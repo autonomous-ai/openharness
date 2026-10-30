@@ -225,7 +225,7 @@ export function rateFor(policy: Policy, engine: string, model: string | null, ef
 const SMALL = /(^|[^a-z0-9])(mini|nano)([^a-z0-9]|$)/i
 
 /** What a reviewed Builder ran: its engine, and the grid model its engine drove. */
-export interface Reviewed { engine: string; gridModel?: string }
+export interface Reviewed { engine: string; gridModel?: string; quality?: number }
 /** A model family: a grid model's own, else its engine's. */
 const familyOf = (t: Reviewed) => t.gridModel ? `grid:${t.gridModel}` : t.engine
 /** Why [p] may not review (Ken, 2026-10-29: a small model never reviews again): a model served on the Swarm's grid, one rated
@@ -418,9 +418,11 @@ function withEveryMachine<T extends { machineId: string }>(ranked: T[]): T[] {
   return ranked.filter(p => keep.has(p))
 }
 
-/** `avoid`: accounts of agents that lost this task (a review's Reviewer whose model kept failing): any other account goes first. */
+/** `avoid`: accounts of agents that lost this task (a review's Reviewer whose model kept failing): any other account goes first.
+ *  `reviewFloor`: a review's reviewed Builder's strength, the Reviewer role's default (Scholes's roadmap, piece 1): the floor
+ *  rises to it, and like any floor it gives way when nobody that strong can run, so a review never waits for nobody. */
 export function choose(probes: Probe[], policy: Policy, a: Assessment, now: number = Date.now(), open: Commitment[] = [], rules: SwarmRule[] = [], held: HeldModel[] = [],
-  avoid: string[] = []): Choice | { error: 'NO_CANDIDATE'; excluded: Array<{ title: string; reason: string }> } {
+  avoid: string[] = [], reviewFloor = 0): Choice | { error: 'NO_CANDIDATE'; excluded: Array<{ title: string; reason: string }> } {
   // A lifted row can equal another row on the same machine (Codex `default` lifted to high beside Codex high); one is kept.
   // A person asking for a local model considers local models alone, whatever their strength.
   if (a.local) probes = probes.filter(p => p.gridModel)
@@ -442,7 +444,7 @@ export function choose(probes: Probe[], policy: Policy, a: Assessment, now: numb
     else excluded.push({ title: 'Local models', reason: LOCAL_NONE })
   }
   if (!viable.length) return { error: 'NO_CANDIDATE', excluded }
-  const floor = floorFor(policy, a)
+  const floor = Math.max(floorFor(policy, a), Math.min(3, reviewFloor))
   const meeting = a.local || named ? viable : viable.filter(p => p.quality >= floor)
   const byFloor = meeting.length ? meeting : viable
   // Strength beats fit (owner, 2026-10-21): a hard task never goes to a weaker model because the strong ones are short of quota.

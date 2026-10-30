@@ -273,6 +273,20 @@ describe('routeTask', () => {
     Object.assign(t.state.conversations[2]!, { assignment: null })
     expect(await routeTask(input, scoped({ tab: t }), where as never, opener(), () => 'op')).toMatchObject({ ok: true })
   })
+  it('holds a review to the reviewed Builder\'s strength: a top-tier Codex Builder is reviewed at the top tier, a grid Builder at its own', async () => {
+    const t = tab(); t.state.agents = agents.map(a => a.id === 'a1' ? { ...a, role: 'reviewer' } : a)
+    t.state.conversations.push({ id: 'g0', title: 'Built', leadId: 'lead', agentIds: ['lead'], archived: false, brief: '', checks: [],
+      assignment: { id: 'b', agentId: 'gone', status: 'review', configuration: { engine: 'codex' } } } as never)
+    Object.assign(t.state.conversations[1]!, { reviewOf: 'g0' })
+    // The idle Sonnet Reviewer is cheaper, but the Builder ran Codex's top tier.
+    const s = scoped({ tab: t })
+    expect(await routeTask(input, s, where as never, opener(), () => 'op')).toMatchObject({ ok: true, pick: { kind: 'new', engine: 'claude', model: 'opus' } })
+    expect(recorded(s).command.decision).toMatchObject({ floor: 3, belowFloor: false })
+    // A Builder on a grid model of quality 2: the Sonnet Reviewer will do.
+    t.state.agents.push({ id: 'b1', name: 'Kimi', machineId: 'm1', harnessId: 'hb', configuration: { engine: 'codex', model: 'default', effort: 'default' }, gridModel: 'moonshotai/kimi-k3' } as never)
+    Object.assign(t.state.conversations[2]!, { assignment: { id: 'b', agentId: 'b1', status: 'review' } })
+    expect(await routeTask(input, scoped({ tab: t }), where as never, opener(), () => 'op')).toMatchObject({ ok: true, pick: { kind: 'member', agentId: 'a1' } })
+  })
   it('lets the Builder\'s engine review at its top tier when the only other engine is on a machine the task may not use', async () => {
     const pool = (machineId: string, engines: string[], patch: Record<string, unknown> = {}) => ({ machineId, name: machineId, cwd: '/w', engines, paused: false, contributorId: 'owner',
       observation: { receivedAt: Date.now(), resources: { memoryTotalBytes: 32e9, memoryUsedBytes: 2e9, projectDiskFreeBytes: 200e9 }, tools: { git: true }, runningHarnessIds: [],

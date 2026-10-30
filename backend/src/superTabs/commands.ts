@@ -33,7 +33,7 @@ import { bindPullRequestCards, bindTaskCard, pullRequestCard, recordCardMerged }
 import { openReview, openReviewOf, projectPullRequest, verdictPending } from './autoReview.js'
 import { carryOver, cheapAttempt, GRID_START_FAILED, REVIEW_FAILED, stepUp, stepUpRefusal } from './stepUp.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
-import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, isConfidential, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
+import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, isConfidential, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleDefaults, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, withRoleDefaults, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
 import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, openBuddyChat, PROPOSAL_ASK_MS, proposalText, renameBuddy, requireBuddyCommand } from './buddies.js'
 import { BUDDY_OWN_MACHINE_REFUSAL, CODEX_BUDDY_REFUSAL } from './buddyContract.js'
 import { LEAD_NAME, leadJoined, leadStartFailed, leadStarting, placeLead } from './leadStart.js'
@@ -67,8 +67,12 @@ const project = z.object({ cwd: path, repositoryUrl: repositoryUrl.nullable() })
 const maxAgents = z.number().int().min(1).max(1024)
 // Copied Default roles keep the ids lead, dev and review; a role the owner adds gets 12 random hex characters from the client.
 const roleId = z.string().regex(/^([0-9a-f]{12}|lead|dev|review)$/)
+/** A role's default engine, model and effort (projects.ts RoleDefaults). */
+const roleDefaultsSchema = z.object({ engine: z.enum(['claude', 'codex']), model: z.string().trim().min(1).max(200).optional(),
+  effort: z.string().trim().min(1).max(80).optional() }).strict()
 const role = z.object({ id: roleId, name: z.string().trim().min(1).max(40), kind: z.enum(['lead', 'builder', 'reviewer']),
-  text: z.string().min(1).refine(value => Buffer.byteLength(value) <= 65_536, 'A role\'s skill text is at most 64 KB.') }).strict()
+  text: z.string().min(1).refine(value => Buffer.byteLength(value) <= 65_536, 'A role\'s skill text is at most 64 KB.'),
+  defaults: roleDefaultsSchema.optional() }).strict()
 const roleSet = z.array(role).min(1).max(MAX_ROLES)
 export const startRequestSchema = z.object({
   conversationId: id, machineId: id, engine: swarmEngine, name: title, cwd: path, role: z.enum(['builder', 'reviewer']).optional(), roleId: roleId.optional(),
@@ -392,7 +396,8 @@ function roleSetOf(roles: ProjectRole[]): ProjectRole[] {
   }
   return roles
 }
-const projectRole = (r: z.infer<typeof role>): ProjectRole => ({ id: r.id, name: r.name, kind: r.kind, version: roleVersion(r.text) })
+const projectRole = (r: z.infer<typeof role>): ProjectRole => ({ id: r.id, name: r.name, kind: r.kind, version: roleVersion(r.text),
+  ...(r.defaults ? { defaults: r.defaults } : {}) })
 
 /** The custom set's role an agent of this kind is started or assigned with. */
 function chosenRole(project: SwarmProject, id: string, kind: RoleKind): ProjectRole {
@@ -979,7 +984,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const { type: _type, projectId: _projectId, machineId, ...request } = command
       // Only its person knows which machine stays on (Ken, 10-29): a Desktop from before asked for the first free one.
       if (!machineId) fail('MACHINE_REQUIRED', `Choose the machine the ${LEAD_NAME} runs on.`, 400)
-      const start = placeLead(state, project, person(state, actor.userId), machineId, request, operationId, context)
+      // Its person named no model: the lead role's default for this engine (Claude Opus 5.5 at xhigh in the built-in sets).
+      const start = placeLead(state, project, person(state, actor.userId), machineId, withRoleDefaults(request, roleDefaults(project, 'lead')), operationId, context)
       Object.assign(result, { startId: start.id, machineId: start.request.machineId })
       break
     }
@@ -1482,7 +1488,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         fail('STARTS_PENDING', 'Reconcile pending agent starts before adding more.')
       }
       // A teammate's project started on a Mac runs in that Mac's Harness Team account, never as its owner (machines.ts).
-      const request = teamStartRequest(state, command.request, home, context.teamAccountsIdle, context.teamMachines)
+      // A person's start that names no model takes its role's default. A routed start keeps the model its route picked.
+      const asked = command.routeDecisionId ? command.request
+        : withRoleDefaults(command.request, roleDefaults(home, command.request.role ?? 'builder', command.request.roleId))
+      const request = teamStartRequest(state, asked, home, context.teamAccountsIdle, context.teamMachines)
       const pool = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)
       // Off the Machines list, a teammate's project never runs: nothing there shows a privacy check (machines.ts).
       if (!pool) requireTeamWork(state, request.machineId, grant.contributorId, home, context.now, context.teamMachines, context.otherWorkspaceMachines)

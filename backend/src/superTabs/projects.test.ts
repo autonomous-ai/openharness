@@ -441,6 +441,28 @@ describe('custom role sets', () => {
     expect(skillSetOf({ ...projectOf(f.state, p.projectId), skillMode: undefined })).toBe('orchestration')
   })
 
+  it('keeps a role\'s default engine, model and effort, and a person\'s start that names no model takes it for that engine', () => {
+    const { f, p, roles } = custom()
+    const writer = { ...role('abcdefabcdef', 'Docs writer', 'builder'), defaults: { engine: 'codex', model: 'gpt-6.1-sol', effort: 'medium' } }
+    f.run({ type: 'project.role.set', projectId: p.projectId, role: writer } as Command, peer)
+    f.run({ type: 'project.skills', projectId: p.projectId, mode: 'custom' }, peer)
+    expect(roles()!.find(r => r.id === 'abcdefabcdef')).toMatchObject({ defaults: { engine: 'codex', model: 'gpt-6.1-sol', effort: 'medium' } })
+    const startWith = (extra: Record<string, unknown>) => {
+      const startId = String(f.run({ type: 'agent.start', request: request(p.conversationId, extra) } as Command, peer).startId)
+      return f.state.starts!.find(s => s.id === startId)!.request
+    }
+    expect(startWith({ roleId: 'abcdefabcdef' })).toMatchObject({ engine: 'codex', model: 'gpt-6.1-sol', effort: 'medium' })
+    expect(startWith({ roleId: 'abcdefabcdef', model: 'gpt-6-luna' })).toMatchObject({ model: 'gpt-6-luna' })
+    expect(startWith({ roleId: 'abcdefabcdef', model: 'gpt-6-luna' })).not.toHaveProperty('effort')
+    expect(startWith({ roleId: 'abcdefabcdef', engine: 'claude' })).not.toHaveProperty('model')
+    // The Engineer of the copied Default set has none: routing chooses.
+    expect(startWith({ roleId: 'dev' })).not.toHaveProperty('model')
+    const bad = (defaults: unknown) => () => f.run({ type: 'project.role.set', projectId: p.projectId, role: { ...writer, defaults } } as Command, peer)
+    expect(bad({ engine: 'cursor' })).toThrow()
+    expect(bad({ engine: 'codex', model: 'x'.repeat(201) })).toThrow()
+    expect(bad({ engine: 'codex', other: true })).toThrow()
+  })
+
   it('starts and assigns by a role id that exists in the custom set and matches the agent\'s kind', () => {
     const { f, p } = custom()
     f.run({ type: 'project.role.set', projectId: p.projectId, role: role('abcdefabcdef', 'Docs writer', 'builder') }, peer)
