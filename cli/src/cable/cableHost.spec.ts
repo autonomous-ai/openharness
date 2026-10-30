@@ -1206,9 +1206,9 @@ describe('announcing over the real lane', () => {
     expect(await first).toEqual({ ok: true })
     host.onDialGone()                            // unplugged: the lane goes with it
     await soon('the old socket to close', () => lines.some((line) => line.startsWith('device: closed')))
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     host.onDialAttached()                        // and back: announces cloud-1, where the dial was
     await soon('the announce', () => selects.length === 2)
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     expect(await host.selectMachine('mine')).toEqual({ ok: true })   // and the person picks this computer
     await soon('the pick', () => selects.length === 3)
     answerNewest()

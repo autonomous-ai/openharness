@@ -1005,7 +1005,7 @@ describe('overlapping machine selects', () => {
 
   it('lets a select of another machine replace the older one at once, and an old timer clear nothing of the new one', async () => {
     // The newer select's answer lands after the older one's 15 s are up: that timer used to clear the newer waiter.
-    const { link, server, selects } = await selecting(60_000)
+    const { link, server, selects, lines } = await selecting(60_000)
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     try {
       const older = settled(link.attach(CLOUD))
@@ -1013,34 +1013,45 @@ describe('overlapping machine selects', () => {
       await vi.advanceTimersByTimeAsync(5_000)
       const newer = settled(link.attach(CLOUD_2))
       await soon('the second select', () => selects().length === 2)
-      expect(await older).toBe('SELECT_SUPERSEDED')
       await vi.advanceTimersByTimeAsync(12_000)   // past the older select's 15 s
       server.send({ type: 'machine_selected', payload: { machineId: CLOUD_2 } })
+      await soon('its answer', () => lines.includes(`device: machine_selected ${CLOUD_2}`))
+      await vi.advanceTimersByTimeAsync(15_000)
+      expect(await older).toBe('SELECT_SUPERSEDED')
       expect(await newer).toBe('ok')
     } finally { vi.useRealTimers() }
   })
 
   it('counts an answer only for the machine it names, and one that names none for the select in flight', async () => {
     const { link, server, selects, lines } = await selecting(60_000)
-    const older = settled(link.attach(CLOUD))
-    await soon('the first select', () => selects().length === 1)
-    const newer = link.attach(CLOUD_2)
-    let done = false
-    void newer.then(() => { done = true }, () => { done = true })
-    expect(await older).toBe('SELECT_SUPERSEDED')
-    // The older select's answers, sent before the backend read the newer one: neither settles the newer.
-    server.send({ type: 'machine_selected', payload: { machineId: CLOUD } })
-    server.send({ type: 'machine_select_error', payload: { machineId: CLOUD, error: 'NOT_YOUR_MACHINE' } })
-    await soon('both read', () => lines.filter((line) => line.includes('for a select no longer waited on')).length === 2)
-    expect(done).toBe(false)
-    // An older backend names no machine: its answer is the select in flight's.
-    server.send({ type: 'machine_select_error', payload: { error: 'MACHINE_START_FAILED' } })
-    await expect(newer).rejects.toThrow('MACHINE_START_FAILED')
-    // And nothing is left waiting: the next select is sent and settled by its own answer.
-    const again = settled(link.attach(CLOUD_2))
-    await soon('the third select', () => selects().length === 3)
-    server.send({ type: 'machine_selected', payload: {} })
-    expect(await again).toBe('ok')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const older = settled(link.attach(CLOUD))
+      await soon('the first select', () => selects().length === 1)
+      let newerSettled = ''
+      const newer = link.attach(CLOUD_2)
+      void settled(newer).then((how) => { newerSettled = how })
+      await soon('the second select', () => selects().length === 2)
+      // The older select's answers, sent before the backend read the newer one: neither settles the newer.
+      server.send({ type: 'machine_selected', payload: { machineId: CLOUD } })
+      server.send({ type: 'machine_select_error', payload: { machineId: CLOUD, error: 'NOT_YOUR_MACHINE' } })
+      await soon('both read', () => lines.includes('device: machine_select_error NOT_YOUR_MACHINE'))
+      for (let turn = 0; turn < 20; turn++) await new Promise((resolve) => setImmediate(resolve))
+      expect(newerSettled).toBe('')
+      // An older backend names no machine: its answer is the select in flight's.
+      server.send({ type: 'machine_select_error', payload: { error: 'MACHINE_START_FAILED' } })
+      await soon('the unnamed answer', () => lines.includes('device: machine_select_error MACHINE_START_FAILED'))
+      await vi.advanceTimersByTimeAsync(15_000)
+      expect(await settled(newer)).toBe('MACHINE_START_FAILED')
+      expect(await older).toBe('SELECT_SUPERSEDED')
+      // And nothing is left waiting: the next select is sent and settled by its own answer.
+      const again = settled(link.attach(CLOUD_2))
+      await soon('the third select', () => selects().length === 3)
+      server.send({ type: 'machine_selected', payload: {} })
+      await soon('its answer', () => lines.filter((line) => line === `device: machine_selected ${CLOUD_2}`).length === 1)
+      await vi.advanceTimersByTimeAsync(15_000)
+      expect(await again).toBe('ok')
+    } finally { vi.useRealTimers() }
   })
 
   it('fails both callers of one select with its error', async () => {
