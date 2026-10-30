@@ -781,7 +781,7 @@ export class ContributedMachines {
     // that is not there drops it; one that cannot be read for any other reason keeps it. Nothing on disk is touched.
     if (await folderGone(record.path)) return writeWorktrees(file, readWorktrees(file).filter(w => !mine(w)))
     if (!await swarmWorktree(record.path, record.source, record.startId)) {
-      // The folder still exists, but without its proof Harness cannot safely remove it. Keep the record for review.
+      // The record no longer proves this belongs to Harness. Keep it; never loosen the proof to recover it.
       if (await folderGone(record.path)) return writeWorktrees(file, readWorktrees(file).filter(w => !mine(w)))
       this.log('Kept a Swarm worktree: WORKTREE_UNPROVEN')
       return
