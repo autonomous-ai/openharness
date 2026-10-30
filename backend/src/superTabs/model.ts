@@ -84,10 +84,18 @@ export interface Agent {
   /** A Buddy (buddies.ts): the person it brainstorms with, at the membership they added it in. Its role stays a builder's
    *  for older readers; this is what makes it a Buddy, and what refuses it every command but its own chat and proposals. */
   buddyOf?: { personId: string; generation: string }
+  /** A Buddy's thread session (buddySessions.ts): it hears and answers only the thread rooted at `thread`, and reads the main
+   *  chat only up to `from`, the sequence before the message that started it. The main Buddy has none. */
+  buddySession?: BuddySession
   /** Joined on a Harness Team account's machine: kept, so a machine row that went never brings back the rules of an
    *  ordinary machine (projects.ts teamSessionAccess, security re-review of #2089). */
   teamAccount?: true
 }
+/** A thread session's thread root and the main chat's last sequence it may read (buddySessions.ts). */
+export interface BuddySession { thread: string; from: number }
+/** A Buddy chat's live or starting thread session, at most MAX_BUDDY_SESSIONS (buddySessions.ts). `agentId` once it runs;
+ *  `waiting`, the person's messages sent while it started, delivered to it when it joins. */
+export interface BuddySessionEntry { thread: string; startId: string; agentId?: string; at: number; waiting?: string[] }
 export type AgentRole = 'builder' | 'reviewer'
 export const agentRole = (agent: Pick<Agent, 'role'>): AgentRole => agent.role ?? 'builder'
 export interface AgentStartRequest {
@@ -109,6 +117,9 @@ export interface AgentStartRequest {
   requirements: { memoryBytes: number; diskBytes: number; maxCpuPercent: number; tools: string[]; devices: string[]; quotaRequired: boolean }
   /** A Buddy's start (buddies.ts): written by buddy.create alone, never taken from an agent.start. */
   buddyOf?: { personId: string; generation: string }
+  /** A Buddy thread session's start (buddySessions.ts): written by message.send with newSession alone. Ids only, never text:
+   *  starts are listed to the Lead. */
+  buddySession?: BuddySession
   /** A project's Product Manager's start (leadStart.ts): written by lead.start alone, never taken from an agent.start. Its
    *  agent becomes the Lead of the project's Lead conversation once it runs. */
   leadFor?: { projectId: string; personId: string; generation: string }
@@ -251,6 +262,8 @@ export interface Conversation {
   /** The name a Buddy chat's owner chose for their Buddy (buddies.ts renameBuddy): kept here, which outlives the Buddy, so
    *  one added again takes it. Absent: the default, "<person>'s Buddy". */
   buddyName?: string
+  /** A Buddy chat's live and starting thread sessions (buddySessions.ts); absent while it has none. */
+  buddySessions?: BuddySessionEntry[]
   /** The person who asked for this work: whoever opened it, or the person its Lead named (leaderboard/record.ts). */
   requesterId?: string
   /** What the leaderboard counts here (leaderboard/record.ts); bookkeeping readers never get whole. */
@@ -392,6 +405,8 @@ export interface MessageDraft {
   thread?: string
   /** A thread reply also shown in the conversation's main stream. */
   alsoInChat?: true
+  /** A reply in a Buddy thread session's thread (buddySessions.ts): the main Buddy never reads it. */
+  buddySession?: true
 }
 /** A notice for one agent alone (a skill update): delivered to it like any message, never shown to people or other agents. */
 export const AGENT_ONLY = { kind: 'agent-only' }
@@ -412,7 +427,7 @@ export const NOTICE_READERS = {
   'update-request': 'recipients', 'digest-request': 'recipients', overlap: 'recipients',
   // Each its own case in commands.ts, decided by the row (forRecipients): statuses, briefs, merges, starts, removals.
   system: 'people',
-  rule: 'people', 'project-report': 'people', route: 'people', 'route-override': 'people', 'buddy-proposal': 'people',
+  rule: 'people', 'project-report': 'people', route: 'people', 'route-override': 'people', 'buddy-proposal': 'people', 'buddy-session-ended': 'people',
   'decision-delegated': 'people', 'machine-removed': 'people', 'machine-left': 'people', ship: 'people', 'auto-review': 'people',
   'auto-archive': 'people', native: 'people',
   // The nightly routing reflection, for the project's people; never a Buddy's (buddies.ts routingRow).
@@ -477,6 +492,8 @@ export interface CommandEffects {
   /** Decisions asked, and a decision answered, written outside the tab state by the store (decisions.ts). */
   decisions?: import('./decisions.js').DecisionDraft[]
   decisionAnswer?: import('./decisions.js').DecisionAnswer
+  /** Deliveries of messages already stored: a Buddy thread session's first messages, sent while it started (buddySessions.ts). */
+  lateDeliveries?: Array<{ messageId: string; conversationId: string; agentId: string; author: { kind: 'person'; id: string; generation: string } }>
 }
 export class SuperTabError extends Error {
   /** `unreachable`: the caller cannot reach this Swarm at all (not, or no longer, a member). The person routes answer it as

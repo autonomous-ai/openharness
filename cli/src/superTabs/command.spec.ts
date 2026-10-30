@@ -681,6 +681,19 @@ it('parses archived status pages and older message pages', () => {
   }
 })
 
+// A Buddy's thread session reads its own thread (spec 2026-10-30-buddy-thread-sessions), paged as the conversation is.
+it('parses one thread\'s messages, and its older pages', () => {
+  const at = ['--tab', 'tab']
+  expect(parseSuperTabArgs([...at, 'messages', 'chat', '--thread', 'root-1'], where).payload).toMatchObject({ action: 'messages', conversationId: 'chat', thread: 'root-1' })
+  expect(parseSuperTabArgs([...at, 'messages', 'chat', '--thread', 'root-1', '--before', '40', 'm-1'], where).payload)
+    .toMatchObject({ action: 'messages', conversationId: 'chat', thread: 'root-1', before: 40, beforeId: 'm-1' })
+  for (const argv of [['messages', 'chat', '--thread'], ['messages', 'chat', '--thread', 'a b'], ['messages', 'chat', '--thread', '../x'],
+    ['messages', 'chat', '--thread', 'root-1', '--before', '40'], ['messages', 'chat', '--thread', 'root-1', 'extra'],
+    ['messages', 'chat', '--thread', 'root-1', '--before', 'x', 'm-1']]) {
+    expect(() => parseSuperTabArgs([...at, ...argv], where)).toThrow('harness super-tab')
+  }
+})
+
 // Cost records (Dee, 2026-10-29): what routed attempts cost and how they went, over the last days.
 it('reads the cost summary of the last 7 days, or of --days N up to 90', () => {
   expect(parseSuperTabArgs([...prefix, 'costs'], where).payload).toMatchObject({ action: 'costs', days: 7 })

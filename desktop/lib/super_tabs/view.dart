@@ -53,6 +53,7 @@ import 'terminal_row.dart';
 import 'thread_panel.dart';
 import 'work_details.dart';
 import 'project_sidebar.dart';
+import 'buddy_sessions.dart';
 import 'swarm_switcher.dart' show fallBackToPersonal;
 import 'project_options.dart';
 import 'pane_layout.dart';
@@ -1022,6 +1023,8 @@ class _SuperTabViewState extends State<SuperTabView>
     final agents = snapshot.agents.where(
       (agent) =>
           group.agentIds.contains(agent.id) &&
+          // A thread's own session answers only there: nobody tags it.
+          agent.buddySession == null &&
           '${_agentName(agent)} ${agent.engine}'.toLowerCase().contains(
             mention.query,
           ),
@@ -2508,6 +2511,16 @@ class _SuperTabViewState extends State<SuperTabView>
             },
       thread: thread,
       threadUnread: thread != null && c.threadUnread(thread),
+      // A thread its own Buddy session answers says so on its line.
+      threadTrailing: switch (thread == null || inThread
+          ? null
+          : c.threadSession(thread.id)) {
+        final session? => SuperTabThreadSessionMark(
+          key: ValueKey('super-thread-session-mark-${thread!.id}'),
+          activity: superTabSessionActivity(c, widget.app, session),
+        ),
+        null => null,
+      },
       onOpenThread:
           !inThread && root != null && (thread != null || message.threadReply)
           ? () => c.openThread(root)
@@ -2565,6 +2578,8 @@ class _SuperTabViewState extends State<SuperTabView>
           _message(message, grouped, byId, inThread: true),
       // The thread panel groups its own rows; one on its way keeps its name.
       outgoing: (sent) => _outgoingRow(sent, byId, grouped: false),
+      sessionActivity: (session) =>
+          superTabSessionActivity(c, widget.app, session),
     );
   }
 

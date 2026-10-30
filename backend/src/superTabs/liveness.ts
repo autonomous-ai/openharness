@@ -1,5 +1,6 @@
 import { activeWork, forRecipients, stableId, type Agent, type AgentStart, type Assignment, type Author, type Conversation, type MessageDraft,
   type SuperTabState, type TaskLiveness } from './model.js'
+import { failedSessionStart } from './buddySessions.js'
 import { noteStartFailed } from './engineHealth.js'
 import { machineOffline, sessionStopped } from './lostReason.js'
 import { agentDisplayName } from './agentNames.js'
@@ -400,8 +401,10 @@ function failStalledStarts(state: SuperTabState, now: number): MessageDraft[] {
         start.error = `${machineName(state, start.request.machineId)}${LEAD_PICKUP_SUFFIX}`
         return leadNotice(state, start, leadStartFailed(state, start, start.error))
       }
-      start.error = `${machineName(state, start.request.machineId)} did not start this Buddy. Update Harness on it, then add the Buddy again.`
-      return buddyNotice(state, start)
+      start.error = start.request.buddySession ? `${machineName(state, start.request.machineId)} did not start this session.`
+        : `${machineName(state, start.request.machineId)} did not start this Buddy. Update Harness on it, then add the Buddy again.`
+      // A thread session's start ends through its own path: its thread says why, never the main chat (buddySessions.ts).
+      return start.request.buddySession ? failedSessionStart(state, start) : buddyNotice(state, start)
     }
     if (!start.dispatched || start.harnessId || start.error || start.dispatchedAt === undefined || now - start.dispatchedAt <= START_RUN_MS) return []
     // Only its own machine's report can say it is preparing; one before preparingStartIds never does, so its starts get 3 minutes.
@@ -415,7 +418,7 @@ function failStalledStarts(state: SuperTabState, now: number): MessageDraft[] {
     const suspended = noteStartFailed(state, start, now)
     if (start.request.leadFor) return leadNotice(state, start, leadStartFailed(state, start, start.error))
     // Never a lookup that throws: these checks run inside every machine's report.
-    if (start.request.buddyOf) return buddyNotice(state, start)
+    if (start.request.buddyOf) return start.request.buddySession ? failedSessionStart(state, start) : buddyNotice(state, start)
     const group = state.conversations.find(c => c.id === start.request.conversationId)
     // Recorded in this write: once the start has ended, no later poll loads it.
     if (group) recordTaskState(state, group, now)

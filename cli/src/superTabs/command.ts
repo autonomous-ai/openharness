@@ -28,7 +28,7 @@ function harnessIn(frames: PaneFrame[], pane: string, machineId: string): boolea
 
 const ELSEWHERE = 'From a harness, Swarm commands go to this computer\'s own Harness only: leave out --machine and --port, or give this computer\'s own.'
 
-const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status [--archived [PAGE]] | messages GROUP [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | decisions [--answered] | costs [--days N] | post GROUP TEXT|- OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | react GROUP MESSAGE_ID EMOJI OPERATION_ID [--off] | command OPERATION_ID JSON | propose OPERATION_ID JSON [--attach PATH]... | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | plan [JSON] | remove-machine MACHINE_ID [--yes] | set-agents MACHINE_ID COUNT | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help'
+const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status [--archived [PAGE]] | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | decisions [--answered] | costs [--days N] | post GROUP TEXT|- OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | react GROUP MESSAGE_ID EMOJI OPERATION_ID [--off] | command OPERATION_ID JSON | propose OPERATION_ID JSON [--attach PATH]... | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | plan [JSON] | remove-machine MACHINE_ID [--yes] | set-agents MACHINE_ID COUNT | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help'
 /** The actions that take an id and then one JSON argument, and what that id names. */
 const JSON_ACTIONS: Readonly<Record<string, string>> = { command: 'OPERATION_ID', propose: 'OPERATION_ID', start: 'OPERATION_ID', capacity: 'MACHINE_ID', route: 'GROUP' }
 const stdinHint = (action: string) => `or send the JSON on stdin with - in its place: ${action} ${JSON_ACTIONS[action]} - <<'JSON' (the JSON on the next lines, then JSON alone on a line)`
@@ -103,6 +103,14 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
   else if (action === 'messages' && identifier(first) && positional.length === 5 && second === '--before' && /^(0|[1-9][0-9]{0,15})$/.test(third ?? '')
     && Number.isSafeInteger(Number(third)) && identifier(positional[4])) {
     Object.assign(payload, { conversationId: first, before: Number(third), beforeId: positional[4] })
+  }
+  // One thread, its root and replies (a Buddy's thread session reads its own this way, with the main-chat messages it started
+  // from), paged as the conversation is.
+  else if (action === 'messages' && identifier(first) && second === '--thread' && identifier(third) && (positional.length === 4
+    || (positional.length === 7 && positional[4] === '--before' && /^(0|[1-9][0-9]{0,15})$/.test(positional[5] ?? '')
+      && Number.isSafeInteger(Number(positional[5])) && identifier(positional[6])))) {
+    Object.assign(payload, { conversationId: first, thread: third,
+      ...(positional.length === 7 ? { before: Number(positional[5]), beforeId: positional[6] } : {}) })
   }
   // A Buddy's archived tasks, a page at a time from the page the last one named (cli/src/superTabs/buddyStatus.ts).
   else if (action === 'status' && first === '--archived' && (positional.length === 2 || positional.length === 3 && /^[A-Za-z0-9_-]{1,512}$/.test(second ?? ''))) {

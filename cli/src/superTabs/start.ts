@@ -51,6 +51,23 @@ function leadPrompt(tabId: string, chat: string, mode: SwarmSkillMode | null): s
 function buddyPrompt(tabId: string, chat: string, mode: SwarmSkillMode | null): string {
   return `You are a person's Buddy in a shared Super Tab. ${mode ? `${swarmSkillUse('buddy', mode)} ` : ''}Run harness super-tab --tab ${tabId} status until this harness appears in the roster. Your chat with your owner is conversation ${chat}: read it with harness super-tab --tab ${tabId} messages ${chat}, and reply there with harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID. Then greet your owner there and ask what they have in mind. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
 }
+/** A thread session's start note (docs/superpowers/specs/2026-10-30-buddy-thread-sessions-design.md): the same Buddy, for one
+ *  thread of its owner's chat. Ids only, never a message's text: a start record is listed in the Lead's status. */
+function buddySessionPrompt(tabId: string, chat: string, thread: string, mode: SwarmSkillMode | null): string {
+  return `You are a person's Buddy in a shared Super Tab, in a session of your own for one thread of your owner's chat. ${mode ? `${swarmSkillUse('buddy', mode)} ` : ''}Run harness super-tab --tab ${tabId} status until this harness appears in the roster. Your thread is the one rooted at message ${thread} in conversation ${chat}. Read it, with the main-chat messages it started from, with harness super-tab --tab ${tabId} messages ${chat} --thread ${thread}. Answer your owner only in this thread: harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID --reply-to MESSAGE_ID, naming a message in this thread. Your owner's newest message in the thread is the one to answer first. Your Buddy's other rules are unchanged. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
+}
+
+/** Why a thread session that is not Claude Code's never starts. */
+export const BUDDY_SESSION_ENGINE = 'A thread session runs only with Claude Code, under its Buddy guard.'
+
+/** The thread a Buddy start's session is for, if it is one (backend `AgentStartRequest.buddySession`). */
+export function buddySessionThread(request: Json): string | null {
+  const session = request.buddySession
+  if (!session || typeof session !== 'object') return null
+  const thread = (session as Json).thread
+  return typeof thread === 'string' && /^[A-Za-z0-9_-]{1,160}$/.test(thread) ? thread : null
+}
+
 export async function inspectCapacity(target: Daemon, request: Json) {
   const wanted = object(request.requirements)
   const requirements: Requirements = {
@@ -344,6 +361,12 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
           return { error: 'START_FAILED', startId, detail }
         }
       }
+      // A Buddy thread session runs only under Claude Code, whose Buddy guard hook holds it: a Codex session would run without
+      // that hook (security review 1 of #2345). The backend refuses one too; this refuses it here before anything launches.
+      if (request.buddySession !== undefined && request.engine !== 'claude') {
+        requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: BUDDY_SESSION_ENGINE } }))
+        return { error: 'START_FAILED', startId, detail: BUDDY_SESSION_ENGINE }
+      }
       const resources = await inspectCapacity(target, request)
       if (resources.capacity.error === 'GUEST_NOT_ALLOWED') return {
         error: 'CONTRIBUTION_REQUIRED', startId,
@@ -369,6 +392,8 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       const skilled = ['claude', 'codex'].includes(String(request.engine)), reviewer = request.role === 'reviewer'
       // A Buddy's start names its owner (backend buddies.ts): it brainstorms in their chat and is never assigned work.
       const buddy = !!request.buddyOf && typeof request.buddyOf === 'object'
+      // A thread session (spec 2026-10-30-buddy-thread-sessions): launched as a Buddy in every way, its prompt aside.
+      const session = buddy ? buddySessionThread(request) : null
       // A project's Product Manager (backend leadStart.ts): the Lead of its project's conversation once it runs.
       const lead = !buddy && !!request.leadFor && typeof request.leadFor === 'object'
       // A contributed machine's host cannot read the tab as a Lead does: it asked the backend whose work this is when it
@@ -388,7 +413,8 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
         ...(asks ? { permissionMode: asks } : permissionModeFlags(request.engine as AgentEngine, 'full') ? { permissionMode: 'full' } : {}),
         ...(mode ? { swarmRole: role, swarmSkillMode: mode } : {}),
         ...(github ? { swarmGitHub: true } : {}),
-        prompt: buddy ? buddyPrompt(String(input.tabId), String(request.conversationId), mode)
+        prompt: buddy ? (session ? buddySessionPrompt(String(input.tabId), String(request.conversationId), session, mode)
+          : buddyPrompt(String(input.tabId), String(request.conversationId), mode))
           : lead ? `${leadPrompt(String(input.tabId), String(request.conversationId), mode)}${github ? ` ${githubPromptLine(github.requester)}` : ''}` : `You are joining a shared Super Tab${reviewer ? ' as a Reviewer' : ''}. ${mode ? `${swarmSkillUse(role, mode)} ` : ''}Run harness super-tab --tab ${input.tabId} status until this harness appears in the roster. ${reviewer
           ? `Do not review yet. You review work in conversation ${request.conversationId} when it is ready for review.`
           : `Do not begin project work yet. Your lead will assign work in conversation ${request.conversationId}.`} Reply in that conversation using harness super-tab --tab ${input.tabId} post ${request.conversationId} 'your message' UNIQUE_OPERATION_ID. Run harness super-tab help for commands. If sandbox restrictions block this local command, request permission to run it outside the sandbox.${github ? ` ${githubPromptLine(github.requester)}` : ''}`,
