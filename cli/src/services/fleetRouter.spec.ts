@@ -252,6 +252,22 @@ describe('which machine an agent is on', () => {
     expect((await settled(router)).map((a) => a.id)).toEqual(['r1'])
   })
 
+  it('shows a machine whose first list was refused once it lists, with no clock left over from the refusals', async () => {
+    const { link, fleet, alive } = laneOf()
+    link.rpc.mockImplementation(async () => { alive('other'); throw new Error('UNSUPPORTED') })
+    const router = new FleetRouter(localOf(), fleet)
+    expect(await settled(router)).toEqual([])
+    const now = Date.now()
+    vi.spyOn(Date, 'now').mockReturnValue(now + 60_000)
+    expect(await settled(router)).toEqual([])
+    link.rpc.mockImplementation(async () => ({ agents: [{ id: 'r1', name: 'api', engine: 'claude' }] }))
+    vi.spyOn(Date, 'now').mockReturnValue(now + 66_000)
+    expect((await settled(router)).map((a) => a.id)).toEqual(['r1'])
+    link.rpc.mockImplementation(async () => { alive('other'); throw new Error('UNSUPPORTED') })
+    vi.spyOn(Date, 'now').mockReturnValue(now + 72_000)
+    expect((await settled(router)).map((a) => a.id)).toEqual(['r1'])
+  })
+
   it('keeps a slow machine whose lists come back good, however late each one is', async () => {
     let answer: (res: Record<string, unknown>) => void = () => {}
     const { link, fleet } = laneOf()
