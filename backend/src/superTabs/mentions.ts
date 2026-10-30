@@ -84,6 +84,13 @@ export function namedIn(state: SuperTabState, text: string, names: ReadonlyMap<s
   return [...new Set(ids)]
 }
 
+/** Whether [text] says `@` and exactly [name] outside code and links, in any case: a stored name that ends in a dot, chosen
+ *  before such names were refused, reads as a shorter tag in [namedIn] but is still said. */
+export function saysName(text: string, name: string): boolean {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`(?<![\\w@/])@${escaped}(?![\\w+-]|\\.[\\w+-])`, 'i').test(prose(text))
+}
+
 /** [tags] on the first line of [text], as a person types them in chat. Only text that opens with a block (a list, heading,
  *  quote, table, code, divider or link definition) keeps them on a line of their own, so that block still renders. The same
  *  rule as Desktop's SuperTabMessageText.withTags, which shows an older message's unsaid tags. */
