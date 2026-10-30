@@ -14,7 +14,7 @@ import { isatty } from 'node:tty'
 import { inDaemonPane, NOT_IN_PANE, runningPane, type PaneProbe } from './callerPane.js'
 // cli.ts's way to it: this file is its door to the Swarm's code (architecture.spec.ts SWARM_DOORS).
 export { buddyRefusal } from './buddyPane.js'
-import { agentShell, buddiesHere, WINDOWS_BUDDY } from './buddyPane.js'
+import { agentShell, buddiesHere, paneBuddy, WINDOWS_BUDDY } from './buddyPane.js'
 import { sendPane } from '../messages/command.js'
 
 /** A frame with its terminals, as agents_list sends them: a pty host pane is named by its instance and pane (Windows). */
@@ -89,6 +89,11 @@ function postStdin(stdin: (what: string) => string, terminal: () => boolean): st
   if (!text.trim()) throw new Error(`post - read no message from stdin, so nothing was posted. Send the message on stdin: ${POST_STDIN}. A message that is only - goes on stdin too.`)
   return text
 }
+/** A JSON action's JSON on stdin, for its `-`; a terminal is refused as post's is, worded for a Buddy too (stdinHint). */
+function jsonStdin(action: string, stdin: (what: string) => string, terminal: () => boolean): string {
+  if (terminal()) throw new UsageError(buddy => `${action} - reads the JSON from stdin, but stdin is a terminal, so nothing was sent. Pass it as one argument, ${stdinHint(action, buddy)}.`)
+  return stdin(action)
+}
 /** How long `-` waits on stdin while nothing arrives. #2355's review: `post GROUP - OPERATION_ID` from a pipe its writer left
  *  open (a tool that never closes it) read with no limit and waited for good. A heredoc or a pipe closes stdin at its end;
  *  every chunk starts the wait again, so a slow writer that keeps sending is never cut off. */
@@ -132,11 +137,8 @@ async function buddyHere(open: typeof openDaemon, local: Where, pane: string | u
     const daemon = await open(local)
     try {
       if (platform === 'win32') return agentShell(env) && await buddiesHere(daemon) === true
-      const listed = await daemon.request('agents_list')
-      const caller = callerOf(Array.isArray(listed.agents) ? listed.agents as Frame[] : [], pane, local.machineId)
-      if (!caller) return false
-      const answer = await daemon.request('super_tabs', { action: 'buddyCheck', harnessId: caller.agentId }, 10_000)
-      return answer.ok === true && answer.buddy === true
+      // The guard's own steps (buddyPane.ts paneBuddy), without its pane check: a wording, not a refusal.
+      return await paneBuddy(daemon, pane!, local.machineId) === 'buddy'
     } finally { daemon.close() }
   } catch { return false }
 }
@@ -158,8 +160,9 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
     else { positional.push(...argv.slice(i)); break }
   }
   if (!Number.isInteger(target.port) || target.port < 1 || target.port > 65535 || !identifier(target.machineId)) throw usageError()
-  // `-` in the JSON's place reads it from stdin, where no shell quoting can split it.
-  if (JSON_ACTIONS[positional[0]] && positional[2] === '-') positional[2] = stdin(positional[0])
+  // `-` in the JSON's place reads it from stdin, where no shell quoting can split it. A terminal is refused at once, as post's
+  // is: read, it waited 30 s for input that never comes and then said stdin was never closed (review of #2379).
+  if (JSON_ACTIONS[positional[0]] && positional[2] === '-') positional[2] = jsonStdin(positional[0], stdin, terminal)
   const [action, first, second, third] = positional
   if (action !== 'help' && (!identifier(tabId) || (agentId && !identifier(agentId)))) throw usageError()
   const payload: Record<string, unknown> = { action, tabId, agentId }
