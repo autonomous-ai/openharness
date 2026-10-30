@@ -137,7 +137,9 @@ function deliveryTouches(delivery: SuperTabDelivery, state: SuperTabState): Touc
   // A Buddy receives only while its person reads there (buddyNews.ts): their part guards the delivery, so taking the
   // project from them while a claim is in flight makes it check again (security review 1 of #2178).
   const person = state.agents.find(a => a.id === delivery.agentId)?.buddyOf?.personId
-  if (person) touches.push({ kind: 'member', key: person })
+  // In the Buddy's own chat its person is also the sender: one part is touched once, or the claim's second guarded write of
+  // the same part version conflicts every retry and no message of theirs ever reaches the Buddy (prod 10-30, v1.3.71).
+  if (person && !touches.some(t => t.kind === 'member' && t.key === person)) touches.push({ kind: 'member', key: person })
   return touches
 }
 

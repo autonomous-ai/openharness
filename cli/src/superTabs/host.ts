@@ -896,6 +896,11 @@ export class SuperTabHost {
       await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: `session-closed-${agent.id}-${agent.harnessId}`,
         command: { type: 'agent.sessionClosed', agentId: agent.id, harnessId: agent.harnessId } })
       state.acked = true
+      // Diego, 10-30: a removed agent's or deleted project's worktree waited up to a week for the weekly sweep. It goes now,
+      // under the stopped worker's rules (machines.ts). Not awaited: git and the disk never hold up this close.
+      void this.contributed().removeStoppedWorktree(tabId, agent.harnessId)
+        // A fixed code: the error's own text can carry the folder's path.
+        .catch(() => this.log('Kept the worktree of an ended session: WORKTREE_REMOVAL_FAILED'))
     })().catch(error => {
       state.retryAt = this.now() + Math.min(END_RETRY_MAX_MS, END_RETRY_MS * 2 ** state.failures++)
       this.log(error instanceof Error ? error.message : String(error))

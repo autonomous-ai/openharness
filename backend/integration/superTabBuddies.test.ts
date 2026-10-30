@@ -155,6 +155,19 @@ describe('a Buddy through the store', () => {
     expect((await f.store.read(owner, f.tab)).state.conversations.map(c => c.id)).not.toContain(chat)
   })
 
+  it('hands its owner\'s own chat messages to the Buddy: the claim and the receipt both go through (prod 10-30, v1.3.71)', async () => {
+    const f = await swarm()
+    const { chat, agentId } = await buddy(f)
+    const sent = String((await f.execute({ type: 'message.send', conversationId: chat, text: 'Summarize my tasks', replyTo: null, recipientIds: [] }, peer)).result.messageId)
+    const waiting = (await f.store.deliveries(peer, f.tab, agentId)).find(d => d.messageId === sent)!
+    expect(waiting).toMatchObject({ status: 'queued' })
+    const claimId = randomUUID()
+    const claimed = await f.store.delivery(peer, f.tab, agentId, waiting.id, { type: 'claim', claimId })
+    expect(claimed).toMatchObject({ message: { id: sent, conversationId: chat } })
+    await f.store.delivery(peer, f.tab, agentId, waiting.id, { type: 'ack', claimId, receipt: 'r-1', uncertain: false })
+    expect(await db.superTabDelivery.findUniqueOrThrow({ where: { id: waiting.id } })).toMatchObject({ status: 'delivered', receipt: 'r-1' })
+  })
+
   it('sends its owner\'s proposal to the PM in the project chat, once per ask', async () => {
     const f = await swarm()
     const { chat, agentId } = await buddy(f)
