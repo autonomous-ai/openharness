@@ -35,6 +35,7 @@ import { registerWorkContext, startQueryStats } from './lib/queryStats.js'
 import { registerRouteLatency, startRouteLatency } from './lib/routeLatency.js'
 import { drainAllSockets, openSocketCount, RELEASE_UPGRADE_SLOT, type SlotSocket } from './lib/wsServer.js'
 import { endpointOf, refusedUpgrade, startWsCounterLog, watchUpgrade } from './lib/wsAttribution.js'
+import { startMachineReportLog } from './superTabs/machineReports.js'
 
 // Node ≥ 15 turns an unhandled rejection into a process exit. On a cluster worker that holds thousands of
 // sockets, one DB/Redis hiccup inside a fire-and-forget promise would then drop every one of them and
@@ -159,6 +160,8 @@ async function start(): Promise<void> {
   useSharedRateCounter(redisWindowCounter(pub))
   // Each pod's socket counts once a minute: open, connects by client, short-lived, refused (WebSocket roadmap Phase 0).
   startWsCounterLog()
+  // Each pod's machine reports a minute, stored without a Swarm load (fast) or in full (DB roadmap 2.5).
+  const stopMachineReportLog = startMachineReportLog()
   configureSwarmStamps(redisSwarmStamps(), { reads: env.SWARM_READ_CACHE === 'on', maxBytes: env.SWARM_CACHE_MB * 2 ** 20 })
   // Hot Swarm reads name their indexes once the database is seen to have them (superTabs/parts/indexed.ts).
   watchGroupIndexes(prisma)
@@ -219,6 +222,7 @@ async function start(): Promise<void> {
       // The last partial minute of both logs, once the drain and the usage flush have run their queries.
       stopQueryStats()
       stopRouteLatency()
+      stopMachineReportLog()
       // The database stays connected through the drain, for the requests still being served (lib/prisma.ts).
       await Promise.allSettled([prisma.$disconnect(), closeBus()])
       process.exit(exitCode)

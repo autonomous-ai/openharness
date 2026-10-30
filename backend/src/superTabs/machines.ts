@@ -159,6 +159,54 @@ export type MachineObservation = z.infer<typeof machineObservationSchema>
 /** A machine reports every 15 seconds (cli/src/superTabs/machines.ts); three missed beats is offline. */
 export const MACHINE_FRESH_MS = 45_000
 
+/** A machine's reading as its pool keeps it. */
+export type StoredReading = NonNullable<ContributedMachine['observation']>
+
+/** A start this machine may say it is preparing: one it launched that neither runs nor failed (liveness.ts). */
+export const preparableStart = (start: AgentStart, machineId: string): boolean =>
+  start.request.machineId === machineId && !!start.dispatched && !start.harnessId && !start.error
+
+/**
+ * What a report stores of [observation] on [pool]: progress and tokens of running sessions only (leases and attempts read
+ * them), the preparing starts [preparable] allows, the contributed engines' quotas, privacy only from a team session
+ * (observedPrivacy), and how the machine is signed in, from the session and never from the report (lib/teamSession.ts).
+ * A full report and a reading-only one (DB 2.5) store the same.
+ */
+export function storedObservation(pool: ContributedMachine, observation: MachineObservation,
+  opts: { team: boolean; now: number; preparable: (startId: string) => boolean }): StoredReading {
+  const { privacy: reported, harnessProgress, harnessTokens, preparingStartIds, ...reading } = observation
+  const running = (id: string) => observation.runningHarnessIds.includes(id)
+  const progress = harnessProgress && Object.fromEntries(Object.entries(harnessProgress).filter(([id]) => running(id)))
+  const tokens = harnessTokens && Object.fromEntries(Object.entries(harnessTokens).filter(([id]) => running(id)))
+  const preparing = preparingStartIds?.filter(opts.preparable)
+  const privacy = observedPrivacy(pool.observation?.privacy, reported, opts.team, opts.now)
+  return { ...reading, quotas: observation.quotas.filter(q => contributedEngines(pool, observation).includes(q.engine)), receivedAt: opts.now,
+    sessionKind: opts.team ? 'team' : 'computer', ...(privacy ? { privacy } : {}), ...(progress ? { harnessProgress: progress } : {}),
+    ...(tokens ? { harnessTokens: tokens } : {}), ...(preparing ? { preparingStartIds: preparing } : {}) }
+}
+
+const sameSet = (a: readonly string[] = [], b: readonly string[] = []) => {
+  const left = new Set(a), right = new Set(b)
+  return left.size === right.size && [...left].every(id => right.has(id))
+}
+
+/**
+ * Whether [next] changes nothing a report decides from, against [previous] (DB 2.5 spec, section 1 condition 2): the same
+ * running and stopped sessions, no stop proof, the same preparing starts. Progress renews leases (liveness.ts
+ * reportRenewedAt), so it also keeps its shape, and no session's progress goes back: a lease then ends no sooner than the
+ * last full report saw.
+ */
+export function readingOnly(previous: StoredReading | undefined, next: StoredReading): boolean {
+  // How the machine is signed in decides who may host it (store.ts teamByRecord reads the stored one): a reading from the
+  // other kind of session runs in full, so the full report's refusal is never skipped (review of #2378).
+  if (!previous || next.stoppedReservations?.length || previous.sessionKind !== next.sessionKind) return false
+  if (!sameSet(previous.runningHarnessIds, next.runningHarnessIds) || !sameSet(previous.stoppedHarnessIds, next.stoppedHarnessIds)
+    || !sameSet(previous.preparingStartIds, next.preparingStartIds)) return false
+  if (!previous.harnessProgress || !next.harnessProgress) return !previous.harnessProgress && !next.harnessProgress
+  const before = previous.harnessProgress, after = next.harnessProgress
+  return sameSet(Object.keys(before), Object.keys(after)) && Object.entries(before).every(([id, at]) => after[id]! >= at)
+}
+
 /** Whether [start] is preparing now: launched, neither running nor failed, and named by a fresh report of its own machine.
  *  Read from that report, never written into the start, so a report a minute per start writes nothing more. */
 export function startPreparing(state: SuperTabState, start: AgentStart, now: number): boolean {

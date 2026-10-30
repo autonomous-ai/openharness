@@ -143,6 +143,15 @@ function limitReason(worker: Agent, now: number): string | null {
     ? `it hit a usage limit until ${worker.limitedUntil.slice(11, 16)} UTC` : null
 }
 
+/** The earliest time a task held by a worker on [machineId] may be lost to its lease running out, as lostReason reads it now,
+ *  or undefined when none can. Reports that keep its session running with progress no older can only move it later. */
+export function nextLossAt(state: SuperTabState, machineId: string): number | undefined {
+  const ends = workerTasks(state).filter(({ worker, assignment }) => worker.machineId === machineId && !waitingForReview(assignment))
+    .map(({ group, assignment, worker }) => leaseEnd(group, assignment, reportRenewedAt(state, worker)))
+    .filter((end): end is number => end !== undefined)
+  return ends.length ? Math.min(...ends) : undefined
+}
+
 /** Why a worker has lost its task now, or null while it still holds it. Only a machine that has reported can be offline. */
 function lostReason(state: SuperTabState, group: Conversation, worker: Agent, assignment: Assignment, now: number): string | null {
   const pool = state.machines?.find(m => m.machineId === worker.machineId)
