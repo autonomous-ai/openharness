@@ -338,6 +338,11 @@ class AgentCreationAttempt {
   String? _outcome;
   String? _preparedFolder;
   ProjectFolderRequest? _projectFolder;
+
+  /// The worktree this computer made for this attempt, set only where it is
+  /// made: [_preparedFolder] is also what a machine's refusal names. A
+  /// confirmed cancel takes it back ([AppNotifier._discardCancelledWorktree]).
+  ({String folder, bool keepBranch})? _worktreeMadeHere;
   String? _remoteProjectName;
   int _projectNameRetries = 0;
 
@@ -15344,6 +15349,7 @@ class AppNotifier extends ChangeNotifier {
           result['state'] == 'cancelled') {
         creation._complete('Creation cancelled.');
         _activeAgentCreations.remove(creation);
+        await _discardCancelledWorktree(creation);
         return null;
       }
       return 'The request may already be starting. Check status before starting another.';
@@ -15353,6 +15359,30 @@ class AppNotifier extends ChangeNotifier {
       creation._cancelling = false;
     }
   }
+
+  /// Takes back the worktree this computer made for [creation], once its
+  /// cancel is confirmed and nothing will start in it. Kept, it held its
+  /// branch, and the next press was refused for that name (desktop 1.3.41,
+  /// 2026-10-30). One it cannot take back stays and is logged: the cancel
+  /// itself is done either way.
+  Future<void> _discardCancelledWorktree(AgentCreationAttempt creation) async {
+    final made = creation._worktreeMadeHere;
+    if (made == null) return;
+    creation._worktreeMadeHere = null;
+    if (creation._preparedFolder == made.folder) creation._preparedFolder = null;
+    try {
+      if (!await discardLocalWorktree(made.folder, keepBranch: made.keepBranch)) {
+        appLog.info('worktree', 'kept after cancel: ${made.folder}');
+      }
+    } catch (error) {
+      appLog.warn('worktree', 'not removed after cancel: ${made.folder}', error: error);
+    }
+  }
+
+  /// The local half of [_discardCancelledWorktree]; a test's seam, as
+  /// [prepareLocalProjectFolder] is.
+  Future<bool> discardLocalWorktree(String folder, {bool keepBranch = false}) =>
+      discardPreparedWorktree(folder, keepBranch: keepBranch);
 
   Future<String?> _createAgentWithReceipt(AgentCreationAttempt creation) async {
     // Only this answer says whether it is starting; one that never reaches
@@ -15431,6 +15461,7 @@ class AppNotifier extends ChangeNotifier {
                     name: projectName is String ? projectName : null,
                   ));
         final dshId = choices['dsh'];
+        final preparedBefore = creation._preparedFolder;
         creation._preparedFolder ??= await prepareLocalProjectFolder(
           project,
           // The folder is named after who the harness is: the harness's own name, else the engine's.
@@ -15442,6 +15473,12 @@ class AppNotifier extends ChangeNotifier {
                     engineIdentity(dshId).label)
               : engineIdentity(choices['engine'] as String?).label,
         );
+        if (preparedBefore == null && project.createsWorktree) {
+          creation._worktreeMadeHere = (
+            folder: creation._preparedFolder!,
+            keepBranch: project.existingBranch,
+          );
+        }
       } on ProjectExistsException catch (error) {
         // This computer's own folder refuses a typed name as the machine
         // does, so the form offers the folder the same way.
