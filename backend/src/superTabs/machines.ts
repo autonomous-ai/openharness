@@ -185,7 +185,10 @@ export function storedObservation(pool: ContributedMachine, observation: Machine
     ...(tokens ? { harnessTokens: tokens } : {}), ...(preparing ? { preparingStartIds: preparing } : {}) }
 }
 
-const sameSet = (a: readonly string[] = [], b: readonly string[] = []) => a.length === b.length && new Set([...a, ...b]).size === new Set(a).size
+const sameSet = (a: readonly string[] = [], b: readonly string[] = []) => {
+  const left = new Set(a), right = new Set(b)
+  return left.size === right.size && [...left].every(id => right.has(id))
+}
 
 /**
  * Whether [next] changes nothing a report decides from, against [previous] (DB 2.5 spec, section 1 condition 2): the same
@@ -194,7 +197,9 @@ const sameSet = (a: readonly string[] = [], b: readonly string[] = []) => a.leng
  * last full report saw.
  */
 export function readingOnly(previous: StoredReading | undefined, next: StoredReading): boolean {
-  if (!previous || next.stoppedReservations?.length) return false
+  // How the machine is signed in decides who may host it (store.ts teamByRecord reads the stored one): a reading from the
+  // other kind of session runs in full, so the full report's refusal is never skipped (review of #2378).
+  if (!previous || next.stoppedReservations?.length || previous.sessionKind !== next.sessionKind) return false
   if (!sameSet(previous.runningHarnessIds, next.runningHarnessIds) || !sameSet(previous.stoppedHarnessIds, next.stoppedHarnessIds)
     || !sameSet(previous.preparingStartIds, next.preparingStartIds)) return false
   if (!previous.harnessProgress || !next.harnessProgress) return !previous.harnessProgress && !next.harnessProgress

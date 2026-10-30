@@ -8,7 +8,8 @@ const EXPIRED_TRANSACTION_ATTEMPTS = 2
 const TRANSACTION_BACKOFF_MS = 50
 const TRANSACTION_BACKOFF_CAP_MS = 1_500
 const errorCode = (error: unknown): unknown => error && typeof error === 'object' && 'code' in error ? error.code : null
-function retryable(error: unknown): boolean {
+/** A transaction's failure that another attempt may not meet: a write conflict, a taken unique key, Mongo's transient ones. */
+export function retryable(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false
   return ['P2034', 'P2002', 'P2028'].includes(errorCode(error) as string) || (error instanceof Error && error.message.includes('TransientTransactionError'))
 }

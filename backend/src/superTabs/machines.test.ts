@@ -254,5 +254,10 @@ describe('a machine\'s reading as a report stores it (DB 2.5)', () => {
     expect(same({ harnessProgress: { a: 4 } })).toBe(false)
     expect(readingOnly(stored({}), stored({ harnessProgress: { a: 5 } }))).toBe(false)
     expect(readingOnly(undefined, before)).toBe(false)
+    // Sessions are compared as sets: a session repeated is not one that stayed.
+    expect(readingOnly(stored({ runningHarnessIds: ['a', 'b'] }), stored({ runningHarnessIds: ['a', 'a'] }))).toBe(false)
+    // A reading from the other kind of session decides who may host the machine (store.ts teamByRecord).
+    const team = storedObservation(pool(), reading({ harnessProgress: { a: 5 }, preparingStartIds: ['s1'] }), { team: true, now: NOW + 15_000, preparable: () => true })
+    expect(readingOnly(before, team)).toBe(false)
   })
 })

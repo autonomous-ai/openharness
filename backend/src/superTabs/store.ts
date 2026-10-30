@@ -39,10 +39,11 @@ import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './part
 import { memberSwarms } from './swarmRows.js'
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { loadDeliveryParts } from './parts/light.js'
-import { guardedWrite, PartConflict, partId } from './parts/write.js'
+import { guardedWrite, partId } from './parts/write.js'
+import { retryable } from './retry.js'
 import { touchesFor } from './parts/touches.js'
 import { freeze, readStamps, stampOwed, swarmReadCache, swarmTransaction, type CacheView, type SwarmCache } from './cache.js'
-import { countReport, DEADLINE_CAP_MS, localReportMemory, type ReportMemory, type ReportRecord } from './machineReports.js'
+import { countReport, DEADLINE_CAP_MS, localReportMemory, RECORD_TTL_MS, type ReportMemory, type ReportRecord } from './machineReports.js'
 import { DIRECT, readLastChangedAt, readParts, type ReadNamed } from './cachedReads.js'
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
 import { activeMember, addMember, hasWorkspaceAccess, listWorkspaces, memberId, WORKSPACE_ACCESS_REVOKED, workspaceForNewSwarm, requireWorkspaceAccess, requireWorkspaceRole, SwarmWorkspaces } from './workspaceStore.js'
@@ -2424,16 +2425,16 @@ export class SuperTabStore {
   /**
    * A machine's reading for one Swarm. A reading whose decisions cannot differ from its last full report's is stored on its
    * machine part alone (fastReading); any other runs in full. Whether it runs the Swarm's time checks is decided once, on a
-   * clock every server shares (machineReports.ts).
+   * clock every server shares (machineReports.ts), and only for a reading that passed the checks: a refused one would
+   * hold up every server's sweep of that Swarm (review of #2378).
    */
   async observeMachine(user: AuthUser, tabId: string, machineId: string, input: MachineObservation, host?: MachineHost,
     part?: MachinePart | null): Promise<{ version: number }> {
     const observation = machineObservationSchema.parse(input)
     const checked = host ?? await this.machineHost(user, machineId)
-    const sweep = await this.reports.sweepDue(tabId, this.now())
-    const fast = sweep ? null : await this.fastReading(user, tabId, machineId, observation, checked, part)
-    countReport(fast ? 'fast' : 'full')
-    return fast ?? this.fullReading(user, tabId, machineId, observation, sweep, checked)
+    const fast = await this.fastReading(user, tabId, machineId, observation, checked, part)
+    countReport(fast && 'version' in fast ? 'fast' : 'full')
+    return fast && 'version' in fast ? fast : this.fullReading(user, tabId, machineId, observation, fast ? true : null, checked)
   }
 
   /**
@@ -2465,11 +2466,12 @@ export class SuperTabStore {
    * the full report would: the same reading, Lent for the count that report recorded, the same push to the same people.
    */
   private async fastReading(user: AuthUser, tabId: string, machineId: string, observation: MachineObservation, host: MachineHost,
-    loaded?: MachinePart | null): Promise<{ version: number } | null> {
+    loaded?: MachinePart | null): Promise<{ version: number } | { sweep: true } | null> {
     if (stampOwed(tabId)) return null
     const [stamps, record] = await Promise.all([readStamps([tabId]), this.reports.get(tabId, machineId)])
     const now = this.now()
-    if (!record || stamps?.get(tabId)?.main !== record.stamp || now >= record.deadline || record.removals) return null
+    // A record holds for RECORD_TTL_MS after its own full report, whatever other machines of the Swarm write since.
+    if (!record || stamps?.get(tabId)?.main !== record.stamp || now >= record.deadline || now - record.at >= RECORD_TTL_MS || record.removals) return null
     // The checks a full report makes with the Swarm, from what the last one saw of it; a refusal is the full report's to say.
     if ((record.team && !isTeamSession(user)) || !host.owned || !machineBillingAllowsDataPlane(host.owned)) return null
     const row = await this.db.superTab.findFirst({ where: { id: tabId, autonomousEnv: user.autonomousEnv }, select: { format: true } })
@@ -2485,12 +2487,15 @@ export class SuperTabStore {
     const suspended = JSON.stringify(mine.engineSuspensions)
     readingClearsSuspensions(mine, now)
     if (JSON.stringify(mine.engineSuspensions) !== suspended) return null
+    // Its sweep due: the full report runs it, with the slot this reading, which passed the checks, just took.
+    if (await this.reports.sweepDue(tabId, now)) return { sweep: true }
     const stamp = clock.next()
     let version: number
     try {
       version = await swarmTransaction(this.db, tx => guardedWrite(tx, tabId, { op: 'update', kind: 'machine', key: machineId, seen: part.version, data }, stamp))
     } catch (error) {
-      if (error instanceof PartConflict) return null
+      // A conflict, or Mongo's transient refusal, is the full report's to retry.
+      if (retryable(error)) return null
       throw error
     }
     try {
@@ -2501,7 +2506,8 @@ export class SuperTabStore {
     return { version }
   }
 
-  private async fullReading(user: AuthUser, tabId: string, machineId: string, observation: MachineObservation, sweep: boolean,
+  /** [sweep]: whether the Swarm's sweep slot was taken already, or null for this report to ask once its checks pass. */
+  private async fullReading(user: AuthUser, tabId: string, machineId: string, observation: MachineObservation, sweep: boolean | null,
     { owned }: MachineHost): Promise<{ version: number }> {
     // The Swarm's stamp before anything is loaded: the next reports may skip the load only while it holds (machineReports.ts).
     const before = (await readStamps([tabId]))?.get(tabId)?.main
@@ -2515,6 +2521,8 @@ export class SuperTabStore {
         return found
       })
       if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
+      // Asked once per report, never again on a retried attempt, which would find the slot taken by itself.
+      sweep ??= await this.reports.sweepDue(tabId, this.now())
       const now = this.now()
       // A machine that went silent while cleaning takes the fallback before this fresh reading can bring it back: its records
       // go, its cleanup waits for this host, as the next sweep would have done (machines.ts expireRemovals).

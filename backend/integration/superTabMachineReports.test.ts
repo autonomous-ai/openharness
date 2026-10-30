@@ -10,7 +10,7 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore, type SwarmChanged } from '../src/superTabs/store.js'
 import { configureSwarmStamps } from '../src/superTabs/cache.js'
 import { MemoryStamps } from '../src/superTabs/cache.test-support.js'
-import { localReportMemory, machineReportLine, type ReportMemory } from '../src/superTabs/machineReports.js'
+import { localReportMemory, machineReportLine, RECORD_TTL_MS, type ReportMemory } from '../src/superTabs/machineReports.js'
 import { SWEEP_EVERY_MS } from '../src/superTabs/liveness.js'
 import type { Command } from '../src/superTabs/commands.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
@@ -188,6 +188,9 @@ describe('every reason a report runs in full (DB 2.5 spec, Tests)', () => {
     }],
     ['its record is missing', async f => ({ by: f.store(never) })],
     ['the stamps cannot be read', async () => { stamps.down = true }],
+    ['its record is older than two minutes, whatever other machines wrote since', async f => {
+      await f.reports.set(f.tab, 'test-host', { ...(await f.reports.get(f.tab, 'test-host'))!, at: f.clock.now - RECORD_TTL_MS })
+    }],
     ['the record says a Team account runs its agents', async f => {
       await f.reports.set(f.tab, 'test-host', { ...(await f.reports.get(f.tab, 'test-host'))!, team: true })
     }],
@@ -242,6 +245,24 @@ describe('every reason a report runs in full (DB 2.5 spec, Tests)', () => {
     expect(paths[4]).toBe('full')
   })
 
+  it('a Team account\'s reading came in since: the owner\'s own sign-in is refused as the full report refuses it', async () => {
+    const f = await swarm()
+    expect((await settle(f)).at(-1)).toBe('fast')
+    // As a fast reading from the machine's Harness Team account stores it: same sessions, signed in as the team account.
+    const row = await f.part()
+    const data = structuredClone(row.data) as unknown as MachineData
+    data.contribution!.observation!.sessionKind = 'team'
+    await db.swarmMachine.update({ where: { id: row.id }, data: { data: data as never } })
+    try {
+      machineReportLine(0)
+      await expect(f.beat()).rejects.toMatchObject({ code: 'TEAM_HOST_ONLY' })
+      expect(machineReportLine(0)).toMatchObject({ fast: 0, full: 1 })
+    } finally {
+      // The machine's host form reads every Swarm it is in, and refuses this sign-in for one that records a Team account.
+      await db.swarmMachine.update({ where: { id: row.id }, data: { data: row.data as never } })
+    }
+  })
+
   it('its contribution was regenerated: refused as revoked', async () => {
     const f = await swarm()
     expect((await settle(f)).at(-1)).toBe('fast')
@@ -290,6 +311,18 @@ describe('time-based losses and Lent on the fast path', () => {
     expect(b.paths.every(p => p === 'full')).toBe(true)
     expect(a.lent).toEqual(b.lent)
     expect(a.lent?.[0]?.busyMs).toBe(4 * BEAT)
+  })
+
+  it('never lets a refused reading take the Swarm\'s sweep', async () => {
+    const f = await swarm(now => localReportMemory(now))
+    const lead = (extra: Partial<MachineObservation> = {}) => f.timed.observeMachine(host, f.tab, 'lead-host', { ...f.reading('lead-host', [f.harness.lead]), ...extra })
+    await lead()
+    await f.beat()
+    // The worker's machine goes silent past two minutes; a revoked reading arrives first, then the Lead machine's own.
+    f.clock.now += 125_000
+    await expect(lead({ generation: 'not-the-current-one' })).rejects.toMatchObject({ code: 'CONTRIBUTION_REVOKED' })
+    await lead()
+    expect((await f.assignment()).status).toBe('lost')
   })
 
   it('sweeps a Swarm once per 30 seconds between servers sharing one memory', async () => {
