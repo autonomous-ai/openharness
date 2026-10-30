@@ -2271,13 +2271,19 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect((await storedState(tab)).conversations.filter(c => c.reviewOf && c.reviewOf !== group)).toEqual([])
 
     const independent = (await storedState(tab)).conversations.find(c => c.id === group)!.checks[0]!.id
-    const pass = (reviewer: string) => run(tab, { type: 'work.check', conversationId: group, assignmentId: built, checkId: independent, passed: true, evidence: 'Pass at abc123.' }, host, reviewer)
+    // Each Reviewer gives its review's own verdict and passes the work, as swarm-review does.
+    const pass = async (reviewer: string) => {
+      const review = reviews.find(r => r.assignment?.agentId === reviewer)!
+      await run(tab, { type: 'work.check', conversationId: review.id, assignmentId: review.assignment!.id, checkId: review.checks[0]!.id, passed: true, evidence: 'Ready: yes at abc123.' }, host, reviewer)
+      await run(tab, { type: 'work.check', conversationId: group, assignmentId: built, checkId: independent, passed: true, evidence: 'Pass at abc123.' }, host, reviewer)
+    }
     const done = () => run(tab, { type: 'work.status', conversationId: group, assignmentId: built, status: 'done', result: 'Merged.' }, host, worker)
     await pass(reviewers[0]!)
     await expect(done()).rejects.toMatchObject({ code: 'REVIEWS_PENDING' })
     await pass(reviewers[1]!)
     expect((await storedState(tab)).conversations.find(c => c.id === group)!.assignment).toMatchObject({ handoffs: 1,
-      verdicts: reviewers.map(r => ({ by: `agent:${r}`, passed: true, handoff: 1 })) })
+      verdicts: reviewers.map(r => ({ by: `agent:${r}`, passed: true, handoff: 1, review: reviews.find(x => x.assignment?.agentId === r)!.id })) })
+    expect(reviews.map(r => r.reviewStamp)).toEqual([{ assignmentId: built, handoff: 1 }, { assignmentId: built, handoff: 1 }])
     await done()
     expect((await storedState(tab)).conversations.find(c => c.id === group)!.assignment!.status).toBe('done')
   })

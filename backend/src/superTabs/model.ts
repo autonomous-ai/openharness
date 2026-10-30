@@ -193,12 +193,17 @@ export interface Assignment {
    *  take it back (work.resume) unless it was handed on first. */
   lost?: { reason: string; at: number; resumeAt?: string }
 }
-/** One reviewer's (actorKey) latest verdict on a task's independent checks, at its [handoff]-th hand-over. */
-export interface ReviewVerdict { by: string; passed: boolean; handoff: number }
+/** One reviewer's (actorKey) latest verdict on a task's independent checks. `handoff`: the hand-over it counts for: a
+ *  person's or the Lead's at the hand-over they judged, a Reviewer's only once its [review] for that hand-over gave its own
+ *  verdict (autoReview.ts verdictHandoff), else -1, which never counts (review of #2382: a pass on an earlier head counted
+ *  for the next one). */
+export interface ReviewVerdict { by: string; passed: boolean; handoff: number; review?: string }
 /** Whether [assignment] has passing verdicts from [wanted] different reviewers at its latest hand-over. One review needs none
  *  of this: its checks say it. */
 export const reviewsPassed = (assignment: Assignment, wanted: number): boolean => wanted < 2 ||
   (assignment.verdicts ?? []).filter(v => v.passed && v.handoff === (assignment.handoffs ?? 0)).length >= wanted
+/** The hand-over of a task wanting two reviews that a review of it was opened for: its attempt, and which hand-over. */
+export interface ReviewStamp { assignmentId: string; handoff: number }
 export interface WorkTask {
   goal: string
   changes: string
@@ -256,6 +261,8 @@ export interface Conversation {
   task?: WorkTask
   /** A review group names the group whose work it reviews; only a Reviewer is assigned it, and a Reviewer nothing else. */
   reviewOf?: string
+  /** A review of a task wanting two reviews: the hand-over it reviews. A later hand-over closes it and opens a new one. */
+  reviewStamp?: ReviewStamp
   checks: Check[]
   assignment: Assignment | null
   lastMessageSequence: number

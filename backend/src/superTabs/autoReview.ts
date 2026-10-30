@@ -1,6 +1,6 @@
 import { githubRepository } from '../github/repository.js'
 import { agentDisplayName } from './agentNames.js'
-import { activeWork, agentRole, forRecipients, nextConversationNumber, renderWorkTask, reviewsWanted, stableId, type Agent, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
+import { activeWork, agentRole, finishWorker, forRecipients, nextConversationNumber, renderWorkTask, reviewsWanted, stableId, type Agent, type Author, type Conversation, type MessageDraft, type ReviewStamp, type SuperTabState } from './model.js'
 import { agentProjectId, groupProject, skillSetOf } from './projects.js'
 import { recordAsked, recordRun } from './leaderboard/record.js'
 import { renewLease } from './liveness.js'
@@ -35,6 +35,54 @@ const verdictGiven = (group: Conversation): boolean => group.checks.some(c => c.
 /** A review group whose Reviewer has given no verdict and that nobody cancelled. */
 const verdictMissing = (group: Conversation): boolean =>
   !!group.reviewOf && group.assignment?.status !== 'cancelled' && !verdictGiven(group)
+
+/** The hand-over of [group]'s work a review opened now reviews: only for a task wanting two reviews, whose done counts
+ *  passes per hand-over (model.ts reviewsPassed). */
+export function reviewStampOf(group: Conversation): ReviewStamp | undefined {
+  return reviewsWanted(group.task) > 1 && group.assignment ? { assignmentId: group.assignment.id, handoff: group.assignment.handoffs ?? 0 } : undefined
+}
+const sameStamp = (a: ReviewStamp | undefined, b: ReviewStamp | undefined) => !!a && !!b && a.assignmentId === b.assignmentId && a.handoff === b.handoff
+
+/** The review of [build] that [agentId] holds, its newest: the one its verdicts on [build]'s independent checks come through. */
+export const reviewHeldBy = (state: SuperTabState, build: Conversation, agentId: string): Conversation | undefined =>
+  state.conversations.filter(c => c.reviewOf === build.id && c.assignment?.agentId === agentId).sort((a, b) => (b.number ?? 0) - (a.number ?? 0))[0]
+
+/** The hand-over a verdict through [review] counts for: its own, once it gave its own verdict and still reviews [build]'s
+ *  current attempt, and was not closed; else -1, never counted. A pass on an earlier head, sent after the new head's review
+ *  was assigned, waits for that review's own verdict (review of #2382). */
+export function verdictHandoff(build: Conversation, review: Conversation): number {
+  const stamp = review.reviewStamp
+  return stamp && stamp.assignmentId === build.assignment?.id && review.assignment?.status !== 'cancelled' && verdictGiven(review) ? stamp.handoff : -1
+}
+
+/**
+ * Closes [group]'s open reviews left on an earlier hand-over when its Engineer hands over a new head, so each of the two
+ * reviews its task wants opens again for this one (review of #2382: a Reviewer still on head 1 passed, and it counted for
+ * head 2). One with a Reviewer is cancelled and its Reviewer told; one nobody took yet just moves to this hand-over.
+ */
+export function supersedeReviews(state: SuperTabState, group: Conversation, operationId: string, author: Author): MessageDraft[] {
+  const stamp = reviewStampOf(group)
+  if (!stamp) return []
+  const messages: MessageDraft[] = []
+  for (const review of openReviewsOf(state, group).filter(r => !sameStamp(r.reviewStamp, stamp))) {
+    if (!review.assignment) { review.reviewStamp = stamp; continue }
+    const reviewer = review.assignment.agentId, ended = !activeWork(review)
+    review.assignment.status = 'cancelled'
+    review.assignment.result = `#${group.number} handed over a new revision.`
+    if (!ended) finishWorker(state, reviewer, review)
+    messages.push({ id: stableId(operationId, 'auto-review', 'superseded', review.id), conversationId: review.id, author, replyTo: null,
+      recipients: ended ? [] : [reviewer], source: forRecipients({ kind: 'auto-review', reviewOf: group.id }),
+      text: `#${group.number} handed over a new revision, so this review is closed and its verdict no longer counts. A new review opens for the new revision. Stop working on this one.` })
+  }
+  return messages
+}
+
+/** Whether the Swarm opens reviews for [group] by itself: not while paused, nor on Custom skills without a reviewer role
+ *  (commands.ts requireCustomRole). */
+export function opensReviews(state: SuperTabState, group: Conversation): boolean {
+  const project = groupProject(state, group)
+  return !state.paused && !(skillSetOf(project) === 'custom' && !project.roles?.some(r => r.kind === 'reviewer'))
+}
 
 /** The reviews of [group] still open: not archived, not cancelled and with no verdict yet, oldest first. */
 export const openReviewsOf = (state: SuperTabState, group: Conversation): Conversation[] =>
@@ -109,6 +157,12 @@ function briefOf(group: Conversation, handoff: string, pullRequest: string, earl
   ].join('\n\n')
 }
 
+/** Who writes the Swarm's own review rows in [group]: its project's Lead, or [fallback] in a group with no Lead. */
+export function swarmAuthor(state: SuperTabState, group: Conversation, fallback: Author): Author {
+  const lead = state.agents.find(a => a.id === group.leadId)
+  return lead ? { kind: 'agent', id: lead.id, name: lead.name, displayName: agentDisplayName(state.agents, lead.id), membershipGeneration: lead.membershipGeneration } : fallback
+}
+
 export interface OpenedReview { reviews: { review: Conversation; reviewer: Agent | null }[]; messages: MessageDraft[] }
 
 /**
@@ -122,9 +176,7 @@ export interface OpenedReview { reviews: { review: Conversation; reviewer: Agent
  */
 export function openReview(state: SuperTabState, group: Conversation, handoff: string, pullRequest: string,
   context: { operationId: string; now: number; engineer: Author; mayWork: (agent: Agent) => boolean; strength: (agent: Agent) => number }): OpenedReview | null {
-  const project = groupProject(state, group)
-  // On Custom skills without a reviewer role there are no review groups (commands.ts requireCustomRole).
-  if (state.paused || (skillSetOf(project) === 'custom' && !project.roles?.some(r => r.kind === 'reviewer'))) return null
+  if (!opensReviews(state, group)) return null
   const open = openReviewsOf(state, group), wanted = reviewsWanted(group.task)
   if (open.length >= wanted) return null
   // Only a review that gave its verdict reviewed an earlier head: one cancelled before it reviewed nothing (#610 review).
@@ -134,9 +186,8 @@ export function openReview(state: SuperTabState, group: Conversation, handoff: s
   const taken = new Set(open.flatMap(c => c.assignment ? [c.assignment.agentId] : []))
   const engineer = state.agents.find(a => a.id === group.assignment?.agentId)
   const leadId = group.leadId
-  const lead = state.agents.find(a => a.id === leadId)
-  const author: Author = lead ? { kind: 'agent', id: lead.id, name: lead.name, displayName: agentDisplayName(state.agents, lead.id),
-    membershipGeneration: lead.membershipGeneration } : context.engineer
+  const author = swarmAuthor(state, group, context.engineer)
+  const stamp = reviewStampOf(group)
   const opened: OpenedReview = { reviews: [], messages: [] }
   for (let index = open.length; index < wanted; index++) {
     // The first keeps the ids a one-review task always had, so a retried write finds the same rows.
@@ -150,7 +201,7 @@ export function openReview(state: SuperTabState, group: Conversation, handoff: s
     const brief = briefOf(group, handoff, pullRequest, previous, { index, of: wanted })
     const review: Conversation = { id, ...(group.projectId ? { projectId: group.projectId } : {}), number,
       title: `${index ? 'Second review' : 'Review'}: ${group.title}`.slice(0, 160),
-      leadId, agentIds: leadId ? [leadId] : [], archived: false, brief, reviewOf: group.id, assignment: null, lastMessageSequence: 0,
+      leadId, agentIds: leadId ? [leadId] : [], archived: false, brief, reviewOf: group.id, ...(stamp ? { reviewStamp: stamp } : {}), assignment: null, lastMessageSequence: 0,
       checks: [{ description: VERDICT_CHECK, independent: false, id: stableId(id, '0'), evidence: null, passedBy: null }] }
     state.conversations.push(review)
     recordAsked(review, group.requesterId, context.now)
