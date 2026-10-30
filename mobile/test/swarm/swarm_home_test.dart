@@ -7,6 +7,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
+import 'package:harness_mobile/phone/phone_navigation.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart'
     show AppFont, AppPalette;
@@ -19,6 +20,7 @@ import 'package:harness_mobile/swarm/swarm_needs_page.dart';
 import 'package:harness_mobile/swarm/swarm_activity_page.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
+import 'package:harness_mobile/swarm/swarm_project_tabs.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_row.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
@@ -1179,6 +1181,52 @@ void main() {
         find.byType(SwarmProjectPage),
       );
       expect((page.swarmId, page.projectId), (tab, web));
+      expectHomeCProject('Web');
+    });
+
+    testWidgets("Jump to's pick opens Home C's project screen", (tester) async {
+      await pump(tester, backend());
+      await tester.tap(key('swarm-jump'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-jump-$tab-$web'));
+      await tester.pumpAndSettle();
+
+      expectHomeCProject('Web');
+    });
+
+    testWidgets('compose opens the picked project on Home C too', (
+      tester,
+    ) async {
+      await pump(tester, backend());
+      await tester.tap(key('swarm-compose'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-jump-$tab-$web'));
+      await tester.pumpAndSettle();
+
+      expectHomeCProject('Web');
+    });
+
+    testWidgets('back from a task opened on Team is the same Home C screen, '
+        'on Team', (tester) async {
+      await pump(tester, backend());
+      await tester.tap(key('swarm-project-$tab-$project'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-project-tab-team'));
+      await tester.pumpAndSettle();
+      final task = find.byWidgetPredicate(
+        (w) => switch (w.key) {
+          ValueKey<String>(:final value) => value.startsWith('swarm-task-'),
+          _ => false,
+        },
+      );
+      await tester.tap(task.first);
+      await tester.pumpAndSettle();
+      expect(key('swarm-chat-header'), findsOneWidget, reason: 'the task');
+
+      await tester.tap(key('tty-back'));
+      await tester.pumpAndSettle();
+      expectHomeCProject('Mobile');
+      expect(key('swarm-project-body-team'), findsOneWidget);
     });
   });
 
@@ -1597,11 +1645,28 @@ void main() {
     });
   });
 
+  /// Project [id] on direction B's page (prototype B2), over Home as Home
+  /// opened it before Swarm Home C: no way into a project opens B's tabs now
+  /// ([SwarmProjectTab.current]), so it is opened as it is built.
+  Future<void> openProjectB(WidgetTester tester, String id) async {
+    unawaited(
+      Navigator.of(tester.element(find.byType(SwarmPage))).push(
+        phoneRoute(
+          (_) => SwarmProjectPage(
+            swarmId: tab,
+            projectId: id,
+            tabs: SwarmProjectTab.homeB,
+          ),
+          listensForItself: true,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+  }
+
   group('a project', () {
-    Future<void> openProject(WidgetTester tester, String id) async {
-      await tester.tap(key('swarm-project-$tab-$id'));
-      await tester.pumpAndSettle();
-    }
+    Future<void> openProject(WidgetTester tester, String id) =>
+        openProjectB(tester, id);
 
     /// One of the project's tabs.
     Future<void> openTab(WidgetTester tester, String name) async {
@@ -2011,8 +2076,7 @@ void main() {
 
   group('the Tasks tab', () {
     Future<void> openTasks(WidgetTester tester) async {
-      await tester.tap(key('swarm-project-$tab-$project'));
-      await tester.pumpAndSettle();
+      await openProjectB(tester, project);
       await tester.tap(key('swarm-project-tab-tasks'));
       await tester.pumpAndSettle();
     }

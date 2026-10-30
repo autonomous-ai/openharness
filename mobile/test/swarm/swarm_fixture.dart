@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart' show CancelToken;
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:harness_mobile/swarm/swarm_home_cache.dart';
@@ -380,6 +381,24 @@ SwarmHomeCache memoryHomeCache() {
 }
 
 /// Waits, in real time, until [done] holds: at most a few seconds.
+/// Swarm Home C's project screen is up for the project named [name]: its
+/// #name, and the tabs Chat and Team, none of direction B's (Buddy, Tasks,
+/// Leaderboard) nor B's team button.
+void expectHomeCProject(String name) {
+  Finder tab(String t) => find.byKey(ValueKey('swarm-project-tab-$t'));
+  expect(find.text('#$name'), findsOneWidget, reason: 'its #name');
+  expect(tab('chat'), findsOneWidget, reason: 'Chat');
+  expect(tab('team'), findsOneWidget, reason: 'Team');
+  for (final b in ['buddy', 'tasks', 'leaderboard']) {
+    expect(tab(b), findsNothing, reason: "B's $b tab");
+  }
+  expect(
+    find.byKey(const ValueKey('swarm-project-team')),
+    findsNothing,
+    reason: "B's team button",
+  );
+}
+
 Future<void> until(bool Function() done) async {
   for (var i = 0; i < 500 && !done(); i++) {
     await Future<void>.delayed(const Duration(milliseconds: 10));
