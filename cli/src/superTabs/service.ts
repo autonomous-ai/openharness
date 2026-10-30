@@ -4,6 +4,7 @@ import { readAuthSession } from '../lib/authSession.js'
 import { createHash } from 'node:crypto'
 import type { CoreApi, ServiceRequests, SuperTabsPort } from '../core/api.js'
 import { validModelTokens } from '../lib/agentUsageWire.js'
+import { ASSIGNMENT_COMMANDS, staleAssignmentHint, wantsCurrent, withCurrentAssignment } from './assignmentIds.js'
 import { backend, swarmRoleFor, hostJournalFile, identifier, object, SuperTabHost, SuperTabHostError, type SuperTabHostOptions, type SwarmSources } from './host.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads, type SwarmRead } from './swarmReads.js'
@@ -85,7 +86,7 @@ const HELP = {
     { type: 'conversation.create', title: 'Review: Outcome', reviewOf: 'GROUP', task: { goal: 'An independent verdict on the Builder\'s revision', changes: 'None: read only', constraints: 'The reviewed group\'s constraints', owns: ['The reviewed group\'s owned code, read only'] }, checks: [{ description: 'Verdict with the reviewed revision', independent: false }] },
     { type: 'conversation.agent', conversationId: 'GROUP', agentId: 'AGENT', present: true, lead: false },
     { type: 'work.define', conversationId: 'GROUP', task: { goal: 'What to deliver', changes: 'What changes', constraints: 'What must stay true', owns: ['Paths or code areas'] }, checks: [{ description: 'Observable acceptance evidence', independent: false }] },
-    { type: 'work.cancel', conversationId: 'GROUP', assignmentId: 'ATTEMPT', reason: 'Lead or tab owner only: why the task is cancelled, in one short sentence' },
+    { type: 'work.cancel', conversationId: 'GROUP', assignmentId: 'current', reason: 'Lead or tab owner only: why the task is cancelled, in one short sentence' },
     { type: 'conversation.merged', conversationId: 'GROUP', pullRequestUrl: 'https://github.com/OWNER/REPOSITORY/pull/NUMBER', mergedAt: 'Optional ISO time of a merge recorded later' },
     { type: 'agent.release', agentId: 'AGENT', decision: 'keep|stop' },
     { type: 'rule.set', rule: { kind: 'forbidModel', model: 'haiku' }, text: 'The owner\'s words: No Haiku.', askedIn: { conversationId: 'GROUP', messageId: 'OWNER_MESSAGE' } },
@@ -97,15 +98,15 @@ const HELP = {
     { type: 'rule.remove', ruleId: 'RULE', askedIn: { conversationId: 'GROUP', messageId: 'OWNER_MESSAGE' } },
     { type: 'machine.engineResume', machineId: 'MACHINE', engine: 'codex', askedIn: { conversationId: 'GROUP', messageId: 'OWNER_MESSAGE' } },
     { type: 'work.assign', conversationId: 'GROUP', agentId: 'AGENT', routeDecisionId: 'DECISION' },
-    { type: 'work.status', conversationId: 'GROUP', assignmentId: 'ATTEMPT', status: 'working', result: null },
+    { type: 'work.status', conversationId: 'GROUP', assignmentId: 'current', status: 'working', result: null },
     // Both reach the Lead and alert the Harness Pro on the machine running the agent until the status moves on.
-    { type: 'work.status', conversationId: 'GROUP', assignmentId: 'ATTEMPT', status: 'needs_human', result: 'The decision you need from a person, asked as one short question' },
+    { type: 'work.status', conversationId: 'GROUP', assignmentId: 'current', status: 'needs_human', result: 'The decision you need from a person, asked as one short question' },
     // The same, opened as a decision for one person in the conversation (decisions in help).
-    { type: 'work.status', conversationId: 'GROUP', assignmentId: 'ATTEMPT', status: 'needs_human', result: 'The question, in one sentence',
+    { type: 'work.status', conversationId: 'GROUP', assignmentId: 'current', status: 'needs_human', result: 'The question, in one sentence',
       ask: { personId: 'PERSON', options: ['Option A', 'Option B'], recommended: 0, unblocks: 'What the answer unblocks' } },
-    { type: 'work.status', conversationId: 'GROUP', assignmentId: 'ATTEMPT', status: 'blocked', result: 'Why you are stuck and what would unblock you, in one or two sentences' },
-    { type: 'work.check', conversationId: 'GROUP', assignmentId: 'ATTEMPT', checkId: 'CHECK', passed: true, evidence: 'Exact test command, revision and observed result' },
-    { type: 'work.status', conversationId: 'GROUP', assignmentId: 'ATTEMPT', status: 'done', result: 'Exact revision, evidence and deliverable links' },
+    { type: 'work.status', conversationId: 'GROUP', assignmentId: 'current', status: 'blocked', result: 'Why you are stuck and what would unblock you, in one or two sentences' },
+    { type: 'work.check', conversationId: 'GROUP', assignmentId: 'current', checkId: 'CHECK', passed: true, evidence: 'Exact test command, revision and observed result' },
+    { type: 'work.status', conversationId: 'GROUP', assignmentId: 'current', status: 'done', result: 'Exact revision, evidence and deliverable links' },
   ],
 }
 
@@ -596,11 +597,19 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           } catch { return { ok: true, value: page } }
         }
         if (payload.action === 'command' && identifier(payload.operationId) && payload.command && typeof payload.command === 'object' && !Array.isArray(payload.command)) {
-          const command = await finishingWith(core, await mentionCommand(taskCommand(object(payload.command)), async () => (await swarm()).state), String(agent.harnessId))
+          const asked = object(payload.command)
+          // `current` (or no id) names the group's active assignment for the agent (superTabs/assignmentIds.ts).
+          const filled = wantsCurrent(asked) ? withCurrentAssignment(asked, (await swarm()).state, agentId) : asked
+          const command = await finishingWith(core, await mentionCommand(taskCommand(filled), async () => (await swarm()).state), String(agent.harnessId))
           const send = (command: Record<string, unknown>) => backend(core, 'POST', `${path}/commands`,
             { operationId: payload.operationId, command, asAgentId: agentId })
           let value: unknown
           try { value = await send(command) } catch (error) {
+            // A stale id gets the one to use, so the agent can send it again right.
+            if (error instanceof SuperTabHostError && error.code === 'STALE_ASSIGNMENT' && ASSIGNMENT_COMMANDS.has(String(command.type))) {
+              const hint = await swarm().then(read => staleAssignmentHint(command, read.state, agentId), () => '')
+              throw new SuperTabHostError(error.code, `${error.message}${hint ? ` ${hint}` : ''}`, error.status)
+            }
             // A backend from before cost records refuses the totals; the status itself still goes.
             if (command.tokens && error instanceof SuperTabHostError && error.status === 400 && error.code === 'VALIDATION_ERROR' && /"tokens"|'tokens'/.test(error.message)) {
               const { tokens: _tokens, ...status } = command

@@ -51,6 +51,7 @@ class SuperTabMessageRow extends StatefulWidget {
     this.thread,
     this.threadUnread = false,
     this.onOpenThread,
+    this.member,
     this.link,
     this.linkTarget,
     this.onOpenLink,
@@ -69,6 +70,10 @@ class SuperTabMessageRow extends StatefulWidget {
   /// Opens [message]'s thread: from its reply line, or from an also-sent
   /// reply's mark.
   final VoidCallback? onOpenThread;
+
+  /// Who a thread's reply author is in the Swarm now, for the faces on its
+  /// reply line; without it each shows the face its recorded name gives.
+  final SuperTabMemberOf? member;
 
   /// The person a Buddy's proposal speaks for, by name, from the server's tag
   /// on it ([SuperTabMessage.proposalOwnerId]); null for any other message.
@@ -504,6 +509,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                   thread: thread,
                                   unread: widget.threadUnread,
                                   onOpen: open,
+                                  member: widget.member,
                                 ),
                               ...widget.receipts,
                             ],
@@ -703,6 +709,15 @@ class _SuperTabLinkState extends State<SuperTabLink> {
   }
 }
 
+/// Who a message author is in the Swarm as last read, by kind and id: the
+/// person, or the agent, whose face their own messages wear. Both are null
+/// for someone no longer in it.
+typedef SuperTabMemberOf =
+    ({SuperTabPerson? person, SuperTabAgent? agent}) Function(
+      String kind,
+      String id,
+    );
+
 /// The line under a thread's root: who replied, how many replies, and when
 /// the last came. Bold while the thread has a reply the reader has not seen.
 class SuperTabThreadLine extends StatelessWidget {
@@ -711,11 +726,37 @@ class SuperTabThreadLine extends StatelessWidget {
     required this.thread,
     required this.unread,
     required this.onOpen,
+    this.member,
   });
 
   final SuperTabThread thread;
   final bool unread;
   final VoidCallback onOpen;
+
+  /// Dresses each reply author as their own messages are: a person's
+  /// picture and status, an agent's avatar.
+  final SuperTabMemberOf? member;
+
+  Widget _face(Map<String, dynamic> author) {
+    const size = grid.AppDesktop.iconSize;
+    final kind = author['kind'] as String? ?? '';
+    final id = author['id'] as String? ?? '';
+    switch ((kind, member?.call(kind, id))) {
+      case ('agent', (agent: final agent?, person: _)):
+        return SuperTabAvatar.agent(agent, size: size, engineBadge: false);
+      case ('person', (person: final person?, agent: _)):
+        return SuperTabAvatar.person(person, size: size);
+    }
+    // Someone no longer in the Swarm keeps the face their recorded name gives.
+    return SuperTabAvatar(
+      identity: '$kind:$id',
+      name: kind == 'agent'
+          ? (author['displayName'] ?? author['name'] ?? 'Agent') as String
+          : superTabPersonName(author['name'] as String? ?? ''),
+      size: size,
+      pattern: kind == 'agent',
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -731,15 +772,7 @@ class SuperTabThreadLine extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             for (final author in thread.authors) ...[
-              SuperTabAvatar(
-                identity: '${author['kind']}:${author['id']}',
-                name: author['kind'] == 'agent'
-                    ? (author['displayName'] ?? author['name'] ?? 'Agent')
-                          as String
-                    : superTabPersonName(author['name'] as String? ?? ''),
-                size: grid.AppDesktop.iconSize,
-                pattern: author['kind'] == 'agent',
-              ),
+              _face(author),
               const SizedBox(width: grid.AppDesktop.menuInset),
             ],
             Text(

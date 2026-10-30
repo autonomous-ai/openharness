@@ -12,6 +12,7 @@ import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_style.dart';
+import 'package:harness_mobile/swarm/swarm_you_page.dart';
 import 'package:harness_mobile/swarm/waiting_work.dart';
 
 import '../voice_fakes.dart';
@@ -61,10 +62,11 @@ void main() {
   /// account's [computers]. Unless [list] answers it, no computer answers:
   /// the list never comes back. Pumped until the kept view is read off disk.
   /// [readMarks] keeps the phone's marks and Home's choices; by default on
-  /// disk, as on the phone.
+  /// disk, as on the phone. [home] is the screen drawn, Home by default.
   Future<({SwarmHost host, FakeSwarm fake})> coldStart(
     WidgetTester tester, {
     bool keep = true,
+    Widget home = const SwarmPage(),
     FakeComputers? computers,
     LocalKeyValueStore? readMarks,
     FutureOr<Object?> Function(Map<String, dynamic>? body)? list,
@@ -95,7 +97,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         builder: (context, child) => SwarmScope(notifier: host, child: child!),
-        home: const SwarmPage(),
+        home: home,
       ),
     );
     // The kept view is read off disk: real time, then a frame, until it is.
@@ -128,7 +130,7 @@ void main() {
         find.byKey(const ValueKey('swarm-project-$tab-$project')),
         findsOneWidget,
       );
-      expect(find.text('Mobile'), findsWidgets);
+      expect(find.text('#Mobile'), findsOneWidget);
       expect(
         find.descendant(
           of: key('swarm-project-$tab-$project'),
@@ -137,37 +139,41 @@ void main() {
         findsOneWidget,
         reason: 'its team',
       );
-      expect(find.textContaining('Fix login'), findsOneWidget);
+      expect(
+        [for (final need in host.session!.inbox.needs) need.conversationId],
+        ['g1'],
+        reason: 'Nova waiting in Fix login, kept for Activity',
+      );
       expect(host.session!.inbox.loaded, isFalse, reason: 'nothing read yet');
       expect(fake.paths, ['/api/super-tabs/list']);
     },
   );
 
   testWidgets(
-    'a cold start lists the Swarms kept in the drawer, with none on their '
-    'way',
+    'a cold start names the Swarm kept in the title, and its switcher lists '
+    'it, with none on their way',
     (tester) async {
       await coldStart(tester);
+      expect(tester.widget<Text>(key('swarm-title')).data, 'Phone Swarm');
 
-      await tester.tap(key('swarm-menu'));
+      await tester.tap(key('swarm-title-button'));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 500));
 
-      expect(key('swarm-drawer-swarm-$tab'), findsOneWidget);
-      expect(key('swarm-drawer-home'), findsOneWidget);
+      expect(key('swarm-switch-$tab'), findsOneWidget);
+      expect(key('swarm-switch-join'), findsOneWidget);
       expect(find.byType(SwarmSkeletonRows), findsNothing);
     },
   );
 
-  testWidgets('a cold start draws you first in the menu, in your picture', (
+  testWidgets('a cold start draws you first on You, in your picture', (
     tester,
   ) async {
-    await coldStart(tester);
-    await tester.tap(key('swarm-menu'));
+    await coldStart(tester, home: const SwarmYouPage());
     for (var i = 0; i < 5; i++) {
       await tester.pump(const Duration(milliseconds: 100));
     }
-    final you = key('swarm-drawer-you-$tab');
+    final you = key('swarm-you-me');
     expect(find.descendant(of: you, matching: find.text('🦊')), findsOneWidget);
     // The kept view holds no email: no name to give, so You.
     expect(
@@ -469,7 +475,10 @@ Finder key(String value) => find.byKey(ValueKey(value));
 void stopReads(SwarmHost host) => host.foreground = false;
 
 /// Home's quiet "Updating…" under its title.
+/// "Updating…" under Home's title: the tab's, or the top bar's when pushed.
 Finder updating() => find.descendant(
-  of: find.byType(SwarmTopBar),
+  of: find.byWidgetPredicate(
+    (widget) => widget is SwarmTabHeader || widget is SwarmTopBar,
+  ),
   matching: find.text('Updating…'),
 );

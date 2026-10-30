@@ -12,7 +12,6 @@ import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
-import 'package:harness_mobile/swarm/swarm_drawer.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
@@ -22,8 +21,8 @@ import '../test/swarm/swarm_fixture.dart';
 
 /// Swarm Home in the real shell on a simulator, a screenshot at each step:
 /// the app opens on Swarm Home; Needs you opens one thing at a time, a tag
-/// with Done, a decision answered with one tap and its Undo; the drawer with
-/// Buddies, the projects and a project's chats, and no Harness there; a
+/// with Done, a decision answered with one tap and its Undo; the Swarm
+/// switcher, and no Harness there; a
 /// project on its project chat, its ⋮ menu at the top right; the Buddy chat
 /// itself; Harness through an agent's notice and back with the terminal's
 /// Swarm mark; and Swarm turned off, the terminal as it always was.
@@ -41,7 +40,7 @@ import '../test/swarm/swarm_fixture.dart';
 void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('Swarm Home, its drawer and a project, in the real shell', (
+  testWidgets('Swarm Home, its switcher and a project, in the real shell', (
     tester,
   ) async {
     final swarm = _Swarm();
@@ -59,9 +58,9 @@ void main() {
       await walk.wait(1200);
     }
 
-    Future<void> drawer() async {
-      await tester.tap(walk.key('swarm-menu'));
-      await walk.waitFor(walk.key('swarm-drawer-home'));
+    Future<void> switcher() async {
+      await tester.tap(walk.key('swarm-title-button'));
+      await walk.waitFor(walk.key('swarm-switch-$tab'));
     }
 
     // ① The app opens on Swarm Home: Needs you, one thing open; Buddies;
@@ -96,21 +95,16 @@ void main() {
     expect(swarm.done, ['m1']);
     await walk.shot('tag-done');
 
-    // ⑤ The drawer: Swarm Home, the projects with their initial and team
-    // line, then Settings, and no Harness; a project's arrow lists its chats,
-    // Buddy chat first, where Chat with PM was (#2090).
-    await drawer();
-    expect(walk.key('swarm-drawer-settings'), findsOneWidget);
-    expect(walk.key('swarm-drawer-harness'), findsNothing);
-    await walk.shot('drawer');
-    await tester.tap(walk.key('swarm-drawer-chats-$tab-$project'));
-    await walk.waitFor(walk.key('swarm-drawer-buddy-chat-$tab-$project'));
-    await walk.waitFor(walk.key('swarm-drawer-chat-$leadChat'));
-    await walk.shot('drawer-chats');
+    // ⑤ The switcher: the Swarm ticked, Join or create, and no Harness.
+    await switcher();
+    expect(walk.key('swarm-switch-join'), findsOneWidget);
+    expect(find.textContaining('Harness'), findsNothing);
+    await walk.shot('switcher');
+    await back();
 
-    // ⑥ A project's name opens it on its project chat, its ⋮ menu at the
+    // ⑥ A project's row opens it on its project chat, its ⋮ menu at the
     // top right and nothing under the header.
-    await tester.tap(walk.key('swarm-drawer-project-$tab-$project'));
+    await tester.tap(walk.key('swarm-project-$tab-$project'));
     await walk.waitFor(walk.key('swarm-project-menu'));
     expect(find.byType(SwarmProjectPage), findsOneWidget);
     await walk.shot('project');
@@ -143,7 +137,7 @@ void main() {
     await walk.shot('buddy-chat');
     await back();
     await back();
-    await walk.waitFor(walk.key('swarm-menu'));
+    await walk.waitFor(walk.key('swarm-title-button'));
 
     // ⑧ Open terminal from the project team: Harness at the root. Its Swarm mark goes back to Swarm Home.
     await _openTerminal(tester, walk);
@@ -151,14 +145,14 @@ void main() {
     await walk.wait(1500);
     await walk.shot('harness');
     await tester.tap(walk.key('swarm-mark'));
-    await walk.waitFor(walk.key('swarm-menu'));
+    await walk.waitFor(walk.key('swarm-title-button'));
     expect(walk.key('tty-back'), findsNothing, reason: 'Home, not a page');
     await walk.shot('home-from-mark');
 
     // ⑨ Swarm off: the terminal, as it always was.
     experimentalFeaturesStore.value = const {};
     await walk.waitFor(find.byKey(const ValueKey('terminal-title')));
-    expect(walk.key('swarm-menu'), findsNothing);
+    expect(walk.key('swarm-title-button'), findsNothing);
     await walk.wait(1500);
     await walk.shot('swarm-off');
   }, timeout: const Timeout(Duration(minutes: 3)));
@@ -192,7 +186,7 @@ void main() {
 
     // ③ Back to Home with the Swarm mark: scrolled where it was.
     await tester.tap(walk.key('swarm-mark'));
-    await walk.waitFor(walk.key('swarm-menu'));
+    await walk.waitFor(walk.key('swarm-title-button'));
     expect(offset(), scrolled);
     await walk.shot('home-back');
   }, timeout: const Timeout(Duration(minutes: 2)));
@@ -252,20 +246,18 @@ Future<void> _openTerminal(WidgetTester tester, _Walk walk) async {
     await tester.tap(walk.key(key));
   }
 
-  await tap('swarm-menu');
-  await walk.waitFor(walk.key('swarm-drawer-home'));
-  // Below a Buddy row for every project.
+  await walk.waitFor(walk.key('swarm-title-button'));
   await tester.scrollUntilVisible(
-    walk.key('swarm-drawer-project-$tab-$project'),
+    walk.key('swarm-project-$tab-$project'),
     200,
     scrollable: find
         .descendant(
-          of: find.byType(SwarmDrawer),
+          of: find.byType(SwarmPage),
           matching: find.byType(Scrollable),
         )
         .first,
   );
-  await tap('swarm-drawer-project-$tab-$project');
+  await tap('swarm-project-$tab-$project');
   await tap('swarm-project-menu');
   await tap('swarm-project-menu-status');
   await tap('swarm-sheet-team');
