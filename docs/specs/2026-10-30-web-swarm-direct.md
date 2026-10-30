@@ -83,14 +83,16 @@ browser coming back online, not on a machine connecting. The machine-connect tri
 
 ### Caching and offline
 
-Unchanged in kind, with one gap left for a follow-up (below). The web's saved Swarm views (`SuperTabSavedViews`, browser storage) are already claimed per
+Unchanged in kind. The web's saved Swarm views (`SuperTabSavedViews`, browser storage) are already claimed per
 account, forgotten when another account signs in on that browser or the account leaves, and cleared by Settings ▸
 Account ▸ Clear now. In-memory state is per account generation (`SuperTabClient.request` drops answers that land
 after an account change; `superTabMachineRequest` the same by `_authRevision`). Offline: reads fail with the network
 text above and retry on the existing poll; posts stay in the composer with their operation id, as now.
 
-What a sign-out on the web leaves in browser storage today (each keyed by account, so another account signing in never
-reads them through the app, but they stay on a shared browser). Follow-up: clear them on a web sign-out.
+What else the web keeps of an account in browser storage, each keyed by account. A web sign-out (or another account
+signing in) removes the leaving account's, and leaves any other account's (`super_tabs/account_keys.dart`). A write for an
+account no longer signed in on that page is dropped, so a draft saved late cannot put one back; one another page wrote
+before it reloaded is swept at the next sign-in or page start (`super_tab.signed_out`, at most 16 accounts).
 - `super_tab.<account>.<swarm>`: each Swarm's unsent composer drafts per conversation, its selection and what is expanded;
 - `super_tab.launch.<account>.<tab>.<conversation>`: an unsent New Harness or New Project draft;
 - `super_tab.hidden.<account>`: the Swarms hidden on this browser;
@@ -150,8 +152,10 @@ sign-out on shared machines), no critical or important findings; their minor one
    or the Team account's. Missing or expired sign-in: the backend answers 401, and the app's existing sign-in flow
    takes over. Nothing falls back to a machine.
 9. **Failure:** backend unreachable → "Could not reach Harness. Check your connection." with a bounded retry on the
-   existing poll (no stuck Loading). Access lost (403/404) → the existing `accessRevoked` path clears the view, as
-   today. Account changed mid-request → the answer is dropped (`ACCOUNT_CHANGED`). A machine-only action whose machine
+   existing poll (no stuck Loading). Access lost → the existing `accessRevoked` path clears the view, as
+   today. On the routes a person's app calls, anything the caller cannot reach (missing, never joined, removed, outside
+   the Workspace, a refused link, another project's chat) answers one 404 with one body (`routes/superTabs.ts`
+   `NOT_AVAILABLE`), so the answer never says which; the server log keeps the reason. Account changed mid-request → the answer is dropped (`ACCOUNT_CHANGED`). A machine-only action whose machine
    cannot answer → the specific text in the table above. 426 → "Update Harness".
 10. **Platforms:** web on desktop and phone browsers changes. Native macOS, Windows and Linux are unchanged (local
     daemon). The phone app is unchanged (still relays) and is a follow-up.

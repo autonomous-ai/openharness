@@ -30,6 +30,7 @@ import { UPDATE_REQUIRED } from '../superTabs/read/contract.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { DEFAULT_DAYS, MAX_DAYS } from '../superTabs/costs/read.js'
+import { WORKSPACE_ACCESS_REVOKED } from '../superTabs/workspaceStore.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const tabParams = z.object({ tabId: id })
@@ -111,9 +112,51 @@ const githubToken = z.object({ machineId: id }).strict()
 const githubStartToken = z.object({ always: z.boolean().optional() }).strict()
 
 
+/**
+ * The routes about one Swarm that a sign-in may call: the web with the browser's own sign-in (desktop
+ * super_tabs/backend_transport.dart), Desktop and the phone through their machine, and a machine's host and its agents.
+ * On these, a Swarm, chat, message, project, decision, start, delivery, file or link the caller cannot reach gets one
+ * answer, whether it is missing, refused, revoked, outside its Workspace or in another project, so the answer never says
+ * which. The server log keeps the specific reason. Role refusals inside a Swarm the caller reads (read-only,
+ * owner-only) keep their own words: they tell nothing the caller cannot already see. Hosts read 403 and 404 alike as
+ * access lost (cli superTabs/machines.ts, swarmReads.ts).
+ */
+export const NOT_AVAILABLE_ROUTES: ReadonlySet<string> = new Set([
+  'GET /api/super-tabs/:tabId/parts', 'GET /api/super-tabs/:tabId/changes', 'GET /api/super-tabs/:tabId/inbox', 'POST /api/super-tabs/:tabId/commands',
+  'GET /api/super-tabs/:tabId/mentions', 'GET /api/super-tabs/:tabId/decisions', 'GET /api/super-tabs/:tabId/leaderboard',
+  'GET /api/super-tabs/:tabId/sharing', 'POST /api/super-tabs/:tabId/sharing', 'GET /api/super-tabs/:tabId/routing-policy',
+  'GET /api/super-tabs/:tabId/groups', 'GET /api/super-tabs/:tabId/groups/:conversationId',
+  'POST /api/super-tabs/:tabId/join', 'POST /api/super-tabs/:tabId/join/preview', 'POST /api/super-tabs/:tabId/native',
+  'GET /api/super-tabs/:tabId/conversations/:conversationId/messages', 'GET /api/super-tabs/:tabId/conversations/:conversationId/catch-up',
+  'POST /api/super-tabs/:tabId/conversations/:conversationId/read',
+  'GET /api/super-tabs/:tabId/projects/:projectId/github', 'POST /api/super-tabs/:tabId/projects/:projectId/github/approve',
+  'GET /api/super-tabs/:tabId/projects/:projectId/roles/:roleId', 'GET /api/super-tabs/:tabId/route-decisions/:decisionId',
+  'GET /api/super-tabs/:tabId/machines/:machineId/removal',
+  'POST /api/super-tabs/:tabId/attachments', 'POST /api/super-tabs/:tabId/avatars',
+  // Reached by any sign-in too (review of #2333): Workspace settings, costs, routing and the host's own reads.
+  'POST /api/super-tabs/:tabId/workspace-visibility', 'POST /api/super-tabs/:tabId/workspace-join', 'GET /api/super-tabs/:tabId/costs',
+  'GET /api/super-tabs/:tabId/route-decisions', 'GET /api/super-tabs/:tabId/starts/:startId',
+  'GET /api/super-tabs/:tabId/conversations/:conversationId/attempts', 'GET /api/super-tabs/:tabId/terminal/:requestId',
+  'GET /api/super-tabs/:tabId/agents/:agentId/deliveries', 'GET /api/super-tabs/:tabId/agents/:agentId/deliveries/:deliveryId',
+  'POST /api/super-tabs/:tabId/agents/:agentId/deliveries/:deliveryId',
+  'GET /api/super-tabs/:tabId/native/:contextId', 'POST /api/super-tabs/:tabId/native/:contextId', 'POST /api/super-tabs/:tabId/github-token',
+  'POST /api/super-tabs/:tabId/machines/:machineId', 'POST /api/super-tabs/:tabId/stopped',
+])
+/** The one answer on those routes for anything the caller cannot reach. 404 with the code every client already
+ *  reads as gone (Desktop and the phone: FORBIDDEN or NOT_FOUND; the CLI: 403 or 404). */
+export const NOT_AVAILABLE = { code: 'NOT_FOUND', message: 'This is not available to you. It may have been removed, or your access changed.', status: 404 } as const
+const UNREACHABLE_CODES: ReadonlySet<string> = new Set(['NOT_FOUND', 'JOIN_UNAVAILABLE', WORKSPACE_ACCESS_REVOKED])
+const unreachable = (error: SuperTabError) => error.unreachable || UNREACHABLE_CODES.has(error.code)
+
 async function respond(reply: FastifyReply, action: () => Promise<unknown>) {
   try { sendSuccess(reply, await action()) } catch (error) {
     if (error instanceof GitHubAppError) return sendError(reply, error.message, error.code, error.status, error.details)
+    const { request } = reply
+    if (error instanceof SuperTabError && unreachable(error) && NOT_AVAILABLE_ROUTES.has(`${request.method} ${request.routeOptions.url}`)) {
+      logger.warn('Swarm not available to the caller', { code: error.code, statusCode: error.status, reason: error.message,
+        path: request.url, method: request.method })
+      return sendError(reply, NOT_AVAILABLE.message, NOT_AVAILABLE.code, NOT_AVAILABLE.status)
+    }
     // A Swarm refusal, a busy Swarm (503 with Retry-After), an expired transaction or a duplicate key: the shared
     // error handler answers each deliberately, and every other failure stays a 500 with its stack logged.
     throw error

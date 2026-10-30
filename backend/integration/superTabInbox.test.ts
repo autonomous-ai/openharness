@@ -295,7 +295,8 @@ describe('a person\'s inbox: unread threads and each chat\'s latest message', ()
     const removed = await inbox(s.tabId, peer)
     // Refused as the messages read refuses them, not answered as a member with nothing to read.
     const page = await get(`/api/super-tabs/${s.tabId}/conversations/${s.web}/messages`, peer)
-    expect(page.status).toBe(403)
+    // As for a Swarm that does not exist (routes/superTabs.ts NOT_AVAILABLE).
+    expect(page.status).toBe(404)
     expect({ status: removed.status, code: removed.body.error?.code }).toEqual({ status: page.status, code: page.body.error?.code })
     expect(removed.body.data).toBeUndefined()
     expect(JSON.stringify(removed.body)).not.toMatch(/Web|Buddy|Leads/)
