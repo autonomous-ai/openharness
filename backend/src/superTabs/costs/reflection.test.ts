@@ -56,17 +56,17 @@ function seededWeek(): ReflectionInput {
 }
 
 describe('the nightly routing reflection', () => {
-  it('reports a seeded week: what shipped, cost per shipped change and first-review pass rate per engine, model, effort and kind', () => {
+  it('reports a seeded week: what shipped, time to ship, cost per shipped change and first-review pass rate per engine, model, effort and kind, and rework per model', () => {
     const report = routingReflection(seededWeek())!
     const lines = report.text.split('\n')
     expect(lines).toContain('Last day: 2 attempts, 2 shipped. Last 7 days: 15 attempts, 11 shipped.')
-    expect(lines).toContain('- claude opus high, parser: 4 attempts, 4 shipped, $4.00 per shipped change, first review passed 3 of 4 (75%)')
-    expect(lines).toContain('- claude sonnet medium, parser: 4 attempts, 4 shipped, $2.00 per shipped change, first review passed 3 of 4 (75%)')
-    expect(lines).toContain('- codex gpt-6.1-sol high, ui: 3 attempts, 1 shipped, $6.00 per shipped change, first review passed 1 of 3 (33%)')
+    expect(lines).toContain('- claude opus high, parser: 4 attempts, 4 shipped, median 60 min to ship, $4.00 per shipped change, first review passed 3 of 4 (75%)')
+    expect(lines).toContain('- claude sonnet medium, parser: 4 attempts, 4 shipped, median 60 min to ship, $2.00 per shipped change, first review passed 3 of 4 (75%)')
+    expect(lines).toContain('- codex gpt-6.1-sol high, ui: 3 attempts, 1 shipped, median 60 min to ship, $6.00 per shipped change, first review passed 1 of 3 (33%)')
     expect(lines).toContain('- claude deepseek/deepseek-v4.1-flash-1017 low, docs: 2 attempts, 0 shipped, first review passed 0 of 2 (0%)')
-    expect(lines).toContain('- claude sonnet medium, docs: 2 attempts, 2 shipped, $2.00 per shipped change, no first review, 2 step-ups')
+    expect(lines).toContain('- claude sonnet medium, docs: 2 attempts, 2 shipped, median 60 min to ship, $2.00 per shipped change, no first review, 2 step-ups')
     expect(lines).toContain('Waste in the last 7 days: 2 failed starts (codex gpt-6.1-sol high: 2), 2 step-ups after a failed grid attempt '
-      + '(docs: 2, 2.5 hours), 3 rework rounds, 1 fix after merge.')
+      + '(docs: 2, 2.5 hours), 3 rework rounds (codex gpt-6.1-sol ui: 2, claude opus feature: 1), 1 fix after merge (claude opus feature: 1).')
   })
 
   it('proposes at most three changes from a seeded week, the largest saving first, each with its expected saving', () => {

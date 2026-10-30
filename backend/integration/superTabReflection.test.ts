@@ -129,7 +129,7 @@ describe('the nightly routing reflection', () => {
     expect(report!.recipientIds).toEqual([])
     const lines = report!.text.split('\n')
     expect(lines).toContain('Last day: 5 attempts, 1 shipped. Last 7 days: 5 attempts, 1 shipped.')
-    expect(lines).toContain('- claude opus high, parser: 1 attempt, 1 shipped, $4.00 per shipped change, no first review')
+    expect(lines).toContain('- claude opus high, parser: 1 attempt, 1 shipped, median 12 min to ship, $4.00 per shipped change, no first review')
     expect(lines).toContain(`- claude ${GRID} low, parser: 2 attempts, 0 shipped, no first review`)
     expect(lines).toContain('- claude sonnet medium, parser: 2 attempts, 0 shipped, no first review, 2 step-ups')
     expect(lines).toContain('1. Start parser work on a subscription model instead of the grid: about 2 hours to ship a week. '

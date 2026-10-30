@@ -53,6 +53,7 @@ const ranOn = (r: Pick<CostSummaryRow, 'engine' | 'model' | 'effort'>) => `${r.e
 
 function line(r: CostSummaryRow): string {
   return `- ${ranOn(r)}, ${r.kind}: ${plural(r.attempts, 'attempt')}, ${r.shipped} shipped`
+    + (r.medianMinutesToShip !== null ? `, median ${Math.round(r.medianMinutesToShip)} min to ship` : '')
     + (r.costPerShipped !== null ? `, ${usd(r.costPerShipped)} per shipped change` : '')
     + (r.firstReviews ? `, first review passed ${r.firstReviewPassed} of ${r.firstReviews} (${percent(r.firstReviewPassRate!)})` : ', no first review')
     + (r.stepUps ? `, ${plural(r.stepUps, 'step-up')}` : '')
@@ -134,14 +135,19 @@ function waste(input: ReflectionInput, grid: ReturnType<typeof gridStepUps>, ste
   for (const f of input.failedStarts) failed.set(ranOn(f), (failed.get(ranOn(f)) ?? 0) + 1)
   const stepped = [...grid].filter(([, k]) => k.stepped)
   const fromGrid = stepped.reduce((n, [, k]) => n + k.stepped, 0)
-  const rework = input.evidence.reduce((n, m) => n + m.reworkRounds, 0), fixes = input.evidence.reduce((n, m) => n + m.fixesAfterMerge, 0)
+  /** A count over the evidence, with each model and kind that has some, the most first. */
+  const byModel = (count: (m: ModelKindEvidence) => number, one: string, many?: string) => {
+    const has = input.evidence.filter(m => count(m) > 0).sort((x, y) => count(y) - count(x))
+    const total = has.reduce((n, m) => n + count(m), 0)
+    return total ? [`${plural(total, one, many)} (${has.map(m => `${m.engine} ${m.model} ${m.kind}: ${count(m)}`).join(', ')})`] : []
+  }
   const parts = [
     ...input.failedStarts.length ? [`${plural(input.failedStarts.length, 'failed start')} (${[...failed].sort((a, b) => b[1] - a[1])
       .map(([on, n]) => `${on}: ${n}`).join(', ')})`] : [],
     ...fromGrid ? [`${plural(fromGrid, 'step-up')} after a failed grid attempt (${stepped.map(([kind, k]) => `${kind}: ${k.stepped}, ${tenths(k.hours)} hours`).join('; ')})`] : [],
     ...stepUps > fromGrid ? [`${plural(stepUps - fromGrid, 'other step-up')}`] : [],
-    ...rework ? [plural(rework, 'rework round')] : [],
-    ...fixes ? [plural(fixes, 'fix after merge', 'fixes after merge')] : [],
+    ...byModel(m => m.reworkRounds, 'rework round'),
+    ...byModel(m => m.fixesAfterMerge, 'fix after merge', 'fixes after merge'),
   ]
   return `Waste in the last 7 days: ${parts.length ? parts.join(', ') : 'none'}.`
 }
