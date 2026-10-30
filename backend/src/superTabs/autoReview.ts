@@ -47,12 +47,14 @@ const sameStamp = (a: ReviewStamp | undefined, b: ReviewStamp | undefined) => !!
 export const reviewHeldBy = (state: SuperTabState, build: Conversation, agentId: string): Conversation | undefined =>
   state.conversations.filter(c => c.reviewOf === build.id && c.assignment?.agentId === agentId).sort((a, b) => (b.number ?? 0) - (a.number ?? 0))[0]
 
-/** The hand-over a verdict through [review] counts for: its own, once it gave its own verdict and still reviews [build]'s
- *  current attempt, and was not closed; else -1, never counted. A pass on an earlier head, sent after the new head's review
- *  was assigned, waits for that review's own verdict (review of #2382). */
+/** The hand-over a verdict through [review], given now, counts for: its own, once its own check passed (a pass verdict, not
+ *  a Hold), while it still reviews [build]'s current attempt and was not closed; else -1, never counted. A pass given before
+ *  that never counts, and the review's own verdict resets it (commands.ts work.check): a Reviewer's late pass on head 1 was
+ *  carried to head 2 when it held head 2 (reviews of #2382). */
 export function verdictHandoff(build: Conversation, review: Conversation): number {
   const stamp = review.reviewStamp
-  return stamp && stamp.assignmentId === build.assignment?.id && review.assignment?.status !== 'cancelled' && verdictGiven(review) ? stamp.handoff : -1
+  return stamp && stamp.assignmentId === build.assignment?.id && review.assignment?.status !== 'cancelled'
+    && review.checks.some(c => c.passedBy && c.evidence) ? stamp.handoff : -1
 }
 
 /**

@@ -2592,9 +2592,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
           { by, passed: command.passed, handoff: review ? verdictHandoff(group, review) : assignment.handoffs ?? 0, ...(review ? { review: review.id } : {}) }]
           .slice(-MAX_VERDICTS)
       }
-      // A review's own verdict lets its Reviewer's verdict on the work count, whichever came first.
+      // A review's own verdict resets its Reviewer's earlier verdict on the work: only a pass given after it counts.
       const build = group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : undefined
-      if (build?.assignment?.verdicts) for (const v of build.assignment.verdicts) if (v.review === group.id) v.handoff = verdictHandoff(build, group)
+      const held = group.assignment && `agent:${group.assignment.agentId}`
+      if (build?.assignment?.verdicts) for (const v of build.assignment.verdicts) if (v.review === group.id || v.by === held) v.handoff = -1
       const run = group.ledger?.runs?.find(r => r.assignmentId === group.assignment!.id), reviewed = run?.firstReview
       // Before the review's first verdict is kept: a check's verdict counts once per attempt.
       if (actor.kind === 'agent') recordVerdict(state, group, check, agent(state, actor.agentId), context.now)

@@ -1839,22 +1839,41 @@ describe('Reviewer role', () => {
         expect(f.state.conversations.find(c => c.id === group)!.assignment!.status).toBe('done')
       })
 
-      it('counts a Reviewer\'s pass sent before its review\'s own verdict once that verdict comes', () => {
+      it('never counts a pass given before its review\'s own pass verdict: the verdict resets it, and only a pass after it counts', () => {
         const { f, group, built, builderActor, markReady, reviews } = ready('claude', { reviews: 2 })
         const done = () => f.run({ type: 'work.status', conversationId: group, assignmentId: built, status: 'done', result: 'Merged.' }, builderActor)
         markReady(`Ready. ${pr}`)
         const independent = f.state.conversations.find(c => c.id === group)!.checks.find(c => c.independent)!.id
-        for (const review of reviews()) {
-          const actor: Actor = { kind: 'agent', agentId: review.assignment!.agentId, machineOwnerId: 'target-owner' }
-          f.run({ type: 'work.check', conversationId: group, assignmentId: built, checkId: independent, passed: true, evidence: 'Pass at head 1.' }, actor)
-        }
+        const actorOf = (review: Conversation): Actor => ({ kind: 'agent', agentId: review.assignment!.agentId, machineOwnerId: 'target-owner' })
+        const passWork = (review: Conversation) => f.run({ type: 'work.check', conversationId: group, assignmentId: built, checkId: independent, passed: true, evidence: 'Pass at head 1.' }, actorOf(review))
+        for (const review of reviews()) passWork(review)
+        for (const review of reviews()) f.run({ type: 'work.check', conversationId: review.id, assignmentId: review.assignment!.id, checkId: review.checks[0]!.id, passed: true, evidence: 'Ready: yes at head 1.' }, actorOf(review))
         expect(done).toThrow('This task wants 2 independent reviews')
-        for (const review of reviews()) {
-          const actor: Actor = { kind: 'agent', agentId: review.assignment!.agentId, machineOwnerId: 'target-owner' }
-          f.run({ type: 'work.check', conversationId: review.id, assignmentId: review.assignment!.id, checkId: review.checks[0]!.id, passed: true, evidence: 'Ready: yes at head 1.' }, actor)
-        }
+        for (const review of reviews()) passWork(review)
         done()
       })
+
+      // Review 2 of #2382 (Kai): A's late pass on head 1 was carried to head 2 when A held head 2's review.
+      it.each([['a failed check', false, 'Hold: replay on reconnect at head 2.'], ['a passed check naming a Hold', true, 'Hold at head 2.']] as const)(
+        'refuses done when a Reviewer late-passes head 1 and then holds head 2 with %s, though the other passes head 2', (_, held, evidence) => {
+          const { f, group, built, builderActor, markReady, reviews } = ready('claude', { reviews: 2 })
+          markReady(`Ready, head 1. ${pr}`)
+          const [onA, onB] = reviews()
+          const a = onA!.assignment!.agentId, b = onB!.assignment!.agentId
+          const aActor: Actor = { kind: 'agent', agentId: a, machineOwnerId: 'target-owner' }
+          verdict(f, onB!, group, built, b, false)
+          f.run({ type: 'work.status', conversationId: group, assignmentId: built, status: 'working', result: null }, builderActor)
+          markReady(`Fixed, head 2. ${pr}`)
+          const head2 = reviews().filter(r => r.id !== onA!.id && r.id !== onB!.id)
+          const aHead2 = head2.find(r => r.assignment!.agentId === a)!
+          // A, still on head 1, passes the work late, then holds its review of head 2.
+          const independent = f.state.conversations.find(c => c.id === group)!.checks.find(c => c.independent)!.id
+          f.run({ type: 'work.check', conversationId: group, assignmentId: built, checkId: independent, passed: true, evidence: 'Pass at head 1.' }, aActor)
+          f.run({ type: 'work.check', conversationId: aHead2.id, assignmentId: aHead2.assignment!.id, checkId: aHead2.checks[0]!.id, passed: held, evidence }, aActor)
+          verdict(f, head2.find(r => r.assignment!.agentId === b)!, group, built, b, true)
+          expect(() => f.run({ type: 'work.status', conversationId: group, assignmentId: built, status: 'done', result: 'Merged.' }, builderActor))
+            .toThrow('This task wants 2 independent reviews')
+        })
 
       it('closes a review whose Reviewer stopped before its verdict when a new head comes, and opens both again on different Reviewers', () => {
         const { f, group, built, builderActor, markReady, reviews } = ready('claude', { reviews: 2 })
