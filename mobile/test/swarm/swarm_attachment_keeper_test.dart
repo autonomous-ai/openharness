@@ -216,7 +216,16 @@ class _ListingDirectory implements Directory {
   List<FileSystemEntity> listSync({
     bool recursive = false,
     bool followLinks = true,
-  }) => entries;
+  }) {
+    final listed = <FileSystemEntity>[];
+    for (final entry in entries) {
+      listed.add(entry);
+      if (recursive && entry is Directory) {
+        listed.addAll(entry.listSync(recursive: true, followLinks: followLinks));
+      }
+    }
+    return listed;
+  }
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
