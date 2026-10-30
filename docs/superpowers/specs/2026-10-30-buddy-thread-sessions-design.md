@@ -398,3 +398,39 @@ Reviewed revision: ______ Reviewer (another engine): ______
 
 - "Thread closed" means **End session**, because threads have no close today. Closing the pane only hides it.
 - A session uses the main Buddy's engine and model; there is no picker ("less is better").
+
+## Contract between backend, CLI host and Desktop (build reference)
+
+Records and views:
+- `Agent.buddySession?: { thread: string; from: number }`: a thread session. `thread` is the root message id; `from` is
+  the sequence of the message that started it. The main Buddy has none.
+- `AgentStartRequest.buddySession?`: the same, written only by `message.send` with `newSession`. Never any message text.
+- `Conversation.buddySessions?: Array<{ thread: string; startId: string; agentId?: string; at: number }>`: a Buddy chat's
+  live or starting sessions, at most 3. `agentId` is set once started.
+- `Message.buddySession?: true`: a reply in a session thread, from the person or the session.
+- Message `source.kind === 'buddy-session-ended'` with `source.reason` (`ended` | `idle` | `stopped` | `failed`) and
+  `source.thread`: the quiet line in the thread when a session ends.
+- Machine observation `buddySessions?: true`: the host can run thread sessions. Without it, New session is refused with
+  `BUDDY_SESSION_UNSUPPORTED`.
+
+Commands:
+- `message.send` takes `newSession?: true`. Refusals:
+  - `BUDDY_SESSIONS_FULL`: 3 running.
+  - `BUDDY_SESSION_EXISTS`: the thread has one.
+  - `BUDDY_SESSION_UNSUPPORTED`: old host.
+  - `BUDDY_SESSION_CHAT`: not the person's own Buddy chat, or not a thread reply.
+  - `BUDDY_SESSION_NO_BUDDY`: no main Buddy running.
+
+  A plain person reply in a thread whose session ended is refused with `BUDDY_SESSION_ENDED`.
+- `buddy.sessionEnd { conversationId, thread, reason: 'ended' | 'idle' | 'stopped' }`: from the chat's person only.
+  Desktop sends `ended`. The host on the person's machine sends `idle` and `stopped`. It is idempotent: an already-ended
+  thread is a no-op.
+- A session agent's `message.send` must reply in its own thread (`BUDDY_SESSION_THREAD`) and can't set `alsoSend`.
+  The main Buddy can't reply in a session thread (`BUDDY_SESSION_THREAD`).
+
+Reads:
+- A session agent reading its chat gets only its own thread's rows. Read with `thread = its root`, the page also carries
+  `context`: up to 10 main-stream rows with sequence ≤ `from`, oldest first, each text cut to 500 characters, 6 KB in all.
+- The main Buddy's reads leave out every `buddySession` row, and thread summaries count none of them.
+- Project reads (the project chat, workgroups) are the same for every session. Buddy news goes to the main session
+  only.
