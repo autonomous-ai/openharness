@@ -199,6 +199,8 @@ export async function transaction<T>(db: Pick<PrismaClient, '$transaction'>, bod
     }
   }, sleep, error => error === staleIndex)
 }
+/** The longest a failed claim's record may hold up the busy answer. */
+const RECORD_FAILED_CLAIM_MS = 2_000
 const TRANSACTION_OPTIONS = { maxWait: 5_000, timeout: 15_000 }
 /** Each attempt's after-commit work, by that attempt's client: a retried attempt's list is dropped with its client. */
 const pendingCommits = new WeakMap<Transaction, Array<() => void>>()
@@ -2617,6 +2619,42 @@ export class SuperTabStore {
   async delivery(user: AuthUser, tabId: string, agentId: string, deliveryId: string,
     action: { type: 'claim'; claimId: string } | { type: 'ack'; claimId: string; receipt: string; uncertain: boolean }
       | { type: 'hold'; claimId: string; reason: HoldReason }) {
+    const reached = { authorized: false }
+    try {
+      return await this.deliver(user, tabId, agentId, deliveryId, action, reached)
+    } catch (error) {
+      // Prod 10-30, v1.3.71: 2 hours of SWARM_BUSY claims left no trace on the delivery. Retries end that way (retry.ts), so it is
+      // the only code to record; the client still gets the original error. Only once an attempt got past the authorization
+      // checks: a busy answer from before them says nothing about whether this caller may touch the delivery. The write is capped
+      // so a struggling database cannot delay the 503 further.
+      if (action.type === 'claim' && reached.authorized && error instanceof SuperTabError && error.code === 'SWARM_BUSY') {
+        let timer: NodeJS.Timeout | undefined
+        const cap = new Promise<void>(resolve => { timer = setTimeout(resolve, RECORD_FAILED_CLAIM_MS); timer.unref() })
+        try { await Promise.race([this.recordFailedClaim(tabId, agentId, deliveryId, error.code), cap]) } finally { clearTimeout(timer) }
+      }
+      throw error
+    }
+  }
+
+  /** A failed claim, written on its delivery by two single-document writes outside the failed transaction: they touch no Swarm
+   *  part, so they cannot meet the conflict that failed it. Only a delivery still queued; the first failure's time never moves
+   *  later. Best effort: a failed write is logged and never replaces the busy answer. */
+  private async recordFailedClaim(tabId: string, agentId: string, deliveryId: string, code: string): Promise<void> {
+    try {
+      const at = new Date(this.now()), mine = { id: deliveryId, tabId, agentId, status: 'queued' }
+      // A row an older backend wrote lacks the field, which Prisma on Mongo matches as isSet false, not null. The count starts at 0
+      // here: Prisma's increment of a missing count leaves it null.
+      await this.db.superTabDelivery.updateMany({ where: { ...mine, OR: [{ claimFailingSince: null }, { claimFailingSince: { isSet: false } }] },
+        data: { claimFailingSince: at, claimFailures: 0 } })
+      await this.db.superTabDelivery.updateMany({ where: mine, data: { claimFailedAt: at, claimFailure: code, claimFailures: { increment: 1 } } })
+    } catch (error) {
+      logger.warn('[swarm-deliveries] could not record a failed claim', { tabId, deliveryId, error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
+  private async deliver(user: AuthUser, tabId: string, agentId: string, deliveryId: string,
+    action: { type: 'claim'; claimId: string } | { type: 'ack'; claimId: string; receipt: string; uncertain: boolean }
+      | { type: 'hold'; claimId: string; reason: HoldReason }, reached: { authorized: boolean }) {
     return transaction(this.db, async tx => {
       const delivery = await tx.superTabDelivery.findFirst({ where: { id: deliveryId, tabId, agentId } })
       await this.row(tx, user, tabId)
@@ -2642,6 +2680,7 @@ export class SuperTabStore {
       if (delivery.claimId && delivery.claimId !== action.claimId) fail('CLAIM_CONFLICT', 'Reconcile the existing delivery before claiming it again.')
       if (action.type !== 'claim' && !delivery.claimId) fail('NOT_CLAIMED', 'Claim this instruction before acknowledging it.')
       if (action.type === 'hold') return this.hold(tx, delivery, action.reason)
+      reached.authorized = true
       const status = action.type === 'claim' ? delivery.status === 'queued' ? 'claimed' : delivery.status : action.uncertain ? 'uncertain' : 'delivered'
       if (delivery.status === 'delivered' && action.type === 'ack' && (action.uncertain || delivery.receipt !== action.receipt)) {
         fail('RECEIPT_CONFLICT', 'A delivered instruction keeps its original host receipt.')
@@ -2653,7 +2692,11 @@ export class SuperTabStore {
         const part = parts.members.find(p => p.key === touch.key)
         if (part) await guardedWrite(tx, tabId, { op: 'touch', ...touch, seen: part.version }, stamp)
       }
+      // A claim that gets in ends the failing record. Unset, never null: a missing field is a real absence, which the first failure's
+      // isSet: false branch matches and which leaves no keys in the document.
       const updated = await tx.superTabDelivery.update({ where: { id: delivery.id }, data: { status, claimId: action.claimId,
+        ...(action.type === 'claim' ? { claimFailingSince: { unset: true }, claimFailedAt: { unset: true }, claimFailures: { unset: true },
+          claimFailure: { unset: true } } : {}),
         ...(action.type === 'ack' ? { receipt: action.receipt, holdReason: null, holdSince: null,
           ...(!action.uncertain ? { deliveredAt: delivery.deliveredAt ?? new Date(this.now()) } : {}) } : {}) } })
       const row = await tx.superTabMessage.findUnique({ where: { id: delivery.messageId } })
