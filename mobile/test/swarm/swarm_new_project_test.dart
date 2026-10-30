@@ -849,6 +849,8 @@ void main() {
           command['type'] == 'project.create' ? held.future : null;
       final host = await pump(tester, [swarm]);
       await tap(tester, 'swarm-new-project');
+      // A brief: the next step would post it.
+      await tester.enterText(key('swarm-new-project-brief'), 'Ship it');
       await pickMachine(tester, 'mac-1');
       await tester.tap(key('swarm-new-project-create'));
       await tester.pump();
