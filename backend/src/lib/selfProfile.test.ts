@@ -13,7 +13,33 @@ it('ranks files and functions by self time, with dependencies by package and no 
     samples: [2, 3, 3, 3, 2], timeDeltas: [0, 1000, 2000, 3000, 4000],
   })
   expect(top).toEqual({ sampledMs: 10, files: { 'node_modules/bson/lib/bson.cjs': 9, 'dist/read/changes.js': 1 },
-    functions: { 'deserialize node_modules/bson/lib/bson.cjs:42': 9, 'readChanges dist/read/changes.js:10': 1 } })
+    functions: { 'deserialize node_modules/bson/lib/bson.cjs:42': 9, 'readChanges dist/read/changes.js:10': 1 },
+    callers: {}, inclusive: { 'readChanges dist/read/changes.js:10': 1 } })
+})
+
+it('names the code of ours that a dependency or built-in spends its time for, and the time under each function of ours', () => {
+  const app = (path: string) => `file://${process.cwd()}/${path}`
+  const at = (id: number, functionName: string, url: string, children: number[] = [], lineNumber = 0) => ({ id, callFrame: { functionName, url, lineNumber }, children })
+  const top = topSelfTime({
+    nodes: [
+      at(1, '(root)', '', [2, 6]),
+      at(2, 'changes', app('dist/read/service.js'), [3, 4], 113),
+      at(3, 'structuredClone', 'node:internal/worker/js_transferable', [], 111),
+      at(4, 'visibleState', app('dist/superTabs/model.js'), [5, 7], 637),
+      at(5, 'structuredClone', 'node:internal/worker/js_transferable', [], 111),
+      at(6, '(garbage collector)', ''),
+      // Recursion counts once per sample under a function of ours.
+      at(7, 'visibleState', app('dist/superTabs/model.js'), [8], 637),
+      at(8, 'parseEngineResponse', 'file:///app/node_modules/@prisma/client/runtime/library.js', [], 111),
+    ],
+    samples: [3, 5, 5, 4, 6, 8], timeDeltas: [0, 1000, 2000, 2000, 1000, 1000, 3000],
+  })
+  expect(top.callers).toEqual({
+    'structuredClone node:internal/worker/js_transferable:112 ← visibleState dist/superTabs/model.js:638': 4,
+    'parseEngineResponse node_modules/@prisma/client/runtime/library.js:112 ← visibleState dist/superTabs/model.js:638': 3,
+    'structuredClone node:internal/worker/js_transferable:112 ← changes dist/read/service.js:114': 1,
+  })
+  expect(top.inclusive).toEqual({ 'changes dist/read/service.js:114': 9, 'visibleState dist/superTabs/model.js:638': 8 })
 })
 
 it('counts the busy time of a named piece of work, and of what it awaits, under its name', async () => {

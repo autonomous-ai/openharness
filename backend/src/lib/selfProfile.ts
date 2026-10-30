@@ -108,11 +108,27 @@ export function startSelfProfile({ everyMs = 15 * 60_000, profileMs = 30_000, re
   return () => { enabled = false; hook.disable(); clearInterval(report); clearTimeout(first); clearInterval(every) }
 }
 
-type Profile = { nodes: { id: number; callFrame: { functionName: string; url: string; lineNumber: number } }[]; samples?: number[]; timeDeltas?: number[] }
+type Frame = { functionName: string; url: string; lineNumber: number }
+type Profile = { nodes: { id: number; callFrame: Frame; children?: number[] }[]; samples?: number[]; timeDeltas?: number[] }
 
-export function topSelfTime(profile: Profile): { sampledMs: number; files: Record<string, number>; functions: Record<string, number> } {
+/**
+ * The profile by self time (`files`, `functions`), and what the self time alone cannot tell, the stacks being dropped:
+ * - `callers`: a dependency's or built-in's self time (Prisma's decoding, structuredClone) by the nearest function of ours
+ *   above it, as `<function> ← <our function>`;
+ * - `inclusive`: each function of ours by the time spent in it and everything it called, counted once per sample however
+ *   deep it recurses.
+ * Ours is what runs from `dist/` or `src/`; V8's own entries (idle, program, garbage collector) have no stack and count in
+ * neither.
+ */
+export function topSelfTime(profile: Profile): { sampledMs: number; files: Record<string, number>; functions: Record<string, number>
+  callers: Record<string, number>; inclusive: Record<string, number> } {
   const byId = new Map(profile.nodes.map(n => [n.id, n.callFrame]))
-  const files = new Map<string, number>(), functions = new Map<string, number>()
+  const parent = new Map<number, number>()
+  for (const node of profile.nodes) for (const child of node.children ?? []) parent.set(child, node.id)
+  // Named once per node: a 30 s profile has tens of thousands of samples, each walking its stack.
+  const ourName = new Map(profile.nodes.filter(n => isOurs(n.callFrame.url)).map(n => [n.id, name(n.callFrame)]))
+  const files = new Map<string, number>(), functions = new Map<string, number>(), callers = new Map<string, number>(), inclusive = new Map<string, number>()
+  const add = (m: Map<string, number>, key: string, us: number) => m.set(key, (m.get(key) ?? 0) + us)
   let total = 0
   const samples = profile.samples ?? [], deltas = profile.timeDeltas ?? []
   for (let i = 0; i < samples.length; i++) {
@@ -120,14 +136,31 @@ export function topSelfTime(profile: Profile): { sampledMs: number; files: Recor
     if (!frame) continue
     total += us
     const file = shortFile(frame.url) || `(${frame.functionName || 'native'})`
-    files.set(file, (files.get(file) ?? 0) + us)
-    const fn = `${frame.functionName || '(anonymous)'} ${file}${frame.url ? `:${frame.lineNumber + 1}` : ''}`
-    functions.set(fn, (functions.get(fn) ?? 0) + us)
+    add(files, file, us)
+    const fn = name(frame)
+    add(functions, fn, us)
+    if (!frame.url && frame.functionName.startsWith('(')) continue
+    const ours = new Set<string>()
+    let nearest: string | undefined
+    for (let id: number | undefined = samples[i]; id !== undefined; id = parent.get(id)) {
+      const key = ourName.get(id)
+      if (!key) continue
+      nearest ??= key
+      ours.add(key)
+    }
+    if (nearest && !ourName.has(samples[i]!)) add(callers, `${fn} ← ${nearest}`, us)
+    for (const key of ours) add(inclusive, key, us)
   }
   const top = (m: Map<string, number>, n: number) =>
     Object.fromEntries([...m].sort((a, b) => b[1] - a[1]).slice(0, n).map(([k, us]) => [k, Math.round(us / 1000)]))
-  return { sampledMs: Math.round(total / 1000), files: top(files, 20), functions: top(functions, 30) }
+  return { sampledMs: Math.round(total / 1000), files: top(files, 20), functions: top(functions, 30), callers: top(callers, 30), inclusive: top(inclusive, 40) }
 }
+
+const name = (frame: Frame) => {
+  const file = shortFile(frame.url) || `(${frame.functionName || 'native'})`
+  return `${frame.functionName || '(anonymous)'} ${file}${frame.url ? `:${frame.lineNumber + 1}` : ''}`
+}
+const isOurs = (url: string) => /^(dist|src)\//.test(shortFile(url))
 
 /** `file:///app/dist/lib/hub.js` → `dist/lib/hub.js`; a dependency → `node_modules/<package>/<file>`. */
 function shortFile(url: string): string {
