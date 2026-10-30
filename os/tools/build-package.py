@@ -69,6 +69,7 @@ def stage(source, runtime, destination, commit):
         'os/onboarding.py': 'usr/lib/harness-os/onboarding.py',
         'os/network.py': 'usr/lib/harness-os/network.py',
         'os/setup.py': 'usr/lib/harness-os/setup.py',
+        'os/button.py': 'usr/lib/harness-os/button.py',
         'os/projects.py': 'usr/lib/harness-os/projects.py',
         'os/trial_projects.py': 'usr/lib/harness-os/trial_projects.py',
         'os/system.py': 'usr/lib/harness-os/system.py',
@@ -119,6 +120,7 @@ def stage(source, runtime, destination, commit):
     for name in ['autostart', 'shutdown']:
         (destination / 'usr/share/harness-os/labwc' / name).chmod(0o755)
     (destination / 'usr/share/harness-os/labwc-install/autostart').chmod(0o755)
+    (destination / 'etc/grub.d/42_harness-recovery').chmod(0o755)
     for path in (destination / 'etc/sudoers.d').iterdir():
         path.chmod(0o440)
     info.update(mode='source', files={p.name: {'sha256': digest(p), 'bytes': p.stat().st_size}

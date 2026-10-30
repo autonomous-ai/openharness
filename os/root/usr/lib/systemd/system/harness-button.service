@@ -1,0 +1,12 @@
+[Unit]
+Description=Factory reset from the power button: five presses, then one more
+ConditionPathExists=!/etc/harness-live
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/lib/harness-os/button.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
