@@ -353,6 +353,23 @@ describe('thread marks (one per person and thread)', () => {
     expect((await markThread(s.tabId, s.web, s.root, 12, peer)).status).toBe(404)
   })
 
+  it('never sends a change read a thread mark of a conversation the reader lost', async () => {
+    const s = await scenario()
+    clock = NOW
+    const cursor = (await firstLoad(s.tabId, peer)).cursor as string
+    clock = NOW + 1_000
+    await markThread(s.tabId, s.web, s.root, 11, peer)
+    await swarmTransaction(db, async tx => {
+      const current = (await parts.loadActive(tx, s.tabId, { groupIds: [s.web] })).groups.find(g => g.key === s.web)!
+      const data = { ...structuredClone(current.data!), audience: { people: [{ id: owner.sub, generation: 0 }] } } as Conversation
+      await guardedWrite(tx, s.tabId, { op: 'update', kind: 'group', key: s.web, seen: current.version, data }, clock)
+    })
+    clock = NOW + 2_000
+    const changed = (await call('GET', `/api/super-tabs/${s.tabId}/changes?cursor=${cursor}`, peer)).body.data
+    expect(JSON.stringify(changed.derived ?? {})).not.toContain(s.root)
+    clock = NOW
+  })
+
   it('keeps no thread marks for agents or Team sessions', async () => {
     const s = await scenario()
     expect((await markThread(s.tabId, s.web, s.root, 11, owner, '?asAgentId=some-agent')).status).toBe(400)
