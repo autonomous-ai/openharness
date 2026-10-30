@@ -622,6 +622,29 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
     }
   })
 
+  it('names the model an agent reports after its task began, when it had reported none: never "Codex" alone (Dee, 2026-10-30)', () => {
+    const f = fixture()
+    const id = f.create(owner, { checks: independent }), done = f.create(owner, { checks: independent })
+    const worker = f.add('codex-worker', id), earlier = f.add('codex-earlier', done)
+    for (const agentId of [worker, earlier]) f.state.agents.find(a => a.id === agentId)!.configuration = { ...config, engine: 'codex', model: null }
+    const { assignmentId } = f.assign(id, worker)
+    const finished = f.assign(done, earlier)
+    f.passChecks(done, finished.assignmentId)
+    f.status(done, finished.assignmentId, earlier, 'done', 'Shipped')
+    const report = (agentId: string, model: string) => {
+      const agent = f.state.agents.find(a => a.id === agentId)!
+      f.run({ type: 'agent.configuration', previousVersion: agent.configurationVersion!, configuration: { ...agent.configuration, model } }, f.asAgent(agentId))
+    }
+    report(worker, 'gpt-6.1-sol')
+    report(earlier, 'gpt-6.1-sol')
+    expect(f.group(id).ledger!.runs).toEqual([{ assignmentId, engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', at: 1_000 }])
+    // A finished task's attempt is history: what its agent reports afterwards is another task's.
+    expect(f.group(done).ledger!.runs![0]!.model).toBeNull()
+    // A model on record is never rewritten by a later report.
+    report(worker, 'gpt-6.1-luna')
+    expect(f.group(id).ledger!.runs![0]!.model).toBe('gpt-6.1-sol')
+  })
+
   it('names the grid model from the start of an agent from before agents kept it, while that start is loaded', () => {
     const f = fixture()
     const id = f.create(owner, { checks: independent })

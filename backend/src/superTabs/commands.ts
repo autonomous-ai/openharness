@@ -24,7 +24,7 @@ import { credentialResult, redactCredentials, type CredentialKind } from './cred
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
 import { workspaceCan, type WorkspaceRole } from './workspaces.js'
 import { fixedOriginal, LEDGER_WEEKS, PULL_REQUEST_URL, recordAsked, recordFix, recordDecision, recordMerged, recordPost, recordProposal, recordReview, recordRun, recordStatus,
-  recordVerdict } from './leaderboard/record.js'
+  recordReportedModel, recordVerdict } from './leaderboard/record.js'
 import { WEEK_MS } from './leaderboard/week.js'
 import { react, reactionSchema, type ReactionTarget } from './reactions.js'
 import { shipNotice, shippedAt } from './ship.js'
@@ -1723,6 +1723,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (Object.entries(command.configuration).some(([key, value]) => target.configuration[key as keyof typeof target.configuration] !== value)) {
         target.configuration = command.configuration
         target.configurationVersion = operationId
+        recordReportedModel(state, target)
       }
       break
     }
