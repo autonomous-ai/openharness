@@ -780,7 +780,12 @@ export class ContributedMachines {
     // Diego, 10-30: a folder deleted by hand kept its record for good, and every later stop tried it again. Only a folder
     // that is not there drops it; one that cannot be read for any other reason keeps it. Nothing on disk is touched.
     if (await folderGone(record.path)) return writeWorktrees(file, readWorktrees(file).filter(w => !mine(w)))
-    if (!await swarmWorktree(record.path, record.source, record.startId)) return
+    if (!await swarmWorktree(record.path, record.source, record.startId)) {
+      // The folder still exists, but without its proof Harness cannot safely remove it. Keep the record for review.
+      if (await folderGone(record.path)) return writeWorktrees(file, readWorktrees(file).filter(w => !mine(w)))
+      this.log('Kept a Swarm worktree: WORKTREE_UNPROVEN')
+      return
+    }
     if (this.core.agents.live().some(a => !!a.cwd && within(record.path, a.cwd))) return
     // Review of #2266: like the weekly sweep (services/workspaces.ts), a paused session of another agent can be resumed
     // there, so its folder stays. This agent's own paused session is not kept: it was stopped or removed.
