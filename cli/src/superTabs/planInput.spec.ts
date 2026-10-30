@@ -92,12 +92,12 @@ describe('planSetup', () => {
     expect(s.effortFor('g1', 'codex-default-default')).toBe('high')
   })
 
-  it('puts a review after its open build on another family, and keeps a review of finished work off its build\'s family', () => {
+  it('puts a review after its open build, and lets a review of finished work run on its build\'s family (Ken, 2026-10-30)', () => {
     const s = setup(state({ conversations: [group('b1'), group('r1', { reviewOf: 'b1' }),
       group('b2', { assignment: { id: 'a', agentId: 'x', status: 'done', configuration: { engine: 'codex', model: 'gpt-6.1-sol', effort: 'auto' } } }),
       group('r2', { reviewOf: 'b2' })].map((g, i) => i === 2 ? { ...g, assignment: { ...(g.assignment as Json), status: 'working' } } : g) }))
     expect(taskOf(s, 'r1')).toMatchObject({ kind: 'review', deps: ['b1'], independent_of: ['b1'], avoid_families: [] })
-    expect(taskOf(s, 'r2')).toMatchObject({ kind: 'review', deps: [], independent_of: [], avoid_families: ['codex'] })
+    expect(taskOf(s, 'r2')).toMatchObject({ kind: 'review', deps: [], independent_of: [], avoid_families: [] })
   })
 
   it('adds the groups the Lead says a group waits for, and lists one that is not open', () => {

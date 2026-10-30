@@ -135,7 +135,7 @@ void main() {
         tester,
         (c, p) => ProjectGitHubLine(controller: c, project: p),
       );
-      expect(find.text("Teammates can't push here yet"), findsOneWidget);
+      expect(find.text('Set up GitHub for teammates'), findsOneWidget);
       expect(asked, hasLength(1));
       // Read again only after 5 minutes, whatever rebuilds meanwhile.
       await tester.pump();
@@ -165,13 +165,15 @@ void main() {
   });
 
   testWidgets(
-    'Project details explains it, links to GitHub\'s install page, copies the link, and checks again',
+    'Project details explains it, links to GitHub\'s install page, copies the link, and reads again on return',
     (tester) async {
       final c = await mount(
         tester,
         (c, p) => ProjectGitHubAccess(controller: c, projectId: p.id),
       );
       expect(find.textContaining("can't push to acme/app yet"), findsOneWidget);
+      // Nothing to press to check again: coming back to the app reads it again (design 2026-10-30).
+      expect(find.byKey(const Key('super-project-github-check')), findsNothing);
       expect(
         find.byKey(const Key('super-project-github-install')),
         findsOneWidget,
@@ -180,7 +182,8 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Link copied'), findsOneWidget);
       answer = {'state': 'covered', 'repository': 'acme/app'};
-      await tester.tap(find.byKey(const Key('super-project-github-check')));
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await tester.pumpAndSettle();
       expect(asked.last, endsWith('/github?refresh=1'));
       // A check mark, the app's own, not a ✓ typed into the sentence (Ken, 2026-10-28).
@@ -248,7 +251,7 @@ void main() {
         (c, p) => ProjectGitHubAccess(controller: c, projectId: p.id),
       );
       expect(
-        find.textContaining("can't use acme/app in this project yet"),
+        find.textContaining("can't push to acme/app from this project yet"),
         findsOneWidget,
       );
       // Approved one project at a time: nothing widens it to every project in one click (Scholes, 2026-10-28).
@@ -289,7 +292,7 @@ void main() {
         );
         expect(
           find.text(
-            "Teammates' agents can't use acme/app in this project yet. $line",
+            "Teammates' agents can't push to acme/app from this project yet. $line",
           ),
           findsOneWidget,
         );
@@ -300,16 +303,16 @@ void main() {
         c.dispose();
       }
 
-      await reads(['Notes'], "It's approved for Notes. Approve it here too?");
+      await reads(['Notes'], "It's allowed for Notes. Allow it here too?");
       await reads([
         'Notes',
         'Docs',
-      ], "It's approved for Notes and Docs. Approve it here too?");
+      ], "It's allowed for Notes and Docs. Allow it here too?");
       await reads([
         'Notes',
         'Docs',
         'Site',
-      ], "It's approved for Notes, Docs and Site. Approve it here too?");
+      ], "It's allowed for Notes, Docs and Site. Allow it here too?");
     },
   );
 
@@ -325,10 +328,7 @@ void main() {
       tester,
       (c, p) => ProjectGitHubAccess(controller: c, projectId: p.id),
     );
-    expect(
-      find.textContaining("can't approve repositories yet"),
-      findsOneWidget,
-    );
+    expect(find.textContaining("can't allow repositories yet"), findsOneWidget);
     expect(find.byKey(const Key('super-project-github-approve')), findsNothing);
     c.dispose();
   });
@@ -370,8 +370,93 @@ void main() {
       await tester.tap(find.byKey(const Key('super-project-github-check')));
       await tester.pumpAndSettle();
       expect(
-        find.textContaining('Install Harness on GitHub there'),
+        find.textContaining('installs Harness on GitHub there'),
         findsOneWidget,
+      );
+      c.dispose();
+    },
+  );
+
+  // Design 2026-10-30 ("Swarm GitHub access flow"): the dialog the sidebar line opens says what is being allowed, waits
+  // for GitHub in its own screen, and ends with a plain confirmation.
+  testWidgets(
+    'the dialog asks to allow it, waits for GitHub, and confirms when it is done',
+    (tester) async {
+      answer = {
+        'state': 'not-approved',
+        'repository': 'acme/app',
+        'canApprove': true,
+      };
+      final c = controllerFor();
+      await c.refresh();
+      final project = c.snapshot!.projects.first;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => TextButton(
+                onPressed: () => showProjectGitHubAccess(context, c, project),
+                child: const Text('open github'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('open github'));
+      await tester.pumpAndSettle();
+      expect(
+        find.text("Let teammates' agents push to ${project.name}"),
+        findsOneWidget,
+      );
+      expect(find.text('acme/app'), findsOneWidget);
+      expect(find.text('Push branches and open pull requests'), findsOneWidget);
+      await tester.ensureVisible(
+        find.byKey(const Key('super-project-github-ask')),
+      );
+      await tester.tap(find.byKey(const Key('super-project-github-ask')));
+      await tester.pumpAndSettle();
+      expect(find.text('Message copied'), findsOneWidget);
+      await tester.ensureVisible(
+        find.byKey(const Key('super-project-github-approve')),
+      );
+      await tester.tap(find.byKey(const Key('super-project-github-approve')));
+      // The waiting screen's spinner never settles.
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(launched.last, contains('/login/oauth/authorize'));
+      expect(find.text('Finish in GitHub'), findsOneWidget);
+      expect(find.text("What GitHub's page means"), findsOneWidget);
+      // Cancel goes back to the question; Continue opens GitHub again.
+      await tester.ensureVisible(
+        find.byKey(const Key('super-project-github-cancel')),
+      );
+      await tester.tap(find.byKey(const Key('super-project-github-cancel')));
+      await tester.pumpAndSettle();
+      expect(find.text('Finish in GitHub'), findsNothing);
+      await tester.ensureVisible(
+        find.byKey(const Key('super-project-github-approve')),
+      );
+      await tester.tap(find.byKey(const Key('super-project-github-approve')));
+      // The waiting screen's spinner never settles.
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      // Back from GitHub, approved.
+      answer = {'state': 'covered', 'repository': 'acme/app'};
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pumpAndSettle();
+      expect(
+        find.text("Teammates' agents can push to ${project.name}"),
+        findsOneWidget,
+      );
+      await tester.ensureVisible(
+        find.byKey(const Key('super-project-github-done')),
+      );
+      await tester.tap(find.byKey(const Key('super-project-github-done')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('super-project-github-dialog')),
+        findsNothing,
       );
       c.dispose();
     },
@@ -421,7 +506,7 @@ void main() {
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await tester.pumpAndSettle();
       expect(asked.last, endsWith('/github?refresh=1'));
-      expect(find.text("Teammates can't push here yet"), findsNothing);
+      expect(find.text('Set up GitHub for teammates'), findsNothing);
       expect(find.textContaining("Teammates' agents can push"), findsOneWidget);
       expect(
         find.byKey(const Key('super-project-github-waiting')),
