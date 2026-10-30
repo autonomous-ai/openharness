@@ -685,6 +685,11 @@ enum AttachIntent { person, automatic }
 /// select there, or the first phone or app.
 typedef MachinesRequest = ({String? devicePub, bool phones});
 
+/// Change agent on a Swarm Buddy, which keeps running and so keeps its agent
+/// (hn's `BUDDY_KEEPS_ITS_AGENT`, word for word).
+const buddyKeepsItsAgent =
+    'A Swarm Buddy keeps its agent. To use another agent, its person removes the Buddy and adds a new one.';
+
 class AppNotifier extends ChangeNotifier {
   final AuthSession session;
 
@@ -17046,6 +17051,9 @@ class AppNotifier extends ChangeNotifier {
       final saved = await close('now');
       if (saved['closed'] != true) {
         change.preservingViews = false;
+        // A Swarm Buddy keeps running, so it keeps its agent. The daemon's
+        // refusal speaks of Stop Harness, which is no help here.
+        if (saved['keptRunning'] == true) return buddyKeepsItsAgent;
         return saved['detail'] as String? ??
             'Could not save and stop this conversation. Its agent has not been changed.';
       }
