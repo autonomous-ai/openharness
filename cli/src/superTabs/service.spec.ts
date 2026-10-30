@@ -1238,14 +1238,34 @@ describe('a Buddy\'s help', () => {
     const buddy = await help(t, { tabId: 'tab', agentId: t.agentId })
     expectBuddy(buddy)
     expect(await help(t, { tabId: 'tab', harnessId: 'native' })).toEqual(buddy)
-    // Only the post line differs: a Buddy reads the same help otherwise, and no Lead option.
-    expect({ ...buddy, post: null }).toEqual({ ...plain, post: null })
+    // Only the post and command lines differ: a Buddy reads the same help otherwise, and no Lead option.
+    expect({ ...buddy, post: null, command: null }).toEqual({ ...plain, post: null, command: null })
     const lead = setup()
     lead.call.mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data: swarmData(lead.agent, path,
       { agents: [lead.agent], projects: [{ id: 'pilot', leadConversationId: 'pilot' }], conversations: [{ id: 'pilot', leadId: lead.agentId, agentIds: [lead.agentId] }] }) } }))
     const leadHelp = await help(lead, { tabId: 'tab', agentId: lead.agentId })
     expectStdin(leadHelp)
     expect(String(leadHelp.post)).toContain('--mention')
+  })
+
+  // A Buddy's help kept the command entry's stdin form (- in the JSON's place, a heredoc), which its guard refuses as well:
+  // it offers stdin nowhere, and everyone else's command entry keeps it.
+  it('offers a Buddy stdin nowhere, and keeps the command entry\'s stdin form for a Builder', async () => {
+    const COMMAND_STDIN = "put - in its place and send it on stdin (command OPERATION_ID - <<'JSON' … JSON)"
+    const builder = setup()
+    const plain = await help(builder, { tabId: 'tab', agentId: builder.agentId })
+    expect(String(plain.command)).toContain(COMMAND_STDIN)
+    const t = setup()
+    Object.assign(t.agent, { buddyOf: { personId: 'peer', generation: 'g' } })
+    const buddy = await help(t, { tabId: 'tab', agentId: t.agentId })
+    expect(String(buddy.command)).toMatch(/^command OPERATION_ID JSON: send one of the commands below\. The JSON is one argument, in single quotes/)
+    expect(String(buddy.command)).toContain("command OPERATION_ID '{...}' (an apostrophe inside it as \\u0027). Reuse exactly")
+    // The rest of the entry is everyone's: only how the JSON is passed differs.
+    const tail = (text: unknown) => String(text).slice(String(text).indexOf(' Reuse exactly the same ID'))
+    expect(tail(buddy.command)).toBe(tail(plain.command))
+    // No entry offers stdin: no heredoc, no - in an argument's place, no TEXT|-. Its post may still say stdin is refused.
+    for (const [key, text] of Object.entries(buddy)) expect(JSON.stringify(text), key).not.toMatch(/<<|in its place|send (it|the [a-zA-Z]+) on stdin|\|-/)
+    expect(JSON.stringify(plain)).toMatch(/<<'JSON'/)
   })
 
   it('is a Buddy\'s help for a harness this computer started as a Buddy, as its guard is', async () => {
