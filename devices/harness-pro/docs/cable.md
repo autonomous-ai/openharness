@@ -31,6 +31,7 @@ Full key list, in the order the Pro sends it:
 | `superTab` | `"wait-v1"` | capability: Super Tab waits on `question` (below) |
 | `swarmCard` | `"v1"` | capability: the Swarm cards and the Lead view (frames below) |
 | `swarmChat` | `"v1"` | capability: the chat the desktop has open on each Lead's face, and its notices (the round dial's, spec 2026-10-30-harness-pro-swarm-parity) |
+| `swarmBuddy` | `"v1"` | capability: the PM and the Buddy in each Swarm project (the round dial's, same spec) |
 | `ota` | `"v1"` | capability: the Pro takes firmware offers |
 | `mac` | `aa:bb:...` | existing |
 | `settings` | object | existing: brightness, character, face, voiceLang, muted, quiet, straightTitle, focusFace, scrollReversed, round |
@@ -252,3 +253,18 @@ With `swarmChat`, the daemon sends the round dial's frames (`docs/device-voice-s
   Lead and sends `supertab.select`. `supertab.notice.read` removes the row whose `chatId` matches.
 - `state` is `work` only for a working group and otherwise `done`; `ask` and `stuck` are not sent to a `swarmChat` device.
 - `supertab.focus` with an empty `lead` (the desktop opened the Swarm with no project, e.g. its Chat with PM) opens the Lead last shown in that Swarm, else its first.
+
+### PM | Buddy (`swarmBuddy: "v1"`)
+
+```
+{"t":"supertab", ..., "side":"pm|buddy", "leads":[{..., "chat":"buddy", "buddies":true,
+  "buddy":{"chatId":"<conversationId>","name":"diego's Buddy","engine":"claude","cells":25513,"color":"#d6a79a","live":true}}]}
+{"t":"supertab.side","tab":"<superTabId>","side":"pm|buddy"}          Pro to daemon: a tap on the pill
+```
+
+- With `buddies`, the Lead view has a PM | Buddy pill at the top. A tap sends `supertab.side` and shows the segment pressed until the next `supertab` for that
+  Swarm, which carries the side the daemon keeps (the newest of the Pro and the desktop wins).
+- The face chat `buddy` draws the Buddy's avatar (`cells`, `color`: the desktop pattern), its name in lilac and "offline" while `live` is false. With the Buddy
+  side and no `buddy`: "No Buddy here yet".
+- A `supertab.notice` with `chat:"buddy"` is quiet: no toast, no Notices row, no beep; a lilac dot on the pill's Buddy segment until the Buddy side opens.
+- A link drop clears the dot.
