@@ -29,7 +29,7 @@ import { env } from './config/env.js'
 import { machineBillingWorkerService } from './services/MachineBillingWorkerService.js'
 import { productUsagePeopleRollupService } from './services/ProductUsagePeopleRollupService.js'
 import { startReceiptSweep } from './lib/productUsageReceiptSweep.js'
-import { startAttachmentSweep } from './lib/attachmentSweep.js'
+import { startAttachmentSweepFrom } from './lib/attachmentSweep.js'
 import { attachmentsFromEnv } from './superTabs/attachments.js'
 import { startRoutingReflection } from './lib/routingReflection.js'
 import { logger } from './utils/logger.js'
@@ -92,10 +92,9 @@ async function start(): Promise<void> {
   productUsagePeopleRollupService.start()
   // Usage receipts from when they lived 36 days, a few at a time until none are left (lib/productUsageReceiptSweep.ts).
   stopReceiptSweep = startReceiptSweep(prisma)
-  // Swarm uploads nobody sent within a day, row and stored file, once an hour (lib/attachmentSweep.ts). Without a bucket
-  // there are no uploads.
-  const attachments = attachmentsFromEnv(env)
-  if (attachments) stopAttachmentSweep = startAttachmentSweep(prisma, attachments)
+  // Swarm uploads nobody sent within a day, row and stored file, once an hour (lib/attachmentSweep.ts). It logs whether it
+  // is on; settings it cannot read turn off only the sweep.
+  stopAttachmentSweep = startAttachmentSweepFrom(prisma, () => attachmentsFromEnv(env))
   // The worker's sweeps and archive write Swarms: they bump the stamps the API processes read by. It reads too little to keep a cache.
   configureSwarmStamps(redisSwarmStamps(), { reads: false })
   // Archive notes and Workspace removals write messages too: their recipients' hosts hear of them at once, and of the

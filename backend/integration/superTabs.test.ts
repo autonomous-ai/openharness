@@ -12,8 +12,8 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { ABANDONED_START_MS, GrantReads, SuperTabStore } from '../src/superTabs/store.js'
 import { HostReads } from '../src/superTabs/read/host.js'
-import { MemoryAttachmentStore, MemoryAvatarStore } from '../src/superTabs/attachments.js'
-import { startAttachmentSweep, sweepUnsentAttachments } from '../src/lib/attachmentSweep.js'
+import { attachmentsFromEnv, MemoryAttachmentStore, MemoryAvatarStore } from '../src/superTabs/attachments.js'
+import { startAttachmentSweepFrom, sweepUnsentAttachments } from '../src/lib/attachmentSweep.js'
 import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
 import type { Command } from '../src/superTabs/commands.js'
@@ -2536,19 +2536,72 @@ describe('Super Tab chat attachments', () => {
       expect([await row(stuck.id), stored(stuck.url), await row(stuckPicture.id), pictures.objects.has(stuckPicture.key)]).toEqual([null, false, null, false])
     })
 
-    it('runs a pass as the worker starts it, then hourly, and says what it removed', async () => {
+    it('logs a failed delete by its code alone, never the stored file\'s address, name or link key', async () => {
+      const { tab } = await fixture()
+      const [offline, refused, odd] = [(await file(tab, 'offline-secret-plan.txt')).attachment, (await file(tab, 'refused-secret-plan.txt')).attachment,
+        (await file(tab, 'odd-secret-plan.txt')).attachment]
+      for (const id of [offline.id, refused.id, odd.id]) await aged(id, 25)
+      const keys = [offline, refused, odd].map(upload => objectKey(upload.url))
+      // As @google-cloud/storage fails: a network error's text is "request to <the object's address> failed" with a
+      // system code, a refused call's text names the object with an HTTP status code; some errors carry neither.
+      const address = (key: string) => `https://storage.googleapis.com/storage/v1/b/attachments/o/${encodeURIComponent(key)}`
+      const errors = new Map<string, Error>([
+        [keys[0], Object.assign(new Error(`request to ${address(keys[0])} failed, reason: socket hang up`), { code: 'ECONNRESET' })],
+        [keys[1], Object.assign(new Error(`Permission denied on attachments/${keys[1]}`), { code: 403 })],
+        [keys[2], new Error(`Could not reach ${address(keys[2])}`)],
+      ])
+      const chat = vi.spyOn(files, 'delete').mockImplementation(async (key: string) => { throw errors.get(key) ?? new Error('unexpected key') })
+      const said: unknown[][] = []
+      const log = { info: (...line: unknown[]) => said.push(line), warn: (...line: unknown[]) => said.push(line) }
+      try {
+        expect(await sweepUnsentAttachments(db, bucket, new Date(), { chunk: 10, chunks: 1, pauseMs: 0, log })).toEqual({ removed: 0, failed: 3 })
+      } finally {
+        chat.mockRestore()
+      }
+      const text = JSON.stringify(said)
+      // Each key is <prefix>/<Swarm>/<link key>/<file name>; the link key alone opens the file on the CDN.
+      const linkKeys = keys.map(key => key.split('/').at(-2)!)
+      expect(linkKeys.every(linkKey => /^[0-9a-f]{32}$/.test(linkKey))).toBe(true)
+      for (const secret of [...keys, ...linkKeys, 'secret-plan', 'storage.googleapis.com', 'socket hang up', 'Permission denied']) expect(text).not.toContain(secret)
+      const line = '[attachment-sweep] could not remove a stored file; its row stays for the next run'
+      expect(said).toEqual(expect.arrayContaining([[line, { attachmentId: offline.id, code: 'ECONNRESET' }], [line, { attachmentId: refused.id, code: '403' }],
+        [line, { attachmentId: odd.id, code: 'unknown' }]]))
+      await sweep()
+      expect([await row(offline.id), await row(refused.id), await row(odd.id)]).toEqual([null, null, null])
+    })
+
+    it('runs a pass as the worker starts it, then hourly, and says once that it is on and what it removed', async () => {
       const { tab } = await fixture()
       const stale = (await file(tab, 'stale.txt')).attachment
       await aged(stale.id, 25)
       const said: unknown[] = []
-      const stop = startAttachmentSweep(db, bucket, { pauseMs: 0, log: { info: (...line: unknown[]) => said.push(line), warn: (...line: unknown[]) => said.push(line) } })
+      const stop = startAttachmentSweepFrom(db, () => bucket, { pauseMs: 0, log: { info: (...line: unknown[]) => said.push(line), warn: (...line: unknown[]) => said.push(line) } })
       try {
         await vi.waitFor(async () => expect(await row(stale.id)).toBeNull())
         expect(stored(stale.url)).toBe(false)
         await vi.waitFor(() => expect(said).toContainEqual(['[attachment-sweep] pass', { removed: 1, failed: 0 }]))
+        expect(said.filter(line => (line as unknown[])[0] === '[attachment-sweep] on')).toEqual([['[attachment-sweep] on', { everyMinutes: 60 }]])
       } finally {
         stop()
       }
+    })
+
+    it('says once when the worker has no bucket, and a settings error turns off only the sweep', async () => {
+      const said: unknown[][] = []
+      const log = { info: (...line: unknown[]) => said.push(['info', ...line]), warn: (...line: unknown[]) => said.push(['warn', ...line]) }
+      const settings = { NODE_ENV: 'production', SUPER_TAB_ATTACHMENTS_BUCKET: '', SUPER_TAB_ATTACHMENTS_CREDENTIALS: '', SUPER_TAB_ATTACHMENTS_PREFIX: 'super-tabs',
+        SUPER_TAB_ATTACHMENTS_PUBLIC_BASE: 'https://cdn.example.test', SUPER_TAB_AVATARS_BUCKET: '' }
+      startAttachmentSweepFrom(db, () => attachmentsFromEnv(settings), { log })()
+      expect(said).toEqual([['info', '[attachment-sweep] off: no attachments bucket is set (SUPER_TAB_ATTACHMENTS_BUCKET)']])
+      said.length = 0
+      // Settings the API would refuse too: the worker's other jobs still start, and the log says why the sweep did not.
+      const broken = { ...settings, SUPER_TAB_ATTACHMENTS_BUCKET: 'attachments', SUPER_TAB_ATTACHMENTS_PUBLIC_BASE: 'http://cdn.example.test' }
+      expect(() => attachmentsFromEnv(broken)).toThrow()
+      let stop: (() => void) | undefined
+      expect(() => { stop = startAttachmentSweepFrom(db, () => attachmentsFromEnv(broken), { log }) }).not.toThrow()
+      stop!()
+      expect(said).toEqual([['warn', '[attachment-sweep] off: the attachment settings are invalid',
+        { error: 'SUPER_TAB_ATTACHMENTS_PUBLIC_BASE must be an https:// address in production.' }]])
     })
 
     it('lets a send racing the sweep either take the file or be refused, never post a message linking a removed file', async () => {
