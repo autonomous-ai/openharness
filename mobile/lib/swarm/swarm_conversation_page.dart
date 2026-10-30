@@ -259,7 +259,15 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     super.didChangeDependencies();
     // Off while a screen pushed over this one covers it.
     _visible = TickerMode.valuesOf(context).enabled;
-    _conversation?.shown = _seen;
+    // Uncovered, what came meanwhile is read, which tells the whole inbox:
+    // not while this frame builds.
+    if (_seen) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _conversation?.shown = _seen;
+      });
+    } else {
+      _conversation?.shown = false;
+    }
     if (_voice == null) {
       if (SwarmScope.voiceOf(context) case final create?) {
         _voice = SwarmVoice(
