@@ -90,13 +90,16 @@ dependencies:
   # The web pane: a domain harness's viewer (Circuit's board, Workshop's part)
   # drawn beside its agent's terminal. THE one native plugin this feature adds
   # — WKWebView via the endorsed `webview_flutter_wkwebview`, which lands in
-  # the macOS SPM package list and GeneratedPluginRegistrant. macOS only for
-  # now; the pane shows the URL as text where no implementation is registered
-  # (Linux, and every `flutter test`). See CLAUDE.md on what a plugin costs.
+  # the macOS SPM package list and GeneratedPluginRegistrant. Linux support
+  # is added separately below; it falls back to the URL when WebKitGTK is
+  # unavailable. See CLAUDE.md on what a plugin costs.
   webview_flutter: ^4.14.1
   # Named directly for the WebKit creation params (muted autoplay in viewer panes).
   webview_flutter_platform_interface: ^2.15.1
   webview_flutter_wkwebview: ^3.26.1
+  # Keep exact: 1.3+ uses a different platform interface. This pin controls
+  # plugin updates, not the host WebKitGTK engine. See RELEASE.md.
+  webview_all_linux: 1.2.1
   # The Finder tile's code editor and its highlighter (lib/finder/): pure
   # Dart, no native plugin, so the macOS SPM package list is unchanged.
   re_editor: ^0.10.0

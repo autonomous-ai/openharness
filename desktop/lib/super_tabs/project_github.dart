@@ -548,7 +548,10 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
   );
 
   Widget _repository(String repository) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+    padding: const EdgeInsets.symmetric(
+      horizontal: grid.AppDesktop.groupGap,
+      vertical: grid.AppDesktop.controlGap,
+    ),
     decoration: BoxDecoration(
       color: grid.AppSurface.wellFill,
       borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
@@ -573,7 +576,7 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
       Padding(
-        padding: const EdgeInsets.only(top: 2),
+        padding: const EdgeInsets.only(top: grid.AppDesktop.listRowGap),
         child: Icon(
           AppIcons.check,
           size: grid.AppControl.iconSize,
@@ -587,7 +590,7 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
 
   Widget _box({required String title, required String text}) => Container(
     width: double.infinity,
-    padding: const EdgeInsets.all(12),
+    padding: const EdgeInsets.all(grid.AppDesktop.groupGap),
     decoration: BoxDecoration(
       color: grid.AppSurface.wellFill,
       borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),

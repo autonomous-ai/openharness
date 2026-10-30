@@ -74,6 +74,15 @@ set_target_properties(${BINARY_NAME}
 # them to the application.
 include(flutter/generated_plugins.cmake)
 
+# Build and bundle the Linux WebView, but load it optionally at runtime. Linking
+# it here would make a missing host WebKitGTK runtime prevent Harness startup.
+get_target_property(HARNESS_PLUGIN_LINKS ${BINARY_NAME} LINK_LIBRARIES)
+list(REMOVE_ITEM HARNESS_PLUGIN_LINKS webview_all_linux_plugin)
+set_property(TARGET ${BINARY_NAME} PROPERTY LINK_LIBRARIES "${HARNESS_PLUGIN_LINKS}")
+target_include_directories(${BINARY_NAME} PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/flutter/ephemeral/.plugin_symlinks/webview_all_linux/linux/include")
+target_link_libraries(${BINARY_NAME} PRIVATE ${CMAKE_DL_LIBS})
+
 
 # === Installation ===
 # By default, "installing" just makes a relocatable bundle in the build
