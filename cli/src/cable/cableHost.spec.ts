@@ -6,6 +6,9 @@ import type { FleetMachine, MachineFleet } from './machineFleet.js'
 import type { FleetRouting } from '../services/fleet.js'
 import { ServiceUnavailableError } from '../core/serviceHost.js'
 import type { RegisteredSession } from '../lib/registry.js'
+import { WebSocketServer, type WebSocket } from 'ws'
+import { DeviceFleet } from '../device/deviceFleet.js'
+import { DeviceLink } from '../device/deviceLink.js'
 
 const AGENTS: Array<{ agentId: string; registeredAt: number; active: boolean; terminalAvailable: boolean; engine: string; lastHookAt?: number }> = []
 
@@ -1104,5 +1107,115 @@ describe('firmware release lookup', () => {
     await host.firmwareFor('9.9.9', 'circle', true)
     await host.firmwareFor('9.9.9', 'circle', true)
     expect(fetch).toHaveBeenCalledTimes(4)
+  })
+})
+
+/**
+ * The two announces of a plug-in, over the real lane (deviceLink.ts) and fleet (deviceFleet.ts), against a fake device
+ * socket that answers only the newest select, as the backend does (deviceWs.ts bindMachine). Diego's Mac, 10-30: 13
+ * "could not announce" lines in a day, each about 15 s after a select the backend had answered.
+ */
+describe('announcing over the real lane', () => {
+  const CLOUD_ROW = { machineId: 'cloud-1', name: 'cloud-box', state: 'ready', authMode: 'managed', local: false }
+  const stops: Array<() => Promise<void> | void> = []
+  afterEach(async () => {
+    vi.useRealTimers()
+    for (const stop of stops.splice(0)) await stop()
+  })
+
+  /** Wait on the lane without a timer (they are faked): it reads each frame through promises alone. */
+  const soon = async (what: string, check: () => boolean): Promise<void> => {
+    for (let turn = 0; turn < 50_000; turn++) {
+      if (check()) return
+      await new Promise((resolve) => setImmediate(resolve))
+    }
+    throw new Error(`never: ${what}`)
+  }
+
+  async function plugged() {
+    const selects: string[] = []
+    let socket: WebSocket | null = null
+    const wss = new WebSocketServer({ port: 0, host: '127.0.0.1', handleProtocols: (protocols) => [...protocols][0] ?? false })
+    await new Promise<void>((resolve) => wss.once('listening', () => resolve()))
+    wss.on('connection', (ws) => {
+      socket = ws
+      ws.on('message', (raw) => {
+        const frame = JSON.parse(raw.toString()) as { type?: string; payload?: { machineId?: string } }
+        if (frame.type === 'machine_select') selects.push(String(frame.payload?.machineId))
+      })
+    })
+    stops.push(() => new Promise<void>((resolve) => { for (const client of wss.clients) client.terminate(); wss.close(() => resolve()) }))
+    /** The backend has read every select so far: only the newest is answered. */
+    const answerNewest = () => socket?.send(JSON.stringify({ type: 'machine_selected', payload: { machineId: selects.at(-1) } }))
+    const lines: string[] = []
+    const seal = { hello: vi.fn(), welcome: vi.fn(), rekey: vi.fn(), seal: vi.fn(), open: vi.fn(), drop: vi.fn() }
+    const link = new DeviceLink({
+      auth: { accessToken: async () => 'token' }, backendWsBase: `ws://127.0.0.1:${(wss.address() as { port: number }).port}`,
+      computerId: 'this-computer', autonomousEnv: 'test', seal: seal as never, peer: () => null,
+      localMachineId: () => 'mine', log: (line) => { lines.push(line) },
+    })
+    stops.push(() => link.stop())
+    const rows = [{ machineId: 'mine', name: 'MacbookPro.local', state: 'ready', authMode: 'remote', local: true }, CLOUD_ROW]
+    const fleet = new DeviceFleet({ list: { list: () => ({ machines: rows, source: 'backend' as const }), find: (id: string) => rows.find((r) => r.machineId === id) } as never,
+      link, hasPeerLink: () => false, log: (line) => { lines.push(line) } })
+    // The lane is up from before (the dial was plugged in already): what overlaps is the announces.
+    await link.online()
+    const host = new DaemonCableHost(wiring({ log: (line: string) => { lines.push(line) } }), fleet)
+    const announced = () => lines.filter((line) => line.includes('could not announce'))
+    return { host, selects, answerNewest, lines, announced }
+  }
+
+  it('logs no "could not announce" for a plug-in that announces through both paths when the backend answers', async () => {
+    const { host, selects, answerNewest, announced, lines } = await plugged()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    host.onDialAttached()                       // announces where the dial is, once the lane is up
+    const picked = host.selectMachine('mine')   // the dial's own pick on hello, announced too
+    expect(await picked).toEqual({ ok: true })
+    await soon('the announce', () => selects.length >= 1)
+    for (let turn = 0; turn < 50; turn++) await new Promise((resolve) => setImmediate(resolve))
+    answerNewest()
+    await soon('its answer', () => lines.includes('device: machine_selected mine'))
+    await vi.advanceTimersByTimeAsync(15_000)
+    for (let turn = 0; turn < 50; turn++) await new Promise((resolve) => setImmediate(resolve))
+    expect(announced()).toEqual([])
+    expect(selects).toEqual(['mine'])
+  })
+
+  it('announces the machine a select is on its way to, instead of replacing it with the one before', async () => {
+    const { host, selects, answerNewest, announced, lines } = await plugged()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const picked = host.selectMachine('cloud-1')
+    await soon('the pick', () => selects.length === 1)
+    host.onDialAttached()
+    for (let turn = 0; turn < 50; turn++) await new Promise((resolve) => setImmediate(resolve))
+    answerNewest()
+    await soon('its answer', () => lines.some((line) => line.startsWith('device: machine_selected')))
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(await picked).toEqual({ ok: true })
+    for (let turn = 0; turn < 50; turn++) await new Promise((resolve) => setImmediate(resolve))
+    expect(host.selectedMachine()).toBe('cloud-1')
+    expect(announced()).toEqual([])
+    expect(selects).toEqual(['cloud-1'])
+  })
+
+  it('says nothing of an announce a newer pick replaced, and the pick lands', async () => {
+    const { host, selects, answerNewest, announced, lines } = await plugged()
+    const first = host.selectMachine('cloud-1')
+    await soon('the first pick', () => selects.length === 1)
+    answerNewest()
+    expect(await first).toEqual({ ok: true })
+    host.onDialGone()                            // unplugged: the lane goes with it, and comes back at once
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    host.onDialAttached()                        // and back: announces cloud-1, where the dial was
+    await soon('the announce', () => selects.length === 2)
+    expect(await host.selectMachine('mine')).toEqual({ ok: true })   // and the person picks this computer
+    await soon('the pick', () => selects.length === 3)
+    answerNewest()
+    await soon('its answer', () => lines.includes('device: machine_selected mine'))
+    await vi.advanceTimersByTimeAsync(15_000)
+    for (let turn = 0; turn < 50; turn++) await new Promise((resolve) => setImmediate(resolve))
+    expect(announced()).toEqual([])
+    expect(selects).toEqual(['cloud-1', 'cloud-1', 'mine'])
+    expect(host.selectedMachine()).toBe('mine')
   })
 })
