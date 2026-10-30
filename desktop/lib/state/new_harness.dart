@@ -1744,14 +1744,17 @@ class NewHarnessController extends ChangeNotifier {
       : 'Default model';
 
   /// The model and effort a Claude Product Manager is launched with when its
-  /// person chose no model: on this Mac as flags, through the Swarm on its
-  /// start. A machine that cannot take them starts it on the engine's own
-  /// (AppNotifier.createAgent; backend leadStart.ts).
+  /// person chose no model and the Swarm's model list leaves Opus on: on this
+  /// Mac as flags. Through the Swarm its start names none, and the Swarm
+  /// fills the same default under the owner's list and rules (backend
+  /// commands.ts). A machine that cannot take them starts it on the engine's
+  /// own (AppNotifier.createAgent).
   ({String model, String effort})? get leadLaunchModel =>
       integration?.swarmRole == 'lead' &&
           _engine == 'claude' &&
           _model == null &&
-          !asGuest
+          !asGuest &&
+          integration?.leadModels?.refusal('claude', kLeadModel.model) == null
       ? (model: kLeadModel.model, effort: kLeadModel.effort)
       : null;
 
@@ -4552,8 +4555,6 @@ class NewHarnessController extends ChangeNotifier {
           title: _leadRepositoryName,
           task: task.trim(),
           files: attachments?.files ?? const [],
-          model: leadLaunchModel?.model,
-          effort: leadLaunchModel?.effort,
         ),
       );
     } catch (failure) {

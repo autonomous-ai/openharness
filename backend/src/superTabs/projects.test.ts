@@ -4,6 +4,7 @@ import { applyCommand, commandSchema, type Command, type CommandContext } from '
 import { agentOnly, createSuperTab, SuperTabError, visibleState, type Actor, type MessageDraft } from './model.js'
 import { canReadAgent, canWatchAgent, markConfidential, projectOf, projectsOf, readConversation, skillModeOf, skillSetOf, watchersLost } from './projects.js'
 import { mayDrive } from './terminal.js'
+import { DEFAULT_ROUTING_POLICY } from './routingPolicy.js'
 
 const owner: Actor = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Actor = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -461,6 +462,27 @@ describe('custom role sets', () => {
     expect(bad({ engine: 'cursor' })).toThrow()
     expect(bad({ engine: 'codex', model: 'x'.repeat(201) })).toThrow()
     expect(bad({ engine: 'codex', other: true })).toThrow()
+  })
+
+  it('starts on its engine\'s own model, and says why, when the owner\'s rules or routing policy rule a role default out', () => {
+    // Review of #2274: a role default never overrides the owner's model list or rules.
+    const { f, p } = custom()
+    const writer = { ...role('abcdefabcdef', 'Docs writer', 'builder'), defaults: { engine: 'codex', model: 'gpt-6.1-sol', effort: 'medium' } }
+    f.run({ type: 'project.role.set', projectId: p.projectId, role: writer } as Command, peer)
+    f.run({ type: 'project.skills', projectId: p.projectId, mode: 'custom' }, peer)
+    const startWith = (context: Partial<CommandContext> = {}) => {
+      const startId = String(f.run({ type: 'agent.start', request: request(p.conversationId, { roleId: 'abcdefabcdef' }) } as Command, peer, context).startId)
+      return { request: f.state.starts!.find(s => s.id === startId)!.request, lines: f.messages.filter(m => m.conversationId === p.conversationId).map(m => m.text) }
+    }
+    const off = { routingPolicy: { ...DEFAULT_ROUTING_POLICY, models: DEFAULT_ROUTING_POLICY.models.map(m => m.model === 'gpt-6.1-sol' ? { ...m, enabled: false } : m) } }
+    const turnedOff = startWith(off)
+    expect(turnedOff.request).not.toHaveProperty('model')
+    expect(turnedOff.request).not.toHaveProperty('effort')
+    expect(turnedOff.lines).toEqual(['Builder starts on its engine\u2019s own model, not gpt-6.1-sol at medium: the routing policy turns off Codex gpt-6.1-sol.'])
+    f.run({ type: 'rule.set', projectId: p.projectId, rule: { kind: 'forbidModel', engine: 'codex', model: 'sol' }, text: 'No Sol.' } as Command, peer)
+    const ruled = startWith()
+    expect(ruled.request).not.toHaveProperty('model')
+    expect(ruled.lines).toEqual(['Builder starts on its engine\u2019s own model, not gpt-6.1-sol at medium: the owner\'s rule "No Sol." rules out Codex gpt-6.1-sol.'])
   })
 
   it('starts and assigns by a role id that exists in the custom set and matches the agent\'s kind', () => {

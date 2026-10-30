@@ -1088,6 +1088,12 @@ it('says in the project chat when a Product Manager on its person\'s own Mac cou
   expect(join({ launchRefused: { model: 'opus', effort: 'xhigh' } }, false)).toEqual([])
   expect(commandSchema.safeParse({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'pm', name: 'Lead', configuration: config, lead: true,
     launchRefused: { model: 'opus', other: 1 } }).success).toBe(false)
+  // Only what a launch could have asked for (cli lib/launchModel.ts MODEL and EFFORT): one short word each.
+  for (const launchRefused of [{ model: 'opus --dangerously-skip-permissions' }, { model: 'opus\nRead this' }, { model: 'x'.repeat(65) }, { model: 'opus', effort: 'XHIGH' }, { model: 'opus', effort: 'x'.repeat(17) }]) {
+    expect(commandSchema.safeParse({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'pm', name: 'Lead', configuration: config, lead: true, launchRefused }).success, JSON.stringify(launchRefused)).toBe(false)
+  }
+  expect(commandSchema.safeParse({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'pm', name: 'Lead', configuration: config, lead: true,
+    launchRefused: { model: 'claude-opus-5[1m]', effort: 'xhigh' } }).success).toBe(true)
 })
 it('accepts POSIX, Windows drive and UNC folders and refuses relative, drive-relative and control-character ones', () => {
   const contribute = (cwd: string) => commandSchema.safeParse({ type: 'machine.contribute', machineId: 'host', name: 'PC', cwd, engines: ['claude'], maxAgents: 1 })
@@ -1651,6 +1657,24 @@ describe('Reviewer role', () => {
       f.state.agents.find(a => a.id === reviewer)!.configuration.engine = 'codex'
       markReady(`Ready. ${pr}`)
       expect(reviews()[0]!.assignment!.agentId).toBe(fresh)
+    })
+
+    it('prefers a free Reviewer at least as strong as the Builder, and falls back to a weaker one (review of #2274)', () => {
+      // The Engineer runs Codex gpt-6.1-sol (quality 3). `reviewer` comes first on Claude Sonnet (2); `fresh` runs Claude Opus (3).
+      const { f, fresh, reviewer, builder, markReady, reviews } = ready('claude')
+      f.state.agents.find(a => a.id === builder)!.configuration.model = 'gpt-6.1-sol'
+      f.state.agents.find(a => a.id === reviewer)!.configuration.model = 'claude-sonnet-5-5'
+      markReady(`Ready. ${pr}`)
+      expect(reviews()[0]!.assignment!.agentId).toBe(fresh)
+    })
+
+    it('takes a weaker free Reviewer when none is as strong as the Builder', () => {
+      const { f, fresh, reviewer, builder, lead, markReady, reviews } = ready('claude')
+      f.run({ type: 'agent.release', agentId: fresh, decision: 'stop' }, { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' })
+      f.state.agents.find(a => a.id === builder)!.configuration.model = 'gpt-6.1-sol'
+      f.state.agents.find(a => a.id === reviewer)!.configuration.model = 'claude-sonnet-5-5'
+      markReady(`Ready. ${pr}`)
+      expect(reviews()[0]!.assignment!.agentId).toBe(reviewer)
     })
 
     it('opens nothing without a link to a pull request of the project\'s repository, or when the Lead marks it ready', () => {

@@ -1547,7 +1547,7 @@ void main() {
       },
     );
 
-    test('a Claude PM the Swarm starts asks for Opus 5.5 at xhigh', () async {
+    test('a Claude PM the Swarm starts leaves its model to the Swarm, which fills its role’s default', () async {
       final f = SuperTabLaunchFixture();
       addDiego(f);
       knownRepo(f);
@@ -1567,10 +1567,54 @@ void main() {
       expect(box.leadThroughSwarm, isTrue);
       expect(box.leadModelLabel, 'Opus 5.5 · xhigh');
       expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      // The server fills it, so the owner's model list and rules decide
+      // (review of #2274: a default the client named read as its person's).
       final start = commandsOf(f, 'lead.start').single;
-      expect(start['model'], 'opus');
-      expect(start['effort'], 'xhigh');
+      expect(start.containsKey('model'), isFalse);
+      expect(start.containsKey('effort'), isFalse);
     });
+
+    test(
+      'with every Opus row of the Swarm’s model list off, a Claude PM on its own Mac launches on its engine’s own model',
+      () async {
+        final f = SuperTabLaunchFixture();
+        Map<String, dynamic> row(String model, String effort, bool on) => {
+          'engine': 'claude',
+          'model': model,
+          'effort': effort,
+          'quality': 3,
+          'cost': 3,
+          'enabled': on,
+        };
+        f.connection.server.routingPolicy = {
+          'policy': {
+            'version': 1,
+            'models': [
+              row('opus', 'high', false),
+              row('opus', 'xhigh', false),
+              row('sonnet', 'medium', true),
+            ],
+            'floor': {'low': 1, 'medium': 2, 'high': 3},
+            'quotaReserve': 10,
+            'notes': '',
+          },
+          'warnings': <String>[],
+          'overridden': <String>[],
+          'override': null,
+        };
+        f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+        final box = await f.box(engine: 'claude', newProject: true);
+        expect(box.leadLaunchModel, isNull);
+        expect(box.leadModelLabel, 'Default model');
+        expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+        final sent = [
+          for (final call in f.connection.calls)
+            if (call.$1 == 'agent_create') call.$2,
+        ];
+        expect(sent.single.containsKey('model'), isFalse);
+        expect(sent.single.containsKey('effort'), isFalse);
+      },
+    );
   });
 
   test(

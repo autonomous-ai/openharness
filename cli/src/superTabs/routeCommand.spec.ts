@@ -287,6 +287,18 @@ describe('routeTask', () => {
     Object.assign(t.state.conversations[2]!, { assignment: { id: 'b', agentId: 'b1', status: 'review' } })
     expect(await routeTask(input, scoped({ tab: t }), where as never, opener(), () => 'op')).toMatchObject({ ok: true, pick: { kind: 'member', agentId: 'a1' } })
   })
+  it('rates a Builder launched on its engine\'s own model by that engine\'s default row, whatever slug it reports (review of #2274)', async () => {
+    const t = tab(); t.state.agents = agents.map(a => a.id === 'a1' ? { ...a, role: 'reviewer' } : a)
+    // Codex reports the slug it runs, which the policy does not name; its start named no model.
+    t.state.agents.push({ id: 'b2', name: 'Codex builder', machineId: 'm1', harnessId: 'hb2', configuration: { engine: 'codex', model: 'gpt-6-luna', effort: 'high' } } as never)
+    Object.assign(t.state, { starts: [{ id: 's2', harnessId: 'hb2', request: { machineId: 'm1', engine: 'codex' } }] })
+    t.state.conversations.push({ id: 'g0', title: 'Built', leadId: 'lead', agentIds: ['lead'], archived: false, brief: '', checks: [],
+      assignment: { id: 'b', agentId: 'b2', status: 'review' } } as never)
+    Object.assign(t.state.conversations[1]!, { reviewOf: 'g0' })
+    const s = scoped({ tab: t })
+    expect(await routeTask(input, s, where as never, opener(), () => 'op')).toMatchObject({ ok: true, pick: { kind: 'new', engine: 'claude', model: 'opus' } })
+    expect(recorded(s).command.decision).toMatchObject({ floor: 3, belowFloor: false })
+  })
   it('lets the Builder\'s engine review at its top tier when the only other engine is on a machine the task may not use', async () => {
     const pool = (machineId: string, engines: string[], patch: Record<string, unknown> = {}) => ({ machineId, name: machineId, cwd: '/w', engines, paused: false, contributorId: 'owner',
       observation: { receivedAt: Date.now(), resources: { memoryTotalBytes: 32e9, memoryUsedBytes: 2e9, projectDiskFreeBytes: 200e9 }, tools: { git: true }, runningHarnessIds: [],

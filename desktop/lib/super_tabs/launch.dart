@@ -686,9 +686,9 @@ class SuperTabLaunch {
         'type': 'lead.start',
         'projectId': saved['projectId'],
         'machineId': start.machineId,
+        // No model: the Swarm fills its role's default where the owner's
+        // model list and rules allow it (backend commands.ts lead.start).
         'engine': start.engine,
-        'model': ?start.model,
-        'effort': ?start.effort,
         'repositoryUrl': ?start.repositoryUrl,
       },
     };

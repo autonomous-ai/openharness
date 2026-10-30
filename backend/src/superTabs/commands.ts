@@ -11,7 +11,7 @@ import {
 import { jobKindOf } from './evidence/jobKind.js'
 import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { DEFAULT_ROUTING_POLICY, routingOverrideSaveSchema, type RoutingPolicy } from './routingPolicy.js'
-import { agentTarget, askedInSchema, broken, MAX_RULES, reviewRefusal, RULE_MESSAGE_MS, sameEngineReview, ruleSchema, ruleTextSchema, startTarget, unmet, type RunTarget } from './rules.js'
+import { agentQuality, agentTarget, askedInSchema, broken, MAX_RULES, reviewRefusal, RULE_MESSAGE_MS, sameEngineReview, ruleSchema, ruleTextSchema, startTarget, unmet, type RunTarget } from './rules.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { checkMentions, MAX_MENTIONS, type MentionTarget } from './mentions.js'
 import { answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
@@ -33,7 +33,7 @@ import { bindPullRequestCards, bindTaskCard, pullRequestCard, recordCardMerged }
 import { openReview, openReviewOf, projectPullRequest, verdictPending } from './autoReview.js'
 import { carryOver, cheapAttempt, GRID_START_FAILED, REVIEW_FAILED, stepUp, stepUpRefusal } from './stepUp.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
-import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, isConfidential, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleDefaults, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, withRoleDefaults, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
+import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, isConfidential, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleDefaults, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, withRoleDefaults, type ProjectRole, type RoleDefaults, type RoleKind, type SwarmProject } from './projects.js'
 import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, openBuddyChat, PROPOSAL_ASK_MS, proposalText, renameBuddy, requireBuddyCommand } from './buddies.js'
 import { BUDDY_OWN_MACHINE_REFUSAL, CODEX_BUDDY_REFUSAL } from './buddyContract.js'
 import { LEAD_NAME, launchRefusedLine, leadJoined, leadStartFailed, leadStarting, placeLead } from './leadStart.js'
@@ -68,6 +68,9 @@ const maxAgents = z.number().int().min(1).max(1024)
 // Copied Default roles keep the ids lead, dev and review; a role the owner adds gets 12 random hex characters from the client.
 const roleId = z.string().regex(/^([0-9a-f]{12}|lead|dev|review)$/)
 /** A role's default engine, model and effort (projects.ts RoleDefaults). */
+/** What a launch may be asked to run, one short word each, as the CLI checks it (cli lib/launchModel.ts MODEL and EFFORT). */
+const LAUNCH_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:\-[\]]{0,63}$/
+const LAUNCH_EFFORT = /^[a-z]{1,16}$/
 const roleDefaultsSchema = z.object({ engine: z.enum(['claude', 'codex']), model: z.string().trim().min(1).max(200).optional(),
   effort: z.string().trim().min(1).max(80).optional() }).strict()
 const role = z.object({ id: roleId, name: z.string().trim().min(1).max(40), kind: z.enum(['lead', 'builder', 'reviewer']),
@@ -147,7 +150,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   // `launchRefused`: the model and effort a Product Manager's own-machine launch asked for, which that machine refused before
   // launching anything, so it runs its engine's own model (Desktop AgentCreationAttempt; leadStart.ts launchRefusedLine).
   z.object({ type: z.literal('agent.add'), conversationId: id, machineId: id, harnessId: id, name: title, configuration, lead: z.boolean(), project: project.optional(), roleId: roleId.optional(), initialMessage: text.optional(),
-    launchRefused: z.object({ model: z.string().trim().min(1).max(200), effort: z.string().trim().min(1).max(80).optional() }).strict().optional() }).strict(),
+    launchRefused: z.object({ model: z.string().regex(LAUNCH_MODEL), effort: z.string().regex(LAUNCH_EFFORT).optional() }).strict().optional() }).strict(),
   z.object({ type: z.literal('agent.start'), request: startRequestSchema, routeDecisionId: id.optional(), overrideReason: reason.optional() }).strict(),
   // A Buddy's proposal for its owner, posted in its project's chat: `conversationId` is its own chat, and `ownerMessageId` its
   // owner's message there asking for it. Its files are its own uploads in that chat, or files its owner sent there (store.ts proposable).
@@ -664,6 +667,27 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   /** The Mac a Harness Team account's machine is, for a machines rule naming the Mac (machines.ts teamStartRequest). */
   const macOf = (id: string) => state.machines?.find(m => m.machineId === id)?.hostMachineId
   const groupRules = (conversationId: string) => projectRules(state, groupProject(state, conversation(state, conversationId)).id)
+  /** [request] with its role's [defaults] filled in (projects.ts withRoleDefaults) while the routing policy has that model on and
+   *  the project's rules allow it. Otherwise it starts as asked, on its engine's own model, and [conversationId] says why: a
+   *  default never overrides the owner's model list or rules (review of #2274). */
+  const defaulted = <T extends { engine: string; model?: string; effort?: string; gridModel?: string }>(request: T, defaults: RoleDefaults | undefined,
+    conversationId: string, machineId: string, name: string): T => {
+    const filled = withRoleDefaults(request, defaults)
+    if (filled === request) return request
+    const model = filled.model!, engineName = filled.engine === 'codex' ? 'Codex' : 'Claude'
+    const rows = policy.models.filter(m => m.engine === filled.engine && m.model === model)
+    const exact = rows.find(m => m.effort === (filled.effort ?? 'default'))
+    const rules = groupRules(conversationId), target = (r: T) => startTarget({ ...r, machineId })
+    const rule = broken(rules, target(filled), machineName, macOf)
+    const why = !rows.length ? `the routing policy has no row for ${engineName} ${model}.`
+      : !(exact ? exact.enabled : rows.some(m => m.enabled)) ? `the routing policy turns off ${engineName} ${model}${exact ? ` at ${exact.effort}` : ''}.`
+      : rule && !broken(rules, target(request), machineName, macOf) ? rule.replace(/^./, c => c.toLowerCase())
+      : null
+    if (!why) return filled
+    effects.messages.push({ id: stableId(operationId, 'role-default'), conversationId, author: sender, replyTo: null, recipients: [], source: RULE_ROW,
+      text: `${name} starts on its engine\u2019s own model, not ${model}${filled.effort ? ` at ${filled.effort}` : ''}: ${why}` })
+    return request
+  }
   /** A requirement names only machines its setter sees, so it never names one to a reader who could not (model.ts TaskRequirement). */
   const requirable = (task: WorkTask | undefined) => {
     const machines = task?.requires?.machines
@@ -988,7 +1012,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // Only its person knows which machine stays on (Ken, 10-29): a Desktop from before asked for the first free one.
       if (!machineId) fail('MACHINE_REQUIRED', `Choose the machine the ${LEAD_NAME} runs on.`, 400)
       // Its person named no model: the lead role's default for this engine (Claude Opus 5.5 at xhigh in the built-in sets).
-      const start = placeLead(state, project, person(state, actor.userId), machineId, withRoleDefaults(request, roleDefaults(project, 'lead')), operationId, context)
+      const asked = defaulted(request, roleDefaults(project, 'lead'), project.leadConversationId, machineId, LEAD_NAME)
+      const start = placeLead(state, project, person(state, actor.userId), machineId, asked, operationId, context)
       Object.assign(result, { startId: start.id, machineId: start.request.machineId })
       break
     }
@@ -1496,7 +1521,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // A teammate's project started on a Mac runs in that Mac's Harness Team account, never as its owner (machines.ts).
       // A person's start that names no model takes its role's default. A routed start keeps the model its route picked.
       const asked = command.routeDecisionId ? command.request
-        : withRoleDefaults(command.request, roleDefaults(home, command.request.role ?? 'builder', command.request.roleId))
+        : defaulted(command.request, roleDefaults(home, command.request.role ?? 'builder', command.request.roleId), command.request.conversationId,
+          command.request.machineId, command.request.name)
       const request = teamStartRequest(state, asked, home, context.teamAccountsIdle, context.teamMachines)
       const pool = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)
       // Off the Machines list, a teammate's project never runs: nothing there shows a privacy check (machines.ts).
@@ -2235,7 +2261,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         const opened = pullRequest && openReview(state, group, command.result!, pullRequest, { operationId, now: context.now, engineer: sender,
           // The owner's hard rules hold as for work.assign; the reviewed task's own requirement is its Engineer's, not its Reviewer's.
           mayWork: a => !teamWorkCheck(state, a.machineId, a.contributorId, groupProject(state, group), context.now, context.teamMachines, context.otherWorkspaceMachines)
-            && !broken(groupRules(group.id), agentTarget(state, a), machineName, macOf) && !reviewRefusal(state, group.id, agentTarget(state, a), policy, mayRun(group.id, false)) })
+            && !broken(groupRules(group.id), agentTarget(state, a), machineName, macOf) && !reviewRefusal(state, group.id, agentTarget(state, a), policy, mayRun(group.id, false)),
+          strength: a => agentQuality(state, policy, a) })
         if (opened) effects.messages.push(...opened.messages)
         // Shipped before this command: the leaderboard marks this Done as shipped just above (recordStatus).
         if (command.status === 'done' && shippedAt(conversation(original, group.id)) == null) {
