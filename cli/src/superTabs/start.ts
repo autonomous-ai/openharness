@@ -38,9 +38,25 @@ const CANCELLED_START = 'The machine cancelled this request before starting an a
 function requireSuccess(reply: Json): Json {
   // The code says whether the backend answered (a refusal) or the reply was lost on the way (a transport code, or none).
   if (reply.error || reply.ok !== true) throw Object.assign(new Error(String(reply.detail ?? reply.error ?? 'This Super Tab request did not succeed.')),
-    { code: typeof reply.error === 'string' ? reply.error : null })
+    { code: typeof reply.error === 'string' ? reply.error : null, status: typeof reply.status === 'number' ? reply.status : null })
   return object(reply.value)
 }
+/** Whether the backend answered a command with its own refusal, so it did not record it: a 4xx answer with a code, as the
+ *  Lead's daemon relays it or a contributed host's request throws it (wire.ts). A lost reply, a transport code or a server
+ *  error may follow a recorded command and proves nothing. START_CLAIMED can mean another run of this start holds the
+ *  claim and is creating it now: its row is left to the ledger's deadline (reservations.ts START_DEADLINE_MS). */
+function refusedByBackend(error: unknown): error is Error & { code: string } {
+  const { code, status } = (error ?? {}) as { code?: unknown; status?: unknown }
+  return error instanceof Error && typeof code === 'string' && code !== 'START_CLAIMED' && typeof status === 'number' && status >= 400 && status < 500
+}
+/** The backend's dispatch refusals (commands.ts agent.startDispatch, machines.ts admitMachineStart) that this start can never
+ *  pass: a routing rule, its engine, its machine grant revoked or gone, the machine removed or outside the contribution, and
+ *  the Team refusals the backend itself fails a start for (machines.ts LASTING_TEAM_REFUSALS). Any other code, unknown ones
+ *  included, may pass by itself (a pause, an offline or full machine, a held Team account, a decision the Lead owes): that
+ *  start keeps waiting, as its host retries it on every pass (superTabs/machines.ts). */
+const LASTING_REFUSALS = new Set(['RULE_BROKEN', 'REQUIREMENT_UNMET', 'REVIEW_REFUSED', 'STEPPED_UP', 'BUILD_REFUSED', 'SWARM_ENGINE',
+  'FORBIDDEN', 'HOST_REQUIRED', 'CONTRIBUTION_REVOKED', 'MACHINE_REMOVED', 'OUTSIDE_CONTRIBUTION', 'NOT_SWARM_MACHINE', 'BUDDY_WINDOWS',
+  'TEAM_ACCOUNT_REQUIRED', 'PRIVACY_UNCHECKED', 'PRIVACY_CHECK_FAILED', 'MACHINE_IN_OTHER_WORKSPACE'])
 /** A Buddy's start note: its owner's chat, where it talks, and nothing to wait for. */
 /** A project's Product Manager the Swarm started here (backend leadStart.ts): the Lead of the project's conversation, with
  *  the lines Desktop's own-machine launch gives one (desktop super_tabs/launch_prompt.dart). */
@@ -334,6 +350,32 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
   /** Whether the agent was launched with them, so that nothing is left to switch. Unknown (undefined) when this
    *  invocation sent no create: a resumed start, which then reads what the agent runs. */
   let launched: boolean | undefined
+  /** A dispatch the backend refused (a pause, a rule, the machine held or paused) sends no agent_create, and its reservation
+   *  was held for good (Diego, 2026-10-30). The backend checks those before the claim itself, so a run that claimed this
+   *  start a moment ago and is creating it now can make this one's claim read as one of them: only a start its record
+   *  shows unclaimed and not launched gives anything back. One refused for now keeps waiting with its reservation given
+   *  back, so its next run reserves again (the review of #2361: a paused machine's starts were lost). One refused for good
+   *  is cancelled, which fences any late copy of a create, its row released and the start failed with the reason. */
+  const releaseRefused = async (refused: Error & { code: string }): Promise<Json> => {
+    const record = await scoped({ action: 'startStatus', startId }).then(requireSuccess).catch(() => null)
+    if (record?.dispatched !== false || record.harnessId) throw refused
+    if (!LASTING_REFUSALS.has(refused.code)) {
+      // An older daemon without the action keeps the row, as before; the ledger's deadline gives it back then.
+      await target.request('super_tabs', { action: 'returnCapacity', creationId }, 10_000).catch(() => null)
+      throw refused
+    }
+    const cancelled = await target.request('agent_create_cancel', { creationId }, 10_000).catch((): Json => ({}))
+    if (cancelled.error || cancelled.creationId !== creationId || cancelled.state !== 'cancelled') {
+      return { error: 'START_UNCERTAIN', startId, creationId,
+        detail: `${refused.message} The machine did not confirm cancellation. Keep this start ID and resume it before starting another agent.` }
+    }
+    await target.request('super_tabs', { action: 'observeCapacity', creationId }, 10_000).catch(() => {})
+    // Its creation can no longer launch, so the start ends with the backend's reason and the Lead starts it elsewhere.
+    if (!record.error) {
+      requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: refused.message } }))
+    }
+    return { error: 'START_FAILED', startId, detail: refused.message }
+  }
   try {
     let refusal: string | null = null
     let native = await target.request('agent_create_status', { creationId }, 10_000)
@@ -383,8 +425,13 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
         detail: reservation.detail ?? 'Update Harness on the execution machine to reserve capacity before starting this agent.' }
       // A new invocation uses a new claim. A lost claim reply never authorizes
       // native dispatch, even if retrying the backend operation returns a receipt.
-      requireSuccess(await scoped({ action: 'command', operationId: `dispatch-${randomUUID()}`,
-        command: { type: 'agent.startDispatch', startId } }))
+      try {
+        requireSuccess(await scoped({ action: 'command', operationId: `dispatch-${randomUUID()}`,
+          command: { type: 'agent.startDispatch', startId } }))
+      } catch (error) {
+        if (!refusedByBackend(error)) throw error
+        return await releaseRefused(error)
+      }
       // Both direct and contributed-host starts reach this boundary. Existing
       // native receipts are read above and never have their permissions changed.
       // Engines without a full mode retain their existing approving launch flags.
