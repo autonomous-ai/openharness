@@ -35,7 +35,10 @@ export interface QuotaWindow { name: string | null; leftPercent: number; resetsA
  * usage window to run out. */
 export interface Quota { known: boolean; leftPercent: number | null; resetsAt: number | null; windows?: QuotaWindow[]; account?: string; metered?: true
   /** Why an unknown allowance could not be read, as its machine said (cli superTabs/capacity.ts quotaUnknownReason). */
-  why?: string }
+  why?: string
+  /** The machine this reading is from, when it is not the candidate's own: a Harness Team account's Mac, whose subscription
+   *  the account spends (routeCommand.ts relayedReadings). */
+  from?: string }
 /** The task's folder as the Lead's machine sees it. `unknown` means it could not be read, `none` that it is not a repository,
  * `missing` that the Lead's machine has no such folder (a member elsewhere may). */
 export interface TaskFolder { cwd: string; kind: 'git' | 'none' | 'missing' | 'unknown'; name: string | null; root: string | null; remote: string | null }
@@ -50,6 +53,9 @@ export interface Probe {
   /** Members: the frame (null when it could not be read), whether the member is in the task's repository, and its earlier work in this Super Tab. */
   frame?: MemberFrame | null; repo?: 'same' | 'different' | 'unknown'; earlier?: Array<{ group: string; outcome: string }>
   terminalUnverified?: boolean
+  /** Why no agent of its engine starts on its machine within REVIEW_START_MS, whatever its quota: offline, paused, signed out,
+   *  suspended, or a member held by a usage limit past it. Read by [otherFamilyReviews]. */
+  cannotStart?: string
   /** New agents: what the machine has. */
   load?: MachineLoad
   /** A new agent on a model served on the Swarm's grid: free, reached through the grid relay, `model`/`effort` `default`.
@@ -65,7 +71,9 @@ export interface Fit { status: 'fits' | 'unknown' | 'short'; coverage: number | 
 export interface Commitment { account: string; spend: Partial<Record<Window, number>>; size: Size; createdAt: number }
 export interface Shown extends Probe { id: string; title: string; label: string; fit: Fit }
 /** `short` is set when no candidate is expected to cover the task, to tell the Lead. */
-export interface Choice { shown: Shown[]; excluded: Array<{ title: string; reason: string }>; floor: number; belowFloor: boolean; short?: string
+/** A candidate left out and why; [machine] names its machine, absent for a model that is not offered anywhere. */
+export interface Excluded { title: string; reason: string; machine?: string }
+export interface Choice { shown: Shown[]; excluded: Excluded[]; floor: number; belowFloor: boolean; short?: string
   /** Every candidate left runs on an account the route was asked to avoid (`choose` `avoid`). */
   avoided?: string }
 export interface Verdict { pick: Shown; via: 'order' | 'only'; p: null; why: string }
@@ -225,7 +233,7 @@ export function rateFor(policy: Policy, engine: string, model: string | null, ef
 const SMALL = /(^|[^a-z0-9])(mini|nano)([^a-z0-9]|$)/i
 
 /** What a reviewed Builder ran: its engine, and the grid model its engine drove. */
-export interface Reviewed { engine: string; gridModel?: string }
+export interface Reviewed { engine: string; gridModel?: string; quality?: number }
 /** A model family: a grid model's own, else its engine's. */
 const familyOf = (t: Reviewed) => t.gridModel ? `grid:${t.gridModel}` : t.engine
 /** Why [p] may not review (Ken, 2026-10-29: a small model never reviews again): a model served on the Swarm's grid, one rated
@@ -237,14 +245,32 @@ export function reviewRefusals(p: Probe, builder: Reviewed | null, otherFamily: 
   if (p.quality < 2) return [`A review needs a model of quality 2 or more, and ${ENGINE[p.engine]} ${p.model} is ${p.quality}.`]
   if (!builder || familyOf(builder) !== familyOf(p)) return []
   if (otherFamily) return [`A review runs on another engine than the reviewed Builder's, ${ENGINE[p.engine]}.`]
-  return p.quality < 3 ? [`A review on the reviewed Builder's engine, ${ENGINE[p.engine]}, needs its top tier (quality 3): no Reviewer on another engine can run in this Swarm.`] : []
+  return p.quality < 3 ? [`A review on the reviewed Builder's engine, ${ENGINE[p.engine]}, needs its top tier (quality 3): no Reviewer on another engine can start soon in this Swarm.`] : []
 }
-/** Whether a strong Reviewer of another family than [builder]'s can run: a candidate off the grid, rated 2 or more, of
- *  another family, that the owner's [rules] let run at the effort it would start at. Busy, offline or short of quota it
- *  still counts, within its start window; the caller leaves out the machines the task or its access rules out (review of
- *  ee4ee6c9a: an engine the owner ruled out blocked the fallback). */
-export const otherFamilyReviews = (probes: Probe[], builder: Reviewed | null, rules: SwarmRule[]) =>
-  !!builder && probes.some(p => !p.gridModel && p.quality >= 2 && familyOf(p) !== familyOf(builder) && !breaks(rules, lifted(rules, p)))
+/** How soon a Reviewer has to be able to start to count: a start still not running after this long is abandoned (backend
+ *  superTabs/store.ts ABANDONED_START_MS). A window that resets inside it counts as quota; one out for longer does not (backend
+ *  superTabs/reviewSeats.ts REVIEW_START_MS). */
+export const REVIEW_START_MS = 15 * 60_000
+/** How the route line and the brief of a review on its Builder's own engine start (Lead, 2026-10-30; backend superTabs/rules.ts). */
+export const SAME_ENGINE = 'same-engine review: no Reviewer of another engine has quota'
+/** Whether [q] has quota now, or once each used-up window resets within REVIEW_START_MS. One it cannot read, or metered, does,
+ *  as a start there does. */
+export function quotaWithin(q: Quota, now: number): boolean {
+  if (!q.known || q.metered) return true
+  const soon = (resetsAt: number | null) => resetsAt !== null && resetsAt - now <= REVIEW_START_MS
+  return q.windows?.length ? q.windows.every(w => w.leftPercent > 0 || soon(w.resetsAt)) : q.leftPercent === null || q.leftPercent > 0 || soon(q.resetsAt)
+}
+/** Whether a strong Reviewer of another family than [builder]'s could start within REVIEW_START_MS: a candidate off the grid,
+ *  rated 2 or more, of another family, that the owner's [rules] let run at the effort it would start at, whose machine is up
+ *  ([Probe.cannotStart]) with quota now or once a window resets inside the window. Busy still counts: a Reviewer frees up. One
+ *  out of quota for days or offline does not (2026-10-30: reviews of Claude builds waited all morning on Codex machines out of
+ *  weekly quota); the caller leaves out the machines the task or its access rules out (review of ee4ee6c9a: an engine the
+ *  owner ruled out blocked the fallback). */
+export const otherFamilyReviews = (probes: Probe[], builder: Reviewed | null, rules: SwarmRule[], now: number = Date.now()) =>
+  !!builder && probes.some(p => !p.gridModel && p.quality >= 2 && familyOf(p) !== familyOf(builder) && !p.cannotStart && quotaWithin(p.quota, now)
+    && !breaks(rules, lifted(rules, p)))
+/** Whether [p] reviews on [builder]'s own model family. */
+export const sameFamily = (p: Probe, builder: Reviewed | null) => !!builder && familyOf(builder) === familyOf(p)
 
 /** A task that stepped up from a cheaper model takes no grid model and nothing below the step's floor; the server refuses
  *  the same (backend superTabs/stepUp.ts stepUpRefusal). */
@@ -301,6 +327,7 @@ const resetsIn = (resetsAt: number, now: number) => span(Math.max(0, resetsAt - 
 function quotaText(q: Quota, now: number): string {
   if (q.metered) return 'quota metered'
   if (!q.known || q.leftPercent === null) return q.why ? `quota unknown (${q.why})` : 'quota unknown'
+  if (q.from) return `quota read on ${cut(q.from, 40)}, whose subscription this account spends: ${quotaText({ ...q, from: undefined }, now).replace(/^quota /, '')}`
   if (q.windows?.length) {
     return `quota ${q.windows.map(w => `${w.name ?? 'window'} ${Math.round(w.leftPercent)}% left${w.resetsAt === null ? '' : ` (resets in ${resetsIn(w.resetsAt, now)})`}`).join(', ')}`
   }
@@ -418,9 +445,11 @@ function withEveryMachine<T extends { machineId: string }>(ranked: T[]): T[] {
   return ranked.filter(p => keep.has(p))
 }
 
-/** `avoid`: accounts of agents that lost this task (a review's Reviewer whose model kept failing): any other account goes first. */
+/** `avoid`: accounts of agents that lost this task (a review's Reviewer whose model kept failing): any other account goes first.
+ *  `reviewFloor`: a review's reviewed Builder's strength, the Reviewer role's default (Scholes's roadmap, piece 1): the floor
+ *  rises to it, and like any floor it gives way when nobody that strong can run, so a review never waits for nobody. */
 export function choose(probes: Probe[], policy: Policy, a: Assessment, now: number = Date.now(), open: Commitment[] = [], rules: SwarmRule[] = [], held: HeldModel[] = [],
-  avoid: string[] = []): Choice | { error: 'NO_CANDIDATE'; excluded: Array<{ title: string; reason: string }> } {
+  avoid: string[] = [], reviewFloor = 0): Choice | { error: 'NO_CANDIDATE'; excluded: Excluded[] } {
   // A lifted row can equal another row on the same machine (Codex `default` lifted to high beside Codex high); one is kept.
   // A person asking for a local model considers local models alone, whatever their strength.
   if (a.local) probes = probes.filter(p => p.gridModel)
@@ -430,7 +459,7 @@ export function choose(probes: Probe[], policy: Policy, a: Assessment, now: numb
   const raised = probes.map(p => lifted(rules, p)), key = (p: Probe) => `${p.kind}\0${p.machineId}\0${p.engine}\0${p.model}\0${p.effort}\0${p.gridModel ?? ''}`
   const ruled = raised.filter((p, i) => p === probes[i] || !raised.some((q, j) => j !== i && key(q) === key(p) && (q === probes[j] || j < i)))
     .map(p => { const why = breaks(rules, p); return why ? { ...p, refusals: [...p.refusals, why] } : p })
-  const excluded = ruled.filter(p => p.refusals.length).map(p => ({ title: titleOf(p), reason: p.refusals.join(' ') }))
+  const excluded: Excluded[] = ruled.filter(p => p.refusals.length).map(p => ({ title: titleOf(p), reason: p.refusals.join(' '), machine: p.machineName }))
   const viable = ruled.filter(p => !p.refusals.length)
   // Nothing offered: a model that is served but taken says who has it, rather than reading as unshared.
   const heldNamed = named ? held.filter(m => words(named).every(w => words(`${m.model} ${m.label}`).join('').includes(w))) : []
@@ -442,7 +471,7 @@ export function choose(probes: Probe[], policy: Policy, a: Assessment, now: numb
     else excluded.push({ title: 'Local models', reason: LOCAL_NONE })
   }
   if (!viable.length) return { error: 'NO_CANDIDATE', excluded }
-  const floor = floorFor(policy, a)
+  const floor = Math.max(floorFor(policy, a), Math.min(3, reviewFloor))
   const meeting = a.local || named ? viable : viable.filter(p => p.quality >= floor)
   const byFloor = meeting.length ? meeting : viable
   // Strength beats fit (owner, 2026-10-21): a hard task never goes to a weaker model because the strong ones are short of quota.
@@ -451,10 +480,10 @@ export function choose(probes: Probe[], policy: Policy, a: Assessment, now: numb
   // An account whose model kept failing this task waits while any other account is offered.
   const fresh = strongest.filter(p => !avoid.includes(p.fit.account))
   const sized = fresh.length ? fresh : strongest
-  if (fresh.length) excluded.push(...strongest.filter(p => !fresh.includes(p)).map(p => ({ title: titleOf(p), reason: AVOIDED })))
+  if (fresh.length) excluded.push(...strongest.filter(p => !fresh.includes(p)).map(p => ({ title: titleOf(p), reason: AVOIDED, machine: p.machineName })))
   // Only the first group that has anyone is shown: those that fit, then those whose quota is not fully known, then the short.
   const status = (['fits', 'unknown', 'short'] as const).find(s => sized.some(p => p.fit.status === s))!
-  excluded.push(...sized.filter(p => p.fit.status !== status).map(p => ({ title: titleOf(p), reason: p.fit.status === 'unknown' ? UNREAD : runsOut(p.tight!) })))
+  excluded.push(...sized.filter(p => p.fit.status !== status).map(p => ({ title: titleOf(p), reason: p.fit.status === 'unknown' ? UNREAD : runsOut(p.tight!), machine: p.machineName })))
   // When every candidate is short, the one expected to get furthest goes first.
   const soft = softOf(rules, a)
   const set = sized.filter(p => p.fit.status === status).sort((x, y) => status === 'short' ? y.fit.coverage! - x.fit.coverage! || compare(x, y, soft) : compare(x, y, soft))

@@ -294,7 +294,20 @@ class AgentCreationAttempt {
     String? creationId,
     this.holdWait,
     this.beforeSubmit,
+    this.launchModel,
   }) : _id = creationId ?? _newCreationId();
+
+  /// A model and effort for this session alone, passed as the engine's own
+  /// flags (cli lib/launchModel.ts): a Product Manager's role default. A
+  /// machine that cannot take them refuses before anything launches, and the
+  /// same request then starts the agent on its engine's own model.
+  final ({String model, String effort})? launchModel;
+  bool _launchModelDropped = false;
+
+  /// The [launchModel] the machine refused, once the agent started on its
+  /// engine's own model instead; null when it launched with it.
+  ({String model, String effort})? get launchModelRefused =>
+      _launchModelDropped ? launchModel : null;
 
   /// How long a request the machine holds is waited for before the create
   /// answers ([AppNotifier._createFollowingHold]). Null answers at once with
@@ -361,6 +374,15 @@ class AgentCreationAttempt {
   /// used until the person chooses it.
   String? _existingFolder;
   String? get existingFolder => _existingFolder;
+
+  /// After the machine refused a launch model before launching anything
+  /// (AppNotifier.createAgent): the request may be sent again without it.
+  void _retryWithoutLaunchModel() {
+    _launchModelDropped = true;
+    _finished = false;
+    _outcome = null;
+    _refusal = null;
+  }
 
   String? _complete(String? error) {
     _finished = true;
@@ -684,6 +706,11 @@ enum AttachIntent { person, automatic }
 /// Machines asked for from outside the workspace ([AppNotifier.requestMachines]): the device to
 /// select there, or the first phone or app.
 typedef MachinesRequest = ({String? devicePub, bool phones});
+
+/// Change agent on a Swarm Buddy, which keeps running and so keeps its agent
+/// (hn's `BUDDY_KEEPS_ITS_AGENT`, word for word).
+const buddyKeepsItsAgent =
+    'A Swarm Buddy keeps its agent. To use another agent, its person removes the Buddy and adds a new one.';
 
 class AppNotifier extends ChangeNotifier {
   final AuthSession session;
@@ -2357,6 +2384,30 @@ class AppNotifier extends ChangeNotifier {
     }
     newSwarm(newTabPage: true);
     bindSuperTab(activeSwarmId, tabId, name);
+  }
+
+  /// Shows Swarm [tabId] in the Swarm tab [swarmId] in place of the Swarm it
+  /// shows, from the Swarm dropdown: the tab keeps its place and its name
+  /// follows. A Swarm already open in another tab is selected there instead,
+  /// so no tab is added or closed. The Swarm the tab showed is hidden here as
+  /// a closed one is, and let go, which keeps its draft for its return.
+  void showSuperTabIn(String swarmId, String tabId, String name) {
+    final tab = swarms.where((s) => s.id == swarmId).firstOrNull;
+    final previous = tab?.superTabId;
+    if (tab == null || previous == null || previous == tabId) return;
+    final open = swarms.where((s) => s.superTabId == tabId).firstOrNull;
+    if (open != null) {
+      selectSwarm(open.id);
+      return;
+    }
+    // As openSuperTab: Reopen later must not add a second view of it.
+    _closedHistory.removeWhere(
+      (entry) => entry is ClosedSwarm && entry.superTabId == tabId,
+    );
+    _rememberSuperTabVisibility(previous, false);
+    superTabs.release(previous);
+    bindSuperTab(swarmId, tabId, name);
+    selectSwarm(swarmId);
   }
 
   /// Opens a tab from [closedSuperTabs]. False when it is no longer listed
@@ -4472,11 +4523,16 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// A device picked a project of a Swarm: show that Swarm, then its Lead
+  /// chat, or with [buddy] (a round dial on its Buddy side, or a tap on the
+  /// reader's Buddy) the reader's own Buddy chat there when they have one.
+  /// Never a terminal tab: closing one stopped the Buddy (Diego, 10-30).
   Future<void> _openSuperTabProject(
     MachineState source,
     String tabId,
-    String projectId,
-  ) async {
+    String projectId, {
+    bool buddy = false,
+  }) async {
     final open = swarms.where((s) => s.superTabId == tabId).firstOrNull;
     final name = open?.name ?? _superTabNames[tabId];
     // A tab this account does not belong to is nobody's to open.
@@ -4503,7 +4559,15 @@ class AppNotifier extends ChangeNotifier {
           .where((p) => p.id == projectId)
           .firstOrNull;
       if (project == null) return;
-      controller.select(project.leadConversationId);
+      // Only an existing chat of the reader's own: a device never makes one.
+      if (buddy && controller.buddyChat(projectId) != null) {
+        await (controller.buddyChatOpener ?? controller.openBuddyChat)(
+          projectId,
+        );
+        if (_disposed || _devicePick != pick) return;
+      } else {
+        controller.select(project.leadConversationId);
+      }
       // Selecting what is already selected announces nothing by itself.
       _announceOpenPanesToDial();
     } catch (error) {
@@ -14780,7 +14844,9 @@ class AppNotifier extends ChangeNotifier {
     PaneSplitRequest? split,
     AgentCreationAttempt? attempt,
     HarnessPlacement? placement,
-  }) {
+  }) async {
+    final creation = attempt ?? AgentCreationAttempt();
+    final launch = creation._launchModelDropped ? null : creation.launchModel;
     final choices = <String, dynamic>{
       'engine': engine,
       if (projectFolder == null && folder != null) 'cwd': folder,
@@ -14800,6 +14866,8 @@ class AppNotifier extends ChangeNotifier {
       },
       'gridModel': ?model?.id,
       'gridName': ?model?.grid,
+      'model': ?launch?.model,
+      'effort': ?launch?.effort,
       // A first message the engine is opened with, and the pane's name before
       // the engine reports a session title. Both absent unless asked for: a
       // daemon that predates them ignores an unknown field, but one that knows
@@ -14814,7 +14882,6 @@ class AppNotifier extends ChangeNotifier {
       // same refusal for an engine that has no such thing (`AGENT_UNSUPPORTED`).
       'agent': ?agent,
     };
-    final creation = attempt ?? AgentCreationAttempt();
     Future<String?> ask() => _create(
       machineId,
       choices,
@@ -14825,8 +14892,26 @@ class AppNotifier extends ChangeNotifier {
       attempt: creation,
       placement: placement,
     );
+    final answer = await _createFollowingHold(creation, creation.holdWait, ask);
+    if (launch == null ||
+        !_launchModelRefusals.contains(creation._refusal) ||
+        _disposed) {
+      return answer;
+    }
+    // Refused before any receipt: the same request, without them, so the
+    // agent starts on its engine's own model rather than not at all.
+    choices
+      ..remove('model')
+      ..remove('effort');
+    creation._retryWithoutLaunchModel();
     return _createFollowingHold(creation, creation.holdWait, ask);
   }
+
+  /// A machine's refusals of a launch model, made before anything launched.
+  static const _launchModelRefusals = {
+    'LAUNCH_MODEL_UNSUPPORTED',
+    'INVALID_LAUNCH_MODEL',
+  };
 
   /// How often a harness the machine holds or is starting is asked after
   /// ([_createFollowingHold]): the pace `harness new` asks at.
@@ -15398,6 +15483,7 @@ class AppNotifier extends ChangeNotifier {
       // Refusals that happen before a launch are safe to correct. INTERNAL,
       // spawn timeouts and connection failures cannot prove nothing started.
       const refusedBeforeLaunch = {
+        ..._launchModelRefusals,
         'INVALID_PROJECT_SOURCE',
         'INVALID_REPOSITORY',
         'PROJECT_EXISTS',
@@ -17009,6 +17095,9 @@ class AppNotifier extends ChangeNotifier {
       final saved = await close('now');
       if (saved['closed'] != true) {
         change.preservingViews = false;
+        // A Swarm Buddy keeps running, so it keeps its agent. The daemon's
+        // refusal speaks of Stop Harness, which is no help here.
+        if (saved['keptRunning'] == true) return buddyKeepsItsAgent;
         return saved['detail'] as String? ??
             'Could not save and stop this conversation. Its agent has not been changed.';
       }
@@ -21411,11 +21500,18 @@ class AppNotifier extends ChangeNotifier {
         break;
       case 'dial_super_tab':
         // The Harness Pro picked a Lead's project. Show that Swarm, then the
-        // project's Lead chat as a click on its row in the sidebar does.
+        // project's Lead chat as a click on its row in the sidebar does. A
+        // round dial names the chat it shows: 'buddy' opens the reader's
+        // Buddy chat there; anything else is the Lead chat.
         final tabId = payload['superTabId'];
         final projectId = payload['projectId'];
         if (tabId is String && projectId is String) {
-          await _openSuperTabProject(machine, tabId, projectId);
+          await _openSuperTabProject(
+            machine,
+            tabId,
+            projectId,
+            buddy: payload['chat'] == 'buddy',
+          );
         }
         break;
       case 'dial_forked':

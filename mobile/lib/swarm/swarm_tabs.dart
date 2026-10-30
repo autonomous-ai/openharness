@@ -8,10 +8,12 @@ import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 
-import 'swarm_needs_page.dart';
+import 'swarm_activity_page.dart';
+import 'swarm_buddies_page.dart';
 import 'swarm_page.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
+import 'swarm_you_page.dart';
 
 /// Swarm's four tabs, along the foot of the screen in this order, as Tony's
 /// prototype C draws them (2026-10-30).
@@ -58,34 +60,38 @@ class SwarmTabEntry {
 }
 
 /// Swarm's tabs, in the bar's order: each part of Swarm plugs its screen in
-/// here, one entry each. Each opens a screen the phone already has: Home,
-/// Needs you with what waits on the person counted, and [settings], the
-/// phone's Settings, as You. [onSettings] opens Settings over Home.
-///
-/// Buddies is not on the bar until its screen comes (part b of direction
-/// C): main has no list of Buddies, each is in its project.
+/// here, one entry each: Home; Buddies ([SwarmBuddiesView]) with the Buddy
+/// chats that have something unread counted; Activity ([SwarmActivityView])
+/// with what waits on the person counted; and You ([SwarmYouPage]).
+/// [onSettings] opens the phone's Settings over the tabs, from You.
 List<SwarmTabEntry> swarmTabs({
   void Function(BuildContext context)? onSettings,
-  required WidgetBuilder settings,
 }) => [
   SwarmTabEntry(
     tab: SwarmTab.home,
     label: 'Home',
     icon: LucideIcons.house300,
-    screen: (_) => SwarmPage(onSettings: onSettings),
+    screen: (_) => const SwarmPage(),
+  ),
+  SwarmTabEntry(
+    tab: SwarmTab.buddies,
+    label: 'Buddies',
+    icon: LucideIcons.messageCircle300,
+    screen: (_) => const SwarmBuddiesView(),
+    badge: (session) => (count: session.buddyList.badge, warn: false),
   ),
   SwarmTabEntry(
     tab: SwarmTab.activity,
     label: 'Activity',
     icon: LucideIcons.bell300,
-    screen: (_) => const SwarmNeedsPage(),
-    badge: (session) => (count: session.inbox.needs.length, warn: true),
+    screen: (_) => const SwarmActivityView(),
+    badge: (session) => (count: session.activity.badge, warn: true),
   ),
   SwarmTabEntry(
     tab: SwarmTab.you,
     label: 'You',
     icon: LucideIcons.circleUser300,
-    screen: settings,
+    screen: (_) => SwarmYouPage(onSettings: onSettings),
   ),
 ];
 
@@ -107,18 +113,10 @@ bool showSwarmTab(BuildContext context, SwarmTab tab) {
 /// Back on another tab goes to Home first; at Home, and while Harness covers
 /// the tabs, back is not the tabs'.
 class SwarmTabsPage extends StatefulWidget {
-  const SwarmTabsPage({
-    super.key,
-    this.onSettings,
-    required this.settings,
-    this.tabs,
-  });
+  const SwarmTabsPage({super.key, this.onSettings, this.tabs});
 
-  /// Settings over Home, from its drawer.
+  /// The phone's Settings over the tabs, from You.
   final void Function(BuildContext context)? onSettings;
-
-  /// The phone's Settings, as the You tab.
-  final WidgetBuilder settings;
 
   /// The tabs, in the bar's order; [swarmTabs] when null.
   final List<SwarmTabEntry>? tabs;
@@ -129,8 +127,7 @@ class SwarmTabsPage extends StatefulWidget {
 
 class _SwarmTabsPageState extends State<SwarmTabsPage> {
   late final List<SwarmTabEntry> _tabs =
-      widget.tabs ??
-      swarmTabs(onSettings: widget.onSettings, settings: widget.settings);
+      widget.tabs ?? swarmTabs(onSettings: widget.onSettings);
 
   late SwarmTab _open = _tabs.first.tab;
 

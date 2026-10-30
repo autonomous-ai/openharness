@@ -64,6 +64,7 @@ export function renewLease(assignment: Assignment, now: number): void {
 /** A hand-off: a result that says it is ready for review and names a revision (a commit hash). Right after '@', 'at ' or
  *  'head ', the forms hand-offs use, any 7-40 hex digits count, since a short hash can be all digits or all letters;
  *  anywhere else it needs a digit and a letter, so dates and other numbers do not count (review of #2176). */
+// Desktop reads hand-offs with a copy of these two (desktop/lib/super_tabs/agent_mark.dart): change both together.
 const READY_FOR_REVIEW = /\bready for review\b/i
 const REVISION = /(?:@|\b(?:at|head)\s+)[0-9a-f]{7,40}\b|\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b/i
 

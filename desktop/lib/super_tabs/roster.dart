@@ -3,17 +3,19 @@ import 'dart:async';
 import 'package:collection/collection.dart' show mergeSort;
 import 'package:flutter/material.dart';
 
+import '../core/relative_time.dart';
+
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/appearance_prefs_store.dart';
 import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_select_field.dart';
 import '../state/app_state.dart';
-import '../state/harness_activity.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/harness_activity_mark.dart';
 import 'agent_details.dart';
+import 'agent_mark.dart';
 import 'controller.dart';
 import 'detail_dialog.dart';
 import 'dialog_scope.dart';
@@ -24,7 +26,6 @@ import 'leaderboard/model.dart';
 import 'leaderboard/person_row.dart';
 import 'leaderboard/reader.dart';
 import 'leaderboard/waiting_line.dart';
-import 'machine_status.dart';
 import 'model.dart';
 import 'profile_sheet.dart';
 import 'section_heading.dart';
@@ -51,7 +52,8 @@ class SuperTabRoster extends StatefulWidget {
   final ValueChanged<SuperTabAgent> onOpenAgent;
   final ValueChanged<SuperTabConversation> onAddAgent;
 
-  /// Opens a conversation where an agent waits on a person.
+  /// Opens a conversation: one where an agent waits on a person, or an agent
+  /// row's task.
   final ValueChanged<String> onAnswer;
 
   /// The open project's week board, shared with the sidebar's Models; the
@@ -70,8 +72,22 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
   late final SuperTabLeaderboardReader _board =
       widget.board ?? (_ownBoard = SuperTabProjectBoard(c));
 
+  /// One tick for the whole list, so ages and leases stay true on a quiet
+  /// Swarm (review of #2281); a change in the Swarm rebuilds it anyway.
+  Timer? _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    _tick = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => mounted ? setState(() {}) : null,
+    );
+  }
+
   @override
   void dispose() {
+    _tick?.cancel();
     _ownBoard?.dispose();
     super.dispose();
   }
@@ -197,74 +213,6 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     );
   }
 
-  /// This Mac's reading of the agent; null when it cannot see it, or reads
-  /// its status as unknown.
-  HarnessActivity? _native(SuperTabAgent agent) {
-    final app = widget.app;
-    final native = app == null
-        ? null
-        : harnessActivity(app, agent.machineId, agent.harnessId);
-    return native == HarnessActivity.unknown ? null : native;
-  }
-
-  HarnessActivity _activity(SuperTabAgent agent) {
-    final native = _native(agent);
-    // Keep the shared lifecycle precedence. A retained workgroup question must
-    // not make a stopped or disconnected harness look available for input.
-    if (native == HarnessActivity.offline ||
-        native == HarnessActivity.paused ||
-        native == HarnessActivity.starting ||
-        native == HarnessActivity.failed ||
-        native == HarnessActivity.needsInput) {
-      return native!;
-    }
-    if (native == null) {
-      if (_swarmDown(agent) case final down?) return down;
-    }
-    if (c.snapshot?.conversations.any(
-          (group) =>
-              !group.closed &&
-              group.assignment?['agentId'] == agent.id &&
-              superTabWorkWaits(group.assignment?['status']),
-        ) ==
-        true) {
-      return HarnessActivity.needsInput;
-    }
-    return native ?? HarnessActivity.unknown;
-  }
-
-  /// What the Swarm knows of an agent this Mac cannot see that stops it
-  /// running (Dee, 2026-10-29): its computer silent, offline; its session
-  /// stopped; its start failed. Null when none is known. While the Swarm
-  /// cannot be read, its computers are not called offline.
-  HarnessActivity? _swarmDown(SuperTabAgent agent) {
-    // The computer it runs on reports for itself: a Harness Team account
-    // shown as its Mac has its own heartbeat.
-    final machine = c.snapshot?.pool(agent.machineId);
-    final at = switch (machine?['observation']) {
-      {'receivedAt': final num at} => at.toInt(),
-      _ => null,
-    };
-    if (machine != null &&
-        !c.backendUnreachable &&
-        superTabMachineStatus(
-              age: at == null
-                  ? null
-                  : widget.now().difference(
-                      DateTime.fromMillisecondsSinceEpoch(at),
-                    ),
-            ) ==
-            SuperTabMachineStatus.offline) {
-      return HarnessActivity.offline;
-    }
-    if (agent.downSince != null) return HarnessActivity.paused;
-    final task = SuperTabAgentInfo(c, null, agent).taskGroup;
-    return task?.liveness?['state'] == 'orphaned' &&
-            task?.liveness?['why'] == 'start-failed'
-        ? HarnessActivity.failed
-        : null;
-  }
-
   /// A person's email and role, and their week when the board has them. One's
   /// own also opens the profile sheet, where one's avatar and status change.
   Future<void> _person(SuperTabPerson person, SuperTabPersonScore? score) =>
@@ -375,38 +323,15 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
         },
       );
 
-  /// The mark an agent's row shows, which also orders the list: its activity,
-  /// except that lost work shows the tabs' Offline, since nothing runs it
-  /// (Dee, 2026-10-29). An agent this Mac cannot see, and the Swarm knows
-  /// nothing stopping, takes its mark from its work: a prompt on its screen
-  /// needs input; finished and in review, done; a task under way, working;
-  /// nothing held, idle. Its words still say only Assigned for a task.
-  HarnessActivity _shownActivity(SuperTabAgentInfo info) {
-    final work = info.taskGroup?.assignment?['status'];
-    if (work == 'lost') return HarnessActivity.offline;
-    final activity = info.activity ?? HarnessActivity.unknown;
-    if (activity != HarnessActivity.unknown || _native(info.agent) != null) {
-      return activity;
-    }
-    if (info.agent.alerting.contains('prompt')) {
-      return HarnessActivity.needsInput;
-    }
-    return switch (work) {
-      'review' => HarnessActivity.done,
-      'working' || 'planned' => HarnessActivity.working,
-      _ => HarnessActivity.idle,
-    };
-  }
-
   /// An agent's row, in the shape the people's rows share (Dee, 2026-10-29):
   /// avatar, name and role chip, today's one status line beneath, and the
   /// tabs' status mark at the right. No rank and no points.
-  Widget _agent(SuperTabAgent agent) {
-    final name = c.snapshot!.agentName(agent.id), activity = _activity(agent);
-    final info = SuperTabAgentInfo(c, widget.app, agent, activity: activity);
-    final shown = _shownActivity(info);
-    // One line, readable in a second (Dee, 2026-10-27): state, machine, model and effort. The task is in the tooltip.
-    final glance = superTabAgentGlance(info);
+  Widget _agent(SuperTabAgent agent, SuperTabAgentState state, DateTime now) {
+    final name = c.snapshot!.agentName(agent.id), shown = state.mark;
+    final info = SuperTabAgentInfo(c, widget.app, agent, activity: state.words);
+    final work = state.work;
+    // The state in a word, where it runs, its engine, model and effort: on hover (Dee, 2026-10-30).
+    final glance = superTabAgentGlance(info, now: now);
     final project = c.snapshot!.projects
         .where((p) => p.id == _agentProjectId(agent))
         .firstOrNull;
@@ -427,10 +352,28 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             : 'Dev');
     final status = info.status ?? 'Status unavailable';
     final tooltip = [
-      [name, role, ?project?.name].join(' · '),
-      if (info.tooltip.isNotEmpty) info.tooltip,
-      if (!info.tooltip.contains(status)) status,
+      [name, role, ?project?.name, ?info.engine].join(' · '),
+      glance.line,
+      if (status != glance.label) status,
+      if (info.lastActive case final at?) 'Last active ${relativeAgo(at, now)}',
     ].join('\n');
+    // The row's details line (Dee, 2026-10-30): the task in plain words and
+    // how long since its last progress; with no task, the state in a word.
+    final limited = glance.label.startsWith('Limited until')
+        ? glance.label
+        : null;
+    final detail = work == null
+        ? glance.label
+        : [
+            ?limited,
+            work.group.title,
+            if (work.progressAt case final at?)
+              superTabAgentAge(now.difference(at)),
+          ].join(' · ');
+    // A task opens its conversation, a needs-you one at its question; no task, the details.
+    void open() => work == null
+        ? unawaited(_details(agent))
+        : widget.onAnswer(work.group.id);
     final theme = terminalThemeFor(
       grid.AppTheme.surfacePalette,
       terminalThemeStore.value,
@@ -476,7 +419,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
         },
         child: SuperTabMemberRow(
           rowKey: ValueKey('super-member-${agent.id}'),
-          onTap: () => unawaited(_details(agent)),
+          onTap: open,
           onLongPress: () => unawaited(_details(agent)),
           avatar: SuperTabAvatar.agent(
             agent,
@@ -486,7 +429,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
           ),
           name: _agentIdentity(name, role, badge),
           detail: Text(
-            glance.line,
+            detail,
             key: ValueKey('super-member-line-${agent.id}'),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
@@ -559,17 +502,30 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
         return byName != 0 ? byName : a.id.compareTo(b.id);
       });
     // Most urgent first, as the tabs order their marks: needs input, working,
-    // idle, offline. Equals keep today's order, the Lead first.
-    final shown = {
+    // idle, offline; within a mark, the most recent progress first (Dee,
+    // 2026-10-30). Equals keep today's order, the Lead first. Each agent's
+    // state is worked out once, by the Swarm's clock.
+    final now = superTabServerNow(c, widget.now());
+    final states = {
       for (final agent in [...leads, ...agents])
-        agent.id: _shownActivity(
-          SuperTabAgentInfo(c, widget.app, agent, activity: _activity(agent)),
-        ),
+        agent.id: superTabAgentState(c, widget.app, agent, now: now),
+    };
+    final progress = {
+      for (final MapEntry(:key, :value) in states.entries)
+        key: value.work?.progressAt,
     };
     final listed = [...leads, ...agents];
     mergeSort(
       listed,
-      compare: (a, b) => shown[a.id]!.index - shown[b.id]!.index,
+      compare: (a, b) {
+        final byMark = states[a.id]!.mark.index - states[b.id]!.mark.index;
+        if (byMark != 0) return byMark;
+        final pa = progress[a.id], pb = progress[b.id];
+        if (pa == null || pb == null) {
+          return (pa == null ? 1 : 0) - (pb == null ? 1 : 0);
+        }
+        return pb.compareTo(pa);
+      },
     );
     final current = leaderboardWeekOf(widget.now());
     // One points column for every person's row.
@@ -653,7 +609,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             : null,
         addTooltip: 'Add agent',
       ),
-      for (final agent in listed) _agent(agent),
+      for (final agent in listed) _agent(agent, states[agent.id]!, now),
     ];
   }
 

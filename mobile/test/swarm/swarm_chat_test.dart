@@ -97,6 +97,8 @@ void main() {
     List<Map<String, dynamic>> decisions = const [],
     List<String>? audience,
     List<Map<String, dynamic>>? members,
+    List<Map<String, dynamic>>? projects,
+    Map<String, dynamic> g1 = const {},
   }) {
     // The Swarm's counts say a decision waits: what has its list read.
     final derived = {'decisionsWaiting': decisions.length};
@@ -109,19 +111,23 @@ void main() {
     };
     fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
       ...firstLoad(
+        head: projects == null ? null : headData(projects: projects),
         groups: [
-          groupData(
-            'g1',
-            title: 'Fix login',
-            agentIds: ['agent-lead', 'agent-builder'],
-            status: 'working',
-            audience: audience,
-            lastMessageSequence: page.isEmpty
-                ? 0
-                : page
-                      .map((m) => m['sequence'] as int)
-                      .reduce((a, b) => a > b ? a : b),
-          ),
+          {
+            ...groupData(
+              'g1',
+              title: 'Fix login',
+              agentIds: ['agent-lead', 'agent-builder'],
+              status: 'working',
+              audience: audience,
+              lastMessageSequence: page.isEmpty
+                  ? 0
+                  : page
+                        .map((m) => m['sequence'] as int)
+                        .reduce((a, b) => a > b ? a : b),
+            ),
+            ...g1,
+          },
         ],
         derived: derived,
       ),
@@ -163,10 +169,12 @@ void main() {
   Future<void> show(
     WidgetTester tester,
     SwarmHost host, {
+    String swarmId = tab,
     String conversation = 'g1',
     String? messageId,
     String? decisionId,
     bool settle = true,
+    bool homeC = false,
   }) async {
     await tester.pumpWidget(
       // The app's own theme, as the shell sets it: its field defaults are
@@ -175,10 +183,11 @@ void main() {
         theme: grid.buildAppTheme(brightness: Brightness.dark),
         builder: (context, child) => SwarmScope(notifier: host, child: child!),
         home: SwarmConversationPage(
-          swarmId: tab,
+          swarmId: swarmId,
           conversationId: conversation,
           messageId: messageId,
           decisionId: decisionId,
+          homeC: homeC,
         ),
       ),
     );
@@ -192,10 +201,12 @@ void main() {
   Future<SwarmHost> pump(
     WidgetTester tester,
     FakeSwarm fake, {
+    String swarmId = tab,
     String conversation = 'g1',
     String? messageId,
     String? decisionId,
     bool settle = true,
+    bool homeC = false,
     SwarmUpload upload = refuseSwarmUpload,
   }) async {
     features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
@@ -214,10 +225,12 @@ void main() {
     await show(
       tester,
       host,
+      swarmId: swarmId,
       conversation: conversation,
       settle: settle,
       messageId: messageId,
       decisionId: decisionId,
+      homeC: homeC,
     );
     return host;
   }
@@ -643,7 +656,7 @@ void main() {
 
     await tester.enterText(find.byType(TextField), 'ask @zed');
     await tester.pump();
-    expect(find.text('No agent by that name.'), findsOneWidget);
+    expect(find.text('No one by that name.'), findsOneWidget);
 
     await tester.enterText(find.byType(TextField), 'ask @N');
     await tester.pump();
@@ -654,6 +667,304 @@ void main() {
       'ask @Nova ',
     );
     expect(key('swarm-mention-picker'), findsNothing);
+  });
+
+  group('@ people, by username, as Desktop tags them', () {
+    // Ken chose a username; Dee keeps the default her email makes.
+    final ken = {...person('ken', role: 'collaborator'), 'username': 'kenji'};
+    final dee = person('dee', role: 'collaborator');
+    final everyone = [person(me), ken, dee];
+    String field(WidgetTester tester) =>
+        tester.widget<TextField>(find.byType(TextField)).controller!.text;
+    Future<void> type(WidgetTester tester, String text) async {
+      await tester.enterText(find.byType(TextField), text);
+      await tester.pump();
+    }
+
+    testWidgets('@ lists the people who read the chat by username, before '
+        'its agents, never the reader; what follows narrows it', (
+      tester,
+    ) async {
+      await pump(tester, backend([message('m1', 1)], members: everyone));
+
+      await type(tester, '@');
+      expect(key('swarm-pick-person-ken'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: key('swarm-pick-person-ken'),
+          matching: find.text('kenji'),
+        ),
+        findsOneWidget,
+      );
+      expect(key('swarm-pick-person-dee'), findsOneWidget);
+      expect(key('swarm-pick-person-$me'), findsNothing);
+      expect(
+        tester.getTopLeft(key('swarm-pick-person-dee')).dy,
+        lessThan(tester.getTopLeft(key('swarm-pick-agent-lead')).dy),
+      );
+
+      // Any part of the username, as on Desktop.
+      await type(tester, 'ask @enj');
+      expect(key('swarm-pick-person-ken'), findsOneWidget);
+      expect(key('swarm-pick-person-dee'), findsNothing);
+      expect(key('swarm-pick-agent-builder'), findsNothing);
+
+      await type(tester, 'ask @zed');
+      expect(find.text('No one by that name.'), findsOneWidget);
+    });
+
+    testWidgets('a picked person goes in as @username, and the post tags '
+        'them beside the agents it goes to, as Desktop sends it', (
+      tester,
+    ) async {
+      final fake = backend([message('m1', 1)], members: everyone);
+      await pump(tester, fake);
+
+      await type(tester, 'ask @ke');
+      await tester.tap(key('swarm-pick-person-ken'));
+      await tester.pump();
+      expect(field(tester), 'ask @kenji ');
+      expect(key('swarm-mention-picker'), findsNothing);
+
+      await type(tester, 'ask @kenji and @N');
+      await tester.tap(key('swarm-pick-agent-builder'));
+      await tester.pump();
+      expect(field(tester), 'ask @kenji and @Nova ');
+
+      await type(tester, 'ask @kenji and @Nova to look');
+      await tester.tap(key('swarm-send'));
+      await tester.pumpAndSettle();
+
+      expect(fake.commands.single, {
+        'type': 'message.send',
+        'conversationId': 'g1',
+        'text': 'ask @kenji and @Nova to look',
+        'replyTo': null,
+        'recipientIds': ['agent-builder'],
+        'mentions': ['ken'],
+      });
+    });
+
+    testWidgets('a username taken out of the draft tags nobody', (
+      tester,
+    ) async {
+      final fake = backend([message('m1', 1)], members: everyone);
+      await pump(tester, fake);
+
+      await type(tester, '@ke');
+      await tester.tap(key('swarm-pick-person-ken'));
+      await tester.pump();
+      await type(tester, 'ask him later');
+      await tester.tap(key('swarm-send'));
+      await tester.pumpAndSettle();
+
+      expect(fake.commands.single.containsKey('mentions'), isFalse);
+      expect(fake.commands.single['recipientIds'], <String>[]);
+    });
+
+    testWidgets('a refused tag puts the post back in the draft with the '
+        'backend\'s words, and the tag stays with it', (tester) async {
+      final fake = backend([message('m1', 1)], members: everyone);
+      var refuse = true;
+      fake.routes[commands] = (_) => refuse
+          ? throw const SuperTabFailure(
+              'INVALID_MENTION',
+              'kenji cannot read this conversation.',
+              statusCode: 400,
+            )
+          : {'result': <String, dynamic>{}};
+      await pump(tester, fake);
+
+      await type(tester, '@ke');
+      await tester.tap(key('swarm-pick-person-ken'));
+      await tester.pump();
+      await tester.tap(key('swarm-send'));
+      await tester.pumpAndSettle();
+
+      expect(field(tester), '@kenji ');
+      expect(find.text('kenji cannot read this conversation.'), findsOneWidget);
+
+      refuse = false;
+      await tester.tap(key('swarm-send'));
+      await tester.pumpAndSettle();
+      expect(fake.commands.last['mentions'], ['ken']);
+    });
+
+    testWidgets('a private chat offers only its own people', (tester) async {
+      await pump(
+        tester,
+        backend([message('m1', 1)], members: everyone, audience: [me, 'dee']),
+      );
+
+      await type(tester, '@');
+      expect(key('swarm-pick-person-dee'), findsOneWidget);
+      expect(key('swarm-pick-person-ken'), findsNothing);
+      expect(find.text('kenji'), findsNothing);
+    });
+
+    testWidgets('a private project offers its owner and members alone', (
+      tester,
+    ) async {
+      await pump(
+        tester,
+        backend(
+          [message('m1', 1)],
+          members: everyone,
+          projects: [
+            {
+              'id': project,
+              'name': 'Mobile',
+              'ownerId': me,
+              'leadConversationId': leadChat,
+              'visibility': 'private',
+              'members': [
+                {'id': 'dee', 'generation': 'gen-dee'},
+              ],
+              'updateMinutes': 5,
+            },
+          ],
+        ),
+      );
+
+      await type(tester, '@');
+      expect(key('swarm-pick-person-dee'), findsOneWidget);
+      expect(key('swarm-pick-person-ken'), findsNothing);
+    });
+
+    testWidgets('a private project offers its members at the membership '
+        'they were added in: someone who left and rejoined is not offered', (
+      tester,
+    ) async {
+      final fake = backend(
+        [message('m1', 1)],
+        members: everyone,
+        projects: [
+          {
+            'id': project,
+            'name': 'Mobile',
+            'ownerId': me,
+            'leadConversationId': leadChat,
+            'visibility': 'private',
+            'members': [
+              {'id': 'dee', 'generation': 'gen-dee'},
+            ],
+          },
+        ],
+      );
+      final host = await pump(tester, fake);
+      await type(tester, '@');
+      expect(key('swarm-pick-person-dee'), findsOneWidget);
+
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => {
+        ...changes(cursor: 'c3', lastChangedAt: 200),
+        'members': [
+          part('dee', 2, {
+            ...dee,
+            'generation': 'rejoined-dee',
+            'username': 'new-dee',
+          }),
+        ],
+      };
+      await host.session!.inbox.reader(tab)!.refresh();
+      await tester.pump();
+
+      expect(
+        key('swarm-pick-person-dee'),
+        findsNothing,
+        reason: 'the project holds their old membership, not this one',
+      );
+      expect(find.text('new-dee'), findsNothing);
+    });
+
+    testWidgets('a Buddy chat and the Leads conversation offer no people', (
+      tester,
+    ) async {
+      for (final kind in [
+        {'kind': 'buddy', 'buddyOwnerId': me},
+        {'kind': 'leads'},
+      ]) {
+        await pump(
+          tester,
+          backend([message('m1', 1)], members: everyone, g1: kind),
+        );
+        await type(tester, '@');
+        expect(key('swarm-pick-person-ken'), findsNothing, reason: '$kind');
+        expect(key('swarm-pick-person-dee'), findsNothing, reason: '$kind');
+        expect(find.text('kenji'), findsNothing, reason: '$kind');
+      }
+    });
+
+    testWidgets('an agent of the same name in another project is never '
+        'offered', (tester) async {
+      final fake = backend([message('m1', 1)], members: everyone);
+      final full = fake.routes['/api/super-tabs/$tab/parts']!(null)! as Map;
+      fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
+        ...full,
+        'agents': [
+          ...full['agents'] as List,
+          part('agent-other', 1, {
+            ...agent('agent-other', displayName: 'Nova'),
+            'projectId': 'project-2',
+          }),
+        ],
+      };
+      await pump(tester, fake);
+
+      await type(tester, '@N');
+      expect(key('swarm-pick-agent-builder'), findsOneWidget);
+      expect(key('swarm-pick-agent-other'), findsNothing);
+    });
+
+    testWidgets('losing the Swarm with the @ list open leaves no name on '
+        'screen', (tester) async {
+      final fake = backend([message('m1', 1)], members: everyone);
+      final host = await pump(tester, fake);
+      await type(tester, '@');
+      expect(find.text('kenji'), findsOneWidget);
+
+      const refused = SuperTabFailure(
+        'FORBIDDEN',
+        'Not yours.',
+        statusCode: 403,
+      );
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => throw refused;
+      fake.routes['/api/super-tabs/$tab/parts'] = (_) => throw refused;
+      await host.session!.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-mention-picker'), findsNothing);
+      for (final name in ['kenji', 'dee', 'River', 'Nova']) {
+        expect(find.textContaining(name), findsNothing, reason: name);
+      }
+    });
+
+    testWidgets('someone who leaves the Swarm leaves the list, and a tag of '
+        'them in the draft is not sent', (tester) async {
+      final fake = backend([message('m1', 1)], members: everyone);
+      final host = await pump(tester, fake);
+
+      await type(tester, '@ke');
+      await tester.tap(key('swarm-pick-person-ken'));
+      await tester.pump();
+      await type(tester, '@kenji and @');
+      expect(key('swarm-pick-person-ken'), findsOneWidget);
+
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => {
+        ...changes(cursor: 'c3', lastChangedAt: 200),
+        'members': [
+          {'key': 'ken', 'version': 2, 'changedAt': 2, 'deleted': true},
+        ],
+      };
+      await host.session!.inbox.reader(tab)!.refresh();
+      await tester.pump();
+      expect(key('swarm-pick-person-ken'), findsNothing);
+      expect(key('swarm-pick-person-dee'), findsOneWidget);
+
+      await type(tester, '@kenji hello');
+      await tester.tap(key('swarm-send'));
+      await tester.pumpAndSettle();
+      expect(fake.commands.single.containsKey('mentions'), isFalse);
+    });
   });
 
   testWidgets('a post shows at once as Sending…, out of the field, and as '
@@ -1411,6 +1722,138 @@ void main() {
       expect(key('swarm-reaction-m1-rocket'), findsOneWidget);
       expect(key('swarm-react-rocket'), findsNothing);
       expect(fake.commands, isEmpty);
+    });
+  });
+
+  group('Copy link to message', () {
+    late List<String> copied;
+
+    setUp(() {
+      copied = [];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+            if (call.method == 'Clipboard.setData') {
+              copied.add((call.arguments as Map)['text'] as String);
+            }
+            return null;
+          });
+    });
+    tearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, null),
+    );
+
+    testWidgets('the long-press sheet copies the link Desktop copies, and '
+        'says so', (tester) async {
+      final fake = backend([message('m1', 1, text: 'Plan')]);
+      await pump(tester, fake);
+
+      await tester.longPress(find.text('Plan'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-react-tada'), findsOneWidget);
+      await tester.tap(key('swarm-copy-link'));
+      await tester.pumpAndSettle();
+
+      expect(copied, ['harness://swarm/$tab/g1/m1']);
+      expect(key('swarm-copy-link'), findsNothing, reason: 'sheet closed');
+      expect(find.text('Link copied'), findsOneWidget);
+      expect(fake.commands, isEmpty);
+    });
+
+    testWidgets('the Add reaction chip opens the reactions alone: Copy link '
+        'is the long-press sheet\'s', (tester) async {
+      final fake = backend([
+        message(
+          'm1',
+          1,
+          text: 'Plan',
+          reactions: {
+            'eyes': [('agent', 'agent-lead')],
+          },
+        ),
+      ]);
+      await pump(tester, fake, homeC: true);
+
+      await tester.tap(key('swarm-add-reaction-m1'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-react-tada'), findsOneWidget);
+      expect(key('swarm-copy-link'), findsNothing);
+      await tester.tap(key('swarm-react-tada'));
+      await tester.pumpAndSettle();
+
+      expect(copied, isEmpty);
+      expect(fake.commands.where((c) => c['type'] == 'message.react'), [
+        {
+          'type': 'message.react',
+          'conversationId': 'g1',
+          'messageId': 'm1',
+          'emoji': 'tada',
+          'on': true,
+        },
+      ]);
+    });
+
+    testWidgets('a person who cannot post still copies the link; the sheet '
+        'offers no reactions', (tester) async {
+      final fake = backend(
+        [message('m1', 1, text: 'Plan')],
+        members: [person(me, role: 'viewer')],
+      );
+      await pump(tester, fake);
+
+      await tester.longPress(find.text('Plan'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-react-tada'), findsNothing);
+      await tester.tap(key('swarm-copy-link'));
+      await tester.pumpAndSettle();
+
+      expect(copied, ['harness://swarm/$tab/g1/m1']);
+      expect(fake.commands, isEmpty);
+    });
+
+    testWidgets('a reply in a thread copies its own link: its id alone '
+        'places it', (tester) async {
+      final fake = backend(
+        [
+          message('m1', 1, author: 'agent-lead', text: 'Root', thread: 'm1'),
+          message('m2', 2, text: 'In thread', thread: 'm1', replyTo: 'm1'),
+        ],
+        threads: [
+          {
+            'id': 'm1',
+            'replies': 1,
+            'lastSequence': 2,
+            'lastAt': DateTime.utc(2026, 10, 27, 1, 2).toIso8601String(),
+            'authors': [
+              {'kind': 'agent', 'id': 'agent-builder', 'name': 'Nova'},
+            ],
+            'people': <String>[],
+          },
+        ],
+      );
+      fake.routes['$messages?thread=m1'] = (_) => {
+        'messages': [
+          message('m2', 2, text: 'In thread', thread: 'm1', replyTo: 'm1'),
+          message('m1', 1, author: 'agent-lead', text: 'Root', thread: 'm1'),
+        ],
+        'next': null,
+        'threads': <Object>[],
+      };
+      await pump(tester, fake);
+      await tester.tap(key('swarm-thread-line-m1'));
+      await tester.pumpAndSettle();
+
+      await tester.longPress(
+        find.descendant(
+          of: key('swarm-thread-messages'),
+          matching: find.text('In thread'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-copy-link'));
+      await tester.pumpAndSettle();
+
+      expect(copied, ['harness://swarm/$tab/g1/m2']);
     });
   });
 
@@ -2438,6 +2881,136 @@ void main() {
       expect(find.text('No messages yet.'), findsOneWidget);
       expect(key('swarm-chat-skeleton'), findsNothing);
       expect(find.text(notOpen), findsNothing);
+    });
+  });
+
+  // A message link opens the chat at its message (phone_shell.dart). One the
+  // person cannot open says "not open" alike, whatever the reason, and shows
+  // nothing of the chat: no title, project, message or name.
+  group('opened from a message link', () {
+    const notOpen = 'This chat is not open to you.';
+    const secret = 'The secret plan';
+
+    void nothingLeaks(WidgetTester tester) {
+      expect(find.text(notOpen), findsOneWidget);
+      expect(key('swarm-chat-skeleton'), findsNothing);
+      for (final text in [secret, 'Fix login', 'Mobile', '#Mobile', 'Nova']) {
+        expect(find.textContaining(text), findsNothing, reason: text);
+      }
+    }
+
+    for (final (why, failure) in [
+      (
+        'an unknown id',
+        const SuperTabFailure('NOT_FOUND', 'No such chat.', statusCode: 404),
+      ),
+      (
+        'a private chat of others',
+        const SuperTabFailure('FORBIDDEN', 'Not yours.', statusCode: 403),
+      ),
+      (
+        'someone else\'s Buddy chat',
+        const SuperTabFailure('FORBIDDEN', 'Not yours.', statusCode: 403),
+      ),
+    ]) {
+      testWidgets('$why is not open, and shows nothing of it', (tester) async {
+        final fake = backend([message('m1', 1, text: secret)]);
+        fake.routes['/api/super-tabs/$tab/groups/g9'] = (_) => throw failure;
+        fake.routes['/api/super-tabs/$tab/conversations/g9/messages'] = (_) =>
+            throw failure;
+
+        await pump(tester, fake, conversation: 'g9', messageId: 'm1');
+
+        nothingLeaks(tester);
+      });
+    }
+
+    testWidgets('a chat of a Swarm the person is not in is not open', (
+      tester,
+    ) async {
+      final fake = backend([message('m1', 1, text: secret)]);
+      const other = 'tab-other';
+      fake.routes['/api/super-tabs/$other/parts'] = (_) =>
+          throw const SuperTabFailure(
+            'FORBIDDEN',
+            'Not yours.',
+            statusCode: 403,
+          );
+      fake.routes['/api/super-tabs/$other/conversations/g1/messages'] = (_) =>
+          throw const SuperTabFailure(
+            'FORBIDDEN',
+            'Not yours.',
+            statusCode: 403,
+          );
+
+      await pump(
+        tester,
+        fake,
+        swarmId: other,
+        conversation: 'g1',
+        messageId: 'm1',
+      );
+
+      nothingLeaks(tester);
+    });
+
+    testWidgets('a person removed from the Swarm while it is open loses it '
+        'at once: nothing of it stays', (tester) async {
+      final fake = backend([message('m1', 1, text: secret)]);
+      final host = await pump(tester, fake, messageId: 'm1');
+      expect(find.text(secret), findsOneWidget);
+
+      const refused = SuperTabFailure(
+        'FORBIDDEN',
+        'Not yours.',
+        statusCode: 403,
+      );
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => throw refused;
+      fake.routes['/api/super-tabs/$tab/parts'] = (_) => throw refused;
+      fake.routes[messages] = (_) => throw refused;
+      await host.session!.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
+
+      nothingLeaks(tester);
+    });
+
+    testWidgets('a lookup that fails is asked again at the next read, and '
+        'opens the chat at the message then', (tester) async {
+      final fake = backend([message('m1', 1, text: secret)]);
+      var lookups = 0;
+      final g9 = {
+        'group': part(
+          'g9',
+          9,
+          groupData('g9', title: 'Found later', lastMessageSequence: 5),
+        ),
+      };
+      fake.routes['/api/super-tabs/$tab/groups/g9'] = (_) {
+        lookups++;
+        if (lookups == 1) throw StateError('socket closed');
+        return g9;
+      };
+      fake.routes['/api/super-tabs/$tab/conversations/g9/messages'] = (_) => {
+        'messages': [
+          {...message('m5', 5, text: 'Found it'), 'conversationId': 'g9'},
+        ],
+        'next': null,
+      };
+      final host = await pump(
+        tester,
+        fake,
+        conversation: 'g9',
+        messageId: 'm5',
+        settle: false,
+      );
+      expect(lookups, 1);
+      expect(find.text(notOpen), findsNothing);
+
+      await host.session!.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
+
+      expect(lookups, 2);
+      expect(find.text('Found it'), findsOneWidget);
     });
   });
 

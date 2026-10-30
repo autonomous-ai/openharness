@@ -6,18 +6,18 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/swarm_devices_page.dart';
-import 'package:harness_mobile/swarm/swarm_drawer.dart';
 import 'package:harness_mobile/swarm/swarm_models_page.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_start.dart';
 import 'package:harness_mobile/swarm/swarm_style.dart';
+import 'package:harness_mobile/swarm/swarm_you_page.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 
-/// The drawer's Your models and Your devices, under the projects, and the two
-/// read-only pages they open: the models a Swarm can use now, and the
+/// You's Your models and Your devices, and the two read-only pages they
+/// open: the models a Swarm can use now, and the
 /// person's computers — each with rows on their way while it is read, and
 /// words for when there is nothing to list.
 void main() {
@@ -51,6 +51,8 @@ void main() {
           part('mac-1', 1, {
             'machineId': 'mac-1',
             'name': 'Studio',
+            // The person's own machine: Your models lists what it offers.
+            'contributorId': me,
             'observation': {
               'receivedAt': DateTime.now().millisecondsSinceEpoch,
               'localModels': [
@@ -118,36 +120,35 @@ void main() {
       find.descendant(of: key(k), matching: matching);
   double y(WidgetTester tester, String k) => tester.getTopLeft(key(k)).dy;
 
-  group('the drawer', () {
-    testWidgets('lists Your models and Your devices under the Swarms', (
+  group('from You', () {
+    testWidgets('lists Your models and Your devices under the status', (
       tester,
     ) async {
       await pump(
         tester,
         backend(),
+        home: const SwarmYouPage(),
         computers: _Computers(const [(name: 'Studio Mac', away: false)]),
       );
-      await tester.tap(key('swarm-menu'));
-      await tester.pumpAndSettle();
 
       expect(
-        inside('swarm-drawer-models', find.text('Your models')),
+        inside('swarm-you-models', find.text('Your models')),
         findsOneWidget,
       );
       expect(
-        inside('swarm-drawer-devices', find.text('Your devices')),
+        inside('swarm-you-devices', find.text('Your devices')),
         findsOneWidget,
       );
       expect(
-        y(tester, 'swarm-drawer-swarm-$tab'),
-        lessThan(y(tester, 'swarm-drawer-models')),
+        y(tester, 'swarm-you-status'),
+        lessThan(y(tester, 'swarm-you-models')),
       );
       expect(
-        y(tester, 'swarm-drawer-models'),
-        lessThan(y(tester, 'swarm-drawer-devices')),
+        y(tester, 'swarm-you-models'),
+        lessThan(y(tester, 'swarm-you-devices')),
       );
       expect(
-        tester.getSize(key('swarm-drawer-models')).height,
+        tester.getSize(key('swarm-you-models')).height,
         greaterThanOrEqualTo(44),
         reason: "a thumb's tap",
       );
@@ -155,21 +156,15 @@ void main() {
 
     testWidgets('Your devices shows where the computers are not known: it '
         "has the Swarm's machines too", (tester) async {
-      await pump(tester, backend());
-      await tester.tap(key('swarm-menu'));
-      await tester.pumpAndSettle();
+      await pump(tester, backend(), home: const SwarmYouPage());
 
-      expect(key('swarm-drawer-models'), findsOneWidget);
-      expect(key('swarm-drawer-devices'), findsOneWidget);
-      await tester.tap(key('swarm-drawer-devices'));
+      await tester.tap(key('swarm-you-devices'));
       await tester.pumpAndSettle();
       expect(find.text('Your computers'), findsNothing);
       expect(key('swarm-machine-section-$tab'), findsOneWidget);
     });
 
-    testWidgets('Your models closes the drawer and opens its page', (
-      tester,
-    ) async {
+    testWidgets('Your models opens its page', (tester) async {
       await pump(
         tester,
         backend(
@@ -177,76 +172,29 @@ void main() {
             {'model': 'qwen3-coder', 'name': 'Qwen3 Coder', 'kind': 'local'},
           ],
         ),
+        home: const SwarmYouPage(),
       );
-      await tester.tap(key('swarm-menu'));
+
+      await tester.tap(key('swarm-you-models'));
       await tester.pumpAndSettle();
 
-      await tester.tap(key('swarm-drawer-models'));
-      await tester.pumpAndSettle();
-
-      expect(key('swarm-drawer-models'), findsNothing, reason: 'it closed');
       expect(find.byType(SwarmModelsPage), findsOneWidget);
       expect(find.text('Qwen3 Coder'), findsOneWidget);
     });
 
-    testWidgets('Your devices closes the drawer and opens its page', (
-      tester,
-    ) async {
+    testWidgets('Your devices opens its page', (tester) async {
       await pump(
         tester,
         backend(),
+        home: const SwarmYouPage(),
         computers: _Computers(const [(name: 'Studio Mac', away: false)]),
       );
-      await tester.tap(key('swarm-menu'));
+
+      await tester.tap(key('swarm-you-devices'));
       await tester.pumpAndSettle();
 
-      await tester.tap(key('swarm-drawer-devices'));
-      await tester.pumpAndSettle();
-
-      expect(key('swarm-drawer-devices'), findsNothing, reason: 'it closed');
       expect(find.byType(SwarmDevicesPage), findsOneWidget);
       expect(find.text('Studio Mac'), findsOneWidget);
-    });
-
-    testWidgets('a drawer too short for its rows scrolls Your devices out '
-        'from under Settings', (tester) async {
-      await pump(
-        tester,
-        backend(),
-        home: SwarmPage(onSettings: (_) {}),
-        computers: _Computers(const [(name: 'Studio Mac', away: false)]),
-      );
-      // A phone shorter than the drawer's rows.
-      tester.view.physicalSize = const Size(1179, 1500);
-      await tester.pumpAndSettle();
-      await tester.tap(key('swarm-menu'));
-      await tester.pumpAndSettle();
-      final settings = tester.getRect(key('swarm-drawer-settings'));
-      final devices = key('swarm-drawer-devices');
-      // Below the list's end it is not even built yet.
-      expect(
-        devices.evaluate().isEmpty ||
-            tester.getRect(devices).bottom > settings.top,
-        isTrue,
-        reason: 'under the pinned Settings row at first',
-      );
-
-      await tester.scrollUntilVisible(
-        devices,
-        100,
-        scrollable: find
-            .descendant(
-              of: find.byType(SwarmDrawer),
-              matching: find.byType(Scrollable),
-            )
-            .first,
-      );
-      await tester.pumpAndSettle();
-
-      expect(tester.getRect(devices).bottom, lessThanOrEqualTo(settings.top));
-      await tester.tap(devices);
-      await tester.pumpAndSettle();
-      expect(find.byType(SwarmDevicesPage), findsOneWidget);
     });
   });
 
@@ -309,7 +257,7 @@ void main() {
 
       expect(key('swarm-models-none-$tab'), findsOneWidget);
       expect(
-        find.text('No models are running for this Swarm right now.'),
+        find.text('None of your models is running for this Swarm right now.'),
         findsOneWidget,
       );
     });
@@ -339,7 +287,9 @@ void main() {
       expect(
         tester
             .getTopLeft(
-              find.text('No models are running for this Swarm right now.'),
+              find.text(
+                'None of your models is running for this Swarm right now.',
+              ),
             )
             .dx,
         12 + 4,

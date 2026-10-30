@@ -1,15 +1,20 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/phone/out_of_sight.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
-import 'package:harness_mobile/swarm/swarm_needs_page.dart';
+import 'package:harness_mobile/swarm/swarm_activity_page.dart';
+import 'package:harness_mobile/swarm/swarm_buddies_page.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_tabs.dart';
+import 'package:harness_mobile/swarm/swarm_you_page.dart';
 
 import '../voice_fakes.dart';
+import 'swarm_buddies_fixture.dart';
 import 'swarm_fixture.dart';
 
 /// A tab's screen that says which it is, whether it is out of sight, and how
@@ -121,9 +126,13 @@ FakeSwarm _asking() {
 }
 
 /// Swarm's own tabs, with a stand-in for the phone's Settings.
-const _tabs = SwarmTabsPage(settings: _settings);
+const _tabs = SwarmTabsPage(onSettings: _settings);
 
-Widget _settings(BuildContext context) => const Text('the settings');
+void _settings(BuildContext context) => unawaited(
+  Navigator.of(
+    context,
+  ).push(MaterialPageRoute<void>(builder: (_) => const Text('the settings'))),
+);
 
 void main() {
   late SwarmHost host;
@@ -156,6 +165,7 @@ void main() {
       request: fake.request,
       notices: notices,
       features: features,
+      readMarks: MemoryKeyValueStore(),
     )..foreground = false;
     addTearDown(host.dispose);
     await tester.pumpWidget(
@@ -176,11 +186,11 @@ void main() {
 
   Finder said(String text) => find.text(text, skipOffstage: false);
 
-  testWidgets('the bar reads Home, Activity and You, and opens on Swarm '
-      'Home; Buddies waits for its screen', (tester) async {
+  testWidgets('the bar reads Home, Buddies, Activity and You, and opens on '
+      'Swarm Home', (tester) async {
     await pump(tester, _tabs);
 
-    const shown = [SwarmTab.home, SwarmTab.activity, SwarmTab.you];
+    const shown = SwarmTab.values;
     final xs = [for (final tab in shown) tester.getCenter(tabOf(tab)).dx];
     expect([...xs]..sort(), xs, reason: 'left to right in this order');
     for (final tab in shown) {
@@ -189,7 +199,6 @@ void main() {
         findsOneWidget,
       );
     }
-    expect(tabOf(SwarmTab.buddies), findsNothing);
     expect(find.text('Coming soon.', skipOffstage: false), findsNothing);
     expect(find.byType(SwarmPage), findsOneWidget);
     // The open tab's name in the main ink, bold; the others quiet.
@@ -212,7 +221,7 @@ void main() {
   testWidgets('a tab tapped shows its screen, and the others stay as they '
       'were, out of sight', (tester) async {
     final made = <SwarmTab>[];
-    await pump(tester, SwarmTabsPage(settings: _settings, tabs: _probes(made)));
+    await pump(tester, SwarmTabsPage(tabs: _probes(made)));
     await tester.tap(find.text('home taps 0'));
     await tester.pump();
 
@@ -242,7 +251,7 @@ void main() {
   testWidgets('each screen is made the first time its tab opens, and only '
       'then', (tester) async {
     final made = <SwarmTab>[];
-    await pump(tester, SwarmTabsPage(settings: _settings, tabs: _probes(made)));
+    await pump(tester, SwarmTabsPage(tabs: _probes(made)));
     expect(made, [SwarmTab.home]);
 
     await open(tester, SwarmTab.buddies);
@@ -259,13 +268,7 @@ void main() {
     // A count the test can move: the projects pinned.
     SwarmTabBadge? pins(SwarmSession session) =>
         (count: session.home.pins.length, warn: true);
-    await pump(
-      tester,
-      SwarmTabsPage(
-        settings: _settings,
-        tabs: _probes([], activity: pins),
-      ),
-    );
+    await pump(tester, SwarmTabsPage(tabs: _probes([], activity: pins)));
     final badge = find.byKey(const ValueKey('swarm-tab-badge-activity'));
     expect(badge, findsNothing, reason: 'none for a count of 0');
 
@@ -300,7 +303,7 @@ void main() {
   testWidgets('every tab takes a thumb: at least 44 points each way, the bar '
       'across the foot, above the home indicator', (tester) async {
     tester.view.padding = const FakeViewPadding(bottom: 34 * 3);
-    await pump(tester, SwarmTabsPage(settings: _settings, tabs: _probes([])));
+    await pump(tester, SwarmTabsPage(tabs: _probes([])));
 
     for (final tab in SwarmTab.values) {
       final size = tester.getSize(tabOf(tab));
@@ -322,7 +325,7 @@ void main() {
         'more, and each opens its own screen', (tester) async {
       final tabs = _probes([]);
       if (count == 3) tabs.removeWhere((e) => e.tab == SwarmTab.buddies);
-      await pump(tester, SwarmTabsPage(settings: _settings, tabs: tabs));
+      await pump(tester, SwarmTabsPage(tabs: tabs));
 
       final rects = [for (final e in tabs) tester.getRect(tabOf(e.tab))];
       expect(rects, hasLength(count));
@@ -343,7 +346,7 @@ void main() {
   testWidgets('back on another tab goes to Home; on Home it is not held', (
     tester,
   ) async {
-    await pump(tester, SwarmTabsPage(settings: _settings, tabs: _probes([])));
+    await pump(tester, SwarmTabsPage(tabs: _probes([])));
     final navigator = tester.state<NavigatorState>(find.byType(Navigator));
     await open(tester, SwarmTab.activity);
 
@@ -363,7 +366,7 @@ void main() {
         valueListenable: hidden,
         builder: (context, value, child) =>
             OutOfSight(hidden: value, child: child!),
-        child: SwarmTabsPage(settings: _settings, tabs: _probes([])),
+        child: SwarmTabsPage(tabs: _probes([])),
       ),
     );
     await open(tester, SwarmTab.activity);
@@ -385,7 +388,7 @@ void main() {
 
   testWidgets('a screen under the tabs can open another tab; nothing else '
       'can', (tester) async {
-    await pump(tester, SwarmTabsPage(settings: _settings, tabs: _probes([])));
+    await pump(tester, SwarmTabsPage(tabs: _probes([])));
 
     await tester.tap(find.text('home to You'));
     await tester.pumpAndSettle();
@@ -400,7 +403,7 @@ void main() {
     );
   });
 
-  testWidgets('Activity opens Needs you, as a tab with no way back, and '
+  testWidgets('Activity opens Activity, as a tab with no way back, and '
       'counts what waits on the person', (tester) async {
     await pump(tester, _tabs, fake: _asking());
     final badge = find.byKey(const ValueKey('swarm-tab-badge-activity'));
@@ -411,24 +414,146 @@ void main() {
 
     await open(tester, SwarmTab.activity);
 
-    expect(find.byType(SwarmNeedsPage), findsOneWidget);
+    expect(find.byType(SwarmActivityView), findsOneWidget);
     expect(
       tester.widget<Text>(find.byKey(const ValueKey('swarm-title'))).data,
-      'Needs you',
+      'Activity',
     );
     expect(find.byKey(const ValueKey('tty-back')), findsNothing);
     expect(find.text('Ship it?'), findsOneWidget);
   });
 
-  testWidgets('You opens the phone\'s Settings', (tester) async {
+  testWidgets('While you were away on Home opens the Activity tab, not a '
+      'page over Home', (tester) async {
+    var now = DateTime.now();
+    final tabs = [
+      for (final entry in swarmTabs(onSettings: _settings))
+        entry.tab == SwarmTab.home
+            ? SwarmTabEntry(
+                tab: entry.tab,
+                label: entry.label,
+                icon: entry.icon,
+                screen: (_) => SwarmPage(now: () => now),
+              )
+            : entry,
+    ];
+    await pump(
+      tester,
+      SwarmTabsPage(onSettings: _settings, tabs: tabs),
+      fake: _asking(),
+    );
+    // The app hidden for an hour, then shown again.
+    for (final state in [
+      AppLifecycleState.inactive,
+      AppLifecycleState.hidden,
+    ]) {
+      tester.binding.handleAppLifecycleStateChanged(state);
+    }
+    now = now.add(const Duration(hours: 1));
+    for (final state in [
+      AppLifecycleState.inactive,
+      AppLifecycleState.resumed,
+    ]) {
+      tester.binding.handleAppLifecycleStateChanged(state);
+    }
+    await tester.pumpAndSettle();
+
+    final away = find.byKey(const ValueKey('swarm-away'));
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('swarm-away-needs')),
+        matching: find.text('1'),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(away);
+    await tester.pumpAndSettle();
+
+    expect(find.byType(SwarmActivityView), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('tty-back')),
+      findsNothing,
+      reason: 'the tab, not a page',
+    );
+    expect(find.text('Ship it?'), findsOneWidget);
+  });
+
+  testWidgets('Buddies opens Buddies, as a tab with no way back, and counts '
+      'the Buddy chats with something unread', (tester) async {
+    await pump(tester, _tabs, fake: buddiesBackend());
+    final badge = find.byKey(const ValueKey('swarm-tab-badge-buddies'));
+    expect(
+      find.descendant(of: badge, matching: find.text('1')),
+      findsOneWidget,
+    );
+
+    await open(tester, SwarmTab.buddies);
+
+    expect(find.byType(SwarmBuddiesView), findsOneWidget);
+    expect(
+      tester.widget<Text>(find.byKey(const ValueKey('swarm-title'))).data,
+      'Buddies',
+    );
+    expect(find.byKey(const ValueKey('tty-back')), findsNothing);
+    expect(find.text('Done: the build is up.'), findsOneWidget);
+  });
+
+  testWidgets('Buddies reads its chats only while its tab is open', (
+    tester,
+  ) async {
+    final fake = buddiesBackend();
+    int reads() => fake.paths.where((p) => p.contains('/messages')).length;
+    await pump(tester, _tabs, fake: fake);
+    expect(reads(), 0, reason: 'its count needs no chat read');
+
+    await open(tester, SwarmTab.buddies);
+    expect(reads(), 2);
+
+    await open(tester, SwarmTab.home);
+    expect(host.session!.buddyList.shown, isFalse);
+    // A new message in the Buddy chat while Buddies is out of sight.
+    fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+      cursor: 'c3',
+      groups: [
+        part(
+          buddiesMobileChat,
+          30,
+          buddyChatData(
+            buddiesMobileChat,
+            agentIds: ['agent-wren'],
+            lastMessageSequence: 9,
+          ),
+        ),
+      ],
+    );
+    await host.session!.inbox.refresh();
+    await tester.pumpAndSettle();
+    expect(reads(), 2, reason: 'out of sight, nothing is read');
+
+    await open(tester, SwarmTab.buddies);
+    expect(reads(), 3);
+  });
+
+  testWidgets('You opens the person\'s own page, and its Settings the '
+      'phone\'s, over the tabs', (tester) async {
     await pump(tester, _tabs);
 
     await open(tester, SwarmTab.you);
 
+    expect(find.byType(SwarmYouPage), findsOneWidget);
+    expect(
+      tester.widget<Text>(find.byKey(const ValueKey('swarm-title'))).data,
+      'You',
+    );
+
+    await tester.tap(find.byKey(const ValueKey('swarm-you-settings')));
+    await tester.pumpAndSettle();
+
     expect(find.text('the settings'), findsOneWidget);
+    expect(find.byKey(const ValueKey('swarm-tab-you')), findsNothing);
   });
 
-  testWidgets('Needs you open on Activity mutes the notices it shows, and '
+  testWidgets('Activity open mutes the notices it shows, and '
       'out of sight under Harness mutes none', (tester) async {
     final hidden = ValueNotifier(false);
     await pump(

@@ -3,10 +3,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { apisOn, ContributedMachines, createQuietGit, liveOn, localModelsStamp, offered, refusedOn, servedOn, sharedWith, swarmWorktreesFile } from './machines.js'
+import { apisOn, ContributedMachines, createQuietGit, liveOn, localModelsStamp, offered, refusedOn, servedOn, sharedWith, swarmUnconfirmedFile, swarmWorktreesFile } from './machines.js'
 import { SuperTabHostError } from './host.js'
 import { startAgent } from './start.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
@@ -788,6 +788,23 @@ describe('contributed machine executor', () => {
         // Once: it is no longer the host's to stop.
         f.advance(); await f.machine.tick(); await settle()
         expect(closeMember).toHaveBeenCalledTimes(1)
+      })
+
+      // A daemon restarted between the launch and the Swarm failing the start no longer forgets the agent it launched.
+      it('still stops it after the daemon restarted, from the launches it kept on disk', async () => {
+        const { f, closeMember, fail } = failedLater(() => ({ error: 'Mac Auto did not start it within 3 minutes' }))
+        const dataDir = mkdtempSync(join(tmpdir(), 'swarm-unconfirmed-'))
+        onTestFinished(() => rmSync(dataDir, { recursive: true, force: true }))
+        ;(f.core as { dataDir: string }).dataDir = dataDir
+        await f.machine.tick()
+        expect(JSON.parse(readFileSync(swarmUnconfirmedFile(dataDir, 'host'), 'utf8')).launches)
+          .toEqual([{ startId: 'start', path: startPath, harnessId: 'launched', creationId: 'creation' }])
+        f.machine.stop()
+        const restarted = new ContributedMachines(f.core, 'host', f.deps as never)
+        fail(); f.advance(); await restarted.tick(); await settle()
+        expect(closeMember).toHaveBeenCalledWith('launched', 'creation')
+        expect(JSON.parse(readFileSync(swarmUnconfirmedFile(dataDir, 'host'), 'utf8')).launches).toEqual([])
+        restarted.stop()
       })
 
       it('never stops one that joined, one its receipt does not name, or one whose start is still pending', async () => {
@@ -1707,6 +1724,112 @@ describe('removed machine cleanup', () => {
     await host.removeStoppedWorktree('tab', 'h-earlier')
     await host.removeStoppedWorktree('other-tab', 'h-recorded')
     expect(existsSync(m.earlier)).toBe(true)
+  })
+
+  const startIds = (m: ReturnType<typeof machine>) => JSON.parse(readFileSync(swarmWorktreesFile(m.data, 'host'), 'utf8')).worktrees.map((w: { startId: string }) => w.startId)
+  const addRecord = (m: ReturnType<typeof machine>, row: Record<string, string>) => {
+    const file = swarmWorktreesFile(m.data, 'host')
+    const saved = JSON.parse(readFileSync(file, 'utf8'))
+    writeFileSync(file, JSON.stringify({ ...saved, worktrees: [...saved.worktrees, row] }))
+  }
+
+  // Diego, 10-30: a worktree folder deleted by hand kept its record for good, so every later stop tried it again.
+  it('drops the record of a stopped worker whose worktree folder is gone, and keeps every other record', async () => {
+    const m = machine()
+    m.setLive([])
+    rmSync(m.recorded, { recursive: true, force: true })
+    await m.open().removeStoppedWorktree('tab', 'h-recorded')
+    expect(startIds(m)).toEqual(['kept'])
+    expect(readFileSync(join(m.ownWorktree, 'unpushed.txt'), 'utf8')).toBe('work')
+  })
+
+  it('keeps the record when its folder cannot be read for any reason but being gone', async () => {
+    const m = machine()
+    m.setLive([])
+    // A file where a folder should be: not "gone", so the record stays.
+    addRecord(m, { tabId: 'tab', startId: 'odd', harnessId: 'h-odd', source: m.clone, path: join(m.recorded, 'unpushed.txt', 'below') })
+    await m.open().removeStoppedWorktree('tab', 'h-odd')
+    expect(startIds(m)).toEqual(['recorded', 'kept', 'odd'])
+    expect(readFileSync(join(m.recorded, 'unpushed.txt'), 'utf8')).toBe('work')
+  })
+
+  it('never touches a recorded folder that is not provably the Swarm\'s worktree: the main checkout, a person\'s own worktree', async () => {
+    const m = machine()
+    m.setLive([])
+    rmSync(join(m.ownWorktree, 'unpushed.txt'))
+    addRecord(m, { tabId: 'tab', startId: 'main', harnessId: 'h-main', source: m.clone, path: m.clone })
+    const host = m.open()
+    await host.removeStoppedWorktree('tab', 'h-main')
+    await host.removeStoppedWorktree('other-tab', 'h-kept')
+    for (const kept of [m.clone, m.ownWorktree]) expect(existsSync(kept), kept).toBe(true)
+    expect(git(m.own, 'worktree', 'list', '--porcelain')).toContain('/mine\n')
+    expect(startIds(m)).toEqual(['recorded', 'kept', 'main'])
+  })
+
+  // Lead, 10-30: an ended session (host.ts endSession) and a stopped worker (releaseWorker) can remove one agent's worktree
+  // at the same moment. The second waits for the first, then finds no record and does nothing.
+  it('runs two removals of one agent one after the other, never both at once', async () => {
+    const m = machine()
+    rmSync(join(m.recorded, 'unpushed.txt'))
+    const folderAtCheck: boolean[] = []
+    vi.mocked(m.core.agents.live).mockImplementation(() => { folderAtCheck.push(existsSync(m.recorded)); return [] })
+    const host = m.open()
+    await Promise.all([host.removeStoppedWorktree('tab', 'h-recorded'), host.removeStoppedWorktree('tab', 'h-recorded')])
+    expect(existsSync(m.recorded)).toBe(false)
+    expect(startIds(m)).toEqual(['kept'])
+    // Only the first looked for sessions in the folder; the second came once it was gone.
+    expect(folderAtCheck).toEqual([true])
+    expect(m.log).not.toHaveBeenCalled()
+  })
+
+  // Lead, 10-30: a removal that waited on one that kept the folder still checks for itself, or the folder waits a week.
+  it('checks again after a removal that kept the folder: a session closed meanwhile keeps it no longer', async () => {
+    const m = machine()
+    rmSync(join(m.recorded, 'unpushed.txt'))
+    // The first check sees the session still open; it closes right after.
+    let open = true
+    vi.mocked(m.core.agents.live).mockImplementation(() => {
+      const sessions = open ? [session('h-recorded', m.recorded, 'agent')] : []
+      open = false
+      return sessions
+    })
+    const host = m.open()
+    const first = host.removeStoppedWorktree('tab', 'h-recorded'), second = host.removeStoppedWorktree('tab', 'h-recorded')
+    await first
+    await second
+    expect(existsSync(m.recorded)).toBe(false)
+    expect(startIds(m)).toEqual(['kept'])
+  })
+
+  // Review of #2266: like the weekly sweep, a paused session of another agent in the folder can be resumed, so it stays.
+  // The removed agent's own paused session does not keep it.
+  it('keeps a worktree where another agent has a paused session, and not for the removed agent\'s own', async () => {
+    const m = machine()
+    m.setLive([])
+    rmSync(join(m.recorded, 'unpushed.txt'))
+    vi.mocked(m.core.agents.all).mockReturnValue([session('h-recorded', m.recorded, 'agent'), session('h-paused', join(m.recorded, 'src'), 'agent')])
+    const host = m.open()
+    await host.removeStoppedWorktree('tab', 'h-recorded')
+    expect(existsSync(m.recorded)).toBe(true)
+    expect(startIds(m)).toEqual(['recorded', 'kept'])
+    vi.mocked(m.core.agents.all).mockReturnValue([session('h-recorded', m.recorded, 'agent')])
+    await host.removeStoppedWorktree('tab', 'h-recorded')
+    expect(existsSync(m.recorded)).toBe(false)
+    expect(startIds(m)).toEqual(['kept'])
+  })
+
+  // Review of #2266: a git failure (a locked worktree, a handle still open on Windows) keeps the folder and says so,
+  // with a fixed code: git's own text names the folder.
+  it('keeps the worktree when git fails to read it, and logs a fixed code without its path', async () => {
+    const m = machine()
+    m.setLive([])
+    rmSync(join(m.recorded, 'unpushed.txt'))
+    const gitdir = /^gitdir: (.+)$/m.exec(readFileSync(join(m.recorded, '.git'), 'utf8'))![1].trim()
+    writeFileSync(join(gitdir, 'HEAD'), 'not a ref\n')
+    await m.open().removeStoppedWorktree('tab', 'h-recorded')
+    expect(existsSync(m.recorded)).toBe(true)
+    expect(startIds(m)).toEqual(['recorded', 'kept'])
+    expect(m.log.mock.calls).toEqual([['Kept a Swarm worktree: WORKTREE_CHECK_FAILED']])
   })
 
   it('deletes only the tab\'s Swarm folders and Swarm-made worktrees, then acknowledges once', async () => {

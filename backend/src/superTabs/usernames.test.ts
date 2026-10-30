@@ -108,6 +108,15 @@ describe('member.username', () => {
     expect(f.state.people[0]!.username).toBeUndefined()
   })
 
+  it('refuses a name that cannot be tagged in text: a dot at its end or two in a row', () => {
+    const f = fixture()
+    for (const username of ['ken.', 'ken..nguyen']) {
+      expect(() => f.run({ type: 'member.username', username }), username).toThrow(expect.objectContaining({ code: 'INVALID_USERNAME' }))
+    }
+    f.run({ type: 'member.username', username: 'ken.nguyen' })
+    expect(f.state.people[0]!.username).toBe('ken.nguyen')
+  })
+
   it('keeps a later person’s numbered name when the person before them leaves', () => {
     const f = fixture()
     const first = person('ken-a', 'ken@example.com')

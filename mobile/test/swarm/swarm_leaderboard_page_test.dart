@@ -453,6 +453,262 @@ void main() {
     }
   });
 
+  group("a person's week closes when what opened it is lost", () {
+    const sheet = 'swarm-leaderboard-sheet';
+
+    /// The page over the scripted Swarm with diego's week open.
+    Future<({FakeSwarm fake, SwarmHost host, ValueNotifier<String?> account})>
+    withSheet(WidgetTester tester) async {
+      final fake = backend();
+      final account = ValueNotifier<String?>(me);
+      final host = await pump(tester, fake, signedIn: account);
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-leaderboard-person-diego'));
+      await tester.pumpAndSettle();
+      expect(inside(sheet, find.text('diego')), findsOneWidget);
+      return (fake: fake, host: host, account: account);
+    }
+
+    int boardReads(FakeSwarm fake) =>
+        fake.paths.where((p) => p.contains('/leaderboard')).length;
+
+    testWidgets('it stays while nothing is lost, a refresh included', (
+      tester,
+    ) async {
+      final (:fake, :host, account: _) = await withSheet(tester);
+
+      await host.session!.inbox.refresh();
+      await host.session!.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
+
+      expect(inside(sheet, find.text('diego')), findsOneWidget);
+    });
+
+    testWidgets('the Swarm leaving the account\'s list closes it, clears the '
+        'board and reads no more', (tester) async {
+      final (:fake, :host, account: _) = await withSheet(tester);
+      final reads = boardReads(fake);
+
+      fake.routes['/api/super-tabs/list'] = (_) => {
+        'tabs': <Object>[],
+        'next': null,
+      };
+      await host.session!.inbox.refresh();
+      await tester.pumpAndSettle();
+
+      expect(key(sheet), findsNothing);
+      expect(find.text('diego'), findsNothing);
+      expect(key('swarm-leaderboard-person-diego'), findsNothing);
+      expect(
+        key('swarm-leaderboard-loading'),
+        findsNothing,
+        reason: 'no loading for an answer that will not come',
+      );
+      await tester.pump(const Duration(minutes: 11));
+      expect(boardReads(fake), reads, reason: 'nothing read once revoked');
+    });
+
+    testWidgets('the project going from the Swarm closes it', (tester) async {
+      final (:fake, :host, account: _) = await withSheet(tester);
+
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => {
+        ...changes(cursor: 'c3'),
+        'head': part('head', 2, headData(projects: [])),
+      };
+      await host.session!.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
+
+      expect(host.session!.inbox.reader(tab)!.snapshot!.projects, isEmpty);
+      expect(key(sheet), findsNothing);
+      expect(find.text('diego'), findsNothing);
+    });
+
+    testWidgets('a sign-out closes it', (tester) async {
+      final (:fake, host: _, :account) = await withSheet(tester);
+      final reads = boardReads(fake);
+
+      account.value = null;
+      await tester.pumpAndSettle();
+
+      expect(key(sheet), findsNothing);
+      expect(find.text('diego'), findsNothing);
+      await tester.pump(const Duration(minutes: 11));
+      expect(boardReads(fake), reads);
+    });
+
+    testWidgets('another account closes it, and its board is the new one\'s', (
+      tester,
+    ) async {
+      final (:fake, host: _, :account) = await withSheet(tester);
+
+      account.value = 'person-other';
+      await tester.pumpAndSettle();
+
+      expect(key(sheet), findsNothing);
+    });
+
+    testWidgets('the page asked for another project closes it', (tester) async {
+      final fake = backend();
+      final account = ValueNotifier<String?>(me);
+      final host = await pump(tester, fake, signedIn: account);
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-leaderboard-person-diego'));
+      await tester.pumpAndSettle();
+      expect(key(sheet), findsOneWidget);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          builder: (context, child) =>
+              SwarmScope(notifier: host, child: child!),
+          home: SwarmLeaderboardPage(
+            swarmId: tab,
+            projectId: 'project-other',
+            now: () => now,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(key(sheet), findsNothing);
+      expect(find.text('diego'), findsNothing);
+      expect(key('swarm-leaderboard-person-diego'), findsNothing);
+      expect(key('swarm-leaderboard-loading'), findsNothing);
+      expect(
+        fake.paths.where((p) => p.contains('projectId=project-other')),
+        isEmpty,
+        reason: 'a project the Swarm does not have is not asked for',
+      );
+    });
+
+    testWidgets('the project back on the Swarm reads its board again', (
+      tester,
+    ) async {
+      final (:fake, :host, account: _) = await withSheet(tester);
+      final reads = boardReads(fake);
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => {
+        ...changes(cursor: 'c3'),
+        'head': part('head', 2, headData(projects: [])),
+      };
+      await host.session!.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
+      expect(key('swarm-leaderboard-person-diego'), findsNothing);
+
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => {
+        ...changes(cursor: 'c4'),
+        'head': part('head', 3, headData()),
+      };
+      await host.session!.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-leaderboard-person-diego'), findsOneWidget);
+      expect(boardReads(fake), reads + 1);
+      expect(key(sheet), findsNothing, reason: 'the week stays closed');
+    });
+
+    /// The page with diego's row tapped and no frame drawn since: the sheet
+    /// is pushed but has not been built.
+    Future<({FakeSwarm fake, SwarmHost host})> tappedNotDrawn(
+      WidgetTester tester,
+    ) async {
+      final fake = backend();
+      final host = await pump(tester, fake);
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-leaderboard-person-diego'));
+      expect(key(sheet), findsNothing, reason: 'no frame since the tap');
+      return (fake: fake, host: host);
+    }
+
+    testWidgets('access refused between the tap and the first frame of the '
+        'week: it does not stay', (tester) async {
+      final (:fake, :host) = await tappedNotDrawn(tester);
+
+      host.session!.inbox.reader(tab)!.revoke();
+      await tester.pumpAndSettle();
+
+      expect(key(sheet), findsNothing);
+      expect(find.text('diego'), findsNothing);
+    });
+
+    testWidgets('the Swarm dropped from the list between the tap and the '
+        'first frame of the week: it does not stay', (tester) async {
+      final (:fake, :host) = await tappedNotDrawn(tester);
+
+      fake.routes['/api/super-tabs/list'] = (_) => {
+        'tabs': <Object>[],
+        'next': null,
+      };
+      await host.session!.inbox.refresh();
+      await tester.pumpAndSettle();
+
+      expect(key(sheet), findsNothing);
+      expect(find.text('diego'), findsNothing);
+    });
+
+    testWidgets('the project removed between the tap and the first frame of '
+        'the week: it does not stay', (tester) async {
+      final (:fake, :host) = await tappedNotDrawn(tester);
+
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => {
+        ...changes(cursor: 'c3'),
+        'head': part('head', 2, headData(projects: [])),
+      };
+      await host.session!.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
+
+      expect(key(sheet), findsNothing);
+      expect(find.text('diego'), findsNothing);
+    });
+
+    testWidgets('a signed-out account between the tap and the first frame '
+        'of the week: it does not stay', (tester) async {
+      final fake = backend();
+      final account = ValueNotifier<String?>(me);
+      await pump(tester, fake, signedIn: account);
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-leaderboard-person-diego'));
+
+      account.value = null;
+      await tester.pumpAndSettle();
+
+      expect(key(sheet), findsNothing);
+      expect(find.text('diego'), findsNothing);
+    });
+
+    testWidgets('a board read still out when access is lost shows nothing '
+        'when it lands', (tester) async {
+      final fake = backend();
+      final host = await pump(tester, fake);
+      await tester.pumpAndSettle();
+      final gate = Completer<void>();
+      fake.routes[path] = (_) async {
+        await gate.future;
+        return board();
+      };
+      // A pull: the board is read again, and the answer is still out.
+      await tester.fling(
+        key('swarm-leaderboard-person-diego'),
+        const Offset(0, 400),
+        1000,
+      );
+      for (var i = 0; i < 20 && boardReads(fake) < 2; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      expect(boardReads(fake), 2, reason: 'the pull is out');
+
+      fake.routes['/api/super-tabs/list'] = (_) => {
+        'tabs': <Object>[],
+        'next': null,
+      };
+      await host.session!.inbox.refresh();
+      gate.complete();
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-leaderboard-person-diego'), findsNothing);
+      expect(find.text('diego'), findsNothing);
+      expect(key('swarm-leaderboard-team'), findsNothing);
+    });
+  });
+
   testWidgets('a read that fails with nothing shown offers Try again', (
     tester,
   ) async {

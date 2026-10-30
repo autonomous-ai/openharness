@@ -5,6 +5,19 @@ import { z } from 'zod'
 import { BENCHMARK_PRIORS } from './benchmarkPriors/data.js'
 import { JOB_KINDS, priorLevel, type JobKind, type PriorsTable } from './benchmarkPriors/priors.js'
 
+/** Built-in rows added after owners could save a policy, so saved policies read them too (effectivePolicy). Codex's own default
+ *  model, named: GPT-6.1 Sol scores 58.18 on Terminal-Bench 4.0 in Codex (benchmarkPriors/data.ts) and costs Sonnet's API rate
+ *  (costs/prices.ts). A start or Reviewer that names it is rated by this row, not as an unknown slug (Lead, 10-30). */
+const ADDED_ROWS = [
+  { engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', quality: 3, cost: 2, enabled: true },
+] as const satisfies ReadonlyArray<Record<string, unknown>>
+/** An owner keeps exactly up to 40 rows of their own. A built-in row added on read, or the owner's own version of one (the same
+ *  engine and model), never counts against that, or a full policy could no longer be saved once read (reviews of #2271). */
+const OWN_MODEL_ROWS = 40
+type Named = { engine: string; model: string }
+const same = (a: Named, b: Named) => a.engine === b.engine && a.model === b.model
+const builtIn = (row: Named) => ADDED_ROWS.some(added => same(added, row))
+
 const quality = z.number().int().min(1).max(3)
 const modelRow = z.object({
   engine: z.enum(['claude', 'codex']),
@@ -15,8 +28,10 @@ const modelRow = z.object({
   cost: z.number().int().min(1).max(100),
   enabled: z.boolean(),
 }).strict()
+const models = z.array(modelRow).min(1).max(OWN_MODEL_ROWS + ADDED_ROWS.length)
+  .refine(rows => rows.filter(row => !builtIn(row)).length <= OWN_MODEL_ROWS, `At most ${OWN_MODEL_ROWS} rows of your own.`)
 const fields = {
-  models: z.array(modelRow).min(1).max(40),
+  models,
   floor: z.object({ low: quality, medium: quality, high: quality }).strict(),
   quotaReserve: z.number().int().min(0).max(90),
   notes: z.string().trim().max(500),
@@ -30,6 +45,14 @@ const fields = {
 }
 export const routingPolicySchema = z.object({ version: z.literal(1), ...fields }).strict()
 export const routingOverrideSchema = z.object(fields).partial().strict()
+/** What a save accepts: also one row at most per built-in model, so a second copy never rides free of the 40 (review of #2271).
+ *  Only saves check it: a policy saved before it still reads as saved, never as unreadable. */
+const saved = { ...fields, models: models.superRefine((rows, ctx) => {
+  for (const added of ADDED_ROWS) if (rows.filter(row => same(row, added)).length > 1)
+    ctx.addIssue({ code: 'custom', message: `Only one row for ${added.engine} ${added.model}.` })
+}) }
+export const routingPolicySaveSchema = z.object({ version: z.literal(1), ...saved }).strict()
+export const routingOverrideSaveSchema = z.object(saved).partial().strict()
 export type RoutingPolicy = z.infer<typeof routingPolicySchema>
 export type RoutingOverride = z.infer<typeof routingOverrideSchema>
 export type RoutingModel = RoutingPolicy['models'][number]
@@ -38,7 +61,12 @@ export const DEFAULT_ROUTING_POLICY: RoutingPolicy = {
   version: 1,
   models: [
     { engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 3, enabled: true },
+    // Opus 5.5 at xhigh, as the Product Manager runs (role defaults, projects.ts): the same price per token as at high, more
+    // thinking per task, so dearer; at equal strength routing keeps choosing high unless a rule or a person asks for more.
+    { engine: 'claude', model: 'opus', effort: 'xhigh', quality: 3, cost: 4, enabled: true },
     { engine: 'codex', model: 'default', effort: 'default', quality: 3, cost: 2, enabled: true },
+    // Next to `default` so the form lists Codex's rows together. List order ranks nothing: the CLI route breaks ties by title.
+    ...ADDED_ROWS,
     { engine: 'claude', model: 'sonnet', effort: 'medium', quality: 2, cost: 2, enabled: true },
     { engine: 'claude', model: 'haiku', effort: 'auto', quality: 1, cost: 1, enabled: true },
   ],
@@ -53,9 +81,10 @@ export const DEFAULT_ROUTING_POLICY: RoutingPolicy = {
 export function effectivePolicy(account: unknown, override: unknown) {
   const warnings: string[] = []
   let policy = DEFAULT_ROUTING_POLICY
+  let accountModels: RoutingModel[] = []
   if (account !== null && account !== undefined) {
     const parsed = routingPolicySchema.safeParse(account)
-    if (parsed.success) policy = parsed.data
+    if (parsed.success) { policy = parsed.data; accountModels = parsed.data.models }
     else warnings.push('The account routing policy is unreadable; the built-in default applies.')
   }
   const overridden: Array<keyof RoutingOverride> = []
@@ -67,6 +96,15 @@ export function effectivePolicy(account: unknown, override: unknown) {
       overridden.push(...(Object.keys(parsed.data) as Array<keyof RoutingOverride>))
     }
   }
+  // A policy saved before a named row was added has no row for that model, which rated it 1: the row joins it. A row of the
+  // owner's own for the model, on or off, stays as it is. A tab override saved without it takes the account's row. Either is
+  // on only while its engine's `default` row is: an owner who turned Codex off keeps it off (review of #2271).
+  const engineOn = (engine: string) => policy.models.some(m => m.engine === engine && m.model === 'default' && m.enabled)
+  const missing = ADDED_ROWS.filter(row => !policy.models.some(m => same(m, row))).map((row): RoutingModel => {
+    const from = accountModels.find(m => same(m, row)) ?? row
+    return { ...from, enabled: from.enabled && engineOn(row.engine) }
+  })
+  if (missing.length) policy = { ...policy, models: [...policy.models, ...missing] }
   const local = policy.localModels ?? DEFAULT_ROUTING_POLICY.localModels!
   policy = { ...policy, localModels: { ...local, models: local.models ?? DEFAULT_ROUTING_POLICY.localModels!.models } }
   return { policy, warnings, overridden }

@@ -60,6 +60,26 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
   SwarmReader? _swarm;
   SwarmLeaderboardReader? _board;
 
+  /// The Swarm's reader was held and has been lost: it left the account's
+  /// list, or may no longer be read. Nothing of it is drawn, and no loading
+  /// stays up for an answer that will not come.
+  bool _lost = false;
+
+  /// The person's week this page opened, while it is up. What it shows is
+  /// this board's: it closes with the page, and when the account, the Swarm
+  /// or the project it was opened from is gone ([_closeWeek]).
+  ModalRoute<void>? _week;
+
+  @override
+  void didUpdateWidget(SwarmLeaderboardPage old) {
+    super.didUpdateWidget(old);
+    // Another Swarm or project: none of the last board stays.
+    if (old.swarmId != widget.swarmId || old.projectId != widget.projectId) {
+      _forget();
+      _attach();
+    }
+  }
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -82,10 +102,28 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
   void _attach() {
     final session = _session;
     final swarm = session?.inbox.reader(widget.swarmId);
-    if (session == null || swarm == null || identical(swarm, _swarm)) return;
-    _swarm?.removeListener(_changed);
-    _swarm = swarm..addListener(_changed);
+    if (session == null) return;
+    // Off the list, or refused: what was read of it goes, and a reader that
+    // may not read it again is not followed. Not listed yet is only waiting.
+    if (swarm == null || swarm.accessRevoked) {
+      if (!_lost && (_swarm != null || swarm != null)) _lose();
+      return;
+    }
+    if (identical(swarm, _swarm)) return;
+    _swarm?.removeListener(_swarmChanged);
+    _lost = false;
+    _swarm = swarm..addListener(_swarmChanged);
+    _startBoard();
+    _changed();
+  }
+
+  void _startBoard() {
+    final session = _session, swarm = _swarm;
+    if (session == null || swarm == null) return;
     _board?.dispose();
+    _board = null;
+    // A project the Swarm does not have is not asked for.
+    if (_projectGone(swarm.snapshot)) return;
     _board = SwarmLeaderboardReader(
       tabId: swarm.tabId,
       projectId: widget.projectId,
@@ -93,25 +131,66 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
       inFront: () => session.inbox.shown,
     )..addListener(_changed);
     _board!.start();
-    _changed();
   }
 
   void _changed() {
     if (mounted) setState(() {});
   }
 
+  /// Whether [snapshot], once read, still has this page's project.
+  bool _projectGone(SuperTabSnapshot? snapshot) =>
+      snapshot != null &&
+      !snapshot.projects.any((p) => p.id == widget.projectId);
+
+  /// The Swarm's reader told of a change: revoked, nothing of it stays;
+  /// without the project any more, nothing of the project does either: its
+  /// week closes and its board is not read, until the project is back.
+  void _swarmChanged() {
+    final swarm = _swarm;
+    if (swarm == null) return;
+    if (swarm.accessRevoked) return _lose();
+    if (_projectGone(swarm.snapshot)) {
+      _closeWeek();
+      _board?.dispose();
+      _board = null;
+    } else if (_board == null) {
+      _startBoard();
+    }
+    _changed();
+  }
+
+  void _lose() {
+    _forget();
+    _lost = true;
+    _changed();
+  }
+
   void _forget() {
-    _swarm?.removeListener(_changed);
+    _swarm?.removeListener(_swarmChanged);
     _swarm = null;
     _board?.dispose();
     _board = null;
+    _lost = false;
+    _closeWeek();
+  }
+
+  /// Closes the week open, if any: once this frame is done, as a page whose
+  /// reader goes away may not change the navigator while it builds.
+  void _closeWeek() {
+    final week = _week;
+    _week = null;
+    if (week == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (week.isActive) week.navigator?.removeRoute(week);
+    });
   }
 
   @override
   void dispose() {
+    _closeWeek();
     _session?.inbox.removeListener(_attach);
     _session?.leave();
-    _swarm?.removeListener(_changed);
+    _swarm?.removeListener(_swarmChanged);
     _board?.dispose();
     super.dispose();
   }
@@ -165,8 +244,9 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
     final reader = _board;
     final board = reader?.board;
     final current = swarmWeekOf(widget.now());
-    // Signed out, or Swarm turned off: no account's board to show.
-    if (_session == null) return const [];
+    // Signed out, or Swarm turned off: no account's board to show; nor of a
+    // Swarm that was lost, or of a project it does not have.
+    if (_session == null || _lost || _projectGone(snapshot)) return const [];
     if (reader != null && reader.unavailable) {
       return [
         const SizedBox(height: AppSpace.m),
@@ -245,16 +325,34 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
             name: nameOf(score),
             own: score.personId == viewer,
             columns: columns!,
-            onTap: () => unawaited(
-              _showPerson(
-                context,
-                score,
-                personOf(score.personId),
-                nameOf(score),
-              ),
+            onTap: () => _openWeek(
+              context,
+              score,
+              personOf(score.personId),
+              nameOf(score),
             ),
           ),
     ];
+  }
+
+  void _openWeek(
+    BuildContext context,
+    SwarmScore score,
+    SuperTabPerson? person,
+    String name,
+  ) {
+    ModalRoute<void>? shown;
+    unawaited(
+      showSwarmPersonWeek(
+        context,
+        score: score,
+        person: person,
+        name: name,
+        opened: (route) => _week = shown = route,
+      ).whenComplete(() {
+        if (_week == shown) _week = null;
+      }),
+    );
   }
 
   /// The four weeks the board keeps, this one first, in a sheet.
@@ -284,23 +382,40 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
         ],
       ),
     );
-    if (week == null || !mounted) return;
+    if (week == null || !mounted || !identical(reader, _board)) return;
     await reader.showWeek(week == current ? null : week);
   }
+}
 
-  /// [score]'s week in a sheet, as the desktop shows it when a name is
-  /// clicked.
-  Future<void> _showPerson(
-    BuildContext context,
-    SwarmScore score,
-    SuperTabPerson? person,
-    String name,
-  ) => showModalBottomSheet<void>(
-    context: context,
+/// [score]'s week in a sheet, as the desktop shows it when a name is clicked:
+/// from the leaderboard and from a project's Team. [opened] is told the
+/// sheet's route before it is pushed, not when it first draws, so a screen
+/// that loses what the sheet shows between the tap and the next frame can
+/// still close it.
+Future<void> showSwarmPersonWeek(
+  BuildContext context, {
+  required SwarmScore score,
+  required SuperTabPerson? person,
+  required String name,
+  ValueChanged<ModalRoute<void>>? opened,
+}) {
+  // What showModalBottomSheet gives its route, with its default options.
+  final navigator = Navigator.of(context);
+  final localizations = MaterialLocalizations.of(context);
+  final route = ModalBottomSheetRoute<void>(
+    capturedThemes: InheritedTheme.capture(
+      from: context,
+      to: navigator.context,
+    ),
     isScrollControlled: true,
+    barrierLabel: localizations.scrimLabel,
+    barrierOnTapHint: localizations.scrimOnTapHint(
+      localizations.bottomSheetLabel,
+    ),
     backgroundColor: AppGlass.rowFill,
     showDragHandle: true,
     shape: AppControl.sheetShape,
+    modalBarrierColor: Theme.of(context).bottomSheetTheme.modalBarrierColor,
     builder: (context) => _Sheet(
       key: const ValueKey('swarm-leaderboard-sheet'),
       title: name,
@@ -316,6 +431,8 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
       ],
     ),
   );
+  opened?.call(route);
+  return navigator.push(route);
 }
 
 /// Figures of one width, so a column of numbers holds row under row.
@@ -328,7 +445,7 @@ TextStyle _rankStyle() => AppType.label(
   color: AppPalette.textSecondary,
   fontFeatures: _figures,
 );
-TextStyle _pointsStyle() => AppType.label(
+TextStyle swarmPointsStyle() => AppType.label(
   fontWeight: FontWeight.w600,
   color: AppPalette.textPrimary,
   fontFeatures: _figures,
@@ -413,7 +530,7 @@ class _Columns {
       rank: width(widest(scores.map((score) => score.rank)), _rankStyle()),
       points: width(
         widest(scores.map((score) => score.points)),
-        _pointsStyle(),
+        swarmPointsStyle(),
       ),
       trend: changes.isEmpty
           ? null
@@ -537,7 +654,11 @@ class _PersonRow extends StatelessWidget {
                   column(
                     'points',
                     columns.points,
-                    Text('${score.points}', maxLines: 1, style: _pointsStyle()),
+                    Text(
+                      '${score.points}',
+                      maxLines: 1,
+                      style: swarmPointsStyle(),
+                    ),
                   ),
                 ],
               ),

@@ -24,12 +24,14 @@ import { opencodeMajorVersion } from '../../engines/launchControl.js'
 import { installOpencodePlugin } from '../../engines/nativeHooks.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
 import { projectsRoot } from '../../lib/projectFolder.js'
+import { harnessMadeWorktree } from '../../lib/gitProject.js'
 import { NativeFiles } from '../../engines/kit/nativeFiles.js'
 import { agentLaunchArgs } from '../../lib/agentAttribution.js'
 import { WindowsBatchLaunchRefused } from '../../lib/windows/launch.js'
 import { swarmGitHubLaunch } from '../../lib/swarmGitHub.js'
 import { SWARM_LAUNCH } from '../../superTabs/inCore/launch.js'
 
+vi.mock('../../lib/gitProject.js', async (real) => ({ ...await real<object>(), harnessMadeWorktree: vi.fn(async () => false) }))
 vi.mock('../../lib/projectFolder.js', async real => {
   const actual = await real<typeof import('../../lib/projectFolder.js')>()
   return { ...actual, projectsRoot: vi.fn(actual.projectsRoot) }
@@ -352,6 +354,37 @@ describe('creating an agent', () => {
       expect(preTrustCodexProject, JSON.stringify(vi.mocked(console.warn).mock.calls)).toHaveBeenCalledTimes(expected ? 1 : 0)
       if (expected) expect(preTrustCodexProject).toHaveBeenCalledWith(cwd, mode === 'legacy' ? null : '/fixture/selected')
     })
+
+  // 2026-10-30: a Cmd+S Swarm's PM, in a clone or worktree the desktop made and sent as a plain cwd, sat at Claude Code's
+  // trust question, which no Swarm view shows.
+  it('trusts a local Claude Swarm agent in full mode in a clone in the projects root or a worktree Harness made', async () => {
+    vi.mocked(projectsRoot).mockReturnValue(root)
+    try {
+      const clone = folder(), plain = folder(['README.md']), worktree = join(folder(), 'worktree')
+      mkdirSync(join(clone, '.git'))
+      mkdirSync(worktree)
+      vi.mocked(harnessMadeWorktree).mockImplementation(async path => path === worktree)
+      const authority = { id: 'fixture', label: 'harness-claude-fixture', current: () => true, hold: () => {} }
+      const prepare = (over: Record<string, unknown>, local = true) =>
+        setup().create.prepare(request({ swarmRole: 'lead', permissionMode: 'full', bypassPermission: true, ...over }), authority, { local })
+      expect((await prepare({ cwd: clone })).ok).toBe(true)
+      expect(preTrustClaudeProject).toHaveBeenCalledWith(clone)
+      await prepare({ cwd: worktree })
+      expect(preTrustClaudeProject).toHaveBeenLastCalledWith(worktree)
+      expect(harnessMadeWorktree).toHaveBeenCalledWith(worktree, root)
+      // Not the person's own folder, not relayed, not outside a Swarm or full mode, not for Codex.
+      await prepare({ cwd: plain })
+      await prepare({ cwd: clone }, false)
+      await prepare({ cwd: clone, swarmRole: null })
+      await prepare({ cwd: clone, permissionMode: 'auto', bypassPermission: false })
+      await prepare({ cwd: clone, engine: 'codex' })
+      expect(preTrustClaudeProject).toHaveBeenCalledTimes(2)
+      expect(preTrustCodexProject).not.toHaveBeenCalled()
+    } finally {
+      vi.mocked(projectsRoot).mockReset()
+      vi.mocked(harnessMadeWorktree).mockReset().mockResolvedValue(false)
+    }
+  })
 
   it.each(['folder inspection', 'tmux capabilities', 'config publication'] as const)('holds a create revoked during %s before launch side effects', async stage => {
     let current = true
