@@ -16,7 +16,8 @@ import { computerId } from '../lib/daemonState.js'
 import { noticeReason, WithheldDeliveries } from './withheld.js'
 import { attentionOf } from './attention.js'
 import { prepareContribution, prepareTeamContribution } from './contribution.js'
-import { hostname } from 'node:os'
+import { homedir, hostname } from 'node:os'
+import { scrubClaudeSession, type PurgeTarget } from './inCore/teamPurge.js'
 import { replacementObservations } from './replacements.js'
 import { TerminalHost } from './terminal.js'
 import { LimitResume } from './limitResume.js'
@@ -136,6 +137,8 @@ export interface SuperTabHostOptions {
   agentCommand?: (core: CoreApi, machineId: string) => Promise<string>
   /** The Swarm start this machine made of a harness (superTabs/reservations.ts), or null. */
   startReceipt?: (harnessId: string) => string | null
+  /** The home whose Claude Code data an ended Buddy session's own traces are removed from; this user's, unless a spec says. */
+  claudeHome?: string
   /** The machine's host form and Swarm reads, shared with the service's other readers (superTabs/service.ts). */
   sources?: SwarmSources
   /** What the contributed-machine executor reaches the local daemon with (superTabs/machines.ts), for a spec. */
@@ -213,6 +216,10 @@ export const buddyChatIdOf = (projectId: string, personId: string, generation: s
 export const BUDDY_SESSION_IDLE_MS = 30 * 60_000
 /** How long a thread session's terminal may be missing before it counts as stopped, so a slow read is never taken for one. */
 export const BUDDY_SESSION_GONE_MS = 60_000
+/** A gap this long between two looks at a thread session means this machine slept (the host looks every few seconds): its
+ *  idle time counts from the wake, so a Mac that slept through 30 minutes never ends a working session as it wakes (security
+ *  review 1 of #2345). */
+export const BUDDY_SESSION_SLEEP_GAP_MS = 2 * 60_000
 const writeJournal = (file: string, journal: Journal) => {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
   const temporary = `${file}.next`
@@ -272,8 +279,8 @@ export class SuperTabHost {
   private readonly lists = new Map<string, { readAt: number; ids: string[]; busy: boolean }>()
   /** Each of this machine's thread sessions, by `tabId:agentId`: when it last did anything, since when its terminal is gone,
    *  and its end once asked of the backend. */
-  private readonly threadSessions = new Map<string, { activeAt: number; missingSince?: number; ending?: 'idle' | 'stopped'; ended?: true
-    running: boolean; failures: number; retryAt: number }>()
+  private readonly threadSessions = new Map<string, { activeAt: number; seenAt: number; missingSince?: number; ending?: 'idle' | 'stopped'
+    ended?: true; running: boolean; failures: number; retryAt: number }>()
   private stopped = false
   private running: Promise<void> | null = null
   private stopsRunning: Promise<void> | null = null
@@ -286,6 +293,7 @@ export class SuperTabHost {
   private receiptCursor = 0
   private readonly agentCommand: (core: CoreApi, machineId: string) => Promise<string>
   private readonly startReceipt: (harnessId: string) => string | null
+  private readonly claudeHome: string
   /** Asked once, on the first delivery: the answer cannot change while this daemon runs (superTabs/shortCommand.ts). */
   private prefix: Promise<string> | null = null
   private configurationsRunning: Promise<void> | null = null
@@ -321,7 +329,7 @@ export class SuperTabHost {
   private readonly keepAlives = new Map<string, { running: boolean; failures: number; retryAt: number; reason?: string }>()
   /** Per session the backend ends: a close or acknowledgement in progress, how far it got, and when the next try may run. */
   private readonly endings = new Map<string, { running: boolean; closed: boolean; acked: boolean; failures: number; retryAt: number
-    forgotten?: boolean; unforgotten?: string }>()
+    forgotten?: boolean; unforgotten?: string; scrub?: PurgeTarget | null; scrubbed?: true }>()
   /** Deliveries withheld from an agent that leads nothing, each said once. */
   private readonly unreadable = new Set<string>()
   /** The machine's host form and Swarm reads: the tick, stops, releases and skill notices read Swarms only through them. */
@@ -344,6 +352,7 @@ export class SuperTabHost {
     this.prepareTeam = options.prepareTeam ?? ((core, input) => prepareTeamContribution(core, input))
     this.agentCommand = options.agentCommand ?? defaultAgentCommand
     this.startReceipt = options.startReceipt ?? (() => null)
+    this.claudeHome = options.claudeHome ?? homedir()
     this.now = options.now ?? Date.now
     this.write = options.write ?? writeJournal
     this.log = options.log ?? (message => console.warn(`[super-tabs] ${message}`))
@@ -913,26 +922,37 @@ export class SuperTabHost {
       const key = `${row.tabId}:${agent.id}`, now = this.now()
       present.add(key)
       let state = this.threadSessions.get(key)
-      if (!state) this.threadSessions.set(key, state = { activeAt: now, running: false, failures: 0, retryAt: 0 })
-      // A delivery waiting for it is work, and so is a screen that changed.
+      if (!state) this.threadSessions.set(key, state = { activeAt: now, seenAt: now, running: false, failures: 0, retryAt: 0 })
+      // Asleep: idle time counts from the wake.
+      if (now - state.seenAt >= BUDDY_SESSION_SLEEP_GAP_MS) state.activeAt = now
+      state.seenAt = now
+      // A delivery still in this host's hands is work, and so is a screen that changed. One settled (withheld, or waiting on a
+      // person as uncertain) is not: it would keep the session from ever going idle (security review 1 of #2345).
       const list = this.lists.get(`list:${row.tabId}:${agent.id}`)
-      if (list?.ids.length) state.activeAt = now
+      if (list?.busy) state.activeAt = now
       const shown = this.terminal.progressOf([agent.harnessId])[agent.harnessId]
       if (typeof shown === 'number' && shown > state.activeAt) state.activeAt = shown
       const live = !!this.core.agents.byAgent(agent.harnessId) && this.core.agents.terminalAvailable(agent.harnessId)
       if (live) delete state.missingSince
       else state.missingSince ??= now
-      // Idle only on a list read this pass or lately that is empty: one never read says nothing of what waits.
+      // Idle only on a list read this pass or lately with nothing unsettled: one never read says nothing of what waits.
       const reason = !live ? (now - state.missingSince! >= BUDDY_SESSION_GONE_MS ? 'stopped' : null)
-        : list && !list.ids.length && now - state.activeAt >= BUDDY_SESSION_IDLE_MS ? 'idle' : null
-      if (!reason && !state.ending) continue
-      state.ending ??= reason!
-      if (state.ended || state.running || now < state.retryAt) continue
+        : list && !list.busy && now - state.activeAt >= BUDDY_SESSION_IDLE_MS ? 'idle' : null
+      // Judged again each pass: an end not yet taken is dropped once the session works again, so a retry never ends a session
+      // that has new work (security review 1 of #2345).
+      if (state.ended) continue
+      if (!reason) {
+        if (!state.running) { delete state.ending; state.failures = 0; state.retryAt = 0 }
+        continue
+      }
+      if (state.ending !== reason) { state.ending = reason; state.failures = 0; state.retryAt = 0 }
+      if (state.running || now < state.retryAt) continue
       const projectId = identifier(agent.projectId) ? agent.projectId : 'lead'
       const conversationId = buddyChatIdOf(projectId, buddyOf.personId, buddyOf.generation)
       state.running = true
-      const ending = state.ending, short = String(agent.harnessId).slice(0, 8)
-      void backend(this.core, 'POST', `/api/super-tabs/${row.tabId}/commands`, { operationId: `buddy-session-end-${agent.id}`,
+      const ending = reason, short = String(agent.harnessId).slice(0, 8)
+      // One id per session and reason: a retry is the same request, and a changed reason never reuses an id for another.
+      void backend(this.core, 'POST', `/api/super-tabs/${row.tabId}/commands`, { operationId: `buddy-session-end-${agent.id}-${ending}`,
         command: { type: 'buddy.sessionEnd', conversationId, thread: session.thread, reason: ending } })
         .then(() => { state.ended = true; this.log(`Ended thread session ${short} in Swarm ${row.tabId}: ${ending}.`) })
         .catch(error => {
@@ -969,6 +989,15 @@ export class SuperTabHost {
     }
     const close = this.core.agents.closeMember
     if (!close) return
+    // A Buddy's own Claude Code traces, known while its session is still registered here (security review 1 of #2345): what its
+    // person sent it, kept in its transcript and Claude Code's paste cache, goes with its session. Its folder is its own
+    // worktree, so its transcripts and history lines are its alone; a paste goes only when one of its own history lines names it
+    // (teamPurge.ts scrubClaudeSession, never a sweep by pattern).
+    if (state.scrub === undefined) {
+      const session = this.core.agents.byAgent(agent.harnessId)
+      state.scrub = session?.swarmSkill?.role === 'buddy' && session.engine === 'claude' && typeof session.cwd === 'string'
+        ? { agentId: agent.id, sessionId: session.sessionId ?? null, cwd: session.cwd, engine: 'claude', codexHome: null } : null
+    }
     if (state.running || state.acked || this.now() < state.retryAt) return
     state.running = true
     void (async () => {
@@ -982,6 +1011,7 @@ export class SuperTabHost {
         if (!result.closed) throw new Error(`Could not close a session the Swarm ended (${result.error ?? 'unknown'}${result.detail ? `: ${result.detail}` : ''}).`)
         state.closed = true
       }
+      if (state.scrub && !state.scrubbed) { await scrubClaudeSession(this.claudeHome, state.scrub); state.scrubbed = true }
       if (this.stopped || !state.forgotten) return
       await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: `session-closed-${agent.id}-${agent.harnessId}`,
         command: { type: 'agent.sessionClosed', agentId: agent.id, harnessId: agent.harnessId } })
@@ -1343,7 +1373,11 @@ export class SuperTabHost {
       && typeof owner.generation === 'string' && owner.generation === author.membershipGeneration
       && chat.kind === 'buddy' && chat.buddyOwnerId === author.id && chat.archived !== true
       && Array.isArray(chat.agentIds) && chat.agentIds.includes(entry.agentId) && chat.projectId === agent.projectId
-    return own ? { onTheirMachine: agent!.machineOwnerId === author.id } : null
+    // A thread session's person speaks to it only in its own thread: a message anywhere else grants it nothing, however it
+    // came (security review 1 of #2345).
+    const session = object(agent?.buddySession)
+    const inThread = !identifier(session.thread) || message.id === session.thread || message.thread === session.thread
+    return own && inThread ? { onTheirMachine: agent!.machineOwnerId === author.id } : null
   }
 
   /** The message a reply answers, quoted into the delivery: agents skipped the command that reads it, and a Lead took Ken's

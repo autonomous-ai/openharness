@@ -13,6 +13,7 @@ import '../state/harness_attachments.dart';
 import 'attachment_upload.dart';
 import 'avatar_upload.dart';
 import 'message_link.dart';
+import 'identity.dart' show superTabMachineName;
 import 'model.dart';
 import 'buddy_chat.dart';
 import 'catch_up.dart';
@@ -1426,12 +1427,48 @@ class SuperTabController extends ChangeNotifier {
         : null;
   }
 
-  /// Whether the reader may start a session in a thread of the open chat:
-  /// their own Buddy chat, with their Buddy running.
-  bool get offersThreadSessions {
+  /// Whether the open chat's thread composer shows New session: the reader's
+  /// own Buddy chat, with a Buddy, or in [root]'s thread that had a session
+  /// (its reply must start a new one). It may still show disabled, saying why
+  /// ([threadSessionBlocked]).
+  bool offersThreadSessions([String? root]) {
     final chat = _ownBuddyChat;
-    return chat != null && buddy(chat.projectId) != null;
+    if (chat == null) return false;
+    return buddy(chat.projectId) != null || (root != null && _hadSession(root));
   }
+
+  /// Why the open Buddy chat cannot start a session now, as the disabled
+  /// choice says it; null when it can, as far as this computer can tell (the
+  /// server still decides, and its refusal shows in the composer).
+  String? get threadSessionBlocked {
+    final chat = _ownBuddyChat;
+    if (chat == null) return null;
+    if (snapshot?.paused == true) return 'New work is paused in this Swarm';
+    final main = buddy(chat.projectId);
+    if (main == null || main.downSince != null) return 'Start your Buddy first';
+    if (main.engine != 'claude') return 'Sessions need a Claude Code Buddy';
+    // The host says what it can run in its report; a machine this computer
+    // has no report of is left to the server.
+    final pool = snapshot?.pool(main.machineId);
+    final observation = pool?['observation'];
+    if (observation is Map) {
+      final capabilities = observation['capabilities'];
+      if (capabilities is! List || !capabilities.contains('buddySessions')) {
+        return 'Update Harness on ${sessionMachineName(main.machineId) ?? 'your Buddy\'s computer'} to start sessions';
+      }
+    }
+    return null;
+  }
+
+  /// The Swarm's name for [machineId], as people read it; null when unknown.
+  String? sessionMachineName(String machineId) {
+    final name = snapshot?.pool(machineId)?['name'];
+    return name is String && name.isNotEmpty ? superTabMachineName(name) : null;
+  }
+
+  /// Whether [root]'s thread has a reply from or to a thread session.
+  bool _hadSession(String root) =>
+      threadMessages(root).any((m) => m.buddySession);
 
   /// The live or starting session answering [root] in the reader's own Buddy
   /// chat; null when none does, or anywhere else.
@@ -1442,11 +1479,15 @@ class SuperTabController extends ChangeNotifier {
   SuperTabAgent? sessionAgent(SuperTabBuddySession session) =>
       session.agentId == null ? null : snapshot?.agent(session.agentId!);
 
-  /// The line saying [root]'s last session ended, while no session answers
-  /// there: a plain reply would be refused, so a new one must start.
+  /// The row saying [root]'s last session ended (its ended line, else its
+  /// last session reply), while no session answers there: a plain reply
+  /// would be refused, so a new one must start. Any session reply locks it,
+  /// ended line or not.
   SuperTabMessage? threadSessionEnded(String root) {
     if (_ownBuddyChat == null || threadSession(root) != null) return null;
-    return threadMessages(root).where((m) => m.sessionEnded).lastOrNull;
+    final messages = threadMessages(root);
+    return messages.where((m) => m.sessionEnded).lastOrNull ??
+        messages.where((m) => m.buddySession).lastOrNull;
   }
 
   /// Whether the open Buddy chat already runs [maxBuddySessions] sessions.

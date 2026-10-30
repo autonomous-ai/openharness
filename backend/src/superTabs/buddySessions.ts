@@ -4,7 +4,7 @@
  *  only up to where it started (a short excerpt), and ends when its person ends it, when it has been idle for 30 minutes
  *  (its host says so), or with its main Buddy. The main Buddy reads none of its thread. */
 import { isBuddy, isBuddyChat } from './buddies.js'
-import { fail, type Agent, type BuddySessionEntry, type Conversation, type SuperTabState } from './model.js'
+import { fail, stableId, type Agent, type AgentStart, type Author, type BuddySessionEntry, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 
 /** At most this many live or starting sessions per Buddy chat, the main Buddy not counted. */
 export const MAX_BUDDY_SESSIONS = 3
@@ -19,7 +19,7 @@ export const CONTEXT_CHARS = 500
 export const CONTEXT_BYTES = 6 * 1024
 /** The quiet line a session's end leaves in its thread. */
 export const SESSION_ENDED_KIND = 'buddy-session-ended'
-export type SessionEndReason = 'ended' | 'idle' | 'stopped' | 'failed'
+export type SessionEndReason = 'ended' | 'idle' | 'stopped' | 'failed' | 'removed' | 'maintenance'
 
 export const isThreadSession = (agent: Pick<Agent, 'buddySession'> | undefined): boolean => !!agent?.buddySession
 /** The chat's main Buddy: the Buddy in it that is not a thread session. */
@@ -71,7 +71,35 @@ export function endedText(reason: SessionEndReason, detail?: string): string {
     case 'idle': return 'Session ended: idle for 30 minutes.'
     case 'stopped': return 'Session ended: it stopped unexpectedly.'
     case 'failed': return `Session ended: it couldn't start${detail ? `: ${detail.slice(0, 300)}` : '.'}`
+    case 'removed': return 'Session ended: its Buddy was removed or replaced.'
+    case 'maintenance': return 'Session ended: Harness was updated. Start a new session to continue.'
   }
+}
+
+/**
+ * The one way a session's end is recorded, for every path (commands, the start timeouts in liveness.ts): its entry leaves
+ * [chat]'s record and a quiet line in its thread says why, to nobody (a reply to the thread's root, tagged as the session's,
+ * so the main Buddy never reads it). Said by the session's agent when it ran, else by the chat's person. Closing the agent
+ * itself is the caller's: only a command can (commands.ts removeAgent). Nothing when the entry is already gone.
+ */
+export function endSessionEntry(state: SuperTabState, chat: Conversation, entry: BuddySessionEntry, reason: SessionEndReason, detail?: string): MessageDraft[] {
+  if (!(chat.buddySessions ?? []).some(e => e.startId === entry.startId)) return []
+  setSessions(chat, (chat.buddySessions ?? []).filter(e => e.startId !== entry.startId))
+  const agent = entry.agentId ? state.agents.find(a => a.id === entry.agentId) : undefined
+  const owner = chatOwner(chat), person = owner && state.people.find(p => p.id === owner.id && p.generation === owner.generation)
+  const author: Author | undefined = agent ? { kind: 'agent', id: agent.id, name: agent.name, displayName: agent.displayName ?? agent.name,
+    membershipGeneration: agent.membershipGeneration } : person ? { kind: 'person', id: person.id, name: person.email, membershipGeneration: person.generation } : undefined
+  if (!author) return []
+  return [{ id: stableId(SESSION_ENDED_KIND, chat.id, entry.startId), conversationId: chat.id, author, text: endedText(reason, detail),
+    replyTo: entry.thread, recipients: [], thread: entry.thread, buddySession: true, source: { kind: SESSION_ENDED_KIND, reason, thread: entry.thread } }]
+}
+
+/** A thread session's start that failed outside a command (liveness.ts timeouts): ended through its own path, never as its
+ *  main Buddy's start, so the main chat says nothing and the thread says why. */
+export function failedSessionStart(state: SuperTabState, start: AgentStart): MessageDraft[] {
+  const chat = start.request.buddySession && state.conversations.find(c => c.id === start.request.conversationId)
+  const entry = chat ? (chat.buddySessions ?? []).find(e => e.startId === start.id) : undefined
+  return chat && entry ? endSessionEntry(state, chat, entry, 'failed', start.error ?? undefined) : []
 }
 
 /** A message row as the session read check needs it. */

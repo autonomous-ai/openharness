@@ -35,7 +35,7 @@ import { openReview, openReviewOf, projectPullRequest, verdictPending } from './
 import { carryOver, cheapAttempt, GRID_START_FAILED, REVIEW_FAILED, stepUp, stepUpRefusal } from './stepUp.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
 import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, isConfidential, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleDefaults, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, withRoleDefaults, type ProjectRole, type RoleDefaults, type RoleKind, type SwarmProject } from './projects.js'
-import { BUDDY_SESSION_CAPABILITY, chatOwner, endedText, liveSessions, mainBuddyOf, MAX_BUDDY_SESSIONS, MAX_SESSION_WAITING, requireChatOwner, SESSION_ENDED_KIND, sessionAgentsOf, sessionOf, setSessions, type SessionEndReason } from './buddySessions.js'
+import { BUDDY_SESSION_CAPABILITY, chatOwner, endSessionEntry, liveSessions, mainBuddyOf, MAX_BUDDY_SESSIONS, MAX_SESSION_WAITING, requireChatOwner, SESSION_ENDED_KIND, sessionAgentsOf, sessionOf, setSessions, type SessionEndReason } from './buddySessions.js'
 import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, openBuddyChat, PROPOSAL_ASK_MS, proposalText, renameBuddy, requireBuddyCommand } from './buddies.js'
 import { BUDDY_OWN_MACHINE_REFUSAL, CODEX_BUDDY_REFUSAL } from './buddyContract.js'
 import { LEAD_NAME, launchRefusedLine, leadJoined, leadStartFailed, leadStarting, placeLead } from './leadStart.js'
@@ -168,7 +168,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('buddy.rename'), conversationId: id, name: z.string().max(200).nullable() }).strict(),
   // A person ends a thread session of their own Buddy chat (buddySessions.ts): `ended` from their app, `idle` and `stopped` from
   // their machine's host, which acts as them. Idempotent: a thread with no session is told so and nothing changes.
-  z.object({ type: z.literal('buddy.sessionEnd'), conversationId: id, thread: id, reason: z.enum(['ended', 'idle', 'stopped']) }).strict(),
+  z.object({ type: z.literal('buddy.sessionEnd'), conversationId: id, thread: id, reason: z.enum(['ended', 'idle', 'stopped', 'maintenance']) }).strict(),
   // The PM's private line to one person, in their Buddy chat of its project: Buddies replaced Chat with PM (Ken, 10-29).
   z.object({ type: z.literal('person.tell'), personId: id, text: z.string().trim().min(1).max(32_000) }).strict(),
   // A person's own Buddy in a project, on a machine of the Swarm (buddies.ts).
@@ -859,6 +859,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
       const main = mainBuddyOf(state, chat)
       if (!main || downSince(state, main, context.now)) fail('BUDDY_SESSION_NO_BUDDY', 'Start your Buddy first: a session runs beside it.')
+      // Only Claude Code runs a Buddy's guard hook. A Codex Buddy added before Codex was refused (buddy.create) must not
+      // start Codex sessions without it (security review 1 of #2345).
+      if (main.configuration.engine !== 'claude') fail('BUDDY_SESSION_ENGINE', 'Sessions need a Buddy running Claude Code.', 403)
       const pool = machineContribution(state, main.machineId)
       if (!pool?.observation?.capabilities?.includes(BUDDY_SESSION_CAPABILITY)) {
         fail('BUDDY_SESSION_UNSUPPORTED', `Update Harness on ${pool?.name ?? 'your Buddy\'s computer'} to start sessions.`)
@@ -898,16 +901,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   /** Ends [entry]'s session in [chat]: its agent leaves as any removed agent does (its host closes it and deletes its folder),
    *  a start not yet running fails, and a quiet line in its thread says why, to nobody (buddySessions.ts). */
   const endBuddySession = (chat: Conversation, entry: BuddySessionEntry, reason: SessionEndReason, detail?: string) => {
+    // Its line first, while its agent can still say it (buddySessions.ts endSessionEntry); then its agent closes.
+    effects.messages.push(...endSessionEntry(state, chat, entry, reason, detail))
     const target = entry.agentId ? state.agents.find(a => a.id === entry.agentId) : undefined
     if (target) removeAgent(target)
     const start = state.starts?.find(s => s.id === entry.startId && !s.harnessId && !s.error)
     if (start) start.error = 'Its session ended before it started.'
-    setSessions(chat, (chat.buddySessions ?? []).filter(e => e !== entry && e.startId !== entry.startId))
-    message(chat.id, endedText(reason, detail), [], entry.thread, { kind: SESSION_ENDED_KIND, reason, thread: entry.thread })
-    // Said by the session that ended, so the thread never shows its person saying it; a start that never ran has none.
-    const said = target ? { author: { kind: 'agent' as const, id: target.id, name: target.name, displayName: target.displayName ?? target.name,
-      membershipGeneration: target.membershipGeneration } } : {}
-    Object.assign(effects.messages.at(-1)!, { thread: entry.thread, buddySession: true, ...said })
   }
 
   /** Deleting its project is the only removal that takes a Lead. `close: false` when its host already closed the session. */
@@ -916,6 +915,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     for (const chat of state.conversations.filter(c => isBuddyChat(c) && c.agentIds.includes(target.id))) {
       if (target.buddySession) setSessions(chat, (chat.buddySessions ?? []).filter(e => e.agentId !== target.id))
       else if (target.buddyOf) {
+        // Each session's thread says it ended, as every end does (security review 1 of #2345): an app then offers New session there.
+        for (const entry of [...chat.buddySessions ?? []]) effects.messages.push(...endSessionEntry(state, chat, entry, 'removed'))
         for (const start of state.starts ?? []) {
           if (start.request.conversationId === chat.id && start.request.buddySession && !start.harnessId && !start.error) start.error = 'Its Buddy was removed before it started.'
         }
@@ -1821,7 +1822,14 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         if (!start.poolGeneration || !start.harnessId || start.error) fail('START_PENDING', 'This contributed start is not ready to settle.')
         // A Product Manager is never assigned work: its conversation already said where it started.
         // A warning is the people's to read (a start that went wrong); being ready is bookkeeping.
-        if (!start.poolSettled && !start.request.leadFor) message(start.request.conversationId, command.warning
+        // A thread session says nothing in the main chat (security review 2 of #2345): its thread shows it working, and a
+        // warning about its start goes in its thread alone.
+        if (!start.poolSettled && start.request.buddySession) {
+          if (command.warning) {
+            message(start.request.conversationId, `${start.request.name}: ${command.warning}`, [], start.request.buddySession.thread, SYSTEM_ROW)
+            Object.assign(effects.messages.at(-1)!, { thread: start.request.buddySession.thread, buddySession: true })
+          }
+        } else if (!start.poolSettled && !start.request.leadFor) message(start.request.conversationId, command.warning
           ? `${start.request.name}: ${command.warning}`
           : start.request.buddyOf ? buddyReady(start.request.name) : `${start.request.name} is ready for an assignment.`, [], null,
           command.warning ? SYSTEM_ROW : bookkeeping(start.request.conversationId, SYSTEM_ROW))

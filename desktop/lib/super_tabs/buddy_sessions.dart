@@ -42,13 +42,16 @@ HarnessActivity superTabSessionActivity(
       HarnessActivity.unknown;
 }
 
-/// The words beside a session's mark.
-String superTabSessionWords(HarnessActivity activity) => switch (activity) {
-  HarnessActivity.starting => 'Starting…',
-  HarnessActivity.offline => 'Your Mac is offline',
-  HarnessActivity.idle => 'Idle',
-  _ => activity.label,
-};
+/// The words beside a session's mark; offline names its machine ([machine],
+/// as people read it) when known.
+String superTabSessionWords(HarnessActivity activity, {String? machine}) =>
+    switch (activity) {
+      HarnessActivity.starting => 'Starting…',
+      HarnessActivity.offline =>
+        machine != null ? '$machine is offline' : 'Its computer is offline',
+      HarnessActivity.idle => 'Idle',
+      _ => activity.label,
+    };
 
 /// Why a session ended, as its thread says it.
 String superTabSessionEndedWords(String? reason) => switch (reason) {
@@ -56,6 +59,8 @@ String superTabSessionEndedWords(String? reason) => switch (reason) {
   'ended' => 'Session ended: you ended it',
   'stopped' => 'Session ended: it stopped unexpectedly',
   'failed' => 'Session ended: it couldn\'t start',
+  'removed' => 'Session ended: its Buddy was removed or replaced',
+  'maintenance' => 'Session ended: Harness was updated',
   _ => 'Session ended',
 };
 
@@ -118,7 +123,12 @@ class _SuperTabThreadSessionLineState extends State<SuperTabThreadSessionLine> {
     final Widget line;
     if (session != null) {
       final activity = widget.activityOf(session);
-      final words = 'Own session · ${superTabSessionWords(activity)}';
+      final machineId = c.sessionAgent(session)?.machineId;
+      final machine = machineId == null
+          ? null
+          : c.sessionMachineName(machineId);
+      final words =
+          'Own session · ${superTabSessionWords(activity, machine: machine)}';
       line = Row(
         children: [
           _mark(activity),
@@ -134,8 +144,10 @@ class _SuperTabThreadSessionLineState extends State<SuperTabThreadSessionLine> {
           if (c.canWrite)
             SuperTabLink(
               key: const ValueKey('super-thread-session-end'),
-              label: 'End session',
-              onTap: _ending == widget.root ? () {} : () => unawaited(_end()),
+              label: _ending == widget.root ? 'Ending session' : 'End session',
+              // Disabled while its end is on its way: pointer, keyboard and
+              // screen readers alike.
+              onTap: _ending == widget.root ? null : () => unawaited(_end()),
               child: Text(
                 _ending == widget.root ? 'Ending…' : 'End session',
                 style: DesktopChrome.control(color: DesktopChrome.muted),

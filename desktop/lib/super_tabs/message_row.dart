@@ -704,7 +704,8 @@ class SuperTabLink extends StatefulWidget {
     required this.child,
   });
 
-  final VoidCallback onTap;
+  /// Null disables it, for pointer, keyboard and screen readers alike.
+  final VoidCallback? onTap;
   final String label;
   final Widget child;
 
@@ -719,13 +720,16 @@ class _SuperTabLinkState extends State<SuperTabLink> {
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final radius = BorderRadius.circular(DesktopChrome.controlRadius);
+    final enabled = widget.onTap != null;
     return Semantics(
       button: true,
+      enabled: enabled,
       label: widget.label,
       child: InkWell(
         onTap: widget.onTap,
+        canRequestFocus: enabled,
         onFocusChange: (focused) => setState(() => _focused = focused),
-        mouseCursor: SystemMouseCursors.click,
+        mouseCursor: enabled ? SystemMouseCursors.click : MouseCursor.defer,
         borderRadius: radius,
         hoverColor: Colors.transparent,
         focusColor: Colors.transparent,

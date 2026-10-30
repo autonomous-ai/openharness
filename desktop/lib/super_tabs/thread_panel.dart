@@ -174,17 +174,22 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
 
   /// The thread's last session ended: a reply here must start a new one.
   bool get _sessionLocked =>
-      c.offersThreadSessions && c.threadSessionEnded(widget.root) != null;
+      c.offersThreadSessions(widget.root) &&
+      c.threadSessionEnded(widget.root) != null;
 
   /// Whether the composer offers New session: the reader's own Buddy chat,
   /// with their Buddy running, in a thread no session answers now.
   bool get _offersSession =>
-      c.offersThreadSessions && c.threadSession(widget.root) == null;
+      c.offersThreadSessions(widget.root) &&
+      c.threadSession(widget.root) == null;
 
   /// Whether this reply starts a session.
   bool get _startsSession =>
       _offersSession &&
-      (_sessionLocked || (_newSession && !c.buddySessionsFull));
+      (_sessionLocked ||
+          (_newSession &&
+              !c.buddySessionsFull &&
+              c.threadSessionBlocked == null));
 
   /// A session's thread stays in the thread: Also send is not offered there,
   /// nor for a reply that starts one.
@@ -545,24 +550,31 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
   /// session ended, unavailable (and saying why) at the limit.
   Widget _sessionChoice(bool writable) {
     final locked = _sessionLocked;
-    final full = !locked && c.buddySessionsFull;
+    // What the server would refuse is said before sending: a block (paused,
+    // no Buddy, an older host) before the limit.
+    final blocked = c.threadSessionBlocked;
+    final full = !locked && blocked == null && c.buddySessionsFull;
     final choice = _choice(
       key: const ValueKey('super-thread-new-session'),
-      value: locked || (_newSession && !full),
-      label: full
+      value: locked || (_newSession && !full && blocked == null),
+      label: blocked != null
+          ? 'New session · $blocked'
+          : full
           ? 'New session · ${SuperTabController.maxBuddySessions} running, end one first'
           : 'New session',
-      onChanged: writable && !locked && !full
+      onChanged: writable && !locked && !full && blocked == null
           ? (on) => setState(() => _newSession = on)
           : null,
     );
     return Tooltip(
-      message: locked
-          ? 'This thread\'s session ended. Your reply starts a new one.'
-          : full
-          ? 'End a session to start another'
-          : 'Answer this thread in its own session, while your Buddy keeps '
-                'answering the chat',
+      message:
+          blocked ??
+          (locked
+              ? 'This thread\'s session ended. Your reply starts a new one.'
+              : full
+              ? 'End a session to start another'
+              : 'Answer this thread in its own session, while your Buddy keeps '
+                    'answering the chat'),
       child: choice,
     );
   }

@@ -53,6 +53,9 @@ function buddySessionPrompt(tabId: string, chat: string, thread: string, mode: S
   return `You are a person's Buddy in a shared Super Tab, in a session of your own for one thread of your owner's chat. ${mode ? `${swarmSkillUse('buddy', mode)} ` : ''}Run harness super-tab --tab ${tabId} status until this harness appears in the roster. Your thread is the one rooted at message ${thread} in conversation ${chat}. Read it, with the main-chat messages it started from, with harness super-tab --tab ${tabId} messages ${chat} --thread ${thread}. Answer your owner only in this thread: harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID --reply-to MESSAGE_ID, naming a message in this thread. Your owner's newest message in the thread is the one to answer first. Your Buddy's other rules are unchanged. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
 }
 
+/** Why a thread session that is not Claude Code's never starts. */
+export const BUDDY_SESSION_ENGINE = 'A thread session runs only with Claude Code, under its Buddy guard.'
+
 /** The thread a Buddy start's session is for, if it is one (backend `AgentStartRequest.buddySession`). */
 export function buddySessionThread(request: Json): string | null {
   const session = request.buddySession
@@ -352,6 +355,12 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
           requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: detail } }))
           return { error: 'START_FAILED', startId, detail }
         }
+      }
+      // A Buddy thread session runs only under Claude Code, whose Buddy guard hook holds it: a Codex session would run without
+      // that hook (security review 1 of #2345). The backend refuses one too; this refuses it here before anything launches.
+      if (request.buddySession !== undefined && request.engine !== 'claude') {
+        requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: BUDDY_SESSION_ENGINE } }))
+        return { error: 'START_FAILED', startId, detail: BUDDY_SESSION_ENGINE }
       }
       const resources = await inspectCapacity(target, request)
       if (resources.capacity.error === 'GUEST_NOT_ALLOWED') return {

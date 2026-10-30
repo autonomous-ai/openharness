@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/message_row.dart' show SuperTabLink;
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -97,6 +98,31 @@ void main() {
       });
       chat['agentIds'] = [...chat['agentIds'] as List, agentId];
     }
+  }
+
+  /// The Buddy's machine as its pool row reads, its host able to run sessions
+  /// unless [capable] is false.
+  Map<String, dynamic> machine({bool capable = true}) => {
+    'machineId': 'mac',
+    'name': 'Studio',
+    'contributorId': 'owner',
+    'scope': 'swarm',
+    'engines': ['claude'],
+    'observation': {
+      'receivedAt': 1,
+      'runningHarnessIds': <String>[],
+      'stoppedHarnessIds': <String>[],
+      if (capable) 'capabilities': ['buddySessions'],
+    },
+  };
+
+  /// A reply in [thread] from or to its session, with no ended line.
+  void sessionReply(ConversationServer server, String thread, String text) {
+    server.append(text, conversationId: 'offline');
+    server.messages.last
+      ..['thread'] = thread
+      ..['replyTo'] = thread
+      ..['buddySession'] = true;
   }
 
   Future<SuperTabController> show(
@@ -264,15 +290,23 @@ void main() {
     expect(alsoSend, findsNothing);
   });
 
-  testSessions('a session on a Mac that went offline says so', (tester) async {
+  testSessions('a session on a computer that went offline names it', (
+    tester,
+  ) async {
     final server = buddyChat();
     addSession(server, 'message-1', agentId: 'session-1', down: true);
     final c = await show(tester, server);
     await openThread(tester, c, 'message-1');
+    // A machine this computer has no row for is not guessed at.
     expect(
       tester.widget<Text>(state).data,
-      'Own session · Your Mac is offline',
+      'Own session · Its computer is offline',
     );
+    server.state['machines'] = [machine()];
+    server.revision++;
+    await c.refresh();
+    await tester.pumpAndSettle();
+    expect(tester.widget<Text>(state).data, 'Own session · Studio is offline');
   });
 
   testSessions('End session is a quiet text action that ends that thread\'s '
@@ -404,7 +438,7 @@ void main() {
     expect(end, findsNothing);
     expect(newSession, findsNothing);
     expect(c.threadSession('message-1'), isNull);
-    expect(c.offersThreadSessions, isFalse);
+    expect(c.offersThreadSessions('message-1'), isFalse);
     expect(await c.endThreadSession('message-1'), isFalse);
   });
 
@@ -446,5 +480,182 @@ void main() {
     await openThread(tester, c, 'message-1');
     expect(newSession, findsOneWidget);
     expect(box(tester, newSession).onChanged, isNotNull);
+  });
+
+  testSessions('any session reply locks New session, ended line or not', (
+    tester,
+  ) async {
+    final server = buddyChat();
+    sessionReply(server, 'message-1', 'Reading the logs…');
+    final c = await show(tester, server);
+    await openThread(tester, c, 'message-1');
+    expect(box(tester, newSession).value, isTrue);
+    expect(box(tester, newSession).onChanged, isNull);
+    expect(alsoSend, findsNothing);
+    expect(tester.widget<Text>(ended).data, 'Session ended');
+  });
+
+  testSessions('after the Buddy is removed, an old session thread stays '
+      'locked and says why', (tester) async {
+    final server = buddyChat(buddy: false);
+    sessionReply(server, 'message-1', 'Reading the logs…');
+    server.append(
+      'Session ended: its Buddy was removed or replaced.',
+      conversationId: 'offline',
+    );
+    server.messages.last
+      ..['thread'] = 'message-1'
+      ..['replyTo'] = 'message-1'
+      ..['buddySession'] = true
+      ..['source'] = {
+        'kind': 'buddy-session-ended',
+        'reason': 'removed',
+        'thread': 'message-1',
+      };
+    final c = await show(tester, server);
+    await openThread(tester, c, 'message-1');
+    expect(
+      tester.widget<Text>(ended).data,
+      'Session ended: its Buddy was removed or replaced',
+    );
+    expect(box(tester, newSession).value, isTrue);
+    expect(box(tester, newSession).onChanged, isNull);
+    expect(find.text('New session · Start your Buddy first'), findsOneWidget);
+    // A thread with no session past offers nothing without a Buddy.
+    await openThread(tester, c, 'message-2');
+    expect(newSession, findsNothing);
+  });
+
+  testSessions('New session says why the server would refuse it, before '
+      'sending', (tester) async {
+    final server = buddyChat();
+    final c = await show(tester, server);
+    await openThread(tester, c, 'message-1');
+    Future<void> blockedBy(String reason) async {
+      server.revision++;
+      await c.refresh();
+      await tester.pumpAndSettle();
+      expect(find.text('New session · $reason'), findsOneWidget);
+      expect(box(tester, newSession).onChanged, isNull);
+      expect(box(tester, newSession).value, isFalse);
+    }
+
+    server.state['paused'] = true;
+    await blockedBy('New work is paused in this Swarm');
+    server.state['paused'] = false;
+    final main = (server.state['agents'] as List).last as Map<String, dynamic>;
+    main['downSince'] = '2026-10-30T00:00:00Z';
+    await blockedBy('Start your Buddy first');
+    main.remove('downSince');
+    main['configuration'] = {'engine': 'codex'};
+    await blockedBy('Sessions need a Claude Code Buddy');
+    main['configuration'] = {'engine': 'claude'};
+    server.state['machines'] = [machine(capable: false)];
+    await blockedBy('Update Harness on Studio to start sessions');
+    // A block wins over the limit: it is what would be refused.
+    addSession(server, 'message-2', agentId: 's2');
+    final chat = chatOf(server);
+    chat['buddySessions'] = [
+      ...chat['buddySessions'] as List,
+      {'thread': 'x', 'startId': 'sx', 'at': 1},
+      {'thread': 'y', 'startId': 'sy', 'at': 1},
+    ];
+    await blockedBy('Update Harness on Studio to start sessions');
+    server.state['machines'] = [machine()];
+    chat['buddySessions'] = <dynamic>[];
+    server.revision++;
+    await c.refresh();
+    await tester.pumpAndSettle();
+    expect(find.text('New session'), findsOneWidget);
+    expect(box(tester, newSession).onChanged, isNotNull);
+  });
+
+  testSessions('Ending… cannot be pressed again while its end is on its way', (
+    tester,
+  ) async {
+    final server = buddyChat();
+    addSession(server, 'message-1', agentId: 'session-1');
+    final c = await show(tester, server);
+    await openThread(tester, c, 'message-1');
+    final hold = server.holdCommands = Completer<void>();
+    await tester.tap(end);
+    await tester.pump();
+    final sent = server.posts.length;
+    expect(find.text('Ending…'), findsOneWidget);
+    final link = tester.widget<SuperTabLink>(end);
+    expect(link.onTap, isNull);
+    expect(
+      tester.getSemantics(end),
+      isSemantics(isButton: true, hasEnabledState: true, isEnabled: false),
+    );
+    await tester.tap(end, warnIfMissed: false);
+    await tester.pump();
+    expect(server.posts.length, sent);
+    hold.complete();
+    server.holdCommands = null;
+    await tester.pumpAndSettle();
+  });
+
+  testSessions('a session start that failed never shows as the Buddy\'s own, '
+      'nor as Starting…', (tester) async {
+    final server = buddyChat();
+    // The backend ended it (no entry left) after its start timed out.
+    server.state['starts'] = [
+      {
+        'id': 'start-message-1',
+        'request': {
+          'conversationId': 'offline',
+          'machineId': 'mac',
+          'engine': 'claude',
+          'buddyOf': {'personId': 'owner', 'generation': 'g1'},
+          'buddySession': {'thread': 'message-1', 'from': 1},
+        },
+        'harnessId': null,
+        'error': 'This start timed out.',
+      },
+    ];
+    final c = await show(tester, server);
+    await openThread(tester, c, 'message-1');
+    expect(c.buddyStart('lead'), isNull);
+    expect(find.textContaining("Couldn't start"), findsNothing);
+    expect(state, findsNothing);
+    expect(box(tester, newSession).onChanged, isNotNull);
+  });
+
+  test('unexpected types in session fields never break the read', () async {
+    final server = buddyChat();
+    final chat = chatOf(server);
+    chat['buddySessions'] = {'thread': 'message-1'};
+    (server.state['agents'] as List).add({
+      'id': 'odd',
+      'name': 'Odd',
+      'machineId': 'mac',
+      'harnessId': 'h-odd',
+      'contributorId': 'owner',
+      'buddyOf': {'personId': 'owner', 'generation': 'g1'},
+      'buddySession': {'thread': 5, 'from': 'x'},
+      'configuration': {'engine': 'claude'},
+    });
+    final c = server.controller();
+    addTearDown(c.dispose);
+    await c.refresh();
+    expect(c.snapshot, isNotNull);
+    expect(c.snapshot!.conversation('offline')!.buddySessions, isEmpty);
+    expect(c.snapshot!.agent('odd')!.buddySession, isNull);
+    chat['buddySessions'] = [
+      {'thread': 'message-1', 'startId': 3, 'agentId': 7, 'at': 'soon'},
+      'not a session',
+    ];
+    (server.state['agents'] as List).last['buddySession'] = {
+      'thread': 'message-1',
+      'from': 'x',
+    };
+    server.revision++;
+    await c.refresh();
+    final session = c.snapshot!.conversation('offline')!.buddySessions.single;
+    expect(session.startId, '');
+    expect(session.agentId, isNull);
+    expect(session.at, 0);
+    expect(c.snapshot!.agent('odd')!.buddySession!.from, 0);
   });
 }

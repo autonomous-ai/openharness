@@ -549,6 +549,24 @@ describe('built-in Swarm skills', () => {
     })
   })
 
+  // Security review 1 of #2345: in a project that does not ignore .claude, a Buddy's own files there left its worktree reading
+  // as uncommitted work, so an ended session's folder was never removed.
+  it('keeps a Buddy\'s own .claude files out of Git in a project that does not ignore .claude, and leaves a project\'s own ignore file alone', () => {
+    const workspace = fixture()
+    execFileSync('git', ['init', '-q', workspace])
+    prepareSwarmSkill(workspace, { role: 'buddy', key: 'session', mode: 'default' }, folderOnly)
+    expect(execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: workspace, encoding: 'utf8' })).toBe('')
+    // A relaunch writes it again.
+    prepareSwarmSkill(workspace, { role: 'buddy', key: 'session', mode: 'default' }, folderOnly)
+    expect(execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: workspace, encoding: 'utf8' })).toBe('')
+    const project = fixture()
+    execFileSync('git', ['init', '-q', project])
+    mkdirSync(join(project, '.claude'))
+    writeFileSync(join(project, '.claude', '.gitignore'), 'notes/\n')
+    prepareSwarmSkill(project, { role: 'buddy', key: 'other', mode: 'default' }, folderOnly)
+    expect(readFileSync(join(project, '.claude', '.gitignore'), 'utf8')).toBe('notes/\n')
+  })
+
   // Diego, 10-30: the ignore file itself was left untracked, so every Swarm worktree read as uncommitted work and neither
   // the cleanup of a removed agent nor the weekly sweep ever removed one. The whole folder stays out of Git, including
   // git add -A; every launch writes the file again, so committing it kept nothing (#1533 wanted generated skills unstaged).

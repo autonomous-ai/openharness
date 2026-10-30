@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { inspectCapacity, startAgent } from './start.js'
+import { BUDDY_SESSION_ENGINE, inspectCapacity, startAgent } from './start.js'
 import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
 const teamDaemon = vi.hoisted(() => ({ value: false, relayed: true, offered: null as null | { slugs: string[]; listed: string[] } }))
 vi.mock('./teamDaemon.js', async (original) => ({ ...await original<object>(), isTeamDaemon: () => teamDaemon.value }))
@@ -262,7 +262,7 @@ it.each(['claude', 'codex'])('starts a %s Buddy with the built-in swarm-buddy sk
   expect(payload.prompt).not.toContain('swarm-dev')
 })
 
-it.each(['claude', 'codex'])('starts a %s thread session as a Buddy in every way, told its thread and to answer only there, with no message text', async engine => {
+it.each(['claude'])('starts a %s thread session as a Buddy in every way, told its thread and to answer only there, with no message text', async engine => {
   const plain = fixture()
   plain.start.request = { ...plain.start.request, engine, buddyOf: { personId: 'peer', generation: 'g' } } as typeof plain.start.request
   await startAgent({ action: 'start', tabId: 'tab', operationId: 'buddy-main', request: plain.start.request }, plain.scoped, where, plain.open)
@@ -282,6 +282,15 @@ it.each(['claude', 'codex'])('starts a %s thread session as a Buddy in every way
   expect(prompt).toContain('only in this thread')
   expect(prompt).not.toContain('greet')
   expect(prompt).not.toContain('assign')
+})
+
+it('refuses a Codex thread session before anything launches: Codex runs without the Buddy guard hook (security review 1 of #2345)', async () => {
+  const f = fixture()
+  f.start.request = { ...f.start.request, engine: 'codex', buddyOf: { personId: 'peer', generation: 'g' }, buddySession: { thread: 'root-1', from: 1 } } as typeof f.start.request
+  const result = await startAgent({ action: 'start', tabId: 'tab', operationId: 'buddy-codex-session', request: f.start.request }, f.scoped, where, f.open)
+  expect(result).toMatchObject({ error: 'START_FAILED', detail: BUDDY_SESSION_ENGINE })
+  expect(f.request.mock.calls.some(call => call[0] === 'agent_create')).toBe(false)
+  expect(f.scoped).toHaveBeenCalledWith(expect.objectContaining({ command: expect.objectContaining({ type: 'agent.startFailed', error: BUDDY_SESSION_ENGINE }) }))
 })
 
 it('starts a plain Buddy for a thread session whose thread is not an id', async () => {

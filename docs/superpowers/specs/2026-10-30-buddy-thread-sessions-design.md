@@ -301,8 +301,16 @@ Reviewed revision: ______ Reviewer (another engine): ______
      entries per chat.
    - The first warning is sessions refused because the machine is full, and Macs low on memory: each session is one
      Claude Code process (about 300–600 MB).
-   - A usage counter records sessions started, ended by reason, and refused by reason (`product_usage_totals`). Its
-     first alarm: more than 10% of starts refused for capacity.
+   - **Where it shows** (security review 1: the usage counters this line first named do not exist, and the fixed usage
+     vocabulary is shared with the CLI, so this uses the server log instead). The backend logs three lines with ids only:
+     - `Buddy session started` (Swarm and start id);
+     - `Buddy session refused` (Swarm and refusal code: `BUDDY_SESSIONS_FULL`, `BUDDY_SESSION_UNSUPPORTED`,
+       `BUDDY_SESSION_ENGINE`, `BUDDY_SESSION_NO_BUDDY` and the machine's capacity refusals);
+     - `Buddy session ended`, with the reason (`ended`, `idle`, `stopped`, `failed`, `removed`, `maintenance`), logged
+       once committed.
+
+     Prod watch reads them from the backend's logs (ArgoCD app logs). The first alarm: refusals for capacity above 10%
+     of starts in a day, or `failed` ends above 10% of starts.
 5. **Compatibility.** Every reader of a new field, from a search of the code:
    - **Server** (`agentIds[0]` in `commands.ts:2036`; `BUDDY_EXISTS` at `:1632`; `nameTaken` and `renameBuddy` in
      `buddies.ts`; pending-start lookups at `:1597` and `:1633`; `stopIdleWorkers`, which skips Buddies; `deliveryAllowed`;
@@ -324,14 +332,32 @@ Reviewed revision: ______ Reviewer (another engine): ______
 6. **Migration and rollback.**
    - No data migration: every field is optional and absent on old rows.
    - Deploy order: backend first, then CLI (hosts report the capability), then Desktop.
-   - Rolling back the backend:
-     - The old server ignores `buddySessions` and the tags.
-     - It routes by `agentIds[0]` (still the main Buddy), so no session gets main-chat messages.
-     - It doesn't filter session threads from the main Buddy. That loses separation between sessions, but no other
-       person can read anything.
-     - Sessions end by idle (the host).
-   - Before a rollback, `harness super-tab` can end all sessions for a chat (the person's End session), and the
-     release notes say so.
+   - What the previous release does with each new field and state, if live sessions were left (security review 1: the
+     earlier text here was wrong):
+     - It ignores `buddySessions`, `buddySession` on agents and starts, and the message tag.
+     - It reads each session agent as one more Buddy in the chat:
+       - The main Buddy reads session threads again. No other person can read anything, but sessions are no longer kept
+         apart.
+       - A session may post anywhere in the chat.
+       - Its Buddy removal takes the first Buddy it finds, which may be a session, and leaves the others running.
+     - A person's message goes to `agentIds[0]`, which this release keeps as the main Buddy.
+     - It refuses `buddy.sessionEnd` (an unknown command), so the host can no longer end idle sessions: they would run on
+       the person's Mac until their Buddy was removed.
+     - New Desktop's `newSession` is refused by its strict schema; the composer shows the error.
+   - **So the rollback ends every session first, while this release still runs:**
+     1. `node --import tsx backend/scripts/buddy-sessions/end-all.ts`: a dry run that lists the live sessions by Swarm
+        and chat id.
+     2. The same with `--apply`. Each session ends through its own end path, as the chat's person, with reason
+        `maintenance`. Its host closes it and deletes its folder, and its thread says "Session ended: Harness was
+        updated." This is a prod write, so Ken runs it.
+     3. The dry run again shows none.
+     4. Roll the backend back.
+
+     A session started between steps 2 and 4 would be left: run step 2 again right before step 4. The integration test
+     `can all be ended before a rollback` runs steps 1–3 on a live store.
+   - Rolling back only the CLI: an older host stops reporting the capability, so New session is refused there. A
+     session it already runs is left without the idle end until the Buddy is removed, so the same script runs first.
+   - Rolling back only Desktop: the choice disappears, and the server keeps routing by thread.
    - Production check: no migration runs. The read-only anomaly query counts Buddy chats whose `agentIds` hold more
      than one agent today (expected 0), so the main-Buddy-first rule holds on existing data.
 7. **Audience.** It doesn't change who can read anything: the chat is still read only by its person. The new rule is
@@ -434,3 +460,34 @@ Reads:
 - The main Buddy's reads leave out every `buddySession` row, and thread summaries count none of them.
 - Project reads (the project chat, workgroups) are the same for every session. Buddy news goes to the main session
   only.
+
+## Changes from the security reviews of e87c2dc
+
+Review 1 said Hold; review 2 passed with two notes. Each change has a test that fails without it.
+
+- **Claude Code only.** The server refuses New session unless the main Buddy runs Claude Code (`BUDDY_SESSION_ENGINE`). The host
+  also refuses to launch a session start on any other engine. Codex runs no Buddy guard hook, and a Codex Buddy from before the
+  Codex refusal could otherwise have started sessions without one.
+- **A session start that fails outside a command** (the pickup and run timeouts in `liveness.ts`) ends through the
+  session's own end path (`buddySessions.ts` `endSessionEntry`). Its thread says why, its place frees, and the main chat
+  says nothing. It was handled as a failed main Buddy start, telling the person to add their Buddy again.
+- **Every end leaves its line**, Buddy removal and replacement included (`removed`), and Desktop locks New session on any
+  session reply in a thread, not only on that line.
+- **Desktop offers New session only when the server would take it.** Otherwise the choice is disabled with the server's
+  reason: the Swarm is paused, the Buddy is down or missing, the Buddy doesn't run Claude Code, or its machine's host lacks
+  the `buddySessions` capability. "Ending…" can't be pressed twice, the offline line names the computer, and wrong field
+  types never break the read (Desktop and phone).
+- **The host's end decision** is worked out again on every pass: an end the backend didn't take is dropped once the
+  session has work again. Its operation id names the reason, so a retry is identical.
+  - A gap of 2 minutes or more between passes counts as sleep, and the idle clock restarts at wake.
+  - Only deliveries still in the host's hands count as work.
+- **Ended sessions' folders.** Each Buddy launch writes a self-ignoring `.claude/.gitignore`, never over a project's own, so
+  the worktree reads clean and its removal goes through.
+- **What a session leaves on the Mac.** When a Claude Code Buddy session ends (main or thread), the host removes its own
+  transcript folder, its history lines and the delivered messages those lines name, and nothing of another session's.
+  Left: if Harness restarts mid-close, the scrub is skipped.
+- **Wide reads.** For a thread session, only its person's message in its own thread grants wide reads or records `run:`
+  approvals.
+- **Reactions** pass the same session read check as reads (review 2).
+- **No main-chat line for a session's start** (review 2). A start warning goes in its thread.
+- **Design 4 and 6** now name the log lines that exist and the real rollback steps (above).

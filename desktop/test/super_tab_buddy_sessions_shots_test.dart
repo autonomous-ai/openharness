@@ -17,7 +17,8 @@ final shots = Platform.environment['SUPER_TAB_BUDDY_SESSION_SHOTS'];
 
 /// Buddy thread sessions as the PR shows them, the spec's five mockups in
 /// both appearances: a thread with no session, the limit, a working session,
-/// the chat's thread line, and an ended session.
+/// the chat's thread line, and an ended session; and a choice the server
+/// would refuse (paused), saying why.
 void main() {
   setUpAll(() async {
     if (shots == null) return;
@@ -63,7 +64,14 @@ void main() {
   };
 
   for (final brightness in Brightness.values) {
-    for (final state in ['no-session', 'limit', 'working', 'chat', 'ended']) {
+    for (final state in [
+      'no-session',
+      'limit',
+      'working',
+      'chat',
+      'ended',
+      'blocked',
+    ]) {
       testWidgets('screenshot $state (${brightness.name})', (tester) async {
         final picture = GlobalKey();
         final app = createApp(connected: true);
@@ -77,6 +85,8 @@ void main() {
           ..['buddyName'] = 'Wren'
           ..['agentIds'] = ['buddy-main'];
         (server.state['agents'] as List).add(agent('buddy-main', 'a1'));
+        // New work paused: the choice says why before sending.
+        if (state == 'blocked') server.state['paused'] = true;
         final now = DateTime.now().toUtc();
         void say(
           String text,
@@ -126,11 +136,8 @@ void main() {
               'thread': 'message-1',
             },
           );
-          server.messages.last['author'] = {
-            'kind': 'person',
-            'id': 'system',
-            'name': 'Harness',
-          };
+          // Said by the session that ended (backend commands.ts).
+          server.messages.last['author'] = session;
         }
         if (state == 'working' || state == 'chat') {
           chat['buddySessions'] = [

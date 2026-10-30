@@ -207,17 +207,18 @@ class SuperTabBuddySessionOf {
     final json = superTabMap(value);
     final thread = json['thread'];
     if (thread is! String || thread.isEmpty) return null;
-    return SuperTabBuddySessionOf(thread, (json['from'] as num?)?.toInt() ?? 0);
+    final from = json['from'];
+    return SuperTabBuddySessionOf(thread, from is num ? from.toInt() : 0);
   }
 }
 
 /// One live or starting thread session of a Buddy chat (desktop model.dart).
 class SuperTabBuddySession {
   SuperTabBuddySession.fromJson(Map<String, dynamic> json)
-    : thread = json['thread'] as String? ?? '',
-      startId = json['startId'] as String? ?? '',
-      agentId = json['agentId'] as String?,
-      at = (json['at'] as num?)?.toInt() ?? 0;
+    : thread = json['thread'] is String ? json['thread'] as String : '',
+      startId = json['startId'] is String ? json['startId'] as String : '',
+      agentId = json['agentId'] is String ? json['agentId'] as String : null,
+      at = json['at'] is num ? (json['at'] as num).toInt() : 0;
   final String thread, startId;
   final String? agentId;
   final int at;
@@ -245,7 +246,7 @@ class SuperTabConversation {
       buddyOwnerId = row['buddyOwnerId'] as String?,
       buddyName = row['buddyName'] as String?,
       buddySessions = List.unmodifiable(
-        (row['buddySessions'] as List? ?? const [])
+        (row['buddySessions'] is List ? row['buddySessions'] as List : const [])
             .whereType<Map>()
             .map((json) => SuperTabBuddySession.fromJson(superTabMap(json)))
             .where((session) => session.thread.isNotEmpty),

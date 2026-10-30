@@ -11,6 +11,7 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { poolRows } from './hostRows.test-support.js'
+import { endBuddySessions, liveBuddySessions } from '../scripts/buddy-sessions/end-all.js'
 
 // Buddy thread sessions end to end through the store (buddySessions.ts; spec docs/superpowers/specs/2026-10-30-buddy-thread-
 // sessions-design.md): a person's thread gets its own Buddy session beside the main one, which hears and answers only its
@@ -40,25 +41,31 @@ afterAll(async () => {
 })
 
 /** A Swarm whose PM runs on the owner's Mac, peer a member whose Mac's host can run thread sessions (or not: `capable`). */
-async function swarm({ capable = true, maxAgents = 6 } = {}) {
-  const store = new SuperTabStore(db, () => Date.now(), { store: new MemoryAttachmentStore(), prefix: 'super-tabs', publicBase: 'https://cdn.example.test' })
+async function swarm({ capable = true, maxAgents = 6, engine = 'claude' } = {}) {
+  // A clock the test moves on, for the start timeouts a machine's report checks (liveness.ts).
+  const clock = { now: Date.now() }, running: string[] = []
+  const store = new SuperTabStore(db, () => clock.now, { store: new MemoryAttachmentStore(), prefix: 'super-tabs', publicBase: 'https://cdn.example.test' })
   const tab = (await store.create(owner, randomUUID(), 'Sessions', 'public')).id
   const execute = (command: Command, user = owner, asAgentId?: string, hostMachineId?: string) =>
     store.execute(user, tab, { operationId: randomUUID(), command }, asAgentId, hostMachineId)
   const invitation = await execute({ type: 'invite.create', email: peer.email, role: 'collaborator', conversationId: 'lead' })
   await execute({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, peer)
   await execute({ type: 'agent.add', conversationId: 'lead', machineId: 'owner-mac', harnessId: randomUUID(), name: 'PM', configuration: config, lead: true })
-  await execute({ type: 'machine.contribute', machineId: 'peer-mac', name: 'Peer Mac', cwd: '/swarm', scope: 'swarm', engines: ['claude'], maxAgents }, peer)
+  await execute({ type: 'machine.contribute', machineId: 'peer-mac', name: 'Peer Mac', cwd: '/swarm', scope: 'swarm', engines: engine === 'claude' ? ['claude'] : ['claude', engine], maxAgents }, peer)
   const generation = (await poolRows(store, peer, 'peer-mac')).find(p => p.tabId === tab)!.machine.generation
-  await store.observeMachine(peer, tab, 'peer-mac', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
+  /** peer-mac's report, as its host sends one every 15 seconds. */
+  const report = () => store.observeMachine(peer, tab, 'peer-mac', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
     diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
-  quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [], ...(capable ? { capabilities: ['buddySessions'] } : {}) })
+  quotas: [], tools: {}, runningHarnessIds: [...running], stoppedHarnessIds: [], ...(capable ? { capabilities: ['buddySessions'] } : {}) })
+  await report()
   const host = (command: Command) => execute(command, peer, undefined, 'peer-mac')
   /** peer's main Buddy, added and started by peer-mac's host. */
   const added = await execute({ type: 'buddy.create', projectId: 'lead', machineId: 'peer-mac', engine: 'claude' }, peer)
   const chat = String(added.result.conversationId)
   await host({ type: 'agent.startDispatch', startId: String(added.result.startId) })
-  const main = String((await host({ type: 'agent.started', startId: String(added.result.startId), harnessId: randomUUID(), configuration: config })).result.agentId)
+  const mainHarness = randomUUID()
+  running.push(mainHarness)
+  const main = String((await host({ type: 'agent.started', startId: String(added.result.startId), harnessId: mainHarness, configuration: { ...config, engine } })).result.agentId)
   await host({ type: 'agent.startSettled', startId: String(added.result.startId), warning: null })
   /** peer's message in the main chat. */
   const say = async (text: string) => String((await execute({ type: 'message.send', conversationId: chat, text, replyTo: null, recipientIds: [] }, peer)).result.messageId)
@@ -74,7 +81,7 @@ async function swarm({ capable = true, maxAgents = 6 } = {}) {
     return { agentId, startId, first: String(sent.result.messageId) }
   }
   const deliveriesTo = async (agentId: string) => (await db.superTabDelivery.findMany({ where: { tabId: tab, agentId } }))
-  return { store, tab, execute, host, chat, main, say, reply, session, deliveriesTo }
+  return { store, tab, execute, host, chat, main, say, reply, session, deliveriesTo, clock, report }
 }
 
 const text = (page: { messages: Array<{ text: string }> }) => page.messages.map(m => m.text)
@@ -235,6 +242,11 @@ describe('a Buddy thread session', () => {
     await f.execute({ type: 'buddy.remove', projectId: 'lead' }, peer)
     const read = await f.store.read(peer, f.tab)
     expect(read.state.agents.filter(x => x.id === agentId || x.id === f.main)).toEqual([])
+    // Each thread says its session ended, so an app offers New session there and never a plain reply (security review 1).
+    for (const root of [a, b]) {
+      expect((await f.store.messages(peer, f.tab, f.chat, { thread: root })).messages.at(-1)).toMatchObject({
+        text: 'Session ended: its Buddy was removed or replaced.', buddySession: true, source: { kind: 'buddy-session-ended', reason: 'removed' } })
+    }
     expect(read.state.conversations.find(c => c.id === f.chat)!.buddySessions).toBeUndefined()
     expect(read.state.starts?.find(s => s.id === pending)?.error).toBeTruthy()
   })
@@ -263,5 +275,65 @@ describe('a Buddy thread session', () => {
       scope: 'Backend', priority: 'normal' }, peer, agentId)
     await expect(propose(mainAsk)).rejects.toMatchObject({ code: 'PROPOSAL_UNASKED' })
     await expect(propose(first)).resolves.toBeTruthy()
+  })
+
+  it('starts only beside a Buddy running Claude Code: a Codex Buddy added before Codex was refused gets none (security review 1)', async () => {
+    const f = await swarm({ engine: 'codex' })
+    const root = await f.say('Start')
+    await expect(f.reply(root, 'x', { newSession: true })).rejects.toMatchObject({ code: 'BUDDY_SESSION_ENGINE' })
+    expect((await f.store.read(peer, f.tab)).state.starts?.some(s => s.request.buddySession)).toBe(false)
+  })
+
+  it('ends a start that timed out through its own path: its thread says so, the main chat says nothing, and its place frees (security review 1)', async () => {
+    const f = await swarm()
+    const [a, b] = [await f.say('a'), await f.say('b')]
+    const dispatched = String((await f.reply(a, 'Never launched', { newSession: true })).result.startId)
+    await f.host({ type: 'agent.startDispatch', startId: dispatched })
+    await f.reply(b, 'Never picked up', { newSession: true })
+    f.clock.now += 6 * 60_000
+    await f.report()
+    for (const root of [a, b]) {
+      const last = (await f.store.messages(peer, f.tab, f.chat, { thread: root })).messages.at(-1)!
+      expect(last).toMatchObject({ buddySession: true, source: { kind: 'buddy-session-ended', reason: 'failed' } })
+      expect(last.text).toMatch(/^Session ended: it couldn't start: Peer Mac /)
+      expect(last.text).not.toContain('add the Buddy again')
+    }
+    const main = await f.store.messages(peer, f.tab, f.chat, {})
+    expect(main.messages.filter(m => !m.thread || m.thread === m.id).map(m => m.text).join('\n')).not.toMatch(/Could not start|add the Buddy again/)
+    expect((await f.store.read(peer, f.tab)).state.conversations.find(c => c.id === f.chat)!.buddySessions).toBeUndefined()
+    // Its place is free again.
+    await expect(f.session(a, 'Try again')).resolves.toBeTruthy()
+  })
+
+  it('can all be ended before a rollback, each through its own end path, after a dry run that ends nothing (spec Design 6)', async () => {
+    const f = await swarm()
+    const [a, b] = [await f.say('a'), await f.say('b')]
+    await f.session(a)
+    await f.reply(b, 'starting', { newSession: true })
+    const live = (await liveBuddySessions(db)).filter(s => s.tabId === f.tab)
+    expect(live.map(s => [s.conversationId, s.thread, s.personId]).sort()).toEqual([[f.chat, a, peer.sub], [f.chat, b, peer.sub]].sort())
+    expect(await endBuddySessions(db, live, false)).toEqual({ ended: 0, failed: [] })
+    expect((await f.store.read(peer, f.tab)).state.conversations.find(c => c.id === f.chat)!.buddySessions).toHaveLength(2)
+    expect(await endBuddySessions(db, live, true)).toEqual({ ended: 2, failed: [] })
+    expect((await f.store.read(peer, f.tab)).state.conversations.find(c => c.id === f.chat)!.buddySessions).toBeUndefined()
+    expect((await f.store.messages(peer, f.tab, f.chat, { thread: a })).messages.at(-1)!.text).toBe('Session ended: Harness was updated. Start a new session to continue.')
+    expect((await liveBuddySessions(db)).filter(s => s.tabId === f.tab)).toEqual([])
+  })
+
+  it('reacts only to what it reads, and its start says nothing in the main chat (security review 2)', async () => {
+    const f = await swarm()
+    const [a, b] = [await f.say('a'), await f.say('b')]
+    const one = await f.session(a), two = await f.session(b)
+    await f.host({ type: 'agent.startSettled', startId: one.startId, warning: null })
+    const react = (messageId: string, agentId: string) => f.execute({ type: 'message.react', conversationId: f.chat, messageId, emoji: 'thumbs_up', on: true }, peer, agentId)
+    await expect(react(a, one.agentId)).resolves.toBeTruthy()
+    await expect(react(one.first, one.agentId)).resolves.toBeTruthy()
+    const elsewhere = await f.say('main only')
+    await expect(react(elsewhere, one.agentId)).rejects.toThrow()
+    await expect(react(two.first, one.agentId)).rejects.toThrow()
+    await expect(react(one.first, f.main)).rejects.toThrow()
+    const main = await f.store.messages(peer, f.tab, f.chat, {})
+    // Only the main Buddy's own ready line: the session's start added none.
+    expect(main.messages.filter(m => (!m.thread || m.thread === m.id) && /is ready/.test(m.text))).toHaveLength(1)
   })
 })
