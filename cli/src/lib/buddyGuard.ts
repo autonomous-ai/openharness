@@ -219,8 +219,9 @@ const fold = process.platform === 'darwin' || process.platform === 'win32' ? (pa
 const under = (path, folder) => fold(path) === fold(folder) || fold(path).startsWith(fold(folder) + sep)
 // Names that hold secrets wherever they are: .env files, keys and certificates, ssh keys, credential files, Harness's own
 // folders and the person's prod database login (~/.harness-ro-prod-db, 10-28).
-const SECRET_NAMES = [/^\.env/i, /\.(pem|key|p12|pfx|jks|keystore|kdbx|ppk|gpg)$/i, /^id_(rsa|dsa|ecdsa|ed25519)/i, /^credentials/i,
-  /^secrets?(\.|$)/i, /^\.harness/i, /ro-?prod|prod-?db/i, /^\.?(netrc|npmrc|pypirc|pgpass|htpasswd|git-credentials)$/i]
+const SECRET_NAMES = [/^\.env/i, /\.env$/i, /\.(pem|key|p12|pfx|jks|keystore|kdbx|ppk|gpg)$/i, /^id_(rsa|dsa|ecdsa|ed25519)/i, /^credentials/i,
+  // A secrets folder, as Ken's clone keeps the read-only prod database login in .secrets/ (Lead, 10-30).
+  /^\.?secrets?(\.|$)/i, /^\.harness/i, /ro-?prod|prod-?db/i, /^\.?(netrc|npmrc|pypirc|pgpass|htpasswd|git-credentials)$/i]
 const secretName = (path) => path.split(sep).some((part) => SECRET_NAMES.some((name) => name.test(part)))
 const realRoots = (paths) => paths.map((path) => realOf(path) ?? path)
 const DENIED = WIDE ? realRoots(WIDE.denied) : []
@@ -468,6 +469,9 @@ const WIDE_COMMANDS = {
       get: { flags: ['--grpc-web', '--show-operation', '--show-params'], values: ['-o', '--output'], positional: one(appName) },
       resources: { flags: ['--grpc-web', '--orphaned'], values: ['-o', '--output'], positional: one(appName) },
       history: { flags: ['--grpc-web'], values: ['-o', '--output'], positional: one(appName) },
+      // One resource of an app as the cluster holds it (Juno's pods, restarts and HPA read, 10-30): never a Secret.
+      'get-resource': { flags: ['--grpc-web'], values: ['--kind', '--group', '--namespace', '--resource-name', '-o', '--output'],
+        check: { '--kind': (v) => !/secret/i.test(v), '--resource-name': (v) => !/secret/i.test(v) }, positional: one(appName) },
       logs: { flags: ['--grpc-web', '--previous', '-p', '--match-case'], values: ['--tail', '--since-seconds', '--until-time', '--container',
         '-c', '--kind', '--name', '--group', '--namespace', '--filter'], positional: one(appName) },
     },

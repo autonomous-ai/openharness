@@ -34,6 +34,8 @@ const denied = [
   'Library/Messages/chat.db', 'Library/Mail/V10/inbox.mbox', '.mozilla/firefox/p.default/key4.db', '.config/google-chrome/Default/Cookies',
   'work/app/.env', 'work/app/.env.production', 'work/certs/server.pem', 'work/certs/tls.key', 'work/certs/client.p12', 'work/keys/id_rsa',
   'work/aws/credentials', 'work/aws/credentials.json',
+  // Where Ken's clone keeps the read-only prod database login (Lead, 10-30), and the like.
+  'work/openharness/.secrets/mongodb-prod-readonly.env', 'work/app/prod.env', 'work/app/.secret/token.txt', 'work/app/secrets/api.json',
 ]
 for (const path of denied) file(join(home, path))
 // Links that lead into those places from somewhere the Buddy may read.
@@ -175,8 +177,11 @@ describe('wide mode: commands not run before are asked of the person first', () 
     'argocd app get harness-backend -o json',
     'argocd app resources harness-backend',
     'argocd app history harness-backend',
+    'argocd app get-resource production-autonomous-code-be --kind Pod -o json',
+    'argocd app get-resource production-autonomous-code-be --kind HorizontalPodAutoscaler -o json',
     'argocd app logs harness-backend --tail 200',
     'argocd app logs harness-backend --kind Deployment --name harness-backend --since-seconds 3600 --filter cpu',
+    'argocd app logs production-autonomous-code-be --kind Deployment --name autonomous-code-be --group apps --since-seconds 3600',
     'argocd version --client',
     'kubectl get pods -n harness',
     'kubectl top pods -n harness',
@@ -252,7 +257,9 @@ describe('wide mode: commands not run before are asked of the person first', () 
     'gh pr comment 1 --body x', 'gh issue comment 1 --body x', 'gh secret list', 'gh auth token', 'gh auth status -t',
     'gh extension install x/y', 'git push origin main', 'git commit -m x', 'git -c alias.x=!sh x', 'git config user.name x', 'git fetch',
     'argocd app sync harness-backend', 'argocd app set harness-backend -p replicas=1', 'argocd app patch harness-backend --patch x',
-    'argocd app delete harness-backend', 'argocd app rollback harness-backend 1', 'argocd app terminate-op harness-backend',
+    'argocd app delete harness-backend', 'argocd app get-resource harness-backend --kind Secret -o json',
+    'argocd app get-resource harness-backend --kind secret', 'argocd app delete-resource harness-backend --kind Pod',
+    'argocd app patch-resource harness-backend --kind Deployment --patch x', 'argocd app rollback harness-backend 1', 'argocd app terminate-op harness-backend',
     'argocd app actions run harness-backend restart --kind Deployment', 'argocd app manifests harness-backend',
     'argocd app get harness-backend --refresh', 'argocd app get harness-backend --hard-refresh', 'argocd app logs harness-backend -f',
     'argocd app logs harness-backend --follow', 'argocd app get harness-backend --server evil.example',
