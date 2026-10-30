@@ -73,6 +73,29 @@ describe('quota and rates', () => {
 })
 
 describe('choose', () => {
+  // A Reviewer's role default (Scholes's roadmap, piece 1): at least the reviewed Builder's strength, while one can run.
+  it('holds a review to the reviewed Builder\'s strength, and never leaves it with nobody when the strongest is busy', () => {
+    const strong = probe({ engine: 'codex', model: 'default', effort: 'default', quality: 3, cost: 2, machineId: 'm2', machineName: 'mac' })
+    const weaker = probe()
+    const low = a({ difficulty: 'low' })
+    const held = choose([strong, weaker], policy, low, NOW, [], [], [], [], 3)
+    if ('error' in held) throw new Error('unexpected')
+    expect(held.shown.map(s => s.title)).toEqual(['New agent · Codex default default · mac'])
+    expect(held).toMatchObject({ floor: 3, belowFloor: false })
+    // Its machine is full: the weaker one still reviews, marked below the floor.
+    const busy = choose([{ ...strong, refusals: ['This machine runs as many agents as its owner allows.'] }, weaker], policy, low, NOW, [], [], [], [], 3)
+    if ('error' in busy) throw new Error('unexpected')
+    expect(busy.shown.map(s => s.title)).toEqual(['New agent · Claude sonnet medium · remote-1'])
+    expect(busy).toMatchObject({ floor: 3, belowFloor: true })
+    // Out of quota, the strong one is still offered first rather than a weaker one.
+    const short = choose([{ ...strong, quota: windows([99, 3 * H], [90, 5 * D]) }, weaker], policy, low, NOW, [], [], [], [], 3)
+    if ('error' in short) throw new Error('unexpected')
+    expect(short.shown[0]!.title).toBe('New agent · Codex default default · mac')
+    // Without a reviewed Builder, the task's own floor.
+    const plain = choose([strong, weaker], policy, low, NOW)
+    if ('error' in plain) throw new Error('unexpected')
+    expect(plain.floor).toBe(1)
+  })
   it('returns NO_CANDIDATE with reasons when nothing can run', () => {
     expect(choose([probe({ refusals: ['Machine is offline.'] })], policy, a())).toEqual({ error: 'NO_CANDIDATE',
       excluded: [{ title: 'New agent · Claude sonnet medium · remote-1', reason: 'Machine is offline.', machine: 'remote-1' }] })

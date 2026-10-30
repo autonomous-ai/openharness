@@ -61,6 +61,9 @@ export const DEFAULT_ROUTING_POLICY: RoutingPolicy = {
   version: 1,
   models: [
     { engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 3, enabled: true },
+    // Opus 5.5 at xhigh, as the Product Manager runs (role defaults, projects.ts): the same price per token as at high, more
+    // thinking per task, so dearer; at equal strength routing keeps choosing high unless a rule or a person asks for more.
+    { engine: 'claude', model: 'opus', effort: 'xhigh', quality: 3, cost: 4, enabled: true },
     { engine: 'codex', model: 'default', effort: 'default', quality: 3, cost: 2, enabled: true },
     // Next to `default` so the form lists Codex's rows together. List order ranks nothing: the CLI route breaks ties by title.
     ...ADDED_ROWS,

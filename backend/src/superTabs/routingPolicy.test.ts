@@ -11,6 +11,10 @@ describe('routing policy', () => {
     expect(new Set(DEFAULT_ROUTING_POLICY.models.map(m => m.engine))).toEqual(new Set(['claude', 'codex']))
   })
 
+  it('offers Claude Opus at xhigh as its own row, dearer than at high for the extra thinking', () => {
+    expect(DEFAULT_ROUTING_POLICY.models).toContainEqual({ engine: 'claude', model: 'opus', effort: 'xhigh', quality: 3, cost: 4, enabled: true })
+  })
+
   it('uses the default when the account has none, and merges a tab override field by field', () => {
     expect(effectivePolicy(null, null)).toEqual({ policy: DEFAULT_ROUTING_POLICY, warnings: [], overridden: [] })
     const account = { ...DEFAULT_ROUTING_POLICY, quotaReserve: 20, notes: 'Frontend prefers Claude.' }
