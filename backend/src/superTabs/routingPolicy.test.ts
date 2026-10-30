@@ -21,6 +21,19 @@ describe('routing policy', () => {
     expect(result.warnings).toEqual([])
   })
 
+  it('reads a policy saved at the 40-row limit with the added rows, and saves and reads it back after an edit', () => {
+    // Review of #2271: rows added on read must not push an owner's full policy past what saving accepts.
+    const owner = Array.from({ length: 40 }, (_, i) => ({ engine: 'claude' as const, model: `model-${i}`, effort: 'high', quality: 2, cost: 2, enabled: true }))
+    const read = effectivePolicy({ ...DEFAULT_ROUTING_POLICY, models: owner }, null).policy
+    expect(read.models).toHaveLength(41)
+    expect(read.models.slice(0, 40)).toEqual(owner)
+    const saved = routingPolicySchema.parse({ ...read, notes: 'Edited.' })
+    expect(saved.models).toEqual(read.models)
+    expect(effectivePolicy(saved, null).policy.models).toEqual(read.models)
+    // The limit grows by the added rows alone: an owner's own 41st row is still refused.
+    expect(routingPolicySchema.safeParse({ ...DEFAULT_ROUTING_POLICY, models: [...owner, { ...owner[0]!, model: 'model-40' }, { ...owner[0]!, model: 'model-41' }] }).success).toBe(false)
+  })
+
   it('falls back to the default with a warning for a corrupt account policy or override', () => {
     const corrupt = effectivePolicy({ version: 9 }, { floor: { low: 7 } })
     expect(corrupt.policy).toEqual(DEFAULT_ROUTING_POLICY)

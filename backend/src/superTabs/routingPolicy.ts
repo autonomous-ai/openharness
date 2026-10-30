@@ -5,6 +5,16 @@ import { z } from 'zod'
 import { BENCHMARK_PRIORS } from './benchmarkPriors/data.js'
 import { JOB_KINDS, priorLevel, type JobKind, type PriorsTable } from './benchmarkPriors/priors.js'
 
+/** Built-in rows added after owners could save a policy, so saved policies read them too (effectivePolicy). Codex's own default
+ *  model, named: GPT-6.1 Sol scores 58.18 on Terminal-Bench 4.0 in Codex (benchmarkPriors/data.ts) and costs Sonnet's API rate
+ *  (costs/prices.ts). A start or Reviewer that names it is rated by this row, not as an unknown slug (Lead, 10-30). */
+const ADDED_ROWS = [
+  { engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', quality: 3, cost: 2, enabled: true },
+] as const satisfies ReadonlyArray<Record<string, unknown>>
+/** An owner keeps up to 40 rows of their own; the rows added on read do not count against that, or a full policy could no longer
+ *  be saved once read (review of #2271). */
+const MAX_MODEL_ROWS = 40 + ADDED_ROWS.length
+
 const quality = z.number().int().min(1).max(3)
 const modelRow = z.object({
   engine: z.enum(['claude', 'codex']),
@@ -16,7 +26,7 @@ const modelRow = z.object({
   enabled: z.boolean(),
 }).strict()
 const fields = {
-  models: z.array(modelRow).min(1).max(40),
+  models: z.array(modelRow).min(1).max(MAX_MODEL_ROWS),
   floor: z.object({ low: quality, medium: quality, high: quality }).strict(),
   quotaReserve: z.number().int().min(0).max(90),
   notes: z.string().trim().max(500),
@@ -39,10 +49,8 @@ export const DEFAULT_ROUTING_POLICY: RoutingPolicy = {
   models: [
     { engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 3, enabled: true },
     { engine: 'codex', model: 'default', effort: 'default', quality: 3, cost: 2, enabled: true },
-    // Codex's own default model, now named: GPT-6.1 Sol scores 58.18 on Terminal-Bench 4.0 in Codex (benchmarkPriors/data.ts)
-    // and costs Sonnet's API rate (costs/prices.ts). A start or Reviewer that names it is rated by this row, not as an unknown
-    // slug (Lead, 10-30). Listed after `default`, which goes first at equal cost and strength.
-    { engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', quality: 3, cost: 2, enabled: true },
+    // Listed after `default`, which goes first at equal cost and strength.
+    ...ADDED_ROWS,
     { engine: 'claude', model: 'sonnet', effort: 'medium', quality: 2, cost: 2, enabled: true },
     { engine: 'claude', model: 'haiku', effort: 'auto', quality: 1, cost: 1, enabled: true },
   ],
@@ -53,9 +61,6 @@ export const DEFAULT_ROUTING_POLICY: RoutingPolicy = {
   // DeepSeek v4.1 do Sonnet's work (Ken, 2026-10-29: they were offered only for low work and rarely ran).
   localModels: { quality: 1, enabled: true, models: [{ model: 'kimi k3', quality: 2 }, { model: 'deepseek v4.1', quality: 2 }] },
 }
-
-/** Built-in rows added after owners could save a policy, so saved policies read them too (effectivePolicy). */
-const ADDED_ROWS = DEFAULT_ROUTING_POLICY.models.filter(m => m.engine === 'codex' && m.model === 'gpt-6.1-sol')
 
 export function effectivePolicy(account: unknown, override: unknown) {
   const warnings: string[] = []
