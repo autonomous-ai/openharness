@@ -1,7 +1,6 @@
-/** Whether a new Reviewer of an engine could start on a contributed machine soon: what both the review rule (rules.ts
- *  judgeReview) and the project chat's notice (reviewCapacity.ts) read. On 2026-10-30 every Codex Reviewer was out of weekly
- *  quota for days, yet a Claude build's top-tier Claude review was refused because Codex machines existed; reviews waited
- *  all morning (Tony). */
+/** Whether a new Reviewer of an engine could start on a contributed machine soon: what the project chat's notice
+ *  (reviewCapacity.ts) reads. On 2026-10-30 every Codex Reviewer was out of weekly quota for days and reviews waited all
+ *  morning (Tony); since Ken's ruling that day any strong engine reviews any build (rules.ts reviewRefusal). */
 import { suspendedEngines } from './engineHealth.js'
 import { MACHINE_FRESH_MS, type ContributedMachine } from './machines.js'
 import type { SuperTabState } from './model.js'
@@ -12,7 +11,7 @@ import type { SuperTabState } from './model.js'
 export const RELAYED_QUOTA = "This account runs on its owner's subscription; its allowance is read on the owner's machine."
 /** How soon a Reviewer has to be able to start to count: a start still not running after this long is abandoned
  *  (store.ts ABANDONED_START_MS), so a review waiting longer than that is stuck. A window that resets inside it counts as
- *  quota; one out for longer does not (cli superTabs/route.ts REVIEW_START_MS). */
+ *  quota; one out for longer does not. */
 export const REVIEW_START_MS = 15 * 60_000
 /** Weekly allowance left, in percent, at or below which an engine is close to running out: the route keeps the policy's
  *  reserve (10) back, so about one more day of reviews is left. */
