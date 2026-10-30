@@ -8,6 +8,32 @@ import { PASTE_DROPS_DIR } from './pasteDropFiles.js'
 /** Where a Buddy's guard reads what its person sent it (the host's list for this Buddy), and where Harness downloads chat
  *  files to (lib/pasteDropFiles.ts). */
 export interface BuddyReads { file: string; drops: string }
+/** Wide mode's settings for a Buddy's guard (docs/specs/2026-10-30-buddy-read-access.md): its person's home, the places
+ *  outside its folder that stay closed, and its person's approvals on this machine. */
+export interface BuddyWide { home: string; denied: readonly string[]; approvals: string }
+
+/** Places in a home that hold secrets or other people's data (the Lead's list, 10-30): ssh, cloud, GitHub, ArgoCD and
+ *  Harness credentials; keychains; browser profiles and mail; shell and database histories, which keep typed secrets; and
+ *  the Claude Code and Codex folders, where agents on this machine keep transcripts and pasted Swarm messages from chats
+ *  the Buddy may not read (the Leads conversation, private chats, other projects). */
+const CLOSED_IN_HOME = ['.ssh', '.aws', '.azure', '.config/gcloud', '.gnupg', '.kube', '.docker', '.config/gh', '.config/argocd',
+  '.argocd', '.config/git/credentials', '.password-store', '.config/op', '.claude', '.claude.json', '.codex', '.local/share/claude',
+  '.mozilla', '.config/google-chrome', '.config/chromium', '.config/BraveSoftware', '.config/microsoft-edge', '.zsh_history',
+  '.bash_history', '.zhistory', '.python_history', '.node_repl_history', '.mongodb', '.dbshell', '.psql_history', '.mysql_history',
+  '.lesshst', '.viminfo', 'Library/Keychains', 'Library/Cookies', 'Library/Safari', 'Library/Messages', 'Library/Mail',
+  'Library/Containers/com.apple.mail', 'Library/Group Containers', 'Library/Application Support/Google',
+  'Library/Application Support/Firefox', 'Library/Application Support/BraveSoftware', 'Library/Application Support/Arc',
+  'Library/Application Support/Microsoft Edge', 'Library/Application Support/com.operasoftware.Opera',
+  'Library/Application Support/Claude']
+
+/** Wide mode for one person's Buddy: [home] is theirs, [dataDir] Harness's data folder (its lists, approvals, downloads and
+ *  agent records stay closed), [tmpDirs] where Claude Code keeps other sessions' tool output, and [personKey] their id
+ *  and membership, which keys their approvals. */
+export function buddyWideOf(input: { home: string; dataDir: string; tmpDirs: readonly string[]; personKey: string }): BuddyWide {
+  return { home: input.home, denied: [...CLOSED_IN_HOME.map(path => join(input.home, path)), input.dataDir, ...input.tmpDirs],
+    approvals: join(input.dataDir, 'buddy-approvals', `${createHash('sha256').update(input.personKey).digest('hex')}.json`) }
+}
+
 /** A listed file or link lasts as long as Harness keeps a download (lib/pasteDropFiles.ts): a day. */
 const KEPT_MS = 24 * 60 * 60 * 1000
 
@@ -54,11 +80,11 @@ const KEPT_MS = 24 * 60 * 60 * 1000
  * Harness's node: the tests run this exact text (lib/buddyGuard.spec.ts, and Claude Code itself in
  * lib/buddyGuard.claude.spec.ts).
  */
-export const buddyGuardSource = (root: string, reads: BuddyReads): string => String.raw`#!/usr/bin/env node
+export const buddyGuardSource = (root: string, reads: BuddyReads, wide: BuddyWide | null = null): string => String.raw`#!/usr/bin/env node
 // A Buddy's guard, written by Harness (cli/src/lib/buddyGuard.ts). Do not edit: Harness writes it again at each launch.
 import { createHash } from 'node:crypto'
-import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync } from 'node:fs'
-import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 // The Buddy's folder, as its real path: what it reads stays in it.
 const ROOT = ${JSON.stringify(root)}
@@ -66,8 +92,12 @@ const ROOT = ${JSON.stringify(root)}
 const READS = ${JSON.stringify(reads.file)}
 const DROPS = ${JSON.stringify(reads.drops)}
 const KEPT_MS = ${KEPT_MS}
+// Wide mode (docs/specs/2026-10-30-buddy-read-access.md): null keeps every read in the folder. Set only for a Buddy on its
+// person's own machine, under their own account; it names their home and the places in it that stay closed.
+const WIDE = ${JSON.stringify(wide)}
 const TOOLS = new Set(['TodoWrite', 'ToolSearch'])
 const READERS = new Set(['cat', 'ls', 'head', 'tail', 'wc', 'grep', 'pwd'])
+const WIDE_READERS = new Set(['cat', 'ls', 'head', 'tail', 'wc', 'grep', 'rg'])
 const GIT = new Set(['grep', 'log', 'show', 'diff', 'blame', 'status'])
 const GH = { issue: new Set(['view', 'list']), pr: new Set(['view', 'list', 'diff']) }
 const GIT_LONG = ['output', 'open-files-in-pager', 'ext-diff']
@@ -163,6 +193,53 @@ const outward = (word) => word.split(/[=:]/).some(escapes)
   || (/^-[^-]/.test(word) && [...word].some((_, at) => at >= 2 && escapes(word.slice(at))))
 
 const short = (word) => /^-[^-]/.test(word)
+
+// The real path of [path] as the guard can best tell now: of the file, or of its nearest folder that exists with the rest
+// added. The native call, so a case-insensitive volume gives the name as stored (.SSH reads as .ssh). Null when unreadable.
+function realOf(path) {
+  if (typeof path !== 'string' || !path || path.includes('\0')) return null
+  let at = resolve(ROOT, path), rest = ''
+  for (;;) {
+    try { return join(realpathSync.native(at), rest) } catch { /* not there: its folder decides */ }
+    if (dirname(at) === at) return null
+    rest = rest ? join(basename(at), rest) : basename(at)
+    at = dirname(at)
+  }
+}
+// macOS volumes are case-insensitive by default: compare names as the volume does.
+const fold = process.platform === 'darwin' || process.platform === 'win32' ? (path) => path.toLowerCase() : (path) => path
+const under = (path, folder) => fold(path) === fold(folder) || fold(path).startsWith(fold(folder) + sep)
+// Names that hold secrets wherever they are: .env files, keys and certificates, ssh keys, credential files, Harness's own
+// folders and the person's prod database login (~/.harness-ro-prod-db, 10-28).
+const SECRET_NAMES = [/^\.env/i, /\.(pem|key|p12|pfx|jks|keystore|kdbx|ppk|gpg)$/i, /^id_(rsa|dsa|ecdsa|ed25519)/i, /^credentials/i,
+  /^secrets?(\.|$)/i, /^\.harness/i, /ro-?prod|prod-?db/i, /^\.?(netrc|npmrc|pypirc|pgpass|htpasswd|git-credentials)$/i]
+const secretName = (path) => path.split(sep).some((part) => SECRET_NAMES.some((name) => name.test(part)))
+const realRoots = (paths) => paths.map((path) => realOf(path) ?? path)
+const DENIED = WIDE ? realRoots(WIDE.denied) : []
+const HOME = WIDE ? realOf(WIDE.home) : null
+// Where people's homes are (/Users, /home): every one but the person's own stays closed. macOS's Shared folder is nobody's.
+const HOMES = HOME ? dirname(HOME) : null
+function otherHome(real) {
+  if (!HOMES || !under(real, HOMES) || fold(real) === fold(HOMES) || under(real, HOME)) return false
+  return fold(relative(HOMES, real).split(sep)[0]) !== 'shared'
+}
+
+// Whether [path], outside the folder, may be read in wide mode. 'any': Read (it may not exist yet); 'file': one regular
+// file (content search: a folder could hold a .env or a key); 'dir': one folder's names (LS, ls); 'tree': a folder searched
+// by name all the way down (Glob), so nothing closed may lie under it. The path as given and its real path are both
+// judged: a link named innocently into ~/.ssh is refused, and so is one named .env.
+function outsideAllowed(path, kind) {
+  if (!WIDE || typeof path !== 'string') return false
+  const real = realOf(path)
+  if (!real || !HOME) return false
+  if (secretName(real) || secretName(resolve(ROOT, path)) || otherHome(real) || DENIED.some((root) => under(real, root))) return false
+  if (kind === 'tree' && (DENIED.some((root) => under(root, real)) || (HOMES && under(HOMES, real)))) return false
+  if (kind === 'any') return true
+  try {
+    const stat = statSync(real)
+    return kind === 'file' ? stat.isFile() : kind === 'dir' ? stat.isDirectory() : stat.isDirectory()
+  } catch { return false }
+}
 // A long option naming one of these, or a unique prefix of one: git takes either.
 const longNames = (word, names) => word.startsWith('--') && names.some((name) => {
   const given = word.slice(2).split('=')[0]
@@ -248,7 +325,13 @@ function bashAllowed(command) {
   const [name, sub, verb] = w
   const rest = w.slice(1)
   if (name === 'harness') return sub === 'super-tab' && superTabAllowed(w.slice(2))
-  if (rest.some(outward)) return false
+  const out = rest.filter(outward)
+  if (out.length) {
+    // In wide mode the plain readers take a path outside the folder as a word of its own: a file (a folder for ls, and not
+    // ls -R), never an option with a path glued on. Content search takes files only, as Grep does.
+    if (!WIDE || !WIDE_READERS.has(name) || out.some((word) => word.startsWith('-') || !outsideAllowed(word, name === 'ls' ? 'dir' : 'file'))) return false
+    if (name === 'ls' && rest.some((word) => longNames(word, ['recursive']) || (short(word) && word.includes('R')))) return false
+  }
   // Nothing that runs on: a background shell, or tail following a file.
   if (name === 'tail') return !rest.some((word) => longNames(word, ['follow']) || (short(word) && /[fF]/.test(word)))
   // Nor following links while walking the folder: grep -R/-S/-O, rg -L, ls -L; nor ugrep's query screen (-Q).
@@ -281,12 +364,13 @@ function decide(input) {
   if (TOOLS.has(input.tool_name)) return true
   // Its read tools, in its folder: Read a file there, Grep and Glob there (their folder by default), LS a folder there.
   // Read opens what its person sent it too, and the Artifact tool reads the links they sent.
-  if (input.tool_name === 'Read') return inside(tool.file_path) || attached(tool.file_path)
+  if (input.tool_name === 'Read') return inside(tool.file_path) || attached(tool.file_path) || outsideAllowed(tool.file_path, 'any')
   if (input.tool_name === 'Artifact') return artifactAllowed(tool)
-  if (input.tool_name === 'LS') return inside(tool.path)
-  if (input.tool_name === 'Grep') return tool.path === undefined || inside(tool.path)
+  if (input.tool_name === 'LS') return inside(tool.path) || outsideAllowed(tool.path, 'dir')
+  if (input.tool_name === 'Grep') return tool.path === undefined || inside(tool.path) || outsideAllowed(tool.path, 'file')
   if (input.tool_name === 'Glob') {
-    return (tool.path === undefined || inside(tool.path)) && typeof tool.pattern === 'string' && !outward(tool.pattern)
+    return (tool.path === undefined || inside(tool.path) || outsideAllowed(tool.path, 'tree')) && typeof tool.pattern === 'string'
+      && !outward(tool.pattern)
   }
   return input.tool_name === 'Bash' && tool.run_in_background !== true && bashAllowed(tool.command)
 }
