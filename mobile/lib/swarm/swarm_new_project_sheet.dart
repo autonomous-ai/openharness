@@ -1010,32 +1010,68 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
     );
   }
 
-  Widget _frame({required Widget header, required List<Widget> children}) =>
-      ListView(
-        shrinkWrap: true,
+  /// The sheet's grabber and [header] at its top and [footer] at its
+  /// bottom, always in sight; [children] between them scroll when the
+  /// phone is too short for them.
+  Widget _frame({
+    required Widget header,
+    required List<Widget> children,
+    List<Widget> footer = const [],
+  }) => Column(
+    mainAxisSize: MainAxisSize.min,
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Padding(
         padding: const EdgeInsets.fromLTRB(
           AppSpace.l,
           AppSpace.s,
           AppSpace.l,
-          AppSpace.l,
+          0,
         ),
-        children: [
-          // The grabber: a capsule as wide as the two largest steps.
-          Center(
-            child: Container(
-              width: AppSpace.xl + AppSpace.m,
-              height: AppSpace.xs,
-              margin: const EdgeInsets.only(bottom: AppSpace.s),
-              decoration: ShapeDecoration(
-                color: AppGlass.hair,
-                shape: const StadiumBorder(),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // The grabber: a capsule as wide as the two largest steps.
+            Center(
+              child: Container(
+                width: AppSpace.xl + AppSpace.m,
+                height: AppSpace.xs,
+                margin: const EdgeInsets.only(bottom: AppSpace.s),
+                decoration: ShapeDecoration(
+                  color: AppGlass.hair,
+                  shape: const StadiumBorder(),
+                ),
               ),
             ),
+            header,
+          ],
+        ),
+      ),
+      Flexible(
+        child: SingleChildScrollView(
+          padding: EdgeInsets.fromLTRB(
+            AppSpace.l,
+            0,
+            AppSpace.l,
+            footer.isEmpty ? AppSpace.l : 0,
           ),
-          header,
-          ...children,
-        ],
-      );
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: children,
+          ),
+        ),
+      ),
+      if (footer.isNotEmpty)
+        Padding(
+          padding: const EdgeInsets.all(AppSpace.l).copyWith(top: 0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: footer,
+          ),
+        ),
+    ],
+  );
 
   /// The sheet's title row: [leading] at its left, [title] in the middle.
   Widget _header(String title, Widget leading) => Padding(
@@ -1161,6 +1197,9 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
             ),
           ],
         ),
+      ],
+      // Why it stopped, and Create, in sight however short the phone.
+      footer: [
         if (_error case final error?)
           Padding(
             padding: const EdgeInsets.fromLTRB(
@@ -1470,6 +1509,8 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
                 ),
               ),
             ),
+          ],
+          footer: [
             if (_linkError case final error?)
               Padding(
                 padding: const EdgeInsets.fromLTRB(

@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
-import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/swarm_new_project_sheet.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
@@ -14,256 +13,7 @@ import 'package:harness_mobile/swarm/swarm_session.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
-
-/// Half an hour after the fixture's parts last changed, as Home reads it: no
-/// project is quiet. Every machine reading here is measured from it.
-final _now = DateTime.fromMillisecondsSinceEpoch(
-  0,
-  isUtc: true,
-).add(const Duration(minutes: 30, seconds: 1));
-
-/// A reading [ago] before [_now], in epoch milliseconds.
-int _at(Duration ago) => _now.subtract(ago).millisecondsSinceEpoch;
-
-const _repo = 'https://github.com/autonomous-ai/openharness';
-const _otherRepo = 'https://github.com/autonomous-ai/lampos';
-
-/// A machine of the Swarm as the backend reads it, with its derived values
-/// over it: [contributor]'s, reporting [ago], offering [engines], its Harness
-/// able to start a Product Manager unless not [capable], [slots] agents free.
-Map<String, dynamic> _machine(
-  String id, {
-  String? name,
-  String contributor = me,
-  List<String> engines = const ['claude', 'codex'],
-  bool capable = true,
-  int slots = 2,
-  Duration ago = const Duration(seconds: 5),
-  Map<String, dynamic>? lead,
-  List<Map<String, dynamic>> readiness = const [],
-  List<Map<String, dynamic>> quotas = const [],
-  String deviceType = 'Mac Studio',
-  bool paused = false,
-  Map<String, String>? suspended,
-}) => {
-  'machineId': id,
-  'name': name ?? '$id.local',
-  'contributorId': contributor,
-  'engines': engines,
-  'maxAgents': 4,
-  'cwd': '/Users/someone/swarm',
-  'paused': ?(paused ? true : null),
-  'observation': {
-    'receivedAt': _at(ago),
-    'capabilities': [if (capable) 'leadStart'],
-    'readiness': {'engines': readiness},
-    'quotas': quotas,
-    'resources': {'deviceType': deviceType},
-  },
-  'availableSlots': slots,
-  'teamWork': {'allowed': true},
-  'lead': ?lead,
-  'suspendedEngines': ?suspended,
-};
-
-/// A project of the Swarm, its repository [repo].
-Map<String, dynamic> _project(
-  String id,
-  String name, {
-  String? repo,
-  String visibility = 'public',
-}) => {
-  'id': id,
-  'name': name,
-  'ownerId': me,
-  'leadConversationId': id == project ? leadChat : 'lead-$id',
-  'visibility': visibility,
-  'members': <Object>[],
-  'updateMinutes': 5,
-  if (repo != null)
-    'repository': {
-      'machineId': 'mac-1',
-      'cwd': '/Users/someone/swarm/$name',
-      'repositoryUrl': repo,
-    },
-};
-
-/// A snapshot of one Swarm with [machines], read by [me].
-SuperTabSnapshot _snapshot(
-  List<Map<String, dynamic>> machines, {
-  bool paused = false,
-  List<Map<String, dynamic>> people = const [],
-}) => SuperTabSnapshot.fromJson({
-  'version': 1,
-  'id': tab,
-  'name': 'Phone Swarm',
-  'ownerId': me,
-  'paused': paused,
-  'projects': [_project(project, 'Mobile', repo: _repo)],
-  'people': [person(me), ...people],
-  'agents': <Object>[],
-  'machines': machines,
-  'conversations': <Object>[],
-  'invitations': <Object>[],
-});
-
-/// One scripted Swarm the sheet creates projects in: its projects, its
-/// person's role, its machines, and what each command answers. A project made
-/// is in every read after it, with its chat.
-class _Swarm {
-  _Swarm({
-    this.id = tab,
-    this.name = 'Phone Swarm',
-    this.role = 'owner',
-    List<Map<String, dynamic>>? machines,
-    List<Map<String, dynamic>>? projects,
-  }) : machines = machines ?? [_machine('mac-1', name: 'Studio.local')],
-       projects =
-           projects ??
-           [
-             _project(project, 'Mobile', repo: _repo),
-             _project('project-2', 'Lamp', repo: _otherRepo),
-           ];
-
-  final String id, name;
-  String role;
-  List<Map<String, dynamic>> machines;
-  final List<Map<String, dynamic>> projects;
-  Map<String, dynamic>? policy;
-
-  /// When each project's chat last changed, by project; else the earlier in
-  /// [projects], the more recent.
-  final activity = <String, int>{};
-
-  /// Its reads fail, as a Swarm that does not answer.
-  bool unreadable = false;
-
-  /// The person's access to it is taken away: every read is refused.
-  bool revoked = false;
-
-  static Never _refused() => throw const SuperTabFailure(
-    'FORBIDDEN',
-    'You no longer have access to this Swarm.',
-    statusCode: 403,
-  );
-
-  /// Answers a command in place of the Swarm when it returns non-null:
-  /// throws to refuse it, or a future to hold its answer.
-  FutureOr<Object?>? Function(Map<String, dynamic> command)? answer;
-
-  /// Every command body sent, with its operation id.
-  final sent = <Map<String, dynamic>>[];
-
-  List<Map<String, dynamic>> commands(String type) => [
-    for (final body in sent)
-      if ((body['command'] as Map)['type'] == type) body,
-  ];
-
-  Map<String, dynamic> _load() {
-    if (revoked) _refused();
-    if (unreadable) {
-      throw const SuperTabFailure(
-        'SERVER_ERROR',
-        'Could not read this Swarm.',
-        statusCode: 503,
-      );
-    }
-    return {
-      ...firstLoad(
-        tabId: id,
-        head: headData(id: id, name: name, projects: projects),
-        machines: machines,
-      ),
-      'members': [part(me, 1, person(me, role: role))],
-      // Each project's chat, its Product Manager's in Mobile.
-      'groups': [
-        for (final (i, p) in projects.indexed)
-          {
-            ...part(p['leadConversationId'] as String, 1, {
-              ...groupData(
-                p['leadConversationId'] as String,
-                title: p['name'] as String,
-                agentIds: [if (p['id'] == project) 'agent-lead'],
-                leadId: p['id'] == project ? 'agent-lead' : null,
-              ),
-              'projectId': p['id'],
-            }),
-            'changedAt': activity[p['id']] ?? 1000 - i,
-          },
-      ],
-    };
-  }
-
-  void install(FakeSwarm fake) {
-    fake.routes['/api/super-tabs/$id/parts'] = (_) => _load();
-    // Every change read loads afresh: what changed is all here.
-    fake.routes['/api/super-tabs/$id/changes'] = (_) =>
-        revoked ? _refused() : {'reload': true};
-    fake.routes['/api/super-tabs/$id/routing-policy'] = (_) => {
-      'policy': policy,
-    };
-    fake.routes['/api/super-tabs/$id/decisions?state=open'] = (_) => {
-      'decisions': <Object>[],
-    };
-    fake.routes['/api/super-tabs/$id/mentions?state=waiting'] = (_) => {
-      'mentions': <Object>[],
-    };
-    fake.routes['/api/super-tabs/$id/conversations/'] = (_) => {
-      'messages': <Object>[],
-      'next': null,
-    };
-    fake.routes['/api/super-tabs/$id/commands'] = (body) async {
-      sent.add(body!);
-      final command = body['command'] as Map<String, dynamic>;
-      if (answer?.call(command) case final answered?) {
-        final value = await answered;
-        if (value != null) return value;
-      }
-      final operation = body['operationId'] as String;
-      switch (command['type']) {
-        case 'project.create':
-          final made = 'p-$operation';
-          if (!projects.any((p) => p['id'] == made)) {
-            projects.add({
-              ..._project(made, command['name'] as String),
-              'leadConversationId': 'project-$made',
-              'visibility': command['visibility'],
-            });
-          }
-          return {
-            'result': {'projectId': made, 'conversationId': 'project-$made'},
-          };
-        case 'project.rename':
-          final named = projects.firstWhere(
-            (p) => p['id'] == command['projectId'],
-          );
-          named['name'] = command['name'];
-          return {'result': <String, dynamic>{}};
-        case 'lead.start':
-          return {
-            'result': {'startId': operation, 'machineId': command['machineId']},
-          };
-        default:
-          return {'result': <String, dynamic>{}};
-      }
-    };
-  }
-}
-
-/// The backend of [swarms], listed in order.
-FakeSwarm _backend(List<_Swarm> swarms) {
-  final fake = FakeSwarm();
-  fake.routes['/api/super-tabs/list'] = (_) => {
-    'tabs': [
-      for (final s in swarms) {'id': s.id, 'name': s.name, 'ownerId': me},
-    ],
-    'next': null,
-  };
-  for (final s in swarms) {
-    s.install(fake);
-  }
-  return fake;
-}
+import 'swarm_new_project_fixture.dart';
 
 void main() {
   group('swarmLeadMachines', () {
@@ -272,19 +22,19 @@ void main() {
       bool paused = false,
       Map<String, String> modelList = const {},
     }) => swarmLeadMachines(
-      _snapshot(
+      leadSnapshot(
         pools,
         paused: paused,
         people: [person('person-ken', role: 'collaborator')],
       ),
       me,
-      now: _now,
+      now: newProjectNow,
       modelList: modelList,
     );
 
     test('lists the person\'s own machine that can start a Product Manager '
         'with the first engine it runs, by its name without .local', () {
-      final [studio] = machines([_machine('mac-1', name: 'Studio.local')]);
+      final [studio] = machines([leadPool('mac-1', name: 'Studio.local')]);
       expect(studio.name, 'Studio');
       expect(studio.startable, isTrue);
       expect(studio.engine, 'claude');
@@ -293,7 +43,7 @@ void main() {
 
     test('a machine of theirs whose Harness cannot start a Product Manager '
         'says to update it, as the start would refuse it', () {
-      final [old] = machines([_machine('mac-1', capable: false)]);
+      final [old] = machines([leadPool('mac-1', capable: false)]);
       expect(old.startable, isFalse);
       expect(
         old.detail,
@@ -304,7 +54,7 @@ void main() {
     test('an engine not offered, not installed, signed out, out of quota or '
         'suspended is ruled out with why; one left runs', () {
       final [codexOnly] = machines([
-        _machine(
+        leadPool(
           'mac-1',
           readiness: [
             {'engine': 'claude', 'installed': true, 'signedIn': false},
@@ -317,7 +67,7 @@ void main() {
       });
 
       final [none] = machines([
-        _machine(
+        leadPool(
           'mac-1',
           engines: ['claude'],
           quotas: [
@@ -339,7 +89,7 @@ void main() {
       );
 
       final [suspended] = machines([
-        _machine(
+        leadPool(
           'mac-1',
           engines: ['claude'],
           suspended: {'claude': 'Claude Code failed to start twice'},
@@ -351,7 +101,7 @@ void main() {
 
     test('the Swarm\'s model list rules an engine out on every machine', () {
       final [studio] = machines(
-        [_machine('mac-1')],
+        [leadPool('mac-1')],
         modelList: swarmLeadModelListRefusals({
           'models': [
             {'engine': 'claude', 'model': 'opus', 'enabled': false},
@@ -370,7 +120,7 @@ void main() {
     test('a teammate\'s machine runs it as the server decided for each '
         'engine, and says the server\'s reason when it cannot', () {
       final [team, refused] = machines([
-        _machine(
+        leadPool(
           'mac-ken',
           name: 'Ken Mac',
           contributor: 'person-ken',
@@ -379,7 +129,7 @@ void main() {
             'codex': {'machineId': 'team-ken'},
           },
         ),
-        _machine(
+        leadPool(
           'mac-dee',
           name: 'Dee Mac',
           contributor: 'person-ken',
@@ -403,17 +153,17 @@ void main() {
     test('a paused Swarm, an offline machine and a full one cannot take it; '
         'the ones that can come first', () {
       final listed = machines([
-        _machine('full', slots: 0),
-        _machine('off', ago: const Duration(minutes: 2)),
-        _machine('ok', name: 'Zed'),
-        _machine('laptop', name: 'Air', deviceType: 'MacBook Air'),
+        leadPool('full', slots: 0),
+        leadPool('off', ago: const Duration(minutes: 2)),
+        leadPool('ok', name: 'Zed'),
+        leadPool('laptop', name: 'Air', deviceType: 'MacBook Air'),
       ]);
       expect([for (final m in listed) m.id], ['ok', 'laptop', 'full', 'off']);
       expect(listed[1].detail, 'Claude Code · 2 agents free · May sleep');
       expect(listed[2].detail, 'Claude Code · No agents free');
       expect(listed[3].detail, 'Offline');
 
-      final [paused] = machines([_machine('mac-1')], paused: true);
+      final [paused] = machines([leadPool('mac-1')], paused: true);
       expect(paused.unavailable, swarmLeadSwarmPaused);
       expect(
         swarmLeadMachineRefusal([paused], 'mac-1'),
@@ -472,13 +222,13 @@ void main() {
     test('the Swarm\'s repositories come once each, the most recently active '
         'project\'s first', () async {
       final fake = FakeSwarm();
-      _Swarm(
+      NewProjectSwarm(
           projects: [
-            _project(project, 'Mobile', repo: _repo),
-            _project('project-2', 'Lamp', repo: _otherRepo),
-            _project('project-3', 'Copy', repo: '$_repo.git'),
-            _project('project-4', 'None'),
-            _project('project-5', 'Bad', repo: 'https://me:pw@x.com/a'),
+            swarmProject(project, 'Mobile', repo: harnessRepo),
+            swarmProject('project-2', 'Lamp', repo: lampRepo),
+            swarmProject('project-3', 'Copy', repo: '$harnessRepo.git'),
+            swarmProject('project-4', 'None'),
+            swarmProject('project-5', 'Bad', repo: 'https://me:pw@x.com/a'),
           ],
         )
         ..activity['project-2'] = 2000
@@ -492,18 +242,18 @@ void main() {
       addTearDown(reader.dispose);
       await reader.refresh();
       // Lamp's chat moved last; Bad's link is not one the server takes.
-      expect(swarmProjectRepositories(reader), [_otherRepo, _repo]);
+      expect(swarmProjectRepositories(reader), [lampRepo, harnessRepo]);
     });
   });
 
   group('SwarmNewProjectSteps', () {
     late FakeSwarm fake;
-    late _Swarm swarm;
+    late NewProjectSwarm swarm;
     late SwarmReader reader;
 
     setUp(() async {
       fake = FakeSwarm();
-      swarm = _Swarm()..install(fake);
+      swarm = NewProjectSwarm()..install(fake);
       reader = SwarmReader(tabId: tab, accountId: me, request: fake.request);
       await reader.refresh();
     });
@@ -513,7 +263,7 @@ void main() {
       SwarmNewProjectSteps steps, {
       String brief = 'Ship the phone flow',
       String machineId = 'mac-1',
-      String repositoryUrl = _repo,
+      String repositoryUrl = harnessRepo,
       bool Function()? live,
     }) => steps.run(
       brief: brief,
@@ -521,7 +271,8 @@ void main() {
       machineId: machineId,
       repositoryUrl: repositoryUrl,
       live: live ?? () => true,
-      machinesOf: (snapshot) => swarmLeadMachines(snapshot, me, now: _now),
+      machinesOf: (snapshot) =>
+          swarmLeadMachines(snapshot, me, now: newProjectNow),
     );
 
     test('creates the project, posts its brief, starts its Product Manager '
@@ -553,7 +304,7 @@ void main() {
         'projectId': made,
         'machineId': 'mac-1',
         'engine': 'claude',
-        'repositoryUrl': _repo,
+        'repositoryUrl': harnessRepo,
       });
       final rename = swarm.commands('project.rename').single;
       expect(rename['command'], {
@@ -631,8 +382,8 @@ void main() {
       'another machine as a new request and makes no second project',
       () async {
         swarm.machines = [
-          _machine('mac-1', name: 'Studio'),
-          _machine('mac-2', name: 'Mini'),
+          leadPool('mac-1', name: 'Studio'),
+          leadPool('mac-2', name: 'Mini'),
         ];
         await reader.refresh();
         var refuse = true;
@@ -709,7 +460,7 @@ void main() {
     test('a machine that can no longer take it on a fresh read is refused '
         'with why, and no start is sent', () async {
       final steps = SwarmNewProjectSteps(reader);
-      swarm.machines = [_machine('mac-1', name: 'Studio', slots: 0)];
+      swarm.machines = [leadPool('mac-1', name: 'Studio', slots: 0)];
       await expectLater(
         run(steps),
         throwsA(
@@ -773,7 +524,7 @@ void main() {
     /// Swarm Home over [swarms], on an iPhone's screen, as the person [me].
     Future<SwarmHost> pump(
       WidgetTester tester,
-      List<_Swarm> swarms, {
+      List<NewProjectSwarm> swarms, {
       ValueNotifier<String?>? account,
     }) async {
       tester.view.physicalSize = const Size(1170, 2532);
@@ -785,7 +536,7 @@ void main() {
       final host = SwarmHost(
         accountId: () => signedIn.value,
         account: signedIn,
-        request: _backend(swarms).request,
+        request: newProjectBackend(swarms).request,
         notices: SilentSystemNotices(),
         features: features,
         readMarks: MemoryKeyValueStore(),
@@ -796,7 +547,7 @@ void main() {
           builder: (context, child) =>
               SwarmScope(notifier: host, child: child!),
           onGenerateRoute: (_) => CupertinoPageRoute<void>(
-            builder: (_) => SwarmPage(now: () => _now),
+            builder: (_) => SwarmPage(now: () => newProjectNow),
           ),
         ),
       );
@@ -820,7 +571,7 @@ void main() {
 
     testWidgets('+ New project is the last row of Projects for someone who '
         'may write in the Swarm', (tester) async {
-      await pump(tester, [_Swarm()]);
+      await pump(tester, [NewProjectSwarm()]);
       expect(key('swarm-new-project'), findsOneWidget);
       expect(find.text('New project'), findsOneWidget);
       final rows = [
@@ -836,19 +587,19 @@ void main() {
     });
 
     testWidgets('a collaborator has it; a viewer does not', (tester) async {
-      await pump(tester, [_Swarm(role: 'collaborator')]);
+      await pump(tester, [NewProjectSwarm(role: 'collaborator')]);
       expect(key('swarm-new-project'), findsOneWidget);
     });
 
     testWidgets('a viewer has no + New project', (tester) async {
-      await pump(tester, [_Swarm(role: 'viewer')]);
+      await pump(tester, [NewProjectSwarm(role: 'viewer')]);
       expect(key('swarm-project-$tab-$project'), findsOneWidget);
       expect(key('swarm-new-project'), findsNothing);
     });
 
     testWidgets('a Swarm whose first read failed offers it once its read '
         'recovers', (tester) async {
-      final swarm = _Swarm()..unreadable = true;
+      final swarm = NewProjectSwarm()..unreadable = true;
       final host = await pump(tester, [swarm]);
       expect(key('swarm-projects-error-$tab'), findsOneWidget);
       expect(key('swarm-new-project'), findsNothing);
@@ -864,9 +615,9 @@ void main() {
     testWidgets('on All Swarms the sheet asks which Swarm, offering only '
         'those the person may write in', (tester) async {
       await pump(tester, [
-        _Swarm(),
-        _Swarm(id: 'tab-viewed', name: 'Viewed', role: 'viewer'),
-        _Swarm(id: 'tab-2', name: 'Lamp Swarm', role: 'collaborator'),
+        NewProjectSwarm(),
+        NewProjectSwarm(id: 'tab-viewed', name: 'Viewed', role: 'viewer'),
+        NewProjectSwarm(id: 'tab-2', name: 'Lamp Swarm', role: 'collaborator'),
       ]);
       await tap(tester, 'swarm-new-project');
       expect(key('swarm-new-project-sheet'), findsOneWidget);
@@ -885,7 +636,7 @@ void main() {
     });
 
     testWidgets('one Swarm shown: no Swarm row', (tester) async {
-      await pump(tester, [_Swarm()]);
+      await pump(tester, [NewProjectSwarm()]);
       await tap(tester, 'swarm-new-project');
       expect(key('swarm-new-project-swarm'), findsNothing);
     });
@@ -893,7 +644,7 @@ void main() {
     testWidgets('the repository is the most recently active project\'s, '
         'others and a link a tap away; a link the server would refuse is '
         'not taken', (tester) async {
-      await pump(tester, [_Swarm()]);
+      await pump(tester, [NewProjectSwarm()]);
       await tap(tester, 'swarm-new-project');
       expect(
         find.descendant(
@@ -903,7 +654,7 @@ void main() {
         findsOneWidget,
       );
       await tap(tester, 'swarm-new-project-repository');
-      expect(key('swarm-new-project-pick-repo-$_otherRepo'), findsOneWidget);
+      expect(key('swarm-new-project-pick-repo-$lampRepo'), findsOneWidget);
       await tap(tester, 'swarm-new-project-pick-link');
       await tester.enterText(
         key('swarm-new-project-link'),
@@ -924,11 +675,11 @@ void main() {
 
     testWidgets('PM runs on lists only machines that can run it; with none, '
         'each says why', (tester) async {
-      final swarm = _Swarm(
+      final swarm = NewProjectSwarm(
         machines: [
-          _machine('mac-1', name: 'Studio'),
-          _machine('mac-2', name: 'Old', capable: false),
-          _machine('mac-3', name: 'Full', slots: 0),
+          leadPool('mac-1', name: 'Studio'),
+          leadPool('mac-2', name: 'Old', capable: false),
+          leadPool('mac-3', name: 'Full', slots: 0),
         ],
       );
       final host = await pump(tester, [swarm]);
@@ -942,8 +693,8 @@ void main() {
 
       // None can now: each says why, and Create says so.
       swarm.machines = [
-        _machine('mac-2', name: 'Old', capable: false),
-        _machine('mac-3', name: 'Full', slots: 0),
+        leadPool('mac-2', name: 'Old', capable: false),
+        leadPool('mac-3', name: 'Full', slots: 0),
       ];
       await host.session!.inbox.reader(tab)!.refresh();
       await tester.pumpAndSettle();
@@ -966,7 +717,7 @@ void main() {
 
     testWidgets('Create makes the project, starts its Product Manager on the '
         'machine picked and opens its project screen', (tester) async {
-      final swarm = _Swarm();
+      final swarm = NewProjectSwarm();
       await pump(tester, [swarm]);
       await tap(tester, 'swarm-new-project');
       await tester.enterText(
@@ -979,17 +730,17 @@ void main() {
       expect(swarm.commands('project.create'), hasLength(1));
       final start = swarm.commands('lead.start').single['command'] as Map;
       expect(start['machineId'], 'mac-1');
-      expect(start['repositoryUrl'], _repo);
+      expect(start['repositoryUrl'], harnessRepo);
       expect(key('swarm-new-project-sheet'), findsNothing);
       expectHomeCProject('openharness');
     });
 
     testWidgets('a refused start keeps the project, in the list, says why, '
         'and Create again starts it without a second project', (tester) async {
-      final swarm = _Swarm(
+      final swarm = NewProjectSwarm(
         machines: [
-          _machine('mac-1', name: 'Studio'),
-          _machine('mac-2', name: 'Mini'),
+          leadPool('mac-1', name: 'Studio'),
+          leadPool('mac-2', name: 'Mini'),
         ],
       );
       var refuse = true;
@@ -1029,7 +780,7 @@ void main() {
 
     testWidgets('a create whose answer was lost is sent again under its '
         'operation on Try again', (tester) async {
-      final swarm = _Swarm();
+      final swarm = NewProjectSwarm();
       var lose = true;
       swarm.answer = (command) {
         if (command['type'] == 'project.create' && lose) {
@@ -1056,7 +807,7 @@ void main() {
 
     testWidgets('its Swarm\'s read taken away while it is open closes it at '
         'once', (tester) async {
-      final swarm = _Swarm();
+      final swarm = NewProjectSwarm();
       final host = await pump(tester, [swarm]);
       await tap(tester, 'swarm-new-project');
       expect(key('swarm-new-project-sheet'), findsOneWidget);
@@ -1070,7 +821,7 @@ void main() {
     });
 
     testWidgets('made a viewer while it is open closes it', (tester) async {
-      final swarm = _Swarm();
+      final swarm = NewProjectSwarm();
       final host = await pump(tester, [swarm]);
       await tap(tester, 'swarm-new-project');
       swarm.role = 'viewer';
@@ -1082,7 +833,7 @@ void main() {
 
     testWidgets('signing out while it is open closes it', (tester) async {
       final account = ValueNotifier<String?>(me);
-      await pump(tester, [_Swarm()], account: account);
+      await pump(tester, [NewProjectSwarm()], account: account);
       await tap(tester, 'swarm-new-project');
       account.value = null;
       await tester.pumpAndSettle();
@@ -1092,7 +843,7 @@ void main() {
 
     testWidgets('access taken away while a create is on its way: its answer '
         'opens nothing and nothing more is sent', (tester) async {
-      final swarm = _Swarm();
+      final swarm = NewProjectSwarm();
       final held = Completer<Object?>();
       swarm.answer = (command) =>
           command['type'] == 'project.create' ? held.future : null;
