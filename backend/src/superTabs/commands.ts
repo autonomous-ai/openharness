@@ -6,7 +6,7 @@ import { tokensByModelSchema } from './costs/tokens.js'
 import {
   activeWork, actorKey, agent, agentRole, appendPullRequestUrls, author, conversation, crossProjectActive, fail, isLeads, person, stableId, syncLeads, numberConversations, nextConversationNumber, renderWorkTask,
   finishWorker, requireWorkerDecisions, reviewing, seenMachineIds, swarmGridName, visibleState, AGENT_ONLY, STATUS_LABELS, forRecipients,
-  type Actor, type AgentStartRequest, type WorkTask, type Agent, type Author, type CommandEffects, type Conversation, type SuperTabState,
+  type Actor, type AgentConfiguration, type AgentStart, type AgentStartRequest, type WorkTask, type Agent, type Author, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
 import { jobKindOf } from './evidence/jobKind.js'
 import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
@@ -175,7 +175,10 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('agent.startDispatch'), startId: id }).strict(),
   z.object({ type: z.literal('agent.started'), startId: id, harnessId: id, configuration,
     startedSession: z.object({ sessionId: id, createdAt: z.iso.datetime() }).strict().optional() }).strict(),
-  z.object({ type: z.literal('agent.startSettled'), startId: id, warning: z.string().max(2000).nullable() }).strict(),
+  // `configuration`: what the agent runs as its start last saw it, so work assigned after the settle records its model (CLI
+  // superTabs/start.ts). Absent from a CLI before it, and when the agent reported none in time.
+  z.object({ type: z.literal('agent.startSettled'), startId: id, warning: z.string().max(2000).nullable(),
+    configuration: configuration.optional() }).strict(),
   z.object({ type: z.literal('agent.startFailed'), startId: id, error: text }).strict(),
   z.object({ type: z.literal('agent.stopLease'), agentId: id, releaseId: id }).strict(),
   z.object({ type: z.literal('agent.stopRefused'), agentId: id, releaseId: id }).strict(),
@@ -650,6 +653,21 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   /** A private conversation is chat only (design section 4.8). */
   const chatOnly = (conversationId: string) => {
     if (state.conversations.find(c => c.id === conversationId)?.audience) fail('AUDIENCE_CHAT_ONLY', 'A private conversation is chat only.', 400)
+  }
+  /** A settling start's own reading of what its agent runs (agent.startSettled): taken as the agent's report, as
+   *  agent.configuration takes its host's, so work assigned after the settle records its model. Only from the machine
+   *  grant that started it, for the same engine, never for a grid model (its start names it); anything else is left to the
+   *  host's own reports. */
+  const settledConfiguration = (start: AgentStart, observed: AgentConfiguration) => {
+    const grant = context.contribution
+    if (!grant || grant.machineOwnerId !== start.machineOwnerId || grant.contributorId !== start.contributorId
+      || (grant.hostGrant ?? null) !== start.hostGrant) return
+    const worker = state.agents.find(a => a.harnessId === start.harnessId && a.machineId === start.request.machineId)
+    if (!worker || worker.gridModel || observed.engine !== worker.configuration.engine) return
+    if (Object.entries(observed).every(([key, value]) => worker.configuration[key as keyof AgentConfiguration] === value)) return
+    worker.configuration = observed
+    worker.configurationVersion = operationId
+    recordReportedModel(state, worker)
   }
   const routed = (routeDecisionId?: string) => {
     if (actor.kind === 'agent' && !routeDecisionId) fail('ROUTE_REQUIRED', 'Route this task first, then start or assign the pick with its routeDecisionId.', 400)
@@ -1701,6 +1719,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       if (command.type === 'agent.startSettled') {
         if (!start.poolGeneration || !start.harnessId || start.error) fail('START_PENDING', 'This contributed start is not ready to settle.')
+        if (command.configuration && !start.poolSettled) settledConfiguration(start, command.configuration)
         // A Product Manager is never assigned work: its conversation already said where it started.
         // A warning is the people's to read (a start that went wrong); being ready is bookkeeping.
         if (!start.poolSettled && !start.request.leadFor) message(start.request.conversationId, command.warning
