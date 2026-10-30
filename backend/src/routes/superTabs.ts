@@ -257,24 +257,25 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Querystring: z.infer<typeof callbackQuery> }>('/api/github/callback', { preHandler: validateQuery(callbackQuery) }, async (req, reply) => {
     const page = (title: string, text: string, status = 200) => reply.status(status).type('text/html; charset=utf-8').send(githubPage(title, text))
     const request = approvalSecret && req.query.state ? readState(approvalSecret, req.query.state, Date.now()) : null
-    if (!request) return page('This link has expired', 'Go back to Harness and choose Approve again.', 400)
+    if (!request) return page('This link has expired', 'Go back to Harness and choose Continue in GitHub again.', 400)
     const named = githubRepository(`https://github.com/${request.repository}`)
     // Cancel on GitHub's sign-in sends the person back with `error` and no code: they were told Harness was installed
     // (local Team account run, 2026-10-28).
-    if (req.query.error) return page('Sign-in was cancelled', 'Nothing was approved. Go back to Harness and choose Approve to try again.')
+    if (req.query.error) return page('Sign-in was cancelled', 'Nothing was allowed. Go back to Harness and choose Continue in GitHub to try again.')
     if (!req.query.code || !signIn || !named) {
-      return page('Harness is installed', 'Go back to Harness and choose Approve, so this project can use it.')
+      return page('Harness is installed', 'Go back to Harness and choose Continue in GitHub, so this project can use it.')
     }
     const seen = await signIn.permission(req.query.code, named).catch(() => null)
-    if (!seen) return page('GitHub could not confirm your access', 'Go back to Harness and choose Approve again.', 502)
+    if (!seen) return page('GitHub could not confirm your access', 'Go back to Harness and choose Continue in GitHub again.', 502)
     if (!seen.push) {
-      return page(`You can't push to ${named.fullName}`, 'So you can\'t approve it for this Swarm. Someone who can push to it can.', 403)
+      return page(`You can't push to ${named.fullName}`, 'So you can\'t allow it. Ask someone who can push to it to open the project in Harness and choose Set up GitHub for teammates.', 403)
     }
     await approvals.approve(request, seen.login)
     // Named, so the person knows which project it was for (local Team account run, 2026-10-28: 'This project can now use it').
     const where = request.scope === 'swarm' ? 'every project in this Swarm'
       : await store.projectNameFor(request.userId, request.autonomousEnv as AuthUser['autonomousEnv'], request.tabId, request.projectId).catch(() => null) ?? 'this project'
-    return page(`${named.fullName} approved`, `Teammates' agents in ${where} can now push to it. You can go back to Harness.`)
+    // Worded as the desktop's GitHub access dialog is (design 2026-10-30): allowed, not approved.
+    return page(`${named.fullName} is allowed`, `Teammates' agents in ${where} can now push to it. You can go back to Harness.`)
   })
   app.get<{ Params: z.infer<typeof machineParams> }>('/api/super-tabs/:tabId/machines/:machineId/removal', { preHandler: validateParams(machineParams) },
     (req, reply) => respond(reply, () => store.machineRemoval(req.user!, req.params.tabId, req.params.machineId)))
