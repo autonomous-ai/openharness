@@ -453,7 +453,7 @@ void main() {
       await frames(tester);
 
       expect(find.text('#Mobile'), findsNothing);
-      expect(key('swarm-project-tab-team'), findsNothing);
+      expect(key('swarm-project-menu'), findsNothing);
     });
   });
 
