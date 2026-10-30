@@ -70,6 +70,23 @@ describe('the parts a command touches (design section 1.2, column T)', () => {
     expect(has(again.touches, 'agent', reviewer) || has(again.touches, 'head', 'head')).toBe(false)
   })
 
+  it('makes a task wanting two reviews meet on both Reviewers it takes in one write', () => {
+    const f = swarm(), a = f.group('A')
+    const add = (harnessId: string) => {
+      const id = f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId, name: harnessId, configuration: { ...config, engine: config.engine === 'claude' ? 'codex' : 'claude', model: config.engine === 'claude' ? 'default' : 'opus' }, lead: false },
+        owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).effects.result.agentId as string
+      f.state.agents.find(x => x.id === id)!.role = 'reviewer'
+      return id
+    }
+    const first = add('reviewer-1'), second = add('reviewer-2')
+    f.state.conversations.find(c => c.id === a.id)!.task = { goal: 'G', changes: 'C', constraints: 'K', owns: ['x'], review: { reviews: 2 } }
+    f.state.projects![0]!.repository = { machineId: 'host', cwd: '/repo', repositoryUrl: 'https://github.com/example/project' }
+    const ready = f.run({ type: 'work.status', conversationId: a.id, assignmentId: a.assignmentId, status: 'review',
+      result: 'Ready. https://github.com/example/project/pull/7' }, f.agentActor(a.worker))
+    expect(ready.effects.state.conversations.filter(c => c.reviewOf === a.id).map(c => c.assignment!.agentId).sort()).toEqual([first, second].sort())
+    expect([has(ready.touches, 'agent', first), has(ready.touches, 'agent', second), has(ready.touches, 'head', 'head')]).toEqual([true, true, true])
+  })
+
   it('makes finishing work and the Lead\'s next start or assignment meet on the project\'s progress part', () => {
     const f = swarm(), a = f.group('A')
     f.run({ type: 'work.check', conversationId: a.id, assignmentId: a.assignmentId, checkId: f.state.conversations.find(c => c.id === a.id)!.checks[0]!.id,

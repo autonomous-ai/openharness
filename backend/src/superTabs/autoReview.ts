@@ -1,6 +1,6 @@
 import { githubRepository } from '../github/repository.js'
 import { agentDisplayName } from './agentNames.js'
-import { activeWork, agentRole, forRecipients, nextConversationNumber, renderWorkTask, stableId, type Agent, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
+import { activeWork, agentRole, forRecipients, nextConversationNumber, renderWorkTask, reviewsWanted, stableId, type Agent, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { agentProjectId, groupProject, skillSetOf } from './projects.js'
 import { recordAsked, recordRun } from './leaderboard/record.js'
 import { renewLease } from './liveness.js'
@@ -36,10 +36,17 @@ const verdictGiven = (group: Conversation): boolean => group.checks.some(c => c.
 const verdictMissing = (group: Conversation): boolean =>
   !!group.reviewOf && group.assignment?.status !== 'cancelled' && !verdictGiven(group)
 
-/** A review of [group] that is still open: not archived, not cancelled and with no verdict yet. A second review, by itself
- *  or by hand, waits until it closes (commands.ts conversation.create). */
-export const openReviewOf = (state: SuperTabState, group: Conversation): Conversation | undefined =>
-  state.conversations.find(c => c.reviewOf === group.id && !c.archived && verdictMissing(c))
+/** The reviews of [group] still open: not archived, not cancelled and with no verdict yet, oldest first. */
+export const openReviewsOf = (state: SuperTabState, group: Conversation): Conversation[] =>
+  state.conversations.filter(c => c.reviewOf === group.id && !c.archived && verdictMissing(c))
+
+/** A review of [group] that is still open while it has every review its task wants: another one, by itself or by hand, waits
+ *  until one closes (commands.ts conversation.create). A task wanting two independent reviews has room for a second one
+ *  beside the first, so the Lead needs no holder group for it (nightly reflection 10-30). */
+export const fullReviewOf = (state: SuperTabState, group: Conversation): Conversation | undefined => {
+  const open = openReviewsOf(state, group)
+  return open.length >= reviewsWanted(group.task) ? open[0] : undefined
+}
 
 /** A review that may not be archived, by hand or by itself: no verdict, not cancelled, and the work it reviews still going.
  *  Once that work is done or cancelled the review is moot. A review with no Reviewer has no assignment to cancel, so that
@@ -69,25 +76,32 @@ function unable(state: SuperTabState, agent: Agent, now: number): boolean {
  * tier are common and an idle Codex Reviewer out of quota came first), or (`mayWork`) not allowed to take this work: on its
  * machine, by the owner's rules (#610 review), or as the review rule (rules.ts reviewRefusal) has it.
  */
-function pickReviewer(state: SuperTabState, group: Conversation, engineer: Agent | undefined, earlier: Conversation | undefined,
-  mayWork: (agent: Agent) => boolean, strength: (agent: Agent) => number, now: number): Agent | null {
+function pickReviewer(state: SuperTabState, group: Conversation, engineer: Agent | undefined, earlier: readonly string[],
+  taken: ReadonlySet<string>, mayWork: (agent: Agent) => boolean, strength: (agent: Agent) => number, now: number): Agent | null {
   const projectId = groupProject(state, group).id
-  const candidates = state.agents.filter(a => a.id !== engineer?.id && agentRole(a) === 'reviewer' && agentProjectId(state, a) === projectId &&
+  // `taken`: the Reviewers of its other open reviews, and of one just opened beside this one: two reviews never share one.
+  const candidates = state.agents.filter(a => a.id !== engineer?.id && !taken.has(a.id) && agentRole(a) === 'reviewer' && agentProjectId(state, a) === projectId &&
     a.workDecision !== 'stop' && !a.lostTask && !downSince(state, a, now) && !unable(state, a, now) && free(state, a) && mayWork(a))
-  const previous = candidates.find(a => a.id === earlier?.assignment?.agentId)
+  const previous = earlier.map(id => candidates.find(a => a.id === id)).find(a => a)
   // Strongest first; at equal strength the roster's order stands (sort is stable).
   return previous ?? [...candidates].sort((a, b) => strength(b) - strength(a))[0] ?? null
 }
 
-function briefOf(group: Conversation, handoff: string, pullRequest: string, earlier: Conversation | undefined): string {
+/** [lane] of [lanes]: which of a task's independent reviews this is, when it wants more than one. */
+function briefOf(group: Conversation, handoff: string, pullRequest: string, earlier: Conversation | undefined, lane: { index: number; of: number }): string {
   const task = group.task
   const privacy = PRIVACY.test([task ? renderWorkTask(task) : group.brief, handoff].join('\n'))
   const kept = handoff.length > HANDOFF_CHARS ? `${handoff.slice(0, HANDOFF_CHARS)}… (the rest is in #${group.number})` : handoff
+  // The focus leads the brief, so it is not repeated in the task below it.
+  const focus = task?.review?.focus
+  const work = task ? renderWorkTask({ ...task, review: undefined }) : group.brief
   return [
     ...privacy ? ['Privacy first: this work touches sharing, access or confidentiality. Check who can see or reach what before anything else.'] : [],
+    ...focus ? [`Review focus:\n${focus}`] : [],
     `Give an independent verdict on the Engineer's revision of #${group.number} ${group.title}. Read only; do not change the code.`,
+    ...lane.of > 1 ? [`Independent review ${lane.index + 1} of ${lane.of}: another Reviewer reviews this work separately. Reach your own verdict without reading theirs.`] : [],
     ...earlier ? [`Delta review: #${earlier.number} reviewed the earlier head. Review only the changes since.`] : [],
-    `The reviewed work:\n${task ? renderWorkTask(task) : group.brief}`,
+    `The reviewed work:\n${work}`,
     `Its acceptance checks:\n${group.checks.map(c => `- ${c.description}`).join('\n')}`,
     `The Engineer's handoff:\n${kept}`,
     `Pull request: ${pullRequest}`,
@@ -95,56 +109,73 @@ function briefOf(group: Conversation, handoff: string, pullRequest: string, earl
   ].join('\n\n')
 }
 
-export interface OpenedReview { review: Conversation; reviewer: Agent | null; messages: MessageDraft[] }
+export interface OpenedReview { reviews: { review: Conversation; reviewer: Agent | null }[]; messages: MessageDraft[] }
 
 /**
- * Opens [group]'s review after its Engineer marked it ready with [handoff], which links [pullRequest]: a "Review: <title>"
- * group reviewing it, assigned to a free Reviewer that also joins [group] so it can pass the independent check, and one
- * line to the Lead, who can cancel it. With no free Reviewer the review waits, and the line asks the Lead to start one.
- * Its rows are the Swarm's own: written as the project's Lead with an auto-review source, as its lost-task and failed-start
- * notices are (liveness.ts), never as the Engineer (#610 review); [engineer] writes them only in a group with no Lead.
+ * Opens [group]'s reviews after its Engineer marked it ready with [handoff], which links [pullRequest]: as many as its task
+ * wants beyond those still open (one, or two for a task wanting two independent reviews). Each is a "Review: <title>" group
+ * (the second "Second review: <title>") reviewing it, assigned to a free Reviewer that also joins [group] so it can pass the
+ * independent check, never the Reviewer of another open review of it, and one line to the Lead, who can cancel it. With no
+ * free Reviewer a review waits, and the line asks the Lead to start one. Its rows are the Swarm's own: written as the
+ * project's Lead with an auto-review source, as its lost-task and failed-start notices are (liveness.ts), never as the
+ * Engineer (#610 review); [engineer] writes them only in a group with no Lead.
  */
 export function openReview(state: SuperTabState, group: Conversation, handoff: string, pullRequest: string,
   context: { operationId: string; now: number; engineer: Author; mayWork: (agent: Agent) => boolean; strength: (agent: Agent) => number }): OpenedReview | null {
   const project = groupProject(state, group)
   // On Custom skills without a reviewer role there are no review groups (commands.ts requireCustomRole).
   if (state.paused || (skillSetOf(project) === 'custom' && !project.roles?.some(r => r.kind === 'reviewer'))) return null
-  // Only a review that gave its verdict reviewed the earlier head: one cancelled before it reviewed nothing (#610 review).
-  const earlier = state.conversations.filter(c => c.reviewOf === group.id && c.assignment && verdictGiven(c)).sort((a, b) => (b.number ?? 0) - (a.number ?? 0))[0]
+  const open = openReviewsOf(state, group), wanted = reviewsWanted(group.task)
+  if (open.length >= wanted) return null
+  // Only a review that gave its verdict reviewed an earlier head: one cancelled before it reviewed nothing (#610 review).
+  const verdicts = state.conversations.filter(c => c.reviewOf === group.id && c.assignment && verdictGiven(c)).sort((a, b) => (b.number ?? 0) - (a.number ?? 0))
+  // The Reviewers of the latest heads, one per review the task wants, newest first: each review goes back to one of them.
+  const earlier = [...new Set(verdicts.map(c => c.assignment!.agentId))].slice(0, wanted)
+  const taken = new Set(open.flatMap(c => c.assignment ? [c.assignment.agentId] : []))
   const engineer = state.agents.find(a => a.id === group.assignment?.agentId)
-  const reviewer = pickReviewer(state, group, engineer, earlier, context.mayWork, context.strength, context.now)
-  const id = stableId(context.operationId, 'auto-review')
-  const number = nextConversationNumber(state)
-  state.groupCounter = number
-  const brief = briefOf(group, handoff, pullRequest, earlier)
   const leadId = group.leadId
   const lead = state.agents.find(a => a.id === leadId)
   const author: Author = lead ? { kind: 'agent', id: lead.id, name: lead.name, displayName: agentDisplayName(state.agents, lead.id),
     membershipGeneration: lead.membershipGeneration } : context.engineer
-  const review: Conversation = { id, ...(group.projectId ? { projectId: group.projectId } : {}), number, title: `Review: ${group.title}`.slice(0, 160),
-    leadId, agentIds: leadId ? [leadId] : [], archived: false, brief, reviewOf: group.id, assignment: null, lastMessageSequence: 0,
-    checks: [{ description: VERDICT_CHECK, independent: false, id: stableId(id, '0'), evidence: null, passedBy: null }] }
-  state.conversations.push(review)
-  recordAsked(review, group.requesterId, context.now)
-  const row = (key: string, text: string, recipients: string[], source: Record<string, unknown> = { kind: 'auto-review', reviewOf: group.id }): MessageDraft =>
-    ({ id: stableId(context.operationId, 'auto-review', key), conversationId: id, author, text, replyTo: null, recipients, source })
-  const messages = [row('brief', brief, [])]
-  if (reviewer) {
-    review.agentIds.push(reviewer.id)
-    if (!group.agentIds.includes(reviewer.id)) group.agentIds.push(reviewer.id)
-    delete reviewer.workDecision
-    delete reviewer.releaseId
-    review.assignment = { id: stableId(id, 'assignment'), agentId: reviewer.id, status: 'working', configuration: structuredClone(reviewer.configuration),
-      execution: { machineId: reviewer.machineId, harnessId: reviewer.harnessId, machineOwnerId: reviewer.machineOwnerId }, result: null }
-    renewLease(review.assignment, context.now)
-    recordRun(state, review, review.assignment, reviewer, context.now)
-    messages.push(row('assign', `${brief}\n\nAcceptance checks:\n- ${VERDICT_CHECK}`, [reviewer.id]))
+  const opened: OpenedReview = { reviews: [], messages: [] }
+  for (let index = open.length; index < wanted; index++) {
+    // The first keeps the ids a one-review task always had, so a retried write finds the same rows.
+    const lane = index === open.length ? [] : [String(index + 1)]
+    const reviewer = pickReviewer(state, group, engineer, earlier, taken, context.mayWork, context.strength, context.now)
+    if (reviewer) taken.add(reviewer.id)
+    const previous = (reviewer && earlier.includes(reviewer.id) && verdicts.find(c => c.assignment!.agentId === reviewer.id)) || verdicts[0]
+    const id = stableId(context.operationId, 'auto-review', ...lane)
+    const number = nextConversationNumber(state)
+    state.groupCounter = number
+    const brief = briefOf(group, handoff, pullRequest, previous, { index, of: wanted })
+    const review: Conversation = { id, ...(group.projectId ? { projectId: group.projectId } : {}), number,
+      title: `${index ? 'Second review' : 'Review'}: ${group.title}`.slice(0, 160),
+      leadId, agentIds: leadId ? [leadId] : [], archived: false, brief, reviewOf: group.id, assignment: null, lastMessageSequence: 0,
+      checks: [{ description: VERDICT_CHECK, independent: false, id: stableId(id, '0'), evidence: null, passedBy: null }] }
+    state.conversations.push(review)
+    recordAsked(review, group.requesterId, context.now)
+    const row = (key: string, text: string, recipients: string[], source: Record<string, unknown> = { kind: 'auto-review', reviewOf: group.id }): MessageDraft =>
+      ({ id: stableId(context.operationId, 'auto-review', key, ...lane), conversationId: id, author, text, replyTo: null, recipients, source })
+    opened.messages.push(row('brief', brief, []))
+    if (reviewer) {
+      review.agentIds.push(reviewer.id)
+      if (!group.agentIds.includes(reviewer.id)) group.agentIds.push(reviewer.id)
+      delete reviewer.workDecision
+      delete reviewer.releaseId
+      review.assignment = { id: stableId(id, 'assignment'), agentId: reviewer.id, status: 'working', configuration: structuredClone(reviewer.configuration),
+        execution: { machineId: reviewer.machineId, harnessId: reviewer.harnessId, machineOwnerId: reviewer.machineOwnerId }, result: null }
+      renewLease(review.assignment, context.now)
+      recordRun(state, review, review.assignment, reviewer, context.now)
+      opened.messages.push(row('assign', `${brief}\n\nAcceptance checks:\n- ${VERDICT_CHECK}`, [reviewer.id]))
+    }
+    const name = reviewer && (reviewer.displayName ?? reviewer.name)
+    const which = wanted > 1 ? ` (independent review ${index + 1} of ${wanted})` : ''
+    if (leadId) opened.messages.push(row('lead', reviewer
+      ? `Review opened by itself for #${group.number}${which}: ${name} reviews it. Cancel it here if it is not needed.`
+      : `Review opened by itself for #${group.number}${which}, but no Reviewer is free. Route it and start one.`, [leadId],
+      // The Lead's wake, its alone (review of #2225): people read the review's brief and its status.
+      forRecipients({ kind: 'auto-review', reviewOf: group.id })))
+    opened.reviews.push({ review, reviewer })
   }
-  const name = reviewer && (reviewer.displayName ?? reviewer.name)
-  if (leadId) messages.push(row('lead', reviewer
-    ? `Review opened by itself for #${group.number}: ${name} reviews it. Cancel it here if it is not needed.`
-    : `Review opened by itself for #${group.number}, but no Reviewer is free. Route it and start one.`, [leadId],
-    // The Lead's wake, its alone (review of #2225): people read the review's brief and its status.
-    forRecipients({ kind: 'auto-review', reviewOf: group.id })))
-  return { review, reviewer, messages }
+  return opened
 }

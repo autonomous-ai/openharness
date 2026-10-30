@@ -184,17 +184,37 @@ export interface Assignment {
   /** When a review last found problems in its hand-off: the hand-off no longer pauses its quiet time (liveness.ts
    *  waitingForReview). Its next status clears it. */
   reviewFoundAt?: number
+  /** A task wanting two independent reviews only (Lead, 10-30: done once both passed at the same head): how many times its
+   *  agent handed it over for review in this attempt, each a new head, and each reviewer's latest verdict on its independent
+   *  checks with the hand-over it judged. */
+  handoffs?: number
+  verdicts?: ReviewVerdict[]
   /** Why and when it was lost (status `lost`); after a usage limit whose screen gave a reset time, when its own agent may
    *  take it back (work.resume) unless it was handed on first. */
   lost?: { reason: string; at: number; resumeAt?: string }
 }
+/** One reviewer's (actorKey) latest verdict on a task's independent checks, at its [handoff]-th hand-over. */
+export interface ReviewVerdict { by: string; passed: boolean; handoff: number }
+/** Whether [assignment] has passing verdicts from [wanted] different reviewers at its latest hand-over. One review needs none
+ *  of this: its checks say it. */
+export const reviewsPassed = (assignment: Assignment, wanted: number): boolean => wanted < 2 ||
+  (assignment.verdicts ?? []).filter(v => v.passed && v.handoff === (assignment.handoffs ?? 0)).length >= wanted
 export interface WorkTask {
   goal: string
   changes: string
   constraints: string
   owns: string[]
   requires?: TaskRequirement
+  /** What its reviews check first, and how many independent reviews it needs (autoReview.ts). Absent: one review, no focus. */
+  review?: ReviewPlan
 }
+/** The Lead's review plan for a task (nightly reflection 10-30: the Lead hand-sent a focus to 20+ reviews that day, and
+ *  built holder groups for second security reviews). `focus` leads every review the Swarm opens for it; `reviews: 2` opens
+ *  two, each by a different Reviewer. */
+export interface ReviewPlan { focus?: string; reviews?: 1 | 2 }
+
+/** How many independent reviews [task] needs: 2 only when its review plan says so. */
+export const reviewsWanted = (task: WorkTask | undefined): number => task?.review?.reviews === 2 ? 2 : 1
 /** Where a task can be done at all (2026-10-27: a task to check a device plugged into one person's Mac was routed to another
  *  machine by policy order). `machines`: it runs only there, or on a Mac's Harness Team account of one of them. `devices`:
  *  full paths every start for it asks its machine to check (cli superTabs/capacity.ts). Never in the rendered brief, since
@@ -214,8 +234,11 @@ export function withSeenRequirement<T extends Pick<Conversation, 'task'>>(group:
     unseenMachines: (requires.unseenMachines ?? 0) + requires.machines.length - machines.length } } }
 }
 
+export const TWO_REVIEWS = 'Two independent reviews, each by a different Reviewer.'
 export function renderWorkTask(task: WorkTask): string {
+  const review = [...task.review?.focus ? [task.review.focus] : [], ...reviewsWanted(task) === 2 ? [TWO_REVIEWS] : []]
   return `Goal:\n${task.goal}\n\nChanges:\n${task.changes}\n\nConstraints:\n${task.constraints}\n\nOwns:\n${task.owns.map(area => `- ${area}`).join('\n')}`
+    + (review.length ? `\n\nReview:\n${review.join('\n')}` : '')
 }
 
 export interface Conversation {

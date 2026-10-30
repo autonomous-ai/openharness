@@ -4,7 +4,7 @@ import { keepUsernames, setUsername, swarmUsernames } from './usernames.js'
 import { z } from 'zod'
 import { tokensByModelSchema } from './costs/tokens.js'
 import {
-  activeWork, actorKey, agent, agentRole, appendPullRequestUrls, author, conversation, crossProjectActive, fail, isLeads, person, stableId, syncLeads, numberConversations, nextConversationNumber, renderWorkTask,
+  activeWork, actorKey, agent, agentRole, appendPullRequestUrls, author, conversation, crossProjectActive, fail, isLeads, person, stableId, syncLeads, numberConversations, nextConversationNumber, renderWorkTask, reviewsPassed, reviewsWanted,
   finishWorker, requireWorkerDecisions, reviewing, seenMachineIds, swarmGridName, visibleState, AGENT_ONLY, STATUS_LABELS, forRecipients,
   type Actor, type AgentConfiguration, type AgentStart, type AgentStartRequest, type BuddySessionEntry, type WorkTask, type Agent, type Author, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
@@ -32,7 +32,7 @@ import { react, reactionSchema, type ReactionTarget } from './reactions.js'
 import { shipNotice, shippedAt } from './ship.js'
 import { assignedNotice, tellBuddies } from './buddyNews.js'
 import { bindPullRequestCards, bindTaskCard, pullRequestCard, recordCardMerged } from './cards.js'
-import { openReview, openReviewOf, projectPullRequest, verdictPending } from './autoReview.js'
+import { fullReviewOf, openReview, projectPullRequest, verdictPending } from './autoReview.js'
 import { carryOver, cheapAttempt, GRID_START_FAILED, REVIEW_FAILED, stepUp, stepUpRefusal } from './stepUp.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
 import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, isConfidential, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleDefaults, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, withRoleDefaults, type ProjectRole, type RoleDefaults, type RoleKind, type SwarmProject } from './projects.js'
@@ -92,6 +92,8 @@ export const startRequestSchema = z.object({
     maxCpuPercent: z.number().min(0).max(100), tools: z.array(z.string().regex(/^[A-Za-z0-9_.+-]{1,80}$/)).max(20),
     devices: z.array(path).max(20), quotaRequired: z.boolean() }).strict(),
 }).strict()
+/** The reviewers' verdicts an attempt keeps for a task wanting two reviews: the latest of each, the most recent ones. */
+const MAX_VERDICTS = 8
 const check = z.object({ description: z.string().trim().min(1).max(1000), independent: z.boolean() }).strict()
 const task = z.object({
   goal: z.string().trim().min(1).max(8000), changes: z.string().trim().min(1).max(8000),
@@ -99,6 +101,9 @@ const task = z.object({
   /** model.ts TaskRequirement; `unseenMachines` is only ever read back, never set. */
   requires: z.object({ machines: z.array(id).min(1).max(20).optional(), devices: z.array(path).min(1).max(20).optional() }).strict()
     .refine(r => r.machines || r.devices, 'Require at least one machine or device.').optional(),
+  /** model.ts ReviewPlan: what every review the Swarm opens for it checks first, and 2 for two independent reviews. */
+  review: z.object({ focus: z.string().trim().min(1).max(2000).optional(), reviews: z.union([z.literal(1), z.literal(2)]).optional() }).strict()
+    .refine(r => r.focus !== undefined || r.reviews !== undefined, 'Give the review a focus or a number of reviews.').optional(),
 }).strict()
 
 export const commandSchema = z.discriminatedUnion('type', [
@@ -256,10 +261,10 @@ const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'agent.start': ['request.name', 'overrideReason'],
   'agent.startFailed': ['error'],
   'agent.startSettled': ['warning'],
-  'conversation.create': ['title', 'brief', 'task.goal', 'task.changes', 'task.constraints', 'task.owns[]', 'checks[].description'],
+  'conversation.create': ['title', 'brief', 'task.goal', 'task.changes', 'task.constraints', 'task.owns[]', 'task.review.focus', 'checks[].description'],
   'conversation.rename': ['title'],
   'buddy.rename': ['name'],
-  'work.define': ['brief', 'task.goal', 'task.changes', 'task.constraints', 'task.owns[]', 'checks[].description'],
+  'work.define': ['brief', 'task.goal', 'task.changes', 'task.constraints', 'task.owns[]', 'task.review.focus', 'checks[].description'],
   'work.assign': ['overrideReason'],
   'work.status': ['result'],
   'work.cancel': ['reason'],
@@ -1451,8 +1456,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
           fail('REVIEW_TARGET', 'A review group reviews one build group of the same project.', 400)
         }
         requireCustomRole(project, 'reviewer')
-        // One open review at a time: a Lead on the skill text from before #610 would otherwise open one beside the Swarm's.
-        const pending = openReviewOf(state, reviewed)
+        // One open review at a time, or two for a task wanting two independent reviews: a Lead on the skill text from before
+        // #610 would otherwise open one beside the Swarm's.
+        const pending = fullReviewOf(state, reviewed)
         if (pending) fail('REVIEW_OPEN', `#${pending.number} ${pending.title} already reviews this work and has no verdict yet. Cancel it first, or wait for its verdict.`)
       }
       const requesterId = command.requesterId ? requester(state, project, command.requesterId) : actor.kind === 'person' ? actor.userId : undefined
@@ -2419,6 +2425,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (command.status === 'done' && (!command.result || !group.checks.every(c => c.passedBy && c.evidence))) {
         fail('CHECKS_PENDING', 'Completion needs a result and evidence for every acceptance check.')
       }
+      if (command.status === 'done' && !reviewsPassed(assignment, reviewsWanted(group.task))) {
+        fail('REVIEWS_PENDING', `This task wants ${reviewsWanted(group.task)} independent reviews: it is done once that many different Reviewers pass its independent check at the revision handed over last.`)
+      }
       let asked: string | undefined
       if (command.ask) {
         if (command.status !== 'needs_human' || !command.result || actor.kind !== 'agent') {
@@ -2436,6 +2445,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       const changed = assignment.status !== command.status || assignment.result !== command.result || !!command.ask, previous = assignment.status
       const waited = waitingForReview(assignment)
+      // Each hand-over of a task wanting two reviews is a new head: verdicts on an earlier one no longer count toward done.
+      if (changed && command.status === 'review' && actor.kind === 'agent' && actor.agentId === assignment.agentId && reviewsWanted(group.task) > 1) {
+        assignment.handoffs = (assignment.handoffs ?? 0) + 1
+      }
       assignment.status = command.status
       assignment.result = command.result
       // A new status is a new hand-off, or the end of one: a review's earlier findings are answered.
@@ -2459,7 +2472,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         message(group.id, `${label}${command.result ? `\n\n${command.result}` : ''}${asked}`, [...(tellLead ? [lead] : []), ...reviewers], null, SYSTEM_ROW)
         // The Engineer's own Ready for review with a pull request of the project opens its review (autoReview.ts).
         const pullRequest = command.status === 'review' && actor.kind === 'agent' && actor.agentId === assignment.agentId && !group.reviewOf
-          && !group.audience && !openReviewOf(state, group) ? projectPullRequest(state, group, command.result) : null
+          && !group.audience && !fullReviewOf(state, group) ? projectPullRequest(state, group, command.result) : null
         const opened = pullRequest && openReview(state, group, command.result!, pullRequest, { operationId, now: context.now, engineer: sender,
           // The owner's hard rules hold as for work.assign; the reviewed task's own requirement is its Engineer's, not its Reviewer's.
           mayWork: a => !teamWorkCheck(state, a.machineId, a.contributorId, groupProject(state, group), context.now, context.teamMachines, context.otherWorkspaceMachines)
@@ -2564,6 +2577,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       check.evidence = command.evidence
       check.passedBy = command.passed ? actorKey(actor) : null
+      // Two reviews pass one independent check in turn: each reviewer's own verdict is kept beside it, at most one each.
+      if (check.independent && !group.reviewOf && reviewsWanted(group.task) > 1) {
+        const by = actorKey(actor), assignment = group.assignment
+        assignment.verdicts = [...(assignment.verdicts ?? []).filter(v => v.by !== by), { by, passed: command.passed, handoff: assignment.handoffs ?? 0 }]
+          .slice(-MAX_VERDICTS)
+      }
       const run = group.ledger?.runs?.find(r => r.assignmentId === group.assignment!.id), reviewed = run?.firstReview
       // Before the review's first verdict is kept: a check's verdict counts once per attempt.
       if (actor.kind === 'agent') recordVerdict(state, group, check, agent(state, actor.agentId), context.now)

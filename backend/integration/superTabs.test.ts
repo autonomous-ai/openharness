@@ -2239,6 +2239,49 @@ describe('Super Tabs on a real Mongo replica set', () => {
     }
   })
 
+  // Nightly reflection 10-30: reviews the Swarm opened started without the Lead's focus, and second security reviews needed
+  // hand-built holder groups. The plan is stored on the task, reaches both reviews, and holds done until both passed.
+  it('opens both reviews of a task wanting two on different Reviewers, each with its focus, and holds done until both pass', async () => {
+    const tab = (await store.create(owner, randomUUID(), 'Pilot')).id
+    const lead = String((await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(), name: 'Lead',
+      configuration: config, lead: true, project: { cwd: '/fixture/repo', repositoryUrl: 'https://github.com/example/project' } } as Command)).result.agentId)
+    // A focus at its limit, saved, read back and saved again.
+    const focus = 'Check that a queued edit is never replayed twice after reconnect. '.repeat(40).slice(0, 2000).trim()
+    const task = { goal: 'Save edits offline.', changes: 'Queue edits.', constraints: 'No data loss.', owns: ['app/offline'], review: { focus, reviews: 2 as const } }
+    const checks = [{ description: 'Independent review', independent: true }]
+    const group = String((await run(tab, { type: 'conversation.create', title: 'Offline', task, checks })).result.conversationId)
+    const readBack = (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.task!
+    expect(readBack.review).toEqual({ focus, reviews: 2 })
+    await run(tab, { type: 'work.define', conversationId: group, task: readBack, checks })
+    const reviewers: string[] = []
+    for (let i = 0; i < 2; i++) {
+      const { startId } = await routedStart(tab, lead, 'reviewer')
+      reviewers.push(String((await run(tab, { type: 'agent.started', startId, harnessId: randomUUID(), configuration: { ...config, model: 'gpt-6.1-sol' } }, host, lead)).result.agentId))
+    }
+    const worker = String((await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Builder', configuration: { ...config, model: 'gpt-6.1-sol' }, lead: false })).result.agentId)
+    const built = String((await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId)
+    await run(tab, { type: 'work.status', conversationId: group, assignmentId: built, status: 'review', result: 'Ready at abc123. https://github.com/example/project/pull/9' }, host, worker)
+
+    const reviews = (await storedState(tab)).conversations.filter(c => c.reviewOf === group)
+    expect(reviews.map(r => r.title)).toEqual(['Review: Offline', 'Second review: Offline'])
+    expect(reviews.map(r => r.assignment?.agentId).sort()).toEqual([...reviewers].sort())
+    for (const review of reviews) expect(review.brief.startsWith(`Review focus:\n${focus}\n\n`)).toBe(true)
+    // The review groups read only the work they review: its own reviews are all the Swarm opened.
+    expect((await storedState(tab)).conversations.filter(c => c.reviewOf && c.reviewOf !== group)).toEqual([])
+
+    const independent = (await storedState(tab)).conversations.find(c => c.id === group)!.checks[0]!.id
+    const pass = (reviewer: string) => run(tab, { type: 'work.check', conversationId: group, assignmentId: built, checkId: independent, passed: true, evidence: 'Pass at abc123.' }, host, reviewer)
+    const done = () => run(tab, { type: 'work.status', conversationId: group, assignmentId: built, status: 'done', result: 'Merged.' }, host, worker)
+    await pass(reviewers[0]!)
+    await expect(done()).rejects.toMatchObject({ code: 'REVIEWS_PENDING' })
+    await pass(reviewers[1]!)
+    expect((await storedState(tab)).conversations.find(c => c.id === group)!.assignment).toMatchObject({ handoffs: 1,
+      verdicts: reviewers.map(r => ({ by: `agent:${r}`, passed: true, handoff: 1 })) })
+    await done()
+    expect((await storedState(tab)).conversations.find(c => c.id === group)!.assignment!.status).toBe('done')
+  })
+
   it('releases a started agent\'s route hold when the host stops it before assignment', async () => {
     const { tab, lead } = await fixture()
     const { routeDecisionId, startId } = await routedStart(tab, lead, 'reviewer')
