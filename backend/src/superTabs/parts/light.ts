@@ -102,6 +102,12 @@ export async function loadDeliveryParts(tx: Transaction, tabId: string, groupIds
     sequenceBase: head.sequenceBase, visibilityEpoch: head.visibilityEpoch, groupCounter: head.groupCounter } as SwarmParts
 }
 
+/** A Swarm's live groups that `match` finds through `index`, light as `loadLight` keeps them: for a read that only checks who may
+ *  read them (the route-decision list), where a brief or a task is bytes sent for nothing. Never committed as state. */
+export async function loadLightGroups(tx: Transaction, tabId: string, index: GroupIndex, match: Record<string, unknown>): Promise<Part<GroupData>[]> {
+  return (await groupsBy(tx, index, [{ $match: { tabId, deleted: false, ...match } as Prisma.InputJsonValue }, { $project: LIGHT_GROUP }])).map(lightGroup)
+}
+
 /**
  * The live parts of one Swarm with conversations light. Conversations: every active one (`groups: 'active'`, as
  * `loadActive`), or only the Lead conversations and those with running work (`'working'`: what visibility and derived
