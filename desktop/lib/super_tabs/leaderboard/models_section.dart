@@ -15,12 +15,9 @@ import 'reader.dart';
 const _gap = DesktopChrome.controlGap;
 const _rowHeight = 36.0;
 
-/// How many models the sidebar lists until its heading shows them all.
-const leaderboardModelsShown = 3;
-
 /// A model as the sidebar's Models lists it: every engine and effort it ran
-/// at as one, its share of the week's tasks, and how many of its tasks
-/// reviewers approved on first review.
+/// at as one, its share of the tasks, and how many of its tasks reviewers
+/// approved on first review.
 class LeaderboardModelShare {
   const LeaderboardModelShare({
     required this.name,
@@ -32,47 +29,38 @@ class LeaderboardModelShare {
     required this.passed,
   });
 
-  /// "Opus 5.5", "GPT-6.1 Sol"; the engine's name when it reported no model.
+  /// "Opus 5.5", "GPT-6.1 Sol"; "Codex, model not reported" when the agent
+  /// reported none.
   final String name;
 
-  /// The engine that ran most of its tasks: its icon leads the row. Null for
-  /// [LeaderboardModelShare.other], which no one engine ran.
-  final String? engine;
+  /// The engine that ran most of its tasks: its icon leads the row.
+  final String engine;
 
   /// Its tasks, of the [total] every model ran.
   final int attempts, total;
 
-  /// Its share of [total], rounded so the week's rows add up to 100.
+  /// Its share of [total], rounded so the rows add up to 100.
   final int percent;
   final int reviewed, passed;
 
-  /// The models behind the heading as one row, so the rows shown add up to
-  /// 100 too: its percent is the sum of theirs, never a rounding of its own.
-  factory LeaderboardModelShare.other(List<LeaderboardModelShare> rest) =>
-      LeaderboardModelShare(
-        name: 'Other',
-        engine: null,
-        attempts: rest.fold(0, (sum, share) => sum + share.attempts),
-        total: rest.first.total,
-        percent: rest.fold(0, (sum, share) => sum + share.percent),
-        reviewed: rest.fold(0, (sum, share) => sum + share.reviewed),
-        passed: rest.fold(0, (sum, share) => sum + share.passed),
-      );
+  /// The share as the row says it: under 1% is never 0%, as it ran tasks.
+  String get percentLabel => percent == 0 ? '<1%' : '$percent%';
 }
 
-/// The week's models that ran tasks, the largest share first, then by name.
-/// Shares round by largest remainder: the floors, then one more point each
-/// to the largest remainders until they add up to 100.
+/// The models that ran tasks in the last 7 days, or the board's week from a
+/// server before those, the largest share first, then by name. Shares round
+/// by largest remainder: the floors, then one more point each to the largest
+/// remainders until they add up to 100.
 List<LeaderboardModelShare> leaderboardModelShares(SuperTabLeaderboard board) {
   final merged =
       <
         String,
         ({Map<String, int> engines, int attempts, int reviewed, int passed})
       >{};
-  for (final score in board.byModel) {
+  for (final score in board.recentModels ?? board.byModel) {
     final name = switch (score.model) {
       final String model => modelDisplayName(model),
-      null => engineIdentity(score.engine).label,
+      null => '${engineIdentity(score.engine).label}, model not reported',
     };
     // One row per model, whichever engine ran it at whichever effort:
     // rows are keyed by name.
@@ -124,72 +112,60 @@ List<LeaderboardModelShare> leaderboardModelShares(SuperTabLeaderboard board) {
   ];
 }
 
-/// The left sidebar's Models, after Machines (Dee, 2026-10-29): each model's
-/// share of the tasks of the week the right pane shows, behind its engine's
-/// icon, the counts and its first-review pass rate in words on hover and to a
-/// screen reader. Behind the first [leaderboardModelsShown] the rest are one
-/// Other row, so the rows shown add up to 100%; the heading names them all.
-/// Nothing shows without a board of [projectId], or when no model ran a task
-/// that week.
-class LeaderboardModelsSection extends StatefulWidget {
+/// The left sidebar's Models, after Machines (Dee, 2026-10-29 and 10-30):
+/// every model by its exact name with its share of the agents' tasks of the
+/// last 7 days, largest first, behind its engine's icon; the counts and its
+/// first-review pass rate in words on hover and to a screen reader. Its
+/// chevron collapses it like every other section. A server before the last
+/// 7 days gives the board's week instead, under the same heading. Nothing
+/// shows without a board of [projectId], or when no model ran a task.
+class LeaderboardModelsSection extends StatelessWidget {
   const LeaderboardModelsSection({
     super.key,
     required this.board,
     required this.projectId,
+    required this.collapsed,
+    required this.onToggleCollapsed,
     this.now = DateTime.now,
   });
   final SuperTabLeaderboardReader board;
 
   /// The open project; a board of any other shows nothing.
   final String? projectId;
+  final bool collapsed;
+  final VoidCallback onToggleCollapsed;
   final DateTime Function() now;
 
   @override
-  State<LeaderboardModelsSection> createState() =>
-      _LeaderboardModelsSectionState();
-}
-
-class _LeaderboardModelsSectionState extends State<LeaderboardModelsSection> {
-  var _all = false;
-
-  @override
   Widget build(BuildContext context) => ListenableBuilder(
-    listenable: widget.board,
+    listenable: board,
     builder: (context, _) {
-      final board = widget.board.board;
-      if (board == null || board.projectId != widget.projectId) {
+      final read = board.board;
+      if (read == null || read.projectId != projectId) {
         return const SizedBox.shrink();
       }
-      final shares = leaderboardModelShares(board);
+      final shares = leaderboardModelShares(read);
       if (shares.isEmpty) return const SizedBox.shrink();
-      final more = shares.length > leaderboardModelsShown;
-      final week = weekName(widget.board.week, leaderboardWeekOf(widget.now()));
+      final span = read.recentModels != null
+          ? 'in the last 7 days'
+          : weekName(board.week, leaderboardWeekOf(now()));
       final style = leaderboardPointsStyle();
       final column = _width(context, '100%', style);
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           SuperTabSectionHeading(
-            'Models · $week',
+            'Models',
             key: const ValueKey('super-models-heading'),
             endInset: 0,
-            startInset: SuperTabSectionHeading.indentFor(0),
-            collapsed: more ? !_all : null,
-            onToggleCollapsed: more ? () => setState(() => _all = !_all) : null,
+            collapsed: collapsed,
+            onToggleCollapsed: onToggleCollapsed,
+            tooltip: read.recentModels != null
+                ? 'Share of agent work, last 7 days'
+                : 'Share of agent work, $span',
           ),
-          for (final share
-              in _all ? shares : shares.take(leaderboardModelsShown))
-            _row(share, week, style, column),
-          if (more && !_all)
-            _row(
-              LeaderboardModelShare.other(
-                shares.sublist(leaderboardModelsShown),
-              ),
-              week,
-              style,
-              column,
-              key: const ValueKey('super-models-other'),
-            ),
+          if (!collapsed)
+            for (final share in shares) _row(share, span, style, column),
         ],
       );
     },
@@ -197,18 +173,17 @@ class _LeaderboardModelsSectionState extends State<LeaderboardModelsSection> {
 
   Widget _row(
     LeaderboardModelShare share,
-    String week,
+    String span,
     TextStyle style,
-    double column, {
-    Key? key,
-  }) {
+    double column,
+  ) {
     final reviews = share.reviewed == 0
         ? 'no first review yet'
         : '${(share.passed * 100 / share.reviewed).round()}% passed first review';
     final words =
-        '${share.name}: ${share.attempts} of ${share.total} tasks $week · $reviews';
+        '${share.name}: ${share.attempts} of ${share.total} tasks $span · $reviews';
     return Tooltip(
-      key: key ?? ValueKey('super-model-${share.name}'),
+      key: ValueKey('super-model-${share.name}'),
       message: words,
       excludeFromSemantics: true,
       child: Semantics(
@@ -232,15 +207,12 @@ class _LeaderboardModelsSectionState extends State<LeaderboardModelsSection> {
                 children: [
                   SizedBox(
                     width: SuperTabSectionHeading.actionWidth,
-                    // Other has no engine: its icon column stays empty.
-                    child: share.engine == null
-                        ? null
-                        : Center(
-                            child: EngineMark(
-                              engine: share.engine,
-                              size: AppIcons.inlineSize,
-                            ),
-                          ),
+                    child: Center(
+                      child: EngineMark(
+                        engine: share.engine,
+                        size: AppIcons.inlineSize,
+                      ),
+                    ),
                   ),
                   Expanded(
                     child: Text(
@@ -256,7 +228,7 @@ class _LeaderboardModelsSectionState extends State<LeaderboardModelsSection> {
                   SizedBox(
                     width: column,
                     child: Text(
-                      '${share.percent}%',
+                      share.percentLabel,
                       maxLines: 1,
                       textAlign: TextAlign.right,
                       style: style,

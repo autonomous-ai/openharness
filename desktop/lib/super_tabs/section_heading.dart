@@ -18,6 +18,7 @@ class SuperTabSectionHeading extends StatelessWidget {
     this.startInset,
     this.collapsed,
     this.onToggleCollapsed,
+    this.tooltip,
   });
 
   final String title;
@@ -47,6 +48,10 @@ class SuperTabSectionHeading extends StatelessWidget {
   /// Set on a heading that collapses a sidebar group; its label and an adjacent
   /// trailing chevron form one button on the left of the heading.
   final VoidCallback? onToggleCollapsed;
+
+  /// What hovering a collapsible heading says instead of "Collapse [title]":
+  /// what the section shows, when its title alone does not say.
+  final String? tooltip;
 
   /// The chevron and every action are a fixed 32 px square; the gap
   /// before the actions is 4 px; the title always keeps at least this
@@ -122,6 +127,7 @@ class SuperTabSectionHeading extends StatelessWidget {
                             expanded: collapsed != true,
                             child: Tooltip(
                               message:
+                                  tooltip ??
                                   '${collapsed == true ? 'Expand' : 'Collapse'} $title',
                               child: InkWell(
                                 onTap: onToggleCollapsed,

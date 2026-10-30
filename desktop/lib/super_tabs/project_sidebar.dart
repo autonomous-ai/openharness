@@ -889,6 +889,8 @@ class ProjectSidebar extends StatelessWidget {
             LeaderboardModelsSection(
               board: board,
               projectId: snapshot?.projectFor(controller.selectedId)?.id,
+              collapsed: !controller.modelsGroupOpen,
+              onToggleCollapsed: controller.toggleModelsGroup,
               now: now,
             ),
           ],

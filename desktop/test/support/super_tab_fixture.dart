@@ -454,6 +454,10 @@ class ConversationServer {
   /// The leaderboard read's answer; reads of it are listed in [leaderboardReads].
   Map<String, dynamic>? leaderboard;
   final leaderboardReads = <String>[];
+
+  /// How many leaderboard reads fail as a server that is down does, before
+  /// they answer again.
+  var failLeaderboardReads = 0;
   // The reader's tags, newest last, answered by GET .../mentions?state=.
   final mentions = <Map<String, dynamic>>[];
   // Decisions asked of the reader, newest last, answered by GET .../decisions?state=.
@@ -1227,6 +1231,10 @@ class ConversationServer {
     }
     if (uri.pathSegments.last == 'leaderboard') {
       leaderboardReads.add(path);
+      if (failLeaderboardReads > 0) {
+        failLeaderboardReads--;
+        throw const SuperTabFailure('OFFLINE', 'No connection.', statusCode: 503);
+      }
       final board = leaderboard;
       if (board == null) {
         throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
