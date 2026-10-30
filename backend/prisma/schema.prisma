@@ -1163,6 +1163,34 @@ model SuperTabReadMark {
   @@index([updatedAt], map: "read_mark_expiry")
 }
 
+/// How far a person has read one thread: the newest reply sequence they saw there (superTabs/readMarks.ts). Apart from
+/// SuperTabReadMark so a backend without thread marks never reads one as a conversation's mark. At most THREAD_MARK_CAP per
+/// person and Swarm; the worker's hourly sweep deletes those untouched for 180 days and those of Swarms and people gone.
+model SuperTabThreadMark {
+  id             String   @id @map("_id")
+  tabId          String
+  personId       String
+  conversationId String
+  /// The thread's root message id.
+  threadId       String
+  sequence       Int
+  updatedAt      DateTime
+
+  /// A person's marks: every one (a first load, the inbox, the cap's count and oldest) or those moved since a change read's
+  /// cursor, and each Swarm's people with marks (the sweep) (parts/indexed.ts NAMED_INDEX).
+  @@index([tabId, personId, updatedAt])
+  /// The sweep's marks untouched for 180 days (readMarks.ts sweepThreadMarks); no TTL option, which the app user cannot set.
+  @@index([updatedAt])
+}
+
+/// Where a Swarm sweep reads on from between passes and releases, one row per sweep (readMarks.ts sweepThreadMarks: id
+/// "thread-marks", the last Swarm whose people check finished). Written by the singleton worker alone.
+model SuperTabSweepCursor {
+  id        String   @id @map("_id")
+  after     String
+  updatedAt DateTime
+}
+
 /// A question to one person, with options and a recommendation (backend/src/superTabs/decisions.ts). Kept out of the tab
 /// state, as mentions are: an asking agent and the asked person read it, and the person answers it once.
 model SuperTabDecision {

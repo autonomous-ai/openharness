@@ -186,7 +186,8 @@ describe('avatar uploads', () => {
 
   it('is refused outside the Swarm and for a viewer', async () => {
     const tab = await swarm()
-    expect((await upload(tab, image(64), 'me.png', 'image/png', outsider)).status).toBe(403)
+    // Outside it, refused as a Swarm that does not exist (routes/superTabs.ts NOT_AVAILABLE).
+    expect(await upload(tab, image(64), 'me.png', 'image/png', outsider)).toMatchObject({ status: 404, code: 'NOT_FOUND' })
     const viewing = (await store.create(owner, randomUUID(), 'Read only')).id
     const invitation = await run(viewing, { type: 'invite.create', email: peer.email, role: 'viewer', conversationId: 'lead' })
     await run(viewing, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, peer)

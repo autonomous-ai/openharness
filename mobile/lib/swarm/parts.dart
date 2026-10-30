@@ -60,6 +60,7 @@ class SuperTabParts {
     // Read marks are held apart from the other derived values (_readMarks).
     final derived = Map.of(superTabMap(answer['derived'] ?? const {}));
     final marks = derived.remove('readMarks');
+    final threadMarks = derived.remove('threadMarks');
     final parts = SuperTabParts._(
       _envelope(answer['head'], live: true),
       derived,
@@ -79,6 +80,7 @@ class SuperTabParts {
       }
     }
     parts._takeReadMarks(marks);
+    parts._takeThreadMarks(threadMarks);
     return parts;
   }
 
@@ -101,6 +103,7 @@ class SuperTabParts {
       }
     }
     parts._takeReadMarks(json['readMarks']);
+    parts._takeThreadMarks(json['threadMarks']);
     return parts;
   }
 
@@ -141,6 +144,27 @@ class SuperTabParts {
       if ((_readMarks[key] ?? 0) >= value) continue;
       _readMarks[key] = value.toInt();
       moved = true;
+    }
+    return moved;
+  }
+
+  /// The reader's own thread marks (backend readMarks.ts): by conversation, the newest message sequence read in each
+  /// thread, by its root. Kept as read marks are: the higher of each, and gone with their conversation.
+  final _threadMarks = <String, Map<String, int>>{};
+
+  /// Keeps the higher of each thread mark in [marks] and the one held; whether any moved.
+  bool _takeThreadMarks(Object? marks) {
+    var moved = false;
+    if (marks is! Map) return moved;
+    for (final MapEntry(key: id, value: threads) in marks.entries) {
+      if (id is! String || threads is! Map) continue;
+      for (final MapEntry(key: root, value: sequence) in threads.entries) {
+        if (root is! String || sequence is! num) continue;
+        final held = _threadMarks[id] ??= {};
+        if ((held[root] ?? 0) >= sequence) continue;
+        held[root] = sequence.toInt();
+        moved = true;
+      }
     }
     return moved;
   }
@@ -199,6 +223,7 @@ class SuperTabParts {
             _dormant.remove(key);
             _stale.remove(key);
             _readMarks.remove(key);
+            _threadMarks.remove(key);
             removed.add(key);
           }
         } else if (kind == 'groups' && part['dormant'] == true) {
@@ -226,7 +251,10 @@ class SuperTabParts {
       }
     }
     final derived = Map.of(superTabMap(changes['derived'] ?? const {}));
-    final marksMoved = _takeReadMarks(derived.remove('readMarks'));
+    final readMarksMoved = _takeReadMarks(derived.remove('readMarks'));
+    // Both run: one moving never skips the other.
+    final marksMoved =
+        _takeThreadMarks(derived.remove('threadMarks')) | readMarksMoved;
     if (!const DeepCollectionEquality().equals(derived, _derived)) {
       _derived = derived;
       changed = true;
@@ -319,6 +347,12 @@ class SuperTabParts {
     // Sent only where the server does not try Harness Team accounts yet.
     if (_derived['teamAccounts'] == false) state['teamAccounts'] = false;
     if (_readMarks.isNotEmpty) state['readMarks'] = Map.of(_readMarks);
+    if (_threadMarks.isNotEmpty) {
+      state['threadMarks'] = {
+        for (final MapEntry(:key, :value) in _threadMarks.entries)
+          key: Map<String, int>.of(value),
+      };
+    }
     return state;
   }
 
@@ -339,6 +373,10 @@ class SuperTabParts {
     'seen': Map<String, int>.of(_seen),
     'stale': _stale.toList(),
     'readMarks': Map<String, int>.of(_readMarks),
+    'threadMarks': {
+      for (final MapEntry(:key, :value) in _threadMarks.entries)
+        key: Map<String, int>.of(value),
+    },
   };
 
   /// [json] (from [toJson]) without what the screens never draw: agent starts carry their tasks, and project
