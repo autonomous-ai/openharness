@@ -728,6 +728,23 @@ describe('the lane\'s own bounds', () => {
     expect(seal.drop).toHaveBeenCalledTimes(1)
   })
 
+  it('a linked machine with no session or hello in flight that refuses this one\'s key is believed: its next frame starts no hello', async () => {
+    // Security review on #2357: with only the session and hello parts of that check, every test still passed.
+    const { server, link, lines, seal, heard } = await lane()
+    await link.online()
+    const startedAt = (link as unknown as { startedAt: Map<string, unknown> }).startedAt
+    server.send({ type: 'e2e_denied', machineId: LINKED, payload: {} })
+    await until('the linked machine\'s denial', () => lines.some((line) => line.includes(`e2e denied ${LINKED}`)))
+    expect(lines.filter((line) => line.includes(`e2e denied ${LINKED}`))).toHaveLength(1)
+    expect([...startedAt.keys()]).toEqual([LINKED])
+    // Its next sealed frame is held and starts no hello; another linked machine's, sent after it, still does.
+    server.send({ type: 'commander_question', machineId: LINKED, agentId: 'a1', payload: { __e2e: { n: 0, k: 'g' } } })
+    server.send({ type: 'commander_question', machineId: LINKED_2, agentId: 'b1', payload: { __e2e: { n: 0, k: 'g' } } })
+    await until('the other machine\'s question, opened', () => heard.some((frame) => frame.machineId === LINKED_2))
+    expect(seal.hello.mock.calls.map(([machineId]) => machineId)).toEqual([LINKED_2])
+    expect(heard.some((frame) => frame.machineId === LINKED)).toBe(false)
+  })
+
   it('keeps a frame held just after a renewal until the delayed renewal reads it, however slow its welcome', async () => {
     // Held at the start of the per-machine limit (30 s), renewed when it ends, welcomed just inside the hello's
     // 15 s: read 45 s after it was held. A hold time of 30 s threw it away before the renewal could read it.
