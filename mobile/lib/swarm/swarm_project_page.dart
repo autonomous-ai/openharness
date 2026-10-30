@@ -464,7 +464,8 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
     ),
   );
 
-  /// Closes the sheet open, if any: once this frame is done, as a page that
+  /// Closes the sheet open, if any, and a dialog or sheet over it, with what
+  /// it shows (Approve's question): once this frame is done, as a page that
   /// lost its project, or is going away, may not change the navigator while
   /// it does.
   void _closeSheet() {
@@ -472,7 +473,10 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
     _sheet = null;
     if (sheet == null) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (sheet.isActive) sheet.navigator?.removeRoute(sheet);
+      if (!sheet.isActive) return;
+      final navigator = sheet.navigator!;
+      navigator.popUntil((top) => top == sheet || top is! PopupRoute);
+      navigator.removeRoute(sheet);
     });
   }
 

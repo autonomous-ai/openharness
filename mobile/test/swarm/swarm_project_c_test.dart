@@ -351,15 +351,14 @@ void main() {
       });
     });
 
-    testWidgets('access taken away while Approve asks: confirming it then '
-        'holds and sends nothing', (tester) async {
+    testWidgets('access taken away while Approve asks: confirming it before '
+        'the dialog goes holds and sends nothing', (tester) async {
       final fake = asked();
       await team(tester, fake);
 
       await tester.tap(key('swarm-approve-d1'));
       await tester.pumpAndSettle();
       host(tester).session!.inbox.reader(tab)!.revoke();
-      await tester.pump();
       await tester.tap(key('swarm-activity-approve-confirm'));
       await tester.pumpAndSettle();
       await tester.pump(const Duration(seconds: 5));
@@ -367,6 +366,73 @@ void main() {
 
       expect(fake.commands, isEmpty);
       expect(find.byType(SwarmWaitingRow), findsNothing);
+    });
+
+    /// Approve asking over the Team sheet, its question on screen.
+    Future<FakeSwarm> asking(WidgetTester tester) async {
+      final fake = asked();
+      await team(tester, fake);
+      await tester.tap(key('swarm-approve-d1'));
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsOneWidget);
+      return fake;
+    }
+
+    /// Nothing of Approve or the sheet stays, and nothing was sent.
+    Future<void> expectAllGone(WidgetTester tester, FakeSwarm fake) async {
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.textContaining('Merge #2160?'), findsNothing);
+      expect(key('swarm-activity-approve-confirm'), findsNothing);
+      expect(find.byType(BottomSheet), findsNothing);
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pumpAndSettle();
+      expect(fake.commands, isEmpty);
+    }
+
+    testWidgets('access taken away while Approve asks: the dialog goes with '
+        'the sheet, and its question with it', (tester) async {
+      final fake = await asking(tester);
+
+      host(tester).session!.inbox.reader(tab)!.revoke();
+
+      await expectAllGone(tester, fake);
+    });
+
+    testWidgets('the project taken off the Swarm while Approve asks: the '
+        'dialog goes with the sheet', (tester) async {
+      final fake = await asking(tester);
+
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => {
+        ...changes(cursor: 'c3'),
+        'head': part('head', 2, headData(projects: const [])),
+      };
+      await host(tester).session!.inbox.reader(tab)!.refresh();
+
+      await expectAllGone(tester, fake);
+    });
+
+    testWidgets('the account signing out while Approve asks: the dialog goes '
+        'with the sheet', (tester) async {
+      final fake = await asking(tester);
+
+      (host(tester).account as ValueNotifier<String?>).value = null;
+
+      await expectAllGone(tester, fake);
+    });
+
+    testWidgets('closing the sheet takes nothing under it: the chat and the '
+        'page stay', (tester) async {
+      final fake = await asking(tester);
+
+      await tester.tap(key('swarm-activity-approve-cancel'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-team-close'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SwarmProjectPage), findsOneWidget);
+      expect(find.text('CI on #2154 is green.'), findsOneWidget);
+      expect(fake.commands, isEmpty);
     });
 
     testWidgets('a task opens its chat', (tester) async {

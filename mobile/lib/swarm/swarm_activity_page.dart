@@ -364,6 +364,10 @@ Future<bool> confirmSwarmApprove(
       : ' in #${decision.projectName}';
   final yes = await showDialog<bool>(
     context: context,
+    // Over the page or sheet it asks from, on their navigator: what closes
+    // them, as access is lost, finds it there. The shell's pages are on a
+    // navigator of their own, under the app's.
+    useRootNavigator: false,
     builder: (context) => AlertDialog(
       title: Text(
         'Approve?',
