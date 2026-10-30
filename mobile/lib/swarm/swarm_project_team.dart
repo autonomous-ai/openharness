@@ -1,7 +1,6 @@
-import 'dart:async';
-
 import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
@@ -9,10 +8,8 @@ import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
-import 'identity.dart';
 import 'model.dart';
 import 'swarm_leaderboard.dart';
-import 'swarm_leaderboard_reader.dart';
 import 'swarm_project_tasks.dart';
 import 'swarm_reader.dart';
 import 'swarm_row.dart';
@@ -20,19 +17,6 @@ import 'swarm_session.dart';
 import 'swarm_style.dart';
 import 'swarm_task_status.dart';
 import 'team_glance.dart';
-
-/// The people of [project] in [snapshot]: everyone in the Swarm, or, for a
-/// private project, only its owner and members — the people who read it.
-List<SuperTabPerson> swarmProjectPeople(
-  SuperTabSnapshot snapshot,
-  SuperTabProject project,
-) => [
-  for (final person in snapshot.people)
-    if (!project.isPrivate ||
-        person.id == project.ownerId ||
-        project.memberIds.contains(person.id))
-      person,
-];
 
 /// "3 humans · 5 agents", the people and agents of a project in words; the
 /// agents left out when there are none, as the team's line then says so.
@@ -150,66 +134,6 @@ String swarmTeamAgentsLine(List<SwarmTeamAgent> team) => [
       '$n ${state.counted}',
 ].join(' · ');
 
-/// The open [tasks] of a project counted as its Team's Tasks caption says
-/// them, in the order they are listed: "1 waiting on you · 2 working"; empty
-/// when none is open.
-String swarmTeamTasksLine(SwarmProjectTaskLists tasks) => [
-  if (tasks.waiting.isNotEmpty) '${tasks.waiting.length} waiting on you',
-  if (tasks.working.isNotEmpty) '${tasks.working.length} working',
-].join(' · ');
-
-/// One person on a project's Team: what they are on now (the status they
-/// set, while it lasts), their week's [score] from its board, if the board
-/// has answered, and whether they are the viewer.
-typedef SwarmTeamHuman = ({
-  SuperTabPerson person,
-  String name,
-  String? now,
-  SwarmScore? score,
-  bool own,
-});
-
-/// [project]'s people ([swarmProjectPeople]) as its Team lists them: by this
-/// week's points on [board], most first, then by name, letter case aside —
-/// all by name while there is no board. No ranks (Dee, 2026-10-29); each row
-/// shows its points beside a line of what earned them, as Desktop's member
-/// list does (#2230). Matched by id, never by name.
-List<SwarmTeamHuman> swarmProjectHumans(
-  SuperTabSnapshot snapshot,
-  SuperTabProject project,
-  SwarmLeaderboard? board, {
-  required String viewer,
-  DateTime? now,
-}) {
-  final at = now ?? clock.now();
-  final scores = {
-    for (final score in board?.people ?? const <SwarmScore>[])
-      score.personId: score,
-  };
-  final humans = [
-    for (final person in swarmProjectPeople(snapshot, project))
-      (
-        person: person,
-        name:
-            scores[person.id]?.displayName ?? superTabPersonName(person.email),
-        now: switch (person.status) {
-          final status? when status.shownAt(at) => status.label,
-          _ => null,
-        },
-        score: scores[person.id],
-        own: person.id == viewer,
-      ),
-  ];
-  String sortName(SwarmTeamHuman h) => h.name.toLowerCase();
-  int points(SwarmTeamHuman h) => h.score?.points ?? 0;
-  return humans..sort((a, b) {
-    final byPoints = points(b).compareTo(points(a));
-    if (byPoints != 0) return byPoints;
-    final byName = sortName(a).compareTo(sortName(b));
-    return byName != 0 ? byName : a.person.id.compareTo(b.person.id);
-  });
-}
-
 /// The colour of [state]'s dot on an agent's face. Never the only signal: the
 /// row says the state in words.
 Color swarmMemberColor(SwarmMemberState state) => switch (state) {
@@ -220,21 +144,57 @@ Color swarmMemberColor(SwarmMemberState state) => switch (state) {
   SwarmMemberState.idle || SwarmMemberState.stopped => AppPalette.textFaint,
 };
 
+/// A project's Team, in the sheet its menu opens (Tony, 2026-10-30), under
+/// ✕ and "Team": [SwarmProjectTeam] of whichever read its Swarm has. The page
+/// under it closes it when the read or the project is gone.
+class SwarmProjectTeamSheet extends StatelessWidget {
+  const SwarmProjectTeamSheet({
+    super.key,
+    required this.swarmId,
+    required this.projectId,
+    required this.onOpen,
+  });
+
+  final String swarmId, projectId;
+
+  /// Opens one of the project's chats, by id: over this sheet, and back comes
+  /// back to it.
+  final ValueChanged<String> onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    final session = SwarmScope.of(context);
+    return SwarmProjectSheetFrame(
+      title: 'Team',
+      closeKey: 'swarm-team-close',
+      child: session == null
+          ? const SizedBox.shrink()
+          : ListenableBuilder(
+              listenable: session.inbox,
+              builder: (context, _) => switch (session.inbox.reader(swarmId)) {
+                final reader? => SwarmProjectTeam(
+                  session: session,
+                  reader: reader,
+                  projectId: projectId,
+                  onOpen: onOpen,
+                ),
+                null => const SizedBox.shrink(),
+              },
+            ),
+    );
+  }
+}
+
 /// A project's Team, as Swarm Home C draws it (Tony, 2026-10-30) to Dee's
-/// rules (2026-10-29), one row shape for all ([SwarmMemberRow]) and no
-/// ranks. On top its open tasks (Tony, 2026-10-30: Home C has no Tasks tab),
-/// in the Tasks tab's rows: what waits on the person there, then the work
-/// going on ([swarmProjectTasks]), counted beside their caption, each
-/// opening its chat ([onOpen]). Then its humans by this week's points, most first, then by name, each
-/// opening their week; then its agents, each in its state with the task it
-/// holds, the most urgent first ([swarmProjectAgents]), with what needs a look
-/// counted beside their caption, each opening the task it holds ([onOpen]).
-///
-/// The points are the project's leaderboard ([SwarmLeaderboardReader]),
-/// read as the tab opens and every few minutes while the app is in front:
-/// until it answers the people show without points; a read that failed says
-/// why, with Try again. A pull reads the Swarm and the board again. Nothing
-/// read for one Swarm or project is shown for another.
+/// rules (2026-10-29), one row shape for its agents ([SwarmMemberRow]). On
+/// top its open tasks, in the Tasks tab's rows: what waits on the person,
+/// then the work going on ([swarmProjectTasks]) — the first [workShown], and
+/// a row that shows the rest in place — each opening its chat ([onOpen]).
+/// Then its agents, each in its state with the task it holds, the most urgent
+/// first ([swarmProjectAgents]), with what needs a look counted beside their
+/// caption, each opening the task it holds ([onOpen]). Its humans are on the
+/// project's leaderboard. A pull reads the Swarm again.
 class SwarmProjectTeam extends StatefulWidget {
   const SwarmProjectTeam({
     super.key,
@@ -251,75 +211,23 @@ class SwarmProjectTeam extends StatefulWidget {
   /// Opens one of the project's chats, by id.
   final ValueChanged<String> onOpen;
 
+  /// How much of the work going on shows before See all: a Swarm with a
+  /// hundred open tasks still reaches its agents (Tony, 2026-10-30).
+  static const workShown = 5;
+
   @override
   State<SwarmProjectTeam> createState() => _SwarmProjectTeamState();
 }
 
 class _SwarmProjectTeamState extends State<SwarmProjectTeam> {
-  late SwarmLeaderboardReader _board = _read();
-
-  /// The person's week this Team opened, while it is up. What it shows is
-  /// the project's: it closes with the Team, and when the read, the Swarm or
-  /// the project it was opened from is gone ([_closeWeek]).
-  ModalRoute<void>? _week;
-
-  SwarmLeaderboardReader _read() => SwarmLeaderboardReader(
-    tabId: widget.reader.tabId,
-    projectId: widget.projectId,
-    request: widget.reader.request,
-    inFront: () => widget.session.inbox.shown,
-  )..start();
+  /// See all was tapped: kept here, so no read of the Swarm folds it again.
+  bool _allWork = false;
 
   @override
   void didUpdateWidget(SwarmProjectTeam old) {
     super.didUpdateWidget(old);
-    // Another Swarm's read or another project: none of the last board stays.
-    if (old.reader != widget.reader || old.projectId != widget.projectId) {
-      _board.dispose();
-      _board = _read();
-    }
-    if (old.session != widget.session ||
-        old.reader != widget.reader ||
-        old.projectId != widget.projectId) {
-      _closeWeek();
-    }
+    if (old.projectId != widget.projectId) _allWork = false;
   }
-
-  @override
-  void dispose() {
-    _closeWeek();
-    _board.dispose();
-    super.dispose();
-  }
-
-  void _openWeek(SwarmTeamHuman h, SwarmScore score) {
-    ModalRoute<void>? shown;
-    unawaited(
-      showSwarmPersonWeek(
-        context,
-        score: score,
-        person: h.person,
-        name: h.name,
-        opened: (route) => _week = shown = route,
-      ).whenComplete(() {
-        if (_week == shown) _week = null;
-      }),
-    );
-  }
-
-  /// Closes the week open, if any: once this frame is done, as a Team going
-  /// away may not change the navigator while it does.
-  void _closeWeek() {
-    final week = _week;
-    _week = null;
-    if (week == null) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (week.isActive) week.navigator?.removeRoute(week);
-    });
-  }
-
-  Future<void> _pull() =>
-      Future.wait([widget.reader.refresh(), _board.refresh()]);
 
   @override
   Widget build(BuildContext context) {
@@ -328,30 +236,27 @@ class _SwarmProjectTeamState extends State<SwarmProjectTeam> {
     final reader = widget.reader;
     return ListenableBuilder(
       // Needs and held answers move with the session and its inbox; the
-      // work and the team with the read; the points with the board.
-      listenable: Listenable.merge([session, session.inbox, reader, _board]),
+      // work and the team with the read.
+      listenable: Listenable.merge([session, session.inbox, reader]),
       builder: (context, _) {
         final snapshot = reader.snapshot;
         final project = snapshot?.projects
             .where((p) => p.id == widget.projectId)
             .firstOrNull;
         if (snapshot == null || project == null) {
-          _closeWeek();
           return const SizedBox.shrink();
         }
         final now = clock.now();
         final tasks = swarmProjectTasks(session.inbox, reader, project.id, now);
         final personName = swarmTaskPersonName(snapshot);
         final agents = swarmProjectAgents(snapshot, project.id);
-        final board = _board.board;
-        final humans = swarmProjectHumans(
-          snapshot,
-          project,
-          board,
-          viewer: reader.accountId,
-        );
+        final working = tasks.working;
+        final folds = working.length > SwarmProjectTeam.workShown;
+        final work = folds && !_allWork
+            ? working.take(SwarmProjectTeam.workShown)
+            : working;
         return RefreshIndicator(
-          onRefresh: _pull,
+          onRefresh: reader.refresh,
           child: ListView(
             key: const ValueKey('swarm-project-team-list'),
             physics: const AlwaysScrollableScrollPhysics(),
@@ -362,21 +267,12 @@ class _SwarmProjectTeamState extends State<SwarmProjectTeam> {
               MediaQuery.paddingOf(context).bottom + AppSpace.xl,
             ),
             children: [
-              SwarmCaption(
-                'Tasks',
-                key: const ValueKey('swarm-team-tasks-caption'),
-                note: swarmTeamTasksLine(tasks),
-                first: true,
-              ),
-              if (tasks.waiting.isEmpty && tasks.working.isEmpty)
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: AppSpace.xs),
-                  child: SwarmRow.line(
-                    'No open tasks.',
-                    key: const ValueKey('swarm-team-no-tasks'),
-                  ),
-                )
-              else
+              if (tasks.waiting.isNotEmpty) ...[
+                const SwarmCaption(
+                  'Waiting on you',
+                  key: ValueKey('swarm-team-waiting-caption'),
+                  first: true,
+                ),
                 SwarmGroup(
                   children: [
                     for (final need in tasks.waiting)
@@ -389,7 +285,27 @@ class _SwarmProjectTeamState extends State<SwarmProjectTeam> {
                         now: now,
                         onOpen: () => widget.onOpen(need.conversationId),
                       ),
-                    for (final g in tasks.working)
+                  ],
+                ),
+              ],
+              if (working.isNotEmpty || tasks.waiting.isEmpty)
+                SwarmCaption(
+                  'Working on',
+                  key: const ValueKey('swarm-team-working-caption'),
+                  first: tasks.waiting.isEmpty,
+                ),
+              if (working.isEmpty && tasks.waiting.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: AppSpace.xs),
+                  child: SwarmRow.line(
+                    'No open tasks.',
+                    key: const ValueKey('swarm-team-no-tasks'),
+                  ),
+                )
+              else if (working.isNotEmpty)
+                SwarmGroup(
+                  children: [
+                    for (final g in work)
                       SwarmWorkRow(
                         key: ValueKey('swarm-task-${g.id}'),
                         snapshot: snapshot,
@@ -397,44 +313,19 @@ class _SwarmProjectTeamState extends State<SwarmProjectTeam> {
                         personName: personName,
                         onTap: () => widget.onOpen(g.id),
                       ),
+                    if (folds)
+                      SwarmRow(
+                        key: const ValueKey('swarm-team-see-all'),
+                        title: _allWork
+                            ? 'Show fewer'
+                            : 'See all ${working.length} tasks',
+                        chevron: _allWork
+                            ? LucideIcons.chevronUp300
+                            : LucideIcons.chevronRight300,
+                        onTap: () => setState(() => _allWork = !_allWork),
+                      ),
                   ],
                 ),
-              SwarmCaption(
-                'Humans',
-                key: const ValueKey('swarm-team-humans-caption'),
-              ),
-              if (_board.error case final error? when board == null)
-                _BoardError(error: error, onRetry: _board.refresh),
-              SwarmGroup(
-                children: [
-                  for (final h in humans)
-                    SwarmMemberRow(
-                      key: ValueKey('swarm-member-person-${h.person.id}'),
-                      face: SwarmAvatar(
-                        id: h.person.id,
-                        name: h.name,
-                        picture: h.person.avatar,
-                      ),
-                      name: h.name,
-                      // As Desktop's member list (#2230): what they are on
-                      // after the name, what they did this week beneath it,
-                      // and the week's points at the right.
-                      tag: switch ([if (h.own) 'you', ?h.now]) {
-                        final words when words.isNotEmpty => words.join(' · '),
-                        _ => null,
-                      },
-                      detail: switch (h.score) {
-                        final score? => swarmNumbers(score).join(' · '),
-                        null => null,
-                      },
-                      points: h.score?.points,
-                      onTap: switch (h.score) {
-                        final score? => () => _openWeek(h, score),
-                        null => null,
-                      },
-                    ),
-                ],
-              ),
               SwarmCaption(
                 'Agents',
                 key: const ValueKey('swarm-team-agents-caption'),
@@ -477,63 +368,25 @@ class _SwarmProjectTeamState extends State<SwarmProjectTeam> {
   }
 }
 
-/// Why the board was not read, and Try again: one read per tap.
-class _BoardError extends StatelessWidget {
-  const _BoardError({required this.error, required this.onRetry});
-
-  final String error;
-  final Future<void> Function() onRetry;
-
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(AppSpace.xs, 0, AppSpace.xs, AppSpace.s),
-    child: Row(
-      children: [
-        Expanded(
-          child: SwarmRow.line(
-            error,
-            key: const ValueKey('swarm-team-board-error'),
-            lines: 2,
-          ),
-        ),
-        SwarmButton(
-          key: const ValueKey('swarm-team-board-retry'),
-          label: 'Try again',
-          onPressed: () => unawaited(onRetry()),
-        ),
-      ],
-    ),
-  );
-}
-
-/// One person or agent on a project's Team, in the one shape both share
-/// (Dee, 2026-10-29): the face in one column — an agent's with its state's
-/// [dot] — the name, a quiet [detail] line beneath, and a person's week's
-/// [points] at the right. The same height with or without the line; a tap
-/// does [onTap], when there is one.
+/// One agent on a project's Team (Dee, 2026-10-29): the face in one column,
+/// with its state's [dot], the name and a quiet [detail] line beneath. The
+/// same height with or without the line; a tap does [onTap], when there is
+/// one.
 class SwarmMemberRow extends StatelessWidget {
   const SwarmMemberRow({
     super.key,
     required this.face,
     required this.name,
     this.dot,
-    this.tag,
     this.detail,
-    this.points,
     this.onTap,
   });
 
   final Widget face;
   final String name;
 
-  /// A person's points this week, once the board has answered.
-  final int? points;
-
-  /// The state's colour on the face's corner: an agent's.
+  /// The state's colour on the face's corner.
   final Color? dot;
-
-  /// Quiet words after the name: "you" on the viewer's own row.
-  final String? tag;
   final String? detail;
   final VoidCallback? onTap;
 
@@ -542,18 +395,12 @@ class SwarmMemberRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
-    final dot = this.dot, tag = this.tag, detail = this.detail;
-    final points = this.points;
+    final dot = this.dot, detail = this.detail;
     return Semantics(
       // Its own node, a tap or not: one row, said as one.
       container: true,
       button: onTap != null,
-      label: [
-        name,
-        ?tag,
-        if (detail != null && detail.isNotEmpty) detail,
-        if (points != null) '$points points',
-      ].join(', '),
+      label: [name, if (detail != null && detail.isNotEmpty) detail].join(', '),
       excludeSemantics: true,
       child: InkWell(
         onTap: onTap,
@@ -601,19 +448,8 @@ class SwarmMemberRow extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text.rich(
-                        TextSpan(
-                          children: [
-                            TextSpan(text: name),
-                            if (tag != null)
-                              TextSpan(
-                                text: '  $tag',
-                                style: AppType.caption(
-                                  color: AppPalette.textSecondary,
-                                ),
-                              ),
-                          ],
-                        ),
+                      Text(
+                        name,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: AppType.label(color: AppPalette.textPrimary),
@@ -633,10 +469,6 @@ class SwarmMemberRow extends StatelessWidget {
                     ],
                   ),
                 ),
-                if (points != null) ...[
-                  const SizedBox(width: AppSpace.s),
-                  Text('$points', maxLines: 1, style: swarmPointsStyle()),
-                ],
               ],
             ),
           ),
