@@ -8345,6 +8345,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                         onNewProject: () => unawaited(
                                           _newAgent(newSwarmProject: true),
                                         ),
+                                        onNewSwarm: () =>
+                                            _newTab(superTab: true),
                                         onAddAgent: (group) => unawaited(
                                           _addAgent(conversationId: group.id),
                                         ),

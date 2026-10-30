@@ -65,6 +65,11 @@ describe('quota and rates', () => {
     expect(rateFor(policy, 'codex', 'default', 'default')).toEqual({ quality: 3, cost: 2 })
     expect(rateFor(policy, 'claude', 'claude-opus-4-7', 'high', true)).toEqual({ quality: 3, cost: 3 })
   })
+  it('rates a Codex model by its own row in the server\'s policy, and an unnamed slug 1', () => {
+    const served = { ...policy, models: [...policy.models, { engine: 'codex' as const, model: 'gpt-6.1-sol', effort: 'high', quality: 3, cost: 2, enabled: true }] }
+    expect(rateFor(served, 'codex', 'gpt-6.1-sol', 'xhigh')).toEqual({ quality: 3, cost: 2 })
+    expect(rateFor(served, 'codex', 'gpt-7-unknown', 'high')).toEqual({ quality: 1, cost: 1 })
+  })
 })
 
 describe('choose', () => {
