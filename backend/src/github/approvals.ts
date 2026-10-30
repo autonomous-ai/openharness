@@ -109,7 +109,7 @@ export function githubSignIn(env: { GITHUB_APP_CLIENT_ID: string; GITHUB_APP_CLI
   return new GitHubSignIn({ clientId, clientSecret })
 }
 
-/** What GitHub last said about the reader on a repository: they can push (they allowed it in this Swarm before), or they
+/** What GitHub last said about the reader on a repository: they can push (they allowed it before, in any Swarm), or they
  *  cannot (their sign-in was refused for this project). Null before they signed in for it. */
 export interface ReaderAccess { canPush: boolean; githubLogin: string }
 
@@ -163,8 +163,9 @@ export class PrismaApprovals implements Approvals {
     const refused = await this.db.gitHubApprovalRefusal.findUnique({ where: { autonomousEnv_tabId_repository_projectId_userId:
       { autonomousEnv, tabId, repository, projectId, userId } }, select: { githubLogin: true } })
     if (refused) return { canPush: false, githubLogin: refused.githubLogin }
-    // They allowed this repository for another project of the Swarm: GitHub said then that they can push to it.
-    const allowed = await this.db.gitHubRepositoryApproval.findFirst({ where: { autonomousEnv, tabId, repository, approvedBy: userId },
+    // They allowed this repository before, for any project in any of their Swarms: GitHub said then that they can push to it
+    // (2026-10-30: a new Swarm on a repository its owner had allowed in another Swarm showed no "You can push").
+    const allowed = await this.db.gitHubRepositoryApproval.findFirst({ where: { autonomousEnv, repository, approvedBy: userId },
       select: { githubLogin: true } })
     return allowed ? { canPush: true, githubLogin: allowed.githubLogin } : null
   }

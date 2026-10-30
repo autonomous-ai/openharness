@@ -120,10 +120,13 @@ describe('approvals', () => {
     expect(refused).toHaveLength(1)
     expect(await approvals.reader('prod', 'tab', 'p1', 'Alice/A', 'alice')).toEqual({ canPush: false, githubLogin: 'bob-gh2' })
     expect(await approvals.reader('prod', 'tab', 'p1', 'alice/a', 'someone-else')).toBeNull()
-    // Someone else allows it: the refusal goes, and whoever allowed it reads as able to push, in the Swarm's other projects too.
+    // Someone else allows it: the refusal goes, and whoever allowed it reads as able to push, in the Swarm's other projects and
+    // in their other Swarms too.
     await approvals.approve({ ...request, userId: 'user-2' }, 'carol')
     expect(refused).toHaveLength(0)
     expect(await approvals.reader('prod', 'tab', 'p2', 'alice/a', 'user-2')).toEqual({ canPush: true, githubLogin: 'carol' })
+    expect(await approvals.reader('prod', 'another-swarm', 'p9', 'alice/a', 'user-2')).toEqual({ canPush: true, githubLogin: 'carol' })
+    expect(await approvals.reader('dev', 'another-swarm', 'p9', 'alice/a', 'user-2')).toBeNull()
     await approvals.refuse({ ...request, projectId: 'p2' }, 'bob-gh')
     await approvals.approve({ ...request, scope: 'swarm', userId: 'user-2' }, 'carol')
     expect(refused).toHaveLength(0)

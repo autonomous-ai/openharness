@@ -1999,6 +1999,8 @@ model GitHubRepositoryApproval {
 
   @@unique([autonomousEnv, tabId, repository, projectId])
   @@index([tabId])
+  /// Whether the reader allowed a repository before, in any Swarm (github/approvals.ts `reader`).
+  @@index([autonomousEnv, approvedBy, repository])
 }
 
 /// A person GitHub said cannot push to a project's repository when they tried to allow it (github/approvals.ts): the app
