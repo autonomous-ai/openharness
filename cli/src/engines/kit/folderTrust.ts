@@ -8,8 +8,9 @@
  * of one): that answer is theirs. One consented exception is a Swarm's own project clones: clicking Add
  * machine authorizes those checkouts and their Swarm agent worktrees (superTabs/cloneTrust.ts), including
  * earlier contributions repaired after an update. It never authorizes the person's other repositories.
- * The other is a Swarm agent in the Swarm's full mode in the checkout of its remote project's own repository
- * (core/agents/launches.ts `swarmCheckout`). Any other existing folder stays the person's question.
+ * The other is a Swarm agent in the Swarm's full mode in the checkout of its remote project's own repository, or in a
+ * worktree of the repository the person picked for it in this machine's own window (core/agents/launches.ts
+ * `swarmCheckout`). Any other existing folder stays the person's question.
  * The callers decide (core/agents/create.ts, launches.ts). A worktree only inherits the answer its source
  * repo already has.
  *
