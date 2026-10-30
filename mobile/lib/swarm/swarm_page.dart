@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/phone/out_of_sight.dart';
 import 'package:harness_mobile/phone/phone_navigation.dart';
@@ -13,6 +12,7 @@ import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import 'swarm_connection_notice.dart';
+import 'swarm_conversation_page.dart' show openSwarmConversation;
 import 'swarm_home_keeper.dart';
 import 'swarm_home_list.dart';
 import 'swarm_home_rows.dart';
@@ -20,6 +20,7 @@ import 'swarm_home_top.dart';
 import 'swarm_inbox.dart';
 import 'swarm_jump_page.dart';
 import 'swarm_needs_page.dart';
+import 'swarm_new_message_sheet.dart';
 import 'swarm_project_page.dart';
 import 'swarm_reader.dart';
 import 'swarm_row.dart';
@@ -53,14 +54,16 @@ bool swarmHomeListed(SwarmInbox inbox, String swarmId, String projectId) {
 }
 
 /// Swarm Home, direction C (Tony's prototype C1, 2026-10-30), the Home tab:
-/// its title the Swarm shown, a switcher to every Swarm, All Swarms and Join
-/// or create ([showSwarmSwitcher]), and compose at its end; Jump to…; While
-/// you were away, once the person has been gone a while ([SwarmAwayCard]);
-/// then the projects they pinned on this phone, then the others by their
-/// latest activity, those quiet for a day folded under "Other projects"
-/// ([swarmHomeLists]). Every Swarm's, or the one picked
-/// ([SwarmHomePrefs.swarmId]). What needs the person is the Activity tab's;
-/// who they are, their models and devices, and Settings, the You tab's.
+/// its title the Swarm shown, with a switcher to every Swarm, All Swarms and
+/// Join or create ([showSwarmSwitcher]); Jump to…; While you were away, once
+/// the person has been gone a while ([SwarmAwayCard]); then the projects
+/// they pinned on this phone, then the others by their latest activity,
+/// those quiet for a day folded under "Other projects" ([swarmHomeLists]).
+/// Every Swarm's, or the one picked ([SwarmHomePrefs.swarmId]). A round +
+/// floats at its bottom right over them: New message (Tony, 10-30: Slack
+/// Mobile's; [showSwarmNewMessage]). What needs the person is the Activity
+/// tab's; who they are, their models and devices, and Settings, the You
+/// tab's.
 ///
 /// Threads, and While you were away's new threads, wait for a read of the
 /// threads with new replies across a Swarm, which the server does not have
@@ -157,6 +160,41 @@ class _SwarmPageState extends State<SwarmPage> {
   /// The projects quiet for a day are listed under Other projects.
   bool _quietOpen = false;
 
+  /// New message is open: a second tap on + opens no second one.
+  bool _composing = false;
+
+  /// New message over Home ([showSwarmNewMessage]), on the Swarms Home
+  /// shows; once a message went, the chat it went to opens over Home. Home
+  /// replaced or out of sight meanwhile opens nothing.
+  Future<void> _newMessage(BuildContext context, SwarmSession session) async {
+    if (_composing) return;
+    _composing = true;
+    final SwarmChatPick? sent;
+    try {
+      sent = await showSwarmNewMessage(
+        context,
+        session,
+        shown: () => _shown(session),
+      );
+    } finally {
+      _composing = false;
+    }
+    if (sent == null ||
+        !mounted ||
+        !context.mounted ||
+        _session != session ||
+        _hidden) {
+      return;
+    }
+    openSwarmConversation(context, sent.swarmId, sent.chatId);
+  }
+
+  /// Whether Home offers New message: a Swarm to post in may be there, or
+  /// is still being read.
+  bool _offersNewMessage(BuildContext context, SwarmSession session) =>
+      swarmStartView(context, session) == null &&
+      !(session.inbox.loaded && session.inbox.swarms.isEmpty);
+
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
@@ -172,6 +210,19 @@ class _SwarmPageState extends State<SwarmPage> {
         : Listenable.merge([session, session.inbox, session.home]);
     return Scaffold(
       backgroundColor: tty.ground,
+      // The tab's Home only, as its compose was: pushed over a page, Home
+      // is a step on the way back.
+      floatingActionButton: session == null || pushed
+          ? null
+          : ListenWhileInSight(
+              listenable: listens!,
+              builder: (context) => _offersNewMessage(context, session)
+                  ? SwarmNewMessageButton(
+                      key: const ValueKey('swarm-new-message'),
+                      onPressed: () => unawaited(_newMessage(context, session)),
+                    )
+                  : const SizedBox.shrink(),
+            ),
       body: SafeArea(
         bottom: false,
         child: Column(
@@ -201,11 +252,14 @@ class _SwarmPageState extends State<SwarmPage> {
                             onRefresh: session.inbox.refresh,
                             child: ListView(
                               physics: const AlwaysScrollableScrollPhysics(),
+                              // The last row clears the floating +.
                               padding: EdgeInsets.fromLTRB(
                                 AppSpace.m,
                                 0,
                                 AppSpace.m,
                                 MediaQuery.paddingOf(context).bottom +
+                                    SwarmNewMessageButton.size +
+                                    AppSpace.l +
                                     AppSpace.xl,
                               ),
                               children: _body(context, session),
@@ -219,8 +273,8 @@ class _SwarmPageState extends State<SwarmPage> {
     );
   }
 
-  /// Home's top bar. At the root, the tab's title: the Swarm shown, a button
-  /// to switch it, and compose; pushed over another page, back and "Swarm".
+  /// Home's top bar. At the root, the tab's title: the Swarm shown and a
+  /// button to switch it; pushed over another page, back and "Swarm".
   /// Either has a quiet "Updating…" under it while it shows the Home kept
   /// ([_updating]).
   Widget _topBar(
@@ -249,12 +303,6 @@ class _SwarmPageState extends State<SwarmPage> {
       titleLabel: 'Swarm: $title. Switch Swarm',
       subtitle: updating ? 'Updating…' : null,
       onTitle: () => unawaited(showSwarmSwitcher(context, session)),
-      trailing: SwarmIconButton(
-        key: const ValueKey('swarm-compose'),
-        icon: LucideIcons.squarePen300,
-        label: 'New message',
-        onPressed: () => openSwarmJump(context, compose: true),
-      ),
     );
   }
 
