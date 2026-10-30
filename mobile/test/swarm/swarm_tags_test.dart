@@ -52,6 +52,7 @@ Future<void> showRow(
   WidgetTester tester,
   String text, {
   List<String> tagged = const [],
+  Map<String, String> addresses = const {},
   List<String> mentions = const [],
   String readerId = '',
 }) async {
@@ -78,6 +79,7 @@ Future<void> showRow(
               role: null,
               mentions: SwarmMentions(const []),
               tagged: tagged,
+              taggedAddresses: addresses,
               readerId: readerId,
               grouped: false,
               lit: false,
@@ -149,6 +151,42 @@ void main() {
     expect(pill?.fontWeight, FontWeight.w600);
   });
 
+  test('reads a 32,000-character text of unclosed link brackets in '
+      'linear time', () {
+    // Each `](` without a `)` once scanned to the end: about 2.9 s to draw.
+    final watch = Stopwatch()..start();
+    final span = SwarmMentions(const [])
+        .span('${'](' * 15995}@dee.', const TextStyle(), tagged: ['dee']);
+    expect(watch.elapsedMilliseconds, lessThan(50));
+    expect(
+      [
+        for (final child in span.children!)
+          if ((child as TextSpan).style?.backgroundColor != null) child.text,
+      ],
+      ['@dee'],
+    );
+  });
+
+  testWidgets('a tag by its full address is its pill', (tester) async {
+    await showRow(
+      tester,
+      '@diego.n@x.com look',
+      tagged: ['diego'],
+      addresses: {'diego': 'diego.n@x.com'},
+    );
+    expect(pills(tester), ['@diego.n@x.com']);
+  });
+
+  testWidgets('another address is no tag of them', (tester) async {
+    await showRow(
+      tester,
+      '@diego@other.com look',
+      tagged: ['diego'],
+      addresses: {'diego': 'diego.n@x.com'},
+    );
+    expect(pills(tester), isEmpty);
+  });
+
   testWidgets('a name the message does not tag is no pill', (tester) async {
     await showRow(tester, '@diego and @ken, look', tagged: ['diego']);
     expect(pills(tester), ['@diego']);
@@ -168,6 +206,22 @@ void main() {
     for (final rich in find.byType(RichText).evaluate()) {
       expect(rich.size!.width, lessThanOrEqualTo(390));
     }
+  });
+
+  testWidgets('the chat knows the address of each person tagged', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await showChat(
+      tester,
+      reader: 'ken',
+      brightness: Brightness.light,
+      diegoEmail: 'diego.n@x.com',
+      text: '@diego.n@x.com can you look? Reviews are waiting on it.',
+    );
+    expect(pills(tester), ['@diego.n@x.com']);
+    await closeChat(tester);
   });
 
   for (final palette in [HarnessPalette.graphite, HarnessPalette.paper]) {
@@ -263,12 +317,17 @@ Future<void> showChat(
   WidgetTester tester, {
   required String reader,
   required Brightness brightness,
+  String diegoEmail = 'diego@example.com',
+  String text =
+      '@diego can you free some memory on your Pro-10? '
+      'Reviews are waiting on it.',
 }) async {
   if (_host != null) await closeChat(tester);
   const messages = '/api/super-tabs/$tab/conversations/g1/messages';
   Map<String, dynamic> member(String id, String role) => {
     ...person(id, role: role),
     'username': id == me ? 'owner' : id,
+    if (id == 'diego') 'email': diegoEmail,
   };
   final fake = FakeSwarm();
   fake.routes['/api/super-tabs/list'] = (_) => {
@@ -306,9 +365,7 @@ Future<void> showChat(
       {
         'id': 'm1',
         'conversationId': 'g1',
-        'text':
-            '@diego can you free some memory on your Pro-10? '
-            'Reviews are waiting on it.',
+        'text': text,
         'sequence': 1,
         'mentions': ['diego'],
         'author': {'kind': 'person', 'id': me, 'name': 'owner'},

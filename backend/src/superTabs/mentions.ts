@@ -7,7 +7,7 @@ import { ensureIndex } from '../lib/db/indexes.js'
 import { activeWork, fail, isLeads, person, stableId, type Actor, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { canReadGroup, groupProject, ledProject, projectOf } from './projects.js'
 import { groupsBy } from './parts/indexed.js'
-import { swarmUsernames, usernameOf } from './usernames.js'
+import { usernameOf } from './usernames.js'
 
 type Tx = Prisma.TransactionClient
 export const MAX_MENTIONS = 5
@@ -62,7 +62,7 @@ function prose(text: string): string {
   }
   return lines.join('\n')
     .replace(/(?<!`)(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/g, blank)
-    .replace(/\]\([^)]*\)/g, blank)
+    .replace(/\]\([^)\]]*\)/g, blank)
     .replace(/\b(?:https?:\/\/|www\.)\S+/gi, blank)
 }
 
@@ -71,11 +71,12 @@ export function tagTokens(text: string): string[] {
   return [...prose(text).matchAll(TAG)].map(match => `${match[1]}${match[2] ?? ''}`.toLowerCase())
 }
 
-/** The people [text] names, in order, once each: `@username` in any case, or `@` and their full address. */
-export function namedIn(state: SuperTabState, text: string): string[] {
+/** The people [text] names, in order, once each: `@username` in any case, or `@` and their full address. [names] is the
+ *  Swarm's usernames by person (usernames.ts swarmUsernames). */
+export function namedIn(state: SuperTabState, text: string, names: ReadonlyMap<string, string>): string[] {
   const tokens = tagTokens(text)
   if (!tokens.length) return []
-  const byName = new Map([...swarmUsernames(state)].map(([id, name]) => [name.toLowerCase(), id]))
+  const byName = new Map([...names].map(([id, name]) => [name.toLowerCase(), id]))
   const ids = tokens.flatMap(token => {
     const id = token.includes('@') ? state.people.find(p => p.email.toLowerCase() === token)?.id : byName.get(token)
     return id && state.people.some(p => p.id === id) ? [id] : []

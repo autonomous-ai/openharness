@@ -1,6 +1,6 @@
 import { admitMachineStart, BUDDY_WINDOWS_REFUSAL, cleanupOverdue, dropIdleBuddyMachines, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, machineSlots, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
 import { assignAgentDisplayNames } from './agentNames.js'
-import { keepUsernames, setUsername, usernameOf } from './usernames.js'
+import { keepUsernames, setUsername, swarmUsernames } from './usernames.js'
 import { z } from 'zod'
 import { tokensByModelSchema } from './costs/tokens.js'
 import {
@@ -1945,8 +1945,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // picked in an older client (or the CLI's --mention) that the text does not say is written into it, so every client
       // shows the same words. Only from the command, so a retry writes the same text.
       const picked = checkMentions(state, actor, group, command.mentions ?? [])
-      const named = namedIn(state, command.text)
-      const text = withTags(picked.filter(id => !named.includes(id)).map(id => `@${usernameOf(state, id)}`), command.text)
+      // Every username is worked out at once, and only for a post that names or picks someone.
+      const names = picked.length || command.text.includes('@') ? swarmUsernames(state) : new Map<string, string>()
+      const named = namedIn(state, command.text, names)
+      const text = withTags(picked.filter(id => !named.includes(id)).map(id => `@${names.get(id)}`), command.text)
       // A tag would tell a person about an agent-only notice they cannot see.
       const mentions = [...new Set([...picked, ...command.agentOnly ? [] : textTags(state, actor, group, named)])].slice(0, MAX_MENTIONS)
       if (command.mentionsIfNoWorker && !mentions.length) fail('INVALID_MENTION', 'Hold a tag only for a message that tags someone.', 400)

@@ -68,7 +68,7 @@ final _tag = RegExp(
 final _oneWord = RegExp(r'^[\w+-]+(?:\.[\w+-]+)*$');
 final _fence = RegExp(r'^ {0,3}(`{3,}|~{3,})');
 final _codeSpan = RegExp(r'(?<!`)(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)');
-final _linkTarget = RegExp(r'\]\([^)]*\)');
+final _linkTarget = RegExp(r'\]\([^)\]]*\)');
 final _bareLink = RegExp(r'\b(?:https?://|www\.)\S+', caseSensitive: false);
 String _blank(String text) => text.replaceAll(RegExp(r'[^\n]'), ' ');
 
@@ -142,25 +142,39 @@ class SwarmMentions {
   final Set<String> _words;
   final RegExp? _pattern;
 
-  /// [text] with each @mention of one of [names] or [tagged] marked.
+  /// [text] with each @mention of one of [names] or [tagged] marked. A tag by
+  /// full address is a tagged person's only when it is their address in
+  /// [addresses] (by username), as the backend matches it to their email.
   TextSpan span(
     String text,
     TextStyle style, {
     Iterable<String> tagged = const [],
+    Map<String, String> addresses = const {},
   }) {
     if (!text.contains('@') || (names.isEmpty && tagged.isEmpty)) {
       return TextSpan(text: text, style: style);
     }
     final words = {..._words, for (final name in tagged) name.toLowerCase()};
+    final known = {
+      for (final MapEntry(:key, :value) in addresses.entries)
+        key.toLowerCase(): value.toLowerCase(),
+    };
+    bool marks(Match match) {
+      final name = match[1]!.toLowerCase();
+      if (match[2] == null) return words.contains(name);
+      if (known.containsValue('$name${match[2]!.toLowerCase()}')) return true;
+      return words.contains(name) && !known.containsKey(name);
+    }
+
     final prose = _prose(text);
-    final marks = [
+    final ranges = [
       for (final match in _tag.allMatches(prose))
-        if (words.contains(match[1]!.toLowerCase())) (match.start, match.end),
+        if (marks(match)) (match.start, match.end),
       if (_pattern case final pattern?)
         for (final match in pattern.allMatches(prose)) (match.start, match.end),
     ]..sort((a, b) => a.$1.compareTo(b.$1));
-    if (marks.isEmpty) return TextSpan(text: text, style: style);
-    return TextSpan(style: style, children: _marked(text, marks));
+    if (ranges.isEmpty) return TextSpan(text: text, style: style);
+    return TextSpan(style: style, children: _marked(text, ranges));
   }
 }
 
@@ -274,6 +288,7 @@ class SwarmMessageRow extends StatelessWidget {
     required this.role,
     required this.mentions,
     this.tagged = const [],
+    this.taggedAddresses = const {},
     this.readerId = '',
     required this.grouped,
     required this.lit,
@@ -303,6 +318,10 @@ class SwarmMessageRow extends StatelessWidget {
   /// The usernames of the people [message] tags: each reads as a pill where
   /// the text says it.
   final List<String> tagged;
+
+  /// Their addresses, by username: a tag by full address is theirs only when
+  /// it is this one.
+  final Map<String, String> taggedAddresses;
 
   /// Who reads it: a message that tags them stands out.
   final String readerId;
@@ -406,6 +425,7 @@ class SwarmMessageRow extends StatelessWidget {
                         part.text,
                         swarmChatText(16, height: 1.42),
                         tagged: tagged,
+                        addresses: taggedAddresses,
                       ),
                     ),
                   ),

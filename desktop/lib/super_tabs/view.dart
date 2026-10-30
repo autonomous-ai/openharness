@@ -2387,6 +2387,10 @@ class _SuperTabViewState extends State<SuperTabView>
         for (final id in message.mentions)
           if (_people[id] case final person?) person.username,
       ],
+      mentionAddresses: {
+        for (final id in message.mentions)
+          if (_people[id] case final person?) person.username: person.email,
+      },
       references: _references,
       onOpenGroup: (id) {
         setState(() => _showPullRequests = false);

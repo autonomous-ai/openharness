@@ -17,6 +17,7 @@ class SuperTabMessageText extends StatelessWidget {
     this.references = const {},
     this.onOpenGroup,
     this.mentions = const [],
+    this.addresses = const {},
     this.taggedYou = false,
   });
   final String text;
@@ -26,6 +27,10 @@ class SuperTabMessageText extends StatelessWidget {
   /// The names a Lead tagged in this message. Each reads highlighted where
   /// the text says it; one the text does not say opens its first line.
   final List<String> mentions;
+
+  /// The address of each person in [mentions], by name: a tag by full
+  /// address is theirs only when it is this one.
+  final Map<String, String> addresses;
 
   /// The message tags the reader, so its row is washed in the accent: a tag
   /// takes the stronger accent in light, to stay 4.5:1 on its pill there.
@@ -70,10 +75,11 @@ class SuperTabMessageText extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    final said = {for (final tag in tagsIn(text)) tag.split('@').first};
+    // Read only for a message that tags someone: most tag nobody.
+    final said = mentions.isEmpty ? const <String>[] : tagsIn(text);
     final unsaid = [
       for (final name in mentions)
-        if (!said.contains(name.toLowerCase())) '@$name',
+        if (!said.any((tag) => _says(tag, name, addresses))) '@$name',
     ];
     return MarkdownBody(
       data: withTags(unsaid, text),
@@ -82,7 +88,7 @@ class SuperTabMessageText extends StatelessWidget {
       inlineSyntaxes: [
         _WebAutolink(),
         _WorkgroupReference(references),
-        if (mentions.isNotEmpty) _Mention(mentions),
+        if (mentions.isNotEmpty) _Mention(mentions, addresses),
       ],
       builders: {
         'pre': _CodeBlock(),
@@ -195,7 +201,7 @@ class _WorkgroupReference extends md.InlineSyntax {
 
 final _fence = RegExp(r'^ {0,3}(`{3,}|~{3,})');
 final _codeSpan = RegExp(r'(?<!`)(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)');
-final _linkTarget = RegExp(r'\]\([^)]*\)');
+final _linkTarget = RegExp(r'\]\([^)\]]*\)');
 final _bareLink = RegExp(r'\b(?:https?://|www\.)\S+', caseSensitive: false);
 String _blank(Match match) => match[0]!.replaceAll(RegExp(r'[^\n]'), ' ');
 
@@ -244,22 +250,34 @@ String _prose(String text) {
       .replaceAllMapped(_bareLink, _blank);
 }
 
+/// Whether [tag] (as [SuperTabMessageText.tagsIn] gives it) names [name]: by
+/// the name, or by full address, which must be theirs when it is known (the
+/// backend matches an address to a person's email, mentions.ts namedIn).
+bool _says(String tag, String name, Map<String, String> addresses) {
+  final at = tag.indexOf('@');
+  if (at < 0) return tag == name.toLowerCase();
+  final address = addresses[name];
+  return address == null
+      ? tag.substring(0, at) == name.toLowerCase()
+      : tag == address.toLowerCase();
+}
+
 /// `@name` or `@name@domain` for a tagged person; any other `@` stays text.
 /// Parsed as inline Markdown, so code and fenced blocks remain literal.
 class _Mention extends md.InlineSyntax {
-  _Mention(this.mentions) : super(tag.pattern);
+  _Mention(this.mentions, this.addresses) : super(tag.pattern);
   // Never right after a letter, digit, `@` or `/` (an address, a path, a
   // link). A name never ends in a dot: `@dee.` closes a sentence.
   static final tag = RegExp(
     r'(?<![\w@/])@([\w+-]+(?:\.[\w+-]+)*)(@[\w-]+(?:\.[\w-]+)+)?',
   );
-  static bool names(Match match, String name) =>
-      match[1]!.toLowerCase() == name.toLowerCase();
   final List<String> mentions;
+  final Map<String, String> addresses;
   @override
   bool onMatch(md.InlineParser parser, Match match) {
+    final tag = '${match[1]}${match[2] ?? ''}'.toLowerCase();
     parser.addNode(
-      mentions.any((name) => names(match, name))
+      mentions.any((name) => _says(tag, name, addresses))
           ? md.Element.text('mention', match[0]!)
           : md.Text(match[0]!),
     );

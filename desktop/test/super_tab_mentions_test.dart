@@ -199,13 +199,19 @@ Iterable<TextStyle?> _runs(
   }
 }
 
-Future<void> showText(WidgetTester tester, String text, List<String> names) =>
-    tester.pumpWidget(
-      MaterialApp(
-        theme: grid.buildAppTheme(brightness: Brightness.dark),
-        home: Scaffold(body: SuperTabMessageText(text, mentions: names)),
-      ),
-    );
+Future<void> showText(
+  WidgetTester tester,
+  String text,
+  List<String> names, {
+  Map<String, String> addresses = const {},
+}) => tester.pumpWidget(
+  MaterialApp(
+    theme: grid.buildAppTheme(brightness: Brightness.dark),
+    home: Scaffold(
+      body: SuperTabMessageText(text, mentions: names, addresses: addresses),
+    ),
+  ),
+);
 
 Finder notificationsEntry() =>
     find.byKey(const ValueKey('super-notifications'));
@@ -1077,6 +1083,60 @@ void main() {
         );
       });
     }
+
+    test('reads a 32,000-character text of unclosed link brackets in '
+        'linear time', () {
+      // Each `](` without a `)` once scanned to the end: about 3 s to draw.
+      final watch = Stopwatch()..start();
+      expect(SuperTabMessageText.tagsIn('${'](' * 15995}@dee.'), ['dee']);
+      expect(watch.elapsedMilliseconds, lessThan(50));
+    });
+
+    testWidgets('a tag by its full address is said, and is its pill', (
+      tester,
+    ) async {
+      await showText(
+        tester,
+        '@diego.n@x.com look',
+        ['diego'],
+        addresses: {'diego': 'diego.n@x.com'},
+      );
+      expect(
+        find.text('@diego.n@x.com look', findRichText: true),
+        findsOneWidget,
+      );
+      expect(tagRuns(tester), ['@diego.n@x.com']);
+    });
+
+    testWidgets('another address is no tag of them', (tester) async {
+      await showText(
+        tester,
+        '@diego@other.com look',
+        ['diego'],
+        addresses: {'diego': 'diego.n@x.com'},
+      );
+      expect(
+        find.text('@diego @diego@other.com look', findRichText: true),
+        findsOneWidget,
+      );
+      expect(tagRuns(tester), ['@diego']);
+    });
+
+    testWidgets('the conversation knows the address of each person tagged', (
+      tester,
+    ) async {
+      final server = taggedChat();
+      (server.state['people'] as List).cast<Map>().firstWhere(
+        (p) => p['id'] == 'diego',
+      )['email'] = 'diego.n@x.com';
+      server.messages.first['text'] = '@diego.n@x.com can you look?';
+      await showView(tester, server, account: 'ken');
+      expect(
+        find.text('@diego.n@x.com can you look?', findRichText: true),
+        findsOneWidget,
+      );
+      expect(tagRuns(tester), ['@diego.n@x.com']);
+    });
 
     for (final brightness in Brightness.values) {
       testWidgets('a message that tags you stands out, for you alone '

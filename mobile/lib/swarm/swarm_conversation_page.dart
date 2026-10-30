@@ -690,7 +690,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       look: _lookOf(c, m),
       role: m.fromAgent && !pm ? view.roles[m.authorId] : null,
       mentions: view.mentions,
-      tagged: _taggedOf(c, m),
+      tagged: _taggedOf(c, m).keys.toList(),
+      taggedAddresses: _taggedOf(c, m),
       readerId: c.reader.accountId,
       grouped: grouped,
       lit: false,
@@ -1123,14 +1124,18 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// [m]'s author by name; in the person's own Buddy chat the PM's private
   /// lines read as lines to them, "River (PM) → you": the PM writes there but
   /// cannot read it (#2090).
-  /// The usernames of the people [m] tags, as the server names them; an
-  /// older server's member without one goes by their email's name.
-  static List<String> _taggedOf(SwarmConversation c, SuperTabMessage m) => [
+  /// The people [m] tags: each one's address by their username, as the
+  /// server names them; an older server's member without one goes by their
+  /// email's name.
+  static Map<String, String> _taggedOf(
+    SwarmConversation c,
+    SuperTabMessage m,
+  ) => {
     if (m.mentions.isNotEmpty)
       for (final person in c.reader.snapshot?.people ?? <SuperTabPerson>[])
         if (m.mentions.contains(person.id))
-          person.chosenUsername ?? person.email.split('@').first,
-  ];
+          person.chosenUsername ?? person.email.split('@').first: person.email,
+  };
 
   String _nameOf(SwarmConversation c, SuperTabMessage m) {
     final name = c.reader.snapshot?.authorName(m) ?? m.authorName;
@@ -1337,7 +1342,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               // The highlight follows the reader: a row kept for another
               // account is drawn again.
               c.reader.accountId,
-              tagged.join(' '),
+              [for (final e in tagged.entries) '${e.key}:${e.value}'].join(' '),
               reactions,
               answerIn,
               view.project,
@@ -1354,7 +1359,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               look: look,
               role: role,
               mentions: view.mentions,
-              tagged: tagged,
+              tagged: tagged.keys.toList(),
+              taggedAddresses: tagged,
               readerId: c.reader.accountId,
               grouped: grouped,
               lit: lit,

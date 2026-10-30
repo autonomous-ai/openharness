@@ -76,6 +76,13 @@ describe('tags in the text', () => {
     expect(tagTokens(text)).toEqual(tags)
   })
 
+  it('reads a 32,000-character text of unclosed link brackets in linear time', () => {
+    // Each `](` without a `)` once scanned to the end: about 200 ms per send at the limit.
+    const started = performance.now()
+    expect(tagTokens(`${']('.repeat(15_995)}@dee.`)).toEqual(['dee'])
+    expect(performance.now() - started).toBeLessThan(50)
+  })
+
   it('tags each person the text names, by username in any case or by full address', () => {
     const f = fixture()
     const said = f.say(f.group, '@peer can you free some memory? @Third.')
