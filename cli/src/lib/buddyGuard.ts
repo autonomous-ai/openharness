@@ -89,6 +89,14 @@ export function buddyLaunchWide(root: string, facts: BuddyLaunchFacts = launchFa
 /** Where GitHub sends a run's logs, which gh run view --log fetches: its Actions hosts and its own result storage accounts
  *  (GitHub's list of the hosts its runners reach), never every Azure storage account (review of #2310). */
 const GITHUB_LOG_HOSTS = ['*.actions.githubusercontent.com', ...Array.from({ length: 20 }, (_, n) => `productionresultssa${n}.blob.core.windows.net`)]
+/** [root]'s person's clone and its git folder, when [root] is a worktree of it (or the clone itself): none when unknown. */
+function cloneOf(root: string): string[] {
+  const common = spawnSync('git', ['-C', root, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8', timeout: 10_000 })
+  if (common.status !== 0 || !common.stdout.trim()) return []
+  const git = common.stdout.trim()
+  return [git, dirname(git)]
+}
+
 /** The tools' own sign-ins, which they read to sign in: closed to the Buddy's own reads, open to the tools in the sandbox. */
 const TOOL_SIGN_INS = ['.config/gh', '.config/argocd', '.argocd', '.kube']
 
@@ -114,7 +122,13 @@ export function buddySandboxSettings(root: string, wide: BuddyWide): Record<stri
     enabled: true, failIfUnavailable: true, autoAllowBashIfSandboxed: false, allowUnsandboxedCommands: false, enableWeakerNetworkIsolation: true,
     excludedCommands: ['harness super-tab *', 'harness buddy-read *'],
     network: { allowedDomains: ['api.github.com', 'github.com', ...GITHUB_LOG_HOSTS, ...wide.hosts] },
-    filesystem: { allowWrite: [], denyWrite: [root], denyRead: wide.denied.filter(path => !signIns.has(path)) },
+    // Writes are denied by name where Claude Code would allow them: the folder it runs in; its person's clone and its git
+    // folder, which a command in a worktree could otherwise commit to; and every session's folder in Claude Code's own
+    // temporary folder (both found by the real sandbox test, review of #2310). That folder itself stays writable: Claude
+    // Code writes a file there for each command from inside the sandbox ("/bin/bash: /tmp/claude-501/cwd-…: Operation not
+    // permitted" without it).
+    filesystem: { allowWrite: [], denyWrite: [...new Set([root, ...cloneOf(root), ...wide.sessionTemp.map(path => `${path}/-*`)])],
+      denyRead: wide.denied.filter(path => !signIns.has(path)) },
   }
 }
 

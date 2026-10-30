@@ -52,13 +52,15 @@ describe.skipIf(!claudeBin || process.platform !== 'darwin')('a wide-mode Buddy 
     return { result: (call: Call) => api.results.get(api.id(call)), bodies: api.bodies }
   }
 
+  // A Buddy's folder is a worktree of its person's clone, as Harness creates it (review of #2310).
   function buddyFolder(name: string) {
-    const at = join(root, name)
-    mkdirSync(at)
-    git(at, 'init', '-q', '-b', 'main')
-    writeFileSync(join(at, 'notes.txt'), 'first\n')
-    git(at, 'add', 'notes.txt'); git(at, 'commit', '-qm', 'first commit')
-    git(at, 'remote', 'add', 'origin', remote)
+    const clone = join(root, `${name}-clone`), at = join(root, name)
+    mkdirSync(clone)
+    git(clone, 'init', '-q', '-b', 'main')
+    writeFileSync(join(clone, 'notes.txt'), 'first\n')
+    git(clone, 'add', 'notes.txt'); git(clone, 'commit', '-qm', 'first commit')
+    git(clone, 'remote', 'add', 'origin', remote)
+    git(clone, 'worktree', 'add', '-q', '-b', name, at)
     // Harness prepares it in wide mode, as on its person's own Mac: their home is the throwaway one.
     prepareSwarmSkill(at, { role: 'buddy', key }, (folderRoot) => buddyLaunchWide(folderRoot, { platform: 'darwin', team: false, home,
       dataDir: process.env.ADAPTER_DATA_DIR!, uid: process.getuid?.() ?? 0, hasBwrap: false }))
@@ -153,8 +155,20 @@ describe.skipIf(!claudeBin || process.platform !== 'darwin')('a wide-mode Buddy 
   // The second line: the folder's settings without the guard, every Bash call allowed. The sandbox alone must still
   // refuse each write, and reach no host off its list.
   describe('its sandbox, with the guard taken out', () => {
+    const uid = process.getuid?.() ?? 0, mark = `planted-${process.pid}-${Date.now()}`
+    const places = {
+      // Its person's clone's record of this worktree, the temporary folder Claude Code runs it with, Claude Code's own
+      // temporary folder, the person's Claude settings, and the person's approvals.
+      cloneWorktree: () => join(root, 'unguarded-clone', '.git', 'worktrees', 'unguarded', mark),
+      temp: () => join(root, mark),
+      // Another session's folder there, named as Claude Code names them, after the folder the session runs in.
+      claudeTemp: () => join('/private/tmp', `claude-${uid}`, `-Users-someone-${mark}`, 'planted'),
+      claudeHome: () => join(home, '.claude', mark),
+      approvals: () => join(process.env.ADAPTER_DATA_DIR!, 'buddy-approvals', mark),
+    }
     const writes = {
       home: bash(''),
+      ...Object.fromEntries(Object.keys(places).map((place) => [place, bash('')])) as Record<keyof typeof places, Call>,
       folder: bash('touch planted.txt'),
       commit: bash('git commit --allow-empty -qm planted'),
       config: bash('git config user.name planted'),
@@ -166,6 +180,10 @@ describe.skipIf(!claudeBin || process.platform !== 'darwin')('a wide-mode Buddy 
     beforeAll(async () => {
       at = buddyFolder('unguarded')
       writes.home.input.command = `touch '${join(home, 'planted.txt')}'`
+      for (const [place, path] of Object.entries(places)) {
+        mkdirSync(join(path(), '..'), { recursive: true })
+        writes[place as keyof typeof places].input.command = `touch '${path()}'`
+      }
       writes.key.input.command = `cat '${join(home, '.ssh', 'id_ed25519')}'`
       const settingsFile = join(at, '.claude', 'settings.local.json')
       const settings = JSON.parse(readFileSync(settingsFile, 'utf8'))
@@ -180,6 +198,8 @@ describe.skipIf(!claudeBin || process.platform !== 'darwin')('a wide-mode Buddy 
 
     it('left everything as it was', () => {
       expect(existsSync(join(home, 'planted.txt'))).toBe(false)
+      for (const path of Object.values(places)) expect(existsSync(path()), path()).toBe(false)
+      rmSync(join(places.claudeTemp(), '..'), { recursive: true, force: true })
       expect(existsSync(join(at, 'planted.txt'))).toBe(false)
       expect(git(at, 'rev-list', '--count', 'HEAD')).toBe('1')
       expect(git(at, 'config', '--list')).not.toContain('planted')

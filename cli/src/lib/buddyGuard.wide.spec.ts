@@ -534,7 +534,8 @@ describe('the launch\'s wide mode and sandbox', () => {
       // which reach its daemon, run outside the sandbox.
       network: { allowedDomains: ['api.github.com', 'github.com', '*.actions.githubusercontent.com',
         ...Array.from({ length: 20 }, (_, n) => `productionresultssa${n}.blob.core.windows.net`), 'deploy.autonomous.ai', 'k8s.example.net'] },
-      filesystem: { allowWrite: [], denyWrite: [repo], denyRead: launched.denied.filter(path => ![join(launchHome, '.config', 'gh'),
+      filesystem: { allowWrite: [], denyWrite: [repo, join(realpathSync(repo), '.git'), realpathSync(repo), ...launched.sessionTemp.map(path => `${path}/-*`)]
+        .filter((path, at, all) => all.indexOf(path) === at), denyRead: launched.denied.filter(path => ![join(launchHome, '.config', 'gh'),
         join(launchHome, '.config', 'argocd'), join(launchHome, '.argocd'), join(launchHome, '.kube'), ...launched.sessionTemp].includes(path)) },
     })
   })
