@@ -4496,11 +4496,16 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// A device picked a project of a Swarm: show that Swarm, then its Lead
+  /// chat, or with [buddy] (a round dial on its Buddy side, or a tap on the
+  /// reader's Buddy) the reader's own Buddy chat there when they have one.
+  /// Never a terminal tab: closing one stopped the Buddy (Diego, 10-30).
   Future<void> _openSuperTabProject(
     MachineState source,
     String tabId,
-    String projectId,
-  ) async {
+    String projectId, {
+    bool buddy = false,
+  }) async {
     final open = swarms.where((s) => s.superTabId == tabId).firstOrNull;
     final name = open?.name ?? _superTabNames[tabId];
     // A tab this account does not belong to is nobody's to open.
@@ -4527,7 +4532,15 @@ class AppNotifier extends ChangeNotifier {
           .where((p) => p.id == projectId)
           .firstOrNull;
       if (project == null) return;
-      controller.select(project.leadConversationId);
+      // Only an existing chat of the reader's own: a device never makes one.
+      if (buddy && controller.buddyChat(projectId) != null) {
+        await (controller.buddyChatOpener ?? controller.openBuddyChat)(
+          projectId,
+        );
+        if (_disposed || _devicePick != pick) return;
+      } else {
+        controller.select(project.leadConversationId);
+      }
       // Selecting what is already selected announces nothing by itself.
       _announceOpenPanesToDial();
     } catch (error) {
@@ -21435,11 +21448,18 @@ class AppNotifier extends ChangeNotifier {
         break;
       case 'dial_super_tab':
         // The Harness Pro picked a Lead's project. Show that Swarm, then the
-        // project's Lead chat as a click on its row in the sidebar does.
+        // project's Lead chat as a click on its row in the sidebar does. A
+        // round dial names the chat it shows: 'buddy' opens the reader's
+        // Buddy chat there; anything else is the Lead chat.
         final tabId = payload['superTabId'];
         final projectId = payload['projectId'];
         if (tabId is String && projectId is String) {
-          await _openSuperTabProject(machine, tabId, projectId);
+          await _openSuperTabProject(
+            machine,
+            tabId,
+            projectId,
+            buddy: payload['chat'] == 'buddy',
+          );
         }
         break;
       case 'dial_forked':
