@@ -127,8 +127,12 @@ const LEAD_HELP = { ...HELP, post: `post GROUP TEXT|- OPERATION_ID [--reply-to M
   commands: [...HELP.commands, { type: 'decision.ask', conversationId: 'GROUP', personId: 'PERSON', questions: [{ question: 'One question a person decides',
     options: ['Option A', 'Option B'], recommended: 0, unblocks: 'What the answer unblocks' }] },
     { type: 'person.tell', personId: 'PERSON', text: 'A line for one person, in their Buddy chat; members watching your terminal see it too' }] }
-/** A Buddy's help: the same, with its post passing the message as TEXT itself (BUDDY_POST_HELP). */
-const BUDDY_HELP = { ...HELP, post: `post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]...: ${BUDDY_POST_HELP}` }
+/** How the command entry offers stdin, which a Buddy is never offered (below). */
+const COMMAND_STDIN = 'The JSON is one argument: when it holds quotes, put - in its place and send it on stdin (command OPERATION_ID - <<\'JSON\' … JSON).'
+/** A Buddy's help: the same, with its post passing the message as TEXT itself (BUDDY_POST_HELP), and its command entry the
+ *  JSON in single quotes, as its JSON hints say (superTabs/command.ts stdinHint): it still offered - and stdin after #2379. */
+const BUDDY_HELP = { ...HELP, post: `post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]...: ${BUDDY_POST_HELP}`,
+  command: HELP.command.replace(COMMAND_STDIN, 'The JSON is one argument, in single quotes: command OPERATION_ID \'{...}\' (an apostrophe inside it as \\u0027).') }
 const OTHER_WORK_FIELDS = ['conversationId', 'projectName', 'title', 'owns', 'status', 'agentName', 'pr'] as const
 /** How old a host form a one-off question about this machine's Swarms may take: the host reads one every second. */
 const POOLS_FRESH_MS = 5_000

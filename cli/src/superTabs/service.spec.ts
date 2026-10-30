@@ -1221,6 +1221,10 @@ describe('a Buddy\'s help', () => {
     expect(String(each.post)).toContain(QUOTED)
     expect(String(each.post)).not.toContain('TEXT|-')
     expect(String(each.post)).not.toContain(STDIN_HINT)
+    // Follow-up to #2379's review: its command entry still offered - and stdin. Nothing a Buddy reads offers either; its post
+    // entry says only that a message read from stdin is refused.
+    const all = JSON.stringify(each)
+    expect([/send (it|the message|the JSON) on stdin/i.test(all), /- in its place/.test(all), all.includes(' - <<'), all.includes('|-')]).toEqual([false, false, false, false])
   }
   const expectStdin = (each: Record<string, unknown>) => {
     expect(String(each.post)).toContain('post GROUP TEXT|- OPERATION_ID')
@@ -1238,8 +1242,11 @@ describe('a Buddy\'s help', () => {
     const buddy = await help(t, { tabId: 'tab', agentId: t.agentId })
     expectBuddy(buddy)
     expect(await help(t, { tabId: 'tab', harnessId: 'native' })).toEqual(buddy)
-    // Only the post line differs: a Buddy reads the same help otherwise, and no Lead option.
-    expect({ ...buddy, post: null }).toEqual({ ...plain, post: null })
+    // Only the post and command lines differ: a Buddy reads the same help otherwise, and no Lead option. Its command line
+    // passes the JSON in single quotes, as its JSON hints do.
+    expect({ ...buddy, post: null, command: null }).toEqual({ ...plain, post: null, command: null })
+    expect(String(plain.command)).toContain("put - in its place and send it on stdin (command OPERATION_ID - <<'JSON' … JSON)")
+    expect(String(buddy.command)).toMatch(/^command OPERATION_ID JSON: send one of the commands below\. The JSON is one argument, in single quotes: command OPERATION_ID '\{\.\.\.\}' \(an apostrophe inside it as \\u0027\)\. Reuse exactly/)
     const lead = setup()
     lead.call.mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data: swarmData(lead.agent, path,
       { agents: [lead.agent], projects: [{ id: 'pilot', leadConversationId: 'pilot' }], conversations: [{ id: 'pilot', leadId: lead.agentId, agentIds: [lead.agentId] }] }) } }))
