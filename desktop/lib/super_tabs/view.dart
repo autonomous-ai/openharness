@@ -2325,6 +2325,7 @@ class _SuperTabViewState extends State<SuperTabView>
         author: _shownAuthor(c, message),
         proposalOwner: _proposalOwner(message),
         person: person,
+        member: _member,
         grouped: grouped,
         reply: reply,
         replyAuthor: reply == null ? null : _shownAuthor(c, reply),
@@ -2375,6 +2376,20 @@ class _SuperTabViewState extends State<SuperTabView>
     for (final person in snapshot?.people ?? <SuperTabPerson>[]) {
       _people.putIfAbsent(person.id, () => person);
     }
+  }
+
+  /// A reply author as the Swarm last read them, so a thread's line shows
+  /// the faces their own messages wear; both null for anyone no longer in
+  /// it.
+  ({SuperTabPerson? person, SuperTabAgent? agent}) _member(
+    String kind,
+    String id,
+  ) {
+    _index();
+    return (
+      person: kind == 'person' ? _people[id] : null,
+      agent: kind == 'agent' ? c.snapshot?.agent(id) : null,
+    );
   }
 
   Widget _message(
@@ -2461,6 +2476,7 @@ class _SuperTabViewState extends State<SuperTabView>
       },
       agent: agent,
       person: message.fromAgent ? null : _people[message.authorId],
+      member: _member,
       onOpenAgent: agent == null ? null : () => _openAgent(agent),
       machineName: agent == null ? null : widget.machineName(agent.machineId),
       grouped: grouped,
