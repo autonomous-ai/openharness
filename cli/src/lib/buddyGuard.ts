@@ -5,6 +5,7 @@ import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openS
 import { basename, dirname, join } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 import { isTeamAccount } from '../team/config.js'
+import type { AgentEngine } from '../engines/types.js'
 import { env } from '../config/env.js'
 import { PASTE_DROPS_DIR } from './pasteDropFiles.js'
 
@@ -23,12 +24,32 @@ export interface BuddyWide { home: string; denied: readonly string[];
   /** Where the host keeps the account signed in on this machine (`writeBuddyAccount`): a grant holds only for it. */
   accountFile: string }
 
+/** Where each engine Harness runs keeps its sessions, history and sign-in in a home: closed to a Buddy, as other agents on
+ *  this machine keep Swarm chats there (delta reviews of #2310). Typed by the engine list, so a new engine names its own. */
+export const BUDDY_ENGINE_HOMES: Record<Exclude<AgentEngine, 'terminal'>, readonly string[]> = {
+  claude: ['.claude', '.claude.json', '.local/share/claude', 'Library/Application Support/Claude'],
+  codex: ['.codex'],
+  cursor: ['.cursor', '.config/cursor', 'Library/Application Support/Cursor'],
+  opencode: ['.config/opencode', '.local/share/opencode', '.local/state/opencode'],
+  pi: ['.pi'],
+  omp: ['.omp', '.config/omp'],
+  hermes: ['.hermes'],
+  commandcode: ['.commandcode'],
+  devin: ['.devin', '.config/devin'],
+  muse: ['.muse', '.config/muse'],
+  amp: ['.amp', '.config/amp', '.local/share/amp'],
+  kilo: ['.kilocode', '.config/kilo', '.local/share/kilo'],
+  grok: ['.grok'],
+  agy: ['.gemini', '.antigravity'],
+  copilot: ['.copilot', '.config/github-copilot'],
+}
+
 /** Places in a home that hold secrets or other people's data (the Lead's list, 10-30): ssh, cloud, GitHub, ArgoCD and
  *  Harness credentials; keychains; browser profiles and mail; shell and database histories, which keep typed secrets; and
  *  the Claude Code and Codex folders, where agents on this machine keep transcripts and pasted Swarm messages from chats
  *  the Buddy may not read (the Leads conversation, private chats, other projects). */
-const CLOSED_IN_HOME = ['.ssh', '.aws', '.azure', '.config/gcloud', '.gnupg', '.kube', '.docker', '.config/gh', '.config/argocd',
-  '.argocd', '.config/git/credentials', '.password-store', '.config/op', '.claude', '.claude.json', '.codex', '.local/share/claude',
+const CLOSED_IN_HOME = ['.ssh', '.aws', '.azure', '.config/gcloud', '.gnupg', '.kube', '.docker', '.config/gh', '.config/hub', '.config/argocd',
+  '.argocd', '.config/git/credentials', '.password-store', '.config/op', '.zsh_sessions', '.local/share/fish', ...Object.values(BUDDY_ENGINE_HOMES).flat(),
   '.mozilla', '.config/google-chrome', '.config/chromium', '.config/BraveSoftware', '.config/microsoft-edge', '.zsh_history',
   '.bash_history', '.zhistory', '.python_history', '.node_repl_history', '.mongodb', '.dbshell', '.psql_history', '.mysql_history',
   '.lesshst', '.viminfo', 'Library/Keychains', 'Library/Cookies', 'Library/Safari', 'Library/Messages', 'Library/Mail',
@@ -41,6 +62,7 @@ const CLOSED_IN_HOME = ['.ssh', '.aws', '.azure', '.config/gcloud', '.gnupg', '.
 const SYSTEM_READABLE = process.platform === 'darwin'
   ? ['/etc', '/usr/share', '/usr/local/etc', '/opt/homebrew/etc', '/Library/Logs', '/var/log']
   : ['/etc', '/usr/share', '/var/log']
+
 
 /** Wide mode for one person's Buddy: [home] is theirs, [dataDir] Harness's data folder (its lists, approvals, downloads and
  *  agent records stay closed), [tmpDirs] where Claude Code keeps other sessions' tool output, and [repos] the project's repositories (owner/name), the only ones gh api reads. */
@@ -472,7 +494,8 @@ function leakIn(fields) {
   const texts = fields.filter((field) => typeof field === 'string')
   const kind = texts.map(secretIn).find(Boolean)
   if (kind) return kind
-  const together = [...texts, texts.join('')].map((text) => text.replace(/\s+/g, ''))
+  // Spaces, and zero-width and other format characters (delta reviews of #2310), hide a token alike.
+  const together = [...texts, texts.join('')].map((text) => text.replace(/[\s\p{Cf}]+/gu, ''))
   return RUN_TOGETHER.find(([, shape]) => together.some((text) => shape.test(text)))?.[0] ?? null
 }
 // Every string in a JSON value, as the CLI decodes it before sending: an escape such as g hides nothing.
@@ -603,7 +626,7 @@ function repoPath(text) {
 }
 const appName = (text) => /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(\/[a-z0-9]([a-z0-9.-]*[a-z0-9])?)?$/.test(text)
 // A resource word naming a ConfigMap, whose values a dump would print (security reviews 1 and 2 of #2310).
-const configMap = (text) => text.split(',').some((part) => /^(configmaps?|cm)(\/|$)/i.test(part))
+const configMap = (text) => /configmap/i.test(text) || text.split(',').some((part) => /^cm(\.|\/|$)/i.test(part))
 // A cluster resource word (pods, deploy/x, pods,services) naming no secret.
 const resource = (text) => /^[A-Za-z0-9.\/,-]+$/.test(text) && !/secret/i.test(text)
 const WIDE_COMMANDS = {
@@ -661,9 +684,9 @@ function widerRead(w) {
   // A ConfigMap is listed by name only: never described or printed whole.
   if (w[0] === 'kubectl' && positional.some(configMap)) {
     if (w[1] !== 'get') return false
-    const output = w.findIndex((word) => word === '-o' || word === '--output' || word.startsWith('--output='))
-    const format = output < 0 ? null : w[output].startsWith('--output=') ? w[output].slice(9) : w[output + 1]
-    return format === null || format === 'name' || format === 'wide'
+    // kubectl takes the last -o or --output it is given, so every one is read.
+    const formats = w.flatMap((word, at) => word === '-o' || word === '--output' ? [w[at + 1]] : word.startsWith('--output=') ? [word.slice(9)] : [])
+    return formats.every((format) => format === 'name' || format === 'wide')
   }
   return true
 }

