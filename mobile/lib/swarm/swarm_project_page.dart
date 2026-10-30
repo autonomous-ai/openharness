@@ -23,6 +23,7 @@ import 'swarm_message_row.dart';
 import 'swarm_pm_chat.dart';
 import 'swarm_project_tabs.dart';
 import 'swarm_project_tasks.dart';
+import 'swarm_project_team.dart';
 import 'swarm_reader.dart';
 import 'swarm_row.dart';
 import 'swarm_session.dart';
@@ -78,15 +79,20 @@ Set<String> swarmWaitingOnYou(SwarmInbox inbox, String swarmId) => {
 /// One project, as Tony's prototype B2 draws it (2026-10-29): a header with
 /// back, the project's name over its team in coloured dots, and its team at
 /// the end ([showSwarmProjectSheet]); under it four tabs
-/// ([SwarmProjectTab]) — its chat with everyone, the person's Buddy chat,
-/// its tasks ([SwarmProjectTasks]) and its leaderboard. Only the tab shown
-/// is built: a chat out of sight reads nothing and marks nothing read.
+/// ([SwarmProjectTab.homeB]) — its chat with everyone, the person's Buddy
+/// chat, its tasks ([SwarmProjectTasks]) and its leaderboard. Swarm Home C
+/// (Tony, 2026-10-30) has two ([SwarmProjectTab.homeC]): its chat and its
+/// team, under its #name over how many humans and agents it has and what
+/// they are doing; the team is a tab there, so the header has no team
+/// button. Only the tab shown is built: a chat out of sight reads nothing
+/// and marks nothing read.
 class SwarmProjectPage extends StatefulWidget {
   const SwarmProjectPage({
     super.key,
     required this.swarmId,
     required this.projectId,
     this.tab = SwarmProjectTab.chat,
+    this.tabs = SwarmProjectTab.homeB,
     this.mention,
   });
 
@@ -94,6 +100,9 @@ class SwarmProjectPage extends StatefulWidget {
 
   /// The tab it opens on.
   final SwarmProjectTab tab;
+
+  /// The tabs it has.
+  final List<SwarmProjectTab> tabs;
 
   /// An agent to @mention in the chat's draft as it opens
   /// ([SwarmConversationPage.mention]).
@@ -105,7 +114,12 @@ class SwarmProjectPage extends StatefulWidget {
 
 class _SwarmProjectPageState extends State<SwarmProjectPage> {
   SwarmSession? _session;
-  late SwarmProjectTab _tab = widget.tab;
+  late SwarmProjectTab _tab = widget.tabs.contains(widget.tab)
+      ? widget.tab
+      : widget.tabs.first;
+
+  /// Swarm Home C's page: Chat and Team.
+  bool get _homeC => widget.tabs.contains(SwarmProjectTab.team);
 
   /// What the page shows of the inbox ([_inboxChanged]): its Swarm's
   /// reader, whether there are several Swarms, why the list was not read.
@@ -211,7 +225,9 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
 
   /// The header: back, [project]'s name over its team — "Updating…" while
   /// counted from the Home kept, and with several Swarms which one — and the
-  /// team at its end, after Remove Buddy on the Buddy tab.
+  /// team at its end, after Remove Buddy on the Buddy tab. Swarm Home C
+  /// writes the name as a channel's, #name, puts how many humans and agents
+  /// before the team's dots, and has no team button: Team is a tab.
   Widget _header(
     SwarmSession session,
     SwarmReader reader,
@@ -220,9 +236,16 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
     Widget back,
   ) {
     final kept = swarmHomeKept(reader);
+    final glance = swarmTeamGlance(snapshot, projectId: project.id);
+    final heads = _homeC
+        ? swarmProjectHeads(
+            humans: swarmProjectPeople(snapshot, project).length,
+            agents: glance.agents.length,
+          )
+        : null;
     return SwarmTopBar(
       leading: back,
-      title: project.name,
+      title: _homeC ? '#${project.name}' : project.name,
       line: KeyedSubtree(
         key: const ValueKey('swarm-project-team-line'),
         child: kept
@@ -235,8 +258,11 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
                 ),
               )
             : SwarmTeamDots(
-                swarmTeamGlance(snapshot, projectId: project.id),
-                lead: _several ? snapshot.name : null,
+                glance,
+                lead: switch ([if (_several) snapshot.name, ?heads]) {
+                  final words when words.isNotEmpty => words.join(' · '),
+                  _ => null,
+                },
               ),
       ),
       trailing: Row(
@@ -244,12 +270,13 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
         children: [
           if (_tab == SwarmProjectTab.buddy && _buddy != null)
             SwarmBuddyMenuButton(actions: _buddy!),
-          SwarmIconButton(
-            key: const ValueKey('swarm-project-team'),
-            icon: LucideIcons.users300,
-            label: 'Team',
-            onPressed: _openTeam,
-          ),
+          if (!_homeC)
+            SwarmIconButton(
+              key: const ValueKey('swarm-project-team'),
+              icon: LucideIcons.users300,
+              label: 'Team',
+              onPressed: _openTeam,
+            ),
         ],
       ),
     );
@@ -290,6 +317,7 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
       conversationId: project.leadConversationId,
       header: false,
       mention: widget.mention,
+      homeC: _homeC,
     ),
     SwarmProjectTab.buddy => SwarmProjectBuddy(
       reader: reader,
@@ -307,6 +335,12 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
       swarmId: widget.swarmId,
       projectId: project.id,
       header: false,
+    ),
+    SwarmProjectTab.team => SwarmProjectTeam(
+      session: session,
+      reader: reader,
+      projectId: project.id,
+      onOpen: _open,
     ),
   };
 
@@ -344,6 +378,7 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
                 ListenableBuilder(
                   listenable: asks ?? Listenable.merge(const []),
                   builder: (context, _) => SwarmProjectTabBar(
+                    tabs: widget.tabs,
                     selected: _tab,
                     chatNews: chat == null || _tab == SwarmProjectTab.chat
                         ? swarmNoNews
