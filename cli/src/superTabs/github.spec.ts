@@ -91,6 +91,20 @@ describe('a local agent\'s GitHub token', () => {
     expect(hosts()).toBe('{}\n')
   })
 
+  // Security review of #2390: a server whose app GitHub refuses (backend github/app.ts `misconfigured`: GitHub answered 401
+  // to the app's own credentials) answers a 503 the backend decided, unlike GitHub not answering (GITHUB_UNAVAILABLE).
+  it('empties the gh login when GitHub refuses the server\'s app, and keeps it while GitHub does not answer', async () => {
+    let reply = issued('ghs_fixtureToken0000004')
+    const { core, hosts } = setup((method) => method === 'GET' ? ok(hostForm([row('tab-1', 'agent-1')])) : reply)
+    await githubToken(core, 'harness-1', sourcesOf(core)())
+    reply = refuse(503, 'GITHUB_UNAVAILABLE')
+    await githubToken(core, 'harness-1', sourcesOf(core)())
+    expect(hosts()).toContain('ghs_fixtureToken0000004')
+    reply = refuse(503, 'GITHUB_APP_MISCONFIGURED')
+    expect(await githubToken(core, 'harness-1', sourcesOf(core)())).toMatchObject({ error: 'GITHUB_APP_MISCONFIGURED', status: 503 })
+    expect(hosts()).toBe('{}\n')
+  })
+
   it('refuses a harness that is not running here, one in no Swarm, and a reply without a token', async () => {
     const { core } = setup(method => method === 'GET' ? ok(hostForm([])) : ok({}))
     expect(await githubToken(core, 'harness-9', sourcesOf(core)())).toMatchObject({ error: 'AGENT_UNAVAILABLE' })

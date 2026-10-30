@@ -183,11 +183,38 @@ describe('preparing another person\'s start with the Harness GitHub App', () => 
       expect([f.prepare.mock.calls.length, f.fetch.mock.calls.length, f.revoke.mock.calls.length]).toEqual([0, 0, 0])
     }
     for (const error of [new SuperTabHostError('FORBIDDEN', 'Not this machine\'s start.', 403), new SuperTabHostError('UPDATE_REQUIRED', 'Update Harness.', 426),
-      new SuperTabHostError('GITHUB_APP_NOT_CONFIGURED', 'No GitHub App.', 503)]) {
+      new SuperTabHostError('GITHUB_APP_NOT_CONFIGURED', 'No GitHub App.', 503), new SuperTabHostError('GITHUB_APP_MISCONFIGURED', 'GitHub refused the app.', 503)]) {
       const thrown = await hosted(error).ready(true).catch(caught => caught)
       expect([thrown instanceof PrepareRetryError, thrown.message]).toEqual([false,
         `This machine could not get a Harness GitHub App token for this project, so it was not prepared with its owner's own GitHub login either: ${error.message}`])
     }
+  })
+
+  // Security review of #2390: an answer with a token but no repository or requester failed the start and left the token good
+  // for its hour. A token in an answer that is not used is revoked, never logged, and the start still fails.
+  it('revokes a token the server sent in an answer it cannot use, and still fails the start', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    for (const answer of [{ github: true, token: TOKEN, repository: 'example/project', requestedBy: {} }, { github: true, token: TOKEN, requestedBy: { email: 'olive@example.com' } },
+      { github: 'yes', token: TOKEN, repository: 'example/project', requestedBy: { email: 'olive@example.com' } }]) {
+      const f = hosted(answer)
+      await expect(f.ready(true)).rejects.toThrow('answered without a GitHub token')
+      expect([f.revoke.mock.calls, f.prepare.mock.calls.length, f.fetch.mock.calls.length]).toEqual([[[TOKEN]], 0, 0])
+    }
+    // The owner's own project with a token beside its answer: prepared with the owner's login, the token revoked.
+    const own = hosted({ github: false, token: TOKEN })
+    expect(await own.ready()).toBeNull()
+    expect(own.revoke.mock.calls).toEqual([[TOKEN]])
+    // A revocation GitHub refuses still fails the start for its answer, and says so without the token.
+    const refused = hosted({ github: true, token: TOKEN })
+    refused.revoke.mockRejectedValueOnce(new Error('GitHub answered 500 to revoking the token'))
+    await expect(refused.ready(true)).rejects.toThrow('answered without a GitHub token')
+    expect(warn.mock.calls.map(([line]) => String(line))).toEqual(['[super-tabs] could not revoke the clone token: GitHub answered 500 to revoking the token'])
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(TOKEN)
+    // No token in it: nothing to revoke.
+    const none = hosted({ github: true })
+    await expect(none.ready(true)).rejects.toThrow('answered without a GitHub token')
+    expect(none.revoke).not.toHaveBeenCalled()
+    warn.mockRestore()
   })
 
   // Kept out of this change by its Lead (10-30): a default branch that could not be fetched never fails or holds a start; the

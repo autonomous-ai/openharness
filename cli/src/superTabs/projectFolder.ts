@@ -30,7 +30,8 @@ export class PrepareRetryError extends Error {}
  * Anything the backend refuses is thrown, to fail the start; a call it gave no answer to, as a PrepareRetryError: never this
  * machine's own login instead.
  */
-export async function startGitHub(core: CoreApi, row: Json, start: Json, deps: { backend: Backend; team: boolean }): Promise<StartGitHub | null> {
+export async function startGitHub(core: CoreApi, row: Json, start: Json,
+  deps: { backend: Backend; team: boolean; revoke?: (token: string) => Promise<void> }): Promise<StartGitHub | null> {
   const machineId = core.daemon.machineId()
   if (row.githubApp !== true) {
     if (deps.team) throw new Error(NO_APP_ON_TEAM)
@@ -46,12 +47,20 @@ export async function startGitHub(core: CoreApi, row: Json, start: Json, deps: {
     if (error instanceof SuperTabHostError && decided(error)) throw new Error(said)
     throw new PrepareRetryError(error instanceof SuperTabHostError ? `${said} (${error.code})` : said)
   }
-  if (answer.github === false && !deps.team) return null
   const requester = object(answer.requestedBy).email
-  if (answer.github !== true || typeof answer.token !== 'string' || typeof answer.repository !== 'string' || typeof requester !== 'string' || !requester) {
-    throw new Error('The Harness server answered without a GitHub token for this project.')
+  if (answer.github === true && typeof answer.token === 'string' && typeof answer.repository === 'string' && typeof requester === 'string' && requester) {
+    return { token: answer.token, repository: answer.repository, requester }
   }
-  return { token: answer.token, repository: answer.repository, requester }
+  // A token in an answer that is not used is revoked, never logged: one that came without its repository or requester failed
+  // the start and stayed good for its hour (security review of #2390).
+  if (typeof answer.token === 'string') await revokeQuietly(answer.token, deps.revoke)
+  if (answer.github === false && !deps.team) return null
+  throw new Error('The Harness server answered without a GitHub token for this project.')
+}
+
+/** Revokes a read-only clone token; one GitHub will not revoke now still expires within the hour, and fails nothing. */
+async function revokeQuietly(token: string, revoke = revokeGitHubToken): Promise<void> {
+  await revoke(token).catch(error => console.warn(`[super-tabs] could not revoke the clone token: ${(error as Error).message}`))
 }
 
 /**
@@ -73,7 +82,7 @@ export async function prepareSwarmStart(core: CoreApi, row: Json, start: Json,
     }
   } finally {
     // The read-only token is done with: the agent gets a token of its own for its task (superTabs/github.ts).
-    if (github) await (deps.revoke ?? revokeGitHubToken)(github.token).catch(error => console.warn(`[super-tabs] could not revoke the clone token: ${(error as Error).message}`))
+    if (github) await revokeQuietly(github.token, deps.revoke)
   }
   return github ? { requester: github.requester } : null
 }
