@@ -4,7 +4,7 @@
 
 **Goal:** Cut the messages route's database reads and CPU, and keep message receipts forever while delivery rows stop growing.
 
-**Architecture:** Phase A (one release): a per-minute messages read log, continuation batches that read only what is missing, and a `SuperTabReceipt` collection that page reads merge. Phase B (only if A's log says so): receipt deltas on `?after` reads, used by Desktop and web. Phase C: a worker job that moves final deliveries older than 14 days into `SuperTabReceipt`, switched on after Phase A is released everywhere.
+**Architecture:** Phase A (one release): a per-minute messages read log, continuation batches that read only what is missing, and a `SuperTabReceipt` collection that page reads merge. Phase B (only if A's log says so): receipt deltas on `?after` reads, used by Desktop and web. Phase C: a worker job (on by default) that moves final deliveries older than 14 days into `SuperTabReceipt`. Phase D: a `SuperTabThread` collection holding each replied thread's `$facet` result, refreshed when a reply is inserted, read by id instead of aggregating on every page.
 
 **Tech Stack:** TypeScript, Fastify, Prisma 5.22 on MongoDB, vitest + `mongodb-memory-server`; Flutter (Desktop and web share `desktop/lib/super_tabs/controller.dart`).
 
@@ -157,9 +157,52 @@
 - [ ] **Step 4: Run** the file and `flutter test test/super_tab_*` — PASS (compare failures with a clean `main`, which has known reds).
 - [ ] **Step 5: Checkpoint** `git diff --stat`.
 
-### Task 8: Checks and measurement
+### Task 8: Thread summaries written with each reply (D)
+
+**Files:**
+- Modify: `backend/prisma/schema.prisma` (new model), `backend/src/superTabs/pageReads.ts` (split `pageThreads` into the `$facet` read and the post-processing), `backend/src/superTabs/store.ts` (`writeMessages`), `backend/src/superTabs/native.ts:235`
+- Test: `backend/integration/superTabThreads.test.ts` (new; add to `vitest.super-tabs.config.ts` `include`)
+
+**Interfaces:**
+- Produces: model
+  ```prisma
+  model SuperTabThread {
+    id             String   @id @map("_id") // the root message id
+    tabId          String
+    conversationId String
+    parts          Json     // the $facet's `parts` for this one thread, as pageThreads reads them today
+    mentions       Json     // the $facet's `mentions` for this one thread
+    updatedAt      DateTime
+    @@index([tabId, conversationId])
+  }
+  ```
+  In `pageReads.ts`: `threadFacet(tx, tabId, conversationId, roots: string[]): Promise<{ parts: FacetPart[]; mentions: FacetMention[] }>` (today's query, unchanged); `threadReplies(tx, tabId, facet): Promise<ThreadReply[]>` (today's post-processing, unchanged); `pageThreads` = `threadReplies(threadFacet(...))` until Task 9; `refreshThreads(tx, tabId, conversationId, roots: string[]): Promise<void>` upserts one `SuperTabThread` per root whose facet holds a reply (skips lone roots).
+- [ ] **Step 1: Write the failing tests:** a reply inserted through `store.execute` (`message.send` with `replyTo`) leaves a `SuperTabThread` whose `parts`/`mentions` deep-equal `threadFacet` for that root; a native reply (`native.ts`) does too; a lone root has no document; a reply that fails its transaction leaves no document.
+- [ ] **Step 2: Run** `npx vitest run --config vitest.super-tabs.config.ts integration/superTabThreads.test.ts` — FAIL.
+- [ ] **Step 3: Implement** the split (no behaviour change) and call `refreshThreads` for the distinct roots of inserted rows whose `thread` is set and not their own id, after the insert, in the same transaction, in both insert sites.
+- [ ] **Step 4: Run** the new file and `integration/superTabRead.test.ts` — PASS.
+- [ ] **Step 5: Checkpoint** `git diff --stat`.
+
+### Task 9: Backfill, per-Swarm switch, and reads from the collection (D)
+
+**Files:**
+- Create: `backend/src/superTabs/threadBackfill.ts`
+- Modify: `backend/src/superTabs/pageReads.ts` (`pageThreads`), `backend/src/worker.ts` (run after `releaseSchema`, before jobs start), `backend/prisma/schema.prisma` (marker model)
+- Test: `backend/integration/superTabThreads.test.ts`
+
+**Interfaces:**
+- Consumes: Task 8's `threadFacet`, `threadReplies`, `refreshThreads`.
+- Produces: model `SuperTabThreadBackfill { id String @id @map("_id") /* tabId */; through DateTime }`; `backfillThreads(db: PrismaClient, now: number): Promise<{ swarms: number; threads: number }>` — for each Swarm, refreshes every thread with a reply created after `marker.through - 3_600_000` (all of them when no marker), then sets `through = now`; `pageThreads(tx, tabId, conversationId, roots)` reads `SuperTabThread` by `_id $in roots` when the Swarm's marker exists (cached per process for 60 s), else `threadFacet` as today, and in both cases returns `threadReplies(...)`. A root without a document contributes what `threadFacet` gives for a lone root; prove it equal, or drop lone roots if `threadSummaries` ignores them.
+- [ ] **Step 1: Write the failing tests:** for a scene with lone roots and replied threads of every visibility class (agent-only notes to others, route rows, a Buddy session thread, mentions) and readers (owner, collaborator outside a private project, Buddy, agent), each reader's page `threads` deep-equals the `$facet` path; a Swarm without a marker reads through `threadFacet`; after backfill the page reads no `SuperTabMessage` aggregation for threads (count by the profiler); a reply written while the marker was stale (insert it with `refreshThreads` skipped, as an older release would) is counted after the next `backfillThreads`.
+- [ ] **Step 2: Run** them — FAIL.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run** the file, `integration/superTabRead.test.ts`, `integration/superTabHotReads.test.ts` — PASS.
+- [ ] **Step 5: Checkpoint** `git diff --stat`.
+
+### Task 10: Checks and measurement
 
 - [ ] **Step 1:** `npm run typecheck` in `backend/`; `flutter analyze` in `desktop/` if Task 7 ran.
 - [ ] **Step 2:** `npm run test:super-tabs` and `npm test` in `backend/` — only failures already on clean `main`, listed in the PR.
 - [ ] **Step 3:** After Phase A's release, one weekday (07:00–16:00 VN) of `'messages by reader'` logs: whole-page reads by reader and cursor, decoded per shown (target < 1.2). Write the Phase B go/no-go into the PR with the numbers.
 - [ ] **Step 4:** After Phase C is switched on: the hourly `compacted`/`remaining` log, and weekly `SuperTabDelivery`/`SuperTabReceipt` counts and index sizes.
+- [ ] **Step 5:** After Phase D: the `$facet` shape under the messages route in `db by shape` (today ~100 a pod-minute, 3.4 MB) gone, replaced by a `SuperTabThread` read by id.

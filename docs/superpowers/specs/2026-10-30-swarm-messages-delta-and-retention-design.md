@@ -42,13 +42,13 @@ working set against memory. Message reads stay index-bounded however long the hi
 - If the numbers confirm it: a Desktop/web poll with nothing new never reads a whole page; changed receipts come as a
   delta.
 - Message history is kept forever with its receipts, and delivery rows stop growing without bound.
+- A page reads its threads' summaries instead of aggregating every root's thread on each read.
 
 ## Non-goals
 
 - Deleting or archiving messages.
 - Operation receipts' growth (`SuperTabOperation`, 7 k a day): native prompts and recoveries (`native.ts:178, 215`) and
   `agent.remove` retries (`store.ts:1117`) read old receipts, so its expiry needs its own decision. Follow-up.
-- Materialized thread summaries (the per-page `$facet`): measure after this ships; 90% of threads are one message.
 - `SuperTabRouteDecision` growth: DB roadmap Phase 5.
 - Sharding. Message reads all name `tabId`; `SuperTabDelivery` also has machine-level indexes (`[machineId, status]`,
   `[status, id]`) and reads by `_id`, so it is not shard-ready, and that is not changed here.
@@ -121,6 +121,33 @@ makes a later rollback safe.
   release show no receipts for compacted (14-day-old) messages and answer a host's receipt read for one with 404 until
   they are replaced; the CLI retries.
 
+### Phase D — thread summaries in their own collection (Ken, 2026-10-30)
+
+**Why:** a thread is a field today (`SuperTabMessage.thread` = the root's id), and every page runs `pageThreads`
+(`pageReads.ts:156`), a `$facet` over all the page's roots, to count replies, their newest and oldest and their mentions,
+per visibility class. Prod: 10.4 k threads, **84% are the root alone**, 1,642 have replies (3 messages on average),
+~300 replies a day; yet the `$facet` runs on every page, ~100 a pod-minute, 3.4 MB a pod-minute (~20% of the route's
+bytes), and with history kept forever it only grows.
+
+**Design:**
+- A new collection `SuperTabThread`: one document per thread **with at least one reply**; `_id` = the root id, `tabId`,
+  `conversationId`, and the raw result today's `$facet` gives for that one thread (`parts` and `mentions`, keyed by the
+  same visibility classes: kind, recipients-only, has recipients, author, Buddy session, root). Index
+  `(tabId, conversationId)`. It holds no text and is never returned as is.
+- **Writes:** messages are insert-only (`store.ts writeMessages` and `native.ts`; nothing updates or deletes a message).
+  When a transaction inserts a reply (`thread` set and not its own id), it recomputes that thread's summary with today's
+  `$facet` for that one root and upserts the document, in the same transaction. So a summary always equals what the
+  `$facet` would compute; ~300 such writes a day.
+- **Reads:** `pageThreads` reads `SuperTabThread` by `_id $in` the page's roots and feeds the stored `parts` and
+  `mentions` to today's post-processing (`deliveredCopies` of roots, `agentOnly`, routing rows, Buddy sessions,
+  `threadSummaries`), which stays per reader as now. A root with no document has no reply; it yields what today's
+  `$facet` yields for a lone root (the builder proves the equality; if summaries drop lone roots, they are skipped).
+- **Backfill and switch:** the worker computes the summaries of every existing thread with replies (~1.6 k today, seconds)
+  and then records, per Swarm, that it is backfilled and through which time. A Swarm's reads use the collection only once
+  its marker exists; until then they run today's `$facet`. At every worker boot the backfill reruns for threads with a
+  reply newer than the marker's time minus 1 hour and moves the marker, so replies written by an older release during a
+  rollback are counted after roll-forward.
+
 ## Left to the builder
 
 - A1's log name and exact keys; A2's margin; reply field names in Phase B (old clients ignore new fields).
@@ -142,6 +169,10 @@ makes a later rollback safe.
 - **C:** only `answered`/`cancelled`/`superseded` over 14 days are compacted; two concurrent compactions of one message
   keep both agents; `deliveryReceipt` answers a compacted delivery with its final status and refuses another machine;
   `writeMessages(keepStored)` writes no delivery for a compacted one; a page is unchanged across compaction.
+- **D:** for a conversation with lone roots, threads with replies of every visibility class (agent-only notes, route rows,
+  a Buddy session thread, mentions), each reader's `threads` from the collection deep-equals today's `$facet` result; a
+  reply inserted by `writeMessages` and by `native.ts` updates its thread in the same transaction; a Swarm without its
+  marker reads through the `$facet`; the boot rerun counts a reply written while the marker was stale.
 - Existing suites stay green: `integration/superTabRead.test.ts`, `superTabReadMarks`, `superTabHotReads`,
   `superTabNamedReads`, the store's delivery tests, the CLI host's receipt tests, Desktop's `super_tabs` tests.
 
@@ -153,16 +184,18 @@ makes a later rollback safe.
 
 **Done when** Phase A ships with A1's numbers reported and rows decoded per row shown under 1.2; Phase B (if it goes)
 cuts Desktop/web whole-page reads by at least 5×; Phase C keeps `SuperTabDelivery` near 14 days of final deliveries plus
-the non-final ones.
+the non-final ones; Phase D removes the `$facet` from the messages route in `db by shape` (~100 a pod-minute, 3.4 MB
+today).
 
 ## Design (AGENTS.md rules)
 
 - **Growth:** messages are kept forever (~5.5 k a day). Final deliveries move into `SuperTabReceipt` after 14 days (one
-  small document per message with receipts); delivery rows hold ~14 days plus non-final ones.
+  small document per message with receipts); delivery rows hold ~14 days plus non-final ones. `SuperTabThread` grows
+  with threads that have replies (~150 a day today), small documents, kept with their messages.
 - **Concurrency:** compaction writes receipts by field path in one transaction with the delete, skipping rows that
   changed since read. Delta reads take `serverTime` before reading.
 - **Read cost:** a page decodes about the rows it shows; it reads live deliveries and compacted receipts for the page's
-  messages by id (two indexed reads). An empty poll with Phase B reads the new messages (none) and the conversation's
+  messages by id (two indexed reads), and thread summaries by id instead of the `$facet` (one read, ~16% of roots match). An empty poll with Phase B reads the new messages (none) and the conversation's
   changed deliveries by the new index.
 - **Scale:** at 10× messages reads stay index-bounded; the first warning is index size against node RAM (`$collStats`
   weekly) and the compaction backlog. Next steps are a larger tier, then a sharding design.
