@@ -23,11 +23,37 @@ export function ignoreHarnessRuntime(workspace: string): void {
   // Diego, 10-30: the file itself was left untracked, so every worktree read as uncommitted work and none was ever cleaned
   // up (superTabs/machines.ts removeStoppedWorktree, lib/worktreeSweep.ts). It ignores itself; each launch writes it again.
   if (!rules.includes('.gitignore')) missing.push('.gitignore')
-  // Publish whole bytes: a killed launch must not leave session files visible to Git.
+  publish(file, `${before}${before && !before.endsWith('\n') ? '\n' : ''}${missing.join('\n')}\n`, mode)
+}
+
+/** The file every Harness before #2266 wrote into a fresh workspace, byte for byte; it did not ignore itself. */
+export const OLDER_RUNTIME_IGNORE = 'runtime/\nlegacy-AGENTS.md\n'
+
+/** Lead, 10-30 (#2266): the worktrees made before the ignore file ignored itself never read as clean, and they are the ones
+ *  piling up (19 on one Mac). The cleanup (lib/worktreeSweep.ts sweepOne) upgrades the exact file an older Harness wrote,
+ *  once it has checked git does not track it: true when it did. Any other file, edited by someone or of unknown origin,
+ *  and a Harness folder or file that is not plain, stays exactly as it is. */
+export function upgradeOlderRuntimeIgnore(workspace: string): boolean {
+  const folder = join(workspace, '.harness'), file = join(folder, '.gitignore')
+  let mode: number
+  try {
+    const dir = lstatSync(folder)
+    if (!dir.isDirectory() || dir.isSymbolicLink()) return false
+    const stat = lstatSync(file)
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== Buffer.byteLength(OLDER_RUNTIME_IGNORE)) return false
+    if (readFileSync(file, 'utf8') !== OLDER_RUNTIME_IGNORE) return false
+    mode = stat.mode & 0o777
+  } catch { return false }
+  publish(file, `${OLDER_RUNTIME_IGNORE}.gitignore\n`, mode)
+  return true
+}
+
+/** Publish whole bytes: a killed launch must not leave session files visible to Git. */
+function publish(file: string, text: string, mode: number): void {
   const temporary = `${file}.${randomUUID()}.tmp`
   const fd = openSync(temporary, 'wx', mode)
   try {
-    try { writeFileSync(fd, `${before}${before && !before.endsWith('\n') ? '\n' : ''}${missing.join('\n')}\n`); fsyncSync(fd) }
+    try { writeFileSync(fd, text); fsyncSync(fd) }
     finally { closeSync(fd) }
     renameSync(temporary, file)
   } finally { rmSync(temporary, { force: true }) }
