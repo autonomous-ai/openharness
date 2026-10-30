@@ -3,9 +3,11 @@ import { createHash } from 'node:crypto'
 import { appendFileSync, chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync,
   truncateSync, utimesSync, writeFileSync, type Stats } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { inspect } from 'node:util'
 import { basename, dirname, join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { allowBuddyReads, artifactLinks, buddyGuardCommand, buddyGuardSource, buddyReadsOf, forgetBuddyReads, grantBuddyWide, recordBuddyApprovals } from './buddyGuard.js'
+import { allowBuddyReads, artifactLinks, buddyGuardCommand, buddyGuardSource, buddyReadsOf, forgetBuddyReads, grantBuddyWide, recordBuddyApprovals,
+  SentListsError } from './buddyGuard.js'
 
 // The guard Claude Code runs before each of a Buddy's tool calls, run here as it runs there: the script, with node, the
 // hook's input on stdin and its decision on stdout.
@@ -594,6 +596,17 @@ describe('the host\'s list of what a Buddy\'s person sent it', () => {
     rmSync(lists, { recursive: true, force: true })
     for (const path of [sent, later]) { rmSync(path, { force: true }); writeFileSync(path, 'bytes') }
   })
+  // Follow-up to #2389's security re-check 2: the host logs what an end failed with, and a filesystem error's message names
+  // its path, under the person's home. It fails by fixed codes alone, carrying nothing of the error it caught.
+  const failsWith = (session: string, codes: string[]) => {
+    let thrown: unknown
+    try { forgetBuddyReads(session, lists) } catch (error) { thrown = error }
+    expect(thrown).toBeInstanceOf(SentListsError)
+    expect((thrown as SentListsError).codes).toEqual(codes)
+    expect((thrown as Error).message).toBe(codes.join(', '))
+    expect((thrown as Error).cause).toBeUndefined()
+    expect(inspect(thrown)).not.toContain(parent)
+  }
 
   it('is kept for each Buddy session apart, in Harness\'s data folder, beside its downloads folder', () => {
     expect(buddyReadsOf('session-key')).toEqual({
@@ -752,7 +765,7 @@ describe('the host\'s list of what a Buddy\'s person sent it', () => {
       expect(decide('Read', { file_path: later }, theirGuard)).toBe('deny')
       expect(() => forgetBuddyReads('harness-1', lists)).not.toThrow()
       expect(existsSync(mine.file)).toBe(false)
-      expect(() => forgetBuddyReads('harness-2', lists)).toThrow(/director/i)
+      failsWith('harness-2', ['SENT_LIST_KEPT'])
       expect(existsSync(mark(theirs.file, 'harness-2'))).toBe(true)
       expect(decide('Read', { file_path: later }, theirGuard)).toBe('deny')
     } finally { rmSync(theirs.file, { recursive: true, force: true }) }
@@ -766,7 +779,7 @@ describe('the host\'s list of what a Buddy\'s person sent it', () => {
     const own = mark(mine.file, 'harness-1')
     rmSync(own); mkdirSync(join(own, 'held'), { recursive: true })
     try {
-      expect(() => forgetBuddyReads('harness-1', lists)).toThrow(/director/i)
+      failsWith('harness-1', ['SENT_LIST_MARK_KEPT'])
       expect(existsSync(mine.file)).toBe(false)
       expect(decide('Read', { file_path: sent }, guard)).toBe('deny')
     } finally { rmSync(own, { recursive: true, force: true }) }
@@ -799,7 +812,7 @@ describe('the host\'s list of what a Buddy\'s person sent it', () => {
     expect(decide('Read', { file_path: sent }, guard)).toBe('allow')
     chmodSync(lists, 0o500)
     try {
-      expect(() => forgetBuddyReads('harness-1', lists)).toThrow(/EACCES|EPERM/)
+      failsWith('harness-1', ['SENT_LIST_KEPT'])
       expect(existsSync(mine.file)).toBe(true)
       expect(existsSync(mark(mine.file, 'harness-1'))).toBe(true)
       expect(decide('Read', { file_path: sent }, guard)).toBe('deny')
@@ -824,7 +837,7 @@ describe('the host\'s list of what a Buddy\'s person sent it', () => {
     chmodSync(lists, 0o500)
     try {
       expect(() => forgetBuddyReads('harness-2', lists)).not.toThrow()
-      expect(() => forgetBuddyReads('harness-1', lists)).toThrow(/EACCES|EPERM/)
+      failsWith('harness-1', ['SENT_LIST_KEPT'])
       expect(existsSync(mine.file)).toBe(true)
     } finally { chmodSync(lists, 0o700) }
     expect(() => forgetBuddyReads('harness-1', lists)).not.toThrow()
@@ -838,7 +851,7 @@ describe('the host\'s list of what a Buddy\'s person sent it', () => {
     writeFileSync(orphan, JSON.stringify({ version: 1, session: 'harness-2', files: [], links: [] }))
     chmodSync(orphan, 0o000)
     try {
-      expect(() => forgetBuddyReads('harness-1', lists)).toThrow(/EACCES|EPERM/)
+      failsWith('harness-1', ['SENT_LIST_UNREAD'])
       expect(existsSync(orphan)).toBe(true)
       writeFileSync(mark(orphan, 'harness-2'), '')
       expect(() => forgetBuddyReads('harness-1', lists)).not.toThrow()
@@ -872,6 +885,33 @@ describe('the host\'s list of what a Buddy\'s person sent it', () => {
     // The earlier session's end no longer finds the list as its own.
     forgetBuddyReads('harness-0', lists)
     expect(held().session).toBe('harness-1')
+  })
+
+  // Follow-up to #2389's security re-check 2: a lists folder that could not be read threw the read's own error, its path with
+  // it, into the daemon's log. It fails by its kind alone, deletes nothing, and the end is tried again.
+  it('fails by a fixed code, with no path, when the lists folder cannot be read, deletes nothing, and finishes once it can', () => {
+    allowBuddyReads(mine, { session: 'harness-1', files: [sent], links: [] })
+    const before = readdirSync(lists).sort()
+    chmodSync(lists, 0o000)
+    try {
+      failsWith('harness-1', ['SENT_LISTS_UNREAD'])
+    } finally { chmodSync(lists, 0o700) }
+    expect(readdirSync(lists).sort()).toEqual(before)
+    expect(decide('Read', { file_path: sent }, guard)).toBe('allow')
+    expect(() => forgetBuddyReads('harness-1', lists)).not.toThrow()
+    expect(readdirSync(lists)).toEqual([])
+    expect(decide('Read', { file_path: sent }, guard)).toBe('deny')
+  })
+
+  it('names each kind of failure once, in a fixed order, when an end meets several', () => {
+    allowBuddyReads(mine, { session: 'harness-1', files: [sent], links: [] })
+    const orphans = ['orphan-a.json', 'orphan-b.json'].map(name => join(lists, name))
+    for (const orphan of orphans) { writeFileSync(orphan, JSON.stringify({ version: 1, session: 'harness-2', files: [], links: [] })); chmodSync(orphan, 0o000) }
+    chmodSync(lists, 0o500)
+    try {
+      failsWith('harness-1', ['SENT_LIST_UNREAD', 'SENT_LIST_KEPT'])
+      for (const file of [mine.file, ...orphans]) expect(existsSync(file)).toBe(true)
+    } finally { chmodSync(lists, 0o700); for (const orphan of orphans) chmodSync(orphan, 0o600) }
   })
 
   it('forgets nothing, and fails nothing, where no list was ever written', () => {

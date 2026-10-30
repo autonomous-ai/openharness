@@ -39,7 +39,7 @@ export { backend, identifier, object, SuperTabHostError } from './wire.js'
 import { backend, ENDED_WORK, identifier, object, SuperTabHostError } from './wire.js'
 import { recordSwarmSkillNotice, refreshSwarmSkill, type SkillRefresh, type SwarmSkillGrant, type SwarmSkillMode } from '../lib/swarmSkills.js'
 import { allowBuddyReads, artifactLinks, buddyApprovalsOf, buddyLaunchOf, buddyReadsOf, forgetBuddyReads, grantBuddyWide, hasBuddyApprovals,
-  judgeBuddyApprovals, recordBuddyApprovals, writeBuddyAccount, type JudgedApprovals } from '../lib/buddyGuard.js'
+  judgeBuddyApprovals, recordBuddyApprovals, SentListsError, writeBuddyAccount, type JudgedApprovals } from '../lib/buddyGuard.js'
 
 /** The skills of a group's project in a tab state: a group from before projects is in the first, and a project from before
  *  modes, or a Swarm from before projects, is orchestration. */
@@ -1098,7 +1098,9 @@ export class SuperTabHost {
     // could not be read held back every Buddy's end on the machine (follow-up to #2248, lib/buddyGuard.ts `forgetBuddyReads`).
     if (!state.forgotten) {
       try { forgetBuddyReads(agent.harnessId); state.forgotten = true; delete state.unforgotten } catch (error) {
-        const why = error instanceof Error ? error.message : String(error)
+        // By fixed codes alone: a filesystem error's message names its path, in the person's home (follow-up to #2389's
+        // security re-check 2). Anything else it might throw is named by kind too, never by its message.
+        const why = error instanceof SentListsError ? error.message : 'SENT_LISTS_FAILED'
         if (why !== state.unforgotten) {
           this.log(`Could not delete what session ${agent.harnessId.slice(0, 8)}'s person sent it, so its end is not acknowledged yet: ${why}`)
         }
