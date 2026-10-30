@@ -108,6 +108,8 @@ export class FakeBackend {
   superTabs: ((method: string, path: string, body: Record<string, any>, machine: FakeMachine) => Promise<{
     status?: number; data?: unknown; error?: { code: string; message: string }
   }>) | null = null
+  /** What `GET /api/auth/me` answers: the signed-in person; null, a 404 as before. */
+  me: { id: string; email: string } | null = null
   /** Opt-in fixture: older scenarios keep the endpoint absent, as on an older backend. */
   productUsage: { enabled: boolean; revision: number; reports: Record<string, unknown>[]; stallReports?: boolean } | null = null
   /** `POST /api/route/jev`, Harness's hosted Jev. Unset answers 503 JEV_BUSY, which callers treat as unavailable. */
@@ -174,6 +176,9 @@ export class FakeBackend {
           }, error => { res.statusCode = 500; res.end(json({ success: false, error: { code: 'FIXTURE', message: String(error) } })) })
         })
         return
+      }
+      if (backend.me && req.method === 'GET' && req.url?.split('?')[0] === '/api/auth/me') {
+        res.end(json({ success: true, data: { user: backend.me } })); return
       }
       const usage = backend.productUsage
       if (usage && req.url === '/api/product-usage/settings' && req.method === 'GET') {

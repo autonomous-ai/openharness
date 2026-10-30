@@ -19,9 +19,10 @@ import 'swarm_fixture.dart';
 
 /// Review screenshots of Swarm's tab bar, direction C, as Tony's prototype
 /// C1 draws it (2026-10-30), with the tabs main has screens for: Swarm Home
-/// over the bar with what waits on the person counted on Activity, each
-/// tab's touch area outlined, Activity's Needs you, and You as C4 draws it,
-/// on a 390-point phone in both phone themes, from made-up data only, to the
+/// as C1 draws it over the bar — back after two hours away — with what
+/// waits on the person counted on Activity, its switcher and Jump to, each
+/// touch area outlined; Activity's Needs you; and You as C4 draws it, on a
+/// 390-point phone in both phone themes, from made-up data only, to the
 /// folder `SWARM_TABS_SHOTS` names.
 final shots = Platform.environment['SWARM_TABS_SHOTS'];
 void main() {
@@ -83,6 +84,33 @@ void main() {
         ),
         'projectId': projectId,
       };
+      // Work in each project: Nova working on mobile, Ash waiting on the
+      // person in the API, Kite down on desktop; three tasks done since the
+      // person left, one before.
+      Map<String, dynamic> work(
+        String projectId,
+        String id,
+        String status,
+        String worker, {
+        Duration? done,
+      }) => {
+        ...groupData(
+          id,
+          title: id,
+          agentIds: [worker],
+          status: status,
+          workerId: worker,
+        ),
+        'projectId': projectId,
+        if (done != null)
+          'assignment': {
+            'id': 'attempt-$id',
+            'agentId': worker,
+            'status': status,
+            'result': null,
+            'progressAt': ago(done),
+          },
+      };
       // When each project's chat last moved, in minutes.
       const moved = {
         'lead-p-oh': 2,
@@ -115,9 +143,29 @@ void main() {
             ...agent('agent-river', name: 'Lead', displayName: 'River'),
             'projectId': 'p-oh',
           },
+          {
+            ...agent('agent-nova', displayName: 'Nova'),
+            'projectId': 'p-mobile',
+          },
+          {...agent('agent-ash', displayName: 'Ash'), 'projectId': 'p-api'},
+          {
+            ...agent('agent-kite', displayName: 'Kite'),
+            'projectId': 'p-desk',
+            'downSince': '2026-10-29T01:00:00.000Z',
+          },
         ],
         groups: [
           for (final id in ['p-oh', 'p-mobile', 'p-api', 'p-desk']) lead(id),
+          work('p-mobile', 'g-tabs', 'working', 'agent-nova'),
+          work('p-api', 'g-ask', 'needs_human', 'agent-ash'),
+          for (final (i, minutes) in [20, 45, 70, 180].indexed)
+            work(
+              'p-oh',
+              'g-done-$i',
+              'done',
+              'agent-river',
+              done: minute * minutes,
+            ),
         ],
       );
       fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
@@ -207,6 +255,8 @@ void main() {
         readMarks: MemoryKeyValueStore(),
         computers: computers,
       )..foreground = false;
+      // Gone two hours: Home has While you were away.
+      host.session!.home.seen(now.subtract(const Duration(hours: 2)));
       final boundary = GlobalKey();
       final targets = ValueNotifier(<Rect>[]);
       await tester.pumpWidget(
@@ -247,14 +297,44 @@ void main() {
             .writeAsBytes(png!.buffer.asUint8List());
         image.dispose();
       });
+      Rect rect(String key) => tester.getRect(find.byKey(ValueKey(key)));
       await capture('home');
       targets.value = [
+        for (final key in [
+          'swarm-title-button',
+          'swarm-compose',
+          'swarm-jump',
+          'swarm-away',
+          'swarm-project-$tab-p-oh',
+        ])
+          rect(key),
         for (final tab in [SwarmTab.home, SwarmTab.activity, SwarmTab.you])
-          tester.getRect(find.byKey(ValueKey('swarm-tab-${tab.name}'))),
+          rect('swarm-tab-${tab.name}'),
       ];
       await tester.pump();
       await capture('targets');
       targets.value = [];
+      await tester.tap(find.byKey(const ValueKey('swarm-title-button')));
+      await tester.pumpAndSettle();
+      await capture('switcher');
+      targets.value = [rect('swarm-switch-$tab'), rect('swarm-switch-join')];
+      await tester.pump();
+      await capture('switcher-targets');
+      targets.value = [];
+      Navigator.of(
+        tester.element(find.byKey(const ValueKey('swarm-switch-join'))),
+      ).pop();
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('swarm-jump')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('swarm-jump-query')),
+        'har',
+      );
+      await tester.pump();
+      await capture('jump');
+      await tester.tap(find.byKey(const ValueKey('swarm-jump-cancel')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('swarm-tab-activity')));
       await tester.pumpAndSettle();
       await capture('activity');
