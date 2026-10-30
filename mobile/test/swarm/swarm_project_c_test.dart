@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/core/local_key_value_store.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
@@ -1024,6 +1025,52 @@ void main() {
       expect(
         heard(tester, 'swarm-member-agent-builder'),
         'Nova, Needs input · #2156 Buddy chat header · now',
+      );
+    });
+
+    testWidgets('on a 320-point phone a long task gives way and its time '
+        'stays whole', (tester) async {
+      tester.view
+        ..physicalSize = const Size(320, 568) * 3
+        ..devicePixelRatio = 3;
+      addTearDown(tester.view.reset);
+      final start = clock.now();
+      final fake = timed(backend(), start);
+      final load = fake.routes['/api/super-tabs/$tab/parts']!;
+      fake.routes['/api/super-tabs/$tab/parts'] = (body) async {
+        final read = (await load(body))! as Map<String, dynamic>;
+        for (final g in (read['groups'] as List).cast<Map>()) {
+          if (g['key'] == 'g1') {
+            (g['data'] as Map)['title'] =
+                'Buddy chat header that runs far past the edge of a phone';
+          }
+        }
+        return read;
+      };
+      await team(tester, fake);
+      await tester.ensureVisible(key('swarm-member-agent-builder'));
+      await tester.pumpAndSettle();
+
+      final row = key('swarm-member-agent-builder');
+      final age = find.descendant(of: row, matching: key('swarm-member-age'));
+      expect(tester.widget<Text>(age).data, ' · 4m');
+      expect(
+        tester.getRect(age).right,
+        lessThanOrEqualTo(tester.getRect(row).right),
+      );
+      final words = find.descendant(
+        of: row,
+        matching: find.textContaining('Working · #2156'),
+      );
+      expect(
+        tester.renderObject<RenderParagraph>(words).didExceedMaxLines,
+        isTrue,
+        reason: 'the title is cut, not the time',
+      );
+      expect(
+        heard(tester, 'swarm-member-agent-builder'),
+        'Nova, Working · #2156 Buddy chat header that runs far past the edge '
+        'of a phone · 4m',
       );
     });
 

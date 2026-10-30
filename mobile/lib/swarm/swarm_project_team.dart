@@ -81,8 +81,11 @@ class SwarmTeamAgent {
   /// task named, or none the Swarm sent a time for.
   final String? age;
 
+  /// Its state and task: "Working · #2156 Buddy chat header".
+  String get doing => [label, ?task?.label].join(' · ');
+
   /// Its row's quiet line: "Working · #2156 Buddy chat header · 4m".
-  String get line => [label, ?task?.label, ?age].join(' · ');
+  String get line => [doing, ?age].join(' · ');
 }
 
 /// [projectId]'s agents as its Team lists them: each in its state
@@ -434,7 +437,8 @@ class _SwarmProjectTeamState extends State<SwarmProjectTeam> {
                         ),
                         dot: swarmMemberColor(a.state),
                         name: a.name,
-                        detail: a.line,
+                        detail: a.doing,
+                        age: a.age,
                         onTap: switch (a.task) {
                           final task? => () => widget.onOpen(task.id),
                           null => null,
@@ -451,9 +455,10 @@ class _SwarmProjectTeamState extends State<SwarmProjectTeam> {
 }
 
 /// One agent on a project's Team (Dee, 2026-10-29): the face in one column,
-/// with its state's [dot], the name and a quiet [detail] line beneath. The
-/// same height with or without the line; a tap does [onTap], when there is
-/// one.
+/// with its state's [dot], the name and a quiet [detail] line beneath, ending
+/// in its [age], which a narrow phone never cuts: the line's words give way
+/// first. The same height with or without the line; a tap does [onTap], when
+/// there is one.
 class SwarmMemberRow extends StatelessWidget {
   const SwarmMemberRow({
     super.key,
@@ -461,6 +466,7 @@ class SwarmMemberRow extends StatelessWidget {
     required this.name,
     this.dot,
     this.detail,
+    this.age,
     this.onTap,
   });
 
@@ -470,6 +476,9 @@ class SwarmMemberRow extends StatelessWidget {
   /// The state's colour on the face's corner.
   final Color? dot;
   final String? detail;
+
+  /// How long since the agent's last progress: "4m".
+  final String? age;
   final VoidCallback? onTap;
 
   static const double _face = 36, _dot = 11;
@@ -477,12 +486,20 @@ class SwarmMemberRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
-    final dot = this.dot, detail = this.detail;
+    final dot = this.dot, detail = this.detail, age = this.age;
+    final line = [
+      if (detail != null && detail.isNotEmpty) detail,
+      ?age,
+    ].join(' · ');
+    final quiet = AppType.caption(
+      color: AppPalette.textSecondary,
+      height: 1.35,
+    );
     return Semantics(
       // Its own node, a tap or not: one row, said as one.
       container: true,
       button: onTap != null,
-      label: [name, if (detail != null && detail.isNotEmpty) detail].join(', '),
+      label: [name, if (line.isNotEmpty) line].join(', '),
       excludeSemantics: true,
       child: InkWell(
         onTap: onTap,
@@ -536,16 +553,29 @@ class SwarmMemberRow extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                         style: AppType.label(color: AppPalette.textPrimary),
                       ),
-                      if (detail != null && detail.isNotEmpty) ...[
+                      if (line.isNotEmpty) ...[
                         const SizedBox(height: 2),
-                        Text(
-                          detail,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: AppType.caption(
-                            color: AppPalette.textSecondary,
-                            height: 1.35,
-                          ),
+                        Row(
+                          children: [
+                            if (detail != null && detail.isNotEmpty)
+                              Flexible(
+                                child: Text(
+                                  detail,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: quiet,
+                                ),
+                              ),
+                            if (age != null)
+                              Text(
+                                detail != null && detail.isNotEmpty
+                                    ? ' · $age'
+                                    : age,
+                                key: const ValueKey('swarm-member-age'),
+                                maxLines: 1,
+                                style: quiet,
+                              ),
+                          ],
                         ),
                       ],
                     ],
