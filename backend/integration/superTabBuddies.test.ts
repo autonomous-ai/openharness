@@ -876,7 +876,9 @@ describe('the person\'s own browser, reading and writing the Swarm straight from
       checks: [] })).result.conversationId)
     const madeUp = 'groups-000000000000000000000000'
     // The owner's browser, on peer's Buddy chat.
-    expect(await refusal(f.store.messages(ownerWeb, f.tab, chat, {}))).toEqual(await refusal(f.store.messages(ownerWeb, f.tab, madeUp, {})))
+    const othersBuddy = await refusal(f.store.messages(ownerWeb, f.tab, chat, {}))
+    expect(othersBuddy).not.toBeNull()
+    expect(othersBuddy).toEqual(await refusal(f.store.messages(ownerWeb, f.tab, madeUp, {})))
     expect((await new SwarmReads(f.store).firstLoad(ownerWeb, f.tab)).groups.map(g => g.key)).not.toContain(chat)
     // peer's browser, on the owner's private project: refused as their own Mac is, and with no name. (The server says
     // "project" here and "conversation" for an id that does not exist, for every sign-in alike; reported, not changed here.)
