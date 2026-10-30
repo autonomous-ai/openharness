@@ -102,6 +102,14 @@ describe('the notice that new Reviewers cannot start', () => {
     expect(notice(again.state, again.built)).toBeNull()
   })
 
+  it('says nothing while a used-up window resets inside the start window, as the review rule waits for it (rules.ts)', () => {
+    const { state, built } = swarm([machine('studio', 'Mac Studio', 'ken', { windows: out })])
+    state.machines![0]!.observation!.quotas[0]!.windows[0]!.resetsAt = new Date(NOW + 10 * 60_000).toISOString()
+    expect(notice(state, built)).toBeNull()
+    state.machines![0]!.observation!.quotas[0]!.windows[0]!.resetsAt = new Date(NOW + 3 * 24 * HOUR).toISOString()
+    expect(notice(state, built)).toMatchObject({ source: { cause: 'out' } })
+  })
+
   it('counts an offline machine as unavailable, and leaves out machines this project may not use', () => {
     const offline = machine('tony-mac', 'MacBook Pro 19', 'tony', { windows: plenty })
     offline.observation!.receivedAt = NOW - HOUR

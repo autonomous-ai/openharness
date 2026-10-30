@@ -668,7 +668,7 @@ describe('local models on the Swarm\'s grid', () => {
     // With no Reviewer of another engine anywhere, the Builder's own engine reviews at its top tier only (Lead, 2026-10-29).
     expect(reviewRefusals(probe({ model: 'opus', quality: 3 }), { engine: 'claude' }, false)).toEqual([])
     expect(reviewRefusals(probe(), { engine: 'claude' }, false))
-      .toEqual(['A review on the reviewed Builder\'s engine, Claude, needs its top tier (quality 3): no Reviewer on another engine can run in this Swarm.'])
+      .toEqual(['A review on the reviewed Builder\'s engine, Claude, needs its top tier (quality 3): no Reviewer on another engine can start soon in this Swarm.'])
   })
 
   it('says why a named model the Swarm has is never offered to Builders, rather than to share it', () => {

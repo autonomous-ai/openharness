@@ -264,7 +264,7 @@ describe('routeTask', () => {
     const s = scoped({ tab: t })
     expect(await routeTask(input, s, where as never, opener(), () => 'op')).toMatchObject({ ok: true, pick: { kind: 'new', engine: 'claude', model: 'opus' } })
     expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([{ title: 'Multiply · Claude sonnet medium · remote-1',
-      reason: 'A review on the reviewed Builder\'s engine, Claude, needs its top tier (quality 3): no Reviewer on another engine can run in this Swarm.' }]))
+      reason: 'A review on the reviewed Builder\'s engine, Claude, needs its top tier (quality 3): no Reviewer on another engine can start soon in this Swarm.' }]))
     // A Builder still in the Swarm is read from its agent: on a grid model, Claude may review it.
     t.state.agents.push({ id: 'b1', name: 'Kimi', machineId: 'm1', harnessId: 'hb', configuration: { engine: 'claude', model: 'default', effort: 'default' }, gridModel: 'moonshotai/kimi-k3' } as never)
     Object.assign(t.state.conversations[2]!, { assignment: { id: 'b', agentId: 'b1', status: 'review' } })
@@ -293,6 +293,56 @@ describe('routeTask', () => {
     expect(await routeWith(pool('m2', ['codex']), ['m1'])).toMatchObject({ ok: true, pick: { engine: 'claude', model: 'opus', machineId: 'm1' } })
     expect(await routeWith(pool('m2', ['codex'], { contributorId: 'mate', teamWork: { allowed: false, code: 'TEAM_ACCOUNT_REQUIRED', reason: 'Not a Team machine.' } })))
       .toMatchObject({ ok: true, pick: { engine: 'claude', model: 'opus', machineId: 'm1' } })
+  })
+  // 2026-10-30: every Codex Reviewer was out of weekly quota for days, yet Claude builds' top-tier Claude reviews were refused
+  // because Codex machines existed; reviews waited all morning (Tony). Another engine counts only where a Reviewer could start
+  // within the start window: on an allowed machine, online, with quota now or once a window resets inside it.
+  describe('a review on its Builder\'s own engine when no Reviewer of another engine could start soon', () => {
+    const DAY = 86_400_000, MIN = 60_000
+    const pool = (machineId: string, engines: string[], weekly: { usedPercent: number; resetsIn: number } = { usedPercent: 10, resetsIn: 5 * DAY }, patch: Record<string, unknown> = {}) => ({
+      machineId, name: machineId, cwd: '/w', engines, paused: false, contributorId: 'owner',
+      observation: { receivedAt: Date.now(), resources: { memoryTotalBytes: 32e9, memoryUsedBytes: 2e9, projectDiskFreeBytes: 200e9 }, tools: { git: true }, runningHarnessIds: [],
+        quotas: engines.map(engine => ({ engine, known: true, windows: [{ name: '5-hour', usedPercent: 20, resetsAt: Date.now() + 3600000 },
+          { name: 'weekly', usedPercent: engine === 'codex' ? weekly.usedPercent : 10, resetsAt: Date.now() + (engine === 'codex' ? weekly.resetsIn : 5 * DAY) }] })) }, ...patch })
+    const both = { ...policy, models: policy.models.map(m => ({ ...m, enabled: true })) }
+    const routeWith = async (codexBox: Record<string, unknown>, rules: unknown[] = []) => {
+      const t = tab(); t.state.agents = [agents[1]] as never
+      t.state.conversations.push({ id: 'g0', title: 'Built', leadId: 'lead', agentIds: ['lead'], archived: false, brief: '', checks: [],
+        assignment: { id: 'b', agentId: 'gone', status: 'review', configuration: { engine: 'claude' } } } as never)
+      Object.assign(t.state.conversations[1]!, { reviewOf: 'g0' })
+      Object.assign(t.state, { machines: [pool('m1', ['claude']), codexBox], rules })
+      const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: t, policy: { policy: both, warnings: [] }, machines: [] } } })
+      const result = await routeTask(input, s, where as never, opener(), () => 'op')
+      return { result, decision: 'error' in result ? null : recorded(s).command.decision }
+    }
+    const sameEngine = { ok: true, pick: { engine: 'claude', model: 'opus', machineId: 'm1' }, why: expect.stringMatching(/^same-engine review: no Reviewer of another engine has quota\. /) }
+
+    it('lets Claude Opus review a Claude build while Codex is out of quota for days, and its route line says why', async () => {
+      const { result, decision } = await routeWith(pool('m2', ['codex'], { usedPercent: 100, resetsIn: 3 * DAY }))
+      expect(result).toMatchObject(sameEngine)
+      expect(decision.why).toMatch(/^same-engine review: no Reviewer of another engine has quota\. /)
+      // Still never below the top tier.
+      expect(decision.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('Claude sonnet'),
+        reason: expect.stringContaining('needs its top tier (quality 3): no Reviewer on another engine can start soon in this Swarm.') })]))
+    })
+
+    it('still refuses Claude while Codex resets inside the start window, so the review waits for it', async () => {
+      const { result } = await routeWith(pool('m2', ['codex'], { usedPercent: 100, resetsIn: 10 * MIN }))
+      expect(result).toMatchObject({ error: 'NO_CANDIDATE' })
+      expect((result as { excluded: Array<{ title: string; reason: string }> }).excluded).toEqual(expect.arrayContaining([
+        expect.objectContaining({ title: expect.stringContaining('Claude opus'), reason: 'A review runs on another engine than the reviewed Builder\'s, Claude.' })]))
+      // And with quota now, Codex reviews.
+      expect((await routeWith(pool('m2', ['codex']))).result).toMatchObject({ ok: true, pick: { engine: 'codex', machineId: 'm2' } })
+    })
+
+    it('lets Claude review when Codex runs only on a machine the owner left out, or one that is offline or signed out', async () => {
+      const ownersMachines = [{ id: 'r1', rule: { kind: 'machines', machineIds: ['m1'] }, text: 'Only m1.' }]
+      expect((await routeWith(pool('m2', ['codex']), ownersMachines)).result).toMatchObject(sameEngine)
+      const offline = pool('m2', ['codex']); (offline.observation as { receivedAt: number }).receivedAt = Date.now() - 10 * MIN
+      expect((await routeWith(offline)).result).toMatchObject(sameEngine)
+      const signedOut = pool('m2', ['codex']); Object.assign(signedOut.observation, { readiness: { engines: [{ engine: 'codex', installed: true, signedIn: false }] } })
+      expect((await routeWith(signedOut)).result).toMatchObject(sameEngine)
+    })
   })
   it('tells the Lead how to assign a member or start a new agent with the decision', async () => {
     const member = await routeTask(input, scoped(), where as never, opener(), () => 'op')

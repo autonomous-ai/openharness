@@ -53,6 +53,9 @@ export interface Probe {
   /** Members: the frame (null when it could not be read), whether the member is in the task's repository, and its earlier work in this Super Tab. */
   frame?: MemberFrame | null; repo?: 'same' | 'different' | 'unknown'; earlier?: Array<{ group: string; outcome: string }>
   terminalUnverified?: boolean
+  /** Why no agent of its engine starts on its machine within REVIEW_START_MS, whatever its quota: offline, paused, signed out,
+   *  suspended, or a member held by a usage limit past it. Read by [otherFamilyReviews]. */
+  cannotStart?: string
   /** New agents: what the machine has. */
   load?: MachineLoad
   /** A new agent on a model served on the Swarm's grid: free, reached through the grid relay, `model`/`effort` `default`.
@@ -242,14 +245,32 @@ export function reviewRefusals(p: Probe, builder: Reviewed | null, otherFamily: 
   if (p.quality < 2) return [`A review needs a model of quality 2 or more, and ${ENGINE[p.engine]} ${p.model} is ${p.quality}.`]
   if (!builder || familyOf(builder) !== familyOf(p)) return []
   if (otherFamily) return [`A review runs on another engine than the reviewed Builder's, ${ENGINE[p.engine]}.`]
-  return p.quality < 3 ? [`A review on the reviewed Builder's engine, ${ENGINE[p.engine]}, needs its top tier (quality 3): no Reviewer on another engine can run in this Swarm.`] : []
+  return p.quality < 3 ? [`A review on the reviewed Builder's engine, ${ENGINE[p.engine]}, needs its top tier (quality 3): no Reviewer on another engine can start soon in this Swarm.`] : []
 }
-/** Whether a strong Reviewer of another family than [builder]'s can run: a candidate off the grid, rated 2 or more, of
- *  another family, that the owner's [rules] let run at the effort it would start at. Busy, offline or short of quota it
- *  still counts, within its start window; the caller leaves out the machines the task or its access rules out (review of
- *  ee4ee6c9a: an engine the owner ruled out blocked the fallback). */
-export const otherFamilyReviews = (probes: Probe[], builder: Reviewed | null, rules: SwarmRule[]) =>
-  !!builder && probes.some(p => !p.gridModel && p.quality >= 2 && familyOf(p) !== familyOf(builder) && !breaks(rules, lifted(rules, p)))
+/** How soon a Reviewer has to be able to start to count: a start still not running after this long is abandoned (backend
+ *  superTabs/store.ts ABANDONED_START_MS). A window that resets inside it counts as quota; one out for longer does not (backend
+ *  superTabs/reviewSeats.ts REVIEW_START_MS). */
+export const REVIEW_START_MS = 15 * 60_000
+/** How the route line and the brief of a review on its Builder's own engine start (Lead, 2026-10-30; backend superTabs/rules.ts). */
+export const SAME_ENGINE = 'same-engine review: no Reviewer of another engine has quota'
+/** Whether [q] has quota now, or once each used-up window resets within REVIEW_START_MS. One it cannot read, or metered, does,
+ *  as a start there does. */
+export function quotaWithin(q: Quota, now: number): boolean {
+  if (!q.known || q.metered) return true
+  const soon = (resetsAt: number | null) => resetsAt !== null && resetsAt - now <= REVIEW_START_MS
+  return q.windows?.length ? q.windows.every(w => w.leftPercent > 0 || soon(w.resetsAt)) : q.leftPercent === null || q.leftPercent > 0 || soon(q.resetsAt)
+}
+/** Whether a strong Reviewer of another family than [builder]'s could start within REVIEW_START_MS: a candidate off the grid,
+ *  rated 2 or more, of another family, that the owner's [rules] let run at the effort it would start at, whose machine is up
+ *  ([Probe.cannotStart]) with quota now or once a window resets inside the window. Busy still counts: a Reviewer frees up. One
+ *  out of quota for days or offline does not (2026-10-30: reviews of Claude builds waited all morning on Codex machines out of
+ *  weekly quota); the caller leaves out the machines the task or its access rules out (review of ee4ee6c9a: an engine the
+ *  owner ruled out blocked the fallback). */
+export const otherFamilyReviews = (probes: Probe[], builder: Reviewed | null, rules: SwarmRule[], now: number = Date.now()) =>
+  !!builder && probes.some(p => !p.gridModel && p.quality >= 2 && familyOf(p) !== familyOf(builder) && !p.cannotStart && quotaWithin(p.quota, now)
+    && !breaks(rules, lifted(rules, p)))
+/** Whether [p] reviews on [builder]'s own model family. */
+export const sameFamily = (p: Probe, builder: Reviewed | null) => !!builder && familyOf(builder) === familyOf(p)
 
 /** A task that stepped up from a cheaper model takes no grid model and nothing below the step's floor; the server refuses
  *  the same (backend superTabs/stepUp.ts stepUpRefusal). */
