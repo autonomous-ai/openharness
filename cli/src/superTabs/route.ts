@@ -126,18 +126,27 @@ export function liftEffort(rules: SwarmRule[], engine: string, effort: string): 
 /** The soft rules for this task: the engine preferred for its kind (a rule for the kind before one for every task),
  * whether idle agents come first, and whether a model on the Swarm's grid comes first. */
 interface Soft { engine: string | null; idle: boolean; grid: boolean }
-/** Kinds of build a quality-2 grid model takes first at medium difficulty: docs, copy, tests, fixtures, a small specified fix,
- *  a mechanical refactor. */
-export const CHEAP_KINDS = ['docs', 'copy', 'tests', 'fixtures', 'fix', 'refactor']
+/** The only kinds of build a model on the Swarm's grid takes, and then only at low risk (Ken, 2026-10-30; it had taken docs,
+ *  copy, tests, fixtures, fixes and refactors since 10-29, and any low-difficulty work before). A failed first review still
+ *  steps it up (backend superTabs/stepUp.ts). */
+export const CHEAP_KINDS = ['docs', 'tests', 'fixtures']
+/** Why a model on the Swarm's grid may not build the task [a]: anything but low-risk docs, tests or fixtures. A person who asks
+ *  for a local model, or names one, gets it. Reviews never run on one ([reviewRefusals]). Which subscription models build is the
+ *  routing table's (backend superTabs/routingPolicy.ts: Sonnet is off by default since 2026-10-30). */
+export function buildRefusals(p: Probe, a: Assessment): string[] {
+  return p.gridModel && a.kind !== 'review' && !gridBuilds(a) ? [GRID_BUILDS] : []
+}
+/** Whether a model on the Swarm's grid may build [a] ([buildRefusals]). */
+export const gridBuilds = (a: Assessment) => !!a.local || !!a.model || (a.risk === 'low' && CHEAP_KINDS.includes(a.kind ?? ''))
+export const GRID_BUILDS = 'A model on the Swarm\'s grid builds only low-risk docs, tests or fixtures.'
 function softOf(rules: SwarmRule[], a: Assessment): Soft {
   const prefer = rules.flatMap(({ rule }) => rule.kind === 'preferEngine' ? [rule] : [])
   const engine = (prefer.find(r => a.kind && r.taskKind === a.kind) ?? prefer.find(r => r.taskKind === null))?.engine ?? null
-  // Simple work goes to the free models first (roadmap, Dec: about 30% of work on cheaper models without lower quality).
+  // The work a grid model may build goes to it first (roadmap, Dec: about 30% of work on cheaper models without lower quality).
   // A grid model counts as cost 1 like Haiku, so an expiring 5-hour window or an idle member ranked above it and it was
-  // rarely picked. Reviews keep the other model family, and the owner can opt out.
-  // Since 2026-10-29 (Ken) also medium work of a kind a strong grid model does well, which steps up when it fails (backend
-  // superTabs/stepUp.ts); the floor still keeps a small model off it.
-  const simple = a.difficulty === 'low' || (a.difficulty === 'medium' && CHEAP_KINDS.includes(a.kind ?? ''))
+  // rarely picked. Reviews never run on one, and the owner can opt out. It steps up when it fails (backend
+  // superTabs/stepUp.ts); the floor still keeps a small model off medium work.
+  const simple = (a.difficulty === 'low' || a.difficulty === 'medium') && CHEAP_KINDS.includes(a.kind ?? '')
   const grid = simple && a.risk === 'low' && a.kind !== 'review' && !rules.some(r => r.rule.kind === 'noGridFirst')
   return { engine, idle: rules.some(r => r.rule.kind === 'preferIdle'), grid }
 }
@@ -458,7 +467,7 @@ export function choose(probes: Probe[], policy: Policy, a: Assessment, now: numb
   if (named) probes = probes.filter(p => runsNamed(p, named))
   const raised = probes.map(p => lifted(rules, p)), key = (p: Probe) => `${p.kind}\0${p.machineId}\0${p.engine}\0${p.model}\0${p.effort}\0${p.gridModel ?? ''}`
   const ruled = raised.filter((p, i) => p === probes[i] || !raised.some((q, j) => j !== i && key(q) === key(p) && (q === probes[j] || j < i)))
-    .map(p => { const why = breaks(rules, p); return why ? { ...p, refusals: [...p.refusals, why] } : p })
+    .map(p => { const why = [...(breaks(rules, p) ? [breaks(rules, p)!] : []), ...buildRefusals(p, a)]; return why.length ? { ...p, refusals: [...p.refusals, ...why] } : p })
   const excluded: Excluded[] = ruled.filter(p => p.refusals.length).map(p => ({ title: titleOf(p), reason: p.refusals.join(' '), machine: p.machineName }))
   const viable = ruled.filter(p => !p.refusals.length)
   // Nothing offered: a model that is served but taken says who has it, rather than reading as unshared.

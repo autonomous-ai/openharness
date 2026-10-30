@@ -421,10 +421,16 @@ both, and add rows of their own, in the policy's local models (`models`: a name
 and a quality, first match first). A model whose host is offline is left out
 with that reason, so no Builder is sent to a machine that cannot start it.
 
-**Cheap first.** Low-risk work that is not a review ranks a grid model first:
-low-difficulty work, and medium work of kind `docs`, `copy`, `tests`,
-`fixtures`, `fix` or `refactor`. The floor still keeps a small model off medium
-work. An owner opts out with the `noGridFirst` rule.
+**Cheap first.** A grid model builds only low-risk work of kind `docs`,
+`tests` or `fixtures` (Ken, 2026-10-30), and ranks first there. Any other
+build leaves it out with that reason, unless a person asks for a local model or
+names one. The floor still keeps a small model off medium work. An owner opts
+out of ranking it first with the `noGridFirst` rule.
+
+**No Sonnet by default.** The default routing table turns Claude Sonnet off
+(Ken, 2026-10-30: no Sonnet Builders), so builds go to Opus, Codex or a grid
+model as above. An owner's saved table keeps its own Sonnet row as it is; an
+owner who wants none there sets a `forbidModel` rule.
 
 **Stepping up.** When a grid attempt's first review says Ready no, or its grid
 host never starts the agent (the start fails or misses its window), the Swarm

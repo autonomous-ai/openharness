@@ -980,14 +980,14 @@ describe('routing contributed capacity', () => {
     observation: { receivedAt: Date.now(), resources: { memoryTotalBytes: 32e9, memoryUsedBytes: 2e9, projectDiskFreeBytes: 200e9 },
       tools: { git: true }, runningHarnessIds: ['h1'], quotas: [{ engine: 'claude', known: true, windows: [{ name: '5-hour', usedPercent: 20, resetsAt: Date.now() + 3600000 }] }] } })
   async function runPool(pool: Record<string, any>, members = false, needs: Record<string, unknown> = {}, project?: Record<string, unknown>,
-    more: { state?: Record<string, unknown>; tab?: Record<string, unknown>; review?: boolean } = {}) {
+    more: { state?: Record<string, unknown>; tab?: Record<string, unknown>; review?: boolean; kind?: string } = {}) {
     const groups = conversations()
     if (project) Object.assign(groups[1]!, { projectId: project.id })
     if (more.review) Object.assign(groups[1]!, { reviewOf: 'g0' })
     const crew = members ? agents.map(a => more.review && a.id === 'a1' ? { ...a, role: 'reviewer' } : a) : [agents[1]]
     const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: { ...more.tab, state: { id: 'tab', agents: crew, conversations: groups, machines: [pool], ...(project ? { projects: [project] } : {}), ...more.state } }, policy: { policy, warnings: [] }, machines: [] } } })
     const open = opener()
-    const answer = await routeTask({ ...input, assessment: { ...input.assessment, needs } }, s, where, open)
+    const answer = await routeTask({ ...input, assessment: { ...input.assessment, needs, ...(more.kind ? { kind: more.kind } : {}) } }, s, where, open)
     expect(open).not.toHaveBeenCalled()
     return { answer, s }
   }
@@ -1132,7 +1132,7 @@ describe('routing contributed capacity', () => {
     it('still offers a local model on a machine whose engine is signed out, since the grid needs no subscription', async () => {
       const grid = 'swarm-0123456789ab', pool = swarm(undefined, [{ engine: 'claude', installed: true, signedIn: false }])
       pool.observation.localModels = [{ grid, model: 'qwen3' }]
-      const { answer, s } = await runPool(pool, false, {}, project, { state: { localModels: { grid, enabled: true } } })
+      const { answer, s } = await runPool(pool, false, {}, project, { state: { localModels: { grid, enabled: true } }, kind: 'tests' })
       expect(answer).toMatchObject({ ok: true, pick: { gridModel: 'qwen3' } })
       expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ reason: expect.stringContaining('not signed in') })]))
     })
@@ -1560,7 +1560,7 @@ describe('local models on the Swarm\'s grid', () => {
         { grid: GRID, model: 'deepseek/deepseek-v4.1', kind: 'api' }, { grid: GRID, model: 'starting', starting: true }, { grid: 7, model: 'odd' }] } },
       { machineId: 'old', observation: { receivedAt: 'never', localModels: [{ grid: GRID, model: 'unnamed-host' }] } }] })
     const s = scoped({ tab: t })
-    const result = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'low' } }, s, where as never, opener(), () => 'op')
+    const result = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'low', kind: 'docs' } }, s, where as never, opener(), () => 'op')
     const excluded = recorded(s).command.decision.excluded as Array<{ title: string; reason: string }>
     expect(excluded.filter(e => /offline/.test(e.reason))).toEqual([
       { title: 'Kimi K3', reason: 'Its host 2x 4090 Rig is offline, so a Builder on it would never start.' },

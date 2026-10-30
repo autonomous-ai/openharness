@@ -15,6 +15,20 @@ describe('routing policy', () => {
     expect(DEFAULT_ROUTING_POLICY.models).toContainEqual({ engine: 'claude', model: 'opus', effort: 'xhigh', quality: 3, cost: 4, enabled: true })
   })
 
+  // Ken, 2026-10-30: no Sonnet Builders. Only the default table changes; an owner's own table is theirs (Lead's ruling).
+  it('turns Sonnet off in the default table, and keeps an owner\'s saved Sonnet row and a tab override\'s as they are', () => {
+    const sonnet = (models: Array<{ engine: string; model: string; enabled: boolean }>) => models.filter(m => m.engine === 'claude' && m.model === 'sonnet')
+    expect(sonnet(DEFAULT_ROUTING_POLICY.models)).toEqual([expect.objectContaining({ effort: 'medium', quality: 2, enabled: false })])
+    expect(sonnet(effectivePolicy(null, null).policy.models).map(m => m.enabled)).toEqual([false])
+    // An owner who saved the table before keeps Sonnet on; it is their row.
+    const saved = { ...DEFAULT_ROUTING_POLICY, models: DEFAULT_ROUTING_POLICY.models.map(m => m.model === 'sonnet' ? { ...m, enabled: true } : m) }
+    const read = effectivePolicy(saved, null)
+    expect(read.warnings).toEqual([])
+    expect(sonnet(read.policy.models).map(m => m.enabled)).toEqual([true])
+    expect(read.policy.models.filter(m => m.model !== 'sonnet')).toEqual(saved.models.filter(m => m.model !== 'sonnet'))
+    // A tab override's own models win over the default too.
+    expect(sonnet(effectivePolicy(null, { models: saved.models }).policy.models).map(m => m.enabled)).toEqual([true])
+  })
   it('uses the default when the account has none, and merges a tab override field by field', () => {
     expect(effectivePolicy(null, null)).toEqual({ policy: DEFAULT_ROUTING_POLICY, warnings: [], overridden: [] })
     const account = { ...DEFAULT_ROUTING_POLICY, quotaReserve: 20, notes: 'Frontend prefers Claude.' }

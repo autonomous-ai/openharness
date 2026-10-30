@@ -67,7 +67,9 @@ export const DEFAULT_ROUTING_POLICY: RoutingPolicy = {
     { engine: 'codex', model: 'default', effort: 'default', quality: 3, cost: 2, enabled: true },
     // Next to `default` so the form lists Codex's rows together. List order ranks nothing: the CLI route breaks ties by title.
     ...ADDED_ROWS,
-    { engine: 'claude', model: 'sonnet', effort: 'medium', quality: 2, cost: 2, enabled: true },
+    // Off since 2026-10-30 (Ken: no Sonnet Builders). Kept as a row so an owner can turn it back on; an owner's saved table keeps
+    // its own Sonnet row as it is, and a forbidModel rule rules Sonnet out there.
+    { engine: 'claude', model: 'sonnet', effort: 'medium', quality: 2, cost: 2, enabled: false },
     { engine: 'claude', model: 'haiku', effort: 'auto', quality: 1, cost: 1, enabled: true },
   ],
   floor: { low: 1, medium: 2, high: 3 },

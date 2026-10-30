@@ -7,7 +7,7 @@ import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
 import { RELAYED_QUOTA, requiredToolReason, startRequirements } from './capacity.js'
 import { inspectCapacity, type ScopedRequest } from './start.js'
 import { ENDED_WORK, object, within } from './wire.js'
-import { accountOf, API_BUILDERS, choose, decide, gridQuality, parseAssessment, quotaOf2, rateFor, recordOf, otherFamilyReviews, repoMatch, repositoryKey, REVIEW_START_MS, reviewRefusals, SAME_ENGINE, sameFamily, stepUpRefusals, type Assessment, type Reviewed, type RecordShape, type Commitment, type Excluded, type HeldModel, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
+import { accountOf, API_BUILDERS, gridBuilds, choose, decide, gridQuality, parseAssessment, quotaOf2, rateFor, recordOf, otherFamilyReviews, repoMatch, repositoryKey, REVIEW_START_MS, reviewRefusals, SAME_ENGINE, sameFamily, stepUpRefusals, type Assessment, type Reviewed, type RecordShape, type Commitment, type Excluded, type HeldModel, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
 import { stat } from 'node:fs/promises'
 import { describeScmProject } from '../scm/scmProjects.js'
 
@@ -494,7 +494,7 @@ export function localProbes(state: Json, policy: Policy, probes: Probe[], a: Ass
  *  2026-10-29). Only where [localProbes] would offer them. */
 export function offlineModels(state: Json, policy: Policy, a: Assessment, review: boolean, now: number = Date.now()): Array<{ title: string; reason: string }> {
   const addOn = object(state.localModels)
-  if (addOn.enabled !== true || typeof addOn.grid !== 'string' || review || (policy.localModels?.enabled === false && !a.local)) return []
+  if (addOn.enabled !== true || typeof addOn.grid !== 'string' || review || !gridBuilds(a) || (policy.localModels?.enabled === false && !a.local)) return []
   const served = servedModels(state, addOn.grid, now), out: Array<{ title: string; reason: string }> = []
   for (const machine of list(state.machines)) {
     const observed = object(machine.observation)

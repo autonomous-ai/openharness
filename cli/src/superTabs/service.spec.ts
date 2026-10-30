@@ -747,10 +747,11 @@ it('says a server from before rules does not support them, and passes a malforme
   expect(await send({ type: 'rule.set', rule: { kind: 'minEffort', effort: 'huge' }, text: 'x' })).not.toMatchObject({ error: 'RULES_UNSUPPORTED' })
 })
 
-it('tells the Lead that simple work ranks grid models first, and how the owner opts out', async () => {
+it('tells the Lead which builds a grid model takes and ranks first, and how the owner opts out', async () => {
   const help = (await setup().ask({ action: 'help' }, owner)).help as { commands: unknown[]; command: string }
   expect(help.commands).toContainEqual(expect.objectContaining({ type: 'rule.set', rule: { kind: 'noGridFirst' } }))
-  expect(help.command).toContain('ranks models on the Swarm\'s grid first unless the owner set noGridFirst')
+  expect(help.command).toContain('builds only low-risk work of kind docs, tests or fixtures')
+  expect(help.command).toContain('ranks first there unless the owner set noGridFirst')
 })
 
 it('documents finished worker decisions and explains an older backend without release support', async () => {

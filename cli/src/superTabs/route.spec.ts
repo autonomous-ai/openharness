@@ -1,6 +1,6 @@
 // cli/src/superTabs/route.spec.ts
 import { describe, expect, it } from 'vitest'
-import { API_BUILDERS, LOCAL_NONE, breaks, choose, gridQuality, otherFamilyReviews, reviewRefusals, decide, floorFor, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, repositoryKey, type Assessment, type Commitment, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
+import { API_BUILDERS, GRID_BUILDS, LOCAL_NONE, breaks, choose, gridQuality, otherFamilyReviews, reviewRefusals, decide, floorFor, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, repositoryKey, type Assessment, type Commitment, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
 
 const object = (v: unknown) => v as Record<string, unknown>
 
@@ -564,20 +564,20 @@ describe('local models on the Swarm\'s grid', () => {
     expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', local: 'yes' })).toContain('local')
   })
   it('fits a local model on no subscription, names it as local and records where it is served', () => {
-    const r = ok(choose([local()], policy, a({ difficulty: 'low' }), NOW))
+    const r = ok(choose([local()], policy, a({ difficulty: 'low', kind: 'docs' }), NOW))
     expect(r.shown[0]).toMatchObject({ title: 'New agent · Claude on Qwen 3 (local) · remote-1', fit: { status: 'fits', account: 'local:swarm-0123456789ab:qwen3' } })
     expect(r.shown[0]!.label).toContain('Claude on Qwen 3 (local)')
     expect((recordOf(r, decide(r), a(), policy) as { candidates: unknown[] }).candidates[0]).toMatchObject({ gridModel: 'qwen3', gridName: 'swarm-0123456789ab' })
     // Without a name or a label: the model stands for both, and nothing about the grid is recorded without a grid.
-    const bare = ok(choose([local({ gridName: undefined, gridLabel: undefined })], policy, a({ difficulty: 'low' }), NOW))
+    const bare = ok(choose([local({ gridName: undefined, gridLabel: undefined })], policy, a({ difficulty: 'low', kind: 'docs' }), NOW))
     expect(bare.shown[0]).toMatchObject({ title: 'New agent · Claude on qwen3 (local) · remote-1', fit: { account: 'local::qwen3' } })
     expect((recordOf(bare, decide(bare), a(), policy) as { candidates: unknown[] }).candidates[0]).not.toHaveProperty('gridModel')
   })
   it('keeps a local model under the floor of a harder task, and keeps it beside a subscription row of the same name', () => {
-    const r = ok(choose([probe(), local()], policy, a(), NOW))
+    const r = ok(choose([probe(), local()], policy, a({ kind: 'docs' }), NOW))
     expect(r.shown.map(s => s.gridModel)).toEqual([undefined])
     // Same machine, engine, model and effort as a subscription `default` row: both stay, being different models.
-    const both = ok(choose([probe({ model: 'default', effort: 'default', quality: 1, cost: 1, quota: windows([80, 3 * H], [90, 5 * D]) }), local()], policy, a({ difficulty: 'low' }), NOW))
+    const both = ok(choose([probe({ model: 'default', effort: 'default', quality: 1, cost: 1, quota: windows([80, 3 * H], [90, 5 * D]) }), local()], policy, a({ difficulty: 'low', kind: 'docs' }), NOW))
     expect(both.shown).toHaveLength(2)
   })
   it('considers only local models when a person asked for one, whatever the floor, and says when none is served', () => {
@@ -597,7 +597,7 @@ describe('local models on the Swarm\'s grid', () => {
     expect(r.belowFloor).toBe(false)
     // A subscription model by name, and the engine's name counts as one of its words.
     expect(ok(choose([opus, api], policy, a({ model: 'Claude Opus' }), NOW)).shown.map(s => s.model)).toEqual(['opus'])
-    expect(ok(choose([older], policy, a({ difficulty: 'low' }), NOW)).shown[0]!.title).toContain('(shared)')
+    expect(ok(choose([older], policy, a({ difficulty: 'low', kind: 'docs' }), NOW)).shown[0]!.title).toContain('(shared)')
     expect(choose([opus], policy, a({ model: 'gpt 9' }), NOW)).toEqual({ error: 'NO_CANDIDATE',
       excluded: [{ title: 'Named model', reason: 'No candidate runs "gpt 9". Share it with the Swarm (Your models), or check its name.' }] })
     expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', model: ' deepseek 4.1 flash ' })).toMatchObject({ model: 'deepseek 4.1 flash' })
@@ -632,20 +632,20 @@ describe('local models on the Swarm\'s grid', () => {
   })
 
   describe('first for simple work (roadmap, Dec: about 30% of work on cheaper models)', () => {
-    const simple = a({ difficulty: 'low', risk: 'low', size: 'small' })
+    const simple = a({ difficulty: 'low', risk: 'low', size: 'small', kind: 'docs' })
     // Opus on an account whose 5-hour window resets in 20 minutes costs nothing in effect, so it ranked above a free model.
     const expiring = probe({ machineName: 'mac', model: 'opus', effort: 'high', quality: 3, cost: 3, quota: windows([60, 20 * M], [60, 2 * D]) })
     const haiku = probe({ machineName: 'mac', model: 'haiku', effort: 'auto', quality: 1, cost: 1, quota: windows([90, 4 * H], [80, 5 * D]) })
     const idle = probe({ kind: 'member', agentId: 'a1', name: 'Idle', model: 'sonnet', quota: windows([90, 4 * H], [80, 5 * D]) })
     const grid = local({ machineName: 'mac' })
     const firstOf = (r: ReturnType<typeof choose>) => ok(r).shown[0]!.gridModel ?? ok(r).shown[0]!.model
-    it('ranks a model on the Swarm\'s grid first for low-difficulty, low-risk work', () => {
+    it('ranks a model on the Swarm\'s grid first for low-difficulty, low-risk docs', () => {
       expect(firstOf(choose([expiring, haiku, grid], policy, simple, NOW))).toBe('qwen3')
       expect(firstOf(choose([idle, grid], policy, simple, NOW, [], [{ rule: { kind: 'preferIdle' }, text: 'Idle first.' }]))).toBe('qwen3')
     })
-    it('ranks a strong grid model first for medium docs, copy, tests, fixtures, a specified fix or a mechanical refactor (Ken, 2026-10-29)', () => {
+    it('ranks a strong grid model first for medium docs, tests and fixtures (Ken, 2026-10-30)', () => {
       const kimi = local({ machineName: 'mac', quality: 2, gridModel: 'moonshotai/kimi-k3', gridLabel: 'Kimi K3' })
-      for (const kind of ['docs', 'copy', 'tests', 'fixtures', 'fix', 'refactor']) {
+      for (const kind of ['docs', 'tests', 'fixtures']) {
         expect(firstOf(choose([expiring, kimi], policy, { ...simple, difficulty: 'medium', kind }, NOW))).toBe('moonshotai/kimi-k3')
       }
       // A small model stays under the medium floor, and other kinds keep the policy order.
@@ -653,6 +653,20 @@ describe('local models on the Swarm\'s grid', () => {
       expect(firstOf(choose([expiring, kimi], policy, { ...simple, difficulty: 'medium', kind: 'ui' }, NOW))).toBe('opus')
       expect(firstOf(choose([expiring, kimi], policy, { ...simple, difficulty: 'medium', kind: 'docs', risk: 'medium' }, NOW))).toBe('opus')
       expect(firstOf(choose([expiring, kimi], policy, { ...simple, difficulty: 'high', kind: 'docs' }, NOW))).toBe('opus')
+    })
+    // Ken, 2026-10-30: cheaper shared models only for low-risk docs, tests and fixtures; they had also built copy, fixes,
+    // refactors and any low-difficulty work.
+    it('never offers a grid model for any other build, or one at more than low risk, and says why', () => {
+      const kimi = local({ machineName: 'mac', quality: 2, gridModel: 'moonshotai/kimi-k3', gridLabel: 'Kimi K3' })
+      for (const assessment of [{ ...simple, kind: undefined }, ...['copy', 'fix', 'refactor', 'ui'].map(kind => ({ ...simple, kind })),
+        { ...simple, difficulty: 'medium' as const, kind: 'fix' }, { ...simple, risk: 'medium' as const }]) {
+        const r = ok(choose([haiku, kimi], policy, assessment, NOW))
+        expect(r.shown.map(s => s.gridModel)).toEqual([undefined])
+        expect(r.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('Kimi K3'), reason: GRID_BUILDS })]))
+      }
+      // A person who asks for a local model, or names one, still gets it.
+      expect(firstOf(choose([haiku, kimi], policy, { ...simple, kind: 'ui', local: true }, NOW))).toBe('moonshotai/kimi-k3')
+      expect(firstOf(choose([haiku, kimi], policy, { ...simple, kind: 'ui', model: 'kimi k3' }, NOW))).toBe('moonshotai/kimi-k3')
     })
     it('keeps the policy order for anything harder, riskier or a review', () => {
       expect(firstOf(choose([expiring, haiku, grid], policy, { ...simple, risk: 'medium' }, NOW))).toBe('opus')
