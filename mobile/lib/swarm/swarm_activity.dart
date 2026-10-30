@@ -279,10 +279,16 @@ class SwarmActivity extends ChangeNotifier {
           _ => false,
         };
         final read = reader.readMarks?.readThrough(item.chatId);
+        // Read through on any device: the thread's own mark (server or phone).
+        final threadRead = reader.readMarks?.threadThrough(
+          item.chatId,
+          thread.id,
+        );
         final opened = marks.values['t:${thread.id}'];
         return mine ||
                 read == null ||
                 thread.lastSequence <= read ||
+                threadRead != null && thread.lastSequence <= threadRead ||
                 opened is int && thread.lastSequence <= opened
             ? 'Read'
             : null;
@@ -334,6 +340,11 @@ class SwarmActivity extends ChangeNotifier {
         _acted[item.key] = (swarmId: item.swarmId, word: 'Opened');
       case SwarmActivityThread(:final thread):
         _marks[item.swarmId]?.put('t:${thread.id}', thread.lastSequence);
+        // Read on every device too (backend readMarks.ts thread marks).
+        inbox
+            .reader(item.swarmId)
+            ?.readMarks
+            ?.markThreadRead(item.chatId, thread.id, thread.lastSequence);
       case SwarmActivityReaction():
         _marks[item.swarmId]?.put('r:${item.message.id}', item.signature);
     }

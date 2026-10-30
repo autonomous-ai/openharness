@@ -46,10 +46,12 @@ Map<String, dynamic> activityThread(
 
 /// One Swarm, project Mobile: decision d1 (recommending "Merge"), River's
 /// tag m1, work g1 waiting on the person, and a project chat whose newest
-/// page [page] answers. The server's read mark of that chat is [readMark].
+/// page [page] answers. The server's read mark of that chat is [readMark],
+/// and its thread marks by root [threadMarks] (none from an older server).
 FakeSwarm activityBackend({
   Map<String, dynamic> Function()? page,
   int readMark = 10,
+  Map<String, int>? threadMarks,
   int chatSequence = 12,
   bool decision = true,
   List<Map<String, dynamic>> groups = const [],
@@ -65,6 +67,7 @@ FakeSwarm activityBackend({
     'decisionsWaiting': decision ? 1 : 0,
     'mentionsWaiting': 1,
     'readMarks': {leadChat: readMark},
+    'threadMarks': ?(threadMarks == null ? null : {leadChat: threadMarks}),
   };
   fake.routes['/api/super-tabs/$tab/parts'] = (_) {
     final load = firstLoad(

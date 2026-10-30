@@ -378,6 +378,28 @@ describe('thread unread as Desktop marks it (controller.dart threadUnread)', () 
     expect(threadsOf((await inbox(s.tabId, peer)).body.data)).toEqual([{ chat: s.web, root: 'Peer root', unread: 1, last: s.worker }])
   })
 
+  it('counts only replies past the person\'s mark of the thread, read on any device, and drops a thread read to its end', async () => {
+    const s = await scene()
+    const [root] = await insert(s.tabId, s.web, [{ text: 'Peer root', author: personAuthor(peer) }])
+    await markRead(s.tabId, s.web, await sequenceOf(root!), peer)
+    const [first] = await insert(s.tabId, s.web, [{ text: 'Worker 1', author: agentAuthor(s.worker), thread: root }])
+    await insert(s.tabId, s.web, [{ text: 'Worker 2', author: agentAuthor(s.worker), thread: root }])
+    const markThread = async (sequence: number, as: AuthUser) => {
+      const response = await app.inject({ method: 'POST', url: `/api/super-tabs/${s.tabId}/conversations/${s.web}/threads/${root}/read`,
+        headers: { authorization: `Bearer ${as.sub}` }, payload: { sequence } })
+      expect(response.statusCode).toBe(200)
+    }
+    await markThread(await sequenceOf(first!), peer)
+    expect(threadsOf((await inbox(s.tabId, peer)).body.data)).toEqual([{ chat: s.web, root: 'Peer root', unread: 1, last: s.worker }])
+    // Another person's thread mark never reads it for them.
+    await markThread(10_000, owner)
+    expect(threadsOf((await inbox(s.tabId, peer)).body.data)).toEqual([{ chat: s.web, root: 'Peer root', unread: 1, last: s.worker }])
+    await markThread(10_000, peer)
+    expect((await inbox(s.tabId, peer)).body.data.threads).toEqual([])
+    await insert(s.tabId, s.web, [{ text: 'Worker 3', author: agentAuthor(s.worker), thread: root }])
+    expect(threadsOf((await inbox(s.tabId, peer)).body.data)).toEqual([{ chat: s.web, root: 'Peer root', unread: 1, last: s.worker }])
+  })
+
   it('leaves archived chats out of the latest messages and the threads', async () => {
     const s = await busyScene()
     await editChat(s.tabId, s.web, data => { data.archived = true })
@@ -519,10 +541,11 @@ describe('what the inbox costs the database', () => {
       `${docsExamined} docs examined (${messageDocs} messages), ${bytesFromDatabase} bytes from the database, ${replyBytes} reply bytes\n` +
       reads.map(r => `  ${r.ns.split('.').at(-1)} ${r.op} ${r.planSummary ?? ''} docs=${r.docsExamined ?? 0}`).join('\n'))
     // A fixed few reads whatever the chat count: the latest rows, the unread rows, their roots, the look-back for threads
-    // whose newer rows do not show the person (the read marks are another collection). Nothing new to check for delivered
-    // copies here, so no read for them.
+    // whose newer rows do not show the person (the read marks are another collection, and the person's thread marks of the
+    // scanned chats one more indexed read). Nothing new to check for delivered copies here, so no read for them.
     expect(messageReads.length).toBeLessThanOrEqual(4)
-    expect(reads.length).toBeLessThanOrEqual(6)
+    expect(reads.length).toBeLessThanOrEqual(7)
+    expect(rows.filter(r => r.ns.endsWith('.SuperTabThreadMark') && r.op !== 'getmore')).toHaveLength(1)
     // Bounded by the caps, never by history: the long chat's rows are read only to its newest UNREAD_SCAN + 1, and each of its
     // threads the person is not in only to MEMBER_SCAN rows before the mark (not its 301).
     expect(messageDocs).toBeLessThan(2_000)

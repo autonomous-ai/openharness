@@ -91,7 +91,13 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
     super.initState();
     _text.addListener(_typed);
     _thread.composer.addListener(_drafted);
+    _thread.addListener(_seen);
     unawaited(_thread.load());
+  }
+
+  /// While on screen, what the thread shows is read ([SwarmThread.markRead]).
+  void _seen() {
+    if (_watching) _thread.markRead();
   }
 
   @override
@@ -106,12 +112,14 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
       _watching = watch;
       if (watch) session.watch(widget.swarmId);
     }
+    _seen();
   }
 
   @override
   void dispose() {
     if (_watching) _session?.unwatch(widget.swarmId);
     _thread.composer.removeListener(_drafted);
+    _thread.removeListener(_seen);
     _thread.dispose();
     _attachNote.dispose();
     _farBack.dispose();
