@@ -8,7 +8,7 @@ import type { NativeLaunch, NativeLaunchResult, NativeLaunchSource } from '../..
  * Moved verbatim out of `runForeground` (the core boundary, step 11: docs/design/2026-10-03-harnessd.md).
  */
 import { realpathSync, statSync } from 'node:fs'
-import { readdir } from 'node:fs/promises'
+import { readdir, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { BackendSocket } from '../../backendSocket.js'
 import type { ModelsPort, SwarmLaunch } from '../api.js'
@@ -42,6 +42,7 @@ import { nativeHookLocations } from '../../engines/kit/nativeLocations.js'
 import { engineHooks } from '../../engines/hooks.js'
 import { acceptFullMode, folderTrust } from '../../engines/launchPrep.js'
 import { projectsRoot } from '../../lib/projectFolder.js'
+import { harnessMadeWorktree } from '../../lib/gitProject.js'
 import { NativeFiles } from '../../engines/kit/nativeFiles.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 import type { TerminalBackend } from '../../lib/terminalBackend.js'
@@ -103,6 +104,13 @@ export interface CreateAgentDeps {
   swarmLaunch?: SwarmLaunch
 }
 
+/** A Git checkout directly in the projects root (a clone the desktop made there), or a worktree Harness made. */
+async function swarmFolder(cwd: string): Promise<boolean> {
+  const root = projectsRoot()
+  if (dirname(cwd) === root) return stat(join(cwd, '.git')).then(info => info.isDirectory(), () => false)
+  return harnessMadeWorktree(cwd, root)
+}
+
 export function createAgentCreator({
   native: inspectNative, publishConfig, createBackend: initialBackend, recoverBackend, noBackendCode = 'TMUX_UNAVAILABLE', registry, externalResume, watchNewPane, announceSession, attachDsh,
   prepareApiTools, hookPort, hooksDisabled, installOpencodePlugin, gridLaunchMachine, buildGridLaunch, terminalHintMachineName, blocksFolder,
@@ -133,6 +141,15 @@ export function createAgentCreator({
     // preparation writes, but grant trust only after its dependencies are ready.
     const trustEmptyProject = context?.local === true && !dsh && dirname(cwd) === projectsRoot()
       && await readdir(cwd).then(names => names.length === 0, () => false)
+    // A Swarm agent's folder has content: the desktop's New Swarm clones a GitHub project into the projects root, or makes
+    // a worktree of a local repository, itself, and sends the folder as a plain cwd. 2026-10-30: a Cmd+S Swarm's PM sat
+    // at Claude Code's "do you trust this folder?", which no Swarm view shows; it read Idle and every message to it was
+    // withheld. The person chose that repository and full mode for the Swarm in this window, so a Claude Code Swarm agent
+    // in full mode is trusted in a Git checkout directly in the projects root or a worktree Harness made, read from disk.
+    // Never from a relayed request, which could name any repository here. Codex's trust also sets defaults for the
+    // person's own sessions in that folder, so it stays theirs to give.
+    const trustSwarmFolder = !trustEmptyProject && context?.local === true && !dsh && engine === 'claude' && !!input.swarmRole
+      && permissionMode === 'full' && await swarmFolder(cwd)
     if (!authority.current()) return stale()
     // A harness can pin its permission mode (`dshPinnedPermissionMode`): the Grid harness starts model
     // servers, which Codex's sandbox would start without a GPU. Pinned before anything reads the mode,
@@ -304,14 +321,14 @@ export function createAgentCreator({
       try { acceptFullMode(engine, native ? { ...native.environment, ...gridLaunch?.env, ...dshEnv } : undefined) }
       catch (error) { console.warn(`[agent] full mode acceptance · ${error instanceof Error ? error.message : error}`) }
     }
-    if (trustEmptyProject) {
+    if (trustEmptyProject || trustSwarmFolder) {
       try {
         // A clone or user edit can arrive while dependencies are being prepared.
-        // Trust only the same physical workspace, still empty at the write boundary.
+        // Trust only the same physical workspace, still empty at the write boundary (a Swarm agent's, still the same).
         const files = new NativeFiles()
         const empty = files.entries(cwd).length === 0
         if (!current()) return stale()
-        if (empty && workspaceIdentity() === originalWorkspace) {
+        if ((empty || trustSwarmFolder) && workspaceIdentity() === originalWorkspace) {
           files.verify()
           const environment = native ? { ...native.environment, ...gridLaunch?.env, ...dshEnv } : undefined
           const profile = engine === 'codex' && environment ? nativeHookLocations(environment).CODEX_HOME : codexHome

@@ -55,6 +55,15 @@ describe('default usernames', () => {
       { id: 'd', email: `${'a'.repeat(40)}@example.com` },
     ])).toEqual(new Map([['a', 'pham.ngocswarm'], ['b', 'x1'], ['c', 'user'], ['d', 'a'.repeat(30)]]))
   })
+
+  it('never ends a default name with a dot or puts two in a row, so @name tags them', () => {
+    expect(usernames([
+      { id: 'a', email: `${'a'.repeat(29)}.b@example.com` },
+      { id: 'b', email: 'ken..nguyen@example.com' },
+      { id: 'c', email: 'dee.@example.com' },
+      { id: 'd', email: 'x.@example.com' },
+    ])).toEqual(new Map([['a', 'a'.repeat(29)], ['b', 'ken.nguyen'], ['c', 'dee'], ['d', 'x1']]))
+  })
 })
 
 describe('member.username', () => {
@@ -106,6 +115,15 @@ describe('member.username', () => {
     expect(f.state.people.find(p => p.id === 'ken-b')!.username).toBe('ken2')
     // Nobody else's default moved, so nothing else was stored.
     expect(f.state.people[0]!.username).toBeUndefined()
+  })
+
+  it('refuses a name that cannot be tagged in text: a dot at its end or two in a row', () => {
+    const f = fixture()
+    for (const username of ['ken.', 'ken..nguyen']) {
+      expect(() => f.run({ type: 'member.username', username }), username).toThrow(expect.objectContaining({ code: 'INVALID_USERNAME' }))
+    }
+    f.run({ type: 'member.username', username: 'ken.nguyen' })
+    expect(f.state.people[0]!.username).toBe('ken.nguyen')
   })
 
   it('keeps a later person’s numbered name when the person before them leaves', () => {

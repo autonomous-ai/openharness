@@ -1,7 +1,54 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { Prisma } from '@prisma/client'
+
+// Real Harness sessions for the sign-in tests below, minted and redeemed through lib/harnessSession.ts against in-memory
+// stores, as routes/control.test.ts does, so the real authentication and team gate run.
+const fakes = vi.hoisted(() => {
+  const redis = new Map<string, string>()
+  const sessions: Array<Record<string, unknown> & { id: string }> = []
+  const pick = (where: Record<string, unknown>) => sessions.find(s => Object.entries(where).every(([k, v]) => s[k] === v)) ?? null
+  return {
+    pub: {
+      set: vi.fn(async (key: string, value: string) => { redis.set(key, value); return 'OK' }),
+      get: vi.fn(async (key: string) => redis.get(key) ?? null),
+      multi: vi.fn(() => {
+        const ops: Array<() => unknown> = []
+        const chain = {
+          get: (key: string) => { ops.push(() => redis.get(key) ?? null); return chain },
+          del: (key: string) => { ops.push(() => (redis.delete(key) ? 1 : 0)); return chain },
+          exec: async () => ops.map(op => [null, op()]),
+        }
+        return chain
+      }),
+    },
+    prisma: {
+      harnessSession: {
+        create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+          const row = { id: `s${sessions.length + 1}`, ...data }; sessions.push(row); return row
+        }),
+        findUnique: vi.fn(async ({ where }: { where: Record<string, unknown> }) => pick(where)),
+      },
+      machine: {
+        findMany: vi.fn(async ({ where }: { where: Record<string, unknown> }) => where.computerId === 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+          ? [{ machineId: 'team-mac', userId: 'owner', computerId: where.computerId, billingStatus: 'not_required', sessionKind: 'team' }] : []),
+      },
+    },
+    user: { id: 'owner', email: 'owner@example.com', role: 'user', autonomousEnv: 'prod' },
+  }
+})
+vi.mock('../lib/bus.js', () => ({ pub: fakes.pub }))
+vi.mock('../lib/prisma.js', () => ({ prisma: fakes.prisma, machineAlive: { OR: [{ deletedAt: null }, { deletedAt: { isSet: false } }] } }))
+vi.mock('../services/UserService.js', () => ({
+  userService: { get: vi.fn(async (id: string) => id === fakes.user.id ? fakes.user : null) },
+  normalizeUserEmail: (email: string) => email.trim().toLowerCase(),
+  isProvisionalUserEmail: () => false,
+}))
+
 import { errorHandler } from '../middlewares/errorHandler.js'
+import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
+import { redeemHandoff, startHandoff } from '../lib/harnessSession.js'
+import type { AuthUser } from '../lib/ssoAuth.js'
 import { SuperTabError } from '../superTabs/model.js'
 import { HOT_BODY_LIMIT, superTabRoutes } from './superTabs.js'
 
@@ -96,5 +143,59 @@ describe('Super Tab body limits (roadmap 2.8)', () => {
     const sizes = Object.values(largest).map(r => Buffer.byteLength(JSON.stringify(r.body)))
     expect(Math.max(...sizes)).toBeLessThan(HOT_BODY_LIMIT)
     expect(HOT_BODY_LIMIT).toBeLessThan(2 * Math.max(...sizes))
+  })
+})
+
+// The web calls Swarm routes straight from the browser with the person's own sign-in (docs/specs/2026-10-30-web-swarm-
+// direct.md): a viewer session reaches them as the person, through the real authentication; a team sign-in is still
+// refused as the person (the store refuses it on the routes the team gate admits for its agents, superTabBuddies).
+describe('the browser\'s own sign-in on Swarm routes', () => {
+  let app: FastifyInstance
+  let viewer: string, team: string
+  const seen: Array<{ route: string; user: AuthUser }> = []
+  beforeAll(async () => {
+    viewer = (await redeemHandoff((await startHandoff(fakes.user.id, 'viewer')).code, 'Safari on iPhone'))!.token
+    team = (await redeemHandoff((await startHandoff(fakes.user.id, 'team')).code, 'MacBook Pro · Team', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'))!.token
+    app = Fastify()
+    app.setErrorHandler(errorHandler)
+    registerAuthMiddleware(app)
+    const reads = {
+      firstLoad: async (user: AuthUser) => { seen.push({ route: 'parts', user }); return { format: 2 } },
+      list: async (user: AuthUser) => { seen.push({ route: 'list', user }); return { tabs: [] } },
+    }
+    const store = { execute: async (user: AuthUser) => { seen.push({ route: 'commands', user }); return { result: { messageId: 'm1' } } } }
+    await app.register(superTabRoutes, { store: store as never, github: null, reads: reads as never, hosts: {} as never })
+    await app.ready()
+  })
+  afterAll(async () => { await app?.close() })
+  beforeEach(() => { seen.length = 0 })
+
+  const command = { operationId: 'op-web-1', command: { type: 'message.send', conversationId: 'buddy-chat', text: 'hi', replyTo: null,
+    recipientIds: [] } }
+
+  it('reads a Swarm and posts in it as the person', async () => {
+    const auth = { authorization: `Bearer ${viewer}` }
+    const read = await app.inject({ method: 'GET', url: '/api/super-tabs/tab-1/parts', headers: auth })
+    expect(read.statusCode).toBe(200)
+    const post = await app.inject({ method: 'POST', url: '/api/super-tabs/tab-1/commands', headers: auth, payload: command })
+    expect(post.statusCode).toBe(200)
+    expect(seen.map(s => s.route)).toEqual(['parts', 'commands'])
+    for (const { user } of seen) expect(user).toMatchObject({ sub: 'owner', harnessSessionKind: 'viewer' })
+  })
+
+  it('refuses a team sign-in as the person, before any Swarm is read', async () => {
+    const auth = { authorization: `Bearer ${team}` }
+    for (const url of ['/api/super-tabs/tab-1/parts', '/api/super-tabs/list']) {
+      const res = await app.inject({ method: 'GET', url, headers: auth })
+      expect(res.statusCode, url).toBe(403)
+      expect(res.json().error.code).toBe('TEAM_SESSION_LIMITED')
+    }
+    expect(seen).toEqual([])
+  })
+
+  it('refuses no sign-in at all', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/super-tabs/tab-1/commands', payload: command })
+    expect(res.statusCode).toBe(401)
+    expect(seen).toEqual([])
   })
 })

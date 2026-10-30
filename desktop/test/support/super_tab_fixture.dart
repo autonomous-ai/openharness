@@ -438,6 +438,10 @@ class ConversationServer {
   // Makes every command answer with this refusal: {code, message}, with
   // [refuseStatus] as its HTTP status.
   Map<String, String>? refuse;
+
+  /// Commands the server refuses as a backend from before them does: its
+  /// strict schema answers `VALIDATION_ERROR` with a 400.
+  bool Function(Map command)? unknownCommand;
   // While set, every command waits for it before it answers: a slow server.
   Completer<void>? holdCommands;
 
@@ -808,6 +812,13 @@ class ConversationServer {
         throw const SuperTabFailure(
           'INVALID_RECIPIENT',
           'Choose an agent in this conversation.',
+          statusCode: 400,
+        );
+      }
+      if (unknownCommand?.call(body['command'] as Map? ?? const {}) ?? false) {
+        throw const SuperTabFailure(
+          'VALIDATION_ERROR',
+          'Invalid request.',
           statusCode: 400,
         );
       }
