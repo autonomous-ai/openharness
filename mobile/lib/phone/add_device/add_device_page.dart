@@ -29,10 +29,19 @@ import 'setup_hotspot.dart';
 /// for the computer's password first; opened, it starts, and its hotspot comes back for the rest.
 /// One on a cable is online already: it is only signed in, with no Wi-Fi to choose.
 class AddDevicePage extends StatefulWidget {
-  const AddDevicePage({super.key, required this.notifier, this.hotspot});
+  const AddDevicePage({
+    super.key,
+    required this.notifier,
+    this.hotspot,
+    this.overComputers = false,
+  });
 
   final AppNotifier notifier;
   final SetupHotspot? hotspot;
+
+  /// Pushed over Computers (its Set up Intern 3): done, it goes back to that list rather than
+  /// putting a second one over it, so back from there still reaches what opened Computers.
+  final bool overComputers;
 
   @override
   State<AddDevicePage> createState() => _AddDevicePageState();
@@ -727,6 +736,11 @@ class _AddDevicePageState extends State<AddDevicePage> {
       if (!_alreadyHere) _app.markMachineNew(machine.machineId);
     }
     if (!mounted) return;
+    if (widget.overComputers) {
+      // Its row reads "new", with Start on it, in the list underneath.
+      Navigator.of(context).pop();
+      return;
+    }
     await Navigator.of(context).pushReplacement(
       phoneRoute(
         // Its row reads "new", with Start on it.
