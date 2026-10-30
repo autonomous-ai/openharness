@@ -449,6 +449,8 @@ it('tells the Lead which branch a started agent works from, and how to choose an
   expect(help.start).toContain('default branch, fetched first')
   expect(help.start).toContain('branchRef')
   expect(help.startRequest).toMatchObject({ worktree: true, branchRef: 'refs/remotes/origin/BASE_BRANCH' })
+  // The template asks for memory and disk, not a CPU reading: one busy sample would refuse a start the route admits.
+  expect(help.startRequest.requirements).toMatchObject({ memoryBytes: 2147483648, diskBytes: 10737418240, maxCpuPercent: 100 })
   expect(help.start).toContain('role "reviewer"')
   expect(help.start).toContain('reviewOf')
 })

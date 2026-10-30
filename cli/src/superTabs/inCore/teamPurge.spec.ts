@@ -3,7 +3,25 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { createSwarmAgents } from './agents.js'
-import { SHARED_LEFT, UNREADABLE_DETAIL, createConfidentialPurge, purgeRecord, recordsOtherFolder, rewriteIfUnchanged, scrubClaudeSession, sweepForSession, type PurgeTarget } from './teamPurge.js'
+import { OWN_LEFT, SHARED_LEFT, SWEEP_LEFT, UNREADABLE_DETAIL, createConfidentialPurge, purgeRecord, recordsOtherFolder, rewriteIfUnchanged, scrubClaudeSession, sweepForSession, type PurgeTarget } from './teamPurge.js'
+
+/** A folder that goes between the sweep's listing of its parent and its own read: removed just before that read. */
+const vanish = vi.hoisted(() => ({ path: '' }))
+/** A folder whose next listing fails with [code], as the system says it, path and all. */
+const fail = vi.hoisted(() => ({ path: '', code: '' }))
+vi.mock('node:fs/promises', async importOriginal => {
+  const fs = await importOriginal<typeof import('node:fs/promises')>()
+  const readdir = (async (path: Parameters<typeof fs.readdir>[0], ...rest: unknown[]) => {
+    if (vanish.path && path === vanish.path) { vanish.path = ''; await fs.rm(path, { recursive: true, force: true }) }
+    if (fail.path && path === fail.path) {
+      const code = fail.code
+      fail.path = ''
+      throw Object.assign(new Error(`${code}: could not list, scandir '${String(path)}'`), { code })
+    }
+    return (fs.readdir as (...args: unknown[]) => unknown)(path, ...rest)
+  }) as typeof fs.readdir
+  return { ...fs, readdir }
+})
 
 // A confidential session the Swarm ended for good in a Harness Team account (#895): its data in the Team user's shared
 // engine homes goes, and the account stays held until a sweep finds nothing of it (security re-checks of #2089).
@@ -77,6 +95,75 @@ describe('scrubbing a Claude Code session from the Team user\'s shared home', ()
     expect(shares).toHaveBeenCalledTimes(1)
   })
 
+  // Security review 1 of 58b035e: a transcript folder that could not be listed counted as empty and went whole. A permissions
+  // error carried its path into the daemon's log, and a passing one (too many open files) deleted other folders' transcripts
+  // unread. Only a folder that is not there is empty.
+  it('keeps a transcript folder it cannot list, whatever the error, and the sweep holds the account by its kind', async () => {
+    const { home, shared, folder } = sharedFolder()
+    const theirs = join(shared, 'theirs.jsonl')
+    writeFileSync(theirs, JSON.stringify({ cwd: '/Users/me/harnesses/worktrees-old/notes' }))
+    const ours = target({ sessionId: null, cwd: folder })
+    for (const code of ['EMFILE', 'EACCES', 'EIO']) {
+      Object.assign(fail, { path: shared, code })
+      await scrubClaudeSession(home, ours, [])
+      expect(existsSync(theirs), code).toBe(true)
+      Object.assign(fail, { path: shared, code })
+      const held = await sweepForSession(home, ours, [])
+      expect(held, code).toBe(left('unreadFolder'))
+      expect(held).not.toContain(home)
+    }
+    // The system's own refusal, as a Team account meets it.
+    chmodSync(shared, 0o000)
+    try {
+      await scrubClaudeSession(home, ours, [])
+      expect(await sweepForSession(home, ours, [])).toBe(left('unreadFolder'))
+    } finally { chmodSync(shared, 0o700) }
+    expect(existsSync(theirs)).toBe(true)
+    // One gone since its parent was listed is nothing of the session's.
+    vanish.path = shared
+    expect(await sweepForSession(home, ours, [])).toBeNull()
+  })
+
+  // Re-check of 68ec6f0 (Lark): the sweep's walk read a folder it could not list as empty, so whatever of the session was in
+  // it went unseen and the purge finished. Only a folder that is not there is empty; any other holds the account by its kind.
+  it('holds the account on any folder of the engines\' homes the sweep cannot list, by its kind, and passes one that went', async () => {
+    const { home, claude } = teamHome()
+    const ours = target()
+    rmSync(join(claude, 'projects', SLUG), { recursive: true })
+    // Everything else of the session gone, its file history left in a folder the sweep cannot list.
+    for (const path of [join(claude, 'history.jsonl'), join(home, '.claude.json'), ...['backups', 'session-env', 'todos', 'debug', 'paste-cache'].map(name => join(claude, name))]) {
+      rmSync(path, { recursive: true, force: true })
+    }
+    const history = join(claude, 'file-history')
+    expect(existsSync(join(history, 'pm-session'))).toBe(true)
+    chmodSync(history, 0o000)
+    const held = await sweepForSession(home, ours, []).finally(() => chmodSync(history, 0o700))
+    expect(held).toBe(SWEEP_LEFT.unlistedFolder)
+    expect(held).not.toContain(home)
+    // A passing error holds it too, on the projects folder or the home itself: what the folder holds is not known.
+    rmSync(history, { recursive: true })
+    for (const path of [join(claude, 'projects'), claude]) {
+      Object.assign(fail, { path, code: 'EMFILE' })
+      expect(await sweepForSession(home, ours, []), path).toBe(SWEEP_LEFT.unlistedFolder)
+    }
+    // A folder gone since its parent was listed holds nothing, and neither does an engine's home that is not there.
+    mkdirSync(join(claude, 'gone'))
+    vanish.path = join(claude, 'gone')
+    rmSync(join(home, '.codex'), { recursive: true })
+    expect(await sweepForSession(home, ours, [])).toBeNull()
+  })
+
+  // Security review 1 of 58b035e: an account held by what could not be read named no next step. Each says what to fix, with
+  // no path, and that the purge then finishes on its own next try (host.ts endSession retries it).
+  it('tells the owner what to fix for each unreadable kind, and that the purge then finishes', () => {
+    for (const said of [...(['unreadFolder', 'unreadMemory', 'unreadTranscript'] as const).map(left), OWN_LEFT.unreadTranscript, SWEEP_LEFT.unlistedFolder, SWEEP_LEFT.unreadFile]) {
+      expect(said).toMatch(/could not be read: its owner (finds it \([^)]+\) and )?makes it readable for the Team account, and the purge finishes on its next try$/)
+    }
+    // With no path to name, what holds the account says where to look (re-check of 8c0b019).
+    expect(SWEEP_LEFT.unlistedFolder).toContain('search the Team account\'s Claude Code and Codex homes for folders it can\'t read')
+    expect(SWEEP_LEFT.unreadFile).toContain('search the Team account\'s Claude Code and Codex homes for files it can\'t read')
+  })
+
   // Security review 2 of #2385, P3: a transcript that records no working folder is no proof it is the session's; it stays,
   // and the sweep refuses it.
   it('keeps a transcript of a shared transcript folder that records no working folder, or both', async () => {
@@ -135,6 +222,33 @@ describe('scrubbing a Claude Code session from the Team user\'s shared home', ()
     expect(existsSync(join(claude, 'todos', 'pm-session2-agent-pm-session2.json'))).toBe(true)
   })
 
+  // Re-check of 8c0b019: a todos or config backups folder that could not be listed was read as empty, and a Buddy's cleanup,
+  // which no sweep follows, finished with its todo file and its folder in the backups left. Only one that is not there is
+  // empty; any other is told by its kind alone, whatever the error, and what it holds stays.
+  it('tells its caller when its todos or config backups folder cannot be listed, by kind, and keeps what is in it', async () => {
+    for (const [sub, kind] of [['todos', 'unreadTodos'], ['backups', 'unreadBackups']] as const) {
+      for (const code of ['EMFILE', 'EACCES']) {
+        const { home, claude } = teamHome(), told = vi.fn()
+        Object.assign(fail, { path: join(claude, sub), code })
+        await scrubClaudeSession(home, target(), [], undefined, told)
+        expect(told.mock.calls, `${sub} ${code}`).toEqual([[kind]])
+        expect(existsSync(join(claude, 'todos', 'pm-session-agent-pm-session.json'))).toBe(sub === 'todos')
+        expect(readFileSync(join(claude, 'backups', '.claude.json.backup.1793236000000'), 'utf8').includes(`"${CWD}"`)).toBe(sub === 'backups')
+        // Listed again, it finishes, and says nothing.
+        told.mockClear()
+        await scrubClaudeSession(home, target(), [], undefined, told)
+        expect(told).not.toHaveBeenCalled()
+        expect(await sweepForSession(home, target(), [])).toBeNull()
+        rmSync(home, { recursive: true, force: true })
+      }
+    }
+    // One that is not there is empty.
+    const { home, claude } = teamHome(), told = vi.fn()
+    for (const sub of ['todos', 'backups']) rmSync(join(claude, sub), { recursive: true })
+    await scrubClaudeSession(home, target(), [], undefined, told)
+    expect(told).not.toHaveBeenCalled()
+  })
+
   it('removes every file and entry its session or folder names, and keeps every other session\'s', async () => {
     const { home, claude } = teamHome()
     expect(await scrubClaudeSession(home, target())).toEqual(['abc123'])
@@ -180,22 +294,37 @@ describe('scrubbing a Claude Code session from the Team user\'s shared home', ()
 })
 
 describe('the sweep for what a scrub left', () => {
-  it('finds the session or folder where Claude Code and Codex write its own data, and nowhere else', async () => {
+  // Re-check 2 of 68ec6f0: what the sweep found was named by its path, the Team home's and all. It names its kind.
+  it('finds the session or folder where Claude Code and Codex write its own data, and nowhere else, by its kind', async () => {
     const { home, claude } = teamHome()
     await scrubClaudeSession(home, target())
     appendFileSync(join(claude, 'history.jsonl'), `${JSON.stringify({ display: 'late', project: CWD, sessionId: 'pm-session' })}\n`)
-    expect(await sweepForSession(home, target(), [])).toBe(join(claude, 'history.jsonl'))
+    expect(await sweepForSession(home, target(), [])).toBe(SWEEP_LEFT.claudeHistory)
     await scrubClaudeSession(home, target())
     writeFileSync(join(claude, 'paste-cache', 'abc123.txt'), 'written again')
-    expect(await sweepForSession(home, target(), ['abc123'])).toBe(join(claude, 'paste-cache', 'abc123.txt'))
+    expect(await sweepForSession(home, target(), ['abc123'])).toBe(SWEEP_LEFT.paste)
     writeFileSync(join(claude, 'paste-cache', 'abc123.txt'), '')
     await scrubClaudeSession(home, target(), ['abc123'])
     mkdirSync(join(claude, 'new-feature', 'pm-session'), { recursive: true })
-    expect(await sweepForSession(home, target(), ['abc123'])).toBe(join(claude, 'new-feature', 'pm-session'))
+    expect(await sweepForSession(home, target(), ['abc123'])).toBe(SWEEP_LEFT.claudeNamed)
     mkdirSync(join(claude, 'later', SLUG), { recursive: true })
-    expect(await sweepForSession(home, target(), [])).toBe(join(claude, 'later', SLUG))
+    expect(await sweepForSession(home, target(), [])).toBe(SWEEP_LEFT.claudeNamed)
     writeFileSync(join(home, '.codex', 'history.jsonl'), '{"session_id":"pm-session"}')
-    expect(await sweepForSession(home, target({ cwd: null }), [])).toBe(join(home, '.codex', 'history.jsonl'))
+    expect(await sweepForSession(home, target({ cwd: null }), [])).toBe(SWEEP_LEFT.codexHistory)
+    rmSync(join(home, '.codex', 'history.jsonl'))
+    for (const left of ['new-feature', 'later']) rmSync(join(claude, left), { recursive: true })
+    mkdirSync(join(home, '.codex', 'sessions', 'pm-session'), { recursive: true })
+    expect(await sweepForSession(home, target({ cwd: null }), [])).toBe(SWEEP_LEFT.codexNamed)
+    rmSync(join(home, '.codex', 'sessions'), { recursive: true })
+    // A history or config that cannot be read holds it, as a folder that cannot be listed does.
+    for (const file of [join(claude, 'history.jsonl'), join(home, '.codex', 'history.jsonl'), join(home, '.claude.json')]) {
+      writeFileSync(file, '')
+      chmodSync(file, 0o000)
+      const held = await sweepForSession(home, target(), []).finally(() => chmodSync(file, 0o600))
+      expect(held, file).toBe(SWEEP_LEFT.unreadFile)
+    }
+    Object.assign(fail, { path: join(claude, 'backups'), code: 'EMFILE' })
+    expect(await sweepForSession(home, target(), [])).toBe(SWEEP_LEFT.unlistedFolder)
     expect(await sweepForSession(dir(), target(), [])).toBeNull()
   })
 
@@ -217,6 +346,15 @@ describe('the sweep for what a scrub left', () => {
     expect(await sweepForSession(home, ours, [])).toBe(left('memory'))
     rmSync(join(memory, 'deep'), { recursive: true })
     expect(await sweepForSession(home, ours, [])).toBeNull()
+    // A transcript folder with no other folder's transcript in it is not said to be shared (re-check 2 of 68ec6f0).
+    rmSync(join(shared, 'theirs.jsonl'))
+    writeFileSync(join(shared, 'mine.jsonl'), transcript(folder))
+    expect(await sweepForSession(home, ours, [])).toBe(OWN_LEFT.transcript)
+    chmodSync(join(shared, 'mine.jsonl'), 0o000)
+    expect(await sweepForSession(home, ours, []).finally(() => chmodSync(join(shared, 'mine.jsonl'), 0o600))).toBe(OWN_LEFT.unreadTranscript)
+    expect(OWN_LEFT.transcript + OWN_LEFT.unreadTranscript + left('unreadFolder') + left('folder')).not.toContain('shares')
+    rmSync(join(shared, 'mine.jsonl'))
+    writeFileSync(join(shared, 'theirs.jsonl'), transcript(OTHER, call(OTHER, 'Write', { file_path: join(memory, 'theirs.md') })))
     // A transcript of its folder, one of both folders, or one that records none; anything else in the folder.
     for (const [name, text] of [['a.jsonl', transcript(folder)], ['b.jsonl', `${transcript(OTHER)}\n${JSON.stringify({ cwd: `${folder}/src` })}`], ['c.jsonl', transcript(null)]]) {
       writeFileSync(join(shared, name), text)
@@ -228,6 +366,17 @@ describe('the sweep for what a scrub left', () => {
       expect(await sweepForSession(home, ours, []), name).toBe(left('other'))
       rmSync(join(shared, name), { recursive: true })
     }
+    // A memory folder gone between the listing and its read is no memory folder.
+    vanish.path = memory
+    expect(await sweepForSession(home, ours, [])).toBeNull()
+    expect(existsSync(memory)).toBe(false)
+    mkdirSync(memory)
+    // A transcript that cannot be read fails it by its kind: the read's own error named its path (review of #2389).
+    chmodSync(join(shared, 'theirs.jsonl'), 0o000)
+    const unread = await sweepForSession(home, ours, []).finally(() => chmodSync(join(shared, 'theirs.jsonl'), 0o600))
+    // Its only other transcript unread, nothing says another folder shares it.
+    expect(unread).toBe(OWN_LEFT.unreadTranscript)
+    expect(unread).not.toContain(home)
     // A memory folder linked elsewhere is never followed, and fails it.
     rmSync(memory, { recursive: true })
     mkdirSync(join(home, 'elsewhere'))
@@ -235,22 +384,21 @@ describe('the sweep for what a scrub left', () => {
     expect(await sweepForSession(home, ours, [])).toBe(left('other'))
     const { unlinkSync } = await import('node:fs')
     unlinkSync(memory)
-    // Its session's name inside the folder still fails it, by its path; so does the folder once no other is left, a file of
+    // Its session's name inside the folder still fails it, by its kind; so does the folder once no other is left, a file of
     // its name, and one that cannot be read.
     writeFileSync(join(shared, 'theirs', 'pm-session.txt'), '')
-    expect(await sweepForSession(home, ours, [])).toBe(join(shared, 'theirs', 'pm-session.txt'))
+    expect(await sweepForSession(home, ours, [])).toBe(SWEEP_LEFT.claudeNamed)
     rmSync(join(shared, 'theirs'), { recursive: true })
     expect(await sweepForSession(home, ours, [])).toBeNull()
     rmSync(join(shared, 'theirs.jsonl'))
     expect(await sweepForSession(home, ours, [])).toBe(left('folder'))
     rmSync(shared, { recursive: true })
     writeFileSync(shared, '')
-    expect(await sweepForSession(home, ours, [])).toBe(shared)
+    expect(await sweepForSession(home, ours, [])).toBe(SWEEP_LEFT.claudeNamed)
     rmSync(shared)
     expect(await sweepForSession(home, ours, [])).toBeNull()
     mkdirSync(shared, { mode: 0o000 })
-    expect(await sweepForSession(home, ours, [])).toBe(left('folder'))
-    chmodSync(shared, 0o700)
+    expect(await sweepForSession(home, ours, []).finally(() => chmodSync(shared, 0o700))).toBe(left('unreadFolder'))
   })
 })
 
@@ -267,8 +415,8 @@ describe('a scrub and sweep with part of a session unknown', () => {
     await scrubClaudeSession(home, target())
     expect(readFileSync(join(home, '.claude.json'), 'utf8')).toBe('null')
     writeFileSync(join(claude, 'backups', '.claude.json.backup.1'), 'a copy that is no JSON, naming "' + CWD + '"')
-    expect(await sweepForSession(home, target(), [])).toBe(join(claude, 'backups', '.claude.json.backup.1'))
-    expect(await sweepForSession(home, target({ sessionId: '../x' }), [])).toBe(join(claude, 'backups', '.claude.json.backup.1'))
+    expect(await sweepForSession(home, target(), [])).toBe(SWEEP_LEFT.config)
+    expect(await sweepForSession(home, target({ sessionId: '../x' }), [])).toBe(SWEEP_LEFT.config)
     // With no folder, nothing of the config is its; with neither, nothing is.
     expect(await sweepForSession(home, target({ cwd: null }), ['../bad'])).toBeNull()
     expect(await sweepForSession(home, target({ cwd: null, sessionId: null }), [])).toBeNull()
@@ -336,7 +484,7 @@ describe('the purge of a confidential session the Swarm ended', () => {
     const ended = createConfidentialPurge({ confidential: id => id === 'pm', home, session: s.session, purge: s.purge, record: s.record })
     // Something the scrub does not know of still names the session: the purge fails and the session stays in its record.
     mkdirSync(join(claude, 'new-feature', 'pm-session'), { recursive: true })
-    expect(await ended('pm')).toEqual({ error: 'SCRUB_INCOMPLETE', detail: `Something still names the session: ${join(claude, 'new-feature', 'pm-session')}` })
+    expect(await ended('pm')).toEqual({ error: 'SCRUB_INCOMPLETE', detail: `Something still names the session: ${SWEEP_LEFT.claudeNamed}` })
     expect(s.calls.map(c => c.mode)).toEqual(['inspect', 'delete'])
     expect(s.record.pending()).toEqual([{ agentId: 'pm', sessionId: 'pm-session', cwd: CWD, engine: 'claude', codexHome: null, pastes: ['abc123'] }])
     // The retry, its stopped entry gone: it scrubs and sweeps again from the record (a history line written since included).
@@ -368,7 +516,21 @@ describe('the purge of a confidential session the Swarm ended', () => {
     expect(['pm-session.jsonl', 'theirs.jsonl', 'memory/MEMORY.md', 'memory/theirs.md'].map(name => existsSync(join(shared, name)))).toEqual([false, true, true, true])
     const restarted = createConfidentialPurge({ confidential: () => true, home, session: s.session, purge: s.purge, record: purgeRecord(join(home, 'super-tabs', 'team-purges.json')) })
     expect(await restarted('pm')).toMatchObject({ error: 'SCRUB_INCOMPLETE' })
+    // A memory folder that cannot be read holds it too, named by its kind: the read's own error carried the folder's path into
+    // the daemon's log (security review of #2385).
+    chmodSync(memory, 0o000)
+    const unread = await restarted('pm').finally(() => chmodSync(memory, 0o700))
+    expect(unread).toEqual({ error: 'SCRUB_INCOMPLETE', detail: `Something still names the session: ${left('unreadMemory')}` })
+    expect(JSON.stringify(unread)).not.toContain(home)
+    expect(purgeRecord(join(home, 'super-tabs', 'team-purges.json')).pending()).toHaveLength(1)
     rmSync(memory, { recursive: true })
+    // So does another folder's transcript that cannot be read: kept, never deleted unread, and named by its kind alone.
+    chmodSync(join(shared, 'theirs.jsonl'), 0o000)
+    const unreadTranscript = await restarted('pm').finally(() => chmodSync(join(shared, 'theirs.jsonl'), 0o600))
+    expect(unreadTranscript).toEqual({ error: 'SCRUB_INCOMPLETE', detail: `Something still names the session: ${OWN_LEFT.unreadTranscript}` })
+    expect(JSON.stringify(unreadTranscript)).not.toContain(home)
+    expect(existsSync(join(shared, 'theirs.jsonl'))).toBe(true)
+    expect(purgeRecord(join(home, 'super-tabs', 'team-purges.json')).pending()).toHaveLength(1)
     expect(await restarted('pm')).toEqual({ ok: true })
     expect(existsSync(join(shared, 'theirs.jsonl'))).toBe(true)
   })
@@ -391,7 +553,7 @@ describe('the purge of a confidential session the Swarm ended', () => {
     rmSync(join(claude, 'paste-cache', 'abc123.txt'), { recursive: true })
     writeFileSync(join(claude, 'paste-cache', 'abc123.txt'), 'left behind')
     const sweep = await sweepForSession(home, s.record.get('pm')!, s.record.get('pm')!.pastes!)
-    expect(sweep).toBe(join(claude, 'paste-cache', 'abc123.txt'))
+    expect(sweep).toBe(SWEEP_LEFT.paste)
     expect(await ended('pm')).toEqual({ ok: true })
   })
 

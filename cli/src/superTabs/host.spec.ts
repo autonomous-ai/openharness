@@ -3092,6 +3092,66 @@ describe('closing the sessions the backend ends', () => {
     } finally { chmodSync(join(claude, 'projects'), 0o755); rmSync(home, { recursive: true, force: true }) }
   })
 
+  // Re-check 2 of 68ec6f0: a Buddy's transcript folder that could not be listed, or one of its own transcripts that could not
+  // be read, was skipped, and with no sweep after it the cleanup marked itself done and left the person's transcript for good.
+  it.each(['folder', 'transcript'] as const)('fails an ended Buddy\'s cleanup by a fixed code when its transcript %s cannot be read, and finishes it later', async unread => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), 'buddy-home-'))), claude = join(home, '.claude'), worktrees = join(home, 'harnesses', 'worktrees')
+    const folder = join(worktrees, 'openharness', 'buddy-session'), transcripts = join(claude, 'projects', folder.replace(/[^A-Za-z0-9]/g, '-'))
+    const locked = unread === 'folder' ? transcripts : join(transcripts, 'own.jsonl')
+    try {
+      mkdirSync(folder, { recursive: true })
+      mkdirSync(transcripts, { recursive: true })
+      writeFileSync(join(transcripts, 'own.jsonl'), JSON.stringify({ cwd: folder }))
+      chmodSync(locked, 0o000)
+      const t = lifeFixture([ended()], { claudeHome: home, worktrees, startReceipt: () => 'super-buddy-session' })
+      t.core.agents.byAgent = vi.fn(() => ({ agentId: 'harness', sessionId: null, engine: 'claude', cwd: folder, swarmSkill: { role: 'buddy', key: 'k' } }) as never)
+      await t.poll()
+      await vi.waitFor(() => expect(t.log).toHaveBeenCalledWith('Could not remove an ended Buddy session\'s Claude Code traces yet: agent agent, TRANSCRIPTS_UNREAD'))
+      const said = t.log.mock.calls.flat().join('\n')
+      expect(said).not.toContain(home)
+      expect(said).not.toContain('Kept another folder\'s transcripts')
+      // Not done: its end is not acknowledged, and the journal still says what to scrub.
+      expect(t.commands).toEqual([])
+      expect(Object.keys(t.saved().scrubs ?? {})).toEqual(['agent'])
+      chmodSync(locked, unread === 'folder' ? 0o755 : 0o644)
+      await t.poll(60_000)
+      await vi.waitFor(() => expect(t.commands).toHaveLength(1))
+      expect(existsSync(transcripts)).toBe(false)
+      expect(t.saved().scrubs).toBeUndefined()
+    } finally { if (existsSync(locked)) chmodSync(locked, 0o755); rmSync(home, { recursive: true, force: true }) }
+  })
+
+  // Re-check of 8c0b019: a todos or config backups folder that could not be listed was read as empty, and with no sweep after
+  // it the cleanup marked itself done and left the Buddy's todo file and its folder in the backups for good.
+  it.each([['todos', 'TODOS_UNREAD'], ['backups', 'CONFIG_BACKUPS_UNREAD']] as const)(
+    'fails an ended Buddy\'s cleanup by a fixed code when its %s folder cannot be listed, and finishes it later', async (sub, code) => {
+      const home = realpathSync(mkdtempSync(join(tmpdir(), 'buddy-home-'))), claude = join(home, '.claude'), worktrees = join(home, 'harnesses', 'worktrees')
+      const folder = join(worktrees, 'openharness', 'buddy-session'), locked = join(claude, sub)
+      const todo = join(claude, 'todos', 'buddy-sid-agent-buddy-sid.json'), backup = join(claude, 'backups', '.claude.json.backup.1')
+      try {
+        mkdirSync(folder, { recursive: true })
+        mkdirSync(join(claude, 'todos'), { recursive: true })
+        mkdirSync(join(claude, 'backups'), { recursive: true })
+        writeFileSync(todo, '[]')
+        writeFileSync(backup, JSON.stringify({ projects: { [folder]: {}, '/elsewhere': {} } }))
+        chmodSync(locked, 0o000)
+        const t = lifeFixture([ended()], { claudeHome: home, worktrees, startReceipt: () => 'super-buddy-session' })
+        t.core.agents.byAgent = vi.fn(() => ({ agentId: 'harness', sessionId: 'buddy-sid', engine: 'claude', cwd: folder, swarmSkill: { role: 'buddy', key: 'k' } }) as never)
+        await t.poll()
+        await vi.waitFor(() => expect(t.log).toHaveBeenCalledWith(`Could not remove an ended Buddy session's Claude Code traces yet: agent agent, ${code}`))
+        expect(t.log.mock.calls.flat().join('\n')).not.toContain(home)
+        // Not done: its end is not acknowledged, and the journal still says what to scrub.
+        expect(t.commands).toEqual([])
+        expect(Object.keys(t.saved().scrubs ?? {})).toEqual(['agent'])
+        chmodSync(locked, 0o755)
+        await t.poll(60_000)
+        await vi.waitFor(() => expect(t.commands).toHaveLength(1))
+        expect(existsSync(todo)).toBe(false)
+        expect(JSON.parse(readFileSync(backup, 'utf8')).projects).toEqual({ '/elsewhere': {} })
+        expect(t.saved().scrubs).toBeUndefined()
+      } finally { if (existsSync(locked)) chmodSync(locked, 0o755); rmSync(home, { recursive: true, force: true }) }
+    })
+
   // A machine with no worktrees folder made no Buddy worktree, and an id that is not one is logged as such, never as itself.
   it('drops every saved scrub when this machine has no worktrees folder, and never logs an id that is not one', async () => {
     const home = realpathSync(mkdtempSync(join(tmpdir(), 'buddy-home-'))), worktrees = join(home, 'harnesses', 'worktrees')

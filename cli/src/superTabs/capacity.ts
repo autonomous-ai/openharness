@@ -12,12 +12,12 @@ export interface Requirements {
   memoryBytes: number; diskBytes: number; maxCpuPercent: number
   tools: string[]; devices: string[]; quotaRequired: boolean
 }
-/** What `start` asks of a machine when the Lead has no reason to ask for more: the help's template. */
-export const START_REQUIREMENTS: Requirements = { memoryBytes: 2147483648, diskBytes: 10737418240, maxCpuPercent: 85, tools: ['git'], devices: [], quotaRequired: false }
+/** What `start` asks of a machine when the Lead has no reason to ask for more: the help's template. CPU use is only a momentary
+ *  reading: a busy machine would refuse every start (seen in the route e2e at 98.7%), so no cap; memory, disk and pressure gate it. */
+export const START_REQUIREMENTS: Requirements = { memoryBytes: 2147483648, diskBytes: 10737418240, maxCpuPercent: 100, tools: ['git'], devices: [], quotaRequired: false }
 /** The same plus what the task needs. The route admits a pick on exactly this, so the start it suggests is admitted too. */
 export const startRequirements = (needs: { tools: string[]; devices: string[] }): Requirements =>
-  // CPU use is only a momentary reading: a busy machine would refuse every candidate (seen in the route e2e at 98.7%), so the route does not cap it.
-  ({ ...START_REQUIREMENTS, maxCpuPercent: 100, tools: [...new Set([...START_REQUIREMENTS.tools, ...needs.tools])], devices: needs.devices })
+  ({ ...START_REQUIREMENTS, tools: [...new Set([...START_REQUIREMENTS.tools, ...needs.tools])], devices: needs.devices })
 
 /** A missing result is a completed check; an absent value or failed check is only unverified. */
 export function requiredToolReason(tool: string, reported: unknown, failure?: unknown): string | null {

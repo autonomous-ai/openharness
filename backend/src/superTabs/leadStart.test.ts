@@ -66,6 +66,8 @@ describe('starting a project\'s Product Manager on a Swarm machine', () => {
       request: expect.objectContaining({ conversationId: f.app.conversationId, machineId: 'owner-mac', engine: 'claude', model: 'opus', effort: 'high',
         cwd: `/swarm/${f.app.projectId}`, worktree: true, leadFor: { projectId: f.app.projectId, personId: 'owner', generation: expect.any(String) } }) })])
     expect(started.result).toMatchObject({ machineId: 'owner-mac' })
+    // Memory and disk gate it; CPU is one momentary sample, so a busy machine admits it as it does a routed Builder (Diego, 10-30).
+    expect(f.state.starts![0]!.request.requirements).toEqual({ memoryBytes: 2 * 1024 ** 3, diskBytes: 1024 ** 3, maxCpuPercent: 100, tools: ['git'], devices: [], quotaRequired: false })
     expect(f.project().lead).toMatchObject({ status: 'starting', machineId: 'owner-mac', machineName: 'Owner Mac', startId: started.result.startId })
     // The repository it clones, recorded for the project.
     expect(f.project().repository).toEqual({ machineId: 'owner-mac', cwd: `/swarm/${f.app.projectId}`, repositoryUrl: REPO })
