@@ -612,6 +612,30 @@ summary, or `text: null` when nothing merits another message. Human questions,
 serious blockers and completion are reported immediately. This does not start
 a second summarizing model or forward every terminal turn.
 
+## A message that is not getting in
+
+A message waits as a delivery until its recipient's computer takes it. Your newest message shows a line under it only
+while it sends, or when it needs attention.
+
+**Not delivered yet** is that line, in amber, with no actions. It shows while the recipient's computer is online and
+either:
+
+- has failed to take the message for a minute, or
+- has not picked it up for two minutes while the agent runs.
+
+Harness keeps trying, and the line goes once the message is in. An offline computer still reads as offline instead.
+
+Behind it, the backend writes each claim that ends busy on the delivery (`claimFailingSince`, `claimFailures`) and
+clears that record when a claim gets in. Every 5 minutes the delivery pass logs `[swarm-deliveries] claims failing`
+for a Swarm whose queued messages have failed to be claimed for 5 minutes and still fail. Prod watch alarms on that
+line. The pass cancels none of them: once the cause is fixed, they go in late but whole.
+
+The host's log names each delivery that keeps failing (delivery, agent, since when, how many tries). It logs at once,
+again when the error changes, and otherwise at most every 5 minutes, and it says once when the delivery gets in.
+
+This comes from 2026-10-30. A backend release made every claim of a person's message to their own Buddy end busy for
+two hours. Nothing was lost, but nobody could tell.
+
 ## Switching Swarms off on a computer
 
 Swarms are on by default. To run a computer's daemon without them, set
