@@ -106,6 +106,10 @@ Reviewed revision: ______  Reviewer (another engine): ______
    relay already counted them for the same person in the route rate limit), now from browsers instead of daemons.
    Daemon socket traffic drops. The first warning is the per-person route rate limit (`ROUTE_RATE_LIMIT_PER_PERSON_*`
    429s for `/api/super-tabs`) and the Swarm route p95 in route latency logs. Both are already measured.
+   Measured (`desktop/test/super_tab_web_request_rate_test.dart`, the web's read policy, one Swarm on screen, ten
+   simulated minutes): quiet 24.7 requests/min through a machine and 24.7 direct; a push every 10 s 33.3 and 33.3; a
+   machine reconnecting every 20 s 29.5 through it and 24.7 direct (no read on reconnect any more). Against the default
+   limits (15,000/person/min, 50/caller/s) a busy web client uses about 0.2% of its minute, about 450x headroom.
 5. **Compatibility:** client-only. An old web bundle still relays through a machine, and the daemon keeps its
    `action: backend` (the phone app and old web bundles use it). A new web bundle against any server from the last
    months works, because these routes already accept the person's sign-in. The relay's `machine.contribute` retry
