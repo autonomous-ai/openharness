@@ -100,6 +100,7 @@ export class DeviceFleet implements MachineFleet {
     this.opts.link.onFrame((frame) => this.onFrame(frame))
     this.opts.link.onUndelivered((what) => this.onUndelivered(what))
     this.opts.link.onAlive((machineId) => this.alive(machineId))
+    this.opts.link.onGone((machineId) => this.gone(machineId))
   }
 
   async list(): Promise<{ machines: FleetMachine[]; source: 'backend' | 'local' | 'signed-out' }> {
@@ -244,6 +245,17 @@ export class DeviceFleet implements MachineFleet {
     this.answers.set(machineId, (this.answers.get(machineId) ?? 0) + 1)
     this.health.set(machineId, { ok: true, at: Date.now() })
     this.misses.delete(machineId)
+  }
+
+  /**
+   * A machine went away (DeviceLink.onGone): the backend said it went offline, or the lane under its session closed. A
+   * turn to it is refused from now, not sent to be lost, until it answers again under a new session (`alive`). Its misses
+   * stay as they were: the word may be the relay's, so it throws nothing more away (#2387's review: a turn to a Mac that
+   * had just gone was lost for up to 50 s while a list to it waited out its time).
+   */
+  private gone(machineId: string): void {
+    this.health.set(machineId, { ok: false, at: Date.now() })
+    this.opts.log(`device: ${machineId.slice(0, 8)} went away — turns to it are refused until it answers again`)
   }
 
   /**

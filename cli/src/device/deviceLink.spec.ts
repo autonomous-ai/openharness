@@ -55,6 +55,8 @@ async function fakeDeviceWs(opts: { refuseToken?: string } = {}) {
     /** Frames for machines, as the lane sent them: its own control frames left out. */
     forMachines: () => received.filter((frame) => frame.type !== 'device_hello' && frame.type !== 'machines_watch' && frame.type !== 'ping'),
     send: (frame: Frame) => socket?.send(JSON.stringify(frame)),
+    /** The socket to this lane closing under it, as a relay restart or a network change does. */
+    drop: () => socket?.terminate(),
     on: (listener: (frame: Frame) => void) => { listeners.add(listener) },
     close: () => new Promise<void>((resolve) => { for (const client of wss.clients) client.terminate(); wss.close(() => resolve()) }),
   }
@@ -843,19 +845,110 @@ describe('a late reply from a slow machine', () => {
     expect(seal.hello).toHaveBeenCalledTimes(2)
   })
 
-  it('has longer to answer an agent list, a background read, than anything a person waits on', async () => {
-    const { link, lines } = await upWithAlive()
+  /** Wait for a frame over the real socket without moving the faked timers (vi.waitFor moves them). */
+  const heardOver = async (check: () => boolean): Promise<void> => {
+    for (let i = 0; i < 2_000 && !check(); i++) await new Promise((resolve) => setImmediate(resolve))
+    expect(check()).toBe(true)
+  }
+
+  /** A lane on a clock of the test's own, with LINKED's session up (its welcome heard at 1 000). */
+  async function upOnClock() {
+    let clock = 1_000
+    const lane$ = await lane({ now: () => clock })
+    await lane$.link.online()
+    await lane$.link.establish(LINKED)
+    return { ...lane$, tick: (ms: number) => { clock += ms } }
+  }
+
+  it('has longer to answer an agent list, a background read, than anything a person waits on, while its machine answers meanwhile', async () => {
+    const { server, seal, link, lines, tick } = await upOnClock()
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     try {
       const list = link.rpc('agents_list', {}, LINKED).catch((error: Error) => error)
       const models = link.rpc('models_list', {}, LINKED).catch((error: Error) => error)
       await vi.advanceTimersByTimeAsync(15_000)
+      tick(15_000)
       expect(await models).toEqual(new Error('models_list timed out'))
+      // Its late answer to something else: the machine is slow, not gone, and the list waits on.
+      seal.open.mockResolvedValueOnce({ frame: { type: 'models_list_result', machineId: LINKED, payload: { requestId: 'late', models: [] } } })
+      server.send({ type: 'models_list_result', machineId: LINKED, payload: { __e2e: { n: 3 } } })
+      await heardOver(() => lines.includes('device: unmatched models_list_result'))
       await vi.advanceTimersByTimeAsync(29_999)
       expect(lines.some((line) => line.includes('agents_list timed out'))).toBe(false)
       await vi.advanceTimersByTimeAsync(1)
       expect(await list).toEqual(new Error('agents_list timed out'))
       expect(lines).toContain('device: agents_list timed out after 45000 ms')
     } finally { vi.useRealTimers() }
+  })
+
+  // #2387's review: B's daemon killed and nothing telling this lane, a list to it waited 45 s, and a turn sent meanwhile
+  // was lost instead of refused. Heard from: a reply that proves the machine (as onAlive), or its welcome to our hello.
+  it('fails a list to a machine nothing has been heard from for 30 s then, and the next after 15 s', async () => {
+    const { link, lines, tick } = await upOnClock()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      tick(5_000)
+      const list = link.rpc('agents_list', {}, LINKED).catch((error: Error) => error)
+      await vi.advanceTimersByTimeAsync(24_999)
+      expect(lines.some((line) => line.includes('agents_list timed out'))).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      tick(25_000)
+      expect(lines).toContain('device: agents_list timed out after 25000 ms')
+      expect(await list).toEqual(new Error('agents_list timed out'))
+      // Still nothing: the next list has the 15 s anything else has.
+      const next = link.rpc('agents_list', {}, LINKED).catch((error: Error) => error)
+      await vi.advanceTimersByTimeAsync(15_000)
+      expect(lines).toContain('device: agents_list timed out after 15000 ms')
+      expect(await next).toEqual(new Error('agents_list timed out'))
+    } finally { vi.useRealTimers() }
+  })
+
+  it('a reply in the clear or under the group key is not hearing from it: the list still fails when it went quiet', async () => {
+    const { server, seal, link, lines, tick } = await upOnClock()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const list = link.rpc('agents_list', {}, LINKED).catch((error: Error) => error)
+      // 10 s on, so a reply counted as heard would be news: the list would wait on to 45 s (#2395's security review 2).
+      await vi.advanceTimersByTimeAsync(10_000)
+      tick(10_000)
+      server.send({ type: 'agents_list_result', machineId: LINKED, payload: { requestId: 'forged', agents: [] } })
+      seal.open.mockResolvedValueOnce({ frame: { type: 'agents_list_result', machineId: LINKED, payload: { requestId: 'group', agents: [] } } })
+      server.send({ type: 'agents_list_result', machineId: LINKED, payload: { __e2e: { k: 'g', n: 1, epoch: 'e' } } })
+      await heardOver(() => lines.filter((line) => line.includes('unmatched agents_list_result')).length === 2)
+      await vi.advanceTimersByTimeAsync(20_000)
+      expect(lines).toContain('device: agents_list timed out after 30000 ms')
+      expect(await list).toEqual(new Error('agents_list timed out'))
+    } finally { vi.useRealTimers() }
+  })
+
+  // Both security reviews of #2395: a machine with no sealed session is never heard from, so its list failed at 15 s.
+  it('gives a list to a machine with no sealed session (a cloud machine) its full 45 s: it can prove nothing either way', async () => {
+    const { link, lines } = await upOnClock()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const list = link.rpc('agents_list', {}, CLOUD).catch((error: Error) => error)
+      await vi.advanceTimersByTimeAsync(44_999)
+      expect(lines.some((line) => line.includes('agents_list timed out'))).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(lines).toContain('device: agents_list timed out after 45000 ms')
+      expect(await list).toEqual(new Error('agents_list timed out'))
+    } finally { vi.useRealTimers() }
+  })
+
+  it('says a machine went away when the backend says it went offline, once per half minute, and when the lane closes under its session', async () => {
+    const { server, link } = await upOnClock()
+    await link.establish(LINKED_2)
+    const gone: string[] = []
+    link.onGone((machineId) => { gone.push(machineId) })
+    server.send({ type: 'node_status', machineId: LINKED, payload: { online: false } })
+    await vi.waitFor(() => expect(gone).toEqual([LINKED]))
+    // Again at once: the relay's word, within the limit, changes nothing. A machine this lane never spoke to is no news.
+    server.send({ type: 'machines_status', payload: { statuses: [{ machineId: LINKED, online: false }, { machineId: CLOUD, online: false }] } })
+    server.send({ type: 'node_status', machineId: LINKED_2, payload: { online: true } })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(gone).toEqual([LINKED])
+    // The lane's socket closing takes every session it carried: LINKED_2's.
+    server.drop()
+    await vi.waitFor(() => expect(gone).toEqual([LINKED, LINKED_2]))
   })
 })
