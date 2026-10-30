@@ -338,6 +338,30 @@ describe('retargeting an agent', () => {
   })
 
   describe('a move that goes ahead', () => {
+    // Codex 0.166 refuses to resume a conversation on another provider (thread/resume → ModelProviderMismatch);
+    // a move between a grid and its own login changes provider, so the conversation goes on in a fork of it.
+    it.each([
+      ['its own login onto a grid', agent({ engine: 'codex' }), grid, true],
+      ['a grid back to its own login', agent({ engine: 'codex', gridLaunch: grid }), null, true],
+      ['one grid to another (the same provider)', agent({ engine: 'codex', gridLaunch: grid }), { ...grid, networkId: 'g2' }, false],
+    ] as const)('continues a Codex conversation moved from %s in a fork only when its provider changes', async (_how, row, to, forks) => {
+      const run = setup(row)
+      expect(await run.retarget({ agentId: 'a1', grid: to })).toEqual({ ok: true })
+      expect(vi.mocked(restartAgent).mock.calls[0][0]).toEqual({ engine: 'codex', sessionId: 's1', ...(forks ? { continueInFork: true } : {}) })
+    })
+
+    it('resumes an engine whose conversations follow any provider (Claude Code) on every move', async () => {
+      const run = setup(agent())
+      expect(await run.retarget({ agentId: 'a1', grid })).toEqual({ ok: true })
+      expect(vi.mocked(restartAgent).mock.calls[0][0]).toEqual({ engine: 'claude', sessionId: 's1' })
+    })
+
+    it('starts fresh rather than forking a Codex agent with no conversation yet', async () => {
+      const run = setup(agent({ engine: 'codex', sessionId: '' }))
+      expect(await run.retarget({ agentId: 'a1', grid })).toEqual({ ok: true })
+      expect(vi.mocked(restartAgent).mock.calls[0][0]).toEqual({ engine: 'codex', sessionId: '' })
+    })
+
     it('keeps its route until a slow replacement is confirmed, even past the default hold timer', async () => {
       vi.useFakeTimers()
       const onDiscovered = vi.fn()
