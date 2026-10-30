@@ -429,7 +429,7 @@ describe('thread marks (one per person and thread)', () => {
     // Someone no longer in the Swarm, and a Swarm that is gone.
     await write('left', now - 1_000, 'person-who-left')
     await write('deleted-swarm', now - 1_000, owner.sub, `${s.tabId}-deleted`)
-    const result = await sweepThreadMarks(db, now, { after: '' }, 100_000)
+    const result = await sweepThreadMarks(db, now, { walk: { after: '' }, swarms: 100_000 })
     const kept = await db.superTabThreadMark.findMany({ where: { tabId: { startsWith: s.tabId } }, select: { threadId: true } })
     expect(kept.map(k => k.threadId).sort()).toEqual(['fresh', 'peers'])
     expect(result.expired).toBeGreaterThanOrEqual(1)
@@ -448,7 +448,7 @@ describe('thread marks (one per person and thread)', () => {
     await marksIn(prefix, ['gone', 'no-members'])
     // A Swarm row stored without memberIds (an older or partial row), written as is.
     await db.$runCommandRaw({ insert: 'SuperTab', documents: [{ _id: `${prefix}-no-members`, ownerId: owner.sub, autonomousEnv: 'prod', state: {} }] })
-    const result = await sweepThreadMarks(db, NOW, { after: prefix }, 10)
+    const result = await sweepThreadMarks(db, NOW, { walk: { after: prefix }, swarms: 10 })
     expect(await swarmsWithMarks(prefix)).toEqual(['no-members'])
     expect(result.swarmsChecked).toBe(2)
   })
@@ -457,13 +457,35 @@ describe('thread marks (one per person and thread)', () => {
     const prefix = `zz-walk-${randomUUID()}`
     await marksIn(prefix, ['a', 'b', 'c'])
     const at = { after: prefix }
-    expect((await sweepThreadMarks(db, NOW, at, 2)).swarmsChecked).toBe(2)
+    expect((await sweepThreadMarks(db, NOW, { walk: at, swarms: 2 })).swarmsChecked).toBe(2)
     expect(await swarmsWithMarks(prefix)).toEqual(['c'])
     expect(at.after).toBe(`${prefix}-b`)
-    await sweepThreadMarks(db, NOW, at, 2)
+    await sweepThreadMarks(db, NOW, { walk: at, swarms: 2 })
     expect(await swarmsWithMarks(prefix)).toEqual([])
     // Past the last Swarm with marks, the next pass starts from the first.
     expect(at.after).toBe('')
+  })
+
+  it('keeps its place in the database: a restarted worker goes on from there, and a Swarm whose check failed is checked again', async () => {
+    const prefix = `zz-restart-${randomUUID()}`
+    await marksIn(prefix, ['a', 'b', 'c'])
+    await db.superTabSweepCursor.upsert({ where: { id: 'thread-marks' }, create: { id: 'thread-marks', after: prefix, updatedAt: new Date(NOW) },
+      update: { after: prefix } })
+    // The first process checks two Swarms, then stops; nothing of it stays in memory.
+    expect((await sweepThreadMarks(db, NOW, { swarms: 2 })).swarmsChecked).toBe(2)
+    expect((await db.superTabSweepCursor.findUniqueOrThrow({ where: { id: 'thread-marks' } })).after).toBe(`${prefix}-b`)
+    // The next one fails while deleting c's marks: its place stays before c.
+    const failing = new Proxy(db, { get: (target, key) => key === '$runCommandRaw'
+      ? async (command: { deletes?: Array<{ q: { tabId?: string } }> }) => {
+        if (command.deletes?.some(d => d.q.tabId === `${prefix}-c`)) throw new Error('connection reset')
+        return target.$runCommandRaw(command as never)
+      }
+      : Reflect.get(target, key) }) as PrismaClient
+    await expect(sweepThreadMarks(failing, NOW, { swarms: 2 })).rejects.toThrow('connection reset')
+    expect((await db.superTabSweepCursor.findUniqueOrThrow({ where: { id: 'thread-marks' } })).after).toBe(`${prefix}-b`)
+    expect(await swarmsWithMarks(prefix)).toEqual(['c'])
+    await sweepThreadMarks(db, NOW, { swarms: 2 })
+    expect(await swarmsWithMarks(prefix)).toEqual([])
   })
 
   it('reads a person\'s thread marks through their named indexes, planned once', async () => {

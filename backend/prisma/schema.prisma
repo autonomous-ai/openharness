@@ -1183,6 +1183,14 @@ model SuperTabThreadMark {
   @@index([updatedAt])
 }
 
+/// Where a Swarm sweep reads on from between passes and releases, one row per sweep (readMarks.ts sweepThreadMarks: id
+/// "thread-marks", the last Swarm whose people check finished). Written by the singleton worker alone.
+model SuperTabSweepCursor {
+  id        String   @id @map("_id")
+  after     String
+  updatedAt DateTime
+}
+
 /// A question to one person, with options and a recommendation (backend/src/superTabs/decisions.ts). Kept out of the tab
 /// state, as mentions are: an asking agent and the asked person read it, and the person answers it once.
 model SuperTabDecision {
