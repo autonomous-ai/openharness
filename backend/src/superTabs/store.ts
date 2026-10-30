@@ -45,7 +45,7 @@ import { activeMember, addMember, hasWorkspaceAccess, listWorkspaces, memberId, 
 import { WORKSPACE_LABEL, type WorkspaceRole } from './workspaces.js'
 import {
   activeWork, actorKey, agent, agentOnly, agentRole, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
-  SuperTabError, isLeads, knownKind, parkLaterConversations, syncLeads, type Actor, type Agent, type Assignment, type Author, type Conversation, type MessageDraft, type Person, type SuperTabState,
+  SuperTabError, forRecipients, isLeads, knownKind, parkLaterConversations, syncLeads, type Actor, type Agent, type Assignment, type Author, type Conversation, type MessageDraft, type Person, type SuperTabState,
 } from './model.js'
 import type { HoldReason } from './holdReason.js'
 import { stuck } from './deliverySettle.js'
@@ -53,11 +53,12 @@ import { agentDisplayName } from './agentNames.js'
 import { endedHolds, HOLDING, startedHolds, type WorkHold } from '../github/holds.js'
 import { accrueLent } from './leaderboard/lent.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, TERMINAL_RECHECK_MS, type TerminalEffect } from './terminal.js'
-import { costRows, summarizeCosts } from './costs/read.js'
-import { recordEvidence } from './evidence/store.js'
+import { costRows, failedStarts, summarizeCosts } from './costs/read.js'
+import { APPROVE, APPROVED_DAYS, approvedReminder, localDate, MAX_PROPOSALS, proposalQuestion, proposalTitle, REASK_DAYS, reflectionMessageId, routingReflection, type Approved, type Proposal, type ReflectionInput } from './costs/reflection.js'
+import { readEvidence, recordEvidence } from './evidence/store.js'
 import { closeAssignment, closeUnassignedStart, LIST_SIZE, newestConversations, newestDecisions, readDecision, recentDecisions, recordAttempts, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { dropHeldTags, listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByReply, resolveWhenWorked, writeMentions } from './mentions.js'
-import { answerable, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingFor, waitingIn, waitingInProject, writeDecisions } from './decisions.js'
+import { answerable, askDecisions, MAX_OPEN_DECISIONS, REFLECTION_DECISION, reflectionDecisions, expireReflections, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingFor, waitingIn, waitingInProject, writeDecisions } from './decisions.js'
 import { CATCH_UP_SCAN, catchUpSummary, type CatchUp } from './catchUp.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySaveSchema, type RoutingPolicy } from './routingPolicy.js'
 import { invitedSwarms } from './invitedSwarms.js'
@@ -148,6 +149,15 @@ function deliveryTouches(delivery: SuperTabDelivery, state: SuperTabState): Touc
  *  (commands.ts applyCommand), and the parts stay what the write is compared with (parts/commit.ts). */
 export async function loadRow(tx: Transaction, row: SwarmRow, named: Named = {}): Promise<Loaded> {
   return loadedFrom(row, await loadActive(tx, row.id, named))
+}
+
+const DAY_MS = 24 * 60 * 60_000
+/** Where a project's routing reflection goes: its project chat, under its Lead. None in a paused Swarm or without a Lead. */
+function reflectionPlace(state: SuperTabState, projectId: string) {
+  const project = projectsOf(state).find(p => p.id === projectId)
+  const chat = project && state.conversations.find(c => c.id === project.leadConversationId)
+  const lead = chat?.leadId ? state.agents.find(a => a.id === chat.leadId) : undefined
+  return state.paused || !project || !chat || !lead ? null : { project, chat, lead }
 }
 
 function loadedFrom(row: SwarmRow, parts: SwarmParts): Loaded {
@@ -2663,6 +2673,84 @@ export class SuperTabStore {
       await tx.superTabDelivery.update({ where: { id: delivery.id }, data: { holdReason: reason, holdSince: delivery.holdSince ?? new Date(this.now()) } })
     }
     return { held: true }
+  }
+
+  /**
+   * Posts a project's nightly routing reflection for local date `on` (lib/routingReflection.ts) in its project chat under its
+   * Lead's name, and asks each new proposal of the project owner as a decision from the Lead; nothing changes routing by
+   * itself. Counts only the attempts and failed starts of the project's own task groups, never a private or Buddy chat, the
+   * Leads conversation or another project. Reads first, outside any transaction (the week's attempts, failed starts, their
+   * groups and evidence); then one short transaction re-checks, reads the project's reflection decisions and writes. The
+   * report's id is the project's and date's, so a second pass or worker writes nothing ('already'). 'empty': no attempt and
+   * no failed start in the last day. 'skipped': no such Swarm or project, a paused Swarm, or a project with no Lead.
+   * Decisions (reviews of #2276): at most MAX_PROPOSALS open, each expiring after 7 days unanswered (every due night, a
+   * report or not); one answered in the last REASK_DAYS days is not asked again; one approved in the last APPROVED_DAYS days
+   * is listed each night, to the people and to the Lead.
+   */
+  async postReflection(tabId: string, projectId: string, on: string): Promise<'posted' | 'already' | 'empty' | 'skipped'> {
+    const id = reflectionMessageId(tabId, projectId, on)
+    if (await this.db.superTabMessage.findUnique({ where: { id }, select: { id: true } })) return 'already'
+    const read = await this.db.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
+    if (!read) return 'skipped'
+    const now = this.now(), since = now - 7 * DAY_MS
+    const { rows, truncated } = await costRows(this.db, tabId, since)
+    const failed = await failedStarts(this.db, tabId, since)
+    const seen = (await loadRow(this.db, requireParts(read), { groupIds: [...new Set([...rows, ...failed].map(r => r.conversationId))] })).state
+    const at = reflectionPlace(seen, projectId)
+    if (!at) return 'skipped'
+    const ids = new Set(seen.conversations.filter(g => !g.audience && !isLeads(g) && g.id !== at.chat.id && groupProject(seen, g).id === projectId).map(g => g.id))
+    const input: ReflectionInput = { now, rows: rows.filter(r => ids.has(r.conversationId)), groups: seen.conversations.filter(g => ids.has(g.id)),
+      failedStarts: failed.filter(f => ids.has(f.conversationId)), evidence: (await readEvidence(this.db, tabId, since, [projectId])).models, truncated,
+      rules: (seen.rules ?? []).filter(r => !r.projectId || r.projectId === projectId).map(r => r.rule) }
+    // A quiet night still expires the proposals left unanswered (delta review of #2276).
+    if (!routingReflection(input)) { await expireReflections(this.db, tabId, projectId, now); return 'empty' }
+    return transaction(this.db, async tx => {
+      if (await tx.superTabMessage.findUnique({ where: { id }, select: { id: true } })) return 'already'
+      const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
+      if (!row) return 'skipped'
+      const loaded = await loadRow(tx, requireParts(row), { groupIds: [at.chat.id] })
+      const state = structuredClone(loaded.state)
+      const place = reflectionPlace(state, projectId)
+      if (!place) return 'skipped'
+      const { project, chat, lead } = place
+      // Expired first, so neither the open proposals nor the owner's open decisions count them.
+      await expireReflections(tx, tabId, projectId, now)
+      const asked = await reflectionDecisions(tx, tabId, projectId)
+      const open = asked.filter(d => !d.answeredAt)
+      const zone = project.digest?.timeZone
+      // Approved in the last APPROVED_DAYS days, the newest per proposal, saying who decided: listed and reminded each night.
+      const approved = new Map<string, Approved>()
+      for (const d of asked) if (d.answeredAt && d.choice === APPROVE && d.answeredAt.getTime() >= now - APPROVED_DAYS * DAY_MS
+        && !approved.has(proposalTitle(d.question))) {
+        approved.set(proposalTitle(d.question), { title: proposalTitle(d.question), on: localDate(d.answeredAt.getTime(), zone), by: d.delegated ? 'pm' : 'owner' })
+      }
+      const decided = asked.filter(d => d.answeredAt && d.answeredAt.getTime() >= now - REASK_DAYS * DAY_MS).map(d => proposalTitle(d.question))
+      const report = routingReflection({ ...input, decided, approved: [...approved.values()] })!
+      const owner = state.people.find(p => p.id === project.ownerId)
+      const reads = !!owner && canReadGroup(state, { kind: 'person', userId: owner.id, email: owner.email }, chat)
+      const waitingSince = new Map(open.map(d => [proposalTitle(d.question), localDate(d.createdAt.getTime(), zone)]))
+      const held = reads ? await tx.superTabDecision.count({ where: { tabId, personId: project.ownerId, askerAgentId: lead.id,
+        OR: [{ answeredAt: null }, { answeredAt: { isSet: false } }] } }) : 0
+      const room = Math.max(0, Math.min(MAX_PROPOSALS - open.length, MAX_OPEN_DECISIONS - held))
+      const fresh = reads ? report.proposals.filter(p => !waitingSince.has(p.title)).slice(0, room) : []
+      // Says of each proposal only what happened to it: asked, waiting, or why not (review of #2276).
+      const note = (p: Proposal) => waitingSince.has(p.title) ? `Waiting for the owner's answer since ${waitingSince.get(p.title)}.`
+        : fresh.includes(p) ? 'Asked of the project owner.' : !reads ? 'Not asked: the project owner does not read this chat.'
+        : held + fresh.length >= MAX_OPEN_DECISIONS ? 'Not asked: the owner has too many open decisions.'
+        : `Not asked: at most ${MAX_PROPOSALS} proposals wait for the owner's answer at once.`
+      const author: Author = { kind: 'agent', id: lead.id, name: lead.name, displayName: agentDisplayName(state.agents, lead.id), membershipGeneration: lead.membershipGeneration }
+      const rows: MessageDraft[] = [{ id, conversationId: chat.id, replyTo: null, recipients: [], author, text: report.render(note),
+        source: { kind: 'routing-reflection', projectId, on } }]
+      // The approved changes, to the Lead too, so a Yes never rests on its memory (delta review of #2276): its alone.
+      if (approved.size) rows.push({ id: stableId(id, 'lead'), conversationId: chat.id, replyTo: null, recipients: [lead.id], author,
+        text: approvedReminder([...approved.values()]), source: forRecipients({ kind: 'routing-reflection', projectId, on }) })
+      const sequences = numberMessages(state, rows, now)
+      await this.save(tx, loaded, state, clock.next())
+      await this.writeMessages(tx, tabId, state, rows, sequences)
+      if (fresh.length) await writeDecisions(tx, tabId, askDecisions(state, chat, project.ownerId, fresh.map(proposalQuestion),
+        { operationId: id, askerAgentId: lead.id, assignmentId: null, kind: REFLECTION_DECISION }), now)
+      return 'posted'
+    })
   }
 
   /** Archives a finished group whose pull requests `checked` were all read merged or closed (archive.ts), only if it still

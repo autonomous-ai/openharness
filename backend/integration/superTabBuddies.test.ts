@@ -270,6 +270,46 @@ describe('a Buddy through the store', () => {
     await expect(f.store.costSummary(peer, f.tab, 7, agentId)).rejects.toThrow('A Buddy reads no routing')
   })
 
+  it('never reads the nightly routing reflection, which says what each engine and model cost: routing too', async () => {
+    const f = await swarm()
+    const { agentId } = await buddy(f)
+    const group = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Parser', brief: '', checks: [] })).result.conversationId)
+    const at = Date.now() - 60 * 60_000
+    await db.superTabRouteDecision.create({ data: { id: randomUUID(), tabId: f.tab, conversationId: group, assignmentId: randomUUID(), outcome: 'done',
+      createdAt: new Date(at), final: { kind: 'member' }, record: { assessment: { kind: 'parser' } }, run: { machineId: 'peer-mac', harnessId: 'h',
+        engine: 'claude', model: 'opus', effort: 'high', billing: 'subscription', startedAt: at, start: {}, endedAt: at + 60_000, end: {} } } })
+    expect(await f.store.postReflection(f.tab, 'lead', '2026-10-30')).toBe('posted')
+    const report = (await f.store.messages(peer, f.tab, 'lead', {})).messages.find(m => (m.source as { kind?: unknown } | null)?.kind === 'routing-reflection')
+    expect(report?.text).toContain('- claude opus high, parser: 1 attempt, 0 shipped')
+    expect((await f.store.messages(peer, f.tab, 'lead', {}, agentId)).messages.map(m => m.id)).not.toContain(report!.id)
+    await expect(f.store.messages(peer, f.tab, 'lead', { messageId: report!.id }, agentId)).resolves.toMatchObject({ messages: [] })
+  })
+
+  it('never reads the routing proposals asked of its person: not in its decisions, nor as the PM\'s line when its person leaves one to the PM (review of #2276)', async () => {
+    const f = await swarm()
+    const { agentId, chat } = await buddy(f)
+    // Two proposals as the nightly reflection asks them (store.ts postReflection): of peer, by the PM, in the project chat, tagged.
+    const proposal = (title: string) => ({ id: randomUUID(), tabId: f.tab, batchId: randomUUID(), projectId: 'lead', conversationId: 'lead', assignmentId: null,
+      personId: peer.sub, askerAgentId: f.lead, question: `${title}? Expected saving: about $10.00 a week at API prices.`,
+      options: ['Yes: the Lead routes this way from now on', 'No: keep routing as it is', 'Not yet: ask again when there is more evidence'],
+      recommended: 0, unblocks: 'If you say yes, the Lead routes parser work this way.', createdAt: new Date(), kind: 'routing-reflection' })
+    const routing = [proposal('Route parser work to claude sonnet medium instead of claude opus high'), proposal('Stop routing ui work to codex gpt-6.1-sol high')]
+    await db.superTabDecision.createMany({ data: routing })
+    await f.execute({ type: 'decision.ask', conversationId: 'lead', personId: peer.sub, questions: [{ question: 'Which week?',
+      options: ['This week', 'Next week'], recommended: 0, unblocks: 'The plan' }] }, owner, f.lead)
+    const theirs = (await f.store.decisions(peer, f.tab, 'open')).decisions
+    expect(theirs.map(d => d.question).sort()).toEqual([...routing.map(r => r.question), 'Which week?'].sort())
+    expect((await f.store.decisions(peer, f.tab, 'open', agentId)).decisions.map(d => d.question)).toEqual(['Which week?'])
+    // Left to the PM: the plain one's line reaches the Buddy chat, the proposal's never does, and the Buddy's answered list holds no proposal.
+    await f.execute({ type: 'decision.answer', decisionId: routing[0]!.id, delegate: true }, peer)
+    await f.execute({ type: 'decision.answer', decisionId: theirs.find(d => d.question === 'Which week?')!.id, delegate: true }, peer)
+    const lines = (await f.store.messages(peer, f.tab, chat, {})).messages.map(m => m.text)
+    expect(lines).toContain('PM decided: This week — Which week?')
+    expect(lines.join('\n')).not.toContain('Route parser work')
+    expect((await f.store.decisions(peer, f.tab, 'settled', agentId)).decisions.map(d => d.question)).toEqual(['Which week?'])
+    expect((await f.store.decisions(peer, f.tab, 'settled')).decisions.map(d => d.question)).toContain(routing[0]!.question)
+  })
+
   it('still reads a task archived before the PM reported on it, until it leaves the active set (security review 1 of #2115)', async () => {
     const f = await swarm()
     const { agentId } = await buddy(f)
