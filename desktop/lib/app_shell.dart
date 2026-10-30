@@ -198,10 +198,6 @@ class _GridTokenScope extends StatelessWidget {
   }
 }
 
-/// Carries "Check for Updates…" from the macOS application menu into Dart.
-///
-/// The item is installed natively (MainFlutterWindow.swift) so the rest of the
-/// menu bar keeps coming from the nib; all this side does is act on the tap.
 /// The licenses page's entries for the fonts this app bundles.
 Stream<LicenseEntry> bundledFontLicenses() async* {
   yield LicenseEntryWithLineBreaks([
@@ -222,6 +218,10 @@ Stream<LicenseEntry> bundledFontLicenses() async* {
   }
 }
 
+/// Carries "Check for Updates…" from the macOS application menu into Dart.
+///
+/// The item is installed natively (MainFlutterWindow.swift) so the rest of the
+/// menu bar keeps coming from the nib; all this side does is act on the tap.
 const _appMenuChannel = MethodChannel('harness/app_menu');
 
 class RootShell extends ConsumerStatefulWidget {
