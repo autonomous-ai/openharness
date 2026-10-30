@@ -554,15 +554,25 @@ function requester(state: SuperTabState, project: SwarmProject, personId: string
 }
 /** The Buddy whose proposal a new group comes from: the message must be a Buddy's proposal posted in the project's chat. Its
  *  row is the Swarm's own (buddy.propose), so a Buddy removed since still earns for it. */
-function proposalOf(state: SuperTabState, project: SwarmProject, proposal: CommandContext['proposal']): { buddyId: string; messageId: string } {
+function proposalOf(state: SuperTabState, project: SwarmProject, proposal: CommandContext['proposal']): { buddyId: string; messageId: string; personId?: string } {
   const author = proposal?.author
   const buddy = author?.kind === 'agent' ? state.agents.find(a => a.id === author.id) : undefined
   if (!proposal || proposal.conversationId !== project.leadConversationId || proposal.source?.kind !== 'buddy-proposal'
     || author?.kind !== 'agent' || (buddy && !isBuddy(buddy))) {
     fail('PROPOSAL_UNKNOWN', 'Name a Buddy\'s proposal posted in this project\'s chat, or leave the proposal out.', 400)
   }
-  return { buddyId: author.id, messageId: proposal.id }
+  // The person it was sent for, as buddy.propose recorded them: the Swarm writes this source, never a sender.
+  const personId = typeof proposal.source.personId === 'string' ? proposal.source.personId : undefined
+  return { buddyId: author.id, messageId: proposal.id, ...personId ? { personId } : {} }
 }
+/** The person a proposal was sent for, while they are still in the Swarm and read [project]; otherwise nobody, so a person
+ *  who left or lost the project is never credited and opening the group still works (the PM is told to name someone). */
+function proposalRequester(state: SuperTabState, project: SwarmProject, personId: string | undefined): string | undefined {
+  const member = personId ? state.people.find(p => p.id === personId) : undefined
+  return member && canReadProject(state, { kind: 'person', userId: member.id, email: member.email }, project) ? member.id : undefined
+}
+/** What an agent opening a group for nobody is told, so the person who asked still gets the credit (groups #294, #327). */
+export const REQUESTER_UNKNOWN = 'Name the person who asked: conversation.requester with their personId for this group, or requesterId when you open a group.'
 
 function open(state: SuperTabState, conversationId: string) {
   const group = conversation(state, conversationId)
@@ -1463,7 +1473,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       // A review by hand of a task wanting two reviews reviews its current hand-over, as one the Swarm opens does.
       const reviewStamp = command.reviewOf ? reviewStampOf(conversation(state, command.reviewOf)) : undefined
-      const requesterId = command.requesterId ? requester(state, project, command.requesterId) : actor.kind === 'person' ? actor.userId : undefined
+      // Who asked: the person named, else the one a Buddy's proposal was sent for, else a person opening it themselves.
+      const proposal = command.proposalMessageId ? proposalOf(state, project, context.proposal) : undefined
+      const requesterId = command.requesterId ? requester(state, project, command.requesterId)
+        : proposalRequester(state, project, proposal?.personId) ?? (actor.kind === 'person' ? actor.userId : undefined)
       const number = nextConversationNumber(state)
       state.groupCounter = number
       state.conversations.push({ id: operationId, ...(state.projects ? { projectId: project.id } : {}),
@@ -1473,9 +1486,14 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         checks: command.checks.map((c, i) => ({ ...c, id: stableId(operationId, String(i)), evidence: null, passedBy: null })),
       })
       recordAsked(state.conversations.at(-1)!, requesterId, context.now)
-      if (command.proposalMessageId) recordProposal(state.conversations.at(-1)!, proposalOf(state, project, context.proposal))
+      if (proposal) recordProposal(state.conversations.at(-1)!, { buddyId: proposal.buddyId, messageId: proposal.messageId })
       result.conversationId = operationId
       result.number = number
+      // A build group an agent opens for nobody credits nobody when it ships: say so, as the PM can still name them.
+      if (actor.kind === 'agent' && !requesterId && !command.reviewOf) {
+        result.requesterUnknown = true
+        result.warnings = [REQUESTER_UNKNOWN]
+      }
       if (brief) {
         message(operationId, brief, [], null, SYSTEM_ROW)
         bindTaskCard(state.conversations.at(-1)!, effects.messages.at(-1)!)

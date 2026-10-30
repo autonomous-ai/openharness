@@ -729,6 +729,22 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
     expect((await f.store.messages(peer, f.tab, group, {}, agentId)).messages.map(m => m.id)).toContain(notice.id)
   })
 
+  it('is told of work the PM opens from its proposal without naming anyone: the proposal\'s person is its requester (groups #294, #327)', async () => {
+    const { f, agentId, proposal, heard } = await proposed()
+    const created = await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Offline sync', brief: 'Desktop keeps edits offline.',
+      checks: [{ description: 'Edits survive a restart', independent: false }], proposalMessageId: proposal }, owner, f.lead)
+    const group = String(created.result.conversationId)
+    expect(created.result.requesterUnknown).toBeUndefined()
+    const stored = (await f.store.read(owner, f.tab)).state.conversations.find(c => c.id === group)!
+    expect(stored.requesterId).toBe(peer.sub)
+    const builder = String((await f.execute({ type: 'agent.add', conversationId: group, machineId: 'owner-mac', harnessId: randomUUID(), name: 'Builder',
+      configuration: config, lead: false })).result.agentId)
+    await f.execute({ type: 'work.assign', conversationId: group, agentId: builder })
+    const notice = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, conversationId: group, recipientIds: { has: agentId } } })
+    expect(notice.text).toMatch(/^News for your owner: #\d+ "Offline sync", which they requested, is assigned and working\.$/)
+    expect(await heard()).toEqual([notice.id])
+  })
+
   it('stops hearing once its person stops reading the project: nothing new is sent, and what waits is refused at pickup', async () => {
     const { f, agentId, proposal, pm, heard } = await proposed()
     const answer = String((await pm('Taking it.', { replyTo: proposal })).result.messageId)
