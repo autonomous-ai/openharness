@@ -66,6 +66,7 @@ import {
   terminalP2pPolicy,
 } from './p2pSignaling.js'
 import { ShortTurnGuard } from './shortTurnGuard.js'
+import { markCpuKind } from './selfProfile.js'
 
 const wss = createWss(WS_LIMITS.adapter, { echoFirstProtocol: true })
 
@@ -276,6 +277,7 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
   const preHandlerQueue: Array<[RawData, boolean]> = []
   let onMessage: ((raw: RawData, isBinary: boolean) => void) | null = null
   ws.on('message', (raw: RawData, isBinary: boolean) => {
+    markCpuKind(isBinary ? 'adapter-ws binary' : 'adapter-ws text')
     if (onMessage) onMessage(raw, isBinary)
     else if (preHandlerQueue.length < 64) preHandlerQueue.push([raw, isBinary])
   })

@@ -727,6 +727,10 @@ describe('local models on the Swarm\'s grid', () => {
       const off = { ...policy, models: policy.models.map(m => m.model === 'sonnet' ? { ...m, enabled: false } : m) }
       expect(choose([], off, { ...simple, model: 'sonnet' }, NOW)).toEqual({ error: 'NO_CANDIDATE',
         excluded: [{ title: 'Named model', reason: 'The routing table turns Claude sonnet off. Turn its row on to use it.' }] })
+      // A row for an engine this CLI does not know yet (a newer server's) is named by the server's own word for it.
+      const newer = { ...policy, models: [...policy.models, { engine: 'gemini' as never, model: 'pro', effort: 'high', quality: 3, cost: 3, enabled: false }] }
+      expect(choose([], newer, { ...simple, model: 'pro' }, NOW)).toEqual({ error: 'NO_CANDIDATE',
+        excluded: [{ title: 'Named model', reason: 'The routing table turns gemini pro off. Turn its row on to use it.' }] })
     })
     it('keeps the policy order for anything harder, riskier or a review', () => {
       expect(firstOf(choose([expiring, haiku, grid], policy, { ...simple, risk: 'medium' }, NOW))).toBe('opus')

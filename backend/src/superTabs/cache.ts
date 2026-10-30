@@ -243,6 +243,24 @@ export function configureSwarmStamps(next: SwarmStamps | null, options: CacheOpt
 }
 export const swarmReadCache = (): SwarmCache | null => readCache
 
+/** These Swarms' stamps now, or null without stamps, when they fail, or past STAMP_TIMEOUT_MS: a reading-only machine
+ *  report then runs in full (machineReports.ts). */
+export async function readStamps(tabIds: readonly string[]): Promise<Map<string, Stamp> | null> {
+  if (!stamps) return null
+  let timer: NodeJS.Timeout | undefined
+  const late = new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), STAMP_TIMEOUT_MS) })
+  try {
+    return await Promise.race([stamps.read(tabIds), late])
+  } catch {
+    return null
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** Whether this process committed a change of the Swarm whose bump Redis has not taken yet: its stamps say nothing new. */
+export const stampOwed = (tabId: string): boolean => owed.has(tabId) || settling.has(tabId)
+
 /** The Swarms a transaction changed, by stamp scope: bumped once it commits (`swarmTransaction`). */
 type Changes = Map<string, Set<StampScope>>
 const changesOf = new WeakMap<object, Changes>()
@@ -271,6 +289,8 @@ export async function swarmTransaction<T>(db: Pick<PrismaClient, '$transaction'>
 }
 
 const owed: Changes = new Map()
+/** Owed bumps being paid now, out of `owed` until Redis takes them or they are owed again. */
+const settling = new Set<string>()
 let paying: NodeJS.Timeout | null = null
 export const OWED_RETRY_MS = 1_000
 
@@ -294,6 +314,11 @@ async function payOwed(): Promise<void> {
   paying = null
   const due = [...owed]
   owed.clear()
-  await announce(new Map(due))
+  for (const [tabId] of due) settling.add(tabId)
+  try {
+    await announce(new Map(due))
+  } finally {
+    for (const [tabId] of due) settling.delete(tabId)
+  }
   if (!owed.size && due.length) logger.info('[swarm-cache] owed stamp bumps paid', { swarms: due.length })
 }

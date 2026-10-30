@@ -45,6 +45,27 @@ export interface DeviceFrame {
 }
 
 const RPC_TIMEOUT_MS = 15_000
+/**
+ * How long an agent list may take: a background read nobody is watching a spinner for, refreshed every few seconds
+ * (fleetRouter.ts). Diego, 10-30: a slow but working Mac answered its lists 5 to 25 s after the 15 s every request had,
+ * so each answer arrived with nobody waiting and the machine was counted dead (20 such answers in a day). A dead machine
+ * is still found: two lists it never answers throw its session away (deviceFleet.ts).
+ */
+const LIST_TIMEOUT_MS = 45_000
+/**
+ * But not for a machine that has gone quiet: an agent list fails once nothing has been heard from its machine for this
+ * long (and never before RPC_TIMEOUT_MS), unless the machine answers something while it waits. #2387's review: B's
+ * daemon killed, and nothing tells this lane (the relay's list still says running), so a list to it was the only way to
+ * learn it was gone, and at 45 s a turn sent meanwhile was lost instead of refused. A dead machine's last answer was the
+ * list before, a few seconds before it died. Diego's slow Mac answered 5 to 25 s after the 15 s its requests then waited,
+ * so 20 to 40 s after each was sent (#2381's log gives no spread beyond that): one answering past 30 s has a turn refused
+ * for the few seconds until its answer lands, never lost, and keeps its tiles (#2395's security review 2 measured 31 to
+ * 40 s answers: refused for 2 to 11 s per list).
+ *
+ * Only a machine under a sealed session can be heard from (onAlive). Any other (a cloud machine, whose requests the
+ * backend answers) proves nothing either way, and its list keeps the full LIST_TIMEOUT_MS.
+ */
+const QUIET_MS = 30_000
 const PING_EVERY_MS = 15_000
 const BASE_DELAY_MS = 1_000
 const MAX_DELAY_MS = 30_000
@@ -139,6 +160,8 @@ export class DeviceLink {
   private readonly pending = new Map<string, { resolve: (v: Record<string, unknown>) => void; reject: (e: Error) => void; timer: NodeJS.Timeout; machineId: string }>()
   private readonly listeners = new Set<(frame: DeviceFrame) => void>()
   private readonly undeliveredListeners = new Set<(what: Undelivered) => void>()
+  private readonly aliveListeners = new Set<(machineId: string) => void>()
+  private readonly goneListeners = new Set<(machineId: string) => void>()
   /** Resolves when `machine_selected` lands, so callers can await the attach rather than poll for it. */
   private selectWaiter: { resolve: () => void; reject: (e: Error) => void; timer: NodeJS.Timeout } | null = null
   /**
@@ -182,6 +205,9 @@ export class DeviceLink {
   private readonly renewLater = new Map<string, NodeJS.Timeout>()
   /** Whether each machine is linked, read for frames that arrive with no session; kept a few seconds. */
   private readonly linkedCache = new Map<string, { linked: boolean; at: number }>()
+  /** When each machine was last heard from under its current session: a reply that proves it (`onAlive`), or its welcome
+   *  to this daemon's hello. Gone with the session. One entry per machine this lane holds a session with. */
+  private readonly heardAt = new Map<string, number>()
   /** What the person sent under each machine's current session, and under the one before it. */
   private readonly sent = new Map<string, SentUnder>()
   private readonly sentBefore = new Map<string, SentUnder>()
@@ -202,6 +228,27 @@ export class DeviceLink {
   onFrame(cb: (frame: DeviceFrame) => void): () => void {
     this.listeners.add(cb)
     return () => this.listeners.delete(cb)
+  }
+
+  /**
+   * Hear each machine that answered: a reply, waited for or not, that opened under that machine's current session with
+   * the key it shares with this daemon alone. Proof the machine is up, however late it came (deviceFleet.ts). Never a
+   * frame in the clear or under the machine's group key: the relay can write the one, and every commander of the
+   * machine can seal the other. Returns how to stop hearing.
+   */
+  onAlive(cb: (machineId: string) => void): () => void {
+    this.aliveListeners.add(cb)
+    return () => this.aliveListeners.delete(cb)
+  }
+
+  /**
+   * Hear each machine that went away: the backend said it went offline (within the per-machine limit on drops on its
+   * word), or this lane's socket closed under its session. A turn to it now would be lost, not refused, until it answers
+   * again (deviceFleet.ts). Returns how to stop hearing.
+   */
+  onGone(cb: (machineId: string) => void): () => void {
+    this.goneListeners.add(cb)
+    return () => this.goneListeners.delete(cb)
   }
 
   /** Hear each turn, stop or answer that did not reach its machine. Returns how to stop hearing. */
@@ -311,6 +358,7 @@ export class DeviceLink {
     if (!this.sessions.has(machineId)) return false
     this.retire(machineId)
     this.sessions.delete(machineId)
+    this.heardAt.delete(machineId)
     this.opts.seal.drop(machineId)
     return true
   }
@@ -329,6 +377,7 @@ export class DeviceLink {
     } else if (this.sessions.has(machineId)) {
       this.retire(machineId)
       this.sessions.delete(machineId)
+      this.heardAt.delete(machineId)
       this.opts.seal.drop(machineId)
     }
     for (const [requestId, waiter] of [...this.pending]) {
@@ -347,6 +396,7 @@ export class DeviceLink {
       return
     }
     this.sessionGone(machineId)
+    for (const cb of this.goneListeners) cb(machineId)
   }
 
   private hasPending(machineId: string): boolean {
@@ -528,13 +578,25 @@ export class DeviceLink {
     if (machineId && this.opts.peer(machineId) && !this.sessions.get(machineId)?.ready) throw new Error(SESSION_GONE)
     const requestId = randomUUID()
 
+    const target = machineId || this.attached
+    const waitMs = type === 'agents_list' ? LIST_TIMEOUT_MS : RPC_TIMEOUT_MS
+    // A list to a machine already quiet fails as soon as it has been quiet QUIET_MS; one heard from meanwhile waits on.
+    const heard = this.heardAt.get(target)
+    const quietMs = type === 'agents_list' && this.sessions.get(target)?.ready ? Math.ceil(Math.max(RPC_TIMEOUT_MS, (heard ?? -Infinity) + QUIET_MS - this.now())) : waitMs
     return new Promise<Record<string, unknown>>((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const timedOut = (afterMs: number): void => {
         this.pending.delete(requestId)
-        this.opts.log(`device: ${type} timed out after ${RPC_TIMEOUT_MS} ms`)
+        this.opts.log(`device: ${type} timed out after ${afterMs} ms`)
         reject(new Error(`${type} timed out`))
-      }, RPC_TIMEOUT_MS)
-      this.pending.set(requestId, { resolve, reject, timer, machineId: machineId || this.attached })
+      }
+      const quiet = (): void => {
+        const since = this.heardAt.get(target)
+        if (since === undefined || since === heard) return timedOut(quietMs)
+        const waiter = this.pending.get(requestId)
+        if (waiter) waiter.timer = setTimeout(() => timedOut(waitMs), waitMs - quietMs)
+      }
+      const timer = quietMs < waitMs ? setTimeout(quiet, quietMs) : setTimeout(() => timedOut(waitMs), waitMs)
+      this.pending.set(requestId, { resolve, reject, timer, machineId: target })
       this.send(machineId ? { type, machineId, payload: { ...payload, requestId } } : { type, payload: { ...payload, requestId } })
 
     })
@@ -652,6 +714,7 @@ export class DeviceLink {
       return
     }
     session.ready = true
+    this.heardAt.set(machineId, this.now())
     const waiter = this.cryptoWaiters.get(machineId)
     if (waiter) { clearTimeout(waiter.timer); this.cryptoWaiters.delete(machineId); waiter.resolve() }
     // Inside the inbound queue, so what was held is read before anything that came after the welcome.
@@ -660,6 +723,7 @@ export class DeviceLink {
 
   private failCrypto(machineId: string, err: Error): void {
     if (this.sessions.get(machineId)) this.retire(machineId)
+    this.heardAt.delete(machineId)
     if (this.sessions.delete(machineId)) this.opts.seal.drop(machineId)
     this.drop(machineId, 'its session could not be made')
     const waiter = this.cryptoWaiters.get(machineId)
@@ -711,7 +775,7 @@ export class DeviceLink {
         this.opts.log(`device: a held ${frame.type ?? '?'} from ${machineId} is not from the session it renewed — dropped`)
         continue
       }
-      this.route(opened.frame as DeviceFrame)
+      this.route(opened.frame as DeviceFrame, this.answered(machineId, session, frame))
     }
   }
 
@@ -745,9 +809,11 @@ export class DeviceLink {
     // EVERY session, not just the attached machine's. The socket is what carried all of them; a session
     // left in the map after it dies would encrypt the first frame of the next connection with a key the
     // far end has already forgotten, and that frame is dropped in silence at the other end.
+    const gone = [...this.sessions.keys()]
     for (const machineId of [...this.cryptoWaiters.keys(), ...this.sessions.keys()]) {
       this.failCrypto(machineId, new Error(why))
     }
+    this.heardAt.clear()
     this.drop(null, why)
     // What was sent on this socket is unknowable now: none of it is named by a later refusal.
     this.sent.clear()
@@ -758,6 +824,8 @@ export class DeviceLink {
     this.attached = ''
     this.state = 'idle'
     try { ws?.close() } catch { /* already gone */ }
+    // Nothing reaches them until a new socket and session do: a turn meanwhile is refused, not lost.
+    for (const machineId of gone) for (const cb of this.goneListeners) cb(machineId)
   }
 
   private onClose(code: number): void {
@@ -848,9 +916,21 @@ export class DeviceLink {
         this.opts.log(`device: could not decrypt ${frame.type ?? '?'} — dropped`)
         return
       }
-      frame = opened.frame as DeviceFrame
+      this.route(opened.frame as DeviceFrame, this.answered(from, session, frame))
+      return
     }
     this.route(frame)
+  }
+
+  /**
+   * Whether a frame the gateway just opened proves its machine answered: sealed with the key this daemon shares with
+   * that machine alone (not its group key), and opened under the session that is still the machine's (one thrown away
+   * while the gateway read it proves nothing about the next). The relay cannot make such a frame, and the session's
+   * counter refuses one it replays. Returns the machine, or '' for no proof.
+   */
+  private answered(machineId: string, session: LaneSession, sealed: DeviceFrame): string {
+    const envelope = (sealed.payload as { __e2e?: { k?: unknown } } | undefined)?.__e2e
+    return envelope?.k !== 'g' && this.sessions.get(machineId) === session && session.ready ? machineId : ''
   }
 
   /**
@@ -925,8 +1005,9 @@ export class DeviceLink {
     return linked
   }
 
-  /** A frame read (opened, or never sealed): to its waiter, or to the listeners. */
-  private route(frame: DeviceFrame): void {
+  /** A frame read (opened, or never sealed): to its waiter, or to the listeners. [answered] is the machine it proves
+   *  up (`answered`), or ''. */
+  private route(frame: DeviceFrame, answered = ''): void {
     const from = typeof frame.machineId === 'string' ? frame.machineId : ''
     const type = frame.type ?? ''
     const payload = (frame.payload ?? {}) as Record<string, unknown>
@@ -961,6 +1042,13 @@ export class DeviceLink {
     }
 
     if (type.endsWith('_result')) {
+      // Said before its waiter hears the answer, so a request that ends now in an error, or ended already in a timeout,
+      // is not counted against a machine that just answered. Only the machine that sealed it: the tag names whose keys
+      // opened it.
+      if (answered && answered === from) {
+        this.heardAt.set(answered, this.now())
+        for (const cb of this.aliveListeners) cb(answered)
+      }
       const requestId = typeof payload.requestId === 'string' ? payload.requestId : ''
       const waiter = requestId ? this.pending.get(requestId) : undefined
       if (!waiter) {

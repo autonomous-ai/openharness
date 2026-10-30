@@ -131,8 +131,9 @@ export function chosenBuddyName(state: SuperTabState, chat: Conversation, owner:
   return { name: chat.title, notice: `${was} is taken now; your Buddy starts as ${chat.title}. Rename it from the ⋮ menu.` }
 }
 
-/** What a Buddy asks of its machine: it reads and talks, so the usual agent's share with git to read the project. */
-export const BUDDY_REQUIREMENTS: AgentStartRequest['requirements'] = { memoryBytes: 2 * 1024 ** 3, diskBytes: 1024 ** 3, maxCpuPercent: 85,
+/** What a Buddy asks of its machine: it reads and talks, so the usual agent's share with git to read the project. CPU use is one
+ *  momentary sample, so it is not capped, as a routed Builder's start (Diego, 10-30). */
+export const BUDDY_REQUIREMENTS: AgentStartRequest['requirements'] = { memoryBytes: 2 * 1024 ** 3, diskBytes: 1024 ** 3, maxCpuPercent: 100,
   tools: ['git'], devices: [], quotaRequired: false }
 
 /** The line a Buddy's chat shows once its session joined. */

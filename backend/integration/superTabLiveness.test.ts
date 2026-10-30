@@ -305,6 +305,19 @@ describe('work that loses its owner', () => {
       expect(await db.superTabDelivery.count({ where: { tabId: f.tab, messageId: ids.lead } })).toBe(1)
     })
 
+    it('gets no second delivery when its delivery was compacted into its receipts (spec 5 C)', async () => {
+      const f = await swarm()
+      f.clock.now += MINUTE
+      const ids = lostIds(f), compacted = stableId(ids.lead, f.lead)
+      await store(f, ids.lead, 'Stored for the Lead')
+      await db.$runCommandRaw({ update: 'SuperTabReceipt', updates: [{ q: { _id: ids.lead }, upsert: true, u: {
+        $set: { tabId: f.tab, conversationId: f.group, [`receipts.${f.lead}`]: { deliveryId: compacted, status: 'answered' } },
+        $addToSet: { deliveryIds: compacted } } }] })
+      await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
+      expect(await f.assignment()).toMatchObject({ status: 'lost' })
+      expect(await db.superTabDelivery.count({ where: { tabId: f.tab, messageId: ids.lead } })).toBe(0)
+    })
+
     it('still refuses a stored message that is not this notice', async () => {
       const f = await swarm()
       f.clock.now += MINUTE

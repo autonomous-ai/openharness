@@ -6,6 +6,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import { DeviceFleet } from './deviceFleet.js'
+import { FleetRouter } from '../services/fleetRouter.js'
 import { FleetError, type FleetEvent } from '../cable/machineFleet.js'
 import { SESSION_GONE, type DeviceFrame, type Undelivered } from './deviceLink.js'
 
@@ -21,12 +22,16 @@ function make(over: { rows?: Partial<Listed>[]; linked?: string[]; rpc?: (t: str
   const rows = listOf(over.rows ?? [{}])
   let frameCb: ((f: DeviceFrame) => void) | null = null
   let undeliveredCb: ((what: Undelivered) => void) | null = null
+  let aliveCb: ((machineId: string) => void) | null = null
+  let goneCb: ((machineId: string) => void) | null = null
   const sent: DeviceFrame[] = []
   const resets: string[] = []
   const link = {
     selectedMachine: 'm1',
     onFrame: (cb: (f: DeviceFrame) => void) => { frameCb = cb; return () => {} },
     onUndelivered: (cb: (what: Undelivered) => void) => { undeliveredCb = cb; return () => {} },
+    onAlive: (cb: (machineId: string) => void) => { aliveCb = cb; return () => {} },
+    onGone: (cb: (machineId: string) => void) => { goneCb = cb; return () => {} },
     attach: vi.fn(async () => {}),
     online: vi.fn(async () => {}),
     detach: vi.fn(),
@@ -45,7 +50,8 @@ function make(over: { rows?: Partial<Listed>[]; linked?: string[]; rpc?: (t: str
     hasPeerLink: (id: string) => (over.linked ?? ['m1']).includes(id),
     log: () => {},
   })
-  return { fleet, link, sent, resets, say: (f: DeviceFrame) => frameCb?.(f), undelivered: (what: Undelivered) => undeliveredCb?.(what) }
+  return { fleet, link, sent, resets, say: (f: DeviceFrame) => frameCb?.(f), undelivered: (what: Undelivered) => undeliveredCb?.(what),
+    alive: (machineId: string) => aliveCb?.(machineId), gone: (machineId: string) => goneCb?.(machineId) }
 }
 
 describe('DeviceFleet', () => {
@@ -106,6 +112,69 @@ describe('DeviceFleet', () => {
     await expect(fleet.listAgents('m1')).rejects.toThrow()
     // Two failures, but a success between them: a flaky link is not a gone machine.
     expect(resets).toEqual([])
+  })
+
+  // Diego, 10-30: a slow but working Mac was treated as dead. Each session drop was followed within 5-25 s by the late
+  // reply it had given up on, from the same machine (42 drops, 20 unmatched agents_list_result in a day).
+  it('keeps a slow machine reachable, with its session, once a late reply of its own comes back', async () => {
+    const { fleet, resets, alive } = make({ rpc: async () => { throw new Error('agents_list timed out') } })
+    await expect(fleet.listAgents('m1')).rejects.toThrow('timed out')
+    expect(fleet.reachable('m1')).toMatchObject({ ok: false })
+    // The reply it timed out on arrives late, opened under its session (deviceLink.ts `onAlive`).
+    alive('m1')
+    expect(fleet.reachable('m1')).toMatchObject({ ok: true })
+    // The count starts again: the next timeout is the first, not the second.
+    await expect(fleet.listAgents('m1')).rejects.toThrow('timed out')
+    expect(resets).toEqual([])
+  })
+
+  // #2387's review: B's daemon gone, a turn to its agent was sent to be lost for up to 50 s, while a list to it waited out
+  // its time. Told it went away (DeviceLink.onGone), the router refuses the turn at once, and sends again once it answers.
+  it('refuses a turn to a machine the lane says went away at once, and sends to it again once it answers', async () => {
+    const { fleet, sent, resets, alive, gone } = make({ rpc: async () => ({ agents: [{ id: 'r1', name: 'api', engine: 'claude' }] }) })
+    const log = vi.fn()
+    const router = new FleetRouter({ machineName: () => 'here', machineId: () => 'this-one', computerId: () => 'c', sessions: () => [],
+      displayName: () => '', desk: () => [], sendTurn: vi.fn(), stopTurn: vi.fn(), answer: vi.fn(), recent: () => [], recentAsks: () => [], log }, fleet)
+    await router.listAgentsFlat()
+    await vi.waitFor(async () => expect((await router.listAgentsFlat()).map((a) => a.id)).toEqual(['r1']))
+    expect(router.sendTurn('r1', 'before')).toEqual({ ok: true })
+    gone('m1')
+    expect(fleet.reachable('m1')).toMatchObject({ ok: false })
+    expect(router.sendTurn('r1', 'while it is away')).toMatchObject({ ok: false, machine: 'office-imac', reason: 'the last request to it did not come back' })
+    expect(sent.filter((frame) => frame.type === 'message').map((frame) => (frame.payload as { content?: string }).content)).toEqual(['before'])
+    // The word may be the relay's: it throws no session away and counts no miss.
+    expect(resets).toEqual([])
+    alive('m1')
+    expect(router.sendTurn('r1', 'back')).toEqual({ ok: true })
+  })
+
+  it('counts no miss for a request its machine proved alive during, however it ended', async () => {
+    let fail!: (error: Error) => void
+    const { fleet, resets, alive } = make({ rpc: () => new Promise((_resolve, reject) => { fail = reject }) })
+    for (const round of [1, 2, 3]) {
+      const asked = fleet.listAgents('m1')
+      alive('m1')
+      fail(new Error(round === 3 ? 'AGENT_NOT_FOUND' : 'agents_list timed out'))
+      await expect(asked).rejects.toThrow()
+      expect(fleet.reachable('m1'), `round ${round}`).toMatchObject({ ok: true })
+    }
+    expect(resets).toEqual([])
+  })
+
+  it('still throws away the session of a machine that proves nothing, whoever else answers', async () => {
+    let fail!: (error: Error) => void
+    const { fleet, resets, alive } = make({ rows: [{}, { machineId: 'm2', name: 'studio' }], linked: ['m1', 'm2'],
+      rpc: () => new Promise((_resolve, reject) => { fail = reject }) })
+    for (const round of [1, 2]) {
+      const asked = fleet.listAgents('m1')
+      // Another machine answering while m1's request is out says nothing about m1.
+      alive('m2')
+      fail(new Error('agents_list timed out'))
+      await expect(asked, `round ${round}`).rejects.toThrow()
+    }
+    expect(resets).toEqual(['m1'])
+    expect(fleet.reachable('m1')).toMatchObject({ ok: false })
+    expect(fleet.reachable('m2')).toMatchObject({ ok: true })
   })
 
   it('shows a turn, a stop or an answer that may not have reached its machine on that agent\'s tile, never inviting a blind resend', async () => {
@@ -291,7 +360,7 @@ describe('DeviceFleet', () => {
         find: (id: string) => rows.find((r) => r.machineId === id),
         applyLive: (r: unknown) => { applied.push(r); return true },
       } as never,
-      link: { selectedMachine: 'm1', onFrame: (cb: never) => { frameCb = cb; return () => {} }, onUndelivered: () => () => {} } as never,
+      link: { selectedMachine: 'm1', onFrame: (cb: never) => { frameCb = cb; return () => {} }, onUndelivered: () => () => {}, onAlive: () => () => {}, onGone: () => () => {} } as never,
       hasPeerLink: () => true,
       log: () => {},
     })
@@ -308,7 +377,7 @@ describe('DeviceFleet', () => {
     let frameCb!: (f: { type?: string; machineId?: string; payload?: Record<string, unknown> }) => void
     const fleet = new DeviceFleet({
       list: { list: () => ({ machines: [], source: 'backend' as const }), find: () => undefined, applyLive: () => true } as never,
-      link: { selectedMachine: 'm1', onFrame: (cb: never) => { frameCb = cb; return () => {} }, onUndelivered: () => () => {} } as never,
+      link: { selectedMachine: 'm1', onFrame: (cb: never) => { frameCb = cb; return () => {} }, onUndelivered: () => () => {}, onAlive: () => () => {}, onGone: () => () => {} } as never,
       hasPeerLink: () => true,
       log: () => {},
     })
