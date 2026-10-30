@@ -2,7 +2,8 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
 import { ProjectFolderError, RepositoryAccessError } from '../lib/projectFolder.js'
-import { prepareSwarmProject, prepareSwarmStart, startGitHub } from './projectFolder.js'
+import { PrepareRetryError, prepareSwarmProject, prepareSwarmStart, startGitHub } from './projectFolder.js'
+import { SuperTabHostError } from './wire.js'
 
 function fixture() {
   const core = fakeCore({ dataDir: '/isolated-project-fixture' })
@@ -158,7 +159,7 @@ describe('preparing another person\'s start with the Harness GitHub App', () => 
   })
 
   it('fails the start when the backend refuses a token, and never prepares it with the owner\'s login instead', async () => {
-    for (const answer of [new Error('The Harness GitHub App is not installed on example/project.'), { github: true }, { github: true, token: TOKEN, repository: 'x', requestedBy: {} }, 'nonsense']) {
+    for (const answer of [new SuperTabHostError('GITHUB_APP_NOT_INSTALLED', 'The Harness GitHub App is not installed on example/project.', 409), { github: true }, { github: true, token: TOKEN, repository: 'x', requestedBy: {} }, 'nonsense']) {
       const f = hosted(answer)
       await expect(f.ready()).rejects.toThrow(answer instanceof Error ? answer.message : 'answered without a GitHub token')
       expect(f.prepare).not.toHaveBeenCalled()
@@ -167,6 +168,35 @@ describe('preparing another person\'s start with the Harness GitHub App', () => 
     const noIds = hosted()
     ;(noIds.start as { id?: string }).id = undefined
     await expect(noIds.ready()).rejects.toThrow('cannot be prepared')
+  })
+
+  // Diego's Mac, 2026-10-30: a backend timeout on the token call failed the start at once. Only an answer the backend decided
+  // (a 4xx, or no app on the server: github.ts `decided`) is a refusal; anything else is for the host to try again.
+  it('tells a token call the backend decided from one that got no answer, which is tried again, and prepares nothing', async () => {
+    const retried = [new SuperTabHostError('BACKEND_TIMEOUT', 'The Harness server did not answer in time.', 504), new SuperTabHostError('BACKEND_UNAVAILABLE', 'Bad gateway.', 502),
+      new Error('fetch failed')]
+    for (const error of retried) {
+      const f = hosted(error)
+      const thrown = await f.ready(true).catch(caught => caught)
+      expect([thrown instanceof PrepareRetryError, thrown.message]).toEqual([true,
+        `This machine could not get a Harness GitHub App token for this project, so it was not prepared with its owner's own GitHub login either: ${error.message}${error instanceof SuperTabHostError ? ` (${error.code})` : ''}`])
+      expect([f.prepare.mock.calls.length, f.fetch.mock.calls.length, f.revoke.mock.calls.length]).toEqual([0, 0, 0])
+    }
+    for (const error of [new SuperTabHostError('FORBIDDEN', 'Not this machine\'s start.', 403), new SuperTabHostError('UPDATE_REQUIRED', 'Update Harness.', 426),
+      new SuperTabHostError('GITHUB_APP_NOT_CONFIGURED', 'No GitHub App.', 503)]) {
+      const thrown = await hosted(error).ready(true).catch(caught => caught)
+      expect([thrown instanceof PrepareRetryError, thrown.message]).toEqual([false,
+        `This machine could not get a Harness GitHub App token for this project, so it was not prepared with its owner's own GitHub login either: ${error.message}`])
+    }
+  })
+
+  // Kept out of this change by its Lead (10-30): a default branch that could not be fetched never fails or holds a start; the
+  // worktree starts from what the checkout has, as before.
+  it('starts from what the checkout has when the default branch could not be fetched', async () => {
+    const f = hosted()
+    f.fetch.mockResolvedValueOnce(false)
+    expect(await f.ready(true)).toEqual({ requester: 'olive@example.com' })
+    expect(f.revoke.mock.calls).toEqual([[TOKEN]])
   })
 
   it('a clone the token cannot make says so, and is not tried again another way', async () => {

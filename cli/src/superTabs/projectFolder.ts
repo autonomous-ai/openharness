@@ -3,7 +3,8 @@ import type { CoreApi } from '../core/api.js'
 import { fetchDefaultBranch } from '../lib/gitProject.js'
 import { otherGitHubTransport, parseProjectFolder, prepareProjectFolder, ProjectFolderError, RepositoryAccessError } from '../lib/projectFolder.js'
 import { revokeGitHubToken, swarmGitPrepareEnv } from '../lib/swarmGitHub.js'
-import { identifier, object } from './wire.js'
+import { identifier, object, SuperTabHostError } from './wire.js'
+import { decided } from './github.js'
 import { repairSwarmCloneTrust, swarmCloneRoot } from './cloneTrust.js'
 
 type Json = Record<string, unknown>
@@ -15,13 +16,19 @@ export interface StartGitHub { token: string; repository: string; requester: str
 const NO_APP_ON_TEAM = 'This Harness server has no GitHub App, and a Harness Team account has no git login of its own, so it cannot fetch '
   + 'the project. Ask the server\'s administrator to set up the Harness GitHub App (docs/swarm-github-app.md).'
 
+/** A start this machine could not prepare yet, as the Harness server gave no answer (a timeout, a 5xx, no connection), which
+ *  decides nothing: its host tries again on its next pass, and fails the start only once it has kept failing for as long as
+ *  a refused start (superTabs/machines.ts). Diego's Mac, 2026-10-30: one backend timeout on the token call failed a start. */
+export class PrepareRetryError extends Error {}
+
 /**
  * Whether a queued start on this machine is prepared with the Harness GitHub App's token instead of this machine's own git
  * login, and that token (docs/swarm-github-app.md). Asked of the backend, which knows whose project it is: another person's
  * project gets a token that only reads its repository; the machine owner's own project answers none, and the owner's login
  * prepares it as before. A Harness Team account ([team]) has no login, so it always asks for one. A server without the app
  * gives none: an owner's machine prepares as before, as its agents then also use its own login; a team account cannot.
- * Anything the backend refuses is thrown, to fail the start: never this machine's own login instead.
+ * Anything the backend refuses is thrown, to fail the start; a call it gave no answer to, as a PrepareRetryError: never this
+ * machine's own login instead.
  */
 export async function startGitHub(core: CoreApi, row: Json, start: Json, deps: { backend: Backend; team: boolean }): Promise<StartGitHub | null> {
   const machineId = core.daemon.machineId()
@@ -34,8 +41,10 @@ export async function startGitHub(core: CoreApi, row: Json, start: Json, deps: {
   try {
     answer = object(await deps.backend(core, 'POST', `/api/super-tabs/hosts/${machineId}/starts/${row.tabId}/${start.id}/github-token`, deps.team ? { always: true } : {}))
   } catch (error) {
-    const said = error instanceof Error ? error.message : String(error)
-    throw new Error(`This machine could not get a Harness GitHub App token for this project, so it was not prepared with its owner's own GitHub login either: ${said}`)
+    const said = `This machine could not get a Harness GitHub App token for this project, so it was not prepared with its owner's own GitHub login either: ${error instanceof Error ? error.message : String(error)}`
+    // Only an answer the backend decided is a refusal, by the rule a session's own token follows (github.ts `decided`).
+    if (error instanceof SuperTabHostError && decided(error)) throw new Error(said)
+    throw new PrepareRetryError(error instanceof SuperTabHostError ? `${said} (${error.code})` : said)
   }
   if (answer.github === false && !deps.team) return null
   const requester = object(answer.requestedBy).email
