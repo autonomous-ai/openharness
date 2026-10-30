@@ -427,8 +427,10 @@ describe('the inbox\'s caps', () => {
   it(`answers the latest message of the ${LATEST_CHATS} most recently active chats and says there are more`, async () => {
     const s = await scene(f => { for (let i = 0; i < LATEST_CHATS; i++) f.group(`Chat ${i}`) })
     const chats = (await store.readLoad(peer, s.tabId)).state.conversations.filter(c => c.title.startsWith('Chat ')).map(c => c.id)
+    // Web and Leads get a message first, so they are the oldest active of LATEST_CHATS + 2 chats with a latest message.
+    await insert(s.tabId, s.web, [{ text: 'Older in Web', author: personAuthor(owner) }])
+    await insert(s.tabId, s.leads, [{ text: 'Older in Leads', author: personAuthor(owner) }])
     for (const chat of chats) await insert(s.tabId, chat, [{ text: `Latest in ${chat}`, author: personAuthor(owner) }])
-    // Web and Leads are now the oldest active of LATEST_CHATS + 2 readable chats.
     const { body } = await inbox(s.tabId, peer)
     expect(body.data.latest).toHaveLength(LATEST_CHATS)
     expect(new Set(body.data.latest.map((l: any) => l.conversationId))).toEqual(new Set(chats))
