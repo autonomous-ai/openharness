@@ -54,6 +54,15 @@ class SwarmTeamGlance {
       : parts.isEmpty
       ? 'All idle'
       : parts.map((part) => part.text).join(' · ');
+
+  /// "5 agents running", counting who [working] counts: what a project's row
+  /// on Home says of its team.
+  late final String running = switch (working) {
+    _ when agents.isEmpty => 'No agents yet',
+    0 => 'No agents running',
+    1 => '1 agent running',
+    final n => '$n agents running',
+  };
 }
 
 const _finished = {'done', 'stopped', 'cancelled'};

@@ -10,12 +10,14 @@ import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 
+import 'model.dart';
 import 'swarm_connection_notice.dart';
 import 'swarm_conversation_page.dart' show openSwarmConversation;
 import 'swarm_home_list.dart';
 import 'swarm_home_rows.dart';
 import 'swarm_home_top.dart';
 import 'swarm_inbox.dart';
+import 'swarm_leaderboard.dart' show swarmProjectPeople;
 import 'swarm_needs_page.dart';
 import 'swarm_new_message_sheet.dart';
 import 'swarm_new_project_sheet.dart';
@@ -436,6 +438,7 @@ class _SwarmPageState extends State<SwarmPage> {
     final several = shown.length > 1;
     final projects = <SwarmHomeProject>[];
     final glances = <String, SwarmTeamGlance>{};
+    final people = <String, List<SuperTabPerson>>{};
     final names = <String, String>{};
     final reading = <String>[];
     final failed = <(String, String)>[];
@@ -454,6 +457,7 @@ class _SwarmPageState extends State<SwarmPage> {
             );
             projects.add(row);
             glances[row.key] = swarmTeamGlance(snapshot, projectId: project.id);
+            people[row.key] = swarmProjectPeople(snapshot, project);
             names[row.key] = swarm.name;
           }
         case SwarmReader(error: final error?):
@@ -467,6 +471,7 @@ class _SwarmPageState extends State<SwarmPage> {
       key: ValueKey('swarm-project-${project.swarmId}-${project.project.id}'),
       project: project,
       glance: glances[project.key]!,
+      people: people[project.key]!,
       now: now,
       swarmName: several ? names[project.key] : null,
       onTap: () => _openProject(context, project.swarmId, project.project.id),

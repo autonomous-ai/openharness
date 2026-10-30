@@ -12,8 +12,8 @@ typedef SwarmHomeSwarm = ({
 
 /// [snapshot] thinned to what Home draws: its projects, its agents by name,
 /// engine and status, each conversation's title, project, people, work
-/// status and when it last changed, and the built-in pictures people and
-/// agents wear. Nothing a chat
+/// status and when it last changed, people's usernames, and the built-in
+/// pictures people and agents wear. Nothing a chat
 /// holds — no message, brief, check, task, question or email, no photo or
 /// status — nor machines, starts or what waits on the person, which come
 /// with the next read. [buddies] marks the Buddy chats and Buddies, so none
@@ -33,7 +33,13 @@ SwarmHomeSwarm swarmHomeSwarm(
     'projects': [for (final p in snapshot.projects) _project(p)],
     'people': [
       for (final p in snapshot.people)
-        {'id': p.id, 'email': '', 'role': p.role, 'avatar': ?_preset(p.avatar)},
+        {
+          'id': p.id,
+          'email': '',
+          'username': ?p.chosenUsername,
+          'role': p.role,
+          'avatar': ?_preset(p.avatar),
+        },
     ],
     'agents': [
       for (final a in snapshot.agents)
