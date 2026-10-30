@@ -417,6 +417,8 @@ export const NOTICE_READERS = {
   'auto-archive': 'people', native: 'people',
   // The nightly routing reflection, for the project's people; never a Buddy's (buddies.ts routingRow).
   'routing-reflection': 'people',
+  // No new Reviewer can start, or soon none will, tagging who can fix it (reviewCapacity.ts).
+  'review-capacity': 'people',
   // #2177's rulings: a failed start and a terminal's alert or typed input stay the people's to see.
   'start-timeout': 'people', 'terminal-alert': 'people', 'terminal-input': 'people',
 } as const satisfies Record<string, 'people' | 'recipients' | 'agent'>

@@ -16,11 +16,12 @@ import 'package:harness_mobile/swarm/swarm_session.dart';
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 
-/// Review screenshots of Swarm Home, direction B, as Tony's prototype B1 and
-/// B3 draw it (2026-10-29) — Needs you, Pinned, Projects by latest activity
-/// with the quiet ones folded, an unread project and a tagged one — then
-/// its slim drawer and the Needs you page, in both phone themes, from
-/// made-up Swarm data only, to the folder `SWARM_HOME_SHOTS` names.
+/// Review screenshots of Swarm Home, direction C, as Tony's prototype C1
+/// draws it (2026-10-30) — over two Swarms, back after an hour away:
+/// While you were away, Pinned, Projects by latest activity with the quiet
+/// ones folded, an unread project and a tagged one — then its switcher, in
+/// both phone themes, from made-up Swarm data only, to the folder
+/// `SWARM_HOME_SHOTS` names.
 final shots = Platform.environment['SWARM_HOME_SHOTS'];
 void main() {
   setUpAll(() async {
@@ -48,9 +49,7 @@ void main() {
     }
   });
 
-  testWidgets('Home, its drawer and Needs you, in both phone themes', (
-    tester,
-  ) async {
+  testWidgets('Home and its switcher, in both phone themes', (tester) async {
     const other = 'tab-2';
     await tester.binding.setSurfaceSize(const Size(390, 844));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -266,7 +265,9 @@ void main() {
         features: features,
         readMarks: MemoryKeyValueStore(),
       )..foreground = false;
-      host.session!.home.pin(tab, 'p-oh', true);
+      host.session!.home
+        ..pin(tab, 'p-oh', true)
+        ..seen(now.subtract(const Duration(hours: 1)));
       final boundary = GlobalKey();
       await tester.pumpWidget(
         RepaintBoundary(
@@ -275,8 +276,7 @@ void main() {
             debugShowCheckedModeBanner: false,
             theme: buildAppTheme(brightness: brightness),
             builder: (_, child) => SwarmScope(notifier: host, child: child!),
-            // Settings at the drawer's foot, as the shell has it.
-            home: SwarmPage(onSettings: (_) {}),
+            home: const SwarmPage(),
           ),
         ),
       );
@@ -311,7 +311,7 @@ void main() {
                     as RenderRepaintBoundary)
                 .toImage(pixelRatio: 3);
         final png = await image.toByteData(format: ui.ImageByteFormat.png);
-        await File('$shots/home-b-$name-${brightness.name}.png')
+        await File('$shots/home-c-$name-${brightness.name}.png')
             .writeAsBytes(png!.buffer.asUint8List());
         image.dispose();
       });
@@ -319,14 +319,9 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('swarm-other-projects')));
       await tester.pumpAndSettle();
       await capture('home-quiet-open');
-      await tester.tap(find.byKey(const ValueKey('swarm-menu')));
+      await tester.tap(find.byKey(const ValueKey('swarm-title-button')));
       await tester.pumpAndSettle();
-      await capture('drawer');
-      await tester.tap(find.byKey(const ValueKey('swarm-drawer-close')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('swarm-needs-all')));
-      await tester.pumpAndSettle();
-      await capture('needs');
+      await capture('switcher');
       await tester.pumpWidget(const SizedBox());
       host.dispose();
       account.dispose();

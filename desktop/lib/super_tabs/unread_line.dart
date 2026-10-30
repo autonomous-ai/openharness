@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -51,8 +52,22 @@ class SuperTabUnreadLines {
   /// The line on screen, to tell whether it is scrolled out of view.
   final key = GlobalKey(debugLabel: 'New messages line');
 
-  /// Whether the reader is scrolled away from the line, so the jump pill shows.
-  bool away = false;
+  /// Whether the reader is scrolled away from the line, and whether it is
+  /// below them.
+  bool away = false, below = false;
+
+  /// Conversations whose line has been in view this visit.
+  final _seen = <String>{};
+
+  /// [id]'s line came into view: reading on needs no way back to it.
+  void saw(String id) => _seen.add(id);
+
+  /// Whether [id]'s line has been in view this visit.
+  bool seen(String id) => _seen.contains(id);
+
+  /// Whether [id] offers the jump back to its line: placed, out of view, and
+  /// not yet seen this visit (a link opened the chat elsewhere).
+  bool offersJump(String id) => away && _at[id] != null && !_seen.contains(id);
 
   /// The message [id]'s line sits above, or null.
   String? lineAt(String id) => _at[id];
@@ -118,15 +133,16 @@ class SuperTabUnreadLines {
     _loading.remove(id);
     _loaded.remove(id);
     _failed.remove(id);
+    _seen.remove(id);
     catchUps.forget(id);
-    away = false;
+    away = below = false;
   }
 
   /// Read with Esc: no line or card until the next visit.
   void clear(String id) {
     _at[id] = null;
     catchUps.dismiss(id);
-    away = false;
+    away = below = false;
   }
 
   void reset() {
@@ -134,8 +150,9 @@ class SuperTabUnreadLines {
     _loading.clear();
     _loaded.clear();
     _failed.clear();
+    _seen.clear();
     catchUps.reset();
-    away = false;
+    away = below = false;
   }
 }
 
@@ -175,17 +192,74 @@ class SuperTabNewMessagesLine extends StatelessWidget {
   }
 }
 
-/// Shown while the New messages line is scrolled out of view: takes the reader back to it.
+/// Shown while the New messages line, not yet seen this visit, is out of view: takes the reader back to it.
 class SuperTabJumpToUnread extends StatelessWidget {
-  const SuperTabJumpToUnread({super.key, required this.onPressed});
+  const SuperTabJumpToUnread({
+    super.key,
+    required this.onPressed,
+    this.down = false,
+  });
 
   final VoidCallback onPressed;
+
+  /// The line is below the reader (a link opened the chat above it).
+  final bool down;
 
   @override
   Widget build(BuildContext context) => FilledButton.icon(
     key: const ValueKey('super-jump-unread'),
     onPressed: onPressed,
-    icon: const Icon(AppIcons.chevronUp, size: grid.AppDesktop.iconSize),
+    icon: Icon(
+      down ? AppIcons.chevronDown : AppIcons.chevronUp,
+      size: grid.AppDesktop.iconSize,
+    ),
     label: const Text('Jump to first unread'),
   );
+}
+
+/// The jump pill's place above the list ([child], or nothing). When it opens
+/// or closes, [scroll] moves by the same height in that frame, so the messages
+/// under the reader's eye stay where they were.
+class SuperTabUnreadBand extends SingleChildRenderObjectWidget {
+  const SuperTabUnreadBand({super.key, required this.scroll, super.child});
+
+  final ScrollController? scroll;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) =>
+      RenderSuperTabUnreadBand(scroll);
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    RenderSuperTabUnreadBand renderObject,
+  ) => renderObject.scroll = scroll;
+}
+
+class RenderSuperTabUnreadBand extends RenderProxyBox {
+  RenderSuperTabUnreadBand(this.scroll);
+
+  ScrollController? scroll;
+  double? _height;
+
+  @override
+  void performLayout() {
+    super.performLayout();
+    final previous = _height;
+    _height = size.height;
+    final scroll = this.scroll;
+    if (previous == null ||
+        previous == size.height ||
+        scroll == null ||
+        !scroll.hasClients ||
+        !scroll.position.hasPixels) {
+      return;
+    }
+    // Laid out before the list below it, which then takes the corrected
+    // offset: the list's top moves by the change, and the messages do not.
+    // Only the view's edge moves, not the content, so this is not a
+    // correctBy (which moves the place the chat's list keeps as well).
+    final position = scroll.position;
+    position.correctPixels(position.pixels + size.height - previous);
+  }
 }

@@ -60,7 +60,7 @@ import { closeAssignment, closeUnassignedStart, readDecision, recentDecisions, r
 import { dropHeldTags, listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByReply, resolveWhenWorked, writeMentions } from './mentions.js'
 import { answerable, askDecisions, MAX_OPEN_DECISIONS, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingFor, waitingIn, waitingInProject, writeDecisions } from './decisions.js'
 import { CATCH_UP_SCAN, catchUpSummary, type CatchUp } from './catchUp.js'
-import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
+import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySaveSchema, type RoutingPolicy } from './routingPolicy.js'
 import { invitedSwarms } from './invitedSwarms.js'
 import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSchema, requireSharingOwner,
   saveSharingSchema, sharingDetails, type JoinSwarm, type SaveSharing } from './sharing.js'
@@ -138,7 +138,9 @@ function deliveryTouches(delivery: SuperTabDelivery, state: SuperTabState): Touc
   // A Buddy receives only while its person reads there (buddyNews.ts): their part guards the delivery, so taking the
   // project from them while a claim is in flight makes it check again (security review 1 of #2178).
   const person = state.agents.find(a => a.id === delivery.agentId)?.buddyOf?.personId
-  if (person) touches.push({ kind: 'member', key: person })
+  // In the Buddy's own chat its person is also the sender: one part is touched once, or the claim's second guarded write of
+  // the same part version conflicts every retry and no message of theirs ever reaches the Buddy (prod 10-30, v1.3.71).
+  if (person && !touches.some(t => t.kind === 'member' && t.key === person)) touches.push({ kind: 'member', key: person })
   return touches
 }
 
@@ -558,7 +560,7 @@ export class SuperTabStore {
 
   async saveAccountPolicy(user: AuthUser, revision: number, input: RoutingPolicy) {
     this.personOnly(user)
-    const policy = routingPolicySchema.parse(input)
+    const policy = routingPolicySaveSchema.parse(input)
     return transaction(this.db, async tx => {
       const id = this.policyId(user)
       const row = await tx.routingPolicy.findUnique({ where: { id } })

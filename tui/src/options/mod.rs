@@ -100,12 +100,14 @@ pub fn defaults() -> &'static BTreeMap<String, String> {
         // has it] when another window has the pane to type in, and its project and branch
         // where there is room. Git context stays here; the status bar keeps the location cue.
         m.insert("pane-border-format".into(), " #{pane_heading}#{?pane_where,#[align=right] #[dim]#{pane_where} #[nodim],}".into());
-        // Window navigation on the left; connection, a model being got, quota, fleet, machine and
-        // clock on the right. The quoted name is this computer's name in Harness, independent of focus.
+        // Window navigation on the left; connection, a model being got, quota, machine and clock
+        // on the right. (No harness counts: each window's mark and the harness list say them;
+        // #{fleet} is there for a format of your own.) The quoted name is this computer's name
+        // in Harness, independent of focus.
         // One cell at each outer edge aligns status text with the pane surfaces.
         // Two spaces separate the window list from the information on the right.
         m.insert("status-left".into(), " #{?client_prefix,#[bold]›#[nobold] ,}".into());
-        m.insert("status-right".into(), "  #{?hn_controls,#{hn_controls}  ,}#{?daemon_down,#[bold]daemon down#[nobold]  ,}#{?model_progress,#{model_progress}  ,}#{?usage_remaining,#{usage_remaining_mark}  ,}#{?fleet,#{s/ /  /:fleet}  ,}#{?pane_watching,[watching]  ,}#{?shell_context,#{=/36/…:shell_context},\"#{=/21/…:local_machine}\"}  %H:%M ".into());
+        m.insert("status-right".into(), "  #{?hn_controls,#{hn_controls}  ,}#{?daemon_down,#[bold]daemon down#[nobold]  ,}#{?model_progress,#{model_progress}  ,}#{?usage_remaining,#{usage_remaining_mark}  ,}#{?pane_watching,[watching]  ,}#{?shell_context,#{=/36/…:shell_context},\"#{=/21/…:local_machine}\"}  %H:%M ".into());
         // Each window's most urgent harness at a glance (the symbol its pane titles show) and its
         // name in a few whole words (#{window_short_name}): a harness is named for its task.
         // Keep tmux's familiar current/previous markers beside the name, then any other

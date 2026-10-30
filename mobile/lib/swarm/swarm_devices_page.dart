@@ -14,7 +14,7 @@ import 'swarm_session.dart';
 import 'swarm_start.dart';
 import 'swarm_style.dart';
 
-/// Your devices, from the drawer: the account's computers, each online or
+/// Your devices, from You: the account's computers, each online or
 /// not, from the list Swarm's start screens read ([SwarmComputers]); then
 /// each Swarm's machines, which its people lend it, with what each can do
 /// and runs ([SwarmMachinesSection]) — the drawer's until it went slim (Lead,

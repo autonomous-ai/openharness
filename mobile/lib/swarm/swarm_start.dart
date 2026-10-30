@@ -239,7 +239,7 @@ Future<void> _showHow(BuildContext context) => Navigator.of(
   rootNavigator: true,
 ).push(phoneSheetRoute<void>(context, builder: (_) => const _HowSheet()));
 
-/// The drawer's Join or create a Swarm: the phone makes no Swarm and sends
+/// The switcher's Join or create a Swarm: the phone makes no Swarm and sends
 /// no invitation, so the same sheet, with how one is joined too.
 Future<void> showSwarmJoinOrCreate(BuildContext context) =>
     Navigator.of(context, rootNavigator: true).push(

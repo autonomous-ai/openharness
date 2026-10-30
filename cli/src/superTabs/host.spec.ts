@@ -14,7 +14,7 @@ import { hostForm, swarmReply } from './fixtures/read/index.js'
 import { CONTINUE } from './limitResume.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
-import { retainedHarnesses, retentionFile } from './retention.js'
+import { mayBeBuddy, retainedHarnesses, retentionFile } from './retention.js'
 import { observerSource } from './observers.js'
 import { ContributedMachines } from './machines.js'
 import { createAccountHttp } from '../gateway/accountHttp.js'
@@ -2519,6 +2519,52 @@ describe('closing the sessions the backend ends', () => {
     for (let i = 0; i < 3; i++) await t.poll(60_000)
     expect(t.closeMember).toHaveBeenCalledTimes(1)
     expect(t.commands).toHaveLength(1)
+  })
+
+  // Diego, 10-30: removing an agent or deleting its project left its worktree to the weekly sweep, up to a week later. It goes
+  // once its close is acknowledged, under the stopped worker's own rules (machines.ts removeStoppedWorktree).
+  it('removes the ended session\'s worktree only once its close is acknowledged, and a failed removal is only logged', async () => {
+    const removeWorktree = vi.spyOn(ContributedMachines.prototype, 'removeStoppedWorktree').mockRejectedValue(new Error('git refused'))
+    try {
+      const t = lifeFixture([ended()])
+      const backend = t.core.account.backend
+      let refused = 1
+      const removalsAtAck: number[] = []
+      t.core.account.backend = async (method, path, body) => {
+        if ((body as any)?.command?.type !== 'agent.sessionClosed') return backend(method, path, body)
+        removalsAtAck.push(removeWorktree.mock.calls.length)
+        return refused-- > 0 ? { status: 503, body: { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'down' } } } : backend(method, path, body)
+      }
+      await t.poll()
+      // Not acknowledged: the worktree stays.
+      await vi.waitFor(() => expect(t.log).toHaveBeenCalledWith('down'))
+      expect(removeWorktree).not.toHaveBeenCalled()
+      await t.poll(5_000)
+      await vi.waitFor(() => expect(removeWorktree).toHaveBeenCalledWith('tab', 'harness'))
+      expect(removalsAtAck).toEqual([0, 0])
+      await vi.waitFor(() => expect(t.log).toHaveBeenCalledWith('Kept the worktree of an ended session: WORKTREE_REMOVAL_FAILED'))
+      for (let i = 0; i < 3; i++) await t.poll(60_000)
+      expect(removeWorktree).toHaveBeenCalledTimes(1)
+      expect(t.closeMember).toHaveBeenCalledTimes(1)
+      expect(t.commands).toHaveLength(1)
+    } finally { removeWorktree.mockRestore() }
+  })
+
+  // Diego, 10-30: a close never stops a Buddy, yet its person removing it must. The host drops the Buddy from what it keeps
+  // before it closes the session, so the core's close guard no longer names it when the close arrives.
+  it('closes a Buddy its person removed, which the close guard no longer names by then', async () => {
+    const buddy = { tabId: 'tab', active: false, agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1', buddyOf: { personId: 'diego', generation: 'g1' } } }
+    const t = lifeFixture([buddy])
+    const guardAtClose: boolean[] = []
+    t.closeMember.mockImplementation(async () => { guardAtClose.push(mayBeBuddy(t.core.dataDir, 'harness')); return { closed: true as const } })
+    await t.poll()
+    expect([mayBeBuddy(t.core.dataDir, 'harness'), retainedHarnesses(t.core.dataDir).has('harness')]).toEqual([true, true])
+    expect(t.closeMember).not.toHaveBeenCalled()
+    t.rows.splice(0, 1, ended({ active: false }))
+    await t.poll()
+    await vi.waitFor(() => expect(t.commands).toHaveLength(1))
+    expect(guardAtClose).toEqual([false])
+    expect(t.closeMember).toHaveBeenCalledWith('harness', undefined)
   })
 
   // Lead, 10-30: a Buddy removed, its person gone from the Swarm, or its chat purged with its project: the Swarm ends its
