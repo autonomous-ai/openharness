@@ -345,10 +345,10 @@ Mockup: `devices/harness-pro/mockup/pro-swarm-parity/index.html` in the main che
 
 - [ ] **Step 1: Write the failing tests**
   - `avatar_cells_mirror`: `cells` with only bit 0 lights columns 0 and 4 of row 0, so exactly 2 cell rects.
-  - `avatar_bit7_centre`: bit 7 lights only row 2 col 2.
+  - `avatar_bit7_centre`: bit 8 lights only row 2 col 2 (bit 7 is row 2, cols 1 and 3).
   - `avatar_parity_with_desktop`: `cells = 25513` (the daemon spec's Buddy) lights exactly the cells of this grid,
     rows top to bottom, which is desktop `superTabAgentPattern`'s mirror of those bits:
-    `#...#`, `#.#.#`, `.###.`, `#...#`, `.###.` (17 cell rects).
+    `#...#`, `#.#.#`, `.###.`, `#...#`, `.###.` (13 cell rects).
 - [ ] **Step 2: Run** `run.sh` → FAIL (undefined symbol).
 - [ ] **Step 3: Implement** with `pod_draw` / `pro_canvas` primitives only, staying under the 4096 B frame cap.
 - [ ] **Step 4: Run** `run.sh` → PASS.

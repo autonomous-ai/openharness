@@ -1690,6 +1690,37 @@ int main(void) {
         ph_toast(&F, &M, u, t0, t0 + 1000);
         CHECK(text_run("harness") && !text_prefix("\xc2\xb7"));
     }
+
+    {   // The Buddy's avatar (ph_avatar.c): the desktop's 15-bit agent pattern, mirrored, on a disc.
+        const int X = 100, Y = 200, D = 120, CELL = 13, OX = X + (D - 5 * CELL) / 2, OY = Y + (D - 5 * CELL) / 2;
+        const uint32_t col = 0xB79CFF;
+        uint16_t sets[4] = { 1, 1 << 8, 25513, 1 << 7 };
+        for (int k = 0; k < 4; k++) {
+            fresh();
+            ph_buddy_avatar(&S, X, Y, D, sets[k], col, PH_GROUND);
+            bool lit[5][5] = { { false } };
+            int n = 0;
+            for (int i = 0; i < S.count; i++) {
+                const ht_run_t *r = &S.runs[i];
+                if (r->pro_kind != K_RECT_AA || r->w != CELL) continue;
+                CHECK(r->fg == ht_rgb(col) && r->pro_height == CELL);
+                int c = (r->x - OX) / CELL, rw = (r->y - OY) / CELL;
+                CHECK(c >= 0 && c < 5 && rw >= 0 && rw < 5 && r->x == OX + c * CELL && r->y == OY + rw * CELL);
+                lit[rw][c] = true; n++;
+            }
+            if (k == 0) CHECK(n == 2 && lit[0][0] && lit[0][4]);   // avatar_cells_mirror
+            if (k == 3) CHECK(n == 2 && lit[2][1] && lit[2][3]);   // avatar_bit7: row 2 index 1 mirrors to columns 1 and 3 (the desktop's half[row * 3 + column])
+            if (k == 1) CHECK(n == 1 && lit[2][2] && abs(OX + 2 * CELL + CELL / 2 - (X + D / 2)) <= 1);   // within a pixel of the disc centre   // avatar_bit7_centre (bit 8: row 2, index 2, the middle column)
+            if (k == 2) {   // avatar_parity_with_desktop
+                const char *g[5] = { "#...#", "#.#.#", ".###.", "#...#", ".###." };
+                CHECK(n == 13);   // the plan says 17; the grid it lists has 13 lit cells
+                for (int rw = 0; rw < 5; rw++) for (int c = 0; c < 5; c++) CHECK(lit[rw][c] == (g[rw][c] == '#'));
+            }
+        }
+        fresh();
+        ph_buddy_avatar(&S, X, Y, D, 0x7FFF, col, PH_GROUND);
+        CHECK(S.count <= 27);   // avatar_run_count
+    }
     printf("test_ph_views: %d checks ok\n", checks);
     return 0;
 }
