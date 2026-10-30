@@ -62,3 +62,22 @@ it('names each request by its route pattern, never its URL', async () => {
   expect(JSON.stringify(logs)).not.toMatch(/alice|bob|hunter2|nowhere/)
   await app.close()
 })
+
+it('counts each route by kind of client, from its user agent and whether it reads as an agent, never the agent itself', async () => {
+  const app = Fastify()
+  const logs: Logged[] = []
+  const l = registerRouteLatency(app, { pod: 'pod-1', log: (message, context) => logs.push({ message, context }) })
+  app.get('/api/items', async () => ({ ok: true }))
+  const as = (ua: string, url = '/api/items') => app.inject({ method: 'GET', url, headers: { 'user-agent': ua } })
+  await as('Mozilla/5.0 (Macintosh) Chrome/130')
+  await as('Dart/3.5 (dart:io)')
+  await as('Dart/3.5 (dart:io)')
+  await as('node')
+  await as('undici', '/api/items?asAgentId=agent-secret-7')
+  await as('curl/8.4')
+  l.flush()
+  expect((logs[0]!.context.routes as Record<string, { clients: Record<string, number> }>)['GET /api/items']!.clients)
+    .toEqual({ web: 1, app: 2, cli: 1, agent: 1, other: 1 })
+  expect(JSON.stringify(logs)).not.toMatch(/agent-secret|curl|Chrome/)
+  await app.close()
+})
