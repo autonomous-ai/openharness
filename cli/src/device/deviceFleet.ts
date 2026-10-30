@@ -10,7 +10,7 @@ import { FleetError, type FleetEvent, type FleetMachine, type MachineFleet } fro
 import type { CableAgent } from '../cable/cableSession.js'
 import type { RecentTurn } from '../cable/cableHost.js'
 import type { MachineListCache } from './machineList.js'
-import type { DeviceFrame, DeviceLink } from './deviceLink.js'
+import { SESSION_GONE, type DeviceFrame, type DeviceLink, type Undelivered } from './deviceLink.js'
 
 /** How long the socket lingers after the dial goes back to local, so flicking between two machines does
  *  not pay a full dial each way. Mirrors RemoteRelayPool's own linger for the same reason. */
@@ -18,6 +18,19 @@ const LINGER_MS = 60_000
 
 /** Consecutive failed round trips before a machine's E2EE session is thrown away — see `rpc()`. */
 const RESET_AFTER_FAILURES = 2
+
+/**
+ * Requests that only read, asked once more when their machine's session went before the answer came. The
+ * far daemon restarted and never saw them, so a second ask is the same question; a write is never repeated.
+ */
+const READS = new Set(['agents_list', 'agent_recent', 'models_list'])
+
+/** What the dial's tile says for a turn, stop or answer that did not reach its machine. */
+function notDelivered(type: string, name: string): string {
+  if (type === 'cancel') return `Stop not delivered to ${name}.`
+  if (type === 'question_response') return `Answer not delivered to ${name}. Answer again.`
+  return `Not delivered to ${name}. Send it again.`
+}
 
 /** Split `runtime-v1:<sid>:<engine>:<model>@<effort>` into the two words the dial's chips show. */
 function chipsFromProfile(profile: unknown): { model?: string; effort?: string } {
@@ -73,6 +86,7 @@ export class DeviceFleet implements MachineFleet {
 
   constructor(private readonly opts: DeviceFleetOpts) {
     this.opts.link.onFrame((frame) => this.onFrame(frame))
+    this.opts.link.onUndelivered((what) => this.onUndelivered(what))
   }
 
   async list(): Promise<{ machines: FleetMachine[]; source: 'backend' | 'local' | 'signed-out' }> {
@@ -177,13 +191,16 @@ export class DeviceFleet implements MachineFleet {
    * Every RPC goes through here so `reachable()` reads a fact rather than a guess. It rethrows
    * untouched — this is a witness, not a handler.
    */
-  private async rpc(machineId: string, type: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+  private async rpc(machineId: string, type: string, payload: Record<string, unknown>, again = false): Promise<Record<string, unknown>> {
     try {
       const res = await this.opts.link.rpc(type, payload, machineId)
       this.health.set(machineId, { ok: true, at: Date.now() })
       this.misses.delete(machineId)
       return res
     } catch (err) {
+      // Its session went before the answer came (the far daemon restarted): a read is asked once more, on
+      // the new session, and is no miss — nothing about the machine is known yet.
+      if (!again && (err as Error).message === SESSION_GONE && READS.has(type)) return this.rpc(machineId, type, payload, true)
       this.health.set(machineId, { ok: false, at: Date.now() })
       const missed = (this.misses.get(machineId) ?? 0) + 1
       this.misses.set(machineId, missed)
@@ -401,6 +418,16 @@ export class DeviceFleet implements MachineFleet {
 
       }
     }
+  }
+
+  /**
+   * A turn, stop or answer that did not reach its machine — said on that agent's tile, where the person
+   * would otherwise go on believing it was sent (Diego, 10-30: the far daemon restarted and they vanished).
+   */
+  private onUndelivered(what: Undelivered): void {
+    if (!what.agentId) return
+    const name = this.opts.list.find(what.machineId)?.name || 'that computer'
+    this.emit({ machineId: what.machineId, kind: 'error', agentId: what.agentId, text: notDelivered(what.type, name), recap: 'Not delivered' })
   }
 
   private emit(event: FleetEvent): void {

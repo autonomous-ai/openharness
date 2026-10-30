@@ -19,6 +19,7 @@ import type { LaneOpened, LaneSeal, LaneSealed } from '../core/api.js'
 import { DeviceLink, type DeviceFrame } from './deviceLink.js'
 
 const LINKED = 'linked-machine'
+const LINKED_2 = 'second-linked-machine'
 const CLOUD = 'cloud-machine'
 type Frame = Record<string, unknown>
 
@@ -61,7 +62,13 @@ async function fakeDeviceWs(opts: { refuseToken?: string } = {}) {
 
 /** The gateway's side of the lane, faked: each seal marks the frame, and a test can make it slow or lost. */
 function fakeSeal() {
-  const sealed = vi.fn(async (_machineId: string, frame: Frame): Promise<LaneSealed> => ({ frame: { ...frame, payload: { __e2e: { of: frame.type } } } }))
+  // Each sealed frame carries its counter, as a real envelope does (`__e2e.n`): a refusal names it.
+  const counters = new Map<string, number>()
+  const sealed = vi.fn(async (machineId: string, frame: Frame): Promise<LaneSealed> => {
+    const n = counters.get(machineId) ?? 0
+    counters.set(machineId, n + 1)
+    return { frame: { ...frame, payload: { __e2e: { of: frame.type, n } } } }
+  })
   const opened = vi.fn(async (_machineId: string, frame: Frame): Promise<LaneOpened> =>
     ({ frame: { ...frame, payload: { opened: (frame.payload as { __e2e: unknown }).__e2e } } }))
   const seal = {
@@ -82,7 +89,7 @@ afterEach(async () => {
   for (const server of servers.splice(0)) await server.close()
 })
 
-async function lane(over: { refuseToken?: string; auth?: { accessToken(options?: { force?: boolean; failedToken?: string }): Promise<string> } } = {}) {
+async function lane(over: { refuseToken?: string; auth?: { accessToken(options?: { force?: boolean; failedToken?: string }): Promise<string> }; welcome?: boolean; now?: () => number } = {}) {
   const server = await fakeDeviceWs({ refuseToken: over.refuseToken })
   servers.push(server)
   const seal = fakeSeal()
@@ -90,14 +97,15 @@ async function lane(over: { refuseToken?: string; auth?: { accessToken(options?:
   const auth = over.auth ?? { accessToken: vi.fn(async () => 'token-1') }
   const link = new DeviceLink({
     auth, backendWsBase: server.url, computerId: 'computer-1', autonomousEnv: 'test', seal,
-    peer: (machineId) => (machineId === LINKED ? { machineId, pub: 'LINKED-PUB', label: 'linked', linkedAt: 1 } as never : null),
+    peer: (machineId) => (machineId === LINKED || machineId === LINKED_2 ? { machineId, pub: 'LINKED-PUB', label: 'linked', linkedAt: 1 } as never : null),
     localMachineId: () => 'this-machine',
     log: (line) => { lines.push(line) },
+    ...(over.now ? { now: over.now } : {}),
   })
   links.push(link)
   // The far machine answers every hello with a welcome, as a linked daemon does.
   server.on((frame) => {
-    if (frame.type === 'e2e_hello') server.send({ type: 'e2e_welcome', machineId: frame.machineId, payload: { ephPub: 'E' } })
+    if (frame.type === 'e2e_hello' && over.welcome !== false) server.send({ type: 'e2e_welcome', machineId: frame.machineId, payload: { ephPub: 'E' } })
   })
   const heard: DeviceFrame[] = []
   link.onFrame((frame) => { heard.push(frame) })
@@ -205,7 +213,7 @@ describe('the fleet\'s lane, sealed by the gateway', () => {
     await link.online()
     const answer = link.rpc('agents_list', { scope: 'all' }, LINKED)
     await until('the request', () => server.forMachines().some((frame) => frame.type === 'agents_list'))
-    expect(server.forMachines().find((frame) => frame.type === 'agents_list')!.payload).toEqual({ __e2e: { of: 'agents_list' } })
+    expect(server.forMachines().find((frame) => frame.type === 'agents_list')!.payload).toEqual({ __e2e: { of: 'agents_list', n: 0 } })
     // What the gateway sealed carried the request id; the reply that comes back sealed is opened to it.
     const asked = seal.seal.mock.calls.find(([, frame]) => frame.type === 'agents_list')![1] as { payload: { requestId: string } }
     seal.open.mockResolvedValueOnce({ frame: { type: 'agents_list_result', machineId: LINKED, payload: { requestId: asked.payload.requestId, agents: ['on B'] } } })
@@ -246,5 +254,231 @@ describe('the fleet\'s lane, sealed by the gateway', () => {
     expect(auth.accessToken).toHaveBeenNthCalledWith(1)
     expect(auth.accessToken).toHaveBeenNthCalledWith(2, { force: true, failedToken: 'token-1' })
     expect(server.tokens).toEqual(['token-1', 'token-2'])
+  })
+})
+
+/** The request id the gateway was handed to seal for a machine's `type`, the nth such. */
+function askedId(seal: ReturnType<typeof fakeSeal>, machineId: string, type: string, nth = 0): string {
+  const asked = seal.seal.mock.calls.filter(([m, frame]) => m === machineId && frame.type === type)[nth]![1] as { payload: { requestId: string } }
+  return asked.payload.requestId
+}
+
+/** The counter the gateway sealed a machine's `type` under, the nth such: what a refusal names. */
+async function sealedCounter(seal: ReturnType<typeof fakeSeal>, machineId: string, type: string, nth = 0): Promise<number> {
+  const at = seal.seal.mock.calls.findIndex(([m, frame], i) => m === machineId && frame.type === type
+    && seal.seal.mock.calls.slice(0, i).filter(([m2, f2]) => m2 === machineId && f2.type === type).length === nth)
+  const result = await seal.seal.mock.results[at]!.value as { frame: { payload: { __e2e: { n: number } } } }
+  return result.frame.payload.__e2e.n
+}
+
+// Diego, 10-30: every CLI release restarts the far daemon. This Mac kept using the session the old process had
+// agreed to, so a dial turn, a stop or an answer for its agents vanished, its open questions with them, and the
+// log filled with "could not decrypt" until two agents_list timeouts happened to reset it.
+describe('a linked machine\'s daemon restarts', () => {
+  it('its "session unknown" drops that session at once: only its requests fail, and the next call says hello again', async () => {
+    const { server, seal, link, lines } = await lane()
+    await link.online()
+    await link.establish(LINKED)
+    await link.establish(LINKED_2)
+    expect(seal.hello).toHaveBeenCalledTimes(2)
+    const toLinked = link.rpc('agents_list', {}, LINKED)
+    const toOther = link.rpc('agents_list', {}, LINKED_2)
+    await until('both requests', () => server.forMachines().filter((frame) => frame.type === 'agents_list').length === 2)
+    const n = await sealedCounter(seal, LINKED, 'agents_list')
+    const asked = Date.now()
+    server.send({ type: 'e2e_session_unknown', machineId: LINKED, payload: { refused: { type: 'agents_list', n } } })
+    // At once, not after the request's own 15-second timeout.
+    await expect(toLinked).rejects.toThrow('E2EE_SESSION_GONE')
+    expect(Date.now() - asked).toBeLessThan(2_000)
+    expect(seal.drop).toHaveBeenCalledWith(LINKED)
+    expect(seal.drop).not.toHaveBeenCalledWith(LINKED_2)
+    expect(lines.some((line) => line.includes(`${LINKED} no longer knows this session`))).toBe(true)
+    // The other machine's request is still waiting, and is answered.
+    seal.open.mockResolvedValueOnce({ frame: { type: 'agents_list_result', machineId: LINKED_2, payload: { requestId: askedId(seal, LINKED_2, 'agents_list'), agents: ['still here'] } } })
+    server.send({ type: 'agents_list_result', machineId: LINKED_2, payload: { __e2e: { n: 1 } } })
+    expect(await toOther).toMatchObject({ agents: ['still here'] })
+    // The next sealed frame for the restarted machine starts a new session first.
+    await link.sendSealed({ type: 'message', machineId: LINKED, payload: { agentId: 'a1', content: 'after the restart' } })
+    await until('the message', () => server.forMachines().some((frame) => frame.type === 'message'))
+    expect(seal.hello).toHaveBeenCalledTimes(3)
+    expect(server.forMachines().filter((frame) => frame.machineId === LINKED).map((frame) => frame.type)).toEqual(['e2e_hello', 'agents_list', 'e2e_hello', 'message'])
+  })
+
+  it('a turn, a stop or an answer it refused is reported not delivered, never re-sent; one it took before is not', async () => {
+    let now = 1_000_000
+    const { server, seal, link } = await lane({ now: () => now })
+    const undelivered: Array<Record<string, unknown>> = []
+    link.onUndelivered((what) => { undelivered.push({ ...what }) })
+    await link.online()
+    await link.sendSealed({ type: 'message', machineId: LINKED, payload: { agentId: 'a0', content: 'before the restart' } })
+    await link.sendSealed({ type: 'message', machineId: LINKED, payload: { agentId: 'a1', content: 'run the tests' } })
+    await link.sendSealed({ type: 'cancel', machineId: LINKED, payload: { agentId: 'a2' } })
+    await link.sendSealed({ type: 'question_response', machineId: LINKED, payload: { agentId: 'a3', requestId: 'q1', answers: { k: 'v' } } })
+    await until('all four', () => server.forMachines().filter((frame) => frame.type !== 'e2e_hello').length === 4)
+    // The far side restarted after the first: it refuses the second, the first it never saw refused.
+    const n = await sealedCounter(seal, LINKED, 'message', 1)
+    server.send({ type: 'e2e_session_unknown', machineId: LINKED, payload: { refused: { type: 'message', n } } })
+    await until('the three reports', () => undelivered.length === 3)
+    expect(undelivered).toEqual([
+      { machineId: LINKED, type: 'message', agentId: 'a1' },
+      { machineId: LINKED, type: 'cancel', agentId: 'a2' },
+      { machineId: LINKED, type: 'question_response', agentId: 'a3', requestId: 'q1' },
+    ])
+    // Nothing went out again: the refusal is a clear frame the relay could have written, and re-sending on its
+    // word would let it replay a turn into a fresh session.
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(server.forMachines().filter((frame) => frame.type !== 'e2e_hello')).toHaveLength(4)
+    expect(seal.hello).toHaveBeenCalledTimes(1)
+    // The next turn starts a new session. A refusal of it moments later is not believed (see the rate limit).
+    await link.sendSealed({ type: 'message', machineId: LINKED, payload: { agentId: 'a4', content: 'again' } })
+    await until('the fifth', () => server.forMachines().filter((frame) => frame.type !== 'e2e_hello').length === 5)
+    server.send({ type: 'e2e_session_unknown', machineId: LINKED, payload: { refused: { type: 'message' } } })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(undelivered).toHaveLength(3)
+    // Half a minute on it is, and one with no counter names what that session sealed in the last minute.
+    now += 30_001
+    server.send({ type: 'e2e_session_unknown', machineId: LINKED, payload: { refused: { type: 'message' } } })
+    await until('the fourth report', () => undelivered.length === 4)
+    expect(undelivered[3]).toEqual({ machineId: LINKED, type: 'message', agentId: 'a4' })
+  })
+
+  it('a turn that could not be sealed at all is reported not delivered too', async () => {
+    const { seal, link } = await lane()
+    const undelivered: Array<Record<string, unknown>> = []
+    link.onUndelivered((what) => { undelivered.push({ ...what }) })
+    await link.online()
+    seal.hello.mockRejectedValueOnce(new Error('the gateway could not start an E2EE session: it is not running'))
+    await link.sendSealed({ type: 'message', machineId: LINKED, payload: { agentId: 'a1', content: 'x' } })
+    expect(undelivered).toEqual([{ machineId: LINKED, type: 'message', agentId: 'a1' }])
+    // The gateway lost the session as it sealed.
+    await link.establish(LINKED)
+    seal.seal.mockResolvedValueOnce({ lost: true })
+    await link.sendSealed({ type: 'cancel', machineId: LINKED, payload: { agentId: 'a2' } })
+    await until('the second report', () => undelivered.length === 2)
+    expect(undelivered[1]).toEqual({ machineId: LINKED, type: 'cancel', agentId: 'a2' })
+  })
+
+  it('a refusal that lands while the new hello is out is about the old session, and kills nothing', async () => {
+    let now = 1_000_000
+    const { server, seal, link } = await lane({ welcome: false, now: () => now })
+    await link.online()
+    const first = link.establish(LINKED)
+    await until('the hello', () => server.forMachines().some((frame) => frame.type === 'e2e_hello'))
+    // Refusals of what the old session sealed come back before the welcome to the new hello.
+    server.send({ type: 'e2e_session_unknown', machineId: LINKED, payload: { refused: { type: 'message', n: 7 } } })
+    server.send({ type: 'e2e_welcome', machineId: LINKED, payload: { ephPub: 'E' } })
+    await first
+    expect(seal.drop).not.toHaveBeenCalled()
+    // Once the session is up, a refusal is believed and drops it.
+    server.send({ type: 'e2e_session_unknown', machineId: LINKED, payload: { refused: { type: 'message', n: 0 } } })
+    await until('the drop', () => seal.drop.mock.calls.length === 1)
+    // But another right after a forced drop is not: a relay repeating it cannot make re-handshakes cheap.
+    const again = link.establish(LINKED)
+    await until('the second hello', () => server.forMachines().filter((frame) => frame.type === 'e2e_hello').length === 2)
+    server.send({ type: 'e2e_welcome', machineId: LINKED, payload: { ephPub: 'E' } })
+    await again
+    server.send({ type: 'e2e_session_unknown', machineId: LINKED, payload: { refused: { type: 'message', n: 0 } } })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(seal.drop).toHaveBeenCalledTimes(1)
+    // Half a minute on, it is believed again.
+    now += 30_001
+    server.send({ type: 'e2e_session_unknown', machineId: LINKED, payload: { refused: { type: 'message', n: 0 } } })
+    await until('the second drop', () => seal.drop.mock.calls.length === 2)
+  })
+
+  it('a machine the backend says went offline loses its session at once; when it is back the next request says hello', async () => {
+    const { server, seal, link, heard } = await lane()
+    await link.online()
+    await link.establish(LINKED)
+    await link.establish(LINKED_2)
+    const pending = link.rpc('agents_list', {}, LINKED)
+    await until('the request', () => server.forMachines().some((frame) => frame.type === 'agents_list'))
+    server.send({ type: 'node_status', machineId: LINKED, payload: { online: false } })
+    await expect(pending).rejects.toThrow('E2EE_SESSION_GONE')
+    expect(seal.drop).toHaveBeenCalledWith(LINKED)
+    server.send({ type: 'node_status', machineId: LINKED, payload: { online: true } })
+    // The fleet still hears both: they are the wheel's dots.
+    await until('both statuses', () => heard.filter((frame) => frame.type === 'node_status').length === 2)
+    const listed = link.rpc('agents_list', {}, LINKED)
+    await until('the new hello', () => seal.hello.mock.calls.length === 3)
+    await until('the request, sealed', () => seal.seal.mock.calls.filter(([m, frame]) => m === LINKED && frame.type === 'agents_list').length === 2)
+    seal.open.mockResolvedValueOnce({ frame: { type: 'agents_list_result', machineId: LINKED, payload: { requestId: askedId(seal, LINKED, 'agents_list', 1), agents: [] } } })
+    server.send({ type: 'agents_list_result', machineId: LINKED, payload: { __e2e: { n: 0 } } })
+    expect(await listed).toMatchObject({ agents: [] })
+    // The live machine list says the same for the other machine; a row still online changes nothing.
+    server.send({ type: 'machines_status', payload: { statuses: [{ machineId: LINKED, online: true }, { machineId: LINKED_2, online: false }] } })
+    await until('the second drop', () => seal.drop.mock.calls.length === 2)
+    expect(seal.drop).toHaveBeenLastCalledWith(LINKED_2)
+  })
+
+  it('the restarted daemon\'s replay is held, a new session made by itself, and the replay read after its welcome, in order', async () => {
+    const { server, seal, link, heard, lines } = await lane()
+    await link.online()
+    await link.establish(LINKED)
+    // The first frame of the replay is sealed under the new process's epoch.
+    seal.open.mockResolvedValueOnce({ unknownEpoch: true })
+    server.send({ type: 'commander_question', machineId: LINKED, agentId: 'a1', payload: { __e2e: { n: 0, k: 'g' } } })
+    server.send({ type: 'commander_event', machineId: LINKED, agentId: 'a1', payload: { __e2e: { n: 1, k: 'g' } } })
+    await until('both, after the new welcome', () => heard.length === 2)
+    expect(seal.hello).toHaveBeenCalledTimes(2)
+    expect(seal.drop).toHaveBeenCalledWith(LINKED)
+    expect(heard.map((frame) => frame.type)).toEqual(['commander_question', 'commander_event'])
+    expect(heard[0].payload).toEqual({ opened: { n: 0, k: 'g' } })
+    expect(lines.some((line) => line.includes(`${LINKED} restarted`))).toBe(true)
+    expect(lines.some((line) => line.includes('could not decrypt'))).toBe(false)
+    // A frame after them is read as before.
+    server.send({ type: 'commander_event', machineId: LINKED, agentId: 'a1', payload: { __e2e: { n: 2, k: 'g' } } })
+    await until('the third', () => heard.length === 3)
+  })
+
+  it('a sealed frame from a linked machine with no session is held and a session started for it', async () => {
+    const { server, seal, link, heard } = await lane()
+    await link.online()
+    server.send({ type: 'commander_question', machineId: LINKED, agentId: 'a1', payload: { __e2e: { n: 0, k: 'g' } } })
+    await until('the question, opened', () => heard.length === 1)
+    expect(seal.hello).toHaveBeenCalledTimes(1)
+    expect(heard[0]).toEqual({ type: 'commander_question', machineId: LINKED, agentId: 'a1', payload: { opened: { n: 0, k: 'g' } } })
+    // A machine with no pinned key is not one this daemon makes sessions with: its frame passes as before.
+    server.send({ type: 'commander_event', machineId: CLOUD, agentId: 'c1', payload: { __e2e: { n: 0, k: 'g' } } })
+    await until('the cloud frame', () => heard.length === 2)
+    expect(seal.hello).toHaveBeenCalledTimes(1)
+  })
+
+  it('a relay forging new epochs gets one new session per machine per half minute, and nothing it forged is read', async () => {
+    let now = 1_000_000
+    const { server, seal, link, heard, lines } = await lane({ now: () => now })
+    await link.online()
+    await link.establish(LINKED)
+    seal.open.mockResolvedValue({ unknownEpoch: true })
+    server.send({ type: 'commander_event', machineId: LINKED, agentId: 'a1', payload: { __e2e: { n: 0, k: 'g', epoch: 'forged-1' } } })
+    await until('the one renewal', () => seal.hello.mock.calls.length === 2)
+    // Under the new session it still does not open: thrown away, not held again, no third hello.
+    await until('the forged frame dropped', () => lines.some((line) => line.includes('not from the session it renewed — dropped')))
+    server.send({ type: 'commander_event', machineId: LINKED, agentId: 'a1', payload: { __e2e: { n: 1, k: 'g', epoch: 'forged-2' } } })
+    server.send({ type: 'commander_event', machineId: LINKED, agentId: 'a1', payload: { __e2e: { n: 2, k: 'g', epoch: 'forged-3' } } })
+    await until('the limit said', () => lines.filter((line) => line.includes('renewed its session moments ago')).length === 2)
+    expect(seal.hello).toHaveBeenCalledTimes(2)
+    expect(heard).toEqual([])
+    now += 30_001
+    server.send({ type: 'commander_event', machineId: LINKED, agentId: 'a1', payload: { __e2e: { n: 3, k: 'g', epoch: 'forged-4' } } })
+    await until('one more renewal', () => seal.hello.mock.calls.length === 3)
+  })
+
+  it('holds a bounded number of frames, and none survive the lane stopping', async () => {
+    const { server, seal, link, heard, lines } = await lane({ welcome: false })
+    await link.online()
+    for (let n = 0; n < 70; n++) server.send({ type: 'commander_event', machineId: LINKED, agentId: 'a1', payload: { __e2e: { n, k: 'g' } } })
+    await until('the overflow said', () => lines.filter((line) => line.includes('held too many')).length === 6)
+    expect(seal.hello).toHaveBeenCalledTimes(1)
+    server.send({ type: 'e2e_welcome', machineId: LINKED, payload: { ephPub: 'E' } })
+    await until('the 64 held', () => heard.length === 64)
+    expect((heard[0].payload as { opened: { n: number } }).opened.n).toBe(0)
+    // Held again, then the lane stops: nothing is read afterwards.
+    seal.open.mockResolvedValueOnce({ unknownEpoch: true })
+    server.send({ type: 'commander_event', machineId: LINKED, agentId: 'a1', payload: { __e2e: { n: 100, k: 'g' } } })
+    await until('the renewal', () => seal.hello.mock.calls.length === 2)
+    link.stop()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(heard).toHaveLength(64)
   })
 })
