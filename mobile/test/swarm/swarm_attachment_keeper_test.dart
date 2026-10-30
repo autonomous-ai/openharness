@@ -72,6 +72,16 @@ void main() {
     return keeper;
   }
 
+  test('a folder removed during the walk does not hide kept sibling files', () {
+    final survivor = File('${root.path}${Platform.pathSeparator}survivor.txt')
+      ..writeAsStringSync('kept');
+    final vanished = Directory('${root.path}${Platform.pathSeparator}vanished');
+
+    expect(keptUnder(_ListingDirectory(root.path, [vanished, survivor])), [
+      'survivor.txt',
+    ]);
+  });
+
   test('sign-out empties them', () async {
     await keeping();
 
@@ -188,6 +198,28 @@ void main() {
 
     expect(storage.asked, hasLength(1));
   });
+}
+
+/// Returns a stable parent listing while a real child directory is already
+/// gone, reproducing the race between listing a parent and walking its child.
+class _ListingDirectory implements Directory {
+  _ListingDirectory(this.path, this.entries);
+
+  @override
+  final String path;
+  final List<FileSystemEntity> entries;
+
+  @override
+  bool existsSync() => true;
+
+  @override
+  List<FileSystemEntity> listSync({
+    bool recursive = false,
+    bool followLinks = true,
+  }) => entries;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 class _Log implements AppLog {
