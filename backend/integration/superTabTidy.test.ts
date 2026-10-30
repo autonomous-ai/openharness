@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
@@ -13,6 +13,8 @@ import type { MachineObservation } from '../src/superTabs/machines.js'
 import { poolRows, rosterRows } from './hostRows.test-support.js'
 import { archiveFinishedGroups, markFinishedGroups, type PullRequestState } from '../src/superTabs/archive.js'
 import { settleStuckDeliveries } from '../src/superTabs/deliverySettle.js'
+import { SuperTabError } from '../src/superTabs/model.js'
+import { logger } from '../src/utils/logger.js'
 
 // Nobody tidies a Swarm by hand: a worker idle for 15 minutes is stopped on its Lead's poll and its host is asked to close
 // it. A fresh loopback replica set, created here.
@@ -284,9 +286,12 @@ describe('a review the Swarm opens by itself', () => {
       checks: [{ description: 'Verified', independent: true }] })).result.conversationId)
     const builder = await f.add(reviewed, 'test-host', randomUUID(), 'Builder')
     const work = String((await f.execute({ type: 'work.assign', conversationId: reviewed, agentId: builder })).result.assignmentId)
-    const reviewer = await f.add('lead', 'test-host', randomUUID(), 'Reviewer')
-    // On another engine than the Builder's: a review never runs on the reviewed Builder's own (rules.ts reviewRefusal).
-    await f.started(reviewer, { role: 'reviewer', configuration: { ...config, engine: config.engine === 'claude' ? 'codex' : 'claude', model: config.engine === 'claude' ? 'default' : 'opus' } })
+    const reviewerHarness = randomUUID()
+    const reviewer = await f.add('lead', 'test-host', reviewerHarness, 'Reviewer')
+    // On a model the routing table rates 2 or more (rules.ts reviewRefusal), of any engine, the Builder's own included (Ken,
+    // 2026-10-30); its machine reports it can start one (autoReview.ts pickReviewer skips a silent machine).
+    await f.started(reviewer, { role: 'reviewer', configuration: { ...config, model: 'gpt-6.1-sol' } })
+    await f.observe('test-host', [reviewerHarness])
     await f.delivered()
     await f.execute({ type: 'work.status', conversationId: reviewed, assignmentId: work, status: 'review',
       result: 'Ready: yes, revision abc..def. https://github.com/example/parser/pull/9' }, host, builder)
@@ -379,6 +384,133 @@ describe('a finished group', () => {
   })
 })
 
+// Ken, 2026-10-30: 28 of 31 open review groups waited for a Reviewer on pull requests already merged or closed.
+describe('a review nobody reviews', () => {
+  const PR = 'https://github.com/example/parser/pull/9'
+  const github = (states: Record<string, PullRequestState>) => ({ async state(url: string) { return states[url] ?? null }, async done() {} })
+  /** A Swarm whose Builder marked "Parser v2" ready with PR, and whose review opened with no Reviewer free (or [reviewer]). */
+  async function waiting(withReviewer = false) {
+    const f = await swarm()
+    const head = await db.swarmHead.findUniqueOrThrow({ where: { id: `${f.tab}:head` } })
+    const data = head.data as { projects: Array<Record<string, unknown>> }
+    data.projects[0]!.repository = { machineId: 'lead-host', cwd: '/repo', repositoryUrl: 'https://github.com/example/parser' }
+    await db.swarmHead.update({ where: { id: head.id }, data: { data: data as object } })
+    const reviewed = String((await f.execute({ type: 'conversation.create', title: 'Parser v2', brief: 'More parsing',
+      checks: [{ description: 'Verified', independent: true }] })).result.conversationId)
+    const builder = await f.add(reviewed, 'test-host', randomUUID(), 'Builder')
+    const work = String((await f.execute({ type: 'work.assign', conversationId: reviewed, agentId: builder })).result.assignmentId)
+    if (withReviewer) {
+      const session = randomUUID()
+      const reviewer = await f.add('lead', 'test-host', session, 'Reviewer')
+      // A strong model on the engine its machine offers, which reports it running: a Reviewer below quality 2, whose machine
+      // is silent, or whose engine cannot start there, is never picked (rules.ts reviewRefusal, autoReview.ts unable).
+      await f.started(reviewer, { role: 'reviewer', configuration: { ...config, model: 'gpt-6.1-sol' } })
+      await f.observe('test-host', [f.harness.worker, session])
+    }
+    const ready = (text: string) => f.execute({ type: 'work.status', conversationId: reviewed, assignmentId: work, status: 'review', result: text }, host, builder)
+    await ready(`Ready: yes, revision abc..def. ${PR}`)
+    const reviews = async () => (await db.swarmGroup.findMany({ where: { tabId: f.tab, deleted: false } }))
+      .filter(row => (row.data as { reviewOf?: string }).reviewOf === reviewed)
+    const review = (await reviews())[0]!
+    const closeLines = async () => (await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: review.key } }))
+      .filter(m => (m.source as { kind?: string } | null)?.kind === 'auto-archive')
+    const isArchived = async () => (await db.swarmGroup.findUniqueOrThrow({ where: { id: review.id } })).archived
+    return { ...f, reviewed, builder, work, ready, reviews, review, closeLines, isArchived }
+  }
+
+  it('closes 30 minutes after its last message once every pull request of the work it reviews is merged, with one line saying why', async () => {
+    const f = await waiting()
+    expect((f.review.data as { assignment: unknown }).assignment).toBeNull()
+    expect(f.review.workFinished).toBe(true)
+    f.clock.now += 29 * MINUTE
+    await archiveFinishedGroups(db, f.timed, github({ [PR]: 'merged' }), f.clock.now)
+    expect(await f.isArchived()).toBe(false)
+    f.clock.now += MINUTE
+    await archiveFinishedGroups(db, f.timed, github({ [PR]: 'merged' }), f.clock.now)
+    expect(await f.isArchived()).toBe(true)
+    expect(await f.closeLines()).toEqual([expect.objectContaining({ recipientIds: [], author: expect.objectContaining({ id: f.lead }),
+      text: 'Closed: #9 merged; no Swarm review is needed now.' })])
+    // The work it reviews is untouched: its Builder still waits, for the Lead to settle.
+    expect((await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.reviewed } })).archived).toBe(false)
+  })
+
+  it('stays open while a pull request of the work it reviews is open, reopened, or unknown to GitHub', async () => {
+    const SECOND = 'https://github.com/example/parser/pull/10'
+    for (const states of [{ [PR]: 'open' }, { [PR]: null }, { [PR]: 'merged', [SECOND]: 'open' }] as Array<Record<string, PullRequestState>>) {
+      const f = await waiting()
+      // A second pull request linked to the work it reviews only, after the review opened.
+      await f.execute({ type: 'message.send', conversationId: f.reviewed, text: `Follow-up: ${SECOND}`, replyTo: null, recipientIds: [] })
+      f.clock.now += 40 * MINUTE
+      await archiveFinishedGroups(db, f.timed, github(states), f.clock.now)
+      expect(await f.isArchived()).toBe(false)
+      expect(await f.closeLines()).toEqual([])
+    }
+  })
+
+  it('never closes while a Reviewer works on it', async () => {
+    const f = await waiting(true)
+    expect((f.review.data as { assignment: { status: string } }).assignment.status).toBe('working')
+    expect(f.review.workFinished).toBe(false)
+    f.clock.now += 40 * MINUTE
+    await archiveFinishedGroups(db, f.timed, github({ [PR]: 'merged' }), f.clock.now)
+    expect(await f.isArchived()).toBe(false)
+  })
+
+  it('is found once the worker marks it at startup when it was written before reviews took the mark', async () => {
+    const f = await waiting()
+    await db.swarmGroup.update({ where: { id: f.review.id }, data: { workFinished: false } })
+    f.clock.now += 40 * MINUTE
+    await archiveFinishedGroups(db, f.timed, github({ [PR]: 'merged' }), f.clock.now)
+    expect(await f.isArchived()).toBe(false)
+    expect(await markFinishedGroups(db)).toBeGreaterThanOrEqual(1)
+    await archiveFinishedGroups(db, f.timed, github({ [PR]: 'merged' }), f.clock.now)
+    expect(await f.isArchived()).toBe(true)
+  })
+
+  // Review of #2322: a Ready committed inside the close's write saw the review still open and opened none; the close then
+  // archived it, and the work was left with no review, silently (the 10-28 failure).
+  it('stays open when a Ready for review with a new pull request commits during its close, so the work keeps a review', async () => {
+    const f = await waiting()
+    let during: (() => Promise<unknown>) | null = () => f.ready('Ready: yes, revision fff. https://github.com/example/parser/pull/11')
+    const hooked = db.$extends({ query: { superTabDecision: { async findFirst({ args, query }) {
+      if (during && (args.where as { conversationId?: string } | undefined)?.conversationId === f.review.key) { const run = during; during = null; await run() }
+      return query(args)
+    } } } })
+    const closing = new SuperTabStore(hooked as unknown as PrismaClient, () => f.clock.now)
+    f.clock.now += 40 * MINUTE
+    await archiveFinishedGroups(db, closing, github({ [PR]: 'merged' }), f.clock.now)
+    expect(during).toBeNull()
+    expect(await f.isArchived()).toBe(false)
+    expect(await f.closeLines()).toEqual([])
+    expect((await f.reviews()).filter(row => !row.archived)).toHaveLength(1)
+  })
+
+  it('is cancelled by its Lead with "current": it archives with the reason, and what waited there for the Lead ends', async () => {
+    const f = await waiting()
+    const waitingFor = await db.superTabDelivery.findMany({ where: { tabId: f.tab, conversationId: f.review.key, status: 'queued' } })
+    expect(waitingFor.map(d => d.agentId)).toEqual([f.lead])
+    await f.execute({ type: 'work.cancel', conversationId: f.review.key, assignmentId: 'current', reason: 'Reviewed outside the Swarm' }, host, f.lead)
+    expect(await f.isArchived()).toBe(true)
+    expect((await db.superTabDelivery.findMany({ where: { id: { in: waitingFor.map(d => d.id) } } })).map(d => d.status)).toEqual(['cancelled'])
+    const line = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, conversationId: f.review.key, text: { startsWith: 'The Lead cancelled' } } })
+    expect(line).toMatchObject({ text: 'The Lead cancelled this task: Reviewed outside the Swarm.', recipientIds: [] })
+  })
+
+  it('opens a new review when the work comes back ready with an open pull request after the close, and tells the Lead', async () => {
+    const f = await waiting()
+    f.clock.now += 40 * MINUTE
+    await archiveFinishedGroups(db, f.timed, github({ [PR]: 'merged' }), f.clock.now)
+    expect(await f.isArchived()).toBe(true)
+    await f.execute({ type: 'work.status', conversationId: f.reviewed, assignmentId: f.work, status: 'working', result: null }, host, f.builder)
+    await f.ready('Ready: yes, revision fff. https://github.com/example/parser/pull/11')
+    const open = (await f.reviews()).filter(row => !row.archived)
+    expect(open).toHaveLength(1)
+    expect(open[0]!.key).not.toBe(f.review.key)
+    const told = await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: open[0]!.key, recipientIds: { has: f.lead } } })
+    expect(told.map(m => m.text)).toEqual([expect.stringContaining('Review opened by itself for #')])
+  })
+})
+
 describe('the archive pass', () => {
   it('reads each pull request once however many groups link it', async () => {
     const PR = 'https://github.com/acme/app/pull/9'
@@ -393,6 +525,25 @@ describe('the archive pass', () => {
     await archiveFinishedGroups(db, f.timed, { state: async url => { read.push(url); return 'open' }, done: async () => {} }, f.clock.now)
     // Other tests' Swarms share this database, with links of their own.
     expect(read.filter(url => url === PR)).toEqual([PR])
+  })
+
+  // Review of #2322: a busy group whose write kept conflicting ended the pass for every group after it.
+  it('skips a group whose write fails, with a warning, and goes on to the rest', async () => {
+    const f = await swarm()
+    const second = String((await f.execute({ type: 'conversation.create', title: 'Docs', brief: 'Docs too', checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
+    const writer = await f.add(second, 'test-host', randomUUID(), 'Writer')
+    const work = String((await f.execute({ type: 'work.assign', conversationId: second, agentId: writer })).result.assignmentId)
+    await f.execute({ type: 'work.cancel', conversationId: second, assignmentId: work, reason: 'Done elsewhere' })
+    // f.group went quiet first, so the pass reaches it first.
+    const failing: Pick<SuperTabStore, 'archiveFinished'> = { archiveFinished: async (tabId, groupId, checked, reviewOf) => {
+      if (groupId === f.group) throw new Error('write conflict')
+      return f.timed.archiveFinished(tabId, groupId, checked, reviewOf)
+    } }
+    f.clock.now += 40 * MINUTE
+    await expect(archiveFinishedGroups(db, failing, { state: async () => null, done: async () => {} }, f.clock.now)).resolves.toBeGreaterThanOrEqual(1)
+    const archivedOf = async (key: string) => (await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key } })).archived
+    expect(await archivedOf(f.group)).toBe(false)
+    expect(await archivedOf(second)).toBe(true)
   })
 
   it('finds a finished group written before the finished mark once the worker marks it at startup', async () => {
@@ -549,5 +700,127 @@ describe('a delivery that cannot move', () => {
     await f.timed.delivery(host, f.tab, f.lead, id, { type: 'claim', claimId: 'claim' })
     expect(await f.timed.settleDeliveries(f.tab, [read], f.clock.now + HOUR + MINUTE)).toBe(1)
     expect(await db.superTabDelivery.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: 'cancelled', holdReason: 'team_waiting_idle' })
+  })
+
+  // Prod 10-30, v1.3.71 (#2178): every Buddy claim answered SWARM_BUSY for two hours and nothing said so. A claim that fails
+  // that way is now written on its delivery, outside the failed transaction (store.ts recordFailedClaim).
+  describe('a claim that keeps failing', () => {
+    /** Whether the stores from failingStore answer busy, and whether the record write itself is down. Reset before each test. */
+    const busy = { on: false, recordDown: false, early: false, recordHangs: false }
+    beforeEach(() => { busy.on = false; busy.recordDown = false; busy.early = false; busy.recordHangs = false })
+    /** A store over the same database whose transactions answer busy while busy.on is set, as retryTransient ends 8 write
+     *  conflicts. By default the real body runs first (its authorization checks included) and the answer comes at commit, rolling
+     *  the body back; with busy.early the answer comes before any body runs. With busy.recordDown its single-document delivery
+     *  writes throw too; with busy.recordHangs they never answer. */
+    const failingStore = (f: Fixture) => {
+      const proxy = new Proxy(db, { get: (target, key) => {
+        const tooBusy = () => new SuperTabError('SWARM_BUSY', 'This Swarm is busy. Try again in a moment.', 503)
+        if (key === '$transaction') return (body: (tx: unknown) => Promise<unknown>, ...rest: unknown[]) => {
+          if (!busy.on) return (target.$transaction as (...a: unknown[]) => unknown)(body, ...rest)
+          if (busy.early) return Promise.reject(tooBusy())
+          return (target.$transaction as (...a: unknown[]) => unknown)(async (tx: unknown) => { await body(tx); throw tooBusy() }, ...rest)
+        }
+        if (key === 'superTabDelivery' && (busy.recordDown || busy.recordHangs)) return new Proxy(target.superTabDelivery, { get: (model, name) =>
+          name === 'updateMany' ? () => busy.recordHangs ? new Promise(() => {}) : Promise.reject(new Error('down')) : Reflect.get(model, name) })
+        return Reflect.get(target, key)
+      } }) as PrismaClient
+      busy.on = true
+      return new SuperTabStore(proxy, () => f.clock.now)
+    }
+    const claim = { type: 'claim', claimId: 'c' } as const
+    const claimFields = ['claimFailingSince', 'claimFailedAt', 'claimFailures', 'claimFailure'] as const
+    const row = (id: string) => db.superTabDelivery.findUniqueOrThrow({ where: { id } })
+
+    it('records a busy claim on its delivery, keeps when it began and counts each one', async () => {
+      const f = await swarm(); const id = await toLead(f, 'Hi')
+      const flaky = failingStore(f)
+      await expect(flaky.delivery(host, f.tab, f.lead, id, claim)).rejects.toMatchObject({ code: 'SWARM_BUSY' })
+      const first = f.clock.now
+      f.clock.now += 30_000
+      await expect(flaky.delivery(host, f.tab, f.lead, id, claim)).rejects.toMatchObject({ code: 'SWARM_BUSY' })
+      expect(await row(id)).toMatchObject({ status: 'queued', claimFailingSince: new Date(first),
+        claimFailedAt: new Date(first + 30_000), claimFailures: 2, claimFailure: 'SWARM_BUSY' })
+    })
+    it('clears the record once a claim gets in', async () => {
+      const f = await swarm(); const id = await toLead(f, 'Hi')
+      await expect(failingStore(f).delivery(host, f.tab, f.lead, id, claim)).rejects.toMatchObject({ code: 'SWARM_BUSY' })
+      expect((await row(id)).claimFailures).toBe(1)
+      await f.timed.delivery(host, f.tab, f.lead, id, claim)
+      const claimed = await row(id)
+      expect(claimed.status).toBe('claimed')
+      // Unset, not null: the claim removes the keys, so "missing" stays a real absence that the first failure's isSet: false branch
+      // matches (and starts the count at 0, since Prisma's increment of a missing count leaves it null). Prisma reads both as null.
+      const [raw] = await db.superTabDelivery.findRaw({ filter: { _id: id } }) as unknown as Array<Record<string, unknown>>
+      for (const field of claimFields) { expect(claimed[field], field).toBeNull(); expect(raw, field).not.toHaveProperty(field) }
+    })
+    it('records nothing for a delivery that is no longer queued, or for an ack', async () => {
+      const f = await swarm(); const gone = await toLead(f, 'Gone'); const acked = await toLead(f, 'Acked')
+      await db.superTabDelivery.update({ where: { id: gone }, data: { status: 'claimed', claimId: 'c' } })
+      const flaky = failingStore(f)
+      await expect(flaky.delivery(host, f.tab, f.lead, gone, claim)).rejects.toMatchObject({ code: 'SWARM_BUSY' })
+      for (const field of claimFields) expect((await row(gone))[field], field).toBeNull()
+      await f.timed.delivery(host, f.tab, f.lead, acked, claim)
+      await expect(flaky.delivery(host, f.tab, f.lead, acked, { type: 'ack', claimId: 'c', receipt: 'r', uncertain: false })).rejects.toMatchObject({ code: 'SWARM_BUSY' })
+      for (const field of claimFields) expect((await row(acked))[field], field).toBeNull()
+    })
+    it('records nothing when busy is answered before the request was authorized', async () => {
+      const f = await swarm(); const id = await toLead(f, 'Hi')
+      const flaky = failingStore(f); busy.early = true
+      await expect(flaky.delivery(host, f.tab, f.lead, id, claim)).rejects.toMatchObject({ code: 'SWARM_BUSY' })
+      for (const field of claimFields) expect((await row(id))[field], field).toBeNull()
+    })
+    it('answers busy within about 2 seconds even when the record write never returns', async () => {
+      const f = await swarm(); const id = await toLead(f, 'Hi')
+      const flaky = failingStore(f); busy.recordHangs = true
+      const began = Date.now()
+      await expect(flaky.delivery(host, f.tab, f.lead, id, claim)).rejects.toMatchObject({ code: 'SWARM_BUSY', status: 503 })
+      expect(Date.now() - began).toBeLessThan(4_000)
+    }, 15_000)
+    it('still throws the busy answer when the record itself cannot be written, and says so', async () => {
+      const f = await swarm(); const id = await toLead(f, 'Hi')
+      const flaky = failingStore(f); busy.recordDown = true
+      const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+      try {
+        await expect(flaky.delivery(host, f.tab, f.lead, id, claim)).rejects.toMatchObject({ code: 'SWARM_BUSY', status: 503 })
+        expect(warn).toHaveBeenCalledWith('[swarm-deliveries] could not record a failed claim', expect.objectContaining({ tabId: f.tab, deliveryId: id }))
+      } finally { warn.mockRestore() }
+    })
+    it('hands claimFailingSince and claimFailures to page readers', async () => {
+      const f = await swarm(); const id = await toLead(f, 'Hi')
+      await expect(failingStore(f).delivery(host, f.tab, f.lead, id, claim)).rejects.toMatchObject({ code: 'SWARM_BUSY' })
+      const page = await f.timed.messages(owner, f.tab, 'lead', {})
+      const shown = page.messages.flatMap(m => m.deliveries).find(d => d.id === id)
+      expect(shown).toMatchObject({ claimFailingSince: new Date(f.clock.now), claimFailures: 1 })
+      expect(JSON.parse(JSON.stringify(shown))).toMatchObject({ claimFailingSince: new Date(f.clock.now).toISOString(), claimFailures: 1 })
+    })
+    it('raises claims failing for a delivery whose claims have failed 5 minutes and still fail, and cancels nothing', async () => {
+      const f = await swarm(); const id = await toLead(f, 'Hi'); const flaky = failingStore(f)
+      const began = f.clock.now
+      await expect(flaky.delivery(host, f.tab, f.lead, id, claim)).rejects.toThrow()
+      f.clock.now = began + 5 * MINUTE
+      await expect(flaky.delivery(host, f.tab, f.lead, id, claim)).rejects.toThrow()
+      const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+      try {
+        await settleStuckDeliveries(db, f.timed, began + 5 * MINUTE + 1_000)
+        // Earlier tests leave rows in the shared database; this Swarm's line is the one that counts.
+        expect(warn).toHaveBeenCalledWith('[swarm-deliveries] claims failing',
+          { tabId: f.tab, deliveries: 1, oldestFailingSince: new Date(began).toISOString(), codes: ['SWARM_BUSY'] })
+        expect(await status(id)).toBe('queued')
+      } finally { warn.mockRestore() }
+    })
+    it('says nothing for a claim failing under 5 minutes, or one whose last failure is over 5 minutes old', async () => {
+      const f = await swarm(); const young = await toLead(f, 'Young'); const old = await toLead(f, 'Old')
+      const now = f.clock.now + 10 * MINUTE
+      await db.superTabDelivery.update({ where: { id: young }, data: { claimFailingSince: new Date(now - 4 * MINUTE),
+        claimFailedAt: new Date(now - 1_000), claimFailures: 3, claimFailure: 'SWARM_BUSY' } })
+      await db.superTabDelivery.update({ where: { id: old }, data: { claimFailingSince: new Date(now - 20 * MINUTE),
+        claimFailedAt: new Date(now - 6 * MINUTE), claimFailures: 9, claimFailure: 'SWARM_BUSY' } })
+      const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+      try {
+        await settleStuckDeliveries(db, f.timed, now)
+        expect(warn.mock.calls.filter(([line, fields]) => line === '[swarm-deliveries] claims failing' && (fields as { tabId: string }).tabId === f.tab)).toEqual([])
+        expect(await status(young)).toBe('queued'); expect(await status(old)).toBe('queued')
+      } finally { warn.mockRestore() }
+    })
   })
 })

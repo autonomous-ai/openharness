@@ -238,7 +238,8 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
         approvedFor: async repository => {
           const ids = await approvals.approvedProjects(req.user!.autonomousEnv, req.params.tabId, repository)
           return project.others.filter(other => ids.includes(other.id)).map(other => other.name)
-        } },
+        },
+        you: repository => approvals.reader(req.user!.autonomousEnv, req.params.tabId, req.params.projectId, repository, req.user!.sub) },
         req.query.refresh === '1')
     }))
   // Approving a project's repository: the person signs in to GitHub through the app (or installs it, which signs them in
@@ -268,6 +269,8 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     const seen = await signIn.permission(req.query.code, named).catch(() => null)
     if (!seen) return page('GitHub could not confirm your access', 'Go back to Harness and choose Continue in GitHub again.', 502)
     if (!seen.push) {
+      // Kept, so the app asks them to send it to someone who can rather than offering this sign-in again.
+      await approvals.refuse(request, seen.login).catch(() => undefined)
       return page(`You can't push to ${named.fullName}`, 'So you can\'t allow it. Ask someone who can push to it to open the project in Harness and choose Set up GitHub for teammates.', 403)
     }
     await approvals.approve(request, seen.login)

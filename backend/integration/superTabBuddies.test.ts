@@ -244,10 +244,10 @@ describe('a Buddy through the store', () => {
     const group = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Offline sync', brief: 'Keep edits.',
       checks: [{ description: 'Edits survive a restart', independent: false }] })).result.conversationId)
     const builder = String((await f.execute({ type: 'agent.add', conversationId: group, machineId: 'owner-mac', harnessId: randomUUID(), name: 'Builder',
-      configuration: config, lead: false })).result.agentId)
+      configuration: { ...config, model: 'opus' }, lead: false })).result.agentId)
     const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Small task.' },
-      candidates: [{ id: 'c0', kind: 'new', machineId: 'owner-mac', engine: 'claude', model: 'fixture-model', effort: 'high',
-        quality: 2, cost: 2, title: 'New agent on Kens-MacBook-Pro.local', label: 'New agent' }],
+      candidates: [{ id: 'c0', kind: 'new', machineId: 'owner-mac', engine: 'claude', model: 'opus', effort: 'high',
+        quality: 3, cost: 3, title: 'New agent on Kens-MacBook-Pro.local', label: 'New agent' }],
       excluded: [], floor: 1, notes: false, pick: 'c0', via: 'only', p: null, belowFloor: false, why: 'Only candidate.' }
     const routeDecisionId = String((await f.execute({ type: 'route.record', conversationId: group, decision } as Command, owner, f.lead)).result.routeDecisionId)
     await f.execute({ type: 'work.assign', conversationId: group, agentId: builder, routeDecisionId, overrideReason: 'It has the context.' } as Command, owner, f.lead)
