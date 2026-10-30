@@ -395,8 +395,12 @@ describe('a review nobody reviews', () => {
     const builder = await f.add(reviewed, 'test-host', randomUUID(), 'Builder')
     const work = String((await f.execute({ type: 'work.assign', conversationId: reviewed, agentId: builder })).result.assignmentId)
     if (withReviewer) {
-      const reviewer = await f.add('lead', 'test-host', randomUUID(), 'Reviewer')
-      await f.started(reviewer, { role: 'reviewer', configuration: { ...config, engine: 'claude', model: 'opus' } })
+      const session = randomUUID()
+      const reviewer = await f.add('lead', 'test-host', session, 'Reviewer')
+      // A strong model on the engine its machine offers, which reports it running: a Reviewer below quality 2, whose machine
+      // is silent, or whose engine cannot start there, is never picked (rules.ts reviewRefusal, autoReview.ts unable).
+      await f.started(reviewer, { role: 'reviewer', configuration: { ...config, model: 'gpt-6.1-sol' } })
+      await f.observe('test-host', [f.harness.worker, session])
     }
     const ready = (text: string) => f.execute({ type: 'work.status', conversationId: reviewed, assignmentId: work, status: 'review', result: text }, host, builder)
     await ready(`Ready: yes, revision abc..def. ${PR}`)
