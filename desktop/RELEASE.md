@@ -504,6 +504,26 @@ show the URL placeholder (recordings offer browser playback). Install the runtim
 restart Harness to enable embedded viewing. Linux release builds also need
 `libwebkit2gtk-4.1-dev` on the build host.
 
+`webview_all_linux` is deliberately pinned to `1.2.1`: its published manifest uses
+`webview_flutter_platform_interface`, while `1.3.0` switched to the separate
+`webview_platform_interface` package. A caret constraint would allow that incompatible
+interface change. The lockfile records the source archive hash; upgrading the plugin
+requires reviewing its native code and rerunning Linux integration tests. The pin
+neither freezes the distribution's WebKitGTK security updates nor establishes that
+the plugin has been security-audited or endorsed by Flutter. It is MIT-licensed;
+retain its attribution in Flutter's bundled notices.
+
+The official [`webview_flutter`](https://pub.dev/packages/webview_flutter/versions/4.14.1)
+currently lists Android, iOS and macOS implementations, with no endorsed Linux
+implementation. [`webview_flutter_linux`](https://pub.dev/packages/webview_flutter_linux)
+is an experimental, non-endorsed WPE WebKit implementation requiring WPE WebKit 2.52+,
+so it is not a drop-in endorsed replacement for this GTK integration.
+
+GTK views are detached while registered Flutter transient overlays are open,
+including pane menus, the agent picker and resize help. All native viewers are
+hidden for that interval because a popup may cross pane boundaries; their controllers
+retain the loaded pages. Dismissal restores them without navigation or reload.
+
 **Packaged as a single-file AppImage**, not a tarball. The script stages an AppDir
 (`usr/bin/` = the Flutter `bundle/` verbatim, plus a hand-written `harness.desktop` and the
 `harness.png` icon CMake already installs at the bundle root) and hands it to `appimagetool` with

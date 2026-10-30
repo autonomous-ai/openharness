@@ -97,7 +97,8 @@ dependencies:
   # Named directly for the WebKit creation params (muted autoplay in viewer panes).
   webview_flutter_platform_interface: ^2.15.1
   webview_flutter_wkwebview: ^3.26.1
-  # Last Linux release using the official Flutter platform interface.
+  # Keep exact: 1.3+ uses a different platform interface. This pin controls
+  # plugin updates, not the host WebKitGTK engine. See RELEASE.md.
   webview_all_linux: 1.2.1
   # The Finder tile's code editor and its highlighter (lib/finder/): pure
   # Dart, no native plugin, so the macOS SPM package list is unchanged.

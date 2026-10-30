@@ -12,6 +12,7 @@ import '../core/runtime_platform.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../terminal/terminal_text.dart';
+import '../widgets/native_webview_host.dart';
 
 Future<void> showStoreDemo(
   BuildContext context, {
@@ -251,7 +252,9 @@ class _StoreDemoDialogState extends State<StoreDemoDialog>
                         children: [
                           if (_controller != null)
                             Positioned.fill(
-                              child: WebViewWidget(controller: _controller!),
+                              child: NativeWebViewHost(
+                                child: WebViewWidget(controller: _controller!),
+                              ),
                             ),
                           if (_loading)
                             const Center(child: CircularProgressIndicator()),

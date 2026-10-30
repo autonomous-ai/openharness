@@ -15,6 +15,8 @@ import 'package:harness/state/pane_arrangement.dart';
 import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/widgets/web_pane_panel.dart';
+import 'package:harness/widgets/pane_menu.dart';
+import 'package:harness/widgets/transient_menus.dart';
 import 'package:webview_flutter_platform_interface/webview_flutter_platform_interface.dart';
 
 import 'support/fake_webview.dart';
@@ -601,6 +603,41 @@ void main() {
       await tester.pump();
       return app;
     }
+
+    testWidgets('Linux pane menu detaches the viewer and restores its page', (
+      tester,
+    ) async {
+      await open(tester);
+      final controller = platform.controllers.single;
+      controller.delegate!.onPageFinished!(controller.loads.single.toString());
+      await tester.pump();
+      final initialLoads = controller.loads.length;
+      final context = tester.element(find.byType(WebPanePanel));
+      final menu = showPaneMenu<String>(
+        context: context,
+        position: const RelativeRect.fromLTRB(20, 100, 20, 0),
+        children: (close) => [
+          paneMenuItem(
+            onTap: () => close('keep'),
+            child: const Text('Keep viewer open'),
+          ),
+        ],
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('pane-menu-surface')), findsOneWidget);
+      expect(transientMenusVisible.value, isTrue);
+      if (RuntimePlatform.isLinux) {
+        expect(find.byKey(const ValueKey('fake-webview')), findsNothing);
+      }
+      await tester.tap(find.text('Keep viewer open'));
+      expect(await menu, 'keep');
+      await tester.pumpAndSettle();
+      expect(transientMenusVisible.value, isFalse);
+      expect(find.byKey(const ValueKey('fake-webview')), findsOneWidget);
+      expect(platform.controllers, [controller]);
+      expect(controller.loads, hasLength(initialLoads));
+      expect(tester.takeException(), isNull);
+    });
 
     testWidgets('Linux dialogs and routes preserve the loaded controller', (
       tester,

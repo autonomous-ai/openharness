@@ -28,6 +28,7 @@ import 'engine_identity.dart';
 import 'harness_activity_mark.dart';
 import '../terminal/terminal_text.dart';
 import 'verdict_marks.dart';
+import 'native_webview_host.dart';
 
 /// A domain harness's viewer, in a tile beside its agent's terminal.
 ///
@@ -406,14 +407,10 @@ class _WebPanePanelState extends State<WebPanePanel> {
           _header(context),
           Divider(height: 1, color: AppColors.border),
           Expanded(
-            // Detaching the GTK widget hides its overlay; the controller keeps
-            // the loaded page, so returning from a dialog does not reload it.
-            child:
-                RuntimePlatform.isLinux &&
-                    (!widget.visible ||
-                        ModalRoute.isCurrentOf(context) == false)
-                ? const SizedBox.shrink()
-                : _body(context),
+            child: NativeWebViewHost(
+              visible: widget.visible,
+              child: _body(context),
+            ),
           ),
         ],
       ),

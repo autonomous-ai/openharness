@@ -48,6 +48,7 @@ import 'restart_agent_action.dart';
 import 'terminal_panel.dart';
 import 'harness_activity_mark.dart';
 import 'web_pane_panel.dart';
+import 'transient_menus.dart';
 import 'pane_resize_handle.dart';
 import 'pane_split_edges.dart';
 import '../agent_messages/pane_shared_chips.dart';
@@ -313,6 +314,14 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
   late Object _lastInputDestination;
   final _resizeFocus = FocusNode(debugLabel: 'Resize focused harness');
   final _resizeHelp = OverlayPortalController();
+  VoidCallback? _unregisterResizeHelp;
+
+  void _hideResizeHelp() {
+    if (_resizeHelp.isShowing) _resizeHelp.hide();
+    _unregisterResizeHelp?.call();
+    _unregisterResizeHelp = null;
+  }
+
   late int _resizeRequest;
   late String _activeId;
   late int _focusRequest;
@@ -372,9 +381,10 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
       _resizeRequest = app.paneResizeRequest;
       _resizeFocus.requestFocus();
       _resizeHelp.show();
+      _unregisterResizeHelp ??= registerTransientMenu(_hideResizeHelp);
     }
     if (_activeId != app.activeSwarmId) {
-      if (_resizeHelp.isShowing) _resizeHelp.hide();
+      _hideResizeHelp();
       _offsets[_activeId] = Offset(
         _horizontalScroll.hasClients ? _horizontalScroll.offset : 0,
         _scroll.hasClients ? _scroll.offset : 0,
@@ -483,6 +493,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
   @override
   void dispose() {
     widget.notifier.removeListener(_onAppChanged);
+    _unregisterResizeHelp?.call();
     terminalFontStore.removeListener(_onFontChanged);
     _resizeFocus.dispose();
     _idleFocus.dispose();
@@ -770,7 +781,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
       ),
       child: FocusScope(
         onFocusChange: (focused) {
-          if (!focused && _resizeHelp.isShowing) _resizeHelp.hide();
+          if (!focused) _hideResizeHelp();
         },
         child: Stack(
           children: [
