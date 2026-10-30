@@ -19,6 +19,8 @@ const UNSURE = 'Harness could not confirm whether this harness is a Buddy just n
 export const WINDOWS_BUDDY = 'This Windows computer runs a Buddy, and Harness cannot tell its pane from this one, so an agent here may not do this '
   + 'while it runs. Run it from your own terminal.'
 
+type DaemonLike = { request: (type: string, payload?: Record<string, unknown>, ms?: number) => Promise<Record<string, unknown>> }
+
 export const SWARM_UNSURE = 'Harness could not reach this computer\'s Swarm just now, so it did not run this. Try again in a moment.'
 
 /**
@@ -27,11 +29,28 @@ export const SWARM_UNSURE = 'Harness could not reach this computer\'s Swarm just
  * request without a Swarm: invalid). Anything else, a failure or no answer in time, throws [SWARM_UNSURE]: read as "off", it
  * skipped the Buddy check and Windows' backstop (re-check 2 of #2093 at 0648a8690).
  */
-export async function buddiesHere(daemon: { request: (type: string, payload?: Record<string, unknown>, ms?: number) => Promise<Record<string, unknown>> }): Promise<boolean | null> {
+export async function buddiesHere(daemon: DaemonLike): Promise<boolean | null> {
   const answer = await daemon.request('super_tabs', { action: 'buddyCheck' }, 10_000).catch(() => { throw new Error(SWARM_UNSURE) })
   if (answer.ok === true) return answer.buddiesHere === true
   if (answer.error === 'UNSUPPORTED' || answer.error === 'INVALID_REQUEST' || answer.error === 'SERVICE_UNAVAILABLE' && answer.retryable === false) return null
   throw new Error(SWARM_UNSURE)
+}
+
+/**
+ * Whether the harness running in [pane] is a Buddy, by this computer's launch record (service.ts `buddyCheck`, what turns its
+ * guard on): the one way this guard and the CLI's usage wording (command.ts `buddyHere`) ask it (review of #2379). With the
+ * command's [ancestors], a harness whose own pane, as the daemon reads it, is not among them is never asked about. A request
+ * that fails is thrown, for each caller to read as it does: this guard refuses, the wording takes it for no Buddy.
+ */
+export async function paneBuddy(daemon: DaemonLike, pane: string, machineId: string, ancestors?: number[])
+  : Promise<'buddy' | 'not a buddy' | 'no harness' | 'not in its pane' | 'unsure'> {
+  const listed = await daemon.request('agents_list')
+  const caller = callerOf(Array.isArray(listed.agents) ? listed.agents as Frame[] : [], pane, machineId)
+  if (!caller) return 'no harness'
+  if (!await inDaemonPane(daemon, caller.agentId, ancestors)) return 'not in its pane'
+  const answer = await daemon.request('super_tabs', { action: 'buddyCheck', harnessId: caller.agentId }, 10_000)
+  if (answer.ok !== true || typeof answer.buddy !== 'boolean') return 'unsure'
+  return answer.buddy ? 'buddy' : 'not a buddy'
 }
 
 /** An agent's shell on Windows, as it marks itself: its Harness pane, or the engine's own variables (`outsideCaller`). */
@@ -53,13 +72,10 @@ export async function buddyRefusal(deps: {
     if (running.refused) return running.refused
     // Not shortcut on `buddies`: a harness an agent started with no Swarm record is asked about by itself (service.ts).
     if (!running.pane) return null
-    const listed = await daemon.request('agents_list')
-    const caller = callerOf(Array.isArray(listed.agents) ? listed.agents as Frame[] : [], running.pane, where.machineId)
-    if (!caller) return null
-    if (!await inDaemonPane(daemon, caller.agentId, running.ancestors)) return NOT_IN_PANE
-    const answer = await daemon.request('super_tabs', { action: 'buddyCheck', harnessId: caller.agentId }, 10_000)
+    const buddy = await paneBuddy(daemon, running.pane, where.machineId, running.ancestors)
+    if (buddy === 'not in its pane') return NOT_IN_PANE
     // The Swarm answered it is on: one that then cannot say for this harness is no answer of "no Buddy" (re-check 1 of #2093).
-    if (answer.ok !== true || typeof answer.buddy !== 'boolean') return UNSURE
-    return answer.buddy ? BUDDY : null
+    if (buddy === 'unsure') return UNSURE
+    return buddy === 'buddy' ? BUDDY : null
   } finally { daemon.close() }
 }

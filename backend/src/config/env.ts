@@ -41,6 +41,10 @@ const envSchema = z.object({
   SWARM_READ_CACHE: z.enum(['on', 'off']).default('on'),
   // Its size per process, counted as the JSON size of what it holds.
   SWARM_CACHE_MB: z.string().default('64').transform(Number),
+  // The worker's hourly move of finished deliveries older than 14 days into their messages' receipts
+  // (superTabs/deliveryCompaction.ts). 'off' is the kill switch: set it before rolling back to a release whose pages do not
+  // read compacted receipts.
+  SWARM_DELIVERY_COMPACTION: z.enum(['on', 'off']).default('on'),
 
   // This backend instance's stable id (used to route manager-command replies via Redis in a
   // multi-instance deploy). Defaults to the pm2 instance index or a per-process fallback.

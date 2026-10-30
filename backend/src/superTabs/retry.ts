@@ -1,4 +1,5 @@
 import { fail } from './model.js'
+import { recordAttempt, recordBusy, recordRetry } from './retryStats.js'
 
 /** A Swarm's answers that say "try again" rather than "no": busy after its retries, or moving to its new store. */
 export const RETRYABLE_SWARM_CODES: ReadonlySet<string> = new Set(['SWARM_BUSY', 'SWARM_MIGRATING'])
@@ -25,6 +26,7 @@ export async function retryTransient<T>(attempt: () => Promise<T>,
   sleep: (ms: number) => Promise<void> = ms => new Promise(resolve => setTimeout(resolve, ms)),
   alsoRetry: (error: unknown) => boolean = () => false): Promise<T> {
   for (let tries = 1; ; tries++) {
+    recordAttempt()
     try {
       return await attempt()
     } catch (error) {
@@ -33,8 +35,10 @@ export async function retryTransient<T>(attempt: () => Promise<T>,
       if (tries >= (errorCode(error) === 'P2028' ? EXPIRED_TRANSACTION_ATTEMPTS : TRANSACTION_ATTEMPTS)) {
         // A unique key still taken after every retry is a real duplicate, not contention.
         if (errorCode(error) === 'P2002') throw error
+        recordBusy()
         fail('SWARM_BUSY', 'This Swarm is busy. Try again in a moment.', 503)
       }
+      recordRetry(typeof errorCode(error) === 'string' ? errorCode(error) as string : 'transient')
       await sleep(Math.random() * Math.min(TRANSACTION_BACKOFF_CAP_MS, TRANSACTION_BACKOFF_MS * 2 ** (tries - 1)))
     }
   }

@@ -22,6 +22,7 @@ import { createCircuitBreaker } from './circuitBreaker.js'
 import { guardRedisCommands, isRedisFailure, wasNotSent } from './redisGuard.js'
 import type { Frame, UpBusMsg, DownBusMsg } from './tunnel.js'
 import { redisStamps, type SwarmStamps } from '../superTabs/cache.js'
+import { busKind, markCpuKind } from './selfProfile.js'
 
 // A connection in subscriber mode must never fail its (re)SUBSCRIBE commands, so the sub side keeps
 // ioredis' "retry forever" setting.
@@ -157,7 +158,7 @@ function dispatchJson(registry: JsonSubscriber, channel: string, payload: string
 
 function createJsonSubscriber(conn: Redis, label: string): JsonSubscriber {
   const registry: JsonSubscriber = { conn, label, channelSubs: new Map(), channelSubscribePromises: new Map() }
-  conn.on('message', (channel: string, payload: string) => dispatchJson(registry, channel, payload))
+  conn.on('message', (channel: string, payload: string) => { markCpuKind(busKind(label, channel)); dispatchJson(registry, channel, payload) })
   return registry
 }
 
@@ -233,7 +234,11 @@ function dispatchBinary(channel: string, payload: Buffer): void {
     try { callback(Buffer.from(payload)) } catch (err) { logger.error('[bus] binary subscriber callback threw', err) }
   }
 }
-terminalSub.on('messageBuffer', (channelRaw: Buffer, payload: Buffer) => dispatchBinary(channelRaw.toString('utf8'), payload))
+terminalSub.on('messageBuffer', (channelRaw: Buffer, payload: Buffer) => {
+  const channel = channelRaw.toString('utf8')
+  markCpuKind(busKind('terminal', channel))
+  dispatchBinary(channel, payload)
+})
 
 async function addBinarySub(channel: string, callback: BinaryCb): Promise<() => void> {
   let callbacks = binarySubs.get(channel)

@@ -15,10 +15,13 @@ import {
 import { ensurePlans } from './lib/db/seed.js'
 import { prisma } from './lib/prisma.js'
 import { startQueryStats } from './lib/queryStats.js'
+import { startRetryStats } from './superTabs/retryStats.js'
 import { releaseSchema } from './lib/db/schemaRelease.js'
 import { startSwarmSweeps } from './superTabs/sweeps.js'
 import { startLegacyDrop } from './superTabs/migration/dropLegacyJob.js'
 import { startDeliverySettle } from './superTabs/deliverySettle.js'
+import { startDeliveryCompaction } from './superTabs/deliveryCompaction.js'
+import { startThreadBackfill } from './superTabs/threadBackfill.js'
 import { appPullRequests, markFinishedGroups, startSwarmArchive, unknownPullRequests } from './superTabs/archive.js'
 import { SuperTabStore } from './superTabs/store.js'
 import { announceSwarmDeliveries } from './lib/swarmDeliveryPushes.js'
@@ -38,6 +41,8 @@ async function start(): Promise<void> {
   // Every minute, this process's queries by model.action and filter shape (lib/queryStats.ts, DB roadmap Phase 1); its
   // jobs and startup migrations count as background.
   const stopQueryStats = startQueryStats()
+  // Every minute, how often Swarm transactions ran again and commands loaded twice (superTabs/retryStats.ts, DB 2.1).
+  const stopRetryStats = startRetryStats()
   // Existing production data was created against staging upstreams. Stamp it before Prisma swaps
   // the old global unique indexes for their per-environment replacements.
   await migrateAutonomousEnvironment()
@@ -63,6 +68,8 @@ async function start(): Promise<void> {
   let stopLegacyDrop = (): void => {}
   let stopArchive = (): void => {}
   let stopDeliveries = (): void => {}
+  let stopCompaction = (): void => {}
+  let stopThreadBackfill = (): void => {}
   let stopReceiptSweep = (): void => {}
   let stopReflection = (): void => {}
   const shutdown = (signal: string): void => {
@@ -75,10 +82,13 @@ async function start(): Promise<void> {
     stopLegacyDrop()
     stopArchive()
     stopDeliveries()
+    stopCompaction()
     stopReceiptSweep()
     stopReflection()
+    stopThreadBackfill()
     // The last partial minute, before the database closes.
     stopQueryStats()
+    stopRetryStats()
     void Promise.allSettled([prisma.$disconnect(), closeBus()]).finally(() => process.exit(0))
   }
   process.on('SIGINT', () => shutdown('SIGINT'))
@@ -103,6 +113,11 @@ async function start(): Promise<void> {
   stopArchive = startSwarmArchive(prisma, swarms, () => githubApp ? appPullRequests(githubApp) : unknownPullRequests)
   // A delivery that can no longer move ends as Not sent, instead of waiting for good (superTabs/deliverySettle.ts).
   stopDeliveries = startDeliverySettle(prisma, swarms)
+  // Every hour, finished deliveries 14 days old move into their messages' receipts, kept forever (superTabs/deliveryCompaction.ts).
+  stopCompaction = startDeliveryCompaction(prisma, env.SWARM_DELIVERY_COMPACTION)
+  // Every 15 minutes, thread summaries for replies no write summed up: all of a Swarm's at first, then only what changed
+  // (superTabs/threadBackfill.ts). Pages read the summaries once a Swarm is backfilled.
+  stopThreadBackfill = startThreadBackfill(prisma)
   // At 23:00 in each project's time zone, what its routed work cost and how it went, with routing changes asked of its owner
   // (lib/routingReflection.ts).
   stopReflection = startRoutingReflection(prisma, swarms)

@@ -64,6 +64,13 @@ export const NAMED_INDEX = {
   SuperTabDelivery: {
     /** An agent's deliveries by status and age: its open ones, oldest first. */
     agentOpen: { tabId: 1, agentId: 1, status: 1, createdAt: 1 },
+    /** Finished deliveries by their last change: those old enough to compact (deliveryCompaction.ts). */
+    compaction: { status: 1, updatedAt: 1 },
+  },
+  /** Compacted receipts (pageReads.ts): a page's by message id, and a host's by the compacted delivery's id. */
+  SuperTabReceipt: {
+    id: { _id: 1 },
+    delivery: { tabId: 1, deliveryIds: 1 },
   },
   /** A person's thread marks (readMarks.ts): `person`, every one or those moved since a cursor, the cap's count and oldest,
    *  and the sweep's people per Swarm; `age`, the sweep's marks untouched for 180 days. */
@@ -71,6 +78,8 @@ export const NAMED_INDEX = {
     person: { tabId: 1, personId: 1, updatedAt: 1 },
     age: { updatedAt: 1 },
   },
+  /** A page's thread summaries, by root id (pageReads.ts pageThreads). */
+  SuperTabThread: { id: { _id: 1 } },
 } as const
 export type NamedCollection = keyof typeof NAMED_INDEX
 export type NamedIndex<C extends NamedCollection> = keyof typeof NAMED_INDEX[C] & string

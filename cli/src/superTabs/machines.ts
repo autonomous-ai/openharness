@@ -12,7 +12,7 @@ import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
 import { readCapabilities, quotaOf, meteredEngine, quotaUnknownReason } from './capacity.js'
 import { startAgent, type ScopedRequest } from './start.js'
-import { prepareSwarmStart } from './projectFolder.js'
+import { PrepareRetryError, prepareSwarmStart } from './projectFolder.js'
 import { readAuthSession } from '../lib/authSession.js'
 import { createSwarmCloneTrustRepair, swarmCloneRoots } from './cloneTrust.js'
 import { git, sweepOne } from '../lib/worktreeSweep.js'
@@ -598,6 +598,14 @@ export class ContributedMachines {
                   github = (await (this.deps.prepare ?? ((core, pooled, queued) => prepareSwarmStart(core, pooled, queued,
                     { backend: this.deps.backend, team: (this.deps.team ?? (() => readAuthSession()?.kind === 'team'))() })))(this.core, row, start)) ?? null
                 } catch (error) {
+                  // A token call that got no answer is tried again on the next passes, on the clock of a refused start, and
+                  // fails it with the last reason once that runs out (Diego's Mac, 2026-10-30: one timeout failed a start).
+                  if (error instanceof PrepareRetryError) {
+                    const since = this.refusedSince.get(start.id) ?? began
+                    this.refusedSince.set(start.id, since)
+                    this.noteWaiting(start.id, error.message)
+                    if (began - since < START_REFUSED_MS) continue
+                  }
                   await scoped({ action: 'command', operationId: `prepare-failed-${start.id}`,
                     command: { type: 'agent.startFailed', startId: start.id,
                       error: error instanceof Error ? error.message : 'Could not prepare this project on the machine.' } })

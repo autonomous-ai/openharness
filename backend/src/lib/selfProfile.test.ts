@@ -1,6 +1,6 @@
 import Fastify from 'fastify'
 import { afterEach, expect, it } from 'vitest'
-import { frameKind, markCpuKind, selfProfileFromEnv, startSelfProfile, topSelfTime } from './selfProfile.js'
+import { busKind, frameKind, markCpuKind, selfProfileFromEnv, startSelfProfile, topCalls, topSelfTime } from './selfProfile.js'
 import { enterWork, workKind } from './queryStats.js'
 
 let stop = () => {}
@@ -110,4 +110,42 @@ it('names the work for the query stats too, with the profile off', async () => {
   }))
   expect(seen).toBe('web-ws swarm_changes')
   enterWork(undefined)
+})
+
+it('splits the profile by the route that ran each sample, from the work kinds marked while it ran', () => {
+  const app = (path: string) => `file://${process.cwd()}/${path}`
+  const at = (id: number, functionName: string, url: string, children: number[] = [], lineNumber = 0) => ({ id, callFrame: { functionName, url, lineNumber }, children })
+  const top = topSelfTime({
+    startTime: 0,
+    nodes: [at(1, '(root)', '', [2, 4]), at(2, 'changes', app('dist/read/service.js'), [3], 9), at(3, 'structuredClone', 'node:internal/worker/js_transferable', [], 111),
+      at(4, 'observeMachine', app('dist/superTabs/store.js'), [5], 99), at(5, 'structuredClone', 'node:internal/worker/js_transferable', [], 111)],
+    // Samples at 1, 2, 3, 4 and 5 ms, each 1 ms long.
+    samples: [3, 3, 5, 5, 5], timeDeltas: [1000, 1000, 1000, 1000, 1000, 1000],
+  }, { start: 0, marks: [[0, 'http GET /changes'], [2.5, 'http POST /machines']] })
+  expect(top.byRoute).toEqual({
+    'http POST /machines': { sampledMs: 3, inclusive: { 'observeMachine dist/superTabs/store.js:100': 3 },
+      callers: { 'structuredClone node:internal/worker/js_transferable:112 ← observeMachine dist/superTabs/store.js:100': 3 } },
+    'http GET /changes': { sampledMs: 2, inclusive: { 'changes dist/read/service.js:10': 2 },
+      callers: { 'structuredClone node:internal/worker/js_transferable:112 ← changes dist/read/service.js:10': 2 } },
+  })
+})
+
+it('counts calls of our functions from precise coverage, an anonymous one by its place, and nothing outside our code', () => {
+  const app = (path: string) => `file://${process.cwd()}/${path}`
+  const calls = topCalls([
+    { url: app('dist/superTabs/model.js'), functions: [{ functionName: 'stableId', ranges: [{ startOffset: 10, count: 900 }] },
+      { functionName: '', ranges: [{ startOffset: 4021, count: 50 }] }, { functionName: 'idle', ranges: [{ startOffset: 90, count: 0 }] }] },
+    { url: 'file:///app/node_modules/@prisma/client/runtime/library.js', functions: [{ functionName: 'parse', ranges: [{ startOffset: 1, count: 99999 }] }] },
+  ])
+  expect(calls).toEqual({ 'stableId dist/superTabs/model.js': 900, '(anonymous) dist/superTabs/model.js@4021': 50 })
+})
+
+it('names a Redis message by its subscriber and channel kind, never the id in the channel', () => {
+  expect(busKind('terminal', 'termup:6a8fe4fcf1a6b5972eed0103')).toBe('bus terminal termup')
+  expect(busKind('main', 'up:machine-123')).toBe('bus main up')
+  expect(busKind('app', 'appup:stream_9')).toBe('bus app appup')
+  expect(busKind('main', 'swarm-stamp')).toBe('bus main swarm-stamp')
+  // Anything that does not look like one of the bus's own names counts as other.
+  expect(busKind('main', 'Weird Channel:1')).toBe('bus main other')
+  expect(busKind('main', `${'x'.repeat(40)}:1`)).toBe('bus main other')
 })
