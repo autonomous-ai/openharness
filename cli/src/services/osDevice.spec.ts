@@ -2,14 +2,25 @@ import { EventEmitter } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { encryptDownFrame, encryptRpcResult } from '../lib/e2ee/applicationFrames.js'
 import { fakeCore } from '../testing/fakeCore.js'
+import { computerUseAvailable } from '../agentClient/computerUse.js'
+import { env } from '../config/env.js'
+import { MACHINE_MCP_FILE } from '../lib/machineMcp.js'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   activeSsid, CHECK_NOW, CMDLINE, deviceCodeOf, execBounded, GH, githubDeviceSignIn, githubLoginOf, joinRequest, LIVE_UPDATE, MAX_OUTPUT, nmcliFields, OS_DEVICE_REQUESTS, SETUP, SETUP_RESULT, spawnDetached,
   startOsDevice, UPDATE_BUSY_MS, updateOf, wifiNetworks, type OsDeviceDeps,
 } from './osDevice.js'
 
-// Nothing real is ever run: the defaults' child_process is this fake.
-const child = vi.hoisted(() => ({ execFile: vi.fn(), spawn: vi.fn() }))
+// Nothing real is ever run: the defaults' child_process is this fake. OpenCode's version is never found, so
+// computer use's default leaves OpenCode's own config alone (agentClient/computerUse.ts applyOpencode).
+const child = vi.hoisted(() => ({ execFile: vi.fn(), spawn: vi.fn(), execFileSync: vi.fn(() => { throw new Error('no opencode here') }) }))
 vi.mock('node:child_process', () => child)
+// Harness OS's computer-use tools are files under /usr/lib/harness-os, on no test machine: a test may say they are there.
+vi.mock('../agentClient/computerUse.js', async (real) => {
+  const actual = await real<typeof import('../agentClient/computerUse.js')>()
+  return { ...actual, computerUseAvailable: vi.fn(actual.computerUseAvailable) }
+})
 
 const OWNER = { local: false, owner: true }
 const STATUS = JSON.stringify({
@@ -224,6 +235,23 @@ describe('the Harness OS computer, managed from the phone', () => {
       expect(await tools(false).ask({ action: 'computer_use', state: 'on' })).toEqual({ error: 'UNSUPPORTED_OS' })
       expect(await tools().ask({ action: 'computer_use', state: 'on' }, { local: false, owner: false })).toEqual({ error: 'OWNER_REQUIRED' })
     })
+
+    it('by default, says and turns them in this machine\'s mcp-servers.json, where harness computer-use does', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      vi.mocked(computerUseAvailable).mockReturnValue(true)
+      try {
+        // The test setup's throwaway data folder (vitest.setup.ts), never this computer's.
+        const servers = () => Object.keys(JSON.parse(readFileSync(join(env.ADAPTER_DATA_DIR, MACHINE_MCP_FILE), 'utf8')).servers)
+        const { ask } = service()
+        expect(await ask({ action: 'computer_use' })).toEqual({ on: false })
+        expect(await ask({ action: 'computer_use', state: 'on' })).toEqual({ on: true })
+        expect(servers()).toEqual(expect.arrayContaining(['playwright', 'desktop']))
+        expect(await ask({ action: 'computer_use' })).toEqual({ on: true })
+        expect(await ask({ action: 'computer_use', state: 'off' })).toEqual({ on: false })
+        expect(servers()).toEqual([])
+        expect(await ask({ action: 'computer_use' })).toEqual({ on: false })
+      } finally { vi.mocked(computerUseAvailable).mockReset() }
+    })
   })
 
   describe('checking for updates now, from the phone', () => {
@@ -415,6 +443,22 @@ describe('the Harness OS computer, managed from the phone', () => {
       signInAs('octo')
       login.end()
       await vi.waitFor(() => expect(exec).toHaveBeenCalledWith(GH, ['auth', 'setup-git', '--hostname', 'github.com'], { timeout: 15_000 }))
+      expect(await ask({ action: 'github' })).toEqual({ login: 'octo' })
+    })
+
+    it('stays signed in when git cannot be set up to use the account, and says so in the log', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const { ask, exec, login, signInAs } = github()
+      const base = exec.getMockImplementation()!
+      exec.mockImplementation(async (file, args) => {
+        if (args[1] === 'setup-git') throw new Error('gh: git not found')
+        return base(file, args)
+      })
+      await ask({ action: 'github', state: 'sign_in' })
+      signInAs('octo')
+      login.end()
+      await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[os-device] gh auth setup-git failed:', 'gh: git not found'))
       expect(await ask({ action: 'github' })).toEqual({ login: 'octo' })
     })
 
