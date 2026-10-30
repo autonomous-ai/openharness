@@ -21,17 +21,67 @@ export async function pageReactions(tx: Transaction, tabId: string, messageIds: 
 export type PageDelivery = Pick<SuperTabDelivery, 'id' | 'messageId' | 'agentId' | 'status' | 'receipt' | 'holdReason' | 'holdSince'
   | 'claimFailingSince' | 'claimFailures' | 'deliveredAt' | 'answeredAt' | 'createdAt' | 'updatedAt'>
 
-/** The deliveries of one page of messages: who each message went to and how far it got. As Prisma read them: dates as
- *  Dates, and an optional field an older record lacks as null. */
+const date = (value: unknown) => value == null ? null : value instanceof Date ? value : new Date(ms(value))
+
+/** The deliveries of one page of messages: who each message went to and how far it got, from the live rows and the
+ *  compacted receipts (deliveryCompaction.ts), a live row winning for the same agent. As Prisma read them: dates as Dates,
+ *  and an optional field an older record lacks as null. A compacted receipt gives only these fields, never its host's. */
 export async function pageDeliveries(tx: Transaction, tabId: string, messageIds: string[]): Promise<PageDelivery[]> {
   const rows = await tx.superTabDelivery.aggregateRaw({ pipeline: [{ $match: { tabId, messageId: { $in: messageIds } } },
     { $project: { messageId: 1, agentId: 1, status: 1, receipt: 1, holdReason: 1, holdSince: 1, claimFailingSince: 1, claimFailures: 1, deliveredAt: 1, answeredAt: 1, createdAt: 1, updatedAt: 1 } }] }) as
     unknown as Array<Record<string, unknown>>
-  const date = (value: unknown) => value == null ? null : new Date(ms(value))
-  return rows.map(row => ({ id: row._id as string, messageId: row.messageId as string, agentId: row.agentId as string, status: row.status as string,
-    receipt: (row.receipt ?? null) as string | null, holdReason: (row.holdReason ?? null) as string | null, holdSince: date(row.holdSince),
-    claimFailingSince: date(row.claimFailingSince), claimFailures: (row.claimFailures ?? null) as number | null,
-    deliveredAt: date(row.deliveredAt), answeredAt: date(row.answeredAt), createdAt: date(row.createdAt)!, updatedAt: date(row.updatedAt)! }))
+  // After the rows, never beside them: a delivery compacted between the two reads is then in both, never in neither.
+  const compacted = await compactedReceipts(tx, tabId, messageIds)
+  const live = rows.map(row => pageDelivery({ ...row, id: row._id }))
+  const held = new Set(live.map(d => `${d.messageId}\0${d.agentId}`))
+  return [...live, ...compacted.filter(d => !held.has(`${d.messageId}\0${d.agentId}`)).map(pageDelivery)]
+}
+
+const pageDelivery = (row: Record<string, unknown>): PageDelivery => ({ id: row.id as string, messageId: row.messageId as string, agentId: row.agentId as string,
+  status: row.status as string, receipt: (row.receipt ?? null) as string | null, holdReason: (row.holdReason ?? null) as string | null, holdSince: date(row.holdSince),
+  claimFailingSince: date(row.claimFailingSince), claimFailures: (row.claimFailures ?? null) as number | null,
+  deliveredAt: date(row.deliveredAt), answeredAt: date(row.answeredAt), createdAt: date(row.createdAt)!, updatedAt: date(row.updatedAt)! })
+
+/** The fields a receipt document keeps of each of its deliveries, rather than per receipt. */
+const RECEIPT_DOCUMENT = new Set(['id', 'tabId', 'conversationId', 'messageId', 'agentId'])
+
+/** A delivery row as its compacted receipt stores it in its message's SuperTabReceipt (deliveryCompaction.ts), for a raw `$set`
+ *  (dates as extended JSON): the row as it was, under its agent's id and with its own as `deliveryId`, without what the
+ *  document holds once (its message, Swarm and conversation). The whole row is kept: a host that still holds the delivery is
+ *  answered from it (store.ts deliveryReceipt, deliver), as from the row. */
+export function receiptFields(row: SuperTabDelivery): Prisma.InputJsonObject {
+  const stored: Record<string, Prisma.InputJsonValue | null> = { deliveryId: row.id }
+  for (const [key, value] of Object.entries(row)) {
+    if (!RECEIPT_DOCUMENT.has(key)) stored[key] = value instanceof Date ? { $date: value.toISOString() } : value as Prisma.InputJsonValue | null
+  }
+  return stored as Prisma.InputJsonObject
+}
+
+/** A receipt document as raw reads return it. */
+interface ReceiptDocument { _id: string; tabId: string; conversationId: string; receipts?: Record<string, Record<string, unknown>> }
+
+/** One compacted receipt as the delivery row it was: dates as Dates, a field the row did not have as null. */
+function compactedRow(document: ReceiptDocument, agentId: string, stored: Record<string, unknown>): SuperTabDelivery {
+  const row: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(stored)) {
+    row[key] = value && typeof value === 'object' && '$date' in value ? date(value) : value
+  }
+  const { deliveryId, ...fields } = row
+  return { ...fields, id: deliveryId as string, tabId: document.tabId, conversationId: document.conversationId, messageId: document._id, agentId } as SuperTabDelivery
+}
+
+/** The compacted receipts of these messages, one per agent. By the primary key; the Swarm checked in the match. */
+async function compactedReceipts(tx: Transaction, tabId: string, messageIds: string[]): Promise<SuperTabDelivery[]> {
+  const documents = await readBy(tx, 'SuperTabReceipt', 'id', [{ $match: { _id: { $in: messageIds }, tabId } }]) as unknown as ReceiptDocument[]
+  return documents.flatMap(document => Object.entries(document.receipts ?? {}).map(([agentId, stored]) => compactedRow(document, agentId, stored)))
+}
+
+/** A delivery of this agent that was compacted, as the row it was, found by its id (index [tabId, deliveryIds]); null when
+ *  there is none. A host back after weeks offline still settles what its journal holds (store.ts deliveryReceipt, deliver). */
+export async function compactedDelivery(tx: Transaction, tabId: string, agentId: string, deliveryId: string): Promise<SuperTabDelivery | null> {
+  const [document] = await readBy(tx, 'SuperTabReceipt', 'delivery', [{ $match: { tabId, deliveryIds: deliveryId } }, { $limit: 1 }]) as unknown as ReceiptDocument[]
+  const stored = document?.receipts?.[agentId]
+  return document && stored?.deliveryId === deliveryId ? compactedRow(document, agentId, stored) : null
 }
 
 /** The deliveries a host is still told about (the rest are answered, cancelled or confirmed). */
@@ -143,22 +193,26 @@ export interface ThreadReply { thread: string; id: string; author: Author; menti
 interface ThreadPart { thread: string; root: boolean; kind?: unknown; only?: unknown; to: boolean; session?: boolean | null }
 /** One row of a part, by its place in the thread. */
 interface ThreadPlace { s: number; i: string; at: unknown; author: Author; slot?: number }
+/** What the database sums up of some threads' rows (threadFacet), as it returns it: the same whoever reads. */
+export interface ThreadFacet {
+  parts: Array<{ _id: ThreadPart; count: number; oldest: ThreadPlace; newest: ThreadPlace; root?: { source?: unknown; recipientIds?: string[] } | null }>
+  mentions: Array<{ _id: ThreadPart & { person: string }; first: ThreadPlace }>
+}
 
 /**
- * The threads rooted at `roots` in one conversation, roots included, oldest first, as a few rows that stand for all of them:
- * what the page's thread summaries are counted from (threads.ts). The database groups the rows of each part (ThreadPart) and
- * returns its oldest and newest row, how many it has (`count` on the newest), and where each person it tags is first tagged.
+ * The threads rooted at `roots` in one conversation, roots included, as the database sums them up: it groups the rows of each
+ * part (ThreadPart) and returns its oldest and newest row, how many it has, and where each person it tags is first tagged.
  * That is every place a summary reads: first appearances, the newest reply of each author, the count and the last reply. So
  * a poll that brings one reply of a 500-reply thread gets a few rows back, not 500, while the summaries stay what every
  * row gave (integration/superTabIndexes.test.ts). Matched as the page reads are, so the thread index bounds it; the database
  * still examines each of the threads' rows.
  */
-export async function pageThreads(tx: Transaction, tabId: string, conversationId: string, roots: string[]): Promise<ThreadReply[]> {
+export async function threadFacet(tx: Transaction, tabId: string, conversationId: string, roots: string[]): Promise<ThreadFacet> {
   const root = { $eq: ['$_id', '$thread'] }
   const part = { thread: '$thread', root, kind: '$source.kind', only: '$source.recipientsOnly',
     to: { $gt: [{ $size: { $ifNull: ['$recipientIds', []] } }, 0] }, author: { kind: '$author.kind', id: '$author.id' },
     session: { $eq: ['$buddySession', true] } }
-  // (sequence, id) lead each place, so the database's min and max order rows as the sort below does (ids are ASCII).
+  // (sequence, id) lead each place, so the database's min and max order rows as threadReplies sorts them (ids are ASCII).
   const place = { s: '$sequence', i: '$_id', at: '$createdAt', author: '$author' }
   // No $sort: it makes the planner walk the conversation's sequence index instead.
   const [found] = await readBy(tx, 'SuperTabMessage', 'thread', [{ $match: { tabId, conversationId, thread: { $in: roots } } },
@@ -168,11 +222,13 @@ export async function pageThreads(tx: Transaction, tabId: string, conversationId
         root: { $first: { $cond: [root, { source: '$source', recipientIds: '$recipientIds' }, '$$REMOVE'] } } } }],
       mentions: [{ $unwind: { path: '$mentions', includeArrayIndex: 'slot' } },
         { $group: { _id: { ...part, person: '$mentions' }, first: { $min: { s: '$sequence', i: '$_id', slot: { $toInt: '$slot' }, at: '$createdAt', author: '$author' } } } }],
-    } }]) as unknown as Array<{
-      parts: Array<{ _id: ThreadPart; count: number; oldest: ThreadPlace; newest: ThreadPlace; root?: { source?: unknown; recipientIds?: string[] } | null }>
-      mentions: Array<{ _id: ThreadPart & { person: string }; first: ThreadPlace }>
-    }>
-  const parts = found?.parts ?? [], mentions = found?.mentions ?? []
+    } }]) as unknown as Array<Partial<ThreadFacet>>
+  return { parts: found?.parts ?? [], mentions: found?.mentions ?? [] }
+}
+
+/** The rows a page's thread summaries are counted from (threads.ts), oldest first, from what threadFacet gave: a few rows that
+ *  stand for every row of each thread (`count` on the newest of each part), with what each reader skips marked. */
+export async function threadReplies(tx: Transaction, tabId: string, { parts, mentions }: ThreadFacet): Promise<ThreadReply[]> {
   const copies = await deliveredCopies(tx, tabId, parts.flatMap(p => p._id.root && p.root
     ? [{ id: p._id.thread, source: p.root.source, recipientIds: p.root.recipientIds ?? [] }] : []))
   // agentOnly reads only whether a row has recipients, not who they are.
@@ -192,4 +248,65 @@ export async function pageThreads(tx: Transaction, tabId: string, conversationId
   for (const m of mentions) row(m._id, m.first).slots.push([m.first.slot!, m._id.person])
   return [...rows.values()].map(({ slots, ...reply }) => ({ ...reply, mentions: slots.sort((a, b) => a[0] - b[0]).map(([, person]) => person) }))
     .sort((a, b) => a.sequence - b.sequence || (a.id < b.id ? -1 : 1))
+}
+
+/**
+ * The rows the threads rooted at `roots` are summed up from (threadReplies). A Swarm whose summaries are backfilled
+ * (threadBackfill.ts) reads them by root id from SuperTabThread, one small document per thread with a reply; any other runs
+ * threadFacet over the threads' rows. A root with no summary has no reply, and threads.ts leaves such a thread out, so it is
+ * left out here too.
+ */
+export async function pageThreads(tx: Transaction, tabId: string, conversationId: string, roots: string[]): Promise<ThreadReply[]> {
+  if (!await threadsBackfilled(tx, tabId)) return threadReplies(tx, tabId, await threadFacet(tx, tabId, conversationId, roots))
+  const stored = await readBy(tx, 'SuperTabThread', 'id', [{ $match: { _id: { $in: roots }, tabId, conversationId } },
+    { $project: { parts: 1, mentions: 1 } }]) as unknown as ThreadFacet[]
+  return threadReplies(tx, tabId, { parts: stored.flatMap(t => t.parts), mentions: stored.flatMap(t => t.mentions) })
+}
+
+/**
+ * Rewrites the summaries of the threads rooted at `roots` in one conversation from their rows now: one document per thread
+ * with a reply, as threadFacet gives it. Run in the transaction that inserts a reply (refreshReplies), so a summary holds what
+ * its rows do: two replies at once write the same document, and one of their transactions runs again.
+ */
+export async function refreshThreads(tx: Transaction, tabId: string, conversationId: string, roots: string[]): Promise<void> {
+  if (!roots.length) return
+  const { parts, mentions } = await threadFacet(tx, tabId, conversationId, roots)
+  const updatedAt = { $date: new Date().toISOString() }
+  const updates = roots.flatMap(root => {
+    const own = parts.filter(p => p._id.thread === root)
+    if (!own.some(p => !p._id.root)) return []
+    return [{ q: { _id: root }, u: { $set: { tabId, conversationId, parts: own, mentions: mentions.filter(m => m._id.thread === root), updatedAt } },
+      upsert: true }]
+  })
+  // Raw, so the stored parts read back as the $facet returns them, dates as dates.
+  if (updates.length) await tx.$runCommandRaw({ update: 'SuperTabThread', updates: updates as unknown as Prisma.InputJsonArray })
+}
+
+/** Refreshes the summaries of the threads that `rows`, just inserted, reply in (refreshThreads). A row that is its own
+ *  thread's root, or has none (written before threads), changes no summary. */
+export async function refreshReplies(tx: Transaction, tabId: string,
+  rows: ReadonlyArray<{ id: string; conversationId: string; thread?: string | null }>): Promise<void> {
+  const roots = new Map<string, Set<string>>()
+  for (const row of rows) {
+    if (row.thread && row.thread !== row.id) roots.set(row.conversationId, (roots.get(row.conversationId) ?? new Set()).add(row.thread))
+  }
+  for (const [conversationId, threads] of roots) await refreshThreads(tx, tabId, conversationId, [...threads])
+}
+
+/** How long this process trusts what it last read of a Swarm's backfill marker. */
+const BACKFILL_CHECK_MS = 60_000
+const backfilled = new Map<string, { done: boolean; at: number }>()
+
+/** Whether the Swarm's thread summaries are backfilled (threadBackfill.ts), as this process read it in the last minute. */
+async function threadsBackfilled(tx: Transaction, tabId: string): Promise<boolean> {
+  const known = backfilled.get(tabId), now = Date.now()
+  if (known && now - known.at < BACKFILL_CHECK_MS) return known.done
+  const done = !!await tx.superTabThreadBackfill.findUnique({ where: { id: tabId }, select: { id: true } })
+  backfilled.set(tabId, { done, at: now })
+  return done
+}
+
+/** Notes that this process backfilled the Swarm's summaries, so its own reads use them at once. */
+export function noteBackfilled(tabId: string): void {
+  backfilled.set(tabId, { done: true, at: Date.now() })
 }

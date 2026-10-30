@@ -13,7 +13,8 @@ import { applyCommand, authorizeCommandAccess, operationSchema, PAIR_CHAIN_LIMIT
 import { redactCredentials } from './credentials.js'
 import type { AvatarUpload } from './profile.js'
 import { reactionCounts, type ReactionTarget } from './reactions.js'
-import { agentOpenDeliveries, deliveredCopies, messagesById, messagesPast, OPEN_DELIVERY, type MessageEdge, pageDeliveries, pageReactions, pageThreads, type PageDelivery } from './pageReads.js'
+import { agentOpenDeliveries, compactedDelivery, deliveredCopies, messagesById, messagesPast, OPEN_DELIVERY, type MessageEdge, pageDeliveries, pageReactions, pageThreads, refreshReplies, type PageDelivery } from './pageReads.js'
+import { restoreDelivery } from './deliveryCompaction.js'
 import { threadSummaries } from './threads.js'
 import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, objectKeyFor, peekType, publicUrl, trimPrefix,
   type Attachment, type Attachments, type AttachmentStore, type AvatarStore } from './attachments.js'
@@ -66,6 +67,7 @@ import { closeAssignment, closeUnassignedStart, LIST_SIZE, newestConversations, 
 import { dropHeldTags, listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByReply, resolveWhenWorked, writeMentions } from './mentions.js'
 import { answerable, askDecisions, MAX_OPEN_DECISIONS, REFLECTION_DECISION, reflectionDecisions, expireReflections, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingFor, waitingIn, waitingInProject, writeDecisions } from './decisions.js'
 import { CATCH_UP_SCAN, catchUpSummary, type CatchUp } from './catchUp.js'
+import { recordMessageRead, type MessageReadKey } from './messageReadStats.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySaveSchema, type RoutingPolicy } from './routingPolicy.js'
 import { invitedSwarms } from './invitedSwarms.js'
 import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSchema, requireSharingOwner,
@@ -406,6 +408,23 @@ const buddyNews = (message: Pick<SuperTabMessage, 'recipientIds'>, delivery: Pic
  *  others could not (security review 2 of #2115). */
 const readsRow = (actor: Actor, buddy: boolean) => (m: Pick<SuperTabMessage, 'source' | 'recipientIds'>): boolean =>
   (!agentOnly(m.source, m.recipientIds) || (actor.kind === 'agent' && m.recipientIds.includes(actor.agentId))) && !(buddy && routingRow(m.source))
+
+/** A page shows 100 rows and reads a 101st to know there are more. After the first batch, each reads the rows still missing at
+ *  the rate this reader has seen them so far, plus a tenth; twice what was read while none was readable; at least MIN_BATCH,
+ *  at most MAX_BATCH (spec 5 A2). One hidden row costs 10 more rows, not a second batch of 101; a chat mostly of notes to
+ *  others fills in about two batches, reading about what the old 101-row batches read. */
+const PAGE_BATCH = 101, MIN_BATCH = 10, MAX_BATCH = 400
+const nextBatch = (decoded: number, shown: number): number => Math.min(MAX_BATCH, Math.max(MIN_BATCH,
+  shown ? Math.ceil((PAGE_BATCH - shown) * decoded / shown * 1.1) : 2 * decoded))
+/** How a messages read counts in the read log (messageReadStats.ts). */
+const readerKind = (actor: Actor, buddy: boolean): MessageReadKey['reader'] => buddy ? 'buddy' : actor.kind
+const sessionKind = (user: AuthUser): MessageReadKey['session'] => user.harnessSessionKind ?? 'sso'
+/** A message's receipts in the order they were written, live or compacted alike: by creation, one write's in the order of
+ *  its recipients (store.ts writeMessages), then by id. */
+const receiptOrder = (m: Pick<SuperTabMessage, 'recipientIds'>) => (a: PageDelivery, b: PageDelivery): number => {
+  const place = (d: PageDelivery) => { const at = m.recipientIds.indexOf(d.agentId); return at < 0 ? Infinity : at }
+  return a.createdAt.getTime() - b.createdAt.getTime() || place(a) - place(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+}
 
 /** A row as a Buddy reads it, without the machine it names (security reviews of #2115): a lost task's reason, in its text and
  *  its source (liveness.ts loseTask), a machine leaving the Swarm (machines.ts removalEnded, commands.ts removeMachine), and
@@ -2050,6 +2069,8 @@ export class SuperTabStore {
       }
     }
     if (rows.length) await tx.superTabMessage.createMany({ data: rows })
+    // A reply's thread summary, in this transaction (pageReads.ts refreshThreads).
+    await refreshReplies(tx, tabId, rows)
     for (const message of messages) {
       // Once committed, so a retried write logs once.
       if (message.source?.kind === SESSION_ENDED_KIND && !kept.has(message.id)) {
@@ -2059,6 +2080,9 @@ export class SuperTabStore {
     }
     if (kept.size) {
       const have = new Set((await tx.superTabDelivery.findMany({ where: { messageId: { in: [...kept] } }, select: { id: true } })).map(d => d.id))
+      // A delivery compacted into its message's receipts (deliveryCompaction.ts) was written too: never sent again.
+      const compacted = await readBy(tx, 'SuperTabReceipt', 'id', [{ $match: { _id: { $in: [...kept] }, tabId } }, { $project: { deliveryIds: 1 } }])
+      for (const receipt of compacted) for (const id of receipt.deliveryIds as string[] ?? []) have.add(id)
       deliveries = deliveries.filter(d => !have.has(d.id))
     }
     if (deliveries.length) await tx.superTabDelivery.createMany({ data: deliveries })
@@ -2099,6 +2123,8 @@ export class SuperTabStore {
   async messages(user: AuthUser, tabId: string, conversationId: string,
     cursor: { after?: number; afterId?: string; before?: number; beforeId?: string; messageId?: string; thread?: string }, asAgentId?: string) {
     const tx = this.db
+    const read: MessageReadKey['cursor'] = cursor.messageId ? 'messageId' : cursor.thread ? 'thread' : cursor.after !== undefined ? 'after'
+      : cursor.before === undefined ? 'latest' : cursor.beforeId === undefined ? 'before' : 'beforeId'
     const { state } = await this.readLoad(user, tabId, { groupIds: [conversationId] })
     const actor = await this.actor(tx, user, state, asAgentId)
     const group = readConversation(state, actor, conversationId)
@@ -2133,17 +2159,23 @@ export class SuperTabStore {
       : cursor.before !== undefined ? { sequence: cursor.before, id: cursor.beforeId } : undefined
     // Hidden rows never shorten a page: Desktop reads on from the
     // last row it shows, so the page reads past them until it has 101 rows this reader may see, or reaches the end.
-    // Each batch reads on from the last row of the one before, never by an offset that walks every row before it again.
+    // Each batch reads on from the last row of the one before, never by an offset that walks every row before it again, and
+    // only about what is still missing (nextBatch): one hidden row once cost a whole second batch of 101.
     const rows: SuperTabMessage[] = []
-    for (let edge = start; rows.length <= 100;) {
-      const batch = await messagesPast(tx, at, edge, forward, 101)
+    let batches = 0, decoded = 0
+    for (let edge = start, size = PAGE_BATCH; rows.length < PAGE_BATCH;) {
+      const batch = await messagesPast(tx, at, edge, forward, size)
+      batches++
+      decoded += batch.length
       // A task chat's copy of a Lead's notice stored before it was marked is that notice: read by no one (pageReads.ts).
       const copies = await deliveredCopies(tx, tabId, batch)
       rows.push(...batch.filter(m => !copies.has(m.id) && readable(m)))
-      if (batch.length < 101) break
+      if (batch.length < size) break
       edge = { sequence: batch.at(-1)!.sequence, id: batch.at(-1)!.id }
+      size = nextBatch(decoded, rows.length)
     }
     const page = rows.slice(0, 100)
+    recordMessageRead({ reader: readerKind(actor, buddy), cursor: read, session: sessionKind(user) }, batches, decoded, page.length)
     const next = rows.length > 100 ? { sequence: page.at(-1)!.sequence, id: page.at(-1)!.id } : null
     if (!forward) page.reverse()
     const reactions = page.length ? reactionCounts(state, await pageReactions(tx, tabId, page.map(m => m.id))) : new Map()
@@ -2173,7 +2205,7 @@ export class SuperTabStore {
     // A session's own thread read carries the main-chat excerpt it started from (buddySessions.ts sessionContext).
     const context = own && !forward && cursor.before === undefined && !cursor.messageId ? await this.sessionExcerpt(tx, tabId, conversationId, own.from, rowRead) : undefined
     return { messages: shown.map(m => ({ ...m, mentions: m.mentions ?? [], reactions: reactions.get(m.id) ?? [],
-      deliveries: deliveries.filter(d => d.messageId === m.id && shownTo(m, d)) })), next, threads, ...(context ? { context } : {}),
+      deliveries: deliveries.filter(d => d.messageId === m.id && shownTo(m, d)).sort(receiptOrder(m)) })), next, threads, ...(context ? { context } : {}),
       // A poll for new messages learns here that a reaction changed on a message it already shows (reactions.ts).
       reactionSeq: group.reactionSeq ?? 0 }
   }
@@ -2206,6 +2238,7 @@ export class SuperTabStore {
     // A task chat's copy of a Lead's notice stored before it was marked is read by no one, as on the page (pageReads.ts).
     const copies = await deliveredCopies(this.db, tabId, scanned)
     const shown = scanned.filter(m => !copies.has(m.id) && reads(m))
+    recordMessageRead({ reader: readerKind(actor, buddy), cursor: 'catchUp', session: sessionKind(user) }, 1, rows.length, shown.length)
     return catchUpSummary(buddy ? shown.map(rowForBuddy) : shown, user.sub, { after, more: rows.length > CATCH_UP_SCAN, decisions })
   }
 
@@ -2842,7 +2875,8 @@ export class SuperTabStore {
   async deliveryReceipt(user: AuthUser, tabId: string, agentId: string, deliveryId: string) {
     return transaction(this.db, async tx => {
       const { state } = await this.load(tx, user, tabId)
-      const row = await tx.superTabDelivery.findFirst({ where: { id: deliveryId, tabId, agentId } })
+      // A host back after weeks offline asks about a delivery compacted since (deliveryCompaction.ts): answered from its receipt.
+      const row = await tx.superTabDelivery.findFirst({ where: { id: deliveryId, tabId, agentId } }) ?? await compactedDelivery(tx, tabId, agentId, deliveryId)
       if (!row) fail('NOT_FOUND', 'This delivery is unavailable.', 404)
       const previous = state.agents.find(a => a.id === agentId && a.membershipGeneration === row.membershipGeneration)
       const owner = row.machineOwnerId ?? previous?.machineOwnerId
@@ -2896,7 +2930,9 @@ export class SuperTabStore {
     action: { type: 'claim'; claimId: string } | { type: 'ack'; claimId: string; receipt: string; uncertain: boolean }
       | { type: 'hold'; claimId: string; reason: HoldReason }, reached: { authorized: boolean }) {
     return transaction(this.db, async tx => {
-      const delivery = await tx.superTabDelivery.findFirst({ where: { id: deliveryId, tabId, agentId } })
+      const live = await tx.superTabDelivery.findFirst({ where: { id: deliveryId, tabId, agentId } })
+      // A compacted delivery (deliveryCompaction.ts) is checked as its row was: finished, it is refused or resolved as before.
+      const delivery = live ?? await compactedDelivery(tx, tabId, agentId, deliveryId)
       await this.row(tx, user, tabId)
       // A native message may be delivered to its Lead in a different conversation from the terminal it came from.
       const context = delivery?.nativeContextId ? await tx.superTabNativeContext.findFirst({
@@ -2932,6 +2968,8 @@ export class SuperTabStore {
         const part = parts.members.find(p => p.key === touch.key)
         if (part) await guardedWrite(tx, tabId, { op: 'touch', ...touch, seen: part.version }, stamp)
       }
+      // Only a held delivery the pass ended can get here compacted: its host typed it after all, so it is a row again.
+      if (!live) await restoreDelivery(tx, delivery)
       // A claim that gets in ends the failing record. Unset, never null: a missing field is a real absence, which the first failure's
       // isSet: false branch matches and which leaves no keys in the document.
       const updated = await tx.superTabDelivery.update({ where: { id: delivery.id }, data: { status, claimId: action.claimId,
