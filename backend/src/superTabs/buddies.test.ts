@@ -198,11 +198,15 @@ describe('what a Buddy reads', () => {
     expect([agent(f.pm).machineOwnerId, agent(f.pm).contributorId, agent(f.pm).teamAccount]).toEqual(['', '', undefined])
     expect(seen.conversations.find(c => c.id === f.group)!.assignment!.execution).toEqual({ machineId: '', harnessId: '', machineOwnerId: '' })
     expect(JSON.stringify(seen)).not.toMatch(/ken-user|"teamAccount"/)
-    // Its own record keeps who added it and on whose machine, as before.
-    expect([agent('buddy').machineOwnerId, agent('buddy').contributorId]).toEqual(['host', 'peer'])
+    // Nor at which membership another agent was added, which matches a person's and so names them (delta review 1 of #2258).
+    const generations = new Set(seen.people.map(p => p.generation))
+    expect(seen.agents.filter(a => a.id !== 'buddy' && generations.has(a.membershipGeneration)).map(a => a.id)).toEqual([])
+    expect(agent(f.pm).membershipGeneration).toBe('')
+    // Its own record keeps who added it, at which membership and on whose machine, as before.
+    expect([agent('buddy').machineOwnerId, agent('buddy').contributorId, agent('buddy').membershipGeneration]).toEqual(['host', 'peer', 'first'])
     // People and the PM read them as before; the stored agent is unchanged.
     for (const reader of [owner, { kind: 'agent', agentId: f.pm, machineOwnerId: 'ken-user' } as Actor]) expect(visibleState(f.state, reader).agents
-      .find(a => a.id === f.pm)).toMatchObject({ machineOwnerId: 'ken-user', contributorId: 'owner', teamAccount: true })
+      .find(a => a.id === f.pm)).toMatchObject({ machineOwnerId: 'ken-user', contributorId: 'owner', teamAccount: true, membershipGeneration: pm.membershipGeneration })
     expect(pm).toMatchObject({ machineOwnerId: 'ken-user', contributorId: 'owner', teamAccount: true })
   })
 

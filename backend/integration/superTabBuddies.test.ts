@@ -461,6 +461,42 @@ describe('a Buddy through the store', () => {
   })
 })
 
+describe('a Buddy matching agents to people (delta review 1 of #2258)', () => {
+  it('matches no agent to a person by membership: not on its roster, nor by who wrote a row; a person\'s row keeps theirs', async () => {
+    const f = await swarm()
+    const { agentId } = await buddy(f)
+    const send = async (text: string, user: typeof owner, asAgentId?: string, replyTo: string | null = null) => String((await f.execute({ type: 'message.send',
+      conversationId: 'lead', text, replyTo, recipientIds: [] }, user, asAgentId)).result.messageId)
+    const pmRow = await send('The plan is up.', owner, f.lead), personRow = await send('Thanks.', peer)
+    await send('Glad it helps.', owner, f.lead, personRow)
+    const people = (await f.store.read(owner, f.tab)).state.people
+    const generations = new Set(people.map(p => p.generation))
+    const peerGeneration = people.find(p => p.id === peer.sub)!.generation
+
+    // The roster: no agent but itself at a membership that matches a person's.
+    const first = await new SwarmReads(f.store).firstLoad(peer, f.tab, agentId)
+    const roster = first.agents.map(a => a.data)
+    expect(roster.map(a => a.id)).toContain(f.lead)
+    expect(roster.filter(a => a.id !== agentId && generations.has(a.membershipGeneration)).map(a => a.id)).toEqual([])
+    expect(roster.find(a => a.id === agentId)!.membershipGeneration).toBe(peerGeneration)
+
+    // Rows: an agent's has no membership, in the page and read alone; a person's keeps theirs, which its host compares.
+    const authors = (rows: Array<{ id: string; author: { membershipGeneration: string } }>) =>
+      [pmRow, personRow].map(id => rows.find(m => m.id === id)?.author.membershipGeneration)
+    const page = await f.store.messages(peer, f.tab, 'lead', {}, agentId)
+    expect(authors(page.messages)).toEqual(['', peerGeneration])
+    // Nor among a thread's reply authors.
+    expect(page.threads.find(t => t.id === personRow)!.authors.map(a => [a.kind, a.membershipGeneration])).toEqual([['agent', '']])
+    expect(authors((await f.store.messages(peer, f.tab, 'lead', { messageId: pmRow }, agentId)).messages)).toEqual(['', undefined])
+    // People and the PM read every author as written.
+    const pmGeneration = (await f.store.messages(owner, f.tab, 'lead', {})).messages.find(m => m.id === pmRow)!.author.membershipGeneration
+    expect(generations.has(pmGeneration)).toBe(true)
+    const pmPage = await f.store.messages(owner, f.tab, 'lead', {}, f.lead)
+    expect(authors(pmPage.messages)).toEqual([pmGeneration, peerGeneration])
+    expect(pmPage.threads.find(t => t.id === personRow)!.authors.map(a => a.membershipGeneration)).toEqual([pmGeneration])
+  })
+})
+
 describe('a person\'s Buddy chat before any Buddy, and the PM\'s private lines (Ken, 10-29)', () => {
   const tell = (text: string) => ({ type: 'person.tell' as const, personId: peer.sub, text })
 

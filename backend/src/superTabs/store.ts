@@ -410,6 +410,18 @@ function withoutMachineNames(m: SuperTabMessage): SuperTabMessage {
   return m
 }
 const LEAD_STARTED = `${LEAD_NAME} started on `, LEAD_ASKED = '. It asked for '
+
+/** A row as a Buddy reads it: without the machine it names, and an agent author without its membership's generation, which
+ *  matches its person's and so says whose agent wrote it (delta review 1 of #2258). A person author's stays: the Buddy's host
+ *  compares it to tell its own person's message (cli host.ts). */
+function rowForBuddy(m: SuperTabMessage): SuperTabMessage {
+  const shown = withoutMachineNames(m)
+  const author = authorForBuddy(shown.author as Author | null)
+  return author === shown.author ? shown : { ...shown, author: author as SuperTabMessage['author'] }
+}
+/** An author as a Buddy reads it, in a row or among a thread's reply authors: an agent's without its membership. */
+const authorForBuddy = <T extends Pick<Author, 'kind' | 'membershipGeneration'> | null>(author: T): T =>
+  author?.kind === 'agent' && author.membershipGeneration ? { ...author, membershipGeneration: '' } : author
 const [UNPURGED_HEAD, UNPURGED_TAIL] = unpurgedNotice('\0').split('\0') as [string, string]
 
 export class SuperTabStore {
@@ -2022,9 +2034,11 @@ export class SuperTabStore {
     // The threads the page's rows are in, so a poll that brings only a reply still moves its root's reply line.
     const roots = [...new Set(page.flatMap(m => m.thread && !hidden.has(m.thread) ? [m.thread] : []))]
     const threadRows = roots.length ? await pageThreads(tx, tabId, conversationId, roots) : []
-    const threads = threadRows.length ? threadSummaries(state, group, buddy ? threadRows.filter(r => !r.routing) : threadRows) : []
-    // A lost task's rows and a machine leaving name the machine; a Buddy reads them without it (security reviews of #2115).
-    const shown = (buddy ? page.map(withoutMachineNames) : page).map(m => (m.thread && hidden.has(m.thread)) || (m.replyTo && hidden.has(m.replyTo))
+    const summaries = threadRows.length ? threadSummaries(state, group, buddy ? threadRows.filter(r => !r.routing) : threadRows) : []
+    const threads = buddy ? summaries.map(t => ({ ...t, authors: t.authors.map(authorForBuddy) })) : summaries
+    // A lost task's rows and a machine leaving name the machine; a Buddy reads them without it (security reviews of #2115), and
+    // an agent's rows without its membership (delta review 1 of #2258).
+    const shown = (buddy ? page.map(rowForBuddy) : page).map(m => (m.thread && hidden.has(m.thread)) || (m.replyTo && hidden.has(m.replyTo))
       ? { ...m, ...(m.thread && hidden.has(m.thread) ? { thread: null } : {}), ...(m.replyTo && hidden.has(m.replyTo) ? { replyTo: null } : {}) } : m)
     // Whose Buddy hears a row is its person's own: its news shows to that Buddy alone.
     const shownTo = (m: SuperTabMessage, d: PageDelivery) => !buddyNews(m, d) || (actor.kind === 'agent' && actor.agentId === d.agentId)
@@ -2052,7 +2066,7 @@ export class SuperTabStore {
     // A task chat's copy of a Lead's notice stored before it was marked is read by no one, as on the page (pageReads.ts).
     const copies = await deliveredCopies(this.db, tabId, scanned)
     const shown = scanned.filter(m => !copies.has(m.id) && reads(m))
-    return catchUpSummary(buddy ? shown.map(withoutMachineNames) : shown, user.sub, { after, more: rows.length > CATCH_UP_SCAN, decisions })
+    return catchUpSummary(buddy ? shown.map(rowForBuddy) : shown, user.sub, { after, more: rows.length > CATCH_UP_SCAN, decisions })
   }
 
   /** The caller's own tags in this Swarm, newest first: still waiting, or answered and marked done. */
@@ -2665,7 +2679,7 @@ export class SuperTabStore {
       // A Buddy reads no machine names, in what it is handed too (security review 2 of #2178). News from outside its chat
       // (buddyNews.ts) is marked, so its host words it as news to note, never a message to answer there.
       const target = agent(state, agentId), group = conversation(state, delivery.conversationId)
-      const message = row && isBuddy(target) ? withoutMachineNames(row) : row
+      const message = row && isBuddy(target) ? rowForBuddy(row) : row
       return { delivery: updated, message, ...isBuddy(target) && !group.agentIds.includes(target.id) ? { buddyNews: true as const } : {} }
     })
   }
