@@ -10,7 +10,7 @@ import { PASTE_DROPS_DIR } from './pasteDropFiles.js'
 export interface BuddyReads { file: string; drops: string }
 /** Wide mode's settings for a Buddy's guard (docs/specs/2026-10-30-buddy-read-access.md): its person's home, the places
  *  outside its folder that stay closed, and its person's approvals on this machine. */
-export interface BuddyWide { home: string; denied: readonly string[]; approvals: string }
+export interface BuddyWide { home: string; denied: readonly string[]; approvals: string; repos: readonly string[] }
 
 /** Places in a home that hold secrets or other people's data (the Lead's list, 10-30): ssh, cloud, GitHub, ArgoCD and
  *  Harness credentials; keychains; browser profiles and mail; shell and database histories, which keep typed secrets; and
@@ -27,10 +27,10 @@ const CLOSED_IN_HOME = ['.ssh', '.aws', '.azure', '.config/gcloud', '.gnupg', '.
   'Library/Application Support/Claude']
 
 /** Wide mode for one person's Buddy: [home] is theirs, [dataDir] Harness's data folder (its lists, approvals, downloads and
- *  agent records stay closed), [tmpDirs] where Claude Code keeps other sessions' tool output, and [personKey] their id
- *  and membership, which keys their approvals. */
-export function buddyWideOf(input: { home: string; dataDir: string; tmpDirs: readonly string[]; personKey: string }): BuddyWide {
-  return { home: input.home, denied: [...CLOSED_IN_HOME.map(path => join(input.home, path)), input.dataDir, ...input.tmpDirs],
+ *  agent records stay closed), [tmpDirs] where Claude Code keeps other sessions' tool output, [personKey] their id and
+ *  membership, which keys their approvals, and [repos] the project's repositories (owner/name), the only ones gh api reads. */
+export function buddyWideOf(input: { home: string; dataDir: string; tmpDirs: readonly string[]; personKey: string; repos: readonly string[] }): BuddyWide {
+  return { home: input.home, repos: input.repos, denied: [...CLOSED_IN_HOME.map(path => join(input.home, path)), input.dataDir, ...input.tmpDirs],
     approvals: join(input.dataDir, 'buddy-approvals', `${createHash('sha256').update(input.personKey).digest('hex')}.json`) }
 }
 
@@ -357,6 +357,111 @@ function bashAllowed(command) {
   return false
 }
 
+// Wide mode's commands (docs/specs/2026-10-30-buddy-read-access.md): reads of CI, ArgoCD, the cluster and Harness's own
+// read-only recipes, each by an allowlist of subcommands and options, every option by its exact word (no prefixes, no
+// short options run together). A command outside these never runs, approved or not; one inside them runs once its person
+// has approved its exact words.
+
+// [args] read by [spec]: its options, each a flag or one taking a value (as the next word, or after = for a long one,
+// checked by spec.check when given), and the rest as positional words; null when any word is not the spec's.
+function parse(args, spec) {
+  const positional = []
+  for (let i = 0; i < args.length; i++) {
+    const word = args[i]
+    if (word.startsWith('-') && word.length > 1) {
+      const [name, glued] = word.startsWith('--') && word.includes('=') ? [word.slice(0, word.indexOf('=')), word.slice(word.indexOf('=') + 1)] : [word, undefined]
+      if (glued === undefined && (spec.flags ?? []).includes(name)) continue
+      if (!(spec.values ?? []).includes(name)) return null
+      const value = glued ?? args[++i]
+      if (value === undefined || (spec.check?.[name] && !spec.check[name](value))) return null
+      continue
+    }
+    positional.push(word)
+  }
+  return spec.positional(positional) ? positional : null
+}
+const none = (p) => p.length === 0
+const one = (test) => (p) => p.length === 1 && test(p[0])
+// Repositories the project names, as owner/name.
+const REPOS = new Set(WIDE?.repos ?? [])
+const QUERY = /^\?[A-Za-z0-9_.,%-]+=[A-Za-z0-9_.,%-]*(&[A-Za-z0-9_.,%-]+=[A-Za-z0-9_.,%-]*)*$/
+// A REST path of the project's own repositories, GET only, and none of its secrets, keys, tokens or hooks.
+function repoPath(text) {
+  const at = text.indexOf('?'), path = (at < 0 ? text : text.slice(0, at)).replace(/^\//, '').replace(/\/$/, '')
+  if (at >= 0 && !QUERY.test(text.slice(at))) return false
+  const parts = path.split('/')
+  if (parts[0] !== 'repos' || parts.length < 3 || !REPOS.has(parts[1] + '/' + parts[2])) return false
+  return parts.every((part) => /^[A-Za-z0-9._-]+$/.test(part) && part !== '..' && part !== '.') && !parts.some((part) => /secret|key|token|hook/i.test(part))
+}
+const appName = (text) => /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(\/[a-z0-9]([a-z0-9.-]*[a-z0-9])?)?$/.test(text)
+// A cluster resource word (pods, deploy/x, pods,services) naming no secret.
+const resource = (text) => /^[A-Za-z0-9.\/,-]+$/.test(text) && !/secret/i.test(text)
+const WIDE_COMMANDS = {
+  gh: {
+    run: {
+      list: { values: ['--limit', '-L', '--workflow', '-w', '--branch', '-b', '--status', '-s', '--event', '-e', '--commit', '-c', '--user',
+        '-u', '--created', '--json', '--jq', '-q'], positional: none },
+      view: { flags: ['--log', '--log-failed', '--verbose', '-v', '--exit-status'], values: ['--job', '-j', '--attempt', '-a', '--json', '--jq', '-q'],
+        positional: (p) => p.length <= 1 && p.every((id) => /^[0-9]+$/.test(id)) },
+    },
+    api: { flags: ['--paginate', '--silent', '--slurp', '--include', '-i'], values: ['--jq', '-q', '--cache', '--method', '-X'],
+      check: { '--method': (v) => v === 'GET', '-X': (v) => v === 'GET' }, positional: one(repoPath) },
+  },
+  argocd: {
+    app: {
+      list: { flags: ['--grpc-web'], values: ['-o', '--output', '-l', '--selector', '-p', '--project'], positional: none },
+      get: { flags: ['--grpc-web', '--show-operation', '--show-params'], values: ['-o', '--output'], positional: one(appName) },
+      resources: { flags: ['--grpc-web', '--orphaned'], values: ['-o', '--output'], positional: one(appName) },
+      history: { flags: ['--grpc-web'], values: ['-o', '--output'], positional: one(appName) },
+      logs: { flags: ['--grpc-web', '--previous', '-p', '--match-case'], values: ['--tail', '--since-seconds', '--until-time', '--container',
+        '-c', '--kind', '--name', '--group', '--namespace', '--filter'], positional: one(appName) },
+    },
+    version: { flags: ['--client', '--short', '--grpc-web'], values: ['-o', '--output'], positional: none },
+  },
+  kubectl: {
+    get: { flags: ['-A', '--all-namespaces', '--show-labels', '--no-headers'], values: ['-n', '--namespace', '--context', '-o', '--output',
+      '-l', '--selector', '--field-selector', '--sort-by', '--request-timeout'], positional: (p) => p.length >= 1 && p.every(resource) },
+    describe: { flags: ['-A', '--all-namespaces'], values: ['-n', '--namespace', '--context', '-l', '--selector', '--request-timeout'],
+      positional: (p) => p.length >= 1 && p.every(resource) },
+    top: { flags: ['-A', '--all-namespaces', '--containers', '--no-headers'], values: ['-n', '--namespace', '--context', '-l', '--selector',
+      '--sort-by', '--request-timeout'], positional: (p) => p.length >= 1 && p.length <= 2 && ['pods', 'pod', 'po', 'nodes', 'node', 'no'].includes(p[0])
+      && p.every(resource) },
+    logs: { flags: ['--previous', '-p', '--timestamps', '--all-containers', '--prefix'], values: ['-n', '--namespace', '--context', '--since',
+      '--since-time', '--tail', '-c', '--container', '--limit-bytes', '-l', '--selector', '--request-timeout'], positional: one(resource) },
+    version: { flags: ['--client'], values: ['-o', '--output', '--context'], positional: none },
+    'api-resources': { flags: ['--no-headers'], values: ['-o', '--output', '--context', '--namespaced'], positional: none },
+    config: { positional: (p) => p.length === 1 && p[0] === 'current-context' },
+  },
+}
+// Harness's own read-only measurements (lib/buddyRecipes.ts): their names alone, nothing added.
+const RECIPES = new Set(['db-size', 'backend-cpu'])
+
+// Whether [w] is one of wide mode's reads, whatever its approval.
+function widerRead(w) {
+  if (!WIDE) return false
+  if (w[0] === 'harness') return w.length === 3 && w[1] === 'buddy-read' && RECIPES.has(w[2])
+  let spec = WIDE_COMMANDS[w[0]], at = 1
+  while (spec && !spec.positional && at < w.length) spec = Object.hasOwn(spec, w[at]) ? spec[w[at++]] : undefined
+  return !!spec?.positional && parse(w.slice(at), spec) !== null
+}
+
+// An approval lasts 30 days from when its person sent it (docs/specs/2026-10-30-buddy-read-access.md, Design 1).
+const APPROVAL_MS = 30 * 24 * 60 * 60 * 1000
+// Whether its person approved exactly these words on this machine: the host's file, by their own "run:" line. A file it
+// cannot read approves nothing.
+function approved(w) {
+  try {
+    const entries = JSON.parse(readFileSync(WIDE.approvals, 'utf8')).entries, now = Date.now(), want = JSON.stringify(w)
+    return Array.isArray(entries) && entries.some((entry) => entry && Array.isArray(entry.argv) && entry.argv.every((word) => typeof word === 'string')
+      && Number.isFinite(entry.at) && now - entry.at < APPROVAL_MS && JSON.stringify(entry.argv) === want)
+  } catch { return false }
+}
+
+const ASK = (command) => 'Not run before, so it was refused, and nobody will be asked here. Ask your person in your chat first: show ' +
+  'them this exact command, why you want it and what it reads. They approve it by sending a line of their own: run: ' + command +
+  ' . Do not run it again until they have.'
+let reason = MAY
+
 function decide(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input) || typeof input.tool_name !== 'string') return false
   const tool = input.tool_input && typeof input.tool_input === 'object' ? input.tool_input : null
@@ -372,7 +477,13 @@ function decide(input) {
     return (tool.path === undefined || inside(tool.path) || outsideAllowed(tool.path, 'tree')) && typeof tool.pattern === 'string'
       && !outward(tool.pattern)
   }
-  return input.tool_name === 'Bash' && tool.run_in_background !== true && bashAllowed(tool.command)
+  if (input.tool_name !== 'Bash' || tool.run_in_background === true || typeof tool.command !== 'string') return false
+  if (bashAllowed(tool.command)) return true
+  const w = words(tool.command)
+  if (!w || !widerRead(w)) return false
+  if (approved(w)) return true
+  reason = ASK(tool.command)
+  return false
 }
 
 let text = ''
@@ -383,7 +494,7 @@ process.stdin.on('end', () => {
   try { input = JSON.parse(text) } catch { /* refused below */ }
   const allow = decide(input)
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse',
-    permissionDecision: allow ? 'allow' : 'deny', permissionDecisionReason: allow ? 'A Buddy may read.' : MAY } }))
+    permissionDecision: allow ? 'allow' : 'deny', permissionDecisionReason: allow ? 'A Buddy may read.' : reason } }))
 })
 `
 

