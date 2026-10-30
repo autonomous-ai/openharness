@@ -867,7 +867,8 @@ export class SuperTabHost {
     // from the Swarm, or its chat purged with its project all end it here. Before the close, which may wait or fail. A list
     // that cannot be deleted is emptied where it can be, and the end is not acknowledged until it is gone (below): the backend
     // keeps the row until then, so it is tried again at each roster, after a restart too. Re-check 2 of #2248: a failure was
-    // only logged, the end acknowledged, and nothing tried again.
+    // only logged, the end acknowledged, and nothing tried again. Only its own session's lists hold it back: one list that
+    // could not be read held back every Buddy's end on the machine (follow-up to #2248, lib/buddyGuard.ts `forgetBuddyReads`).
     if (!state.forgotten) {
       try { forgetBuddyReads(agent.harnessId); state.forgotten = true; delete state.unforgotten } catch (error) {
         const why = error instanceof Error ? error.message : String(error)
