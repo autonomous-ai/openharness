@@ -453,7 +453,79 @@ void main() {
       await frames(tester);
 
       expect(find.text('#Mobile'), findsNothing);
-      expect(key('swarm-project-tab-team'), findsNothing);
+      expect(key('swarm-project-menu'), findsNothing);
+    });
+
+    testWidgets('access lost with Approve asking over the Team sheet, in the '
+        "shell's own navigator: the dialog and the sheet go", (tester) async {
+      const derived = {'decisionsWaiting': 1};
+      final fake = swarm();
+      fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
+        ...firstLoad(
+          agents: [
+            agent('agent-lead', name: 'Lead', displayName: 'River'),
+            agent('agent-juno', displayName: 'Juno'),
+          ],
+          groups: [
+            groupData(
+              'g2',
+              title: 'Saved views cache',
+              number: 2160,
+              agentIds: ['agent-lead', 'agent-juno'],
+              status: 'needs_human',
+              workerId: 'agent-juno',
+              lastMessageSequence: 4,
+            ),
+          ],
+          derived: derived,
+        ),
+        'members': [part('person-me', 1, person('person-me'))],
+      };
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
+          changes(cursor: 'c2', derived: derived);
+      fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
+        'decisions': [
+          {
+            'id': 'd1',
+            'projectName': 'Mobile',
+            'conversationId': 'g2',
+            'conversationTitle': 'Saved views cache',
+            'askerName': 'River',
+            'question': 'Merge #2160?',
+            'options': ['Merge', 'Wait'],
+          },
+        ],
+      };
+      fake.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
+        'mentions': <Object>[],
+      };
+      (app as _LinkApp).swarm = fake;
+      await start(tester);
+      await frames(tester);
+      await arrive(tester, 'harness://swarm/$tab/$leadChat/m7');
+      await frames(tester);
+      await tester.tap(key('swarm-project-menu'));
+      await frames(tester);
+      await tester.tap(key('swarm-project-menu-team'));
+      await frames(tester);
+      await tester.tap(key('swarm-approve-d1'));
+      await frames(tester);
+      expect(find.byType(AlertDialog), findsOneWidget);
+
+      tester
+          .widget<SwarmScope>(find.byType(SwarmScope).first)
+          .notifier!
+          .session!
+          .inbox
+          .reader(tab)!
+          .revoke();
+      await frames(tester);
+
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.textContaining('Merge #2160?'), findsNothing);
+      expect(find.byType(BottomSheet), findsNothing);
+      expect(find.text('#Mobile'), findsNothing);
+      expect(fake.commands, isEmpty);
     });
   });
 

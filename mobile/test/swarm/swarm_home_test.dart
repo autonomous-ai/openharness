@@ -22,6 +22,7 @@ import 'package:harness_mobile/swarm/swarm_activity_page.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_tabs.dart';
+import 'package:harness_mobile/swarm/swarm_project_team.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_row.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
@@ -1224,11 +1225,13 @@ void main() {
     });
 
     testWidgets('back from a task opened on Team is the same Home C screen, '
-        'on Team', (tester) async {
+        'with Team still open', (tester) async {
       await pump(tester, backend());
       await tester.tap(key('swarm-project-$tab-$project'));
       await tester.pumpAndSettle();
-      await tester.tap(key('swarm-project-tab-team'));
+      await tester.tap(key('swarm-project-menu'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-project-menu-team'));
       await tester.pumpAndSettle();
       final task = find.byWidgetPredicate(
         (w) => switch (w.key) {
@@ -1243,7 +1246,7 @@ void main() {
       await tester.tap(key('tty-back'));
       await tester.pumpAndSettle();
       expectHomeCProject('Mobile');
-      expect(key('swarm-project-body-team'), findsOneWidget);
+      expect(find.byType(SwarmProjectTeamSheet), findsOneWidget);
     });
   });
 
