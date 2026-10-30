@@ -70,6 +70,25 @@ it('refuses a post\'s - with an empty or a terminal stdin, naming the fix, and p
   expect(print.mock.calls.map(([line]) => JSON.parse(line).error)).toEqual([expect.stringContaining('read no message from stdin'), expect.stringContaining('stdin is a terminal')])
   expect(request).not.toHaveBeenCalled()
 })
+// Review of #2379: a JSON action's - with a terminal stdin waited 30 s and then said stdin was never closed; post refused it at once.
+it('refuses a JSON action\'s - with a terminal stdin at once, naming the fix, and sends nothing', async () => {
+  const stdin = vi.fn(() => 'never read')
+  for (const [action, id] of [['command', 'op-1'], ['propose', 'op-1'], ['start', 'op-1'], ['capacity', 'machine-2'], ['route', 'lead']]) {
+    expect(() => parseSuperTabArgs([...prefix, action, id, '-'], where, stdin, () => true))
+      .toThrow(`${action} - reads the JSON from stdin, but stdin is a terminal, so nothing was sent. Pass it as one argument, or send the JSON on stdin with - in its place: ${action} `)
+  }
+  expect(stdin).not.toHaveBeenCalled()
+  // Through the command: refused before stdin is read or anything is sent, and the error is the terminal's, not the idle one.
+  const print = vi.fn(), close = vi.fn(), request = vi.fn(async () => ({ ok: true }))
+  const deps = { where: () => where, pane: undefined, open: async () => ({ request, close, machineId: 'machine' }), print }
+  expect(await superTabCommand([...prefix, 'command', 'op', '-'], { ...deps, stdin, terminal: () => true })).toBe(1)
+  expect(JSON.parse(print.mock.calls.at(-1)![0]).error).toContain('command - reads the JSON from stdin, but stdin is a terminal, so nothing was sent.')
+  expect(stdin).not.toHaveBeenCalled()
+  expect(request).not.toHaveBeenCalled()
+  // A JSON in its place, or a stdin that is no terminal, goes on as before.
+  expect(parseSuperTabArgs([...prefix, 'command', 'op-1', '{"type":"x"}'], where, stdin, () => true).payload).toMatchObject({ command: { type: 'x' } })
+  expect(parseSuperTabArgs([...prefix, 'command', 'op-1', '-'], where, () => '{"type":"y"}', () => false).payload).toMatchObject({ command: { type: 'y' } })
+})
 it('never reads stdin for a post whose TEXT is the message', () => {
   const stdin = vi.fn(() => 'from stdin'), terminal = vi.fn(() => false)
   for (const text of ['Ready', '--', '- ', ' -', '-x', '']) {
@@ -719,8 +738,8 @@ describe("a Buddy's usage line and JSON hints", () => {
     })
     const print = vi.fn()
     const open = vi.fn(async (at: Where) => { opened.push(at); return { request, close: vi.fn(), machineId: 'machine' } })
-    const run = async (argv: string[]) => {
-      expect(await superTabCommand(['--tab', 'tab', ...argv], { where: () => where, pane: '%9', open, print, terminal: () => false })).toBe(1)
+    const run = async (argv: string[], terminal = false) => {
+      expect(await superTabCommand(['--tab', 'tab', ...argv], { where: () => where, pane: '%9', open, print, terminal: () => terminal })).toBe(1)
       return JSON.parse(print.mock.calls.at(-1)![0]).error as string
     }
     return { run, asked, opened, request }
@@ -737,6 +756,8 @@ describe("a Buddy's usage line and JSON hints", () => {
       const error = await run(argv)
       expect(error, argv.join(' ')).not.toMatch(/stdin|TEXT\|-|<<| - /)
     }
+    // A - that meets a terminal tells a Buddy to quote its JSON, not to send it on stdin.
+    expect(await run(['command', 'op-1', '-'], true)).toBe("command - reads the JSON from stdin, but stdin is a terminal, so nothing was sent. Pass it as one argument, with the JSON in single quotes: command OPERATION_ID '{...}' (an apostrophe inside it as \\u0027).")
   })
 
   it('keeps the stdin form for any other agent, and for a harness Harness cannot confirm is a Buddy', async () => {
@@ -752,6 +773,8 @@ describe("a Buddy's usage line and JSON hints", () => {
     const { run, asked, opened } = buddyDeps(true)
     await run(['propose', 'op-1', '{"goal":'])
     expect(asked.find(([, payload]) => payload?.action === 'buddyCheck')?.[1]).toEqual({ action: 'buddyCheck', harnessId: 'buddy-h' })
+    // Through the guard's own steps (paneBuddy), without its pane check: a wording is no refusal.
+    expect(asked.map(([type]) => type)).toEqual(['agents_list', 'super_tabs'])
     // Another machine named with --machine is never the one asked: the pane is this computer's.
     expect(await run(['--port', '14002', '--machine', 'other', 'propose', 'op-1', '{"goal":'])).toContain('single quotes')
     expect(opened).toEqual([where, where])
