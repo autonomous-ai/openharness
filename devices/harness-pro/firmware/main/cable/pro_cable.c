@@ -229,6 +229,7 @@ static void send_hello(void)
     msg_string(&root, "player", "library-v1");
     msg_string(&root, "superTab", "wait-v1");   // a question with superTab + attention is shown as a wait (handle_question)
     msg_string(&root, "swarmCard", "v1");       // supertabs / supertab.recap / supertab.focus: the Swarm cards (handle_supertab)
+    msg_string(&root, "swarmChat", "v1");       // each Lead's face chat (chat, chatId, chatName), recaps by chatId, supertab.notice / .read
     msg_string(&root, "ota", "v1");
     char mac[24] = "";
     device_mac_str(mac, sizeof(mac));
