@@ -233,6 +233,7 @@ void pod_model_unread_add(pod_model_t *, const char *agent, const char *name, co
 // The whole list at once (notif.replace): clear, then append in the order given (first = newest). One per agent, at most
 // POD_UNREAD_MAX; an append past that or for an agent already listed is dropped.
 void pod_model_unread_clear(pod_model_t *);
+void pod_model_unread_clear_agents(pod_model_t *);   // as clear, but the Swarm notices stay
 void pod_model_unread_append(pod_model_t *, const char *agent, const char *name, const char *token, const char *text, uint32_t now_ms);
 // Read elsewhere (notif.seen): drop the agent's entry. With a token, only an entry that has that token or none. True if dropped.
 bool pod_model_unread_seen(pod_model_t *, const char *agent, const char *token);

@@ -1276,6 +1276,9 @@ static void test_swarm_cards(void)
     feed("{\"t\":\"supertab.focus\",\"tab\":\"\",\"lead\":\"L2\"}");
     feed("{\"t\":\"supertab.focus\",\"lead\":\"\"}");
     CHECK(nev == 0);
+    reset();
+    feed("{\"t\":\"supertab.focus\",\"tab\":\"S1\",\"lead\":5}");   // focus_non_string_lead_ignored
+    CHECK(nev == 0);
 
     // the send helper
     reset();

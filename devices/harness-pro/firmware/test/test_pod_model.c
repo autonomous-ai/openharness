@@ -1259,6 +1259,11 @@ static void pod_model_test_lead_chat(void) {
     pod_swarm_t bare = card("S1", "T1", l1, 1);
     pod_model_supertab(&M, &bare, 400);
     CHECK(M.swarms[0].leads[0].chat == POD_CHAT_NONE && M.swarms[0].leads[0].chat_name[0] == 0 && M.swarms[0].leads[0].chat_id[0] == 0);
+
+    // recap_with_chat_id_for_lead_without_chat_is_taken
+    pod_model_supertab_loading(&M, "S1", "a");
+    pod_model_supertab_recap(&M, "S1", "a", "g1", "named", 401, false);
+    CHECK(M.swarms[0].leads[0].recap == POD_RECAP_LOADED && !strcmp(M.swarms[0].leads[0].text, "named"));
     pod_model_reset(&M);
 }
 // A Swarm chat's notice is an unread entry keyed by its Lead: it shares the order and the cap with agent entries, and a read must match its chat.

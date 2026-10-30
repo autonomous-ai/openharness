@@ -1795,12 +1795,52 @@ static void swarm_notice_toasts_and_beeps(void) {
     swarm_lead_open(1);
     CHECK(pod_ui_swarm_notice(&U, "sw1", "l1", "c1", "Hi.", false, 4000) && pod_model_unread_find(&U.model, "l1"));
 }
+static void notif_replace_keeps_swarm_notices(void) {
+    swarm_lead_open(1);
+    CHECK(pod_ui_swarm_notice(&U, "sw1", "l2", "c1", "Merged.", true, 3400));
+    pod_model_unread_add(&U.model, "a2", "Beta", "Done.", 20, 3410);
+    pod_ui_notif_begin(&U);
+    CHECK(pod_model_unread_find(&U.model, "l2") && !pod_model_unread_find(&U.model, "a2") && U.model.unread_count == 1);
+    pod_ui_notif_end(&U);
+}
 static void swarm_notice_on_its_lead_view_reads_at_once(void) {
     swarm_lead_open(1);
+    snprintf(U.model.swarms[0].leads[1].chat_id, ID_MAX, "c1");   // the face shows the chat the notice is for
     CHECK(!pod_ui_swarm_notice(&U, "sw1", "l1", "c1", "Seen already.", true, 3400));
     CHECK(U.model.unread_count == 0 && !U.ban_on);
     render(3500);
     CHECK(!U.frame.banner);
+}
+static void notice_for_other_chat_on_lead_view_files_row(void) {
+    swarm_lead_open(1);
+    snprintf(U.model.swarms[0].leads[1].chat_id, ID_MAX, "g1");   // the face shows g1; the notice is for c1
+    CHECK(pod_ui_swarm_notice(&U, "sw1", "l1", "c1", "Elsewhere.", true, 3400));
+    const pod_unread_t *e = pod_model_unread_find(&U.model, "l1");
+    CHECK(e && !strcmp(e->chat_id, "c1"));
+}
+static void notice_for_face_chat_on_lead_view_clears_old_row(void) {
+    swarm_lead_open(1);
+    snprintf(U.model.swarms[0].leads[1].chat_id, ID_MAX, "g1");
+    CHECK(pod_ui_swarm_notice(&U, "sw1", "l1", "c1", "Older.", true, 3300));   // an older row of this Lead
+    CHECK(!pod_ui_swarm_notice(&U, "sw1", "l1", "g1", "Seen.", true, 3400));
+    CHECK(!pod_model_unread_find(&U.model, "l1") && U.model.unread_count == 0);
+}
+static void chat_switch_asks_recap_at_once(void) {
+    swarm_lead_open(1);
+    take();
+    U.model.clock_ms += 10 * POD_SUPERTAB_RETRY_MS;
+    for (int i = 0; i < POD_SUPERTAB_RETRIES + 2; i++) { U.model.clock_ms += POD_SUPERTAB_RETRY_MS; take(); }   // retries exhausted, the bubble is "..."
+    CHECK(U.model.swarms[0].leads[1].recap == POD_RECAP_LOADING && take() == 0);
+    static pod_swarm_t sw;
+    memset(&sw, 0, sizeof sw);
+    snprintf(sw.id, ID_MAX, "sw1"); snprintf(sw.tab, ID_MAX, "s1"); snprintf(sw.name, sizeof sw.name, "openharness"); sw.count = 4; sw.lead_n = 4;
+    for (int i = 0; i < 4; i++) { snprintf(sw.leads[i].id, ID_MAX, "l%d", i); snprintf(sw.leads[i].project, sizeof sw.leads[i].project, "proj"); snprintf(sw.leads[i].engine, sizeof sw.leads[i].engine, "claude"); }
+    snprintf(sw.leads[1].chat_id, ID_MAX, "g9");
+    pod_ui_supertab(&U, &sw, U.model.clock_ms);
+    int n = take();
+    bool got = false;
+    for (int i = 0; i < n; i++) got |= is_q(i, "supertab.recap.get", "sw1", "l1");
+    CHECK(got);
 }
 static void swarm_toast_tap_opens_lead_and_selects(void) {
     swarm_lead_open(1);
@@ -2200,6 +2240,10 @@ int main(void) {
     notice_opens_lead();
     swarm_notice_toasts_and_beeps();
     swarm_notice_on_its_lead_view_reads_at_once();
+    notice_for_other_chat_on_lead_view_files_row();
+    notice_for_face_chat_on_lead_view_clears_old_row();
+    chat_switch_asks_recap_at_once();
+    notif_replace_keeps_swarm_notices();
     swarm_toast_tap_opens_lead_and_selects();
     swarm_row_tap_opens_lead_and_selects();
     swarm_notice_read_ends_toast();

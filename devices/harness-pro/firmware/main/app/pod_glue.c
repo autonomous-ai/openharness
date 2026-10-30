@@ -76,7 +76,7 @@ pod_out_t pod_ui_link(pod_ui_t *u, bool up)
     if (!up) pod_ui_sweep_abort(u);
     if (!up || !u->model.linked) {   // the daemon forgets the open recap and any focus with its link: nothing queued or open carries over
         u->sup_qn = 0;
-        u->sup_tab[0] = u->sup_lead[0] = 0;
+        u->sup_tab[0] = u->sup_lead[0] = u->sup_chat[0] = 0;
         u->lead_wait = false;
     }
     if (up && !u->model.linked) {   // a real down -> up transition: the start runs again on this link on swarms this link brings
@@ -957,8 +957,12 @@ bool pod_ui_swarm_notice(pod_ui_t *u, const char *tab, const char *lead, const c
     const pod_swarm_t *sw = pod_model_swarm(&u->model, tab);
     if (!sw || pod_model_lead_index(sw, lead) < 0) return false;
     const pod_frame_t *t = top(u);
-    if (awake && t && t->view == POD_V_LEAD && !strcmp(t->swarm, sw->id) && !strcmp(t->lead_id, lead)) return false;   // its own view is on screen: seen at once
-    pod_model_swarm_notice(&u->model, sw->id, lead, chat_id, text, now_ms);
+    pod_model_swarm_notice(&u->model, sw->id, lead, chat_id, text, now_ms);   // filed first, so a seen one also replaces this Lead's older row
+    const pod_lead_t *face = awake && t && t->view == POD_V_LEAD && !strcmp(t->swarm, sw->id) && !strcmp(t->lead_id, lead) ? &sw->leads[pod_model_lead_index(sw, lead)] : NULL;
+    if (face && !strcmp(face->chat_id, chat_id ? chat_id : "")) {   // the face shows that very chat: seen at once
+        pod_ui_swarm_notice_read(u, sw->id, lead, chat_id);
+        return false;
+    }
     u->dirty = true;
     if (!pod_ui_talking(u) && !u->ota && t && (t->view == POD_V_AGENT || t->view == POD_V_RECAP || t->view == POD_V_LEAD)) {
         pod_copy_str(u->ban_agent, sizeof u->ban_agent, lead);
@@ -977,7 +981,7 @@ void pod_ui_swarm_notice_read(pod_ui_t *u, const char *tab, const char *lead, co
     u->dirty = true;
 }
 
-void pod_ui_notif_begin(pod_ui_t *u) { pod_model_unread_clear(&u->model); }
+void pod_ui_notif_begin(pod_ui_t *u) { pod_model_unread_clear_agents(&u->model); }   // notif.replace lists only the harness entries: a Swarm notice stays
 
 void pod_ui_notif_row(pod_ui_t *u, const char *agent_id, const char *name, const char *token, const char *summary, uint32_t now_ms)
 {
@@ -1069,6 +1073,14 @@ static void sup_sync(pod_ui_t *u)
             return;
         }
         const uint32_t now_ms = m->clock_ms;
+        if (l->recap == POD_RECAP_LOADING && strcmp(u->sup_chat, l->chat_id) && u->sup_qn + 2 <= POD_SUPERTAB_OUT_MAX) {   // the chat switched: ask for its message at once
+            u->sup_tries = 0;
+            sup_push(u, "supertab.open", sw->id, lead);
+            sup_push(u, "supertab.recap.get", sw->id, lead);
+            pod_copy_str(u->sup_chat, sizeof u->sup_chat, l->chat_id);
+            u->sup_at = now_ms;
+            return;
+        }
         if ((uint32_t)(now_ms - u->sup_at) < POD_SUPERTAB_RETRY_MS || u->sup_qn + 2 > POD_SUPERTAB_OUT_MAX) return;
         if (l->recap == POD_RECAP_LOADING) {   // no reply yet: ask again, a few times; then the "…" stays and nothing more is sent
             if (u->sup_tries >= POD_SUPERTAB_RETRIES) return;
@@ -1086,7 +1098,7 @@ static void sup_sync(pod_ui_t *u)
     if (!l) {   // closed: the frame still names the Swarm it was open in
         if (!sup_push(u, "supertab.open", u->sup_tab, "")) return;   // no room: still open as far as the daemon knows, the next sync closes it
         if (u->sup_lead[0]) pod_model_supertab_close(m, u->sup_tab, u->sup_lead);   // only the open Lead is pushed to: a closed one's text would go stale
-        u->sup_tab[0] = u->sup_lead[0] = 0;
+        u->sup_tab[0] = u->sup_lead[0] = u->sup_chat[0] = 0;
         return;
     }
     const char *tab = sw->id;
@@ -1100,6 +1112,7 @@ static void sup_sync(pod_ui_t *u)
     }
     pod_copy_str(u->sup_tab, sizeof u->sup_tab, tab);
     pod_copy_str(u->sup_lead, sizeof u->sup_lead, lead);
+    pod_copy_str(u->sup_chat, sizeof u->sup_chat, l->chat_id);
     u->sup_close[0] = 0;   // the open replaces any close still owed
     u->sup_at = m->clock_ms;
     u->sup_tries = 0;

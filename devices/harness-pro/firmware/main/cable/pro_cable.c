@@ -663,6 +663,7 @@ static void handle_supertab_focus(const cJSON *p)
 {
     char tab[ID_MAX], lead[ID_MAX];
     const char *t = str_of(p, "tab"), *l = str_of(p, "lead");
+    if (!l && cJSON_GetObjectItemCaseSensitive(p, "lead")) return;   // present but not a string: dropped, not read as "open the Swarm"
     if (!id_fits(t) || (l && *l && !id_fits(l))) return;
     if (!l) l = "";
     snprintf(tab, sizeof tab, "%s", t);

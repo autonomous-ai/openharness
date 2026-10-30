@@ -840,7 +840,7 @@ void pod_model_supertab_recap(pod_model_t *m, const char *tab, const char *lead,
     const int j = pod_model_lead_index(s, lead);
     if (j < 0) return;
     pod_lead_t *l = &((pod_swarm_t *)s)->leads[j];
-    if (chat_id && chat_id[0] && strcmp(chat_id, l->chat_id)) return;   // a reply for a chat the face has left
+    if (chat_id && chat_id[0] && l->chat_id[0] && strcmp(chat_id, l->chat_id)) return;   // a reply for a chat the face has left (both name one)
     if (l->recap == POD_RECAP_NONE) return;   // a Lead nobody asked for or has left: a late reply would only sit there stale
     lead_free_text(l);
     l->text_at = at;
@@ -1037,6 +1037,14 @@ int pod_notice_count(const pod_model_t *m) {
 
 void pod_model_unread_clear(pod_model_t *m) {
     m->unread_count = 0;
+    m->revision++;
+}
+
+void pod_model_unread_clear_agents(pod_model_t *m) {   // a Swarm notice (tab set) is not in a notif.replace list: it stays
+    int k = 0;
+    for (int i = 0; i < m->unread_count; i++)
+        if (m->unread[i].tab[0]) m->unread[k++] = m->unread[i];
+    m->unread_count = k;
     m->revision++;
 }
 
