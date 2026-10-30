@@ -631,7 +631,9 @@ class SwarmNewProjectSteps {
   /// starts after what was answered. [machinesOf] lists the machines from a
   /// fresh read before a start is first sent, as Desktop checks the machine
   /// again: one that can no longer take it is refused with why, and nothing
-  /// is sent. One run at a time: a second waits for the first.
+  /// is sent. A project made in an earlier run is looked for first, and one
+  /// deleted since lets the steps go. A name the Swarm refuses counts as
+  /// done. One run at a time: a second waits for the first.
   Future<String> run({
     required String brief,
     required String visibility,
@@ -678,6 +680,19 @@ class SwarmNewProjectSteps {
     final text = String.fromCharCodes(
       brief.trim().runes.take(swarmNewProjectBriefRunes),
     ).trim();
+    // Made in an earlier run, it may have been deleted since (from Desktop,
+    // say): then these steps are done with, whatever step they stopped at.
+    // Unread, the steps left say what is wrong themselves.
+    var read = false;
+    if (_projectId case final made?) {
+      switch (await _deleted(made, check)) {
+        case true:
+          _gone();
+        case false:
+          read = true;
+        case null:
+      }
+    }
     if (_projectId == null) {
       _create ??= {
         'operationId': superTabOperationId(),
@@ -724,27 +739,18 @@ class SwarmNewProjectSteps {
     if (!_started) {
       if (_start == null) {
         // The list from when the sheet drew it may be stale: read the Swarm
-        // again, and send nothing to a machine that cannot take it now.
-        final reads = reader.reads.value;
-        await reader.refresh();
-        check();
+        // again (unless this run just did), and send nothing to a machine
+        // that cannot take it now, nor for a project deleted meanwhile.
+        final deleted = read ? false : await _deleted(projectId, check);
         final snapshot = reader.snapshot;
-        if (reader.reads.value == reads || snapshot == null) {
+        if (deleted == null || snapshot == null) {
           throw const SuperTabFailure(
             'SWARM_UNREADABLE',
             'Couldn’t check the machine for the Product Manager: the Swarm '
                 'didn’t answer. Try again.',
           );
         }
-        // Deleted meanwhile (from Desktop, say): these steps are done with,
-        // and the next Create makes a new project.
-        if (snapshot.projectById(projectId) == null) {
-          forget();
-          throw const SuperTabFailure(
-            'PROJECT_GONE',
-            'The project was deleted meanwhile. Create it again.',
-          );
-        }
+        if (deleted) _gone();
         final machines = machinesOf(snapshot);
         if (swarmLeadMachineRefusal(machines, machineId) case final why?) {
           throw SuperTabFailure('MACHINE_UNAVAILABLE', why);
@@ -769,18 +775,24 @@ class SwarmNewProjectSteps {
     }
     final name = swarmRepositoryName(startRepository ?? repositoryUrl);
     if (!_named) {
-      await _send(
-        () => {
-          'operationId':
-              '${superTabMap(_create ?? const {})['operationId'] ?? projectId}-name',
-          'command': {
-            'type': 'project.rename',
-            'projectId': projectId,
-            'name': name,
+      try {
+        await _send(
+          () => {
+            'operationId':
+                '${superTabMap(_create ?? const {})['operationId'] ?? projectId}-name',
+            'command': {
+              'type': 'project.rename',
+              'projectId': projectId,
+              'name': name,
+            },
           },
-        },
-        (_) {},
-      );
+          (_) {},
+        );
+      } on SuperTabFailure catch (failure) {
+        // Refused, it never will be: the project keeps the name it has and
+        // opens by it, rather than hold the steps (Lead's re-review).
+        if (!_refusedOutright(failure)) rethrow;
+      }
       _named = true;
       check();
     }
@@ -791,8 +803,41 @@ class SwarmNewProjectSteps {
       check();
       if (reader.snapshot?.projectById(projectId)?.name == name) break;
     }
+    // Not there (its name refused because it was deleted, say): it says so
+    // rather than close on nothing.
+    if (reader.snapshot?.projectById(projectId) == null &&
+        (await _deleted(projectId, check) ?? false)) {
+      _gone();
+    }
     forget();
     return projectId;
+  }
+
+  /// Whether project [projectId] was deleted: absent from a read of the
+  /// Swarm asked after it was made. A read already on its way is joined and
+  /// may have been asked before, so an absence is read once more before it
+  /// counts. Null when the Swarm did not answer. [check] runs after each
+  /// read.
+  Future<bool?> _deleted(String projectId, void Function() check) async {
+    for (var i = 0; i < 2; i++) {
+      final reads = reader.reads.value;
+      await reader.refresh();
+      check();
+      final snapshot = reader.snapshot;
+      if (reader.reads.value == reads || snapshot == null) return null;
+      if (snapshot.projectById(projectId) != null) return false;
+    }
+    return true;
+  }
+
+  /// Its project deleted meanwhile: these steps are done with, and the next
+  /// Create makes a new project.
+  Never _gone() {
+    forget();
+    throw const SuperTabFailure(
+      'PROJECT_GONE',
+      'The project was deleted meanwhile. Create it again.',
+    );
   }
 
   /// Sends the request [held] holds exactly as it was first written and
@@ -1463,8 +1508,30 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
               ? () => unawaited(_create(swarmId, reader, repository, machineId))
               : null,
         ),
+        // Steps left that nothing runs: the way out of them, whatever stops
+        // them (Lead's re-review).
+        if (steps != null && steps.sent && steps.running == null && !_busy) ...[
+          const SizedBox(height: AppSpace.s),
+          SwarmButton(
+            key: const ValueKey('swarm-new-project-start-over'),
+            label: 'Start over',
+            style: SwarmButtonStyle.link,
+            wide: true,
+            onPressed: _startOver,
+          ),
+        ],
       ],
     );
+  }
+
+  /// Lets the Swarm's steps go: the fields open again, and the next Create
+  /// makes a new project. One already made stays in the list.
+  void _startOver() {
+    if (_busy) return;
+    setState(() {
+      _steps?.forget();
+      _error = null;
+    });
   }
 
   /// Why Create cannot be pressed now, or null (Desktop's `leadBlocked`).
