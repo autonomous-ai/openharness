@@ -61,13 +61,29 @@ export async function readParts(db: Db, view: CacheView, tabId: string, named: R
 
 /** The parts loadLight gives for `opts`, held whole by what it selects. */
 export async function readLight(db: Db, view: CacheView, tabId: string, opts: Omit<LightOptions, 'machines'>): Promise<SwarmParts> {
-  const name = `light:${JSON.stringify([opts.groups ?? 'active', !!opts.includeRecentStarts, !!opts.recentStartGroups, ...(['groupIds', 'agentIds', 'projectIds'] as const)
+  const name = `light:${JSON.stringify([opts.groups ?? 'active', !!opts.includeRecentStarts, ...(['groupIds', 'agentIds', 'projectIds'] as const)
     .map(key => [...opts[key] ?? []].sort())])}`
   const [light, machines] = await Promise.all([
     view.get(tabId, name, 'main', () => retryTransient(() => retryStaleIndex(() => db.$transaction(tx => store.loadLight(tx, tabId, { ...opts, machines: false }))))),
     readMachines(db, view, tabId),
   ])
   return { ...light, machines }
+}
+
+/** Light conversations by id (parts/light.ts loadLightGroups), dormant ones too, in the order named: each held at the
+ *  Swarm's main stamp, an id no live conversation has held as none. A read's misses are one query, as readLastChangedAts
+ *  batches them; without stamps every id is read, still in one query. */
+export async function readLightGroups(db: Db, view: CacheView, tabId: string, ids: readonly string[]): Promise<Part<GroupData>[]> {
+  const missing: string[] = []
+  let batch: Promise<Map<string, Part<GroupData>>> | undefined
+  const groups = await Promise.all([...new Set(ids)].map(id => view.get(tabId, `light-group:${id}`, 'main', () => {
+    missing.push(id)
+    // As readLastChangedAts: every miss of this read joins before the query starts.
+    batch ??= Promise.resolve().then(async () => new Map((await retryStaleIndex(() => store.loadLightGroups(db, tabId, 'key', { key: { $in: missing } })))
+      .map(group => [group.key, group])))
+    return batch.then(found => found.get(id) ?? null)
+  })))
+  return groups.filter((group): group is Part<GroupData> => group !== null)
 }
 
 /** The Swarm's newest data change (parts/load.ts lastChangedAt), held at its main stamp: a machine's reading leaves it. */

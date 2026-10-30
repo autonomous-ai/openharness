@@ -15,7 +15,7 @@ import { guardedWrite } from '../src/superTabs/parts/write.js'
 import type { HeadData, MachineData } from '../src/superTabs/parts/index.js'
 import { sweepSwarms } from '../src/superTabs/sweeps.js'
 import { SwarmCache } from '../src/superTabs/cache.js'
-import { readChanged, readLastChangedAt, readParts } from '../src/superTabs/cachedReads.js'
+import { DIRECT, readChanged, readLastChangedAt, readLightGroups, readParts } from '../src/superTabs/cachedReads.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
@@ -129,30 +129,35 @@ function pod(options: { cache?: SwarmCache | null } = {}) {
 }
 
 /** The rich fixture Swarm in parts, with a conversation private to `peer`: their Buddy chat. */
-async function privateScene() {
+async function privateScene(extra: (s: ReturnType<typeof richSwarm>) => void = () => {}) {
   const s = richSwarm(Date.now())
   const privateId = s.group('Peer and PM')
   s.edit(state => {
     const generation = state.people.find(p => p.id === peerActor.userId)!.generation
     Object.assign(state.conversations.find(c => c.id === privateId)!, { kind: 'buddy', audience: { people: [{ id: peerActor.userId, generation }] } })
   })
+  extra(s)
   const tabId = `tab-${randomUUID()}`
   await writeLegacySwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 10 })
   const report = await migrateSwarm(db, tabId)
   if (!report.ok) throw new Error(report.error)
-  return { tabId, privateId, secret: s.secret, secretGroup: s.secretGroup, web: s.web, lead: s.lead }
+  return { tabId, privateId, secret: s.secret, secretGroup: s.secretGroup, web: s.web, lead: s.lead, done: s.done }
 }
 const groupKeys = (read: { groups: Array<{ key: string }> }) => read.groups.map(g => g.key)
 
-/** The part collections' reads MongoDB served while `run` ran (its profiler, every operation). */
-async function partReads<T>(run: () => Promise<T>): Promise<{ value: T; reads: number }> {
+/** The part collections' reads MongoDB served while `run` ran (its profiler, every operation). Only each row's collection
+ *  is read back: a light read's projection holds `$type`, which Prisma would take for one of its own tagged values. */
+async function partReads<T>(run: () => Promise<T>): Promise<{ value: T; reads: number; byCollection: Record<string, number> }> {
   await db.$runCommandRaw({ profile: 2 })
   const since = new Date()
   try {
     const value = await run()
     const rows = await db.$runCommandRaw({ find: 'system.profile', filter: { ts: { $gte: { $date: since.toISOString() } },
-      ns: { $regex: '\\.Swarm(Head|Member|Agent|Group|Machine|Start|Progress)$' } } }) as { cursor: { firstBatch: unknown[] } }
-    return { value, reads: rows.cursor.firstBatch.length }
+      ns: { $regex: '\\.Swarm(Head|Member|Agent|Group|Machine|Start|Progress)$' } }, projection: { _id: 0, ns: 1 }, batchSize: 10_000 }) as
+      { cursor: { firstBatch: Array<{ ns: string }> } }
+    const byCollection: Record<string, number> = {}
+    for (const { ns } of rows.cursor.firstBatch) byCollection[ns.slice(ns.lastIndexOf('.') + 1)] = (byCollection[ns.slice(ns.lastIndexOf('.') + 1)] ?? 0) + 1
+    return { value, reads: rows.cursor.firstBatch.length, byCollection }
   } finally {
     await db.$runCommandRaw({ profile: 0 })
   }
@@ -274,6 +279,80 @@ describe('composing a read from what the cache holds', () => {
   })
 })
 
+describe('a change poll\'s shared light read (DB 2.3)', () => {
+  const tag = (tabId: string, conversationId: string, personId: string) => db.superTabMention.create({ data: { id: `${tabId}-${conversationId}-${personId}`,
+    tabId, conversationId, messageId: `${conversationId}-msg`, personId, projectId: 'lead', authorAgentId: 'lead-agent', createdAt: new Date() } })
+  /** The change feed and the newest change at this stamp, held as a poll would hold them, so what is counted after is the
+   *  light base and what each reader adds to it. */
+  const warm = async (cache: SwarmCache, tabId: string) => {
+    const view = await cache.at([tabId])
+    await readChanged(db, view, tabId, Date.now() - 120_000)
+    await readLastChangedAt(db, view, tabId)
+  }
+
+  it('three readers polling one Swarm at one stamp load its light base once, and once more after a write', async () => {
+    const machineId = `host-${randomUUID()}`
+    await db.machine.create({ data: { machineId, userId: people.owner.sub, apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+    let agentId = ''
+    const { tabId, web, done, secretGroup } = await privateScene(s => { agentId = s.add('reader-harness', s.web, false, ownerActor, machineId, ownerActor.userId) })
+    // Each person has their own waiting tags, so no two readers name the same conversations.
+    await tag(tabId, done, people.owner.sub)
+    await tag(tabId, secretGroup, people.owner.sub)
+    await tag(tabId, done, people.peer.sub)
+    const { reads, store, cache } = pod()
+    const cursors = [(await reads.firstLoad(people.owner, tabId)).cursor, (await reads.firstLoad(people.peer, tabId)).cursor,
+      (await reads.firstLoad(people.owner, tabId, agentId)).cursor]
+    const poll = () => Promise.all([reads.changes(people.owner, tabId, cursors[0]!), reads.changes(people.peer, tabId, cursors[1]!),
+      reads.changes(people.owner, tabId, cursors[2]!, agentId)])
+    await warm(cache!, tabId)
+    const first = await partReads(poll)
+    expect(first.byCollection.SwarmHead).toBe(1)
+    expect(first.byCollection.SwarmProgress ?? 0).toBe(0)
+    await store.execute(people.owner, tabId, { operationId: `send-${randomUUID()}`,
+      command: { type: 'message.send', conversationId: web, text: 'moves the stamp', replyTo: null, recipientIds: [] } })
+    await warm(cache!, tabId)
+    const after = await partReads(poll)
+    expect(after.byCollection.SwarmHead).toBe(1)
+    expect(after.byCollection.SwarmProgress ?? 0).toBe(0)
+  })
+
+  it('a second reader tagged in the same dormant conversation reads no part at the same stamp', async () => {
+    const { tabId, done, secretGroup } = await privateScene()
+    await db.swarmGroup.update({ where: { id: `${tabId}:${done}` }, data: { dormant: true } })
+    // The owner is also tagged elsewhere, so the two readers do not name the same conversations.
+    await tag(tabId, done, people.owner.sub)
+    await tag(tabId, secretGroup, people.owner.sub)
+    await tag(tabId, done, people.peer.sub)
+    const { reads } = pod()
+    const cursors = [(await reads.firstLoad(people.owner, tabId)).cursor, (await reads.firstLoad(people.peer, tabId)).cursor]
+    await reads.changes(people.owner, tabId, cursors[0]!)
+    const second = await partReads(() => reads.changes(people.peer, tabId, cursors[1]!))
+    expect(second.reads).toBe(0)
+    expect((second.value as { derived: { mentionsWaiting: number } }).derived.mentionsWaiting).toBe(1)
+  })
+})
+
+describe('named light conversations', () => {
+  it('holds named light conversations per group: a second reader and an unknown id read nothing at the same stamp', async () => {
+    const { tabId, web } = await privateScene()
+    const quiet = (await db.swarmGroup.findFirstOrThrow({ where: { tabId, key: { notIn: [web, 'lead'] }, kind: null, dormant: false } })).key
+    await db.swarmGroup.update({ where: { id: `${tabId}:${quiet}` }, data: { dormant: true } })
+    const { cache, store } = pod()
+    const read = async (ids: string[]) => readLightGroups(db, await cache!.at([tabId]), tabId, ids)
+    const first = await partReads(() => read([quiet, 'nope', web]))
+    expect(first.reads).toBe(1)
+    // In the order named, light (no brief), an unknown id left out.
+    expect(first.value.map(g => [g.key, !!g.dormant, g.data!.brief])).toEqual([[quiet, true, ''], [web, false, '']])
+    // Another reader at the same stamp: every id held, the unknown one as none.
+    expect(await partReads(() => read(['nope', web, quiet]))).toMatchObject({ reads: 0, value: [{ key: web }, { key: quiet }] })
+    await store.execute(people.owner, tabId, { operationId: `send-${randomUUID()}`,
+      command: { type: 'message.send', conversationId: web, text: 'moves the stamp', replyTo: null, recipientIds: [] } })
+    expect((await partReads(() => read([quiet, 'nope']))).reads).toBe(1)
+    // Without stamps: read from Mongo every time, still in one query.
+    expect((await partReads(() => readLightGroups(db, DIRECT, tabId, [quiet, 'nope', web]))).reads).toBe(1)
+  })
+})
+
 describe('the change feed', () => {
   it('gives what loadChanged gives for any cursor, and serves a later cursor at the same stamp from memory', async () => {
     const { tabId, web } = await privateScene()
@@ -346,6 +425,6 @@ describe('a machine\'s own reading', () => {
     const first = await readLastChangedAt(db, await cache.at([tabId]), tabId)
     await write(Date.now(), { released: ['again'] }, false)
     const again = await partReads(async () => readLastChangedAt(db, await cache.at([tabId]), tabId))
-    expect(again).toEqual({ value: first, reads: 0 })
+    expect(again).toEqual({ value: first, reads: 0, byCollection: {} })
   })
 })
