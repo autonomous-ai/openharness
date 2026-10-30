@@ -284,6 +284,12 @@ describe('routeTask', () => {
     t.state.agents.push({ id: 'b1', name: 'Kimi', machineId: 'm1', harnessId: 'hb', configuration: { engine: 'codex', model: 'default', effort: 'default' }, gridModel: 'moonshotai/kimi-k3' } as never)
     Object.assign(t.state.conversations[2]!, { assignment: { id: 'b', agentId: 'b1', status: 'review' } })
     expect(await routeTask(input, scoped({ tab: t, policy: floorPolicy }), where as never, opener(), () => 'op')).toMatchObject({ ok: true, pick: { kind: 'member', agentId: 'a1' } })
+    // An assignment that names no agent is held by what it ran on, and keeps no Reviewer out as its Builder.
+    Object.assign(t.state.conversations[2]!, { assignment: { id: 'b', status: 'review', configuration: { engine: 'codex' } } })
+    const unnamed = scoped({ tab: t, policy: floorPolicy })
+    expect(await routeTask(input, unnamed, where as never, opener(), () => 'op')).toMatchObject({ ok: true, pick: { kind: 'new', engine: 'claude', model: 'opus' } })
+    expect(recorded(unnamed).command.decision).toMatchObject({ floor: 3, belowFloor: false })
+    expect(JSON.stringify(recorded(unnamed).command.decision)).not.toContain('never reviews work it built')
   })
   it('rates a Builder launched on its engine\'s own model by that engine\'s default row, whatever slug it reports (review of #2274)', async () => {
     const t = tab(); t.state.agents = agents.map(a => a.id === 'a1' ? { ...a, role: 'reviewer' } : a)
@@ -1111,6 +1117,14 @@ describe('routing contributed capacity', () => {
       expect(reasons(out.answer)[0]!.reason).toContain('Claude Code is suspended on this machine: its last 2 starts there failed.')
       pool.suspendedEngines = { codex: 'Codex is suspended on this machine: its last 2 starts there failed.' }
       expect((await runPool(pool, false, {}, project)).answer.ok).toBe(true)
+      // The machine's own reading says more, and goes first: what its owner can fix there, not the count of failed starts.
+      // An engine this CLI does not run, or a reason that is not words, is not read.
+      const unsigned = swarm(undefined, [{ engine: 'claude', installed: true, signedIn: false }])
+      unsigned.suspendedEngines = { claude: 'Claude Code is suspended on this machine: its last 2 starts there failed.', gemini: 'Suspended.', codex: 2 }
+      const both = await runPool(unsigned, false, {}, project)
+      expect(both.answer).toMatchObject({ error: 'NO_CANDIDATE' })
+      expect(reasons(both.answer)[0]!.reason).toContain('not signed in to a subscription')
+      expect(JSON.stringify(reasons(both.answer))).not.toMatch(/suspended|Suspended/)
     })
 
     it('still offers a local model on a machine whose engine is signed out, since the grid needs no subscription', async () => {
