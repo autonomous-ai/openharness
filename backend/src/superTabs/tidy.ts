@@ -149,11 +149,48 @@ export function archivable(state: SuperTabState, group: Conversation, now: numbe
 
 /** The one quiet line an archived group gets, to nobody, written as its project's Lead; none when the project has no Lead. */
 export function archiveLine(state: SuperTabState, group: Conversation, now: number): MessageDraft | null {
+  const prs = group.pullRequestUrls?.length ? ' and its pull requests are merged or closed' : ''
+  return leadLine(state, group, now, `Archived: the work is ${group.assignment!.status}${prs}.`)
+}
+
+function leadLine(state: SuperTabState, group: Conversation, now: number, text: string): MessageDraft | null {
   const leadId = state.conversations.find(c => c.id === groupProject(state, group).leadConversationId)?.leadId
   const lead = leadId ? state.agents.find(a => a.id === leadId) : undefined
   if (!lead) return null
-  const prs = group.pullRequestUrls?.length ? ' and its pull requests are merged or closed' : ''
   return { id: stableId('auto-archive', group.id, String(now)), conversationId: group.id, replyTo: null, recipients: [],
     author: { kind: 'agent', id: lead.id, name: lead.name, displayName: agentDisplayName(state.agents, lead.id), membershipGeneration: lead.membershipGeneration },
-    text: `Archived: the work is ${group.assignment!.status}${prs}.`, source: { kind: 'auto-archive' } }
+    text, source: { kind: 'auto-archive' } }
+}
+
+// A review nobody is reviewing closes once the work it reviews needs no Swarm review (Ken, 2026-10-30): 28 of 31 open
+// review groups waited for a Reviewer on pull requests already merged, reviewed outside the Swarm or folded into a batch PR.
+// A review with no Reviewer has no task to finish or cancel, so `archivable` never matched it.
+
+/** A review group with no active Reviewer: none was ever free, or its Reviewer's task ended. The archive pass reads these
+ *  as it reads finished work (parts/write.ts workFinished). */
+export const unattendedReview = (group: Conversation): boolean => !!group.reviewOf && !activeWork(group)
+
+/** The pull requests that decide whether an unattended review still matters: those it links and those of the work it reviews. */
+export function reviewPullRequests(state: SuperTabState, review: Conversation): string[] {
+  const reviewed = state.conversations.find(c => c.id === review.reviewOf)
+  return [...new Set([...review.pullRequestUrls ?? [], ...reviewed?.pullRequestUrls ?? []])]
+}
+
+/** Whether an unattended review may close by itself, as far as the Swarm alone can tell: it links, or the work it reviews
+ *  links, a pull request, and it has been quiet for ARCHIVE_QUIET_MS. That each of those pull requests is merged or
+ *  closed, and that no decision waits there, the caller checks (archive.ts, store.ts archiveFinished). */
+export function reviewClosable(state: SuperTabState, review: Conversation, now: number): boolean {
+  if (state.tidy === false || review.archived || review.kind || review.audience || !unattendedReview(review)) return false
+  if (projectsOf(state).some(p => p.leadConversationId === review.id)) return false
+  if (!reviewPullRequests(state, review).length) return false
+  const last = time(review.lastActivityAt)
+  return last !== undefined && now - last >= ARCHIVE_QUIET_MS
+}
+
+const pullNumber = (url: string) => `#${url.slice(url.lastIndexOf('/') + 1)}`
+
+/** The one quiet line a closed review gets, naming each pull request and how it ended. */
+export function reviewCloseLine(state: SuperTabState, review: Conversation, settled: Readonly<Record<string, 'merged' | 'closed'>>, now: number): MessageDraft | null {
+  const prs = reviewPullRequests(state, review).map(url => `${pullNumber(url)} ${settled[url]}`).join(', ')
+  return leadLine(state, review, now, `Closed: ${prs}; no Swarm review is needed now.`)
 }

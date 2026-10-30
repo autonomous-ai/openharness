@@ -1336,6 +1336,57 @@ describe('cancelling work', () => {
     f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'stopped', result: null }, owner, { confirmedStopped: true })
     expect(() => f.run(cancel, leadActor)).toThrow('already ended')
   })
+
+  // Ken, 2026-10-30: a review no Reviewer was free for had no assignment to name, so a Lead could not cancel it.
+  describe('a task nobody was assigned', () => {
+    function unassigned() {
+      const f = fixture(); f.invite()
+      const lead = f.add('lead', 'owner', 'lead', true), group = f.group(), worker = f.add('worker', 'owner', group)
+      const leadActor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+      const workerActor: Actor = { kind: 'agent', agentId: worker, machineOwnerId: 'host-owner' }
+      const cancel = { type: 'work.cancel', conversationId: group, assignmentId: 'current', reason: 'Merged outside the Swarm.' } as Command
+      const at = () => f.state.conversations.find(c => c.id === group)!
+      return { f, group, lead, leadActor, workerActor, cancel, at }
+    }
+
+    it('is cancelled by its Lead with "current": it archives, with the reason in one line to nobody', () => {
+      const { f, leadActor, cancel, at } = unassigned()
+      expect(at().assignment).toBeNull()
+      const effects = f.run(cancel, leadActor)
+      expect(at()).toMatchObject({ archived: true, assignment: null })
+      expect(effects.messages).toMatchObject([{ conversationId: at().id, recipients: [], text: 'The Lead cancelled this task: Merged outside the Swarm.' }])
+      // A retry finds it archived and changes nothing.
+      expect(() => f.run(cancel, leadActor)).toThrow('Reopen this conversation')
+    })
+
+    it('is cancelled by the tab owner the same way', () => {
+      const { f, cancel, at } = unassigned()
+      expect(f.run(cancel).messages.map(m => m.text)).toEqual(['The tab owner cancelled this task: Merged outside the Swarm.'])
+      expect(at().archived).toBe(true)
+    })
+
+    it('still answers a named assignment id that is not current as stale', () => {
+      const { f, leadActor, cancel, at } = unassigned()
+      expect(() => f.run({ ...cancel, assignmentId: '58c2d5f2bdc100771bc57de7' } as Command, leadActor)).toThrow('no longer the active assignment')
+      expect(at().archived).toBe(false)
+    })
+
+    it('refuses the worker, a collaborator and another project\'s Lead, and leaves it open', () => {
+      const { f, workerActor, cancel, at } = unassigned()
+      const project = f.run({ type: 'project.create', name: 'Other', visibility: 'public', brief: '' }).result
+      const otherLead = f.add('other-lead', 'owner', project.conversationId as string, true)
+      expect(() => f.run(cancel, workerActor)).toThrow('no longer the active assignment')
+      expect(() => f.run(cancel, peer)).toThrow('no longer the active assignment')
+      expect(() => f.run(cancel, { kind: 'agent', agentId: otherLead, machineOwnerId: 'host-owner' })).toThrow()
+      expect(at().archived).toBe(false)
+    })
+
+    it('never archives the Lead conversation through it', () => {
+      const { f, leadActor, cancel } = unassigned()
+      expect(() => f.run({ ...cancel, conversationId: 'lead' } as Command, leadActor)).toThrow('no longer the active assignment')
+      expect(f.state.conversations.find(c => c.id === 'lead')!.archived).toBe(false)
+    })
+  })
 })
 
 it('allows routing directly to the awaiting worker without first keeping it', () => {
@@ -1801,6 +1852,48 @@ describe('Reviewer role', () => {
       expect(reviews()[0]!.assignment).toBeNull()
       expect(effects.messages.filter(m => m.recipients.includes(lead) && m.conversationId === reviews()[0]!.id).map(m => [m.text, agentOnly(m.source, m.recipients)]))
         .toEqual([['Review opened by itself for #1, but no Reviewer is free. Route it and start one.', true]])
+    })
+
+    // Ken, 2026-10-30: a review no Reviewer was free for could not be cancelled, and on 10-28 archiving an open review made
+    // the work's next Ready for review open nothing, silently.
+    it('lets the Lead cancel a review no Reviewer was free for, and the next Ready for review opens a new one and tells the Lead', () => {
+      const { f, lead, leadActor, reviewer, fresh, markReady, reviews } = ready()
+      for (const id of [reviewer, fresh]) f.run({ type: 'agent.release', agentId: id, decision: 'stop' }, leadActor)
+      markReady(`Ready. ${pr}`)
+      const first = reviews()[0]!
+      expect(first.assignment).toBeNull()
+      f.run({ type: 'work.cancel', conversationId: first.id, assignmentId: 'current', reason: 'Reviewed outside the Swarm' }, leadActor)
+      expect(reviews()[0]!.archived).toBe(true)
+      const again = markReady(`Ready, head 2. ${pr.replace('/42', '/43')}`)
+      expect(reviews()).toHaveLength(2)
+      const second = reviews().find(c => c.id !== first.id)!
+      expect(second.archived).toBe(false)
+      expect(again.messages.filter(m => m.conversationId === second.id && m.recipients.includes(lead)).map(m => m.text))
+        .toEqual([`Review opened by itself for #1, but no Reviewer is free. Route it and start one.`])
+    })
+
+    // Review of #2322: a review whose Reviewer stopped had an ended attempt, which the CLI names for "current", so it answered
+    // "already ended" and stayed open while its pull request was.
+    it('lets the Lead cancel a review whose Reviewer stopped, by "current" or by the ended attempt\'s id', () => {
+      for (const named of ['current', 'ended']) {
+        const { f, leadActor, markReady, reviews } = ready()
+        markReady(`Ready. ${pr}`)
+        const review = reviews()[0]!, attempt = review.assignment!.id
+        f.run({ type: 'work.status', conversationId: review.id, assignmentId: attempt, status: 'stopped', result: null }, owner, { confirmedStopped: true })
+        const effects = f.run({ type: 'work.cancel', conversationId: review.id, assignmentId: named === 'current' ? 'current' : attempt, reason: 'Merged' }, leadActor)
+        expect(reviews()[0]).toMatchObject({ archived: true, assignment: { status: 'stopped' } })
+        expect(effects.messages.map(m => [m.text, m.recipients])).toEqual([['The Lead cancelled this task: Merged.', []]])
+      }
+    })
+
+    it('opens a new review on the next Ready for review once the archive pass closed the open one (tidy.ts)', () => {
+      const { f, leadActor, reviewer, fresh, markReady, reviews } = ready()
+      for (const id of [reviewer, fresh]) f.run({ type: 'agent.release', agentId: id, decision: 'stop' }, leadActor)
+      markReady(`Ready. ${pr}`)
+      // As store.ts archiveFinished leaves it.
+      reviews()[0]!.archived = true
+      markReady(`Ready, head 2. ${pr}`)
+      expect(reviews().filter(c => !c.archived)).toHaveLength(1)
     })
 
     it('gives a delta review to the Reviewer of the earlier head while it is still free', () => {
