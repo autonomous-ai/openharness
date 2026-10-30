@@ -1158,7 +1158,9 @@ describe('mentions on a post', () => {
     const t = setup()
     swarm(t, t.agentId)
     const lead = await help(t, { tabId: 'tab', agentId: t.agentId })
-    expect(lead.post).toContain(`post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... ${mention}:`)
+    expect(lead.post).toContain(`post GROUP TEXT|- OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... ${mention}:`)
+    // 2026-10-30: TEXT - posted a literal dash; help says - reads the message from stdin (command.ts postStdin).
+    expect(lead.post).toContain("when it holds quotes, or is only -, put - in its place and send the message on stdin (post GROUP - OPERATION_ID <<'MSG' … MSG); an empty stdin is refused and nothing is posted.")
     expect(lead.post).toContain('--mention tags a person, by the id or email shown in status (up to 5), when you need them to act or decide; it shows in their notifications.')
     // The server reads tags from the text too (backend mentions.ts).
     expect(lead.post).toContain('An @username or @email in TEXT tags that person as well, outside code and links.')
