@@ -682,7 +682,12 @@ export class DeviceLink {
           this.opts.log(`device: a frame could not be read (${err instanceof Error ? err.message : String(err)})`)
         })
       })
-      ws.on('close', (code) => this.onClose(code))
+      // Only while it is still the lane's socket. One closed on purpose (teardown: an unplug, a revoke) closes a moment
+      // later, when a new socket may already be up; read then, it tore the new one down (a fast replug failed once).
+      ws.on('close', (code) => {
+        if (this.ws === ws) this.onClose(code)
+        else this.opts.log(`device: an earlier socket closed (${code}) — not the lane's any more`)
+      })
     })
   }
 
@@ -889,10 +894,18 @@ export class DeviceLink {
       this.opts.log('device: not authorized — other machines are unavailable until the next sign-in')
       return
     }
+    this.reconnectLater()
+  }
+
+  private reconnectLater(): void {
     const delay = Math.min(MAX_DELAY_MS, BASE_DELAY_MS * 2 ** Math.min(this.attempts++, 5))
     this.reconnectTimer = setTimeout(() => {
-      // Re-select only if a machine was selected. A socket held open purely for presence comes back the
-      // same way it went up — connected and attached to nothing.
+      this.reconnectTimer = null
+      // Re-select only if a machine is wanted NOW: one chosen during the wait wins over the one before the drop (a
+      // select of the old one would end the backend there while the dial shows the new one). A socket held open purely
+      // for presence comes back the same way it went up — connected and attached to nothing.
+      const wanted = this.wanted
+      if (!wanted && !this.heldOpen) return
       const retry = wanted ? this.attach(wanted) : this.online()
       // Replaced by a newer select meanwhile is not a failed reconnect: the newer one carries on.
       void retry.catch((err) => { if ((err as Error).message !== SELECT_SUPERSEDED) this.opts.log(`device: reconnect failed (${(err as Error).message})`) })
@@ -968,7 +981,7 @@ export class DeviceLink {
       this.route(opened.frame as DeviceFrame, this.answered(from, session, frame))
       return
     }
-    this.route(frame)
+    this.route(frame, '', !from && !wrapped)
   }
 
   /**
@@ -1056,16 +1069,26 @@ export class DeviceLink {
 
   /** A frame read (opened, or never sealed): to its waiter, or to the listeners. [answered] is the machine it proves
    *  up (`answered`), or ''. */
-  private route(frame: DeviceFrame, answered = ''): void {
+  private route(frame: DeviceFrame, answered = '', backend = false): void {
     const from = typeof frame.machineId === 'string' ? frame.machineId : ''
     const type = frame.type ?? ''
     const payload = (frame.payload ?? {}) as Record<string, unknown>
 
+    // A select is answered by the backend itself, in the clear and tagged with no machine (deviceWs.ts bindMachine). One
+    // tagged with a machine was relayed from that machine's side, and one opened from a sealed frame was written by a
+    // machine: neither says where the backend put this dial, and one naming no machine would settle the select in flight.
+    if ((type === 'machine_selected' || type === 'machine_select_error') && !backend) {
+      this.opts.log(`device: ignored a ${type} not from the backend${from ? ` (tagged ${from})` : ''}`)
+      return
+    }
     if (type === 'machine_selected') {
       const named = typeof payload.machineId === 'string' ? payload.machineId : ''
-      this.attached = named || this.wanted
-      this.opts.log(`device: machine_selected ${this.attached}`)
-      if (this.answersSelect(type, named)) this.settleSelect()
+      this.opts.log(`device: machine_selected ${named || this.selecting?.machineId || '?'}`)
+      if (!this.answersSelect(type, named)) return
+      // Only the answer that settles the select in flight says what is attached: a late one for a machine already
+      // replaced would make the next select of that machine look done and be skipped (attach).
+      this.attached = this.selecting!.machineId
+      this.settleSelect()
       return
     }
     if (type === 'machine_select_error') {
@@ -1079,6 +1102,9 @@ export class DeviceLink {
       this.opts.log('device: revoked — this dial was removed from the account')
       this.wanted = ''
       this.teardown('revoked')
+      // As before: a lane held open for a plugged-in dial comes back. This used to happen only through the revoked
+      // socket's own close, which now no longer reaches the lane (see open()).
+      if (this.heldOpen) this.reconnectLater()
       return
     }
     // A machine the backend says went offline took its session with it: its daemon is gone or going, and the
