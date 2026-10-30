@@ -124,8 +124,8 @@ describe('the notice that new Reviewers cannot start', () => {
     const buddy = machine('buddy', 'Huy private laptop', 'huy', { windows: plenty }, { buddyOnly: true })
     const { state, built } = swarm([machine('studio', 'Mac Studio', 'ken', { windows: out }), buddy])
     const said = notice(state, built)
+    expect(said).toMatchObject({ mentions: ['ken'], source: { cause: 'out' } })
     expect(said!.text).not.toContain('Huy private laptop')
-    expect(said!.mentions).toEqual(['ken'])
   })
 
   it('says nothing for a build on a grid model, which any strong engine reviews, or a group with no build', () => {
