@@ -114,6 +114,9 @@ async function swarmWorktree(path: string, source: string, startId: string): Pro
   } catch { return false }
 }
 
+/** Whether `path` is not there at all: any other failure to read it (a permission, a file in its place) is not "gone". */
+const folderGone = (path: string) => realpath(path).then(() => false, (error: NodeJS.ErrnoException) => error?.code === 'ENOENT')
+
 export interface MachineDeps {
   backend: typeof backend; open: typeof openDaemon; capabilities: typeof readCapabilities; start: typeof startAgent; now: () => number
   log?: (message: string) => void; env?: NodeJS.ProcessEnv
@@ -204,6 +207,8 @@ export class ContributedMachines {
   private readonly startsInFlight = new Map<string, Set<Promise<void>>>()
   /** Per removal whose cleanup or acknowledgement failed, how often and when it may run again. */
   private readonly cleanupRetries = new Map<string, { failures: number; at: number }>()
+  /** The last removal asked for each stopped agent's worktree, by tab and agent: the next one waits for it (removeStoppedWorktree). */
+  private readonly removals = new Map<string, Promise<void>>()
   /** Until when the reading leaves out its privacy field, which the backend refused. */
   private privacyRefusedUntil = 0
   /** Until when the reading leaves out its progress, which the backend refused. */
@@ -742,14 +747,34 @@ export class ContributedMachines {
    *  after the weekly sweep's idle week, by that sweep's own rule (lib/worktreeSweep.ts): only a worktree this machine's
    *  record proves the Swarm made, with no session in it and nothing uncommitted. Its branch keeps every commit and goes
    *  only when they are all on other branches or the remote, as once its pull request merged. Anything else stays. */
-  async removeStoppedWorktree(tabId: string, harnessId: string): Promise<void> {
+  removeStoppedWorktree(tabId: string, harnessId: string): Promise<void> {
+    // Lead, 10-30: an ended session (host.ts endSession) and a stopped worker (releaseWorker) can ask at the same moment.
+    // Each waits for the one before it and then checks for itself: after a removal it finds no record; after one that
+    // kept the folder (a session still open then), it reads the folder and the sessions again.
+    const key = JSON.stringify([tabId, harnessId])
+    const run = (this.removals.get(key) ?? Promise.resolve()).catch(() => {}).then(() => this.removeWorktreeOnce(tabId, harnessId))
+    this.removals.set(key, run)
+    const settled = () => { if (this.removals.get(key) === run) this.removals.delete(key) }
+    run.then(settled, settled)
+    return run
+  }
+  private async removeWorktreeOnce(tabId: string, harnessId: string): Promise<void> {
     const file = swarmWorktreesFile(this.core.dataDir, this.machineId)
-    const record = readWorktrees(file).find(w => w.tabId === tabId && w.harnessId === harnessId)
-    if (!record || !await swarmWorktree(record.path, record.source, record.startId)) return
+    const mine = (w: SwarmWorktree) => w.tabId === tabId && w.harnessId === harnessId
+    const record = readWorktrees(file).find(mine)
+    if (!record) return
+    // Diego, 10-30: a folder deleted by hand kept its record for good, and every later stop tried it again. Only a folder
+    // that is not there drops it; one that cannot be read for any other reason keeps it. Nothing on disk is touched.
+    if (await folderGone(record.path)) return writeWorktrees(file, readWorktrees(file).filter(w => !mine(w)))
+    if (!await swarmWorktree(record.path, record.source, record.startId)) return
     if (this.core.agents.live().some(a => !!a.cwd && within(record.path, a.cwd))) return
+    // Review of #2266: like the weekly sweep (services/workspaces.ts), a paused session of another agent can be resumed
+    // there, so its folder stays. This agent's own paused session is not kept: it was stopped or removed.
+    if (this.core.agents.all().some(a => a.agentId !== harnessId && !!a.cwd && within(record.path, a.cwd))) return
     // File times are wall-clock, so the sweep's idle check reads the real clock; no idle wait is asked.
-    if (!await sweepOne(record.path, Date.now(), 0).catch(() => false)) return
-    writeWorktrees(file, readWorktrees(file).filter(w => !(w.tabId === tabId && w.harnessId === harnessId)))
+    // A failed git read (a locked worktree, a handle still open on Windows) keeps the folder; the log names no path.
+    if (!await sweepOne(record.path, Date.now(), 0).catch(() => { this.log('Kept a Swarm worktree: WORKTREE_CHECK_FAILED'); return false })) return
+    writeWorktrees(file, readWorktrees(file).filter(w => !mine(w)))
   }
 
   /** A removal deletes only what is provably the Swarm's: the record says which worktree each start made. */

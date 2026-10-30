@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, rm, stat, utimes, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -84,6 +84,60 @@ describe('sweeping unused worktrees', { timeout: 30_000 }, () => {
     expect(await sweepWorktrees({ root: join(root, 'harnesses'), inUse: [], now: later() })).toEqual([flat])
     expect(await exists(detached)).toBe(true)
     expect(await exists(home)).toBe(true)
+  })
+
+  // Lead, 10-30 (#2266): before Harness's ignore file ignored itself, it was untracked in every worktree, so none ever read as
+  // clean; 19 piled up on one Mac. The exact file an older Harness wrote is upgraded first; anything else stays as it is.
+  const OLDER = 'runtime/\nlegacy-AGENTS.md\n'
+  const withHarnessFolder = async (path: string, ignore: string) => {
+    await mkdir(join(path, '.harness', 'runtime'), { recursive: true })
+    await writeFile(join(path, '.harness', 'runtime', 'SKILL.md'), 'session skill')
+    await writeFile(join(path, '.harness', '.gitignore'), ignore)
+  }
+
+  it('removes an idle worktree whose only untracked file is the ignore file an older Harness wrote', async () => {
+    const path = await add('older-ignore', 'harness/older-ignore')
+    await withHarnessFolder(path, OLDER)
+    expect(await sweepWorktrees({ root: join(root, 'harnesses'), inUse: [], now: later() })).toEqual([path])
+    expect(await exists(path)).toBe(false)
+  })
+
+  // Review of #2266: the upgraded rule names only Harness's own file; an ignore file someone added deeper is still work.
+  it('upgrades the older ignore file to a rule that still shows an ignore file someone added deeper', async () => {
+    const path = await add('nested-ignore', 'harness/nested-ignore')
+    await withHarnessFolder(path, OLDER)
+    await mkdir(join(path, '.harness', 'mine'))
+    await writeFile(join(path, '.harness', 'mine', '.gitignore'), 'scratch/\n')
+    expect(await sweepWorktrees({ root: join(root, 'harnesses'), inUse: [], now: later() })).toEqual([])
+    expect(await readFile(join(path, '.harness', '.gitignore'), 'utf8')).toBe(`${OLDER}/.gitignore\n`)
+  })
+
+  it('keeps a worktree whose ignore file someone edited, and leaves that file as it was', async () => {
+    const path = await add('edited-ignore', 'harness/edited-ignore')
+    await withHarnessFolder(path, `${OLDER}mine/\n`)
+    expect(await sweepWorktrees({ root: join(root, 'harnesses'), inUse: [], now: later() })).toEqual([])
+    expect(await readFile(join(path, '.harness', '.gitignore'), 'utf8')).toBe(`${OLDER}mine/\n`)
+  })
+
+  it('never rewrites a committed ignore file, which would be a change of its own', async () => {
+    await mkdir(join(repo, '.harness'))
+    await writeFile(join(repo, '.harness', '.gitignore'), OLDER)
+    await git(repo, 'add', '.')
+    await git(repo, 'commit', '--quiet', '-m', 'ignore file committed by an earlier git add -A')
+    const path = await add('committed-ignore', 'harness/committed-ignore')
+    await writeFile(join(path, 'draft'), 'not committed')
+    expect(await sweepWorktrees({ root: join(root, 'harnesses'), inUse: [], now: later() })).toEqual([])
+    expect(await readFile(join(path, '.harness', '.gitignore'), 'utf8')).toBe(OLDER)
+  })
+
+  it('never writes through a Harness folder that points elsewhere', async () => {
+    const path = await add('linked-ignore', 'harness/linked-ignore')
+    const outside = join(root, 'outside')
+    await mkdir(outside)
+    await writeFile(join(outside, '.gitignore'), OLDER)
+    await symlink(outside, join(path, '.harness'))
+    expect(await sweepWorktrees({ root: join(root, 'harnesses'), inUse: [], now: later() })).toEqual([])
+    expect(await readFile(join(outside, '.gitignore'), 'utf8')).toBe(OLDER)
   })
 
   it('ignores a missing worktrees folder and checkouts that are not worktrees', async () => {
