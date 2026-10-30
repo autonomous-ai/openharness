@@ -33,10 +33,21 @@ export const DB_SIZE_SCRIPT = [
   'const actions = [].concat(...(auth.authenticatedUserPrivileges || []).map((p) => p.actions || []));',
   `if (!roles.length || !actions.length || roles.some((role) => !${JSON.stringify(READ_ROLES)}.includes(role))`
     + ` || actions.some((action) => !${JSON.stringify(READ_ACTIONS)}.includes(action))) { print(JSON.stringify({ refused: 'not read-only', roles })); quit(3) }`,
+  // A number as JSON prints it. MongoDB hands 64-bit integers over as bson Longs (low and high 32-bit parts), which printed
+  // as {"low":…,"high":…} on Ken's Mac (CLI 0.5.17, 10-30); past 2^53 a plain number would round, so those print as digits.
+  'const plain = (value) => {',
+  '  if (value === null || value === undefined) return 0;',
+  "  if (typeof value === 'number') return value;",
+  "  if (typeof value === 'object' && value._bsontype === 'Decimal128') return Number(String(value));",
+  "  const big = typeof value === 'bigint' ? value : typeof value === 'object' && Number.isInteger(value.low) && Number.isInteger(value.high)",
+  '    ? (BigInt(value.unsigned ? value.high >>> 0 : value.high) << 32n) + BigInt(value.low >>> 0) : null;',
+  '  if (big === null) return Number(value);',
+  '  return big >= BigInt(Number.MIN_SAFE_INTEGER) && big <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(big) : String(big);',
+  '};',
   'const collections = {};',
-  'for (const name of db.getCollectionNames().sort()) collections[name] = db.getCollection(name).estimatedDocumentCount();',
+  'for (const name of db.getCollectionNames().sort()) collections[name] = plain(db.getCollection(name).estimatedDocumentCount());',
   `const total = db.SuperTabAttachment.aggregate([{ $group: { _id: null, bytes: { $sum: '$size' } } }]).toArray()[0];`,
-  'print(JSON.stringify({ database: db.getName(), collections, attachmentBytes: total ? total.bytes : 0 }));',
+  'print(JSON.stringify({ database: db.getName(), collections, attachmentBytes: total ? plain(total.bytes) : 0 }));',
 ].join('\n')
 
 /** Where the read-only login is kept, in the person's home, and its variable. One fixed place, wherever the command runs:

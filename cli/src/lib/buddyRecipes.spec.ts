@@ -128,7 +128,7 @@ describe('harness buddy-read db-size', () => {
 describe('the db-size script', () => {
   const READ = ['find', 'listCollections', 'listIndexes', 'collStats', 'dbStats', 'killCursors']
   type Privilege = { resource: Record<string, unknown>; actions: string[] }
-  function database(roles: string[], collections: Record<string, number>, attachmentBytes: number | null, actions: string[] | Privilege[] = READ) {
+  function database(roles: string[], collections: Record<string, unknown>, attachmentBytes: unknown, actions: string[] | Privilege[] = READ) {
     const calls: unknown[] = []
     const privileges = typeof actions[0] === 'object' ? actions as Privilege[] : [{ resource: { db: '', collection: '' }, actions: actions as string[] }]
     const db = {
@@ -154,6 +154,37 @@ describe('the db-size script', () => {
     expect(JSON.parse(printed.join(''))).toEqual({ database: 'harness', collections: { SuperTab: 12, SuperTabAttachment: 3 }, attachmentBytes: 2048 })
     expect(calls).toEqual([URL, { connectionStatus: 1, showPrivileges: true }, [{ $group: { _id: null, bytes: { $sum: '$size' } } }]])
   })
+
+  // MongoDB's 64-bit integer as mongosh hands it over (bson's Long: low and high 32-bit parts, unsigned), with and without its
+  // methods. On Ken's Mac (CLI 0.5.17, 10-30) the attachments' $sum came back as one and printed as {"low":…,"high":…}.
+  class Long {
+    _bsontype = 'Long'
+    constructor(readonly low: number, readonly high: number, readonly unsigned = false) {}
+    toNumber() { return this.unsigned ? (this.high >>> 0) * 2 ** 32 + (this.low >>> 0) : this.high * 2 ** 32 + (this.low >>> 0) }
+    toString() { return String((BigInt(this.unsigned ? this.high >>> 0 : this.high) << 32n) + BigInt(this.low >>> 0)) }
+  }
+  const FIVE_GIB = new Long(1_073_741_824, 1)
+
+  it.each([
+    ['a Long', FIVE_GIB, 5_368_709_120],
+    ['a Long without its methods', { low: 1_073_741_824, high: 1, unsigned: false }, 5_368_709_120],
+    ['a Long whose low part reads as negative', new Long(-1, 0), 4_294_967_295],
+    ['an unsigned Long', new Long(5, 3, true), 3 * 2 ** 32 + 5],
+    ['a 32-bit integer object', { valueOf: (): number => 2048 }, 2048],
+    ['a 128-bit decimal', { _bsontype: 'Decimal128', toString: () => '2048' }, 2048],
+    ['a bigint', 2048n, 2048],
+  ])('prints the attachments\' bytes given as %s as a plain number', (_, bytes, want) => {
+    const { printed, quit } = database(['read'], { SuperTab: new Long(12, 0) }, bytes)
+    expect(quit).toBeNull()
+    expect(printed.join('')).not.toContain('low')
+    expect(JSON.parse(printed.join(''))).toEqual({ database: 'harness', collections: { SuperTab: 12 }, attachmentBytes: want })
+  })
+
+  // Past 2^53 a plain number would be rounded without saying so: the exact value prints as a string of digits instead.
+  it.each([['a Long', new Long(1, 2 ** 21), '9007199254740993'], ['an unsigned Long with its top bit set', new Long(0, -(2 ** 31), true), '9223372036854775808']])(
+    'prints %s past what a plain number holds exactly as its exact digits', (_, bytes, want) => {
+      expect(JSON.parse(database(['read'], {}, bytes).printed.join('')).attachmentBytes).toBe(want)
+    })
 
   it('counts no attachments as 0 bytes', () => {
     expect(JSON.parse(database(['read'], {}, null).printed.join('')).attachmentBytes).toBe(0)
