@@ -14,14 +14,21 @@ import { dirname, join } from 'node:path'
  * command line, where any process could read it, and refuses any login with a role beyond reading.
  */
 
-/** The roles of a read-only login: reading data and the cluster's own statistics. */
-const READ_ROLES = ['read', 'readAnyDatabase', 'clusterMonitor']
+/** The roles of a read-only login. clusterMonitor is not one: its actions include setting changes. */
+const READ_ROLES = ['read', 'readAnyDatabase']
+/** What a read-only login may do, as the server lists its privileges (connectionStatus with showPrivileges): MongoDB's
+ *  read and readAnyDatabase roles' actions. A role is only a name; a custom one named "read" could insert (review of #2310). */
+const READ_ACTIONS = ['changeStream', 'collStats', 'dbHash', 'dbStats', 'find', 'killCursors', 'listCollections', 'listIndexes',
+  'listSearchIndexes', 'listDatabases']
 
 /** What mongosh runs for db-size, with no rc file of the person's: its login from the environment, its roles checked first. */
 export const DB_SIZE_SCRIPT = [
   'const db = connect(process.env.HARNESS_RO_DB_URL);',
-  `const roles = ((db.runCommand({ connectionStatus: 1 }).authInfo || {}).authenticatedUserRoles || []).map((r) => r.role);`,
-  `if (!roles.length || roles.some((role) => !${JSON.stringify(READ_ROLES)}.includes(role))) { print(JSON.stringify({ refused: 'not read-only', roles })); quit(3) }`,
+  'const auth = db.runCommand({ connectionStatus: 1, showPrivileges: true }).authInfo || {};',
+  'const roles = (auth.authenticatedUserRoles || []).map((r) => r.role);',
+  'const actions = [].concat(...(auth.authenticatedUserPrivileges || []).map((p) => p.actions || []));',
+  `if (!roles.length || !actions.length || roles.some((role) => !${JSON.stringify(READ_ROLES)}.includes(role))`
+    + ` || actions.some((action) => !${JSON.stringify(READ_ACTIONS)}.includes(action))) { print(JSON.stringify({ refused: 'not read-only', roles })); quit(3) }`,
   'const collections = {};',
   'for (const name of db.getCollectionNames().sort()) collections[name] = db.getCollection(name).estimatedDocumentCount();',
   `const total = db.SuperTabAttachment.aggregate([{ $group: { _id: null, bytes: { $sum: '$size' } } }]).toArray()[0];`,
@@ -68,7 +75,10 @@ export async function buddyReadCommand(args: readonly string[], deps: BuddyReadD
     return 1
   }
   const run = spawnSync('mongosh', ['--nodb', '--quiet', '--norc', '--eval', DB_SIZE_SCRIPT], { encoding: 'utf8', timeout: 120_000,
-    env: { ...process.env, PATH: deps.path, HARNESS_RO_DB_URL: url } })
+    // No usage data from this run (review of #2310). mongosh turns its telemetry off for one run only by this variable or
+    // its global config file's forceDisableTelemetry (mongodb-js/mongosh packages/cli-repl/src/cli-repl.ts, read 10-30);
+    // DO_NOT_TRACK does nothing there, and disableTelemetry() would change the person's own settings for good.
+    env: { ...process.env, PATH: deps.path, HARNESS_RO_DB_URL: url, MONGOSH_FORCE_DISABLE_TELEMETRY_FOR_TESTING: '1' } })
   if (run.error) {
     deps.write(`mongosh could not run here: ${scrub(run.error.message, url)}\n`)
     return 1

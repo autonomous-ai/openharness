@@ -27,7 +27,7 @@ const bin = join(parent, 'bin'), seen = join(parent, 'seen.json')
 mkdirSync(bin)
 function mongosh(answer: { stdout?: string; stderr?: string; status?: number }) {
   writeFileSync(join(parent, 'stdout'), answer.stdout ?? ''); writeFileSync(join(parent, 'stderr'), answer.stderr ?? '')
-  writeFileSync(join(bin, 'mongosh'), `#!/bin/sh\nnode -e 'require("fs").writeFileSync(${JSON.stringify(seen)}, JSON.stringify({ args: process.argv.slice(1), url: process.env.HARNESS_RO_DB_URL ?? null }))' -- "$@"\n`
+  writeFileSync(join(bin, 'mongosh'), `#!/bin/sh\nnode -e 'require("fs").writeFileSync(${JSON.stringify(seen)}, JSON.stringify({ args: process.argv.slice(1), url: process.env.HARNESS_RO_DB_URL ?? null, track: process.env.MONGOSH_FORCE_DISABLE_TELEMETRY_FOR_TESTING ?? null }))' -- "$@"\n`
     + `cat '${join(parent, 'stdout')}'\ncat '${join(parent, 'stderr')}' >&2\nexit ${answer.status ?? 0}\n`)
   chmodSync(join(bin, 'mongosh'), 0o755)
 }
@@ -51,6 +51,8 @@ describe('harness buddy-read db-size', () => {
     expect(called.url).toBe(URL)
     expect(called.args).toEqual(['--nodb', '--quiet', '--norc', '--eval', DB_SIZE_SCRIPT])
     expect(JSON.stringify(called.args)).not.toContain('Sup3rS3cret')
+    // mongosh sends no usage data from this run (review of #2310).
+    expect(called.track).toBe('1')
   })
 
   it.each([['KEY=value', `MONGODB_PROD_RO_URL=${URL}`], ['single quotes', `MONGODB_PROD_RO_URL='${URL}'`]])('reads the login written as %s', async (_, line) => {
@@ -96,11 +98,13 @@ describe('harness buddy-read db-size', () => {
 
 // The script mongosh runs, run here with a stand-in for mongosh's globals: Juno's reads and nothing wider.
 describe('the db-size script', () => {
-  function database(roles: string[], collections: Record<string, number>, attachmentBytes: number | null) {
+  const READ = ['find', 'listCollections', 'listIndexes', 'collStats', 'dbStats', 'killCursors']
+  function database(roles: string[], collections: Record<string, number>, attachmentBytes: number | null, actions: string[] = READ) {
     const calls: unknown[] = []
     const db = {
       getName: () => 'harness',
-      runCommand: (command: unknown) => { calls.push(command); return { authInfo: { authenticatedUserRoles: roles.map(role => ({ role, db: 'admin' })) } } },
+      runCommand: (command: unknown) => { calls.push(command); return { authInfo: { authenticatedUserRoles: roles.map(role => ({ role, db: 'admin' })),
+        authenticatedUserPrivileges: [{ resource: { db: '', collection: '' }, actions }] } } },
       getCollectionNames: () => Object.keys(collections),
       getCollection: (name: string) => ({ estimatedDocumentCount: () => collections[name] }),
       SuperTabAttachment: { aggregate: (pipeline: unknown) => { calls.push(pipeline); return { toArray: () => attachmentBytes === null ? [] : [{ _id: null, bytes: attachmentBytes }] } } },
@@ -118,17 +122,24 @@ describe('the db-size script', () => {
     const { calls, printed, quit } = database(['readAnyDatabase'], { SuperTab: 12, SuperTabAttachment: 3 }, 2048)
     expect(quit).toBeNull()
     expect(JSON.parse(printed.join(''))).toEqual({ database: 'harness', collections: { SuperTab: 12, SuperTabAttachment: 3 }, attachmentBytes: 2048 })
-    expect(calls).toEqual([URL, { connectionStatus: 1 }, [{ $group: { _id: null, bytes: { $sum: '$size' } } }]])
+    expect(calls).toEqual([URL, { connectionStatus: 1, showPrivileges: true }, [{ $group: { _id: null, bytes: { $sum: '$size' } } }]])
   })
 
   it('counts no attachments as 0 bytes', () => {
     expect(JSON.parse(database(['read'], {}, null).printed.join('')).attachmentBytes).toBe(0)
   })
 
-  it.each([[['readWrite']], [['read', 'dbAdmin']], [['atlasAdmin']], [[]]])('refuses a login with roles %j before reading anything', roles => {
+  it.each([[['readWrite']], [['read', 'dbAdmin']], [['atlasAdmin']], [['clusterMonitor']], [[]]])('refuses a login with roles %j before reading anything', roles => {
     const { calls, printed, quit } = database(roles, { SuperTab: 12 }, 1)
     expect(quit).toBe(3)
-    expect(calls).toEqual([URL, { connectionStatus: 1 }])
+    expect(calls).toEqual([URL, { connectionStatus: 1, showPrivileges: true }])
     expect(printed.join('')).toContain('not read-only')
+  })
+
+  // A role is a name; what it may do is its privileges (review of #2310): a custom role named "read" that may insert.
+  it.each([[['insert']], [['find', 'update']], [['find', 'dropCollection']], [[]]])('refuses a read role whose privileges include %j', actions => {
+    const { calls, quit } = database(['read'], { SuperTab: 12 }, 1, actions)
+    expect(quit).toBe(3)
+    expect(calls).toEqual([URL, { connectionStatus: 1, showPrivileges: true }])
   })
 })
