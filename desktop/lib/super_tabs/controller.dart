@@ -1981,8 +1981,19 @@ class SuperTabController extends ChangeNotifier {
 
   /// Open dialogs and native panes lose their content immediately, before
   /// account cleanup waits for an in-flight read or a draft write.
-  void revokeAccess(String message) {
+  ///
+  /// With [keepSaved] (Desktop), what is saved on this computer stays as it
+  /// was: this account's own refused, unsent and unconfirmed messages are
+  /// there for its next sign-in (saved state is kept per account), and an
+  /// unconfirmed one is checked against the backend by its receipt id then.
+  /// The web clears what an account leaves behind, so it keeps nothing.
+  void revokeAccess(String message, {bool keepSaved = false}) {
     if (_disposed) return;
+    if (keepSaved) {
+      _pruneSendOrder();
+      _savedAtRevoke ??=
+          jsonDecode(jsonEncode(_localState())) as Map<String, dynamic>;
+    }
     accessRevoked = true;
     devicesSelected = false;
     error = message;
@@ -2066,7 +2077,12 @@ class SuperTabController extends ChangeNotifier {
       },
   };
 
-  Future<void> _persist() {
+  /// The state saved once access is revoked ([revokeAccess]): every later
+  /// write, an autosave queued before or a send answering after, writes it, so
+  /// the emptied screen never overwrites what this account kept here.
+  Map<String, dynamic>? _savedAtRevoke;
+
+  void _pruneSendOrder() {
     final active = {
       if (_pending != null) _pending!['operationId'],
       ..._sent.keys,
@@ -2075,10 +2091,14 @@ class SuperTabController extends ChangeNotifier {
       ..._queuedSends.map((q) => q.operationId),
     };
     _sendOrder.removeWhere((id) => !active.contains(id));
+  }
+
+  Future<void> _persist() {
+    if (_savedAtRevoke == null) _pruneSendOrder();
     // Serial writes prevent an older autosave from restoring a resolved receipt.
     final next = _persisting
         .catchError((Object _) {})
-        .then((_) => save(_localState()));
+        .then((_) => save(_savedAtRevoke ?? _localState()));
     _persisting = next;
     return next;
   }
