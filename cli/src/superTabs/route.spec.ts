@@ -65,6 +65,15 @@ describe('quota and rates', () => {
     expect(rateFor(policy, 'codex', 'default', 'default')).toEqual({ quality: 3, cost: 2 })
     expect(rateFor(policy, 'claude', 'claude-opus-4-7', 'high', true)).toEqual({ quality: 3, cost: 3 })
   })
+  // Lead's ruling, 10-30: Builders run on Opus high or Astra xhigh; the server's table now names Astra (backend
+  // superTabs/routingPolicy.ts ADDED_ROWS), and the route rates it by that row as the server does (rules.ts policyQuality).
+  it('rates Codex GPT-6-Astra by the server\'s Astra row, at xhigh or any other effort, and 1 from a server without it', () => {
+    const astra = { engine: 'codex' as const, model: 'gpt-6-astra', effort: 'xhigh', quality: 3, cost: 5, enabled: true }
+    const served = { ...policy, models: [...policy.models, astra] }
+    expect(rateFor(served, 'codex', 'gpt-6-astra', 'xhigh')).toEqual({ quality: 3, cost: 5 })
+    expect(rateFor(served, 'codex', 'gpt-6-astra', 'high')).toEqual({ quality: 3, cost: 5 })
+    expect(rateFor(policy, 'codex', 'gpt-6-astra', 'xhigh')).toEqual({ quality: 1, cost: 1 })
+  })
   it('rates a Codex model by its own row in the server\'s policy, and an unnamed slug 1', () => {
     const served = { ...policy, models: [...policy.models, { engine: 'codex' as const, model: 'gpt-6.1-sol', effort: 'high', quality: 3, cost: 2, enabled: true }] }
     expect(rateFor(served, 'codex', 'gpt-6.1-sol', 'xhigh')).toEqual({ quality: 3, cost: 2 })

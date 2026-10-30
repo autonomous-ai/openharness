@@ -7,9 +7,13 @@ import { JOB_KINDS, priorLevel, type JobKind, type PriorsTable } from './benchma
 
 /** Built-in rows added after owners could save a policy, so saved policies read them too (effectivePolicy). Codex's own default
  *  model, named: GPT-6.1 Sol scores 58.18 on Terminal-Bench 4.0 in Codex (benchmarkPriors/data.ts) and costs Sonnet's API rate
- *  (costs/prices.ts). A start or Reviewer that names it is rated by this row, not as an unknown slug (Lead, 10-30). */
+ *  (costs/prices.ts). A start or Reviewer that names it is rated by this row, not as an unknown slug (Lead, 10-30).
+ *  GPT-6-Astra at xhigh: the owners' standing decision is that Builders run on Opus high or Astra xhigh, which without a row
+ *  rated it 1, so routing never picked it (Lead's ruling, 10-30). Its API rate is five times Sol's and 2.5 times Opus's
+ *  (costs/prices.ts), so it costs 5, after Opus at xhigh (4): at equal strength routing keeps choosing Opus high first. */
 const ADDED_ROWS = [
   { engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', quality: 3, cost: 2, enabled: true },
+  { engine: 'codex', model: 'gpt-6-astra', effort: 'xhigh', quality: 3, cost: 5, enabled: true },
 ] as const satisfies ReadonlyArray<Record<string, unknown>>
 /** An owner keeps exactly up to 40 rows of their own. A built-in row added on read, or the owner's own version of one (the same
  *  engine and model), never counts against that, or a full policy could no longer be saved once read (reviews of #2271). */

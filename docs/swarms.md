@@ -430,7 +430,10 @@ out of ranking it first with the `noGridFirst` rule.
 **No Sonnet by default.** The default routing table turns Claude Sonnet off
 (Ken, 2026-10-30: no Sonnet Builders), so builds go to Opus, Codex or a grid
 model as above. An owner's saved table keeps its own Sonnet row as it is; an
-owner who wants none there sets a `forbidModel` rule.
+owner who wants none there sets a `forbidModel` rule. Codex GPT-6-Astra at
+`xhigh` is a built-in row (quality 3, cost 5: its API rate is 2.5 times
+Opus's), added on read like GPT-6.1 Sol's, so Builders can run on Opus high or
+Astra xhigh as the owners decided; an owner's own Astra row wins over it.
 
 **Stepping up.** When a grid attempt's first review says Ready no, or its grid
 host never starts the agent (the start fails or misses its window), the Swarm
