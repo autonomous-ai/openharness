@@ -47,15 +47,17 @@ const sameStamp = (a: ReviewStamp | undefined, b: ReviewStamp | undefined) => !!
 export const reviewHeldBy = (state: SuperTabState, build: Conversation, agentId: string): Conversation | undefined =>
   state.conversations.filter(c => c.reviewOf === build.id && c.assignment?.agentId === agentId).sort((a, b) => (b.number ?? 0) - (a.number ?? 0))[0]
 
-/** A verdict that says it passes. Reviewers often pass their review's own check only to say a verdict was given, whatever it
- *  was, so the words decide: a review passes only when they say so (review 4 of #2382: "Not ready", "Request changes" and
- *  "Blocked" each read as a pass when only Hold words were looked for). */
-const PASS = /\b(no findings?|pass(es|ed)?|ready:\s*yes|approved?|approves)\b/i
-/** Words that take a pass back even beside a pass word ("Ready: yes with fixes", "did not pass"). */
-const NOT_PASS = /\b(hold|holds|held|not ready|ready:\s*(no|with fixes)|with fixes|request(s|ed)? changes|changes (needed|requested)|block(ed|s|ing|er)?|not pass(ed)?|did not|fail(s|ed)?)\b/i
-/** Whether [review] gave a pass verdict: its own check passed, and its verdict says it passes; anything else is not yet. */
-export const reviewPassed = (review: Conversation): boolean =>
-  review.checks.some(c => c.passedBy && c.evidence && PASS.test(c.evidence) && !NOT_PASS.test(c.evidence))
+/** A verdict that opens by saying it passes: at the start of the text, after an optional "Verdict:". Reviewers often pass
+ *  their review's own check only to say a verdict was given, whatever it was, so the words decide, and only the opening ones:
+ *  swarm-review opens with "No finding on <rev>" or "Hold — <rev>" (reviews 4 and 5 of #2382: "Not ready", "Request changes"
+ *  and "Blocked" read as passes, then a Hold reporting "300 passed" or "CI passed" did). */
+const PASS = /^\s*(verdict\s*:\s*)?(no findings?|pass(es|ed)?|ready\s*:\s*yes|approved?|approves)\b/i
+/** Words in its opening line that take a pass back ("Pass — with fixes", "Ready: yes, but blocked"). */
+const NOT_PASS = /\b(hold|holds|held|not ready|ready\s*:\s*(no|with fixes)|with fixes|request(s|ed)? changes|changes (needed|requested)|block(ed|s|ing|er)?|not pass(ed)?|did not|fail(s|ed)?)\b/i
+/** Whether [verdict] is a pass: it opens with a pass and its opening line takes nothing back; anything else is not yet. */
+export const passVerdict = (verdict: string): boolean => PASS.test(verdict) && !NOT_PASS.test(verdict.trimStart().split('\n')[0]!)
+/** Whether [review] gave a pass verdict: its own check passed, and its verdict opens with a pass. */
+export const reviewPassed = (review: Conversation): boolean => review.checks.some(c => c.passedBy && c.evidence && passVerdict(c.evidence))
 
 /** The hand-over a pass on [build] through [review] counts for: the review's own, once the review gave a pass verdict, while
  *  it still reviews [build]'s current attempt and was not closed; else -1, never counted. A pass on the work given while
