@@ -732,13 +732,14 @@ describe('Super Tab native delivery handoff', () => {
 
 describe('a delivery poll or claim that keeps failing', () => {
   /** The calls the host makes for one failing path, counted as the backend refuses them with `status`. */
-  function failing(t: ReturnType<typeof setup>, refuse: (method: string, path: string) => boolean, status = 503) {
+  function failing(t: ReturnType<typeof setup>, refuse: (method: string, path: string) => boolean, status = 503,
+    error: () => { code: string; message: string } = () => ({ code: 'SWARM_BUSY', message: 'This Swarm is busy. Try again in a moment.' })) {
     const original = vi.mocked(t.core.account.backend).getMockImplementation()!
     const calls = { n: 0 }
     vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => {
       if (!refuse(method, path)) return original(method, path, body)
       calls.n++
-      return { status, body: { success: false, error: { code: 'SWARM_BUSY', message: 'This Swarm is busy. Try again in a moment.' } } }
+      return { status, body: { success: false, error: error() } }
     })
     return calls
   }
@@ -765,6 +766,51 @@ describe('a delivery poll or claim that keeps failing', () => {
       t.wait(1); await host.tick()
       expect(claims.n).toBe(attempts)
     }
+  })
+
+  it('says which delivery keeps failing to go through, once, then at most every 5 minutes', async () => {
+    const t = setup(), host = t.open()
+    failing(t, (method, path) => method === 'POST' && path.endsWith('/deliveries/delivery'))
+    await host.tick()
+    const said = () => t.log.mock.calls.map(c => c[0] as string).filter(l => l.includes('delivery delivery') || l.includes('Delivery delivery') || l.includes('This Swarm is busy'))
+    expect(said()).toEqual(['Could not hand delivery delivery to agent agent (session harness) in Swarm tab: This Swarm is busy. Try again in a moment. (SWARM_BUSY). '
+      + 'Failing since 1970-01-01T00:00:00.000Z, 1 try; next try in 1 s.'])
+    for (let i = 0; i < 9; i++) { t.wait(30_000); await host.tick() }   // 4.5 min of failing claims
+    expect(said()).toHaveLength(1)
+    t.wait(30_000); await host.tick()                                     // 5 min since the last line
+    expect(said()).toHaveLength(2)
+    expect(said()[1]).toMatch(/^Could not hand delivery delivery .*Failing since 1970-01-01T00:00:00.000Z, \d+ tries; next try in 30 s\.$/)
+  })
+
+  it('says a different failure at once, and the same one again only after 5 minutes', async () => {
+    // Prod 10-30: accept() is more than the claim (ack, downloads, checks), so a new error inside the window must not hide.
+    const t = setup(), host = t.open()
+    let err = { code: 'SWARM_BUSY', message: 'This Swarm is busy. Try again in a moment.' }
+    failing(t, (method, path) => method === 'POST' && path.endsWith('/deliveries/delivery'), 503, () => err)
+    await host.tick()
+    const said = () => t.log.mock.calls.map(c => c[0] as string).filter(l => l.startsWith('Could not hand delivery delivery'))
+    expect(said()).toHaveLength(1)
+    err = { code: 'INTERNAL', message: 'The delivery has no message.' }
+    t.wait(1_000); await host.tick()
+    expect(said()).toHaveLength(2)
+    expect(said()[1]).toContain('The delivery has no message. (INTERNAL)')
+    t.wait(2_000); await host.tick()
+    t.wait(4_000); await host.tick()
+    expect(said()).toHaveLength(2)
+  })
+
+  it('says once when a delivery that had failed goes through', async () => {
+    const t = setup(), host = t.open()
+    let refuse = true
+    failing(t, (method, path) => refuse && method === 'POST' && path.endsWith('/deliveries/delivery'))
+    await host.tick()
+    t.wait(1_000); await host.tick()
+    refuse = false
+    t.wait(2_000); await host.tick()
+    const claimed = () => t.log.mock.calls.map(c => c[0] as string).filter(l => l.startsWith('Delivery delivery went through'))
+    expect(claimed()).toEqual(['Delivery delivery went through after 3 tries, 0 min.'])
+    t.wait(1_000); await host.tick()
+    expect(claimed()).toHaveLength(1)
   })
 
   it('claims at once, on the next second, after the backend answers again', async () => {

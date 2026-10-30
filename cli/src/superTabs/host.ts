@@ -169,6 +169,9 @@ const JOIN_FINAL = new Set(['MACHINES_FULL', 'OWNER_REQUIRED'])
  *  added to an overloaded backend (production at 5 pods, 2026-10-27). */
 const DELIVERY_RETRY_MS = 1_000
 const DELIVERY_RETRY_MAX_MS = 30_000
+/** Prod 10-30: a claim refused every 30 s said the backend's bare words 223 times in 2 hours. The same failure of a delivery is
+ *  named at most this often. */
+const CLAIM_FAILURE_LOG_MS = 5 * 60_000
 /** Stability roadmap 2.4 (2026-10-28): every host read each running agent's delivery list each second, almost always to find
  *  nothing. A server that says it pushes (a `super_tab_deliveries` notice over the daemon socket, backend lib/adapterWs.ts)
  *  names the agent when work waits; an idle agent's list is then read only this often, as the safety net for a lost push.
@@ -268,7 +271,7 @@ export class SuperTabHost {
   private nextReplacementsAt = 0
   private timer: ReturnType<typeof setTimeout> | null = null
   /** Per agent's delivery list and per delivery's claim, the failures in a row and when it may be asked again. */
-  private readonly deliveryRetries = new Map<string, { failures: number; retryAt: number; since: number; list?: string }>()
+  private readonly deliveryRetries = new Map<string, { failures: number; retryAt: number; since: number; saidAt?: number; said?: string; list?: string }>()
   private native: NativeRecorder | null = null
   private machines: ContributedMachines | null = null
   private readonly machineDeps: Partial<MachineDeps>
@@ -739,7 +742,7 @@ export class SuperTabHost {
         for (const id of last.ids) seen.add(id)
         continue
       }
-      let listRead = false
+      let listRead = false, claimError: unknown
       try {
         const deliveries = await backend(this.core, 'GET', path)
         if (this.stopped) return
@@ -760,10 +763,30 @@ export class SuperTabHost {
           // claimed one with no journal is never typed, only reported as uncertain; a delivered one only acknowledged.
           const entry = this.journal.entries[delivery.id]
           if ((entry ? entry.stage === 'prepared' : !delivery.claimId) && !this.mayRead(target, delivery)) continue
-          try { await this.accept(target, delivery, path); this.deliveryRetries.delete(claimKey) } catch (error) {
+          try {
+            await this.accept(target, delivery, path)
+            const failed = this.deliveryRetries.get(claimKey)
+            this.deliveryRetries.delete(claimKey)
+            if (failed && failed.failures > 0) this.log(`Delivery ${delivery.id} went through after ${failed.failures + 1} tries, ${Math.round((this.now() - failed.since) / 60_000)} min.`)
+          } catch (error) {
             // Answered (or resolved by a person) between the roster read and this call: nothing is owed, and the
             // agent's other deliveries go on.
-            if (!(error instanceof SuperTabHostError) || error.code !== 'DELIVERY_RESOLVED') { this.retryLater(claimKey, listKey); throw error }
+            if (!(error instanceof SuperTabHostError) || error.code !== 'DELIVERY_RESOLVED') {
+              // Prod 10-30: the bare message below named no delivery or agent. Named here, and only now and then: this retries for hours.
+              // accept() is more than the claim (ack POST, downloads, message and journal checks; ack failures are a known open risk),
+              // so the line names no step, and a different error than the last one said is told at once, not hidden by the window.
+              const retry = this.retryLater(claimKey, listKey), now = this.now(), code = error instanceof SuperTabHostError ? ` (${error.code})` : ''
+              const what = `${error instanceof Error ? error.message : String(error)}${code}`
+              if (retry.saidAt === undefined || retry.said !== what || now - retry.saidAt >= CLAIM_FAILURE_LOG_MS) {
+                retry.saidAt = now
+                retry.said = what
+                this.log(`Could not hand delivery ${delivery.id} to agent ${target.agent.id} (session ${target.agent.harnessId.slice(0, 8)}) in Swarm ${target.tabId}: `
+                  + `${what}. Failing since ${new Date(retry.since).toISOString()}, ${retry.failures} ${retry.failures === 1 ? 'try' : 'tries'}; `
+                  + `next try in ${Math.round((retry.retryAt - now) / 1_000)} s.`)
+              }
+              claimError = error
+              throw error
+            }
             this.deliveryRetries.delete(claimKey)
             this.retire(delivery.id as string)
           }
@@ -772,7 +795,7 @@ export class SuperTabHost {
       } catch (error) {
         // Authority checks and network failures both withhold input. A later fresh read may grant it again.
         const message = error instanceof Error ? error.message : String(error)
-        if (listRead) this.log(message)
+        if (listRead) { if (error !== claimError) this.log(message) }
         else {
           // 2026-10-28: a Lead's list failed for 45 minutes while this log said only the backend's words, with no agent.
           const retry = this.retryLater(listKey), code = error instanceof SuperTabHostError ? ` (${error.code})` : ''
