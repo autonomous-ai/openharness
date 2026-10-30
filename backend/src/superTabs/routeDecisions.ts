@@ -1,6 +1,7 @@
 /** Persistence for route decisions. Called inside SuperTabStore's transactions. */
 import type { Prisma, SuperTabRouteDecision } from '@prisma/client'
 import { ms } from './parts/light.js'
+import { readBy } from './parts/indexed.js'
 import type { SuperTabState } from './model.js'
 import { attemptChanges, endRun, startRun, type RouteRun } from './costs/attempts.js'
 import type { TokensByModel } from './costs/tokens.js'
@@ -34,24 +35,32 @@ export async function readDecision(tx: Tx, tabId: string, id: string): Promise<R
 /** What the list shows of a Swarm: its newest decisions. */
 export const LIST_SIZE = 100
 
-/** The decisions a match finds, newest first, as Prisma reads them. Plain `aggregateRaw` matches: Prisma's `conversationId: { in }`
- *  is an $expr $or that Mongo plans branch by branch, 25 ms a read over a Lead's ~360 conversations
- *  (integration/superTabIndexes.test.ts). */
-async function newestWhere(tx: Tx, match: Prisma.InputJsonObject, limit: number): Promise<SuperTabRouteDecision[]> {
-  const rows = await tx.superTabRouteDecision.aggregateRaw({ pipeline: [{ $match: match }, { $sort: { createdAt: -1 } }, { $limit: limit }] }) as unknown as Array<Record<string, unknown>>
-  return rows.map(row => ({ id: row._id as string, tabId: row.tabId as string, conversationId: row.conversationId as string,
-    record: row.record as Prisma.JsonValue, final: (row.final ?? null) as Prisma.JsonValue, override: (row.override ?? null) as Prisma.JsonValue,
-    assignmentId: (row.assignmentId ?? null) as string | null, outcome: (row.outcome ?? null) as string | null, run: (row.run ?? null) as Prisma.JsonValue,
-    evidence: (row.evidence ?? null) as Prisma.JsonValue, outcomeAt: row.outcomeAt == null ? null : new Date(ms(row.outcomeAt)), createdAt: new Date(ms(row.createdAt)) }))
+const rowOf = (row: Record<string, unknown>): SuperTabRouteDecision => ({ id: row._id as string, tabId: row.tabId as string, conversationId: row.conversationId as string,
+  record: row.record as Prisma.JsonValue, final: (row.final ?? null) as Prisma.JsonValue, override: (row.override ?? null) as Prisma.JsonValue,
+  assignmentId: (row.assignmentId ?? null) as string | null, outcome: (row.outcome ?? null) as string | null, run: (row.run ?? null) as Prisma.JsonValue,
+  evidence: (row.evidence ?? null) as Prisma.JsonValue, outcomeAt: row.outcomeAt == null ? null : new Date(ms(row.outcomeAt)), createdAt: new Date(ms(row.createdAt)) })
+
+/** The newest 100 decisions in the conversations a reader may see, newest first, as Prisma reads them. Plain `aggregateRaw`
+ *  matches: Prisma's `conversationId: { in }` is an $expr $or that Mongo plans branch by branch, 25 ms a read over a Lead's
+ *  ~360 conversations (integration/superTabIndexes.test.ts). */
+export async function recentDecisions(tx: Tx, tabId: string, conversationIds: string[]): Promise<SuperTabRouteDecision[]> {
+  const rows = await tx.superTabRouteDecision.aggregateRaw({ pipeline: [{ $match: { tabId, conversationId: { $in: conversationIds } } },
+    { $sort: { createdAt: -1 } }, { $limit: LIST_SIZE }] }) as unknown as Array<Record<string, unknown>>
+  return rows.map(rowOf)
 }
 
-/** The newest 100 decisions in the conversations a reader may see, newest first. */
-export const recentDecisions = (tx: Tx, tabId: string, conversationIds: string[]): Promise<SuperTabRouteDecision[]> =>
-  newestWhere(tx, { tabId, conversationId: { $in: conversationIds } }, LIST_SIZE)
-
-/** The newest `limit` decisions of the Swarm in any conversation, one scan of the (tabId, createdAt) index of `limit` documents.
+/** The newest `limit` decisions of the Swarm in any conversation: one scan of the (tabId, createdAt) index of `limit` documents.
  *  The reader's access is applied after, to the conversations these name only. */
-export const newestDecisions = (tx: Tx, tabId: string, limit: number): Promise<SuperTabRouteDecision[]> => newestWhere(tx, { tabId }, limit)
+export async function newestDecisions(tx: Tx, tabId: string, limit: number): Promise<SuperTabRouteDecision[]> {
+  return (await readBy(tx, 'SuperTabRouteDecision', 'recent', [{ $match: { tabId } }, { $sort: { createdAt: -1 } }, { $limit: limit }])).map(rowOf)
+}
+
+/** The conversation of each of the Swarm's newest `limit` decisions, newest first: the same scan, a wider window, with none of
+ *  a decision's text in the reply. */
+export async function newestConversations(tx: Tx, tabId: string, limit: number): Promise<string[]> {
+  return (await readBy(tx, 'SuperTabRouteDecision', 'recent', [{ $match: { tabId } }, { $sort: { createdAt: -1 } }, { $limit: limit },
+    { $project: { conversationId: 1 } }])).map(row => row.conversationId as string)
+}
 
 export async function writeRouteEffects(tx: Tx, tabId: string, effects: RouteDecisionEffect[], now: number): Promise<void> {
   for (const effect of effects) {
