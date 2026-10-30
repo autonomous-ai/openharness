@@ -11,9 +11,9 @@ import {
 import { jobKindOf } from './evidence/jobKind.js'
 import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { DEFAULT_ROUTING_POLICY, routingOverrideSaveSchema, type RoutingPolicy } from './routingPolicy.js'
-import { agentQuality, agentTarget, askedInSchema, broken, MAX_RULES, reviewRefusal, RULE_MESSAGE_MS, SAME_ENGINE, sameEngineReview, ruleSchema, ruleTextSchema, startTarget, unmet, type RunTarget } from './rules.js'
+import { agentQuality, agentTarget, askedInSchema, broken, buildRefusal, MAX_RULES, reviewRefusal, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema, startTarget, unmet, type RunTarget } from './rules.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
-import { checkMentions, MAX_MENTIONS, namedIn, textTags, withTags, type MentionTarget } from './mentions.js'
+import { checkMentions, MAX_MENTIONS, namedIn, saysName, textTags, withTags, type MentionTarget } from './mentions.js'
 import { answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
 import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest } from './terminal.js'
 import { leadNoticeRows, loseTasks, recordTaskState, renewLease, renewOwnTask, restartQuietTime, reviewFoundProblems, waitingForReview } from './liveness.js'
@@ -70,6 +70,8 @@ const maxAgents = z.number().int().min(1).max(1024)
 const roleId = z.string().regex(/^([0-9a-f]{12}|lead|dev|review)$/)
 /** A role's default engine, model and effort (projects.ts RoleDefaults). */
 /** What a launch may be asked to run, one short word each, as the CLI checks it (cli lib/launchModel.ts MODEL and EFFORT). */
+/** How a CLI from before 2026-10-30 starts the why of a review on its Builder's own engine (cli superTabs/route.ts, removed). */
+const OLD_SAME_ENGINE = /^same-engine review: no Reviewer of another engine has quota\. /
 const LAUNCH_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:\-[\]]{0,63}$/
 const LAUNCH_EFFORT = /^[a-z]{1,16}$/
 const roleDefaultsSchema = z.object({ engine: z.enum(['claude', 'codex']), model: z.string().trim().min(1).max(200).optional(),
@@ -701,23 +703,30 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
    *  an owner's rule from where the task can be done at all. */
   const policy = context.routingPolicy ?? DEFAULT_ROUTING_POLICY
   /** Whether a new agent may run [target] for group [conversationId]: the owner's rules, the task's own machine
-   *  ([requirement]) and team access. Whether another engine could review is judged by it (rules.ts reviewRefusal). */
+   *  ([requirement]) and team access. Whether a new Reviewer could start is judged by it (reviewCapacity.ts). */
   const mayRun = (conversationId: string, requirement: boolean) => (target: RunTarget, contributorId: string) =>
     !broken(groupRules(conversationId), target, machineName, macOf) && (!requirement || !unmet(conversation(state, conversationId).task?.requires, target, macOf))
     && !teamWorkCheck(state, target.machineId, contributorId, groupProject(state, conversation(state, conversationId)), context.now, context.teamMachines, context.otherWorkspaceMachines)
-  /** [builds]: the target would do the group's work, so a step up's floor holds too (stepUp.ts). */
-  const refusal = (target: RunTarget, conversationId: string, builds = true): { code: string; why: string } | null => {
+  /** What the route decision this command carries or names says of [conversationId]'s work (rules.ts RoutedWork). */
+  const routedWork = (conversationId: string) => command.type === 'route.record' && command.conversationId === conversationId ? command.decision.assessment
+    : context.routeDecision?.conversationId === conversationId ? context.routeDecision.record.assessment : undefined
+  /** [builds]: the target would do the group's work, so a step up's floor holds too (stepUp.ts). [reviews]: it would review
+   *  the group's work, so the review rule holds (rules.ts reviewRefusal); merely joining a review group is not reviewing. */
+  const refusal = (target: RunTarget, conversationId: string, builds = true, reviews = true): { code: string; why: string } | null => {
     const rule = broken(groupRules(conversationId), target, machineName, macOf)
     if (rule) return { code: 'RULE_BROKEN', why: rule }
     const requirement = unmet(conversation(state, conversationId).task?.requires, target, macOf)
     if (requirement) return { code: 'REQUIREMENT_UNMET', why: requirement }
-    const review = reviewRefusal(state, conversation(state, conversationId).reviewOf, target, policy, mayRun(conversationId, true), context.now)
+    const review = reviews ? reviewRefusal(state, conversation(state, conversationId).reviewOf, target, policy) : null
     if (review) return { code: 'REVIEW_REFUSED', why: review }
     const stepped = builds ? stepUpRefusal(conversation(state, conversationId), target, policy) : null
-    return stepped ? { code: 'STEPPED_UP', why: stepped } : null
+    if (stepped) return { code: 'STEPPED_UP', why: stepped }
+    // A build at the top tier, or on the grid only for the work it may take (rules.ts buildRefusal).
+    const build = builds && !conversation(state, conversationId).reviewOf ? buildRefusal(policy, target, routedWork(conversationId)) : null
+    return build ? { code: 'BUILD_REFUSED', why: build } : null
   }
-  const ruled = (target: RunTarget, conversationId: string, done: string, personChose = false, builds = true) => {
-    const refused = refusal(target, conversationId, builds)
+  const ruled = (target: RunTarget, conversationId: string, done: string, personChose = false, builds = true, reviews = true) => {
+    const refused = refusal(target, conversationId, builds, reviews)
     if (!refused) return
     const { code, why } = refused
     if (actor.kind === 'agent' && !personChose) fail(code, `${why} Route again.`, 403)
@@ -1548,7 +1557,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
           bookkeeping(r.conversationId, { kind: 'route-override', decisionId: decision.id, by: 'lead' }))
         personChose = !override && decision.override?.by === 'person'
       }
-      ruled(startTarget(request), request.conversationId, `${who} started ${request.name}`, personChose)
+      // A Reviewer started is held to the review rule where it reviews, not to a Builder's (rules.ts buildRefusal).
+      ruled(startTarget(request), request.conversationId, `${who} started ${request.name}`, personChose, request.role !== 'reviewer')
       break
     }
     case 'buddy.propose': {
@@ -1674,7 +1684,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
           fail('SWARM_ENGINE', 'A Swarm agent runs only Claude Code or Codex.', 400)
         }
         // A start recorded before a rule was added is not launched past it, unless a person asked for it by hand.
-        const why = actor.kind === 'agent' && !(start.routeDecisionId && context.routeDecision?.override?.by === 'person') && refusal(startTarget(start.request), start.request.conversationId)
+        const why = actor.kind === 'agent' && !(start.routeDecisionId && context.routeDecision?.override?.by === 'person') && refusal(startTarget(start.request), start.request.conversationId, start.request.role !== 'reviewer')
         if (why) fail(why.code, `${why.why} This start was not launched. Route again.`, 403)
         requireWorkerDecisions(state, actor, open(state, start.request.conversationId))
         const grant = context.contribution ?? fail('HOST_REQUIRED', 'The original machine grant is unavailable.', 403)
@@ -1749,7 +1759,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         // Taking over from a Lead that left, as agent.add does.
         if (group.leadId && !group.agentIds.includes(group.leadId)) keepLead(group, agentId)
         // The people's to read: it answers the start a person asked for, whose "Waiting for a machine" line they read.
-        message(group.id, leadJoined(state, start, group, agentId), [], null, SYSTEM_ROW)
+        const joined = leadJoined(state, start, group, agentId)
+        message(group.id, joined.text, [], null, joined.source)
       }
       // A Buddy always starts on a Swarm machine: its chat hears once it settles, as the Lead does for a worker.
       else if (!start.request.buddyOf) message(group.id, start.poolGeneration
@@ -1916,7 +1927,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         }
         // A Reviewer added to a group is handed its review, as an assignment hands a Builder its task.
         if (reviewer) requireTeamWork(state, member.machineId, member.contributorId, groupProject(state, group), context.now, context.teamMachines, context.otherWorkspaceMachines)
-        ruled(agentTarget(state, member), group.id, `${who} added ${member.name}`, false, false)
+        // Only a Reviewer added here is handed the review; anyone else joining is not reviewing (review of #2313).
+        ruled(agentTarget(state, member), group.id, `${who} added ${member.name}`, false, false, reviewer)
         if (!group.agentIds.includes(command.agentId)) group.agentIds.push(command.agentId)
         // Adding a Reviewer to a group reuses it, as assigning work reuses a Builder.
         if (reviewer) delete member.workDecision
@@ -1992,7 +2004,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // Every username is worked out at once, and only for a post that names or picks someone.
       const names = picked.length || command.text.includes('@') ? swarmUsernames(state) : new Map<string, string>()
       const named = namedIn(state, command.text, names)
-      const text = withTags(picked.filter(id => !named.includes(id)).map(id => `@${names.get(id)}`), command.text)
+      const unsaid = picked.filter(id => !named.includes(id) && !saysName(command.text, names.get(id)!))
+      const text = withTags(unsaid.map(id => `@${names.get(id)}`), command.text)
       // A tag would tell a person about an agent-only notice they cannot see.
       const mentions = [...new Set([...picked, ...command.agentOnly ? [] : textTags(state, actor, group, named)])].slice(0, MAX_MENTIONS)
       if (command.mentionsIfNoWorker && !mentions.length) fail('INVALID_MENTION', 'Hold a tag only for a message that tags someone.', 400)
@@ -2087,18 +2100,18 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       requireWorkerDecisions(state, actor, open(state, command.conversationId), chosen.kind === 'member' ? chosen.agentId : undefined)
       const via = decision.via === 'jev' ? `Jev ${Math.round((decision.p ?? 0) * 100)}%`
         : decision.via === 'only' ? 'only candidate' : 'by policy order'
-      // The step this attempt is comes from the group alone (stepUp.ts), and why a review stays on its Builder's engine from
-      // the server's own judgement (rules.ts).
+      // The step this attempt is comes from the group alone (stepUp.ts). An older CLI's same-engine note, as a field or at the
+      // start of its why, is not kept: any engine reviews now (rules.ts reviewRefusal).
       const step = conversation(state, command.conversationId).stepUp
-      const sameEngine = sameEngineReview(state, conversation(state, command.conversationId).reviewOf, member ? agentTarget(state, member) : chosen, policy, mayRun(command.conversationId, true), context.now)
-      const { stepUp: _sent, sameEngine: _said, jobKind: _kind, ...made } = decision
+      const { stepUp: _sent, sameEngine: _said, jobKind: _kind, ...sent } = decision
+      const made = { ...sent, why: sent.why.replace(OLD_SAME_ENGINE, '') || sent.why }
       const jobKind = jobKindOf(conversation(state, command.conversationId), decision.assessment.kind)
       effects.routeDecisions.push({ op: 'create', id: operationId, conversationId: command.conversationId,
-        record: { ...made, ...step ? { stepUp: { attempt: step.attempt, reason: step.reason } } : {}, ...sameEngine ? { sameEngine } : {}, jobKind } })
+        record: { ...made, ...step ? { stepUp: { attempt: step.attempt, reason: step.reason } } : {}, jobKind } })
       result.routeDecisionId = operationId
       // The row quotes the Lead's reason for the task; the verdict's own text stays in the decision record.
       const reason = decision.assessment.why
-      message(command.conversationId, `Routed to ${chosen.title} — ${via} · "${reason}"${sameEngine ? ` · ${SAME_ENGINE}` : ''}`, [], null, bookkeeping(command.conversationId, {
+      message(command.conversationId, `Routed to ${chosen.title} — ${via} · "${reason}"`, [], null, bookkeeping(command.conversationId, {
         kind: 'route', decisionId: operationId, via: decision.via, p: decision.p, belowFloor: decision.belowFloor, why: reason,
         ...(decision.via === 'order' && decision.fallback ? { fallback: decision.fallback } : {}),
         pick: { id: chosen.id, title: chosen.title },
@@ -2210,9 +2223,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         personChose = !override && decision.override?.by === 'person'
       }
       ruled(agentTarget(state, worker), group.id, `${who} assigned ${worker.name}`, personChose)
-      // A review on its Builder's own engine says so first, so its Reviewer knows why (rules.ts sameEngineReview).
-      const sameEngine = sameEngineReview(state, group.reviewOf, agentTarget(state, worker), policy, mayRun(group.id, true), context.now)
-      message(group.id, `${sameEngine ? `${sameEngine}\n\n` : ''}${group.brief}${carryOver(group)}\n\nAcceptance checks:\n${group.checks.map(c => `- ${c.description}`).join('\n')}`, [worker.id], null, SYSTEM_ROW)
+      message(group.id, `${group.brief}${carryOver(group)}\n\nAcceptance checks:\n${group.checks.map(c => `- ${c.description}`).join('\n')}`, [worker.id], null, SYSTEM_ROW)
       const news = assignedNotice(state, group, sender, operationId)
       if (news) effects.messages.push(news)
       if (routeNote) effects.messages.push({ id: stableId(operationId, 'route-override'), conversationId: group.id, author: sender,
@@ -2275,11 +2286,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         const opened = pullRequest && openReview(state, group, command.result!, pullRequest, { operationId, now: context.now, engineer: sender,
           // The owner's hard rules hold as for work.assign; the reviewed task's own requirement is its Engineer's, not its Reviewer's.
           mayWork: a => !teamWorkCheck(state, a.machineId, a.contributorId, groupProject(state, group), context.now, context.teamMachines, context.otherWorkspaceMachines)
-            && !broken(groupRules(group.id), agentTarget(state, a), machineName, macOf) && !reviewRefusal(state, group.id, agentTarget(state, a), policy, mayRun(group.id, false), context.now),
-          strength: a => agentQuality(state, policy, a),
-          sameEngine: a => sameEngineReview(state, group.id, agentTarget(state, a), policy, mayRun(group.id, false), context.now) })
+            && !broken(groupRules(group.id), agentTarget(state, a), machineName, macOf) && !reviewRefusal(state, group.id, agentTarget(state, a), policy),
+          strength: a => agentQuality(state, policy, a) })
         if (opened) effects.messages.push(...opened.messages)
-        // No new Reviewer on another engine can start, or soon none will: the project's chat hears it once (reviewCapacity.ts).
+        // No new strong Reviewer of any engine can start, or soon none will: the project's chat hears it once (reviewCapacity.ts).
         const short = command.status === 'review' && !group.reviewOf ? reviewCapacityNotice(state, group, policy, mayRun(group.id, false), context.now) : null
         // A row of its own beside the command's, as the ship notice is: written as the Engineer who handed over.
         if (short) effects.messages.push({ id: stableId(operationId, 'review-capacity', short.source.engine), conversationId: short.conversationId, author: sender,
@@ -2354,6 +2364,15 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const check = group.checks.find(c => c.id === command.checkId) ?? fail('NOT_FOUND', 'This acceptance check is unavailable.', 404)
       if (actor.kind === 'agent' && !group.agentIds.includes(actor.agentId)) fail('FORBIDDEN', 'This agent does not participate in the review.', 403)
       if (check.independent && actor.kind === 'agent' && actor.agentId === group.assignment.agentId) fail('INDEPENDENT_REVIEW', 'Another agent or a person must perform this check.')
+      // The Builder of the reviewed work may sit in its review group, but never gives that review's verdict (review of #2313).
+      if (group.reviewOf && actor.kind === 'agent' && actor.agentId === state.conversations.find(c => c.id === group.reviewOf)?.assignment?.agentId) {
+        fail('INDEPENDENT_REVIEW', 'The Builder of the reviewed work does not give its review\'s verdict.')
+      }
+      // A review's checks are its Reviewer's or a person's: the server keeps no list of the reviewed work's past Builders, so any
+      // other agent in the review group, an earlier Builder of reassigned work among them, is refused (re-review of #2313).
+      if (group.reviewOf && actor.kind === 'agent' && agentRole(agent(state, actor.agentId)) !== 'reviewer') {
+        fail('INDEPENDENT_REVIEW', 'Only a Reviewer or a person passes a review\'s checks.')
+      }
       check.evidence = command.evidence
       check.passedBy = command.passed ? actorKey(actor) : null
       const run = group.ledger?.runs?.find(r => r.assignmentId === group.assignment!.id), reviewed = run?.firstReview

@@ -6,7 +6,7 @@
 import { suspendedEngines } from '../engineHealth.js'
 import { leadChoices } from '../leadStart.js'
 import { isBuddyChat, isBuddyReader } from '../buddies.js'
-import { agentWithoutMachine, groupWithoutMachines, isLeads, machineHiddenFrom, seenMachineIds, visibleState, withSeenRequirement, type Actor, type Agent, type Conversation, type SuperTabState } from '../model.js'
+import { agentForBuddy, agentWithoutMachine, groupWithoutMachines, isLeads, machineHiddenFrom, seenMachineIds, visibleState, withSeenRequirement, type Actor, type Agent, type Conversation, type SuperTabState } from '../model.js'
 import { machineSlots, machineTeamWork, teamAccountSwarm, type ContributedMachine } from '../machines.js'
 import * as store from '../parts/index.js'
 import type { Part, SwarmParts } from '../parts/index.js'
@@ -101,7 +101,9 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
       members: parts.members.filter(m => !m.deleted).map(m => envelope(m, { ...withAvatarView(m.data!), username: names.get(m.key) } as MemberView)),
       agents: visible.agents.map(a => {
         const stored = state.agents.find(s => s.id === a.id)!
-        return envelope(agentPart(a.id), buddy || machineHiddenFrom(state, actor, stored) ? agentWithoutMachine(agentView(stored)) : agentView(stored))
+        const view = agentView(stored)
+        return envelope(agentPart(a.id), buddy && actor.kind === 'agent' ? agentForBuddy(view, actor.agentId)
+          : machineHiddenFrom(state, actor, stored) ? agentWithoutMachine(view) : view)
       }),
       groups: groups.map(g => envelope(groupPart(g.id), groupView(buddy ? groupWithoutMachines(g) : g, seen))),
       machines: (visible.machines ?? []).map(m => envelope(machinePart(m.machineId), m)),
