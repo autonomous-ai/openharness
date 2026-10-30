@@ -50,7 +50,9 @@ import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
 import { redeemHandoff, startHandoff } from '../lib/harnessSession.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { SuperTabError } from '../superTabs/model.js'
-import { HOT_BODY_LIMIT, superTabRoutes } from './superTabs.js'
+import { HOT_BODY_LIMIT, NOT_AVAILABLE, superTabRoutes } from './superTabs.js'
+import { logger } from '../utils/logger.js'
+import { WORKSPACE_ACCESS_REVOKED } from '../superTabs/workspaceStore.js'
 
 describe('Super Tab route failures', () => {
   let app: FastifyInstance
@@ -95,6 +97,60 @@ describe('Super Tab route failures', () => {
     expect(res.statusCode).toBe(503)
     expect(res.headers['retry-after']).toBe('2')
     expect(res.json().error.code).toBe('SWARM_BUSY')
+  })
+})
+
+// One answer for anything the caller cannot reach, on the routes a person's app calls (Huy, 10-30): the route only maps the
+// store's refusal, so a fake store throws each kind. integration/superTabNotAvailable.test.ts runs the real store.
+describe('the person routes\' one not-available answer', () => {
+  let app: FastifyInstance
+  let thrown: unknown
+  const throwing = async () => { throw thrown }
+  beforeEach(async () => {
+    app = Fastify()
+    app.setErrorHandler(errorHandler)
+    app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
+    const store = { hostGrids: throwing, messages: throwing, execute: throwing }
+    await app.register(superTabRoutes, { store: store as never, github: null, reads: { firstLoad: throwing } as never, hosts: {} as never })
+    await app.ready()
+  })
+  afterEach(async () => { await app.close(); vi.restoreAllMocks() })
+  const body = JSON.stringify({ success: false, error: { code: NOT_AVAILABLE.code, message: NOT_AVAILABLE.message } })
+  const ask = (url: string, method: 'GET' | 'POST' = 'GET') => app.inject({ method, url,
+    payload: method === 'POST' ? { operationId: 'op-1', command: { type: 'message.send', conversationId: 'c1', text: 'hi', replyTo: null, recipientIds: [] } } : undefined })
+
+  it('answers missing, not a member, out of the Workspace and a refused link alike, and logs which it was', async () => {
+    const warn = vi.spyOn(logger, 'warn')
+    const refusals = [new SuperTabError('NOT_FOUND', 'This Super Tab is unavailable.', 404),
+      new SuperTabError('FORBIDDEN', 'You no longer have access to this Super Tab.', 403, true),
+      new SuperTabError(WORKSPACE_ACCESS_REVOKED, 'You are no longer in this Swarm\'s Workspace.', 403),
+      new SuperTabError('JOIN_UNAVAILABLE', 'This Swarm link is unavailable for this account.', 404),
+      new SuperTabError('NOT_FOUND', 'This conversation is unavailable.', 404)]
+    for (const refusal of refusals) {
+      thrown = refusal
+      for (const [url, method] of [['/api/super-tabs/tab-1/parts'], ['/api/super-tabs/tab-1/conversations/c1/messages'], ['/api/super-tabs/tab-1/commands', 'POST']] as const) {
+        const res = await ask(url, method)
+        expect({ status: res.statusCode, body: res.body }, `${refusal.code} ${url}`).toEqual({ status: 404, body })
+      }
+      expect(warn).toHaveBeenCalledWith('Swarm not available to the caller', expect.objectContaining({ code: refusal.code, reason: refusal.message }))
+    }
+  })
+
+  it('keeps a role refusal inside a Swarm the caller reads, and a FORBIDDEN that is not about reaching it', async () => {
+    for (const refusal of [new SuperTabError('READ_ONLY', 'You have read-only access to this Super Tab.', 403),
+      new SuperTabError('FORBIDDEN', 'Only the owner can remove another person.', 403)]) {
+      thrown = refusal
+      const res = await ask('/api/super-tabs/tab-1/commands', 'POST')
+      expect(res.statusCode).toBe(403)
+      expect(res.json().error).toEqual({ code: refusal.code, message: refusal.message })
+    }
+  })
+
+  it('leaves the routes a machine\'s host calls as they were', async () => {
+    thrown = new SuperTabError('FORBIDDEN', 'You no longer have access to this Super Tab.', 403, true)
+    const res = await ask('/api/super-tabs/grids')
+    expect(res.statusCode).toBe(403)
+    expect(res.json().error.message).toBe('You no longer have access to this Super Tab.')
   })
 })
 
