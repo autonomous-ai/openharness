@@ -61,6 +61,8 @@ export class RelaySessionCrypto {
   }
 
   get ready(): boolean { return this.c2s !== null && this.s2c !== null }
+  /** The far process's group-key epoch, as its welcome or its last rekey named it ('' before either). */
+  get groupEpoch(): string { return this.epoch }
   get terminalP2pVersion(): number { return this.p2pVersion }
   get viewerForwardingVersion(): number { return this.viewerVersion }
   /** The daemon opens every sealed type and refuses STRICT_DOWN_TYPES unsealed (its welcome said so). */

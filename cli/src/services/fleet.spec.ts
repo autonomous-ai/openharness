@@ -24,10 +24,12 @@ const lane = vi.hoisted(() => ({
   peers: new Map<string, { pub: string }>(),
 }))
 vi.mock('../device/deviceLink.js', () => ({
+  SESSION_GONE: 'E2EE_SESSION_GONE',
   DeviceLink: class {
     selectedMachine = ''
     constructor(opts: DeviceLinkOpts) { lane.opts = opts }
     onFrame(cb: (frame: Record<string, unknown>) => void) { lane.frames = cb; return () => {} }
+    onUndelivered() { return () => {} }
     stop() { lane.stop() }
     rpc(type: string) { return lane.rpc(type) }
     sendSealed(...args: unknown[]) { return lane.sendSealed(...(args as [])) }

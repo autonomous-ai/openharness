@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { DeviceFleet } from './deviceFleet.js'
 import { FleetError, type FleetEvent } from '../cable/machineFleet.js'
-import type { DeviceFrame } from './deviceLink.js'
+import { SESSION_GONE, type DeviceFrame, type Undelivered } from './deviceLink.js'
 
 type Listed = { machineId: string; name: string; state: string; agentCount: number; authMode: string; local: boolean }
 
@@ -20,11 +20,13 @@ function listOf(rows: Partial<Listed>[]): Listed[] {
 function make(over: { rows?: Partial<Listed>[]; linked?: string[]; rpc?: (t: string, p: Record<string, unknown>) => Promise<Record<string, unknown>> } = {}) {
   const rows = listOf(over.rows ?? [{}])
   let frameCb: ((f: DeviceFrame) => void) | null = null
+  let undeliveredCb: ((what: Undelivered) => void) | null = null
   const sent: DeviceFrame[] = []
   const resets: string[] = []
   const link = {
     selectedMachine: 'm1',
     onFrame: (cb: (f: DeviceFrame) => void) => { frameCb = cb; return () => {} },
+    onUndelivered: (cb: (what: Undelivered) => void) => { undeliveredCb = cb; return () => {} },
     attach: vi.fn(async () => {}),
     online: vi.fn(async () => {}),
     detach: vi.fn(),
@@ -43,7 +45,7 @@ function make(over: { rows?: Partial<Listed>[]; linked?: string[]; rpc?: (t: str
     hasPeerLink: (id: string) => (over.linked ?? ['m1']).includes(id),
     log: () => {},
   })
-  return { fleet, link, sent, resets, say: (f: DeviceFrame) => frameCb?.(f) }
+  return { fleet, link, sent, resets, say: (f: DeviceFrame) => frameCb?.(f), undelivered: (what: Undelivered) => undeliveredCb?.(what) }
 }
 
 describe('DeviceFleet', () => {
@@ -104,6 +106,47 @@ describe('DeviceFleet', () => {
     await expect(fleet.listAgents('m1')).rejects.toThrow()
     // Two failures, but a success between them: a flaky link is not a gone machine.
     expect(resets).toEqual([])
+  })
+
+  it('shows a turn, a stop or an answer that may not have reached its machine on that agent\'s tile, never inviting a blind resend', async () => {
+    // Diego, 10-30: after the far daemon restarted, a dial turn vanished with nothing on the dial to say so.
+    const { fleet, undelivered } = make()
+    const seen: FleetEvent[] = []
+    fleet.onEvent((e) => seen.push(e))
+    undelivered({ machineId: 'm1', type: 'message', agentId: 'a1' })
+    undelivered({ machineId: 'm1', type: 'cancel', agentId: 'a2' })
+    undelivered({ machineId: 'm1', type: 'question_response', agentId: 'a3', requestId: 'q1' })
+    // With no agent to put it on there is no tile to tell.
+    undelivered({ machineId: 'm1', type: 'message' })
+    undelivered({ machineId: 'gone', type: 'message', agentId: 'a4' })
+    expect(seen).toEqual([
+      { machineId: 'm1', kind: 'error', agentId: 'a1', text: 'May not have reached office-imac. Check before sending again.', recap: 'May not have arrived' },
+      { machineId: 'm1', kind: 'error', agentId: 'a2', text: 'Stop may not have reached office-imac. Check before stopping again.', recap: 'May not have arrived' },
+      { machineId: 'm1', kind: 'error', agentId: 'a3', text: 'Answer may not have reached office-imac. Check before answering again.', recap: 'May not have arrived' },
+      { machineId: 'gone', kind: 'error', agentId: 'a4', text: 'May not have reached that computer. Check before sending again.', recap: 'May not have arrived' },
+    ])
+  })
+
+  it('asks a read again once when its machine\'s session went before the answer came, and counts no miss for it', async () => {
+    // The far daemon restarted mid-request: it never saw the request, so asking again is safe for a read.
+    const asked: string[] = []
+    let fail = 1
+    const { fleet, resets } = make({
+      rpc: async (type) => { asked.push(type); if (fail-- > 0) throw new Error(SESSION_GONE); return { agents: [{ id: 'c1', engine: 'claude' }] } },
+    })
+    expect((await fleet.listAgents('m1')).map((a) => a.id)).toEqual(['c1'])
+    expect(asked).toEqual(['agents_list', 'agents_list'])
+    expect(fleet.reachable('m1')).toMatchObject({ ok: true })
+    // Only once: a second loss is a failure like any other.
+    fail = 2
+    await expect(fleet.listAgents('m1')).rejects.toThrow(SESSION_GONE)
+    expect(asked).toHaveLength(4)
+    expect(resets).toEqual([])
+    // A write is never asked twice: the far side may have run it.
+    const writes: string[] = []
+    const w = make({ rpc: async (type) => { writes.push(type); throw new Error(SESSION_GONE) } })
+    await expect(w.fleet.forkAgent('m1', 'a1')).rejects.toThrow(SESSION_GONE)
+    expect(writes).toEqual(['agent_fork'])
   })
 
   it('says nothing about a machine nobody has asked', async () => {
@@ -248,7 +291,7 @@ describe('DeviceFleet', () => {
         find: (id: string) => rows.find((r) => r.machineId === id),
         applyLive: (r: unknown) => { applied.push(r); return true },
       } as never,
-      link: { selectedMachine: 'm1', onFrame: (cb: never) => { frameCb = cb; return () => {} } } as never,
+      link: { selectedMachine: 'm1', onFrame: (cb: never) => { frameCb = cb; return () => {} }, onUndelivered: () => () => {} } as never,
       hasPeerLink: () => true,
       log: () => {},
     })
@@ -265,7 +308,7 @@ describe('DeviceFleet', () => {
     let frameCb!: (f: { type?: string; machineId?: string; payload?: Record<string, unknown> }) => void
     const fleet = new DeviceFleet({
       list: { list: () => ({ machines: [], source: 'backend' as const }), find: () => undefined, applyLive: () => true } as never,
-      link: { selectedMachine: 'm1', onFrame: (cb: never) => { frameCb = cb; return () => {} } } as never,
+      link: { selectedMachine: 'm1', onFrame: (cb: never) => { frameCb = cb; return () => {} }, onUndelivered: () => () => {} } as never,
       hasPeerLink: () => true,
       log: () => {},
     })
