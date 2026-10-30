@@ -1,0 +1,12 @@
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Path
+Target = usr/lib/systemd/system/harness-button.service
+Target = usr/lib/systemd/logind.conf.d/20-harness-os.conf
+
+[Action]
+Description = Listening to the power button for a factory reset
+When = PostTransaction
+# logind reads its settings again on SIGHUP: one press stops turning the computer off at once.
+Exec = /usr/bin/sh -c 'test -e /etc/harness-live || { systemctl enable harness-button.service; systemctl restart harness-button.service; systemctl kill -s HUP systemd-logind.service; }'

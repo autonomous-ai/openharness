@@ -1,0 +1,15 @@
+[Unit]
+Description=Factory reset from the power button while the disk waits for its password
+Documentation=file:///usr/lib/harness-os/unlock/button
+DefaultDependencies=no
+ConditionPathExists=/etc/initrd-release
+After=systemd-udev-trigger.service
+Wants=systemd-udev-trigger.service
+# The system proper listens instead once the disk is open (harness-button.service).
+Conflicts=initrd-switch-root.target
+Before=initrd-switch-root.target initrd-cleanup.service
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/harness-os/unlock/button
+KillMode=control-group

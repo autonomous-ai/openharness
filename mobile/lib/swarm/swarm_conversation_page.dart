@@ -32,6 +32,7 @@ import 'swarm_outgoing_files.dart';
 import 'swarm_inbox.dart';
 import 'swarm_live_card.dart';
 import 'swarm_message_link.dart';
+import 'swarm_message_receipt.dart';
 import 'swarm_message_row.dart';
 import 'swarm_need_rows.dart';
 import 'swarm_profile_sheet.dart';
@@ -130,8 +131,9 @@ class SwarmConversationPage extends StatefulWidget {
   /// Swarm Home C's project chat (Tony, 2026-10-30): a New messages line
   /// above the first message the person had not read as it opened
   /// ([swarmFirstUnread]), placed once, the chat opening at it when it is
-  /// above the screen; and Jump to latest while they read more than a
-  /// screen back. The person's own Buddy chat has both too, in the project's
+  /// above the screen; Jump to first unread while the line is above the view
+  /// and has not been seen; and Jump to latest while they read more than a
+  /// screen back. The person's own Buddy chat has them too, in the project's
   /// Buddy tab and on its own page.
   final bool homeC;
 
@@ -230,6 +232,19 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   SwarmReadMarks? _marksAwaited;
   final _lineKey = GlobalKey(debugLabel: 'New messages line');
 
+  /// The line has been in view this visit: reading on needs no way back.
+  bool _lineSeen = false;
+
+  /// The line is above the view and not yet seen, where Jump to first unread
+  /// is offered ([_measureLine]).
+  final _offersUnread = ValueNotifier<bool>(false);
+
+  /// The jump still landing: its passing scroll neither counts the line as
+  /// seen nor changes what is offered. Each jump takes a new number.
+  int? _landing;
+  int _landings = 0;
+  bool _measuring = false;
+
   /// No message has this id: held at it, a chat reads nothing until its New
   /// messages line is placed ([SwarmConversation.heldAt]).
   static const _undecided = '';
@@ -312,19 +327,19 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
         widget.buddy != null ||
         swarmIsOwnBuddyChat(reader, widget.conversationId);
     // Set before what the chat kept is shown, so it is read only as far as
-    // it is seen: opened at a message, through it until the person goes
-    // down to the foot; with a New messages line to place, nothing until it
-    // is placed.
+    // it is seen: with a New messages line to place, nothing until it is
+    // placed, a notice's message included, or the line would sit under it;
+    // opened at a message, through it until the person goes down to the foot.
     final c = _conversation = SwarmConversation(
       reader,
       widget.conversationId,
       shown: _seen,
-      heldAt:
-          widget.messageId ??
-          _held.value ??
-          ((_unreadLine || _ownerUnknown) && !_lineDecided ? _undecided : null),
+      heldAt: (_unreadLine || _ownerUnknown) && !_lineDecided
+          ? _undecided
+          : widget.messageId ?? _held.value,
     );
     c.composer.addListener(_drafted);
+    c.addListener(_chatMoved);
     if (widget.mention case final agentId?) c.mention(agentId);
     reader.addListener(_see);
     session.inbox.addListener(_see);
@@ -335,12 +350,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
         // A chat left behind may finish reading after its replacement began.
         if (!mounted || _conversation != c) return;
         _firstRead = true;
-        _placeLine(c);
-        if (_noticeHandled) return;
-        if (widget.messageId case final messageId?) {
-          _noticeHandled = true;
-          unawaited(_jumpTo(c, messageId));
-        }
+        _chatMoved();
       }),
     );
     if (rebuild && mounted) setState(() {});
@@ -354,15 +364,17 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// once they are back ([_marksMoved]). It stays there however the chat and
   /// its marks move on. Without one, everything shown is read. A line above
   /// the screen opens the chat at it ([_openAtLine]), unless a notice opened
-  /// it at a message.
+  /// it at a message. A read that failed says nothing of what is unread: the
+  /// chat stays held, and the first read that works places it ([_chatMoved]).
   void _placeLine(SwarmConversation c) {
     if (!mounted || _conversation != c || _lineDecided || _ownerUnknown) {
       return;
     }
     if (!_unreadLine) {
-      if (c.heldAt == _undecided) c.heldAt = null;
+      _releaseHold(c);
       return;
     }
+    if (c.state != SwarmChatState.loaded || c.error != null) return;
     final marks = c.reader.readMarks;
     if (marks != null && !marks.loaded) {
       if (_marksAwaited != marks) {
@@ -380,11 +392,40 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       hasOlder: c.hasOlder,
     );
     if (at == null) {
-      if (c.heldAt == _undecided) c.heldAt = null;
+      _releaseHold(c);
       return;
     }
     setState(() => _lineAt = at);
-    if (widget.messageId == null) _openAtLine(c, at, 0);
+    if (widget.messageId == null) {
+      _openAtLine(c, at, 0);
+    } else {
+      _releaseHold(c);
+      _measureLineSoon();
+    }
+  }
+
+  /// The line is decided: the chat is read as far as a notice opened it at, or
+  /// the person had read back to, else to its foot.
+  void _releaseHold(SwarmConversation c) {
+    if (c.heldAt == _undecided) c.heldAt = widget.messageId ?? _held.value;
+  }
+
+  /// A read came in: the line, if a failed read left it to place; the notice's
+  /// message, once a read has brought what to look for it in; and what is
+  /// offered of the line, since the list changed.
+  void _chatMoved() {
+    final c = _conversation;
+    if (c == null || !_firstRead) return;
+    if (!_lineDecided) _placeLine(c);
+    if (!_noticeHandled &&
+        c.state == SwarmChatState.loaded &&
+        c.error == null) {
+      if (widget.messageId case final messageId?) {
+        _noticeHandled = true;
+        unawaited(_jumpTo(c, messageId));
+      }
+    }
+    _measureLineSoon();
   }
 
   /// The marks the line waits on moved: back, it is placed. Only the chat's
@@ -402,15 +443,22 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// it, the chat goes to the line, and what came before the line is read
   /// while the rest waits until the person goes down to it. The list builds
   /// only the rows near what is shown, so it jumps near the line by its place
-  /// until its row is built, as [_reveal] does.
-  void _openAtLine(SwarmConversation c, String at, int attempt) {
+  /// until its row is built, as [_reveal] does. Jump to first unread comes
+  /// here at [attempt] 1: what is read does not move.
+  void _openAtLine(
+    SwarmConversation c,
+    String at,
+    int attempt, {
+    int? landing,
+  }) {
+    final jump = landing ?? _land();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || _conversation != c || _lineAt != at) return;
+      if (!mounted || _conversation != c || _lineAt != at) return _landed(jump);
       final row = _lineKey.currentContext;
       if (attempt == 0) {
         if (row != null && _onScreen(row)) {
           if (c.heldAt == _undecided) c.heldAt = null;
-          return;
+          return _landed(jump);
         }
         final place = c.messages.indexWhere((m) => m.id == at);
         if (place > 0 && c.heldAt == _undecided) {
@@ -418,32 +466,104 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
         }
       }
       if (row != null) {
-        unawaited(Scrollable.ensureVisible(row, alignment: 1));
+        unawaited(
+          Scrollable.ensureVisible(
+            row,
+            alignment: 1,
+          ).whenComplete(() => _landed(jump)),
+        );
         return;
       }
       final index = _shown.indexWhere((entry) => entry is _LineEntry);
-      if (!_scroll.hasClients || index < 0 || attempt > 20) return;
-      final position = _scroll.position;
-      position.jumpTo(
-        (position.maxScrollExtent * (index + 1) / _shown.length).clamp(
-          0,
-          position.maxScrollExtent,
-        ),
-      );
-      _openAtLine(c, at, attempt + 1);
+      if (!_scroll.hasClients || index < 0 || attempt > 20) {
+        return _landed(jump);
+      }
+      _scroll.position.jumpTo(_offsetNear(index));
+      _openAtLine(c, at, attempt + 1, landing: jump);
     });
     WidgetsBinding.instance.scheduleFrame();
   }
 
   /// Whether [row]'s top is inside its list: the list runs from the foot, so
   /// a row drawn there is on screen unless it starts above the list's top.
-  static bool _onScreen(BuildContext row) {
+  static bool _onScreen(BuildContext row) => (_topInList(row) ?? -1) >= 0;
+
+  /// How far [row]'s top is below its list's top; null until both are laid
+  /// out.
+  static double? _topInList(BuildContext row) {
     final box = row.findRenderObject(), list = Scrollable.maybeOf(row);
     final view = list?.context.findRenderObject();
-    if (box is! RenderBox || view is! RenderBox) return false;
-    if (!box.hasSize || !view.hasSize) return false;
-    return box.localToGlobal(Offset.zero).dy >=
+    if (box is! RenderBox || view is! RenderBox) return null;
+    if (!box.hasSize || !view.hasSize) return null;
+    return box.localToGlobal(Offset.zero).dy -
         view.localToGlobal(Offset.zero).dy;
+  }
+
+  /// Where the list scrolls to bring the entry at [index] of [_shown] near,
+  /// by its place: the rows not built have no place of their own yet.
+  double _offsetNear(int index) {
+    final position = _scroll.position;
+    return (position.maxScrollExtent * (index + 1) / _shown.length).clamp(
+      0,
+      position.maxScrollExtent,
+    );
+  }
+
+  /// A jump starts: what is offered stays as it is until it has landed.
+  int _land() => _landing = ++_landings;
+
+  /// Jump [landing] is over: the line is measured where the list lays out
+  /// next, unless a newer jump has started.
+  void _landed(int landing) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _landing != landing) return;
+      _landing = null;
+      _measureLine();
+    });
+    WidgetsBinding.instance.scheduleFrame();
+  }
+
+  /// [_measureLine] once this frame is laid out: a scroll or a read may come
+  /// in the middle of it.
+  void _measureLineSoon() {
+    if (_lineAt == null || _lineSeen || _measuring) return;
+    _measuring = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _measuring = false;
+      if (mounted) _measureLine();
+    });
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
+  /// Offers Jump to first unread while the line is above the view and has not
+  /// been seen (Desktop's `_checkUnreadLine`). A line not laid out is told by
+  /// its place in the list. A jump still landing passes lines it does not stop
+  /// at: what is offered stays as it was until the line is measured where the
+  /// jump landed.
+  void _measureLine() {
+    if (_landing != null) return;
+    var offers = false;
+    if (_lineAt != null && !_lineSeen && _scroll.hasClients) {
+      final position = _scroll.position;
+      final row = _lineKey.currentContext;
+      final top = row == null ? null : _topInList(row);
+      if (top != null) {
+        // Less than a point past the top: where the jump to the line puts it.
+        if (top >= -1 && top < position.viewportDimension) _lineSeen = true;
+        offers = top < -1;
+      } else {
+        final index = _shown.indexWhere((entry) => entry is _LineEntry);
+        offers = index >= 0 && _offsetNear(index) > position.pixels;
+      }
+    }
+    _offersUnread.value = offers;
+  }
+
+  /// Takes the person to the New messages line.
+  void _jumpToFirstUnread() {
+    final c = _conversation, at = _lineAt;
+    if (c == null || at == null) return;
+    _openAtLine(c, at, 1);
   }
 
   /// Its Swarm is watched while the chat is open and visible, so it is read
@@ -507,6 +627,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       ..removeListener(_see);
     if (_conversation case final c?) {
       c.composer.removeListener(_drafted);
+      c.removeListener(_chatMoved);
       c.reader.removeListener(_see);
       c.dispose();
     }
@@ -516,6 +637,9 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     _madeFrom = null;
     _lineAt = null;
     _lineDecided = false;
+    _lineSeen = false;
+    _landing = null;
+    _offersUnread.value = false;
     _ownerUnknown = false;
     _firstRead = false;
     _farBack.value = false;
@@ -535,6 +659,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     _view.dispose();
     _held.dispose();
     _farBack.dispose();
+    _offersUnread.dispose();
     _litTimer?.cancel();
     _text.dispose();
     _focus.dispose();
@@ -591,6 +716,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   void _scrolled() {
     _nearTop();
     if (!_scroll.hasClients) return;
+    _measureLineSoon();
     final back = _scroll.offset > _readingBack;
     if (_unreadLine) {
       _farBack.value = _scroll.offset > _scroll.position.viewportDimension;
@@ -651,15 +777,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   void _send(SwarmConversation c) {
     _target = null;
     _attachNote.value = null;
-    if (_scroll.hasClients && _scroll.offset > 0) {
-      unawaited(
-        _scroll.animateTo(
-          0,
-          duration: const Duration(milliseconds: 250),
-          curve: Curves.easeOut,
-        ),
-      );
-    }
+    if (_scroll.hasClients && _scroll.offset > 0) _toFoot();
     unawaited(_post(c));
   }
 
@@ -788,6 +906,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// when it is further back — or says why it cannot.
   Future<void> _jumpTo(SwarmConversation c, String messageId) async {
     if (_finding) return;
+    final landing = _land();
     setState(() {
       _decisionTarget = null;
       _finding = true;
@@ -809,7 +928,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
         if (!_scroll.hasClients || _scroll.offset <= _readingBack) {
           c.heldAt = null;
         }
-        return;
+        return _landed(landing);
       }
     }
     setState(() {
@@ -828,9 +947,9 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       if (!_scroll.hasClients || _scroll.offset <= _readingBack) {
         c.heldAt = null;
       }
-      return;
+      return _landed(landing);
     }
-    _reveal(c, messageId, 0);
+    _reveal(c, messageId, 0, landing: landing);
     _litTimer?.cancel();
     setState(() => _lit = messageId);
     _litTimer = Timer(const Duration(seconds: 2), () {
@@ -841,10 +960,17 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// The list builds only the rows near what is shown: it jumps near the
   /// target by its place in the list until its row is built, then brings it
   /// to the middle (the desktop's `_revealTarget`).
-  void _reveal(SwarmConversation c, String messageId, int attempt) {
+  void _reveal(
+    SwarmConversation c,
+    String messageId,
+    int attempt, {
+    int? landing,
+  }) {
+    final jump = landing ?? _land();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || (_target != messageId && _decisionTarget != messageId)) {
-        return;
+      if (!mounted) return;
+      if (_target != messageId && _decisionTarget != messageId) {
+        return _landed(jump);
       }
       if (_targetKey.currentContext case final row?) {
         unawaited(
@@ -852,7 +978,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
             row,
             alignment: 0.5,
             duration: const Duration(milliseconds: 250),
-          ),
+          ).whenComplete(() => _landed(jump)),
         );
         return;
       }
@@ -862,15 +988,11 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
             ? entry is _AskEntry && entry.need.decision.id == messageId
             : entry is _MessageEntry && entry.message.id == messageId,
       );
-      if (!_scroll.hasClients || index < 0 || attempt > 20) return;
-      final position = _scroll.position;
-      position.jumpTo(
-        (position.maxScrollExtent * (index + 1) / shown.length).clamp(
-          0,
-          position.maxScrollExtent,
-        ),
-      );
-      _reveal(c, messageId, attempt + 1);
+      if (!_scroll.hasClients || index < 0 || attempt > 20) {
+        return _landed(jump);
+      }
+      _scroll.position.jumpTo(_offsetNear(index));
+      _reveal(c, messageId, attempt + 1, landing: jump);
     });
     WidgetsBinding.instance.scheduleFrame();
   }
@@ -1056,6 +1178,24 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                 listenable: Listenable.merge([c, _held]),
                 builder: (context, _) =>
                     _messages(context, session, c, view, tty),
+              ),
+            ),
+            // At the top of the list, as Jump to latest is at its foot: the
+            // two can show at once.
+            Positioned(
+              left: 0,
+              right: 0,
+              top: 8,
+              child: ListenableBuilder(
+                listenable: Listenable.merge([c, _offersUnread]),
+                builder: (context, _) =>
+                    _offersUnread.value &&
+                        c.state != SwarmChatState.lost &&
+                        c.stream.isNotEmpty
+                    ? Center(
+                        child: SwarmJumpToUnreadPill(onTap: _jumpToFirstUnread),
+                      )
+                    : const SizedBox.shrink(),
               ),
             ),
             Positioned(
@@ -1331,6 +1471,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       });
     }
     final lead = pending == null ? 0 : 1;
+    final latestOwn = c.latestOwn;
 
     Widget entry(_Entry entry) {
       final key = _keyOf(entry);
@@ -1364,6 +1505,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
           final lit = _lit == m.id, followed = _target == m.id;
           final acting = _acting == m.id;
           final reactions = c.reactionsOf(m);
+          final receipt =
+              m.id == latestOwn?.id && m.receiptDelivery?.status == 'queued';
           // A card's facts are its group's: only a reader of the group has
           // them, and a change to them draws the row again.
           final group = c.conversation;
@@ -1382,6 +1525,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               lit,
               followed,
               acting,
+              receipt,
               reply,
               quoted,
               view.canPost,
@@ -1472,6 +1616,13 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                     : null,
               ),
               onLongPress: () => unawaited(_pickReaction(c, m.id)),
+              receipt: receipt
+                  ? SwarmMessageReceipt(
+                      key: ValueKey('swarm-message-receipt-${m.id}'),
+                      conversation: c,
+                      message: m,
+                    )
+                  : null,
               below: answerIn == null
                   ? null
                   : _AnswerIn(
@@ -1615,12 +1766,15 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// Back to the foot, where the messages that waited show.
   void _toFoot() {
     if (!_scroll.hasClients) return;
+    final landing = _land();
     unawaited(
-      _scroll.animateTo(
-        0,
-        duration: const Duration(milliseconds: 250),
-        curve: Curves.easeOut,
-      ),
+      _scroll
+          .animateTo(
+            0,
+            duration: const Duration(milliseconds: 250),
+            curve: Curves.easeOut,
+          )
+          .whenComplete(() => _landed(landing)),
     );
   }
 
@@ -2225,19 +2379,18 @@ class SwarmChatSkeleton extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Semantics(
     label: 'Loading messages',
-    child: SingleChildScrollView(
+    child: ListView.builder(
       key: const ValueKey('swarm-chat-skeleton'),
-      // From the foot, as the messages are; those that do not fit are cut
-      // off at the top.
+      // From the foot, as the messages are, the bubbles over and over: any
+      // screen is full up to its top, where the last one is cut off.
       reverse: true,
       physics: const NeverScrollableScrollPhysics(),
       padding: _listPadding,
-      child: Column(
-        children: [
-          for (final (lines, width) in _bubbles)
-            _SkeletonBubble(lines: lines, width: width),
-        ],
-      ),
+      itemBuilder: (_, i) {
+        final (lines, width) =
+            _bubbles[(_bubbles.length - 1 - i) % _bubbles.length];
+        return _SkeletonBubble(lines: lines, width: width);
+      },
     ),
   );
 }
@@ -2312,22 +2465,62 @@ class _Day extends StatelessWidget {
 class SwarmNewPill extends StatelessWidget {
   const SwarmNewPill({super.key, required this.count, required this.onTap});
 
-  static const double _height = 36;
-
   final int count;
   final VoidCallback onTap;
 
   @override
-  Widget build(BuildContext context) => Semantics(
-    button: true,
+  Widget build(BuildContext context) => _JumpPill(
+    key: ValueKey(count == 0 ? 'swarm-jump-latest' : 'swarm-new-pill'),
+    icon: LucideIcons.arrowDown,
+    text: count == 0 ? 'Jump to latest' : '$count new',
     label: count == 0
         ? 'Jump to latest'
         : count == 1
         ? '1 new message'
         : '$count new messages',
+    onTap: onTap,
+  );
+}
+
+/// Shown while the New messages line, not yet seen this visit, is above the
+/// view: takes the person up to it (Desktop's `SuperTabJumpToUnread`).
+class SwarmJumpToUnreadPill extends StatelessWidget {
+  const SwarmJumpToUnreadPill({super.key, required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => _JumpPill(
+    key: const ValueKey('swarm-jump-unread'),
+    icon: LucideIcons.arrowUp,
+    text: 'Jump to first unread',
+    label: 'Jump to first unread',
+    onTap: onTap,
+  );
+}
+
+/// A capsule over the chat that takes the person somewhere in it.
+class _JumpPill extends StatelessWidget {
+  const _JumpPill({
+    super.key,
+    required this.icon,
+    required this.text,
+    required this.label,
+    required this.onTap,
+  });
+
+  static const double _height = 36;
+
+  final IconData icon;
+  final String text, label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    button: true,
+    label: label,
     excludeSemantics: true,
     child: GestureDetector(
-      key: ValueKey(count == 0 ? 'swarm-jump-latest' : 'swarm-new-pill'),
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
       // 44 to tap, 36 to see.
@@ -2345,14 +2538,18 @@ class SwarmNewPill extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(LucideIcons.arrowDown, size: 16, color: AppInk.onFill),
+              Icon(icon, size: 16, color: AppInk.onFill),
               const SizedBox(width: 6),
-              Text(
-                count == 0 ? 'Jump to latest' : '$count new',
-                style: swarmChatText(
-                  14,
-                  color: AppInk.onFill,
-                  weight: FontWeight.w600,
+              Flexible(
+                child: Text(
+                  text,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: swarmChatText(
+                    14,
+                    color: AppInk.onFill,
+                    weight: FontWeight.w600,
+                  ),
                 ),
               ),
             ],

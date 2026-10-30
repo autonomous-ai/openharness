@@ -30,6 +30,10 @@ const LAUNCH_MODEL_REFUSALS = new Set(['LAUNCH_MODEL_UNSUPPORTED', 'INVALID_LAUN
 // The join turn must finish before the pane accepts a model switch, and it ends only once the roster shows the agent.
 const MODEL_SWITCH_WAIT_MS = 60_000
 const MODEL_SWITCH_RETRY_MS = 1_000
+/** How long a start waits for an agent with no model on record to report one before it joins: a Codex agent at its own
+ *  default names it at its first turn, which its join prompt starts. Work assigned before it was recorded with none (Scholes,
+ *  2026-10-30, median 34 s after the start). An engine or grid model that never reports one joins without it. */
+export const MODEL_REPORT_WAIT_MS = 30_000
 const CANCELLED_START = 'The machine cancelled this request before starting an agent. Review its settings and create a new start request.'
 function requireSuccess(reply: Json): Json {
   // The code says whether the backend answered (a refusal) or the reply was lost on the way (a transport code, or none).
@@ -314,13 +318,14 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       ...(permissionWarning ? { permissionWarning } : {}),
       detail: 'Queued on the contributed machine. Resume this start ID to read its receipt.' }
   const target = await open(where, request.machineId)
-  /** What the agent runs now, as its frame says; null when the frame cannot say. */
-  const ranNow = async (agentId: string, engine: string) => {
-    const listed = await target.request('agents_list', {}, 10_000).catch((): Json => ({}))
+  /** What the agent runs now, and its frame, as the frame says; null when the frame cannot say. */
+  const seenNow = async (agentId: string, engine: string, ms = 10_000) => {
+    const listed = await target.request('agents_list', {}, ms).catch((): Json => ({}))
     const frame = (Array.isArray(listed.agents) ? listed.agents.map(object) : []).find(f => f.id === agentId)
     const ran = parseRuntimeProfile(frame?.selectedModel)
-    return ran && ran.sessionId === agentId && ran.engine === engine ? ran : null
+    return ran && ran.sessionId === agentId && ran.engine === engine ? { ran, frame: frame! } : null
   }
+  const ranNow = async (agentId: string, engine: string) => (await seenNow(agentId, engine))?.ran ?? null
   /** The model and effort routed for this start; `default` keeps what the engine launches with. */
   const model = text(request.model), effort = text(request.effort)
   const routedModel = !!model && !!effort && !(model === 'default' && effort === 'default')
@@ -484,14 +489,12 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       detail: 'The created agent is unavailable, but its stop is not confirmed. Inspect the execution machine before starting another agent.' }
     // Reports what the engine launched with; the routed model, once launched or switched, is observed afterwards.
     const profile = parseRuntimeProfile(frame.selectedModel)
-    const matched = profile && profile.sessionId === nativeId && profile.engine === frame.engine ? profile : null
+    let matched = profile && profile.sessionId === nativeId && profile.engine === frame.engine ? profile : null
+    let seenFrame = frame
     // Claude Code does not report an effort it was launched with, so its frame reads auto: the agent runs the effort this
     // start launched it with (a resumed start: the one the machine accepted at launch). Builders started with opus high
     // were stored as auto until 2026-10-27.
     const launchedEffort = launched ? effort : launched === undefined ? text(object(native.launchModel).effort) : null
-    const configuration = { engine: text(frame.engine) ?? String(request.engine), model: matched?.model ?? null,
-      effort: matched?.effort === 'auto' && launchedEffort ? launchedEffort : matched?.effort ?? null,
-      contextWindow: number(frame.contextWindow), engineVersion: text(frame.engineVersion) }
     const startedSession = typeof frame.sessionId === 'string' && frame.sessionId && typeof frame.createdAt === 'string' && Number.isFinite(Date.parse(frame.createdAt))
       ? { sessionId: frame.sessionId, createdAt: frame.createdAt } : undefined
     // New native frames have their creation time before the engine binds. Wait for its original session identity.
@@ -499,6 +502,23 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
     // (superTabs/machines.ts `abandoned`).
     if (typeof frame.createdAt === 'string' && !startedSession) return { error: 'START_PENDING', startId, creationId, harnessId: nativeId,
       detail: 'Waiting for the launched engine to record its session identity. Resume this same start request.' }
+    // An agent left on its engine's own model (Codex) names it at its first turn: it joins with it, so the work assigned to
+    // it records it. Bounded: an engine or grid model that never reports one joins without it, and its first report fills
+    // its attempts later (backend leaderboard/record.ts). A routed model is switched in after the join and read then.
+    const engine = text(frame.engine) ?? String(request.engine)
+    if (!matched && !start.harnessId && !routedModel && request.gridModel === undefined && request.gridName === undefined
+      && ['claude', 'codex'].includes(engine)) {
+      const giveUp = Date.now() + MODEL_REPORT_WAIT_MS
+      for (;;) {
+        const seen = await seenNow(nativeId, engine, Math.max(1_000, Math.min(10_000, giveUp - Date.now())))
+        if (seen) { matched = seen.ran; seenFrame = seen.frame; break }
+        if (giveUp - Date.now() < MODEL_SWITCH_RETRY_MS) break
+        await new Promise(resolve => setTimeout(resolve, MODEL_SWITCH_RETRY_MS))
+      }
+    }
+    const configuration = { engine, model: matched?.model ?? null,
+      effort: matched?.effort === 'auto' && launchedEffort ? launchedEffort : matched?.effort ?? null,
+      contextWindow: number(seenFrame.contextWindow), engineVersion: text(seenFrame.engineVersion) }
     const join = { type: 'agent.started', startId, harnessId: nativeId, configuration }
     let joined: Json = { result: {} }
     if (!start.harnessId) {
@@ -564,7 +584,16 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
         }
       }
     }
+    // What the agent runs as this start last saw it, for its settle (superTabs/machines.ts): work is assigned only after the
+    // settle, so it records the model even before the host's own report of it. None when the agent has named no model.
+    const last = switching || routedModel ? await seenNow(nativeId, engine) : matched ? { ran: matched, frame: seenFrame } : null
+    const lastEffort = switching && last?.ran.model === model ? effort : launchedEffort
+    const settledConfiguration = last && last.ran.model.length <= 200 ? { engine, model: last.ran.model,
+      effort: last.ran.effort === 'auto' && lastEffort ? lastEffort : last.ran.effort,
+      contextWindow: Number.isSafeInteger(last.frame.contextWindow) && Number(last.frame.contextWindow) > 0 ? Number(last.frame.contextWindow) : null,
+      engineVersion: text(last.frame.engineVersion)?.slice(0, 160) ?? null } : null
     return { ok: true, startId, machineId: request.machineId, harnessId: nativeId, ...object(joined.result),
+      ...(settledConfiguration ? { configuration: settledConfiguration } : {}),
       ...(permissionWarning ? { permissionWarning } : {}), ...(modelWarning ? { modelWarning } : {}) }
   } finally { target.close() }
 }

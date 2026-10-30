@@ -212,7 +212,7 @@ void main() {
       .length;
 
   group('the Swarm page', () {
-    testWidgets('Jump to comes first, then its projects; what needs the '
+    testWidgets('its projects come first, under the title; what needs the '
         'person is in Needs you', (tester) async {
       // An iPhone's screen: all of Home at once.
       tester.view.physicalSize = const Size(1170, 2532);
@@ -226,7 +226,7 @@ void main() {
         reason: "the Activity tab's",
       );
       expect(
-        tester.getTopLeft(key('swarm-jump')).dy,
+        tester.getTopLeft(key('swarm-title-button')).dy,
         lessThan(tester.getTopLeft(key('swarm-project-$tab-$project')).dy),
       );
       expect(

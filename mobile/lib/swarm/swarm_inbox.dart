@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../core/local_key_value_store.dart';
+import '../logging/app_log.dart';
 import 'model.dart';
 import 'swarm_asks.dart';
 import 'swarm_buddy.dart';
@@ -368,11 +369,28 @@ class SwarmInbox extends ChangeNotifier {
       ]);
     } on SuperTabFailure catch (failure) {
       if (_disposed) return;
+      // Once per failure, not once per poll.
+      if (error != failure.message) {
+        appLog.warn(
+          'swarm',
+          'Swarm list not read: ${failure.code} ${failure.statusCode}',
+          error: failure,
+        );
+      }
       error = failure.message;
       _away = failure.code == 'MACHINE_UNAVAILABLE' ? _sooner() : null;
-    } catch (_) {
+    } catch (failure, stack) {
       if (_disposed) return;
-      error = 'Could not load your Swarms. Try again.';
+      const unread = 'Could not load your Swarms. Try again.';
+      if (error != unread) {
+        appLog.failure(
+          'swarm',
+          'Swarm list not read',
+          error: failure,
+          stackTrace: stack,
+        );
+      }
+      error = unread;
       _away = null;
     } finally {
       _polling = false;

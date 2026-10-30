@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:dio/dio.dart' show CancelToken;
 import 'package:flutter/material.dart';
@@ -2770,13 +2771,53 @@ void main() {
     const parts = '/api/super-tabs/$tab/parts';
     const notOpen = 'This chat is not open to you.';
 
-    /// Skeleton bubbles fill the chat: six to eight of them.
+    /// Skeleton bubbles fill the chat, from its foot up to its top.
     void skeleton(WidgetTester tester) {
       expect(key('swarm-chat-skeleton'), findsOneWidget);
-      expect(
-        tester.widgetList(key('swarm-skeleton-bubble')).length,
-        inInclusiveRange(6, 8),
+      // Those built just past the top count: one ending right at it is full.
+      final bubbles = find.byKey(
+        const ValueKey('swarm-skeleton-bubble'),
+        skipOffstage: false,
       );
+      final tops = [
+        for (final bubble in bubbles.evaluate())
+          tester
+              .getTopLeft(
+                find.byElementPredicate(
+                  (e) => e == bubble,
+                  skipOffstage: false,
+                ),
+              )
+              .dy,
+      ];
+      expect(
+        tops.reduce(math.min),
+        lessThanOrEqualTo(tester.getTopLeft(key('swarm-chat-skeleton')).dy),
+        reason: 'no gap above the first bubble',
+      );
+    }
+
+    for (final (name, size) in [
+      ('a small phone', const Size(320, 568)),
+      ('an iPhone 14', const Size(390, 844)),
+      ('a tablet', const Size(1024, 1366)),
+    ]) {
+      testWidgets('on $name the skeleton leaves no gap at the top', (
+        tester,
+      ) async {
+        tester.view.physicalSize = size;
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+        final fake = backend([message('m1', 1, text: 'The plan')]);
+        final page = Completer<Object?>();
+        fake.routes[messages] = (_) => page.future;
+
+        await pump(tester, fake, settle: false);
+
+        skeleton(tester);
+        page.complete({'messages': <Object>[], 'next': null});
+        await tester.pumpAndSettle();
+      });
     }
 
     testWidgets('the first page shows skeleton bubbles, and nothing says the '
@@ -3471,6 +3512,98 @@ void main() {
 
       expect(key('swarm-read-only'), findsOneWidget);
       expect(key('swarm-attach'), findsNothing);
+    });
+  });
+  group('the delivery line under the newest own message', () {
+    final queued = {'id': 'd1', 'agentId': 'agent-lead', 'status': 'queued'};
+    final claimed = {...queued, 'status': 'claimed'};
+    const notDelivered = 'Not delivered yet';
+
+    Map<String, dynamic> mine(
+      String id,
+      int sequence, {
+      String? thread,
+      Object? delivery,
+    }) => {
+      ...message(id, sequence, author: me, thread: thread, minute: sequence),
+      'deliveries': [?delivery],
+    };
+
+    Future<SwarmHost> open(WidgetTester tester, FakeSwarm fake) async {
+      final host = await pump(tester, fake);
+      await host.session!.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
+      return host;
+    }
+
+    testWidgets('only the person\'s newest message carries it', (tester) async {
+      await open(
+        tester,
+        backend([
+          mine('m1', 1, delivery: queued),
+          {
+            ...message('m2', 2, text: 'On it', minute: 2),
+            'deliveries': [queued],
+          },
+          mine('m3', 3, delivery: queued),
+          message('m4', 4, text: 'Still here', minute: 4),
+        ]),
+      );
+
+      expect(key('swarm-message-receipt-m3'), findsOneWidget);
+      expect(key('swarm-message-receipt-m1'), findsNothing);
+      expect(key('swarm-message-receipt-m2'), findsNothing);
+      expect(find.text(notDelivered), findsOneWidget);
+      expect(find.textContaining("River's computer is online"), findsOneWidget);
+    });
+
+    testWidgets('a delivery claimed clears it, its own row alone', (
+      tester,
+    ) async {
+      final page = [mine('m1', 1), mine('m2', 2, delivery: queued)];
+      final fake = backend(page);
+      var answer = page.last;
+      fake.routes['$messages?messageId='] = (_) => {
+        'messages': [answer],
+      };
+      final host = await open(tester, fake);
+      expect(find.text(notDelivered), findsOneWidget);
+
+      answer = mine('m2', 2, delivery: claimed);
+      await tester.pump(const Duration(seconds: 30));
+      final built = await rowsBuilt(() async {
+        await host.session!.inbox.reader(tab)!.refresh();
+        await tester.pumpAndSettle();
+      });
+
+      expect(built, ['m2']);
+      expect(find.text(notDelivered), findsNothing);
+      expect(key('swarm-message-receipt-m2'), findsNothing);
+    });
+
+    testWidgets('sign-out while it shows: nothing of it stays', (tester) async {
+      await open(tester, backend([mine('m1', 1, delivery: queued)]));
+      expect(find.text(notDelivered), findsOneWidget);
+
+      account.value = null;
+      await frames(tester);
+
+      expect(find.text(notDelivered), findsNothing);
+      expect(find.textContaining('River'), findsNothing);
+    });
+
+    testWidgets('a newest own reply only in its thread leaves the chat quiet', (
+      tester,
+    ) async {
+      await open(
+        tester,
+        backend([
+          mine('m1', 1, delivery: queued),
+          message('m2', 2, text: 'Root', minute: 2),
+          mine('m3', 3, thread: 'm2', delivery: queued),
+        ]),
+      );
+      expect(find.text(notDelivered), findsNothing);
     });
   });
 }

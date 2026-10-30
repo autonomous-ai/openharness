@@ -372,7 +372,7 @@ void main() {
   });
 
   testWidgets(
-    'the Home kept says it is updating until its Swarm is read again',
+    'the Home kept says nothing of being read again, before or after',
     (tester) async {
       final answer = Completer<Object?>();
       final (:host, fake: _) = await coldStart(
@@ -380,7 +380,8 @@ void main() {
         list: (_) => answer.future,
       );
 
-      expect(updating(), findsOneWidget, reason: 'under the title, quiet');
+      expect(key('swarm-project-$tab-$project'), findsOneWidget);
+      expect(updating(), findsNothing, reason: 'the kept rows are enough');
       expect(key('swarm-connection'), findsNothing);
 
       answer.complete({
@@ -393,6 +394,7 @@ void main() {
       await tester.pump();
       await tester.pump();
 
+      expect(key('swarm-project-$tab-$project'), findsOneWidget);
       expect(updating(), findsNothing);
       stopReads(host);
     },
@@ -432,8 +434,8 @@ void main() {
   });
 
   testWidgets(
-    'a first read of the Swarm that fails keeps Home Updating… until a read '
-    'gets through',
+    'a first read of the Swarm that fails leaves the Home kept as it is, '
+    'with no line, until a read gets through',
     (tester) async {
       final answer = Completer<Object?>();
       final (:host, :fake) = await coldStart(
@@ -455,13 +457,15 @@ void main() {
       expect(inbox.loaded, isTrue);
       expect(inbox.reader(tab)!.error, isNotNull, reason: 'the read failed');
 
-      expect(updating(), findsOneWidget);
+      expect(key('swarm-project-$tab-$project'), findsOneWidget);
+      expect(updating(), findsNothing);
 
       fake.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad();
       await inbox.refresh();
       await tester.pump();
       await tester.pump();
 
+      expect(key('swarm-project-$tab-$project'), findsOneWidget);
       expect(updating(), findsNothing);
       stopReads(host);
     },
@@ -474,8 +478,8 @@ Finder key(String value) => find.byKey(ValueKey(value));
 /// answers, stop.
 void stopReads(SwarmHost host) => host.foreground = false;
 
-/// Home's quiet "Updating…" under its title.
-/// "Updating…" under Home's title: the tab's, or the top bar's when pushed.
+/// "Updating…" under Home's title, which is no longer drawn: the tab's, or
+/// the top bar's when pushed.
 Finder updating() => find.descendant(
   of: find.byWidgetPredicate(
     (widget) => widget is SwarmTabHeader || widget is SwarmTopBar,

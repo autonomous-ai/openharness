@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -169,6 +170,24 @@ void main() {
         row['changedAt'] = now
             .subtract(Duration(minutes: row['key'] == 'g2' ? 7 : 2))
             .millisecondsSinceEpoch;
+      }
+      // Each agent's last progress on its task, by the test's clock, which
+      // the Team counts by: Nova's 4 minutes ago, Juno's question 7.
+      for (final row in groups.cast<Map>()) {
+        final minutes = switch (row['key']) {
+          'g1' => 4,
+          'g2' => 7,
+          _ => null,
+        };
+        if (minutes == null) continue;
+        final data = row['data'] as Map;
+        data['assignment'] = <String, dynamic>{
+          ...data['assignment'] as Map,
+          'progressAt': clock
+              .now()
+              .subtract(Duration(minutes: minutes))
+              .millisecondsSinceEpoch,
+        };
       }
       final lead = (groups.first as Map)['data'] as Map;
       lead
