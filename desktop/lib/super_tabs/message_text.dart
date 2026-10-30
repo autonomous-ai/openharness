@@ -47,6 +47,15 @@ class SuperTabMessageText extends StatelessWidget {
         : '${tags.join(' ')} $body';
   }
 
+  /// The tags [text] holds, in order: each name as written after its `@`,
+  /// lowercased, a full address with its domain. Not in code or a link. The
+  /// backend reads a message's tags by this same rule (superTabs/mentions.ts);
+  /// test/fixtures/tag_fixture.json is the table both pass.
+  static List<String> tagsIn(String text) => [
+    for (final match in _Mention.tag.allMatches(_prose(text)))
+      '${match[1]}${match[2] ?? ''}'.toLowerCase(),
+  ];
+
   static final _opensBlock = RegExp(
     r'^(?: {4}|\t| {0,3}(?:[-*+](?:[ \t\n]|$)|#{1,6}(?:[ \t\n]|$)|>'
     r'|\d{1,9}[.)](?:[ \t\n]|$)|```|~~~|\||\[[^\]\n]+\]:'
@@ -56,10 +65,10 @@ class SuperTabMessageText extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
+    final said = {for (final tag in tagsIn(text)) tag.split('@').first};
     final unsaid = [
       for (final name in mentions)
-        if (!_Mention.tag.allMatches(text).any((m) => _Mention.names(m, name)))
-          '@$name',
+        if (!said.contains(name.toLowerCase())) '@$name',
     ];
     return MarkdownBody(
       data: withTags(unsaid, text),
@@ -169,13 +178,65 @@ class _WorkgroupReference extends md.InlineSyntax {
   }
 }
 
+final _fence = RegExp(r'^ {0,3}(`{3,}|~{3,})');
+final _codeSpan = RegExp(r'(?<!`)(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)');
+final _linkTarget = RegExp(r'\]\([^)]*\)');
+final _bareLink = RegExp(r'\b(?:https?://|www\.)\S+', caseSensitive: false);
+String _blank(Match match) => match[0]!.replaceAll(RegExp(r'[^\n]'), ' ');
+
+/// [text] with what is never a tag blanked out, as Markdown renders it: fenced
+/// and indented code, code spans, bare links and link destinations.
+String _prose(String text) {
+  final lines = text.split('\n');
+  String? fence;
+  var indented = false;
+  for (var i = 0; i < lines.length; i++) {
+    final line = lines[i];
+    final blank = line.replaceAll(RegExp(r'[^\n]'), ' ');
+    if (fence != null) {
+      final close = _fence.firstMatch(line);
+      if (close != null &&
+          close[1]![0] == fence[0] &&
+          close[1]!.length >= fence.length &&
+          line.substring(close[0]!.length).trim().isEmpty) {
+        fence = null;
+      }
+      lines[i] = blank;
+      continue;
+    }
+    final open = _fence.firstMatch(line);
+    if (open != null &&
+        !(open[1]![0] == '`' &&
+            line.substring(open[0]!.length).contains('`'))) {
+      fence = open[1];
+      lines[i] = blank;
+      indented = false;
+      continue;
+    }
+    // Indented code starts after a blank line (or the first line) and runs
+    // while its lines stay indented.
+    final startsCode =
+        RegExp(r'^( {4}|\t)').hasMatch(line) &&
+        line.trim().isNotEmpty &&
+        (indented || i == 0 || lines[i - 1].trim().isEmpty);
+    indented = startsCode || (indented && line.trim().isEmpty);
+    if (startsCode) lines[i] = blank;
+  }
+  return lines
+      .join('\n')
+      .replaceAllMapped(_codeSpan, _blank)
+      .replaceAllMapped(_linkTarget, _blank)
+      .replaceAllMapped(_bareLink, _blank);
+}
+
 /// `@name` or `@name@domain` for a tagged person; any other `@` stays text.
 /// Parsed as inline Markdown, so code and fenced blocks remain literal.
 class _Mention extends md.InlineSyntax {
   _Mention(this.mentions) : super(tag.pattern);
-  // A name never ends in a dot: `@dee.` closes a sentence.
+  // Never right after a letter, digit, `@` or `/` (an address, a path, a
+  // link). A name never ends in a dot: `@dee.` closes a sentence.
   static final tag = RegExp(
-    r'(?<![\w@])@([\w+-]+(?:\.[\w+-]+)*)(@[\w-]+(?:\.[\w-]+)+)?',
+    r'(?<![\w@/])@([\w+-]+(?:\.[\w+-]+)*)(@[\w-]+(?:\.[\w-]+)+)?',
   );
   static bool names(Match match, String name) =>
       match[1]!.toLowerCase() == name.toLowerCase();

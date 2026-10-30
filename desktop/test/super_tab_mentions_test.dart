@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -83,15 +84,20 @@ Future<void> shot(WidgetTester tester, String name) async {
 
 Future<SuperTabController> showView(
   WidgetTester tester,
-  ConversationServer server,
-) async {
+  ConversationServer server, {
+  String account = 'owner',
+  Brightness brightness = Brightness.dark,
+}) async {
   await tester.binding.setSurfaceSize(const Size(1200, 900));
   addTearDown(() => tester.binding.setSurfaceSize(null));
-  final c = server.controller();
+  final before = grid.AppTheme.brightness.value;
+  grid.AppTheme.brightness.value = brightness;
+  addTearDown(() => grid.AppTheme.brightness.value = before);
+  final c = server.controller(account: account);
   await c.refresh();
   await tester.pumpWidget(
     MaterialApp(
-      theme: grid.buildAppTheme(brightness: Brightness.dark),
+      theme: grid.buildAppTheme(brightness: brightness),
       builder: (context, child) => RepaintBoundary(key: _picture, child: child),
       home: Scaffold(
         body: SuperTabView(
@@ -113,6 +119,51 @@ String minutesAgo(int minutes) => DateTime.now()
     .toUtc()
     .subtract(Duration(minutes: minutes))
     .toIso8601String();
+
+/// The texts painted as tags, in order.
+List<String> tagRuns(WidgetTester tester) => [
+  for (final rich in tester.widgetList<RichText>(find.byType(RichText)))
+    ..._tagRuns(rich.text, null),
+];
+
+Iterable<String> _tagRuns(InlineSpan span, TextStyle? inherited) sync* {
+  if (span is! TextSpan) return;
+  final style = inherited?.merge(span.style) ?? span.style;
+  if (span.text case final text?
+      when style?.backgroundColor == grid.AppSurface.accentWash &&
+          style?.color == grid.AppPalette.accentOnSurface) {
+    yield text;
+  }
+  for (final child in span.children ?? const <InlineSpan>[]) {
+    yield* _tagRuns(child, style);
+  }
+}
+
+/// The table of tags and non-tags the backend and the phone pass too.
+final tagTable = jsonDecode(
+  File('test/fixtures/tag_fixture.json').readAsStringSync(),
+) as Map<String, dynamic>;
+
+/// A Swarm with diego and ken in it, and two messages from its owner: one
+/// that tags diego, one that tags nobody.
+ConversationServer taggedChat() {
+  final server = ConversationServer();
+  for (final name in ['diego', 'ken']) {
+    (server.state['people'] as List).add({
+      'id': name,
+      'email': '$name@example.com',
+      'role': 'collaborator',
+      'username': name,
+    });
+  }
+  server
+    ..append(
+      '@diego can you free some memory on your Pro-10? Reviews are waiting on it.',
+    )
+    ..append('Thanks, the review queue is moving again.');
+  server.messages.first['mentions'] = ['diego'];
+  return server;
+}
 
 /// The styles of every run of [text] painted in the tree.
 List<TextStyle?> runsOf(WidgetTester tester, String text) => [
@@ -990,6 +1041,74 @@ void main() {
       await showText(tester, 'Run `ping @dee` now.', ['dee']);
       expect(runsOf(tester, 'ping @dee'), isNotEmpty);
     });
+
+    for (final row in (tagTable['cases'] as List).cast<Map>()) {
+      testWidgets('finds the tags in ${jsonEncode(row['text'])}', (
+        tester,
+      ) async {
+        final names = (tagTable['names'] as List).cast<String>();
+        final tags = (row['tags'] as List).cast<String>();
+        await showText(tester, row['text'] as String, names);
+        // A tagged name the text does not say opens it (withTags), so each
+        // name the table has no tag for in this text is shown first.
+        final said = {for (final tag in tags) tag.split('@').first};
+        expect(
+          [for (final tag in tagRuns(tester)) tag.substring(1).toLowerCase()],
+          [
+            for (final name in names)
+              if (!said.contains(name)) name,
+            ...tags,
+          ],
+        );
+      });
+    }
+
+    for (final brightness in Brightness.values) {
+      testWidgets('a message that tags you stands out, for you alone '
+          '(${brightness.name})', (tester) async {
+        Finder tagged(String id) =>
+            find.byKey(ValueKey('super-tagged-you-$id'));
+        final server = taggedChat();
+        await showView(
+          tester,
+          server,
+          account: 'diego',
+          brightness: brightness,
+        );
+        await shot(tester, 'tagged-you-${brightness.name}');
+        expect(tagged('message-1'), findsOneWidget);
+        expect(tagged('message-2'), findsNothing);
+        final row = tester.widget<DecoratedBox>(tagged('message-1'));
+        expect(
+          (row.decoration as BoxDecoration).color,
+          grid.AppSurface.accentWash,
+        );
+        final bar = tester.getSize(
+          find.byKey(const ValueKey('super-tagged-bar-message-1')),
+        );
+        expect(bar.width, 3);
+        expect(bar.height, greaterThan(20));
+        expect(
+          tester
+              .widget<ColoredBox>(
+                find.byKey(const ValueKey('super-tagged-bar-message-1')),
+              )
+              .color,
+          grid.AppPalette.accentOnSurface,
+        );
+        // The tag in the text stays its pill.
+        expect(tagRuns(tester), ['@diego']);
+
+        // The same message, read by someone else: plain.
+        await showView(tester, server, account: 'ken', brightness: brightness);
+        await shot(tester, 'tagged-other-${brightness.name}');
+        expect(tagged('message-1'), findsNothing);
+        expect(
+          find.byKey(const ValueKey('super-tagged-bar-message-1')),
+          findsNothing,
+        );
+      });
+    }
 
     testWidgets('the conversation highlights the people a message tags', (
       tester,
