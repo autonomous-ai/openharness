@@ -178,19 +178,22 @@ async function foldersOf(file: string, folder: string): Promise<{ own: boolean; 
  * and 2 of #2385: a Bash append, a subagent, a transcript Claude Code pruned, `Notes.md` on a Mac), and the Team purge's
  * sweep holds the account while one is there. A transcript that records no folder, or both, stays too, for the sweep to refuse.
  */
-async function removeTranscripts(dir: string, folder: string, onShared?: () => void): Promise<void> {
-  // Only a folder that is not there is empty. One that cannot be listed stays whole, for the sweep to hold the account by its
-  // kind: read as empty it went whole, its error's path into the log, or another folder's transcripts unread on a passing
-  // error such as too many open files (security review 1 of 58b035e).
+async function removeTranscripts(dir: string, folder: string, told?: (what: 'shared' | 'unread') => void): Promise<void> {
+  // Only a folder that is not there is empty. One that cannot be listed stays whole, and its caller is told, by that word
+  // alone: read as empty it went whole, its error's path into the log, or another folder's transcripts unread on a passing
+  // error such as too many open files (security reviews 1 and 2 of 58b035e). The Team purge's sweep then holds the account;
+  // a Buddy's cleanup, which has no sweep, fails and is tried again (host.ts endSession).
   const names = await readdir(dir).catch((error: NodeJS.ErrnoException) => error.code === 'ENOENT' ? [] : null)
-  if (!names) return
+  if (!names) { told?.('unread'); return }
   const transcripts = new Map<string, Awaited<ReturnType<typeof foldersOf>>>()
   for (const name of names.filter(name => name.endsWith('.jsonl'))) {
     transcripts.set(name, await foldersOf(join(dir, name), folder))
   }
-  // One that could not be read may be another folder's: it and the folder stay, for the sweep to hold the account by its kind.
-  if (![...transcripts.values()].some(transcript => transcript.other || transcript.unread)) { await rm(dir, { recursive: true, force: true }); return }
-  onShared?.()
+  // One that could not be read may be another folder's: it and the folder stay, and its caller is told.
+  const values = [...transcripts.values()]
+  if (values.some(transcript => transcript.unread)) told?.('unread')
+  if (!values.some(transcript => transcript.other || transcript.unread)) { await rm(dir, { recursive: true, force: true }); return }
+  if (values.some(transcript => transcript.other)) told?.('shared')
   for (const [name, { own, other }] of transcripts) {
     if (!own || other) continue
     await rm(join(dir, name), { force: true })
@@ -208,12 +211,15 @@ async function leftInSharedFolder(dir: string, folder: string): Promise<string |
   try { entries = (await readdir(dir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name)) } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'ENOENT' ? null : SHARED_LEFT.unreadFolder
   }
+  const read = new Map<string, Awaited<ReturnType<typeof foldersOf>>>()
+  for (const entry of entries.filter(entry => entry.isFile() && entry.name.endsWith('.jsonl'))) read.set(entry.name, await foldersOf(join(dir, entry.name), folder))
+  // Said to be shared only when another folder's transcript is there (re-check 2 of 68ec6f0).
+  const kinds = [...read.values()].some(transcript => transcript.other) ? SHARED_LEFT : OWN_LEFT
   const transcripts = new Set<string>()
-  for (const entry of entries.filter(entry => entry.isFile() && entry.name.endsWith('.jsonl'))) {
-    const { own, other, unread } = await foldersOf(join(dir, entry.name), folder)
-    if (unread) return SHARED_LEFT.unreadTranscript
-    if (own || !other) return SHARED_LEFT.transcript
-    transcripts.add(entry.name.slice(0, -'.jsonl'.length))
+  for (const [name, { own, other, unread }] of read) {
+    if (unread) return kinds.unreadTranscript
+    if (own || !other) return kinds.transcript
+    transcripts.add(name.slice(0, -'.jsonl'.length))
   }
   if (!transcripts.size) return SHARED_LEFT.folder
   for (const entry of entries) {
@@ -235,23 +241,41 @@ const MAKE_READABLE = 'could not be read: its owner makes it readable for the Te
 export const SHARED_LEFT = {
   transcript: 'a transcript in its transcript folder, which another folder shares, that records its folder or none',
   memory: 'a memory file in its transcript folder, which another folder shares: its owner checks it and removes what is not the other folder\'s',
-  unreadFolder: `its transcript folder, which another folder shares, which ${MAKE_READABLE}`,
+  unreadFolder: `its transcript folder, which ${MAKE_READABLE}`,
   unreadMemory: `a memory folder in its transcript folder, which another folder shares, that ${MAKE_READABLE}`,
   unreadTranscript: `a transcript in its transcript folder, which another folder shares, that ${MAKE_READABLE}`,
   other: 'something in its transcript folder, which another folder shares, that is not another folder\'s transcript',
   folder: 'its transcript folder',
+}
+/** The same, for a transcript folder no other folder's transcript is in. */
+export const OWN_LEFT = {
+  transcript: 'a transcript in its transcript folder that records its folder or none',
+  unreadTranscript: `a transcript in its transcript folder that ${MAKE_READABLE}`,
+}
+/** What the sweep names of what it found or could not read, in place of a path: one held the Team home's, and could name another
+ *  folder (re-check 2 of 68ec6f0). */
+export const SWEEP_LEFT = {
+  claudeHistory: 'a line of Claude Code\'s prompt history that names its session or its folder',
+  codexHistory: 'a line of Codex\'s prompt history that names its session or its folder',
+  paste: 'a paste Claude Code kept from one of its prompts',
+  config: 'its folder in Claude Code\'s config, or in a backup of it',
+  claudeNamed: 'a file or folder in Claude Code\'s home named for its session or its folder',
+  codexNamed: 'a file or folder in Codex\'s home named for its session or its folder',
+  unreadFile: `a file in the Team account's Claude Code or Codex home that ${MAKE_READABLE}`,
+  unlistedFolder: `a folder in the Team account's Claude Code or Codex home that ${MAKE_READABLE}`,
 }
 
 /**
  * Removes from the Team user's shared Claude Code home ([home]/.claude, [home]/.claude.json and its backups) what Claude
  * Code keeps of the session: its prompt history lines and the pastes they kept ([pastes] from an earlier attempt too), its
  * project folder with its transcripts and memory (only the transcripts that record its folder alone when another folder's
- * share it, [onShared]),
+ * share it, and [told] 'shared'; [told] 'unread' when its transcript folder or one of its transcripts could not be read, and
+ * stays),
  * its file history, todos, session environment and debug log, and its folder's entry and repository paths in the config
  * and in every backup of it. The pastes its history named, for the record.
  */
 export async function scrubClaudeSession(home: string, target: PurgeTarget, pastes: readonly string[] = [],
-  onPastes?: (pastes: string[]) => void, onShared?: () => void): Promise<string[]> {
+  onPastes?: (pastes: string[]) => void, told?: (what: 'shared' | 'unread') => void): Promise<string[]> {
   const sessionId = target.sessionId && SESSION.test(target.sessionId) ? target.sessionId : null
   const folder = folderOf(target)
   if (!sessionId && !folder) return []
@@ -279,7 +303,7 @@ export async function scrubClaudeSession(home: string, target: PurgeTarget, past
     return kept.length ? `${kept.join('\n')}\n` : ''
   })
   for (const hash of new Set([...pastes, ...found])) if (SESSION.test(hash)) await rm(join(claude, 'paste-cache', `${hash}.txt`), { force: true })
-  if (folder) await removeTranscripts(join(claude, 'projects', claudeSlug(folder)), folder, onShared)
+  if (folder) await removeTranscripts(join(claude, 'projects', claudeSlug(folder)), folder, told)
   if (sessionId) {
     for (const sub of ['file-history', 'session-env']) await rm(join(claude, sub, sessionId), { recursive: true, force: true })
     await rm(join(claude, 'debug', `${sessionId}.txt`), { force: true })
@@ -308,32 +332,43 @@ export async function sweepForSession(home: string, target: PurgeTarget, pastes:
   const claude = join(home, '.claude'), codex = join(home, '.codex')
   const quoted = [...sessionId ? [`"${sessionId}"`] : [], ...folder ? [`"${folder}"`, `"${folder}/`] : []]
   const names = (path: string) => quoted.some(q => path.includes(q))
-  for (const history of [join(claude, 'history.jsonl'), join(codex, 'history.jsonl')]) {
-    const text = await readFile(history, 'utf8').catch(() => '')
-    if (names(text)) return history
+  // Only what is not there is empty: anything else that cannot be read holds the account, by its kind. Read as empty, an
+  // unreadable projects folder let the account go with the session's transcript in it (re-checks 1 and 2 of 68ec6f0).
+  const gone = (error: NodeJS.ErrnoException) => error.code === 'ENOENT'
+  const read = (path: string) => readFile(path, 'utf8').catch((error: NodeJS.ErrnoException) => gone(error) ? '' : null)
+  for (const [history, kind] of [[join(claude, 'history.jsonl'), SWEEP_LEFT.claudeHistory], [join(codex, 'history.jsonl'), SWEEP_LEFT.codexHistory]]) {
+    const text = await read(history)
+    if (text === null) return SWEEP_LEFT.unreadFile
+    if (names(text)) return kind
   }
-  for (const hash of pastes) if (SESSION.test(hash) && existsSync(join(claude, 'paste-cache', `${hash}.txt`))) return join(claude, 'paste-cache', `${hash}.txt`)
+  for (const hash of pastes) if (SESSION.test(hash) && existsSync(join(claude, 'paste-cache', `${hash}.txt`))) return SWEEP_LEFT.paste
   if (folder) {
-    const configs = [join(home, '.claude.json'), ...(await readdir(join(claude, 'backups')).catch(() => [] as string[])).map(name => join(claude, 'backups', name))]
-    for (const config of configs) if ((await readFile(config, 'utf8').catch(() => '')).includes(`"${folder}"`)) return config
+    const backups = await readdir(join(claude, 'backups')).catch((error: NodeJS.ErrnoException) => gone(error) ? [] : null)
+    if (!backups) return SWEEP_LEFT.unlistedFolder
+    for (const config of [join(home, '.claude.json'), ...backups.map(name => join(claude, 'backups', name))]) {
+      const text = await read(config)
+      if (text === null) return SWEEP_LEFT.unreadFile
+      if (text.includes(`"${folder}"`)) return SWEEP_LEFT.config
+    }
   }
   const slug = folder ? claudeSlug(folder) : null, projects = join(claude, 'projects')
-  const walk = async (path: string): Promise<string | null> => {
-    const entries = await readdir(path, { withFileTypes: true }).catch(() => [])
+  const walk = async (path: string, named: string): Promise<string | null> => {
+    let entries: Dirent[]
+    try { entries = await readdir(path, { withFileTypes: true }) } catch (error) { return gone(error as NodeJS.ErrnoException) ? null : SWEEP_LEFT.unlistedFolder }
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
       const child = join(path, entry.name)
-      if (sessionId && entry.name.includes(sessionId)) return child
+      if (sessionId && entry.name.includes(sessionId)) return named
       if (entry.name === slug) {
         // Its transcript folder outlives the scrub when another folder's transcripts share it ('/' and '.' both become '-'),
         // and its name alone held the account for good (follow-up to security review 2 of #2375).
-        const left = path === projects && entry.isDirectory() ? await leftInSharedFolder(child, folder!) : child
+        const left = path === projects && entry.isDirectory() ? await leftInSharedFolder(child, folder!) : named
         if (left) return left
       }
-      if (entry.isDirectory()) { const found = await walk(child); if (found) return found }
+      if (entry.isDirectory()) { const found = await walk(child, named); if (found) return found }
     }
     return null
   }
-  for (const root of [claude, codex]) { const found = await walk(root); if (found) return found }
+  for (const [root, named] of [[claude, SWEEP_LEFT.claudeNamed], [codex, SWEEP_LEFT.codexNamed]]) { const found = await walk(root, named); if (found) return found }
   return null
 }
 

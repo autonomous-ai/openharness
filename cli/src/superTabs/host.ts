@@ -1084,9 +1084,14 @@ export class SuperTabHost {
         const scrub = await this.ownScrub(agent.id, agent.harnessId, state.scrub)
           .catch(() => { throw new Error(`Could not remove an ended Buddy session's Claude Code traces yet: agent ${agent.id}, SCRUB_FAILED`) })
         if (scrub) {
-          await scrubClaudeSession(this.claudeHome, scrub, [], undefined,
-            () => this.log(`Kept another folder's transcripts that share a Buddy session's transcript folder: agent ${agent.id}`))
-            .catch(() => { throw new Error(`Could not remove an ended Buddy session's Claude Code traces yet: agent ${agent.id}, SCRUB_FAILED`) })
+          let unread = false
+          await scrubClaudeSession(this.claudeHome, scrub, [], undefined, what => {
+            if (what === 'unread') unread = true
+            else this.log(`Kept another folder's transcripts that share a Buddy session's transcript folder: agent ${agent.id}`)
+          }).catch(() => { throw new Error(`Could not remove an ended Buddy session's Claude Code traces yet: agent ${agent.id}, SCRUB_FAILED`) })
+          // No sweep follows a Buddy's cleanup: a transcript folder or transcript it could not read would be left behind for good
+          // once this marked itself done (re-check 2 of 68ec6f0). It fails, by a fixed code, and is tried again.
+          if (unread) throw new Error(`Could not remove an ended Buddy session's Claude Code traces yet: agent ${agent.id}, TRANSCRIPTS_UNREAD`)
         }
         state.scrubbed = true
         if (this.journal.scrubs?.[agent.id]) {
