@@ -77,6 +77,10 @@ class SuperTabFixtureConnection extends WsConn {
   bool failResume = false;
   bool nativeSurface = false;
   bool failFiles = false, failCreation = false, changeAccountOnUpload = false;
+
+  /// The machine's Claude Code takes no model or effort flags: refused before
+  /// any receipt, as the daemon does (`LAUNCH_MODEL_UNSUPPORTED`).
+  bool refuseLaunchModel = false;
   bool changeAccountOnProjectRead = false;
   late AppNotifier app;
   final sentFiles = <Uint8List>[];
@@ -318,6 +322,16 @@ class SuperTabFixtureConnection extends WsConn {
         'state': cancelledCreation ? 'cancelled' : 'created',
         'agent': native,
       };
+    }
+    if (type == 'agent_create' &&
+        refuseLaunchModel &&
+        (payload['model'] != null || payload['effort'] != null)) {
+      throw const WsRequestFailure(
+        responseType: 'agent_create_result',
+        code: 'LAUNCH_MODEL_UNSUPPORTED',
+        detail: 'The claude on this machine does not support --effort.',
+        payload: {},
+      );
     }
     if (type == 'agent_create') {
       // Match the native daemon: this refusal happens before a receipt or pane.
@@ -1448,6 +1462,206 @@ void main() {
     );
     expect(commandsOf(f, 'project.create'), isEmpty);
     expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), isEmpty);
+  });
+
+  // Scholes's roadmap, piece 1: the Product Manager runs Claude Opus 5.5 at xhigh.
+  group('The Product Manager’s model', () {
+    Future<List<Map<String, dynamic>>> creates(
+      SuperTabLaunchFixture f, {
+      required String engine,
+      required bool newProject,
+    }) async {
+      if (newProject) f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(engine: engine, newProject: newProject);
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      return [
+        for (final call in f.connection.calls)
+          if (call.$1 == 'agent_create') call.$2,
+      ];
+    }
+
+    test(
+      'on its person’s own Mac, a Claude PM launches on Opus 5.5 at xhigh',
+      () async {
+        for (final newProject in [false, true]) {
+          final f = SuperTabLaunchFixture();
+          final sent = await creates(
+            f,
+            engine: 'claude',
+            newProject: newProject,
+          );
+          expect(sent.single['swarmRole'], 'lead');
+          expect(sent.single['model'], 'opus');
+          expect(sent.single['effort'], 'xhigh');
+        }
+      },
+    );
+
+    test('a Codex PM keeps its engine’s own model', () async {
+      final f = SuperTabLaunchFixture();
+      final sent = await creates(f, engine: 'codex', newProject: true);
+      expect(sent.single.containsKey('model'), isFalse);
+      expect(sent.single.containsKey('effort'), isFalse);
+    });
+
+    test('a machine that cannot launch with them starts the PM on the engine’s own model, never failing', () async {
+      final f = SuperTabLaunchFixture()..connection.refuseLaunchModel = true;
+      final sent = await creates(f, engine: 'claude', newProject: true);
+      expect(sent, hasLength(2));
+      expect(sent.first['model'], 'opus');
+      expect(sent.last.containsKey('model'), isFalse);
+      expect(sent.last.containsKey('effort'), isFalse);
+      // The same request, so the same harness: nothing launched the first time.
+      expect(sent.last['creationId'], sent.first['creationId']);
+      // Its project chat is told, as for a PM the Swarm starts.
+      expect(commandsOf(f, 'agent.add').single['launchRefused'], {
+        'model': 'opus',
+        'effort': 'xhigh',
+      });
+    });
+
+    test(
+      'a PM that launched on Opus 5.5 at xhigh joins without a note',
+      () async {
+        final f = SuperTabLaunchFixture();
+        await creates(f, engine: 'claude', newProject: true);
+        expect(
+          commandsOf(f, 'agent.add').single.containsKey('launchRefused'),
+          isFalse,
+        );
+      },
+    );
+
+    test(
+      'a backend from before the note still joins the PM, without it',
+      () async {
+        final f = SuperTabLaunchFixture()..connection.refuseLaunchModel = true;
+        f.connection.server.unknownCommand = (command) =>
+            command['type'] == 'agent.add' &&
+            command.containsKey('launchRefused');
+        await creates(f, engine: 'claude', newProject: true);
+        final joins = commandsOf(f, 'agent.add');
+        expect(joins, hasLength(2));
+        expect(joins.first['launchRefused'], isNotNull);
+        expect(joins.last.containsKey('launchRefused'), isFalse);
+      },
+    );
+
+    test('a Claude PM the Swarm starts leaves its model to the Swarm, which fills its role’s default', () async {
+      final f = SuperTabLaunchFixture();
+      addDiego(f);
+      knownRepo(f);
+      f.connection.server.state['machines'] = [
+        machineRow('diego-mac', 'Diego MacBook'),
+        machineRow(
+          'diego-team',
+          'Diego MacBook',
+          host: 'diego-mac',
+          kind: 'team',
+          lead: true,
+        ),
+      ];
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(engine: 'claude', newProject: true);
+      box.chooseLeadMachine('diego-mac');
+      expect(box.leadThroughSwarm, isTrue);
+      expect(box.leadModelLabel, 'Opus 5.5 · xhigh');
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      // The server fills it, so the owner's model list and rules decide
+      // (review of #2274: a default the client named read as its person's).
+      final start = commandsOf(f, 'lead.start').single;
+      expect(start.containsKey('model'), isFalse);
+      expect(start.containsKey('effort'), isFalse);
+    });
+
+    test('with Opus at xhigh off and at high on in the Swarm’s model list, a Claude PM on its own Mac launches on its engine’s own model', () async {
+      final f = SuperTabLaunchFixture();
+      Map<String, dynamic> row(String effort, bool on) => {
+        'engine': 'claude',
+        'model': 'opus',
+        'effort': effort,
+        'quality': 3,
+        'cost': 3,
+        'enabled': on,
+      };
+      f.connection.server.routingPolicy = {
+        'policy': {
+          'version': 1,
+          'models': [row('high', true), row('xhigh', false)],
+          'floor': {'low': 1, 'medium': 2, 'high': 3},
+          'quotaReserve': 10,
+          'notes': '',
+        },
+        'warnings': <String>[],
+        'overridden': <String>[],
+        'override': null,
+      };
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(engine: 'claude', newProject: true);
+      expect(box.leadLaunchModel, isNull);
+      expect(box.leadModelLabel, 'Default model');
+    });
+
+    test('with every Opus row of the Swarm’s model list off, a Claude PM on its own Mac launches on its engine’s own model', () async {
+      final f = SuperTabLaunchFixture();
+      Map<String, dynamic> row(String model, String effort, bool on) => {
+        'engine': 'claude',
+        'model': model,
+        'effort': effort,
+        'quality': 3,
+        'cost': 3,
+        'enabled': on,
+      };
+      f.connection.server.routingPolicy = {
+        'policy': {
+          'version': 1,
+          'models': [
+            row('opus', 'high', false),
+            row('opus', 'xhigh', false),
+            row('sonnet', 'medium', true),
+          ],
+          'floor': {'low': 1, 'medium': 2, 'high': 3},
+          'quotaReserve': 10,
+          'notes': '',
+        },
+        'warnings': <String>[],
+        'overridden': <String>[],
+        'override': null,
+      };
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(engine: 'claude', newProject: true);
+      expect(box.leadLaunchModel, isNull);
+      expect(box.leadModelLabel, 'Default model');
+      // As the server judges it (backend commands.ts): the xhigh row
+      // decides, and any Opus row only when the list has none at xhigh
+      // (re-review of #2274).
+      LeadModelList list(List<(String, bool)> opus) => LeadModelList.of({
+        'models': [for (final (effort, on) in opus) row('opus', effort, on)],
+      });
+      expect(
+        list([('high', true), ('xhigh', false)])
+            .modelOn('claude', 'opus', 'xhigh'),
+        isFalse,
+      );
+      expect(
+        list([('high', false), ('xhigh', true)])
+            .modelOn('claude', 'opus', 'xhigh'),
+        isTrue,
+      );
+      expect(list([('high', true)]).modelOn('claude', 'opus', 'xhigh'), isTrue);
+      expect(
+        list([('high', false)]).modelOn('claude', 'opus', 'xhigh'),
+        isFalse,
+      );
+      expect(list([]).modelOn('claude', 'opus', 'xhigh'), isTrue);
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      final sent = [
+        for (final call in f.connection.calls)
+          if (call.$1 == 'agent_create') call.$2,
+      ];
+      expect(sent.single.containsKey('model'), isFalse);
+      expect(sent.single.containsKey('effort'), isFalse);
+    });
   });
 
   test(

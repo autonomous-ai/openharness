@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import type { ContributedMachine, MachinePrivacy } from './machines.js'
+import { DEFAULT_ROUTING_POLICY } from './routingPolicy.js'
 import { createSuperTab, SuperTabError, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
 
 // A project's Product Manager started by the Swarm on the machine its person names (Dee, 10-29, option B; Ken, 10-29): on
@@ -194,6 +195,84 @@ describe('starting a project\'s Product Manager on a Swarm machine', () => {
   })
 })
 
+describe('the Product Manager\'s model and effort (Scholes\'s roadmap, piece 1)', () => {
+  const requestOf = (f: ReturnType<typeof swarm>) => f.state.starts!.at(-1)!.request
+  it('asks for Claude Opus 5.5 at xhigh when its person names no model', () => {
+    const f = swarm()
+    f.lead('owner-mac')
+    expect(requestOf(f)).toMatchObject({ engine: 'claude', model: 'opus', effort: 'xhigh' })
+  })
+  it('keeps a model or effort its person named, and leaves a Codex Product Manager on its engine\'s own model', () => {
+    const named = swarm()
+    named.lead('owner-mac', { model: 'sonnet', effort: 'high' })
+    expect(requestOf(named)).toMatchObject({ model: 'sonnet', effort: 'high' })
+    const effortOnly = swarm()
+    effortOnly.lead('owner-mac', { effort: 'max' })
+    expect(requestOf(effortOnly)).toMatchObject({ model: 'opus', effort: 'max' })
+    const codex = swarm()
+    codex.lead('owner-mac', { engine: 'codex' })
+    expect(requestOf(codex)).not.toHaveProperty('model')
+    expect(requestOf(codex)).not.toHaveProperty('effort')
+  })
+  it('takes a custom lead role\'s own default, for its engine only', () => {
+    const f = swarm()
+    const roles = [{ id: 'lead', name: 'Product Manager', kind: 'lead', text: '# PM', defaults: { engine: 'codex', model: 'gpt-6.1-sol', effort: 'xhigh' } },
+      { id: 'dev', name: 'Engineer', kind: 'builder', text: '# Dev' }]
+    f.run({ type: 'project.roles.create', projectId: f.app.projectId, roles } as Command)
+    f.run({ type: 'project.skills', projectId: f.app.projectId, mode: 'custom' } as Command)
+    f.lead('owner-mac', { engine: 'codex' })
+    expect(requestOf(f)).toMatchObject({ engine: 'codex', model: 'gpt-6.1-sol', effort: 'xhigh' })
+    const claude = swarm()
+    claude.run({ type: 'project.roles.create', projectId: claude.app.projectId, roles } as Command)
+    claude.run({ type: 'project.skills', projectId: claude.app.projectId, mode: 'custom' } as Command)
+    claude.lead('owner-mac')
+    expect(requestOf(claude)).not.toHaveProperty('model')
+  })
+  it('keeps its engine\'s own model, and says why in the project chat, when the owner\'s rules or routing policy rule its default out', () => {
+    // Review of #2274: a default never overrides the owner's model list or rules.
+    const linesOf = (f: ReturnType<typeof swarm>, effects: ReturnType<ReturnType<typeof swarm>['run']>) =>
+      effects.messages.filter(m => m.conversationId === f.app.conversationId).map(m => m.text)
+    const ruled = swarm()
+    ruled.run({ type: 'rule.set', projectId: ruled.app.projectId, rule: { kind: 'forbidModel', model: 'opus' }, text: 'No Opus.' } as Command)
+    const refused = ruled.lead('owner-mac')
+    expect(requestOf(ruled)).not.toHaveProperty('model')
+    expect(requestOf(ruled)).not.toHaveProperty('effort')
+    expect(linesOf(ruled, refused)).toEqual(['Product Manager starts on its engine\u2019s own model, not opus at xhigh: the owner\'s rule "No Opus." rules out Claude opus.'])
+    const policyWith = (off: (m: { model: string; effort: string }) => boolean) =>
+      ({ routingPolicy: { ...DEFAULT_ROUTING_POLICY, models: DEFAULT_ROUTING_POLICY.models.map(m => off(m) ? { ...m, enabled: false } : m) } })
+    for (const off of [(m: { model: string }) => m.model === 'opus', (m: { model: string; effort: string }) => m.model === 'opus' && m.effort === 'xhigh']) {
+      const f = swarm()
+      const effects = f.lead('owner-mac', {}, owner, policyWith(off))
+      expect(requestOf(f)).not.toHaveProperty('model')
+      expect(linesOf(f, effects)).toEqual(['Product Manager starts on its engine\u2019s own model, not opus at xhigh: the routing policy turns off Claude opus at xhigh.'])
+    }
+    // Opus at xhigh off, the effort its person named on: that row decides.
+    const named = swarm()
+    named.lead('owner-mac', { effort: 'high' }, owner, policyWith(m => m.model === 'opus' && m.effort === 'xhigh'))
+    expect(requestOf(named)).toMatchObject({ model: 'opus', effort: 'high' })
+    // Each rule on its own (re-review of #2274): one the plain request already breaks never lets the default through another.
+    const two = swarm()
+    two.run({ type: 'rule.set', projectId: two.app.projectId, rule: { kind: 'minEffort', effort: 'high' }, text: 'At least high.' } as Command)
+    two.run({ type: 'rule.set', projectId: two.app.projectId, rule: { kind: 'forbidModel', model: 'opus' }, text: 'No Opus.' } as Command)
+    const both = two.lead('owner-mac')
+    expect(requestOf(two)).not.toHaveProperty('model')
+    expect(linesOf(two, both)).toContain('Product Manager starts on its engine\u2019s own model, not opus at xhigh: the owner\'s rule "No Opus." rules out Claude opus.')
+    // Allowed: no line.
+    const plain = swarm()
+    expect(linesOf(plain, plain.lead('owner-mac'))).toEqual([])
+  })
+  it('never takes another project\'s role default', () => {
+    const f = swarm()
+    const other = f.run({ type: 'project.create', name: 'Other', visibility: 'private', brief: 'Other work.' }).result.projectId as string
+    f.run({ type: 'project.roles.create', projectId: other, roles: [{ id: 'lead', name: 'PM', kind: 'lead', text: '# PM',
+      defaults: { engine: 'codex', model: 'gpt-6.1-sol', effort: 'xhigh' } }] } as Command)
+    f.run({ type: 'project.skills', projectId: other, mode: 'custom' } as Command)
+    f.lead('owner-mac', { engine: 'codex' })
+    expect(requestOf(f)).toMatchObject({ engine: 'codex', leadFor: { projectId: f.app.projectId } })
+    expect(requestOf(f)).not.toHaveProperty('model')
+  })
+})
+
 describe('a Product Manager\'s start, once its host reports it', () => {
   /** The host of [machineId] acting for the start's requester, as the store's host route does (store.ts poolHostActor). */
   const hosted = (f: ReturnType<typeof swarm>, machineId: string) => ({ contribution: { machineOwnerId: f.machine(machineId).contributorId,
@@ -201,10 +280,25 @@ describe('a Product Manager\'s start, once its host reports it', () => {
   const messages = (effects: ReturnType<ReturnType<typeof swarm>['run']>, conversationId: string) =>
     effects.messages.filter(m => m.conversationId === conversationId).map(m => m.text)
 
+  it('says when it runs another model or effort than it asked for, and nothing when it cannot tell', () => {
+    const joinedWith = (configuration: AgentConfiguration) => {
+      const f = swarm()
+      const startId = f.lead('mate-mac').result.startId as string
+      return messages(f.run({ type: 'agent.started', startId, harnessId: 'pm', configuration }, owner, hosted(f, 'mate-team')), f.app.conversationId)
+    }
+    expect(joinedWith({ ...config, model: 'claude-sonnet-5-5', effort: 'high' })).toEqual(
+      ['Product Manager started on MacBook Pro. It asked for opus at xhigh and runs claude-sonnet-5-5 at high there.'])
+    expect(joinedWith({ ...config, model: 'claude-opus-5-5', effort: 'high' })).toEqual(
+      ['Product Manager started on MacBook Pro. It asked for opus at xhigh and runs claude-opus-5-5 at high there.'])
+    expect(joinedWith({ ...config, model: 'claude-opus-5-5', effort: 'xhigh' })).toEqual(['Product Manager started on MacBook Pro.'])
+    expect(joinedWith({ ...config, model: 'claude-opus-5-5[1m]', effort: 'auto' })).toEqual(['Product Manager started on MacBook Pro.'])
+    expect(joinedWith({ ...config, model: null, effort: null })).toEqual(['Product Manager started on MacBook Pro.'])
+  })
+
   it('running, becomes the project\'s Lead and says on which machine', () => {
     const f = swarm()
     const startId = f.lead('mate-mac').result.startId as string
-    const joined = f.run({ type: 'agent.started', startId, harnessId: 'pm', configuration: config }, owner, hosted(f, 'mate-team'))
+    const joined = f.run({ type: 'agent.started', startId, harnessId: 'pm', configuration: { ...config, effort: 'xhigh' } }, owner, hosted(f, 'mate-team'))
     const agentId = joined.result.agentId as string
     const home = f.state.conversations.find(c => c.id === f.app.conversationId)!
     expect(home).toMatchObject({ leadId: agentId, agentIds: [agentId] })

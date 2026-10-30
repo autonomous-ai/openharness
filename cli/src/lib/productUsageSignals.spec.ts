@@ -380,6 +380,10 @@ it.each([
   expect(names.filter(name => name.endsWith('_error_other'))).toEqual([])
 })
 
+it('counts a model switch held for an unreadable Swarm role as unavailable, which a retry once the Swarm answers clears', () => {
+  expect(failureKind('SWARM_ROLE_UNAVAILABLE')).toBe('unavailable')
+})
+
 it('keeps every refusal a Store install or update can answer in the code list', () => {
   const codes = new Set<string>()
   for (const path of ['../dsh/install.ts', '../dsh/update.ts', '../dsh/lock.ts', '../dsh/service.ts', '../services/store.ts']) {

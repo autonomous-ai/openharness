@@ -9,9 +9,11 @@ const SHAPE = /^[a-z0-9](?:[a-z0-9_-]|\.(?!\.)){0,30}[a-z0-9_-]$/
 /** Room left in a default for its number (`ken` → `ken12`). */
 const DEFAULT_BASE_LENGTH = 30
 
-/** The name a person's email prefix makes: lowercased, only the characters a username takes, never too short. */
+/** The name a person's email prefix makes: lowercased, only the characters a username takes, never too short. Like a chosen
+ *  name (SHAPE), never a dot at its end or two in a row, so `@name` in a message tags them: trimmed after it is cut. */
 function base(email: string): string {
-  const prefix = email.split('@')[0]!.toLowerCase().replace(/[^a-z0-9._-]/g, '').replace(/^[._-]+/, '').slice(0, DEFAULT_BASE_LENGTH)
+  const prefix = email.split('@')[0]!.toLowerCase().replace(/[^a-z0-9._-]/g, '').replace(/\.{2,}/g, '.').replace(/^[._-]+/, '')
+    .slice(0, DEFAULT_BASE_LENGTH).replace(/\.+$/, '')
   if (!prefix) return 'user'
   return prefix.length < 2 ? `${prefix}1` : prefix
 }
