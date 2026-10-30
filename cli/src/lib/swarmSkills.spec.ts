@@ -155,6 +155,8 @@ describe('built-in Swarm skills', () => {
   const reactionsBefore = (role: 'lead' | 'dev' | 'review') => `\n${reactions(role).trimEnd()}\n`
   // The Builder's 👀 replaces its "say that you took it" line, in both modes.
   const took = '- React 👀 to the message that assigned it and mark it working; your first post is your plan or a first result, never that you took it.\n'
+  // The task's review plan (nightly reflection 10-30): a new bullet right after each Lead's review line, nothing replaced.
+  const reviewPlan = '- Put what every review must check first (the most-likely-wrong list, the privacy edges) in the task\'s review focus when you create or define it, and ask for two reviews when the work needs two independent ones: every review the Swarm opens for it, re-checks too, starts with that focus, two open at once on different Reviewers with no holder group, and the task is done only once both pass at the revision handed over last.\n'
   const reactionTake: Array<['orchestration' | 'default', 'dev', string, string]> = [
     ['orchestration', 'dev', took, '- Say in the group chat that you took it and what your first step is; mark it working.\n'],
     ['default', 'dev', took, '- Say in the group that you took it and what you will do first; mark it working.\n'],
@@ -171,7 +173,7 @@ describe('built-in Swarm skills', () => {
   })
   // By role too: the Builder's and the Reviewer's tool-check line is the same, and only the Builder's replaced an approved one.
   const approved = (text: string, mode: 'orchestration' | 'default', role: 'lead' | 'dev' | 'review') =>
-    [...autoReview, ...failFast, ...stallWake, ...reactionTake].filter(([m, r]) => m === mode && r === role).reduce((t, [, , line, before]) => t.replace(line, before), text)
+    [...autoReview, ...failFast, ...stallWake, ...reactionTake].filter(([m, r]) => m === mode && r === role).reduce((t, [, , line, before]) => t.replace(line, before), role === 'lead' ? text.replace(reviewPlan, '') : text)
   it('tells each Lead to act within minutes on the Swarm\'s stall wake-up, in place of the 6-hour rule, and no other role', () => {
     for (const [mode, , line, before] of stallWake) {
       expect(readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode }).file, 'utf8').split(line), mode).toHaveLength(2)
@@ -179,6 +181,16 @@ describe('built-in Swarm skills', () => {
         const text = readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode }).file, 'utf8')
         expect(text, `${mode} ${role}`).not.toContain(before)
         if (role !== 'lead') expect(text, `${mode} ${role}`).not.toContain('a task stalled')
+      }
+    }
+  })
+  it('tells each Lead, once and right after its review line, to put the review focus and two reviews on the task, and no other role', () => {
+    for (const mode of ['orchestration', 'default'] as const) {
+      for (const role of ['lead', 'dev', 'review'] as const) {
+        const text = readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode }).file, 'utf8')
+        expect(text.split(reviewPlan), `${mode} ${role}`).toHaveLength(role === 'lead' ? 2 : 1)
+        const reviewLine = autoReview.find(([m, r]) => m === mode && r === 'lead')![2].replace(/\n?$/, '\n')
+        if (role === 'lead') expect(text, mode).toContain(`${reviewLine}${reviewPlan}`)
       }
     }
   })

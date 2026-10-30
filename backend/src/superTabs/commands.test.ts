@@ -3,7 +3,7 @@ import { applyCommand, commandSchema, PAIR_CHAIN_LIMIT, swarmGridName, withoutCr
 import { CREDENTIAL_MARKER, type CredentialKind } from './credentials.js'
 import { sweepLiveness } from './liveness.js'
 import { hostLocalGrid, machineSlots, removalPreview, swarmGridRow } from './machines.js'
-import { activeWork, agentOnly, agentRole, createSuperTab, visibleState, type Actor, type AgentConfiguration } from './model.js'
+import { activeWork, agentOnly, agentRole, createSuperTab, visibleState, type Actor, type AgentConfiguration, type Conversation, type ReviewPlan } from './model.js'
 import type { RouteDecision } from './routeRecord.js'
 import { startFinished } from './parts/write.js'
 import { agentTarget, broken } from './rules.js'
@@ -66,6 +66,24 @@ describe('five-part tasks', () => {
     const define = commandSchema.parse({ type: 'work.define', conversationId: group, brief: 'ignored', task, checks })
     expect(f.run(define).messages[0]!.text).toBe(brief)
     expect(f.state.conversations[1]).toMatchObject({ task, brief })
+  })
+
+  it('renders a review plan under "Review:" and refuses an empty, too long or third-review plan', () => {
+    const f = fixture()
+    const review = { focus: ' Check revoked access first. ', reviews: 2 }
+    const group = f.run(commandSchema.parse({ type: 'conversation.create', title: 'Drafts', task: { ...task, review }, checks })).result.conversationId as string
+    expect(f.state.conversations.find(c => c.id === group)).toMatchObject({ task: { ...task, review: { focus: 'Check revoked access first.', reviews: 2 } },
+      brief: `${brief}\n\nReview:\nCheck revoked access first.\nTwo independent reviews, each by a different Reviewer.` })
+    f.run(commandSchema.parse({ type: 'work.define', conversationId: group, task: { ...task, review: { reviews: 2 } }, checks }))
+    expect(f.state.conversations.find(c => c.id === group)!.brief).toBe(`${brief}\n\nReview:\nTwo independent reviews, each by a different Reviewer.`)
+    f.run(commandSchema.parse({ type: 'work.define', conversationId: group, task: { ...task, review: { focus: 'Lifecycle.', reviews: 1 } }, checks }))
+    expect(f.state.conversations.find(c => c.id === group)!.brief).toBe(`${brief}\n\nReview:\nLifecycle.`)
+    for (const bad of [{}, { focus: '' }, { focus: 'x'.repeat(2001) }, { reviews: 3 }, { reviews: 0 }, { focus: 'x', reviewers: 2 }]) {
+      for (const type of ['conversation.create', 'work.define']) {
+        expect([bad, commandSchema.safeParse({ type, title: 'Drafts', conversationId: group, task: { ...task, review: bad }, checks }).success]).toEqual([bad, false])
+      }
+    }
+    expect(commandSchema.safeParse({ type: 'conversation.create', title: 'Drafts', task: { ...task, review: { focus: 'x'.repeat(2000) } }, checks }).success).toBe(true)
   })
 
   it('delivers all five parts from the stored rendered brief', () => {
@@ -1705,9 +1723,12 @@ describe('Reviewer role', () => {
   describe('a review the Swarm opens by itself', () => {
     const pr = 'https://github.com/example/project/pull/42'
     /** reviewed() with the project's repository, the Builder working, and a second Reviewer `fresh` that is not in the group. */
-    function ready(engine: 'claude' | 'codex' = 'claude') {
+    function ready(engine: 'claude' | 'codex' = 'claude', review?: ReviewPlan) {
       const setup = reviewed()
       const { f, leadActor, group, builder } = setup
+      // The Lead's review plan, set as a person or Lead sets any task (model.ts ReviewPlan).
+      if (review) f.run(commandSchema.parse({ type: 'work.define', conversationId: group, task: { ...offlineTask, review },
+        checks: [{ description: 'Reconnect preserves the edits.', independent: true }] }))
       f.state.projects![0]!.repository = { machineId: 'host', cwd: '/repo', repositoryUrl: 'https://github.com/Example/project.git' }
       const startId = f.run({ type: 'agent.start', request: request('lead', { role: 'reviewer', engine, name: 'Second reviewer' }), ...via } as Command, leadActor,
         { contribution, ...decisionIn('lead') }).result.startId as string
@@ -1720,6 +1741,316 @@ describe('Reviewer role', () => {
       const reviews = () => f.state.conversations.filter(c => c.reviewOf === group)
       return { ...setup, fresh, built, builderActor, markReady, reviews }
     }
+    const offlineTask = { goal: 'Save edits while offline.', changes: 'Queue edits locally.', constraints: 'No data loss.', owns: ['app/offline'] }
+    const focus = 'Most likely wrong: a queued edit replayed twice after reconnect, and a stale sync result landing on a new session.'
+    /** [reviewer] gives [review]'s verdict as swarm-review does: passes the review's own check, then the work's independent one. */
+    function verdict(f: ReturnType<typeof fixture>, review: Conversation, group: string, built: string, reviewer: string, passed: boolean) {
+      const actor: Actor = { kind: 'agent', agentId: reviewer, machineOwnerId: 'target-owner' }
+      f.run({ type: 'work.check', conversationId: review.id, assignmentId: review.assignment!.id, checkId: review.checks[0]!.id, passed: true,
+        evidence: `Ready: ${passed ? 'yes' : 'with fixes'} at d4e5f6.` }, actor)
+      const independent = f.state.conversations.find(c => c.id === group)!.checks.find(c => c.independent)!
+      f.run({ type: 'work.check', conversationId: group, assignmentId: built, checkId: independent.id, passed, evidence: `${passed ? 'Pass' : 'Fail'} at d4e5f6.` }, actor)
+      f.run({ type: 'work.status', conversationId: review.id, assignmentId: review.assignment!.id, status: 'done', result: 'Verdict given.' }, actor)
+    }
+
+    // Nightly reflection 10-30: the Lead hand-sent a focus to 20+ reviews the Swarm opened itself, and built holder groups
+    // for second security reviews.
+    describe('with the task\'s review plan', () => {
+      it('starts the first review and its re-check with the focus, after the privacy line and before the delta line', () => {
+        const { f, group, built, builderActor, reviewer, markReady, reviews } = ready('claude', { focus })
+        const effects = markReady(`Ready. Readers without access lose the queue. ${pr}`)
+        const first = reviews()[0]!
+        expect(first.brief.split('\n\n').slice(0, 3)).toEqual([expect.stringMatching(/^Privacy first:/), `Review focus:\n${focus}`,
+          expect.stringMatching(/^Give an independent verdict/)])
+        // Said once: the reviewed work below it leaves the plan out.
+        expect(first.brief.split(focus)).toHaveLength(2)
+        expect(effects.messages.find(m => m.conversationId === first.id && m.recipients.includes(reviewer))!.text).toContain(`Review focus:\n${focus}`)
+        verdict(f, first, group, built, reviewer, false)
+        f.run({ type: 'work.status', conversationId: group, assignmentId: built, status: 'working', result: null }, builderActor)
+        markReady(`Fixed, head 778899. ${pr}`)
+        const recheck = reviews().find(c => c.id !== first.id)!
+        expect(recheck.assignment!.agentId).toBe(reviewer)
+        expect(recheck.brief.split('\n\n').slice(0, 3)).toEqual([`Review focus:\n${focus}`, expect.stringMatching(/^Give an independent verdict/),
+          `Delta review: #${first.number} reviewed the earlier head. Review only the changes since.`])
+      })
+
+      it('opens two reviews at once on two different Reviewers for a task wanting two, each told it is one of two', () => {
+        const { f, lead, group, reviewer, fresh, markReady, reviews } = ready('claude', { focus, reviews: 2 })
+        expect(f.state.conversations.find(c => c.id === group)!.brief).toContain(`Review:\n${focus}\nTwo independent reviews, each by a different Reviewer.`)
+        const effects = markReady(`Ready. ${pr}`)
+        expect(reviews().map(r => r.title)).toEqual(['Review: Offline editing', 'Second review: Offline editing'])
+        expect(new Set(reviews().map(r => r.assignment!.agentId))).toEqual(new Set([reviewer, fresh]))
+        expect(reviews().map(r => r.brief.includes(`Independent review ${reviews().indexOf(r) + 1} of 2`))).toEqual([true, true])
+        expect(reviews().every(r => r.brief.startsWith(`Review focus:\n${focus}`))).toBe(true)
+        expect(f.state.conversations.find(c => c.id === group)!.agentIds).toEqual(expect.arrayContaining([reviewer, fresh]))
+        expect(effects.messages.filter(m => m.recipients.includes(lead) && m.conversationId !== group).map(m => m.text.replace(/: .* reviews it/, ': X reviews it')))
+          .toEqual(['Review opened by itself for #1 (independent review 1 of 2): X reviews it. Cancel it here if it is not needed.',
+            'Review opened by itself for #1 (independent review 2 of 2): X reviews it. Cancel it here if it is not needed.'])
+        // Every row id is its own.
+        const ids = effects.messages.map(m => m.id)
+        expect(new Set(ids).size).toBe(ids.length)
+        // A new head closes both, as neither reviewed it, and opens both again for it, on different Reviewers.
+        const firstRound = reviews().map(r => r.id)
+        markReady(`Ready, head 2. ${pr}`)
+        expect(reviews().filter(r => firstRound.includes(r.id)).map(r => r.assignment!.status)).toEqual(['cancelled', 'cancelled'])
+        const secondRound = reviews().filter(r => !firstRound.includes(r.id))
+        expect(secondRound.map(r => r.reviewStamp!.handoff)).toEqual([2, 2])
+        expect(new Set(secondRound.map(r => r.assignment!.agentId))).toEqual(new Set([reviewer, fresh]))
+      })
+
+      it('never gives both reviews to one Reviewer: with one free, the second waits for the Lead', () => {
+        const { f, lead, leadActor, fresh, reviewer, markReady, reviews } = ready('claude', { reviews: 2 })
+        f.run({ type: 'agent.release', agentId: fresh, decision: 'stop' }, leadActor)
+        const effects = markReady(`Ready. ${pr}`)
+        expect(reviews().map(r => r.assignment?.agentId ?? null)).toEqual([reviewer, null])
+        expect(effects.messages.filter(m => m.conversationId === reviews()[1]!.id && m.recipients.includes(lead)).map(m => m.text))
+          .toEqual(['Review opened by itself for #1 (independent review 2 of 2), but no Reviewer is free. Route it and start one.'])
+      })
+
+      // Review of #2382: A still on head 1 passed after head 2 was handed over, and it counted for head 2.
+      it('counts a pass only through a review of the head handed over last, so a pass on an earlier head never completes it', () => {
+        const { f, group, built, builderActor, markReady, reviews } = ready('claude', { reviews: 2 })
+        const done = () => f.run({ type: 'work.status', conversationId: group, assignmentId: built, status: 'done', result: 'Merged.' }, builderActor)
+        markReady(`Ready, head 1. ${pr}`)
+        const [onA, onB] = reviews()
+        const a = onA!.assignment!.agentId, b = onB!.assignment!.agentId
+        const aActor: Actor = { kind: 'agent', agentId: a, machineOwnerId: 'target-owner' }
+        // B finds a problem in head 1; A is still reviewing it.
+        verdict(f, onB!, group, built, b, false)
+        f.run({ type: 'work.status', conversationId: group, assignmentId: built, status: 'working', result: null }, builderActor)
+        const handover = markReady(`Fixed, head 2. ${pr}`)
+        // A's review of head 1 is closed and A is told; both reviews open again for head 2.
+        expect(f.state.conversations.find(c => c.id === onA!.id)!.assignment!.status).toBe('cancelled')
+        expect(handover.messages.filter(m => m.conversationId === onA!.id && m.recipients.includes(a)).map(m => m.text))
+          .toEqual(['#1 handed over a new revision, so this review is closed and its verdict no longer counts. A new review opens for the new revision. Stop working on this one.'])
+        const head2 = reviews().filter(r => r.id !== onA!.id && r.id !== onB!.id)
+        expect(head2.map(r => r.reviewStamp!.handoff)).toEqual([2, 2])
+        expect(new Set(head2.map(r => r.assignment!.agentId))).toEqual(new Set([a, b]))
+        // A, still on head 1, can no longer give the closed review's verdict, and its pass on the work does not count.
+        expect(() => f.run({ type: 'work.check', conversationId: onA!.id, assignmentId: onA!.assignment!.id, checkId: onA!.checks[0]!.id, passed: true,
+          evidence: 'Ready: yes at head 1.' }, aActor)).toThrow()
+        const independent = f.state.conversations.find(c => c.id === group)!.checks.find(c => c.independent)!.id
+        f.run({ type: 'work.check', conversationId: group, assignmentId: built, checkId: independent, passed: true, evidence: 'Pass at head 1.' }, aActor)
+        verdict(f, head2.find(r => r.assignment!.agentId === b)!, group, built, b, true)
+        const aAgent = f.state.agents.find(x => x.id === a)!
+        expect(done).toThrow(`Still to pass it at this revision, after their review's pass verdict: ${aAgent.displayName ?? aAgent.name}.`)
+        // Only A's own review of head 2 completes it.
+        verdict(f, head2.find(r => r.assignment!.agentId === a)!, group, built, a, true)
+        done()
+        expect(f.state.conversations.find(c => c.id === group)!.assignment!.status).toBe('done')
+      })
+
+      // Review 3 of #2382 (Kai): both Reviewers passed the work, then recorded their reviews' pass verdicts, and done was refused.
+      it('keeps a pass on the work given before its review\'s own pass verdict for the same head, and clears it on a Hold, naming who must pass again', () => {
+        const { f, group, built, builderActor, markReady, reviews } = ready('claude', { reviews: 2 })
+        const done = () => f.run({ type: 'work.status', conversationId: group, assignmentId: built, status: 'done', result: 'Merged.' }, builderActor)
+        markReady(`Ready. ${pr}`)
+        const independent = f.state.conversations.find(c => c.id === group)!.checks.find(c => c.independent)!.id
+        const actorOf = (review: Conversation): Actor => ({ kind: 'agent', agentId: review.assignment!.agentId, machineOwnerId: 'target-owner' })
+        const nameOf = (review: Conversation) => { const a = f.state.agents.find(x => x.id === review.assignment!.agentId)!; return a.displayName ?? a.name }
+        const [one, two] = reviews()
+        for (const review of [one!, two!]) f.run({ type: 'work.check', conversationId: group, assignmentId: built, checkId: independent, passed: true, evidence: 'Pass at head 1.' }, actorOf(review))
+        // Passed the work, but no review verdict yet: both are named.
+        expect(done).toThrow(`Still to pass it at this revision, after their review's pass verdict: ${nameOf(one!)}, ${nameOf(two!)}.`)
+        // One holds in its review's own check, though it passed that check: its pass on the work is cleared.
+        f.run({ type: 'work.check', conversationId: two!.id, assignmentId: two!.assignment!.id, checkId: two!.checks[0]!.id, passed: true, evidence: 'Ready: with fixes at head 1.' }, actorOf(two!))
+        f.run({ type: 'work.check', conversationId: one!.id, assignmentId: one!.assignment!.id, checkId: one!.checks[0]!.id, passed: true, evidence: 'Ready: yes at head 1.' }, actorOf(one!))
+        expect(done).toThrow(`Still to pass it at this revision, after their review's pass verdict: ${nameOf(two!)}.`)
+        // Its review passes on a second look: the earlier pass on the work stays cleared until it passes the work again.
+        f.run({ type: 'work.check', conversationId: two!.id, assignmentId: two!.assignment!.id, checkId: two!.checks[0]!.id, passed: true, evidence: 'Ready: yes at head 1.' }, actorOf(two!))
+        expect(done).toThrow(nameOf(two!))
+        f.run({ type: 'work.check', conversationId: group, assignmentId: built, checkId: independent, passed: true, evidence: 'Pass at head 1.' }, actorOf(two!))
+        done()
+      })
+
+      // Review 4 of #2382 (Kai): verdicts outside the short Hold list read as passes, so done went through with one real pass.
+      it.each([['Not ready at head 2: P1 replay on reconnect.'], ['Request changes at head 2: P1 replay on reconnect.'], ['Blocked at head 2: one P1.'],
+        ['Looked at head 2; see the findings below.'],
+        // Review 5 (Kai): Holds that report test runs or name approval words read as passes when pass words matched anywhere.
+        ['Two findings at d4e5f6: P1 in the sweep. Ran specs: 300 passed.'], ['P1 at d4e5f6: the token leaks. 120 tests passed.'],
+        ['Needs work at d4e5f6: P1. CI passed.'], ['Cannot approve d4e5f6: P1.'], ['Not approved: P1.'], ['Rejected at d4e5f6. Unit suite passes.'],
+        ['Pass — with fixes at d4e5f6: P2 in the sweep.'],
+        // Review 6 (Kai): "Passed"/"passes" report runs, not a verdict; an orchestration opening that holds back is not a pass.
+        ['Passed typecheck at d4e5f6; P1 below.'], ['Passes the unit suite at d4e5f6, but P1 below.'],
+        ['Meets the brief: yes, quality: no. Ready: with fixes — revision d4e5f6.'], ['Meets the brief: no, quality: yes. Ready: yes — revision d4e5f6.']])('refuses done when a review passes its check with %j, naming its Reviewer', (wording) => {
+        const { f, group, built, builderActor, markReady, reviews } = ready('claude', { reviews: 2 })
+        markReady(`Ready. ${pr}`)
+        const [one, two] = reviews()
+        verdict(f, one!, group, built, one!.assignment!.agentId, true)
+        const actor: Actor = { kind: 'agent', agentId: two!.assignment!.agentId, machineOwnerId: 'target-owner' }
+        const independent = f.state.conversations.find(c => c.id === group)!.checks.find(c => c.independent)!.id
+        f.run({ type: 'work.check', conversationId: group, assignmentId: built, checkId: independent, passed: true, evidence: 'Pass at head 2.' }, actor)
+        f.run({ type: 'work.check', conversationId: two!.id, assignmentId: two!.assignment!.id, checkId: two!.checks[0]!.id, passed: true, evidence: wording }, actor)
+        const name = f.state.agents.find(a => a.id === two!.assignment!.agentId)!
+        expect(() => f.run({ type: 'work.status', conversationId: group, assignmentId: built, status: 'done', result: 'Merged.' }, builderActor))
+          .toThrow(`Still to pass it at this revision, after their review's pass verdict: ${name.displayName ?? name.name}. A review's verdict passes when it opens with No finding or Pass.`)
+      })
+
+      it.each([['No finding at head 2.'], ['Pass at head 2.'], ['Ready: yes at head 2.'], ['Approve at head 2.'], ['Pass — d4e5f6, every check rerun.'],
+        ['Verdict: No finding on d4e5f6.'], ['No finding on d4e5f6.\nRan specs: 300 passed, 0 failed.'],
+        // Review 6 (Kai): the Harness orchestration Reviewer's opening, a pass with minor notes.
+        ['Meets the brief: yes, quality: yes. Ready: yes — revision d4e5f6. Two minor notes below.']])('counts a review whose verdict says %j as a pass', (wording) => {
+        const { f, group, built, builderActor, markReady, reviews } = ready('claude', { reviews: 2 })
+        markReady(`Ready. ${pr}`)
+        const independent = f.state.conversations.find(c => c.id === group)!.checks.find(c => c.independent)!.id
+        for (const review of reviews()) {
+          const actor: Actor = { kind: 'agent', agentId: review.assignment!.agentId, machineOwnerId: 'target-owner' }
+          f.run({ type: 'work.check', conversationId: review.id, assignmentId: review.assignment!.id, checkId: review.checks[0]!.id, passed: true, evidence: wording }, actor)
+          f.run({ type: 'work.check', conversationId: group, assignmentId: built, checkId: independent, passed: true, evidence: 'Pass at head 2.' }, actor)
+        }
+        f.run({ type: 'work.status', conversationId: group, assignmentId: built, status: 'done', result: 'Merged.' }, builderActor)
+        expect(f.state.conversations.find(c => c.id === group)!.assignment!.status).toBe('done')
+      })
+
+      it('counts both passes when each Reviewer passes the work first and then records its review\'s pass verdict', () => {
+        const { f, group, built, builderActor, markReady, reviews } = ready('claude', { reviews: 2 })
+        markReady(`Ready. ${pr}`)
+        const independent = f.state.conversations.find(c => c.id === group)!.checks.find(c => c.independent)!.id
+        for (const review of reviews()) {
+          const actor: Actor = { kind: 'agent', agentId: review.assignment!.agentId, machineOwnerId: 'target-owner' }
+          f.run({ type: 'work.check', conversationId: group, assignmentId: built, checkId: independent, passed: true, evidence: 'Pass at head 1.' }, actor)
+          f.run({ type: 'work.check', conversationId: review.id, assignmentId: review.assignment!.id, checkId: review.checks[0]!.id, passed: true, evidence: 'Ready: yes at head 1.' }, actor)
+        }
+        f.run({ type: 'work.status', conversationId: group, assignmentId: built, status: 'done', result: 'Merged.' }, builderActor)
+        expect(f.state.conversations.find(c => c.id === group)!.assignment!.status).toBe('done')
+      })
+
+      // Review 2 of #2382 (Kai): A's late pass on head 1 was carried to head 2 when A held head 2's review.
+      it.each([['a failed check', false, 'Hold: replay on reconnect at head 2.'], ['a passed check naming a Hold', true, 'Hold at head 2.']] as const)(
+        'refuses done when a Reviewer late-passes head 1 and then holds head 2 with %s, though the other passes head 2', (_, held, evidence) => {
+          const { f, group, built, builderActor, markReady, reviews } = ready('claude', { reviews: 2 })
+          markReady(`Ready, head 1. ${pr}`)
+          const [onA, onB] = reviews()
+          const a = onA!.assignment!.agentId, b = onB!.assignment!.agentId
+          const aActor: Actor = { kind: 'agent', agentId: a, machineOwnerId: 'target-owner' }
+          verdict(f, onB!, group, built, b, false)
+          f.run({ type: 'work.status', conversationId: group, assignmentId: built, status: 'working', result: null }, builderActor)
+          markReady(`Fixed, head 2. ${pr}`)
+          const head2 = reviews().filter(r => r.id !== onA!.id && r.id !== onB!.id)
+          const aHead2 = head2.find(r => r.assignment!.agentId === a)!
+          // A, still on head 1, passes the work late, then holds its review of head 2.
+          const independent = f.state.conversations.find(c => c.id === group)!.checks.find(c => c.independent)!.id
+          f.run({ type: 'work.check', conversationId: group, assignmentId: built, checkId: independent, passed: true, evidence: 'Pass at head 1.' }, aActor)
+          f.run({ type: 'work.check', conversationId: aHead2.id, assignmentId: aHead2.assignment!.id, checkId: aHead2.checks[0]!.id, passed: held, evidence }, aActor)
+          verdict(f, head2.find(r => r.assignment!.agentId === b)!, group, built, b, true)
+          expect(() => f.run({ type: 'work.status', conversationId: group, assignmentId: built, status: 'done', result: 'Merged.' }, builderActor))
+            .toThrow('This task wants 2 independent reviews')
+        })
+
+      it('closes a review whose Reviewer stopped before its verdict when a new head comes, and opens both again on different Reviewers', () => {
+        const { f, group, built, builderActor, markReady, reviews } = ready('claude', { reviews: 2 })
+        markReady(`Ready. ${pr}`)
+        const [first, second] = reviews()
+        f.run({ type: 'work.status', conversationId: second!.id, assignmentId: second!.assignment!.id, status: 'stopped', result: null }, owner, { confirmedStopped: true })
+        verdict(f, first!, group, built, first!.assignment!.agentId, false)
+        f.run({ type: 'work.status', conversationId: group, assignmentId: built, status: 'working', result: null }, builderActor)
+        const handover = markReady(`Fixed, head 2. ${pr}`)
+        expect(f.state.conversations.find(c => c.id === second!.id)!.assignment!.status).toBe('cancelled')
+        // Its Reviewer had already stopped: nobody is told to stop again.
+        expect(handover.messages.filter(m => m.conversationId === second!.id).map(m => m.recipients)).toEqual([[]])
+        const added = reviews().filter(r => r.id !== first!.id && r.id !== second!.id)
+        expect(added).toHaveLength(2)
+        expect(new Set(added.map(r => r.assignment!.agentId)).size).toBe(2)
+      })
+
+      it('moves a review nobody took yet to the new head instead of closing it', () => {
+        const { f, leadActor, reviewer, fresh, markReady, reviews } = ready('claude', { reviews: 2 })
+        for (const id of [reviewer, fresh]) f.run({ type: 'agent.release', agentId: id, decision: 'stop' }, leadActor)
+        markReady(`Ready. ${pr}`)
+        expect(reviews().map(r => [r.assignment, r.reviewStamp!.handoff])).toEqual([[null, 1], [null, 1]])
+        markReady(`Ready, head 2. ${pr}`)
+        expect(reviews().map(r => [r.assignment, r.reviewStamp!.handoff])).toEqual([[null, 2], [null, 2]])
+      })
+
+      it('gives each re-check back to its own earlier Reviewer, never both to one', () => {
+        const { f, group, built, builderActor, markReady, reviews } = ready('claude', { reviews: 2 })
+        markReady(`Ready. ${pr}`)
+        const firstRound = reviews().map(r => [r.id, r.assignment!.agentId] as const)
+        for (const r of reviews()) verdict(f, r, group, built, r.assignment!.agentId, false)
+        f.run({ type: 'work.status', conversationId: group, assignmentId: built, status: 'working', result: null }, builderActor)
+        markReady(`Fixed, head 2. ${pr}`)
+        const recheck = reviews().filter(r => !firstRound.some(([id]) => id === r.id))
+        expect(recheck).toHaveLength(2)
+        expect(new Set(recheck.map(r => r.assignment!.agentId))).toEqual(new Set(firstRound.map(([, a]) => a)))
+        for (const r of recheck) {
+          const own = firstRound.find(([, a]) => a === r.assignment!.agentId)!
+          expect(r.brief).toContain(`Delta review: #${f.state.conversations.find(c => c.id === own[0])!.number} reviewed the earlier head.`)
+        }
+      })
+
+      it('lets the Lead open the second review by hand beside the first, with no holder group, and refuses a third', () => {
+        const { f, leadActor, group, reviewer, fresh, markReady, reviews } = ready('claude', { reviews: 2 })
+        f.run({ type: 'agent.release', agentId: fresh, decision: 'stop' }, leadActor)
+        f.run({ type: 'agent.release', agentId: reviewer, decision: 'stop' }, leadActor)
+        const create = () => f.run({ type: 'conversation.create', title: 'Review: by hand', brief: 'Review it.', reviewOf: group,
+          checks: [{ description: 'Verdict', independent: false }] }, leadActor)
+        create()
+        expect(reviews()).toHaveLength(1)
+        // The Engineer's hand-over opens the one still missing, not a third.
+        markReady(`Ready. ${pr}`)
+        expect(reviews()).toHaveLength(2)
+        expect(create).toThrow('already reviews this work and has no verdict yet')
+        expect(reviews()).toHaveLength(2)
+      })
+
+      it('is done only once two different Reviewers passed at the head handed over last', () => {
+        const { f, group, built, builderActor, markReady, reviews } = ready('claude', { reviews: 2 })
+        const done = () => f.run({ type: 'work.status', conversationId: group, assignmentId: built, status: 'done', result: 'Merged.' }, builderActor)
+        markReady(`Ready. ${pr}`)
+        const [first, second] = reviews()
+        verdict(f, first!, group, built, first!.assignment!.agentId, true)
+        // The work's independent check now reads passed, but only one Reviewer said so.
+        expect(done).toThrow('This task wants 2 independent reviews')
+        // The second Reviewer finds a problem: still not done, whatever the first said.
+        verdict(f, second!, group, built, second!.assignment!.agentId, false)
+        expect(done).toThrow('Completion needs a result and evidence for every acceptance check.')
+        // A new head: the first Reviewer's pass was for the earlier one.
+        f.run({ type: 'work.status', conversationId: group, assignmentId: built, status: 'working', result: null }, builderActor)
+        markReady(`Fixed, head 2. ${pr}`)
+        const [lane2] = reviews().filter(r => r.id !== first!.id && r.id !== second!.id)
+        verdict(f, lane2!, group, built, lane2!.assignment!.agentId, true)
+        expect(done).toThrow('This task wants 2 independent reviews')
+        const [lane1] = reviews().filter(r => ![first!.id, second!.id, lane2!.id].includes(r.id))
+        verdict(f, lane1!, group, built, lane1!.assignment!.agentId, true)
+        expect(lane1!.assignment!.agentId).not.toBe(lane2!.assignment!.agentId)
+        done()
+        expect(f.state.conversations.find(c => c.id === group)!.assignment!.status).toBe('done')
+      })
+
+      it('never takes another project\'s Reviewer for the second review, and refuses a review of another project\'s work without its title', () => {
+        const { f, lead, leadActor, fresh, reviewer, markReady, reviews } = ready('claude', { reviews: 2 })
+        const other = f.run({ type: 'project.create', name: 'Other', visibility: 'public', brief: '' }).result
+        const outsider = f.add('other-reviewer', 'owner', other.conversationId as string)
+        Object.assign(f.state.agents.find(a => a.id === outsider)!, { role: 'reviewer', configuration: { ...config, engine: 'claude', model: 'claude-opus-4-7' } })
+        f.run({ type: 'agent.release', agentId: fresh, decision: 'stop' }, leadActor)
+        markReady(`Ready. ${pr}`)
+        expect(reviews().map(r => r.assignment?.agentId ?? null)).toEqual([reviewer, null])
+        expect(f.state.conversations.filter(c => c.agentIds.includes(outsider)).map(c => c.id)).toEqual([other.conversationId])
+        // A two-review task of the other project: a review of it from this project is refused, naming nothing of it.
+        const theirs = f.run({ type: 'conversation.create', projectId: other.projectId as string, title: 'Secret payroll export',
+          task: { ...offlineTask, review: { reviews: 2 } }, checks: [{ description: 'Review', independent: true }] }).result.conversationId as string
+        let refusal = ''
+        try { f.run({ type: 'conversation.create', title: 'Review: theirs', brief: 'Review it.', reviewOf: theirs, checks: [{ description: 'Verdict', independent: false }] }, leadActor) }
+        catch (error) { refusal = (error as Error).message }
+        expect(refusal).not.toBe('')
+        expect(refusal).not.toContain('Secret payroll')
+        expect(f.state.conversations.filter(c => c.reviewOf === theirs)).toEqual([])
+        expect(lead).toBeTruthy()
+      })
+
+      it('keeps a task with no plan as today: one review, no focus line, done on its checks', () => {
+        const { f, group, built, builderActor, markReady, reviews } = ready()
+        markReady(`Ready. ${pr}`)
+        expect(reviews()).toHaveLength(1)
+        expect(reviews()[0]!.brief).not.toContain('Review focus')
+        expect(reviews()[0]!.brief).not.toContain('Independent review')
+        expect(reviews()[0]!.title).toBe('Review: Offline editing')
+        verdict(f, reviews()[0]!, group, built, reviews()[0]!.assignment!.agentId, true)
+        f.run({ type: 'work.status', conversationId: group, assignmentId: built, status: 'done', result: 'Merged.' }, builderActor)
+        expect(f.state.conversations.find(c => c.id === group)!.assignment).not.toHaveProperty('verdicts')
+        expect(f.state.conversations.find(c => c.id === group)!.assignment).not.toHaveProperty('handoffs')
+      })
+    })
 
     // Overnight 2026-10-30 reviews waited hours with every Codex Reviewer out of quota, and nobody was told. Since any strong
     // engine reviews (Ken, 2026-10-30), the chat hears only when no machine can start one of any engine.

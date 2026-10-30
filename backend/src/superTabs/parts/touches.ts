@@ -181,11 +181,12 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       if (command.status === 'review') {
         // A review the Swarm opened by itself (autoReview.ts) reads whether its Reviewer is free and numbers the new group,
         // as conversation.create and work.assign do: two opened at once meet on that Reviewer and on the head.
-        const opened = effects.state.conversations.find(c => c.reviewOf === command.conversationId && !before.conversations.some(b => b.id === c.id))
-        if (opened) {
+        // A task wanting two independent reviews opens two in one write, each with its own Reviewer.
+        const opened = effects.state.conversations.filter(c => c.reviewOf === command.conversationId && !before.conversations.some(b => b.id === c.id))
+        if (opened.length) {
           head()
           group(leadGroupOf(projectOfGroup(command.conversationId)?.id))
-          agent(opened.assignment?.agentId)
+          for (const review of opened) agent(review.assignment?.agentId)
           progress(projectOfGroup(command.conversationId)?.id)
         }
       }
