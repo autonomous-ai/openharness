@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -39,6 +39,37 @@ function teamHome() {
 }
 
 describe('scrubbing a Claude Code session from the Team user\'s shared home', () => {
+  // Security review 2 of #2375: Claude Code's transcript folder name makes every '/' and '.' a dash, so a removed worktree
+  // `<worktrees>/old/notes` shares it with an unrelated `~/harnesses/worktrees-old/notes`. Only transcripts that record no
+  // other working folder are the session's; the folder goes whole only when every one is.
+  it('removes only its own transcripts from a transcript folder another folder\'s sessions share, and says so', async () => {
+    const home = dir(), claude = join(home, '.claude'), folder = '/Users/me/harnesses/worktrees/old/notes'
+    const shared = join(claude, 'projects', folder.replace(/[^A-Za-z0-9]/g, '-'))
+    expect(shared).toBe(join(claude, 'projects', '/Users/me/harnesses/worktrees-old/notes'.replace(/[^A-Za-z0-9]/g, '-')))
+    for (const sub of ['own/subagents', 'theirs/subagents', 'memory']) mkdirSync(join(shared, sub), { recursive: true })
+    writeFileSync(join(shared, 'own.jsonl'), [JSON.stringify({ type: 'summary' }), JSON.stringify({ cwd: folder }), JSON.stringify({ cwd: `${folder}/src` }), 'not json "cwd"'].join('\n'))
+    writeFileSync(join(shared, 'theirs.jsonl'), [JSON.stringify({ cwd: '/Users/me/harnesses/worktrees-old/notes' })].join('\n'))
+    const shares = vi.fn()
+    await scrubClaudeSession(home, target({ sessionId: null, cwd: folder }), [], undefined, shares)
+    expect(['own.jsonl', 'own', 'theirs.jsonl', 'theirs', 'memory'].map(name => existsSync(join(shared, name)))).toEqual([false, false, true, true, true])
+    expect(shares).toHaveBeenCalledTimes(1)
+    // Once only its own are left, the folder goes whole.
+    rmSync(join(shared, 'theirs.jsonl'))
+    writeFileSync(join(shared, 'again.jsonl'), JSON.stringify({ cwd: folder }))
+    await scrubClaudeSession(home, target({ sessionId: null, cwd: folder }), [], undefined, shares)
+    expect(existsSync(shared)).toBe(false)
+    expect(shares).toHaveBeenCalledTimes(1)
+  })
+
+  // Security review 2 of #2375: todos were matched by prefix, so a one-character session id removed every todo starting with it.
+  it('removes only its own session\'s todos, never one whose name only starts with its id', async () => {
+    const { home, claude } = teamHome()
+    writeFileSync(join(claude, 'todos', 'pm-session2-agent-pm-session2.json'), '[]')
+    await scrubClaudeSession(home, target())
+    expect(existsSync(join(claude, 'todos', 'pm-session-agent-pm-session.json'))).toBe(false)
+    expect(existsSync(join(claude, 'todos', 'pm-session2-agent-pm-session2.json'))).toBe(true)
+  })
+
   it('removes every file and entry its session or folder names, and keeps every other session\'s', async () => {
     const { home, claude } = teamHome()
     expect(await scrubClaudeSession(home, target())).toEqual(['abc123'])

@@ -7,6 +7,7 @@ import { NativeRecorder, nativeJournalFile } from './native.js'
 import { attachedFiles, attachmentsOf } from './attachments.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
+import { readdir, readFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, normalize, relative, sep } from 'node:path'
 import type { BackendNotice, CoreApi, TurnDelivery } from '../core/api.js'
 import { shellQuote } from '../orchestrator/prompts.js'
@@ -17,7 +18,7 @@ import { noticeReason, WithheldDeliveries } from './withheld.js'
 import { attentionOf } from './attention.js'
 import { prepareContribution, prepareTeamContribution } from './contribution.js'
 import { homedir, hostname } from 'node:os'
-import { scrubClaudeSession, type PurgeTarget } from './inCore/teamPurge.js'
+import { recordsOtherFolder, scrubClaudeSession, type PurgeTarget } from './inCore/teamPurge.js'
 import { replacementObservations } from './replacements.js'
 import { TerminalHost } from './terminal.js'
 import { LimitResume } from './limitResume.js'
@@ -25,6 +26,7 @@ import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
 import { UPDATE_REQUIRED } from './readContract.js'
 import { projectsRoot } from '../lib/projectFolder.js'
+import { worktreeFolderName } from '../lib/agentNames.js'
 
 type Json = Record<string, unknown>
 // A Buddy is told its commands without --agent: the pane it runs in says who it is (command.ts callerOf), and its guard
@@ -175,6 +177,26 @@ function buddyWorktree(cwd: string, worktrees: string): boolean {
     }
     return leafOf(home, join(found, ...missing))
   } catch { return false }
+}
+/** A Claude Code session id: a saved one of another shape is dropped (security review 2 of #2375). */
+const CLAUDE_SESSION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+/** Whether [sessionId] is [folder]'s session: no prompt history line names it with another project, and no transcript of
+ *  it records another folder. A person's own session id beside a Buddy's worktree took their history, a paste, file history
+ *  and debug log (security review 2 of #2375). A file that cannot be read is no answer: the scrub fails and is tried again. */
+async function sessionOfFolder(home: string, sessionId: string, folder: string): Promise<boolean> {
+  const claude = join(home, '.claude'), own = (cwd: unknown) => cwd === folder || (typeof cwd === 'string' && cwd.startsWith(`${folder}/`))
+  const missing = (error: NodeJS.ErrnoException) => { if (error?.code === 'ENOENT') return null; throw error }
+  for (const line of (await readFile(join(claude, 'history.jsonl'), 'utf8').catch(missing) ?? '').split('\n')) {
+    if (!line.includes(sessionId)) continue
+    let row: { sessionId?: unknown; project?: unknown }
+    try { row = JSON.parse(line) } catch { continue }
+    if (row.sessionId === sessionId && !own(row.project)) return false
+  }
+  for (const name of await readdir(join(claude, 'projects')).catch(missing) ?? []) {
+    const transcript = join(claude, 'projects', name, `${sessionId}.jsonl`)
+    if (existsSync(transcript) && await recordsOtherFolder(transcript, folder)) return false
+  }
+  return true
 }
 /** How long after an add the roster may ask for another (a roster read may predate the add), and the first wait after a
  *  failed one. Each try probes every engine's account (about 14 login shells), so the wait doubles up to half an hour:
@@ -418,7 +440,9 @@ export class SuperTabHost {
         const t = object(value)
         if (agentId === t.agentId && identifier(agentId) && t.engine === 'claude' && typeof t.cwd === 'string' && buddyWorktree(t.cwd, this.worktrees)
           && (t.sessionId === null || typeof t.sessionId === 'string') && t.codexHome === null) {
-          (this.journal.scrubs ??= {})[agentId] = { agentId, sessionId: t.sessionId as string | null, cwd: t.cwd, engine: 'claude', codexHome: null }
+          const sessionId = typeof t.sessionId === 'string' && !CLAUDE_SESSION.test(t.sessionId) ? null : t.sessionId as string | null
+          if (sessionId !== t.sessionId) this.log(`Dropped the session id of a saved Buddy session scrub: agent ${agentId}`)
+          ;(this.journal.scrubs ??= {})[agentId] = { agentId, sessionId, cwd: t.cwd, engine: 'claude', codexHome: null }
         } else this.log(`Dropped a saved Buddy session scrub this host did not write: ${identifier(agentId) ? `agent ${agentId}` : 'an unreadable agent id'}`)
       }
     }
@@ -1056,7 +1080,14 @@ export class SuperTabHost {
         state.closed = true
       }
       if (state.scrub && !state.scrubbed) {
-        await scrubClaudeSession(this.claudeHome, state.scrub)
+        // A fixed code: the error's own text names the transcript folder's path (security review 2 of #2375).
+        const scrub = await this.ownScrub(agent.id, agent.harnessId, state.scrub)
+          .catch(() => { throw new Error(`Could not remove an ended Buddy session's Claude Code traces yet: agent ${agent.id}, SCRUB_FAILED`) })
+        if (scrub) {
+          await scrubClaudeSession(this.claudeHome, scrub, [], undefined,
+            () => this.log(`Kept another folder's transcripts that share a Buddy session's transcript folder: agent ${agent.id}`))
+            .catch(() => { throw new Error(`Could not remove an ended Buddy session's Claude Code traces yet: agent ${agent.id}, SCRUB_FAILED`) })
+        }
         state.scrubbed = true
         if (this.journal.scrubs?.[agent.id]) {
           delete this.journal.scrubs[agent.id]
@@ -1077,6 +1108,26 @@ export class SuperTabHost {
       state.retryAt = this.now() + Math.min(END_RETRY_MAX_MS, END_RETRY_MS * 2 ** state.failures++)
       this.log(error instanceof Error ? error.message : String(error))
     }).finally(() => { state.running = false })
+  }
+
+  /** What of [target] an ended Buddy session's scrub removes, or null when its folder is not this agent's own. Any Harness
+   *  worktree passed, a person's own (Desktop makes them there too) or another agent's included (security review 1 of
+   *  #2375): only the one named for this agent's own Swarm start is (start.ts names its branch super-tab/<start>, the
+   *  folder is named after it, -2, -3 when taken; machines.ts swarmWorktree checks the same). Its session id goes only when
+   *  it is that folder's. */
+  private async ownScrub(agentId: string, harnessId: string, target: PurgeTarget): Promise<PurgeTarget | null> {
+    const creation = this.startReceipt(harnessId), folder = target.cwd ?? ''
+    const leaf = creation?.startsWith('super-') ? worktreeFolderName(`super-tab/${creation.slice('super-'.length)}`) : null
+    const name = basename(folder)
+    if (!leaf || (name !== leaf && !/^\d+$/.test(name.startsWith(`${leaf}-`) ? name.slice(leaf.length + 1) : ''))) {
+      this.log(`Dropped a Buddy session scrub that names no worktree of its own start: agent ${agentId}`)
+      return null
+    }
+    if (target.sessionId && !await sessionOfFolder(this.claudeHome, target.sessionId, folder)) {
+      this.log(`Kept another folder's session that a Buddy session scrub named: agent ${agentId}`)
+      return { ...target, sessionId: null }
+    }
+    return target
   }
 
   /** A CLI update can ship new built-in skill text while Swarm sessions run; until now a running agent kept the text it

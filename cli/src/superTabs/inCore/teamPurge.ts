@@ -13,9 +13,10 @@
  * reviewed purge drops the session from the stopped catalog, so a retry after a failed sweep had nothing left to scrub from.
  * Everything here reads and writes asynchronously: a Team home holds gigabytes of transcripts, and this runs in the core.
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
+import { createInterface } from 'node:readline'
 import { PM_HOMES } from '../teamDaemon.js'
 
 /** What a purge needs of a session, kept until it finishes. `pastes`: the paste cache files its history lines kept. */
@@ -138,14 +139,46 @@ function withoutFolder(text: string, folder: string): string {
   return changed ? JSON.stringify(config, null, 2) : text
 }
 
+/** Whether the transcript [file] records a working folder other than [folder] or one inside it: Claude Code writes the cwd
+ *  on every turn, and its folder name makes every '/' and '.' a dash, so a removed worktree `<worktrees>/old/notes` shares its
+ *  transcript folder with an unrelated `~/harnesses/worktrees-old/notes` (security review 2 of #2375). */
+export async function recordsOtherFolder(file: string, folder: string): Promise<boolean> {
+  const lines = createInterface({ input: createReadStream(file, 'utf8'), crlfDelay: Infinity })
+  try {
+    for await (const line of lines) {
+      if (!line.includes('"cwd"')) continue
+      let cwd: unknown
+      try { cwd = (JSON.parse(line) as { cwd?: unknown }).cwd } catch { continue }
+      if (typeof cwd === 'string' && cwd !== folder && !cwd.startsWith(`${folder}/`)) return true
+    }
+    return false
+  } finally { lines.close() }
+}
+
+/** [dir], the transcript folder Claude Code names for [folder]: whole when no transcript in it is another folder's; else only
+ *  [folder]'s own transcripts, each with its folder of subagents and tool results, and [onShared] is told. */
+async function removeTranscripts(dir: string, folder: string, onShared?: () => void): Promise<void> {
+  const transcripts = (await readdir(dir).catch(() => [] as string[])).filter(name => name.endsWith('.jsonl'))
+  const others = new Set<string>()
+  for (const name of transcripts) if (await recordsOtherFolder(join(dir, name), folder)) others.add(name)
+  if (!others.size) { await rm(dir, { recursive: true, force: true }); return }
+  onShared?.()
+  for (const name of transcripts) {
+    if (others.has(name)) continue
+    await rm(join(dir, name), { force: true })
+    await rm(join(dir, name.slice(0, -'.jsonl'.length)), { recursive: true, force: true })
+  }
+}
+
 /**
  * Removes from the Team user's shared Claude Code home ([home]/.claude, [home]/.claude.json and its backups) what Claude
  * Code keeps of the session: its prompt history lines and the pastes they kept ([pastes] from an earlier attempt too), its
- * project folder with its transcripts and memory, its file history, todos, session environment and debug log, and its
- * folder's entry and repository paths in the config and in every backup of it. The pastes its history named, for the record.
+ * project folder with its transcripts and memory (only its own transcripts when another folder's share it, [onShared]),
+ * its file history, todos, session environment and debug log, and its folder's entry and repository paths in the config
+ * and in every backup of it. The pastes its history named, for the record.
  */
 export async function scrubClaudeSession(home: string, target: PurgeTarget, pastes: readonly string[] = [],
-  onPastes?: (pastes: string[]) => void): Promise<string[]> {
+  onPastes?: (pastes: string[]) => void, onShared?: () => void): Promise<string[]> {
   const sessionId = target.sessionId && SESSION.test(target.sessionId) ? target.sessionId : null
   const folder = folderOf(target)
   if (!sessionId && !folder) return []
@@ -173,12 +206,13 @@ export async function scrubClaudeSession(home: string, target: PurgeTarget, past
     return kept.length ? `${kept.join('\n')}\n` : ''
   })
   for (const hash of new Set([...pastes, ...found])) if (SESSION.test(hash)) await rm(join(claude, 'paste-cache', `${hash}.txt`), { force: true })
-  if (folder) await rm(join(claude, 'projects', claudeSlug(folder)), { recursive: true, force: true })
+  if (folder) await removeTranscripts(join(claude, 'projects', claudeSlug(folder)), folder, onShared)
   if (sessionId) {
     for (const sub of ['file-history', 'session-env']) await rm(join(claude, sub, sessionId), { recursive: true, force: true })
     await rm(join(claude, 'debug', `${sessionId}.txt`), { force: true })
     const todos = await readdir(join(claude, 'todos')).catch(() => [] as string[])
-    for (const name of todos) if (name.startsWith(sessionId)) await rm(join(claude, 'todos', name), { force: true })
+    // `<session>-agent-<agent>.json`: by prefix alone, a one-character id took every todo starting with it (security review 2 of #2375).
+    for (const name of todos) if (name.startsWith(`${sessionId}-agent-`)) await rm(join(claude, 'todos', name), { force: true })
   }
   if (folder) {
     await rewriteIfUnchanged(join(home, '.claude.json'), text => withoutFolder(text, folder))
