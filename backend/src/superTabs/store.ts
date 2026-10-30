@@ -1,4 +1,4 @@
-import { expireRemovals, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, machineSlots, machineTeamWork, preparableStart, readingOnly, recordAgentPresence, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, teamWorkRefusal, type MachineObservation } from './machines.js'
+import { expireRemovals, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, slotCounter, machineTeamWork, preparableStart, readingOnly, recordAgentPresence, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, teamWorkRefusal, type MachineObservation } from './machines.js'
 import { readingClearsSuspensions, suspendedEngines } from './engineHealth.js'
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { createHash } from 'node:crypto'
@@ -1043,13 +1043,14 @@ export class SuperTabStore {
     const facts = visible.machines?.length ? await this.machineFacts(tx, state) : { team: [], versions: {} as Record<string, string> }
     const teamMachines = facts.team
     const otherWorkspace = visible.machines?.length ? await this.otherWorkspaceMachines(tx, state) : []
+    const slots = slotCounter(state)
     return { lastChangedAt: await readLastChangedAt(tx, view, tabId) ?? 0, state: { ...visible, ...mentions, machines: visible.machines?.map(pool => {
       const stored = state.machines!.find(m => m.machineId === pool.machineId)!
       // Whether it takes teammates' projects now, and if not why (machines.ts teamWorkRefusal): what routing leaves it
       // out for, and what Desktop can show on the machine.
       const refusal = machineTeamWork(state, stored, now, teamMachines, otherWorkspace)
       const suspended = suspendedEngines(stored, now)
-      return { ...pool, availableSlots: Math.max(0, pool.maxAgents - machineSlots(state, stored)),
+      return { ...pool, availableSlots: Math.max(0, pool.maxAgents - slots(stored)),
         teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const },
         ...(facts.versions[pool.machineId] ? { clientVersion: facts.versions[pool.machineId] } : {}),
         // What the route leaves out (cli superTabs/routeCommand.ts unreadyPool).

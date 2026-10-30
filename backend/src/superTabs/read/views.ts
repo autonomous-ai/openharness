@@ -7,7 +7,7 @@ import { suspendedEngines } from '../engineHealth.js'
 import { leadChoices } from '../leadStart.js'
 import { isBuddyChat, isBuddyReader } from '../buddies.js'
 import { agentForBuddy, agentWithoutMachine, groupWithoutMachines, isLeads, machineHiddenFrom, seenMachineIds, visibleState, withSeenRequirement, type Actor, type Agent, type Conversation, type SuperTabState } from '../model.js'
-import { machineSlots, machineTeamWork, teamAccountSwarm, type ContributedMachine } from '../machines.js'
+import { slotCounter, machineTeamWork, teamAccountSwarm, type ContributedMachine } from '../machines.js'
 import * as store from '../parts/index.js'
 import type { Part, SwarmParts } from '../parts/index.js'
 import { canReadGroup } from '../projects.js'
@@ -123,12 +123,14 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
     ? leadChoices(state, actor.userId, { now, teamMachines: extras.teamMachines, otherWorkspaceMachines: extras.otherWorkspaceMachines ?? [],
       ...(extras.teamAccountsIdle ? { teamAccountsIdle: true } : {}) })
     : {}
+  // Every listed machine's slots from one pass over the Swarm's lists (machines.ts slotCounter).
+  const slots = slotCounter(state)
   const machine = (pool: ContributedMachine) => {
     const stored = state.machines!.find(m => m.machineId === pool.machineId)!
     const refusal = machineTeamWork(state, stored, now, extras.teamMachines, extras.otherWorkspaceMachines ?? [])
     const version = extras.machineVersions?.[pool.machineId]
     const suspended = suspendedEngines(stored, now)
-    return [pool.machineId, { availableSlots: Math.max(0, pool.maxAgents - machineSlots(state, stored)),
+    return [pool.machineId, { availableSlots: Math.max(0, pool.maxAgents - slots(stored)),
       teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const }, ...(version ? { clientVersion: version } : {}),
       ...(Object.keys(suspended).length ? { suspendedEngines: suspended } : {}), ...(leads[pool.machineId] ? { lead: leads[pool.machineId] } : {}) }] as const
   }
