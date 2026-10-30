@@ -53,9 +53,6 @@ export interface Probe {
   /** Members: the frame (null when it could not be read), whether the member is in the task's repository, and its earlier work in this Super Tab. */
   frame?: MemberFrame | null; repo?: 'same' | 'different' | 'unknown'; earlier?: Array<{ group: string; outcome: string }>
   terminalUnverified?: boolean
-  /** Why no agent of its engine starts on its machine within REVIEW_START_MS, whatever its quota: offline, paused, signed out,
-   *  suspended, or a member held by a usage limit past it. Read by [otherFamilyReviews]. */
-  cannotStart?: string
   /** New agents: what the machine has. */
   load?: MachineLoad
   /** A new agent on a model served on the Swarm's grid: free, reached through the grid relay, `model`/`effort` `default`.
@@ -232,45 +229,18 @@ export function rateFor(policy: Policy, engine: string, model: string | null, ef
 /** A small variant by its name: a mini or a nano (backend superTabs/rules.ts). */
 const SMALL = /(^|[^a-z0-9])(mini|nano)([^a-z0-9]|$)/i
 
-/** What a reviewed Builder ran: its engine, and the grid model its engine drove. */
-export interface Reviewed { engine: string; gridModel?: string; quality?: number }
-/** A model family: a grid model's own, else its engine's. */
-const familyOf = (t: Reviewed) => t.gridModel ? `grid:${t.gridModel}` : t.engine
-/** Why [p] may not review (Ken, 2026-10-29: a small model never reviews again): a model served on the Swarm's grid, one rated
- *  below 2, or the reviewed Builder's own model family while a strong Reviewer of another family can run here ([otherFamily]).
- *  With none, the Builder's own engine at its top tier (Lead, 2026-10-29). The server judges the same (backend
- *  superTabs/rules.ts reviewRefusal). */
-export function reviewRefusals(p: Probe, builder: Reviewed | null, otherFamily: boolean): string[] {
+/** What a reviewed Builder ran: its agent, its engine, the grid model its engine drove, and how strong that was. */
+export interface Reviewed { engine: string; gridModel?: string; quality?: number; agentId?: string }
+/** Why [p] may not review: a model served on the Swarm's grid or one rated below 2 (Ken, 2026-10-29: a small model never
+ *  reviews again), or the agent that built the work. Any engine reviews any build (Ken, 2026-10-30: reviews of Claude builds
+ *  waited all morning for Codex quota; a Reviewer is a session of its own with fresh context, so its strength is what counts).
+ *  The server judges the same (backend superTabs/rules.ts reviewRefusal). */
+export function reviewRefusals(p: Probe, builder: Reviewed | null): string[] {
   if (p.gridModel) return ['A review never runs on a model served on the Swarm\'s grid.']
   if (p.quality < 2) return [`A review needs a model of quality 2 or more, and ${ENGINE[p.engine]} ${p.model} is ${p.quality}.`]
-  if (!builder || familyOf(builder) !== familyOf(p)) return []
-  if (otherFamily) return [`A review runs on another engine than the reviewed Builder's, ${ENGINE[p.engine]}.`]
-  return p.quality < 3 ? [`A review on the reviewed Builder's engine, ${ENGINE[p.engine]}, needs its top tier (quality 3): no Reviewer on another engine can start soon in this Swarm.`] : []
+  if (p.kind === 'member' && builder?.agentId && p.agentId === builder.agentId) return ['A Reviewer never reviews work it built.']
+  return []
 }
-/** How soon a Reviewer has to be able to start to count: a start still not running after this long is abandoned (backend
- *  superTabs/store.ts ABANDONED_START_MS). A window that resets inside it counts as quota; one out for longer does not (backend
- *  superTabs/reviewSeats.ts REVIEW_START_MS). */
-export const REVIEW_START_MS = 15 * 60_000
-/** How the route line and the brief of a review on its Builder's own engine start (Lead, 2026-10-30; backend superTabs/rules.ts). */
-export const SAME_ENGINE = 'same-engine review: no Reviewer of another engine has quota'
-/** Whether [q] has quota now, or once each used-up window resets within REVIEW_START_MS. One it cannot read, or metered, does,
- *  as a start there does. */
-export function quotaWithin(q: Quota, now: number): boolean {
-  if (!q.known || q.metered) return true
-  const soon = (resetsAt: number | null) => resetsAt !== null && resetsAt - now <= REVIEW_START_MS
-  return q.windows?.length ? q.windows.every(w => w.leftPercent > 0 || soon(w.resetsAt)) : q.leftPercent === null || q.leftPercent > 0 || soon(q.resetsAt)
-}
-/** Whether a strong Reviewer of another family than [builder]'s could start within REVIEW_START_MS: a candidate off the grid,
- *  rated 2 or more, of another family, that the owner's [rules] let run at the effort it would start at, whose machine is up
- *  ([Probe.cannotStart]) with quota now or once a window resets inside the window. Busy still counts: a Reviewer frees up. One
- *  out of quota for days or offline does not (2026-10-30: reviews of Claude builds waited all morning on Codex machines out of
- *  weekly quota); the caller leaves out the machines the task or its access rules out (review of ee4ee6c9a: an engine the
- *  owner ruled out blocked the fallback). */
-export const otherFamilyReviews = (probes: Probe[], builder: Reviewed | null, rules: SwarmRule[], now: number = Date.now()) =>
-  !!builder && probes.some(p => !p.gridModel && p.quality >= 2 && familyOf(p) !== familyOf(builder) && !p.cannotStart && quotaWithin(p.quota, now)
-    && !breaks(rules, lifted(rules, p)))
-/** Whether [p] reviews on [builder]'s own model family. */
-export const sameFamily = (p: Probe, builder: Reviewed | null) => !!builder && familyOf(builder) === familyOf(p)
 
 /** A task that stepped up from a cheaper model takes no grid model and nothing below the step's floor; the server refuses
  *  the same (backend superTabs/stepUp.ts stepUpRefusal). */

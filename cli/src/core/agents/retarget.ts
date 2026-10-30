@@ -32,6 +32,7 @@ import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import type { createLaunchHelpers } from './launch.js'
 import type { PaneSwap } from './swap.js'
 import { createLaunchAuthority } from './launchAuthority.js'
+import type { AdoptSwarmSkill } from '../api.js'
 import { nativeOpencodeStore } from '../../engines/kit/nativeLocations.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
@@ -63,12 +64,14 @@ export interface RetargetDeps {
   refreshGridAssignment: (session: RegisteredSession) => void
   /** OpenCode's store, whose rows a resumed session takes its model from. */
   opencodeDb: string
+  /** An older Swarm session's role, read before it is relaunched (superTabs/inCore/adoption.ts). Absent while the Swarm is off. */
+  adoptSwarmSkill?: AdoptSwarmSkill
 }
 
 export function createAgentRetargeter({
   sessionTurnOpen, purgeBusy, terminals, registry, runtimeProfiles, launchOverridesDeps, acquireTerminalControl,
   relaunchOverrides, downgradedPermission, agentReconciler, restartJobs, paneSwapDeps, liveBypassPermission,
-  announceSession, refreshGridAssignment, opencodeDb, noBackendCode = 'TMUX_UNAVAILABLE',
+  announceSession, refreshGridAssignment, opencodeDb, noBackendCode = 'TMUX_UNAVAILABLE', adoptSwarmSkill,
 }: RetargetDeps) {
   const authority = createLaunchAuthority({ byAgent: id => registry.byAgent(id),
     revision: id => restartJobs.revision(id), cancelled: () => false })
@@ -106,6 +109,20 @@ export function createAgentRetargeter({
     // validate, and respawning over a pane whose occupant we cannot identify is how you replace
     // something that was not ours.
     if (!session.processIdentity) return { ok: false, error: 'NO_ACTIVE_PROCESS' }
+    // An older Swarm session switches with its role, or not at all while the role cannot be read: a switch relaunched an old
+    // Buddy with no saved role as an ordinary session, without its guard (security review 1 of #2255). Nothing has touched
+    // the pane yet, so a refusal leaves the running engine as it is.
+    const looked = await adoptSwarmSkill?.lookup?.(session, current)
+    if (looked !== undefined) {
+      // The lookup answers null once this switch no longer owns the row.
+      if (looked === null) return changed()
+      if (looked === 'unavailable') return { ok: false, error: 'SWARM_ROLE_UNAVAILABLE',
+        detail: 'This agent\'s Swarm role could not be confirmed, so its model was not switched. Try again once the Swarm can be reached.' }
+      // Recording the role changes the row this switch owns: it owns the recorded one, taken in the same step.
+      looked.commit()
+      if (looked.row.swarmSkill) session.swarmSkill = looked.row.swarmSkill
+      current = captureAuthority()
+    }
     // Leaving for a grid is the LAST moment this agent's own model is observable: once the pane is on
     // the grid, the engine reports the grid's model and the previous choice exists nowhere. So it is
     // read now and kept, and a later move back returns the person to it rather than to whatever

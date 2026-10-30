@@ -66,13 +66,6 @@ export function parsePlanRequest(value: unknown): PlanRequest | string {
   return out
 }
 
-/** The model family a finished build used, so its review avoids it: a grid model is its own, any other the engine's. */
-function familyOf(configuration: Json, gridModels: Set<string>): string | null {
-  const engine = configuration.engine, model = String(configuration.model ?? '')
-  if (gridModels.has(model)) return model
-  return engine === 'claude' || engine === 'codex' ? engine : null
-}
-
 export function planSetup(input: { state: Json; policy: Policy; leadId: string; request: PlanRequest; githubApp: boolean; now: number }): PlanSetup {
   const { state, policy, leadId, request, githubApp, now } = input
   const conversations = list(state.conversations)
@@ -144,7 +137,6 @@ export function planSetup(input: { state: Json; policy: Policy; leadId: string; 
       concurrency: (s.kind === 'api' ? API_BUILDERS : 1) - s.holders.length, subscription: false, remote: s.kind === 'api' || s.kind === 'shared',
       family: s.model, label: `Claude on ${s.label} (${KIND_WORD[s.kind]})`, ...(s.machines ? { machines: [...s.machines].filter(m => pools.has(m)) } : {}) })
   }
-  const gridModels = new Set(served.map(s => s.model))
 
   // Tasks: each open group, with its assessment, dependencies, and the machines and models its project's rules leave.
   const estimates: string[] = [], ignored: string[] = [], titles: Record<string, string> = {}
@@ -160,7 +152,6 @@ export function planSetup(input: { state: Json; policy: Policy; leadId: string; 
     const after = (a.after ?? []).filter(d => openIds.has(d))
     ignored.push(...(a.after ?? []).filter(d => !openIds.has(d) && !conversations.some(x => x.id === d)))
     const deps = [...new Set([...(buildOpen ? [String(build!.id)] : []), ...after])]
-    const builtWith = build && !buildOpen ? familyOf(object(object(build.assignment).configuration), gridModels) : null
     const projectOwner = project?.ownerId ?? state.ownerId
     // One machine (routeTask): a Mac's owner's own projects start on the Mac, a teammate's in its team account, so only one of
     // the two is offered for this group.
@@ -188,7 +179,8 @@ export function planSetup(input: { state: Json; policy: Policy; leadId: string; 
     const { minutes, spend } = SIZES[a.size]
     return { id, title: titles[id], minutes, floor: floorFor(policy, a as unknown as Assessment), kind: review ? 'review' : a.kind ?? 'default',
       difficulty: a.difficulty, spend: { ...spend }, deps, independent_of: buildOpen ? [String(build!.id)] : [],
-      avoid_families: builtWith ? [builtWith] : [], machines: allowed, models: allowedModels }
+      // Any strong engine reviews any build (Ken, 2026-10-30), so a review avoids no model family.
+      avoid_families: [], machines: allowed, models: allowedModels }
   })
 
   // Accounts: each machine's quota readings, shared where two machines report one account (route.ts accountOf).
