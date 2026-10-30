@@ -202,15 +202,23 @@ describe('the nightly routing reflection', () => {
   it('tries a failed report again on the next pass, and the other projects still get theirs', async () => {
     const f = await swarm()
     await f.ship()
+    // A second project of the same Swarm, with its own Lead and a day of routed work.
+    const web = (await f.execute({ type: 'project.create', name: 'Web', visibility: 'public', brief: '' })).result as { projectId: string; conversationId: string }
+    await f.execute({ type: 'agent.add', conversationId: web.conversationId, machineId: 'lead-host', harnessId: randomUUID(), name: 'Web Lead',
+      configuration: config, lead: true })
+    await f.stepUpFromGrid(web.projectId, 'Web grid task')
+    await db.superTabModelEvidence.create({ data: { id: randomUUID(), tabId: f.tab, projectId: web.projectId, engine: 'claude', model: 'opus', kind: 'feature',
+      week: new Date(Date.UTC(2026, 9, 26)), updatedAt: new Date(f.clock.now) } })
     f.clock.now = NIGHT
     let failures = 1
     const flaky = { postReflection: async (...args: Parameters<SuperTabStore['postReflection']>) => {
-      if (args[0] === f.tab && failures-- > 0) throw new Error('The database read timed out')
+      if (args[0] === f.tab && args[1] === 'lead' && failures-- > 0) throw new Error('The database read timed out')
       return f.store.postReflection(...args)
     } }
     const warned: unknown[] = []
     expect(await reflectNightly(db, flaky, NIGHT, { warn: (...a: unknown[]) => { warned.push(a) } })).toMatchObject({ failed: 1 })
     expect(await f.reports()).toEqual([])
+    expect(await f.reports(web.conversationId)).toHaveLength(1)
     expect(warned).toHaveLength(1)
     await reflectNightly(db, flaky, NIGHT + 15 * MINUTE)
     expect(await f.reports()).toHaveLength(1)
