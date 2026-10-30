@@ -720,6 +720,9 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       look: _lookOf(c, m),
       role: m.fromAgent && !pm ? view.roles[m.authorId] : null,
       mentions: view.mentions,
+      tagged: _taggedOf(c, m).keys.toList(),
+      taggedAddresses: _taggedOf(c, m),
+      readerId: c.reader.accountId,
       grouped: grouped,
       lit: false,
       quote: null,
@@ -1144,6 +1147,19 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// [m]'s author by name; in the person's own Buddy chat the PM's private
   /// lines read as lines to them, "River (PM) → you": the PM writes there but
   /// cannot read it (#2090).
+  /// The people [m] tags: each one's address by their username, as the
+  /// server names them; an older server's member without one goes by their
+  /// email's name.
+  static Map<String, String> _taggedOf(
+    SwarmConversation c,
+    SuperTabMessage m,
+  ) => {
+    if (m.mentions.isNotEmpty)
+      for (final person in c.reader.snapshot?.people ?? <SuperTabPerson>[])
+        if (m.mentions.contains(person.id))
+          person.chosenUsername ?? person.email.split('@').first: person.email,
+  };
+
   String _nameOf(SwarmConversation c, SuperTabMessage m) {
     final name = c.reader.snapshot?.authorName(m) ?? m.authorName;
     return swarmIsPmLine(c.reader, m) ? '$name (PM) → you' : name;
@@ -1326,7 +1342,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
           final line = root == m.id ? c.thread(m.id) : null;
           final faces = line == null
               ? const <SwarmThreadFace>[]
-              : swarmThreadFaces(snapshot, line);
+              : swarmThreadFaces(snapshot, line, roles: view.roles);
           final name = _nameOf(c, m);
           final look = _lookOf(c, m);
           final pm = swarmIsPmLine(c.reader, m);
@@ -1336,6 +1352,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
           // project chat, where everyone reads it (Tony, mockup A, 10-29).
           final answerIn = pm && view.canPost ? view.buddyProject : null;
           final quoted = reply == null ? null : _quoted(c, reply);
+          final tagged = _taggedOf(c, m);
           final lit = _lit == m.id, followed = _target == m.id;
           final acting = _acting == m.id;
           final reactions = c.reactionsOf(m);
@@ -1361,13 +1378,17 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               quoted,
               view.canPost,
               view.mentions,
+              // The highlight follows the reader: a row kept for another
+              // account is drawn again.
+              c.reader.accountId,
+              [for (final e in tagged.entries) '${e.key}:${e.value}'].join(' '),
               reactions,
               answerIn,
               view.project,
               line,
               [
                 for (final who in faces)
-                  '${who.id}:${who.name}:${swarmLookKey(who.look)}',
+                  '${who.id}:${who.name}:${who.pm}:${swarmLookKey(who.look)}',
               ].join(','),
             ),
             () => SwarmMessageRow(
@@ -1377,6 +1398,9 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               look: look,
               role: role,
               mentions: view.mentions,
+              tagged: tagged.keys.toList(),
+              taggedAddresses: tagged,
+              readerId: c.reader.accountId,
               grouped: grouped,
               lit: lit,
               followed: followed,
