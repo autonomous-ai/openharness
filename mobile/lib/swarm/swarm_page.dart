@@ -9,7 +9,6 @@ import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
-import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import 'swarm_connection_notice.dart';
 import 'swarm_conversation_page.dart' show openSwarmConversation;
@@ -18,7 +17,6 @@ import 'swarm_home_list.dart';
 import 'swarm_home_rows.dart';
 import 'swarm_home_top.dart';
 import 'swarm_inbox.dart';
-import 'swarm_jump_page.dart';
 import 'swarm_needs_page.dart';
 import 'swarm_new_message_sheet.dart';
 import 'swarm_new_project_sheet.dart';
@@ -56,8 +54,8 @@ bool swarmHomeListed(SwarmInbox inbox, String swarmId, String projectId) {
 
 /// Swarm Home, direction C (Tony's prototype C1, 2026-10-30), the Home tab:
 /// its title the Swarm shown, with a switcher to every Swarm, All Swarms and
-/// Join or create ([showSwarmSwitcher]); Jump to…; While you were away, once
-/// the person has been gone a while ([SwarmAwayCard]); then the projects
+/// Join or create ([showSwarmSwitcher]); While you were away, once the person
+/// has been gone a while ([SwarmAwayCard]); then the projects
 /// they pinned on this phone, then the others by their latest activity,
 /// those quiet for a day folded under "Other projects" ([swarmHomeLists]).
 /// Every Swarm's, or the one picked ([SwarmHomePrefs.swarmId]). A round +
@@ -322,21 +320,33 @@ class _SwarmPageState extends State<SwarmPage> {
   List<Widget> _body(BuildContext context, SwarmSession session) {
     final inbox = session.inbox;
     // No computer answering: a card that says so over what Home has, never a
-    // screen in its place, and no red line besides.
+    // screen in its place.
     final notice = inbox.noComputer
         ? SwarmConnectionNotice(
             inbox: inbox,
             computers: SwarmScope.computersOf(context),
           )
         : null;
-    final error = notice == null ? inbox.error : null;
-    // Before the list there is nothing to read, unless a Home was kept; a
-    // list that could not be read says so alone, without rows on their way.
+    // A list that could not be read says nothing here: it is in the app's log
+    // and read again by the next poll, Home as it was until then. Only a
+    // server without the list says so, as no poll will ever bring its rows.
     if (!inbox.loaded && inbox.swarms.isEmpty) {
       return [
         ?notice,
-        if (error != null)
-          _error(error, key: 'swarm-error')
+        if (notice == null && inbox.error == swarmServerTooOld)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpace.xs,
+              AppSpace.s,
+              AppSpace.xs,
+              0,
+            ),
+            child: SwarmRow.line(
+              swarmServerTooOld,
+              key: const ValueKey('swarm-too-old'),
+              lines: 3,
+            ),
+          )
         else
           ..._reading(first: notice == null),
       ];
@@ -346,21 +356,17 @@ class _SwarmPageState extends State<SwarmPage> {
         ? shown.single.id
         : null;
     final now = widget.now();
+    final away = _awayCard(context, session, shown, picked, now);
     return [
       ?notice,
-      if (error != null) _error(error, key: 'swarm-error'),
-      Padding(
-        padding: EdgeInsets.only(
-          top: notice == null ? AppSpace.xs : AppSpace.m,
-          bottom: AppSpace.xs,
-        ),
-        child: SwarmJumpField(
-          key: const ValueKey('swarm-jump'),
-          onTap: () => openSwarmJump(context),
-        ),
+      ?away,
+      ..._projects(
+        context,
+        session,
+        shown,
+        now,
+        first: notice == null && away == null,
       ),
-      ?_awayCard(context, session, shown, picked, now),
-      ..._projects(context, session, shown, now),
     ];
   }
 
@@ -418,17 +424,19 @@ class _SwarmPageState extends State<SwarmPage> {
 
   /// Pinned, then Projects: every project of the Swarms shown, grouped by
   /// [swarmHomeLists]; a Swarm still to be read has rows on their way, one
-  /// that could not be read says so.
+  /// that could not be read says so. The first caption is the screen's
+  /// [first] thing, with nothing over it.
   List<Widget> _projects(
     BuildContext context,
     SwarmSession session,
     List<SwarmListing> shown,
-    DateTime now,
-  ) {
+    DateTime now, {
+    required bool first,
+  }) {
     final inbox = session.inbox;
     if (inbox.swarms.isEmpty) {
       return [
-        const SwarmCaption('Projects'),
+        SwarmCaption('Projects', first: first),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: AppSpace.xs),
           child: SwarmRow.line(
@@ -488,14 +496,14 @@ class _SwarmPageState extends State<SwarmPage> {
         : null;
     return [
       if (lists.pinned.isNotEmpty) ...[
-        const SwarmCaption('Pinned'),
+        SwarmCaption('Pinned', first: first),
         SwarmGroup(children: [for (final p in lists.pinned) row(p)]),
       ],
       if (lists.recent.isNotEmpty ||
           quiet.isNotEmpty ||
           empty ||
           create != null) ...[
-        const SwarmCaption('Projects'),
+        SwarmCaption('Projects', first: first && lists.pinned.isEmpty),
         SwarmGroup(
           children: [
             if (empty) const SwarmRow(title: 'No project yet', onTap: null),
@@ -514,7 +522,7 @@ class _SwarmPageState extends State<SwarmPage> {
           ],
         ),
       ] else if (reading.isNotEmpty || failed.isNotEmpty)
-        const SwarmCaption('Projects'),
+        SwarmCaption('Projects', first: first && lists.pinned.isEmpty),
       for (final (i, id) in reading.indexed) ...[
         if (projects.isNotEmpty || i > 0) const SizedBox(height: 8),
         SwarmSkeletonRows(id: 'swarm-projects-loading-$id'),
@@ -583,16 +591,6 @@ class _SwarmPageState extends State<SwarmPage> {
     SwarmSkeletonRows(id: 'swarm-projects-loading'),
   ];
 
-  /// What went wrong, in the danger colour, up to three lines.
-  Widget _error(String text, {required String key, double top = 6}) => Padding(
-    padding: EdgeInsets.fromLTRB(AppSpace.xs, top, AppSpace.xs, 0),
-    child: SwarmRow.line(
-      text,
-      key: ValueKey(key),
-      lines: 3,
-      color: AppColors.danger,
-    ),
-  );
 }
 
 /// Home shows the Home kept, not read again yet: the list not read, or a
