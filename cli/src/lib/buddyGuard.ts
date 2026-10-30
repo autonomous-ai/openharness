@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync,
   writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 import { isTeamAccount } from '../team/config.js'
 import { env } from '../config/env.js'
@@ -853,15 +853,35 @@ export function allowBuddyReads(reads: BuddyReads, sent: { session: string; file
   const dir = dirname(reads.file)
   mkdirSync(dir, { recursive: true, mode: 0o700 })
   sweep(dir, now)
-  // Whose the list is, before the list says so; a mark it cannot write lists nothing.
-  writeFileSync(markOf(reads.file, sent.session), '', { mode: 0o600 })
   const held = heldList(reads.file, sent.session)
   const fresh = <T extends { at: number }>(entries: T[]) => entries.filter(entry => now - entry.at < KEPT_MS)
   const list: List = { version: 1, session: sent.session, ...(held.approvals ? { approvals: held.approvals } : {}),
     ...(held.wide !== undefined ? { wide: held.wide } : {}),
     files: [...fresh(held.files).filter(entry => !files.some(file => file.path === entry.path)), ...files].slice(-MAX_FILES),
     links: [...fresh(held.links).filter(entry => !links.some(link => link.url === entry.url)), ...links].slice(-MAX_LINKS) }
-  writeWhole(reads.file, list)
+  // Whose the list is, before the list says so; a mark it cannot write lists nothing.
+  writeList(reads.file, sent.session, list)
+}
+
+/**
+ * Writes [list] as [session]'s: every writer of a session's list comes here (security reviews of #2261, folded into #2310,
+ * Lead 10-30). Its mark first, so a list that cannot be read still holds back its own session's end and no other
+ * (`forgetBuddyReads`): created only as a file of its own, never through a link, and one already there must be a plain
+ * file. Other sessions' marks beside the list go, as the list is no longer theirs. Then the list, as one rename. Throws
+ * when it cannot, so the host tries the delivery again.
+ */
+function writeList(file: string, session: string, list: List): void {
+  const dir = dirname(file), own = markOf(file, session)
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  let fd: number | undefined
+  try { fd = openSync(own, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600) } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || !lstatSync(own).isFile()) throw error
+  } finally { if (fd !== undefined) closeSync(fd) }
+  const prefix = `${basename(file).replace(/\.json$/, '')}.`
+  for (const name of readdirSync(dir)) {
+    if (name.startsWith(prefix) && MARK.test(name) && name.length === prefix.length + 70 && join(dir, name) !== own) rmSync(join(dir, name), { force: true })
+  }
+  writeWhole(file, list)
 }
 
 /** Writes [value] to [file] as one rename, mode 600: a reader sees a whole old file or a whole new one, never a part. */
@@ -903,8 +923,7 @@ function classify(node: string, guard: string, commands: readonly string[]): { w
  * it cannot write, so the host tries the delivery again.
  */
 export function grantBuddyWide(reads: BuddyReads, input: { session: string; wide: boolean }): void {
-  mkdirSync(dirname(reads.file), { recursive: true, mode: 0o700 })
-  writeWhole(reads.file, { ...heldList(reads.file, input.session), wide: input.wide })
+  writeList(reads.file, input.session, { ...heldList(reads.file, input.session), wide: input.wide })
 }
 
 /** Whether [text] has a line approving commands or forgetting them: the host judges it only then. */
@@ -964,8 +983,7 @@ export function recordBuddyApprovals(input: { reads: BuddyReads; session: string
   // Files nothing approved into for 30 days approve nothing any more: an earlier membership's, or a person who left.
   sweep(dirname(input.approvals), now, APPROVAL_MS)
   writeWhole(input.approvals, { version: 1, entries })
-  mkdirSync(dirname(input.reads.file), { recursive: true, mode: 0o700 })
-  writeWhole(input.reads.file, { ...heldList(input.reads.file, input.session), approvals: input.approvals })
+  writeList(input.reads.file, input.session, { ...heldList(input.reads.file, input.session), approvals: input.approvals })
 }
 
 /**
@@ -997,9 +1015,20 @@ export function forgetBuddyReads(session: string, dir = listsDir()): void {
   for (const name of names) {
     if (!name.endsWith('.json')) continue
     const file = join(dir, name)
+    let text: string | undefined, unreadable: unknown
+    try { text = readFileSync(file, 'utf8') } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') unreadable = error }
     let named: unknown
-    try { named = (JSON.parse(readFileSync(file, 'utf8')) as { session?: unknown } | null)?.session } catch { /* unreadable, or not JSON: it names no session */ }
-    if (marked.has(name) ? typeof named === 'string' && named !== session : named !== session) continue
+    try { named = text === undefined ? undefined : (JSON.parse(text) as { session?: unknown } | null)?.session } catch { /* not JSON: it names no session */ }
+    if (!marked.has(name)) {
+      // Not its own by mark. One it cannot read is another session's to remove when that session's mark is beside it, and
+      // otherwise whose it is cannot be told: kept, and the end fails so it is tried again, as before marks (review of #2261).
+      if (unreadable !== undefined) {
+        const base = `${name.slice(0, -'.json'.length)}.`
+        if (!names.some(other => other.startsWith(base) && MARK.test(other))) failed ??= unreadable
+        continue
+      }
+      if (named !== session) continue
+    } else if (typeof named === 'string' && named !== session) continue
     try { rmSync(file, { force: true }) } catch (error) {
       const empty: List = { version: 1, session, files: [], links: [] }
       try { writeFileSync(file, `${JSON.stringify(empty)}\n`) } catch { /* neither: the host's next try is all that is left */ }

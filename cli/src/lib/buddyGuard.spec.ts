@@ -5,7 +5,7 @@ import { appendFileSync, chmodSync, existsSync, linkSync, lstatSync, mkdirSync, 
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { allowBuddyReads, artifactLinks, buddyGuardCommand, buddyGuardSource, buddyReadsOf, forgetBuddyReads } from './buddyGuard.js'
+import { allowBuddyReads, artifactLinks, buddyGuardCommand, buddyGuardSource, buddyReadsOf, forgetBuddyReads, grantBuddyWide, recordBuddyApprovals } from './buddyGuard.js'
 
 // The guard Claude Code runs before each of a Buddy's tool calls, run here as it runs there: the script, with node, the
 // hook's input on stdin and its decision on stdout.
@@ -754,6 +754,71 @@ describe('the host\'s list of what a Buddy\'s person sent it', () => {
     } finally { chmodSync(lists, 0o700) }
     forgetBuddyReads('harness-1', lists)
     expect(readdirSync(lists)).toEqual([])
+  })
+
+  // Security reviews of #2261, folded into #2310 (Lead, 10-30): every writer of a session's list marks it first, so a list
+  // that cannot be read still holds back its own session's end, and only that one.
+  const writers: Array<[string, (session: string) => void]> = [
+    ['allowBuddyReads', (session) => allowBuddyReads(mine, { session, files: [sent], links: [] })],
+    ['recordBuddyApprovals', (session) => recordBuddyApprovals({ reads: mine, session, approvals: join(parent, 'approvals', 'person.json'),
+      judged: { wide: true, approve: [], refused: [], forgot: true }, messageId: 'm' })],
+    ['grantBuddyWide', (session) => grantBuddyWide(mine, { session, wide: true })],
+  ]
+  it.each(writers)('marks the list %s writes, so its session\'s end finds it unread, holds back on it alone, and removes it', (_, write) => {
+    write('harness-1')
+    expect(existsSync(mark(mine.file, 'harness-1'))).toBe(true)
+    chmodSync(mine.file, 0o000)
+    chmodSync(lists, 0o500)
+    try {
+      expect(() => forgetBuddyReads('harness-2', lists)).not.toThrow()
+      expect(() => forgetBuddyReads('harness-1', lists)).toThrow(/EACCES|EPERM/)
+      expect(existsSync(mine.file)).toBe(true)
+    } finally { chmodSync(lists, 0o700) }
+    expect(() => forgetBuddyReads('harness-1', lists)).not.toThrow()
+    expect(readdirSync(lists)).toEqual([])
+  })
+
+  it('fails on a list it cannot read with no session\'s mark beside it, as before, and skips one beside another session\'s mark', () => {
+    const orphan = join(lists, 'orphan.json')
+    mkdirSync(lists, { recursive: true })
+    // Another session's list, which that session's own end removes: here its mark is not written yet.
+    writeFileSync(orphan, JSON.stringify({ version: 1, session: 'harness-2', files: [], links: [] }))
+    chmodSync(orphan, 0o000)
+    try {
+      expect(() => forgetBuddyReads('harness-1', lists)).toThrow(/EACCES|EPERM/)
+      expect(existsSync(orphan)).toBe(true)
+      writeFileSync(mark(orphan, 'harness-2'), '')
+      expect(() => forgetBuddyReads('harness-1', lists)).not.toThrow()
+      expect(existsSync(orphan)).toBe(true)
+    } finally { chmodSync(orphan, 0o600) }
+    forgetBuddyReads('harness-2', lists)
+    expect(readdirSync(lists)).toEqual([])
+  })
+
+  it('writes the mark only as a file of its own: never through a link, and keeps one already there', () => {
+    mkdirSync(lists, { recursive: true })
+    const elsewhere = join(parent, 'elsewhere-target.txt')
+    writeFileSync(elsewhere, 'untouched')
+    symlinkSync(elsewhere, mark(mine.file, 'harness-1'))
+    try {
+      expect(() => grantBuddyWide(mine, { session: 'harness-1', wide: true })).toThrow()
+      expect(readFileSync(elsewhere, 'utf8')).toBe('untouched')
+      expect(existsSync(mine.file)).toBe(false)
+    } finally { rmSync(mark(mine.file, 'harness-1')); rmSync(elsewhere) }
+    grantBuddyWide(mine, { session: 'harness-1', wide: true })
+    grantBuddyWide(mine, { session: 'harness-1', wide: false })
+    expect(lstatSync(mark(mine.file, 'harness-1')).isFile()).toBe(true)
+    expect(held()).toMatchObject({ session: 'harness-1', wide: false })
+  })
+
+  it('takes the marks of other sessions away from a list a session writes', () => {
+    allowBuddyReads(mine, { session: 'harness-0', files: [sent], links: [] })
+    grantBuddyWide(mine, { session: 'harness-1', wide: true })
+    expect(existsSync(mark(mine.file, 'harness-0'))).toBe(false)
+    expect(existsSync(mark(mine.file, 'harness-1'))).toBe(true)
+    // The earlier session's end no longer finds the list as its own.
+    forgetBuddyReads('harness-0', lists)
+    expect(held().session).toBe('harness-1')
   })
 
   it('forgets nothing, and fails nothing, where no list was ever written', () => {
