@@ -9,6 +9,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
+import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
 
 import 'identity.dart';
@@ -168,8 +169,9 @@ class SwarmProjectSheetFrame extends StatelessWidget {
 /// sheet. No cups, medals or emoji.
 ///
 /// In a sheet from the project's menu ([sheet]) the people are the project's
-/// own ([swarmProjectHumans]), without ranks: each shows at once, with their
-/// points when the board answers.
+/// own ([swarmProjectHumans]), without ranks or the change against last week:
+/// skeleton rows until the board answers, then each with their points; each by
+/// name alone if it cannot.
 ///
 /// People are named from the members its Swarm already read; the board
 /// itself is read on open, on a pull, on another week, and every few minutes
@@ -440,9 +442,12 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
     int current,
   ) {
     final reader = _board;
-    if (_session == null || _lost || snapshot == null || project == null) {
-      return const [];
+    if (_session == null || _lost) return const [];
+    // The Swarm names the people: how many rows is not known before it.
+    if (snapshot == null) {
+      return [if (_swarm?.error == null) const _PersonRowsLoading(rows: 4)];
     }
+    if (project == null) return const [];
     final board = reader?.board;
     final humans = swarmProjectHumans(
       snapshot,
@@ -494,20 +499,24 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
             ],
           ),
         ),
-      for (final h in humans)
-        _PersonRow(
-          id: h.person.id,
-          score: h.score,
-          person: h.person,
-          name: h.name,
-          own: h.own,
-          columns: columns,
-          ranks: false,
-          onTap: switch (h.score) {
-            final score? => () => _openWeek(context, score, h.person, h.name),
-            null => null,
-          },
-        ),
+      if (reader == null || reader.loading)
+        _PersonRowsLoading(rows: humans.length.clamp(1, 8))
+      else
+        for (final h in humans)
+          _PersonRow(
+            id: h.person.id,
+            score: h.score,
+            person: h.person,
+            name: h.name,
+            own: h.own,
+            columns: columns,
+            ranks: false,
+            trends: false,
+            onTap: switch (h.score) {
+              final score? => () => _openWeek(context, score, h.person, h.name),
+              null => null,
+            },
+          ),
     ];
   }
 
@@ -761,6 +770,53 @@ class _TeamLine extends StatelessWidget {
   }
 }
 
+/// The sheet's team line and [rows] people on their way, in the metrics of a
+/// person named alone ([_PersonRow]), fading towards the last.
+class _PersonRowsLoading extends StatelessWidget {
+  const _PersonRowsLoading({required this.rows});
+
+  final int rows;
+
+  @override
+  Widget build(BuildContext context) => SkeletonBlock(
+    key: const ValueKey('swarm-leaderboard-loading'),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: AppSpace.s, bottom: AppSpace.xs),
+          child: SkeletonText(style: AppType.caption(), width: 180),
+        ),
+        for (var i = 0; i < rows; i++)
+          Opacity(
+            opacity: skeletonFade(i, rows, depth: .4),
+            child: ConstrainedBox(
+              key: ValueKey('swarm-leaderboard-loading-$i'),
+              constraints: const BoxConstraints(minHeight: minTouchTarget),
+              child: Padding(
+                padding: const EdgeInsets.all(AppSpace.s),
+                child: Row(
+                  children: [
+                    const Skeleton(
+                      width: 32,
+                      height: 32,
+                      shape: BoxShape.circle,
+                    ),
+                    const SizedBox(width: AppSpace.m),
+                    SkeletonText(
+                      style: AppType.body(),
+                      width: i.isEven ? 96 : 128,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+      ],
+    ),
+  );
+}
+
 /// The board's fixed numeric columns, each as wide as its widest value at the
 /// current text size, so rank, trend and points line up on every row.
 class _Columns {
@@ -821,11 +877,15 @@ class _PersonRow extends StatelessWidget {
     required this.columns,
     required this.onTap,
     this.ranks = true,
+    this.trends = true,
   });
 
   final String id;
   final SwarmScore? score;
   final bool ranks;
+
+  /// The change against last week; a project's sheet has the points alone.
+  final bool trends;
 
   /// Null for someone who has left.
   final SuperTabPerson? person;
@@ -839,7 +899,7 @@ class _PersonRow extends StatelessWidget {
     AppTheme.watch(context);
     final score = this.score;
     final numbers = score == null ? const <String>[] : swarmNumbers(score);
-    final trend = score == null ? null : swarmTrend(score);
+    final trend = score == null || !trends ? null : swarmTrend(score);
     Widget column(String kind, double width, Widget? child) => Padding(
       padding: const EdgeInsets.only(left: AppSpace.s),
       child: SizedBox(
@@ -919,7 +979,7 @@ class _PersonRow extends StatelessWidget {
                       ],
                     ),
                   ),
-                  if (columns.trend case final width?)
+                  if (columns.trend case final width? when trends)
                     column(
                       'trend-column',
                       width,

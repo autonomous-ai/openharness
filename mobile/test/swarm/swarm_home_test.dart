@@ -768,9 +768,64 @@ void main() {
       expect(key('swarm-title-button'), findsOneWidget);
     });
 
+    testWidgets("a project's row draws who reads it and counts who is running: "
+        'a private one only its owner and members', (tester) async {
+      final fake = backend();
+      Map<String, dynamic> inProject(String id, String visibility) => {
+        'id': id,
+        'name': id,
+        'ownerId': me,
+        'leadConversationId': 'lead-$id',
+        'visibility': visibility,
+        'members': [
+          {'id': 'person-other', 'generation': 'gen-person-other'},
+        ],
+        'updateMinutes': 5,
+      };
+      fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
+        ...firstLoad(
+          head: headData(
+            projects: [
+              inProject(project, 'public'),
+              inProject(web, 'private'),
+            ],
+          ),
+          agents: [agent('agent-builder'), agent('agent-idle')],
+          groups: [
+            groupData(
+              'g-work',
+              title: 'Work',
+              agentIds: ['agent-builder'],
+              status: 'working',
+              workerId: 'agent-builder',
+            ),
+          ],
+        ),
+        'members': [
+          part(me, 1, person(me)),
+          part('person-other', 1, person('person-other')),
+          part('person-third', 1, person('person-third')),
+        ],
+      };
+      await pump(tester, fake);
+
+      List<String> faces(String row) => [
+        for (final avatar in tester.widgetList<SwarmAvatar>(
+          inside(row, find.byType(SwarmAvatar)),
+        ))
+          avatar.id,
+      ];
+      const publicRow = 'swarm-project-$tab-$project';
+      const privateRow = 'swarm-project-$tab-$web';
+      expect(faces(publicRow), [me, 'person-other', 'person-third']);
+      expect(faces(privateRow), [me, 'person-other']);
+      expect(inside(publicRow, find.text('1 agent running')), findsOneWidget);
+      expect(inside(privateRow, find.text('No agents yet')), findsOneWidget);
+    });
+
     testWidgets('a project the Lead tagged the person in is bold and bright '
-        'with @N filled; the rest are quiet; each has its team in coloured '
-        'dots and when it last moved', (tester) async {
+        'with @N filled; the rest are quiet; each has its people, how many '
+        'agents are running and when it last moved', (tester) async {
       final semantics = tester.ensureSemantics();
       await pump(tester, backend());
 
@@ -784,17 +839,11 @@ void main() {
       expect(find.bySemanticsLabel(RegExp('1 mention')), findsOneWidget);
       expect(weightOf(tester, webRow, 'Web'), isNot(AppFont.semibold));
       expect(inside(webRow, find.textContaining('@')), findsNothing);
-      String team(String row) => tester
-          .widget<RichText>(
-            find.descendant(
-              of: inside(row, find.byType(SwarmTeamDots)),
-              matching: find.byType(RichText),
-            ),
-          )
-          .text
-          .toPlainText();
-      expect(team(mobileRow), '● 1 waiting  ● 1 down');
-      expect(team(webRow), 'All idle');
+      for (final row in [mobileRow, webRow]) {
+        expect(inside(row, find.text('No agents running')), findsOneWidget);
+        expect(inside(row, key('swarm-team-face-$me')), findsOneWidget);
+        expect(inside(row, find.byType(SwarmTeamDots)), findsNothing);
+      }
       expect(inside(mobileRow, find.text('30m')), findsOneWidget);
       expect(inside(mobileRow, find.text('#Mobile')), findsOneWidget);
       expect(inside(webRow, find.text('#Web')), findsOneWidget);
@@ -1311,10 +1360,7 @@ void main() {
       expect(inside(mobileRow, find.text('#Mobile')), findsOneWidget);
       expect(inside(backendRow, find.text('#Backend')), findsOneWidget);
       expect(
-        inside(
-          backendRow,
-          find.textContaining('Work Swarm · ', findRichText: true),
-        ),
+        inside(backendRow, find.textContaining(' · Work Swarm')),
         findsOneWidget,
       );
 

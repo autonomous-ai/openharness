@@ -1094,6 +1094,55 @@ void main() {
   });
 
   group('the keyboard', () {
+    /// A chat longer than the screen.
+    FakeSwarm long() => backend([
+      for (var i = 1; i <= 60; i++) message('m$i', i, text: 'Message $i'),
+    ]);
+
+    testWidgets('goes down when a finger scrolls the chat, whichever way, and '
+        'the draft stays', (tester) async {
+      await pump(tester, long());
+      await tester.enterText(find.byType(TextField), 'On it');
+      await tester.pump();
+      expect(composer(tester), up);
+
+      // Back through the messages, then towards the latest again.
+      for (final by in [const Offset(0, 300), const Offset(0, -100)]) {
+        await tester.showKeyboard(find.byType(TextField));
+        await tester.pump();
+        expect(composer(tester), up, reason: '$by');
+
+        await tester.drag(key('swarm-messages'), by);
+        await tester.pump();
+
+        expect(composer(tester), down, reason: '$by');
+        expect(
+          tester.widget<TextField>(find.byType(TextField)).controller!.text,
+          'On it',
+        );
+      }
+    });
+
+    testWidgets('stays up when the chat moves with no finger on it', (
+      tester,
+    ) async {
+      await pump(tester, long());
+      await tester.enterText(find.byType(TextField), 'On it');
+      await tester.pump();
+
+      final list = tester.state<ScrollableState>(
+        find.descendant(
+          of: key('swarm-messages'),
+          matching: find.byType(Scrollable),
+        ),
+      );
+      list.position.jumpTo(200);
+      await tester.pump();
+
+      expect(list.position.pixels, 200);
+      expect(composer(tester), up);
+    });
+
     testWidgets('stays up while a post is on its way and goes down once it '
         'is taken', (tester) async {
       final fake = backend([message('m1', 1)]);

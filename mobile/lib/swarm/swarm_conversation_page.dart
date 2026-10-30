@@ -1664,6 +1664,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       key: const ValueKey('swarm-messages'),
       controller: _scroll,
       reverse: true,
+      // A finger's scroll only: a new message moving the list leaves it up.
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       padding: _listPadding,
       itemCount: lead + entries.length + (c.hasOlder ? 1 : 0),
       // A row keeps its element when a message or a post moves the others'
