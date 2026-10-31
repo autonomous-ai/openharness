@@ -123,6 +123,7 @@ abstract final class AppIcons {
   static const info = LucideIcons.info400;
   static const keyboard = LucideIcons.keyboard400;
   static const laptop = LucideIcons.laptop400;
+  static const mail = LucideIcons.mail400;
   static const layers = LucideIcons.layers400;
   static const layoutGrid = LucideIcons.layoutGrid400;
   static const link2 = LucideIcons.link2400;
