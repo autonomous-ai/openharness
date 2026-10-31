@@ -712,3 +712,58 @@ describe('ranking by facts', () => {
     expect(gridStrength(catalog, 'qwen3:4b', 'Qwen 3 4B')).toBe(1)
   })
 })
+
+/** Scholes's goals, pieces 3 to 6, each change the ranking; they plug into choose() rather than edit it. These are today's
+ *  answers for a fixed set of tasks and machines, captured before the hook existed: with no plug-ins every answer, label and
+ *  record must stay byte for byte the same. */
+describe('route answers without plug-ins', () => {
+  const OPUS = { model: 'opus', effort: 'high', quality: 3, cost: 3 } as const
+  const CODEX = { engine: 'codex', model: 'default', effort: 'default', quality: 3, cost: 2 } as const
+  const on = (machine: string, row: Partial<Probe>, quota: Probe['quota'] = windows([80, 3 * H], [90, 5 * D], machine)) =>
+    probe({ machineId: machine, machineName: machine, ...row, quota })
+  const frame: MemberFrame = { title: 'Fix the dial', project: 'openharness', cwd: '/r', root: '/r', remote: 'github.com/o/r', branch: 'fix/dial', updatedAt: NOW - 20 * M }
+  const grid = (patch: Partial<Probe> = {}) => probe({ model: 'default', effort: 'default', quality: 1, cost: 1, quota: { known: false, leftPercent: null, resetsAt: null },
+    gridModel: 'qwen3', gridName: 'swarm-0123456789ab', gridLabel: 'Qwen 3', ...patch })
+  type Args = Parameters<typeof choose>
+  const SCENARIOS: Array<[string, Args]> = [
+    ['mixed members and new agents', [[on('a', OPUS), on('b', {}), on('a', {}, windows([60, 3 * H], [90, 5 * D], 'a')),
+      on('a', { kind: 'member', agentId: 'm1', name: 'Multiply', activity: 'idle', repo: 'same', frame, earlier: [{ group: 'Dial fix', outcome: 'merged' }] }),
+      on('b', { kind: 'member', agentId: 'm2', name: 'Elsewhere', activity: 'idle', repo: 'different', frame: null }),
+      on('a', { model: 'haiku', effort: 'auto', quality: 1, cost: 1 })], policy, a(), NOW]],
+    ['high, large: strong pick short, weaker one fits', [[on('a', OPUS, windows([20, 4 * H], [50, 5 * D], 'A')), on('b', CODEX, windows([5, 4 * H], [60, 3 * D], 'B')),
+      on('c', {}, windows([90, 4 * H], [90, 6 * D], 'C'))], policy, a({ difficulty: 'high', size: 'large' }), NOW]],
+    ['low, small: weekly day budget and an expiring window', [[on('a', OPUS, windows([70, 20 * M], [10, 6 * D], 'A')), on('b', OPUS, windows([40, 4 * H], [80, 2 * D], 'B')),
+      on('c', CODEX, windows(null, [30, 6 * D], 'C'))], policy, a({ difficulty: 'low', size: 'small', kind: 'docs' }), NOW]],
+    ['picks still at work hold their quota', [[on('a', OPUS, windows([50, 3 * H], [50, 5 * D], 'A')), on('b', OPUS, windows([45, 3 * H], [50, 5 * D], 'B'))],
+      policy, a({ difficulty: 'high' }), NOW, [{ account: 'A', spend: { '5-hour': 30, weekly: 4 }, size: 'medium', createdAt: NOW - 10 * M }]]],
+    ['metered, unknown and unreadable quota', [[on('a', CODEX, { known: true, leftPercent: null, resetsAt: null, metered: true }),
+      on('b', CODEX, { known: false, leftPercent: null, resetsAt: null, why: 'signed out of usage' }), on('c', CODEX, { known: true, leftPercent: 40, resetsAt: NOW + 2 * H }),
+      on('d', CODEX, { known: true, leftPercent: 40, resetsAt: null, from: 'Team Mac' })], policy, a(), NOW]],
+    ['more machines than rows shown', [Array.from({ length: 15 }, (_, i) => on(`m${String(i).padStart(2, '0')}`, i % 2 ? OPUS : {},
+      windows([30 + i * 4, 3 * H], [90, 5 * D], `acct${i}`))), policy, a(), NOW]],
+    ['a task naming a repository leaves out a member in another', [[on('a', {}), on('b', { kind: 'member', agentId: 'm2', name: 'Zed', activity: 'idle', repo: 'different' }),
+      on('c', { refusals: ['Machine is offline.'] }), on('d', { load: { agents: 2, freeMemoryBytes: 8e9, hasFolder: true }, notes: ['Its last task here was lost.'] })],
+      policy, a({ needs: { tools: ['git'], devices: [], cwd: '/repo' } }), NOW]],
+    ['a person asked for a local model', [[on('a', OPUS), grid(), grid({ machineId: 'b', machineName: 'b', gridModel: 'kimi-k3', gridLabel: 'Kimi K3', gridKind: 'api' })],
+      { ...policy, grid: { strength: 1, models: [{ model: 'kimi k3', strength: 2 }] } }, a({ local: true, difficulty: 'low', kind: 'docs' }), NOW]],
+    ['a named model the catalog does not list', [[on('a', OPUS), on('b', CODEX), on('c', {})], policy, a({ model: 'claude-opus-6' }), NOW]],
+    ['a named model somebody holds', [[on('a', OPUS)], policy, a({ model: 'deepseek 4.1' }), NOW,
+      [], [{ model: 'deepseek/deepseek-v4.1', label: 'DeepSeek v4.1', kind: 'api', holders: ['Wren', 'Ada'] }]]],
+    ['a named model served by a host now offline', [[on('a', OPUS)], policy, a({ model: 'qwen coder' }), NOW, [], [],
+      [{ title: 'Qwen Coder 32B', reason: 'Its host Rig is offline, so an agent on it would never start.' }]]],
+    ['nothing can run', [[on('a', { refusals: ['Machine is offline.'] }), on('b', CODEX, undefined)].map((p, i) => i ? { ...p, refusals: ['Codex is signed out.'] } : p),
+      policy, a(), NOW]],
+    ['an unrated member and a single candidate', [[on('a', { kind: 'member', agentId: 'm3', model: 'gpt-x', unrated: true, quality: 1, cost: 1, activity: 'working',
+      terminalUnverified: true, frame: { ...frame, title: null, project: null, branch: null, updatedAt: null } })], policy, a({ size: 'small' }), NOW]],
+  ]
+  const answer = ([name, args]: [string, Args]) => {
+    const choice = choose(...args)
+    if ('error' in choice) return { name, choice }
+    const verdict = decide(choice)
+    return { name, choice, verdict, record: recordOf(choice, verdict, args[2]) }
+  }
+
+  it('answers every scenario exactly as before the hook', async () => {
+    await expect(`${JSON.stringify(SCENARIOS.map(answer), null, 1)}\n`).toMatchFileSnapshot('./__snapshots__/route.answers.json')
+  })
+})
