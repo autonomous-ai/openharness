@@ -190,6 +190,20 @@ direct ones plus about 40 through `announceSession`.
 The same count from a Desktop log of a comparable day after release (the script reads `~/.harness/logs/app-*.log`,
 counting `↓` frames by type), written into this document beside the "before" table.
 
+## Results
+
+Counted with `python3 -I scripts/desktop-frame-count.py <Desktop log>` (received `↓` frames by type, the
+`swarm_changed` gap, and each `agent_synced` against the previous one for its agent).
+
+| Log | Window | Frames | `swarm_changed` | `agent_activity` | `turn_heartbeat` | `agent_synced` (identical / activity only) |
+|---|---|---|---|---|---|---|
+| Before: Ken's Desktop, 2026-10-30 (the table above) | about 22 h open | 170,666 | 54,282 | 32,819 | 28,411 | 17,099 (4,239 / 181) |
+| Before: the build Mac's Desktop, 2026-10-30 | 03:05-17:02 | 161,203 | 40,344 (median gap 1 s) | 22,670 | 18,980 | 59,467 (35,601 / 147) |
+| After | pending: a comparable day after the release | | | | | |
+
+The build Mac's Desktop had far more identical `agent_synced` (60% of them, against 25% on Ken's): worth weighing if
+change 3 is taken up again.
+
 ## Design
 
 - **Growth**: one held change per Swarm per socket (backend); one small object per live session and per agent
