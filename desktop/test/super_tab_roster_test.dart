@@ -117,6 +117,9 @@ class RosterFixture {
   String lineText(WidgetTester tester, int i) =>
       tester.widget<Text>(line(i)).data!;
 
+  /// The model and effort after the role chip (Dee, 2026-10-31).
+  Finder model(int i) => find.byKey(ValueKey('super-member-model-agent-$i'));
+
   /// The hover's state line: state, machine, model and effort (team glance,
   /// 2026-10-27), on the row until 2026-10-30.
   String glanceText(WidgetTester tester, int i) => tester
@@ -304,6 +307,112 @@ void main() {
     );
     expect(find.textContaining('claude-opus-5-5'), findsNothing);
     await f.close(tester);
+  });
+
+  // Dee (2026-10-31): "show the model and effort on the first line of each
+  // agent ... let's bring it back." Right after the role chip, in the grey of
+  // the line below.
+  group('first line model and effort', () {
+    Future<RosterFixture> withModel(
+      WidgetTester tester,
+      Map<String, Object> configuration,
+    ) async {
+      final f = await fixture(tester);
+      (f.server.state['agents'] as List)[1]['configuration'] = {
+        'engine': 'claude',
+        ...configuration,
+      };
+      await f.controller.refresh();
+      await f.show(tester);
+      return f;
+    }
+
+    testWidgets('reads "Opus 5.5 · high" after the role chip', (tester) async {
+      final f = await withModel(tester, {
+        'model': 'claude-opus-5-5',
+        'effort': 'high',
+      });
+      final model = f.model(1);
+      expect(tester.widget<Text>(model).data, 'Opus 5.5 · high');
+      final name = tester.getRect(f.inRow(1, find.text('Sage')));
+      final badge = tester.getRect(f.inRow(1, find.text('Dev')));
+      final shown = tester.getRect(model);
+      expect(shown.left, greaterThan(badge.right));
+      expect(shown.center.dy, closeTo(name.center.dy, 2));
+      expect(shown.bottom, lessThanOrEqualTo(tester.getRect(f.line(1)).top));
+      // The grey of the details line beneath.
+      expect(
+        tester.widget<Text>(model).style!.color,
+        tester.widget<Text>(f.line(1)).style!.color,
+      );
+      // The second line and the hover card stay as they were.
+      expect(f.lineText(tester, 1), isNot(contains('Opus')));
+      expect(f.glanceText(tester, 1), contains('Opus 5.5 · high'));
+      await f.close(tester);
+    });
+
+    testWidgets('a model with no known effort shows the model alone', (
+      tester,
+    ) async {
+      final f = await withModel(tester, {
+        'model': 'claude-opus-5-5',
+        'effort': 'auto',
+      });
+      expect(tester.widget<Text>(f.model(1)).data, 'Opus 5.5');
+      await f.close(tester);
+    });
+
+    testWidgets('an unknown model shows nothing extra', (tester) async {
+      final f = await withModel(tester, {'effort': 'high'});
+      expect(f.model(1), findsNothing);
+      expect(f.inRow(1, find.textContaining('high')), findsNothing);
+      await f.close(tester);
+    });
+
+    for (final width in [220.0, 280.0]) {
+      for (final scale in [1.0, 2.0]) {
+        testWidgets(
+          'at $width pixels and ${scale}x the model is cut before the name',
+          (tester) async {
+            final f = await fixture(tester);
+            await tester.binding.setSurfaceSize(Size(width, 700));
+            (f.server.state['agents'] as List)[1]['displayName'] = 'Alexandria';
+            await f.controller.refresh();
+            await f.show(tester, nativeState: false, scale: scale);
+            final name = f.inRow(1, find.text('Alexandria'));
+            final badge = f.inRow(1, find.text('Dev'));
+            final (nameAlone, badgeAlone) = (
+              tester.getRect(name),
+              tester.getRect(badge),
+            );
+            (f.server.state['agents'] as List)[1]['configuration'] = {
+              'engine': 'claude',
+              'model': 'claude-opus-5-5',
+              'effort': 'xhigh',
+            };
+            await f.controller.refresh();
+            await f.show(tester, nativeState: false, scale: scale);
+            // The name and chip keep their size; the model takes what is left.
+            expect(tester.getRect(name), nameAlone);
+            expect(tester.getRect(badge), badgeAlone);
+            final row = tester.getRect(f.row(1));
+            final mark = tester.getRect(f.inRow(1, find.byType(ActivityMark)));
+            expect(f.model(1), findsOneWidget);
+            final model = tester.getRect(f.model(1));
+            expect(model.left, greaterThanOrEqualTo(badgeAlone.right));
+            expect(model.right, lessThanOrEqualTo(mark.left));
+            expect(model.right, lessThanOrEqualTo(row.right));
+            expect(tester.widget<Text>(f.model(1)).maxLines, 1);
+            expect(
+              tester.widget<Text>(f.model(1)).overflow,
+              TextOverflow.ellipsis,
+            );
+            expect(tester.takeException(), isNull);
+            await f.close(tester);
+          },
+        );
+      }
+    }
   });
 
   testWidgets('agent tooltip omits data that neither state nor host knows', (
@@ -767,8 +876,14 @@ void main() {
     expect(f.controller.snapshot!.agents.first.engine, 'claude');
     await tester.longPress(f.row(0));
     await tester.pumpAndSettle();
-    expect(find.text('Claude'), findsOneWidget);
-    expect(find.text('Sonnet'), findsOneWidget);
+    Finder details(String text) => find.descendant(
+      of: find.byType(AlertDialog),
+      matching: find.text(text),
+    );
+    expect(details('Claude'), findsOneWidget);
+    expect(details('Sonnet'), findsOneWidget);
+    // The row's first line names the new model too (Dee, 2026-10-31).
+    expect(tester.widget<Text>(f.model(0)).data, 'Sonnet');
     await tester.tap(find.widgetWithText(TextButton, 'Close'));
     await tester.pumpAndSettle();
     await f.close(tester);
@@ -2087,7 +2202,24 @@ void main() {
         'roster marks remain legible in ${brightness.name} at ${scale}x',
         (tester) async {
           final f = await fixture(tester);
-          (f.server.state['agents'] as List)[2]['projectId'] = 'lead';
+          final agents = f.server.state['agents'] as List;
+          agents[2]['projectId'] = 'lead';
+          // Model and effort on the first line (Dee, 2026-10-31): both, the
+          // model alone, and none.
+          agents[0]['configuration'] = {
+            'engine': 'codex',
+            'model': 'gpt-5.6-sol',
+            'effort': 'xhigh',
+          };
+          agents[1]['configuration'] = {
+            'engine': 'claude',
+            'model': 'claude-opus-5-5',
+            'effort': 'high',
+          };
+          agents[2]['configuration'] = {
+            'engine': 'codex',
+            'model': 'gpt-5.6-sol',
+          };
           await f.controller.refresh();
           (f.server.state['conversations'] as List)[0]
             ..['title'] = 'Polish sidebar navigation'
@@ -2130,6 +2262,11 @@ void main() {
             );
             expect(bounds.contains(status.center), isTrue);
           }
+          expect(
+            [for (var i = 0; i < 3; i++) tester.widget<Text>(f.model(i)).data],
+            ['GPT-5.6 Sol · xhigh', 'Opus 5.5 · high', 'GPT-5.6 Sol'],
+          );
+          expect(f.model(3), findsNothing);
           expect(tester.takeException(), isNull);
           await captureBoundary(
             tester,
@@ -2835,12 +2972,19 @@ void main() {
             ago: const Duration(minutes: 1),
           ),
         );
+        (f.server.state['agents'] as List)[1]['configuration'] = {
+          'engine': 'claude',
+          'model': 'claude-opus-5-5',
+          'effort': 'high',
+        };
         await f.controller.refresh();
         await f.show(tester, nativeState: false);
         expect(find.text('Sidebar rescan fix · 1m'), findsOneWidget);
+        expect(find.text('Opus 5.5 · high'), findsOneWidget);
         f.controller.revokeAccess('Access removed');
         await tester.pumpAndSettle();
         expect(find.textContaining('Sidebar rescan fix'), findsNothing);
+        expect(find.textContaining('Opus 5.5'), findsNothing);
         expect(f.row(1), findsNothing);
         await f.close(tester);
       },
