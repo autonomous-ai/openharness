@@ -261,68 +261,93 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     widget.onOpenAgent,
   );
 
-  Widget _agentIdentity(String name, String role, String badge) =>
-      LayoutBuilder(
-        builder: (context, constraints) {
-          final nameStyle = DesktopChrome.control();
-          final tagStyle = DesktopChrome.metadata();
-          final scale = MediaQuery.textScalerOf(context);
-          double measure(String text, TextStyle style) {
-            final painter = TextPainter(
-              text: TextSpan(text: text, style: style),
-              textDirection: Directionality.of(context),
-              textScaler: scale,
-              maxLines: 1,
-            )..layout();
-            final width = painter.width;
-            painter.dispose();
-            return width;
-          }
+  /// Name, role chip, then the model and effort in the details line's grey
+  /// (Dee, 2026-10-31). The name and chip are measured first; the model takes
+  /// what is left and is cut before either shrinks.
+  Widget _agentIdentity(
+    String name,
+    String role,
+    String badge, {
+    String? model,
+    Key? modelKey,
+  }) => LayoutBuilder(
+    builder: (context, constraints) {
+      final nameStyle = DesktopChrome.control();
+      final tagStyle = DesktopChrome.metadata();
+      final scale = MediaQuery.textScalerOf(context);
+      double measure(String text, TextStyle style) {
+        final painter = TextPainter(
+          text: TextSpan(text: text, style: style),
+          textDirection: Directionality.of(context),
+          textScaler: scale,
+          maxLines: 1,
+        )..layout();
+        final width = painter.width;
+        painter.dispose();
+        return width;
+      }
 
-          final badgeWidth = (measure(badge, tagStyle) + 10).clamp(
-            0.0,
-            constraints.maxWidth,
-          );
-          final nameWidth = measure(name, nameStyle).clamp(
-            0.0,
-            (constraints.maxWidth - badgeWidth - 6).clamp(0.0, double.infinity),
-          );
-          Widget tag(String text) => Container(
-            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-            decoration: BoxDecoration(
-              color: grid.AppSurface.hoverFill,
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: Text(
-              text,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: tagStyle,
-            ),
-          );
-          return Row(
-            children: [
-              if (nameWidth > 0) ...[
-                SizedBox(
-                  width: nameWidth,
-                  child: Text(
-                    name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: nameStyle,
-                  ),
-                ),
-                const SizedBox(width: 6),
-              ],
-              Semantics(
-                label: role,
-                excludeSemantics: true,
-                child: SizedBox(width: badgeWidth, child: tag(badge)),
-              ),
-            ],
-          );
-        },
+      final badgeWidth = (measure(badge, tagStyle) + 10).clamp(
+        0.0,
+        constraints.maxWidth,
       );
+      // One gap between name, chip and model.
+      const gap = 6.0;
+      final nameWidth = measure(name, nameStyle).clamp(
+        0.0,
+        (constraints.maxWidth - badgeWidth - gap).clamp(0.0, double.infinity),
+      );
+      Widget tag(String text) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+        decoration: BoxDecoration(
+          color: grid.AppSurface.hoverFill,
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Text(
+          text,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: tagStyle,
+        ),
+      );
+      return Row(
+        children: [
+          if (nameWidth > 0) ...[
+            SizedBox(
+              width: nameWidth,
+              child: Text(
+                name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: nameStyle,
+              ),
+            ),
+            const SizedBox(width: gap),
+          ],
+          Semantics(
+            label: role,
+            excludeSemantics: true,
+            child: SizedBox(width: badgeWidth, child: tag(badge)),
+          ),
+          // The gap shrinks with the model, so a name that fills the row never overflows.
+          if (model != null)
+            Flexible(
+              child: Padding(
+                padding: const EdgeInsets.only(left: gap),
+                child: Text(
+                  model,
+                  key: modelKey,
+                  maxLines: 1,
+                  softWrap: false,
+                  overflow: TextOverflow.ellipsis,
+                  style: tagStyle,
+                ),
+              ),
+            ),
+        ],
+      );
+    },
+  );
 
   /// An agent's row, in the shape the people's rows share (Dee, 2026-10-29):
   /// avatar, name and role chip, today's one status line beneath, and the
@@ -331,7 +356,8 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     final name = c.snapshot!.agentName(agent.id), shown = state.mark;
     final info = SuperTabAgentInfo(c, widget.app, agent, activity: state.words);
     final work = state.work;
-    // The state in a word, where it runs, its engine, model and effort: on hover (Dee, 2026-10-30).
+    // The state in a word, where it runs, its engine, model and effort: on hover (Dee, 2026-10-30); the model and
+    // effort on the first line too (Dee, 2026-10-31).
     final glance = superTabAgentGlance(info, now: now);
     final project = c.snapshot!.projects
         .where((p) => p.id == _agentProjectId(agent))
@@ -415,7 +441,13 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             size: SuperTabAvatar.rowSize,
             engineBadge: false,
           ),
-          name: _agentIdentity(name, role, badge),
+          name: _agentIdentity(
+            name,
+            role,
+            badge,
+            model: glance.modelEffort,
+            modelKey: ValueKey('super-member-model-${agent.id}'),
+          ),
           detail: Text(
             detail,
             key: ValueKey('super-member-line-${agent.id}'),
