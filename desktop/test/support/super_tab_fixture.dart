@@ -88,6 +88,7 @@ class SwarmPartsBackend {
           'threadMarks',
           'teamAccounts',
           'threadSessions',
+          'sessionsFromChat',
         }.contains(entry.key))
           entry.key: entry.value,
     };
@@ -168,6 +169,7 @@ class SwarmPartsBackend {
     if (state['teamAccounts'] == false) 'teamAccounts': false,
     // A server that takes a thread reply's New session (backend read/views.ts).
     if (state['threadSessions'] == true) 'threadSessions': true,
+    if (state['sessionsFromChat'] == true) 'sessionsFromChat': true,
     // The reader's own read marks alone, as backend readMarks.ts sends them.
     if ((state['readMarks'] as Map?)?[reader ?? 'owner'] case final Map marks)
       'readMarks': Map<String, dynamic>.from(marks),
@@ -988,6 +990,21 @@ class ConversationServer {
           messages.last['id'] = id;
         }
         output['messageId'] = messages.last['id'];
+        // New session starts the thread's own session (backend commands.ts
+        // routeBuddySession): a top-level message roots its own thread.
+        if (command['newSession'] == true) {
+          final sent = messages.last;
+          final thread = (sent['thread'] ?? sent['id']) as String;
+          sent['buddySession'] = true;
+          final chat = (state['conversations'] as List).cast<Map>().firstWhere(
+            (c) => c['id'] == command['conversationId'],
+          );
+          chat['buddySessions'] = [
+            ...(chat['buddySessions'] as List? ?? const []),
+            {'thread': thread, 'startId': operationId, 'at': 1},
+          ];
+          output['startId'] = operationId;
+        }
       } else if (command['type'] == 'member.status' ||
           command['type'] == 'member.username' ||
           command['type'] == 'member.avatar' ||

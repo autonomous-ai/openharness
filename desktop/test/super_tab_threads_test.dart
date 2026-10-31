@@ -514,7 +514,11 @@ void main() {
     final c = await show(tester, server);
     await tester.tap(line('message-1'));
     await tester.pumpAndSettle();
-    expect(inPanel(find.text('Also send to the project chat')), findsOneWidget);
+    expect(inPanel(find.text('Also send')), findsOneWidget);
+    expect(
+      inPanel(find.byTooltip('Also send to the project chat')),
+      findsOneWidget,
+    );
     await tester.enterText(
       find.byKey(const ValueKey('super-thread-composer')),
       'In the thread only.',
