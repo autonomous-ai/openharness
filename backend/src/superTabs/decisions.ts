@@ -169,15 +169,27 @@ export async function waitingFor(tx: Tx, tabId: string, conversationId: string, 
 /** Closes the decisions still waiting in these conversations, whose work is over (workOver), as withdrawn: answered at
  *  [now] with no choice, so none waits, none is listed, none can be answered and a new ask of the same question is a new
  *  decision. Never a routing reflection's, which expires on its own (expireReflections). Run in the transaction that ends
- *  the work (store.ts), so a concurrent answer conflicts with it and only one of them counts. The number closed. */
-export async function withdrawIn(tx: Tx, tabId: string, conversationIds: readonly string[], now: number): Promise<number> {
+ *  the work (store.ts), so a concurrent answer conflicts with it and only one of them counts. With [askedBy], only those
+ *  asked by then: the work was read as over at that time (store.ts withdrawEndedDecisions). The number closed. */
+export async function withdrawIn(tx: Tx, tabId: string, conversationIds: readonly string[], now: number, askedBy?: number): Promise<number> {
   let closed = 0
   // One by one through the conversation index: a command ends one conversation's work, rarely a few (hotFilters.test.ts).
   for (const conversationId of new Set(conversationIds)) {
-    closed += (await tx.superTabDecision.updateMany({ where: { tabId, conversationId, AND: [waiting, notReflection] },
+    closed += (await tx.superTabDecision.updateMany({ where: { tabId, conversationId, AND: [waiting, notReflection],
+      ...askedBy === undefined ? {} : { createdAt: { lte: new Date(askedBy) } } },
       data: { answeredAt: new Date(now), withdrawn: true } })).count
   }
   return closed
+}
+
+/** The conversations, by Swarm, where a decision still waits, a routing reflection's aside (store.ts withdrawEndedDecisions,
+ *  once at worker startup). Open decisions are few: at most MAX_OPEN_DECISIONS per asker and person. */
+export async function waitingConversations(tx: Tx): Promise<Map<string, string[]>> {
+  const rows = await tx.superTabDecision.findMany({ where: { AND: [waiting, notReflection] }, select: { tabId: true, conversationId: true },
+    distinct: ['tabId', 'conversationId'] })
+  const byTab = new Map<string, string[]>()
+  for (const row of rows) byTab.set(row.tabId, [...byTab.get(row.tabId) ?? [], row.conversationId])
+  return byTab
 }
 
 /** The conversations whose work this write ended (workOver in [after], not in [before]): their waiting decisions close. */

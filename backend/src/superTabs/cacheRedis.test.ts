@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto'
 import { Redis } from 'ioredis'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { redisStamps, STAMP_TTL_MS, type StampScope } from './cache.js'
 
 // A real Redis: REDIS_TEST_URL, e.g. redis://127.0.0.1:6379/15 (CI has none, so this file is skipped there). Only keys of
 // this run are touched, and they are removed afterwards.
 const url = process.env.REDIS_TEST_URL
+// A real client: the shared setup's never connects (noRedis.test-support.ts).
+vi.unmock('ioredis')
 
 describe.skipIf(!url)('redisStamps', () => {
   let redis: Redis

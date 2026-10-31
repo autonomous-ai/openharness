@@ -300,6 +300,43 @@ void main() {
       variant: TargetPlatformVariant.only(TargetPlatform.macOS),
     );
 
+    testWidgets(
+      'Option+Shift+Down and Up stop at the ends: nothing moves past the '
+      'last unread chat or before the first',
+      (tester) async {
+        final (c, _) = await _show(tester, Brightness.dark, selected: 'lead');
+        final order = [
+          for (final id in ['lead', 'offline', 'routing', 'roster', 'web-lead'])
+            if (c.unreadShown(c.snapshot!.conversation(id)!)) id,
+        ];
+        expect(order.length, greaterThan(1));
+        Future<void> jump(LogicalKeyboardKey arrow) => _keys(tester, [
+          LogicalKeyboardKey.altLeft,
+          LogicalKeyboardKey.shiftLeft,
+        ], arrow);
+
+        // At the last unread chat, Down twice stays there.
+        await tester.tap(find.byKey(ValueKey('super-group-${order.last}')));
+        await tester.pumpAndSettle();
+        expect(c.selectedId, order.last);
+        await jump(LogicalKeyboardKey.arrowDown);
+        expect(c.selectedId, order.last);
+        await jump(LogicalKeyboardKey.arrowDown);
+        expect(c.selectedId, order.last);
+
+        // At the first, Up twice stays there.
+        await tester.tap(find.byKey(ValueKey('super-group-${order.first}')));
+        await tester.pumpAndSettle();
+        expect(c.selectedId, order.first);
+        await jump(LogicalKeyboardKey.arrowUp);
+        expect(c.selectedId, order.first);
+        await jump(LogicalKeyboardKey.arrowUp);
+        expect(c.selectedId, order.first);
+        await _done(tester, c);
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.macOS),
+    );
+
     testWidgets('Shift+Esc marks every chat read with an Undo toast; Undo puts '
         'them back', (tester) async {
       final (c, _) = await _show(tester, Brightness.dark);

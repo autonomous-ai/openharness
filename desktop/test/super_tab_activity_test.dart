@@ -237,6 +237,29 @@ void main() {
       expect(c.unreadShown(group), isFalse);
       expect(attention.mentionsIn('offline'), 0);
     });
+
+    test('a muted chat\'s thread tags never count on Threads either; '
+        'unmuted, they count again', () async {
+      final server = projectServer();
+      server.followedThreads = {'unread': [], 'read': [], 'more': false};
+      fromLead(server, 'Root', conversationId: 'offline');
+      server.tag(
+        'message-1',
+        conversationId: 'offline',
+        threadId: 'message-1',
+        messageSequence: 2,
+      );
+      server.tag('message-1', threadId: 'message-1', messageSequence: 2);
+      final c = await open(server);
+      final attention = SuperTabAttention.of(c);
+      await attention.mentions.load();
+      expect(attention.threadMentions, 2);
+      await c.setNotify('offline', SuperTabNotify.muted);
+      // Only the tag in the chat that is not muted.
+      expect(attention.threadMentions, 1);
+      await c.setNotify('offline', SuperTabNotify.all);
+      expect(attention.threadMentions, 2);
+    });
   });
 
   group('Mark all read (Shift+Esc) holds its write for Undo', () {
