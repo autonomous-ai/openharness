@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Prisma } from '@prisma/client'
 import { isLeads, type Agent, type SuperTabState } from './model.js'
-import { revokeConditions } from './native.js'
+import { recoveryText, revokeConditions, turnRecipients } from './native.js'
 import { canReadAgent, canReadGroup, ownSession, projectsOf, watchClosed } from './projects.js'
 import { outsider, owner, peer, richSwarm } from './read/fixture.test-support.js'
 
@@ -114,5 +114,25 @@ describe('which terminals a commit revokes (item 7: only what changed access is 
     const ids = swarm()
     const { got } = ids.revokes(after => { target(after, ids.s.worker).confidential = true })
     expect(got.watchersLost).toEqual([{ agentId: ids.s.worker, personIds: [owner.userId, peer.userId, outsider.userId] }])
+  })
+})
+
+// Project instructions, phase 4: a recording gap is a notice of what happened, to the coordinator alone; nothing blocks its
+// task, and a typed prompt or its answer reaches nobody (phase 1's ruling: a terminal turn names no one).
+describe('what a recorded terminal turn tells', () => {
+  it('records a recording gap without blocking its task', () => {
+    const group = { leadId: 'L', title: 'Ship it', assignment: { status: 'working' } }
+    const text = recoveryText({ name: 'worker', displayName: 'Rowan' }, group, 'The work was interrupted by a restart of the terminal recording.',
+      '2026-10-30T08:00:00.000Z')
+    expect(text).toBe('Rowan\'s terminal recording on "Ship it" has a gap. The work was interrupted by a restart of the terminal recording.\n\n'
+      + 'Last recorded checkpoint: 2026-10-30T08:00:00.000Z. Input and commands before the gap may already have taken effect.')
+    expect(text).not.toMatch(/Recovery needed|Check the agent|Keep this task|report working|Do not replay/)
+    expect(group.assignment.status).toBe('working')
+    expect(recoveryText({ name: 'worker' }, group, 'Part of the recorded terminal history was lost.', null)).toContain('Last recorded checkpoint: time unavailable.')
+    // A required recovery reaches the coordinator; a prompt, an answer or any other gap nobody; nor the coordinator's own.
+    expect(turnRecipients(group, { id: 'w' }, true)).toEqual(['L'])
+    expect(turnRecipients(group, { id: 'w' }, false)).toEqual([])
+    expect(turnRecipients(group, { id: 'L' }, true)).toEqual([])
+    expect(turnRecipients({ leadId: null }, { id: 'w' }, true)).toEqual([])
   })
 })

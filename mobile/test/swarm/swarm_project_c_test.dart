@@ -670,6 +670,68 @@ void main() {
     });
   });
 
+  group('Team, its instructions', () {
+    FakeSwarm withInstructions({bool coordinator = true}) {
+      final fake = backend();
+      final parts = fake.routes['/api/super-tabs/$tab/parts']!;
+      fake.routes['/api/super-tabs/$tab/parts'] = (body) async {
+        final read = Map<String, dynamic>.from(await parts(body) as Map);
+        final data = Map<String, dynamic>.from(
+          (read['head'] as Map)['data'] as Map,
+        );
+        data['projects'] = [
+          {
+            ...(data['projects'] as List).first as Map<String, dynamic>,
+            if (coordinator) 'coordinatorName': 'Product Manager',
+            'instructionsRevision': 7,
+            'notesRevision': 1,
+          },
+        ];
+        read['head'] = part('head', 1, data);
+        return read;
+      };
+      fake.routes['/api/super-tabs/$tab/projects/$project/instructions'] =
+          (_) => {
+            'projectId': project,
+            'revision': 7,
+            'text': 'The rules',
+            'template': false,
+            'coordinatorName': 'Product Manager',
+            'notesRevision': 1,
+            'notes': <Object>[],
+          };
+      return fake;
+    }
+
+    testWidgets('Team lists the instructions after the agents', (tester) async {
+      await team(tester, withInstructions());
+      await tester.scrollUntilVisible(
+        key('swarm-team-instructions'),
+        200,
+        scrollable: find.descendant(
+          of: key('swarm-project-team-list'),
+          matching: find.byType(Scrollable),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(said(tester, 'swarm-team-instructions'), contains('Revision 7'));
+      expect(
+        tester.getTopLeft(key('swarm-team-instructions')).dy,
+        greaterThan(tester.getTopLeft(key('swarm-member-agent-ash')).dy),
+      );
+      await tester.tap(key('swarm-team-instructions'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-instructions-text'), findsOneWidget);
+    });
+
+    testWidgets('a backend that does not know them shows no row', (
+      tester,
+    ) async {
+      await team(tester, withInstructions(coordinator: false));
+      expect(key('swarm-team-instructions'), findsNothing);
+    });
+  });
+
   group('the Leaderboard sheet', () {
     testWidgets("this project's humans by this week's points, most first, "
         'without ranks: the name, a line of what they did this week and the '

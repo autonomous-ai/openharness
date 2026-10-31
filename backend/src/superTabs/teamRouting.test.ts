@@ -530,14 +530,6 @@ describe('one machine: a Mac and its Harness Team account', () => {
     expect(refusal(() => f.run({ type: 'agent.start', request: f.request(group, 'mate-mac') }, owner, f.pooled('mate-mac')))?.code).toBe('TEAM_ACCOUNT_REQUIRED')
   })
 
-  it('a machines rule naming the Mac allows its team account', () => {
-    const f = oneMachine(), group = f.group()
-    f.run({ type: 'rule.set', projectId: 'lead', rule: { kind: 'machines', machineIds: ['mate-mac'] }, text: 'Only the MacBook Pro.' })
-    const effects = f.run({ type: 'agent.start', request: f.request(group, 'mate-mac') }, owner, f.pooled('mate-mac'))
-    expect(effects.result.warnings).toBeUndefined()
-    expect(effects.messages).toEqual([])
-  })
-
   it('a route that picked the Mac for a teammate\'s project keeps it, and the start there is the pick', () => {
     const f = oneMachine()
     const lead = String(f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'owner-mac', harnessId: 'lead', name: 'Lead', configuration: config, lead: true },

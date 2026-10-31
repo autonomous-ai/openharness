@@ -4,7 +4,7 @@ A Swarm is an invite-only collaborative tab. Regular tabs and multiple Swarms
 share the existing tab bar. Each Swarm contains projects, people, agents and
 contributed machines.
 
-![A project lead chat, expandable workgroups and shared resources](images/swarms/projects.png)
+![A project's product manager chat, expandable workgroups and shared resources](images/swarms/projects.png)
 
 This screenshot uses fixture conversations and resources.
 
@@ -16,16 +16,19 @@ write the request, and choose the project's visibility. Store uses
 **Cmd-Control-S**.
 
 Use **+ Project** in the left sidebar to create another project in the current
-Swarm. It uses the same form and creates a separate lead session. Clicking a
-project row opens its lead chat and expands its numbered workgroups; a second
-click on the open project hides them.
-The lead can create and coordinate those workgroups; people usually work
-through the project lead.
+Swarm. It uses the same form and creates a separate session for the project's
+first agent, its coordinator: the product manager, or the name the project's
+instructions give it (`coordinatorName`). Clicking a project row opens the
+coordinator's chat and expands its numbered workgroups; a second click on the
+open project hides them. People usually work through the coordinator, which
+creates and coordinates those workgroups; any other agent of the project can
+too.
 
 The center toolbar switches between chat, terminals and pull requests. The
 project's vertical menu contains rename, details, sharing, update cadence and
-Swarm routing. A workgroup keeps its own details, rename and archive actions.
-Pull requests in a project lead view include that project's workgroups. Linked
+**Instructions**, which replaces Swarm routing (Desktop and web edit the
+document; the phone shows it read-only; see [Instructions](#instructions)). A workgroup keeps its own details, rename and archive actions.
+Pull requests in a project's coordinator view include that project's workgroups. Linked
 GitHub pull requests are read by your computer with its own `gh` login, even after
 an agent stops or changes branches. The pane groups PRs under Needs you, Open,
 Merged, Closed and Status unknown. It refreshes open PRs every minute while
@@ -46,12 +49,46 @@ Each section's plus button has one purpose:
 - Machines lets an owner contribute a machine's available engines and signed-in
   accounts to the Swarm.
 
+An agent carries a role name chosen when it is started (free text, up to 40
+characters; empty is named "Engineer" by the server), and the roster shows it.
+The role name is a label: the server checks nothing against the project's
+instructions. Any agent of the project may create, assign and start tasks and
+agents. Access and facts bind it: it belongs to the project, the machine has a
+free agent slot, the starts-pending cap. The Swarm's own settings (`tab.rename`,
+`tab.pause`, `project.report`, who coordinates) stay the coordinator's or a
+person's; another agent is refused `COORDINATOR_REQUIRED`. So is the project
+chat's work, the people's chat that is never archived: defining, routing,
+assigning or starting work there, renaming it, and naming its requester or a
+merge on it.
+
+Access still binds every agent (security review of the project instructions
+branch, 2026-10-30):
+
+- **Agents start agents; people add sessions.** An agent never adds a session
+  already running (`agent.add` from an agent is refused `HUMAN_REQUIRED`). A
+  person adding a session that is already in the Swarm meets the checks of
+  `conversation.agent`: a Buddy stays in its own chat and nobody joins a Buddy
+  chat, a stopping agent joins nowhere, and a teammate's agent joins only where
+  it may take the project's work.
+- **Releasing.** Any agent of the project keeps or stops (`agent.release`) an
+  agent the Swarm started. A session a person added by hand is closed by its
+  host on a stop, so among agents only the coordinator releases it, or the
+  agent itself; people keep their rule (the Swarm's owner or the agent's contributor).
+- **Terminals.** An agent reads or types in another agent's terminal only where
+  the person whose machine runs it could. Agents on one login drive each other as
+  before; a teammate hosting an agent of a private project they cannot read
+  drives none of that project's agents on other people's logins through it. An
+  agent on a machine lent by someone outside the Swarm cannot drive other logins'
+  terminals. The project's coordinator keeps driving its project's agents as
+  before.
+
 A machine contribution is a workspace grant for this Swarm. The host prepares
 each project's repository before starting an agent. A project on another
 machine needs a shared GitHub repository; a local-only folder is not silently
-replaced with an unrelated directory. The project records its lead checkout's
-GitHub `origin` as an HTTPS address when the lead starts. If a project has no
-address yet, its owner or lead can share one once with `project.repository`.
+replaced with an unrelated directory. The project records its coordinator's
+checkout's GitHub `origin` as an HTTPS address when the coordinator starts. If a
+project has no address yet, its owner or coordinator can share one once with
+`project.repository`.
 An address that is already shared is not replaced.
 
 Each host clones with its owner's own GitHub access; Harness never passes
@@ -60,9 +97,9 @@ tries the other transport (HTTPS or SSH) once. For a private repository, every
 contributing owner needs access to it on that machine, either through
 `gh auth login` and `gh auth setup-git` or through an SSH key.
 
-The lead starts new agents only on the Swarm's listed machines: every
+Agents of a project start new agents only on the Swarm's listed machines: every
 contributed machine, plus every machine an agent of the Swarm already runs on
-(the lead's own machine is always one of them). To make another machine
+(the coordinator's own machine is always one of them). To make another machine
 available, a person adds it to the Swarm under Machines; the host then clones
 the project there.
 
@@ -88,20 +125,21 @@ Who can start it, where, and who then reaches it:
   not when it runs in a Team account). Typing in it: nobody in a Team account; on a teammate's Mac itself, only that
   Mac's owner, and only when they may read the project. A private project they are not in shows them nothing.
 
-A Builder starts in a new worktree of the project's checkout on that machine.
+An agent starts in a new worktree of the project's checkout on that machine.
 The host clones a project once and reuses the checkout, so it is not kept up to
 date. A start that names no `branchRef` therefore bases its worktree on the
 repository's default branch (`origin/HEAD`, else `origin/main` or
 `origin/master`), fetched first, rather than on whatever commit the checkout was
 left on. If the fetch fails (offline, access refused), the worktree starts from
 the copy of that branch the checkout already has; a repository with no `origin`
-default branch starts from the checkout's current commit, as before. The lead
-passes `branchRef` (`refs/remotes/origin/BRANCH`, fetched first, or
+default branch starts from the checkout's current commit, as before. The agent
+that starts it passes `branchRef` (`refs/remotes/origin/BRANCH`, fetched first, or
 `refs/heads/BRANCH`) to start from another branch, such as the integration
 branch the work builds on. This is the Swarm start only: New Harness in Desktop
 and the CLI still starts from the folder's current commit unless a branch is
-chosen. On the lead's own machine the same rule applies, so work that is only in
-the lead's checkout (unpushed commits) reaches a Builder through `branchRef`.
+chosen. On the coordinator's own machine the same rule applies, so work that is
+only in the coordinator's checkout (unpushed commits) reaches an agent through
+`branchRef`.
 
 A machine contribution accepts a start in the folder this project uses on that
 machine, with one of the engines its owner contributed and the owner's default
@@ -160,8 +198,8 @@ arrive. The Desktop log (`app-*.log`, category `swarm`) records how long each re
 Swarm's state took and when one failed, without what it said.
 
 Ordinary guest machine sharing does not authorize Swarm controls under the
-owner's account. The owner contributes the machine or an agent. The lead's
-routing policy still determines eligible engines, capacity and model choices.
+owner's account. The owner contributes the machine or an agent. Which engine,
+model and machine to use is advice: see [Routing](#routing).
 
 Clicking an agent with one workgroup opens its terminal. If it participates in
 several, choose the workgroup and focus the same session there. A needs-human
@@ -245,8 +283,11 @@ Buddies are on in every Swarm; there is no setting. They replaced Chat with PM (
   and on request a task's messages and the archived tasks, a page at a time. The server checks every read as the owner,
   at the membership they added the Buddy in: once they leave, rejoin or lose a private project, the Buddy reads nothing.
 - A Buddy never reads a private chat (its owner's own with others included), another person's Buddy chat, the Leads
-  conversation or another project, and its Swarm read shows no machines, agent starts or routing rules. It can post
+  conversation or another project, and its Swarm read shows no machines, agent starts or routing rows. It can post
   only in its own chat. The server refuses every other command.
+- A Buddy reads the project's instructions as its member's helper, never their
+  history or the coordinator's notes, and changes them only by asking the
+  coordinator.
 - Its status is a short task summary, the newest 100 tasks, marking what changed since its last read and which ones
   are archived but not yet in the product manager's report; routing rows (where a task was routed, what was left out
   and why) and the project's folder never reach it. Pull requests show their merge and CI state as its owner's own
@@ -401,6 +442,10 @@ picker reaches back three weeks.
 items each, in name order. An item leaves the list as soon as it is answered. It is never ranked and never earns points. **Answer**
 opens the reader's own waiting item, or the first one when none waits on them.
 
+Review credit goes to whoever records a verdict, passed or not, on another
+agent's task, whatever its role name: its model's review points count the
+first verdict on each check of an attempt.
+
 Only facts count, never message text. The leaderboard records when work was asked
 for and shipped, who answered what kind of item, and how long it waited. It
 never records what anyone wrote. The only text it shows is the title of a
@@ -416,103 +461,120 @@ recorded is never changed.
 
 ## Routing
 
-The Lead routes each task before starting or assigning an agent. The route
-leaves out what cannot run it or breaks one of the owner's hard rules, then
-orders the rest by the owner's soft rules and the routing policy (strength,
-quota fit, effective cost).
+**Advice, not rules.** `harness super-tab route` ranks the candidates for a task
+before an agent is started or assigned. By default the coordinator does it; the
+project's instructions may give routing to another role. The route leaves out
+only facts: a machine that is offline, removed or paused; an engine that is
+signed out or suspended; a model the machine does not serve (a grid model whose
+host is down). Each candidate left out says why. It ranks the rest by strength,
+price, quota fit and idle agents. The project's instructions say what the
+project prefers in their Routing section; where they say nothing, the route's
+order stands. Quota and task requirements are notes on a candidate, never a
+reason to refuse one. A route decision records the revision of the instructions
+it relied on, stamped by the server when the decision is recorded. A person or
+an agent may follow any candidate; following one other than the first needs no
+reason.
 
-**Grid models.** A model served on the Swarm's grid counts as strong as the
-policy says. Kimi K3 and DeepSeek v4.1 are rated 2; every other
-grid or local model takes the policy's local quality (1). An owner can change
-both, and add rows of their own, in the policy's local models (`models`: a name
-and a quality, first match first). A model whose host is offline is left out
-with that reason, so no Builder is sent to a machine that cannot start it.
+**The model catalog.** A reviewed, read-only list in the backend (`catalog.ts`,
+`MODEL_CATALOG`) holds each engine's models and the efforts offered, with a
+strength rating from 1 to 3. The tab's routing-policy read serves it to the CLI
+beside the benchmark priors and the prices, so one read serves the route. The
+rows offered by default are Claude Opus at `high` and `xhigh`, Codex's default,
+GPT-6.1 Sol and GPT-6-Astra at `xhigh`. Claude Sonnet and Haiku are listed and
+not offered; the template's Routing section says in words that Engineers do not
+run on them. Grid models keep their built-in ratings as catalog data: Kimi K3
+and DeepSeek v4.1 are rated 2, every other grid or local model 1. A model a
+member names that the catalog does not list may still be started; the route
+shows it unrated. Adding a model is a data change in the catalog, with its prior
+(see [Benchmark priors](benchmark-priors.md)). A project that wants a model
+treated differently says so in its Routing section.
 
-**Builds at the top tier.** A build needs a model the table rates 3 (Ken and
-Dee, 2026-10-30: Builders run on Opus high or Astra xhigh), on the server and
-in the route alike, so Sonnet (2), Haiku (1) and any model the table does not
-name build nothing. Two exceptions: a model a person named, and a grid model
-for low-risk docs, tests or fixtures (below). The server refuses an agent's
-start, assignment or pick otherwise, and lets a person through with a warning.
-An owner who wants Sonnet Builders rates Sonnet 3 in their table. A Claude agent
-that reports no model is rated 1, since Claude Code's own default depends on
-the account and can be Sonnet; a person's own start without a model therefore
-posts a warning.
+**What the server no longer does.** The server steers no workflow: it refuses a
+start, an assignment or a route only for a fact or for access. These are gone:
 
-**No Haiku by default.** Haiku's row is off too (review of #2314): an older CLI
-on a newer server picked it for easy work that the server refuses, on every
-route. With it off, every row the default table offers is rated 3.
+- floors for builds, reviews, difficulty or grid models, the rule that a build
+  needs the top tier, and the rule that a review never runs on a grid model;
+- the owner's rules (`forbidModel`, `noGridFirst` and the rest) and task
+  requirements as a refusal (`TaskRequirement` is stored and shown, not
+  enforced);
+- stepping a task up and cancelling its Engineer when a first review or a grid
+  start fails;
+- the automatic review step: the agent whose work is ready opens its own linked
+  review, as the template's Workflow says;
+- the refusals `REVIEWER_NOT_LEAD`, `LEAD_REQUIRED`, `RULE_BROKEN`,
+  `REVIEW_REFUSED`, `STEPPED_UP`, `BUILD_REFUSED`, `INDEPENDENT_REVIEW`,
+  `REVIEWER_NOT_ASSIGNABLE`, `REVIEW_GROUP`, `REQUIREMENT_UNMET` and
+  `REVIEW_SHIPS_NOTHING` (a merge is recorded on a linked task like on any
+  other). No command answers them any more.
 
-**Cheap first.** A grid model builds only low-risk work of kind `docs`,
-`tests` or `fixtures`, singular or plural (Ken, 2026-10-30), and ranks first
-there. Any other build leaves it out with that reason, unless a person asks for
-a local model or names one; the route decision records that, and the server
-refuses a grid start or assignment whose decision does not allow it. The floor
-still keeps a small model off medium work. An owner opts out of ranking it
-first with the `noGridFirst` rule.
+A failed first review on a grid model, a failed grid start and any failed start
+are notices to the coordinator (see [Notices to the
+coordinator](#notices-to-the-coordinator)), with the failure, the model that was
+asked for and the findings. The instructions' Workflow says what happens next;
+nothing is moved or restarted elsewhere for anyone.
 
-**No Sonnet by default.** The default routing table turns Claude Sonnet off
-(Ken, 2026-10-30: no Sonnet Builders). With its row off, the route also starts
-no new Sonnet Reviewer, and a role whose default is Sonnet starts on its
-engine's own model instead, telling the group why. A person who names Sonnet
-is told the table turns it off. An owner's saved table keeps its own Sonnet row
-as it is; an owner who wants none there sets a `forbidModel` rule. Codex GPT-6-Astra at
-`xhigh` is a built-in row (quality 3, cost 5: its API rate is 2.5 times
-Opus's), added on read like GPT-6.1 Sol's, so Builders can run on Opus high or
-Astra xhigh as the owners decided; an owner's own Astra row wins over it.
+**Older clients.** An older CLI's `rule.set` appends its words to
+the Routing section of the project's instructions as a new revision, for the
+person whose message it quotes; an agent's `rule.set` with no person behind it
+is refused `ASKED_BY_REQUIRED`, and one from an agent that is not the
+project's coordinator `COORDINATOR_REQUIRED`. `rule.remove`, `tab.routingPolicy`,
+`project.skills` and `project.roles.*` are accepted, store nothing and answer
+`ignored: true` with a note, so an older client's policy, skill-set or role-set
+edit is lost: its person edits the instructions instead. `tab.routingPolicy`
+from anyone but the Swarm's owner is still refused `OWNER_REQUIRED`. The old
+rules, policy rows and role texts stay in the database, unread by the server.
+Reads still serve the old rules and older CLIs still route by them, so for this
+release a machine removed from the Swarm still leaves every machines rule, and
+a machines rule left with none goes; nothing is said about it in the chat.
 
-**Stepping up.** When a grid attempt's first review says Ready no, or its grid
-host never starts the agent (the start fails or misses its window), the Swarm
-steps the task up: it closes the attempt, tells its Builder to stop, and wakes
-the Lead to route it again. The next attempt runs on no grid model and, as
-every build, at the top tier (quality 3). A
-task steps up at most twice; after that the Lead decides. The route and the
-server both keep to the new floor. The next attempt's brief carries the pull
-request, the last result and the review's findings, and the step (attempt
-number and why) is kept on the attempt and its route decision.
-
-**Reviews.** A review never runs on a grid model or on a model the policy rates
-below 2. A model the policy does not name, a small Codex variant such as a mini
-or nano among them, is rated 1; an agent launched on its engine's own model is
-rated by that engine's `default` row. Any engine reviews any build, the
-Builder's own included (Ken, 2026-10-30: a Reviewer is a session of its own
-with fresh context, so its strength is what counts), and a review never waits
-for another engine's quota. The agent that built the work never reviews it.
-The route holds a Reviewer to the Builder's strength where one can run, and the
-owner's preferred engine for kind `review` ranks the rest. The server refuses
-such a start, assignment or pick from an agent, whatever the soft rules say,
-and lets a person through with a warning.
+**The nightly routing reflection.** Each night the Swarm proposes up to three
+routing changes to the project's owner, each with one fixed Routing line. A Yes
+writes nothing by itself: the coordinator writes that line into the Routing
+section of the instructions, announced like any save, with the owner as
+`askedBy`. Until the line is in the instructions, each report in the 14 days
+after the Yes lists it as approved and not in yet ("Approved <date>; not in the
+instructions yet: <line>"), read from the document. A proposal whose line is
+already there is reported with how the last 7 days ran, and is not asked again.
+The separate approved list, its nightly reminder and the recall of a lapsed
+approval are gone. A reworded line is proposed again.
 
 Design:
 
-- Growth: one step record per task, replaced at each step; it goes with its
-  group. Policy rows are capped at 40.
-- Concurrency: a step is recorded in the write that saw the failure (the
-  review's verdict, the failed start or the start timeout), so a newer write
-  retries on current data like every other Swarm write.
-- Read cost: no new reads beyond the tab's policy, which work commands read once.
-- Scale: at most two steps per task; a Swarm's 300 tasks a week add at most 600
-  small records. The step-up rate in `costs` is the first warning.
-- Compatibility: a policy saved before per-model rows reads the built-in rows.
-  An older CLI routes without the new exclusions, and the server still refuses
-  a grid or weak Reviewer and a pick below a step's floor.
-- Migration and rollback: additive fields, no migration. Rolling back leaves
-  them unread; a stepped-up task is then routed as before.
-- Audience: the step is part of its group, read by whoever reads the group.
-- Identity: steps are the Swarm's own notices, written as the project's Lead.
-- Failure: a step is told to the Lead and the Builder; a step that cannot be
-  taken (the cap) leaves the attempt with its Builder.
-- Platforms: server-side; the same on every host.
+- Growth: the catalog is code. A route decision records one revision number;
+  decisions are deleted after 90 days, as before. Policy rows an older client
+  saved are not written again.
+- Concurrency: no new lock. Recording a route is the same Swarm write as
+  before, and the server stamps the revision in it.
+- Read cost: one read of the tab's routing-policy (catalog, priors, prices) per
+  route, as the policy read was; `route` prints the instructions for the agent to read; the server does not parse them.
+- Scale: the catalog has tens of rows. The route's own latency is the first
+  warning.
+- Compatibility: an older CLI on this backend reads the catalog as a policy and
+  routes as before, and its refusals are gone; an older Desktop's saves are
+  accepted and ignored, except `rule.set` (above). A newer CLI on an older
+  backend ranks the same way; that backend still refuses by its old rules.
+- Migration and rollback: additive. Old policy, rules and role texts stay
+  unread; rolling back reads them again and restores the old refusals.
+- Audience: the route and the catalog are read by members who can read the
+  project; the instructions' text follows the instructions read's rule.
+- Identity: a rule an older client sends is written for the person whose
+  message it quotes, never the machine owner; the reflection's Yes carries the
+  owner who said it.
+- Failure: a route that lists nothing says which fact removed each candidate; a
+  failed start is a notice with its model; an approved reflection line not yet
+  in the instructions is listed as approved and not in yet, each night for 14
+  days, so a Yes is never lost silently.
+- Platforms: the CLI reads and ranks; the backend is the same everywhere.
 
 ## Cost records
 
-Every task a Lead routes records what it ran on, what it cost and how it ended,
+Every task the coordinator routes records what it ran on, what it cost and how it ended,
 so a Swarm can show that it gets work done cheaper and route each job to the
 cheapest harness that still gets it right.
 
 Each attempt keeps:
 
-- the kind of job the Lead gave when routing (`ui`, `docs`; `review` for a
+- the kind of job the coordinator gave when routing (`ui`, `docs`; `review` for a
   review), or none;
 - the engine, model and effort it ran at, and the model on the Swarm's grid when
   it ran one;
@@ -544,7 +606,7 @@ OpenRouter's rates. A model served on the Swarm's own GPUs costs 0, and its
 attempts say so. Two costs are shown: what the tokens would have cost on the API,
 and what was actually spent per token (nothing on a plan or on own GPUs).
 
-**Reading it.** The Lead reads `harness super-tab costs [--days N]` (7 days unless
+**Reading it.** The coordinator reads `harness super-tab costs [--days N]` (7 days unless
 set, at most 90), for the Product Manager, and later for the leaderboard and the
 nightly reflection. Per engine, model, effort and kind of job it gives:
 attempts, first-review pass rate, shipped, median minutes to ship, tokens,
@@ -589,7 +651,10 @@ before sending it. The server accepts only those three formats, judged by the
 file's own bytes, and at most 1 MB. Each upload can be used once. Without a picture, a person shows their initial. An
 agent shows a pattern made from its name, the same on every computer, with a
 small Claude or Codex badge. Its contributor changes it from the agent's
-details, and the project's product manager can change it with `agent.avatar`.
+details, and the project's coordinator can change it with `agent.avatar`.
+Wherever an agent shows a role, it is the agent's role name, and the
+coordinator is called by the project's `coordinatorName`; the phone's
+coordinator avatar does not depend on the label.
 
 A person can also set a short status, such as Focusing, Coffee break or their
 own words up to 80 characters. They can let it clear itself after an hour,
@@ -634,18 +699,287 @@ one throws confetti once on each computer. An old one in the history, or one
 seen with reduced motion, stays still. A private conversation is never celebrated,
 and the line never quotes the work's result.
 
-## Lead updates
+## Coordinator updates
 
 The default update cadence is five minutes; the project menu also offers one,
 fifteen and thirty minutes. New workgroup reports mark the project for an update.
-The existing delivery poll asks its lead to consolidate those reports at its
+The existing delivery poll asks the coordinator to consolidate those reports at its
 next natural checkpoint. Idle projects do not generate scheduled updates, and
 an outstanding request prevents duplicates.
 
-The lead uses `project.report` to acknowledge the request and post a useful
+The coordinator uses `project.report` to acknowledge the request and post a useful
 summary, or `text: null` when nothing merits another message. Human questions,
 serious blockers and completion are reported immediately. This does not start
 a second summarizing model or forward every terminal turn.
+
+## Messages between agents
+
+Agents talk to each other directly, not through the product manager
+(`docs/plans/2026-10-30-project-instructions-design.md`):
+
+- An agent names the agents a post reaches with `harness super-tab post GROUP
+  TEXT OPERATION_ID [--to AGENT]... [--reply-to MESSAGE_ID] [--attach PATH]...
+  [--mention PERSON]...` (up to 16 `--to`). Any agent of the same project may be
+  named, and one that is not in the conversation joins it, so it can read and
+  answer there. An agent may also post in any task of its project; it joins it.
+  An agent that opens a task is in it too. Each of these joins checks the
+  agent's team access as adding it to a task does: a teammate's agent joins the
+  owner's task only from a Harness Team account (`TEAM_ACCOUNT_REQUIRED`).
+- A post that names agents reaches exactly them: no copy goes to the product
+  manager. On 2026-10-30 such copies were 198 of the 486 messages it received in
+  a day.
+- A post that names no one goes to its default addressee: an agent's to the
+  project's coordinator (the product manager unless the project names it
+  otherwise), the coordinator's to the task's assigned agent, a person's as
+  before. It is never lost: the post is written, and the coordinator gets it as a
+  notice (see [Notices to the coordinator](#notices-to-the-coordinator)). On
+  2026-10-29 a monitoring agent's "the backend worker is down" alarm named no
+  one and reached nobody for 4 h 50 min.
+- A person's message is unchanged: it reaches the agent it addresses, or the
+  coordinator when it addresses none.
+- The coordinator's unnamed posts to its assigned agent keep their bounce limit
+  (`leadWorkerBounced`): once the two have exchanged 6 messages in a row, with
+  no person or other agent between, its next unnamed post reaches nobody until
+  it names the agent.
+- Agents of another project, Buddies, Buddy chats, private chats, the project
+  chat and the Leads conversation keep their own members; naming an agent there
+  is refused with `INVALID_RECIPIENT`. Only the coordinator or a person adds an
+  agent to the project chat or takes one out (`conversation.agent`); another
+  agent is refused with `COORDINATOR_REQUIRED`.
+- When two agents exchange 20 messages in a row within 30 minutes (the notice comes at the 20th),
+  with no one else in between, the coordinator is told once, naming the pair.
+  The notice holds nothing back and decides nothing.
+
+Design:
+
+- Growth: a named agent joins a conversation once; membership goes with the
+  conversation, as before.
+- Concurrency: joining is part of the message's own Swarm write, which also
+  touches each joining agent, so its removal meets the post.
+- Read cost: the loop count reads the conversation's 20 newest messages, the
+  read a message already made for 6.
+- Scale: delivery rows per message equal the agents named, at most 16.
+- Compatibility: an older CLI names no one, so its posts keep their old
+  addressee and reach the coordinator as before; a newer CLI on an older
+  backend is refused only when it names an agent outside the conversation.
+- Migration and rollback: none; a rollback restores the copies.
+- Audience: the server checks the recipient belongs to the same project and the
+  conversation is not a Buddy chat, the project chat, the Leads conversation or
+  private, and checks the team access of every agent that joins. The sender
+  needs no role.
+- Identity: messages stay the agent's own.
+- Failure: a refused recipient is an `INVALID_RECIPIENT` error to the sender; a
+  post that names no one is delivered as a notice, not dropped.
+- Platforms: server-side; the same everywhere.
+
+## Notices to the coordinator
+
+A notice is a message the server posts to the coordinator about something that
+happened. Measured on the openharness Swarm over 24 hours to 2026-10-30 06:40
+UTC, the product manager received 486 messages (about 20 an hour): 198 agents'
+posts copied to it by the server, 174 from people, 51 Buddy proposals and 63
+notices. The copies were the load; the notices are about three an hour, so they
+are delivered at once, with no delay.
+
+- **What is a notice**: a task's status change (Ready for review, Done), a task
+  lost or stalled, a failed start with the model it asked for, a failed first
+  review on a grid model with the findings, a terminal alert, a recording gap
+  that needs a recovery (other gaps, typed prompts and their answers are
+  recorded in the task for no one), an idle agent, a possible loop between two
+  agents, an agent's post that named no one, and a review-capacity note (no
+  machine the project may use can start either engine, or the quota left on
+  every one is close to running out). The review-capacity note is the
+  coordinator's alone; a project chat with no coordinator in it has its people
+  read it, tagging who can fix it.
+- **Status changes**: the task's own agent's Ready for review, Needs a human,
+  Stuck and Done reach the coordinator. A status anyone else sets reaches the
+  task's agent and the coordinator.
+- **Stalled tasks**: a task whose agent reported nothing for 30 minutes, and a
+  task in review for 30 minutes with no linked task open (since its last
+  progress or since its last linked task ended), are told to the coordinator
+  once each time they stall: "waited for review for N minutes; no review task
+  is open". Nothing opens a review by itself. A task in review keeps its agent
+  however long it waits; so, while agents on the older built-in skills exist,
+  does a working task whose result hands it over as they do ("ready for review"
+  naming a revision), until someone else's verdict finds problems in it.
+- **Failed starts** are told in the task to its lead and to the agent that made
+  the start. When that does not reach the project's coordinator (a task with no
+  lead, or a lead that left it), the coordinator also hears it in its own chat.
+  A Buddy's failed start is its owner's alone, in their Buddy chat.
+- **What is not**: a person's message, a Buddy's proposal (a person's request)
+  and an agent's message that names the coordinator. These are always delivered
+  at once as messages.
+- **Idle agents**: an agent other than the coordinator and Buddies that belongs
+  to no task with active work for 15 minutes is reported once per idle spell.
+  The server stops no agent: the instructions say whether the coordinator stops
+  or keeps it (the template stops idle Engineers and keeps Reviewers and Testers
+  while the work they checked is open). A keep answers the notice: a kept agent
+  is reported again only after it is assigned again and that work finishes.
+  `tab.tidy` governs only the auto-archive of finished groups.
+- **Unchanged**: the project's update cadence (the project menu's one, five,
+  fifteen or thirty minutes) and the daily digest.
+
+Design:
+
+- Growth: notices are messages in the conversation they concern and go with it;
+  an idle spell is one flag on the agent.
+- Concurrency: a notice is written in the same Swarm write as the change it
+  reports, so a newer write retries on current data like every other.
+- Read cost: the idle check reads the agents' task membership already in the
+  state; no new read.
+- Scale: about three notices an hour on the busiest Swarm measured; 10x is still
+  one a few minutes. The coordinator's received messages per hour is the metric
+  that warns first.
+- Compatibility: older clients show notices as the system messages they were;
+  an older backend sends none of the new kinds.
+- Migration and rollback: none; a rollback restores the server's own idle stop
+  and the copies.
+- Audience: a notice is written for the coordinator alone or for the project's
+  people, by its kind; a Buddy never reads a coordinator-only notice.
+- Identity: a notice is the Swarm's own message, never a person's or a machine
+  owner's.
+- Failure: a notice that cannot be written leaves the change it reports
+  written; a post that names no one is a notice rather than a refusal.
+- Platforms: server-side; the same everywhere.
+
+## Instructions
+
+Each project has one instruction document that says how it works: its roles, its
+workflow and its routing (`docs/plans/2026-10-30-project-instructions-design.md`).
+The server and the CLI validate nothing in it. They refuse only facts (a machine
+offline, removed or paused; an engine signed out or suspended; a model not served
+there) and access (who may read the project, the Swarm's settings, Team
+accounts, Buddy guards, the starts-pending cap). Who does what, in which order
+and on which model is the document's to say, and the agents follow it.
+
+- **The document** is Markdown, at most 64 KB, one per project, free text. A new
+  project, and a new Swarm's first project, starts with a copy of the built-in
+  template (`backend/src/superTabs/instructionsTemplate.ts`) as revision 1. The
+  template suggests three sections, Roles, Workflow and Routing, with one
+  heading per role (PM, Engineer, Reviewer and Tester); nothing parses them. The
+  project in the Swarm state carries only `instructionsRevision` and
+  `instructionsHash`; the text is read from
+  `GET /api/super-tabs/:tabId/projects/:projectId/instructions`. A project
+  without a document yet reads the template as revision 0.
+- **How agents read it.** Every Swarm agent has two skills: **Harness tools**
+  (the commands, the same for everyone; `swarm-tools`) and **Project
+  instructions** (the document and the agent's role name; `swarm-instructions`).
+  A Buddy has the second only. A host refreshes the second within one
+  roster pass of a save, and the agent gets one notice for the newest revision
+  per pass. `harness super-tab instructions [PROJECT]` and `harness super-tab
+  route` print the document with the coordinator's notes. An agent in no project,
+  and an agent on a backend without the route, keep today's role file
+  (`INSTRUCTIONS_UNAVAILABLE` is the backend's answer when it has no text for a
+  revision).
+- **Who changes it.** Any member who can read the project edits it in the
+  Instructions panel on Desktop and web, or asks the coordinator in the project
+  chat, or through their Buddy. The phone shows it read-only. Saving
+  (`instructions.save`: `projectId`, `baseRevision`, `text`, `summary`,
+  `askedBy`) is open to any member who can read the project and write in the
+  Swarm, and to the project's coordinator for the member named in `askedBy`. A
+  save on an older revision is refused with `INSTRUCTIONS_STALE`; the panel reads
+  the document again, keeps the draft in the editor and shows the newer text
+  beside it, and the next Save goes on the newer revision. **Restore** loads an
+  old revision into the editor with the summary "Restored revision N."; Save
+  writes it. Each save posts one line in the project chat: "dee changed the
+  instructions: Reviews run on Opus." When a request contradicts the document,
+  the coordinator changes the document, says so and tells the author of the line
+  it replaced.
+- **History**: the last 50 revisions, each with who wrote it, whose words it
+  carries, when and its summary (`…/instructions/revisions`, and
+  `…/instructions/revisions/:revision` with its text).
+- **Every project has a coordinator.** It is created with the project and the
+  document cannot remove it. The document may rename it (`coordinatorName` on the
+  project, "Product Manager" by default, set with `project.coordinatorName` by
+  the coordinator or the project owner) and say what it does; that name
+  replaces "Product Manager" and "PM" on screen. A document with no coordinator
+  section leaves it running on the template's part. Its first start, from New
+  Project, keeps the machine choice and the built-in model default, since the
+  document cannot choose a model before any agent has read it.
+- **Roles are names.** An agent carries a role name chosen when it is added or
+  started (`roleName`, free text, up to 40 characters; empty is named
+  "Engineer" by the server). The server stores and shows it and checks nothing
+  against the document. An agent whose role the document does not define says so
+  to the coordinator. Any agent of the project may create, assign and start
+  tasks and agents; access and facts bind it (it belongs to the project, the
+  machine has a free slot, the starts-pending cap), and the Swarm's own settings
+  (`tab.rename`, `tab.pause`, `project.report`, who coordinates) and the project
+  chat's work stay the coordinator's or a person's (`COORDINATOR_REQUIRED`). What
+  else access keeps (adding sessions, releasing, terminals) is under
+  [People, agents and machines](#people-agents-and-machines).
+- **The coordinator's notes** are the small, often temporary things a member
+  tells it, such as "don't use Codex on machine A". The panel shows them under
+  the document as `${coordinatorName}'s notes`, "Product Manager's notes" by
+  default. Only the coordinator writes one (`note.add`: 1 to 300 characters,
+  `askedBy`, an optional `expiresAt`), freely and with no chat line; at most 100
+  per project. Every member sees them and can delete one (`note.remove`); the
+  coordinator is told when a person did. An expired note is never read and is
+  deleted on the project's next note write. They come with the document's read
+  and are not in the Project instructions skill file, so frequent notes refresh
+  nobody's skill. Where a note and the document disagree, the coordinator follows
+  the newer one.
+- **The template** has the work go from "ready" to "passed" with no coordinator
+  action in between. The agent whose work is ready opens its own review, linked
+  to its task, and messages the Reviewer, and the Tester when users see the
+  change. Review and test run in parallel. A reviewer, not the agent that did the
+  work, passes the verdict. Findings go straight to the agent, which fixes them
+  and asks again. The coordinator hears once, merges and tells the people who
+  asked. Idle Engineers are stopped; Reviewers and Testers are kept while the
+  work they checked is open.
+- **Buddies** read the document as their member's helper, never the history or
+  the notes, and change it only by asking the coordinator.
+- **Older projects** start on the built-in template (revision 0) until their
+  first save; the release does not migrate them. An optional script, run from
+  `backend/` as
+  `DATABASE_URL=… node --import tsx scripts/swarm-instructions/migrate.ts`,
+  is a dry run that lists each document's project, origin and size (`--apply`
+  would write); it prints no document's text, which holds a team's private
+  role texts and rules. `--text TAB_ID` is a read-only dry run that prints the
+  texts of that one Swarm and writes nothing, so a custom set's former role
+  texts can be exported any time before that project's first save. A project
+  with custom roles has its coordinator (or owner) paste them into the
+  Instructions panel after the release.
+
+Design (docs/feature-design-rules.md):
+
+- Growth: one document and at most 50 revisions per project, the 51st save
+  deleting the oldest; at most 100 live notes, expired ones deleted on the next
+  note write; all of it deleted with the project.
+- Concurrency: a save is a compare-and-set on the project's revision, at the
+  Swarm write level (the head part); the text, the revision record and the
+  state's revision are written in one transaction, so two saves on one base
+  never both land. Notes, names and the coordinator's name are Swarm commands
+  too.
+- Read cost: the state carries two short fields per project; the 64 KB text is
+  read only by the instructions read, when the revision moves, never on a poll.
+  The revisions list carries no text.
+- Scale: 64 KB per project at most, outside the state; at 10x projects the
+  instructions collection grows linearly. The first warning would be the
+  instructions read's latency, which reads one document by id.
+- Compatibility: every field and command is new and optional. An older client
+  ignores them and sends no `roleName`; its role-set, skill-set and policy saves
+  are accepted and ignored, and its `rule.set` lands in the Routing section (see
+  [Routing](#routing)). A newer Desktop or phone on an older backend sees no
+  `coordinatorName`, so it shows no Instructions and sends no `roleName`.
+  Refusals may carry details beside `code` and `message`, which older clients
+  ignore.
+- Migration and rollback: additive, and the release runs no migration: a project
+  without a document reads the built-in template. The optional script is
+  idempotent and skips any project that has a document. Rolling back leaves the
+  documents and notes unread; the old rules, policy and role texts are untouched.
+- Audience: every read checks the reader can read the project (`readProject`);
+  a Buddy reads the text alone, and loses it with its member's access; private
+  projects stay their people's.
+- Identity: `askedBy` is a member who can read the project, required of the
+  coordinator; `writtenBy` is the person or the coordinator, never a machine
+  owner's login; the optional migration script writes as `system`.
+- Failure: a stale save is refused and the panel reads again; a document
+  missing for its revision is said (`INSTRUCTIONS_UNAVAILABLE`), never replaced
+  with another text; a backend without the route reads "This Swarm has no
+  project instructions yet." in the panel; a Swarm the job fails on is listed
+  and taken by the next run.
+- Platforms: the backend is the same everywhere; Desktop and the web app (which
+  runs Desktop's screens) edit, the phone reads.
 
 ## A message that is not getting in
 
@@ -716,9 +1050,31 @@ Use the matching backend, CLI and Desktop versions together for this feature:
    `SuperTabSessionScope`, before serving the new project commands.
 2. Update participating hosts to the CLI with Swarm-scoped contributions and
    project checkout preparation. A host on an older CLI ignores the request for
-   the default branch and starts Builders from its checkout's current commit. A host older than
+   the default branch and starts agents from its checkout's current commit. A host older than
    the immediate reports still reports, and picks up a waiting start, only every 15 seconds.
 3. Install the Desktop build with the project sidebar and Cmd-S entry point.
+
+The project instructions release (messaging, notices, instructions, routing as
+advice) ships in the same order, and its parts need each other:
+
+- Backend first. The instructions migration (`scripts/swarm-instructions/
+  migrate.ts`, above) is not part of the release: every project without a
+  document reads the built-in template as revision 0. After the release, a
+  project with custom role texts has them pasted into its Instructions panel;
+  export them first with the script's `--text TAB_ID` dry run if needed.
+- Then the CLI. A newer CLI on an older backend gets `INSTRUCTIONS_UNAVAILABLE`
+  and keeps today's role file; it still names recipients, and the older backend
+  refuses it only when it names an agent outside the conversation.
+- Then Desktop and the web app, then the phone. A newer client on an older
+  backend finds no `coordinatorName`: it shows no Instructions and sends no
+  `roleName`, and everything else works as before.
+- An older CLI on a newer backend names no one, so its posts reach the
+  coordinator as before, and its `rule.set` lands in the Routing section of the
+  instructions. An older Desktop's role, skill-set and policy saves are accepted
+  and ignored (see [Routing](#routing)).
+- A machine on an older CLI that is sent an agent by a newer one installs the
+  built-in Engineer text until it updates; the wire keeps `lead`, `dev`, `review`
+  and `buddy` for it.
 
 A signed internal Desktop artifact alone does not update the backend or host
 CLI. Validate the coordinated versions in an internal environment before a

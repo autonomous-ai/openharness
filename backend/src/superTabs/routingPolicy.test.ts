@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_ROUTING_POLICY, effectivePolicy, gridQuality, priorFor, routingOverrideSaveSchema, routingOverrideSchema, routingPolicySaveSchema, routingPolicySchema } from './routingPolicy.js'
+import { DEFAULT_ROUTING_POLICY, effectivePolicy, priorFor, routingOverrideSaveSchema, routingOverrideSchema, routingPolicySaveSchema, routingPolicySchema } from './routingPolicy.js'
 import type { PriorsTable } from './benchmarkPriors/priors.js'
-import { startTarget, targetQuality } from './rules.js'
 
 describe('routing policy', () => {
   it('ships a valid default that needs no setup', () => {
@@ -88,14 +87,6 @@ describe('routing policy', () => {
     expect(effectivePolicy(owned, null).policy.models.filter(m => m.model === 'gpt-6-astra')).toEqual([{ ...astra, effort: 'high', quality: 2, cost: 9, enabled: false }])
   })
 
-  it('rates a start or agent on Astra at the top tier on the server, as the CLI\'s route does (cli route.ts rateFor)', () => {
-    const on = (effort: string) => targetQuality(DEFAULT_ROUTING_POLICY, startTarget({ machineId: 'm', engine: 'codex', model: 'gpt-6-astra', effort }))
-    expect(on('xhigh')).toBe(3)
-    expect(on('high')).toBe(3)
-    const before = { ...DEFAULT_ROUTING_POLICY, models: DEFAULT_ROUTING_POLICY.models.filter(m => m.model !== 'gpt-6-astra') }
-    expect(targetQuality(before, startTarget({ machineId: 'm', engine: 'codex', model: 'gpt-6-astra', effort: 'xhigh' }))).toBe(1)
-  })
-
   describe('a built-in row added on read (review of #2271 at 1d9499646)', () => {
     const sol = DEFAULT_ROUTING_POLICY.models.find(m => m.model === 'gpt-6.1-sol')!
     const codexDefault = DEFAULT_ROUTING_POLICY.models.find(m => m.engine === 'codex' && m.model === 'default')!
@@ -165,18 +156,14 @@ describe('routing policy', () => {
     expect(routingOverrideSchema.safeParse({ version: 1 }).success).toBe(false)
   })
 
-  it('rates Kimi K3 and DeepSeek v4.1 at Sonnet\'s tier and every other grid model at the local quality, from the policy', () => {
-    const { policy } = effectivePolicy(null, null)
-    expect(gridQuality(policy, 'moonshotai/kimi-k3')).toBe(2)
-    expect(gridQuality(policy, 'deepseek/deepseek-v4.1-flash-1017', 'deepseek/deepseek-v4.1-flash-1017 · OpenRouter')).toBe(2)
-    expect(gridQuality(policy, 'qwen3:4b', 'Qwen 3 4B')).toBe(1)
-    // A policy saved before per-model rows reads the built-in ones; the owner's own rows replace them, first match first.
+  // Grid ratings are the catalog's (catalog.test.ts); the CLI's route rates grid models by them (cli superTabs/route.ts
+  // gridStrength). The migration still reads a saved policy's own grid rows.
+  it('reads a policy saved before per-model grid rows with the built-in ones, and an owner\'s own rows as saved', () => {
+    const builtIn = DEFAULT_ROUTING_POLICY.localModels!.models
     const saved = { ...DEFAULT_ROUTING_POLICY, localModels: { quality: 1, enabled: true } }
-    expect(gridQuality(effectivePolicy(saved, null).policy, 'moonshotai/kimi-k3')).toBe(2)
-    const owner = effectivePolicy(saved, { localModels: { quality: 2, enabled: true, models: [{ model: 'qwen 3', quality: 3 }, { model: 'qwen', quality: 1 }] } }).policy
-    expect(gridQuality(owner, 'qwen3:4b', 'Qwen 3 4B')).toBe(3)
-    expect(gridQuality(owner, 'moonshotai/kimi-k3')).toBe(2)
-    expect(gridQuality({ ...owner, localModels: { quality: 1, enabled: true, models: [] } }, 'moonshotai/kimi-k3')).toBe(1)
+    expect(effectivePolicy(saved, null).policy.localModels).toEqual({ quality: 1, enabled: true, models: builtIn })
+    const own = [{ model: 'qwen 3', quality: 3 }, { model: 'qwen', quality: 1 }]
+    expect(effectivePolicy(saved, { localModels: { quality: 2, enabled: true, models: own } }).policy.localModels).toEqual({ quality: 2, enabled: true, models: own })
     expect(routingPolicySchema.safeParse({ ...DEFAULT_ROUTING_POLICY, localModels: { quality: 1, enabled: true, models: [{ model: 'x', quality: 4 }] } }).success).toBe(false)
   })
 

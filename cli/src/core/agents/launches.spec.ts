@@ -266,9 +266,11 @@ describe('agent_create, refused before any pane exists', () => {
 
   it('passes explicit Swarm roles and refuses invalid role metadata before dispatch', async () => {
     const { ask, create } = setup()
-    for (const engine of ['claude', 'codex']) for (const swarmRole of ['lead', 'dev', 'review']) {
+    // Taken as the kinds the CLI keeps (project instructions, phase 4); a Reviewer keeps its swarm-review file.
+    const kinds = { lead: { swarmRole: 'coordinator' }, dev: { swarmRole: 'agent' }, review: { swarmRole: 'agent', swarmFallback: 'review' } }
+    for (const engine of ['claude', 'codex']) for (const swarmRole of ['lead', 'dev', 'review'] as const) {
       await ask({ engine, cwd: '/w', swarmRole })
-      expect(vi.mocked(create!).mock.calls.at(-1)![0]).toMatchObject({ engine, swarmRole })
+      expect(vi.mocked(create!).mock.calls.at(-1)![0]).toMatchObject({ engine, ...kinds[swarmRole] })
     }
     for (const swarmRole of [7, '', 'builder', 'reviewer']) {
       expect(await ask({ engine: 'claude', cwd: '/w', swarmRole })).toMatchObject({ error: 'INVALID_SWARM_ROLE' })
@@ -277,11 +279,44 @@ describe('agent_create, refused before any pane exists', () => {
     expect(await ask({ engine: 'codex', cwd: '/w', swarmRole: 'dev', resumeSessionId: 'old-session' })).toMatchObject({ error: 'INVALID_SESSION' })
   })
 
+  // Project instructions, phase 4 (decision 1): an older Harness sends lead, dev or review; the next one may send the kinds.
+  it('takes older and newer Swarm roles from agent_create', async () => {
+    const { ask, create } = setup()
+    const launched = () => vi.mocked(create!).mock.calls.at(-1)![0]
+    await ask({ engine: 'claude', cwd: '/w', swarmRole: 'review' })
+    expect(launched()).toMatchObject({ swarmRole: 'agent', swarmFallback: 'review' })
+    for (const [swarmRole, role] of [['lead', 'coordinator'], ['dev', 'agent'], ['buddy', 'buddy'], ['coordinator', 'coordinator'], ['agent', 'agent']]) {
+      await ask({ engine: 'codex', cwd: '/w', swarmRole })
+      expect(launched()).toMatchObject({ swarmRole: role })
+      expect(launched()).not.toHaveProperty('swarmFallback')
+    }
+    const calls = vi.mocked(create!).mock.calls.length
+    for (const swarmRole of ['pm', 'Coordinator', 'reviewer']) {
+      expect(await ask({ engine: 'claude', cwd: '/w', swarmRole })).toStrictEqual({ error: 'INVALID_SWARM_ROLE',
+        detail: 'A Swarm role is coordinator, agent or buddy (or lead, dev or review from an older Harness), for Claude Code or Codex.' })
+    }
+    expect(vi.mocked(create!).mock.calls).toHaveLength(calls)
+  })
+
+  it('finds the receipt a start got before role kinds when it is asked again, whichever role values it carries', async () => {
+    const { ask, create, deps, replies } = setup()
+    // What this machine fingerprinted for a Reviewer's start before its update.
+    const before = { engine: 'claude', cwd: '/w', bypassPermission: true, permissionMode: null, grid: null, codexHome: null, dsh: null, prompt: null,
+      swarmRole: 'review', name: null, agent: null, resumeSessionId: null, takeOver: null }
+    await deps.receipts.run(CREATION, creationFingerprint(before), async () => ({ state: 'created', agentId: 'new-agent' }))
+    await ask({ engine: 'claude', cwd: '/w', swarmRole: 'review', creationId: CREATION })
+    await vi.waitFor(() => expect(replies.at(-1)).toMatchObject({ state: 'created' }))
+    await ask({ engine: 'claude', cwd: '/w', swarmRole: 'agent', creationId: `${CREATION}-new` })
+    await vi.waitFor(() => expect(replies).toHaveLength(2))
+    expect(create).toHaveBeenCalledTimes(1)
+    expect(deps.receipts.has(`${CREATION}-new`, creationFingerprint({ ...before, swarmRole: 'dev' }))).toBe(true)
+  })
+
   it('passes the project\'s skill mode with a Swarm role, and refuses one it does not know before dispatch', async () => {
     const { ask, create } = setup()
     for (const swarmSkillMode of ['default', 'orchestration']) {
       await ask({ engine: 'claude', cwd: '/w', swarmRole: 'dev', swarmSkillMode })
-      expect(vi.mocked(create!).mock.calls.at(-1)![0]).toMatchObject({ swarmRole: 'dev', swarmSkillMode })
+      expect(vi.mocked(create!).mock.calls.at(-1)![0]).toMatchObject({ swarmRole: 'agent', swarmSkillMode })
     }
     // From a start before modes: the session launches as it did then.
     await ask({ engine: 'claude', cwd: '/w', swarmRole: 'dev' })
@@ -296,7 +331,7 @@ describe('agent_create, refused before any pane exists', () => {
   it('passes the GitHub App flag with a Swarm role only, and refuses anything else before dispatch', async () => {
     const { ask, create } = setup()
     await ask({ engine: 'codex', cwd: '/w', swarmRole: 'dev', swarmGitHub: true })
-    expect(vi.mocked(create!).mock.calls.at(-1)![0]).toMatchObject({ swarmRole: 'dev', swarmGitHub: true })
+    expect(vi.mocked(create!).mock.calls.at(-1)![0]).toMatchObject({ swarmRole: 'agent', swarmGitHub: true })
     await ask({ engine: 'codex', cwd: '/w', swarmRole: 'dev' })
     expect(vi.mocked(create!).mock.calls.at(-1)![0]).not.toHaveProperty('swarmGitHub')
     const calls = vi.mocked(create!).mock.calls.length

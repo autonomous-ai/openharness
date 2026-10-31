@@ -32,6 +32,7 @@ import { parseNewAgentModel, type NewAgentModel } from '../../lib/newAgentModel.
 import { parseProjectFolder, prepareProjectFolder, projectsRoot, ProjectFolderError, type ProjectFolder } from '../../lib/projectFolder.js'
 import type { ScmLaunchRecord } from '../../scm/types.js'
 import { parentAgentIdOf, type RegisteredSession } from '../../lib/registry.js'
+import { roleFromWire, wireRole } from '../../lib/savedSkill.js'
 import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
 import type { LaunchAuthority, LaunchPreparation } from '../../lib/launchPreparation.js'
 import { createPendingLaunches } from './pendingLaunches.js'
@@ -416,10 +417,12 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     if (!swarmLaunch && ((swarmRole !== undefined && swarmRole !== null) || payload.swarmSkillMode !== undefined || payload.swarmGitHub !== undefined)) {
       reply({ error: 'INVALID_SWARM_ROLE', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' }); return
     }
-    const isSwarmRole = (value: unknown): value is NonNullable<CreateInput['swarmRole']> => !!swarmLaunch?.role(value)
+    // Project instructions, phase 4 (decision 1): a coordinator, an agent or a Buddy. An older Harness sends lead, dev or review
+    // (a Reviewer, which keeps its swarm-review file); the next release may send the kinds, so this one takes both.
+    const swarm = swarmRole === undefined || swarmRole === null ? null : roleFromWire(swarmRole)
     if (swarmRole !== undefined && swarmRole !== null &&
-      (!isSwarmRole(swarmRole) || (engine !== 'claude' && engine !== 'codex'))) {
-      reply({ error: 'INVALID_SWARM_ROLE', detail: 'A Swarm role is lead, dev or review, for Claude Code or Codex.' }); return
+      (!swarm || !swarmLaunch?.role(swarm.role) || (engine !== 'claude' && engine !== 'codex'))) {
+      reply({ error: 'INVALID_SWARM_ROLE', detail: 'A Swarm role is coordinator, agent or buddy (or lead, dev or review from an older Harness), for Claude Code or Codex.' }); return
     }
     // The skills of the project the agent joins (superTabs/start.ts); a start from before modes sends none.
     const swarmSkillMode = payload.swarmSkillMode
@@ -429,7 +432,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     // Another person's project work: git and gh use the Harness GitHub App's token for the task (lib/swarmGitHub.ts).
     // Only `true`, and only with a role; a start from before the app sends none and launches as it did.
     const swarmGitHub = payload.swarmGitHub
-    if (swarmGitHub !== undefined && (swarmGitHub !== true || !isSwarmRole(swarmRole))) {
+    if (swarmGitHub !== undefined && (swarmGitHub !== true || !swarm)) {
       reply({ error: 'INVALID_SWARM_ROLE', detail: 'swarmGitHub is true, with a Swarm role.' }); return
     }
     // Its worktree fetches nothing with this machine's own git login: its host fetched with the app's token just before
@@ -503,7 +506,8 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       codexHome,
       dsh,
       prompt,
-      ...(isSwarmRole(swarmRole) ? { swarmRole, ...(swarmSkillMode ? { swarmSkillMode } : {}), ...(swarmGitHub ? { swarmGitHub } : {}) } : {}),
+      ...(swarm ? { swarmRole: swarm.role, ...(swarm.fallback ? { swarmFallback: swarm.fallback } : {}), ...(swarmSkillMode ? { swarmSkillMode } : {}),
+        ...(swarmGitHub ? { swarmGitHub } : {}) } : {}),
       name,
       agent,
       resumeSessionId,
@@ -513,7 +517,11 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       ...(launchModel.state === 'ok' ? { launchModel: launchModel.launchModel } : {}),
       ...(parentAgentId ? { parentAgentId } : {}),
     }
-    const fingerprintInput = model.state === 'ok' ? { ...input, modelSelection: model.selection } : input
+    // The fingerprint names the role in the wire's values, as every receipt from before role kinds does: a start asked again
+    // after this machine's update still finds the receipt its first ask got, whichever value set the asker sends.
+    const { swarmFallback: _fallback, ...stable } = input
+    const recorded = swarm ? { ...stable, swarmRole: wireRole(swarm) } : input
+    const fingerprintInput = model.state === 'ok' ? { ...recorded, modelSelection: model.selection } : recorded
     if (creationId !== undefined) {
       // Reserve before spawning. A transport retry carries the SAME creationId; a deliberate
       // New agent action carries a new one. Detach so a status check can pass a slow create

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Prisma } from '@prisma/client'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
-import { listDecisions, waitingInProject, type DecisionTarget } from './decisions.js'
+import { checkAsker, listDecisions, waitingInProject, type DecisionTarget } from './decisions.js'
 import { buddyChatId } from './buddies.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
@@ -47,12 +47,11 @@ describe('asking a person for decisions', () => {
     expect(asked.result.decisionIds).toEqual(asked.decisions!.map(d => d.id))
   })
 
-  it('refuses a question from anyone but the project\'s Lead, to someone outside the Swarm, or with a recommendation that is not an option', () => {
+  it('refuses a question from a person, to someone outside the Swarm, or with a recommendation that is not an option', () => {
     const s = swarm()
     const ask = (actor: Actor, personId = 'peer', recommended = 0) =>
       () => s.run({ type: 'decision.ask', conversationId: s.group, personId, questions: [question('Ship how?', recommended)] }, actor)
-    expect(ask(asAgent(s.worker))).toThrow('Lead')
-    expect(ask(owner)).toThrow('Lead')
+    expect(ask(owner)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
     expect(ask(asAgent(s.lead), 'stranger')).toThrow('person in this Swarm')
     expect(ask(asAgent(s.lead), 'peer', 2)).toThrow('recommend one of its options')
     expect(commandSchema.safeParse({ type: 'decision.ask', conversationId: s.group, personId: 'peer',
@@ -73,6 +72,22 @@ describe('asking a person for decisions', () => {
     expect(plain.decisions ?? []).toEqual([])
     expect(() => s.run({ type: 'work.status', conversationId: s.group, assignmentId: s.assignmentId, status: 'blocked', result: 'Stuck',
       ask: { personId: 'peer', options: ['A', 'B'], recommended: 0, unblocks: 'X' } }, asAgent(s.worker))).toThrow('needs a human')
+  })
+
+  // Who asks a person is workflow (project instructions, phase 4): any agent of the project, in its own project only.
+  it('lets any agent of the project ask a person', () => {
+    const s = swarm()
+    const task = s.state.conversations.find(c => c.id === s.group)!
+    expect(checkAsker(s.state, asAgent(s.worker), task)).toBe(s.worker)
+    const asked = s.run({ type: 'decision.ask', conversationId: s.group, personId: 'peer', questions: [question('Ship how?')] }, asAgent(s.worker))
+    expect(asked.decisions).toEqual([expect.objectContaining({ askerAgentId: s.worker, conversationId: s.group })])
+    const other = s.run({ type: 'project.create', name: 'Other', visibility: 'public', brief: '' }).result as { projectId: string }
+    const elsewhere = s.run({ type: 'conversation.create', projectId: other.projectId, title: 'Elsewhere', brief: '', checks: [] }).result.conversationId as string
+    const leads = s.state.conversations.find(c => c.id === s.state.leadsConversationId)!
+    for (const group of [leads, s.state.conversations.find(c => c.id === elsewhere)!]) {
+      expect(() => checkAsker(s.state, asAgent(s.worker), group)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+    }
+    expect(() => checkAsker(s.state, owner, task)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
   })
 })
 

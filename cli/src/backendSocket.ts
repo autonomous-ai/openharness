@@ -163,8 +163,11 @@ export class BackendSocket {
      *  null when the pane opens on an empty input. Validated here — length, and that the engine has a
      *  contract for it — so cli.ts never sees one it cannot hand over. Never logged. */
     prompt: string | null
-    /** Session-scoped built-in instructions for a newly launched Swarm agent. */
+    /** Session-scoped built-in instructions for a newly launched Swarm agent: a coordinator, an agent or a Buddy. A launch an
+     *  older CLI saved to finish later names it in the wire's values (lead, dev, review), which create.ts reads too. */
     swarmRole?: import('./lib/swarmSkills.js').SwarmRole
+    /** With swarmRole `agent`: an older client's Reviewer, which keeps its swarm-review file. */
+    swarmFallback?: 'review'
     /** The skills of the Swarm project it joins; absent from a start before modes, which launches on orchestration. */
     swarmSkillMode?: import('./lib/swarmSkills.js').SwarmSkillMode
     /** With swarmRole: git and gh use the Harness GitHub App's token for the agent's task (lib/swarmGitHub.ts). */

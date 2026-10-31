@@ -123,7 +123,7 @@ class _SuperTabAgentGroupPickerState extends State<SuperTabAgentGroupPicker> {
     final selected = group.id == _selectedId;
     final project = snapshot.projectFor(group.id);
     final label = snapshot.isProjectLead(group.id)
-        ? 'Product Manager'
+        ? snapshot.coordinatorNameOf(group.projectId)
         : group.label;
     final ink = selected ? DesktopChrome.onSelection : DesktopChrome.foreground;
     return Padding(

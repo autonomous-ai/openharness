@@ -45,6 +45,7 @@ import { projectsRoot } from '../../lib/projectFolder.js'
 import { harnessMadeWorktree } from '../../lib/gitProject.js'
 import { NativeFiles } from '../../engines/kit/nativeFiles.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
+import { parseSwarmSkill } from '../../lib/savedSkill.js'
 import type { TerminalBackend } from '../../lib/terminalBackend.js'
 import { windowsLaunchRefusal } from '../../lib/windows/launch.js'
 import { isWindowsHeldPane, windowsPaneLaunch } from '../../lib/windows/engineStart.js'
@@ -381,8 +382,12 @@ export function createAgentCreator({
     // A harness another agent started says so in the pull requests it opens (lib/agentAttribution.ts), last, as every
     // relaunch appends it (`buildLaunchOverrides`), and read from the person's settings where this launch reads them.
     // What Harness tells the agent (its instructions, and the pull request line for one another agent started), last.
-    const swarmSkill = input.swarmRole ? { role: input.swarmRole, key: label, ...(input.swarmSkillMode ? { mode: input.swarmSkillMode } : {}),
-      ...(swarmGitHub ? { github: true as const } : {}) } : undefined
+    // A launch an older CLI saved to finish later (a pending intent) names its role in the wire's values (lead, dev, review):
+    // read as this release keeps it, so a Reviewer keeps its swarm-review file. Nothing else is one.
+    const swarmSkill = input.swarmRole ? parseSwarmSkill({ role: input.swarmRole, key: label, fallback: input.swarmFallback, mode: input.swarmSkillMode,
+      github: swarmGitHub ? true : undefined }) : undefined
+    // Its own words: the Swarm's skill code (and its refusal's text) stays out of the core's bundle (src/leanEntry.spec.ts).
+    if (input.swarmRole && !swarmSkill) return { ok: false, error: 'SWARM_SKILL_FAILED', detail: 'This launch names no Swarm role this Harness knows.' }
     let swarmInstructions: string | undefined
     if (swarmLaunch && swarmSkill) {
       try { swarmInstructions = swarmLaunch.prepare(cwd, swarmSkill).instructions }
@@ -392,7 +397,7 @@ export function createAgentCreator({
     // The person's machine MCP servers (lib/machineMcp.ts, #1872), beside the grid's and their own: read at each launch,
     // as every relaunch reads them again (`buildLaunchOverrides`). Never a Buddy's: it starts no MCP server, as a server
     // runs with its person's credentials and its tools are not its guard's to vet (review 3 of #2092).
-    const machineMcp = input.swarmRole === 'buddy' ? [] : machineMcpLaunchArgs(engine, cwd)
+    const machineMcp = swarmSkill?.role === 'buddy' ? [] : machineMcpLaunchArgs(engine, cwd)
     const extraArgs = joinedInstructions(engine, [...(gridLaunch?.args ?? relay?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, native ? native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null) : []), ...machineMcp, ...(swarmLaunch && swarmSkill ? swarmLaunch.args(engine) : []), ...told])
     // The first prompt is a launch option only — never part of `extraArgs`, which the registry row
     // carries into a relaunch (engineLaunch.ts, `firstPrompt`).

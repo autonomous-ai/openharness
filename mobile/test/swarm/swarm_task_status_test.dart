@@ -107,7 +107,7 @@ void main() {
       );
     });
 
-    test('queued for a free machine, with the PM retrying', () {
+    test('queued for a free machine, routed again', () {
       final queued = task(
         status: null,
         liveness: state('waiting', 'queued', minute * 25),
@@ -115,19 +115,19 @@ void main() {
       );
       expect(
         read(queued),
-        'Queued: no free machine · 25m · PM retrying 2m ago',
+        'Queued: no free machine · 25m · Routed again 2m ago',
       );
       expect(mark(queued), SwarmTaskMark.unknown);
     });
 
-    test('quiet, with what the PM did once it went quiet', () {
+    test('quiet, with what was done once it went quiet', () {
       final reassigned = task(
         liveness: state('quiet', 'silent', minute * 34),
         leadAction: {'kind': 'assign', 'at': ago(minute)},
       );
-      expect(read(reassigned), 'Quiet 34m · PM reassigned it 1m ago');
+      expect(read(reassigned), 'Quiet 34m · Reassigned 1m ago');
       expect(mark(reassigned), SwarmTaskMark.failed);
-      // What the PM did before it went quiet is not handling it.
+      // What was done before it went quiet is not handling it.
       expect(
         read(
           task(
@@ -144,7 +144,7 @@ void main() {
             leadAction: {'kind': 'post', 'at': ago(minute)},
           ),
         ),
-        'Quiet 34m · PM posted 1m ago',
+        'Quiet 34m · Posted 1m ago',
       );
       expect(
         read(
@@ -153,7 +153,7 @@ void main() {
             leadAction: {'kind': 'start', 'at': ago(minute * 3)},
           ),
         ),
-        'Quiet 34m · PM retrying 3m ago',
+        'Quiet 34m · Starting another agent 3m ago',
       );
       // An action the desktop does not name says nothing.
       expect(
@@ -180,13 +180,22 @@ void main() {
       );
     });
 
-    test('waiting on a review, a new revision, a blocker or a start', () {
+    test('waiting on others, a new revision, a blocker or a start', () {
       final cases = {
         task(
           status: 'review',
           liveness: state('waiting', 'review', minute * 3),
         ): (
-          'Waiting for review · 3m',
+          'Waiting on others · 3m',
+          SwarmTaskMark.needsInput,
+        ),
+        // With the agent's note.
+        task(
+          status: 'review',
+          result: 'PR 12 is up',
+          liveness: state('waiting', 'review', minute * 3),
+        ): (
+          'Waiting on others · PR 12 is up · 3m',
           SwarmTaskMark.needsInput,
         ),
         task(liveness: state('waiting', 'revision', minute * 3)): (
@@ -407,15 +416,15 @@ void main() {
       await tester.binding.setSurfaceSize(const Size(1800, 600));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       final cases = {
-        // A short reason, a long PM action.
+        // A short reason, a long action.
         task(
           liveness: state('quiet', 'silent', minute * 34),
-          leadAction: {'kind': 'assign', 'at': ago(minute)},
+          leadAction: {'kind': 'start', 'at': ago(minute)},
         ): (
           width: 700.0,
-          parts: ['Quiet', ' 34m', ' · PM reassigned it 1m ago'],
+          parts: ['Quiet', ' 34m', ' · Starting another agent 1m ago'],
         ),
-        // A long reason, a short PM action.
+        // A long reason, a short action.
         task(
           status: 'blocked',
           result: 'Needs the staging token',
@@ -426,7 +435,7 @@ void main() {
           parts: [
             'Blocked · Needs the staging token',
             ' · 5m',
-            ' · PM posted 1m ago',
+            ' · Posted 1m ago',
           ],
         ),
       };
@@ -467,7 +476,7 @@ void main() {
         status: 'blocked',
         result: 'Needs the staging token and the release signing key',
         liveness: state('waiting', 'blocked', minute * 5),
-        leadAction: {'kind': 'assign', 'at': ago(minute)},
+        leadAction: {'kind': 'start', 'at': ago(minute)},
       );
       await withClock(
         Clock.fixed(now),
@@ -483,7 +492,10 @@ void main() {
             .didExceedMaxLines,
         isTrue,
       );
-      expect(part(' · PM reassigned it 1m ago').didExceedMaxLines, isTrue);
+      expect(
+        part(' · Starting another agent 1m ago').didExceedMaxLines,
+        isTrue,
+      );
       expect(tester.takeException(), isNull);
     });
 
@@ -500,7 +512,7 @@ void main() {
           ),
         ),
       );
-      expect(line(tester), 'Nova · Waiting for review · 3m');
+      expect(line(tester), 'Nova · Waiting on others · 3m');
     });
 
     testWidgets('its ages keep moving on their own, the state\'s and the '
@@ -514,10 +526,10 @@ void main() {
       );
       await withClock(Clock(() => at), () async {
         await tester.pumpWidget(app(SwarmTaskLine(group)));
-        expect(line(tester), 'Quiet 34m · PM posted 1m ago');
+        expect(line(tester), 'Quiet 34m · Posted 1m ago');
         for (final expected in [
-          'Quiet 35m · PM posted 2m ago',
-          'Quiet 36m · PM posted 3m ago',
+          'Quiet 35m · Posted 2m ago',
+          'Quiet 36m · Posted 3m ago',
         ]) {
           at = at.add(minute);
           await tester.pump(minute + const Duration(milliseconds: 2));
@@ -580,16 +592,20 @@ void main() {
         '${source.path} missing — run from mobile/ in the monorepo',
       );
     }
+    // Plain words, or words before the agent's note (none given here).
     final cases = RegExp(
-      r"\('(\w+)', '([\w-]+)'\) => \(\s*HarnessActivity\.(\w+),\s*'([^']*)',?\s*\)",
+      r"\('(\w+)', '([\w-]+)'\) => \(\s*HarnessActivity\.(\w+),\s*"
+      r"(?:'([^']*)'|\['([^']*)', \?asked\]\.join\(' · '\)),?\s*\)",
     ).allMatches(source.readAsStringSync()).toList();
-    // review, revision, queued, starting, and three ways to be stuck: fewer
-    // means the desktop's table changed shape and this reads too little.
-    expect(cases.length, greaterThanOrEqualTo(7));
+    // review, revision, blocked, queued, starting, and three ways to be
+    // stuck: fewer means the desktop's table changed shape and this reads too
+    // little.
+    expect(cases.length, greaterThanOrEqualTo(8));
     for (final match in cases) {
-      final [state!, why!, activity!, words!] = [
-        for (final i in [1, 2, 3, 4]) match.group(i),
+      final [state!, why!, activity!] = [
+        for (final i in [1, 2, 3]) match.group(i),
       ];
+      final words = match.group(4) ?? match.group(5)!;
       final status = swarmTaskStatus(
         task(liveness: {'state': state, 'why': why, 'since': ago(minute * 5)}),
         now,

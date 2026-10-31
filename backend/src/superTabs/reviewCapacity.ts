@@ -1,13 +1,11 @@
-/** Whether new Reviewers can still start for a project's builds, said once in its chat when they cannot or soon will not.
+/** Whether new agents can still start for a project's work, said once in its chat when they cannot or soon will not.
  *  Overnight 2026-10-30, 12 pull requests waited hours for a review while every Codex Reviewer was out of weekly quota, and
- *  nobody was told until people noticed in the morning (Tony: "don't let the workflow get stuck"). Any engine reviews any
- *  build now (Ken, 2026-10-30; rules.ts reviewRefusal), so the notice speaks only when no strong Reviewer of any engine can
- *  start. Checked when an Engineer hands work over for review (commands.ts work.status). */
+ *  nobody was told until people noticed in the morning (Tony: "don't let the workflow get stuck"). The notice states the fact
+ *  only: no machine the project may use can start either engine (project instructions, phase 4: no policy, quality or rules,
+ *  and no next step). Checked when work is handed over for review (commands.ts work.status). */
 import type { Conversation, SuperTabState } from './model.js'
-import { canReadProject, groupProject, projectRules } from './projects.js'
+import { canReadProject, groupProject } from './projects.js'
 import { STANDING, standing, type Standing } from './reviewSeats.js'
-import { liftEffort, type MayRun } from './rules.js'
-import type { RoutingPolicy } from './routingPolicy.js'
 import { usernameOf } from './usernames.js'
 
 export { RELAYED_QUOTA } from './reviewSeats.js'
@@ -19,18 +17,15 @@ const ANY = 'any'
 export type Cause = 'out' | 'low'
 export interface ReviewCapacityNotice { conversationId: string; text: string; mentions: string[]; source: { kind: 'review-capacity'; engine: string; cause: Cause } }
 
-/** Each machine the project may start a strong Reviewer on, of either engine, on a policy row of quality 2 or more, as one:
- *  a Mac and its Harness Team account are one machine (machines.ts teamStartRequest), standing as the best of its engines
- *  and accounts. */
-function seats(state: SuperTabState, group: Conversation, policy: RoutingPolicy, mayRun: MayRun, now: number) {
-  const rules = projectRules(state, groupProject(state, group).id)
+/** Each machine the project may start an agent on ([teamOk]: machines.ts teamWorkCheck), of either engine it has, as one: a
+ *  Mac and its Harness Team account are one machine (machines.ts teamStartRequest), standing as the best of its engines and
+ *  accounts. */
+function seats(state: SuperTabState, now: number, teamOk: (machineId: string, contributorId: string) => boolean) {
   const byMac = new Map<string, { name: string; contributorId: string; standing: Standing }>()
   for (const pool of state.machines ?? []) {
-    if (pool.buddyOnly || pool.removal) continue
+    if (pool.buddyOnly || pool.removal || !teamOk(pool.machineId, pool.contributorId)) continue
     for (const engine of ENGINES) {
       if (!pool.engines.includes(engine)) continue
-      const rows = policy.models.filter(row => row.enabled && row.engine === engine && row.quality >= 2)
-      if (!rows.some(row => mayRun({ machineId: pool.machineId, engine, model: row.model, effort: liftEffort(rules, engine, row.effort) }, pool.contributorId))) continue
       const key = pool.hostMachineId ?? pool.machineId, here = standing(state, pool, engine, now), seen = byMac.get(key)
       if (!seen) byMac.set(key, { name: pool.name, contributorId: pool.contributorId, standing: here })
       else if (STANDING.indexOf(here) < STANDING.indexOf(seen.standing)) seen.standing = here
@@ -40,16 +35,17 @@ function seats(state: SuperTabState, group: Conversation, policy: RoutingPolicy,
 }
 
 /**
- * The notice for [group]'s review when no new strong Reviewer of any engine can start on any machine the project may use
+ * The notice for [group]'s hand-over when no new agent of either engine can start on any machine the project may use
  * (cause `out`), or when each one that could is close to running out of weekly quota (`low`); null otherwise. Said once
  * per cause: the project keeps which it last said, and forgets it once a machine is usable again. With no machine at all
- * that may run a Reviewer nothing is said, as before: a Swarm whose agents run on hosts outside the contributions reports
+ * the project may use nothing is said, as before: a Swarm whose agents run on hosts outside the contributions reports
  * no readings to judge. Tags the owners of those machines who read the project and have a username.
  */
-export function reviewCapacityNotice(state: SuperTabState, group: Conversation, policy: RoutingPolicy, mayRun: MayRun, now: number): ReviewCapacityNotice | null {
+export function reviewCapacityNotice(state: SuperTabState, group: Conversation, now: number,
+  teamOk: (machineId: string, contributorId: string) => boolean): ReviewCapacityNotice | null {
   if (!group.assignment) return null
   const project = groupProject(state, group)
-  const places = seats(state, group, policy, mayRun, now)
+  const places = seats(state, now, teamOk)
   const said = project.reviewCapacity?.[ANY]
   // Written only when it changes, so an ordinary Ready for review writes nothing to the project.
   if (!places.length || places.some(p => p.standing === 'usable')) { if (project.reviewCapacity) delete project.reviewCapacity; return null }
@@ -65,10 +61,9 @@ export function reviewCapacityNotice(state: SuperTabState, group: Conversation, 
   // A tag is a username; someone without one is not tagged, never named by their email (review of #2275).
   const mentions = [...new Set(places.map(p => p.contributorId))].filter(id => reads(id) && usernameOf(state, id))
   const who = mentions.map(id => `@${usernameOf(state, id)}`).join(' ')
-  const fixes = 'More Claude Code or Codex quota, an engine signed in on another machine, a paused machine resumed, or another machine in the Swarm'
   const text = (cause === 'low'
-    ? `Quota for new Reviewers is close to running out on every machine this project may use (${list}). ${fixes} would keep reviews going.`
-    : `Reviews cannot start a new Reviewer: no machine this project may use can run Claude Code or Codex now (${list}). ${fixes} would unblock them.`)
+    ? `Quota for new agents is close to running out on every machine this project may use (${list}).`
+    : `No new agent can start: no machine this project may use can run Claude Code or Codex now (${list}).`)
     + (who ? ` ${who} can fix it.` : '')
   return { conversationId: project.leadConversationId, text, mentions, source: { kind: 'review-capacity', engine: ANY, cause } }
 }

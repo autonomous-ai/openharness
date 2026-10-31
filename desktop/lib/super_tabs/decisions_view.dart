@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
 import 'decisions.dart';
+import 'model.dart';
 import 'section_heading.dart';
 
 /// The reader's decisions in the Notifications pane: what is open first, one
@@ -149,9 +150,10 @@ Widget quietDecisionAction({
 );
 
 /// One question: what it unblocks, one button per option, the recommended
-/// one marked, and the quiet Let PM decide (only with a recommendation) and
-/// Not now ([onNotNow], in the Buddy chat). Answered, it shows the choice, or
-/// that the PM decided.
+/// one marked, and the quiet `Let <coordinator> decide` (only with a
+/// recommendation) and Not now ([onNotNow], in the Buddy chat). Answered, it
+/// shows the choice, or that the coordinator decided, called what its project
+/// calls it.
 class SuperTabDecisionCard extends StatelessWidget {
   const SuperTabDecisionCard({
     super.key,
@@ -162,6 +164,10 @@ class SuperTabDecisionCard extends StatelessWidget {
   final SuperTabDecisions decisions;
   final SuperTabDecision decision;
   final VoidCallback? onNotNow;
+
+  String get _coordinator =>
+      decisions.controller.snapshot?.coordinatorNameOf(decision.projectId) ??
+      kDefaultCoordinatorName;
 
   @override
   Widget build(BuildContext context) {
@@ -187,7 +193,7 @@ class SuperTabDecisionCard extends StatelessWidget {
           const SizedBox(height: 8),
           if (choice != null)
             Text(
-              '${decision.delegated ? 'PM decided' : 'You chose'}: '
+              '${decision.delegated ? '$_coordinator decided' : 'You chose'}: '
               '${decision.options.elementAtOrNull(choice) ?? ''}',
               style: DesktopChrome.control(color: DesktopChrome.muted),
             )
@@ -231,14 +237,14 @@ class SuperTabDecisionCard extends StatelessWidget {
     ),
   );
 
-  /// Let PM decide · Not now, whichever of them this card offers.
+  /// `Let <coordinator> decide` · Not now, whichever of them this card offers.
   Widget? _later() {
     final busy = decisions.answering.contains(decision.id);
     final actions = [
       if (decision.canDelegate)
         quietDecisionAction(
           key: ValueKey('super-decision-${decision.id}-delegate'),
-          label: 'Let PM decide',
+          label: 'Let $_coordinator decide',
           onPressed: busy
               ? null
               : () => unawaited(decisions.delegate(decision)),

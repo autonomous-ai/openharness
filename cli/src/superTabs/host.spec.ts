@@ -85,6 +85,27 @@ function setup(messageFields: Record<string, unknown> = {}, claimFields: Record<
 }
 
 describe('current Swarm role lookup', () => {
+  // Project instructions, phase 4 (decision 1): the role's name is the project's document's; the session is a coordinator,
+  // an agent or a Buddy, and an older client's Reviewer keeps its swarm-review file.
+  it('reads a session\'s role without its kind', async () => {
+    const t = setup()
+    let agent: Record<string, unknown> = { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }
+    let groups: unknown[] = [{ leadId: 'agent', agentIds: [] }]
+    vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
+      path.includes('/hosts/') ? hostForm([{ tabId: 'tab', agent }]) : swarmReply(path, { agents: [agent], conversations: groups }) } }))
+    const sources = sourcesOf(t.core)
+    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'coordinator', mode: 'orchestration' })
+    groups = [{ leadId: 'other', agentIds: ['agent'] }]
+    agent = { ...agent, role: 'reviewer' }
+    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'agent', fallback: 'review', mode: 'orchestration' })
+    for (const role of ['builder', 'Tester', undefined]) {
+      agent = { ...agent, role }
+      expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'agent', mode: 'orchestration' })
+    }
+    agent = { ...agent, role: 'builder', buddyOf: { personId: 'peer', generation: 'g' } }
+    groups = [{ id: 'chat', kind: 'buddy', leadId: null, agentIds: ['agent'] }]
+    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'buddy', mode: 'orchestration' })
+  })
   it('derives a Reviewer from its stored role while it is in a current group', async () => {
     const t = setup()
     const agent = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', role: 'reviewer' }
@@ -92,7 +113,7 @@ describe('current Swarm role lookup', () => {
     vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
       path.includes('/hosts/') ? hostForm([{ tabId: 'tab', agent }]) : swarmReply(path, { agents: [agent], conversations: groups }) } }))
     const sources = sourcesOf(t.core)
-    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'review', mode: 'orchestration' })
+    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'agent', fallback: 'review', mode: 'orchestration' })
     groups = []
     expect(await swarmRoleFor(sources, 'harness')).toBeNull()
   })
@@ -161,7 +182,7 @@ describe('current Swarm role lookup', () => {
     vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
       path.includes('/hosts/') ? hostForm([{ tabId: 'tab', agent }]) : swarmReply(path, { agents: [agent], conversations: [group] }) } }))
     const sources = sourcesOf(t.core)
-    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: kind === 'lead' ? 'lead' : 'dev', mode: 'orchestration' })
+    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: kind === 'lead' ? 'coordinator' : 'agent', mode: 'orchestration' })
     expect(await swarmRoleFor(sources, 'personal')).toBeNull()
   })
   it('gives the mode of the project whose group made the role, Lead first', async () => {
@@ -172,12 +193,12 @@ describe('current Swarm role lookup', () => {
     vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
       path.includes('/hosts/') ? hostForm([{ tabId: 'tab', agent }]) : swarmReply(path, { agents: [agent], conversations, projects }) } }))
     const sources = sourcesOf(t.core)
-    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'lead', mode: 'default' })
+    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'coordinator', mode: 'default' })
     conversations = [{ projectId: 'p2', leadId: 'other', agentIds: ['agent'] }]
-    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'dev', mode: 'orchestration' })
+    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'agent', mode: 'orchestration' })
     // A group from before projects is in the first project.
     conversations = [{ leadId: 'other', agentIds: ['agent'] }]
-    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'dev', mode: 'default' })
+    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'agent', mode: 'default' })
   })
   it.each(['removed-roster', 'foreign', 'removed-state', 'archived', 'released', 'none', 'malformed'] as const)
     ('never adopts a session whose membership is %s', async kind => {
@@ -197,7 +218,7 @@ describe('current Swarm role lookup', () => {
       ? hostForm(present ? [{ tabId: 'tab', agent }] : [], { tabs: ['tab'] })
       : swarmReply(path, { agents: [agent], conversations: [{ agentIds: ['agent'] }, { leadId: 'agent' }] }) } }))
     const sources = sourcesOf(t.core)
-    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'lead', mode: 'orchestration' })
+    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'coordinator', mode: 'orchestration' })
     present = false
     expect(await swarmRoleFor(sources, 'harness')).toBeNull()
     expect(await swarmRoleFor(sources, 'harness')).toBeNull()
@@ -310,11 +331,6 @@ describe('Super Tab native delivery handoff', () => {
     expect(lead.core.turns.deliver).toHaveBeenCalledTimes(1)
     expect(vi.mocked(lead.call).mock.calls.some(([, path]) => path.includes('asAgentId='))).toBe(false)
   })
-  it('names all five task parts in the worker delivery header', async () => {
-    const t = setup()
-    await t.open().tick()
-    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('goal, changes, constraints, owned code and acceptance checks')
-  })
   it('keeps roster members through host failure and restart, releasing only a confirmed removal', async () => {
     const t = setup(), first = t.open()
     await first.tick()
@@ -345,8 +361,6 @@ describe('Super Tab native delivery handoff', () => {
       'In reply to message question-2. Read it before interpreting the answer:'
     ), 'team:service:superTabs:delivery')
     expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('Message message from Collaborator:\nYes, keep them.')
-    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('On Claude Code or Codex, Leads use swarm-lead, Builders swarm-dev and Reviewers swarm-review.')
-    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('Leads coordinate: assign multi-part or 15+ minute work to Swarm agent groups; do only answers, lookups and work under 15 minutes yourself; your subagents only read/look up.')
   })
 
   describe('the replied-to message', () => {
@@ -726,6 +740,26 @@ describe('Super Tab native delivery handoff', () => {
     expect(prompt).toContain('Answer each message once')
     expect(prompt).not.toContain('email addresses')
     expect(prompt).not.toContain('Report exact revisions')
+  })
+  // Final review: with no --to a reply reaches the coordinator (or, from the coordinator, the task's assignee), so an Engineer
+  // answering a Reviewer reached the PM, and the PM answering an agent that was not the assignee reached no one.
+  it('names an agent author with --to in the reply line, and no one for a person', async () => {
+    const t = setup({ author: { kind: 'agent', id: 'a0000000000000000000000r', name: 'Reviewer 1' }, text: 'Two findings.' })
+    await t.open().tick()
+    const prompt = vi.mocked(t.core.turns.deliver).mock.calls[0]![1] as string
+    expect(prompt).toContain("post 'lead' 'your message' UNIQUE_OPERATION_ID --reply-to 'message' --to 'a0000000000000000000000r'\n")
+    const person = setup({ author: { kind: 'person', id: 'p1', name: 'sam@example.com' }, text: 'Hi' })
+    await person.open().tick()
+    expect(vi.mocked(person.core.turns.deliver).mock.calls[0]![1] as string).not.toContain('--to')
+  })
+  it('keeps workflow out of the delivered prompt (it lives in the project instructions)', async () => {
+    const t = setup({ author: { kind: 'person', id: 'p1', name: 'sam@example.com' }, text: 'Hi' })
+    await t.open().tick()
+    const prompt = vi.mocked(t.core.turns.deliver).mock.calls[0]![1] as string
+    for (const gone of ['Leads:', 'decide reuse, keep or stop', 'swarm-lead', 'swarm-dev', 'swarm-review', 'Each task needs goal', 'Leads coordinate'])
+      expect(prompt).not.toContain(gone)
+    expect(prompt).toContain('Manage agreed work and delegation:')
+    expect(prompt).toContain('Answer each message once')
   })
   it('persists before typing, keeps one native delivery during polls, and acknowledges the exact receipt', async () => {
     const t = setup(), host = t.open()
@@ -1157,7 +1191,7 @@ describe('the super-tab command in delivered input', () => {
     const text = String(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1])
     expect(text).toContain(`Read its state: harness super-tab --tab 'tab' --agent 'agent' status`)
     expect(text).toContain(`harness super-tab --tab 'tab' --agent 'agent' message 'lead' 'earlier'`)
-    expect(text).toContain(`harness super-tab --tab 'tab' --agent 'agent' route GROUP JSON`)
+    expect(text).toContain(`harness super-tab --tab 'tab' --agent 'agent' help`)
     expect(text).not.toContain('--port')
     t.event('rejected', 'team_waiting_busy')
     await host.tick()
@@ -2767,6 +2801,350 @@ describe('built-in skill text after a CLI update', () => {
     expect(f.sent.map(s => s.asAgentId).sort()).toEqual(['a-builder', 'a-lead', 'a-reviewer'])
     await f.pass(host, 60_000)
     expect(f.sent).toHaveLength(3)
+  })
+})
+
+// Project instructions (spec 2026-10-30, How agents read it): the roster names each agent's project, the document's revision
+// and the agent's role name, never the text. The host reads the text once per revision and project, installs it as the
+// agent's swarm-instructions skill beside its tools skill, and tells the agent once per change. An old backend's rows carry
+// no `instructions` key, and everything there runs as before.
+describe('project instructions from the roster', () => {
+  const NOTE = 'Ship on Fridays only.'
+  const START = '# How this project works\nTesters test every change.\n'
+  const older = (role: string) => `---\nname: swarm-${role}\n---\nAn older release of this skill.\n`
+  /** A save's time before any launch in these tests: a session launched since has read that revision. */
+  const LONG_AGO = '2026-01-01T00:00:00.000Z'
+  type Name = 'pm' | 'tester' | 'reviewer' | 'buddy'
+  const AGENTS: Record<Name, { role: 'lead' | 'dev' | 'review' | 'buddy'; roleName: string; lead?: true }> = {
+    pm: { role: 'lead', roleName: 'PM', lead: true }, tester: { role: 'dev', roleName: 'Tester' },
+    reviewer: { role: 'review', roleName: 'Reviewer' }, buddy: { role: 'buddy', roleName: 'Buddy' } }
+  /** What a Buddy's guard at [guard], for its folder [folder], answers a shell [command]. */
+  const guardRuns = (guard: string, folder: string, command: string): string => {
+    const run = spawnSync(process.execPath, [guard], { encoding: 'utf8', timeout: 10_000,
+      input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd: folder }) })
+    return JSON.parse(run.stdout).hookSpecificOutput.permissionDecision
+  }
+  function docFixture(names: Name[] = ['tester'], options: { stale?: Name[] } = {}) {
+    const t = setup(), workspace = mkdtempSync(join(tmpdir(), 'super-tab-instructions-')); roots.push(workspace)
+    const folder = mkdtempSync(join(tmpdir(), 'buddy-folder-')); roots.push(folder)
+    const sessions: Record<string, unknown> = {}, roleFiles: Partial<Record<Name, string>> = {}, launched: Partial<Record<Name, string>> = {}
+    for (const name of names) {
+      const { role } = AGENTS[name], cwd = role === 'buddy' ? folder : workspace
+      const { file } = prepareSwarmSkill(cwd, { role, key: `key-${name}` }, folderOnly)
+      launched[name] = readFileSync(file, 'utf8')
+      // What an older CLI left: its own text and no record of which text it was.
+      if (options.stale?.includes(name)) { writeFileSync(file, older(role)); rmSync(join(dirname(file), 'version.json')) }
+      roleFiles[name] = file
+      sessions[`h-${name}`] = { agentId: `h-${name}`, cwd, swarmSkill: { role, key: `key-${name}` } }
+    }
+    const agents = names.map(name => ({ id: `a-${name}`, harnessId: `h-${name}`, machineId: 'machine-1',
+      ...(name === 'buddy' ? { buddyOf: { personId: 'peer', generation: 'g' } } : {}) }))
+    const groups = [
+      { id: 'lead-group', leadId: 'a-pm', agentIds: ['a-pm', 'a-tester', 'a-reviewer'] },
+      { id: 'work', leadId: 'a-pm', agentIds: ['a-pm', 'a-tester'], assignment: { agentId: 'a-tester', status: 'working' } },
+      { id: 'chat', kind: 'buddy', leadId: null, agentIds: ['a-buddy'] },
+    ]
+    /** The project's saved revisions, oldest first, the first long before any launch here. The backend serves the newest, or
+     *  revision `lag` (a read behind the roster); `history` refuses the revisions read (an outage). */
+    const saves = [{ revision: 1, hash: 'hash-1', summary: 'Started from the built-in instructions.', text: START, at: LONG_AGO }]
+    let lag: number | undefined, history = true
+    /** What the roster says of the agent's project: undefined leaves the keys out, as an old backend does. */
+    let doc: Record<string, unknown> | null | undefined = { projectId: 'app', revision: 1, hash: 'hash-1', coordinatorName: 'Product Manager' }
+    const rows = () => agents.map(agent => {
+      const { roleName, lead } = AGENTS[agent.id.slice(2) as Name]
+      return { tabId: 'tab', agent, lead: lead === true, ...(doc === undefined ? {} : { roleName, instructions: doc }) }
+    })
+    const reads: string[] = []
+    const sent: Array<{ operationId: string; asAgentId: string; command: Record<string, any> }> = []
+    const receipts = new Map<string, string>()
+    const holds: Array<{ match: (path: string) => boolean; until: Promise<void> }> = []
+    let inFlight = 0
+    t.core.agents.byAgent = vi.fn(id => sessions[id] as never)
+    t.core.agents.terminalAvailable = vi.fn(() => true)
+    t.core.account.backend = vi.fn(async (_method, path, body) => {
+      const held = holds.findIndex(h => h.match(path))
+      if (held >= 0) await holds.splice(held, 1)[0]!.until
+      inFlight++
+      await Promise.resolve()
+      inFlight--
+      const request = body as any
+      if (path.includes('/hosts/')) return { status: 200, body: { data: hostForm(rows(), { tabs: ['tab'] }) } }
+      const read = /^\/api\/super-tabs\/tab\/projects\/app\/instructions(\/revisions)?\?asAgentId=(a-[a-z]+)$/.exec(path)
+      if (read) {
+        reads.push(path)
+        // As the backend answers a Buddy: no notes, and none of the history, which names who asked for what.
+        const buddy = read[2] === 'a-buddy'
+        if (read[1]) {
+          if (!history) return { status: 503, body: { success: false, error: { code: 'INSTRUCTIONS_UNAVAILABLE', message: 'Try again in a moment.' } } }
+          return buddy ? { status: 404, body: { success: false, error: { code: 'NOT_FOUND', message: 'This project is unavailable.' } } }
+            : { status: 200, body: { data: { projectId: 'app', revisions: saves.map(({ text: _text, ...save }) => ({ ...save,
+              writtenBy: { kind: 'person', id: 'ken' }, askedBy: 'ken' })).reverse() } } }
+        }
+        const at = saves[(lag ?? saves.length) - 1]!
+        return { status: 200, body: { data: { projectId: 'app', revision: at.revision, hash: at.hash, text: at.text, template: false,
+          coordinatorName: 'Product Manager', notesRevision: 1,
+          ...(buddy ? {} : { notes: [{ id: 'note', text: NOTE, askedBy: 'ken', at: '2026-10-30T09:00:00.000Z', expiresAt: null }] }) } } }
+      }
+      if (path.endsWith('/deliveries')) return { status: 200, body: { data: [] } }
+      if (request?.command?.type === 'message.send') {
+        const prior = receipts.get(request.operationId), same = JSON.stringify(request.command)
+        if (prior !== undefined && prior !== same) return { status: 409, body: { success: false, error: { code: 'OPERATION_REUSED', message: 'Use a new operation ID for a different request.' } } }
+        if (prior === undefined) { receipts.set(request.operationId, same); sent.push(request) }
+        return { status: 200, body: { data: {} } }
+      }
+      return { status: 200, body: { data: swarmReply(path, { agents, conversations: groups }) } }
+    })
+    const pass = async (host = t.open(), advance = 0) => {
+      t.wait(advance); await host.tick()
+      for (let idle = 0; idle < 3;) { await new Promise(resolve => setImmediate(resolve)); idle = inFlight ? 0 : idle + 1 }
+      return host
+    }
+    const holdNext = (match: (path: string) => boolean) => {
+      let release!: () => void
+      holds.push({ match, until: new Promise<void>(resolve => { release = resolve }) })
+      return release
+    }
+    /** One of a session's skill files: its role file's neighbours. */
+    const file = (name: Name, skill = 'swarm-instructions') => join(dirname(dirname(roleFiles[name]!)), skill, 'SKILL.md')
+    return { t, sent, reads, pass, holdNext, file, roleFiles, launched, folder, agents,
+      save: (summary: string, text: string, at = LONG_AGO) => { const revision = saves.length + 1; saves.push({ revision, hash: `hash-${revision}`, summary, text, at }); return revision },
+      move: (revision: number) => { doc = { projectId: 'app', revision, hash: `hash-${revision}`, coordinatorName: 'Product Manager' } },
+      setDoc: (next: typeof doc) => { doc = next }, setLag: (revision: number | undefined) => { lag = revision }, setHistory: (served: boolean) => { history = served } }
+  }
+  const instructionsRead = (agentId: string) => `/api/super-tabs/tab/projects/app/instructions?asAgentId=${agentId}`
+  const historyRead = (agentId: string) => `/api/super-tabs/tab/projects/app/instructions/revisions?asAgentId=${agentId}`
+
+  it('installs a Tester\'s instructions from the roster and tells it nothing at first', async () => {
+    const f = docFixture()
+    const role = readFileSync(f.roleFiles.tester!, 'utf8')
+    const host = await f.pass()
+    const text = readFileSync(f.file('tester'), 'utf8')
+    expect(text).toContain('\nYou are this project\'s Tester. Product Manager is the project\'s coordinator.\n')
+    expect(text.endsWith(`Instructions revision 1:\n\n${START}`)).toBe(true)
+    // The notes are the PM's to print with the instructions command; the skill holds the document alone.
+    expect(text).not.toContain(NOTE)
+    // Its role file stays as the launch wrote it, beside the tools skill.
+    expect(readFileSync(f.roleFiles.tester!, 'utf8')).toBe(role)
+    expect(existsSync(f.file('tester', 'swarm-tools'))).toBe(true)
+    expect(f.sent).toEqual([])
+    expect(f.reads).toEqual([instructionsRead('a-tester'), historyRead('a-tester')])
+    // Read once per revision: later rosters naming the same one read nothing and tell nothing.
+    for (let i = 1; i <= 3; i++) await f.pass(host, i * 120_000)
+    expect(f.reads).toHaveLength(2)
+    expect(f.sent).toEqual([])
+  })
+
+  // Task 3's review: the launch line sends a new session to the instructions command, so its first install is told nothing only
+  // for a revision saved by its launch. One saved after it is told once.
+  it('tells a new session about a revision saved after its launch', async () => {
+    const f = docFixture()
+    f.move(f.save('Reviews go to the Reviewer', 'Revision two.\n', new Date(Date.now() + 60_000).toISOString()))
+    const host = await f.pass()
+    expect(readFileSync(f.file('tester'), 'utf8').endsWith('Instructions revision 2:\n\nRevision two.\n')).toBe(true)
+    expect(f.sent.map(s => s.command.text)).toEqual([expect.stringMatching(/^The project's instructions changed: Reviews go to the Reviewer\. /)])
+    expect(f.sent[0]!.command.text).toContain(JSON.stringify(f.file('tester')))
+    await f.pass(host, 1_000)
+    expect(f.sent).toHaveLength(1)
+  })
+
+  // Task 4's review: one failed history read kept every notice of that revision without its summary, and gave each fresh
+  // launch an extra notice (its save time unknown). It is read again at the next pass, and said once.
+  it('retries a failed history read at the next pass', async () => {
+    const f = docFixture()
+    const host = await f.pass()
+    const before = readFileSync(f.file('tester'), 'utf8')
+    f.move(f.save('Reviews go to the Reviewer', 'Revision two.\n'))
+    f.setHistory(false)
+    await f.pass(host, 1_000)
+    expect(readFileSync(f.file('tester'), 'utf8')).toBe(before)
+    expect(f.sent).toEqual([])
+    f.setHistory(true)
+    await f.pass(host, 60_000)
+    expect(f.reads.filter(path => path === historyRead('a-tester'))).toHaveLength(3)
+    // The text was kept: only the history was read again.
+    expect(f.reads.filter(path => path === instructionsRead('a-tester'))).toHaveLength(2)
+    expect(readFileSync(f.file('tester'), 'utf8').endsWith('Instructions revision 2:\n\nRevision two.\n')).toBe(true)
+    expect(f.sent.map(s => s.command.text)).toEqual([expect.stringMatching(/^The project's instructions changed: Reviews go to the Reviewer\. /)])
+    expect(f.t.log).toHaveBeenCalledTimes(1)
+    expect(f.t.log).toHaveBeenCalledWith(expect.stringContaining('history'))
+  })
+
+  // A history that stays unreadable never holds the instructions back for long: after five minutes they go out without the
+  // summary, and a new session whose save time is unknown is told once, as Task 3 decides.
+  it('installs without a summary once the history read has failed for five minutes, and says so once', async () => {
+    const f = docFixture()
+    f.move(f.save('Reviews go to the Reviewer', 'Revision two.\n'))
+    f.setHistory(false)
+    const host = await f.pass()
+    for (let i = 1; i < 5; i++) await f.pass(host, 60_000)
+    expect(f.sent).toEqual([])
+    expect(existsSync(f.file('tester'))).toBe(false)
+    await f.pass(host, 60_000)
+    expect(readFileSync(f.file('tester'), 'utf8').endsWith('Instructions revision 2:\n\nRevision two.\n')).toBe(true)
+    expect(f.sent.map(s => s.command.text)).toEqual([expect.stringMatching(/^The project's instructions changed\. /)])
+    expect(f.t.log).toHaveBeenCalledTimes(1)
+    await f.pass(host, 60_000)
+    expect(f.sent).toHaveLength(1)
+  })
+
+  // Task 4's review: a Buddy has no tools skill, so its own Buddy skill stays its Harness text (spec: "The Buddy skill stays,
+  // and a Buddy also gets the project's document"), kept current by a CLI release as before.
+  it('keeps a Buddy\'s own skill current on an instructions row', async () => {
+    const f = docFixture(['buddy'], { stale: ['buddy'] })
+    const host = await f.pass()
+    expect(readFileSync(f.roleFiles.buddy!, 'utf8')).toBe(f.launched.buddy)
+    expect(readFileSync(f.file('buddy'), 'utf8').endsWith(`Instructions revision 1:\n\n${START}`)).toBe(true)
+    expect(f.sent.map(s => [s.asAgentId, s.command.conversationId])).toEqual([['a-buddy', 'chat'], ['a-buddy', 'chat']])
+    expect(f.sent[0]!.command.text).toMatch(/^Harness updated your built-in swarm-buddy skill\. /)
+    expect(f.sent[0]!.command.text).toContain(JSON.stringify(f.roleFiles.buddy))
+    expect(f.sent[1]!.command.text).toContain(JSON.stringify(f.file('buddy')))
+    await f.pass(host, 1_000)
+    await f.pass()
+    expect(f.sent).toHaveLength(2)
+  })
+
+  it('tells it once when a save moves the revision', async () => {
+    const f = docFixture()
+    const host = await f.pass()
+    f.move(f.save('Reviews go to the Reviewer', '# How this project works\nTesters test; the Reviewer reviews.\n'))
+    await f.pass(host, 1_000)
+    expect(readFileSync(f.file('tester'), 'utf8').endsWith('Instructions revision 2:\n\n# How this project works\nTesters test; the Reviewer reviews.\n')).toBe(true)
+    expect(f.sent).toHaveLength(1)
+    const [notice] = f.sent
+    expect(notice!.asAgentId).toBe('a-tester')
+    expect(notice!.operationId).toMatch(/^skill-a-tester-[0-9a-f]{32}-1$/)
+    expect(notice!.command).toMatchObject({ type: 'message.send', conversationId: 'work', replyTo: null, recipientIds: ['a-tester'], agentOnly: true })
+    expect(notice!.command.text.startsWith('The project\'s instructions changed: Reviews go to the Reviewer.')).toBe(true)
+    expect(notice!.command.text).toContain(JSON.stringify(f.file('tester')))
+    // A third poll, and a restarted host, find it told.
+    await f.pass(host, 1_000)
+    await f.pass()
+    expect(f.sent).toHaveLength(1)
+  })
+
+  it.each([
+    ['an old backend\'s rows (no instructions key)', undefined],
+    ['an agent in no project (instructions null)', null],
+  ])('keeps %s on the built-in skills', async (_case, doc) => {
+    const f = docFixture(['tester'], { stale: ['tester'] })
+    f.setDoc(doc)
+    const host = await f.pass()
+    expect(vi.mocked(f.t.core.account.backend).mock.calls.some(([, path]) => path.includes('/instructions'))).toBe(false)
+    expect(existsSync(dirname(f.file('tester')))).toBe(false)
+    // Today's refresh: the role file on this release's text, and its notice.
+    expect(readFileSync(f.roleFiles.tester!, 'utf8')).toBe(f.launched.tester)
+    expect(f.sent.map(s => s.command.text)).toEqual([expect.stringMatching(/^Harness updated your built-in swarm-dev skill\. /)])
+    await f.pass(host, 120_000)
+    expect(f.sent).toHaveLength(1)
+    expect(f.reads).toEqual([])
+  })
+
+  it('retries a read that answers another revision', async () => {
+    const f = docFixture()
+    const host = await f.pass()
+    const before = readFileSync(f.file('tester'), 'utf8')
+    f.move(f.save('Reviews go to the Reviewer', 'Revision two.\n'))
+    f.setLag(1)
+    await f.pass(host, 1_000)
+    expect(readFileSync(f.file('tester'), 'utf8')).toBe(before)
+    expect(f.sent).toEqual([])
+    expect(f.t.log).toHaveBeenCalledWith(expect.stringContaining('instructions'))
+    // Not read again on every poll: a minute later, as a role text.
+    const reads = f.reads.length
+    await f.pass(host, 1_000)
+    expect(f.reads).toHaveLength(reads)
+    f.setLag(undefined)
+    await f.pass(host, 60_000)
+    expect(readFileSync(f.file('tester'), 'utf8').endsWith('Instructions revision 2:\n\nRevision two.\n')).toBe(true)
+    expect(f.sent.map(s => s.command.text)).toEqual([expect.stringMatching(/^The project's instructions changed: Reviews go to the Reviewer\. /)])
+  })
+
+  // Several saves between two roster passes make one notice, for the newest: never one per save.
+  it('tells once, for the newest, when revisions 2 and 3 come in one pass', async () => {
+    const f = docFixture()
+    const host = await f.pass()
+    f.save('Reviews go to the Reviewer', 'Revision two.\n')
+    f.move(f.save('Testers write the release notes', 'Revision three.\n'))
+    await f.pass(host, 1_000)
+    expect(readFileSync(f.file('tester'), 'utf8').endsWith('Instructions revision 3:\n\nRevision three.\n')).toBe(true)
+    expect(f.sent.map(s => s.command.text)).toEqual([expect.stringMatching(/^The project's instructions changed: Testers write the release notes\. /)])
+    await f.pass(host, 1_000)
+    expect(f.sent).toHaveLength(1)
+  })
+
+  // The review of #1660, for instructions: a refresh works from the roster it started with. One whose revision moved on while
+  // it read installs and tells nothing; the newer roster's refresh does, once.
+  it('tells once, for the newest, when revision 3 arrives while revision 2 is being read', async () => {
+    const f = docFixture()
+    const host = await f.pass()
+    f.move(f.save('Reviews go to the Reviewer', 'Revision two.\n'))
+    const release = f.holdNext(path => path === instructionsRead('a-tester'))
+    await host.tick()
+    await vi.waitFor(() => expect(vi.mocked(f.t.core.account.backend).mock.calls.filter(([, path]) => path === instructionsRead('a-tester'))).toHaveLength(2))
+    f.move(f.save('Testers write the release notes', 'Revision three.\n'))
+    await host.tick()
+    release()
+    await f.pass(host, 1_000)
+    expect(readFileSync(f.file('tester'), 'utf8').endsWith('Instructions revision 3:\n\nRevision three.\n')).toBe(true)
+    expect(f.sent.map(s => s.command.text)).toEqual([expect.stringMatching(/^The project's instructions changed: Testers write the release notes\. /)])
+    expect(f.t.log).not.toHaveBeenCalled()
+    await f.pass(host, 1_000)
+    expect(f.sent).toHaveLength(1)
+  })
+
+  it('reads the text once for the project\'s agents here, each with its own role line, the coordinator\'s too', async () => {
+    const f = docFixture(['pm', 'tester'])
+    const host = await f.pass()
+    expect(f.reads).toEqual([instructionsRead('a-pm'), historyRead('a-pm')])
+    expect(readFileSync(f.file('pm'), 'utf8')).toContain('\nYou are this project\'s PM, its coordinator: ')
+    expect(readFileSync(f.file('tester'), 'utf8')).toContain('\nYou are this project\'s Tester. Product Manager is the project\'s coordinator.\n')
+    f.move(f.save('Reviews go to the Reviewer', 'Revision two.\n'))
+    await f.pass(host, 1_000)
+    expect(f.reads).toHaveLength(4)
+    expect(f.sent.map(s => s.asAgentId).sort()).toEqual(['a-pm', 'a-tester'])
+    expect(new Set(f.sent.map(s => s.operationId)).size).toBe(2)
+  })
+
+  // Diego's issue, 2026-10-27, for instructions: a daemon running for weeks kept every text it read.
+  it('forgets a project\'s instructions text once no roster row names that project', async () => {
+    const f = docFixture()
+    const host = await f.pass()
+    const texts = (host as unknown as { instructionTexts: Map<string, unknown> }).instructionTexts
+    expect(texts.size).toBe(1)
+    f.agents.splice(0, f.agents.length)
+    await f.pass(host, 1_000)
+    expect(texts.size).toBe(0)
+  })
+
+  it('gives a Buddy the text without notes or summary', async () => {
+    const f = docFixture(['tester', 'buddy'])
+    const buddyRole = readFileSync(f.roleFiles.buddy!, 'utf8')
+    const host = await f.pass()
+    const file = f.file('buddy')
+    const text = readFileSync(file, 'utf8')
+    expect(text).toContain('\nYou are this project\'s Buddy. ')
+    expect(text.endsWith(`Instructions revision 1:\n\n${START}`)).toBe(true)
+    expect(text).not.toContain(NOTE)
+    // Only its instructions file beside its Buddy skill, which stays as it was: no tools skill.
+    expect(readdirSync(dirname(dirname(file))).sort()).toEqual(['swarm-buddy', 'swarm-instructions'])
+    expect(readFileSync(f.roleFiles.buddy!, 'utf8')).toBe(buddyRole)
+    // Its own read, never a member's text: and never the history, which names who asked for what.
+    expect(f.reads.filter(path => path.includes('a-buddy'))).toEqual([instructionsRead('a-buddy')])
+    const toBuddy = () => f.sent.filter(s => s.asAgentId === 'a-buddy')
+    expect(toBuddy().map(s => [s.command.conversationId, s.command.recipientIds])).toEqual([['chat', ['a-buddy']]])
+    expect(toBuddy()[0]!.command.text).toContain(JSON.stringify(file))
+    // A save reaches it with no summary.
+    f.move(f.save('Reviews go to the Reviewer', 'Revision two.\n'))
+    await f.pass(host, 1_000)
+    expect(readFileSync(file, 'utf8').endsWith('Instructions revision 2:\n\nRevision two.\n')).toBe(true)
+    expect(toBuddy()).toHaveLength(2)
+    expect(toBuddy()[1]!.command.text).toMatch(/^The project's instructions changed\. /)
+    expect(f.reads.filter(path => path.includes('a-buddy'))).toEqual([instructionsRead('a-buddy'), instructionsRead('a-buddy')])
+    // It reads the file inside its folder, which its guard allows, and gains no command: instructions stays refused.
+    const guard = join(f.folder, '.claude', 'buddy-guard.mjs')
+    expect(guardReads(guard, f.folder, file)).toBe('allow')
+    expect(guardRuns(guard, f.folder, 'harness super-tab --tab tab instructions')).toBe('deny')
+    expect(guardRuns(guard, f.folder, 'harness super-tab --tab tab status')).toBe('allow')
   })
 })
 

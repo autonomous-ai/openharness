@@ -1,13 +1,14 @@
 import { isBuddy, isBuddyChat } from './buddies.js'
 import type { PrismaClient } from '@prisma/client'
 import { ensureIndex } from '../lib/db/indexes.js'
-import { activeWork, actorKey, agent, author, conversation, fail, isLeads, stableId, type Actor, type Agent, type Author, type Conversation, type MessageDraft,
+import { activeWork, actorKey, agent, author, conversation, fail, isLeads, stableId, SuperTabError, type Actor, type Agent, type Author, type Conversation, type MessageDraft,
   type SuperTabState } from './model.js'
 import { downSince, productManagerOn } from './machines.js'
-import { agentProjectId, isConfidential, ledProject, onTeamAccount, ownSession, projectOf, readAgent, teamSessionAccess } from './projects.js'
+import { agentProjectId, isConfidential, ledProject, onTeamAccount, ownSession, projectAgent, projectOf, readAgent, teamSessionAccess } from './projects.js'
 import { redactCredentials } from './credentials.js'
 
-/** The Lead reads and types in an agent's terminal through the host of the agent's machine (spec/2026-10-23-lead-sees-agent-terminal.md).
+/** Any agent of an agent's project, or a person with write access, reads and types in its terminal through the host of its
+ * machine (spec/2026-10-23-lead-sees-agent-terminal.md; project instructions, phase 4).
  * The request and its answer live in SuperTabTerminalRequest, never in the tab state or group history, because a screen can show secrets. */
 export const TERMINAL_KEYS = ['Enter', 'Esc', 'Tab', 'Up', 'Down', 'Left', 'Right', 'Ctrl-C', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'] as const
 /** The host has this long to pick a request up, then this long to answer it; after either, the request fails with a plain reason. */
@@ -32,15 +33,25 @@ export type TerminalEffect =
 /** A stored request as the store reads it for an answer. */
 export interface TerminalRequest { id: string; agentId: string; harnessId: string; kind: TerminalKind; status: 'pending' | 'claimed' | 'done' }
 
-/** Only the Lead of the agent's project, or a person with write access who can see the agent, reads or types in its terminal. */
-/** `elsewhere`: the agent's session is confidential in another Swarm (confidential.ts). */
+/** Any agent of the agent's project (project instructions, phase 4), or a person with write access who can see the agent, reads
+ *  or types in its terminal; a private one stays its own machine owner's. `elsewhere`: the agent's session is confidential in
+ *  another Swarm (confidential.ts). */
 export function mayDrive(state: SuperTabState, actor: Actor, target: Agent, elsewhere = false, kind: TerminalKind = 'input'): void {
   // For both kinds of requester: no person or agent reads a confidential session but its own (final review, Critical 1).
   const closed = () => {
     // A Team account holding a Product Manager: every agent there is one macOS user, which reads people's chats with it,
-    // so no person types in any of them (security review 2 of #2089). They talk to them in their groups' chats.
-    if (actor.kind === 'person' && kind === 'input' && onTeamAccount(state, target) && productManagerOn(state, target.machineId)) {
-      fail('TERMINAL_PRIVATE', `${target.displayName ?? target.name} runs in a Harness Team account that holds a Product Manager, so nobody types in it through the Swarm. Talk to it in its group's chat.`, 403)
+    // so no person types in any of them (security review 2 of #2089). Nor does any agent read or type in them, but the
+    // session itself and the Product Manager there, which already runs as that user (review of phase 4, task 1). They
+    // talk to them in their groups' chats.
+    if (onTeamAccount(state, target) && productManagerOn(state, target.machineId)) {
+      if (actor.kind === 'person' && kind === 'input') {
+        fail('TERMINAL_PRIVATE', `${target.displayName ?? target.name} runs in a Harness Team account that holds a Product Manager, so nobody types in it through the Swarm. Talk to it in its group's chat.`, 403)
+      }
+      const self = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId) : undefined
+      const sameUser = !!self && (ownSession(actor, target) || (self.machineId === target.machineId && !!ledProject(state, self.id)))
+      if (actor.kind === 'agent' && !sameUser) {
+        fail('TERMINAL_PRIVATE', `${target.displayName ?? target.name} runs in a Harness Team account that holds a Product Manager, so no other agent reads or types in it through the Swarm. Talk to it in its group's chat.`, 403)
+      }
     }
     // In a Harness Team account: its project's owner reads its screen, and nobody types in it (projects.ts teamSessionAccess).
     const team = teamSessionAccess(state, actor, target, elsewhere)
@@ -62,8 +73,21 @@ export function mayDrive(state: SuperTabState, actor: Actor, target: Agent, else
     return closed()
   }
   closed()
-  if (conversation(state, projectOf(state, agentProjectId(state, target)).leadConversationId).leadId !== actor.agentId) {
-    fail('LEAD_REQUIRED', 'Only the Lead of this agent’s project, or a person with write access, can read or type in its terminal.', 403)
+  if (!projectAgent(state, actor, agentProjectId(state, target))) {
+    fail('FORBIDDEN', 'Only an agent of this agent’s project, or a person with write access, can read or type in its terminal.', 403)
+  }
+  // An agent never drives further than the person whose machine runs it, whose own sign-in speaks for it: a teammate hosting
+  // an agent of a private project they cannot read would otherwise type, through it, into the project's agents on other
+  // people's logins (security review S1). Agents on one login drive each other as before, and the project's coordinator keeps
+  // driving its project's agents wherever it runs (it unblocks an agent stuck on a prompt). Every path checks here: the
+  // request, the host's pickup (store.ts terminalRefusal) and the answer's read (store.ts terminalResult).
+  if (actor.machineOwnerId === target.machineOwnerId) return
+  if (ledProject(state, actor.agentId)?.id === agentProjectId(state, target)) return
+  try {
+    mayDrive(state, { kind: 'person', userId: actor.machineOwnerId, email: '' }, target, elsewhere, kind)
+  } catch (error) {
+    if (!(error instanceof SuperTabError)) throw error
+    fail('FORBIDDEN', 'An agent reads or types in another agent’s terminal only where the person whose machine runs it could.', 403)
   }
 }
 
@@ -133,7 +157,7 @@ export function terminalAlert(state: SuperTabState, actor: Actor, sender: Author
   }
   // Its engine has been retrying its model for 10 minutes (2026-10-24: a Builder on a small local model retried for an
   // hour while its Lead waited on it).
-  if (command.alert === 'model') text = `${nameOf(target)} can't get answers from its model: its requests keep failing. Stop it, or give the work to another model.`
+  if (command.alert === 'model') text = `${nameOf(target)} can't get answers from its model: its requests keep failing.`
   // A Buddy's alert is its owner's alone, in their chat: the PM neither reads that chat nor runs the Buddy (buddies.ts).
   const chat = isBuddy(target) ? state.conversations.find(c => isBuddyChat(c) && c.agentIds.includes(target.id)) : undefined
   if (chat) return [{ id, conversationId: chat.id, author: sender, replyTo: null, recipients: [], text, source }]

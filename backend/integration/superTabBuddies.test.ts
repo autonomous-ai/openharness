@@ -584,6 +584,22 @@ describe('a person\'s Buddy chat before any Buddy, and the PM\'s private lines (
     expect(await chats()).toEqual([chat])
     expect((await f.store.messages(peer, f.tab, chat!, {})).messages.map(m => m.text)).toEqual(['First.', 'Second.'])
   })
+
+  // Any agent of the project tells a person now (project instructions, phase 4): its quiet Buddy chat is loaded for that
+  // agent's line too, not only the coordinator's (final review of the branch).
+  it('takes any agent\'s line in a quiet chat rather than opening a second one', async () => {
+    const f = await swarm()
+    const engineer = String((await f.execute({ type: 'agent.add', conversationId: 'lead', machineId: 'owner-mac', harnessId: randomUUID(), name: 'Engineer',
+      configuration: config, lead: false })).result.agentId)
+    await f.execute(tell('First.'), owner, f.lead)
+    const chats = async () => (await db.swarmGroup.findMany({ where: { tabId: f.tab, deleted: false } }))
+      .filter(row => (row.data as { kind?: string }).kind === 'buddy').map(row => row.key)
+    const [chat] = await chats()
+    await db.swarmGroup.updateMany({ where: { tabId: f.tab, key: chat }, data: { dormant: true } })
+    await f.execute(tell('From the Engineer.'), owner, engineer)
+    expect(await chats()).toEqual([chat])
+    expect((await f.store.messages(peer, f.tab, chat!, {})).messages.map(m => m.text)).toEqual(['First.', 'From the Engineer.'])
+  })
 })
 
 describe('naming a Buddy through the store (Diego, 10-29)', () => {

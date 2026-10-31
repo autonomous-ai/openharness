@@ -15,7 +15,7 @@ String superTabCardStatus(Map<String, dynamic>? assignment) =>
       'working' => 'Working',
       'needs_human' => 'Waiting on a person',
       'blocked' => 'Blocked',
-      'review' => 'In review',
+      'review' => 'Waiting on others',
       'done' => 'Done',
       'stopped' || 'lost' => 'Stopped',
       'cancelled' => 'Cancelled',
@@ -89,7 +89,7 @@ class _SuperTabLiveCardState extends State<SuperTabLiveCard> {
         for (final card in _watched)
           SuperTabCardPullRequest(card, widget.facts.of(card.url)),
       ];
-      final review = widget.controller.reviewLine(widget.group);
+      final linked = widget.controller.linkedLine(widget.group);
       return _Frame(
         bar: widget.card.task || pulls.isEmpty
             ? DesktopChrome.accent
@@ -101,7 +101,7 @@ class _SuperTabLiveCardState extends State<SuperTabLiveCard> {
         children: [
           if (widget.card.task) ..._task(),
           for (final pull in pulls) SuperTabCardPullRequestRow(pull),
-          if (review != null) Text(review, style: DesktopChrome.metadata()),
+          if (linked != null) Text(linked, style: DesktopChrome.metadata()),
         ],
       );
     },
