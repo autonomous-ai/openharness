@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
@@ -229,7 +227,11 @@ class _Chip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
-    final picture = swarmMimeForName(file.name).startsWith('image/');
+    // A picture past what goes as a form is a file mark: no thumbnail is decoded from a file of
+    // hundreds of megabytes, as a message shows it ([SwarmAttachment]).
+    final picture =
+        swarmMimeForName(file.name).startsWith('image/') &&
+        file.size <= swarmFormAttachmentMaxBytes;
     final mark = Icon(
       picture ? LucideIcons.image : LucideIcons.file,
       size: AppIconSize.besideText,
@@ -256,19 +258,12 @@ class _Chip extends StatelessWidget {
             borderRadius: BorderRadius.circular(AppCard.insetRadius),
             child: SizedBox.square(
               dimension: _thumbnail,
-              child: switch ((picture, file.bytes, file.path)) {
+              child: switch ((picture, file.bytes)) {
                 // Decoded small: a thumbnail, not the photo — three pixels a
-                // point, a phone's sharpest. A large picture is decoded from
-                // its file, never read whole into memory to show.
-                (true, final bytes?, _) => Image.memory(
+                // point, a phone's sharpest. Only from memory: a file read
+                // from disk as it goes up is never decoded to show.
+                (true, final bytes?) => Image.memory(
                   bytes,
-                  fit: BoxFit.cover,
-                  cacheWidth: (_thumbnail * 3).round(),
-                  gaplessPlayback: true,
-                  errorBuilder: (_, _, _) => Center(child: mark),
-                ),
-                (true, null, final path?) => Image.file(
-                  File(path),
                   fit: BoxFit.cover,
                   cacheWidth: (_thumbnail * 3).round(),
                   gaplessPlayback: true,

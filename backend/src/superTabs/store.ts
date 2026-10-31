@@ -16,7 +16,7 @@ import { reactionCounts, type ReactionTarget } from './reactions.js'
 import { agentOpenDeliveries, compactedDelivery, deliveredCopies, messagesById, messagesPast, OPEN_DELIVERY, type MessageEdge, pageDeliveries, pageReactions, pageThreads, refreshReplies, type PageDelivery } from './pageReads.js'
 import { restoreDelivery } from './deliveryCompaction.js'
 import { threadSummaries } from './threads.js'
-import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, directUploads, errorCode, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, MAX_FORM_ATTACHMENT_BYTES, objectKeyFor, peekType, PENDING_UPLOAD_PURPOSE, publicUrl, TOO_LARGE_MESSAGE, trimPrefix, typeFromHead, UPLOAD_LINK_MS,
+import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, directUploads, errorCode, HOURLY_UPLOAD_BYTES, HOURLY_UPLOADS, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, MAX_FORM_ATTACHMENT_BYTES, objectKeyFor, peekType, PENDING_UPLOAD_PURPOSE, publicUrl, TOO_LARGE_MESSAGE, trimPrefix, typeFromHead, UPLOAD_LINK_MS,
   type Attachment, type Attachments, type AttachmentStore, type AvatarStore } from './attachments.js'
 import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
@@ -1739,16 +1739,37 @@ export class SuperTabStore {
     if (!name.success || !mime.success) fail('INVALID_ATTACHMENT', 'Attach a file with a printable name and a content type.', 400)
     if (!Number.isSafeInteger(file.size) || file.size < 1) fail('INVALID_ATTACHMENT', 'Name the file\'s size in bytes.', 400)
     if (file.size > MAX_ATTACHMENT_BYTES) fail('ATTACHMENT_TOO_LARGE', TOO_LARGE_MESSAGE, 413)
-    const key = await this.uploader(tabId, tx => this.poster(tx, user, tabId, conversationId, asAgentId).then(p => p.actor))
-    const objectKey = objectKeyFor(attachments.prefix, tabId, name.data), expiresAt = this.now() + UPLOAD_LINK_MS
+    const objectKey = objectKeyFor(attachments.prefix, tabId, name.data)
+    // The pending row is written before any link is signed, in the transaction that counts the sender's last hour. Each request
+    // first writes the sender's allowance row there, so two at once conflict and one retries after the other commits: parallel
+    // requests stop at the limits. The row is made outside it once, since a duplicate key is not retried and a conflict is.
+    const row = await transaction(this.db, async tx => {
+      const { actor } = await this.poster(tx, user, tabId, conversationId, asAgentId)
+      const key = actorKey(actor), allowance = `${tabId}:${key}`, now = new Date(this.now())
+      return { key, allowance, now }
+    }).then(async ({ key, allowance, now }) => {
+      await this.db.superTabUploadAllowance.create({ data: { id: allowance, at: now } }).catch(error => { if (errorCode(error) !== 'P2002') throw error })
+      return transaction(this.db, async tx => {
+        await this.poster(tx, user, tabId, conversationId, asAgentId)
+        await tx.superTabUploadAllowance.update({ where: { id: allowance }, data: { at: new Date(this.now()) } })
+        const recent = await tx.superTabAttachment.findMany({ where: { tabId, actorKey: key, createdAt: { gte: new Date(this.now() - 3_600_000) } }, select: { size: true } })
+        if (recent.length >= HOURLY_UPLOADS) fail('RATE_LIMITED', `You attached ${HOURLY_UPLOADS} files in the last hour. Wait before attaching more.`, 429)
+        if (recent.reduce((sum, r) => sum + r.size, 0) + file.size > HOURLY_UPLOAD_BYTES) {
+          fail('RATE_LIMITED', 'You attached 4 GB of files in the last hour. Wait before attaching more.', 429)
+        }
+        return tx.superTabAttachment.create({ data: { id: randomBytes(12).toString('hex'), tabId, conversationId, actorKey: key,
+          name: name.data, mime: mime.data, size: file.size, objectKey, purpose: PENDING_UPLOAD_PURPOSE } })
+      })
+    })
+    const expiresAt = this.now() + UPLOAD_LINK_MS
     let link: { url: string; headers: Record<string, string> }
     try { link = await direct.uploadLink(objectKey, { name: name.data }, file.size, expiresAt) } catch (error) {
       // The signing error's text is never logged: it may carry the object's key, which is the file's link.
       logger.error('super-tab upload link failed', { tabId, code: errorCode(error) })
+      // No link was handed out, so nothing can write the object: the row goes now, not with the sweep.
+      await this.db.superTabAttachment.deleteMany({ where: { id: row.id, tabId, purpose: PENDING_UPLOAD_PURPOSE } }).catch(() => {})
       fail('ATTACHMENTS_UNAVAILABLE', 'Could not prepare the upload just now. Try again.', 503)
     }
-    const row = await this.db.superTabAttachment.create({ data: { id: randomBytes(12).toString('hex'), tabId, conversationId, actorKey: key,
-      name: name.data, mime: mime.data, size: file.size, objectKey, purpose: PENDING_UPLOAD_PURPOSE } })
     return { upload: { id: row.id, url: link.url, method: 'PUT' as const, headers: link.headers, expiresAt } }
   }
 

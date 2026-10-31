@@ -98,7 +98,8 @@ async function uploadDirect(path: string, target: UploadTarget, agentId: string,
   let stored: Response
   try {
     stored = await fetcher(upload.url, {
-      method: 'PUT', body: blob,
+      // A redirect would carry the file and its signed headers to another address: a failure, never followed.
+      method: 'PUT', body: blob, redirect: 'error',
       headers: { ...headers as Record<string, string>, 'content-length': String(blob.size) },
       signal: AbortSignal.timeout(60_000 + Math.ceil(blob.size / DIRECT_FLOOR_BYTES_PER_MS)),
     })

@@ -1,5 +1,6 @@
+import { mkdir, statfs as fsStatfs } from 'node:fs/promises'
 import { env } from '../config/env.js'
-import { copyPasteDropFile, writePasteDropStream } from '../lib/pasteDropFiles.js'
+import { copyPasteDropFile, PASTE_DROPS_DIR, writePasteDropStream } from '../lib/pasteDropFiles.js'
 import { object } from './wire.js'
 
 /** The most a file sent by the multipart route may be (lib/superTabAttachmentProxy.ts); a larger one goes by a link. */
@@ -22,6 +23,21 @@ const BUDGET_MS = 45_000
 const budgetMs = (files: MessageAttachment[]) =>
   BUDGET_MS + Math.ceil(files.reduce((sum, file) => sum + Math.min(file.size, MAX_ATTACHMENT_BYTES), 0) / FLOOR_BYTES_PER_MS)
 const megabytes = (bytes: number) => `${bytes / 1024 / 1024} MB`
+/** Kept free beside a download: a 256 MB file must not fill the disk this computer's agents work on. */
+const FREE_MARGIN_BYTES = 512 * 1024 * 1024
+/** What `fs.statfs` tells of the disk: free blocks for this user, and their size. */
+export type Statfs = (path: string) => Promise<{ bavail: number | bigint; bsize: number | bigint }>
+
+/** Whether the paste-drops disk has room for [bytes] and the margin. A disk that cannot say (statfs unsupported) is not refused. */
+async function roomFor(bytes: number, statfs: Statfs): Promise<boolean> {
+  let free: number
+  try {
+    await mkdir(PASTE_DROPS_DIR, { recursive: true })
+    const disk = await statfs(PASTE_DROPS_DIR)
+    free = Number(disk.bavail) * Number(disk.bsize)
+  } catch { return true }
+  return free >= bytes + FREE_MARGIN_BYTES
+}
 
 export function attachmentsOf(message: Record<string, unknown>): MessageAttachment[] {
   if (!Array.isArray(message.attachments)) return []
@@ -49,9 +65,12 @@ class Refused extends Error {}
  * shell reads as syntax ($(...), quotes, spaces, ;). The original name stays in the label beside it. */
 export const diskName = (name: string) => name.replaceAll(/[^A-Za-z0-9._-]+/g, '_').replace(/^[.-]+/, '').slice(-120) || 'file'
 
-async function download(file: MessageAttachment, base: string, fetcher: typeof fetch, ms: number, idleMs: number, stop?: AbortSignal): Promise<string> {
+async function download(file: MessageAttachment, base: string, fetcher: typeof fetch, ms: number, idleMs: number, stop: AbortSignal | undefined,
+  statfs: Statfs): Promise<string> {
   if (!servedFrom(base, file.url)) throw new Refused('not a Harness file address')
   if (file.size > MAX_ATTACHMENT_BYTES) throw new Refused(`over the ${megabytes(MAX_ATTACHMENT_BYTES)} limit`)
+  // Another try would find the same disk: refused, not tried again.
+  if (!await roomFor(file.size, statfs)) throw new Refused('not enough free disk space')
   const limit = file.size
   // No bytes for idleMs ends it, from the request on: waiting for the answer counts too.
   const idle = new AbortController()
@@ -101,12 +120,14 @@ async function download(file: MessageAttachment, base: string, fetcher: typeof f
  * `complete` is false, so the host tries again before it next delivers the same message. `paths` are the files written,
  * which a Buddy's guard may list when its own person sent them (lib/buddyGuard.ts). */
 /** A file being downloaded, by its address and size: a second delivery of the same file waits on the first's download
- *  rather than start its own (superTabs/host.ts keeps one such map). */
-export type FilesInFlight = Map<string, Promise<{ line: string; path: string | null }>>
+ *  rather than start its own (superTabs/host.ts keeps one such map). [wanting]: the deliveries still waiting for it; the last
+ *  to leave stops it. */
+export type FilesInFlight = Map<string, SharedDownload>
+interface SharedDownload { result: Promise<{ line: string; path: string | null }>; wanting: number; stop: AbortController }
 
 export async function attachedFiles(message: Record<string, unknown>,
   options: { base?: string; fetch?: typeof fetch; budgetMs?: number; idleMs?: number; now?: () => number
-    inFlight?: FilesInFlight; signal?: AbortSignal } = {}):
+    inFlight?: FilesInFlight; signal?: AbortSignal; statfs?: Statfs } = {}):
   Promise<{ text: string; complete: boolean; paths: string[] }> {
   const files = attachmentsOf(message)
   if (!files.length) return { text: '', complete: true, paths: [] }
@@ -116,37 +137,48 @@ export async function attachedFiles(message: Record<string, unknown>,
   const labelOf = (file: MessageAttachment) => `sent as ${JSON.stringify(file.name)}, ${formatSize(file.size)}`
   const failed = (file: MessageAttachment, why: string) => ({ path: null, line: servedFrom(base, file.url)
     ? `- Could not download ${file.url} (${labelOf(file)}): ${why}` : `- Could not download a file (${labelOf(file)}): ${why}` })
-  const one = async (file: MessageAttachment) => {
+  const one = async (file: MessageAttachment, signal: AbortSignal | undefined) => {
     const label = labelOf(file)
     let failure: unknown
-    for (let attempt = 0; attempt < 3 && deadline - now() > 0 && !options.signal?.aborted; attempt++) {
+    for (let attempt = 0; attempt < 3 && deadline - now() > 0 && !signal?.aborted; attempt++) {
       try {
         const path = await download(file, base, options.fetch ?? fetch, Math.min(downloadMs(file.size), deadline - now()), options.idleMs ?? IDLE_MS,
-          options.signal)
+          signal, options.statfs ?? fsStatfs)
         return { line: `- ${path} (${label})`, path }
       } catch (error) {
         failure = error
         if (error instanceof Refused) break
       }
     }
-    return failed(file, options.signal?.aborted ? 'stopped' : failure instanceof Error ? failure.message : 'out of time')
+    return failed(file, signal?.aborted ? 'stopped' : failure instanceof Error ? failure.message : 'out of time')
   }
-  const lines = await Promise.all(files.map(file => {
+  const lines = await Promise.all(files.map(async file => {
     const inFlight = options.inFlight
-    if (!inFlight) return one(file)
+    if (!inFlight) return one(file, options.signal)
     const key = `${file.size} ${file.url}`
-    const running = inFlight.get(key)
+    let shared = inFlight.get(key)
+    const joined = !!shared
+    if (!shared) {
+      const stop = new AbortController()
+      const started: SharedDownload = { wanting: 0, stop,
+        result: one(file, stop.signal).finally(() => { if (inFlight.get(key) === started) inFlight.delete(key) }) }
+      inFlight.set(key, shared = started)
+    }
+    const download = shared
+    // This delivery wants it until it is in or the delivery leaves; the last one to leave stops it, and its part file goes.
+    download.wanting++
+    let left = false
+    const leave = () => { if (left) return; left = true; if (--download.wanting === 0) download.stop.abort() }
+    if (options.signal?.aborted) leave()
+    else options.signal?.addEventListener('abort', leave, { once: true })
+    const result = await download.result
+    options.signal?.removeEventListener('abort', leave)
+    if (!joined || result.path === null) return result
     // Downloaded once, but each delivery's own file: copied as soon as the download is in, before either is delivered.
-    if (running) return running.then(async shared => {
-      if (shared.path === null) return shared
-      try {
-        const path = await copyPasteDropFile(shared.path, diskName(file.name))
-        return { line: `- ${path} (${labelOf(file)})`, path }
-      } catch (error) { return failed(file, error instanceof Error ? error.message : 'could not copy') }
-    })
-    const started: Promise<{ line: string; path: string | null }> = one(file).finally(() => { if (inFlight.get(key) === started) inFlight.delete(key) })
-    inFlight.set(key, started)
-    return started
+    try {
+      const path = await copyPasteDropFile(result.path, diskName(file.name))
+      return { line: `- ${path} (${labelOf(file)})`, path }
+    } catch (error) { return failed(file, error instanceof Error ? error.message : 'could not copy') }
   }))
   const paths = lines.flatMap(l => l.path === null ? [] : [l.path])
   return { text: `Attached files:\n${lines.map(l => l.line).join('\n')}`, complete: paths.length === lines.length, paths }

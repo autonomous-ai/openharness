@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import '../core/open_in_browser.dart';
 import '../finder/finder_file_kind.dart';
 import '../widgets/desktop_chrome.dart';
+import 'attachment_upload.dart' show kSuperTabFormAttachmentMaxBytes;
 import 'model.dart';
 
 /// The largest file read into the chat's text viewer; a bigger one opens in
@@ -177,8 +178,13 @@ class AttachmentImage extends ImageProvider<AttachmentImage> {
     debugLabel: url.toString(),
   );
 
-  Future<ui.Codec> _decode(ImageDecoderCallback decode) async =>
-      decode(await ui.ImmutableBuffer.fromUint8List(await readAttachment(url)));
+  // No more than a picture shown in place may weigh, whatever its row says:
+  // a larger one fails to draw rather than being read whole.
+  Future<ui.Codec> _decode(ImageDecoderCallback decode) async => decode(
+    await ui.ImmutableBuffer.fromUint8List(
+      await readAttachment(url, maxBytes: kSuperTabFormAttachmentMaxBytes),
+    ),
+  );
 
   @override
   bool operator ==(Object other) =>

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 
 import '../api/api_client.dart';
 import '../logging/app_log.dart';
@@ -206,8 +207,12 @@ Future<Map<String, dynamic>> _uploadDirect(
   }
   final link = superTabMap(_attachmentOf(asked)['upload']);
   final id = link['id'], url = link['url'], headers = link['headers'];
-  if (id is! String || url is! String || headers is! Map) {
-    appLog.warn('super-tabs', 'upload link unreadable');
+  if (id is! String ||
+      url is! String ||
+      headers is! Map ||
+      !superTabStorageLinkAllowed(url)) {
+    // Not the link: it is a credential.
+    appLog.warn('super-tabs', 'upload link unreadable or not https');
     throw SuperTabFailure(
       'UPLOAD_FAILED',
       'Could not upload $name. Try again.',
@@ -232,6 +237,21 @@ Future<Map<String, dynamic>> _uploadDirect(
     cancelToken: cancel,
   );
   return _attachmentOf(done);
+}
+
+/// Whether a file may be sent to storage at [url]: https only, so the bytes
+/// and the link's signature never cross a network in the clear. A computer
+/// also takes plain http to itself, for a local stack.
+@visibleForTesting
+bool superTabStorageLinkAllowed(String url, {bool web = kIsWeb}) {
+  final link = Uri.tryParse(url);
+  if (link == null || link.host.isEmpty || link.userInfo.isNotEmpty) {
+    return false;
+  }
+  return link.scheme == 'https' ||
+      (!web &&
+          link.scheme == 'http' &&
+          const {'127.0.0.1', 'localhost'}.contains(link.host));
 }
 
 /// Sends [file]'s [size] bytes to [url] with [headers], read as they go.

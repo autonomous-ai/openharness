@@ -1,6 +1,8 @@
 import 'dart:typed_data';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/swarm/swarm_attach.dart';
 import 'package:harness_mobile/swarm/swarm_outgoing_files.dart';
 
 /// The files waiting to go with the next message in a phone Swarm chat: the
@@ -182,4 +184,46 @@ void main() {
     expect(said, 'Attach at most 10 files. big.jpg is over 256 MB.');
     expect(files.files, hasLength(10));
   });
+
+  group('the composer\'s chips', () {
+    Future<void> pumpChips(WidgetTester tester, SwarmOutgoingFile file) async {
+      final box = _Box()..files.add([file]);
+      addTearDown(box.files.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(body: SwarmOutgoingChips(box: box)),
+        ),
+      );
+    }
+
+    testWidgets('a picture over 10 MB shows a file mark, never decoded', (
+      tester,
+    ) async {
+      await pumpChips(
+        tester,
+        SwarmOutgoingFile.onDisk('photo.png', '/nowhere/photo.png', 11 * mb),
+      );
+
+      expect(find.byType(Image), findsNothing);
+      expect(find.text('photo.png'), findsOneWidget);
+    });
+
+    testWidgets('a small picture shows its thumbnail', (tester) async {
+      await pumpChips(tester, file('photo.png', 3));
+
+      expect(find.byType(Image), findsOneWidget);
+    });
+  });
+}
+
+/// A composer that holds files and sends none.
+class _Box implements SwarmFilesBox {
+  @override
+  final files = SwarmOutgoingFiles();
+
+  @override
+  bool isUploading(SwarmOutgoingFile file) => false;
+
+  @override
+  double? uploadProgress(SwarmOutgoingFile file) => null;
 }

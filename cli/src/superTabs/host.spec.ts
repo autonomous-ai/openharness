@@ -1343,6 +1343,8 @@ describe('Super Tab attachments in delivered input', () => {
     resolved = true
     t.wait(5_000)
     await pass(host)
+    // No other delivery wanted it: the download stopped (and with it, its part file: attachments.ts).
+    expect(attachedFiles.mock.calls[0]?.[1]?.signal?.aborted).toBe(true)
     resolved = false
     t.send()
     t.wait(5_000)
@@ -1353,6 +1355,74 @@ describe('Super Tab attachments in delivered input', () => {
     host.stop()
     expect(signal?.aborted).toBe(true)
     expect(t.core.turns.deliver).not.toHaveBeenCalled()
+  })
+  /** A Swarm of agents on this machine, each with its deliveries, in order, as the backend lists them. */
+  function swarmOf(t: ReturnType<typeof setup>, agents: Array<{ id: string; deliveries: Array<{ id: string; text: string; attachments?: unknown[] }> }>) {
+    const claimed: Record<string, string> = {}
+    vi.mocked(t.call).mockImplementation(async (method, path, body) => {
+      let data: unknown
+      if (path.endsWith('/readings')) return { status: 404, body: { message: 'not found', error: 'Not Found', statusCode: 404 } }
+      if (path.includes('/hosts/')) {
+        data = hostForm(agents.map(a => ({ tabId: 'tab', agent: { id: a.id, harnessId: `harness-${a.id}`, machineId: 'machine-1' }, leadsConversationId: 'leads' })), { tabs: ['tab'] })
+      } else if (path.includes('asAgentId=')) data = swarmReply(path, { conversations: [{ id: 'lead' }] })
+      else {
+        const agent = agents.find(a => path.includes(`/agents/${a.id}/`))!
+        if (method === 'GET') data = agent.deliveries.map(d => ({ id: d.id, conversationId: 'lead', claimId: claimed[d.id] ?? null, status: claimed[d.id] ? 'claimed' : 'queued' }))
+        else {
+          const id = path.split('/').at(-1)!, command = body as Record<string, unknown>, delivery = agent.deliveries.find(d => d.id === id)!
+          if (command.type === 'claim') claimed[id] = command.claimId as string
+          data = { delivery: { id, claimId: claimed[id], status: 'claimed' }, message: { id: `m-${id}`, conversationId: 'lead', author: { name: 'Collaborator' },
+            text: delivery.text, ...delivery.attachments ? { attachments: delivery.attachments } : {} } }
+        }
+      }
+      return { status: 200, body: { success: true, data } }
+    })
+    const delivered = () => vi.mocked(t.core.turns.deliver).mock.calls.map(c => `${String(c[0])}: ${String(c[1]).match(/(The model\.|Hello\.|Next\.)/)?.[0]}`)
+    return { delivered }
+  }
+  /** A download that ends when [finish] is called, for messages with files. */
+  function slowFiles() {
+    let finish!: () => void
+    const downloading = new Promise<void>(resolve => { finish = resolve })
+    const attachedFiles = vi.fn(async (message: Record<string, unknown>) => {
+      if (!Array.isArray(message.attachments)) return { text: '', complete: true, paths: [] }
+      await downloading
+      return DOWNLOADED
+    })
+    return { attachedFiles, finish }
+  }
+  // Review 1 of the PR, P2-2: a later message to the same agent must not reach it before the one whose file it waits for.
+  it('holds an agent\'s later deliveries until the one waiting for its file is through', async () => {
+    const t = setup()
+    const { delivered } = swarmOf(t, [{ id: 'a', deliveries: [{ id: 'first', text: 'The model.', attachments: [BIG] }, { id: 'second', text: 'Next.' }] }])
+    const { attachedFiles, finish } = slowFiles()
+    const host = t.open({ attachedFiles, downloadWaitMs: 10 })
+    await pass(host)
+    // While its back-off runs, and once it is tried again.
+    for (const ms of [500, 1_000, 2_000]) { t.wait(ms); await pass(host) }
+    expect(delivered()).toEqual([])
+    finish()
+    await settle()
+    await pass(host)
+    expect(delivered()).toEqual(['harness-a: The model.', 'harness-a: Next.'])
+  })
+  // Review 1 of the PR, P2-3: one big file sent to many agents must not hold the loop that serves every agent for each of them.
+  it('waits on new downloads at most once a pass, however many deliveries wait for files, and serves the others in it', async () => {
+    const t = setup()
+    const waiting = ['a', 'b', 'c', 'd', 'e'].map(id => ({ id, deliveries: [{ id: `big-${id}`, text: 'The model.', attachments: [BIG] }] }))
+    const { delivered } = swarmOf(t, [...waiting, { id: 'z', deliveries: [{ id: 'plain', text: 'Hello.' }] }])
+    const { attachedFiles } = slowFiles()
+    const host = t.open({ attachedFiles, downloadWaitMs: 200 })
+    const started = Date.now()
+    await host.tick()
+    expect(Date.now() - started).toBeLessThan(600)
+    expect(delivered()).toEqual(['harness-z: Hello.'])
+    expect(attachedFiles).toHaveBeenCalledTimes(6)
+    // Known to be slow, they hold no later pass at all.
+    t.wait(30_000)
+    const again = Date.now()
+    await host.tick()
+    expect(Date.now() - again).toBeLessThan(150)
   })
   it('delivers a message of files alone', async () => {
     const t = setup({ text: '', attachments: [{ id: 'a1', name: 'a.log', mime: 'text/plain', size: 1, url: 'https://cdn.example.test/a.log' }] })

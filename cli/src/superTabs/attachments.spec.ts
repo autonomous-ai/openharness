@@ -162,6 +162,49 @@ describe('Super Tab attachment downloads', () => {
     expect(await pending).toMatchObject({ complete: false, paths: [] })
     expect(dropped(name)).toEqual([])
   })
+  it('refuses a file the disk has no room for, before fetching it and without trying again', async () => {
+    const fetcher = replying(new Uint8Array(5))
+    const size = 100 * 1024 * 1024
+    // Room for the file but not the 512 MB kept free beside it.
+    const statfs = vi.fn(async () => ({ bavail: (size + 256 * 1024 * 1024) / 4096, bsize: 4096 }))
+    const listed = await attachedFiles({ attachments: [file({ size })] }, { base, fetch: fetcher, statfs })
+    expect(listed).toEqual({ text: `Attached files:\n- Could not download ${file().url} (sent as "screen.png", 100.0 MB): not enough free disk space`,
+      complete: false, paths: [] })
+    expect(fetcher).not.toHaveBeenCalled()
+    expect(statfs).toHaveBeenCalledWith(PASTE_DROPS_DIR)
+    // With the room, it goes ahead.
+    const roomy = vi.fn(async () => ({ bavail: 2 * 1024 * 1024 * 1024 / 4096, bsize: 4096 }))
+    expect(await attachedFiles({ attachments: [file()] }, { base, fetch: fetcher, statfs: roomy })).toMatchObject({ complete: true })
+  })
+  it('keeps a shared download going while one delivery still wants it, and stops it, keeping nothing, once none does', async () => {
+    const name = 'wanted-by-two.bin', inFlight = new Map()
+    let release!: () => void
+    const hold = new Promise<void>(resolve => { release = resolve })
+    const fetcher = streamed(1, hold)
+    const shared = file({ name, size: 64 * 1024 })
+    const [one, two] = [new AbortController(), new AbortController()]
+    const first = attachedFiles({ attachments: [shared] }, { base, fetch: fetcher, inFlight, signal: one.signal })
+    const second = attachedFiles({ attachments: [shared] }, { base, fetch: fetcher, inFlight, signal: two.signal })
+    await vi.waitFor(() => expect(dropped(name)).toHaveLength(1))
+    // The first delivery left: the second still gets the file.
+    one.abort()
+    release()
+    expect((await second).complete).toBe(true)
+    await first
+    // Both leave a download still under way: it stops, and its part file goes.
+    const name2 = 'wanted-by-none.bin'
+    const again = streamed(1, new Promise<void>(() => {}))
+    const [three, four] = [new AbortController(), new AbortController()]
+    const lone = file({ name: name2, size: 2 * 64 * 1024, url: `${base}/super-tabs/tab/abc/${name2}` })
+    const third = attachedFiles({ attachments: [lone] }, { base, fetch: again, inFlight, signal: three.signal })
+    const fourth = attachedFiles({ attachments: [lone] }, { base, fetch: again, inFlight, signal: four.signal })
+    await vi.waitFor(() => expect(dropped(name2)).toHaveLength(1))
+    three.abort(); four.abort()
+    expect(await third).toMatchObject({ complete: false })
+    expect(await fourth).toMatchObject({ complete: false })
+    expect(dropped(name2)).toEqual([])
+    expect(inFlight.size).toBe(0)
+  })
   it('gives a large message time to finish: its budget grows with the bytes it declares', async () => {
     let clock = 0
     const slow = vi.fn(async () => { clock += 30_000; return new Response(null, { status: 503 }) })

@@ -16,6 +16,7 @@ import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
 import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
 import { logger } from '../src/utils/logger.js'
+import { sweepPendingUploads } from '../src/lib/pendingUploadSweep.js'
 import { IGNORED_NOTE, type Command } from '../src/superTabs/commands.js'
 import { nextMachineShareGrants } from '../src/lib/machineSharePolicy.js'
 import { DEFAULT_ROUTING_POLICY } from '../src/superTabs/routingPolicy.js'
@@ -2659,11 +2660,65 @@ describe('Super Tab chat attachments', () => {
     expect(await linkFor(tab, { size: 11 })).toMatchObject({ status: 429, code: 'RATE_LIMITED' })
   })
 
+  it('holds the hourly limits under parallel link requests: 200 uploads and 4 GB a sender', async () => {
+    const { tab } = await fixture()
+    const old = (n: number, size = 1) => db.superTabAttachment.createMany({ data: Array.from({ length: n }, () => ({ id: randomUUID().replaceAll('-', '').slice(0, 24),
+      tabId: tab, conversationId: 'lead', actorKey: `person:${owner.sub}`, name: 'x', mime: 'text/plain', size, objectKey: 'x' })) })
+    await old(190)
+    const answers = await Promise.all(Array.from({ length: 60 }, () => linkFor(tab, { size: 11 })))
+    expect(answers.filter(a => a.status === 200)).toHaveLength(10)
+    expect(answers.filter(a => a.status === 429).every(a => a.code === 'RATE_LIMITED')).toBe(true)
+    expect(answers.filter(a => a.status !== 200 && a.status !== 429)).toEqual([])
+    expect(await db.superTabAttachment.count({ where: { tabId: tab, actorKey: `person:${owner.sub}` } })).toBe(200)
+    // Bytes: another sender, 3.9 GB already this hour.
+    const { tab: other } = await fixture()
+    await db.superTabAttachment.create({ data: { id: randomUUID().replaceAll('-', '').slice(0, 24), tabId: other, conversationId: 'lead',
+      actorKey: `person:${owner.sub}`, name: 'x', mime: 'text/plain', size: 3900 * 1024 * 1024, objectKey: 'x' } })
+    expect(await linkFor(other, { size: 200 * 1024 * 1024 })).toMatchObject({ status: 429, code: 'RATE_LIMITED', message: 'You attached 4 GB of files in the last hour. Wait before attaching more.' })
+    expect((await linkFor(other, { size: 100 * 1024 * 1024 })).status).toBe(200)
+  })
+
+  it('removes an upload never finished, and what it stored, an hour after its link expired; nothing else', async () => {
+    const { tab } = await fixture()
+    const ask = async (size: number) => (await linkFor(tab, { size })).upload
+    const [stale, unstored, finished, young, stuck] = [await ask(5), await ask(5), await ask(5), await ask(5), await ask(5)]
+    for (const link of [stale, finished, young, stuck]) expect(await files.receive(link.url, link.headers, Buffer.alloc(5))).toBe(200)
+    const done = await complete(tab, finished.id)
+    const keyOf = async (id: string) => (await db.superTabAttachment.findFirst({ where: { id } }))!.objectKey
+    const keys = { stale: await keyOf(stale.id), stuck: await keyOf(stuck.id), young: await keyOf(young.id) }
+    const aged = new Date(Date.now() - 71 * 60_000)
+    await db.superTabAttachment.updateMany({ where: { id: { in: [stale.id, unstored.id, finished.id, stuck.id] } }, data: { createdAt: aged } })
+    const remove = vi.spyOn(files, 'delete')
+    remove.mockImplementation(async key => { if (key === keys.stuck) throw Object.assign(new Error(`DELETE ${key} failed`), { code: 503 }); files.objects.delete(key) })
+    const warn = vi.spyOn(logger, 'warn')
+    expect(await sweepPendingUploads(db, files, Date.now())).toEqual({ removed: 2, failed: 1 })
+    remove.mockRestore()
+    expect(files.objects.has(keys.stale)).toBe(false)
+    expect(await db.superTabAttachment.findFirst({ where: { id: { in: [stale.id, unstored.id] } } })).toBeNull()
+    // A failed delete keeps the row for the next pass, and logs no key.
+    expect(await db.superTabAttachment.findFirst({ where: { id: stuck.id } })).not.toBeNull()
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(keys.stuck)
+    warn.mockRestore()
+    // A finished upload and one whose link is young are kept, bytes and all.
+    expect(files.objects.has(objectKey(done.attachment.url))).toBe(true)
+    expect(files.objects.has(keys.young)).toBe(true)
+    expect(await complete(tab, young.id)).toMatchObject({ status: 200 })
+    expect(await sweepPendingUploads(db, files, Date.now())).toEqual({ removed: 1, failed: 0 })
+  })
+
   it('answers a signing or bucket failure as unavailable, never with the object\'s key', async () => {
     const { tab } = await fixture()
     const error = vi.spyOn(logger, 'error')
-    const signing = vi.spyOn(files, 'uploadLink').mockRejectedValueOnce(Object.assign(new Error('cannot sign super-tabs/secret-key'), { code: 'ENOSIGN' }))
+    const rows = await db.superTabAttachment.count({ where: { tabId: tab } })
+    let pendingWhenSigned = -1
+    const signing = vi.spyOn(files, 'uploadLink').mockImplementationOnce(async () => {
+      pendingWhenSigned = await db.superTabAttachment.count({ where: { tabId: tab, purpose: 'pending-upload' } })
+      throw Object.assign(new Error('cannot sign super-tabs/secret-key'), { code: 'ENOSIGN' })
+    })
     expect(await linkFor(tab, { size: 11 })).toMatchObject({ status: 503, code: 'ATTACHMENTS_UNAVAILABLE' })
+    // The row was written before signing, and goes when no link was handed out.
+    expect(pendingWhenSigned).toBe(1)
+    expect(await db.superTabAttachment.count({ where: { tabId: tab } })).toBe(rows)
     signing.mockRestore()
     const { upload: link } = await linkFor(tab, { size: 11 })
     const stat = vi.spyOn(files, 'stored').mockRejectedValueOnce(Object.assign(new Error(`GET ${link.url} failed`), { code: 503 }))

@@ -48,9 +48,14 @@ class NewHarnessAttachmentChip extends StatelessWidget {
       size: 13,
       color: DesktopChrome.muted,
     );
-    // A file left on disk is heavy: its kind's mark, not a preview read whole.
+    // A heavy file — left on disk, or a large picture pasted — shows its
+    // kind's mark: a preview would decode it whole.
     final bytes = file.bytes;
-    if (bytes == null || !looksLikeImage(bytes)) return icon;
+    if (bytes == null ||
+        bytes.length > _previewMaxBytes ||
+        !looksLikeImage(bytes)) {
+      return icon;
+    }
     return ClipRRect(
       borderRadius: BorderRadius.circular(3),
       child: Image.memory(
@@ -68,6 +73,9 @@ class NewHarnessAttachmentChip extends StatelessWidget {
   }
 
   static const _previewSize = 16.0;
+
+  /// The largest picture previewed in its chip (a chat's form limit).
+  static const _previewMaxBytes = 10 * 1024 * 1024;
 
   @override
   Widget build(BuildContext context) => Container(

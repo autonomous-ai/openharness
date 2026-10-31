@@ -116,6 +116,24 @@ it('says the upload failed when storage refuses it, and completes nothing', asyn
   expect(fetcher.mock.calls.map(([url]) => url)).not.toContain('http://127.0.0.1:14001/api/super-tabs/tab/attachments/uploads/u1/complete?asAgentId=agent-1')
 })
 
+// Security review of the PR: the link is the credential, and a redirect would send the file somewhere else with its headers.
+it('never follows a redirect from storage: the upload fails and the other address is never asked', async () => {
+  const folder = dir('attach-direct-')
+  const elsewhere = 'https://elsewhere.example.test/take'
+  const base = direct(() => new Response(null, { status: 307, headers: { location: elsewhere } }))
+  // As fetch does: a redirect refused when told so, else followed.
+  const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+    const answer = await base(url, init)
+    if (answer.status < 300 || answer.status >= 400) return answer
+    if (init?.redirect === 'error') throw new TypeError('fetch failed: unexpected redirect')
+    return base(answer.headers.get('location')!, init).then(() => new Response(null, { status: 200 }))
+  })
+  await expect(uploadAttachments([sparse(folder, 'big.bin', 20 * MiB)], 'op', { tabId: 'tab', conversationId: 'c1', port: 14001, dataDir: folder }, sent(),
+    fetcher as unknown as typeof fetch)).rejects.toThrow('Could not upload big.bin. Try again.')
+  expect(base.mock.calls.map(([url]) => url)).not.toContain(elsewhere)
+  expect(base.mock.calls.map(([url]) => url)).not.toContain('http://127.0.0.1:14001/api/super-tabs/tab/attachments/uploads/u1/complete?asAgentId=agent-1')
+})
+
 it('names the daemon\'s refusal of a link, as the backend said it', async () => {
   const folder = dir('attach-direct-')
   const fetcher = vi.fn(async () => json({ success: false, error: { code: 'ATTACHMENTS_UNAVAILABLE', message: 'Files over 10 MB cannot be sent right now.' } }, 503))

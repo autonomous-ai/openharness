@@ -652,15 +652,21 @@ before it is sent, with "Files can be up to 256 MB."
   100 MB on plans below Business, so bigger files do not pass through the server.
 - A file over 10 MB goes straight to the attachments bucket. The server first
   checks that the sender may post in that conversation and is under 200 uploads
-  an hour, then signs a link that writes one new object of exactly that size,
+  and 4 GB an hour (counted together with the new upload, so requests at once
+  cannot pass it), records the upload, then signs a link that writes one new object of exactly that size,
   served as a download. The upload must start within 10 minutes. A second write
   to the same link, another size, or a changed header is refused by storage
   itself. The sender then asks the server to finish the upload. Only the same
   person or agent, still able to post there, can finish it, and only once
   storage holds exactly that size. Until then no message can carry the file. An
   image keeps its type only when its first bytes are one.
-- An upload that is never finished or never sent is an unsent file, like any
-  other.
+- An upload that is never finished is removed, with anything it stored, an
+  hour after its link expired. One finished but never sent is an unsent file,
+  like any other.
+- Desktop in a browser sends straight to the bucket only once the bucket allows
+  it: a CORS rule for `https://harness.autonomous.ai` alone, method `PUT` alone,
+  and the five headers the link signs (`Content-Type`, `Content-Disposition`,
+  `Cache-Control`, `x-goog-content-length-range`, `x-goog-if-generation-match`).
 - Agents' computers save each message's files straight to disk, never more than
   the size the message names.
 

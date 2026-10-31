@@ -424,6 +424,67 @@ void main() {
       },
     );
 
+    test('a link that is not https is refused before a byte is sent, never '
+        'quoting it', () async {
+      // Plain http to a host that is not this computer by name: reachable
+      // here, so a client that sent to it would be seen doing so.
+      final plain = await HttpServer.bind(InternetAddress.loopbackIPv6, 0);
+      addTearDown(() => plain.close(force: true));
+      final reached = <String>[];
+      plain.listen((request) async {
+        reached.add(request.method);
+        await request.drain<void>();
+        await request.response.close();
+      });
+      link = 'http://[::1]:${plain.port}/bucket/key?$secret';
+      final (status, body) =
+          replies['/api/super-tabs/tab%201/attachments/uploads']!;
+      ((body['data'] as Map)['upload'] as Map)['url'] = link;
+      replies['/api/super-tabs/tab%201/attachments/uploads'] = (status, body);
+
+      await expectLater(
+        sendLarge(),
+        throwsA(
+          isA<SuperTabFailure>()
+              .having((f) => f.code, 'code', 'UPLOAD_FAILED')
+              .having(
+                (f) => f.message,
+                'message',
+                'Could not upload AC4 - 26 Oct v2.step. Try again.',
+              ),
+        ),
+      );
+      expect(reached, isEmpty);
+      expect(seen.map((r) => r.path), [
+        '/api/super-tabs/tab%201/attachments/uploads',
+      ]);
+      expect(logged.where((line) => line.contains('s3cr3t')), isEmpty);
+    });
+
+    test('storage links: https, or plain http to this computer from a '
+        'computer only', () {
+      expect(
+        superTabStorageLinkAllowed('https://storage.googleapis.com/b/k?s=1'),
+        isTrue,
+      );
+      expect(superTabStorageLinkAllowed('http://127.0.0.1:9000/b/k'), isTrue);
+      expect(superTabStorageLinkAllowed('http://localhost:9000/b/k'), isTrue);
+      expect(
+        superTabStorageLinkAllowed('http://127.0.0.1:9000/b/k', web: true),
+        isFalse,
+      );
+      for (final refused in [
+        'http://storage.googleapis.com/b/k',
+        'http://[::1]:9000/b/k',
+        'ftp://storage.googleapis.com/b/k',
+        'https://user:pw@storage.googleapis.com/b/k',
+        'https:///b/k',
+        'not a link',
+      ]) {
+        expect(superTabStorageLinkAllowed(refused), isFalse, reason: refused);
+      }
+    });
+
     test('over 256 MB it is refused before any request', () async {
       await expectLater(
         sendLarge(length: 256 * 1024 * 1024 + 1),

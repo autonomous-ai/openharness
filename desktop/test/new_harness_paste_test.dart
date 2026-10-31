@@ -260,6 +260,32 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
+  testWidgets('a picture over 10 MB shows its kind\'s mark, not a preview', (
+    tester,
+  ) async {
+    // A PNG's header on 10 MB and a byte: decoding it would read it all.
+    final big = Uint8List(10 * 1024 * 1024 + 1)..setAll(0, _png);
+    final files = HarnessAttachments(limitBytes: 256 * 1024 * 1024)
+      ..add([HarnessAttachment('big.png', big)]);
+    addTearDown(files.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: NewHarnessAttachmentChips(attachments: files, enabled: true),
+        ),
+      ),
+    );
+    expect(
+      find.byKey(const ValueKey('new-harness-attachment-preview:big.png')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('new-harness-attachment-icon:big.png')),
+      findsOneWidget,
+    );
+    debugDefaultTargetPlatformOverride = null;
+  });
+
   test('pasted files are numbered, never swapped for one of their name', () {
     final files = HarnessAttachments()
       ..add([HarnessAttachment('image.png', _png)]);

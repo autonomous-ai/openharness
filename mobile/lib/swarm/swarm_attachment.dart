@@ -13,11 +13,13 @@ import 'package:harness_mobile/shared/widgets/skeleton.dart';
 
 import 'model.dart';
 import 'swarm_attachment_store.dart';
+import 'swarm_outgoing_files.dart' show swarmFormAttachmentMaxBytes;
 import 'swarm_style.dart';
 
 /// A message's file: a picture on Harness's file storage shows in place
-/// ([_Preview]); every other file, and a picture that cannot be shown, is
-/// [chip].
+/// ([_Preview]); every other file, a picture that cannot be shown, and one
+/// past [swarmFormAttachmentMaxBytes] — which every phone in the chat would
+/// otherwise fetch and decode whole — is [chip].
 class SwarmAttachment extends StatelessWidget {
   const SwarmAttachment({
     super.key,
@@ -40,7 +42,11 @@ class SwarmAttachment extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final url = link;
-    if (!file.isImage || url == null) return chip;
+    if (!file.isImage ||
+        url == null ||
+        file.size > swarmFormAttachmentMaxBytes) {
+      return chip;
+    }
     return _Preview(
       file: file,
       url: url,
