@@ -203,6 +203,8 @@ void main() {
         find.textContaining('Read only: talk to your Buddy in # buddy.'),
         findsOneWidget,
       );
+      expect(find.textContaining('Earlier Buddy chat · '), findsOneWidget);
+      expect(find.text('Read only'), findsOneWidget);
       // Nothing is sent from it.
       final field = tester.widget<TextField>(
         find.byKey(const ValueKey('super-message-composer')),
