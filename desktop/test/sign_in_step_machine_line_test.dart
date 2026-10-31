@@ -198,6 +198,39 @@ void main() {
       });
     }
 
+    for (final (width, scale) in [
+      (340.0, 1.0),
+      (340.0, 1.2),
+      (420.0, 1.5),
+      (520.0, 2.0),
+      (640.0, 2.5),
+    ]) {
+      testWidgets('a ${width.round()}px window at ${scale}x text never '
+          'overflows the bar, long name or short', (tester) async {
+        tester.platformDispatcher.textScaleFactorTestValue = scale;
+        addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+        for (final name in ['Studio', 'Studio-${'very-long-name-' * 20}end']) {
+          for (final setUp in [true, false]) {
+            final line = signInStepReadyParts(computerName: name, setUp: setUp);
+            await _mountPage(tester, width: width, readyLine: line);
+            final error = tester.takeException();
+            expect(error, isNull, reason: '$name, set up: $setUp');
+            expect(
+              _lineText(tester),
+              signInStepReadyLine(computerName: name, setUp: setUp),
+            );
+            // Drawn in parts, the sentence after the name is whole; else
+            // the line is one text, cut at its end as it always was.
+            final drawn = _drawn(tester);
+            if (drawn.length > 1) {
+              expect(drawn.first.cut, isFalse);
+              expect(drawn.last.cut, isFalse);
+            }
+          }
+        }
+      });
+    }
+
     testWidgets('what is under way still wins over it', (tester) async {
       final line = signInStepReadyParts(computerName: 'Studio');
       await _mountPage(tester, readyLine: line, finishing: true);

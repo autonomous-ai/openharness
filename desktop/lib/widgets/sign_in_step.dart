@@ -470,7 +470,8 @@ class _ReadyBar extends StatelessWidget {
 
   /// The line as it reads, with only the computer's name giving way to a
   /// narrow window: "This Mac (Studio-with-a-very-lo…) is set up. Sign in to
-  /// continue." The rest keeps its whole width while there is room for it.
+  /// continue." Narrower than the sentence around a name cut to "…", the
+  /// line is one text cut at its end, as it always was: never an overflow.
   Widget _parts(BuildContext context) {
     final style = grid.AppType.label(color: grid.AppPalette.textPrimary);
     Text part(String text, String key) => Text(
@@ -485,12 +486,25 @@ class _ReadyBar extends StatelessWidget {
     if (name == null) {
       return part('${line.lead}${line.rest}', 'text');
     }
-    return Row(
-      children: [
-        part(line.lead, 'lead'),
-        Flexible(child: part(name, 'name')),
-        part(line.rest, 'rest'),
-      ],
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final around = TextPainter(
+          text: TextSpan(text: '${line.lead}…${line.rest}', style: style),
+          textDirection: Directionality.of(context),
+          textScaler: MediaQuery.textScalerOf(context),
+          maxLines: 1,
+        )..layout();
+        final fits = around.width <= constraints.maxWidth;
+        around.dispose();
+        if (!fits) return part('${line.lead}$name${line.rest}', 'text');
+        return Row(
+          children: [
+            part(line.lead, 'lead'),
+            Flexible(child: part(name, 'name')),
+            part(line.rest, 'rest'),
+          ],
+        );
+      },
     );
   }
 }

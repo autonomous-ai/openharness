@@ -142,19 +142,23 @@ void main() {
   );
 
   testWidgets(
-    'signed out, Settings hands AppKit the keymap, so its File menu leaves '
-    '⌘W to Settings',
+    'signed out, Settings hands AppKit only Close Tab\'s key; the menu rows '
+    'keep theirs',
     (tester) async {
-      // Before a workspace nothing else sends it, and AppKit's Close Tab,
-      // off while signed out, would take ⌘W first.
-      swarmMenuBus.state.hints = const {};
-      addTearDown(() => swarmMenuBus.state.hints = const {});
+      // Before a workspace nothing else sends the keymap, and AppKit's Close
+      // Tab, off while signed out, would take ⌘W first. Only ⌘W goes to
+      // Flutter: ⌘, ⌘H and ⌘M stay with the menu (review of #2455).
+      _resetBus();
       final keymap = AppKeymap();
       addTearDown(keymap.dispose);
       await _signedOut(tester, keymap: keymap);
+      expect(swarmMenuBus.state.input, isNull);
       expect(swarmMenuBus.state.hints, isEmpty);
       await _openSettings(tester);
-      expect(swarmMenuBus.state.hints['closeActive'], isNotNull);
+      expect(swarmMenuBus.state.input, {'cmd+w'});
+      // Every menu row still gets its key from the whole keymap.
+      expect(swarmMenuBus.state.hints['settings'], '⌘,');
+      expect(swarmMenuBus.state.hints['machineList'], '⌘M');
       await _press(tester, LogicalKeyboardKey.keyW, meta: true);
       expect(find.byType(SettingsScreen), findsNothing);
       expect(find.byType(LoginScreen), findsOneWidget);
@@ -162,4 +166,41 @@ void main() {
     },
     variant: TargetPlatformVariant.only(TargetPlatform.macOS),
   );
+
+  testWidgets(
+    'leaving the workspace (sign-out) takes back every key but Close Tab\'s',
+    (tester) async {
+      _resetBus();
+      final keymap = AppKeymap();
+      addTearDown(keymap.dispose);
+      final app = await _signedOut(tester, keymap: keymap);
+      app
+        ..signedIn = true
+        ..status = AppStatus.authenticated;
+      app.notifyListeners();
+      await tester.pumpAndSettle();
+      expect(find.byType(LoginScreen), findsNothing);
+      // The workspace's own keymap hands Flutter every key.
+      swarmMenuBus.state.input = null;
+
+      app
+        ..signedIn = false
+        ..status = AppStatus.unauthenticated;
+      app.notifyListeners();
+      await tester.pumpAndSettle();
+      expect(find.byType(LoginScreen), findsOneWidget);
+      expect(swarmMenuBus.state.input, {'cmd+w'});
+      expect(swarmMenuBus.state.hints['settings'], '⌘,');
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.macOS),
+  );
+}
+
+void _resetBus() {
+  void reset() => swarmMenuBus.state
+    ..hints = const {}
+    ..input = null;
+  reset();
+  addTearDown(reset);
 }

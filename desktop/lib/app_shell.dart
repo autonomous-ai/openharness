@@ -238,6 +238,30 @@ class RootShell extends ConsumerStatefulWidget {
 class _RootShellState extends ConsumerState<RootShell>
     with WidgetsBindingObserver {
   bool _menuDialogOpen = false;
+
+  /// Whether the workspace is the window's screen: it then owns what AppKit
+  /// hands to Flutter ([_handSignedOutKeymap] otherwise).
+  bool _home = false;
+
+  /// Before a workspace (signed out), AppKit's File menu keeps ⌘W for Close
+  /// Tab, which is off there, so Settings over the sign-in page never hears
+  /// it. Hand AppKit the keymap with Close Tab's keys alone going to Flutter:
+  /// ⌘, ⌘H and ⌘M stay with the menu. Also on leaving the workspace, whose
+  /// keymap handed Flutter every key.
+  void _handSignedOutKeymap() {
+    if (!mounted) return;
+    final keymap = KeymapTheme.of(context, listen: false);
+    if (keymap == null) return;
+    unawaited(
+      swarmMenuBus
+          .send(
+            'keymapState',
+            nativeKeymapSnapshot(keymap, inputOnly: const {'swarm.close'}),
+          )
+          .catchError((Object _) {}),
+    );
+  }
+
   SharedAgentLocation? _sharedLocation;
 
   @override
@@ -297,17 +321,7 @@ class _RootShellState extends ConsumerState<RootShell>
     switch (action) {
       case 'settings':
         final app = ref.read(appStateProvider);
-        // Before a workspace, nothing has told AppKit the keymap, so its File
-        // menu keeps ⌘W for Close Tab (off while signed out) and Settings
-        // never hears it. Hand it over as the workspace does: AppKit then
-        // leaves the keymap's keys to Flutter.
-        if (KeymapTheme.of(context, listen: false) case final keymap?) {
-          unawaited(
-            swarmMenuBus
-                .send('keymapState', nativeKeymapSnapshot(keymap))
-                .catchError((Object _) {}),
-          );
-        }
+        if (!_home) _handSignedOutKeymap();
         await _menuDialog(
           () => showSettingsScreen(
             context,
@@ -435,6 +449,12 @@ class _RootShellState extends ConsumerState<RootShell>
         // of inside each of them.
         final home =
             app.status == AppStatus.authenticated && !touring && !signInStep;
+        if (_home && !home) {
+          WidgetsBinding.instance.addPostFrameCallback(
+            (_) => _handSignedOutKeymap(),
+          );
+        }
+        _home = home;
         final framed = home ? screen : FullWindowScreen(child: screen);
         // The band takes a row of its own rather than floating over one. As an
         // overlay it landed on the rail's head — covering the wordmark and the
