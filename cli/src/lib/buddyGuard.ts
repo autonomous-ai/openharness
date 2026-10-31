@@ -563,13 +563,18 @@ function decoded(text) {
 }
 const SECRET = (kind) => 'This holds what looks like ' + kind + ', so nothing was sent, and nobody will be asked. Take it out and ' +
   'send again: never pass on secrets, tokens, keys or connection strings.'
-// A file to attach, in the folder (outward refused any other): its first 10 MB, the most a chat file holds, read as text.
-// One that is not there holds nothing, as sending it fails anyway; one there that cannot be read is refused.
+// A file to attach, in the folder (outward refused any other), read whole as text to be checked for secrets. A Buddy's files
+// stay at 10 MB, the form upload's size: a chat file may be 256 MB now, but one past 10 MB would go out with only its
+// start checked, so it is refused. One that is not there holds nothing, as sending it fails anyway; one there that cannot
+// be read is refused.
+const ATTACH_MAX_BYTES = 10 * 1024 * 1024
+const TOO_LARGE = 'A Buddy attaches files of up to 10 MB, so nothing was sent, and nobody will be asked. Attach a smaller file.'
 function fileText(path) {
   let fd
   try {
     fd = openSync(resolve(ROOT, path), constants.O_RDONLY)
-    const buffer = Buffer.alloc(10 * 1024 * 1024), read = readSync(fd, buffer, 0, buffer.length, 0)
+    const buffer = Buffer.alloc(ATTACH_MAX_BYTES + 1), read = readSync(fd, buffer, 0, buffer.length, 0)
+    if (read > ATTACH_MAX_BYTES) { reason = TOO_LARGE; return null }
     return buffer.subarray(0, read).toString('utf8')
   } catch (error) { return error?.code === 'ENOENT' ? '' : null } finally { if (fd !== undefined) closeSync(fd) }
 }
@@ -846,9 +851,9 @@ const MARK = /\.[0-9a-f]{64}\.owner$/
 /** A message holds at most ten files (superTabs/attachments.ts): ten messages' worth, and as many links. */
 const MAX_FILES = 100
 const MAX_LINKS = 50
-/** The backend's per-file limit (superTabs/attachments.ts MAX_ATTACHMENT_BYTES): no download is larger, so nothing larger
- *  is read whole to be listed. */
-const MAX_BYTES = 10 * 1024 * 1024
+/** The backend's per-file limit (superTabs/attachments.ts MAX_ATTACHMENT_BYTES, 256 MB): no download is larger, so nothing
+ *  larger is listed. A listed file is never read whole: its bytes are hashed 64 KiB at a time, here and in the guard. */
+const MAX_BYTES = 256 * 1024 * 1024
 
 /** A claude.ai Artifact link as the guard compares it (`artifactLink` in the guard above, the same rules), or null. */
 function artifactLink(text: string): string | null {

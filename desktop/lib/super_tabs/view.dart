@@ -30,6 +30,7 @@ import 'live_card.dart';
 import 'personal_projects.dart';
 import 'pull_request_facts.dart';
 import 'pull_requests.dart';
+import 'attachment_upload.dart' show kSuperTabFolderZipMaxBytes;
 import 'composer_files.dart';
 import 'composer_newline.dart';
 import 'composer_tags.dart';
@@ -829,9 +830,16 @@ class _SuperTabViewState extends State<SuperTabView>
     final oversized = <String>[], failed = <String>[];
     for (final folder in folders) {
       try {
-        final bytes = await zipFolder(folder, limitBytes: files.limitBytes);
-        bytes == null
-            ? oversized.add(folderName(folder))
+        final bytes = await zipFolder(
+          folder,
+          limitBytes: kSuperTabFolderZipMaxBytes,
+        );
+        bytes == null || bytes.length > kSuperTabFolderZipMaxBytes
+            ? oversized.add(
+                bytes == null
+                    ? folderName(folder)
+                    : '${folderName(folder)}.zip',
+              )
             : zipped[folder] = bytes;
       } on Exception {
         // Unreadable, or gone since the drop.
@@ -842,10 +850,13 @@ class _SuperTabViewState extends State<SuperTabView>
     setState(() => _zipping.remove(id));
     if (!identical(_droppedFolders[id], dropped)) return;
     // Numbered, so two folders of one name are both attached.
-    final problem = files.addPasted([
-      for (final MapEntry(key: folder, value: bytes) in zipped.entries)
-        HarnessAttachment('${folderName(folder)}.zip', bytes),
-    ], oversized: oversized);
+    final added = zipped.isEmpty
+        ? null
+        : files.addPasted([
+            for (final MapEntry(key: folder, value: bytes) in zipped.entries)
+              HarnessAttachment('${folderName(folder)}.zip', bytes),
+          ]);
+    final problem = added ?? _folderZipsTooLarge(oversized);
     // Only a folder whose zip was taken gives up its path.
     final attached = [
       for (final MapEntry(key: folder, value: bytes) in zipped.entries)
@@ -875,6 +886,16 @@ class _SuperTabViewState extends State<SuperTabView>
       problem ??
           (failed.isEmpty ? null : '${failed.join(', ')} could not be zipped.'),
     );
+  }
+
+  /// What to say of the folders whose zips are over
+  /// [kSuperTabFolderZipMaxBytes], or null for none.
+  static String? _folderZipsTooLarge(List<String> names) {
+    if (names.isEmpty) return null;
+    const limit = '${kSuperTabFolderZipMaxBytes ~/ (1024 * 1024)} MB';
+    return names.length == 1
+        ? '${names.single} is over $limit.'
+        : '${names.length} folders are over $limit.';
   }
 
   /// The box was edited: keep it as this chat's draft and drop the pick state.
