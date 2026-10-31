@@ -1847,8 +1847,9 @@ export class SuperTabStore {
     // the main chat or another thread could be another project's.
     const thread = self.buddySession?.thread
     if (thread && handed.length) {
-      const inThread = new Set((await tx.superTabMessage.findMany({ where: { tabId: state.id, conversationId: command.conversationId,
-        id: { in: handed.map(r => r.usedBy!) } }, select: { id: true, thread: true } })).filter(m => m.id === thread || m.thread === thread).map(m => m.id))
+      // By the messages' ids through their named index (pageReads.ts messagesById), never an `in` filter on a hot collection.
+      const inThread = new Set((await messagesById(tx, state.id, command.conversationId, handed.map(r => r.usedBy!)))
+        .filter(m => m.id === thread || m.thread === thread).map(m => m.id))
       handed = handed.filter(r => inThread.has(r.usedBy!))
     }
     return { attachments: [...own, ...handed].map(row => ({ id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey) })),

@@ -3,7 +3,7 @@
  *  with one tap, and the answer reaches the asking agent and the Lead in the conversation it came from. Decisions live in
  *  SuperTabDecision, never in the tab state, as mentions do. A decision is not a private channel: the PM's private lines go
  *  to the person's Buddy chat (buddies.ts). Called inside SuperTabStore's transactions. */
-import { isBuddy, openBuddyChat, openSwarmBuddyChat } from './buddies.js'
+import { isBuddy, isSwarmBuddy, openBuddyChat, openSwarmBuddyChat } from './buddies.js'
 import { createHash } from 'node:crypto'
 import type { Prisma } from '@prisma/client'
 import { z } from 'zod'
@@ -235,7 +235,9 @@ function readerWhere(state: SuperTabState, actor: Actor): Prisma.SuperTabDecisio
   // checked as the Buddy reads it (readableIn), so none in a private chat or after its person left (buddies.ts).
   const buddy = state.agents.find(a => a.id === actor.agentId && isBuddy(a))
   // Never a routing reflection's: those are about the project's routing, for its people (review of #2276).
-  if (buddy) return { personId: buddy.buddyOf!.personId, projectId: agentProjectId(state, buddy), AND: [notReflection] }
+  // A Swarm-wide Buddy reads its person's decisions in every project, each still checked as it reads that conversation
+  // (Dee, 10-31); a project session and an older Buddy, those of its own project.
+  if (buddy) return { personId: buddy.buddyOf!.personId, ...(isSwarmBuddy(buddy) ? {} : { projectId: agentProjectId(state, buddy) }), AND: [notReflection] }
   const led = ledProject(state, actor.agentId)
   return { OR: [{ askerAgentId: actor.agentId }, ...led ? [{ projectId: led.id }] : []] }
 }

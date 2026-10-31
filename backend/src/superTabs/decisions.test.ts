@@ -149,28 +149,36 @@ describe('leaving a decision to the PM', () => {
     const chat = buddyChat(s)
     const answered = delegate(s, peer, open(s))
     expect(answered.decisionAnswer).toEqual({ id: 'decision-1', choice: 1, note: null, delegated: true })
-    const [notice, line] = answered.messages
+    const [notice, swarmLine, line] = answered.messages
     // The asker and the Lead are told the PM decided, with none of the answer, as for any answer.
     expect(notice).toMatchObject({ conversationId: s.group, recipients: [s.worker, s.lead], source: { kind: 'agent-only', decisionId: 'decision-1' } })
     expect(notice!.text).toContain('left to the Product Manager')
     for (const text of ['Ship how?', 'To everyone']) expect(notice!.text).not.toContain(text)
-    // One line from the PM in the person's own chat, which only they read, to nobody.
+    // One line from the PM in the person's one Buddy chat, marked with its project, and the same in their older chat there for
+    // older apps (Dee, 10-31): only they read either, and it goes to nobody.
+    const swarmChat = s.state.conversations.find(c => c.kind === 'swarm-buddy')!
+    expect(swarmLine).toMatchObject({ conversationId: swarmChat.id, recipients: [], text: 'PM decided: To everyone — Ship how?',
+      author: { kind: 'agent', id: s.lead }, source: { kind: 'decision-delegated', decisionId: 'decision-1', projectId: 'lead' } })
     expect(line).toMatchObject({ conversationId: chat, recipients: [], text: 'PM decided: To everyone — Ship how?',
       author: { kind: 'agent', id: s.lead }, source: { kind: 'decision-delegated', decisionId: 'decision-1' } })
-    expect(line!.id).not.toBe(notice!.id)
-    expect(answered.messages).toHaveLength(2)
+    expect(new Set([notice!.id, swarmLine!.id, line!.id]).size).toBe(3)
+    expect(answered.messages).toHaveLength(3)
   })
 
   it('opens the person\'s Buddy chat for the line when they have none, and opens an archived one again: the line never drops', () => {
     const s = swarm()
     const answered = delegate(s, peer, open(s))
     expect(answered.decisionAnswer).toMatchObject({ choice: 1, delegated: true })
-    const chat = s.state.conversations.find(c => c.kind === 'buddy')!
+    const chat = s.state.conversations.find(c => c.kind === 'buddy')!, swarmChat = s.state.conversations.find(c => c.kind === 'swarm-buddy')!
     expect(chat).toMatchObject({ projectId: 'lead', agentIds: [], audience: { people: [{ id: 'peer' }] } })
-    expect(answered.messages.map(m => m.conversationId)).toEqual([s.group, chat.id])
+    expect(swarmChat).toMatchObject({ agentIds: [], audience: { people: [{ id: 'peer' }] } })
+    expect(swarmChat.projectId).toBeUndefined()
+    expect(answered.messages.map(m => m.conversationId)).toEqual([s.group, swarmChat.id, chat.id])
     chat.archived = true
-    expect(delegate(s, peer, open(s)).messages.map(m => m.conversationId)).toEqual([s.group, chat.id])
+    swarmChat.archived = true
+    expect(delegate(s, peer, open(s)).messages.map(m => m.conversationId)).toEqual([s.group, swarmChat.id, chat.id])
     expect(s.state.conversations.find(c => c.id === chat.id)!.archived).toBe(false)
+    expect(s.state.conversations.find(c => c.id === swarmChat.id)!.archived).toBe(false)
   })
 
   it('lets only the person asked delegate, once, and only a decision with a recommended option', () => {

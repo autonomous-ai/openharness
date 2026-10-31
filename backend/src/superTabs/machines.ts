@@ -689,8 +689,8 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   if (pool.paused) fail('MACHINE_PAUSED', 'New work is paused on this machine.')
   // A person's one Buddy chat has no project (Dee, 10-31): its project session works in the one it names, and its main Buddy
   // and plain sessions in none, in their own folder (buddyHomeFolder).
-  const group = conversation(state, request.conversationId)
-  const project = forProject ?? (!isSwarmBuddyChat(group) ? groupProject(state, group)
+  const group = forProject ? undefined : conversation(state, request.conversationId)
+  const project = forProject ?? (!isSwarmBuddyChat(group!) ? groupProject(state, group!)
     : request.buddySession?.projectId ? projectOf(state, request.buddySession.projectId) : undefined)
   if (project && !pool.scope && project.id !== 'lead') fail('PROJECT_CONTRIBUTION', 'Ask its owner to add this machine to the swarm again to support other projects.')
   const held = teamAccountPool(pool) ? productManagerOn(state, pool.machineId) : null

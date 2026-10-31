@@ -151,5 +151,7 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
     ...(teamAccountSwarm(state) ? {} : { teamAccounts: false as const }),
     threadSessions: true as const,
     sessionsFromChat: true as const,
+    // One Buddy per person per Swarm (Dee, 10-31): an app shows # buddy and New session in a project only when the server says so.
+    swarmBuddy: true as const,
   }
 }

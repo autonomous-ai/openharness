@@ -29,7 +29,7 @@ one project's material into another, Dee confirmed the mockup, two security revi
 
 ## The model
 
-**One Buddy chat per person per Swarm**, at Swarm level like the Leads conversation: `kind: 'buddy'`, `scope: 'swarm'`,
+**One Buddy chat per person per Swarm**, at Swarm level like the Leads conversation: `kind: 'swarm-buddy'`,
 no `projectId`, id `stableId('buddy', 'swarm', person, generation)`, audience the person alone. It is opened for each
 member from the start, as today's chats are.
 
@@ -71,10 +71,11 @@ choice, as when they post in a project chat themselves.
   whose old chat has messages; opening one shows it with a line on top: "Your earlier Buddy chat in openharness. Read
   only." A project the person no longer reads drops off the list, as its old chat was unreadable to them before.
 - Old chats stay writable from older apps until the mobile release (section 4); new Desktop shows them read only.
-- At release a script removes every per-project Buddy (as `scripts/buddy-sessions/end-all.js` did for sessions) and
-  writes one line in each old chat: "Your Buddy is now one chat for the whole Swarm: # buddy." The person starts their
-  one Buddy from # buddy with one click (machine and Claude Code already chosen); a message in an old chat afterwards
-  starts its project session on that Buddy's machine.
+- No release script. A person's per-project Buddies keep running in their old chats until the person starts their one
+  Buddy from # buddy (one click, machine and Claude Code already chosen); that start removes them in the same write, so
+  from then on they have exactly one. A message in an old chat afterwards reaches a session of that project on the one
+  Buddy's machine (section 4). Ruling. Why: no prod write, and nobody loses a working Buddy at release. Cost if wrong: until
+  they start it, new Desktop shows # buddy with Start while an old Buddy still answers in an old chat.
 
 ### 2. One Buddy reads several projects' code without mixing checkouts
 
@@ -142,9 +143,10 @@ release, **old per-project chats stay writable** and keep working on old clients
   server paths to keep until the mobile release.
 - **Older CLIs (hosts)**: the Swarm Buddy needs a host that says it can run one (capability `swarmBuddy`). On an older
   host `buddy.create` is refused: "Update Harness on <machine> to start your Buddy." Old per-project Buddies on such a
-  host keep running until the release script removes them.
-- **An older server after rollback**: it sees the Swarm chat as a Buddy chat of its default project with the same
-  audience, so only its person still reads it. It shows the old per-project chats as before.
+  host keep running until their person starts their one Buddy.
+- **An older server (rolling deploy or rollback)**: the Swarm chat has a kind of its own, `swarm-buddy`, which an older
+  release parks unread (`parkLaterConversations`) instead of reading it as a project's chat, so nobody reads it, its person
+  included, until the new server is back, and no other read breaks. It shows the old per-project chats as before.
 
 ### 5. Access
 
@@ -253,9 +255,9 @@ openharness and I'll send it from there." (skill text).
   Buddy launch (`BUDDY_REQUIREMENTS.diskBytes`), so worktrees are made only for projects whose repository is on that
   machine and are shallow read-only checkouts.
 - **Compatibility.** Section 4.
-- **Migration and rollback.** Additive: a new chat kind and agent fields; old chats untouched. The release script
-  removes per-project Buddies (rollout note in the PR). Rollback: the old server reads the Swarm chat as a private
-  Buddy chat of its default project; people add their per-project Buddies again.
+- **Migration and rollback.** Additive: a new chat kind (`swarm-buddy`) and agent fields; old chats untouched; no script.
+  An older release parks the new kind unread during a rolling deploy. Rollback: the old server finds no project for the Swarm chat, so nobody
+  reads it; people add their per-project Buddies again.
 - **Audience.** The server enforces every read and command: the chat's audience is the person alone; the session's
   project limits are checked on each read path and on `buddy.propose`.
 - **Identity.** The Buddy speaks as its own agent, on its person's own machine and account; never the machine owner's
@@ -268,7 +270,7 @@ openharness and I'll send it from there." (skill text).
 ## Build order (reviewable PRs)
 
 1. **Server**: the Swarm Buddy chat and agent, reads per project, project sessions, `buddy.propose` limits, `person.tell`
-   to the one chat, old chats read only, refusals for old clients, the release script. Integration suite in full.
+   to the one chat, old chats answered by a project session, the Swarm chat's own kind. Integration suite in full.
 2. **CLI and guard**: Buddy home folder and per-project worktrees, host capability `swarmBuddy`, folder sync before each
    delivery, project session start (no wide mode), `fromOwnPerson` for the Swarm chat, status across projects, skill
    and help text.
