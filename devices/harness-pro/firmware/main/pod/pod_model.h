@@ -98,6 +98,7 @@ typedef struct {
 typedef enum { POD_UNREAD_FINISHED, POD_UNREAD_FAILED } pod_unread_kind_t;
 typedef struct {
     char agent[ID_MAX], name[CABLE_NAME_MAX], token[POD_TOKEN_MAX], text[POD_UNREAD_TEXT];
+    char tab[ID_MAX], chat_id[ID_MAX];   // a Swarm chat's notice (tab set): agent = the Lead's id, name = its project, tab = the Swarm's id, chat_id = the chat it is about
     bool ask;                            // filed by a question (not a finished turn): it goes when the question closes
     pod_unread_kind_t kind;              // FAILED when the agent's last turn ended in an error
     uint32_t at_ms;
@@ -130,6 +131,10 @@ typedef struct {
     // Swarm the list does not hold yet waits for it).
     bool focus_pending;
     char focus_tab[ID_MAX], focus_lead[ID_MAX];
+    // The PM | Buddy segment the person just tapped on this Swarm (the pill draws it selected at once); the Swarm's next supertab frame ends it.
+    pod_side_t side_press;
+    char side_press_swarm[ID_MAX];
+    uint32_t side_press_ms;              // the device clock when it was tapped
 } pod_model_t;
 
 // Copy src into dst[cap], cut on a UTF-8 codepoint boundary (always valid, always NUL-terminated); src may be dst.
@@ -191,11 +196,23 @@ void pod_model_supertab_ids(pod_model_t *, const char (*ids)[ID_MAX], int n);
 // keeps its recap state and text; the texts of Leads that left are freed. Stamps since_at_ms with now_ms. Ignored when the id is not in the list.
 void pod_model_supertab(pod_model_t *, const pod_swarm_t *s, uint32_t now_ms);
 // A Lead's last message: LOADED with a copy of `text` (cut to SWARM_TEXT_MAX - 1 on a codepoint), or EMPTY when `none`. Unknown Swarm/Lead: dropped.
-void pod_model_supertab_recap(pod_model_t *, const char *tab, const char *lead, const char *text, uint32_t at, bool none);
+void pod_model_supertab_recap(pod_model_t *, const char *tab, const char *lead, const char *chat_id, const char *text, uint32_t at, bool none);
 // The Lead view asks for / lets go of a Lead's last message: loading puts a cold one (NONE) to LOADING (the texts arrive as pod_model_supertab_recap);
 // close sends a LOADING, LOADED or EMPTY one back to NONE and frees its text (only the open Lead gets pushes, so a closed one would go stale).
 void pod_model_supertab_loading(pod_model_t *, const char *tab, const char *lead);
 void pod_model_supertab_close(pod_model_t *, const char *tab, const char *lead);
+// A tap on the pill: the segment shows selected on this Swarm until its next supertab frame (NONE clears it). `buddy_unread` of the Lead is the glue's to clear.
+void pod_model_side_press(pod_model_t *, const char *swarm_id, pod_side_t side, uint32_t now_ms);
+enum { POD_SIDE_PRESS_MS = 3000 };   // as POD_SUPERTAB_RETRY_MS: how long a tap waits for the daemon's frame
+// The side the pill and the body show for this Swarm (PM or BUDDY): the tapped segment while the daemon has not answered, else the Swarm's own (NONE counts
+// as PM). A press older than POD_SIDE_PRESS_MS is dropped: the frame it asked for may never come. The view and the glue both read it, so they cannot disagree.
+pod_side_t pod_model_side_shown(const pod_model_t *, const pod_swarm_t *);
+// The Buddy side of a Lead that has none is showing: "No Buddy here yet", no bubble, nothing to talk to.
+bool pod_model_no_buddy(const pod_model_t *, const pod_swarm_t *, const pod_lead_t *);
+// The milliseconds left before the press on this Swarm lapses; 0 when there is none.
+uint32_t pod_model_side_press_left_ms(const pod_model_t *, const pod_swarm_t *);
+// Mark (unread) or clear the lilac dot of a Buddy chat; the Lead must be held. True when the mark changed.
+bool pod_model_buddy_mark(pod_model_t *, const char *tab, const char *lead, bool unread);
 // supertab.focus: record it as pending (focus_pending, focus_tab, focus_lead); the latest one wins.
 void pod_model_supertab_focus(pod_model_t *, const char *tab, const char *lead);
 const pod_swarm_t *pod_model_swarm_for_tab(const pod_model_t *, const char *tab_id);   // the desk tab's Swarm (its `tab` link); NULL for "" or none
@@ -232,6 +249,7 @@ void pod_model_unread_add(pod_model_t *, const char *agent, const char *name, co
 // The whole list at once (notif.replace): clear, then append in the order given (first = newest). One per agent, at most
 // POD_UNREAD_MAX; an append past that or for an agent already listed is dropped.
 void pod_model_unread_clear(pod_model_t *);
+void pod_model_unread_clear_agents(pod_model_t *);   // as clear, but the Swarm notices stay
 void pod_model_unread_append(pod_model_t *, const char *agent, const char *name, const char *token, const char *text, uint32_t now_ms);
 // Read elsewhere (notif.seen): drop the agent's entry. With a token, only an entry that has that token or none. True if dropped.
 bool pod_model_unread_seen(pod_model_t *, const char *agent, const char *token);
@@ -240,6 +258,11 @@ bool pod_model_unread_read(pod_model_t *, const char *agent);
 const pod_unread_t *pod_model_unread_find(const pod_model_t *, const char *agent);
 // How many notices Pets lists (the Notices screen and Home's Notices card): the asking agents, then the unread entries of agents that are not asking.
 int pod_notice_count(const pod_model_t *);
+// A Swarm chat's notice (supertab.notice): an entry like an agent's, keyed by its Lead (one per Lead, the newest replacing, the 16 cap shared), named by the Lead's
+// project. Nothing is filed for a Swarm or Lead the model does not hold. The read drops only the entry of that tab, Lead AND chat (true when it did), so one that
+// arrives before its notice, or for another chat, leaves the row alone.
+void pod_model_swarm_notice(pod_model_t *, const char *tab, const char *lead, const char *chat_id, const char *text, uint32_t now_ms);
+bool pod_model_swarm_notice_read(pod_model_t *, const char *tab, const char *lead, const char *chat_id);
 // The entry of a question that was just asked (the toast needs one): like pod_model_unread_add, marked `ask`.
 void pod_model_unread_ask(pod_model_t *, const char *agent, const char *name, const char *text, uint32_t now_ms);
 // Take the queued notif.read frames (at most max); returns the count.

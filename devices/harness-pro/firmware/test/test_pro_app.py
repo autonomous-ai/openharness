@@ -117,6 +117,7 @@ static struct { int n; ht_scroll_phase_t phase[64]; int dy[64], v[64]; } SC;
 
 bool pro_cable_send_open(const char *id) { CHECK(LOCK_DEPTH == 0); R.opens++; snprintf(R.open_id, sizeof R.open_id, "%s", id); return true; }
 static struct { int n; bool fail; char t[16][24], tab[16][ID_MAX], lead[16][ID_MAX]; } SUP;   // the Swarm cards' select / open / recap.get frames
+bool pro_cable_supertab_side(const char *tab, const char *side) { CHECK(LOCK_DEPTH == 0); (void)tab; (void)side; return true; }
 bool pro_cable_supertab_send(const char *t, const char *tab, const char *lead) {
     CHECK(LOCK_DEPTH == 0);
     if (SUP.fail) return false;
@@ -350,7 +351,7 @@ static void lead_view_via_app(void) {
     CHECK(top() == POD_V_LEAD && U.nav.depth == 2);
     CHECK(SUP.n == 3 && !strcmp(SUP.t[0], "supertab.select") && !strcmp(SUP.t[1], "supertab.open") && !strcmp(SUP.t[2], "supertab.recap.get"));
     CHECK(!strcmp(SUP.tab[2], "sw1") && !strcmp(SUP.lead[2], "l1") && !strcmp(SUP.lead[0], "l1"));
-    pro_app_supertab_recap("sw1", "l1", "Merged and shipped.", 1792560000u, false);   // the answer lands: drawn, nothing more sent
+    pro_app_supertab_recap("sw1", "l1", "", "Merged and shipped.", 1792560000u, false);   // the answer lands: drawn, nothing more sent
     render();
     CHECK(U.model.swarms[0].leads[1].recap == POD_RECAP_LOADED && SUP.n == 3);
     memset(&SUP, 0, sizeof SUP);
@@ -385,7 +386,7 @@ static void lead_view_scrolls_via_app(void) {
     swarm_home_page();
     tap(POD_A_LEAD, 1);
     CHECK(top() == POD_V_LEAD && !strcmp(U.nav.stack[1].agent, "a1"));
-    pro_app_supertab_recap("sw1", "l1", LONG_LEAD, 1792560000u, false);
+    pro_app_supertab_recap("sw1", "l1", "", LONG_LEAD, 1792560000u, false);
     render();
     CHECK(pod_scroll_max(&U.nav, &U.model) >= 2 && first_text_y("one") >= 0);
     now += 2000;
@@ -2011,6 +2012,24 @@ static void notify_banner_beep_and_expiry(void) {
     CHECK(BEEPS == 1 && U.model.unread_count == 1 && !pro_app_asleep());
 }
 
+// A Swarm chat's notice through the app: an entry, the toast, one beep and a wake (a muted Pro is silent); a read removes it. Phase 1 ignores the Buddy's chat.
+static void swarm_notice_and_buddy_chat(void) {
+    notif_room();
+    swarm_feed(3);
+    pro_app_supertab_notice("sw1", "l1", "buddy", "b1", "The Buddy answered.");   // buddy_chat_notice_ignored_in_phase_1
+    CHECK(BEEPS == 0 && U.model.unread_count == 0 && !U.ban_on);
+    pro_app_supertab_notice("sw1", "l1", "lead", "c1", "The Lead answered. More.");
+    CHECK(BEEPS == 1 && U.model.unread_count == 1 && U.ban_on && !strcmp(U.model.unread[0].tab, "sw1") && !strcmp(U.model.unread[0].agent, "l1"));
+    render();
+    CHECK(banner() && !strcmp(banner()->id, "l1"));
+    pro_app_supertab_notice_read("sw1", "l1", "c1");
+    render();
+    CHECK(U.model.unread_count == 0 && !U.ban_on && banner() == NULL);
+    MUTED = true; now += 40000;
+    pro_app_supertab_notice("sw1", "l2", "group", "g1", "Muted.");
+    CHECK(BEEPS == 1 && U.model.unread_count == 1);
+}
+
 // The tiers: alert = entry + toast + beep + wake; list = entry only; silent = nothing. One beep per 30 s; one entry per agent.
 static void notify_tiers(void) {
     notif_room();   // a1's room, now = 5300
@@ -2632,7 +2651,7 @@ int main(int argc, char **argv) {
         {"pro_app_test_sweep_retries", pro_app_test_sweep_retries}, {"pro_app_test_voice_gate", pro_app_test_voice_gate},
         {"pro_app_test_voice_paths", pro_app_test_voice_paths}, {"pro_app_test_touch_rules", pro_app_test_touch_rules},
         {"pro_app_test_roster_and_swarms", pro_app_test_roster_and_swarms}, {"side_button", side_button}, {"side_button_console", side_button_console}, {"question_needs_the_link", question_needs_the_link},
-        {"notify_banner_beep_and_expiry", notify_banner_beep_and_expiry}, {"notify_tap_opens_and_swipe_dismisses", notify_tap_opens_and_swipe_dismisses},
+        {"notify_banner_beep_and_expiry", notify_banner_beep_and_expiry}, {"swarm_notice_and_buddy_chat", swarm_notice_and_buddy_chat}, {"notify_tap_opens_and_swipe_dismisses", notify_tap_opens_and_swipe_dismisses},
         {"notify_never_over_talk", notify_never_over_talk}, {"notify_tiers", notify_tiers}, {"notify_question_and_error", notify_question_and_error}, {"notify_supertab_question_stays", notify_supertab_question_stays}, {"supertab_question_survives_turns", supertab_question_survives_turns}, {"supertab_question_link_drop", supertab_question_link_drop}, {"supertab_question_close_and_failure", supertab_question_close_and_failure}, {"notify_entries_expire", notify_entries_expire}, {"notify_question_entry_ends_with_question", notify_question_entry_ends_with_question}, {"notify_question_resent_after_relink_is_quiet", notify_question_resent_after_relink_is_quiet}, {"notify_question_same_prompt_new_request_beeps", notify_question_same_prompt_new_request_beeps}, {"notify_replace_seen_and_read", notify_replace_seen_and_read},
         {"ota_screen_and_touch", ota_screen_and_touch}, {"voice_refused_while_updating", voice_refused_while_updating},
         {"update_gate", update_gate}, {"ota_failed_returns", ota_failed_returns}, {"ota_keeps_awake", ota_keeps_awake},

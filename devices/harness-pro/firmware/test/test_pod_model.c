@@ -1161,25 +1161,25 @@ static void pod_model_test_swarm_cards(void) {
 
     // a recap for a Lead: LOADED with the text; none:true is EMPTY; an unknown Lead is dropped. Only a Lead that was asked for (LOADING) takes one: a late reply
     // for a Lead already left (NONE) is ignored, not kept stale
-    pod_model_supertab_recap(&M, "S1", "b", "late", 1, false);
+    pod_model_supertab_recap(&M, "S1", "b", "", "late", 1, false);
     CHECK(M.swarms[0].leads[1].recap == POD_RECAP_NONE && M.swarms[0].leads[1].text == NULL);
     pod_model_supertab_loading(&M, "S1", "b");
     pod_model_supertab_loading(&M, "S1", "c");
-    pod_model_supertab_recap(&M, "S1", "b", "hello there", 1792560000u, false);
+    pod_model_supertab_recap(&M, "S1", "b", "", "hello there", 1792560000u, false);
     CHECK(M.swarms[0].leads[1].recap == POD_RECAP_LOADED && !strcmp(M.swarms[0].leads[1].text, "hello there") && M.swarms[0].leads[1].text_at == 1792560000u);
-    pod_model_supertab_recap(&M, "S1", "c", "", 5, true);
+    pod_model_supertab_recap(&M, "S1", "c", "", "", 5, true);
     CHECK(M.swarms[0].leads[2].recap == POD_RECAP_EMPTY && M.swarms[0].leads[2].text == NULL);
-    pod_model_supertab_recap(&M, "S1", "zz", "x", 1, false);
-    pod_model_supertab_recap(&M, "S9", "a", "x", 1, false);
+    pod_model_supertab_recap(&M, "S1", "zz", "", "x", 1, false);
+    pod_model_supertab_recap(&M, "S9", "a", "", "x", 1, false);
     CHECK(M.swarms[0].leads[0].recap == POD_RECAP_NONE);
-    pod_model_supertab_recap(&M, "S1", "b", "newer", 6, false);   // an open (LOADED) Lead takes a refresh: replaces, no leak (the sanitizer build sees one)
+    pod_model_supertab_recap(&M, "S1", "b", "", "newer", 6, false);   // an open (LOADED) Lead takes a refresh: replaces, no leak (the sanitizer build sees one)
     CHECK(!strcmp(M.swarms[0].leads[1].text, "newer"));
     pod_model_supertab_loading(&M, "S2", "x");
-    pod_model_supertab_recap(&M, "S2", "x", "second", 7, false);
+    pod_model_supertab_recap(&M, "S2", "x", "", "second", 7, false);
     // out of memory: the Lead stays LOADING (the retry asks again), not cold
     pod_model_supertab_loading(&M, "S1", "a");
     pod_big_alloc_fail = 1;
-    pod_model_supertab_recap(&M, "S1", "a", "no room", 8, false);
+    pod_model_supertab_recap(&M, "S1", "a", "", "no room", 8, false);
     pod_big_alloc_fail = 0;
     CHECK(M.swarms[0].leads[0].recap == POD_RECAP_LOADING && M.swarms[0].leads[0].text == NULL);
     pod_model_supertab_close(&M, "S1", "a");
@@ -1217,7 +1217,7 @@ static void pod_model_test_swarm_cards(void) {
 
     // focus is kept as a pending request; the link dropping forgets the list, the texts and the focus
     pod_model_supertab_loading(&M, "s0", "x");
-    pod_model_supertab_recap(&M, "s0", "x", "kept?", 1, false);
+    pod_model_supertab_recap(&M, "s0", "x", "", "kept?", 1, false);
     pod_model_supertab_focus(&M, "s0", "x");
     CHECK(M.focus_pending && !strcmp(M.focus_tab, "s0") && !strcmp(M.focus_lead, "x"));
     pod_model_link(&M, true);
@@ -1225,6 +1225,121 @@ static void pod_model_test_swarm_cards(void) {
     CHECK(M.swarm_n == 0 && M.want_n == 0 && !M.focus_pending);
     pod_model_reset(&M);   // frees whatever a list still holds
 }
+// A Lead's recap belongs to its face chat: a recap for another chat is dropped, a chat switch resets it, a frame without chat fields clears it.
+static void pod_model_test_lead_chat(void) {
+    pod_model_reset(&M);
+    const char *l1[] = {"a"};
+    pod_swarm_t s = card("S1", "T1", l1, 1);
+    s.leads[0].chat = POD_CHAT_GROUP;
+    snprintf(s.leads[0].chat_id, sizeof s.leads[0].chat_id, "g1");
+    snprintf(s.leads[0].chat_name, sizeof s.leads[0].chat_name, "review-cable-fit");
+    ids_of("S1", NULL, NULL, NULL);
+    pod_model_supertab(&M, &s, 100);
+    pod_model_supertab_loading(&M, "S1", "a");
+
+    // recap_for_old_chat_dropped
+    pod_model_supertab_recap(&M, "S1", "a", "lead-c1", "old chat", 1, false);
+    CHECK(M.swarms[0].leads[0].recap == POD_RECAP_LOADING && M.swarms[0].leads[0].text == NULL);
+    pod_model_supertab_recap(&M, "S1", "a", "g1", "this chat", 2, false);
+    CHECK(M.swarms[0].leads[0].recap == POD_RECAP_LOADED && !strcmp(M.swarms[0].leads[0].text, "this chat"));
+    pod_model_supertab_recap(&M, "S1", "a", "", "no id", 3, false);   // an older daemon names none: taken
+    CHECK(!strcmp(M.swarms[0].leads[0].text, "no id"));
+
+    // chat_switch_resets_recap (and the same chat keeps it)
+    pod_model_supertab(&M, &s, 200);
+    CHECK(M.swarms[0].leads[0].recap == POD_RECAP_LOADED && !strcmp(M.swarms[0].leads[0].text, "no id"));
+    snprintf(s.leads[0].chat_id, sizeof s.leads[0].chat_id, "g2");
+    pod_model_supertab(&M, &s, 300);
+    // An asked-for Lead (the open one) waits for its new chat's message: LOADING takes the daemon's push, NONE would drop it.
+    CHECK(M.swarms[0].leads[0].recap == POD_RECAP_LOADING && M.swarms[0].leads[0].text == NULL);
+    pod_model_supertab_recap(&M, "S1", "a", "g2", "the new chat", 301, false);
+    CHECK(M.swarms[0].leads[0].recap == POD_RECAP_LOADED && !strcmp(M.swarms[0].leads[0].text, "the new chat"));
+
+    // frame_without_chat_clears_it
+    pod_swarm_t bare = card("S1", "T1", l1, 1);
+    pod_model_supertab(&M, &bare, 400);
+    CHECK(M.swarms[0].leads[0].chat == POD_CHAT_NONE && M.swarms[0].leads[0].chat_name[0] == 0 && M.swarms[0].leads[0].chat_id[0] == 0);
+
+    // recap_with_chat_id_for_lead_without_chat_is_taken
+    pod_model_supertab_loading(&M, "S1", "a");
+    pod_model_supertab_recap(&M, "S1", "a", "g1", "named", 401, false);
+    CHECK(M.swarms[0].leads[0].recap == POD_RECAP_LOADED && !strcmp(M.swarms[0].leads[0].text, "named"));
+    pod_model_reset(&M);
+}
+// buddy_unread is the device's own mark: a frame for the same Lead keeps it, a new Lead starts without it.
+static void pod_model_test_buddy_unread(void) {
+    pod_model_reset(&M);
+    const char *l1[] = {"a"};
+    pod_swarm_t s = card("S1", "T1", l1, 1);
+    s.side = POD_SIDE_PM;
+    s.leads[0].buddies = s.leads[0].has_buddy = true;
+    s.leads[0].buddy.cells = 25513;
+    ids_of("S1", NULL, NULL, NULL);
+    pod_model_supertab(&M, &s, 100);
+    CHECK(!M.swarms[0].leads[0].buddy_unread && M.swarms[0].side == POD_SIDE_PM && M.swarms[0].leads[0].buddy.cells == 25513);
+    M.swarms[0].leads[0].buddy_unread = true;
+    s.side = POD_SIDE_BUDDY;
+    pod_model_supertab(&M, &s, 200);
+    CHECK(M.swarms[0].leads[0].buddy_unread && M.swarms[0].side == POD_SIDE_BUDDY);
+    const char *l2[] = {"b", "a"};
+    pod_swarm_t t = card("S1", "T1", l2, 2);
+    pod_model_supertab(&M, &t, 300);
+    CHECK(!M.swarms[0].leads[0].buddy_unread && M.swarms[0].leads[1].buddy_unread);   // "a" moved; its mark went with it; "b" is new
+    pod_model_reset(&M);
+}
+// A Swarm chat's notice is an unread entry keyed by its Lead: it shares the order and the cap with agent entries, and a read must match its chat.
+static void swarm_card_for_notices(void) {
+    pod_model_reset(&M);
+    const char *l1[] = {"L1", "L2"};
+    pod_swarm_t s = card("S1", "openharness", l1, 2);
+    snprintf(s.leads[0].project, sizeof s.leads[0].project, "harness");
+    ids_of("S1", NULL, NULL, NULL);
+    pod_model_supertab(&M, &s, 100);
+}
+static void pod_model_test_swarm_notice(void) {
+    // swarm_notice_replaces_per_lead
+    swarm_card_for_notices();
+    pod_model_swarm_notice(&M, "S1", "L1", "c1", "First. More.", 1000);
+    pod_model_swarm_notice(&M, "S1", "L2", "c9", "Other.", 1500);
+    pod_model_swarm_notice(&M, "S1", "L1", "c2", "Second.", 2000);
+    CHECK(M.unread_count == 2);
+    CHECK(!strcmp(M.unread[0].agent, "L1") && !strcmp(M.unread[0].tab, "S1") && !strcmp(M.unread[0].chat_id, "c2") &&
+          !strcmp(M.unread[0].text, "Second.") && !strcmp(M.unread[0].name, "harness") && M.unread[0].at_ms == 2000);
+    CHECK(!strcmp(M.unread[1].agent, "L2") && !strcmp(M.unread[1].chat_id, "c9"));
+    pod_model_swarm_notice(&M, "S1", "NOPE", "c1", "x", 2100);   // a Lead the model does not hold: nothing filed
+    pod_model_swarm_notice(&M, "S9", "L1", "c1", "x", 2100);
+    CHECK(M.unread_count == 2);
+
+    // swarm_notice_cap_16 (shared with agent entries)
+    swarm_card_for_notices();
+    for (int i = 0; i < POD_UNREAD_MAX; i++) {
+        char id[8];
+        snprintf(id, sizeof id, "a%d", i);
+        pod_model_unread_add(&M, id, id, "x", 1, 1000 + (uint32_t)i);
+    }
+    CHECK(M.unread_count == POD_UNREAD_MAX);
+    pod_model_swarm_notice(&M, "S1", "L1", "c1", "News.", 3000);
+    CHECK(M.unread_count == POD_UNREAD_MAX && !strcmp(M.unread[0].agent, "L1") && !strcmp(M.unread[POD_UNREAD_MAX - 1].agent, "a1"));   // the oldest (a0) went
+    CHECK(!pod_model_unread_find(&M, "a0"));
+
+    // notice_read_other_chat_keeps_row
+    swarm_card_for_notices();
+    pod_model_swarm_notice(&M, "S1", "L1", "c1", "News.", 1000);
+    CHECK(!pod_model_swarm_notice_read(&M, "S1", "L1", "c2"));
+    CHECK(!pod_model_swarm_notice_read(&M, "S2", "L1", "c1"));
+    CHECK(M.unread_count == 1);
+    CHECK(pod_model_swarm_notice_read(&M, "S1", "L1", "c1") && M.unread_count == 0);
+
+    // notice_read_before_notice_is_noop
+    swarm_card_for_notices();
+    uint32_t rev = M.revision;
+    CHECK(!pod_model_swarm_notice_read(&M, "S1", "L1", "c1"));
+    CHECK(M.unread_count == 0 && M.revision == rev);
+    pod_model_unread_add(&M, "a1", "Alpha", "x", 1, 1000);   // an agent entry is never a Swarm notice's read target
+    CHECK(!pod_model_swarm_notice_read(&M, "S1", "a1", ""));
+    CHECK(M.unread_count == 1);
+}
+
 int main(void) {
     pod_model_test_work_alt();
     pod_model_test_states();
@@ -1258,6 +1373,9 @@ int main(void) {
     pod_model_test_console_data();
     pod_model_test_step_total_and_fresh();
     pod_model_test_swarm_cards();
+    pod_model_test_lead_chat();
+    pod_model_test_buddy_unread();
+    pod_model_test_swarm_notice();
     printf("Pod model: PASS (%d checks)\n", checks);
     return 0;
 }

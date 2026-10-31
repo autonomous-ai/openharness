@@ -4,7 +4,7 @@
 //   agent:<id>, recap:<id>, talk:<id> (ids: fw ota be cli web desk docs vault site cur notes2 kilo; suffixes :long :offline :unread :viet ...),
 //   talk:listen|send, inbox[:viet|:quiet|:failed], ota:<pct>|ota:restart (the update screen), notice:updated|notice:failed (the Home screen with that pill),
 //   <room>:toast[@<ms after it showed>] (the notice toast; <room>:toast:decision / :stuck: a Super Tab question's staying toast, backend deciding or
-//   desktop stuck), inbox:supertab (Notices with those two asking rows above a plain entry), and ":bell" / ":banner" on a screen (unread entries; banner adds the toast). The demo is the
+//   desktop stuck), inbox:supertab (Notices with those two asking rows above a plain entry), toast:swarm[@<ms>] / inbox:swarm (a Swarm chat's notice: the toast over a Lead view, and its row in Notices), and ":bell" / ":banner" on a screen (unread entries; banner adds the toast). The demo is the
 //   HTML mockup's: the same agents, tabs and times. `--skin pets` is accepted and ignored (Pets is the only interface).
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,7 +19,7 @@
 static void asked_recap(pod_model_t *m, const char *tab, const char *lead, const char *text, uint32_t at, bool none)
 {
     pod_model_supertab_loading(m, tab, lead);
-    pod_model_supertab_recap(m, tab, lead, text, at, none);
+    pod_model_supertab_recap(m, tab, lead, "", text, at, none);
 }
 
 #define T0 100000u
@@ -297,7 +297,9 @@ static void overlay(bool banner, bool toast, uint32_t now)
     const pod_unread_t *bn = pod_model_unread_find(&M, s_toast_agent);
     if (!bn) return;
     const pod_frame_t *top = N.depth ? &N.stack[N.depth - 1] : NULL;
-    if ((banner || toast) && top && (top->view == POD_V_AGENT || top->view == POD_V_RECAP) && strcmp(top->agent, s_toast_agent)) ph_toast(&F, &M, bn, T0, now);
+    const bool room = top && (top->view == POD_V_AGENT || top->view == POD_V_RECAP) && strcmp(top->agent, s_toast_agent);
+    const bool lead = top && top->view == POD_V_LEAD && bn->tab[0] && strcmp(top->lead_id, bn->agent);   // a Swarm chat's notice also toasts over another Lead's view
+    if ((banner || toast) && (room || lead)) ph_toast(&F, &M, bn, T0, now);
 }
 
 // A Super Tab ("Launch v2") question: the agent asks with that attention and the question's entry is filed, as pro_app does.
@@ -350,18 +352,40 @@ static void swarm_fixture(const char *kind)
     }
 }
 
-// lead:<loaded|ask|loading|none|remote>: the Lead view over Home (the mockup swarm-card.html B1, B2, and the loading, no-message and remote-Lead states). loaded: the working
+// lead:<loaded|ask|loading|none|remote|group|pm|pill|buddy|buddy-offline|nobuddy|buddy-dot>: the Lead view over Home (the mockup swarm-card.html B1, B2, and the loading, no-message and remote-Lead states). loaded: the working
 // "harness" Lead (B1); ask: "mobile", which needs you (B2, the orange edge); loading: "website" before its message came; none: "backend", which has said nothing; remote:
-// a Lead on another person's machine (its owner shown, no talk).
+// a Lead on another person's machine (its owner shown, no talk); group / pm: the loaded Lead with its chat named ("review-cable-fit", "PM").
 static void lead_fixture(const char *kind)
 {
-    const bool remote = !strcmp(kind, "remote");
+    const bool group = !strcmp(kind, "group"), pm = !strcmp(kind, "pm"), remote = !strcmp(kind, "remote");
+    const bool pill = !strcmp(kind, "pill"), buddy = !strcmp(kind, "buddy"), offline = !strcmp(kind, "buddy-offline"), nobuddy = !strcmp(kind, "nobuddy"), dot = !strcmp(kind, "buddy-dot");
+    const bool buddies = pill || buddy || offline || nobuddy || dot;
+    if (group || pm || buddies) kind = "loaded";   // the loaded Lead, with the chat the desktop has open named under the project
     swarm_fixture(remote ? "remote" : "p1");
     const pod_swarm_t *sw = pod_model_swarm(&M, remote ? "sw2" : "sw1");
     const int at = remote ? 0 : !strcmp(kind, "loaded") ? 1 : !strcmp(kind, "ask") ? 0 : !strcmp(kind, "loading") ? 2 : 3;
     if (!pod_nav_open_lead(&N, &M, sw->id, at)) { fprintf(stderr, "lead:%s: the Lead view did not open\n", kind); exit(2); }
     const char *id = sw->leads[at].id;
-    if (!strcmp(kind, "loaded")) asked_recap(&M, sw->id, id, "PR #1492 is merged and backend 1.2.100 is on production. The Pro took the test flash. Next: waiting for you to try it on the device.", 1792560000u, false);
+    if (group || pm) {
+        pod_lead_t *cl = &M.swarms[0].leads[at];
+        cl->chat = group ? POD_CHAT_GROUP : POD_CHAT_PM;
+        snprintf(cl->chat_name, sizeof cl->chat_name, "%s", group ? "review-cable-fit" : "PM");
+    }
+    if (buddies) {   // PM | Buddy: the pill on; pill: the PM side; buddy / buddy-offline: Mira, her chat the face; nobuddy: the Buddy side with none; buddy-dot: the PM side with the Buddy's dot
+        pod_swarm_t *ws = &M.swarms[0];
+        pod_lead_t *cl = &ws->leads[at];
+        cl->buddies = true;
+        ws->side = buddy || offline || nobuddy ? POD_SIDE_BUDDY : POD_SIDE_PM;
+        cl->buddy_unread = dot;
+        if (buddy || offline || dot || pill) {
+            cl->has_buddy = true;
+            snprintf(cl->buddy.chat_id, ID_MAX, "bc1"); snprintf(cl->buddy.name, sizeof cl->buddy.name, "Mira"); snprintf(cl->buddy.engine, sizeof cl->buddy.engine, "claude");
+            cl->buddy.cells = 0x2B5D; cl->buddy.color = 0xC49BFF; cl->buddy.live = !offline;
+        }
+        if (buddy || offline) { cl->chat = POD_CHAT_BUDDY; snprintf(cl->chat_name, sizeof cl->chat_name, "Mira"); }
+    }
+    if (buddy || offline) asked_recap(&M, sw->id, id, "Morning! I read the Swarm overnight. Two Leads are waiting on you: mobile needs a TestFlight call, and docs wants a review.", 1792560000u, false);
+    else if (!strcmp(kind, "loaded")) asked_recap(&M, sw->id, id, "PR #1492 is merged and backend 1.2.100 is on production. The Pro took the test flash. Next: waiting for you to try it on the device.", 1792560000u, false);
     else if (!strcmp(kind, "ask")) asked_recap(&M, sw->id, id, "iOS 1.0.9 finished building. Do you want it on TestFlight now, or wait for the Android banner fix?", 1792560000u, false);
     else if (remote) asked_recap(&M, sw->id, id, "Staging is up on the new region. I am moving the queue workers over now; the first batch should land within the hour.", 1792560000u, false);
     else if (!strcmp(kind, "loading")) pod_model_supertab_loading(&M, sw->id, id);
@@ -412,8 +436,17 @@ int main(int argc, char **argv)
         supertab_ask("be", "backend", "Run the migration on staging first, or straight to prod?", POD_ATTN_DECISION);
         supertab_ask("desk", "desktop", "e2e failed 3 times, no write access to staging", POD_ATTN_STUCK);
     }
-    if (inbox) pod_nav_act(&N, &M, POD_A_INBOX, 0, T0);
-    else if (!strcmp(screen, "tabs:notices")) {   // Home on the Notices card (the entries are added above; the asking agent counts too)
+    if (inbox) {
+        if (strstr(screen, "swarm")) {   // inbox:swarm, the mockup pro-swarm-parity 1E: a Lead's notice among the agents' (a minute old, so it sits second)
+            swarm_fixture("p1");
+            pod_model_swarm_notice(&M, "sw1", "l2", "c1", "Cable fit now counts JSON tokens for the Pro.", T0 - 60000u);
+        }
+        pod_nav_act(&N, &M, POD_A_INBOX, 0, T0);
+    } else if (!strncmp(screen, "toast:swarm", 11)) {   // the mockup 1D: Lead l1's view with a notice from the "harness" Lead (l2) over it
+        lead_fixture("ask");
+        pod_model_swarm_notice(&M, "sw1", "l2", "c1", "Cable fit now counts JSON tokens for the Pro.", T0);
+        s_toast_agent = "l2";
+    } else if (!strcmp(screen, "tabs:notices")) {   // Home on the Notices card (the entries are added above; the asking agent counts too)
         pod_nav_act(&N, &M, POD_A_SCROLL, POD_HOME_NOTICES, T0);
     } else if (!strncmp(screen, "tabs:working", 12)) {   // Home on the Working card (fw, be, web, cur work: three pets on page 0); :codex has be, web (Muse), site (Codex) work
         if (strstr(screen, ":codex")) {

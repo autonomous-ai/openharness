@@ -4,6 +4,7 @@
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <ctype.h>
 #include <string.h>
 
 #include "board/board.h"
@@ -229,6 +230,8 @@ static void send_hello(void)
     msg_string(&root, "player", "library-v1");
     msg_string(&root, "superTab", "wait-v1");   // a question with superTab + attention is shown as a wait (handle_question)
     msg_string(&root, "swarmCard", "v1");       // supertabs / supertab.recap / supertab.focus: the Swarm cards (handle_supertab)
+    msg_string(&root, "swarmChat", "v1");       // each Lead's face chat (chat, chatId, chatName), recaps by chatId, supertab.notice / .read
+    msg_string(&root, "swarmBuddy", "v1");      // PM | Buddy: buddies, buddy {..}, the Swarm's side; supertab.side from the pill
     msg_string(&root, "ota", "v1");
     char mac[24] = "";
     device_mac_str(mac, sizeof(mac));
@@ -280,6 +283,15 @@ bool pro_cable_supertab_send(const char *t, const char *tab, const char *lead)
     msg_string(&root, "tab", tab);
     msg_string(&root, "lead", lead ? lead : "");
     return send_json_with(root, false);   // false: dropped on a busy link (the caller retries)
+}
+
+bool pro_cable_supertab_side(const char *tab, const char *side)
+{
+    if (!tab || !tab[0] || !side || (strcmp(side, "pm") && strcmp(side, "buddy"))) return false;
+    cJSON *root = msg("supertab.side");
+    msg_string(&root, "tab", tab);
+    msg_string(&root, "side", side);
+    return send_json_with(root, false);   // false: dropped on a busy link; the next supertab frame shows the true side
 }
 
 bool pro_cable_send_scroll(pro_scroll_phase_t phase, int dy, int velocity)
@@ -561,6 +573,32 @@ static pod_lead_state_t lead_state(const char *s)
 }
 
 // The Leads in the Swarm's order (each Lead's `order`, the project's index in the app), whatever their urgency; a Lead without one keeps its place as it came.
+// The Lead's Buddy: `buddies` is true only for JSON true; the block counts only with a `cells` integer in 0..32767. Bad fields keep the Lead.
+static void read_buddy(const cJSON *l, pod_lead_t *ld)
+{
+    ld->buddies = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(l, "buddies"));
+    const cJSON *b = cJSON_GetObjectItemCaseSensitive(l, "buddy");
+    const cJSON *cells = cJSON_IsObject(b) ? cJSON_GetObjectItemCaseSensitive(b, "cells") : NULL;
+    if (!cJSON_IsNumber(cells) || cells->valuedouble < 0 || cells->valuedouble > 32767 || cells->valuedouble != (double)(int)cells->valuedouble) return;
+    pod_buddy_t *bd = &ld->buddy;
+    ld->has_buddy = true;
+    bd->cells = (uint16_t)cells->valuedouble;
+    const char *cid = str_of(b, "chatId");
+    if (cid && strlen(cid) < sizeof bd->chat_id) snprintf(bd->chat_id, sizeof bd->chat_id, "%s", cid);   // whole or none
+    cut_of(b, "name", bd->name, sizeof bd->name);
+    cut_of(b, "engine", bd->engine, sizeof bd->engine);
+    const char *col = str_of(b, "color");
+    bd->color = POD_BUDDY_INK;
+    if (col && strlen(col) == 7 && col[0] == '#') {
+        char *end = NULL;
+        bool hex = true;
+        for (int i = 1; i < 7; i++) hex = hex && isxdigit((unsigned char)col[i]);
+        const unsigned long v = hex ? strtoul(col + 1, &end, 16) : 0;
+        if (hex) bd->color = (uint32_t)v;
+    }
+    bd->live = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(b, "live"));
+}
+
 static void read_leads(const cJSON *it, pod_swarm_t *sw)
 {
     double order[SWARM_LEADS_MAX];
@@ -593,7 +631,14 @@ static void read_leads(const cJSON *it, pod_swarm_t *sw)
         ld->state = lead_state(str_of(l, "state"));
         const cJSON *since = cJSON_GetObjectItemCaseSensitive(l, "since");
         if (cJSON_IsNumber(since) && since->valuedouble > 0) ld->since_s = since->valuedouble > 2592000 ? 2592000u : (uint32_t)since->valuedouble;
+        const char *chat = str_of(l, "chat");
+        if (chat) ld->chat = !strcmp(chat, "lead") ? POD_CHAT_LEAD : !strcmp(chat, "pm") ? POD_CHAT_PM :
+                             !strcmp(chat, "group") ? POD_CHAT_GROUP : !strcmp(chat, "buddy") ? POD_CHAT_BUDDY : POD_CHAT_NONE;
+        const char *cid = str_of(l, "chatId");
+        if (cid && strlen(cid) < sizeof ld->chat_id) snprintf(ld->chat_id, sizeof ld->chat_id, "%s", cid);   // whole or none
+        cut_of(l, "chatName", ld->chat_name, sizeof ld->chat_name);
         ld->recap = POD_RECAP_NONE;
+        read_buddy(l, ld);
     }
 }
 
@@ -625,6 +670,8 @@ static void handle_supertab(const cJSON *p)
     const char *tab = str_of(p, "tab");
     if (tab && strlen(tab) < sizeof sw->tab) snprintf(sw->tab, sizeof sw->tab, "%s", tab);
     cut_of(p, "name", sw->name, sizeof sw->name);
+    const char *side = str_of(p, "side");
+    sw->side = !side ? POD_SIDE_NONE : !strcmp(side, "buddy") ? POD_SIDE_BUDDY : !strcmp(side, "pm") ? POD_SIDE_PM : POD_SIDE_NONE;
     read_leads(p, sw);
     const cJSON *count = cJSON_GetObjectItemCaseSensitive(p, "count");   // absent: the Leads listed
     sw->count = cJSON_IsNumber(count) ? (count->valuedouble > 0 ? (count->valuedouble > 65535 ? 65535 : (uint16_t)count->valuedouble) : 0)
@@ -635,28 +682,60 @@ static void handle_supertab(const cJSON *p)
 // `supertab.recap`: one Lead's last message, cut to 1,500 bytes on a UTF-8 boundary. `none` (or no text) is "No message yet".
 static void handle_supertab_recap(const cJSON *p)
 {
-    char tab[ID_MAX], lead[ID_MAX];
-    const char *t = str_of(p, "tab"), *l = str_of(p, "lead");
+    char tab[ID_MAX], lead[ID_MAX], chat_id[ID_MAX];
+    const char *t = str_of(p, "tab"), *l = str_of(p, "lead"), *c = str_of(p, "chatId");
     if (!id_fits(t) || !id_fits(l)) return;
     snprintf(tab, sizeof tab, "%s", t);
     snprintf(lead, sizeof lead, "%s", l);
+    snprintf(chat_id, sizeof chat_id, "%s", c && strlen(c) < sizeof chat_id ? c : "");   // whole or none
     const cJSON *none = cJSON_GetObjectItemCaseSensitive(p, "none"), *at = cJSON_GetObjectItemCaseSensitive(p, "at");
     const char *text = cut_of(p, "text", s_card_text, sizeof s_card_text);
     if (!text) s_card_text[0] = 0;
     const bool empty = cJSON_IsTrue(none);
     if (empty) s_card_text[0] = 0;
     const double secs = cJSON_IsNumber(at) && at->valuedouble > 0 ? at->valuedouble : 0;
-    pro_app_supertab_recap(tab, lead, s_card_text, secs > 4294967295.0 ? 0xFFFFFFFFu : (uint32_t)secs, empty);
+    pro_app_supertab_recap(tab, lead, chat_id, s_card_text, secs > 4294967295.0 ? 0xFFFFFFFFu : (uint32_t)secs, empty);
 }
 
+// `supertab.focus`: the desktop opened that Swarm's project. An empty or missing `lead` (a Swarm tab with no project open) is kept, meaning "the Lead
+// last shown there, else its first"; a `lead` that is present but too long is ignored, as is a missing `tab`.
 static void handle_supertab_focus(const cJSON *p)
 {
     char tab[ID_MAX], lead[ID_MAX];
     const char *t = str_of(p, "tab"), *l = str_of(p, "lead");
-    if (!id_fits(t) || !id_fits(l)) return;
+    if (!l && cJSON_GetObjectItemCaseSensitive(p, "lead")) return;   // present but not a string: dropped, not read as "open the Swarm"
+    if (!id_fits(t) || (l && *l && !id_fits(l))) return;
+    if (!l) l = "";
     snprintf(tab, sizeof tab, "%s", t);
     snprintf(lead, sizeof lead, "%s", l);
     pro_app_supertab_focus(tab, lead);
+}
+
+// supertab.notice / supertab.notice.read: a Swarm chat's new message, and that chat read on the desktop. The ids must fit; a frame with a bad one is dropped
+// (chatId may be empty: an older daemon names none, and the read then matches the same).
+static bool notice_ids(const cJSON *p, char tab[ID_MAX], char lead[ID_MAX], char chat_id[ID_MAX])
+{
+    const char *t = str_of(p, "tab"), *l = str_of(p, "lead"), *c = str_of(p, "chatId");
+    if (!id_fits(t) || !id_fits(l) || (c && strlen(c) >= ID_MAX)) return false;
+    snprintf(tab, ID_MAX, "%s", t);
+    snprintf(lead, ID_MAX, "%s", l);
+    snprintf(chat_id, ID_MAX, "%s", c ? c : "");
+    return true;
+}
+
+static void handle_supertab_notice(const cJSON *p)
+{
+    char tab[ID_MAX], lead[ID_MAX], chat_id[ID_MAX], chat[16], text[POD_UNREAD_TEXT];
+    if (!notice_ids(p, tab, lead, chat_id)) return;
+    copy_cut(chat, sizeof chat, str_of(p, "chat") ? str_of(p, "chat") : "");
+    copy_cut(text, sizeof text, str_of(p, "text") ? str_of(p, "text") : "");
+    pro_app_supertab_notice(tab, lead, chat, chat_id, text);
+}
+
+static void handle_supertab_notice_read(const cJSON *p)
+{
+    char tab[ID_MAX], lead[ID_MAX], chat_id[ID_MAX];
+    if (notice_ids(p, tab, lead, chat_id)) pro_app_supertab_notice_read(tab, lead, chat_id);
 }
 
 // ── the machine list ────────────────────────────────────────────────────────────────────────────────
@@ -1016,6 +1095,8 @@ static void handle_message(const cJSON *root)
     if (!strcmp(t, "supertab")) { handle_supertab(p); return; }
     if (!strcmp(t, "supertab.recap")) { handle_supertab_recap(p); return; }
     if (!strcmp(t, "supertab.focus")) { handle_supertab_focus(p); return; }
+    if (!strcmp(t, "supertab.notice")) { handle_supertab_notice(p); return; }
+    if (!strcmp(t, "supertab.notice.read")) { handle_supertab_notice_read(p); return; }
     if (!strcmp(t, "player.library")) { handle_library(p); return; }
     if (!strcmp(t, "player.context")) { handle_context(p); return; }
     if (!strcmp(t, "settings.set")) { handle_settings_set(p); return; }
