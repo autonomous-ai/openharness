@@ -100,7 +100,7 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
     Widget tab(SuperTabActivityFilter value, String label) {
       final selected = _activity.filter == value;
       return Padding(
-        padding: const EdgeInsets.only(right: 4),
+        padding: const EdgeInsets.only(right: grid.AppDesktop.menuInset),
         child: Material(
           color: selected ? grid.AppSurface.selectedFill : Colors.transparent,
           borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
@@ -114,8 +114,8 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
               button: true,
               child: Padding(
                 padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 6,
+                  horizontal: grid.AppDesktop.controlGap,
+                  vertical: grid.AppDesktop.menuInset,
                 ),
                 child: Text(
                   label,
@@ -132,7 +132,12 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
     }
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      padding: const EdgeInsets.fromLTRB(
+        grid.AppDesktop.groupGap,
+        grid.AppDesktop.controlGap,
+        grid.AppDesktop.groupGap,
+        0,
+      ),
       child: Wrap(
         children: [
           tab(SuperTabActivityFilter.all, 'All'),
@@ -146,7 +151,12 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
   }
 
   Widget _empty(String text) => Padding(
-    padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+    padding: const EdgeInsets.fromLTRB(
+      grid.AppDesktop.groupGap,
+      grid.AppDesktop.controlGap,
+      grid.AppDesktop.groupGap,
+      grid.AppDesktop.controlGap,
+    ),
     child: Text(text, style: DesktopChrome.metadata()),
   );
 
@@ -174,7 +184,10 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
     required VoidCallback onTap,
     Widget? trailing,
   }) => Padding(
-    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
+    padding: const EdgeInsets.symmetric(
+      horizontal: grid.AppDesktop.controlGap,
+      vertical: grid.AppDesktop.listRowGap,
+    ),
     child: Material(
       color: Colors.transparent,
       borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
@@ -187,12 +200,20 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
         child: Semantics(
           label: unread ? 'Unread' : null,
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+            padding: const EdgeInsets.fromLTRB(
+              grid.AppDesktop.groupGap,
+              grid.AppDesktop.controlGap,
+              grid.AppDesktop.controlGap,
+              grid.AppDesktop.controlGap,
+            ),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Padding(
-                  padding: const EdgeInsets.only(right: 10, top: 2),
+                  padding: const EdgeInsets.only(
+                    right: grid.AppDesktop.controlGap,
+                    top: grid.AppDesktop.listRowGap,
+                  ),
                   child: face,
                 ),
                 Expanded(
@@ -280,7 +301,7 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
       onTap: () => widget.onOpenMention(mention),
       trailing: waiting
           ? Padding(
-              padding: const EdgeInsets.only(left: 8),
+              padding: const EdgeInsets.only(left: grid.AppDesktop.controlGap),
               child: TextButton(
                 onPressed: _marking.contains(mention.id)
                     ? null
@@ -329,12 +350,17 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
       final error = a.error ?? a.mentions.error;
       return ListView(
         key: const ValueKey('super-activity-list'),
-        padding: const EdgeInsets.only(bottom: 16),
+        padding: const EdgeInsets.only(bottom: grid.AppDesktop.groupGap),
         children: [
           _filters(),
           if (error != null)
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+              padding: const EdgeInsets.fromLTRB(
+                grid.AppDesktop.groupGap,
+                grid.AppDesktop.controlGap,
+                grid.AppDesktop.groupGap,
+                0,
+              ),
               child: Row(
                 children: [
                   Expanded(child: Text(error, style: DesktopChrome.control())),
@@ -352,7 +378,12 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
           if (filter != SuperTabActivityFilter.decisions) ...[
             if (filter == SuperTabActivityFilter.all)
               const Padding(
-                padding: EdgeInsets.fromLTRB(12, 16, 12, 4),
+                padding: EdgeInsets.fromLTRB(
+                  grid.AppDesktop.groupGap,
+                  grid.AppDesktop.groupGap,
+                  grid.AppDesktop.groupGap,
+                  grid.AppDesktop.menuInset,
+                ),
                 child: SuperTabSectionHeading('Activity', endInset: 0),
               ),
             if (entries.isEmpty)
