@@ -944,6 +944,10 @@ class SuperTabController extends ChangeNotifier {
         .toList();
   }
 
+  /// Whether [conversationId]'s terminals are open as a group ([term]).
+  bool groupTerminalsOpen(String conversationId) =>
+      !accessRevoked && !devicesSelected && _terminals[conversationId] == '*';
+
   void selectGroupTerminals(String conversationId) {
     if (_disposed ||
         accessRevoked ||
