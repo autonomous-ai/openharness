@@ -62,6 +62,18 @@ String superTabMessageId({
 const _unsentReason = 'Not sent before this window closed.';
 const _unsentKey = 'unsent';
 
+/// What a thread reply refused for New session says: the server does not
+/// take it yet (an older backend, or one of its servers during a release).
+const superTabSessionsUnavailable =
+    "New sessions aren't available yet; send without it?";
+
+/// What a message refused for its form says, in place of the schema's own
+/// words ('command: Unrecognized key: ...'), which name fields, not causes.
+const superTabRefusedAsSent = "The server couldn't take this message yet.";
+
+/// The schema's own words, as a refusal saved before this version kept them.
+final _schemaWords = RegExp(r'Unrecognized key|^command(\.\w+)*: ');
+
 class SuperTabFailure implements Exception {
   const SuperTabFailure(this.code, this.message, {this.statusCode = 0});
   final String code, message;
@@ -241,7 +253,11 @@ class SuperTabController extends ChangeNotifier {
                         in superTabMap(row['mentions']).entries)
                       if (token is String) agent: token,
                   },
-                  error: row[_unsentKey] == true ? '' : row['error'] as String,
+                  error: row[_unsentKey] == true
+                      ? ''
+                      : _schemaWords.hasMatch(row['error'] as String)
+                      ? superTabRefusedAsSent
+                      : row['error'] as String,
                 ),
           ];
           if (kept.isNotEmpty) _refused[key] = kept;
@@ -1408,7 +1424,8 @@ class SuperTabController extends ChangeNotifier {
     ));
     if (ids == null) return null;
     final before = _pending;
-    final sending = command({
+    final operationId = superTabOperationId();
+    final sending = command(operationId: operationId, {
       'type': 'message.send',
       'conversationId': open.conversationId,
       'text': text,
@@ -1429,13 +1446,63 @@ class SuperTabController extends ChangeNotifier {
     }
     final result = await sending;
     _forgetRefusedUploads(result);
+    if (result == null && newSession) {
+      _restoreSessionRefusal(open.conversationId, open.root, operationId);
+    }
     return result;
+  }
+
+  /// A reply the server refused only for New session goes back into its
+  /// thread's box, ready to send without it, when nothing was typed there
+  /// since and it carries no files; else it stays Not sent, and its Retry
+  /// goes without New session.
+  void _restoreSessionRefusal(
+    String conversationId,
+    String root,
+    String operationId,
+  ) {
+    final kept = _refused[conversationId];
+    final i = kept?.indexWhere((r) => r.operationId == operationId) ?? -1;
+    if (i < 0) return;
+    final refused = kept![i];
+    final files = refused.command['attachmentIds'];
+    if (refused.error != superTabSessionsUnavailable ||
+        (files is List && files.isNotEmpty) ||
+        threadDraft(root).trim().isNotEmpty) {
+      return;
+    }
+    kept.removeAt(i);
+    if (kept.isEmpty) _refused.remove(conversationId);
+    _sendOrder.remove(operationId);
+    _threadDrafts[root] = refused.command['text'] as String? ?? '';
+    unawaited(
+      _persist().catchError((Object _) {
+        error = 'Could not save this change on this computer.';
+        _changed();
+      }),
+    );
+    _changed();
   }
 
   // ── Buddy thread sessions (spec 2026-10-30-buddy-thread-sessions) ───────
 
   /// How many thread sessions a Buddy chat may run at once (backend limit).
   static const maxBuddySessions = 3;
+
+  /// When the server last refused a reply's New session as a field it does not
+  /// know, though it said it takes them (one of its servers older during a
+  /// release): New session is not offered for [_sessionsRefusedFor] after.
+  DateTime? _sessionsRefusedAt;
+  static const _sessionsRefusedFor = Duration(minutes: 10);
+
+  /// Whether this Swarm's server takes New session: it says so in its reads,
+  /// and has not just refused one.
+  bool get _serverTakesThreadSessions {
+    if (snapshot?.threadSessions != true) return false;
+    final refused = _sessionsRefusedAt;
+    return refused == null ||
+        clock.now().difference(refused) >= _sessionsRefusedFor;
+  }
 
   /// The open thread's chat when it is the reader's own Buddy chat, where a
   /// thread may have a session of its own; null anywhere else.
@@ -1456,7 +1523,7 @@ class SuperTabController extends ChangeNotifier {
   /// ([threadSessionBlocked]).
   bool offersThreadSessions([String? root]) {
     final chat = _ownBuddyChat;
-    if (chat == null) return false;
+    if (chat == null || !_serverTakesThreadSessions) return false;
     return buddy(chat.projectId) != null || (root != null && _hadSession(root));
   }
 
@@ -3550,11 +3617,12 @@ class SuperTabController extends ChangeNotifier {
           _pending = pending;
         }
       } else if (!_disposed && !accessRevoked) {
+        final command = superTabMap(pending['command']);
         _failOperation(
           failure is SuperTabFailure
-              ? failure.message
+              ? _refusalText(failure, command)
               : 'The action is not confirmed. Retry to check it.',
-          command: superTabMap(pending['command']),
+          command: command,
           code: failure is SuperTabFailure ? failure.code : null,
         );
         if (failure is SuperTabFailure &&
@@ -3563,7 +3631,20 @@ class SuperTabController extends ChangeNotifier {
             !const {408, 429}.contains(failure.statusCode)) {
           // A definitive rejection made no change. Keep the message for the
           // person to correct; a lost reply retains its exact receipt ID.
-          _refuse(pending, operationError!);
+          // One refused for New session is kept without it: its Retry, or
+          // its text back in the box, sends a plain reply.
+          final unsupported = operationError == superTabSessionsUnavailable;
+          if (unsupported) _sessionsRefusedAt = clock.now();
+          _refuse(
+            unsupported
+                ? {
+                    ...pending,
+                    'command': Map<String, dynamic>.of(command)
+                      ..remove('newSession'),
+                  }
+                : pending,
+            operationError!,
+          );
           _pending = null;
           try {
             await _persist();
@@ -3602,6 +3683,24 @@ class SuperTabController extends ChangeNotifier {
         );
       }
     }
+  }
+
+  /// What a person reads for [failure] of [command]: the server's own words,
+  /// except where a message was refused for its form (`VALIDATION_ERROR`, the
+  /// schema naming fields): a thread reply with New session, by a server that
+  /// does not take it yet, says so; any other says it plainly. Text length is
+  /// held to the limit before sending, so a form refusal is a newer app's field.
+  static String _refusalText(
+    SuperTabFailure failure,
+    Map<String, dynamic> command,
+  ) {
+    if (command['type'] != 'message.send' ||
+        failure.code != 'VALIDATION_ERROR') {
+      return failure.message;
+    }
+    return command['newSession'] == true
+        ? superTabSessionsUnavailable
+        : superTabRefusedAsSent;
   }
 
   static String _excerpt(String text) {

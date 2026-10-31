@@ -146,6 +146,20 @@ describe('routeTask', () => {
     expect(await routeTask(input, s, where as never, opener(), () => 'op')).toMatchObject({ instructions: { revision: 1, notes: [] } })
     expect(leftOut([{ title: 't', reason: 'x'.repeat(301), machine: 'm' }], [])).toEqual([{ machine: 'm', reasons: [`${'x'.repeat(299)}…`] }])
   })
+  it('pulls the task onto the account whose weekly window resets soon with quota left, through its listed maker (piece 6)', async () => {
+    const reading = (account: string, weeklyUsed: number, weeklyResetsIn: number) => ({ providers: [{ provider: 'claude', outcome: 'answered', httpStatus: 200, account,
+      body: { five_hour: { utilization: 20, resets_at: new Date(Date.now() + 3 * 3_600_000).toISOString() },
+        seven_day: { utilization: weeklyUsed, resets_at: new Date(Date.now() + weeklyResetsIn).toISOString() } } }] })
+    // m1 (remote-1) has a fresh week; m2 (mac) resets in 12 hours with 60% left.
+    const machines = opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], usage: id === 'm2' ? reading('acct-soon', 40, 12 * 3_600_000) : reading('acct-fresh', 10, 5 * 86_400_000) }))
+    const plain = await routeTask(input, scoped(), where as never, machines, () => 'op', undefined, [])
+    expect(plain).toMatchObject({ ok: true, pick: { title: expect.stringContaining('remote-1') } })
+    const s = scoped()
+    const pulled = await routeTask(input, s, where as never, machines, () => 'op')
+    expect(pulled).toMatchObject({ ok: true, pick: { title: expect.stringContaining('mac') } })
+    expect(labels(s)[0]).toContain('Window pull: its account\'s weekly window resets in 12h')
+    expect(JSON.stringify(pulled)).not.toContain('acct-soon')
+  })
   it('answers exactly as before with no makers, and with makers that have nothing to say', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     try {
@@ -1766,5 +1780,33 @@ describe('routing by facts', () => {
     // A backend without instructions takes no roleName.
     const old = await routeTask(hard, scoped({ tab: crew(), policy: floorPolicy, instructions: { error: 'NOT_FOUND' } }), where as never, opener(), () => 'op')
     expect(old.next).not.toContain('roleName')
+  })
+})
+
+/** Piece 3 through the route itself, with the makers it ships with (routePlugins.ts ROUTE_PLUGIN_MAKERS). */
+describe('routing by measured cost and results', () => {
+  const row = (model: string, effort: string, fullCostPerShipped: number) => ({ engine: 'claude', model, effort, kind: 'build', firstReviews: 10,
+    firstReviewPassed: 8, shipped: 6, costPerShipped: 1, fullCostPerShipped, fullCostKnown: 1 })
+  const built = { ...input, assessment: { ...input.assessment, kind: 'build' } }
+  const withCosts = (base: ReturnType<typeof scoped>, answer: (payload: Record<string, unknown>) => Promise<Answer>) =>
+    vi.fn(async (payload: Record<string, any>) => payload.action === 'costs' ? answer(payload) : base(payload))
+
+  it('reads the last 7 days\' results and ranks the choice that costs less per shipped change first, with its numbers', async () => {
+    const base = scoped()
+    // Sonnet ranks first today (cost 2 against Opus's 3); measured in full, Opus costs $3 per shipped change and Sonnet $9.
+    const plain = await routeTask(input, scoped(), where as never, opener(), () => 'op')
+    expect(plain).toMatchObject({ pick: { model: 'sonnet' } })
+    const s = withCosts(base, async () => ({ ok: true, value: { truncated: false, rows: [row('opus', 'high', 3), row('sonnet', 'medium', 9)] } }))
+    const result = await routeTask(built, s, where as never, opener(), () => 'op')
+    expect(s.mock.calls.filter(c => c[0].action === 'costs').map(c => c[0])).toEqual([{ action: 'costs', days: 7 }])
+    expect(result).toMatchObject({ ok: true, pick: { model: 'opus', notes: expect.arrayContaining([expect.stringMatching(/^measured results: build work, last 7 days: 8 of 10 first reviews passed, \$3\.00 per shipped change over 6/)]) } })
+    expect(labels(base)[0]).toContain('measured results: build work')
+  })
+
+  it('a failed read leaves today\'s ranking and says so', async () => {
+    const s = withCosts(scoped(), async () => ({ error: 'FORBIDDEN' }))
+    const result = await routeTask(built, s, where as never, opener(), () => 'op')
+    expect(result).toMatchObject({ ok: true, pick: { model: 'sonnet' },
+      warnings: expect.arrayContaining(['The routing plug-in "measured results" was skipped: its maker failed. The route is ranked without it.']) })
   })
 })
