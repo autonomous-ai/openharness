@@ -482,6 +482,8 @@ class SuperTabSnapshot {
             harness: effort,
       }),
       localModels = SuperTabLocalModels.read(row['localModels']),
+      threadSessions = row['threadSessions'] == true,
+      sessionsFromChat = row['sessionsFromChat'] == true,
       mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0,
       mentionsDigest = row['mentionsDigest'] as String?,
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
@@ -552,6 +554,16 @@ class SuperTabSnapshot {
 
   /// The Local models add-on, once the owner has turned it on; null before.
   final SuperTabLocalModels? localModels;
+
+  /// Whether this Swarm's server takes a thread reply's New session: true only
+  /// where it says so (backend read/contract.ts `threadSessions`). Read as the
+  /// desktop reads it (desktop_parity_test.dart); the phone offers no New
+  /// session yet.
+  final bool threadSessions;
+
+  /// Whether that server also takes New session on a top-level message in a
+  /// Buddy chat (read/contract.ts `sessionsFromChat`); false from an older one.
+  final bool sessionsFromChat;
 
   /// The reader's tags still waiting for them, Swarm-wide; 0 from a backend
   /// before tags (spec 2026-10-24-lead-mentions.md).
