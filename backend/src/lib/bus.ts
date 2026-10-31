@@ -874,21 +874,30 @@ export const TUI_OPEN_FOR_MS = 180_000
 const TUI_OPEN_KEY_SEC = 150
 const TUI_SAID_SEC = 60
 
-/** A terminal app of [userId]'s is open (its daemon's `open`) or still is (`ping`). Never throws. */
+/** A terminal app of [userId]'s is open (its daemon's `open`) or still is (`ping`). Never throws. Without Redis its keys
+ *  cannot be kept, but the daemons are told anyway (final review: in single-pod mode `safePublish` still reaches this
+ *  pod's daemons, and holding a terminal app's events back is what must not happen silently). */
 export async function noteTuiPresence(userId: string, kind: 'open' | 'ping'): Promise<void> {
+  let tell = kind === 'open'
   try {
     await pub.set(tuiOpenKey(userId), '1', 'EX', TUI_OPEN_KEY_SEC)
-    const tell = kind === 'open' || await pub.set(tuiSaidKey(userId), '1', 'EX', TUI_SAID_SEC, 'NX') === 'OK'
-    if (tell) await safePublish(tuiChannel(userId), '1')
+    if (!tell) tell = await pub.set(tuiSaidKey(userId), '1', 'EX', TUI_SAID_SEC, 'NX') === 'OK'
   } catch (err) {
-    logger.warn('[bus] terminal app presence failed', { userId, error: err instanceof Error ? err.message : String(err) })
+    tell = true
+    logger.warn('[bus] terminal app presence not kept', { userId, error: err instanceof Error ? err.message : String(err) })
   }
+  if (tell) await safePublish(tuiChannel(userId), '1')
 }
 
-/** Whether a terminal app of [userId]'s is open now; no when Redis cannot say (the daemon then holds events back, which
- *  costs a terminal app only its tool ends until the next word). */
-export async function tuiOpenNow(userId: string): Promise<boolean> {
-  try { return await pub.exists(tuiOpenKey(userId)) > 0 } catch { return false }
+/** Whether a terminal app of [userId]'s is open now; null when Redis cannot say, and then the daemon is told nothing and
+ *  relays every event, which costs frames, never a terminal app its events. */
+export async function tuiOpenNow(userId: string): Promise<boolean | null> {
+  try {
+    return await pub.exists(tuiOpenKey(userId)) > 0
+  } catch (err) {
+    logger.warn('[bus] terminal app presence unreadable', { userId, error: err instanceof Error ? err.message : String(err) })
+    return null
+  }
 }
 
 export function subscribeTuiOpen(userId: string, cb: () => void): Promise<() => void> {

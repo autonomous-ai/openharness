@@ -62,7 +62,9 @@ export async function relayAccountPushes(userId: string, send: (frame: unknown) 
     unsubs.push(await relaySwarmChanges(userId, (frame) => send({ t: 'down', connId: '', frame })))
     const tuiOpen = (forMs: number) => send({ t: 'down', connId: '', frame: { type: '__tui_open', payload: { forMs } } })
     unsubs.push(await subscribeTuiOpen(userId, () => tuiOpen(TUI_OPEN_FOR_MS)))
-    tuiOpen(await tuiOpenNow(userId) ? TUI_OPEN_FOR_MS : 0)
+    // Unreadable (null): no word at all, so the daemon relays every event rather than hold a terminal app's back.
+    const open = await tuiOpenNow(userId)
+    if (open !== null) tuiOpen(open ? TUI_OPEN_FOR_MS : 0)
   } catch (err) {
     stop()
     throw err

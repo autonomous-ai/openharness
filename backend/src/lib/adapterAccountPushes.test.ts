@@ -150,6 +150,12 @@ describe('account pushes on a daemon socket', () => {
     await relayAccountPushes('kim', send, on)
     expect(send).toHaveBeenCalledWith(tuiOpen(0))
   })
+  it('says nothing at attach when it cannot read whether one is open, so the daemon relays everything', async () => {
+    m.tuiOpenNow.mockResolvedValue(null)
+    const send = vi.fn()
+    await relayAccountPushes('kim', send, on)
+    expect(send.mock.calls.some(([f]) => (f as { frame: { type: string } }).frame.type === '__tui_open')).toBe(false)
+  })
   it('tells a team machine nothing about terminal apps', async () => {
     const send = vi.fn()
     await relayAccountPushes('kim', send, { ...on, team: true })

@@ -365,14 +365,20 @@ describe('terminal app presence', () => {
     expect(pub.publish).toHaveBeenCalledTimes(1)
   })
 
-  it('reads whether one is open now, and says no when Redis fails', async () => {
+  it('reads whether one is open now, and cannot say (null) when Redis fails', async () => {
     pub.exists.mockResolvedValueOnce(1)
     await expect(bus.tuiOpenNow('kim')).resolves.toBe(true)
     pub.exists.mockResolvedValueOnce(0)
     await expect(bus.tuiOpenNow('kim')).resolves.toBe(false)
     pub.exists.mockRejectedValueOnce(new Error('ECONNREFUSED'))
-    await expect(bus.tuiOpenNow('kim')).resolves.toBe(false)
-    pub.set.mockRejectedValueOnce(new Error('ECONNREFUSED'))
+    await expect(bus.tuiOpenNow('kim')).resolves.toBeNull()
+  })
+
+  // Final review: without Redis (single-pod mode, bus.ts) the daemons on this pod must still hear a terminal app opened.
+  it('still tells the daemons when Redis refuses its keys', async () => {
+    pub.set.mockRejectedValue(new Error('ECONNREFUSED'))
     await expect(bus.noteTuiPresence('kim', 'open')).resolves.toBeUndefined()
+    await expect(bus.noteTuiPresence('kim', 'ping')).resolves.toBeUndefined()
+    expect(pub.publish.mock.calls.map((c: unknown[]) => c[0])).toEqual(['tui:kim', 'tui:kim'])
   })
 })
