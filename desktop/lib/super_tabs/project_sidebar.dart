@@ -247,6 +247,8 @@ class ProjectSidebar extends StatelessWidget {
   Widget _drawRow(
     SuperTabConversation group, {
     SuperTabProject? project,
+    // A channel that is no project: # buddy, the reader's one Buddy chat.
+    String? label,
     String? key,
     required bool selected,
     required bool waiting,
@@ -272,7 +274,7 @@ class ProjectSidebar extends StatelessWidget {
     // Unread is the name in bold and nothing else, no dot (Dee, 2026-10-29).
     final style = DesktopChrome.control(
       medium: highlighted,
-      color: highlighted || unread || project != null
+      color: highlighted || unread || project != null || label != null
           ? DesktopChrome.foreground
           : DesktopChrome.muted,
     ).copyWith(fontWeight: unread ? grid.AppFont.semibold : null);
@@ -301,7 +303,9 @@ class ProjectSidebar extends StatelessWidget {
                       SizedBox(width: SuperTabSectionHeading.indentFor(0)),
                       SizedBox(
                         width: _iconColumn,
-                        child: project != null ? _channelMark() : null,
+                        child: project != null || label != null
+                            ? _channelMark()
+                            : null,
                       ),
                       Expanded(
                         child: Semantics(
@@ -311,9 +315,10 @@ class ProjectSidebar extends StatelessWidget {
                           selected: selected,
                           child: _withTaskStatus(
                             group,
-                            task: project == null,
+                            task: project == null && label == null,
                             (status) => Tooltip(
                               message:
+                                  label ??
                                   project?.name ??
                                   [
                                     SuperTabWorkgroupName.plain(group),
@@ -331,7 +336,14 @@ class ProjectSidebar extends StatelessWidget {
                                   child: Row(
                                     children: [
                                       Expanded(
-                                        child: project == null
+                                        child: label != null
+                                            ? Text(
+                                                label,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: style,
+                                              )
+                                            : project == null
                                             ? Column(
                                                 crossAxisAlignment:
                                                     CrossAxisAlignment.start,
@@ -408,7 +420,7 @@ class ProjectSidebar extends StatelessWidget {
                                       ),
                                     ),
                                   )
-                                : project == null
+                                : project == null && label == null
                                 ? SuperTabTaskMark(group)
                                 : trailing,
                           ),
