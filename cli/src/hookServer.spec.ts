@@ -496,8 +496,42 @@ describe('Super Tab attachment pass-through', () => {
     expect(await r.json()).toEqual({ path: '/api/super-tabs/tab-1/avatars', bytes: 7 })
   })
 
+  // Files over 10 MB go straight to storage (contract of group 1604): the daemon asks the backend for the link and says the
+  // upload is complete, with the account's token; the bytes never pass through it.
+  it('passes a direct upload\'s link request and completion on, guarded like the other writes', async () => {
+    const forward = vi.fn(async (path: string, body: unknown) => ({ status: 200, body: { success: true, data: { path, body } } }))
+    const { base } = await start({ onSuperTabAttachmentUpload: forward })
+    const headers = { 'x-adapter-local': '1', 'content-type': 'application/json' }
+    const ask = { conversationId: 'c1', name: 'AC4 - 26 Oct v2.step', mime: 'application/octet-stream', size: 123456789 }
+    const link = `${base}/api/super-tabs/tab-1/attachments/uploads`, complete = `${link}/0123456789abcdef01234567/complete`
+    for (const url of [link, complete]) {
+      for (const h of [{ 'content-type': 'application/json' }, { ...headers, origin: 'https://untrusted.example' }]) {
+        expect((await fetch(url, { method: 'POST', headers: h, body: JSON.stringify(ask) })).status).toBe(403)
+      }
+    }
+    for (const url of [`${base}/api/super-tabs/../attachments/uploads`, `${link}/../x/complete`, `${link}/u1`, `${link}/u1/complete/x`]) {
+      expect((await fetch(url, { method: 'POST', headers, body: '{}' })).status).toBe(404)
+    }
+    expect((await fetch(link, { method: 'POST', headers, body: 'not json' })).status).toBe(400)
+    expect((await fetch(link, { method: 'POST', headers, body: '[1]' })).status).toBe(400)
+    expect(forward).not.toHaveBeenCalled()
+    const asked = await fetch(`${link}?asAgentId=agent-1&other=x`, { method: 'POST', headers, body: JSON.stringify(ask) })
+    expect(asked.status).toBe(200)
+    expect(await asked.json()).toEqual({ success: true, data: { path: '/api/super-tabs/tab-1/attachments/uploads?asAgentId=agent-1', body: ask } })
+    // Completion's body is {}, and an empty one is read as that.
+    const done = await fetch(`${complete}?asAgentId=../x`, { method: 'POST', headers })
+    expect(await done.json()).toEqual({ success: true, data: { path: '/api/super-tabs/tab-1/attachments/uploads/0123456789abcdef01234567/complete', body: {} } })
+    // The backend's refusal, as it said it.
+    forward.mockResolvedValueOnce({ status: 413, body: { success: false, error: { code: 'ATTACHMENT_TOO_LARGE', message: 'Files can be up to 256 MB.' } } } as never)
+    const refused = await fetch(link, { method: 'POST', headers, body: JSON.stringify({ ...ask, size: 256 * 1024 * 1024 + 1 }) })
+    expect(refused.status).toBe(413)
+    expect(await refused.json()).toEqual({ success: false, error: { code: 'ATTACHMENT_TOO_LARGE', message: 'Files can be up to 256 MB.' } })
+  })
+
   it('is unavailable on a daemon without it', async () => {
     const { base } = await start({})
+    expect((await fetch(`${base}/api/super-tabs/tab-1/attachments/uploads`, { method: 'POST',
+      headers: { 'x-adapter-local': '1', 'content-type': 'application/json' }, body: '{}' })).status).toBe(503)
     expect((await fetch(`${base}/api/super-tabs/tab-1/attachments`, { method: 'POST',
       headers: { 'x-adapter-local': '1', 'content-type': 'multipart/form-data; boundary=x' }, body: 'x' })).status).toBe(503)
   })

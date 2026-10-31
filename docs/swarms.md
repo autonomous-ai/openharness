@@ -363,7 +363,8 @@ Buddies are on in every Swarm; there is no setting. They replaced Chat with PM (
   or one from the last hour, and only once for each such message. The server writes the "on behalf of" label, so a Buddy cannot leave it out or change it.
 - A proposal's files are only ones its owner handed it: a file inside the Buddy's own copy of the project (checked by
   its real path on its own machine, so never through a link out of it, and never the repository's or Harness's own
-  records), or a file its owner sent in their Buddy chat. Each file has a chat file's limits (10 MB). The server accepts
+  records), or a file its owner sent in their Buddy chat. A file from its own copy is at most 10 MB, since its guard reads
+  it whole to check it for secrets; a file its owner sent has a chat file's limit (256 MB). The server accepts
   a Buddy's file only in its own chat and only on a proposal, so it cannot post a file in the project chat any other way.
   The files show on the proposal message like any message's files, for the product manager and every member.
 - Nobody else reads a Buddy chat: not the product manager, and not the project's or the Swarm's owner. Private matters

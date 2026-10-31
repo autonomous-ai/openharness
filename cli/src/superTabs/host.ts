@@ -4,7 +4,7 @@ import { SwarmGrids } from './swarmGrids.js'
 import { retainContributions } from './retention.js'
 import { configurationObservation } from './configuration.js'
 import { NativeRecorder, nativeJournalFile } from './native.js'
-import { attachedFiles, attachmentsOf } from './attachments.js'
+import { attachedFiles, attachmentsOf, formatSize, type FilesInFlight } from './attachments.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
 import { readdir, readFile } from 'node:fs/promises'
@@ -140,6 +140,8 @@ export interface SuperTabHostOptions {
   log?: (message: string) => void
   observers?: typeof publishObservers
   attachedFiles?: typeof attachedFiles
+  /** How long a pass waits on a delivery's files (DOWNLOAD_WAIT_MS), for a spec. */
+  downloadWaitMs?: number
   prepareContribution?: typeof prepareContribution
   /** This Mac's Harness Team account preparing its workspace through the relay (contribution.ts), for a spec. */
   prepareTeam?: (core: CoreApi, input: { tabId: string; machineId: string }) => Promise<Record<string, unknown>>
@@ -262,6 +264,14 @@ const JOIN_FINAL = new Set(['MACHINES_FULL', 'OWNER_REQUIRED'])
 /** A delivery poll or claim the backend refused is asked again after 1 s, doubling to 30 s: every host retried each second, which
  *  added to an overloaded backend (production at 5 pods, 2026-10-27). */
 const DELIVERY_RETRY_MS = 1_000
+/** How long a pass waits on a delivery's files before it goes on (group 1604): a chat file may be 256 MB, minutes to download,
+ *  and this one loop hands every agent on the host its deliveries. Most files are in by then and go in the same pass; a larger
+ *  one downloads on in the background while its delivery is withheld and tried again (FilesDownloading). */
+const DOWNLOAD_WAIT_MS = 2_000
+/** A delivery whose files are still downloading. Tried again like any withheld one (at most DELIVERY_RETRY_MAX_MS apart), and
+ *  each try claims it again with the same claim id: that writes the delivery, so the backend never takes the claim for one
+ *  nobody holds (backend deliverySettle.ts CLAIM_QUIET_MS, 10 minutes). Said once, not as a failure. */
+class FilesDownloading extends Error {}
 const DELIVERY_RETRY_MAX_MS = 30_000
 /** Prod 10-30: a claim refused every 30 s said the backend's bare words 223 times in 2 hours. The same failure of a delivery is
  *  named at most this often. */
@@ -350,6 +360,14 @@ export class SuperTabHost {
   /** Each delivery's downloaded files, so input held by a busy terminal is not downloaded again on every retry. Only a
    * complete download is kept: a failed one is tried again before the next delivery of the same message. */
   private readonly files = new Map<string, { text: string; paths: string[] }>()
+  /** Each delivery's download still running or not yet taken by a pass, off the poll loop. It goes once a pass takes it, when
+   *  the delivery leaves the journal, and when the host stops. */
+  private readonly downloads = new Map<string, { pending: Promise<{ done: Awaited<ReturnType<typeof attachedFiles>> } | { error: unknown }>; said: boolean }>()
+  /** The files those downloads are fetching, so two deliveries of one file download it once at a time (attachments.ts). */
+  private readonly inFlight: FilesInFlight = new Map()
+  /** Ends every download when the host stops; each removes what it had written (lib/pasteDropFiles.ts). */
+  private readonly stopDownloads = new AbortController()
+  private readonly downloadWaitMs: number
   /** Each delivery's quote of the message it replies to ('' when none is shown), read once like its files. A failed read is
    * not kept, so the next try reads again. */
   private readonly quotes = new Map<string, string>()
@@ -444,6 +462,7 @@ export class SuperTabHost {
     this.file = hostJournalFile(core.dataDir, machineId)
     this.observers = options.observers ?? publishObservers
     this.attachedFiles = options.attachedFiles ?? attachedFiles
+    this.downloadWaitMs = options.downloadWaitMs ?? DOWNLOAD_WAIT_MS
     this.prepareContribution = options.prepareContribution ?? prepareContribution
     this.machineDeps = options.machines ?? {}
     this.prepareTeam = options.prepareTeam ?? ((core, input) => prepareTeamContribution(core, input))
@@ -520,6 +539,9 @@ export class SuperTabHost {
     // A running Buddy loses its wide grant at once (final review of #2310): the account it held for is none until a start.
     try { writeBuddyAccount(null) } catch { /* the next start writes none again until it knows */ }
     this.stopped = true
+    this.stopDownloads.abort()
+    this.downloads.clear()
+    this.inFlight.clear()
     if (this.timer) clearInterval(this.timer)
     this.timer = null
     this.stopHearing()
@@ -959,6 +981,12 @@ export class SuperTabHost {
             this.deliveryRetries.delete(claimKey)
             if (failed && failed.failures > 0) this.log(`Delivery ${delivery.id} went through after ${failed.failures + 1} tries, ${Math.round((this.now() - failed.since) / 60_000)} min.`)
           } catch (error) {
+            // Its files still downloading: tried again, quietly, and the agent's later deliveries wait behind it, in order.
+            if (error instanceof FilesDownloading) {
+              this.retryLater(claimKey, listKey)
+              claimError = error
+              throw error
+            }
             // Answered (or resolved by a person) between the roster read and this call: nothing is owed, and the
             // agent's other deliveries go on.
             if (!(error instanceof SuperTabHostError) || error.code !== 'DELIVERY_RESOLVED') {
@@ -1014,6 +1042,7 @@ export class SuperTabHost {
       else if (key.startsWith('claim:') && listsRead.has(agentKey) && !listed.has(key.slice('claim:'.length))) this.deliveryRetries.delete(key)
     }
     for (const deliveryId of this.files.keys()) if (!this.journal.entries[deliveryId]) this.files.delete(deliveryId)
+    for (const deliveryId of this.downloads.keys()) if (!this.journal.entries[deliveryId]) this.downloads.delete(deliveryId)
     for (const deliveryId of this.quotes.keys()) if (!this.journal.entries[deliveryId]) this.quotes.delete(deliveryId)
     for (const entry of Object.values(this.journal.entries)) {
       const id = typedId(entry)
@@ -1480,6 +1509,7 @@ export class SuperTabHost {
     if (!entry) return
     const id = typedId(entry)
     delete this.journal.entries[deliveryId]
+    this.downloads.delete(deliveryId)
     this.lateAcks.delete(deliveryId)
     this.withheld.clear(deliveryId)
     this.authorized.delete(id)
@@ -1558,7 +1588,7 @@ export class SuperTabHost {
     // Downloaded before the lease: a large file must not use up the 2.5 s the core gives a write.
     let files = this.files.get(deliveryId)
     if (files === undefined) {
-      const downloaded = await this.attachedFiles(message)
+      const downloaded = await this.downloaded(deliveryId, message)
       files = { text: downloaded.text, paths: downloaded.paths }
       if (downloaded.complete) this.files.set(deliveryId, files)
     }
@@ -1625,6 +1655,33 @@ export class SuperTabHost {
       approving ? APPROVALS(approving.judged) : '']
       .filter(Boolean).join('\n\n')
     this.core.turns.deliver(entry.harnessId, this.prompt(entry, message, attached, command, quote ?? '', result.buddyNews === true), id)
+  }
+
+  /** A delivery's files, downloaded off the poll loop: waited on for at most downloadWaitMs a pass, else FilesDownloading. A
+   *  download whose tries all failed answers its "Could not download" lines, delivered as before. */
+  private async downloaded(deliveryId: string, message: Json): Promise<Awaited<ReturnType<typeof attachedFiles>>> {
+    let download = this.downloads.get(deliveryId)
+    if (!download) {
+      const pending = this.attachedFiles(message, { inFlight: this.inFlight, signal: this.stopDownloads.signal })
+        .then(done => ({ done }), (error: unknown) => ({ error }))
+      download = { pending, said: false }
+      this.downloads.set(deliveryId, download)
+      const started = download
+      // One a pass stopped waiting on (said) is tried at the next pass once in, not after its back-off.
+      void pending.then(() => { if (started.said && this.downloads.get(deliveryId) === started) this.deliveryRetries.delete(`claim:${deliveryId}`) })
+    }
+    let timer: NodeJS.Timeout | undefined
+    const result = await Promise.race([download.pending, new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), this.downloadWaitMs) })])
+    clearTimeout(timer)
+    if (result === null) {
+      const bytes = attachmentsOf(message).reduce((sum, file) => sum + file.size, 0)
+      if (!download.said) this.log(`Delivery ${deliveryId}: its files (${formatSize(bytes)}) are downloading; it goes in once they are.`)
+      download.said = true
+      throw new FilesDownloading(`Its files are still downloading (${formatSize(bytes)}).`)
+    }
+    this.downloads.delete(deliveryId)
+    if ('error' in result) throw result.error
+    return result.done
   }
 
   /** Whether a Buddy's delivery is its own person's message in their own Buddy chat, the one source of files and links its

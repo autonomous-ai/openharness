@@ -26,7 +26,7 @@ Every command starts \`harness super-tab --tab TAB\` (your tab id is in your lau
 ## Post
 \`post GROUP TEXT OPERATION_ID [--to AGENT]... [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]...\`
 - Answer a message once, inside its thread: \`--reply-to MESSAGE_ID\` puts your reply in that message's thread. Post at the top level only to start a new topic.
-- \`--attach PATH\` sends a file (a screenshot, a log; up to 10 files of 10 MB each); TEXT may then be empty.
+- \`--attach PATH\` sends a file (a screenshot, a log; up to 10 files of 256 MB each); TEXT may then be empty.
 - \`--mention PERSON\` tags a person by the id or email shown in status (up to 5), when you need them to act or decide; an @username or @email in TEXT tags too, outside code and links. Nobody is tagged who cannot read the conversation.
 - Quote TEXT so the shell keeps it one argument.
 

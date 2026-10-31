@@ -2202,7 +2202,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onProductFeedback: (body) => proxyBackend('POST', '/api/product-usage/feedback', body),
     onSignInAnswer: (action, body) => proxyBackend('POST', `/api/auth/qr/${action}`, body),
     ...(swarm ? { onSuperTabAttachment: (req, res, path) => swarm.forwardAttachmentUpload(req, res, path,
-      { accessToken: () => auth.accessToken(), environment: autonomousEnv, base: backendHttpBase() }) } : {}),
+      { accessToken: () => auth.accessToken(), environment: autonomousEnv, base: backendHttpBase() }),
+      // A file over 10 MB: its signed link and its completion, with the account's token; the bytes go straight to storage.
+      onSuperTabAttachmentUpload: (path, body) => proxyBackend('POST', path, body) } : {}),
     onProductUsageReport: (body) => proxyBackend('POST', '/api/product-usage/report', body),
     onProductUsageRead: () => proxyBackend('GET', '/api/product-usage/settings'),
     onProductUsageWrite: (body) => proxyBackend('POST', '/api/product-usage/settings', body),
