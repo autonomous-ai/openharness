@@ -36,7 +36,9 @@ describe.skipIf(!url)('redisStamps', () => {
     const before = Date.now()
     await stamps.bump(id, ['main'])
     const first = (await stamps.read([id])).get(id)!
-    expect(first.main).toBeGreaterThan(before - 60_000)
+    // Redis's clock in microseconds.
+    expect(first.main).toBeGreaterThan((before - 60_000) * 1000)
+    expect(first.main).toBeLessThan((Date.now() + 60_000) * 1000)
     expect(first.machine).toBe(first.main - 1)
     await stamps.bump(id, ['main']); await stamps.bump(id, ['main'])
     const old = (await stamps.read([id])).get(id)!.main
@@ -45,15 +47,46 @@ describe.skipIf(!url)('redisStamps', () => {
     expect((await stamps.read([id])).get(id)!.main).toBeGreaterThan(old)
   })
 
-  it('moves only the scopes named, by one each', async () => {
+  // Review of #2456: a stamp the old Redis handed out must never come back for other data, or a process serves what it holds
+  // (cache.ts) and a delivery poll skips its revocation check (store.ts deliveries). Each bump is at least Redis's clock.
+  it('moves forward even after Redis comes back with an older value, as from a snapshot or a lagging replica', async () => {
+    const stamps = redisStamps(redis, bus), id = tab()
+    used.push(id)
+    await stamps.bump(id, ['main', 'machine'])
+    const older = (await stamps.read([id])).get(id)!
+    for (let i = 0; i < 5; i++) await stamps.bump(id, ['main', 'machine'])
+    const newest = (await stamps.read([id])).get(id)!
+    await redis.hset(`swarm:stamp:${id}`, 'main', older.main, 'machine', older.machine)
+    await stamps.bump(id, ['main', 'machine'])
+    const after = (await stamps.read([id])).get(id)!
+    expect(after.main).toBeGreaterThan(newest.main)
+    expect(after.machine).toBeGreaterThan(newest.machine)
+  })
+
+  it('moves each stamp strictly forward on every bump, many in one millisecond', async () => {
+    const stamps = redisStamps(redis, bus), id = tab()
+    used.push(id)
+    const seen: number[] = []
+    for (let i = 0; i < 50; i++) {
+      await stamps.bump(id, ['main'])
+      seen.push((await stamps.read([id])).get(id)!.main)
+    }
+    for (let i = 1; i < seen.length; i++) expect(seen[i]).toBeGreaterThan(seen[i - 1]!)
+  })
+
+  it('moves only the scopes named', async () => {
     const stamps = redisStamps(redis, bus), id = tab()
     used.push(id)
     await stamps.bump(id, ['main'])
     const start = (await stamps.read([id])).get(id)!
     await stamps.bump(id, ['machine'])
-    expect((await stamps.read([id])).get(id)).toEqual({ main: start.main, machine: start.machine + 1 })
+    const machine = (await stamps.read([id])).get(id)!
+    expect(machine.main).toBe(start.main)
+    expect(machine.machine).toBeGreaterThan(start.machine)
     await stamps.bump(id, ['main', 'machine'])
-    expect((await stamps.read([id])).get(id)).toEqual({ main: start.main + 1, machine: start.machine + 2 })
+    const both = (await stamps.read([id])).get(id)!
+    expect(both.main).toBeGreaterThan(machine.main)
+    expect(both.machine).toBeGreaterThan(machine.machine)
   })
 
   it('reads several Swarms in one call, and lets a quiet Swarm\'s stamp expire', async () => {

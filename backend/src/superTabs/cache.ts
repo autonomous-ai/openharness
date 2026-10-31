@@ -179,16 +179,24 @@ export class CacheView {
 export const STAMP_TTL_MS = 30 * 86_400_000
 const stampKey = (tabId: string) => `swarm:stamp:${tabId}`
 /**
- * A Swarm's first bump starts both stamps from Redis's clock in ms, then moves the named ones by one. Redis losing the key
- * (a restart, the expiry) therefore never hands out a stamp a process may still hold: it starts again above it, as long as
- * a Swarm has fewer commits than milliseconds between its first and its loss.
+ * Moves each named stamp to Redis's clock in microseconds, or one past its value if that is higher, so a stamp only grows
+ * and never comes back for other data: a process serves what it holds at an unchanged stamp (SwarmCache), and a delivery
+ * poll skips its revocation check while the main stamp holds (store.ts deliveries). No two bumps run in one microsecond
+ * (Redis runs one script at a time, each longer than that), so every stamp is its bump's time and none runs ahead of the
+ * clock. Redis losing the key (a restart, the expiry) or coming back with an older value (a snapshot, a lagging replica)
+ * therefore starts again above every stamp handed out. In milliseconds, a burst of bumps ran ahead of the clock and a loss
+ * within that millisecond handed a stamp out again (review of #2456). A first bump starts the stamps it does not name one
+ * below the clock. Stamps are compared only for equality: the jump from older millisecond stamps is one more change.
  */
-const BUMP = `if redis.call('exists', KEYS[1]) == 0 then
-  local t = redis.call('time')
-  local base = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
-  redis.call('hset', KEYS[1], 'main', base - 1, 'machine', base - 1)
+const BUMP = `local t = redis.call('time')
+local now = tonumber(t[1]) * 1000000 + tonumber(t[2])
+if redis.call('exists', KEYS[1]) == 0 then
+  redis.call('hset', KEYS[1], 'main', string.format('%.0f', now - 1), 'machine', string.format('%.0f', now - 1))
 end
-for i = 2, #ARGV do redis.call('hincrby', KEYS[1], ARGV[i], 1) end
+for i = 2, #ARGV do
+  local next = tonumber(redis.call('hget', KEYS[1], ARGV[i]) or 0) + 1
+  redis.call('hset', KEYS[1], ARGV[i], string.format('%.0f', math.max(next, now)))
+end
 redis.call('pexpire', KEYS[1], ARGV[1])
 return 1`
 
