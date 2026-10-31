@@ -41,8 +41,9 @@ export class FileLinks {
     return key.startsWith(folder) && !/[?#\\%]/.test(key) && parts.every(part => part && part !== '.' && part !== '..') ? key : null
   }
 
-  /** [rows] with each file's signed link and its expiry added; a file that cannot be linked reads without them, which every
-   *  app that knows links shows as not available. Only the fields a message stores for a file are kept. */
+  /** [rows] with each file's signed link and its expiry added. A file that cannot be linked (its signature failed, or its row
+   *  names nothing in this Swarm's folder) is marked `unlinked`: apps that know links then ask for a fresh one or say to try
+   *  again, and never fall back to the public address. Only the fields a message stores for a file are kept. */
   async forRows<T extends { attachments?: unknown }>(tabId: string, rows: T[], now: number): Promise<T[]> {
     if (!rows.some(row => Array.isArray(row.attachments) && row.attachments.length)) return rows
     const expiresAt = fileLinkExpiry(now)
@@ -53,7 +54,7 @@ export class FileLinks {
     return rows.map(row => !Array.isArray(row.attachments) ? row : { ...row, attachments: files(row).map(file => {
       const key = this.keyOf(tabId, file.url), url = key ? links.get(key) : undefined
       return { id: file.id, name: file.name, mime: file.mime, size: file.size, url: typeof file.url === 'string' ? file.url : '',
-        ...url ? { link: url, expiresAt } : {} } satisfies Attachment
+        ...url ? { link: url, expiresAt } : { unlinked: true as const } } satisfies Attachment
     }) })
   }
 

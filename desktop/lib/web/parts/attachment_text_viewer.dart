@@ -1,6 +1,7 @@
 import 'package:flutter/widgets.dart';
 
 import '../../super_tabs/attachment_text_viewer.dart' deferred as viewer;
+import '../../super_tabs/file_links.dart';
 import '../../super_tabs/model.dart';
 import 'deferred_part.dart';
 
@@ -17,14 +18,16 @@ class AttachmentTextViewer extends StatelessWidget {
     super.key,
     required this.file,
     required this.url,
+    this.ref,
   });
 
   final SuperTabAttachment file;
   final Uri url;
+  final SuperTabFileRef? ref;
 
   @override
   Widget build(BuildContext context) => DeferredPartView(
     part: attachmentTextPart,
-    builder: (_) => viewer.AttachmentTextViewer(file: file, url: url),
+    builder: (_) => viewer.AttachmentTextViewer(file: file, url: url, ref: ref),
   );
 }

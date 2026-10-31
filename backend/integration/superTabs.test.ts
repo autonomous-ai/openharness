@@ -2874,6 +2874,31 @@ describe('Super Tab chat attachments', () => {
     expect((await fresh(tab, messageId, attachment.id, peer, 'nope')).status).toBe(404)
   })
 
+  // Review 1 of #2460: a brief signing error read as lost access, and apps could not tell it from an older server.
+  it('marks a file it could not sign, answers its fresh-link read "try again", and links it once signing works', async () => {
+    const { tab, lead } = await fixture()
+    const sign = files.signedUrl.bind(files)
+    const failing = vi.spyOn(files, 'signedUrl').mockImplementation(async (key, at) => {
+      if (key.startsWith(`super-tabs/${tab}/`)) throw Object.assign(new Error('signBlob denied'), { code: 403 })
+      return sign(key, at)
+    })
+    try {
+      const { attachment, messageId } = await sentFile(tab)
+      expect(attachment).toMatchObject({ unlinked: true })
+      expect(attachment.link).toBeUndefined()
+      const [file] = await read(tab, messageId)
+      expect(file).toMatchObject({ unlinked: true, url: attachment.url })
+      const refused = await fresh(tab, messageId, attachment.id)
+      expect([refused.status, JSON.parse(refused.body).error.code]).toEqual([503, 'FILE_LINK_UNAVAILABLE'])
+      expect((await fresh(tab, messageId, attachment.id, host, 'lead', lead)).status).toBe(503)
+      failing.mockRestore()
+      const again = await fresh(tab, messageId, attachment.id)
+      expect(again.status).toBe(200)
+      expect(again.attachment!.unlinked).toBeUndefined()
+      expect(files.open(again.attachment!.link!)?.toString()).toBe('hello')
+    } finally { failing.mockRestore() }
+  })
+
   it('adds no link on a server with no bucket, and a fresh-link read there answers not available', async () => {
     const { tab } = await fixture()
     const { attachment, messageId } = await sentFile(tab)

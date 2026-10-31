@@ -953,8 +953,13 @@ class SuperTabAttachment {
       mime = _text(row, 'mime'),
       size = (row['size'] as num).toInt(),
       url = _text(row, 'url'),
+      // Read defensively: a field of the wrong type reads as absent, never as
+      // a failed row.
       link = row['link'] is String ? row['link'] as String : null,
-      expiresAt = (row['expiresAt'] as num?)?.toInt();
+      unlinked = row['unlinked'] == true,
+      expiresAt = row['expiresAt'] is num
+          ? (row['expiresAt'] as num).toInt()
+          : null;
 
   /// [url] is the address the file was stored with, on the attachments CDN:
   /// what an older server hands out, and what stops opening once the bucket
@@ -966,6 +971,10 @@ class SuperTabAttachment {
   /// this read; null from an older server, or when none could be signed.
   /// Opened in place of [url] whenever there is one.
   final String? link;
+
+  /// The server could not sign a link this time: [url] is never opened then,
+  /// a fresh link is asked for first (it may sign now).
+  final bool unlinked;
 
   /// When [link] stops opening, in epoch milliseconds.
   final int? expiresAt;

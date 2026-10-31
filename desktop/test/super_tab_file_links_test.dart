@@ -12,6 +12,7 @@ import 'package:harness/core/open_in_browser.dart';
 import 'package:harness/super_tabs/attachment_viewer.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/file_links.dart';
+import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -474,5 +475,142 @@ void main() {
       await tester.pumpAndSettle();
       await close(tester, c);
     });
+
+    testWidgets('an answer after the Swarm changed under it still lets the '
+        'new one load', (tester) async {
+      final fresh = _signed('p1', 'shot.png', sig: 'fresh');
+      pictures[fresh] = await _png(tester);
+      final answer = Completer<Map<String, dynamic>>();
+      final (server, c) = await show(tester, [
+        _file('p1', 'shot.png', mime: 'image/png', expiresAt: _ms - 1),
+      ], fileLink: (_) => answer.future);
+      expect(server.fileLinkReads, hasLength(1));
+      // Another account's controller over the same chat: the same picture,
+      // a new fresh-link source, asked for while the first ask still runs.
+      final other = server.controller(account: 'other');
+      await other.refresh();
+      await tester.pumpWidget(view(other));
+      await tester.pump();
+      answer.complete(
+        _file(
+          'p1',
+          'shot.png',
+          mime: 'image/png',
+          link: fresh,
+          expiresAt: _ms + 600000,
+        ),
+      );
+      for (var i = 0; i < 4; i++) {
+        await tester.runAsync(() => Future<void>.delayed(Durations.short2));
+        await tester.pumpAndSettle();
+      }
+      expect(server.fileLinkReads, hasLength(2));
+      expect(drawn.toSet(), {Uri.parse(fresh)});
+      expect(inline, findsOneWidget);
+      await close(tester, other);
+      await c.flush();
+      c.dispose();
+    });
+  });
+
+  group('a file the server could not sign', () {
+    testWidgets('never opens its stored address: a fresh link is asked for', (
+      tester,
+    ) async {
+      final (server, c) = await show(tester, [
+        {..._file('a1', 'report.pdf', unsigned: true), 'unlinked': true},
+      ], fileLink: (id) => _file(id, 'report.pdf', expiresAt: _ms + 600000));
+
+      await tester.tap(chip('a1'));
+      await tester.pumpAndSettle();
+      expect(server.fileLinkReads, hasLength(1));
+      expect(opened, [Uri.parse(_signed('a1', 'report.pdf'))]);
+      await close(tester, c);
+    });
+
+    testWidgets('a signing failure says try again, not gone', (tester) async {
+      final (server, c) = await show(
+        tester,
+        [
+          {..._file('a1', 'report.pdf', unsigned: true), 'unlinked': true},
+        ],
+        fileLink: (_) => throw const SuperTabFailure(
+          'FILE_LINK_UNAVAILABLE',
+          'Couldn’t open the file just now. Try again.',
+          statusCode: 503,
+        ),
+      );
+
+      await tester.tap(chip('a1'));
+      await tester.pump();
+      await tester.pump();
+      expect(find.text(kSuperTabFileRetry), findsOneWidget);
+      expect(find.text(kSuperTabFileGone), findsNothing);
+      expect(server.fileLinkReads, hasLength(1));
+      expect(opened, isEmpty);
+      await close(tester, c);
+    });
+  });
+
+  test('a link or expiry of another type reads as none, not a failed row', () {
+    final file = SuperTabAttachment.fromJson({
+      ..._file('a1', 'report.pdf'),
+      'link': 42,
+      'expiresAt': '1793466886541',
+    });
+    expect(file.link, isNull);
+    expect(file.expiresAt, isNull);
+    final signed = SuperTabAttachment.fromJson({
+      ..._file('a2', 'report.pdf'),
+      'expiresAt': 'soon',
+    });
+    // A signed link with no readable end is asked for again, never trusted.
+    expect(signed.expiresAt, isNull);
+    expect(SuperTabFileRef(signed).current, isNull);
+  });
+
+  testWidgets('a text file\'s viewer asks for a fresh link once its own ends', (
+    tester,
+  ) async {
+    final fetched = <Uri>[];
+    final fetcher = attachmentFetcher;
+    attachmentFetcher = (url, {maxBytes}) async {
+      fetched.add(url);
+      return Uint8List.fromList('# Notes'.codeUnits);
+    };
+    addTearDown(() => attachmentFetcher = fetcher);
+    final (server, c) = await show(
+      tester,
+      [
+        _file(
+          'a1',
+          'notes.md',
+          mime: 'text/markdown',
+          size: 7,
+          expiresAt: _ms + 120000,
+        ),
+      ],
+      fileLink: (id) => _file(
+        id,
+        'notes.md',
+        mime: 'text/markdown',
+        link: _signed(id, 'notes.md', sig: 'later'),
+        expiresAt: _ms + 900000,
+      ),
+    );
+
+    await tester.tap(chip('a1'));
+    await tester.pumpAndSettle();
+    expect(fetched, [Uri.parse(_signed('a1', 'notes.md'))]);
+    expect(server.fileLinkReads, isEmpty);
+    // The viewer stayed open past the link's last minute.
+    superTabFileClock = () => _now.add(const Duration(minutes: 2));
+    await tester.tap(find.text('Open in browser'));
+    await tester.pumpAndSettle();
+    expect(server.fileLinkReads, hasLength(1));
+    expect(opened, [Uri.parse(_signed('a1', 'notes.md', sig: 'later'))]);
+    await tester.tap(find.text('Close'));
+    await tester.pumpAndSettle();
+    await close(tester, c);
   });
 }

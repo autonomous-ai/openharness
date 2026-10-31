@@ -16,4 +16,26 @@ describe('avatar links', () => {
     expect(Object.keys(links)).toEqual(['person:p1'])
     expect(links['person:p1']).toMatch(/^https:\/\/bucket\.example\.test\/avatars\/tab\/0123\/avatar\?/)
   })
+
+  // Review 1 of #2460: one picture the cloud would not sign (a missing permission, a brief error) failed every member's read.
+  it('leaves out a picture it cannot sign, keeps the rest, shares signatures in flight and tries again on the next read', async () => {
+    const calls: string[] = []
+    let failing = true
+    const bucket = { signedUrl: async (key: string) => {
+      calls.push(key)
+      await new Promise(resolve => setTimeout(resolve, 5))
+      if (failing && key.endsWith('/bad/avatar')) throw Object.assign(new Error(`signBlob denied for ${key}`), { code: 403 })
+      return `https://bucket.example.test/${key}?signed`
+    } }
+    const links = new AvatarLinks(bucket as never, 'avatars')
+    const state = { people: [{ id: 'p1', avatar: { kind: 'upload', key: 'avatars/tab/good/avatar' } },
+      { id: 'p2', avatar: { kind: 'upload', key: 'avatars/tab/bad/avatar' } }] } as never
+    const [first, second] = await Promise.all([links.forReader(state, [], now), links.forReader(state, [], now)])
+    expect(first).toEqual({ 'person:p1': 'https://bucket.example.test/avatars/tab/good/avatar?signed' })
+    expect(second).toEqual(first)
+    expect(calls.sort()).toEqual(['avatars/tab/bad/avatar', 'avatars/tab/good/avatar'])
+    failing = false
+    expect(Object.keys(await links.forReader(state, [], now)).sort()).toEqual(['person:p1', 'person:p2'])
+    expect(calls).toHaveLength(3)
+  })
 })

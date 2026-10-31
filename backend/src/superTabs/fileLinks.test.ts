@@ -38,7 +38,8 @@ describe('chat file links', () => {
     )], now)
     expect(Object.fromEntries(read!.attachments.map(a => [a.id, !!a.link]))).toEqual(
       { ok: true, other: false, avatar: false, lookalike: false, escape: false, query: false, elsewhere: false })
-    expect(read!.attachments.filter(a => !a.link).every(a => a.expiresAt === undefined)).toBe(true)
+    expect(read!.attachments.filter(a => !a.link).every(a => a.expiresAt === undefined && a.unlinked === true)).toBe(true)
+    expect(read!.attachments.find(a => a.link)!.unlinked).toBeUndefined()
   })
 
   it('signs each file once per window however many reads ask at once, and afresh in the next window', async () => {
@@ -69,6 +70,8 @@ describe('chat file links', () => {
     const first = await links.forRows('tab1', [row(file('super-tabs/tab1/a/one.txt'))], now)
     expect(first[0]!.attachments[0]!.link).toBeUndefined()
     expect(first[0]!.attachments[0]!.expiresAt).toBeUndefined()
+    // Marked, so an app asks again or says to try again rather than open the public address (review 1 of #2460).
+    expect(first[0]!.attachments[0]!.unlinked).toBe(true)
     fail = false
     const second = await links.forRows('tab1', [row(file('super-tabs/tab1/a/one.txt'))], now)
     expect(second[0]!.attachments[0]!.link).toBe('https://s.test/super-tabs/tab1/a/one.txt')

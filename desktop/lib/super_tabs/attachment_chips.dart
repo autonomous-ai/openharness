@@ -117,7 +117,7 @@ class _AttachmentChipState extends State<_AttachmentChip> {
     if (opensAsText(file)) {
       await showAppDialog<void>(
         context: context,
-        builder: (_) => AttachmentTextViewer(file: file, url: url),
+        builder: (_) => AttachmentTextViewer(file: file, url: url, ref: ref),
       );
     } else {
       await openInBrowser(url);

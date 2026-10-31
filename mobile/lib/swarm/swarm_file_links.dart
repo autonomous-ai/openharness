@@ -51,6 +51,10 @@ const swarmFileGone = 'This file is no longer available.';
 /// Said when a fresh link could not be had just now; a later tap tries again.
 const swarmFileRetry = 'Couldn’t open the file. Try again.';
 
+/// How long a fresh-link read may take before it counts as failed.
+@visibleForTesting
+Duration swarmFileLinkTimeout = const Duration(seconds: 20);
+
 /// A link with less than this left is asked for again before it is opened.
 const swarmLinkMargin = Duration(seconds: 60);
 
@@ -101,10 +105,11 @@ class SwarmFileRef {
   SuperTabAttachment _latest;
 
   /// The newest link at hand: its signed link while it opens for more than
-  /// [swarmLinkMargin], else null; with no signed link at all (an older
-  /// server, or none signed this time), the stored address on the
-  /// attachments CDN. A signed link is never passed over for
-  /// the stored address.
+  /// [swarmLinkMargin], else null. A file the server could not sign this
+  /// time ([SuperTabAttachment.unlinked]) has none: a fresh one is asked for.
+  /// Only from an older server, which signs nothing, the stored address on
+  /// the attachments CDN. A signed link is never passed over for the stored
+  /// address.
   Uri? get current {
     if (_latest.link case final signed?) {
       final link = swarmSignedLink(signed), ends = _latest.expiresAt;
@@ -112,13 +117,16 @@ class SwarmFileRef {
       final left = ends - swarmFileClock().millisecondsSinceEpoch;
       return left > swarmLinkMargin.inMilliseconds ? link : null;
     }
+    if (_latest.unlinked) return null;
     return swarmAttachmentLink(_latest.url);
   }
 
   /// Whether the message names the file only by addresses this app refuses.
   bool get refused => file.link != null
       ? swarmSignedLink(file.link) == null
-      : file.url.isNotEmpty && swarmAttachmentLink(file.url) == null;
+      : !file.unlinked &&
+            file.url.isNotEmpty &&
+            swarmAttachmentLink(file.url) == null;
 
   /// A link that opens now: [current], or a fresh one; [stale] asks for a
   /// fresh one whatever the time. Throws [SwarmFileUnavailable].
@@ -135,13 +143,17 @@ class SwarmFileRef {
       next = SuperTabAttachment.fromJson(
         superTabMap(
           superTabMap(
-            await ask.request(
-              'GET',
-              '/api/super-tabs/${Uri.encodeComponent(ask.tabId)}'
-                  '/conversations/${Uri.encodeComponent(conversation)}'
-                  '/messages/${Uri.encodeComponent(message)}'
-                  '/attachments/${Uri.encodeComponent(file.id)}',
-            ),
+            await ask
+                .request(
+                  'GET',
+                  '/api/super-tabs/${Uri.encodeComponent(ask.tabId)}'
+                      '/conversations/${Uri.encodeComponent(conversation)}'
+                      '/messages/${Uri.encodeComponent(message)}'
+                      '/attachments/${Uri.encodeComponent(file.id)}',
+                )
+                // A request that never answers ends as a failure to retry,
+                // never a tap that waits for good.
+                .timeout(swarmFileLinkTimeout),
           )['attachment'],
         ),
       );
@@ -153,20 +165,24 @@ class SwarmFileRef {
     final link = next.id == file.id && next.expiresAt != null
         ? swarmSignedLink(next.link)
         : null;
-    if (link == null) throw const SwarmFileUnavailable(gone: true);
+    // Not signed this time either: another try may sign it.
+    if (link == null) throw SwarmFileUnavailable(gone: !next.unlinked);
     _latest = next;
     return link;
   }
 
+  /// Gone: the reader may no longer read it. Signing that failed for a
+  /// reader who may (503 FILE_LINK_UNAVAILABLE) is worth another try.
   static bool _gone(SuperTabFailure failure) =>
-      const {401, 403, 404}.contains(failure.statusCode) ||
-      const {
-        'FILE_UNAVAILABLE',
-        'NOT_FOUND',
-        'FORBIDDEN',
-        'SIGNED_OUT',
-        'ACCOUNT_CHANGED',
-      }.contains(failure.code);
+      failure.code != 'FILE_LINK_UNAVAILABLE' &&
+      (const {401, 403, 404}.contains(failure.statusCode) ||
+          const {
+            'FILE_UNAVAILABLE',
+            'NOT_FOUND',
+            'FORBIDDEN',
+            'SIGNED_OUT',
+            'ACCOUNT_CHANGED',
+          }.contains(failure.code));
 }
 
 /// [ref]'s link for a widget at [context]: null, with [onProblem] told why,

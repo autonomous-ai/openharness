@@ -2355,9 +2355,6 @@ export class SuperTabStore {
     if (told) afterCommit(tx, () => told(waiting))
   }
 
-  /** One page of a conversation, read by (sequence, id): rows written by one command before the store by parts share a
-   *  sequence, so a page edge inside such a run must not skip any (design section 4.6). `after` alone reads strictly after
-   *  a sequence, which is enough to poll for new messages. */
   /** [rows] as a reader is handed them: each file with a signed link of this read (fileLinks.ts). A server without a bucket
    *  links nothing. */
   private async linked<T extends { attachments?: unknown }>(tabId: string, rows: T[]): Promise<T[]> {
@@ -2369,15 +2366,20 @@ export class SuperTabStore {
 
   /** A fresh link to one file of one message, for a client whose earlier link is about to stop opening. Read as that exact
    *  message is (messages() with its id), so who may open it is exactly who may read the message now: anyone else, a message
-   *  that is not there, and a file it does not carry are answered alike. */
+   *  that is not there, and a file it does not carry are answered alike. A file the reader may open whose link could not be
+   *  signed just now is answered as a failure to try again (503), never as lost access (review 1 of #2460). */
   async fileLink(user: AuthUser, tabId: string, conversationId: string, messageId: string, attachmentId: string, asAgentId?: string) {
     const page = await this.messages(user, tabId, conversationId, { messageId }, asAgentId)
     const message = page.messages.find(m => m.id === messageId)
     const file = Array.isArray(message?.attachments) ? (message.attachments as unknown as Attachment[]).find(a => a.id === attachmentId) : undefined
-    if (!file?.link) fail('FILE_UNAVAILABLE', 'This file is no longer available.', 404)
+    if (!file || !this.fileLinks?.keyOf(tabId, file.url)) fail('FILE_UNAVAILABLE', 'This file is no longer available.', 404)
+    if (!file!.link) fail('FILE_LINK_UNAVAILABLE', 'Couldn\'t open the file just now. Try again.', 503)
     return { attachment: file }
   }
 
+  /** One page of a conversation, read by (sequence, id): rows written by one command before the store by parts share a
+   *  sequence, so a page edge inside such a run must not skip any (design section 4.6). `after` alone reads strictly after
+   *  a sequence, which is enough to poll for new messages. */
   async messages(user: AuthUser, tabId: string, conversationId: string,
     cursor: { after?: number; afterId?: string; before?: number; beforeId?: string; messageId?: string; thread?: string }, asAgentId?: string) {
     const tx = this.db

@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { PASTE_DROPS_DIR } from '../lib/pasteDropFiles.js'
-import { attachedFiles, attachmentsOf, diskName, formatSize, MAX_ATTACHMENT_BYTES, servedFrom } from './attachments.js'
+import { attachedFiles, attachmentsOf, diskName, formatSize, MAX_ATTACHMENT_BYTES, sameObject, servedFrom } from './attachments.js'
 
 const base = 'https://cdn.example.test'
 const file = (over: Record<string, unknown> = {}) => ({ id: 'a1', name: 'screen.png', mime: 'image/png', size: 5, url: `${base}/super-tabs/tab/abc/screen.png`, ...over })
@@ -311,9 +311,42 @@ describe('Super Tab attachment downloads', () => {
       expect(fetcher).toHaveBeenCalledTimes(1)
     })
 
+    // Review 1 of #2460: a file the server could not sign must not open by its public address, a dead page once the bucket is
+    // private; and a signed link may name only the object its message's file names.
+    it('asks a fresh link for a file the server could not sign, and never opens its public address', async () => {
+      const unsigned = file({ unlinked: true })
+      const fetcher = replying(new Uint8Array(5)), relink = fresh()
+      expect((await attachedFiles({ attachments: [unsigned] }, { base, signedBase, fetch: fetcher, now: () => 0, relink })).complete).toBe(true)
+      expect(relink).toHaveBeenCalledTimes(1)
+      expect(fetcher).toHaveBeenCalledWith(expect.stringContaining('Signature=fresh'), expect.anything())
+      expect(fetcher).not.toHaveBeenCalledWith(file().url, expect.anything())
+      // Without a way to ask, and while signing still fails: said so, and nothing fetched.
+      const none = vi.fn()
+      expect((await attachedFiles({ attachments: [unsigned] }, { base, signedBase, fetch: none, now: () => 0 })).text)
+        .toBe('Attached files:\n- Could not download a file (sent as "screen.png", 5 B): could not get a link just now')
+      const busy = vi.fn(async () => { throw Object.assign(new Error('Couldn\'t open the file just now. Try again.'), { status: 503 }) })
+      expect((await attachedFiles({ attachments: [unsigned] }, { base, signedBase, fetch: none, now: () => 0, relink: busy })).text)
+        .toContain('could not get a fresh link')
+      expect(none).not.toHaveBeenCalled()
+    })
+
+    it('downloads a signed link only when it names the object its file names, in one bucket', async () => {
+      const fetcher = replying(new Uint8Array(5))
+      const elsewhere = [`${signedBase}/bucket/super-tabs/tab/OTHER/screen.png?s=1`, `${signedBase}/bucket/extra/super-tabs/tab/abc/screen.png?s=1`,
+        `${signedBase}/super-tabs/tab/abc/screen.png?s=1`, `${signedBase}//super-tabs/tab/abc/screen.png?s=1`]
+      for (const link of elsewhere) {
+        expect((await attachedFiles({ attachments: [signed({ link })] }, { base, signedBase, fetch: fetcher, now: () => 0 })).text, link)
+          .toContain('not a Harness file address')
+      }
+      expect(fetcher).not.toHaveBeenCalled()
+      expect(sameObject(base, file().url, `${signedBase}/bucket/super-tabs/tab/abc/screen.png?X-Goog-Signature=1`)).toBe(true)
+      expect(sameObject(base, 'https://elsewhere.test/super-tabs/tab/abc/screen.png', `${signedBase}/bucket/super-tabs/tab/abc/screen.png`)).toBe(false)
+    })
+
     it('reads a file\'s link expiry, and nothing else it does not know', () => {
-      expect(attachmentsOf({ attachments: [{ ...signed(), extra: 'x' }, { ...file(), expiresAt: 'soon' }, { ...file(), expiresAt: 5 }, { ...file(), link: 7 }] }))
-        .toEqual([signed(), file(), file(), file()])
+      expect(attachmentsOf({ attachments: [{ ...signed(), extra: 'x' }, { ...file(), expiresAt: 'soon' }, { ...file(), expiresAt: 5 }, { ...file(), link: 7 },
+        { ...file(), unlinked: true }, { ...file(), unlinked: 'yes' }, { ...signed(), unlinked: true }] }))
+        .toEqual([signed(), file(), file(), file(), file({ unlinked: true }), file(), signed()])
     })
   })
 })

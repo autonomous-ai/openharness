@@ -256,6 +256,74 @@ void main() {
     expect(opened, isEmpty);
   });
 
+  testWidgets('a file the server could not sign never opens its stored '
+      'address: a fresh link is asked for', (tester) async {
+    backend.answer = (id) => _row(id, expiresAt: _ms + 600000);
+    await tester.pumpWidget(
+      chat(reader, {..._row('a1', unsigned: true), 'unlinked': true}),
+    );
+    await tester.tap(chip('a1'));
+    await tester.pumpAndSettle();
+    expect(backend.reads, hasLength(1));
+    expect(opened, [Uri.parse(_signed('a1'))]);
+  });
+
+  testWidgets('a signing failure says try again, not gone', (tester) async {
+    backend.answer = (_) => throw const SuperTabFailure(
+      'FILE_LINK_UNAVAILABLE',
+      'Couldn’t open the file just now. Try again.',
+      statusCode: 503,
+    );
+    await tester.pumpWidget(
+      chat(reader, {..._row('a1', unsigned: true), 'unlinked': true}),
+    );
+    await tester.tap(chip('a1'));
+    await tester.pump();
+    await tester.pump();
+    expect(find.text(swarmFileRetry), findsOneWidget);
+    expect(find.text(swarmFileGone), findsNothing);
+    expect(opened, isEmpty);
+  });
+
+  testWidgets('a fresh link that never answers ends as try again', (
+    tester,
+  ) async {
+    final timeout = swarmFileLinkTimeout;
+    swarmFileLinkTimeout = const Duration(seconds: 20);
+    addTearDown(() => swarmFileLinkTimeout = timeout);
+    final never = Completer<Map<String, dynamic>>();
+    backend.answer = (_) => never.future;
+    await tester.pumpWidget(chat(reader, _row('a1', expiresAt: _ms - 1)));
+    await tester.tap(chip('a1'));
+    await tester.pump(const Duration(seconds: 21));
+    await tester.pump();
+    expect(find.text(swarmFileRetry), findsOneWidget);
+    expect(opened, isEmpty);
+    // The chip takes a tap again.
+    backend.answer = (id) => _row(id, expiresAt: _ms + 600000);
+    ScaffoldMessenger.of(tester.element(chip('a1'))).clearSnackBars();
+    await tester.pumpAndSettle();
+    await tester.tap(chip('a1'));
+    await tester.pumpAndSettle();
+    expect(opened, [Uri.parse(_signed('a1'))]);
+  });
+
+  test('a link or expiry of another type reads as none, not a failed row', () {
+    final file = SuperTabAttachment.fromJson({
+      ..._row('a1'),
+      'link': 42,
+      'expiresAt': '1793466886541',
+    });
+    expect(file.link, isNull);
+    expect(file.expiresAt, isNull);
+    final signed = SuperTabAttachment.fromJson({
+      ..._row('a2'),
+      'expiresAt': 'soon',
+    });
+    // A signed link with no readable end is asked for again, never trusted.
+    expect(SwarmFileRef(signed).current, isNull);
+  });
+
   testWidgets('a link off file storage opens nothing and asks nothing', (
     tester,
   ) async {
@@ -377,19 +445,43 @@ void main() {
       await closed(tester);
     });
 
-    testWidgets('a signed link is kept by its file, not its address', (
+    testWidgets('a signed link is kept by its file, not its address: a new '
+        'link to the same picture fetches nothing again', (tester) async {
+      await show(
+        tester,
+        _row('p1', name: 'p.png', mime: 'image/png', expiresAt: _ms + 600000),
+      );
+      await settle(tester);
+      expect(preview, findsOneWidget);
+      // The next read hands a new link to the same file.
+      await show(
+        tester,
+        _row(
+          'p1',
+          name: 'p.png',
+          mime: 'image/png',
+          link: _signed('p1', sig: 'next'),
+          expiresAt: _ms + 900000,
+        ),
+      );
+      await settle(tester);
+      expect(storage.asked.map((a) => a.url), [_signed('p1')]);
+      expect(preview, findsOneWidget);
+      await closed(tester);
+    });
+
+    testWidgets('one the server could not sign is fetched by a fresh link', (
       tester,
     ) async {
-      final first = await tester.runAsync(() async {
-        await store.keepOnly('me');
-        await store.file(Uri.parse(_signed('p1')), key: 'swarm-file:p1');
-        return store.file(
-          Uri.parse(_signed('p1', sig: 'later')),
-          key: 'swarm-file:p1',
-        );
+      backend.answer = (id) =>
+          _row(id, name: 'p.png', mime: 'image/png', expiresAt: _ms + 600000);
+      await show(tester, {
+        ..._row('p1', name: 'p.png', mime: 'image/png', unsigned: true),
+        'unlinked': true,
       });
-      expect(first, isNotNull);
-      expect(storage.asked, hasLength(1));
+      await settle(tester);
+      expect(backend.reads, hasLength(1));
+      expect(storage.asked.map((a) => a.url), [_signed('p1')]);
       await closed(tester);
     });
   });

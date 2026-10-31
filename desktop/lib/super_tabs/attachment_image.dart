@@ -65,8 +65,14 @@ class _SuperTabInlineImageState extends State<SuperTabInlineImage> {
     final ref = _ref;
     setState(() => _asking = true);
     final url = await superTabOpenableLink(context, ref, stale: stale);
-    // Gone, or another file now: this answer is not for what is shown.
-    if (!mounted || !identical(ref, _ref)) return;
+    if (!mounted) return;
+    // Another file, Swarm or account now: this answer is not for what is
+    // shown. The ask is over all the same, and the one shown now is asked for.
+    if (!identical(ref, _ref)) {
+      _asking = false;
+      if (_url == null && !_failed) _ask(stale: false);
+      return;
+    }
     setState(() {
       _asking = false;
       _url = url;

@@ -684,6 +684,12 @@ for files in the reading Swarm's own folder.
   someone removed from the Swarm or the project, a deleted Swarm, a private
   chat or another project's chat all get the same "This file is no longer
   available."
+- A file the server could not sign just now (the cloud's signing failed) is
+  marked as such. The apps then ask for a fresh link, and the server answers
+  "Couldn't open the file just now. Try again." while signing still fails. They
+  never open the public address instead. Only a file with no link and no such
+  mark, which comes from a server from before signed links, opens by its public
+  address.
 - Agents' computers download through the same links. A try whose link is over
   asks for a fresh one, read as the agent reads the message now. Storage checks
   a link when a download starts, so a slow download that started in time
@@ -700,11 +706,14 @@ Signed links alone do not end that; the release step does.
 
 **Release step (Ken's go).** The code never changes the bucket. In order:
 
-1. Ship the backend, then the CLI, Desktop and the phone. The backend signs
-   links with the same permission as the 256 MB upload links: see step 2 of
-   "Release steps for Ken" in #2441. Without it, files read without a link,
-   apps fall back to the public address, and the backend logs
-   `[file-links] could not sign a chat file link`. For the web build's text
+1. **Before the backend ships**, grant the signing permission: the same one
+   the 256 MB upload links need (step 2 of "Release steps for Ken" in #2441).
+   Then ship the backend, then the CLI, Desktop and the phone. Without the
+   permission, every file reads as not
+   signed, new apps say "Try again" instead of opening it, uploaded avatars show
+   the default face, and the backend logs
+   `[file-links] could not sign a chat file link` and
+   `[avatar-links] could not sign an avatar link`. For the web build's text
    viewer, also add `GET` to the bucket's CORS rule from #2441's step 1.
 2. Wait until old apps are rare. Run `cd backend && npm run usage:daily -- 7`
    with a read-only `DATABASE_URL` (docs/product-measurement.md), and read the
@@ -725,7 +734,11 @@ Signed links alone do not end that; the release step does.
    and an avatar still open in Desktop, on the phone and for an agent.
 
 Rollback: add the `allUsers` binding back. Old apps open files again; new ones
-never stopped. A later release can stop sending the public address, so that
+never stopped. That rollback covers only the bucket. **Once the bucket is
+private, rolling the backend back past this release breaks every chat file and
+uploaded avatar at once**: an older backend hands out only public addresses,
+and a private bucket refuses them. So roll back in this order: make the bucket
+public again first, then roll the backend back. A later release can stop sending the public address, so that
 an old app says the file is not on Harness's file storage instead of opening a
 dead link.
 
@@ -741,8 +754,8 @@ Design (`backend/src/superTabs/fileLinks.ts`):
 - Scale: at 10x files per page, the first read in a window signs 10x. The
   first metric to warn is message page latency (`recordMessageRead`), and the
   signing warnings in the log.
-- Compatibility: new apps use the link and fall back to the address on an
-  older server. Old apps and old agents' computers use the address until the
+- Compatibility: new apps use the link, and use the address only for a file
+  with neither a link nor the not-signed mark, which only an older server sends. Old apps and old agents' computers use the address until the
   bucket is private. The fresh-link read is new; an older server answers it
   404.
 - Migration + rollback: no data migration. The release step above is the
@@ -751,8 +764,10 @@ Design (`backend/src/superTabs/fileLinks.ts`):
   read. Storage enforces the end time.
 - Identity: the signed-in person's or the agent's own read. A Team account's
   session reads as its agent.
-- Failure: a file that cannot be signed reads without a link, the apps say it
-  is not available, and the backend logs the storage error's code.
+- Failure: a file that cannot be signed is marked not signed. Its fresh-link
+  read answers "try again" (503), never "no longer available", and the apps and
+  agents say to try again. An avatar that cannot be signed is left out of that
+  read alone. The backend logs the storage error's code only.
 - Platforms: backend, CLI host, Desktop (and the web build), phone.
 
 ## Avatars, status and celebrations

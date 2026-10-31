@@ -17,19 +17,23 @@ import '../shared/widgets/empty_state.dart';
 import '../shared/widgets/skeleton.dart';
 import '../widgets/desktop_chrome.dart';
 import 'attachment_viewer.dart';
+import 'file_links.dart';
 import 'model.dart';
 
 /// A text file from the chat, read only: Markdown rendered with its source a
 /// click away, anything else in Finder's editor. Fetched when this opens.
+/// [ref] gives Download and Open in browser a fresh link once [url] ends.
 class AttachmentTextViewer extends StatefulWidget {
   const AttachmentTextViewer({
     super.key,
     required this.file,
     required this.url,
+    this.ref,
   });
 
   final SuperTabAttachment file;
   final Uri url;
+  final SuperTabFileRef? ref;
 
   @override
   State<AttachmentTextViewer> createState() => _AttachmentTextViewerState();
@@ -102,7 +106,11 @@ class _AttachmentTextViewerState extends State<AttachmentTextViewer> {
                 const SizedBox(height: 12),
                 Expanded(child: _body(read)),
                 const SizedBox(height: 12),
-                AttachmentViewerActions(file: widget.file, url: widget.url),
+                AttachmentViewerActions(
+                  file: widget.file,
+                  url: widget.url,
+                  ref: widget.ref,
+                ),
               ],
             ),
           ),

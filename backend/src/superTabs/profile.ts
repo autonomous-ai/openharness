@@ -31,7 +31,7 @@ export function setStatus(state: SuperTabState, actor: Actor, status: z.infer<ty
 export const AVATAR_PRESETS = ['fox', 'owl', 'cat', 'panda', 'octopus', 'cactus', 'rocket', 'sun'] as const
 /** What a member or agent shows: an uploaded picture or a preset. Absent: the default, initials for a person, a pattern from
  *  the name for an agent (Desktop). An upload keeps its object's key on the server; readers never get the key, only a link with
- *  each read (avatarLinks.ts): short-lived in a private avatar bucket, permanent on the attachments CDN. */
+ *  each read (avatarLinks.ts), signed for an hour wherever the picture is kept. */
 export type Avatar = { kind: 'upload'; key: string } | { kind: 'preset'; key: (typeof AVATAR_PRESETS)[number] }
 /** An avatar as readers get it: an upload says only that there is one. */
 export type AvatarView = { kind: 'upload' } | Extract<Avatar, { kind: 'preset' }>

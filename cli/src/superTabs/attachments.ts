@@ -7,9 +7,11 @@ import { object } from './wire.js'
 export { MAX_FORM_ATTACHMENT_BYTES } from '../lib/superTabAttachmentProxy.js'
 
 /** As the backend hands it with a message (backend/src/superTabs/attachments.ts): `link` is a signed link of that read, which
- *  opens until `expiresAt` (epoch ms); `url` is the file's public address, which an older backend sends alone and which stops
- *  opening once the bucket is private. The link is used whenever there is one. */
-export interface MessageAttachment { id: string; name: string; mime: string; size: number; url: string; link?: string; expiresAt?: number }
+ *  opens until `expiresAt` (epoch ms); `unlinked` says the server could not sign one just now; `url` is the file's public
+ *  address, which stops opening once the bucket is private. The link is used whenever there is one, a fresh one is asked for
+ *  an unlinked file, and the address only for a file with neither, which only an older backend sends. */
+export interface MessageAttachment { id: string; name: string; mime: string; size: number; url: string; link?: string; expiresAt?: number
+  unlinked?: true }
 /** A fresh link to [file], from the backend, for whoever this host delivers to (superTabs/host.ts): the read checks that they
  *  may still read the message. It throws when they may not, or the file is gone. */
 export type Relink = (file: MessageAttachment) => Promise<MessageAttachment>
@@ -54,14 +56,16 @@ export function attachmentsOf(message: Record<string, unknown>): MessageAttachme
     && Number.isSafeInteger(a.size) && (a.size as number) >= 0)
     .map(a => ({ id: typeof a.id === 'string' ? a.id : '', name: a.name, mime: a.mime, size: a.size, url: a.url,
       ...typeof a.link === 'string' && a.link ? { link: a.link,
-        ...typeof a.expiresAt === 'number' && Number.isFinite(a.expiresAt) ? { expiresAt: a.expiresAt } : {} } : {} }))
+        ...typeof a.expiresAt === 'number' && Number.isFinite(a.expiresAt) ? { expiresAt: a.expiresAt } : {} }
+        : a.unlinked === true ? { unlinked: true as const } : {} }))
 }
 
 export const formatSize = (bytes: number) => bytes < 1024 ? `${bytes} B`
   : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`
 
 /** Only files on Harness's own file storage, under the backend's public base (an older backend) or on the signed-link host:
- *  a message's URL must not make this computer fetch another address. */
+ *  a message's URL must not make this computer fetch another address. A signed link must also name the very object its file's
+ *  public address names (sameObject). */
 export function servedFrom(base: string, address: string, signedBase = env.SUPER_TAB_FILES_BASE): boolean {
   return under(base, address) || under(signedBase, address)
 }
@@ -80,14 +84,31 @@ class Refused extends Error {}
  * shell reads as syntax ($(...), quotes, spaces, ;). The original name stays in the label beside it. */
 export const diskName = (name: string) => name.replaceAll(/[^A-Za-z0-9._-]+/g, '_').replace(/^[.-]+/, '').slice(-120) || 'file'
 
-/** Storage's answer to a signed link that is over: the next try asks for a fresh one (attachedFiles). */
+/** Whether signed [link] names the same object as public [url]: `/<one bucket>/<the key url names under base>`. Without the
+ *  bucket's name, this binds a link to the one file Harness stored for the message, in a single bucket, on the signed-link
+ *  host (review 1 of #2460); `SUPER_TAB_FILES_BASE` may also name the bucket itself. */
+export function sameObject(base: string, url: string, link: string): boolean {
+  try {
+    const root = new URL(base), stored = new URL(url), signed = new URL(link)
+    const prefix = root.pathname.endsWith('/') ? root.pathname : `${root.pathname}/`
+    if (stored.origin !== root.origin || !stored.pathname.startsWith(prefix)) return false
+    const key = decodeURIComponent(stored.pathname.slice(prefix.length))
+    const [blank, bucket, ...rest] = signed.pathname.split('/')
+    return blank === '' && !!bucket && !!key && rest.map(decodeURIComponent).join('/') === key
+  } catch { return false }
+}
+
+/** Storage's answer to a signed link that is over, or a file the server could not sign: the next try asks for a fresh one
+ *  (attachedFiles). */
 class Expired extends Error {}
 
 async function download(file: MessageAttachment, base: string, signedBase: string, fetcher: typeof fetch, ms: number, idleMs: number,
   stop: AbortSignal | undefined, statfs: Statfs): Promise<string> {
+  // An unlinked file is never opened by its public address: once the bucket is private that is a dead page.
+  if (!file.link && file.unlinked) throw new Expired('not signed just now')
   const address = file.link ?? file.url
   if (!address) throw new Refused('no longer available')
-  if (!servedFrom(base, address, signedBase)) throw new Refused('not a Harness file address')
+  if (!servedFrom(base, address, signedBase) || (file.link && !sameObject(base, file.url, file.link))) throw new Refused('not a Harness file address')
   if (file.size > MAX_ATTACHMENT_BYTES) throw new Refused(`over the ${megabytes(MAX_ATTACHMENT_BYTES)} limit`)
   // Another try would find the same disk: refused, not tried again.
   if (!await roomFor(file.size, statfs)) throw new Refused('not enough free disk space')
@@ -165,7 +186,7 @@ export async function attachedFiles(message: Record<string, unknown>,
     let file = sent, failure: unknown, stale = false
     for (let attempt = 0; attempt < 3 && deadline - now() > 0 && !signal?.aborted; attempt++) {
       try {
-        if (options.relink && (stale || (file.expiresAt !== undefined && file.expiresAt - now() < RELINK_MARGIN_MS))) {
+        if (options.relink && (stale || file.unlinked || (file.expiresAt !== undefined && file.expiresAt - now() < RELINK_MARGIN_MS))) {
           try { file = await options.relink(file) } catch (error) {
             // Refused (404) or forbidden (403): its reader may no longer read the message, or the file is gone.
             const status = error && typeof error === 'object' && 'status' in error ? error.status : null
@@ -179,7 +200,10 @@ export async function attachedFiles(message: Record<string, unknown>,
       } catch (error) {
         failure = error
         if (error instanceof Refused) break
-        if (error instanceof Expired) { if (!options.relink) break; stale = true }
+        if (error instanceof Expired) {
+          if (!options.relink) { failure = file.unlinked ? new Error('could not get a link just now') : error; break }
+          stale = true
+        }
       }
     }
     return failed(file, signal?.aborted ? 'stopped' : failure instanceof Error ? failure.message : 'out of time')

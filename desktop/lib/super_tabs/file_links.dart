@@ -74,10 +74,11 @@ class SuperTabFileRef {
   SuperTabAttachment _latest;
 
   /// The newest link at hand: its signed [SuperTabAttachment.link] while it
-  /// opens for more than [kSuperTabLinkMargin], else null; with no signed
-  /// link at all (an older server, or none signed this time), the stored
-  /// address on the attachments CDN, as ever. A signed link is never passed
-  /// over for the stored address.
+  /// opens for more than [kSuperTabLinkMargin], else null. A file the server
+  /// could not sign this time ([SuperTabAttachment.unlinked]) has none: a
+  /// fresh one is asked for. Only from an older server, which signs nothing,
+  /// the stored address on the attachments CDN, as ever. A signed link is
+  /// never passed over for the stored address.
   Uri? get current {
     if (_latest.link case final signed?) {
       final link = attachmentSignedLink(signed), ends = _latest.expiresAt;
@@ -85,16 +86,19 @@ class SuperTabFileRef {
       final left = ends - superTabFileClock().millisecondsSinceEpoch;
       return left > kSuperTabLinkMargin.inMilliseconds ? link : null;
     }
+    if (_latest.unlinked) return null;
     return attachmentLink(_latest.url);
   }
 
   /// Whether the message names the file only by addresses this app refuses
-  /// to open: a signed link off [kSuperTabFilesHost] or not https, or, with
-  /// none, a stored address off the attachments host. With neither, the file
-  /// is only unlinked this time.
+  /// to open: a signed link off [kSuperTabFilesHost] or not https, or, from
+  /// an older server, a stored address off the attachments host. A file not
+  /// signed this time, or with no address, is only unlinked for now.
   bool get refused => file.link != null
       ? attachmentSignedLink(file.link) == null
-      : file.url.isNotEmpty && attachmentLink(file.url) == null;
+      : !file.unlinked &&
+            file.url.isNotEmpty &&
+            attachmentLink(file.url) == null;
 
   /// A link that opens now: [current], or a fresh one. [stale]: the one at
   /// hand just failed to open, so a fresh one is asked for whatever its time.
@@ -118,20 +122,24 @@ class SuperTabFileRef {
     final link = next.id == file.id && next.expiresAt != null
         ? attachmentSignedLink(next.link)
         : null;
-    if (link == null) throw const SuperTabFileUnavailable(gone: true);
+    // Not signed this time either: another try may sign it.
+    if (link == null) throw SuperTabFileUnavailable(gone: !next.unlinked);
     _latest = next;
     return link;
   }
 
+  /// Gone: the reader may no longer read it. Signing that failed for a
+  /// reader who may (503 FILE_LINK_UNAVAILABLE) is worth another try.
   static bool _gone(SuperTabFailure failure) =>
-      const {401, 403, 404}.contains(failure.statusCode) ||
-      const {
-        'FILE_UNAVAILABLE',
-        'NOT_FOUND',
-        'FORBIDDEN',
-        'SIGNED_OUT',
-        'ACCOUNT_CHANGED',
-      }.contains(failure.code);
+      failure.code != 'FILE_LINK_UNAVAILABLE' &&
+      (const {401, 403, 404}.contains(failure.statusCode) ||
+          const {
+            'FILE_UNAVAILABLE',
+            'NOT_FOUND',
+            'FORBIDDEN',
+            'SIGNED_OUT',
+            'ACCOUNT_CHANGED',
+          }.contains(failure.code));
 }
 
 /// [ref]'s link for a widget at [context]: null, with [onProblem] told why,
