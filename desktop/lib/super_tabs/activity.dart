@@ -174,8 +174,13 @@ class SuperTabActivity extends ChangeNotifier {
     if (!_open) return;
     _open = false;
     _newThisVisit.clear();
-    unawaited(_markShownRead());
-    if (!_disposed) notifyListeners();
+    // The view is going away while this runs (its dispose): what listens is
+    // told after the frame's teardown, never during it.
+    scheduleMicrotask(() {
+      if (_disposed) return;
+      unawaited(_markShownRead());
+      notifyListeners();
+    });
   }
 
   void setFilter(SuperTabActivityFilter value) {

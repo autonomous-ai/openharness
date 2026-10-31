@@ -214,7 +214,7 @@ Future<void> showText(
 );
 
 Finder notificationsEntry() =>
-    find.byKey(const ValueKey('super-notifications'));
+    find.byKey(const ValueKey('super-activity'));
 
 void main() {
   setUpAll(() async {

@@ -92,7 +92,7 @@ Future<SuperTabController> showView(
 }
 
 Finder notificationsEntry() =>
-    find.byKey(const ValueKey('super-notifications'));
+    find.byKey(const ValueKey('super-activity'));
 Finder option(String id, int index) =>
     find.byKey(ValueKey('super-decision-$id-$index'));
 Finder letPmDecide(String id) =>

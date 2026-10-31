@@ -1494,7 +1494,7 @@ void main() {
           final server = buddySwarm();
           server.ask(['Ship it?']);
           final c = await show(tester, server);
-          await tester.tap(find.byKey(const ValueKey('super-notifications')));
+          await tester.tap(find.byKey(const ValueKey('super-activity')));
           await tester.pumpAndSettle();
 
           expect(find.text('Decisions'), findsOneWidget);
@@ -1520,7 +1520,7 @@ void main() {
         'a tag from the old Chat with PM is placed in the project chat and opens it',
         (tester) async {
           final (_, c) = await withHistory(tester);
-          await tester.tap(find.byKey(const ValueKey('super-notifications')));
+          await tester.tap(find.byKey(const ValueKey('super-activity')));
           await tester.pumpAndSettle();
 
           expect(find.textContaining('Chat with PM'), findsNothing);
