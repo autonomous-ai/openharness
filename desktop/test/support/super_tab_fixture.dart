@@ -87,6 +87,7 @@ class SwarmPartsBackend {
           'readMarks',
           'threadMarks',
           'teamAccounts',
+          'threadSessions',
         }.contains(entry.key))
           entry.key: entry.value,
     };
@@ -165,6 +166,8 @@ class SwarmPartsBackend {
     if (state['avatars'] != null) 'avatars': state['avatars'],
     // Only where the server does not try Team accounts (backend read/views.ts).
     if (state['teamAccounts'] == false) 'teamAccounts': false,
+    // A server that takes a thread reply's New session (backend read/views.ts).
+    if (state['threadSessions'] == true) 'threadSessions': true,
     // The reader's own read marks alone, as backend readMarks.ts sends them.
     if ((state['readMarks'] as Map?)?[reader ?? 'owner'] case final Map marks)
       'readMarks': Map<String, dynamic>.from(marks),

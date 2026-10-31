@@ -86,6 +86,13 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
     expect(keys(readerView(parts, agentActor(s.worker), NOW, { teamMachines: [] }).parts.groups)).not.toContain(leads)
   })
 
+  it('says to every reader that this server takes New session in a thread reply', () => {
+    const { s, parts } = scene()
+    for (const actor of [owner, peer, agentActor(s.worker)]) {
+      expect(readerView(parts, actor, NOW, { teamMachines: [] }).derived.threadSessions).toBe(true)
+    }
+  })
+
   it('keeps time-based agent values out of the part and puts them in derived', () => {
     const { s, parts } = scene()
     const view = readerView(parts, peer, NOW, { teamMachines: [] })

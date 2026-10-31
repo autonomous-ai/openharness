@@ -8,6 +8,7 @@ import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
+import { SwarmReads } from '../src/superTabs/read/service.js'
 import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { poolRows } from './hostRows.test-support.js'
@@ -87,6 +88,16 @@ async function swarm({ capable = true, maxAgents = 6, engine = 'claude' } = {}) 
 const text = (page: { messages: Array<{ text: string }> }) => page.messages.map(m => m.text)
 
 describe('a Buddy thread session', () => {
+  it('is announced in every Swarm read, so an app offers New session only on a server that takes it', async () => {
+    const f = await swarm()
+    const reads = new SwarmReads(f.store)
+    const first = await reads.firstLoad(peer, f.tab)
+    expect(first.derived.threadSessions).toBe(true)
+    await f.say('Moving the cursor on')
+    const changes = await reads.changes(peer, f.tab, first.cursor)
+    expect(changes.reload === false && changes.derived.threadSessions).toBe(true)
+  })
+
   it('starts from a thread reply on its Buddy\'s machine, with no message text in its start, and hears that reply once it joins', async () => {
     const f = await swarm()
     const root = await f.say('Two things today')

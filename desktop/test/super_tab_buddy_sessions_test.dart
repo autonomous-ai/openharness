@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -38,9 +39,11 @@ void main() {
       (server.state['conversations'] as List)[1] as Map<String, dynamic>;
 
   /// The reader's own Buddy chat ('offline' in the fixture) with their Buddy
-  /// running, a root, and a second thread to switch to.
-  ConversationServer buddyChat({bool buddy = true}) {
+  /// running, a root, and a second thread to switch to, on a server that takes
+  /// New session unless [sessions] is false (an older backend).
+  ConversationServer buddyChat({bool buddy = true, bool sessions = true}) {
     final server = ConversationServer()..threads = true;
+    if (sessions) server.state['threadSessions'] = true;
     final chat = chatOf(server)
       ..['kind'] = 'buddy'
       ..['buddyOwnerId'] = 'owner'
@@ -130,10 +133,11 @@ void main() {
     ConversationServer server, {
     Brightness brightness = Brightness.dark,
     bool select = true,
+    Map<String, dynamic>? initial,
   }) async {
     await tester.binding.setSurfaceSize(const Size(1400, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final c = shown = server.controller();
+    final c = shown = server.controller(initial: initial);
     await c.refresh();
     await tester.pumpWidget(
       MaterialApp(
@@ -568,6 +572,263 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('New session'), findsOneWidget);
     expect(box(tester, newSession).onChanged, isNotNull);
+  });
+
+  // ── An older server (2026-10-31, Scholes): a test build offered New session
+  // against production, whose schema refused it with its raw text. ──────────
+
+  const unavailable = "New sessions aren't available yet; send without it?";
+  const rawRefusal = 'command: Unrecognized key: "newSession"';
+  final threadError = find.byKey(const ValueKey('super-thread-error'));
+
+  /// Makes [server] refuse every command as a backend from before New session
+  /// refuses one with it.
+  void refuseAsOlderServer(ConversationServer server) {
+    server
+      ..refuse = {'code': 'VALIDATION_ERROR', 'message': rawRefusal}
+      ..refuseStatus = 400;
+  }
+
+  testSessions('a server that does not take New session never offers it, '
+      'and offers it once it says it does', (tester) async {
+    final server = buddyChat(sessions: false);
+    server.state['machines'] = [machine()];
+    final c = await show(tester, server);
+    await openThread(tester, c, 'message-1');
+    // The Buddy's machine can run sessions; the server cannot start them.
+    expect(newSession, findsNothing);
+    expect(alsoSend, findsOneWidget);
+    expect(c.offersThreadSessions('message-1'), isFalse);
+    await tester.enterText(composer, 'Plain reply');
+    await tester.pump();
+    await tester.tap(send);
+    await tester.pumpAndSettle();
+    expect(lastCommand(server).containsKey('newSession'), isFalse);
+
+    // The server is updated: the next changes read says so.
+    server.state['threadSessions'] = true;
+    server.revision++;
+    await c.refresh();
+    await tester.pumpAndSettle();
+    expect(newSession, findsOneWidget);
+    expect(box(tester, newSession).onChanged, isNotNull);
+  });
+
+  testSessions('a server rolled back to before New session hides it again', (
+    tester,
+  ) async {
+    final server = buddyChat();
+    final c = await show(tester, server);
+    await openThread(tester, c, 'message-1');
+    expect(newSession, findsOneWidget);
+    server.state.remove('threadSessions');
+    server.revision++;
+    await c.refresh();
+    await tester.pumpAndSettle();
+    expect(newSession, findsNothing);
+    expect(alsoSend, findsOneWidget);
+  });
+
+  testSessions('a New session reply the server refuses keeps its text in the '
+      'box, says so plainly, and sends without it', (tester) async {
+    final server = buddyChat();
+    final c = await show(tester, server);
+    await openThread(tester, c, 'message-1');
+    refuseAsOlderServer(server);
+    await tester.tap(newSession);
+    await tester.pump();
+    await tester.enterText(composer, 'Measure it now');
+    await tester.pump();
+    await tester.tap(send);
+    await tester.pumpAndSettle();
+    expect(lastCommand(server)['newSession'], isTrue);
+
+    expect(
+      tester.widget<TextField>(composer).controller!.text,
+      'Measure it now',
+    );
+    expect(tester.widget<Text>(threadError).data, unavailable);
+    expect(find.textContaining('Unrecognized key'), findsNothing);
+    // Nothing waits as Not sent: the text is in the box, ready to go.
+    expect(find.text('Not sent'), findsNothing);
+    expect(c.outgoing('offline'), isEmpty);
+    // New session is no longer offered, so Send goes without it.
+    expect(newSession, findsNothing);
+
+    server.refuse = null;
+    await tester.tap(send);
+    await tester.pumpAndSettle();
+    final sent = lastCommand(server);
+    expect(sent['text'], 'Measure it now');
+    expect(sent['replyTo'], 'message-1');
+    expect(sent.containsKey('newSession'), isFalse);
+    expect(threadError, findsNothing);
+    expect(tester.widget<TextField>(composer).controller!.text, isEmpty);
+  });
+
+  testSessions('after a refusal New session comes back a while later, if the '
+      'server still says it takes it', (tester) async {
+    final server = buddyChat();
+    final c = await show(tester, server);
+    await openThread(tester, c, 'message-1');
+    refuseAsOlderServer(server);
+    await tester.tap(newSession);
+    await tester.enterText(composer, 'Measure it now');
+    await tester.pump();
+    await tester.tap(send);
+    await tester.pumpAndSettle();
+    expect(c.offersThreadSessions('message-1'), isFalse);
+    final later = clock.now().add(const Duration(minutes: 11));
+    expect(
+      withClock(Clock.fixed(later), () => c.offersThreadSessions('message-1')),
+      isTrue,
+    );
+  });
+
+  testSessions('a refusal that lands after more was typed keeps the new text '
+      'and the refused reply, whose Retry goes without New session', (
+    tester,
+  ) async {
+    final server = buddyChat();
+    final c = await show(tester, server);
+    await openThread(tester, c, 'message-1');
+    refuseAsOlderServer(server);
+    final hold = server.holdCommands = Completer<void>();
+    await tester.tap(newSession);
+    await tester.enterText(composer, 'First');
+    await tester.pump();
+    await tester.tap(send);
+    await tester.pump();
+    await tester.enterText(composer, 'Second, typed meanwhile');
+    await tester.pump();
+    hold.complete();
+    server.holdCommands = null;
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.widget<TextField>(composer).controller!.text,
+      'Second, typed meanwhile',
+    );
+    expect(find.textContaining('Unrecognized key'), findsNothing);
+    final refused = c.outgoing('offline').single;
+    expect(refused.state, SuperTabOutgoingState.refused);
+    expect(refused.text, 'First');
+    expect(refused.error, unavailable);
+
+    server.refuse = null;
+    await c.retryOutgoing(refused);
+    await tester.pumpAndSettle();
+    final sent = lastCommand(server);
+    expect(sent['text'], 'First');
+    expect(sent.containsKey('newSession'), isFalse);
+  });
+
+  testSessions('a refusal that lands after another thread opened changes only '
+      'its own thread', (tester) async {
+    final server = buddyChat();
+    final c = await show(tester, server);
+    await openThread(tester, c, 'message-1');
+    refuseAsOlderServer(server);
+    final hold = server.holdCommands = Completer<void>();
+    await tester.tap(newSession);
+    await tester.enterText(composer, 'For the first thread');
+    await tester.pump();
+    await tester.tap(send);
+    await tester.pump();
+    await openThread(tester, c, 'message-2');
+    hold.complete();
+    server.holdCommands = null;
+    await tester.pumpAndSettle();
+    // The open thread's box is left as it was, and says nothing of another's.
+    expect(tester.widget<TextField>(composer).controller!.text, isEmpty);
+    expect(threadError, findsNothing);
+    expect(c.threadDraft('message-2'), isEmpty);
+    // Its own thread has the text back.
+    await openThread(tester, c, 'message-1');
+    expect(
+      tester.widget<TextField>(composer).controller!.text,
+      'For the first thread',
+    );
+  });
+
+  testSessions('access lost while a New session reply is on its way leaves '
+      'nothing behind', (tester) async {
+    final server = buddyChat();
+    final c = await show(tester, server);
+    await openThread(tester, c, 'message-1');
+    refuseAsOlderServer(server);
+    final hold = server.holdCommands = Completer<void>();
+    await tester.tap(newSession);
+    await tester.enterText(composer, 'Private words');
+    await tester.pump();
+    await tester.tap(send);
+    await tester.pump();
+    c.revokeAccess('You no longer have access to this Swarm.');
+    hold.complete();
+    server.holdCommands = null;
+    await tester.pumpAndSettle();
+    expect(c.threadDraft('message-1'), isEmpty);
+    expect(c.outgoing('offline'), isEmpty);
+    expect(find.text('Private words'), findsNothing);
+    expect(find.textContaining('Unrecognized key'), findsNothing);
+  });
+
+  testSessions('a message the server refuses for its form says so plainly '
+      'under it, never in the server\'s own words', (tester) async {
+    final server = buddyChat();
+    final c = await show(tester, server);
+    server
+      ..refuse = {
+        'code': 'VALIDATION_ERROR',
+        'message': 'command: Unrecognized key: "agentOnly"',
+      }
+      ..refuseStatus = 400;
+    c.setDraft('offline', 'In the main chat');
+    await c.send();
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Unrecognized key'), findsNothing);
+    expect(find.text('Not sent'), findsOneWidget);
+    expect(
+      find.text("The server couldn't take this message yet."),
+      findsOneWidget,
+    );
+  });
+
+  testSessions('a refusal saved with the server\'s own words before this '
+      'version shows plainly', (tester) async {
+    final server = buddyChat();
+    final c = await show(
+      tester,
+      server,
+      initial: {
+        'tabId': 'tab',
+        'accountId': 'owner',
+        'refused': {
+          'offline': [
+            {
+              'operationId': 'op-old',
+              'command': {
+                'type': 'message.send',
+                'conversationId': 'offline',
+                'text': 'Saved before',
+                'replyTo': null,
+                'recipientIds': <String>[],
+              },
+              'mentions': <String, String>{},
+              'error': rawRefusal,
+            },
+          ],
+        },
+      },
+    );
+    await tester.pumpAndSettle();
+    expect(c.outgoing('offline').single.text, 'Saved before');
+    expect(find.text('Not sent'), findsOneWidget);
+    expect(find.textContaining('Unrecognized key'), findsNothing);
+    expect(
+      find.text("The server couldn't take this message yet."),
+      findsOneWidget,
+    );
   });
 
   testSessions('Ending… cannot be pressed again while its end is on its way', (

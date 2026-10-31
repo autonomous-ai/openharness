@@ -8,7 +8,7 @@ import base from './vitest.config.js'
 const IN_CORE = ['adoption', 'agents', 'attention', 'cards', 'deliveries', 'launch', 'role', 'teamApps', 'teamPurge', 'terminal'].map(name => `src/superTabs/inCore/${name}.ts`)
 const FILES = ['src/superTabs/route.ts', 'src/superTabs/routeCommand.ts', 'src/superTabs/routePlugins.ts', 'src/superTabs/shortCommand.ts', ...IN_CORE,
   // The routing plug-ins (routePlugins.ts), one line each.
-  'src/superTabs/routeMeasured.ts',
+  'src/superTabs/routeMeasured.ts', 'src/superTabs/windowPull.ts',
 ]
 export default defineConfig({
   test: {

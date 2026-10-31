@@ -90,6 +90,10 @@ export interface Derived {
   /** Present, and false, only in a Swarm Harness Team accounts are not tried in yet (machines.ts teamAccountSwarm): this
    *  Mac's daemon and Desktop then offer no team account for it. Absent is every older backend's "yes". */
   teamAccounts?: false
+  /** This server takes a thread reply's `newSession` (buddySessions.ts): Desktop offers New session only where it is
+   *  true and the Buddy's machine reports it can run sessions. Absent from an older backend, whose strict schema refuses
+   *  the field. */
+  threadSessions?: true
 }
 export interface OtherProjectWorkView {
   conversationId: string; projectName: string; title: string; owns: string[]; status: WorkStatus; agentName: string; pr: string | null

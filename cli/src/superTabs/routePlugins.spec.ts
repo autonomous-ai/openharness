@@ -1,7 +1,7 @@
 // cli/src/superTabs/routePlugins.spec.ts
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RoutePlugin } from './route.js'
-import { makePlugins, MAKER_TIMEOUT_MS, type PluginInput, type PluginMaker } from './routePlugins.js'
+import { makePlugins, MAKER_TIMEOUT_MS, ROUTE_PLUGIN_MAKERS, type PluginInput, type PluginMaker } from './routePlugins.js'
 
 const input: PluginInput = { conversationId: 'g1', assessment: { difficulty: 'low', risk: 'low', size: 'small', why: 'x', needs: { tools: [], devices: [] } },
   read: { tab: {} }, catalog: { models: [], grid: { strength: 1, models: [] } }, history: Promise.resolve(null), request: async () => ({ ok: true }) }
@@ -12,7 +12,9 @@ const skipped = (name: string, why: string) => `The routing plug-in "${name}" wa
 afterEach(() => { vi.useRealTimers() })
 
 describe('makePlugins', () => {
-  it('an empty list makes no plug-ins and no warnings', async () => {
+  it('names every maker, and an empty list makes no plug-ins and no warnings', async () => {
+    // Each piece adds its own maker (windowPull.spec.ts checks piece 6's is listed), so this pins no list.
+    expect(ROUTE_PLUGIN_MAKERS.every(m => !!m.name && typeof m.make === 'function')).toBe(true)
     expect(await makePlugins([], input)).toEqual({ plugins: [], warnings: [] })
   })
   it('gives each maker the task, the backend read, the shared history and the request, and keeps the makers\' order whatever order they finish in', async () => {
