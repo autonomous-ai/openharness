@@ -102,6 +102,7 @@ import '../super_tabs/backend_transport.dart';
 import '../super_tabs/client.dart';
 import '../super_tabs/controller.dart';
 import '../super_tabs/join_machine.dart';
+import '../super_tabs/identity.dart' show superTabMachineName;
 import '../super_tabs/view_store.dart';
 import '../super_tabs/notifications.dart' show superTabMentionNotice;
 import '../measurement/setup_preference_store.dart';
@@ -1368,6 +1369,24 @@ class AppNotifier extends ChangeNotifier {
   /// account. Only meaningful once [status] has left
   /// setup — [signedIn] is presumed true until the CLI has been asked.
   bool get signInStepNext => _signInStep && viewer == null && !signedIn;
+
+  /// Whether Harness was on this computer before this launch, so the sign-in
+  /// page can say it is set up rather than look like a first run (Scholes's
+  /// end-to-end test of 1.3.44, finding 5). False on the launch that first
+  /// installed it, the tour's.
+  bool get harnessSetUpBefore => !_firstHarnessLaunch;
+  bool _firstHarnessLaunch = false;
+
+  /// This computer as the sign-in page names it: its own row (the daemon's
+  /// while signed out), else its host name, without Bonjour's `.local`.
+  /// Null when neither is known. Only ever this computer's own name: no
+  /// account, and no other machine.
+  String? get thisComputerName {
+    final row = localMachineState?.machine.name?.trim();
+    final name = row != null && row.isNotEmpty ? row : localHostnameOrNull();
+    if (name == null || name.isEmpty) return null;
+    return superTabMachineName(name);
+  }
 
   /// Whether RootShell shows the sign-in step in place of the workspace: from
   /// the moment setup (and its tour) hands over, until an account arrives.
@@ -6659,6 +6678,7 @@ class AppNotifier extends ChangeNotifier {
       // box and installed OpenCode in its first pane, about 90 s to a first result against 55 s on a Mac.
       // They wait for what setup brings until it is ready ([_continueAfterEnvironmentReady]).
       if (firstHarness) {
+        _firstHarnessLaunch = true;
         agentPrefetch?.setupRunning = true;
         agentPrefetch?.start();
         // The tour's final line announces sign-in: see [signInStepShowing].
@@ -10212,10 +10232,36 @@ class AppNotifier extends ChangeNotifier {
     }
     if (localEndpoint != null) _updateLocalProjectSnapshot(localEndpoint);
     _autoConnectAndLoadMachines();
+    _startBackgroundRereads();
+    notifyListeners();
+    // A grant that has just arrived places what waited for it (R2).
+    _placeSharedPanesSoon();
+  }
+
+  /// The background re-reads a signed-in window keeps: each connected
+  /// machine's agent sync and the machine list's safety net. A guest keeps
+  /// none (an unattended computer on the sign-in page goes idle); the local
+  /// service itself stays supervised. Sign-out cancels them in
+  /// [_clearAccountWorkspace], and sign-in starts them here again.
+  void _startBackgroundRereads() {
+    if (_disposed || isGuest) return;
+    for (final machine in machineStates.values) {
+      if (machine.connectionStatus == ConnectionStatus.connected) {
+        _startAgentSyncTimer(machine.machine.machineId);
+      }
+    }
     // The list is pushed (`machines_changed`); this only catches a missed push.
     _sharingDiscoveryTimer ??= Timer.periodic(machineListSafetyNetInterval, (
-      _,
+      timer,
     ) {
+      // Belt and braces: sign-out cancels it, and a guest never arms it.
+      if (isGuest) {
+        timer.cancel();
+        if (identical(_sharingDiscoveryTimer, timer)) {
+          _sharingDiscoveryTimer = null;
+        }
+        return;
+      }
       // The desk is pushed too, and a missed desk push is caught here as well:
       // one small GET, and an unchanged revision applies nothing.
       if (!_disposed &&
@@ -10234,9 +10280,6 @@ class AppNotifier extends ChangeNotifier {
       }
       unawaited(_rereadMachinesInBackground(pushed: false));
     });
-    notifyListeners();
-    // A grant that has just arrived places what waited for it (R2).
-    _placeSharedPanesSoon();
   }
 
   /// The inventory has answered, and answered for now: loaded, not loading,
@@ -10588,6 +10631,9 @@ class AppNotifier extends ChangeNotifier {
   }
 
   void _startAgentSyncTimer(String machineId) {
+    // A guest asks nothing on a timer: an unattended computer on the sign-in
+    // page must go idle. Sign-in starts it ([_startBackgroundRereads]).
+    if (isGuest) return;
     if (_agentSyncTimers.containsKey(machineId)) return;
     _agentSyncTimers[machineId] = Timer.periodic(agentSyncInterval, (_) {
       final machine = machineStates[machineId];
@@ -18774,6 +18820,52 @@ class AppNotifier extends ChangeNotifier {
   }
 
   /// Keep a group member visible while its terminal is unavailable.
+  /// Takes pane [paneId] out of Swarm tab [swarmId] only: one of the person's
+  /// own panes a Personal project showed behind its [term]
+  /// (super_tabs/personal_projects.dart). The tab it lives in keeps it and its
+  /// session, and nothing is remembered as closed.
+  Future<void> releaseSuperTabView(String swarmId, int paneId) async {
+    final tab = swarms
+        .where((s) => s.id == swarmId && s.isSuperTab)
+        .firstOrNull;
+    final pane = tab?.panes.where((p) => p.id == paneId).firstOrNull;
+    if (tab == null || pane == null || _disposed) return;
+    final wasFocused = identical(activeSwarm, tab) && focusedPaneId == paneId;
+    tab.remove(pane);
+    _settlePins(tab);
+    _persistLayout();
+    selectedMachineId = focusedPane?.machineId;
+    if (wasFocused) _announceAppFocus();
+    notifyListeners();
+    if (!allPanes.contains(pane)) await _detachSession(pane, sendClose: true);
+  }
+
+  /// Swarm tab [swarmId] lays out its panes as [source] does: a Personal
+  /// project's panes that are exactly one tab's keep that tab's split sizes.
+  void copySuperTabLayout(String swarmId, Swarm source) {
+    final tab = swarms
+        .where((s) => s.id == swarmId && s.isSuperTab)
+        .firstOrNull;
+    if (tab == null || _disposed || tab.panes.length != source.panes.length) {
+      return;
+    }
+    final count = '${tab.panes.length}:';
+    tab.presets.remove(tab.panes.length);
+    if (source.presets[source.panes.length] case final preset?) {
+      tab.presets[tab.panes.length] = preset;
+    }
+    tab.paneSizes.removeWhere((key, _) => key.startsWith(count));
+    for (final MapEntry(:key, :value) in source.paneSizes.entries) {
+      if (key.startsWith(count)) tab.paneSizes[key] = value;
+    }
+    final arranged = source.arrangedKey?.startsWith(count) == true;
+    tab.arranged = arranged ? source.arranged : null;
+    tab.arrangedKey = arranged ? source.arrangedKey : null;
+    tab.gridColumns = source.gridColumns;
+    _persistLayout();
+    notifyListeners();
+  }
+
   void reserveSuperTabPane(String swarmId, String machineId, String harnessId) {
     final tab = swarms
         .where((s) => s.id == swarmId && s.superTabId != null)

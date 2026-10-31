@@ -1012,6 +1012,10 @@ class ConversationServer {
           ],
         );
         messages.last['replyTo'] = command['replyTo'];
+        // The people it tags, as the backend keeps them (commands.ts).
+        if (command['mentions'] case final List tagged) {
+          messages.last['mentions'] = [...tagged];
+        }
         // A reply joins its message's thread at the root; one to a message
         // written before threads stays inline (backend commands.ts).
         final target = messages

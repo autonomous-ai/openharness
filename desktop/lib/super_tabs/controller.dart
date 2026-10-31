@@ -681,6 +681,10 @@ class SuperTabController extends ChangeNotifier {
   final _threadBefore = <String, Map<String, dynamic>>{};
   final _threadDrafts = <String, String>{};
 
+  /// The people and agents picked with `@` in each thread's reply box, by its
+  /// conversation and root, as [_mentions] holds the chat's own.
+  final _threadMentions = <(String, String), Map<String, String>>{};
+
   /// The thread open beside the chat.
   ({String conversationId, String root})? openedThread;
   final _attachments = <String, HarnessAttachments>{};
@@ -943,6 +947,10 @@ class SuperTabController extends ChangeNotifier {
         .where((agent) => group.agentIds.contains(agent.id))
         .toList();
   }
+
+  /// Whether [conversationId]'s terminals are open as a group ([term]).
+  bool groupTerminalsOpen(String conversationId) =>
+      !accessRevoked && !devicesSelected && _terminals[conversationId] == '*';
 
   void selectGroupTerminals(String conversationId) {
     if (_disposed ||
@@ -1287,6 +1295,7 @@ class SuperTabController extends ChangeNotifier {
     _uploadErrors.removeWhere(
       (key, _) => key is (String, String) && gone(key.$1),
     );
+    _threadMentions.removeWhere((key, _) => gone(key.$1));
     if (openedThread case final open? when gone(open.conversationId)) {
       openedThread = null;
     }
@@ -1331,7 +1340,30 @@ class SuperTabController extends ChangeNotifier {
   }
 
   String threadDraft(String root) => _threadDrafts[root] ?? '';
-  void setThreadDraft(String root, String text) => _threadDrafts[root] = text;
+  void setThreadDraft(String root, String text) {
+    _threadDrafts[root] = text;
+    // A tag the text no longer says is no longer picked.
+    for (final MapEntry(key: thread, value: tags) in _threadMentions.entries) {
+      if (thread.$2 == root) {
+        tags.removeWhere((_, token) => !containsMention(text, token));
+      }
+    }
+    _threadMentions.removeWhere((_, tags) => tags.isEmpty);
+  }
+
+  /// The tags picked in the reply box of [root]'s thread in [conversationId].
+  Map<String, String> threadMentions(String conversationId, String root) =>
+      Map.unmodifiable(_threadMentions[(conversationId, root)] ?? const {});
+
+  /// [id] picked as [token] in the open thread's reply box, while its draft
+  /// says it.
+  void threadMention(String id, String token) {
+    final open = openedThread;
+    if (open == null || accessRevoked) return;
+    if (!containsMention(threadDraft(open.root), token)) return;
+    (_threadMentions[(open.conversationId, open.root)] ??= {})[id] = token;
+    _changed();
+  }
 
   /// How many pages a thread reads when it opens; past them "Show earlier
   /// replies" reads on, a page at a time.
@@ -1443,10 +1475,27 @@ class SuperTabController extends ChangeNotifier {
         _pending != null) {
       return null;
     }
-    final ids = await _uploadAll(open.conversationId, owner, (
-      open.conversationId,
-      open.root,
-    ));
+    final thread = (open.conversationId, open.root);
+    // The tags as picked when sent: the box may take new ones meanwhile.
+    final picked = Map<String, String>.of(_threadMentions[thread] ?? const {});
+    final (:tagged, :addressed) = _tagsSaid(picked, text);
+    final failure = addressed.any((id) => !selected!.agentIds.contains(id))
+        ? 'A mentioned agent is no longer in this conversation. Remove its mention or choose another agent.'
+        // Only its own session hears a session's thread (backend
+        // routeBuddySession): another agent's tag there would be refused.
+        : addressed.isNotEmpty &&
+              (newSession || threadSession(open.root) != null)
+        ? 'Only this thread\'s session hears a reply here. Remove the agent\'s mention.'
+        : null;
+    if (failure != null) {
+      _failOperation(
+        failure,
+        command: {'conversationId': open.conversationId, 'replyTo': open.root},
+      );
+      _changed();
+      return null;
+    }
+    final ids = await _uploadAll(open.conversationId, owner, thread);
     if (ids == null) return null;
     final before = _pending;
     final operationId = superTabOperationId();
@@ -1455,16 +1504,19 @@ class SuperTabController extends ChangeNotifier {
       'conversationId': open.conversationId,
       'text': text,
       'replyTo': open.root,
-      'recipientIds': const <String>[],
+      'recipientIds': addressed,
+      if (tagged.isNotEmpty) 'mentions': tagged,
       // A session's thread stays in the thread: never also sent.
       if (alsoSend && !newSession) 'alsoSend': true,
       if (newSession) 'newSession': true,
       if (ids.isNotEmpty) 'attachmentIds': ids,
     });
     if (_pending case final pending? when !identical(pending, before)) {
+      _sendingMentions[pending['operationId'] as String] = picked;
       // Only a draft still holding what went: more may have been typed since.
       if (_threadDrafts[open.root]?.trim() == text) {
         _threadDrafts.remove(open.root);
+        _threadMentions.remove(thread);
       }
       onSending?.call();
       _changed();
@@ -1509,6 +1561,9 @@ class SuperTabController extends ChangeNotifier {
       }
     } else {
       _threadDrafts[root] = text;
+      if (refused.mentions.isNotEmpty) {
+        _threadMentions[(conversationId, root)] = refused.mentions;
+      }
     }
     unawaited(
       _persist().catchError((Object _) {
@@ -2245,6 +2300,22 @@ class SuperTabController extends ChangeNotifier {
       (_, token) => !containsMention(value, token),
     );
     _saveSoon();
+  }
+
+  /// The tags of [picked] that [text] still says: a person's is a tag, an
+  /// agent's makes it a recipient.
+  ({List<String> tagged, List<String> addressed}) _tagsSaid(
+    Map<String, String> picked,
+    String text,
+  ) {
+    final said = picked.entries
+        .where((entry) => containsMention(text, entry.value))
+        .map((entry) => entry.key);
+    bool isPerson(String id) => snapshot?.people.any((p) => p.id == id) == true;
+    return (
+      tagged: said.where(isPerson).toList(),
+      addressed: said.where((id) => !isPerson(id)).toList(),
+    );
   }
 
   static bool containsMention(String text, String token) =>
@@ -3863,15 +3934,9 @@ class SuperTabController extends ChangeNotifier {
             (files.isNotEmpty || newSession || !canQueueText))) {
       return null;
     }
-    // A tag the text still says: an agent's is a recipient, a person's a tag.
-    final said = mentions(selectedId).entries
-        .where((entry) => containsMention(text, entry.value))
-        .map((entry) => entry.key);
-    bool isPerson(String id) => snapshot?.people.any((p) => p.id == id) == true;
-    final tagged = said.where(isPerson).toList();
-    final addressed = recipients.isEmpty
-        ? said.where((id) => !isPerson(id)).toList()
-        : recipients;
+    final said = _tagsSaid(mentions(selectedId), text);
+    final tagged = said.tagged;
+    final addressed = recipients.isEmpty ? said.addressed : recipients;
     if (addressed.any((id) => !selected!.agentIds.contains(id))) {
       _failOperation(
         'A mentioned agent is no longer in this conversation. Remove its mention or choose another agent.',

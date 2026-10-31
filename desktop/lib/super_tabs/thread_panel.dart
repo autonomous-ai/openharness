@@ -9,6 +9,7 @@ import '../shared/widgets/app_icon_button.dart';
 import '../state/harness_attachments.dart';
 import '../widgets/desktop_chrome.dart';
 import 'buddy_sessions.dart';
+import 'composer_tags.dart';
 import 'composer_toggle.dart';
 import 'reply_box.dart';
 import 'controller.dart';
@@ -26,6 +27,7 @@ class SuperTabThreadPanel extends StatefulWidget {
     required this.row,
     required this.outgoing,
     this.sessionActivity,
+    this.machineName,
   });
 
   final SuperTabController controller;
@@ -40,6 +42,9 @@ class SuperTabThreadPanel extends StatefulWidget {
   /// What a thread's own Buddy session is doing, as this computer reads it;
   /// without it, what the Swarm alone says.
   final SuperTabSessionActivity? sessionActivity;
+
+  /// A machine's name, said beside an agent `@` offers.
+  final String Function(String machineId)? machineName;
 
   @override
   State<SuperTabThreadPanel> createState() => _SuperTabThreadPanelState();
@@ -64,8 +69,19 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
   // The newest row (reply or one on its way), as built and as last measured:
   // earlier replies arriving above do not change it.
   String? _newest, _newestMeasured;
+  // `@` in the reply box, as in the chat's (composer_tags.dart): the choice
+  // selected, and the text before the caret where the list was dismissed.
+  final _tagIndex = ValueNotifier(0);
+  final _tagDismissed = ValueNotifier<String?>(null);
+  final _tagRows = List.generate(superTabCompletionLimit, (_) => GlobalKey());
+  late final _tagBackspace = SuperTabTagBackspace(
+    () => c.threadMentions(_conversationId, widget.root).values,
+  );
 
   SuperTabController get c => widget.controller;
+
+  /// The conversation this thread is in.
+  String get _conversationId => c.openedThread?.conversationId ?? c.selectedId;
 
   @override
   void initState() {
@@ -89,6 +105,8 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
       _composer.text = c.threadDraft(widget.root);
       _alsoSend = false;
       _newSession = false;
+      _tagIndex.value = 0;
+      _tagDismissed.value = null;
     }
   }
 
@@ -97,6 +115,8 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     _scroll.dispose();
     _composer.dispose();
     _focus.dispose();
+    _tagIndex.dispose();
+    _tagDismissed.dispose();
     super.dispose();
   }
 
@@ -193,7 +213,54 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
   /// The box was edited: keep it as this thread's draft.
   void _edited(String text) {
     c.setThreadDraft(widget.root, text);
+    _tagIndex.value = 0;
+    _tagDismissed.value = null;
     setState(() {});
+  }
+
+  /// The `@` tag typed at the caret.
+  ({int start, int end, String query})? get _tagAt => superTabTagAtCaret(
+    _composer.value,
+    dismissed: _tagDismissed.value,
+    tags: c.threadMentions(_conversationId, widget.root).values,
+  );
+
+  /// Who `@` offers in this reply: whom the chat's box offers, except agents
+  /// where the thread's own Buddy session alone hears the reply.
+  List<SuperTabComposerChoice> get _tagChoices {
+    final group = c.selected;
+    if (!_writable || group == null) return const [];
+    final at = _tagAt;
+    if (at == null) return const [];
+    return superTabTagChoices(
+      c,
+      group,
+      at.query,
+      machineName: widget.machineName ?? (_) => '',
+      choose: _chooseTag,
+      agents: !_startsSession && c.threadSession(widget.root) == null,
+    );
+  }
+
+  void _chooseTag(String id, String name) {
+    final at = _tagAt;
+    if (at == null) return;
+    final token = '@$name';
+    final value = superTabInsertTag(_composer.value, at, token);
+    c.setThreadDraft(widget.root, value.text);
+    c.threadMention(id, token);
+    _composer.value = value;
+    _tagIndex.value = 0;
+    _focus.requestFocus();
+    setState(() {});
+  }
+
+  void _moveTag(int index) {
+    _tagIndex.value = index;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final row = _tagRows[index].currentContext;
+      if (mounted && row != null) Scrollable.ensureVisible(row, alignment: .5);
+    });
   }
 
   Future<void> _send() async {
@@ -397,6 +464,28 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  ListenableBuilder(
+                    listenable: Listenable.merge([
+                      _composer,
+                      _tagIndex,
+                      _tagDismissed,
+                    ]),
+                    builder: (context, _) {
+                      final choices = _tagChoices;
+                      if (choices.isEmpty) return const SizedBox.shrink();
+                      return Padding(
+                        padding: const EdgeInsets.only(
+                          bottom: grid.AppDesktop.controlGap,
+                        ),
+                        child: SuperTabCompletionList(
+                          listKey: const ValueKey('super-thread-completions'),
+                          choices: choices,
+                          index: _tagIndex.value,
+                          rowKeys: _tagRows,
+                        ),
+                      );
+                    },
+                  ),
                   _composerBox(),
                   // Its place is kept while New session is offered, so the
                   // box never moves as the choice is toggled.
@@ -440,6 +529,23 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     onEdited: _edited,
     onSend: () => unawaited(_send()),
     options: _choices(_writable),
+    // `@` in the reply: the open completion list takes its keys first.
+    onKey: (event) {
+      final composing = _composer.value.composing;
+      return _focus.hasFocus && !(composing.isValid && !composing.isCollapsed)
+          ? superTabCompletionKey(
+              event,
+              choices: () => _tagChoices,
+              index: _tagIndex.value,
+              move: _moveTag,
+              dismiss: () => _tagDismissed.value = _composer.text.substring(
+                0,
+                _composer.selection.baseOffset,
+              ),
+            )
+          : null;
+    },
+    inputFormatters: [_tagBackspace],
   );
 
   /// The send row's options, left of attach and send, on one line at any

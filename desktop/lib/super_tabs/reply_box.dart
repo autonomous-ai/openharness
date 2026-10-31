@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -30,6 +31,8 @@ class SuperTabReplyBox extends StatelessWidget {
     required this.onEdited,
     required this.onSend,
     this.options,
+    this.onKey,
+    this.inputFormatters = const [],
     this.surfaceKey = const ValueKey('super-thread-composer-surface'),
     this.fieldKey = const ValueKey('super-thread-composer'),
     this.sendKey = const ValueKey('super-thread-send'),
@@ -49,6 +52,11 @@ class SuperTabReplyBox extends StatelessWidget {
   final ValueChanged<String> onEdited;
   final VoidCallback onSend;
   final Widget? options;
+
+  /// Sees each key first, such as an open @ completion list's arrows and
+  /// Enter; a non-null answer is the key's.
+  final KeyEventResult? Function(KeyEvent event)? onKey;
+  final List<TextInputFormatter> inputFormatters;
   final Key surfaceKey, fieldKey, sendKey;
 
   @override
@@ -84,6 +92,7 @@ class SuperTabReplyBox extends StatelessWidget {
             SuperTabComposerChips(controller: controller, files: files),
             Focus(
               onKeyEvent: (_, event) {
+                if (onKey?.call(event) case final handled?) return handled;
                 switch (composerEnter(
                   event,
                   focused: focus.hasFocus,
@@ -111,6 +120,7 @@ class SuperTabReplyBox extends StatelessWidget {
                   minLines: 1,
                   maxLines: 6,
                   maxLength: kComposerMaxLength,
+                  inputFormatters: inputFormatters,
                   keyboardType: TextInputType.multiline,
                   style: DesktopChrome.text(),
                   decoration: InputDecoration(
