@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { ENGINES } from '../engines/types.js'
 import { basename, dirname, join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { BUDDY_ENGINE_HOMES, allowBuddyReads, engineHomesOutsideDefaults, buddyApprovalsOf, buddyGuardSource, buddyLaunchWide, buddySandboxSettings, buddyWideOf, grantBuddyWide, hasBuddyApprovals,
+import { BUDDY_ENGINE_HOMES, markBuddyNarrow, allowBuddyReads, engineHomesOutsideDefaults, buddyApprovalsOf, buddyGuardSource, buddyLaunchWide, buddySandboxSettings, buddyWideOf, grantBuddyWide, hasBuddyApprovals,
   judgeBuddyApprovals, recordBuddyApprovals, revokeBuddyWide, writeBuddyAccount } from './buddyGuard.js'
 
 // Wide mode (docs/specs/2026-10-30-buddy-read-access.md): a Buddy on its person's own machine also reads outside its
@@ -554,6 +554,19 @@ describe('the launch\'s wide mode and sandbox', () => {
     ['Linux without bubblewrap', { platform: 'linux' as NodeJS.Platform, hasBwrap: false }],
   ])('keeps the folder only on %s', (_, change) => {
     expect(buddyLaunchWide(repo, { ...deps, ...change })).toBeNull()
+  })
+
+  // Security review 1 of #2436: a Buddy of one project launches with no wide guard at all.
+  it('keeps the folder only for a Buddy of one project, its folder marked by its host before launch, a -2 name included', () => {
+    const narrow = join(dirname(repo), 'super-tab-narrow-start')
+    mkdirSync(narrow, { recursive: true })
+    markBuddyNarrow(basename(narrow), dataDir)
+    expect(buddyLaunchWide(narrow, deps)).toBeNull()
+    const taken = `${narrow}-2`
+    mkdirSync(taken, { recursive: true })
+    expect(buddyLaunchWide(taken, deps)).toBeNull()
+    // Another folder, unmarked, still gets it.
+    expect(buddyLaunchWide(repo, deps)).not.toBeNull()
   })
 
   it('turns wide mode on for Linux with bubblewrap', () => {

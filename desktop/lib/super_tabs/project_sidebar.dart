@@ -30,6 +30,22 @@ import 'task_status.dart';
 import 'workgroup_name.dart';
 import 'project_github.dart';
 
+/// The reader's one Buddy for the whole Swarm, listed first among the projects
+/// as a channel (Dee, 10-31).
+const kSwarmBuddyChannel = 'buddy';
+
+/// What the # buddy row draws before the reader's one Buddy chat is opened: a
+/// row with nothing in it, which opens the chat on the server when clicked.
+final _unopenedSwarmBuddyChat = SuperTabConversation.fromJson(const {
+  'id': '',
+  'kind': 'swarm-buddy',
+  'title': kSwarmBuddyChannel,
+  'brief': '',
+  'leadId': null,
+  'archived': false,
+  'agentIds': <String>[],
+});
+
 class ProjectSidebar extends StatelessWidget {
   const ProjectSidebar({
     super.key,
@@ -266,6 +282,8 @@ class ProjectSidebar extends StatelessWidget {
   Widget _drawRow(
     SuperTabConversation group, {
     SuperTabProject? project,
+    // A channel that is no project: # buddy, the reader's one Buddy chat.
+    String? label,
     String? key,
     required bool selected,
     required bool waiting,
@@ -273,6 +291,9 @@ class ProjectSidebar extends StatelessWidget {
     int badge = 0,
     SuperTabConversation? buddyChat,
     String? selectedProjectId,
+    Widget? trailing,
+    VoidCallback? onTap,
+    bool tappable = true,
   }) {
     final expanded =
         project != null && controller.expandedProjects.contains(project.id);
@@ -310,7 +331,7 @@ class ProjectSidebar extends StatelessWidget {
                 expanded: expanded,
                 child: InkWell(
                   key: ValueKey(key ?? 'super-group-${group.id}'),
-                  onTap: () => onSelect(group.id),
+                  onTap: !tappable ? null : onTap ?? () => onSelect(group.id),
                   hoverColor: Colors.transparent,
                   focusColor: grid.AppSurface.hoverFill,
                   borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
@@ -319,7 +340,9 @@ class ProjectSidebar extends StatelessWidget {
                       SizedBox(width: SuperTabSectionHeading.indentFor(0)),
                       SizedBox(
                         width: _iconColumn,
-                        child: project != null ? _channelMark() : null,
+                        child: project != null || label != null
+                            ? _channelMark()
+                            : null,
                       ),
                       Expanded(
                         child: Semantics(
@@ -329,9 +352,10 @@ class ProjectSidebar extends StatelessWidget {
                           selected: selected,
                           child: _withTaskStatus(
                             group,
-                            task: project == null,
+                            task: project == null && label == null,
                             (status) => Tooltip(
                               message:
+                                  label ??
                                   project?.name ??
                                   [
                                     SuperTabWorkgroupName.plain(group),
@@ -349,7 +373,14 @@ class ProjectSidebar extends StatelessWidget {
                                   child: Row(
                                     children: [
                                       Expanded(
-                                        child: project == null
+                                        child: label != null
+                                            ? Text(
+                                                label,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: style,
+                                              )
+                                            : project == null
                                             ? Column(
                                                 crossAxisAlignment:
                                                     CrossAxisAlignment.start,
@@ -441,9 +472,9 @@ class ProjectSidebar extends StatelessWidget {
                                       ),
                                     ),
                                   )
-                                : project == null
+                                : project == null && label == null
                                 ? SuperTabTaskMark(group)
-                                : null,
+                                : trailing,
                           ),
                         ),
                       ),
@@ -662,6 +693,35 @@ class ProjectSidebar extends StatelessWidget {
           : controller.saving || controller.hasPendingAction
           ? null
           : () => _openBuddyChat(project.id),
+    );
+  }
+
+  /// The reader's one Buddy for the whole Swarm, the first row under Projects
+  /// (Dee, 10-31; spec 2026-10-31-one-buddy-per-swarm): a channel like the
+  /// projects, `# buddy`, bold with new lines, with its activity mark on the
+  /// right and no chevron. Before its chat is opened the row opens it, as the
+  /// Buddies section's rows did; a viewer, who opens nothing, sees it only
+  /// once they have one.
+  Widget? _swarmBuddyRow() {
+    const key = SuperTabController.kSwarmBuddyKey;
+    final chat = controller.buddyChat(key);
+    if (chat == null && !controller.canWrite) return null;
+    final agent = controller.buddy(key);
+    final busy = controller.saving || controller.hasPendingAction;
+    return _drawRow(
+      chat ?? _unopenedSwarmBuddyChat,
+      label: kSwarmBuddyChannel,
+      key: 'super-swarm-buddy',
+      selected:
+          chat != null &&
+          !devicesSelected &&
+          !notificationsSelected &&
+          controller.selectedId == chat.id,
+      waiting: false,
+      unread: chat != null && controller.unread(chat),
+      trailing: agent == null ? null : _buddyMark(agent),
+      onTap: chat == null ? () => _openBuddyChat(key) : null,
+      tappable: chat != null || !busy,
     );
   }
 
@@ -917,11 +977,15 @@ class ProjectSidebar extends StatelessWidget {
             collapsed: !controller.projectsGroupOpen,
             onToggleCollapsed: controller.toggleProjectsGroup,
           ),
-          if (controller.projectsGroupOpen)
+          if (controller.projectsGroupOpen) ...[
+            // One Buddy for the whole Swarm, pinned first (Dee, 10-31).
+            if (controller.oneBuddy) ?_swarmBuddyRow(),
             for (final (_, channel) in _channels(snapshot, reading)) channel,
+          ],
           const SizedBox(height: 16),
-          // Buddies replaced Chat with PM in every Swarm (Ken, 10-29).
-          ...[
+          // Buddies replaced Chat with PM in every Swarm (Ken, 10-29); where the
+          // server gives one Buddy for the whole Swarm, it is # buddy above.
+          if (!controller.oneBuddy) ...[
             SuperTabSectionHeading(
               'Buddies',
               onAdd:

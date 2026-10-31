@@ -1810,8 +1810,11 @@ describe('any agent of the project', () => {
     const { f, E } = project()
     f.invite()
     const told = f.run({ type: 'person.tell', personId: 'peer', text: 'Your fix is merged.' }, E)
-    const chat = f.state.conversations.find(c => c.kind === 'buddy')!
-    expect(told.messages).toEqual([expect.objectContaining({ conversationId: chat.id, text: 'Your fix is merged.', recipients: [] })])
+    // In their one Buddy chat, marked with its project, and in their older chat there for older apps (Dee, 10-31).
+    const swarm = f.state.conversations.find(c => c.kind === 'swarm-buddy')!, chat = f.state.conversations.find(c => c.kind === 'buddy')!
+    expect(told.messages).toEqual([
+      expect.objectContaining({ conversationId: swarm.id, text: 'Your fix is merged.', recipients: [], source: { kind: 'pm-line', projectId: chat.projectId } }),
+      expect.objectContaining({ conversationId: chat.id, text: 'Your fix is merged.', recipients: [] })])
     expect(() => f.run({ type: 'person.tell', personId: 'peer', text: 'Hello.' })).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
   })
 
@@ -3630,7 +3633,7 @@ describe('Lead mentions', () => {
     const { f, lead, secret } = swarm(), group = f.group(), worker = f.add('worker', 'owner', group)
     expect(f.run(send(group, ['peer'])).messages[0]!.mentions).toEqual(['peer'])
     expect(f.run(send(group, ['peer']), as(worker)).messages[0]!.mentions).toEqual(['peer'])
-    expect(() => f.run(send(group, ['owner']), as(secret.lead))).toThrow('This project is unavailable.')
+    expect(() => f.run(send(group, ['owner']), as(secret.lead))).toThrow('This conversation is unavailable.')
     expect(() => f.run(send(storeOldLeads(f.state), ['owner']), as(lead))).toThrow(expect.objectContaining({ code: 'LEADS_CONVERSATION_REMOVED' }))
   })
 

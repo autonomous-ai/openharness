@@ -41,10 +41,13 @@ afterAll(async () => {
   await replica?.stop()
 })
 
-/** A Swarm whose PM runs on the owner's Mac, peer a member whose Mac's host can run thread sessions (or not: `capable`). */
+/** A Swarm whose PM runs on the owner's Mac, peer a member whose Mac's host can run thread sessions (or not: `capable`, a host
+ *  that started their Buddy and then reports as an older Harness that runs no sessions). */
 async function swarm({ capable = true, maxAgents = 6, engine = 'claude' } = {}) {
   // A clock the test moves on, for the start timeouts a machine's report checks (liveness.ts).
   const clock = { now: Date.now() }, running: string[] = []
+  // A host that runs the one Buddy of a Swarm and its sessions (machines.ts SWARM_BUDDY_CAPABILITY, BUDDY_SESSION_CAPABILITY).
+  let capabilities = ['buddySessions', 'swarmBuddy']
   const store = new SuperTabStore(db, () => clock.now, { store: new MemoryAttachmentStore(), prefix: 'super-tabs', publicBase: 'https://cdn.example.test' })
   const tab = (await store.create(owner, randomUUID(), 'Sessions', 'public')).id
   const execute = (command: Command, user = owner, asAgentId?: string, hostMachineId?: string) =>
@@ -57,25 +60,29 @@ async function swarm({ capable = true, maxAgents = 6, engine = 'claude' } = {}) 
   /** peer-mac's report, as its host sends one every 15 seconds. */
   const report = () => store.observeMachine(peer, tab, 'peer-mac', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
     diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
-  quotas: [], tools: {}, runningHarnessIds: [...running], stoppedHarnessIds: [], ...(capable ? { capabilities: ['buddySessions'] } : {}) })
+  quotas: [], tools: {}, runningHarnessIds: [...running], stoppedHarnessIds: [], ...(capabilities.length ? { capabilities } : {}) })
   await report()
   const host = (command: Command) => execute(command, peer, undefined, 'peer-mac')
-  /** peer's main Buddy, added and started by peer-mac's host. */
-  const added = await execute({ type: 'buddy.create', projectId: 'lead', machineId: 'peer-mac', engine: 'claude' }, peer)
+  /** peer's main Buddy, their one Buddy of the Swarm in their Swarm chat (Dee, 10-31), added and started by peer-mac's host. */
+  const added = await execute({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude' }, peer)
   const chat = String(added.result.conversationId)
   await host({ type: 'agent.startDispatch', startId: String(added.result.startId) })
   const mainHarness = randomUUID()
   running.push(mainHarness)
   const main = String((await host({ type: 'agent.started', startId: String(added.result.startId), harnessId: mainHarness, configuration: { ...config, engine } })).result.agentId)
   await host({ type: 'agent.startSettled', startId: String(added.result.startId), warning: null })
+  if (!capable) {
+    capabilities = []
+    await report()
+  }
   /** peer's message in the main chat. */
   const say = async (text: string) => String((await execute({ type: 'message.send', conversationId: chat, text, replyTo: null, recipientIds: [] }, peer)).result.messageId)
   /** peer's reply in [root]'s thread, starting its session when `newSession`. */
   const reply = (root: string, text: string, extra: Partial<Extract<Command, { type: 'message.send' }>> = {}) =>
     execute({ type: 'message.send', conversationId: chat, text, replyTo: root, recipientIds: [], ...extra }, peer)
   /** Starts [root]'s session and its host launches it, as a running host does. */
-  const session = async (root: string, text = 'Measure prod CPU for the last day') => {
-    const sent = await reply(root, text, { newSession: true })
+  const session = async (root: string, text = 'Measure prod CPU for the last day', extra: Partial<Extract<Command, { type: 'message.send' }>> = {}) => {
+    const sent = await reply(root, text, { newSession: true, ...extra })
     const startId = String(sent.result.startId)
     await host({ type: 'agent.startDispatch', startId })
     const agentId = String((await host({ type: 'agent.started', startId, harnessId: randomUUID(), configuration: config })).result.agentId)
@@ -250,7 +257,7 @@ describe('a Buddy thread session', () => {
     const [a, b] = [await f.say('a'), await f.say('b')]
     const { agentId } = await f.session(a)
     const pending = String((await f.reply(b, 'pending', { newSession: true })).result.startId)
-    await f.execute({ type: 'buddy.remove', projectId: 'lead' }, peer)
+    await f.execute({ type: 'buddy.remove' }, peer)
     const read = await f.store.read(peer, f.tab)
     expect(read.state.agents.filter(x => x.id === agentId || x.id === f.main)).toEqual([])
     // Each thread says its session ended, so an app offers New session there and never a plain reply (security review 1).
@@ -312,18 +319,23 @@ describe('a Buddy thread session', () => {
     await expect(f.execute({ type: 'message.send', conversationId: f.chat, text: 'x', replyTo: mine, recipientIds: [], newSession: true }, owner))
       .rejects.toThrow('unavailable')
     await expect(f.reply('ffffffffffffffffffffffff', 'x', { newSession: true })).rejects.toMatchObject({ code: 'INVALID_REPLY' })
-    await f.execute({ type: 'buddy.remove', projectId: 'lead' }, peer)
+    await f.execute({ type: 'buddy.remove' }, peer)
     await expect(f.reply(mine, 'x', { newSession: true })).rejects.toMatchObject({ code: 'BUDDY_SESSION_NO_BUDDY' })
   })
 
-  it('proposes to the PM only for its person\'s ask in its own thread', async () => {
+  // In the one Buddy chat only a project session proposes, and only to its project's PM (spec 3); a plain session proposes
+  // nothing, as the main Buddy does.
+  it('proposes to the PM only from a project session, for its person\'s ask in its own thread', async () => {
     const f = await swarm()
-    const root = await f.say('Start here')
-    const { agentId, first } = await f.session(root)
+    const [root, plainRoot] = [await f.say('Start here'), await f.say('Plain topic')]
+    const { agentId, first } = await f.session(root, 'Measure prod CPU for the last day', { sessionProjectId: 'lead' })
+    const plain = await f.session(plainRoot, 'Ask the PM for it')
     const mainAsk = await f.say('Send the other thing to the PM')
-    const propose = (ownerMessageId: string) => f.execute({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId, goal: 'CPU fix',
-      scope: 'Backend', priority: 'normal' }, peer, agentId)
+    const propose = (ownerMessageId: string, as = agentId) => f.execute({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId, goal: 'CPU fix',
+      scope: 'Backend', priority: 'normal' }, peer, as)
+    await expect(propose(plain.first, plain.agentId)).rejects.toMatchObject({ code: 'BUDDY_PROPOSE_SESSION' })
     await expect(propose(mainAsk)).rejects.toMatchObject({ code: 'PROPOSAL_UNASKED' })
+    await expect(propose(plain.first)).rejects.toMatchObject({ code: 'PROPOSAL_UNASKED' })
     await expect(propose(first)).resolves.toBeTruthy()
   })
 

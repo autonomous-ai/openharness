@@ -175,8 +175,12 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
   /// One line, always the full wording.
   String get _alsoSendHint => '${_alsoSendLabels.first} as well as this thread';
 
+  // An older Buddy chat is kept to read: no thread reply there either (security review 1 of #2437).
   bool get _writable =>
-      c.canWrite && c.selected?.archived == false && !c.hasPendingAction;
+      c.canWrite &&
+      c.selected?.archived == false &&
+      !c.hasPendingAction &&
+      !c.isEarlierBuddyChat(c.selected);
 
   /// The thread's last session ended: a reply here must start a new one.
   bool get _sessionLocked =>
@@ -522,10 +526,16 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     text: _composer,
     focus: _focus,
     files: _files,
-    enabled: c.canWrite && c.selected?.archived == false,
+    enabled:
+        c.canWrite &&
+        c.selected?.archived == false &&
+        !c.isEarlierBuddyChat(c.selected),
     writable: _writable,
     busy: _busy,
     error: c.threadComposerError(c.selectedId, widget.root),
+    hint: c.isEarlierBuddyChat(c.selected)
+        ? 'This is an earlier chat, kept to read.'
+        : 'Reply',
     onEdited: _edited,
     onSend: () => unawaited(_send()),
     options: _choices(_writable),

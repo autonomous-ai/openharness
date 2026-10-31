@@ -28,7 +28,7 @@ function harnessIn(frames: PaneFrame[], pane: string, machineId: string): boolea
 
 const ELSEWHERE = 'From a harness, Swarm commands go to this computer\'s own Harness only: leave out --machine and --port, or give this computer\'s own.'
 
-const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status [--archived [PAGE]] | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | decisions [--answered] | costs [--days N] | post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | react GROUP MESSAGE_ID EMOJI OPERATION_ID [--off] | command OPERATION_ID JSON | propose OPERATION_ID JSON [--attach PATH]... | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | plan [JSON] | remove-machine MACHINE_ID [--yes] | set-agents MACHINE_ID COUNT | instructions [PROJECT] | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help'
+const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status [--project NAME] [--archived [PAGE]] | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | decisions [--answered] | costs [--days N] | post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | react GROUP MESSAGE_ID EMOJI OPERATION_ID [--off] | command OPERATION_ID JSON | propose OPERATION_ID JSON [--attach PATH]... | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | plan [JSON] | remove-machine MACHINE_ID [--yes] | set-agents MACHINE_ID COUNT | instructions [PROJECT] | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help'
 /** A Buddy's guard refuses a post or a proposal read from stdin (#2358): there its words would skip the secret check. A Buddy
  *  that followed the stdin form here was refused and tried again (#2360 took it out of a Buddy's help), so a Buddy's usage
  *  line and JSON hints never offer it. */
@@ -163,9 +163,18 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
   // `-` in the JSON's place reads it from stdin, where no shell quoting can split it. A terminal is refused at once, as post's
   // is: read, it waited 30 s for input that never comes and then said stdin was never closed (review of #2379).
   if (JSON_ACTIONS[positional[0]] && positional[2] === '-') positional[2] = jsonStdin(positional[0], stdin, terminal)
+  // A person's one Buddy reads one of its projects by its name (status --project NAME, spec 2026-10-31-one-buddy-per-swarm):
+  // taken out first, so it goes with status alone or with --archived.
+  let statusProject: string | undefined
+  const projectAt = positional[0] === 'status' ? positional.indexOf('--project') : -1
+  if (projectAt > 0) {
+    statusProject = positional[projectAt + 1]
+    if (!statusProject || statusProject.length > 200 || /[\u0000-\u001f]/.test(statusProject)) throw usageError()
+    positional.splice(projectAt, 2)
+  }
   const [action, first, second, third] = positional
   if (action !== 'help' && (!identifier(tabId) || (agentId && !identifier(agentId)))) throw usageError()
-  const payload: Record<string, unknown> = { action, tabId, agentId }
+  const payload: Record<string, unknown> = { action, tabId, agentId, ...(statusProject ? { project: statusProject } : {}) }
   if (action === 'messages' && identifier(first) && positional.length === 2) payload.conversationId = first
   // Older messages, a page before the cursor the last page named: its sequence and message id together, as messages may
   // share a sequence and a sequence alone skipped them (security review 2 of #2115). A Buddy reads a task's history this way.
@@ -441,7 +450,11 @@ async function proposalFiles(paths: string[], operationId: string, command: Reco
   if (!folder) throw new Error('Attach files to a proposal from your Buddy\'s own terminal.')
   const files = readInsideFolder(paths, folder)
   const state = object(object((await scoped({ action: 'status' })).value).state)
-  const projectId = (Array.isArray(state.conversations) ? state.conversations : []).map(object).find(c => c.id === target.conversationId)?.projectId
+  const chat = (Array.isArray(state.conversations) ? state.conversations : []).map(object).find(c => c.id === target.conversationId)
+  // A person's one Buddy chat has no project (Dee, 10-31): a project session proposes into its own project, and the Swarm-wide
+  // Buddy into none (the backend refuses it too).
+  const self = (Array.isArray(state.agents) ? state.agents : []).map(object).find(a => a.id === caller?.agentId)
+  const projectId = chat?.kind === 'swarm-buddy' ? object(self?.buddySession).projectId : chat?.projectId
   const home = (Array.isArray(state.projects) ? state.projects : []).map(object).find(p => p.id === projectId)?.leadConversationId
   if (typeof home !== 'string') throw new Error('Name your own chat: a proposal comes from there.')
   const uploaded = await uploadAttachments(files, operationId, { ...target, sentIn: home }, scoped, deps.fetch)

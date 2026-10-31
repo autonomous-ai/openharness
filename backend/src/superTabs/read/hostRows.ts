@@ -5,8 +5,9 @@
  */
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { activeWork, agent, isLeads, SuperTabError, conversation, type Agent, type SuperTabState } from '../model.js'
+import { isSwarmBuddyChat } from '../buddies.js'
 import { hostLocalGrid, machineContribution, teamAccountSwarm, type MachineCleanup } from '../machines.js'
-import { agentProjectId, agentSetRole, canWatchAgent, isConfidential, groupProject, ledProject, projectsOf, skillModeOf, skillSetOf, watchClosed } from '../projects.js'
+import { agentProjectId, agentSetRole, canWatchAgent, isConfidential, groupProject, ledProject, projectsOf, skillModeOf, startProject, skillSetOf, watchClosed } from '../projects.js'
 import type { HostAgentRow, HostPool, HostRosterRow, HostTabRows } from './contract.js'
 import { hostEtag } from './hostEtag.js'
 import { coordinatorNameOf, roleNameOf } from '../instructions.js'
@@ -112,12 +113,11 @@ function pool(tabId: string, state: SuperTabState, machineId: string, user: Auth
   const buddyChats = new Set(buddyStarts.map(s => s.request.conversationId))
   const reservations = (state.harnessReservations ?? []).filter(r => r.machineId === machineId)
   return { tabId, paused: state.paused, machine: contribution, starts, ...(buddyStarts.length ? { buddyStarts } : {}), ...(leadStarts.length ? { leadStarts } : {}),
-    ...(contribution.scope === 'swarm' ? { projects: projectsOf(state).filter(p => pending.some(s =>
-      groupProject(state, conversation(state, s.request.conversationId)).id === p.id))
+    ...(contribution.scope === 'swarm' ? { projects: projectsOf(state).filter(p => pending.some(s => startProject(state, s.request)?.id === p.id))
       .map(p => ({ id: p.id, leadConversationId: p.leadConversationId, repository: p.repository,
         // A private conversation is chat only and never runs work here, so its id stays with its audience; a Buddy chat whose
         // Buddy starts here is named, so the host may prepare the project's folder for it.
-        conversationIds: state.conversations.filter(c => !isLeads(c) && (!c.audience || buddyChats.has(c.id)) && groupProject(state, c).id === p.id).map(c => c.id) })) } : {}),
+        conversationIds: state.conversations.filter(c => !isLeads(c) && !isSwarmBuddyChat(c) && (!c.audience || buddyChats.has(c.id)) && groupProject(state, c).id === p.id).map(c => c.id) })) } : {}),
     // A Buddy-only machine never joins the Swarm's grid: it serves nobody's models (machines.ts buddyOnly).
     ...(contribution.buddyOnly ? {} : hostLocalGrid(state)),
     reservations: reservations.map(({ harnessId, generation }) => ({ harnessId, generation })),

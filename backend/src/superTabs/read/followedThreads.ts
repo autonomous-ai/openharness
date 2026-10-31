@@ -61,14 +61,14 @@ export async function readFollowedThreads(store: SuperTabStore, user: AuthUser, 
   // Every root by its id, in one read; a root counts only in the chat its mark names, and only one the person reads.
   const found = (await readBy(db, 'SuperTabMessage', 'id', [{ $match: { _id: { $in: candidates.map(c => c.threadId) }, tabId } },
     { $project: { ...FIELDS, conversationId: 1 } }])).map(row)
-  const roots = new Map((await readable(db, tabId, found.filter(m => !isReply(m)))).map(m => [threadKey(m.conversationId, m.id), m]))
+  const roots = new Map((await readable(db, tabId, found.filter(m => !isReply(m)), state)).map(m => [threadKey(m.conversationId, m.id), m]))
   const withRoot = candidates.filter(c => roots.has(threadKey(c.conversationId, c.threadId)))
   if (!withRoot.length) return { unread, read: [], more }
   // Each thread's newest rows, the root among them in a short thread, by its thread index range.
   const scanned = await perRange(db, withRoot.map(c => [{ $match: { tabId, conversationId: c.conversationId, thread: c.threadId } },
     { $sort: { sequence: -1 } }, { $limit: THREAD_SCAN }, { $project: { ...SCAN_FIELDS, conversationId: 1 } }]))
   const byThread = new Map<string, Row[]>()
-  for (const m of await readable(db, tabId, scanned.filter(isReply))) {
+  for (const m of await readable(db, tabId, scanned.filter(isReply), state)) {
     const key = threadKey(m.conversationId, m.thread!)
     byThread.set(key, [...byThread.get(key) ?? [], m])
   }

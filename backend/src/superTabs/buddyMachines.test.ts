@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor } from './model.js'
 import { servedLocalModels, type ContributedMachine } from './machines.js'
-import { buddyChatId } from './buddies.js'
+import { isBuddyChat, swarmBuddyChatId } from './buddies.js'
 import { LEAD_CAPABILITY } from './leadStart.js'
 import { hostTab } from './read/hostRows.js'
 import { leaderboard } from './leaderboard/stats.js'
@@ -70,8 +70,11 @@ describe('a Buddy on its person\'s own machine outside the Swarm', () => {
       cwd: '/home/peer/harness-swarm', scope: 'swarm', engines: ['claude', 'codex'], paused: false, buddyOnly: true })
     const start = f.state.starts!.find(s => s.id === added.result.startId)!
     expect(start).toMatchObject({ contributorId: 'peer', machineOwnerId: 'peer', poolGeneration: buddyOnly(f)!.generation, error: null })
-    expect(start.request).toMatchObject({ machineId: 'peer-laptop', cwd: `/home/peer/harness-swarm/${f.app.projectId}`,
-      buddyOf: { personId: 'peer', generation: 'first' }, conversationId: buddyChatId(f.app.projectId, { id: 'peer', generation: 'first' }) })
+    // The person's one Buddy (Dee, 10-31): its own folder there, in no project, and its chat the person's one in the Swarm.
+    expect(start.request).toMatchObject({ machineId: 'peer-laptop', cwd: '/home/peer/harness-swarm/.buddy-peer', worktree: false, buddyScope: 'swarm',
+      buddyOf: { personId: 'peer', generation: 'first' }, conversationId: swarmBuddyChatId({ id: 'peer', generation: 'first' }) })
+    expect(start.request.buddyProjects!.map(p => [p.id, p.cwd])).toEqual(expect.arrayContaining([[f.app.projectId, `/home/peer/harness-swarm/${f.app.projectId}`],
+      [f.web.projectId, `/home/peer/harness-swarm/${f.web.projectId}`]]))
     expect(added.messages).toEqual([])
   })
 
@@ -91,14 +94,16 @@ describe('a Buddy on its person\'s own machine outside the Swarm', () => {
     ]
     for (const grant of refused) {
       expect(() => addOwn(f, f.app.projectId, peer, grant)).toThrow('A Buddy runs only on your own machine')
-      expect([buddyOnly(f), f.state.starts ?? [], f.state.conversations.filter(c => c.kind === 'buddy')]).toEqual([undefined, [], []])
+      expect([buddyOnly(f), f.state.starts ?? [], f.state.conversations.filter(isBuddyChat)]).toEqual([undefined, [], []])
     }
   })
 
-  it('takes the person\'s Buddy in another project too, and never another person\'s Buddy', () => {
+  // One Buddy per person per Swarm (Dee, 10-31): an older app's Start in another project finds the same one Buddy.
+  it('takes the person\'s one Buddy, which a Start in another project finds already there, and never another person\'s Buddy', () => {
     const f = setup()
     addOwn(f, f.app.projectId)
-    expect(addOwn(f, f.web.projectId).result.startId).toBeTruthy()
+    expect(() => addOwn(f, f.web.projectId)).toThrow('You already have a Buddy')
+    expect(f.state.starts!.filter(s => s.request.machineId === 'peer-laptop')).toHaveLength(1)
     expect(f.state.machines!.filter(m => m.machineId === 'peer-laptop')).toHaveLength(1)
     // The owner cannot reach it: the store reads the laptop's row as peer's (store.ts contribution, pooled).
     expect(() => addOwn(f, f.app.projectId, owner, { machineOwnerId: 'peer', contributorId: 'peer', hostGrant: null })).toThrow('A Buddy runs only on your own machine')
@@ -193,13 +198,13 @@ describe('a Buddy-only machine\'s end', () => {
     expect(buddyOnly(f, 'owner-laptop')!.buddyOnly).toBeUndefined()
   })
 
-  it('comes when its last Buddy is removed: its host cleans up, and no chat hears of it', () => {
+  it('comes when its person\'s Buddy is removed: its host cleans up, and no chat hears of it', () => {
     const f = setup()
     running(f, f.app.projectId)
-    running(f, f.web.projectId)
-    f.run({ type: 'buddy.remove', projectId: f.app.projectId }, peer)
+    // An older app's Remove in a project removes only a Buddy of its older chat there: the one Buddy and its machine stay.
+    expect(() => f.run({ type: 'buddy.remove', projectId: f.app.projectId }, peer)).toThrow('You have no Buddy in this project')
     expect(buddyOnly(f)?.buddyOnly).toBe(true)
-    const removed = f.run({ type: 'buddy.remove', projectId: f.web.projectId }, peer)
+    const removed = f.run({ type: 'buddy.remove' }, peer)
     expect(buddyOnly(f)).toBeUndefined()
     expect(f.state.machineCleanups).toEqual([expect.objectContaining({ machineId: 'peer-laptop', machineOwnerId: 'peer' })])
     expect(removed.messages).toEqual([])
@@ -215,7 +220,7 @@ describe('a Buddy-only machine\'s end', () => {
     expect(() => addOwn(f, f.app.projectId)).toThrow('still cleaning up after your last Buddy there')
     f.run({ type: 'machine.cleaned', machineId: 'peer-laptop', removalId }, peer)
     addOwn(f, f.app.projectId)
-    f.run({ type: 'buddy.remove', projectId: f.app.projectId }, peer)
+    f.run({ type: 'buddy.remove' }, peer)
     expect(buddyOnly(f)).toBeUndefined()
   })
 
@@ -283,14 +288,15 @@ describe('a Buddy-only machine after its reviews', () => {
     expect(buddyOnly(f)).toBeUndefined()
   })
 
-  it('hides where a Buddy runs from everyone but its person; their other agents show theirs as today', () => {
+  // A Swarm-wide Buddy is read by its person and itself alone (projects.ts canReadAgent), so nobody else sees it, nor its machine.
+  it('hides a Buddy, and where it runs, from everyone but its person; their other agents show theirs as today', () => {
     const f = setup()
     const { agentId } = running(f, f.app.projectId)
     const pane = f.run({ type: 'agent.add', conversationId: f.group, harnessId: 'pane', machineId: 'peer-laptop', name: 'Pane', configuration, lead: false }, peer,
       { contribution: own('peer') }).result.agentId as string
     const where = (reader: Actor) => Object.fromEntries(visibleState(f.state, reader, 1000).agents.filter(a => [agentId, pane].includes(a.id)).map(a => [a.id, a.machineId]))
-    expect(where(owner)).toEqual({ [agentId]: '', [pane]: 'peer-laptop' })
-    expect(where(pmActor(f))).toEqual({ [agentId]: '', [pane]: 'peer-laptop' })
+    expect(where(owner)).toEqual({ [pane]: 'peer-laptop' })
+    expect(where(pmActor(f))).toEqual({ [pane]: 'peer-laptop' })
     expect(where(peer)).toEqual({ [agentId]: 'peer-laptop', [pane]: 'peer-laptop' })
     // A Buddy reads no machine ids at all, its own included (review 1 of #2115).
     expect(where({ kind: 'agent', agentId, machineOwnerId: 'peer' })[agentId]).toBe('')
@@ -305,7 +311,7 @@ describe('a Buddy-only machine after its reviews', () => {
     const request = { conversationId: f.group, machineId: 'peer-laptop', engine: 'claude' as const, name: 'Builder',
       cwd: `/home/peer/harness-swarm/${f.app.projectId}`, worktree: true, requirements: { memoryBytes: 1, diskBytes: 1, maxCpuPercent: 85, tools: [], devices: [], quotaRequired: false } }
     expect(() => f.run({ type: 'agent.start', request }, peer)).toThrow('This machine is not one of the Swarm\'s machines')
-    f.run({ type: 'buddy.remove', projectId: f.app.projectId }, peer)
+    f.run({ type: 'buddy.remove' }, peer)
     expect(buddyOnly(f)?.buddyOnly).toBe(true)
     f.run({ type: 'agent.remove', agentId: pane }, peer)
     expect(buddyOnly(f)).toBeUndefined()

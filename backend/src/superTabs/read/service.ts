@@ -5,7 +5,7 @@
 import type { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../../lib/teamSession.js'
-import { agentOnly, author, fail, groupWithoutMachines, isLeads, seenMachineIds, stableId, SuperTabError, visibleState, type Actor, type AgentStart, type SuperTabState } from '../model.js'
+import { agentOnly, author, fail, groupForBuddy, isLeads, seenMachineIds, stableId, SuperTabError, visibleState, type Actor, type AgentStart, type SuperTabState } from '../model.js'
 import { mentionsDigest, swarmsWithTags, waitingMentions, waitingTagConversations } from '../mentions.js'
 import { decisionsWaiting } from '../decisions.js'
 import { readMarks, readThreadMarks, writeReadMark, writeThreadFollow, writeThreadMark } from '../readMarks.js'
@@ -188,7 +188,7 @@ export class SwarmReads {
       }
       const seen = readable.some(p => p.data!.task?.requires) ? seenMachineIds(visibleState(state, actor, this.now())) : new Set<string>()
       const buddy = isBuddyReader(state, actor)
-      return { groups: readable.map(p => envelope(p, groupView({ ...buddy ? groupWithoutMachines(p.data!) : p.data!, dormant: true }, seen))),
+      return { groups: readable.map(p => envelope(p, groupView({ ...buddy ? groupForBuddy(p.data!) : p.data!, dormant: true }, seen))),
         next: more ? encodeDormantPage(readable.at(-1)!) : null }
     })
   }
@@ -202,7 +202,7 @@ export class SwarmReads {
       // A dormant group is in no whole-Swarm view; it passes the same read check as on the dormant list.
       const dormant = loaded.groups.find(g => g.key === conversationId && g.dormant)
       if (dormant && canReadGroup(view.state, actor, dormant.data!)) {
-        const data = isBuddyReader(view.state, actor) ? groupWithoutMachines(dormant.data!) : dormant.data!
+        const data = isBuddyReader(view.state, actor) ? groupForBuddy(dormant.data!) : dormant.data!
         return { group: envelope(dormant, groupView({ ...data, dormant: true }, seenIn(view.parts))) }
       }
       return fail('NOT_FOUND', 'This conversation is unavailable.', 404)

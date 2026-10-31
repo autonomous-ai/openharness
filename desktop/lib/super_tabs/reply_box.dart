@@ -36,6 +36,7 @@ class SuperTabReplyBox extends StatelessWidget {
     this.surfaceKey = const ValueKey('super-thread-composer-surface'),
     this.fieldKey = const ValueKey('super-thread-composer'),
     this.sendKey = const ValueKey('super-thread-send'),
+    this.hint = 'Reply',
   });
 
   final SuperTabController controller;
@@ -58,6 +59,9 @@ class SuperTabReplyBox extends StatelessWidget {
   final KeyEventResult? Function(KeyEvent event)? onKey;
   final List<TextInputFormatter> inputFormatters;
   final Key surfaceKey, fieldKey, sendKey;
+
+  /// The field's hint: what an empty box says it is for.
+  final String hint;
 
   @override
   Widget build(BuildContext context) => NewHarnessDropZone(
@@ -126,7 +130,7 @@ class SuperTabReplyBox extends StatelessWidget {
                   decoration: InputDecoration(
                     isCollapsed: true,
                     constraints: const BoxConstraints(),
-                    hintText: 'Reply',
+                    hintText: hint,
                     hintStyle: DesktopChrome.text(color: DesktopChrome.muted),
                     contentPadding: EdgeInsets.zero,
                     border: InputBorder.none,

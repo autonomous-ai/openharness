@@ -391,6 +391,7 @@ class _ThreadCardState extends State<_ThreadCard> {
   bool get _writable =>
       _c.canWrite &&
       _snapshot?.conversation(_thread.conversationId)?.archived == false &&
+      !_c.isEarlierBuddyChat(_snapshot?.conversation(_thread.conversationId)) &&
       !_c.hasPendingAction;
 
   bool get _busy => _c.uploading || _c.saving;
@@ -439,7 +440,12 @@ class _ThreadCardState extends State<_ThreadCard> {
     final count = a.newCount(_thread);
     final followed = _thread.follow != false;
     final group = _snapshot?.conversation(_thread.conversationId);
-    final canReply = fresh && _c.canWrite && group?.archived == false;
+    // An older Buddy chat is kept to read: nothing here offers a reply.
+    final canReply =
+        fresh &&
+        _c.canWrite &&
+        group?.archived == false &&
+        !_c.isEarlierBuddyChat(group);
     // A Buddy chat's thread may need a new session (its last one ended),
     // which only the thread pane offers: a box here would be refused.
     final buddyThread = group?.isBuddyChat == true;
