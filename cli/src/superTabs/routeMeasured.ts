@@ -16,6 +16,7 @@
  * routing agent gives in its assessment (`kind`); none, or one nothing was measured for, ranks as today. */
 import { claudeAliasForModel } from '../engines/claude/runtimeProfile.js'
 import { catalogRow, type Catalog, type Probe, type RoutePlugin } from './route.js'
+import type { PluginMaker } from './routePlugins.js'
 import type { ScopedRequest } from './start.js'
 import { within } from './wire.js'
 
@@ -26,6 +27,8 @@ export const MIN_SHIPPED = 3
 /** How far a clearly worse pass rate moves a candidate: after its strength's other choices, before the next strength's. */
 const WORSE = -0.5
 const Z = 1.96
+/** Well under the makers' 3 s (routePlugins.ts MAKER_TIMEOUT_MS), so a slow read is said as this piece's own failure. */
+export const READ_MS = 2000
 
 /** One choice's results for one kind of work, as the costs read gives them (backend costs/read.ts CostSummaryRow, FullCost). */
 export interface MeasuredRow { engine: string; model: string; effort: string; kind: string; firstReviews: number; firstReviewPassed: number
@@ -56,7 +59,7 @@ export function measuredFrom(answer: unknown): Measured | null {
 /** The project's measures, read through the route's own backend request: null when refused, failed, slower than [ms] or
  *  unreadable, so the route ranks as today. The route runs about 30 times an hour; the read is the costs command's, about
  *  0.1 to 0.3 s beyond a plain request on the openharness Swarm (2026-10-31). */
-export async function readMeasured(request: ScopedRequest, ms = 3000): Promise<Measured | null> {
+export async function readMeasured(request: ScopedRequest, ms = READ_MS): Promise<Measured | null> {
   const answer = await within(request({ action: 'costs', days: DAYS }).catch(() => null), ms)
   return answer ? measuredFrom(answer) : null
 }
@@ -129,4 +132,17 @@ export function measuredPlugin(measured: Measured): RoutePlugin {
         ...(shift ? { cost: shift } : {}), ...(worse ? { strength: WORSE } : {}) }
     },
   }
+}
+
+/** The maker (routePlugins.ts): no kind of work, nothing to read; a read that fails says so through the route's warnings
+ *  (the maker failed); a kind with no rows has nothing to say. */
+export const MEASURED_MAKER: PluginMaker = {
+  name: MEASURED,
+  async make({ assessment, request }) {
+    const kind = assessment.kind
+    if (!kind) return null
+    const measured = await readMeasured(request)
+    if (!measured) throw new Error('The cost results could not be read.')
+    return measured.rows.some(r => r.kind === kind) ? measuredPlugin(measured) : null
+  },
 }

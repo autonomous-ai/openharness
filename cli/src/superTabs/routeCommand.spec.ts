@@ -1707,3 +1707,31 @@ describe('routing by facts', () => {
     expect(old.next).not.toContain('roleName')
   })
 })
+
+/** Piece 3 through the route itself, with the makers it ships with (routePlugins.ts ROUTE_PLUGIN_MAKERS). */
+describe('routing by measured cost and results', () => {
+  const row = (model: string, effort: string, fullCostPerShipped: number) => ({ engine: 'claude', model, effort, kind: 'build', firstReviews: 10,
+    firstReviewPassed: 8, shipped: 6, costPerShipped: 1, fullCostPerShipped })
+  const built = { ...input, assessment: { ...input.assessment, kind: 'build' } }
+  const withCosts = (base: ReturnType<typeof scoped>, answer: (payload: Record<string, unknown>) => Promise<Answer>) =>
+    vi.fn(async (payload: Record<string, any>) => payload.action === 'costs' ? answer(payload) : base(payload))
+
+  it('reads the last 7 days\' results and ranks the choice that costs less per shipped change first, with its numbers', async () => {
+    const base = scoped()
+    // Sonnet ranks first today (cost 2 against Opus's 3); measured in full, Opus costs $3 per shipped change and Sonnet $9.
+    const plain = await routeTask(input, scoped(), where as never, opener(), () => 'op')
+    expect(plain).toMatchObject({ pick: { model: 'sonnet' } })
+    const s = withCosts(base, async () => ({ ok: true, value: { truncated: false, rows: [row('opus', 'high', 3), row('sonnet', 'medium', 9)] } }))
+    const result = await routeTask(built, s, where as never, opener(), () => 'op')
+    expect(s.mock.calls.filter(c => c[0].action === 'costs').map(c => c[0])).toEqual([{ action: 'costs', days: 7 }])
+    expect(result).toMatchObject({ ok: true, pick: { model: 'opus', notes: expect.arrayContaining([expect.stringMatching(/^measured results: build work, last 7 days: 8 of 10 first reviews passed, \$3\.00 per shipped change over 6/)]) } })
+    expect(labels(base)[0]).toContain('measured results: build work')
+  })
+
+  it('a failed read leaves today\'s ranking and says so', async () => {
+    const s = withCosts(scoped(), async () => ({ error: 'FORBIDDEN' }))
+    const result = await routeTask(built, s, where as never, opener(), () => 'op')
+    expect(result).toMatchObject({ ok: true, pick: { model: 'sonnet' },
+      warnings: expect.arrayContaining(['The routing plug-in "measured results" was skipped: its maker failed. The route is ranked without it.']) })
+  })
+})

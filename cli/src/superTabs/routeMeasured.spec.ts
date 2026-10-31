@@ -1,7 +1,8 @@
 // cli/src/superTabs/routeMeasured.spec.ts
 import { describe, expect, it } from 'vitest'
 import { choose, type Assessment, type Catalog, type Probe } from './route.js'
-import { MEASURED, measuredFrom, measuredPlugin, readMeasured, type MeasuredRow } from './routeMeasured.js'
+import { MEASURED, MEASURED_MAKER, measuredFrom, measuredPlugin, readMeasured, type MeasuredRow } from './routeMeasured.js'
+import { ROUTE_PLUGIN_MAKERS, type PluginInput } from './routePlugins.js'
 
 /** Today's strong rows (backend superTabs/catalog.ts): at equal strength Codex's cost 2 ranks before Opus's 3. */
 const catalog: Catalog = { grid: { strength: 1, models: [{ model: 'kimi k3', strength: 2 }] }, models: [
@@ -147,5 +148,28 @@ describe('reading the measures', () => {
     // A backend before full costs sends none: read as unknown.
     const { fullCostPerShipped: _f, ...older } = row({})
     expect(measuredFrom(answer([older]))).toEqual({ rows: [row({ fullCostPerShipped: null })], truncated: false })
+  })
+})
+
+describe('the maker', () => {
+  const made = (a: Assessment, request: PluginInput['request']) => MEASURED_MAKER.make({ conversationId: 'g1', assessment: a, read: {}, catalog,
+    history: Promise.resolve(null), request })
+  const costs = (rows: unknown[]) => async () => ({ ok: true, value: { truncated: false, rows } })
+
+  it('is in the route\'s list of makers', () => {
+    expect(ROUTE_PLUGIN_MAKERS).toContain(MEASURED_MAKER)
+  })
+
+  it('reads nothing for a task with no kind of work', async () => {
+    let asked = 0
+    expect(await made(task({ kind: undefined }), async () => { asked++; return {} })).toBeNull()
+    expect(asked).toBe(0)
+  })
+
+  it('makes the plug-in when the kind was measured, has nothing to say when it was not, and fails when the read fails', async () => {
+    const plugin = await made(task(), costs(measured))
+    expect(plugin?.name).toBe(MEASURED)
+    expect(await made(task({ kind: 'docs' }), costs(measured))).toBeNull()
+    await expect(made(task(), async () => ({ error: 'FORBIDDEN' }))).rejects.toThrow()
   })
 })
