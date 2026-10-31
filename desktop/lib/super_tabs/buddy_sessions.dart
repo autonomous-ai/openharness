@@ -181,11 +181,17 @@ class _SuperTabThreadSessionLineState extends State<SuperTabThreadSessionLine> {
 }
 
 /// " · ⠋ Own session" at the end of a thread's line in the chat, while the
-/// thread has a session of its own.
+/// thread has a session of its own; "⠋ Own session · Starting…" as the whole
+/// line ([alone]) while its thread has no reply yet.
 class SuperTabThreadSessionMark extends StatelessWidget {
-  const SuperTabThreadSessionMark({super.key, required this.activity});
+  const SuperTabThreadSessionMark({
+    super.key,
+    required this.activity,
+    this.alone = false,
+  });
 
   final HarnessActivity activity;
+  final bool alone;
 
   @override
   Widget build(BuildContext context) {
@@ -196,10 +202,15 @@ class SuperTabThreadSessionMark extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(' · ', style: DesktopChrome.metadata()),
+          if (!alone) Text(' · ', style: DesktopChrome.metadata()),
           _mark(activity),
           const SizedBox(width: grid.AppDesktop.menuInset),
-          Text('Own session', style: DesktopChrome.metadata()),
+          Text(
+            alone
+                ? 'Own session · ${superTabSessionWords(activity)}'
+                : 'Own session',
+            style: DesktopChrome.metadata(),
+          ),
         ],
       ),
     );

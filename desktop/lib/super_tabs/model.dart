@@ -960,6 +960,14 @@ class SuperTabDelivery {
 /// What a page says about one thread (backend threads.ts): the line under its
 /// root, and who it marks unread for.
 class SuperTabThread {
+  /// A thread with no reply yet: a session's, started from the main chat.
+  SuperTabThread.empty(this.id)
+    : replies = 0,
+      lastSequence = 0,
+      lastAt = null,
+      authors = const [],
+      people = const [];
+
   SuperTabThread.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
       replies = (row['replies'] as num).toInt(),
@@ -1029,6 +1037,10 @@ class SuperTabMessage {
   String? get sessionEndReason =>
       sessionEnded ? source['reason'] as String? : null;
   bool get threadReply => thread != null && thread != id;
+
+  /// A Buddy chat message that started its own thread's session from the
+  /// main chat: its thread's root, in the session's thread.
+  bool get sessionRoot => buddySession && !threadReply;
 
   /// Whether the main stream lists it: a thread reply only when also sent.
   bool get inMainStream => !threadReply || alsoInChat;

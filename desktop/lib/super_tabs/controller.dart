@@ -1479,8 +1479,9 @@ class SuperTabController extends ChangeNotifier {
     final text = refused.command['text'] as String? ?? '';
     if (root == null) {
       _drafts[conversationId] = text;
-      if (refused.mentions.isNotEmpty)
+      if (refused.mentions.isNotEmpty) {
         _mentions[conversationId] = refused.mentions;
+      }
     } else {
       _threadDrafts[root] = text;
     }

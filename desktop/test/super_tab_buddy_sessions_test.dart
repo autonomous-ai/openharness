@@ -973,9 +973,20 @@ void main() {
       tester.getRect(chatSession).right,
       lessThan(tester.getRect(chatSend).left),
     );
+    final chatNote = find
+        .byKey(const ValueKey('super-chat-session-note'))
+        .hitTestable();
+    final restingBottom = tester.getRect(chatComposer).bottom;
+    expect(chatNote, findsNothing);
     await tester.tap(chatSession);
     await tester.pump();
     expect(box(tester, chatSession).on, isTrue);
+    expect(
+      tester.widget<Text>(chatNote).data,
+      'Your message starts its own thread and Buddy session',
+    );
+    // The line's place was kept: the box doesn't move.
+    expect(tester.getRect(chatComposer).bottom, restingBottom);
     await tester.enterText(chatComposer, 'Measure prod CPU for the last day');
     await tester.pump();
     await tester.tap(chatSend);
@@ -992,7 +1003,23 @@ void main() {
     expect(tester.widget<Text>(state).data, 'Own session · Starting…');
     // The chip is off again, and the box empty.
     expect(box(tester, chatSession).on, isFalse);
+    expect(chatNote, findsNothing);
     expect(tester.widget<TextField>(chatComposer).controller!.text, isEmpty);
+    // In the chat the message stands on its own, not under the one before
+    // it, with its session's line: found again once the pane is closed.
+    final row = find.byKey(ValueKey('super-message-$root'));
+    expect(
+      find.descendant(of: row, matching: find.text('You')),
+      findsOneWidget,
+    );
+    c.closeThread();
+    await tester.pumpAndSettle();
+    expect(panel, findsNothing);
+    final mark = find.byKey(ValueKey('super-thread-session-mark-$root'));
+    expect(find.descendant(of: row, matching: mark), findsOneWidget);
+    await tester.tap(mark);
+    await tester.pumpAndSettle();
+    expect(c.openedThread?.root, root);
   });
 
   testSessions('a server that takes New session only on replies never offers '

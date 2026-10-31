@@ -2500,9 +2500,14 @@ class _SuperTabViewState extends State<SuperTabView>
         (fetched != null && _shown(fetched) ? fetched : null);
     final writable = c.canWrite && c.selected?.archived == false;
     final root = message.thread;
+    // A message that started a session has its line before any reply comes,
+    // so the session is found again after its pane closes.
     final thread = inThread || root != message.id
         ? null
-        : c.thread(message.conversationId, message.id);
+        : c.thread(message.conversationId, message.id) ??
+              (c.threadSession(message.id) != null
+                  ? SuperTabThread.empty(message.id)
+                  : null);
     final group = inThread
         ? null
         : c.snapshot?.conversation(message.conversationId);
@@ -2573,6 +2578,7 @@ class _SuperTabViewState extends State<SuperTabView>
         final session? => SuperTabThreadSessionMark(
           key: ValueKey('super-thread-session-mark-${thread!.id}'),
           activity: superTabSessionActivity(c, widget.app, session),
+          alone: thread.replies == 0,
         ),
         null => null,
       },
@@ -3642,6 +3648,27 @@ class _SuperTabViewState extends State<SuperTabView>
                     ),
                   ),
                 ),
+              ),
+            ),
+          ),
+        // While New session can be chosen here, its line's place is kept, so
+        // the box never moves as the choice is toggled.
+        if (c.offersChatSessions)
+          Container(
+            alignment: Alignment.centerLeft,
+            padding: const EdgeInsets.fromLTRB(28, 0, 24, 10),
+            child: Visibility(
+              visible:
+                  _chatSessions.contains(chatId) &&
+                  c.threadSessionBlocked == null &&
+                  !c.buddySessionsFull,
+              maintainSize: true,
+              maintainAnimation: true,
+              maintainState: true,
+              child: Text(
+                'Your message starts its own thread and Buddy session',
+                key: const ValueKey('super-chat-session-note'),
+                style: DesktopChrome.metadata(color: DesktopChrome.muted),
               ),
             ),
           ),

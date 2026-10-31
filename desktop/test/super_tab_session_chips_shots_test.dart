@@ -65,6 +65,7 @@ void main() {
       'chat-on',
       'chat-unavailable',
       'chat-started',
+      'chat-closed',
     ]) {
       final inChat = scene.startsWith('chat-');
       testWidgets('screenshots for review ($scene, ${brightness.name})', (
@@ -117,12 +118,21 @@ void main() {
               : 'Measure it now, and compare with last week.',
         );
         await tester.pump();
-        if (const {'on', 'chat-on', 'chat-started'}.contains(scene)) {
+        if (const {
+          'on',
+          'chat-on',
+          'chat-started',
+          'chat-closed',
+        }.contains(scene)) {
           await tester.tap(chip);
           await tester.pump();
         }
-        if (scene == 'chat-started') {
+        if (scene == 'chat-started' || scene == 'chat-closed') {
           await tester.tap(find.byTooltip('Send message'));
+          await tester.pumpAndSettle();
+        }
+        if (scene == 'chat-closed') {
+          c.closeThread();
           await tester.pumpAndSettle();
         }
         if (scene.endsWith('unavailable')) {
