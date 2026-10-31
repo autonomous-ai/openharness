@@ -46,11 +46,11 @@ describe('the task says its heavy work and its CI', () => {
     expect(heavyNeed({ heavy: ['e2e'] })).toEqual({ memoryBytes: 6 * GB, diskBytes: 10 * GB, words: 'end-to-end tests' })
     expect(heavyNeed({ heavy: ['e2e', 'build'] })).toEqual({ memoryBytes: 8 * GB, diskBytes: 30 * GB, words: 'end-to-end tests and a heavy build' })
   })
-  it('a heavy task\'s start asks its machine for at least half the need; any other start asks what it always did', () => {
+  it('a heavy task\'s start asks its whole memory need and half its disk; any other start asks what it always did', () => {
     expect(startRequirements({ tools: [], devices: [] })).toEqual(START_REQUIREMENTS)
-    expect(startRequirements({ tools: [], devices: [], heavy: ['build'] })).toMatchObject({ memoryBytes: 4 * GB, diskBytes: 15 * GB })
+    expect(startRequirements({ tools: [], devices: [], heavy: ['build'] })).toMatchObject({ memoryBytes: 8 * GB, diskBytes: 15 * GB })
     // End-to-end's half of the disk is less than any start asks, so the start's own stays.
-    expect(startRequirements({ tools: [], devices: [], heavy: ['e2e'] })).toMatchObject({ memoryBytes: 3 * GB, diskBytes: START_REQUIREMENTS.diskBytes })
+    expect(startRequirements({ tools: [], devices: [], heavy: ['e2e'] })).toMatchObject({ memoryBytes: 6 * GB, diskBytes: START_REQUIREMENTS.diskBytes })
     expect(floorOf({ memoryBytes: 8 * GB, diskBytes: 30 * GB })).toEqual({ memoryBytes: 4 * GB, diskBytes: 15 * GB })
   })
 })
@@ -59,7 +59,7 @@ describe('machine fit', () => {
   it('a heavy build avoids a low-memory machine: the one that has what it needs ranks first, and the other says why', () => {
     const choice = ok(route([on('small', { memory: 5, disk: 100 }), on('big', { memory: 16, disk: 100 })], a({ heavy: ['build'] })))
     expect(choice.shown.map(s => s.machineId)).toEqual(['big', 'small'])
-    expect(choice.shown[1]!.notes).toEqual(['Machine fit: Short for a heavy build: 5.0 GB memory free, 100.0 GB disk free; it needs 8.0 GB memory and 30.0 GB disk, '
+    expect(choice.shown[1]!.notes).toEqual(['Machine fit: Short of free memory for a heavy build: it needs 8 GB memory and 30 GB disk free, '
       + 'so equally strong candidates that have it rank first.'])
     expect(choice.shown[0]!.notes).toEqual([])
     // Without heavy work the same machines rank as they always did, by title.
@@ -70,7 +70,7 @@ describe('machine fit', () => {
   it('short of disk counts like short of memory', () => {
     const choice = ok(route([on('a-full', { memory: 16, disk: 20 }), on('b', { memory: 16, disk: 100 })], a({ heavy: ['build'] })))
     expect(choice.shown.map(s => s.machineId)).toEqual(['b', 'a-full'])
-    expect(choice.shown[1]!.notes[0]).toContain('20.0 GB disk free')
+    expect(choice.shown[1]!.notes[0]).toMatch(/^Machine fit: Short of free disk for a heavy build:/)
   })
   it('never passes over a stronger model for a machine: a short machine still ranks above a weaker model that fits', () => {
     const choice = ok(route([on('short', { memory: 5, disk: 100 }), on('big', { memory: 16, disk: 100 }, { model: 'sonnet', effort: 'medium', quality: 2, cost: 2 })],
@@ -83,7 +83,7 @@ describe('machine fit', () => {
     const choice = ok(route([on('tiny', { memory: 3, disk: 100 }), on('big', { memory: 16, disk: 100 })], a({ heavy: ['build'] })))
     expect(choice.shown.map(s => s.machineId)).toEqual(['big'])
     expect(choice.excluded).toEqual([{ title: 'New agent · Claude opus high · tiny', machine: 'tiny',
-      reason: 'Machine fit: Too little free for a heavy build: 3.0 GB memory free, 100.0 GB disk free; it needs 8.0 GB memory and 30.0 GB disk, and at least half to run at all.' }])
+      reason: 'Machine fit: Too little free memory for a heavy build: it needs 8 GB memory and 30 GB disk free, and at least half to run at all.' }])
     expect(route([on('tiny', { memory: 16, disk: 10 })], a({ heavy: ['build'] }))).toMatchObject({ error: 'NO_CANDIDATE' })
     // Exactly half is enough to run.
     expect(ok(route([on('half', { memory: 4, disk: 15 })], a({ heavy: ['build'] }))).shown).toHaveLength(1)
@@ -91,22 +91,22 @@ describe('machine fit', () => {
   it('says an unknown reading and ranks it after a machine known to fit, never leaving it out', () => {
     const choice = ok(route([on('a-unread', { memory: null, disk: 100 }), on('b', { memory: 16, disk: 100 })], a({ heavy: ['e2e'] })))
     expect(choice.shown.map(s => s.machineId)).toEqual(['b', 'a-unread'])
-    expect(choice.shown[1]!.notes).toEqual(['Machine fit: Free memory unknown; end-to-end tests needs 6.0 GB memory and 10.0 GB disk. Known: 100.0 GB disk free.'])
+    expect(choice.shown[1]!.notes).toEqual(['Machine fit: Free memory unknown here; end-to-end tests: it needs 6 GB memory and 10 GB disk free.'])
     const both = ok(route([on('blind', { memory: null, disk: null })], a({ heavy: ['e2e'] })))
-    expect(both.shown[0]!.notes).toEqual(['Machine fit: Free memory and free disk unknown; end-to-end tests needs 6.0 GB memory and 10.0 GB disk.'])
+    expect(both.shown[0]!.notes).toEqual(['Machine fit: Free memory and disk unknown here; end-to-end tests: it needs 6 GB memory and 10 GB disk free.'])
     expect(ok(route([on('d', { memory: 16, disk: null })], a({ heavy: ['e2e'] }))).shown[0]!.notes)
-      .toEqual(['Machine fit: Free disk unknown; end-to-end tests needs 6.0 GB memory and 10.0 GB disk. Known: 16.0 GB memory free.'])
+      .toEqual(['Machine fit: Free disk unknown here; end-to-end tests: it needs 6 GB memory and 10 GB disk free.'])
     // A short machine whose disk is unknown is short: what is known decides.
-    expect(ok(route([on('x', { memory: 5, disk: null })], a({ heavy: ['build'] }))).shown[0]!.notes[0]).toMatch(/^Machine fit: Short for a heavy build: 5\.0 GB memory free;/)
+    expect(ok(route([on('x', { memory: 5, disk: null })], a({ heavy: ['build'] }))).shown[0]!.notes[0]).toMatch(/^Machine fit: Short of free memory for a heavy build:/)
     // A probe with no machine reading at all is unknown too.
-    expect(ok(route([on('none', { memory: 16, disk: 100 }, { load: undefined })], a({ heavy: ['build'] }))).shown[0]!.notes[0]).toContain('Free memory and free disk unknown')
+    expect(ok(route([on('none', { memory: 16, disk: 100 }, { load: undefined })], a({ heavy: ['build'] }))).shown[0]!.notes[0]).toContain('Free memory and disk unknown here')
   })
   it('a busy CPU ranks a machine later among equals, never leaving it out, and is said', () => {
     const choice = ok(route([on('a-busy', { memory: 16, disk: 100, cpu: 92.4 }), on('b', { memory: 16, disk: 100, cpu: 30 })], a({ heavy: ['build'] })))
     expect(choice.shown.map(s => s.machineId)).toEqual(['b', 'a-busy'])
-    expect(choice.shown[1]!.notes).toEqual(['Machine fit: CPU 92% busy; it has what a heavy build needs.'])
-    expect(ok(route([on('s', { memory: 5, disk: 100, cpu: 99 })], a({ heavy: ['build'] }))).shown[0]!.notes[0]).toMatch(/rank first\. CPU 99% busy\.$/)
-    expect(ok(route([on('u', { memory: null, disk: 100, cpu: 99 })], a({ heavy: ['build'] }))).shown[0]!.notes[0]).toMatch(/CPU 99% busy\.$/)
+    expect(choice.shown[1]!.notes).toEqual(['Machine fit: Its CPU is busy; it has what a heavy build needs.'])
+    expect(ok(route([on('s', { memory: 5, disk: 100, cpu: 99 })], a({ heavy: ['build'] }))).shown[0]!.notes[0]).toMatch(/rank first\. Its CPU is busy\.$/)
+    expect(ok(route([on('u', { memory: null, disk: 100, cpu: 99 })], a({ heavy: ['build'] }))).shown[0]!.notes[0]).toMatch(/free\. Its CPU is busy\.$/)
   })
   it('a member is judged by its machine\'s reading too', () => {
     const member = on('small', { memory: 5, disk: 100 }, { kind: 'member', agentId: 'ag1', name: 'Builder', repo: 'same' })
@@ -134,12 +134,16 @@ describe('heavy work placed but not yet in the reading', () => {
       { request: { requirements: startRequirements({ tools: [], devices: [], heavy: ['build'] }) }, requestedAt: NOW - M },
       { request: { machineId: 'm', requirements: startRequirements({ tools: [], devices: [], heavy: ['build'] }) } },
       heavyStart('m', NOW - PLACED_RECENT_MS),
-      heavyStart('m', NOW + M),
+      heavyStart('m', NOW + 2 * M),
+      // An ordinary Builder's start asks 4 GB, under every heavy need.
+      { request: { machineId: 'm', requirements: { ...startRequirements({ tools: [], devices: [] }), memoryBytes: 4 * 2 ** 30 } }, requestedAt: NOW - M },
     ]
     expect(placedHeavyWork(starts, NOW).size).toBe(0)
     // Its kind is read back from the memory its start asked for, and a start known only by its dispatch time counts too.
     const e2e = { request: { machineId: 'm', requirements: startRequirements({ tools: [], devices: [], heavy: ['e2e'] }) }, dispatchedAt: NOW - M }
     expect(placedHeavyWork([e2e, heavyStart('m', NOW - M)], NOW).get('m')).toEqual({ memoryBytes: 14 * GB, diskBytes: 40 * GB, agents: 2 })
+    // A start stamped up to a minute ahead of this clock counts.
+    expect(placedHeavyWork([heavyStart('m', NOW + 50_000)], NOW).get('m')).toMatchObject({ agents: 1 })
   })
   it('a Harness Team account\'s start counts on its Mac, whose memory it shares', () => {
     const hostOf = (id: string) => id === 'team' ? 'mac' : id
@@ -151,11 +155,12 @@ describe('heavy work placed but not yet in the reading', () => {
     expect(ok(route(probes, a({ heavy: ['build'] }), plugin([]))).shown.map(s => s.machineId)).toEqual(['studio', 'z-other'])
     const one = ok(route(probes, a({ heavy: ['build'] }), plugin([heavyStart('studio', NOW - 5 * M), heavyStart('studio', NOW - 4 * 60 * M)])))
     expect(one.shown.map(s => s.machineId)).toEqual(['z-other', 'studio'])
-    expect(one.shown[1]!.notes[0]).toBe('Machine fit: Short for a heavy build: 6.0 GB memory free, 70.0 GB disk free after 8.0 GB memory and 30.0 GB disk for 1 heavy agent '
-      + 'started there in the last 15 minutes; it needs 8.0 GB memory and 30.0 GB disk, so equally strong candidates that have it rank first.')
+    expect(one.shown[1]!.notes[0]).toBe('Machine fit: Short of free memory for a heavy build, counting heavy work started there in the last 15 minutes: '
+      + 'it needs 8 GB memory and 30 GB disk free, so equally strong candidates that have it rank first.')
     const three = ok(route(probes, a({ heavy: ['build'] }), plugin([1, 2, 3].map(i => heavyStart('studio', NOW - i * M)))))
     expect(three.shown.map(s => s.machineId)).toEqual(['z-other'])
-    expect(three.excluded[0]!.reason).toContain('0.0 GB memory free, 10.0 GB disk free after 24.0 GB memory and 90.0 GB disk for 3 heavy agents started there in the last 15 minutes')
+    expect(three.excluded[0]!.reason).toBe('Machine fit: Too little free memory and disk for a heavy build, counting heavy work started there in the last 15 minutes: '
+      + 'it needs 8 GB memory and 30 GB disk free, and at least half to run at all.')
   })
 })
 
@@ -200,7 +205,7 @@ describe('its maker', () => {
     const plugin = (await MACHINE_FIT_MAKER.make(input(a({ heavy: ['build'] }), state)))!
     const choice = ok(choose([on('mac', { memory: 12, disk: 100 }), on('z', { memory: 12, disk: 100 })], catalog, a({ heavy: ['build'] }), now, [], [], [], [plugin]))
     expect(choice.shown.map(s => s.machineId)).toEqual(['z', 'mac'])
-    expect(choice.shown[1]!.notes[0]).toContain('4.0 GB memory free, 70.0 GB disk free after 8.0 GB memory and 30.0 GB disk for 1 heavy agent')
+    expect(choice.shown[1]!.notes[0]).toContain('counting heavy work started there in the last 15 minutes')
     // A tab read with no machines or starts reads as nothing placed.
     const bare = (await MACHINE_FIT_MAKER.make(input(a({ heavy: ['build'] }), {})))!
     expect(ok(choose([on('mac', { memory: 12, disk: 100 })], catalog, a({ heavy: ['build'] }), now, [], [], [], [bare])).shown).toHaveLength(1)

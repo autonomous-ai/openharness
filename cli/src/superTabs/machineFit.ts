@@ -41,21 +41,22 @@ export function heavyNeed(needs: Pick<Needs, 'heavy'>): Need | null {
   return { memoryBytes: Math.max(...kinds.map(k => HEAVY_NEEDS[k].memoryBytes)), diskBytes: Math.max(...kinds.map(k => HEAVY_NEEDS[k].diskBytes)),
     words: kinds.map(k => HEAVY_NEEDS[k].words).join(' and ') }
 }
-/** The least a machine must have free to run [need] at all. A heavy task's start asks its machine for this (capacity.ts
- *  startRequirements), so the start's own check agrees with the route, and its record says it was heavy. */
+/** The least a machine must have free to run [need] at all: below it the route leaves the machine out. */
 export const floorOf = (need: Pick<Need, 'memoryBytes' | 'diskBytes'>) => ({ memoryBytes: need.memoryBytes * FLOOR_SHARE, diskBytes: need.diskBytes * FLOOR_SHARE })
 
 /** Heavy work already placed on each machine: what it is expected to use, and how many agents. */
 export interface Placed { memoryBytes: number; diskBytes: number; agents: number }
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
-/** The heavy work a start asked for, read back from the memory its requirements asked of the machine ([floorOf]): the
- *  largest kind whose floor it asked, or none. */
+/** The heavy work a start asked for, read back from the memory its requirements asked of the machine: the largest kind whose
+ *  whole memory need it asked (capacity.ts startRequirements), or none. An ordinary Builder's start asks 4 GB, under every
+ *  heavy need, so it never counts (review of #2426). */
 function heavyOfStart(start: Json): Need | null {
   const memory = object(object(start.request).requirements).memoryBytes
   if (!finite(memory)) return null
-  const kinds = (Object.keys(HEAVY_NEEDS) as HeavyWork[]).filter(k => memory >= floorOf(HEAVY_NEEDS[k]).memoryBytes)
-  return heavyNeed({ heavy: kinds })
+  return heavyNeed({ heavy: (Object.keys(HEAVY_NEEDS) as HeavyWork[]).filter(k => memory >= HEAVY_NEEDS[k].memoryBytes) })
 }
+/** A start stamped this far ahead of this machine's clock still counts: clocks differ a little (as the window pull allows). */
+export const CLOCK_SKEW_MS = 60_000
 /** Heavy work placed per machine and not yet in its reading: a heavy start that did not fail, made in the last
  *  [PLACED_RECENT_MS]. An agent running longer already shows in its machine's free memory, so it is never subtracted again:
  *  Builders waiting hours on review would otherwise push every heavy task off the machine (Lead, 10-31). [hostOf] names the
@@ -65,7 +66,7 @@ export function placedHeavyWork(starts: Json[], now: number, hostOf: (machineId:
   for (const start of starts) {
     const need = heavyOfStart(start), machineId = object(start.request).machineId
     const at = finite(start.requestedAt) ? start.requestedAt : finite(start.dispatchedAt) ? start.dispatchedAt : null
-    if (!need || start.error || typeof machineId !== 'string' || at === null || now - at >= PLACED_RECENT_MS || at > now) continue
+    if (!need || start.error || typeof machineId !== 'string' || at === null || now - at >= PLACED_RECENT_MS || at > now + CLOCK_SKEW_MS) continue
     const host = hostOf(machineId), sum = placed.get(host) ?? { memoryBytes: 0, diskBytes: 0, agents: 0 }
     placed.set(host, { memoryBytes: sum.memoryBytes + need.memoryBytes, diskBytes: sum.diskBytes + need.diskBytes, agents: sum.agents + 1 })
   }
@@ -88,7 +89,8 @@ export function ciHold(needs: Pick<Needs, 'ci'>, load: CiLoad | null): string | 
 /** Said when a task starts CI and the load could not be read. */
 export const CI_UNCHECKED = `The running CI jobs could not be read, so the account's limit of ${CI_LIMIT.jobs} jobs (${CI_LIMIT.macos} on macOS) was not checked.`
 
-const bytes = (n: number) => `${(Math.max(0, n) / GB).toFixed(1)} GB`
+/** A need in whole gigabytes, as the needs are set. */
+const gb = (n: number) => `${Math.round(n / GB)} GB`
 /** The machine-fit plug-in. [placed]: [placedHeavyWork]; [hostOf]: as there; [ci]: the CI load, null when unread. */
 export function machineFit(input: { placed?: ReadonlyMap<string, Placed>; hostOf?: (machineId: string) => string; ci?: CiLoad | null } = {}): RoutePlugin {
   const hostOf = input.hostOf ?? (id => id)
@@ -106,29 +108,27 @@ export function machineFit(input: { placed?: ReadonlyMap<string, Placed>; hostOf
 }
 
 /** How [candidate]'s machine fits the task's heavy work, with [held] already placed there; null when the task has none, or
- *  the machine has all it needs and an idle CPU. */
+ *  the machine has all it needs and an idle CPU. Its reason names only which resource is short and what the work needs, never
+ *  the machine's measured memory, disk or CPU: every reader of the route log reads it, also of a machine the route shows
+ *  nothing else of (paused, folded, or reached only for its member; review of #2426). */
 function fitOf(candidate: Pick<Probe, 'load'>, needs: Needs, held: Placed | undefined): Adjustment | null {
   const need = heavyNeed(needs)
   if (!need) return null
   const floor = floorOf(need), load = candidate.load
-  const after = held?.agents ? ` after ${bytes(held.memoryBytes)} memory and ${bytes(held.diskBytes)} disk for ${held.agents} heavy ${held.agents === 1 ? 'agent' : 'agents'} started there in the last ${PLACED_RECENT_MS / 60_000} minutes` : ''
   const left = (free: number | null | undefined, use: number) => finite(free) ? free - use : null
   const memory = left(load?.freeMemoryBytes, held?.memoryBytes ?? 0), disk = left(load?.freeDiskBytes, held?.diskBytes ?? 0)
-  const facts = [memory === null ? null : `${bytes(memory)} memory free`, disk === null ? null : `${bytes(disk)} disk free`].filter(Boolean).join(', ')
-  const wants = `${bytes(need.memoryBytes)} memory and ${bytes(need.diskBytes)} disk`
-  if ((memory !== null && memory < floor.memoryBytes) || (disk !== null && disk < floor.diskBytes)) {
-    return { refuse: true, reason: `Too little free for ${need.words}: ${facts}${after}; it needs ${wants}, and at least half to run at all.` }
-  }
-  const busy = finite(load?.cpuPercent) && load.cpuPercent >= BUSY_CPU_PERCENT ? `CPU ${Math.round(load.cpuPercent)}% busy` : null
-  const cpu = busy ? { cost: BUSY_CPU_COST } : {}
-  if ((memory !== null && memory < need.memoryBytes) || (disk !== null && disk < need.diskBytes)) {
-    return { strength: SHORT_STRENGTH, ...cpu, reason: `Short for ${need.words}: ${facts}${after}; it needs ${wants}, so equally strong candidates that have it rank first.${busy ? ` ${busy}.` : ''}` }
-  }
-  if (memory === null || disk === null) {
-    const unknown = [memory === null ? 'free memory' : null, disk === null ? 'free disk' : null].filter(Boolean).join(' and ')
-    return { strength: UNKNOWN_STRENGTH, ...cpu, reason: `${unknown[0]!.toUpperCase()}${unknown.slice(1)} unknown; ${need.words} needs ${wants}.${facts ? ` Known: ${facts}${after}.` : ''}${busy ? ` ${busy}.` : ''}` }
-  }
-  return busy ? { cost: BUSY_CPU_COST, reason: `${busy}; it has what ${need.words} needs.` } : null
+  const which = (memoryShort: boolean, diskShort: boolean) => [memoryShort ? 'memory' : null, diskShort ? 'disk' : null].filter(Boolean).join(' and ')
+  const counting = held?.agents ? `, counting heavy work started there in the last ${PLACED_RECENT_MS / 60_000} minutes` : ''
+  const wants = `it needs ${gb(need.memoryBytes)} memory and ${gb(need.diskBytes)} disk free`
+  const busy = finite(load?.cpuPercent) && load.cpuPercent >= BUSY_CPU_PERCENT
+  const cpu = busy ? { cost: BUSY_CPU_COST } : {}, cpuWords = busy ? ' Its CPU is busy.' : ''
+  const out = which(memory !== null && memory < floor.memoryBytes, disk !== null && disk < floor.diskBytes)
+  if (out) return { refuse: true, reason: `Too little free ${out} for ${need.words}${counting}: ${wants}, and at least half to run at all.` }
+  const short = which(memory !== null && memory < need.memoryBytes, disk !== null && disk < need.diskBytes)
+  if (short) return { strength: SHORT_STRENGTH, ...cpu, reason: `Short of free ${short} for ${need.words}${counting}: ${wants}, so equally strong candidates that have it rank first.${cpuWords}` }
+  const unknown = which(memory === null, disk === null)
+  if (unknown) return { strength: UNKNOWN_STRENGTH, ...cpu, reason: `Free ${unknown} unknown here; ${need.words}: ${wants}.${cpuWords}` }
+  return busy ? { cost: BUSY_CPU_COST, reason: `Its CPU is busy; it has what ${need.words} needs.` } : null
 }
 
 /** Piece 5's maker (routePlugins.ts): the heavy work placed on each machine, read off the route's own Super Tab read. Nothing
