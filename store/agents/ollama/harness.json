@@ -13,15 +13,15 @@
   "agent": {
     "instructions": "agent/AGENTS.md",
     "env": {
-      "LOCAL_AI": "${dsh}/toolchain/local-ai"
+      "LOCAL_AI": "${dsh}/toolchain/local-ai.mjs"
     }
   },
   "toolchain": {
-    "setup": "toolchain/setup.sh",
-    "doctor": "toolchain/doctor.sh"
+    "setup": "node toolchain/setup.mjs",
+    "doctor": "node toolchain/doctor.mjs"
   },
   "viewer": {
-    "command": "./viewer.sh",
+    "command": "node toolchain/viewer.mjs",
     "url": "http://127.0.0.1:${port}/?view=grid"
   },
   "verdict": ".harness/verdict.json"
