@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
-import { activeWork, agent, agentRole, author, conversation, fail, isLeads, leadsRemoved, nextConversationNumber, person, type Actor, type Agent, type Conversation, type Person, type SuperTabState } from './model.js'
+import { activeWork, agent, agentRole, author, conversation, fail, isLeads, leadsRemoved, nextConversationNumber, person, type Actor, type Agent, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
 import type { SwarmRule } from './rules.js'
-import { buddyReads, isBuddy, isBuddyChat } from './buddies.js'
+import { buddyReads, isBuddy, isBuddyChat, isSwarmBuddy, isSwarmBuddyChat } from './buddies.js'
 
 export type ProjectVisibility = 'public' | 'private'
 /** Which built-in skill texts the project's agents get: Default (the team process only) or today's Harness orchestration. */
@@ -95,12 +95,25 @@ export function projectOf(state: SuperTabState, projectId: string): SwarmProject
 
 export function groupProject(state: SuperTabState, group: Conversation): SwarmProject {
   if (isLeads(group)) leadsRemoved()
+  // Never the project 'lead' by default: a person's one Buddy chat belongs to no project (Dee, 10-31).
+  if (isSwarmBuddyChat(group)) fail('NOT_FOUND', 'This conversation is unavailable.', 404)
   return projectOf(state, group.projectId ?? 'lead')
 }
 
+/** The project a start works in: a project session's own, none for a Swarm-wide Buddy's (Dee, 10-31), else its conversation's. */
+export function startProject(state: SuperTabState, request: Pick<AgentStartRequest, 'conversationId' | 'buddySession'>): SwarmProject | undefined {
+  if (request.buddySession?.projectId) return projectOf(state, request.buddySession.projectId)
+  const group = conversation(state, request.conversationId)
+  return isSwarmBuddyChat(group) ? undefined : groupProject(state, group)
+}
+
 export function agentProjectId(state: SuperTabState, target: Agent): string {
+  // A Swarm-wide Buddy has no project (Dee, 10-31): never the project 'lead' by default, so it matches none.
+  if (isSwarmBuddy(target)) return NO_PROJECT
   return target.projectId ?? state.conversations.find(c => c.agentIds.includes(target.id))?.projectId ?? 'lead'
 }
+/** The project id of an agent in no project: no project has it, so a comparison with one is false and projectOf refuses it. */
+export const NO_PROJECT = ''
 
 /** The project whose Lead (Product Manager) this agent is: the Lead of that project's Lead conversation. */
 export function ledProject(state: SuperTabState, agentId: string): SwarmProject | undefined {
@@ -113,7 +126,10 @@ export const sharedWithLeads = (project: SwarmProject): boolean => project.visib
 export function canReadProject(state: SuperTabState, actor: Actor, project: SwarmProject): boolean {
   if (actor.kind === 'agent') {
     const target = state.agents.find(a => a.id === actor.agentId)
-    return !!target && target.machineOwnerId === actor.machineOwnerId && agentProjectId(state, target) === project.id
+    if (!target || target.machineOwnerId !== actor.machineOwnerId) return false
+    // A Swarm-wide Buddy reads every project its person reads now, at the membership it was added in (Dee, 10-31).
+    if (isSwarmBuddy(target)) return !!buddyPerson(state, target, project)
+    return agentProjectId(state, target) === project.id
   }
   const member = state.people.find(p => p.id === actor.userId)
   return !!member && (project.visibility === 'public' || project.ownerId === member.id ||
@@ -134,8 +150,16 @@ export function readConversation(state: SuperTabState, actor: Actor, conversatio
     author(state, actor)
     leadsRemoved()
   }
-  readProject(state, actor, groupProject(state, group).id)
-  if (!canReadGroup(state, actor, group)) fail('NOT_FOUND', 'This conversation is unavailable.', 404)
+  // A person's one Buddy chat has no project: its person and their Buddies read it, and anyone else finds no such chat.
+  if (isSwarmBuddyChat(group)) {
+    author(state, actor)
+    if (!readsSwarmBuddyChat(state, actor, group)) fail('NOT_FOUND', 'This conversation is unavailable.', 404)
+    return group
+  }
+  // A chat of a project the reader does not read is refused in the same words as one that does not exist: "project
+  // unavailable" told another project's chat apart from a made-up id (security review 2 of #2435).
+  author(state, actor)
+  if (!canReadProject(state, actor, groupProject(state, group)) || !canReadGroup(state, actor, group)) fail('NOT_FOUND', 'This conversation is unavailable.', 404)
   return group
 }
 
@@ -158,6 +182,7 @@ export function canReadGroup(state: SuperTabState, actor: Actor, group: Conversa
  *  person, at the generation they were listed with, and the project's Lead, so a decision asked there before stays theirs. */
 export function readsRecordsIn(state: SuperTabState, actor: Actor, group: Conversation): boolean {
   if (isLeads(group)) return false
+  if (isSwarmBuddyChat(group)) return readsSwarmBuddyChat(state, actor, group)
   const project = groupProject(state, group)
   if (!canReadProject(state, actor, project)) return false
   const buddy = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId && isBuddy(a)) : undefined
@@ -168,6 +193,17 @@ export function readsRecordsIn(state: SuperTabState, actor: Actor, group: Conver
   const member = state.people.find(p => p.id === actor.userId)
   return !!member && (group.audience.people.some(p => p.id === member.id && p.generation === member.generation)
     || (PRIVATE_VISIBLE_TO_OWNERS && (member.id === project.ownerId || member.id === state.ownerId)))
+}
+
+/** Whether [actor] reads Swarm Buddy chat [group] (Dee, 10-31): its person at the membership it was opened in, and a Buddy in it
+ *  of that person and membership. Nobody else: not the Swarm's owner, a project's PM or another agent. */
+function readsSwarmBuddyChat(state: SuperTabState, actor: Actor, group: Conversation): boolean {
+  const owner = group.audience?.people[0]
+  if (!owner || !state.people.some(p => p.id === owner.id && p.generation === owner.generation)) return false
+  if (actor.kind === 'person') return actor.userId === owner.id
+  const target = state.agents.find(a => a.id === actor.agentId)
+  return !!target && target.machineOwnerId === actor.machineOwnerId && group.agentIds.includes(target.id) && isBuddy(target)
+    && target.buddyOf!.personId === owner.id && target.buddyOf!.generation === owner.generation
 }
 
 /** A Buddy's person, while they read [project] at the membership they added it in: a person who left, rejoined or lost a
@@ -189,6 +225,8 @@ export function audienceOf(state: SuperTabState, project: SwarmProject, personId
 }
 
 export function canReadAgent(state: SuperTabState, actor: Actor, target: Agent): boolean {
+  // A Swarm-wide Buddy belongs to no project and writes only in its person's chat: its person reads it, and so does it.
+  if (isSwarmBuddy(target)) return actor.kind === 'person' ? actor.userId === target.buddyOf!.personId : actor.agentId === target.id
   return canReadProject(state, actor, projectOf(state, agentProjectId(state, target)))
 }
 
@@ -349,7 +387,8 @@ export function manageProject(state: SuperTabState, actor: Actor, projectId: str
  * Pending starts must be reconciled first; terminal-history privacy bindings remain permanent. */
 export function deleteProject(state: SuperTabState, actor: Actor, projectId: string): void {
   const project = manageProject(state, actor, projectId)
-  const groups = state.conversations.filter(c => !isLeads(c) && groupProject(state, c).id === project.id)
+  // A person's one Buddy chat belongs to no project and stays; that project's sessions in it go with their agents.
+  const groups = state.conversations.filter(c => !isLeads(c) && !isSwarmBuddyChat(c) && groupProject(state, c).id === project.id)
   const groupIds = new Set(groups.map(c => c.id))
   if (state.starts?.some(s => groupIds.has(s.request.conversationId) && !s.error &&
     (!s.harnessId || s.poolGeneration && !s.poolSettled))) {

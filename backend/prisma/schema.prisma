@@ -1102,6 +1102,9 @@ model SuperTabMessage {
   alsoInChat      Boolean?
   /// A reply in a Buddy thread session's thread (superTabs/buddySessions.ts): the main Buddy never reads it.
   buddySession    Boolean?
+  /// The project a row of a person's one Buddy chat belongs to (superTabs/buddySessions.ts lostProjectRow): a project
+  /// session's thread and a PM's private line. Hidden once its person no longer reads that project.
+  buddyProject    String?
   createdAt       DateTime @default(now())
 
   /// Pages read by (sequence, id): older rows of one command share a sequence.

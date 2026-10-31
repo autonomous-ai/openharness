@@ -6,6 +6,7 @@ import type { Prisma, PrismaClient } from '@prisma/client'
 import { ensureIndex } from '../lib/db/indexes.js'
 import { activeWork, fail, isLeads, person, stableId, type Actor, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { canReadGroup, groupProject, projectAgent, projectOf } from './projects.js'
+import { isSwarmBuddyChat } from './buddies.js'
 import { groupsBy } from './parts/indexed.js'
 import { usernameOf } from './usernames.js'
 
@@ -107,7 +108,8 @@ const OPENS_BLOCK = new RegExp('^(?: {4}|\\t| {0,3}(?:[-*+](?:[ \\t\\n]|$)|#{1,6
 /** Whether [actor] may tag people in [group]: a person who can post there; any agent of the project but a Buddy, in its own
  *  project's conversations (project instructions, phase 4); nobody in the Leads conversation. */
 function mayTag(state: SuperTabState, actor: Actor, group: Conversation): boolean {
-  if (isLeads(group)) return false
+  // Nobody else reads a person's one Buddy chat, so nobody is tagged there (Dee, 10-31).
+  if (isLeads(group) || isSwarmBuddyChat(group)) return false
   return actor.kind !== 'agent' || projectAgent(state, actor, groupProject(state, group).id)
 }
 
@@ -125,6 +127,7 @@ export function checkMentions(state: SuperTabState, actor: Actor, group: Convers
   const ids = [...new Set(personIds)].filter(id => actor.kind !== 'person' || id !== actor.userId)
   if (!ids.length) return ids
   if (isLeads(group)) fail('INVALID_MENTION', 'Nobody is tagged in the Leads conversation.', 400)
+  if (isSwarmBuddyChat(group)) fail('INVALID_MENTION', 'Nobody else reads your Buddy chat.', 400)
   if (actor.kind === 'agent' && !projectAgent(state, actor, groupProject(state, group).id)) {
     fail('FORBIDDEN', 'Only a person or an agent of this project tags people here.', 403)
   }
