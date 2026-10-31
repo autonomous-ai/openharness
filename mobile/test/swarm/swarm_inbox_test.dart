@@ -733,6 +733,23 @@ void main() {
       addTearDown(() => appLog = before);
     });
 
+    test('a Swarm that could not be read, once however many reads fail', () async {
+      final fake = backend({'a': []});
+      fake.routes['/api/super-tabs/a/parts'] = (_) =>
+          throw SuperTabFailure('INTERNAL', 'Broken', statusCode: 500);
+      final i = inbox(fake);
+
+      await i.refresh();
+      final reader = i.reader('a')!;
+      await reader.refresh();
+      await reader.refresh();
+
+      expect(reader.error, 'Broken');
+      expect(log.events, hasLength(1));
+      expect(log.events.single.level, AppLogLevel.warn);
+      expect(log.events.single.message, contains('Swarm a not read: Broken'));
+    });
+
     test('what threw, with its stack, once however many polls fail, and '
         'again after a read that worked', () async {
       final fake = backend({'a': []});

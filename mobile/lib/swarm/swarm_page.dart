@@ -10,8 +10,8 @@ import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
+import 'package:harness_mobile/shared/widgets/skeleton.dart';
 
-import 'model.dart';
 import 'swarm_conversation_page.dart' show openSwarmConversation;
 import 'swarm_home_list.dart';
 import 'swarm_home_rows.dart';
@@ -70,7 +70,9 @@ bool swarmHomeListed(SwarmInbox inbox, String swarmId, String projectId) {
 /// yet (Lead, 2026-10-30): the phone reads no chat by chat for them.
 ///
 /// Pushed over another page it has a back button instead of the switcher.
-/// Reads the account's [SwarmSession] from the shell; with none, says why.
+/// Reads the account's [SwarmSession] from the shell; with none, its skeleton
+/// while the account is on its way ([SwarmScope.accountComingOf]), else says
+/// why.
 class SwarmPage extends StatefulWidget {
   const SwarmPage({super.key, this.now = DateTime.now});
 
@@ -251,7 +253,13 @@ class _SwarmPageState extends State<SwarmPage> {
               ),
             Expanded(
               child: session == null
-                  ? const _Unavailable()
+                  ? SwarmScope.accountComingOf(context)
+                        ? ListView(
+                            key: const ValueKey('swarm-account-coming'),
+                            padding: _listPadding(context),
+                            children: _reading(first: true),
+                          )
+                        : const _Unavailable()
                   : ListenWhileInSight(
                       listenable: listens!,
                       // Before there is a Swarm to show, a start screen in
@@ -262,16 +270,7 @@ class _SwarmPageState extends State<SwarmPage> {
                             onRefresh: () => _pulled(context, session),
                             child: ListView(
                               physics: const AlwaysScrollableScrollPhysics(),
-                              // The last row clears the floating +.
-                              padding: EdgeInsets.fromLTRB(
-                                AppSpace.m,
-                                0,
-                                AppSpace.m,
-                                MediaQuery.paddingOf(context).bottom +
-                                    SwarmNewMessageButton.size +
-                                    AppSpace.l +
-                                    AppSpace.xl,
-                              ),
+                              padding: _listPadding(context),
                               children: _body(context, session),
                             ),
                           ),
@@ -282,6 +281,17 @@ class _SwarmPageState extends State<SwarmPage> {
       ),
     );
   }
+
+  /// Around Home's rows: the last clears the floating +.
+  EdgeInsets _listPadding(BuildContext context) => EdgeInsets.fromLTRB(
+    AppSpace.m,
+    0,
+    AppSpace.m,
+    MediaQuery.paddingOf(context).bottom +
+        SwarmNewMessageButton.size +
+        AppSpace.l +
+        AppSpace.xl,
+  );
 
   /// Home's top bar. At the root, the tab's title: the Swarm shown and a
   /// button to switch it; pushed over another page, back and "Swarm".
@@ -295,15 +305,38 @@ class _SwarmPageState extends State<SwarmPage> {
         title: 'Swarm',
       );
     }
-    if (session == null) return const SwarmTabHeader('Swarm');
+    if (session == null) {
+      if (!SwarmScope.accountComingOf(context)) {
+        return const SwarmTabHeader('Swarm');
+      }
+      // Where the Swarm's name will be: its button has nothing to switch yet.
+      return SwarmTabHeader(
+        'Swarm',
+        loading: true,
+        leading: _loadingTile,
+        titleLabel: 'Loading your Swarm',
+        onTitle: () {},
+      );
+    }
     final shown = _shown(session);
     final title = swarmHomeTitle(session.inbox, shown);
     // The one Swarm named has its tile; All Swarms has none.
     final named = swarmHomeNamed(session.inbox, shown);
+    // A start screen in the body has no Swarm coming to name.
+    final listing =
+        swarmHomeListing(session.inbox) &&
+        swarmStartView(context, session) == null;
     return SwarmTabHeader(
       title,
-      leading: named == null ? null : SwarmProjectTile(named.name),
-      titleLabel: 'Swarm: $title. Switch Swarm',
+      loading: listing,
+      leading: listing
+          ? _loadingTile
+          : named == null
+          ? null
+          : SwarmProjectTile(named.name),
+      titleLabel: listing
+          ? 'Loading your Swarm. Switch Swarm'
+          : 'Swarm: $title. Switch Swarm',
       onTitle: () => unawaited(showSwarmSwitcher(context, session)),
     );
   }
@@ -327,7 +360,11 @@ class _SwarmPageState extends State<SwarmPage> {
     // was until then. Only a server without the list says so, as no read will
     // ever bring its rows.
     if (!inbox.loaded && inbox.swarms.isEmpty) {
+      final away = swarmHomeListing(inbox)
+          ? _awayCard(context, session, const [], null, widget.now())
+          : null;
       return [
+        ?away,
         if (inbox.error == swarmServerTooOld)
           Padding(
             padding: const EdgeInsets.fromLTRB(
@@ -343,7 +380,7 @@ class _SwarmPageState extends State<SwarmPage> {
             ),
           )
         else
-          ..._reading(),
+          ..._reading(first: away == null),
       ];
     }
     final shown = _shown(session);
@@ -360,8 +397,8 @@ class _SwarmPageState extends State<SwarmPage> {
 
   /// While you were away, once the person has been gone [SwarmPage.awayAfter]
   /// or more: the work done since in the Swarms shown and what needs them
-  /// there now, each unknown while a Swarm, or what waits in it, is not read.
-  /// A tap opens Activity.
+  /// there now, each a skeleton while the Swarms, or what waits in them, are
+  /// not read. A tap opens Activity.
   Widget? _awayCard(
     BuildContext context,
     SwarmSession session,
@@ -381,13 +418,14 @@ class _SwarmPageState extends State<SwarmPage> {
       return null;
     }
     final inbox = session.inbox;
-    // A Swarm not read, or out of reach, leaves the work done unknown.
-    int? done = 0;
-    for (final swarm in shown) {
+    final listing = swarmHomeListing(inbox);
+    // A Swarm not read leaves the work done unknown; one no read will bring is
+    // left out, or its skeleton would never end.
+    int? done = listing ? null : 0;
+    for (final swarm in listing ? const <SwarmListing>[] : shown) {
       final reader = inbox.reader(swarm.id);
-      final snapshot = reader == null || reader.accessRevoked
-          ? null
-          : reader.snapshot;
+      if (reader != null && _ended(reader)) continue;
+      final snapshot = reader?.snapshot;
       done = snapshot == null ? null : done! + swarmDoneSince(snapshot, since);
       if (done == null) break;
     }
@@ -400,7 +438,9 @@ class _SwarmPageState extends State<SwarmPage> {
         back: back,
         done: done,
         // None found is not none waiting until all of it is read.
-        needs: needs > 0 || _needsRead(inbox, shown) ? needs : null,
+        needs: !listing && (needs > 0 || _needsRead(inbox, shown))
+            ? needs
+            : null,
         onTap: () {
           if (!showSwarmTab(context, SwarmTab.activity)) {
             openSwarmNeeds(context, swarmId: picked);
@@ -411,9 +451,10 @@ class _SwarmPageState extends State<SwarmPage> {
   }
 
   /// Pinned, then Projects: every project of the Swarms shown, grouped by
-  /// [swarmHomeLists]; a Swarm still to be read has rows on their way, one
-  /// that could not be read says so. The first caption is the screen's
-  /// [first] thing, with nothing over it.
+  /// [swarmHomeLists]; a Swarm still to be read has rows on their way, a
+  /// failed read still trying too, as it is in the log. One no read will bring
+  /// says so. The first caption is the screen's [first] thing, with nothing
+  /// over it.
   List<Widget> _projects(
     BuildContext context,
     SwarmSession session,
@@ -437,11 +478,13 @@ class _SwarmPageState extends State<SwarmPage> {
     final several = shown.length > 1;
     final projects = <SwarmHomeProject>[];
     final glances = <String, SwarmTeamGlance>{};
-    final people = <String, List<SuperTabPerson>>{};
+    final humans = <String, int>{};
     final names = <String, String>{};
     final reading = <String>[];
     final failed = <(String, String)>[];
+    final asking = <String>{};
     for (final swarm in shown) {
+      if (inbox.asks(swarm.id)?.loading ?? false) asking.add(swarm.id);
       switch (inbox.reader(swarm.id)) {
         case final SwarmReader reader when reader.snapshot != null:
           final snapshot = reader.snapshot!;
@@ -456,11 +499,12 @@ class _SwarmPageState extends State<SwarmPage> {
             );
             projects.add(row);
             glances[row.key] = swarmTeamGlance(snapshot, projectId: project.id);
-            people[row.key] = swarmProjectPeople(snapshot, project);
+            humans[row.key] = swarmProjectPeople(snapshot, project).length;
             names[row.key] = swarm.name;
           }
-        case SwarmReader(error: final error?):
-          failed.add((swarm.id, error));
+        case final SwarmReader reader
+            when _ended(reader) && reader.error != null:
+          failed.add((swarm.id, reader.error!));
         case _:
           reading.add(swarm.id);
       }
@@ -470,9 +514,10 @@ class _SwarmPageState extends State<SwarmPage> {
       key: ValueKey('swarm-project-${project.swarmId}-${project.project.id}'),
       project: project,
       glance: glances[project.key]!,
-      people: people[project.key]!,
+      humans: humans[project.key]!,
       now: now,
       swarmName: several ? names[project.key] : null,
+      tagsLoading: asking.contains(project.swarmId),
       onTap: () => _openProject(context, project.swarmId, project.project.id),
       onLongPress: () => unawaited(_pin(context, session, project)),
     );
@@ -516,18 +561,14 @@ class _SwarmPageState extends State<SwarmPage> {
         SwarmCaption('Projects', first: first && lists.pinned.isEmpty),
       for (final (i, id) in reading.indexed) ...[
         if (projects.isNotEmpty || i > 0) const SizedBox(height: 8),
-        SwarmSkeletonRows(id: 'swarm-projects-loading-$id'),
+        SwarmSkeletonRows(id: 'swarm-projects-loading-$id', dot: true),
       ],
       for (final (id, error) in failed) ...[
         const SizedBox(height: 8),
         SwarmGroup(
           key: ValueKey('swarm-projects-error-$id'),
           children: [
-            SwarmRow(
-              title: error,
-              detail: SwarmRow.line('Pull down to try again.'),
-              onTap: null,
-            ),
+            SwarmRow(title: error, onTap: null),
           ],
         ),
       ],
@@ -576,17 +617,31 @@ class _SwarmPageState extends State<SwarmPage> {
   }
 
   /// Home before the list answers: the projects as rows on their way.
-  List<Widget> _reading() => [
-    const SwarmCaption('Projects', first: true),
-    SwarmSkeletonRows(id: 'swarm-projects-loading'),
+  List<Widget> _reading({required bool first}) => [
+    SwarmCaption('Projects', first: first),
+    SwarmSkeletonRows(id: 'swarm-projects-loading', dot: true),
   ];
 
 }
 
+/// A Swarm's tile on its way.
+const _loadingTile = Skeleton(
+  width: 32,
+  height: 32,
+  radius: AppCard.insetRadius,
+);
+
+/// Whether no read will bring this Swarm: the reader may no longer read it, or
+/// the backend needs a newer build, with nothing read before then.
+bool _ended(SwarmReader reader) =>
+    reader.snapshot == null && (reader.accessRevoked || reader.updateRequired);
+
 /// Whether what waits on the person in every Swarm [shown] is read: the
-/// Swarm, and what waits in it since it was last read in full.
+/// Swarm, and what waits in it since it was last read in full. One no read
+/// will bring has nothing more to wait for.
 bool _needsRead(SwarmInbox inbox, List<SwarmListing> shown) => shown.every(
   (swarm) => switch (inbox.reader(swarm.id)) {
+    final reader? when _ended(reader) => true,
     SwarmReader(snapshot: _?, accessRevoked: false) => switch (inbox.asks(
       swarm.id,
     )) {

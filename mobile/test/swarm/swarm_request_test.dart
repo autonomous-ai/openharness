@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart' show CancelToken;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/core/models.dart';
+import 'package:harness_mobile/logging/app_log.dart';
 import 'package:harness_mobile/swarm/swarm_conversation.dart';
 import 'package:harness_mobile/swarm/swarm_file_picker.dart'
     show swarmPickerCopyFolders;
@@ -17,12 +18,187 @@ import 'package:harness_mobile/swarm/swarm_outgoing_files.dart';
 import '../viewer_app_fixture.dart';
 import 'swarm_fixture.dart' show changes, firstLoad, groupData, me, tab;
 
-/// How the phone reaches the Swarm: one of the account's own machines
-/// forwards the call to the backend with its session (`super_tabs`,
-/// `action: backend` in cli/src/superTabs/service.ts), as the web build does.
-/// The phone holds no Swarm credential of its own.
+/// How the phone reaches the Swarm: a read goes straight to the backend with
+/// the phone's own sign-in, as the web build's does, and on through a machine
+/// when that says nothing of the person. A command, and a read going on, is
+/// forwarded by one of the account's own machines with its session
+/// (`super_tabs`, `action: backend` in cli/src/superTabs/service.ts). The tests
+/// outside the first group have no sign-in to read with (`FakeApi.swarmRead`),
+/// so their reads all go on through the machines.
 void main() {
   Map<String, dynamic> forwarded(Object? value) => {'ok': true, 'value': value};
+
+  group('a read goes to the backend itself', () {
+    const path = '/api/super-tabs/list';
+    SuperTabFailure refusal(String code, int status) =>
+        SuperTabFailure(code, 'Refused: $code', statusCode: status);
+
+    test('and with an answer, no machine is asked', () async {
+      final rig = await signedInWith({'m': []});
+      addTearDown(rig.app.dispose);
+      rig.api.onSwarmRead = (_) async => {'tabs': <Object>[], 'next': null};
+
+      final value = await rig.app.swarmRequest('GET', path);
+
+      expect(value, {'tabs': <Object>[], 'next': null});
+      expect(rig.api.swarmReads, [path]);
+      expect(rig.conn('m').payloadsOf('super_tabs'), isEmpty);
+    });
+
+    test('so it needs no computer connected', () async {
+      final rig = await signedInWith({});
+      addTearDown(rig.app.dispose);
+      rig.api.onSwarmRead = (_) async => {'tabs': <Object>[]};
+
+      expect(await rig.app.swarmRequest('GET', path), {'tabs': <Object>[]});
+    });
+
+    test('a value of null is an answer, not a reason to ask a machine', () async {
+      final rig = await signedInWith({'m': []});
+      addTearDown(rig.app.dispose);
+      rig.api.onSwarmRead = (_) async => null;
+
+      expect(await rig.app.swarmRequest('GET', path), isNull);
+      expect(rig.conn('m').payloadsOf('super_tabs'), isEmpty);
+    });
+
+    test('its query goes with it', () async {
+      final rig = await signedInWith({'m': []});
+      addTearDown(rig.app.dispose);
+      rig.api.onSwarmRead = (_) async => <String, Object?>{};
+
+      await rig.app.swarmRequest('GET', '/api/super-tabs/t/changes?cursor=c1');
+
+      expect(rig.api.swarmReads, ['/api/super-tabs/t/changes?cursor=c1']);
+    });
+
+    test('a command never does: a machine forwards it', () async {
+      final rig = await signedInWith({'m': []});
+      addTearDown(rig.app.dispose);
+      rig.api.onSwarmRead = (_) async => fail('a command is not a read');
+      rig.conn('m').answers['super_tabs'] = (_) => forwarded({'result': {}});
+
+      await rig.app.swarmRequest(
+        'POST',
+        '/api/super-tabs/t/commands',
+        body: {'operationId': 'op'},
+      );
+
+      expect(rig.api.swarmReads, isEmpty);
+      expect(rig.conn('m').payloadsOf('super_tabs'), hasLength(1));
+    });
+
+    for (final (code, status) in const [
+      ('FORBIDDEN', 403),
+      ('NOT_FOUND', 404),
+      ('UPDATE_REQUIRED', 426),
+      ('INVALID_REQUEST', 400),
+    ]) {
+      test('what it refuses stands: $code $status', () async {
+        final rig = await signedInWith({'m': []});
+        addTearDown(rig.app.dispose);
+        rig.api.onSwarmRead = (_) async => throw refusal(code, status);
+        rig.conn('m').answers['super_tabs'] = (_) => forwarded('from a machine');
+
+        await expectLater(
+          rig.app.swarmRequest('GET', path),
+          throwsA(
+            isA<SuperTabFailure>()
+                .having((f) => f.code, 'code', code)
+                .having((f) => f.statusCode, 'statusCode', status),
+          ),
+        );
+        expect(rig.conn('m').payloadsOf('super_tabs'), isEmpty);
+      });
+    }
+
+    for (final (name, failure) in <(String, Object)>[
+      ('no status', refusal('BACKEND_UNAVAILABLE', 0)),
+      ('a 500', refusal('INTERNAL', 500)),
+      ('a 503', refusal('BACKEND_UNAVAILABLE', 503)),
+      ('an expired session', refusal('UNAUTHORIZED', 401)),
+      ('a rate limit', refusal('RATE_LIMITED', 429)),
+      ('a session of a limited kind', refusal('TEAM_SESSION_LIMITED', 403)),
+      ('no answer at all', const SocketException('offline')),
+      ('no sign-in to read with', StateError('no token source')),
+    ]) {
+      test('$name: a machine reads it instead', () async {
+        final rig = await signedInWith({'m': []});
+        addTearDown(rig.app.dispose);
+        rig.api.onSwarmRead = (_) async => throw failure;
+        rig.conn('m').answers['super_tabs'] = (_) => forwarded('from a machine');
+
+        expect(await rig.app.swarmRequest('GET', path), 'from a machine');
+        expect(rig.conn('m').payloadsOf('super_tabs'), hasLength(1));
+      });
+    }
+
+    test('no answer and no computer: no computer', () async {
+      final rig = await signedInWith({});
+      addTearDown(rig.app.dispose);
+      rig.api.onSwarmRead = (_) async => throw const SocketException('offline');
+
+      await expectLater(
+        rig.app.swarmRequest('GET', path),
+        throwsA(
+          isA<SuperTabFailure>().having(
+            (f) => f.code,
+            'code',
+            'MACHINE_UNAVAILABLE',
+          ),
+        ),
+      );
+    });
+
+    for (final (name, finish) in <(String, void Function(Completer<Object?>))>[
+      ('an answer', (held) => held.complete({'tabs': <Object>[]})),
+      ('a failure', (held) => held.completeError(StateError('late'))),
+    ]) {
+      test('$name that lands after sign-out is dropped', () async {
+        final rig = await signedInWith({'m': []});
+        addTearDown(rig.app.dispose);
+        final held = Completer<Object?>();
+        rig.api.onSwarmRead = (_) => held.future;
+
+        final read = rig.app.swarmRequest('GET', path);
+        await rig.app.logout();
+        finish(held);
+
+        await expectLater(
+          read,
+          throwsA(
+            isA<SuperTabFailure>().having(
+              (f) => f.code,
+              'code',
+              'ACCOUNT_CHANGED',
+            ),
+          ),
+        );
+      });
+    }
+
+    test('failing again and again goes in the log once, and again only after '
+        'it answered', () async {
+      final before = appLog;
+      final log = _SwarmLog();
+      appLog = log;
+      addTearDown(() => appLog = before);
+      final rig = await signedInWith({'m': []});
+      addTearDown(rig.app.dispose);
+      rig.conn('m').answers['super_tabs'] = (_) => forwarded('from a machine');
+
+      rig.api.onSwarmRead = (_) async => throw StateError('down');
+      await rig.app.swarmRequest('GET', path);
+      await rig.app.swarmRequest('GET', path);
+      expect(log.errors, hasLength(1));
+
+      rig.api.onSwarmRead = (_) async => 'back';
+      await rig.app.swarmRequest('GET', path);
+      rig.api.onSwarmRead = (_) async => throw StateError('down again');
+      await rig.app.swarmRequest('GET', path);
+      expect(log.errors, hasLength(2));
+    });
+  });
 
   test(
     'a read goes through a connected machine and answers its value',
@@ -794,4 +970,19 @@ void main() {
       );
     });
   });
+}
+
+class _SwarmLog implements AppLog {
+  final errors = <Object?>[];
+
+  @override
+  void record(
+    AppLogLevel level,
+    String category,
+    String message, {
+    Object? error,
+    StackTrace? stackTrace,
+  }) {
+    if (category == 'swarm') errors.add(error);
+  }
 }

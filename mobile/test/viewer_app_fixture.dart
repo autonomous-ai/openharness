@@ -224,6 +224,19 @@ class FakeApi extends ApiClient {
     return answer == null ? profile : await answer();
   }
 
+  /// The Swarm reads asked of the backend itself.
+  final swarmReads = <String>[];
+
+  /// Answers them when set. Unset, this client has no sign-in to read with, so
+  /// the read goes on through a machine.
+  Future<Object?> Function(String path)? onSwarmRead;
+
+  @override
+  Future<Object?> swarmRead(String path) {
+    swarmReads.add(path);
+    return onSwarmRead?.call(path) ?? super.swarmRead(path);
+  }
+
   @override
   Future<Map<String, dynamic>?> desk() async => _deskDocument;
 

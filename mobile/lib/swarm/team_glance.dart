@@ -56,14 +56,16 @@ class SwarmTeamGlance {
       : parts.map((part) => part.text).join(' · ');
 
   /// "5 agents running", counting who [working] counts: what a project's row
-  /// on Home says of its team.
-  late final String running = switch (working) {
-    _ when agents.isEmpty => 'No agents yet',
-    0 => 'No agents running',
+  /// on Home says of its team. Null with nobody running.
+  late final String? running = switch (working) {
+    0 => null,
     1 => '1 agent running',
     final n => '$n agents running',
   };
 }
+
+/// "1 human", "3 humans".
+String swarmHumans(int count) => count == 1 ? '1 human' : '$count humans';
 
 const _finished = {'done', 'stopped', 'cancelled'};
 

@@ -82,12 +82,7 @@ void main() {
     expect(glance.line, '1 waiting');
 
     final row = tester
-        .widget<SwarmTeamFaces>(
-          find.descendant(
-            of: key('swarm-project-$tab-$project'),
-            matching: find.byType(SwarmTeamFaces),
-          ),
-        )
+        .widget<SwarmHomeProjectRow>(key('swarm-project-$tab-$project'))
         .glance;
 
     expect(reader.snapshot, same(read), reason: 'still the same read');

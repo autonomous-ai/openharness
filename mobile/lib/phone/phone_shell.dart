@@ -104,7 +104,8 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
     notices.openedDevice.addListener(_openNoticedDevice);
     final state = WidgetsBinding.instance.lifecycleState;
     _swarm = SwarmHost(
-      accountId: () => widget.notifier.currentUser?.id,
+      accountId: () => widget.notifier.swarmAccountId,
+      accountReading: () => widget.notifier.accountReading,
       account: widget.notifier,
       request: widget.notifier.swarmRequest,
       upload: widget.notifier.swarmUpload,

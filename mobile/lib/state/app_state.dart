@@ -11,7 +11,7 @@ import '../measurement/setup_transport.dart';
 
 import 'dart:async';
 import 'dart:convert' show jsonDecode, jsonEncode;
-import 'dart:math' show Random;
+import 'dart:math' show Random, min;
 
 import 'package:dio/dio.dart';
 import 'package:xterm/xterm.dart' show RemoteScrollMemory, Terminal;
@@ -572,6 +572,9 @@ class AppNotifier extends ChangeNotifier {
     // The copies large chat files were kept in went with the chats that held them.
     unawaited(clearSwarmPickerCopies());
     _profileInFlight = null;
+    _profileAgain?.cancel();
+    _profileFailures = 0;
+    _keptAccountId = null;
     _retryInFlight = null;
     machinesLoading = false;
     _registeringDevice = false;
@@ -1870,6 +1873,11 @@ class AppNotifier extends ChangeNotifier {
     // appear as soon as the local state is restored, and these two now overlap.
     await StartupTrace.time('boot.restoreLocalState', _restorePaneLayout);
     if (!_authWorkCurrent(revision)) return;
+    // Before the shell is up, so its first frame can already open what Swarm
+    // kept for this account. Only a nicety: nothing here is worth a failed boot.
+    final kept = await session.accountId().catchError((Object _) => null);
+    if (!_authWorkCurrent(revision)) return;
+    _keptAccountId = kept;
     _bootStatusMessage = null;
     status = AppStatus.authenticated;
     notifyListeners();
@@ -1903,6 +1911,35 @@ class AppNotifier extends ChangeNotifier {
     if (_authWorkCurrent(revision)) notifyListeners();
   }
 
+  /// Signed in, and who as is still to come: the shell is up before the account
+  /// is read, and a read that fails is tried again ([_profileNotRead]).
+  bool get accountReading =>
+      status == AppStatus.authenticated &&
+      currentUser == null &&
+      _keptAccountId == null;
+
+  /// The account this sign-in last said it was, until it says so again.
+  String? _keptAccountId;
+
+  /// Whose Swarm to open: the account, or before it has answered, who this
+  /// sign-in last said it was: a launch's kept Home need not wait on
+  /// `/api/auth/me` with everything it needs on disk.
+  /// Should the account answer otherwise, its answer wins and Swarm starts over
+  /// ([SwarmHost]), taking what it kept with it.
+  String? get swarmAccountId =>
+      currentUser?.id ??
+      (status == AppStatus.authenticated ? _keptAccountId : null);
+
+  void _keepAccount(String id) {
+    if (id == _keptAccountId) return;
+    _keptAccountId = id;
+    unawaited(
+      session.saveAccountId(id).catchError((Object error) {
+        appLog.warn('auth', 'Account id not kept', error: error);
+      }),
+    );
+  }
+
   /// Who is signed in, from the account. Shared by the boot path and by the
   /// retry path, because a profile the boot could not read is asked for again
   /// there — and a session that never learns its own account has an empty
@@ -1925,21 +1962,46 @@ class AppNotifier extends ChangeNotifier {
       if (!_authWorkCurrent(revision) || status != AppStatus.authenticated) {
         return;
       }
-      if (me != null) {
+      if (me == null) {
+        _profileNotRead(revision, null);
+      } else {
+        _profileFailures = 0;
         currentUser = CurrentUserProfile.fromMe(me);
         // Made by a sign-in in this run, or coming back to it.
         onboardingMeasurement.accountCreated(currentUser?.createdAt);
         // A sign-in by hand: the device log keeps which account it was made to.
         if (currentUser?.id case final id?) {
           unawaited(_deviceLog?.signedInAs(id));
+          _keepAccount(id);
         }
         notifyListeners();
       }
     } catch (error) {
-      if (_authWorkCurrent(revision)) {
-        debugPrint('bootstrap: profile unavailable: $error');
-      }
+      if (_authWorkCurrent(revision)) _profileNotRead(revision, error);
     }
+  }
+
+  Timer? _profileAgain;
+
+  /// Reads of the profile that failed in a row: the first goes in the log.
+  int _profileFailures = 0;
+
+  /// A read that brought no account: asked for again, less often each time,
+  /// from 5 seconds up to a minute. Swarm waits on it, and nothing else asks
+  /// while the machines are well.
+  void _profileNotRead(int revision, Object? error) {
+    if (_profileFailures == 0) {
+      appLog.warn('auth', 'Account not read', error: error);
+    }
+    final wait = min(60, 5 << min(_profileFailures, 4));
+    _profileFailures++;
+    _profileAgain?.cancel();
+    _profileAgain = Timer(Duration(seconds: wait), () {
+      if (_disposed || !_authWorkCurrent(revision) || currentUser != null) {
+        return;
+      }
+      unawaited(_loadProfile());
+    });
   }
 
   /// The session went away while the app was already running — send the user to the signed-out screen with a
@@ -6359,12 +6421,20 @@ class AppNotifier extends ChangeNotifier {
     return best;
   }
 
-  /// One Swarm backend call ([method] on [path], `/api/super-tabs…`), forwarded by one of the
-  /// account's own machines with its session (`super_tabs`, `action: backend`,
-  /// cli/src/superTabs/service.ts). The phone holds no Swarm credential: the machine checks that
-  /// this connection is its owner's, and the backend what that account may read. Answers the
-  /// backend's value; a refusal — the backend's, the machine's, or none to ask — is a
-  /// [SuperTabFailure], and an answer that lands after the account changed is dropped.
+  /// One Swarm backend call ([method] on [path], `/api/super-tabs…`). Answers the backend's value;
+  /// a refusal — the backend's, the machine's, or none to ask — is a [SuperTabFailure], and an
+  /// answer that lands after the account changed is dropped.
+  ///
+  /// A read goes straight to the backend with the phone's own sign-in
+  /// ([ApiClient.swarmRead]), as the web build's does: on the iPhone (2026-10-31) a launch's first
+  /// list took 9 seconds through the machines, 6 of them on a Team sign-in's refusals and the wait
+  /// for the next machine, where the same backend answers the phone in 400 ms. What the backend
+  /// refuses stands, being about this person; with no answer, or one that says nothing of them
+  /// ([_swarmReadTriesMachine]), the read goes on through a machine as below.
+  ///
+  /// A command, and a read going on, is forwarded by one of the account's own machines with its
+  /// session (`super_tabs`, `action: backend`, cli/src/superTabs/service.ts): the machine checks
+  /// that this connection is its owner's, and the backend what that account may read.
   ///
   /// A refusal is asked again through each other machine that is up, one after another, up to
   /// [_swarmAsksPerCall] in all. One that answers shows the refusals before it were those
@@ -6391,6 +6461,31 @@ class AppNotifier extends ChangeNotifier {
     String path, {
     Map<String, dynamic>? body,
   }) async {
+    if (method == 'GET') {
+      final revision = _authRevision;
+      void stillThisAccount() {
+        if (!_authWorkCurrent(revision)) {
+          throw const SuperTabFailure(
+            'ACCOUNT_CHANGED',
+            'The account changed. Open Swarm again.',
+          );
+        }
+      }
+
+      try {
+        final value = await api.swarmRead(path);
+        stillThisAccount();
+        _swarmReadFailed = false;
+        return value;
+      } on SuperTabFailure catch (refusal) {
+        stillThisAccount();
+        if (!_swarmReadTriesMachine(refusal)) rethrow;
+        _swarmReadGoesOn(refusal);
+      } catch (error) {
+        stillThisAccount();
+        _swarmReadGoesOn(error);
+      }
+    }
     var machine = _swarmMachine() ?? await _swarmMachineBack();
     if (machine == null) throw _swarmNoComputer();
     final asked = <MachineState>{}, refused = <MachineState>[];
@@ -6428,6 +6523,29 @@ class AppNotifier extends ChangeNotifier {
       throw _swarmNoComputer();
     }
     Error.throwWithStackTrace(failure, trace);
+  }
+
+  /// Whether a machine might still read what the phone's own read could not: the backend was not
+  /// there to say (no status, a 5xx), or its answer was about this sign-in or this phone, not about
+  /// what the person may read (an expired session, a rate limit, a session of a limited kind).
+  static bool _swarmReadTriesMachine(SuperTabFailure refusal) =>
+      refusal.statusCode == 0 ||
+      refusal.statusCode >= 500 ||
+      refusal.statusCode == 401 ||
+      refusal.statusCode == 429 ||
+      refusal.code == 'TEAM_SESSION_LIMITED';
+
+  /// Whether the phone's own reads are failing: logged as they start to, not once per read.
+  bool _swarmReadFailed = false;
+
+  void _swarmReadGoesOn(Object failure) {
+    if (_swarmReadFailed) return;
+    _swarmReadFailed = true;
+    appLog.warn(
+      'swarm',
+      'Swarm read from the backend failed, asking a machine',
+      error: failure,
+    );
   }
 
   /// Sends one Swarm chat file to the backend ([SwarmUpload]): straight from this phone with its own
@@ -11119,6 +11237,7 @@ class AppNotifier extends ChangeNotifier {
       // went to their computer to sign it in.
       _rereadMachinesWhileDeaf();
       _startDeafPoll();
+      if (currentUser == null) unawaited(_loadProfile());
     }
     // The zoo too, for the same reason: a `zoo_changed` sent while the phone
     // was in a pocket reached nobody.
@@ -11354,6 +11473,7 @@ class AppNotifier extends ChangeNotifier {
 
   @override
   void dispose() {
+    _profileAgain?.cancel();
     launchMeasurement?.dispose();
     productConnections.dispose();
     productResumes.dispose();

@@ -254,9 +254,9 @@ void main() {
         reason: "River's tag, waiting in it",
       );
       expect(
-        find.descendant(of: row, matching: find.byType(SwarmTeamFaces)),
+        find.descendant(of: row, matching: find.text('1 human')),
         findsOneWidget,
-        reason: "its people's faces and how many agents are running",
+        reason: 'how many people read it, with no agent running',
       );
     });
 

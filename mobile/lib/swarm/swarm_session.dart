@@ -216,6 +216,7 @@ class SwarmSession extends ChangeNotifier {
 class SwarmHost extends ChangeNotifier {
   SwarmHost({
     required this.accountId,
+    this.accountReading,
     required this.account,
     required this.request,
     this.upload = refuseSwarmUpload,
@@ -238,6 +239,10 @@ class SwarmHost extends ChangeNotifier {
 
   /// The signed-in account's id; null while nobody is.
   final String? Function() accountId;
+
+  /// Whether someone is signed in and [accountId] is on its way; null where
+  /// nobody can tell, and no account is taken to be coming.
+  final bool Function()? accountReading;
 
   /// Tells when [accountId] may have changed.
   final Listenable account;
@@ -277,6 +282,13 @@ class SwarmHost extends ChangeNotifier {
   SwarmSession? session;
   bool _foreground = true;
 
+  /// No session yet, only because the account is on its way: Swarm is on and
+  /// someone is signed in, so Home shows its skeleton, not that Swarm is off.
+  bool get accountComing =>
+      session == null &&
+      features.isOn(PhoneExperiment.swarm) &&
+      (accountReading?.call() ?? false);
+
   /// Whether Swarm was on at the last [_update]; null before the first.
   bool? _on;
 
@@ -301,6 +313,8 @@ class SwarmHost extends ChangeNotifier {
       // frame, so this is known, and what an earlier run kept goes. A missing
       // account is not: the signed-in shell is up before the account is read.
       if (!on && wasOn != false) unawaited(homeCache.clear());
+      // No session either way, but [accountComing] may have moved with it.
+      if (wasOn != null && on != wasOn) notifyListeners();
       return;
     }
     // Signed out, another account, or Swarm turned off: nothing of it stays.
@@ -347,6 +361,15 @@ class SwarmScope extends InheritedNotifier<SwarmHost> {
       .dependOnInheritedWidgetOfExactType<SwarmScope>()
       ?.notifier
       ?.session;
+
+  /// Whether there is no session only because the account is on its way
+  /// ([SwarmHost.accountComing]); false outside the shell.
+  static bool accountComingOf(BuildContext context) =>
+      context
+          .dependOnInheritedWidgetOfExactType<SwarmScope>()
+          ?.notifier
+          ?.accountComing ??
+      false;
 
   /// How an avatar photo goes up ([SwarmHost.uploadAvatar]); null outside
   /// the shell or where none can.
