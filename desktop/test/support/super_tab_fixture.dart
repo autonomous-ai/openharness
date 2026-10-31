@@ -1503,6 +1503,9 @@ class ConversationServer {
     }
     if (uri.pathSegments.last == 'activity') {
       activityReads.add(path);
+      // Worked out when asked, as a server does: a slow answer is the one
+      // it had then.
+      final asked = activity;
       if (holdActivity case final hold?) await hold.future;
       if (activityStatus != 0) {
         throw SuperTabFailure(
@@ -1511,11 +1514,10 @@ class ConversationServer {
           statusCode: activityStatus,
         );
       }
-      final answer = activity;
-      if (answer == null) {
+      if (asked == null) {
         throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
       }
-      return jsonDecode(jsonEncode(answer)) as Map<String, dynamic>;
+      return jsonDecode(jsonEncode(asked)) as Map<String, dynamic>;
     }
     if (uri.pathSegments.last == 'mentions') {
       mentionReads++;

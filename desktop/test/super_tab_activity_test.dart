@@ -470,9 +470,15 @@ void main() {
         server.revision++;
         server.activity = {'items': <dynamic>[], 'more': false};
         await c.refresh();
+        // Every state shown from here: the old answer must never show.
+        final shown = <List<String>>[];
+        activity.addListener(
+          () => shown.add([for (final i in activity.items) i.id]),
+        );
         server.holdActivity!.complete();
         await settle();
         expect(activity.items, isEmpty);
+        expect(shown.where((ids) => ids.contains('r1')), isEmpty);
       },
     );
 
