@@ -26,7 +26,9 @@ class SuperTabMention {
       leadName = row['leadName'] as String? ?? 'Lead',
       text = row['text'] as String? ?? '',
       createdAt = DateTime.tryParse(row['createdAt'] as String? ?? ''),
-      resolvedBy = row['resolvedBy'] as String?;
+      resolvedBy = row['resolvedBy'] as String?,
+      threadId = row['threadId'] as String?,
+      messageSequence = (row['messageSequence'] as num?)?.toInt();
   final String id, projectId, projectName, conversationId, conversationTitle;
   final String messageId, leadName, text;
 
@@ -36,6 +38,16 @@ class SuperTabMention {
 
   /// `reply` or `done` once it moved to Earlier; null while it waits.
   final String? resolvedBy;
+
+  /// The thread's root when the tag is in a reply that lives only in its
+  /// thread: it counts on Threads, not on its chat's row. Null for a tag in
+  /// the main stream, and from a server before it.
+  final String? threadId;
+
+  /// The tagged message's place in its chat: the red number for it clears
+  /// once the reader has read past it, as in Slack. Null from a server
+  /// before it, where it counts until the tag is answered.
+  final int? messageSequence;
 }
 
 /// Whether the menu bar's Harness menu lists the reader's tags and decisions,

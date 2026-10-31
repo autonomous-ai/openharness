@@ -488,6 +488,30 @@ class ConversationServer {
   var failLeaderboardReads = 0;
   // The reader's tags, newest last, answered by GET .../mentions?state=.
   final mentions = <Map<String, dynamic>>[];
+
+  /// The followed-threads read's answer (backend read/followedThreads.ts):
+  /// `{unread, read, more}`; null answers 404, as a server before it does,
+  /// and the inbox ([inbox]) is read instead.
+  Map<String, dynamic>? followedThreads;
+
+  /// The inbox read's answer (backend read/inbox.ts): `{threads, latest,
+  /// more}`; null answers 404.
+  Map<String, dynamic>? inbox;
+
+  /// Every followed-threads and inbox read, by path.
+  final threadListReads = <String>[];
+
+  /// While set, followed-threads reads wait for it: an answer that arrives
+  /// late.
+  Completer<void>? holdThreadLists;
+
+  /// Followed-threads reads fail as offline, or with [threadListStatus].
+  bool failThreadLists = false;
+  int threadListStatus = 503;
+
+  /// The Follow and Unfollow writes, in order: {conversationId, root, follow}.
+  final followPosts = <Map<String, dynamic>>[];
+  bool failFollows = false;
   // Decisions asked of the reader, newest last, answered by GET .../decisions?state=.
   final decisions = <Map<String, dynamic>>[];
   // How many times a decisions list was read (open and answered each count).
@@ -907,6 +931,25 @@ class ConversationServer {
         ? RegExp(r'/conversations/([^/]+)/threads/([^/]+)/read$')
               .firstMatch(path)
         : null;
+    final follow = method == 'POST'
+        ? RegExp(r'/conversations/([^/]+)/threads/([^/]+)/follow$')
+              .firstMatch(path)
+        : null;
+    if (follow != null) {
+      followPosts.add({
+        'conversationId': Uri.decodeComponent(follow.group(1)!),
+        'root': Uri.decodeComponent(follow.group(2)!),
+        'follow': body!['follow'],
+      });
+      if (failFollows) {
+        throw const SuperTabFailure(
+          'OFFLINE',
+          'No connection.',
+          statusCode: 503,
+        );
+      }
+      return {'follow': body['follow']};
+    }
     if (threadRead != null) {
       return _markThreadRead(
         Uri.decodeComponent(threadRead.group(1)!),
@@ -1392,6 +1435,25 @@ class ConversationServer {
       return jsonDecode(jsonEncode(_catchUp(id, after)))
           as Map<String, dynamic>;
     }
+    if (uri.pathSegments.last == 'threads' ||
+        uri.pathSegments.last == 'inbox') {
+      threadListReads.add(path);
+      if (holdThreadLists case final hold?) await hold.future;
+      if (failThreadLists) {
+        throw SuperTabFailure(
+          'OFFLINE',
+          'No connection.',
+          statusCode: threadListStatus,
+        );
+      }
+      final answer = uri.pathSegments.last == 'threads'
+          ? followedThreads
+          : inbox;
+      if (answer == null) {
+        throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
+      }
+      return jsonDecode(jsonEncode(answer)) as Map<String, dynamic>;
+    }
     if (uri.pathSegments.last == 'mentions') {
       mentionReads++;
       if (mentionsMissing) {
@@ -1562,9 +1624,13 @@ class ConversationServer {
     String text = 'Please confirm the release.',
     String createdAt = '2026-10-24T05:00:00Z',
     String? leadId,
+    String? threadId,
+    int? messageSequence,
   }) {
     mentions.add({
       'leadId': ?leadId,
+      'threadId': ?threadId,
+      'messageSequence': ?messageSequence,
       'id': 'mention-${mentions.length + 1}',
       'projectId': 'lead',
       'projectName': 'web-project',
