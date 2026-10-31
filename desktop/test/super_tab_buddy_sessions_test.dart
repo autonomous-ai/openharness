@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/harness_attachments.dart';
@@ -1018,6 +1019,20 @@ void main() {
     final mark = find.byKey(ValueKey('super-thread-session-mark-$root'));
     expect(find.descendant(of: row, matching: mark), findsOneWidget);
     await tester.tap(mark);
+    await tester.pumpAndSettle();
+    expect(c.openedThread?.root, root);
+    // Reached by keyboard too, and opened with Enter, as the reply count is.
+    c.closeThread();
+    await tester.pumpAndSettle();
+    final node = Focus.of(
+      tester.element(
+        find.descendant(of: mark, matching: find.byType(Text)).first,
+      ),
+    );
+    node.requestFocus();
+    await tester.pump();
+    expect(node.hasFocus, isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
     expect(c.openedThread?.root, root);
   });
