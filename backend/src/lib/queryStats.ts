@@ -4,6 +4,7 @@ import { performance } from 'node:perf_hooks'
 import type { PrismaClient } from '@prisma/client'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { logger } from '../utils/logger.js'
+import { MEASURE_EVERY_MS, MEASURE_FOR_MS, measureWindows } from './measureWindows.js'
 
 /**
  * Which queries this process sends, per kind of work (DB roadmap Phase 1). Atlas logs only operations over 100 ms; the
@@ -218,6 +219,8 @@ export type QueryStatsOptions = {
 
 export type QueryStats = {
   record(model: string | undefined, action: string, args: unknown, ms: number, result: unknown, failed?: boolean): void
+  /** Inside a measured window (lib/measureWindows.ts) every query is counted; outside, only a slow one is warned about. */
+  measure(on: boolean): void
   /** Logs the window so far and starts a new one. */
   flush(): void
 }
@@ -228,9 +231,20 @@ export function createQueryStats({ pod = `${hostname()}:${process.pid}`, slowMs 
   top = { bytes: 20, count: 10, ms: 10 }, log = (m, c) => logger.info(m, c), warn = (m, c) => logger.warn(m, c) }: QueryStatsOptions = {}): QueryStats {
   let entries = new Map<string, Entry>()
   let overflowQueries = 0, slowLogged = 0, slowSuppressed = 0, slowQueries = 0, slowTotalMs = 0, bytesCapped = 0, started = performance.now()
+  let measuring = true
 
   const record: QueryStats['record'] = (model, action, args, ms, result, failed = false) => {
+    // Shaping every query was ~4.6% of prod's CPU; between windows only a slow one pays for its shape.
+    if (!measuring && ms < slowMs) return
     const op = opName(model, action, args), shape = filterShape(action, args), route = workKind()
+    if (!measuring) {
+      slowQueries++
+      slowTotalMs += ms
+      if (slowLogged >= slowPerWindow) { slowSuppressed++; return }
+      slowLogged++
+      warn('slow query', { pod, op, shape, route, ms: Math.round(ms), docs: failed ? 0 : docsOf(result), bytes: 0, error: failed })
+      return
+    }
     let key = `${op}\0${shape}\0${route}`
     let entry = entries.get(key)
     if (!entry) {
@@ -290,24 +304,28 @@ export function createQueryStats({ pod = `${hostname()}:${process.pid}`, slowMs 
     entries = new Map(); overflowQueries = 0; slowLogged = 0; slowSuppressed = 0; slowQueries = 0; slowTotalMs = 0; bytesCapped = 0; started = performance.now()
   }
 
-  return { record, flush }
+  const reset = () => {
+    entries = new Map(); overflowQueries = 0; slowLogged = 0; slowSuppressed = 0; slowQueries = 0; slowTotalMs = 0; bytesCapped = 0; started = performance.now()
+  }
+  // Opening a window starts it afresh: what was warned about between windows was logged as it happened.
+  return { record, flush, measure: on => { if (on && !measuring) reset(); measuring = on } }
 }
 
 /* ---------- the process's own stats, fed by the Prisma hook ---------- */
 
 let active: QueryStats | undefined
 
-/** Starts this process's per-minute log. Returns a stop that logs the last partial window. Until started, the hook only
- *  times queries. */
-export function startQueryStats(options: QueryStatsOptions & { reportMs?: number } = {}): () => void {
+/** Starts this process's log: one measured window of `reportMs` (a minute) every `everyMs` (ten), logged as it closes,
+ *  the first at once (lib/measureWindows.ts). Between windows only slow queries are warned about. Returns a stop that logs
+ *  an open window. Until started, the hook only times queries. */
+export function startQueryStats(options: QueryStatsOptions & { reportMs?: number; everyMs?: number } = {}): () => void {
   const stats = createQueryStats(options)
   active = stats
-  const timer = setInterval(() => stats.flush(), options.reportMs ?? 60_000)
-  timer.unref()
+  const stop = measureWindows({ everyMs: options.everyMs ?? MEASURE_EVERY_MS, forMs: options.reportMs ?? MEASURE_FOR_MS,
+    open: () => stats.measure(true), close: () => { stats.flush(); stats.measure(false) } })
   return () => {
-    clearInterval(timer)
+    stop()
     if (active === stats) active = undefined
-    stats.flush()
   }
 }
 
