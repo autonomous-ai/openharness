@@ -23,9 +23,11 @@ const EVERY_MS = 15 * 60_000
  *  moves the marker to `now`. A Swarm that fails keeps its marker, is logged and is done at the next run. */
 export async function backfillThreads(db: PrismaClient, now: number): Promise<{ swarms: number; threads: number }> {
   const marks = new Map((await db.superTabThreadBackfill.findMany()).map(mark => [mark.id, mark.through.getTime()]))
-  const swarms = await db.superTab.findMany({ select: { id: true } })
+  const swarms = await db.superTab.findMany({ select: { id: true, deletedAt: true } })
   let done = 0, threads = 0
-  for (const { id: tabId } of swarms) {
+  for (const { id: tabId, deletedAt } of swarms) {
+    // A deleted Swarm keeps its summaries for its restore; its purge removes them and its marker (deletion.ts).
+    if (deletedAt) continue
     try {
       threads += await backfillSwarm(db, tabId, marks.get(tabId), now)
       done++

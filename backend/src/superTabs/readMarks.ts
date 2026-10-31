@@ -207,10 +207,11 @@ export async function sweepThreadMarks(db: PrismaClient, now: number, options: {
     // Past the last Swarm: the next pass starts again from the first.
     if (tabId === null) { await moveTo(''); break }
     swarmsChecked++
-    const [row] = await readBy(db, 'SuperTab', 'id', [{ $match: { _id: tabId } }, { $project: { memberIds: 1 } }])
+    const [row] = await readBy(db, 'SuperTab', 'id', [{ $match: { _id: tabId } }, { $project: { memberIds: 1, deletedAt: 1 } }])
     if (!row) await remove({ tabId })
-    // A row without memberIds is skipped, never read as having no members.
-    else if (Array.isArray(row.memberIds)) {
+    // A row without memberIds is skipped, never read as having no members. So is a deleted Swarm (deletion.ts): it lists
+    // nobody while it can be restored, and its marks come back with it; its purge removes them.
+    else if (Array.isArray(row.memberIds) && !row.deletedAt) {
       const members = new Set(row.memberIds as string[])
       for (let person = await nextOf(db, { tabId }, 'personId', ''); person !== null; person = await nextOf(db, { tabId }, 'personId', person)) {
         if (!members.has(person)) await remove({ tabId, personId: person })

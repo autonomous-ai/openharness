@@ -357,6 +357,22 @@ describe('a queued start\'s preparation token', () => {
     expect(env.approved).toHaveLength(1)
   })
 
+  it('approves nothing for a Swarm deleted since the link was made, and says so as for an expired link', async () => {
+    const signIn = { authorizeUrl: (state: string) => `https://github.test/login/oauth/authorize?state=${state}`,
+      permission: async () => ({ login: 'olive', push: true }) } as unknown as GitHubSignIn
+    teamAccounts()
+    const env = await fresh({ approveAll: false, signIn })
+    const { tab } = await queued(env)
+    const asked = await env.app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/projects/lead/github/approve`,
+      headers: { authorization: `Bearer ${owner.sub}` }, payload: { scope: 'project' } })
+    const state = new URL((asked.json().data as { authorizeUrl: string }).authorizeUrl).searchParams.get('state')!
+    await env.run(tab, { type: 'swarm.delete', name: 'Pool' } as Command)
+    const late = await env.app.inject({ method: 'GET', url: `/api/github/callback?code=c&state=${encodeURIComponent(state)}` })
+    expect(late.statusCode).toBe(400)
+    expect(late.body).toContain('This link has expired')
+    expect(env.approved).toEqual([])
+  })
+
   it('says nothing was approved when the person cancels GitHub\'s sign-in', async () => {
     const signIn = { authorizeUrl: (state: string) => `https://github.test/login/oauth/authorize?state=${state}`,
       permission: async () => ({ login: 'olive', push: true }) } as unknown as GitHubSignIn

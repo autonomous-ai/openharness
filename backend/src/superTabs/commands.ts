@@ -17,6 +17,7 @@ import { checkMentions, MAX_MENTIONS, namedIn, saysName, textTags, withTags, typ
 import { answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
 import { leadOf, TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest } from './terminal.js'
 import { leadNoticeRows, loseTasks, recordTaskState, renewLease, renewOwnTask, restartQuietTime, waitingForReview } from './liveness.js'
+import { DELETED_SWARM_COMMANDS, isPersonalSwarm, notThere, SWARM_DELETE_GRACE_MS } from './deletion.js'
 import { ABANDONED, askedModel, coordinatorCopy, failureNotice, failureRecipients, MACHINE_REMOVED } from './startFailure.js'
 import { noteStartFailed, noteStartSucceeded, resumeEngine } from './engineHealth.js'
 import { reviewCapacityNotice } from './reviewCapacity.js'
@@ -129,6 +130,9 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('tab.rename'), name: title }).strict(),
   z.object({ type: z.literal('tab.project'), machineId: id, project }).strict(),
   z.object({ type: z.literal('tab.pause'), paused: z.boolean() }).strict(),
+  // The owner types the Swarm's name to confirm (deletion.ts); the server checks it too, so no client deletes by a slip.
+  z.object({ type: z.literal('swarm.delete'), name: z.string().max(160) }).strict(),
+  z.object({ type: z.literal('swarm.restore') }).strict(),
   z.object({ type: z.literal('tab.routingPolicy'), policy: routingOverrideSaveSchema.nullable() }).strict(),
   z.object({ type: z.literal('tab.tidy'), enabled: z.boolean(), askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('rule.set'), projectId: id.optional(), rule: ruleSchema, text: ruleTextSchema, askedIn: askedInSchema.optional() }).strict(),
@@ -348,6 +352,11 @@ export interface CommandContext {
   confidentialSession?: boolean
   /** For a command that registers a session or can make one confidential: the other Swarms' registrations (confidential.ts). */
   registrations?: import('./projects.js').OtherRegistrations
+  /** A Workspace removal taking the person out of this Swarm (workspaceStore.ts): it reaches a deleted Swarm too, so a restore
+   *  never brings them back (security review 2 of #2457). Set by the store alone. */
+  workspaceLeave?: true
+  /** For a restore: the people no longer in the Swarm's Workspace, read by the store. They do not come back with it. */
+  workspaceLost?: string[]
   /** The machines of this Swarm's pending cleanups whose machine account is deleted, read by the store: no host will ever
    *  confirm those cleanups (Ken's remote-deepseek and WIN-DELL, 2026-10-28), so they go. */
   deletedMachineIds?: string[]
@@ -540,6 +549,8 @@ const SWARM_BUDDY_CHAT_COMMANDS: ReadonlySet<string> = new Set(['message.send', 
 
 export function authorizeCommandAccess(state: SuperTabState, actor: Actor, command: Command, context: Partial<CommandContext> = {}) {
   if (command.type === 'invite.accept' || command.type === 'agent.sessionClosed' || command.type === 'machine.cleaned') return
+  // The owner's alone, checked where they apply: everyone else, a viewer too, gets the answer a missing Swarm gets (deletion.ts).
+  if (command.type === 'swarm.delete' || command.type === 'swarm.restore') return
   // Marking one's own tag done changes only one's own list, so a viewer may do it too.
   // Answering a decision asked of oneself changes only that decision, so a viewer may do it too.
   // So does choosing one's own username (usernames.ts).
@@ -674,6 +685,24 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   const effects: CommandEffects = { state, messages: ended, cancelledAgents: [], previousAttempts: [], routeDecisions: [], result }
   const operationId = stableId(state.id, actorKey(actor), context.operationId)
 
+  // A deleted Swarm (deletion.ts) takes only its hosts' confirmations and its owner's restore; anything else, from anyone,
+  // answers as for a Swarm that does not exist. The store refuses before this; this holds for every other caller.
+  if (state.deletion && !DELETED_SWARM_COMMANDS.has(command.type) && !(context.workspaceLeave && command.type === 'member.remove')) notThere()
+  if (command.type === 'swarm.restore') {
+    // Only its owner, only while deleted and before its purge; anyone else learns nothing, not even that it was deleted.
+    if (!state.deletion || actor.kind !== 'person' || actor.userId !== state.ownerId || Date.parse(state.deletion.purgeAt) <= context.now) notThere()
+    delete state.deletion
+    // Whoever left the Workspace meanwhile stays out: the Workspace removal could not take them out of a deleted Swarm's list.
+    const lost = new Set((context.workspaceLost ?? []).filter(id => id !== state.ownerId))
+    if (lost.size) {
+      const emails = new Set(state.people.filter(p => lost.has(p.id)).map(p => p.email))
+      state.people = state.people.filter(p => !lost.has(p.id))
+      state.invitations = state.invitations.filter(i => !emails.has(i.email))
+    }
+    result.restored = true
+    return effects
+  }
+
   // Acceptance is the only operation a non-member can perform; the verified account email owns the invite.
   if (command.type === 'invite.accept') {
     if (actor.kind !== 'person') fail('FORBIDDEN', 'A person must accept this invitation.', 403)
@@ -695,7 +724,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   // Anyone else, or a second confirmation, is told the same thing and writes nothing; the store answers an exact retry.
   if (command.type === 'agent.sessionClosed') {
     const request = state.closingSessions?.find(c => c.agentId === command.agentId && c.harnessId === command.harnessId
-      && actor.kind === 'person' && c.machineOwnerId === actor.userId) ?? fail('NOT_FOUND', 'This machine has no session waiting to close.', 404)
+      && actor.kind === 'person' && c.machineOwnerId === actor.userId) ?? (state.deletion ? notThere() : fail('NOT_FOUND', 'This machine has no session waiting to close.', 404))
     dropClosing(state, c => c !== request)
     releaseHarness(state, request.machineId, request.harnessId)
     return effects
@@ -706,7 +735,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       && actor.kind === 'person' && ownerId === actor.userId
     const pool = state.machines?.find(m => m.removal && owns(m.machineId, m.removal.id, m.contributorId))
     const cleanup = state.machineCleanups?.find(c => owns(c.machineId, c.removalId, c.machineOwnerId))
-    if (!pool && !cleanup) fail('NOT_FOUND', 'This machine has no cleanup waiting.', 404)
+    // Of a deleted Swarm, only a host with a cleanup waiting learns it exists (deletion.ts).
+    if (!pool && !cleanup) state.deletion ? notThere() : fail('NOT_FOUND', 'This machine has no cleanup waiting.', 404)
     // One that already left the list said why then.
     if (pool) effects.messages.push(...removalEnded(state, pool, 'confirmed'))
     state.machines = state.machines?.filter(m => m !== pool)
@@ -724,6 +754,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     return effects
   }
 
+  // Before any role check: a viewer or an agent is told what anyone without the Swarm is told (deletion.ts).
+  if (command.type === 'swarm.delete' && (actor.kind !== 'person' || actor.userId !== state.ownerId)) notThere()
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
   const sender = author(state, actor, !leaving && command.type !== 'decision.answer' && command.type !== 'member.username')
   authorizeCommandAccess(state, actor, command, context)
@@ -1146,7 +1178,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
    *  like one agent, its pending starts fail, routing rules lose it, and a contributed machine stays paused and cleaning
    *  until its host deletes the Swarm's folders there — or leaves at once when that host is offline
    *  (spec 2026-10-23-remove-machine.md). */
-  const removeMachine = (machineId: string, pool: ContributedMachine | undefined, members: Agent[], how: (machine: string) => string) => {
+  const removeMachine = (machineId: string, pool: ContributedMachine | undefined, members: Agent[], how: (machine: string) => string, lead = false) => {
     const pending = state.starts?.filter(s => s.request.machineId === machineId && !s.harnessId && !s.error) ?? []
     // A launch already under way would arrive with nowhere to go; it finishes in moments.
     if (pending.some(s => s.dispatched)) fail('STARTS_PENDING', 'An agent is starting on this machine. Try again in a moment.')
@@ -1160,7 +1192,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       || (group.leadId && removed.has(group.leadId)) || (group.assignment && removed.has(group.assignment.agentId)))
       .map(group => ({ group, names: members.filter(a => group.agentIds.includes(a.id) || group.leadId === a.id || group.assignment?.agentId === a.id)
         .map(a => a.displayName ?? a.name), task: !!group.assignment && removed.has(group.assignment.agentId) && activeWork(group) }))
-    for (const target of members) removeAgent(target)
+    for (const target of members) removeAgent(target, { lead })
     if (pool) {
       // Paused, so routing in clients that do not know removals stops offering it too.
       pool.removal = { id: operationId, state: 'cleaning', requestedAt: new Date(context.now).toISOString() }
@@ -1597,6 +1629,25 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (actor.kind === 'agent') coordinatorOrPerson(state, actor)
       state.paused = command.paused
       break
+    case 'swarm.delete': {
+      // Its owner alone; a member, an agent or anyone else is answered as for a Swarm that does not exist (deletion.ts).
+      if (actor.kind !== 'person' || actor.userId !== state.ownerId) notThere()
+      if (isPersonalSwarm(state)) fail('PERSONAL_SWARM', 'Your Personal Swarm cannot be deleted.', 409)
+      if (command.name.trim() !== state.name.trim()) fail('NAME_MISMATCH', 'Type the Swarm\'s name exactly to delete it.', 400)
+      // A launch already under way would arrive with nowhere to go; it finishes in moments (removeMachine says the same).
+      if (state.starts?.some(s => s.dispatched && !s.harnessId && !s.error)) fail('STARTS_PENDING', 'An agent is starting in this Swarm. Try again in a moment.')
+      // Every machine leaves as its owner removing it would: its agents' sessions close and its host deletes the Swarm's
+      // folders there. Product Managers go too. A Buddy-only machine goes once its Buddy has (dropIdleBuddyMachines).
+      for (const pool of (state.machines ?? []).filter(m => !m.removal && !m.buddyOnly)) {
+        removeMachine(pool.machineId, pool, state.agents.filter(a => a.machineId === pool.machineId), machine => `${machine} left the Swarm when it was deleted`, true)
+      }
+      // Agents on no contributed machine (shared sessions, Buddies), each with its session.
+      for (const target of [...state.agents]) if (state.agents.some(a => a.id === target.id)) removeAgent(target, { lead: true })
+      for (const start of state.starts ?? []) if (!start.harnessId && !start.error) start.error = 'Its Swarm was deleted.'
+      state.deletion = { at: new Date(context.now).toISOString(), by: actor.userId, purgeAt: new Date(context.now + SWARM_DELETE_GRACE_MS).toISOString() }
+      result.purgeAt = state.deletion.purgeAt
+      break
+    }
     case 'tab.tidy': {
       swarmOwnerAsked(command.askedIn, 'turns tidying on or off')
       if (command.enabled) delete state.tidy
@@ -2853,7 +2904,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     alertOverlaps(conversation(state, command.type === 'conversation.create' ? result.conversationId as string : command.conversationId))
   }
   for (const target of original.agents.filter(a => a.workDecision === 'stop')) {
-    const acknowledged = command.type === 'agent.remove' && command.agentId === target.id &&
+    const acknowledged = command.type === 'swarm.delete' || command.type === 'agent.remove' && command.agentId === target.id &&
       (actor.kind === 'agent' && actor.agentId === target.id || actor.kind === 'person' && [state.ownerId, target.contributorId].includes(actor.userId))
     if (!acknowledged && !state.agents.some(a => a.id === target.id)) fail('STOP_REQUESTED', 'Wait for the execution host to finish stopping its workers before withdrawing them.')
   }
