@@ -429,6 +429,43 @@ describe('service links', () => {
     ]))
   })
 
+  it('logs a bounded one-line cause when a service query fails without changing its reply', async () => {
+    const cause = new Error(`early binding\n${'x'.repeat(300)}SECRET`)
+    cause.name = `EngineReadError${'N'.repeat(100)}`
+    const links = make({ answer: () => { throw cause } })
+    const search = sink()
+    const link = links.accept('search', TOKEN, search, vi.fn())!
+    link.receive({ type: 'service_query', payload: { requestId: 'q1', query: 'runtimeModels' } })
+    await vi.waitFor(() => expect(search.sent).toHaveLength(1))
+    expect(search.sent).toEqual([{ type: 'service_query_result', payload: { error: 'QUERY_FAILED', requestId: 'q1' } }])
+    const failure = lines.filter(line => line.includes('runtimeModels'))
+    expect(failure).toHaveLength(1)
+    expect(failure[0]).toContain('EngineReadError')
+    expect(failure[0]).toContain('early binding')
+    expect(failure[0]).not.toContain('SECRET')
+    expect(failure[0]).not.toContain('\n')
+    expect(failure[0]!.length).toBeLessThan(450)
+  })
+
+  it('still answers a service query when a non-Error value is thrown', async () => {
+    const links = make({ answer: () => { throw { toString: () => { throw new Error('cannot stringify') } } } })
+    const search = sink()
+    links.accept('search', TOKEN, search, vi.fn())!.receive({ type: 'service_query', payload: { requestId: 'q1', query: 'runtimeModels' } })
+    await vi.waitFor(() => expect(search.sent).toEqual([
+      { type: 'service_query_result', payload: { error: 'QUERY_FAILED', requestId: 'q1' } },
+    ]))
+    expect(lines.find(line => line.includes('runtimeModels'))).toContain('NonError')
+  })
+
+  it('keeps a thrown string as a bounded query diagnostic', async () => {
+    const links = make({ answer: () => { throw 'worker still starting' } })
+    const search = sink()
+    links.accept('search', TOKEN, search, vi.fn())!.receive({ type: 'service_query', payload: { requestId: 'q1', query: 'runtimeModels' } })
+    await vi.waitFor(() => expect(search.sent).toHaveLength(1))
+    expect(search.sent[0].payload).toEqual({ error: 'QUERY_FAILED', requestId: 'q1' })
+    expect(lines.find(line => line.includes('runtimeModels'))).toContain('worker still starting')
+  })
+
   it('tells a connected service what it needs to know, and says when none is listening', () => {
     const links = make()
     expect(links.notify('search', { type: 'service_event', payload: { kind: 'touch' } })).toBe(false)

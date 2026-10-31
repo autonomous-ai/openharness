@@ -152,6 +152,32 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     client.close()
   })
 
+  it('lists a newly bound Codex agent from its moved home while the first profile read settles', async () => {
+    const d = await IsolatedDaemon.create(); daemon = d
+    d.env.NODE_OPTIONS = `--import=${pathToFileURL(join(CLI_ROOT, 'e2e/harness/hiddenProcessEnv.mjs')).href}`
+    onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
+    const home = join(d.root, 'codex-early-models')
+    mkdirSync(home)
+    writeFileSync(join(d.env.ZDOTDIR!, '.zshrc'), `export CODEX_HOME=${JSON.stringify(home)}\n`)
+    const cache = JSON.stringify({ models: [{ slug: 'gpt-6-luna', display_name: 'gpt-6-luna', visibility: 'list', supported_reasoning_levels: [{ effort: 'high' }] }] })
+    writeFileSync(join(home, 'models_cache.json'), cache)
+    await d.start()
+    const client = await LocalClient.connect(d)
+    const warm = await client.request('models_list', {}, 30_000)
+    expect(warm.error, JSON.stringify(warm)).toBeUndefined()
+    const created = await client.request('agent_create', { engine: 'codex', cwd: d.projectsDir, bypassPermission: true }, 90_000)
+    expect(created.error, JSON.stringify(created)).toBeUndefined()
+    const answerPending = client.request('models_list', { agentId: created.agent.id }, 30_000)
+    const agent = await until('the new Codex session to bind', async () => {
+      const now = await row(client, created.agent.id); return now?.sessionId ? now : null
+    }, 30_000, 1)
+    expect(agent.codexHome).toBe(home)
+    const answer = await answerPending
+    expect(answer.error, JSON.stringify(answer)).toBeUndefined()
+    expect(answer.models.map((model: Row) => model.id)).toContain(`runtime-v1:${agent.id}:codex:gpt-6-luna@auto`)
+    client.close()
+  })
+
   // zsh reads the first file and bash, as a login shell, the second: whichever the account running the tests has.
   it.runIf(accountShell === 'zsh' || accountShell === 'bash')('reads the profile of the account\'s shell when the daemon is given no SHELL', async () => {
     // As from `docker exec`, a CI step or a bare service: a shell hands SHELL on only when it was handed it. The
