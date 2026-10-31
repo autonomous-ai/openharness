@@ -787,7 +787,8 @@ class ProjectSidebar extends StatelessWidget {
                 if (!_paneCovered) controller.selectedId,
                 for (final group in groups)
                   if (reading.unread.contains(group.id) ||
-                      reading.waiting.contains(group.id))
+                      reading.waiting.contains(group.id) ||
+                      (attention?.mentionsIn(group.id) ?? 0) > 0)
                     group.id,
               },
               more: (hidden, onTap) => _moreRow(project, hidden, onTap),

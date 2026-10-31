@@ -60,6 +60,7 @@ class SuperTabAttention extends ChangeNotifier {
       decisions = SuperTabDecisions.of(controller),
       _now = now ?? DateTime.now {
     controller.addListener(_changed);
+    controller.onDispose(dispose);
     mentions.addListener(notifyListeners);
     decisions.addListener(notifyListeners);
     _changed();
@@ -117,6 +118,14 @@ class SuperTabAttention extends ChangeNotifier {
   /// Threads whose Follow is being sent.
   final Set<String> following = {};
 
+  /// The new-reply count each thread showed when this visit first listed it
+  /// as new: a thread read meanwhile comes back with none, and keeps saying
+  /// what it had.
+  final Map<String, int> _counts = {};
+
+  /// A read for a change that came inside the gap, once the gap is over.
+  Timer? _trailing;
+
   int? _epoch;
   int _lastChangedAt = -1;
   DateTime? _lastRead, _waitUntil;
@@ -131,17 +140,54 @@ class SuperTabAttention extends ChangeNotifier {
   /// stream, and decisions asked of them there (an agent asking a person to
   /// decide tags them). A tag in a reply that lives only in its thread counts
   /// on Threads instead.
-  int mentionsIn(String conversationId) =>
-      mentions.waiting
-          .where(
-            (m) => m.conversationId == conversationId && m.threadId == null,
-          )
-          .length +
-      decisions.open.where((d) => d.conversationId == conversationId).length;
+  ///
+  /// As in Slack, a tag stops counting once the reader has read past it,
+  /// answered or not; a decision once its chat is read (its row does not say
+  /// which message asked). Nothing counts once access is gone.
+  int mentionsIn(String conversationId) {
+    if (controller.accessRevoked) return 0;
+    final tags = mentions.waiting
+        .where(
+          (m) =>
+              m.conversationId == conversationId &&
+              m.threadId == null &&
+              (m.messageSequence ?? _unknown) >
+                  controller.readMark(conversationId),
+        )
+        .length;
+    final asked = decisions.open
+        .where((d) => d.conversationId == conversationId)
+        .length;
+    if (asked == 0) return tags;
+    final group = controller.snapshot?.conversation(conversationId);
+    return tags + (group != null && controller.unread(group) ? asked : 0);
+  }
 
-  /// The Threads row's number: tags of the reader inside threads.
-  int get threadMentions =>
-      mentions.waiting.where((m) => m.threadId != null).length;
+  /// A tag from a server that does not say where it is: it counts until
+  /// answered, past any read mark.
+  static const _unknown = 1 << 52;
+
+  /// The Threads row's number: tags of the reader inside threads they have
+  /// not read past, in chats this Swarm still lists for them.
+  int get threadMentions {
+    final snapshot = controller.snapshot;
+    if (controller.accessRevoked || snapshot == null) return 0;
+    final chats = {for (final g in snapshot.conversations) g.id};
+    return mentions.waiting
+        .where(
+          (m) =>
+              m.threadId != null &&
+              chats.contains(m.conversationId) &&
+              (m.messageSequence ?? _unknown) >
+                  controller.threadReadMark(m.threadId!),
+        )
+        .length;
+  }
+
+  /// How many new replies [thread] shows: as many as it had when this visit
+  /// first listed it new.
+  int newCount(SuperTabFollowedThread thread) =>
+      _counts[thread.key] ?? thread.unreadReplies;
 
   /// Whether a followed thread has replies the reader has not read: the
   /// Threads row is bold.
@@ -175,15 +221,21 @@ class SuperTabAttention extends ChangeNotifier {
     _newThisVisit
       ..clear()
       ..addAll(unread.map((t) => t.key));
+    _counts
+      ..clear()
+      ..addAll({for (final t in unread) t.key: t.unreadReplies});
     unawaited(load());
   }
 
   void closed() {
     _open = false;
+    _trailing?.cancel();
+    _trailing = null;
     _newThisVisit.clear();
+    _counts.clear();
     newReplies.clear();
     _repliesFailed.clear();
-    notifyListeners();
+    if (!_disposed) notifyListeners();
   }
 
   void _clear() {
@@ -192,9 +244,12 @@ class SuperTabAttention extends ChangeNotifier {
     error = null;
     more = false;
     _newThisVisit.clear();
+    _counts.clear();
     newReplies.clear();
     _readingReplies.clear();
     _repliesFailed.clear();
+    _trailing?.cancel();
+    _trailing = null;
   }
 
   void _changed() {
@@ -226,11 +281,23 @@ class SuperTabAttention extends ChangeNotifier {
     }
     if (controller.lastChangedAt == _lastChangedAt && loaded) return;
     final now = _now();
-    if (_waitUntil case final until? when now.isBefore(until)) return;
-    if (_lastRead case final last?
-        when now.difference(last) < (_open ? openGap : quietGap)) {
+    // Inside the gap, or waiting out a refusal: one read when it is over, so
+    // the change is not lost.
+    final until = [
+      if (_waitUntil case final wait? when now.isBefore(wait)) wait,
+      if (_lastRead case final last?) last.add(_open ? openGap : quietGap),
+    ].fold<DateTime?>(null, (a, b) => a == null || b.isAfter(a) ? b : a);
+    if (until != null && now.isBefore(until)) {
+      // Only while something shows it (the sidebar, the Threads view).
+      if (!hasListeners) return;
+      _trailing ??= Timer(until.difference(now), () {
+        _trailing = null;
+        _changed();
+      });
       return;
     }
+    _trailing?.cancel();
+    _trailing = null;
     _lastChangedAt = controller.lastChangedAt;
     unawaited(load());
   }
@@ -294,7 +361,12 @@ class SuperTabAttention extends ChangeNotifier {
       more = answer['more'] == true;
       error = null;
       loaded = true;
-      if (_open) _newThisVisit.addAll(unread.map((t) => t.key));
+      if (_open) {
+        _newThisVisit.addAll(unread.map((t) => t.key));
+        for (final t in unread) {
+          _counts.putIfAbsent(t.key, () => t.unreadReplies);
+        }
+      }
       _waitUntil = null;
       notifyListeners();
     } catch (failure) {
@@ -388,9 +460,21 @@ class SuperTabAttention extends ChangeNotifier {
     }
   }
 
+  /// The last one showing it went: no read is waited for.
+  @override
+  void removeListener(VoidCallback listener) {
+    super.removeListener(listener);
+    if (_disposed || hasListeners) return;
+    _trailing?.cancel();
+    _trailing = null;
+  }
+
   @override
   void dispose() {
+    if (_disposed) return;
     _disposed = true;
+    _trailing?.cancel();
+    _trailing = null;
     controller.removeListener(_changed);
     mentions.removeListener(notifyListeners);
     decisions.removeListener(notifyListeners);

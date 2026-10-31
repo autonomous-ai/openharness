@@ -1621,10 +1621,12 @@ class ConversationServer {
     String createdAt = '2026-10-24T05:00:00Z',
     String? leadId,
     String? threadId,
+    int? messageSequence,
   }) {
     mentions.add({
       'leadId': ?leadId,
       'threadId': ?threadId,
+      'messageSequence': ?messageSequence,
       'id': 'mention-${mentions.length + 1}',
       'projectId': 'lead',
       'projectName': 'web-project',

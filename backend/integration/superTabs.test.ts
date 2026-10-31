@@ -3347,7 +3347,11 @@ describe('Lead mentions', () => {
     expect(mention).toEqual({ id: expect.any(String), projectId: 'lead', projectName: 'Pilot', conversationId: group, conversationTitle: 'Copy review',
       // The picked tag the text did not say opens it, as the server stores it (mentions.ts withTags).
       messageId, leadId: lead, leadName: expect.any(String), text: `@peer ${text}`.slice(0, 200), createdAt: expect.any(String), resolvedAt: null, resolvedBy: null,
-      threadId: null })
+      threadId: null, messageSequence: expect.any(Number) })
+    // Where the tagged message is in its chat, as its page numbers it: Desktop clears the red number once read past it.
+    const page = await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/conversations/${group}/messages`, headers: { authorization: `Bearer ${peer.sub}` } })
+    const shown = (page.json().data.messages as Array<{ id: string; sequence: number }>).find(m => m.id === messageId)
+    expect(mention!.messageSequence).toBe(shown!.sequence)
     expect(mention!.leadName).toBe((await waiting(tab, owner)).agents.find(a => a.id === lead)!.displayName)
     expect(await list(tab, owner, 'waiting')).toEqual([])
     expect(await list(tab, peer, 'earlier')).toEqual([])

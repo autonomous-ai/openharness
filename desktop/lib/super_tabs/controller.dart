@@ -4152,9 +4152,18 @@ class SuperTabController extends ChangeNotifier {
     await _persist();
   }
 
+  /// Runs [then] when this controller is disposed: a helper that keeps a
+  /// timer of its own (attention.dart) stops with it.
+  void onDispose(VoidCallback then) => _onDispose.add(then);
+  final _onDispose = <VoidCallback>[];
+
   @override
   void dispose() {
     _disposed = true;
+    for (final then in _onDispose) {
+      then();
+    }
+    _onDispose.clear();
     for (final queued in _queuedSends) {
       queued.result.complete(null);
     }

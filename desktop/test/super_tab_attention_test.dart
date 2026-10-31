@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/attention.dart';
@@ -311,6 +312,174 @@ void main() {
     expect(ground().color, grid.AppSurface.selectedFill);
     expect(tester.getRect(groundFinder), hovered);
     await close(tester, c);
+  });
+
+  group('review of 99b8018', () {
+    test('a thread read during the visit keeps its new-reply count after '
+        'the list is read again', () async {
+      final server = projectServer();
+      server.followedThreads = {
+        'unread': [unreadThread('message-1', 3, unread: 2)],
+        'read': [],
+        'more': false,
+      };
+      final c = await open(server);
+      final attention = SuperTabAttention.of(c)..opened();
+      await attention.load();
+      final thread = attention.shown.single;
+      expect(attention.newCount(thread), 2);
+      // Read now: the server lists it among the read ones, with no count.
+      server.followedThreads = {
+        'unread': [],
+        'read': [readThread('message-1', 3)],
+        'more': false,
+      };
+      await attention.load();
+      final reloaded = attention.shown.single;
+      expect(attention.isNew(reloaded), isTrue);
+      expect(attention.newCount(reloaded), 2);
+      attention.closed();
+      expect(attention.newCount(reloaded), 0);
+    });
+
+    test('a change inside the gap is read once the gap is over, and the '
+        'wait stops with the controller', () {
+      fakeAsync((async) {
+        var now = DateTime(2026, 10, 31, 9);
+        final server = projectServer();
+        server.followedThreads = {'unread': [], 'read': [], 'more': false};
+        final c = server.controller();
+        unawaited(c.refresh());
+        async.flushMicrotasks();
+        final attention = SuperTabAttention.forTest(c, now: () => now);
+        // On screen, as the sidebar shows it.
+        void shown() {}
+        attention.addListener(shown);
+        async.flushMicrotasks();
+        final reads = server.threadListReads.length;
+        expect(reads, greaterThan(0));
+        // A change 5 s after the read: inside the 15 s gap.
+        now = now.add(const Duration(seconds: 5));
+        async.elapse(const Duration(seconds: 5));
+        fromLead(server, 'News');
+        unawaited(c.refresh());
+        async.flushMicrotasks();
+        expect(server.threadListReads.length, reads);
+        // The gap ends: the change is read without another one.
+        now = now.add(const Duration(seconds: 11));
+        async.elapse(const Duration(seconds: 11));
+        expect(server.threadListReads.length, reads + 1);
+        // Another change in the next gap, then the controller goes.
+        now = now.add(const Duration(seconds: 1));
+        fromLead(server, 'More');
+        unawaited(c.refresh());
+        async.flushMicrotasks();
+        expect(async.pendingTimers, isNotEmpty);
+        // Nothing shows it any more: nothing is waited for.
+        attention.removeListener(shown);
+        expect(async.pendingTimers, isEmpty);
+        attention.addListener(shown);
+        fromLead(server, 'Again');
+        unawaited(c.refresh());
+        async.flushMicrotasks();
+        expect(async.pendingTimers, isNotEmpty);
+        unawaited(c.flush());
+        async.flushMicrotasks();
+        c.dispose();
+        expect(async.pendingTimers, isEmpty);
+        async.elapse(const Duration(seconds: 30));
+        expect(server.threadListReads.length, reads + 1);
+        expect(attention.unread, isEmpty);
+      });
+    });
+
+    test('no red number once access is gone, nor for a tag in a chat the '
+        'Swarm no longer lists', () async {
+      final server = projectServer();
+      server.followedThreads = {'unread': [], 'read': [], 'more': false};
+      server.tag('message-1', threadId: 'message-1', messageSequence: 2);
+      server.tag(
+        'message-9',
+        conversationId: 'gone',
+        threadId: 'message-9',
+        messageSequence: 2,
+      );
+      server.tag('message-1', conversationId: 'offline', messageSequence: 2);
+      var revoked = false;
+      final c = SuperTabController(
+        tabId: 'tab',
+        accountId: 'owner',
+        request: (method, path, {body}) {
+          if (revoked &&
+              (path.contains('/parts') || path.contains('/changes'))) {
+            throw const SuperTabFailure(
+              'FORBIDDEN',
+              'No access.',
+              statusCode: 403,
+            );
+          }
+          return server.request(method, path, body: body);
+        },
+        save: server.save,
+        pollInterval: Duration.zero,
+      );
+      addTearDown(() async {
+        await c.flush();
+        c.dispose();
+      });
+      await c.refresh();
+      final attention = SuperTabAttention.of(c);
+      await attention.mentions.load();
+      // The tag in a chat the Swarm does not list counts nowhere.
+      expect(attention.threadMentions, 1);
+      expect(attention.mentionsIn('offline'), 1);
+      // The moment access is gone, before anything is cleared.
+      c.accessRevoked = true;
+      expect(attention.threadMentions, 0);
+      expect(attention.mentionsIn('offline'), 0);
+      c.accessRevoked = false;
+      revoked = true;
+      fromLead(server, 'After access went');
+      await c.refresh();
+      expect(c.accessRevoked, isTrue);
+      expect(attention.threadMentions, 0);
+      expect(attention.mentionsIn('offline'), 0);
+    });
+
+    test('a tag stops counting once the reader has read past it, answered '
+        'or not; a decision once its chat is read', () async {
+      final server = projectServer();
+      server.followedThreads = {'unread': [], 'read': [], 'more': false};
+      fromLead(server, 'Please look', conversationId: 'offline');
+      server.tag(
+        'message-1',
+        conversationId: 'offline',
+        messageSequence: server.revision,
+      );
+      server.ask(['Ship it?'], conversationId: 'offline');
+      final c = await open(server);
+      final attention = SuperTabAttention.of(c);
+      await attention.mentions.load();
+      await attention.decisions.load();
+      expect(attention.mentionsIn('offline'), 2);
+      // Read on another device, past the tagged message.
+      server.markReadElsewhere('offline', server.revision);
+      await c.refresh();
+      expect(attention.mentions.waiting, hasLength(1));
+      expect(attention.mentionsIn('offline'), 0);
+      // A tag in a thread clears once the thread is read past it.
+      server.tag(
+        'message-1',
+        threadId: 'message-1',
+        messageSequence: server.revision,
+      );
+      await c.refresh();
+      await attention.mentions.load();
+      expect(attention.threadMentions, 1);
+      server.markThreadReadElsewhere('lead', 'message-1', server.revision);
+      await c.refresh();
+      expect(attention.threadMentions, 0);
+    });
   });
 
   group('the Threads list', () {
@@ -677,6 +846,89 @@ void main() {
     await tester.tap(find.text('Unfollow thread'));
     await tester.pumpAndSettle();
     expect(server.followPosts.single['follow'], isFalse);
+    await close(tester, c);
+  });
+
+  testWidgets('a read workgroup with a tag of the reader is never behind '
+      '"… N more"', (tester) async {
+    final server = projectServer();
+    server.followedThreads = {'unread': [], 'read': [], 'more': false};
+    final groups = server.state['conversations'] as List;
+    // Nine newer workgroups than "offline" (number 12), all read.
+    for (var n = 20; n < 29; n++) {
+      groups.add({
+        ...conversationFixture('g$n', 'Work $n'),
+        'projectId': 'lead',
+        'number': n,
+      });
+    }
+    fromLead(server, 'Please look', conversationId: 'offline');
+    // From a server that does not say where the tag is: it counts until
+    // answered, though the chat is read.
+    server.tag('message-1', conversationId: 'offline');
+    server.markReadElsewhere('offline', server.revision);
+    final c = await openHere(server);
+    final attention = SuperTabAttention.of(c);
+    await attention.mentions.load();
+    expect(c.unread(c.snapshot!.conversation('offline')!), isFalse);
+    c.toggleProject('lead');
+    await pumpSidebar(tester, c, attention);
+    expect(
+      find.byKey(const ValueKey('super-project-more-lead')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('super-group-offline')), findsOneWidget);
+    expect(inRow('super-group-offline', find.text('1')), findsOneWidget);
+    await close(tester, c);
+  });
+
+  testWidgets('a thread in the reader\'s Buddy chat offers Open thread to '
+      'reply, not a box its ended session would refuse', (tester) async {
+    final server = projectServer();
+    (server.state['conversations'] as List).add({
+      ...conversationFixture('buddy-owner-lead', "owner's Buddy"),
+      'kind': 'buddy',
+      'projectId': 'lead',
+      'buddyOwnerId': 'owner',
+    });
+    server.followedThreads = {
+      'unread': [
+        unreadThread(
+          'message-1',
+          2,
+          conversationId: 'buddy-owner-lead',
+          text: 'Plan the week',
+        ),
+      ],
+      'read': [],
+      'more': false,
+    };
+    final c = await openHere(server);
+    final attention = SuperTabAttention.of(c);
+    await attention.load();
+    String? opened;
+    await tester.binding.setSurfaceSize(const Size(700, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: grid.buildAppTheme(brightness: Brightness.dark),
+        home: Scaffold(
+          body: SuperTabThreadsView(
+            attention: attention,
+            onOpen: (id, root) => opened = '$id/$root',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(
+        const ValueKey('super-thread-reply-buddy-owner-lead/message-1'),
+      ),
+      findsNothing,
+    );
+    await tester.tap(find.text('Open thread to reply'));
+    expect(opened, 'buddy-owner-lead/message-1');
     await close(tester, c);
   });
 }

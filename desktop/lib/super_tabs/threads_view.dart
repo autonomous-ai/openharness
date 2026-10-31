@@ -11,7 +11,6 @@ import 'identity.dart';
 import 'message_more_menu.dart';
 import 'machine_status.dart' show superTabAgo;
 import 'model.dart';
-import 'project_sidebar.dart' show kProductManagersChannel;
 import 'reply_box.dart';
 import 'section_heading.dart';
 import 'workgroup_name.dart';
@@ -234,9 +233,6 @@ class _ThreadCardState extends State<_ThreadCard> {
     final snapshot = _snapshot;
     final group = snapshot?.conversation(_thread.conversationId);
     if (snapshot == null || group == null) return '';
-    if (group.id == snapshot.leadsConversationId) {
-      return '# $kProductManagersChannel';
-    }
     final project = snapshot.projectFor(group.id);
     if (snapshot.isProjectLead(group.id)) return '# ${project?.name ?? ''}';
     if (group.isBuddyChat) return 'Buddy · ${project?.name ?? ''}';
@@ -375,12 +371,13 @@ class _ThreadCardState extends State<_ThreadCard> {
     final a = widget.attention;
     final fresh = a.isNew(_thread);
     final replies = a.newReplies[_thread.key];
-    final count = _thread.unreadReplies;
+    final count = a.newCount(_thread);
     final followed = _thread.follow != false;
-    final canReply =
-        fresh &&
-        _c.canWrite &&
-        _snapshot?.conversation(_thread.conversationId)?.archived == false;
+    final group = _snapshot?.conversation(_thread.conversationId);
+    final canReply = fresh && _c.canWrite && group?.archived == false;
+    // A Buddy chat's thread may need a new session (its last one ended),
+    // which only the thread pane offers: a box here would be refused.
+    final buddyThread = group?.isBuddyChat == true;
     final showMore = _hovered || _focused;
     return Focus(
       canRequestFocus: false,
@@ -490,7 +487,20 @@ class _ThreadCardState extends State<_ThreadCard> {
                       lines: 4,
                     ),
                   ),
-              if (canReply)
+              if (canReply && buddyThread)
+                Padding(
+                  padding: const EdgeInsets.only(
+                    left: _indent,
+                    top: grid.AppDesktop.controlGap,
+                  ),
+                  child: TextButton(
+                    key: ValueKey('super-thread-open-reply-${_thread.key}'),
+                    onPressed: () =>
+                        widget.onOpen(_thread.conversationId, _thread.rootId),
+                    child: const Text('Open thread to reply'),
+                  ),
+                ),
+              if (canReply && !buddyThread)
                 Padding(
                   padding: const EdgeInsets.only(
                     left: _indent,

@@ -253,7 +253,7 @@ export function mentionsDigest(ids: string[]): string {
 export async function listMentions(tx: Tx, tabId: string, state: SuperTabState, actor: Extract<Actor, { kind: 'person' }>, now: number, open: boolean) {
   const tagged = await readable(tx, tabId, state, actor, now, open)
   const messages = tagged.length ? await tx.superTabMessage.findMany({ where: { tabId, id: { in: tagged.map(t => t.row.messageId) } },
-    select: { id: true, text: true, author: true, conversationId: true, thread: true, alsoInChat: true } }) : []
+    select: { id: true, text: true, author: true, conversationId: true, thread: true, alsoInChat: true, sequence: true } }) : []
   const threads = await threadsOf(tx, tabId, messages)
   return tagged.map(({ row, group }) => {
     const message = messages.find(m => m.id === row.messageId)
@@ -263,7 +263,9 @@ export async function listMentions(tx: Tx, tabId: string, state: SuperTabState, 
     return { id: row.id, projectId: row.projectId, projectName: projectOf(state, group.projectId ?? 'lead').name,
       conversationId: row.conversationId, conversationTitle: group.title, messageId: row.messageId,
       leadId: row.authorAgentId, leadName: authorName, text: (message?.text ?? '').slice(0, 200),
-      createdAt: row.createdAt, resolvedAt: row.resolvedAt, resolvedBy: row.resolvedBy, threadId: message ? threads.get(message.id) ?? null : null }
+      createdAt: row.createdAt, resolvedAt: row.resolvedAt, resolvedBy: row.resolvedBy, threadId: message ? threads.get(message.id) ?? null : null,
+      // Where the tagged message is in its chat: Desktop clears its red number once the reader has read past it (Slack).
+      messageSequence: message?.sequence ?? null }
   })
 }
 
