@@ -346,6 +346,8 @@ class SuperTabParts {
     }
     // Sent only where the server does not try Harness Team accounts yet.
     if (_derived['teamAccounts'] == false) state['teamAccounts'] = false;
+    // Sent by a server that takes a thread reply's New session.
+    if (_derived['threadSessions'] == true) state['threadSessions'] = true;
     if (_readMarks.isNotEmpty) state['readMarks'] = Map.of(_readMarks);
     if (_threadMarks.isNotEmpty) {
       state['threadMarks'] = {
