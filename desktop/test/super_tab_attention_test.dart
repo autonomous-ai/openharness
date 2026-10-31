@@ -480,21 +480,27 @@ void main() {
       final c = await open(server);
       final attention = SuperTabAttention.of(c);
       await attention.load();
-      server.holdThreadLists = Completer<void>();
+      final first = server.holdThreadLists = Completer<void>();
       final stale = attention.load();
       await pumpEventQueue();
-      // Who may read what changes: the next read reloads under a new epoch.
+      // Who may read what changes: the next state read reloads under a new
+      // epoch, which clears the list and asks for it again.
       server.parts.epoch++;
-      server.followedThreads = {'unread': [], 'read': [], 'more': false};
-      final hold = server.holdThreadLists!;
-      server.holdThreadLists = null;
       await c.refresh();
       await settle(c);
-      hold.complete();
-      await stale;
+      expect(attention.unread, isEmpty);
+      // The read asked before the change answers with the old list, while
+      // the one asked after it is still out.
+      final second = server.holdThreadLists = Completer<void>();
+      first.complete();
       await settle(c);
       expect(attention.unread, isEmpty);
+      expect(attention.loaded, isFalse);
+      second.complete();
+      await stale;
+      await settle(c);
       expect(attention.loaded, isTrue);
+      expect(attention.unread, hasLength(1));
     });
 
     test(
@@ -519,7 +525,8 @@ void main() {
       },
     );
 
-    test('asked too often, it waits before reading again', () async {
+    test('asked too often, it waits before reading again, even with the '
+        'Threads view open', () async {
       var now = DateTime(2026, 10, 31, 9);
       final server = projectServer()
         ..failThreadLists = true
@@ -528,18 +535,24 @@ void main() {
       final c = await open(server);
       final attention = SuperTabAttention.forTest(c, now: () => now);
       addTearDown(attention.dispose);
+      // The view open reads every few seconds as the Swarm moves.
+      attention.opened();
       await settle(c);
+      expect(attention.error, isNotNull);
       final reads = server.threadListReads.length;
       server.failThreadLists = false;
+      // Past the open view's pace, short of the wait the refusal asked for.
+      now = now.add(const Duration(seconds: 4));
       fromLead(server, 'More');
       await c.refresh();
       await settle(c);
       expect(server.threadListReads.length, reads);
-      now = now.add(const Duration(seconds: 20));
+      now = now.add(const Duration(seconds: 2));
       fromLead(server, 'More again');
       await c.refresh();
       await settle(c);
       expect(server.threadListReads.length, reads + 1);
+      expect(attention.error, isNull);
     });
   });
 
