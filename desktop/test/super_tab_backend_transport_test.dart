@@ -370,7 +370,7 @@ void main() {
         return (200, {'success': true, 'data': data});
       } on SuperTabFailure catch (failure) {
         return (
-          failure.statusCode ?? 500,
+          failure.statusCode,
           {
             'success': false,
             'error': {'code': failure.code, 'message': failure.message},
