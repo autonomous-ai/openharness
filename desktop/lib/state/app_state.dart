@@ -102,6 +102,7 @@ import '../super_tabs/backend_transport.dart';
 import '../super_tabs/client.dart';
 import '../super_tabs/controller.dart';
 import '../super_tabs/join_machine.dart';
+import '../super_tabs/identity.dart' show superTabMachineName;
 import '../super_tabs/view_store.dart';
 import '../super_tabs/notifications.dart' show superTabMentionNotice;
 import '../measurement/setup_preference_store.dart';
@@ -1368,6 +1369,24 @@ class AppNotifier extends ChangeNotifier {
   /// account. Only meaningful once [status] has left
   /// setup — [signedIn] is presumed true until the CLI has been asked.
   bool get signInStepNext => _signInStep && viewer == null && !signedIn;
+
+  /// Whether Harness was on this computer before this launch, so the sign-in
+  /// page can say it is set up rather than look like a first run (Scholes's
+  /// end-to-end test of 1.3.44, finding 5). False on the launch that first
+  /// installed it, the tour's.
+  bool get harnessSetUpBefore => !_firstHarnessLaunch;
+  bool _firstHarnessLaunch = false;
+
+  /// This computer as the sign-in page names it: its own row (the daemon's
+  /// while signed out), else its host name, without Bonjour's `.local`.
+  /// Null when neither is known. Only ever this computer's own name: no
+  /// account, and no other machine.
+  String? get thisComputerName {
+    final row = localMachineState?.machine.name?.trim();
+    final name = row != null && row.isNotEmpty ? row : localHostnameOrNull();
+    if (name == null || name.isEmpty) return null;
+    return superTabMachineName(name);
+  }
 
   /// Whether RootShell shows the sign-in step in place of the workspace: from
   /// the moment setup (and its tour) hands over, until an account arrives.
@@ -6659,6 +6678,7 @@ class AppNotifier extends ChangeNotifier {
       // box and installed OpenCode in its first pane, about 90 s to a first result against 55 s on a Mac.
       // They wait for what setup brings until it is ready ([_continueAfterEnvironmentReady]).
       if (firstHarness) {
+        _firstHarnessLaunch = true;
         agentPrefetch?.setupRunning = true;
         agentPrefetch?.start();
         // The tour's final line announces sign-in: see [signInStepShowing].

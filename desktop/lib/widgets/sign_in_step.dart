@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../auth/phone_sign_in.dart';
 import '../auth/sign_in_provider.dart';
+import '../core/runtime_platform.dart';
 import '../logging/app_log.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -42,6 +43,27 @@ const signInStepBenefits = [
   (icon: AppIcons.panelsTopLeft, line: 'Same tabs on every computer'),
 ];
 
+/// The bottom bar's line while nothing is under way: which computer this is,
+/// and whether Harness is already set up on it (Scholes's end-to-end test of
+/// 1.3.44, finding 5: every relaunch showed a bare page that knew nothing of
+/// the computer). [mac] words it "This Mac", else "This computer".
+String signInStepReadyLine({
+  String? computerName,
+  bool setUp = false,
+  bool mac = true,
+}) {
+  final here = mac ? 'This Mac' : 'This computer';
+  final name = computerName?.trim();
+  if (name == null || name.isEmpty) {
+    return setUp
+        ? '$here is set up. Sign in to continue.'
+        : 'Sign in to continue.';
+  }
+  return setUp
+      ? '$here ($name) is set up. Sign in to continue.'
+      : '$here: $name. Sign in to continue.';
+}
+
 /// The page itself, apart from the app: what it says and its three controls.
 class SignInStep extends StatelessWidget {
   const SignInStep({
@@ -58,6 +80,7 @@ class SignInStep extends StatelessWidget {
     this.signOutError,
     this.onRetrySignOut,
     this.recovery,
+    this.readyLine = 'Sign in to continue.',
   });
 
   /// Continue with Google, Continue with Apple, or — with no provider — Email,
@@ -89,6 +112,10 @@ class SignInStep extends StatelessWidget {
   final VoidCallback? onRetrySignOut;
   final Widget? recovery;
 
+  /// The bottom bar's line while nothing is under way
+  /// ([signInStepReadyLine]).
+  final String readyLine;
+
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
@@ -111,7 +138,7 @@ class SignInStep extends StatelessWidget {
                     ? 'Signing in…'
                     : sessionExpired
                     ? 'Your session ended. Sign in again to continue.'
-                    : 'Sign in to continue.',
+                    : readyLine,
               ),
             ],
           );
@@ -540,6 +567,11 @@ class _SignInStepScreenState extends State<SignInStepScreen> {
             finishing: app.signingIn && !app.canCancelLogin,
             error: app.loginBrowserError ?? _error,
             sessionExpired: app.sessionExpired,
+            readyLine: signInStepReadyLine(
+              computerName: app.thisComputerName,
+              setUp: app.harnessSetUpBefore,
+              mac: RuntimePlatform.isMacOS,
+            ),
             signingOut: app.signingOut,
             signOutError: app.signOutError,
             onRetrySignOut: () => unawaited(app.logout()),
