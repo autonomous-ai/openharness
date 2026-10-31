@@ -36,7 +36,7 @@ import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
 import { answersRequest, dirtyGroups, noteWorkChanges, projectUpdateRequest, UNANSWERED_REQUEST_MS } from './projectUpdates.js'
 import { cloneData } from './cloneData.js'
-import { defaultDigest, digestDue, digestMessageId, digestRequest, digestSince } from './digest.js'
+import { digestDue, digestMessageId, digestOf, digestRequest, digestSince } from './digest.js'
 import { judgedMachines, loseTasks, nextLossAt, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { archivable, archiveLine, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests } from './tidy.js'
 import { clock, insertParts, loadActive, loadLightGroups, loadMachineParts, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
@@ -2880,12 +2880,9 @@ export class SuperTabStore {
         if (groupIds.length) loaded = await this.ensure(tx, loaded, { groupIds })
       }
       const state = cloneData(loaded.state)
-      // The digest is on by default (Dee, 2026-10-31): a stored project without one gets it here, once; its first is due from
-      // tomorrow when today's time has passed (digest.ts defaultDigest).
-      if (led && state.projects) defaultDigest(projectOf(state, led.id), this.now())
       if (sentAlready) {
         const project = projectOf(state, led!.id)
-        project.digest = { ...project.digest!, lastOn: due! }
+        project.digest = { ...digestOf(project)!, lastOn: due! }
       }
       author(state, await this.actor(tx, user, state, agentId), true)
       const target = agent(state, agentId)
@@ -2916,7 +2913,8 @@ export class SuperTabStore {
       const digest = digestRequest(state, target, this.now(), asked)
       if (digest) {
         const project = projectOf(state, digest.source!.projectId as string)
-        project.digest = { ...project.digest!, lastOn: digest.source!.on as string, lastAt: this.now() }
+        // A default digest is stored with its first send (digest.ts digestOf).
+        project.digest = { ...digestOf(project)!, lastOn: digest.source!.on as string, lastAt: this.now() }
         written.push(digest)
       }
       // The poll also frees agents whose task the checks just lost, and any an older server left marked running (each poll; a

@@ -28,21 +28,21 @@ export function knownTimeZone(timeZone: string): boolean {
 /** Every project's digest unless a person turns it off (Dee, 2026-10-31): 08:00 in the project owner's zone. No owner's
  *  zone is known to the Swarm yet, so it is Vietnam's, where the team works; a person moves it with project.digest. */
 export const DEFAULT_DIGEST = { time: '08:00', timeZone: DEFAULT_TIME_ZONE } as const
+/** A project that never stored a digest gets its first default one in the hour from 08:00, Vietnam time: no release goes
+ *  out then (releases run 09:00 to 18:00), so a release never sends every project's digest at once, and no poll writes
+ *  anything for it until that send stores it like any other digest. */
+const DEFAULT_UNTIL = '09:00'
 
-/** Gives a stored project without a digest the default, unless a person turned it off; whether it did. Set after today's
- *  time, the first comes tomorrow (digestStartsAfter), so a release in the afternoon sends no digest at once. */
-export function defaultDigest(project: SwarmProject, now: number): boolean {
-  if (project.digest || project.digestOff) return false
-  const lastOn = digestStartsAfter(DEFAULT_DIGEST.time, DEFAULT_DIGEST.timeZone, now)
-  project.digest = { ...DEFAULT_DIGEST, ...lastOn ? { lastOn } : {} }
-  return true
-}
+/** The digest a project keeps: its own, else the default unless a person turned it off. */
+export const digestOf = (project: SwarmProject): NonNullable<SwarmProject['digest']> | undefined =>
+  project.digest ?? (project.digestOff ? undefined : DEFAULT_DIGEST)
 
 /** The local date of a digest due at `now`, or null: none set, not yet its time today, or today's already sent. */
 export function digestDue(project: SwarmProject, now: number): string | null {
-  const digest = project.digest
+  const digest = digestOf(project)
   if (!digest) return null
   const local = localNow(digest.timeZone, now)
+  if (!project.digest) return local.time >= digest.time && local.time < DEFAULT_UNTIL ? local.date : null
   return local.time >= digest.time && digest.lastOn !== local.date ? local.date : null
 }
 
@@ -111,7 +111,7 @@ export function digestRequest(state: SuperTabState, target: Agent, now: number,
   const project = ledProject(state, target.id)
   const on = project && digestDue(project, now)
   if (!project || !on) return null
-  const digest = project.digest!
+  const digest = digestOf(project)!
   const text = `Morning digest for project ${JSON.stringify(project.name)} (${digest.time}, ${digest.timeZone}). This is a scheduled request, not a new task. `
     + 'Check that each pull request under Shipped is merged, and move one that is not to In progress. Then post one message to the people in this chat '
     + 'with these parts, in plain words, without commands or internal IDs.\n\n'

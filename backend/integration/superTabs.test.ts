@@ -800,8 +800,11 @@ describe('private swarm projects on the real control API', () => {
       name: 'Moved lead', configuration: config, lead: false })).rejects.toMatchObject({ code: 'PROJECT_SESSION' })
   })
 
-  it('requests one consolidation after five minutes and remains quiet without new reports', async () => {
-    let now = 10_000
+  // Quiet project chats (Dee, 2026-10-31): a work group's change of state wakes the coordinator at most once every 15 minutes,
+  // an ordinary message never; its report sets the project's status card and posts nothing; the digest is on by default.
+  it('wakes the coordinator only on work changes, at most every 15 minutes, and keeps its report in the status card', async () => {
+    // 14:00 in Vietnam: the default digest starts tomorrow at 08:00.
+    let now = Date.UTC(2026, 9, 31, 7, 0)
     const timed = new SuperTabStore(db, () => now)
     const tab = (await timed.create(owner, randomUUID(), 'Updates', 'public')).id
     const execute = (command: Command, asAgentId?: string) => timed.execute(asAgentId ? host : owner, tab,
@@ -809,38 +812,50 @@ describe('private swarm projects on the real control API', () => {
     const lead = String((await execute({ type: 'agent.add', conversationId: 'lead', machineId: 'test-host',
       harnessId: randomUUID(), name: 'Lead', configuration: config, lead: true })).result.agentId)
     const updates = async () => (await timed.deliveries(host, tab, lead)).filter(d => d.conversationId === 'lead')
+    const chat = async () => db.superTabMessage.findMany({ where: { tabId: tab, conversationId: 'lead' } })
+    expect(await updates()).toEqual([])
     const group = String((await execute({ type: 'conversation.create', title: 'Work', brief: 'Implement it',
       checks: [{ description: 'Verified', independent: true }] })).result.conversationId)
-    expect(await updates()).toEqual([])
+    // Five minutes on, so a burst of changes is one wake-up (the quiet poll's 30 s fit within that).
     now += 299_999
     expect(await updates()).toEqual([])
-    // The quiet poll skips the time checks for 30 s after a full one (store.deliveries), so the request lands within that.
-    now += 30_000
+    now += 30_001
     const polls = await Promise.all(Array.from({ length: 3 }, () => updates()))
     const ids = new Set(polls.flat().map(d => d.id))
     expect(ids.size).toBe(1)
-    const requests = await db.superTabMessage.findMany({ where: { tabId: tab, conversationId: 'lead' } })
-    expect(requests).toHaveLength(1)
-    expect(requests[0]!.source).toMatchObject({ kind: 'update-request' })
+    expect((await chat()).map(m => (m.source as Record<string, unknown>)?.kind)).toEqual(['update-request'])
     await execute({ ...message('New evidence'), conversationId: group } as Command)
-    now += 300_000
+    now += 900_000
     expect((await updates()).map(d => d.id)).toEqual([...ids])
-    // The Lead reports through what it read of each workgroup: here the new evidence, the group's latest message.
+    // The Lead reports through what it read of each workgroup: the card, and nothing in the chat.
     const read = (await timed.read(owner, tab)).state.conversations.find(c => c.id === group)!
-    await execute({ type: 'project.report', projectId: 'lead', through: { [group]: read.lastMessageSequence },
-      text: 'The implementation is ready. Verification is next.' }, lead)
+    const card = 'Work: implementation ready, verification next.'
+    await execute({ type: 'project.report', projectId: 'lead', through: { [group]: read.lastMessageSequence }, text: card }, lead)
     expect(await updates()).toEqual([])
+    expect((await chat()).filter(m => m.text === card || (m.source as Record<string, unknown>)?.kind === 'project-report')).toEqual([])
+    expect((await timed.read(owner, tab)).state.projects!.find(p => p.id === 'lead')!.status).toEqual({ text: card, at: new Date(now).toISOString(), by: lead })
+    // An ordinary message, here an hour of them, wakes nobody.
+    await execute({ ...message('Tests passed'), conversationId: group } as Command)
     now += 3_600_000
     expect(await updates()).toEqual([])
-    expect((await db.superTabMessage.findMany({ where: { tabId: tab, conversationId: 'lead' } })).filter(m =>
-      (m.source as Record<string, unknown>)?.kind === 'project-report')).toHaveLength(1)
-    await execute({ type: 'project.cadence', projectId: 'lead', minutes: 15 })
-    await execute({ ...message('Tests passed'), conversationId: group } as Command)
-    now += 899_999
-    expect(await updates()).toEqual([])
-    // As above: the Lead's open deliveries are answered from its last full poll for 30 s, so the request lands within that.
-    now += 30_000
+    // Two changes within 15 minutes: one wake-up now, the second waits for the next window.
+    await execute({ type: 'conversation.create', title: 'Docs', brief: 'Write them', checks: [{ description: 'Read', independent: false }] })
+    now += 300_000
     expect(await updates()).toHaveLength(1)
+    const answered = (await timed.read(owner, tab)).state.conversations.filter(c => c.title === 'Docs' || c.id === group)
+    await execute({ type: 'project.report', projectId: 'lead', through: Object.fromEntries(answered.map(c => [c.id, c.lastMessageSequence])), text: null }, lead)
+    expect(await updates()).toEqual([])
+    await execute({ type: 'conversation.merged', conversationId: group, pullRequestUrl: 'https://github.com/example/app/pull/7' })
+    now += 600_000
+    expect(await updates()).toEqual([])
+    now += 300_000
+    expect(await updates()).toHaveLength(1)
+    // The card stayed through the acknowledgement, and the morning digest comes by default at 08:00 the next day.
+    expect((await timed.read(owner, tab)).state.projects!.find(p => p.id === 'lead')!.status!.text).toBe(card)
+    expect((await chat()).some(m => (m.source as Record<string, unknown>)?.kind === 'digest-request')).toBe(false)
+    now = Date.UTC(2026, 10, 1, 1, 0) + 30_000
+    await updates()
+    expect((await chat()).filter(m => (m.source as Record<string, unknown>)?.kind === 'digest-request')).toHaveLength(1)
   })
 })
 

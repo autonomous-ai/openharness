@@ -21,12 +21,15 @@ export function dirtyGroups(state: SuperTabState, project: SwarmProject): Conver
 /** The least time between two of a project's scheduled wake-ups (Dee, 2026-10-31: "even at 30 min that's 48 updates a day").
  *  A question, a blocker or completion reaches the coordinator at once anyway, as the status line's recipients. */
 export const WAKE_GAP_MS = 15 * 60_000
+/** How long after a project's first change since its last report the wake-up waits, so a burst (a task created, assigned
+ *  and started) is one wake-up. */
+export const BATCH_MS = 5 * 60_000
 
 /** What of a work group's state wakes its coordinator: its task (assigned, a new one), the task's status (review, done,
  *  blocked, needs_human, cancelled; a review group's verdict is its own task's status), a review's findings, its merges and
- *  pull requests, and its archiving. Ordinary messages, progress notes and terminal turns change none of it. */
+ *  pull requests. Ordinary messages, progress notes, terminal turns and archiving change none of it. */
 const workState = (group: Conversation): string => JSON.stringify([group.assignment?.id ?? null, group.assignment?.status ?? null,
-  group.assignment?.reviewFoundAt ?? null, group.ledger?.mergedAt ?? null, group.pullRequestUrls?.length ?? 0, group.archived])
+  group.assignment?.reviewFoundAt ?? null, group.ledger?.mergedAt ?? null, group.pullRequestUrls?.length ?? 0])
 
 /** Marks each work group whose state this write changed, or that it created, through its latest message, so the wake-up
  *  asks the coordinator to read it; the project's progress changes only when the project goes from clean to dirty, so
@@ -63,9 +66,10 @@ export function projectUpdateRequest(state: SuperTabState, target: Agent, now: n
   const group = conversation(state, project.leadConversationId), progress = project.progress
   if (group.leadId !== target.id || group.archived) return null
   const dirty = dirtyGroups(state, project)
-  // At most once every 15 minutes, whatever cadence an older client set (updateMinutes is still read, never used here).
+  // Five minutes after the first change, and at most once every 15 minutes, whatever cadence an older client set
+  // (updateMinutes is still read, never used here).
   const reports = !!progress && dirty.some(g => (g.reportSeq ?? 0) > (progress.requested[g.id] ?? progress.requestedFloor)) &&
-    now >= (progress.requestedAt ?? 0) + WAKE_GAP_MS
+    now >= Math.max(progress.since + BATCH_MS, progress.requestedAt === undefined ? 0 : progress.requestedAt + WAKE_GAP_MS)
   if (!reports) return null
   const through = throughOf(dirty)
   const id = stableId('project-update', state.id, project.id, JSON.stringify(through))

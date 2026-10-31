@@ -20,7 +20,7 @@ import { leadNoticeRows, loseTasks, recordTaskState, renewLease, renewOwnTask, r
 import { ABANDONED, askedModel, coordinatorCopy, failureNotice, failureRecipients, MACHINE_REMOVED } from './startFailure.js'
 import { noteStartFailed, noteStartSucceeded, resumeEngine } from './engineHealth.js'
 import { reviewCapacityNotice } from './reviewCapacity.js'
-import { defaultDigest, digestStartsAfter, knownTimeZone } from './digest.js'
+import { digestStartsAfter, knownTimeZone } from './digest.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
 import { cloneData } from './cloneData.js'
@@ -1165,7 +1165,6 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // It starts on a copy of the built-in instructions as revision 1, the team's own to change (design, The built-in template).
       projects.push({ id: operationId, name: command.name, ownerId: actor.userId, leadConversationId,
         visibility: command.visibility, members: [], updateMinutes: 5, skillMode: 'default', ...FIRST_INSTRUCTIONS })
-      defaultDigest(projects.at(-1)!, context.now)
       effects.instructions = { projectId: operationId, revision: 1, hash: FIRST_INSTRUCTIONS.instructionsHash, text: INSTRUCTIONS_TEMPLATE,
         summary: FIRST_SUMMARY, writtenBy: { kind: 'person', id: actor.userId }, askedBy: actor.userId, at: context.now }
       state.conversations.push({ id: leadConversationId, projectId: operationId, title: 'Lead', leadId: null,

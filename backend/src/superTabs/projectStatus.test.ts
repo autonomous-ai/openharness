@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
-import { noteWorkChanges, projectUpdateRequest, WAKE_GAP_MS } from './projectUpdates.js'
-import { DEFAULT_DIGEST, defaultDigest, digestDue } from './digest.js'
+import { BATCH_MS, noteWorkChanges, projectUpdateRequest, WAKE_GAP_MS } from './projectUpdates.js'
+import { DEFAULT_DIGEST, digestDue, digestOf } from './digest.js'
 import { projectOf } from './projects.js'
 import { numberMessages } from './parts/commit.js'
 
@@ -72,6 +72,19 @@ describe('the project status card', () => {
     expect(projectOf(f.state, 'lead').status).toBeUndefined()
   })
 
+  it('is refused alike to another project\'s coordinator, which writes only its own card', () => {
+    const f = fixture()
+    const created = f.run({ type: 'project.create', name: 'Firmware', visibility: 'public', brief: 'Build the firmware.' } as Command)
+    const other = f.add('other-lead', created.result.conversationId as string, true)
+    const as: Actor = { kind: 'agent', agentId: other, machineOwnerId: 'host-owner' }
+    expect(() => f.run(report('Firmware took over'), as)).toThrow(expect.objectContaining({ code: 'NOT_FOUND', message: 'This project is unavailable.' }))
+    expect(() => f.run(commandSchema.parse({ type: 'project.report', projectId: 'no-such-project', through: {}, text: 'x' }), as))
+      .toThrow(expect.objectContaining({ code: 'NOT_FOUND', message: 'This project is unavailable.' }))
+    f.run(commandSchema.parse({ type: 'project.report', projectId: created.result.projectId, through: {}, text: 'Firmware: flashing' }), as)
+    expect(projectOf(f.state, created.result.projectId as string).status!.text).toBe('Firmware: flashing')
+    expect(projectOf(f.state, 'lead').status).toBeUndefined()
+  })
+
   it('is read exactly by those who read the project chat', () => {
     const f = fixture()
     const invited = f.run({ type: 'invite.create', email: peer.email, role: 'collaborator', conversationId: 'lead' })
@@ -106,6 +119,7 @@ describe('the coordinator\'s scheduled wake-up', () => {
     const engineer = f.add('engineer', group)
     const as: Actor = { kind: 'agent', agentId: engineer, machineOwnerId: 'host-owner' }
     const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: engineer }).result.assignmentId as string
+    f.tick(BATCH_MS)
     answer(f, projectUpdateRequest(f.state, lead(f), f.now)!)
     f.tick(WAKE_GAP_MS)
     f.run({ type: 'message.send', conversationId: group, text: 'Halfway there.', replyTo: null, recipientIds: [] }, as)
@@ -114,15 +128,21 @@ describe('the coordinator\'s scheduled wake-up', () => {
     f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'working', result: 'Tests written' }, as)
     f.tick(WAKE_GAP_MS)
     expect(projectUpdateRequest(f.state, lead(f), f.now)).toBeNull()
-    // Ready for review is a change.
+    // Ready for review is a change: it wakes the coordinator five minutes on.
     f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'review', result: 'PR #7' }, as)
+    f.tick(BATCH_MS - 1)
+    expect(projectUpdateRequest(f.state, lead(f), f.now)).toBeNull()
+    f.tick(1)
     expect(projectUpdateRequest(f.state, lead(f), f.now)?.source).toMatchObject({ kind: 'update-request', through: { [group]: expect.any(Number) } })
   })
 
   it('is asked for by a work group\'s change of state, at most once every 15 minutes', () => {
     const f = fixture()
-    // A new group is a change: the first wake-up comes at once.
+    // A new group is a change: the wake-up comes five minutes on, so a burst of changes is one.
     const a = f.group()
+    f.tick(BATCH_MS - 1)
+    expect(projectUpdateRequest(f.state, lead(f), f.now)).toBeNull()
+    f.tick(1)
     const first = projectUpdateRequest(f.state, lead(f), f.now)
     expect(first?.source).toMatchObject({ kind: 'update-request' })
     answer(f, first!)
@@ -147,7 +167,9 @@ describe('the coordinator\'s scheduled wake-up', () => {
   it('keeps its 15 minutes whatever cadence an older client set', () => {
     const f = fixture()
     f.run({ type: 'project.cadence', projectId: 'lead', minutes: 1 })
-    answer(f, (f.group(), projectUpdateRequest(f.state, lead(f), f.now)!))
+    f.group()
+    f.tick(BATCH_MS)
+    answer(f, projectUpdateRequest(f.state, lead(f), f.now)!)
     f.tick(MINUTE)
     f.group()
     expect(projectUpdateRequest(f.state, lead(f), f.now)).toBeNull()
@@ -161,22 +183,20 @@ describe('the morning digest by default', () => {
   const AFTERNOON = Date.UTC(2026, 9, 31, 7, 0)
   const NEXT_EIGHT = Date.UTC(2026, 10, 1, 1, 0)
 
-  it('is 08:00 Vietnam time for a project without one, starting tomorrow when today\'s has passed', () => {
+  it('is 08:00 Vietnam time for a project that never set one, first sent in the hour from 08:00', () => {
     const f = fixture(), project = projectOf(f.state, 'lead')
     expect(project.digest).toBeUndefined()
-    expect(defaultDigest(project, AFTERNOON)).toBe(true)
-    expect(project.digest).toEqual({ ...DEFAULT_DIGEST, lastOn: '2026-10-31' })
     expect(DEFAULT_DIGEST).toEqual({ time: '08:00', timeZone: 'Asia/Ho_Chi_Minh' })
-    expect(digestDue(project, AFTERNOON + MINUTE)).toBeNull()
+    expect(digestOf(project)).toEqual(DEFAULT_DIGEST)
+    // A release in the afternoon sends nothing at once; the first comes the next morning.
+    expect(digestDue(project, AFTERNOON)).toBeNull()
+    expect(digestDue(project, NEXT_EIGHT - 1)).toBeNull()
     expect(digestDue(project, NEXT_EIGHT)).toBe('2026-11-01')
-    // Filled in once: a project with a digest keeps its own.
-    expect(defaultDigest(project, NEXT_EIGHT)).toBe(false)
-  })
-
-  it('comes the same morning for a project set up before 08:00', () => {
-    const f = fixture(), project = projectOf(f.state, 'lead')
-    defaultDigest(project, NEXT_EIGHT - 60 * MINUTE)
-    expect(digestDue(project, NEXT_EIGHT)).toBe('2026-11-01')
+    expect(digestDue(project, NEXT_EIGHT + 59 * MINUTE)).toBe('2026-11-01')
+    expect(digestDue(project, NEXT_EIGHT + 60 * MINUTE)).toBeNull()
+    // Once sent it is stored like any digest, and the next day's comes whenever the coordinator polls after 08:00.
+    project.digest = { ...digestOf(project)!, lastOn: '2026-11-01', lastAt: NEXT_EIGHT }
+    expect(digestDue(project, NEXT_EIGHT + 24 * 60 * MINUTE + 5 * 60 * MINUTE)).toBe('2026-11-02')
   })
 
   it('stays off once a person turns it off, and comes back when they set a time', () => {
@@ -185,8 +205,8 @@ describe('the morning digest by default', () => {
     const project = () => projectOf(f.state, 'lead')
     expect(project().digest).toBeUndefined()
     expect(project().digestOff).toBe(true)
-    expect(defaultDigest(project(), AFTERNOON)).toBe(false)
-    expect(project().digest).toBeUndefined()
+    expect(digestOf(project())).toBeUndefined()
+    expect(digestDue(project(), NEXT_EIGHT)).toBeNull()
     f.run({ type: 'project.digest', projectId: 'lead', time: '09:00', timeZone: 'Europe/Paris' })
     expect(project().digestOff).toBeUndefined()
     expect(project().digest).toMatchObject({ time: '09:00', timeZone: 'Europe/Paris' })
@@ -195,6 +215,8 @@ describe('the morning digest by default', () => {
   it('is on for a new project from its creation', () => {
     const f = fixture()
     const created = f.run({ type: 'project.create', name: 'Firmware', visibility: 'public', brief: 'Build the firmware.' } as Command)
-    expect(projectOf(f.state, created.result.projectId as string).digest).toMatchObject(DEFAULT_DIGEST)
+    const project = projectOf(f.state, created.result.projectId as string)
+    expect(digestOf(project)).toEqual(DEFAULT_DIGEST)
+    expect(digestDue(project, NEXT_EIGHT)).toBe('2026-11-01')
   })
 })
