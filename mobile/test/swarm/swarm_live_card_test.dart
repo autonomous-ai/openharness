@@ -410,6 +410,7 @@ void main() {
     expect(find.textContaining('deadbeef1'), findsNothing);
   });
 
+  // A Leads chat from an older server is in no read at all (Dee, 10-31).
   testWidgets('a Buddy chat or the Leads chat is never a linked task', (
     tester,
   ) async {

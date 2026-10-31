@@ -351,12 +351,12 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
   }
 
   /// The people a post can tag, as Desktop offers them: those who read this
-  /// conversation, never the reader. Nobody in the Leads conversation; in a
-  /// Buddy chat only its owner reads it. The backend checks each tag again.
+  /// conversation, never the reader. In a Buddy chat only its owner reads it.
+  /// The backend checks each tag again.
   List<SuperTabPerson> get mentionablePeople {
     final snapshot = reader.snapshot;
     final group = conversation;
-    if (snapshot == null || group == null || group.kind == 'leads') {
+    if (snapshot == null || group == null) {
       return const [];
     }
     final project = snapshot.projectFor(group.id);

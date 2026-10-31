@@ -1487,12 +1487,12 @@ export class SuperTabHost {
     this.persist()
   }
 
-  /** Leads see each other's work and talk (spec 2026-10-23): the Leads conversation reaches Leads alone. The server
-   *  delivers it only to them; an agent that leads nothing is also never given it here. The roster names the Leads
-   *  conversation, so this needs no read of the Swarm (design 2026-10-26 section 5.3); the server's delivery rules decide
-   *  every other conversation, a private one's audience included. */
+  /** The Leads conversation is removed (Dee, 10-31): the server takes no post there, and a delivery still queued for it from
+   *  before reaches nobody, a Lead included. The roster names it while a server does, so this needs no read of the Swarm
+   *  (design 2026-10-26 section 5.3); the server's delivery rules decide every other conversation, a private one's audience
+   *  included. */
   private mayRead(target: HostAgent, delivery: Json): boolean {
-    if (target.lead === true || delivery.conversationId !== target.leadsConversationId) return true
+    if (typeof target.leadsConversationId !== 'string' || delivery.conversationId !== target.leadsConversationId) return true
     if (!this.unreadable.has(delivery.id as string)) {
       this.unreadable.add(delivery.id as string)
       this.log(`Withheld delivery ${String(delivery.id)}: it is not in a conversation ${target.agent.harnessId} can read.`)

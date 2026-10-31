@@ -45,7 +45,7 @@ const POST_HELP = `${POST_ABOUT} TEXT is one argument: when it holds quotes, or 
  *  hint was refused and tried again, so its help passes the message in quotes, as the guard's refusal says. */
 const BUDDY_POST_HELP = `${POST_ABOUT} TEXT is one argument, the message itself in quotes: 'your message', or "it's done" when it holds an apostrophe. A Buddy never passes - for TEXT: its message is checked for secrets, so one read from stdin is refused and nothing is posted.`
 const POST_FLAGS = '[--to AGENT]... [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]...'
-const MENTION_HELP = ' --mention tags a person, by the id or email shown in status (up to 5), when you need them to act or decide; it shows in their notifications. An @username or @email in TEXT tags that person as well, outside code and links. Nobody is tagged in the Leads conversation, nor a person who cannot read the conversation.'
+const MENTION_HELP = ' --mention tags a person, by the id or email shown in status (up to 5), when you need them to act or decide; it shows in their notifications. An @username or @email in TEXT tags that person as well, outside code and links. Nobody is tagged who cannot read the conversation.'
 /** What the command entry says after how its JSON is passed, the same for everyone. A task's review plan (#2382) is said in
  *  its brief (backend superTabs/model.ts renderWorkTask), for whoever opens its review (project instructions, phase 4). */
 const COMMAND_ABOUT = 'send one of the commands below.'
@@ -67,7 +67,6 @@ async function finishingWith(core: CoreApi, command: Record<string, unknown>, ha
  *  is the project's instructions', never this help's. */
 const HELP = {
   status: 'Read the shared tab roster and work: people, projects, agents, conversations and their tasks. How the project routes work is in its instructions (instructions). The PM\'s status also lists otherProjectsWork: the active work of the Swarm\'s other projects (group, project, title, owned code, status, agent, PR), read only.',
-  leads: 'The Leads conversation (leadsConversationId in the PM\'s status) is one conversation for the whole Swarm, outside every project. Only Leads (the projects\' PMs) and people post there, and only Leads among agents receive it. otherProjectsWork shows what the other projects work on; the Swarm posts there by itself when two projects\' active tasks own the same code.',
   messages: 'messages GROUP: read recent messages in a conversation, thread replies included: each names its thread, the root message it answers there. A post with --reply-to lands in that message\'s thread. messages GROUP --thread ROOT reads one thread, its root and replies; a Buddy\'s thread session also gets there, as context, the main-chat messages it started from.',
   message: 'message GROUP MESSAGE_ID: read one exact message, including an earlier question or result referenced by a reply.',
   instructions: 'instructions [PROJECT]: print your project\'s instructions (its roles, workflow and routing) and the coordinator\'s notes, each with its id. Work by them; ask the coordinator, or a person, to change them.',
@@ -145,16 +144,18 @@ function isLead(state: Record<string, unknown>, agentId: string): boolean {
   return list(state.conversations).some(c => leads.includes(c.id) && c.leadId === agentId)
 }
 
-/** Leads see each other's work and talk (spec 2026-10-23): a Lead reads other projects' active work in the backend's
- *  fields alone; any other agent reads neither it nor the Leads conversation, even from a server that sent it. */
+/** Leads see each other's work (spec 2026-10-23): a Lead reads other projects' active work in the backend's fields alone;
+ *  any other agent reads none of it. Nobody reads the Leads conversation, removed on 10-31, even from an older server
+ *  that still sends it. */
 function statusView(answer: Record<string, unknown>, agentId: string): Record<string, unknown> {
   const { otherProjectsWork, leadsConversationId, ...state } = object(answer.state)
+  const conversations = list(state.conversations).filter(c => c.kind !== 'leads' && (leadsConversationId == null || c.id !== leadsConversationId))
   if (isLead(state, agentId)) {
-    return { ...answer, state: { ...state, ...(leadsConversationId !== undefined ? { leadsConversationId } : {}),
+    return { ...answer, state: { ...state, conversations,
       ...(Array.isArray(otherProjectsWork) ? { otherProjectsWork: list(otherProjectsWork).map(work =>
         Object.fromEntries(OTHER_WORK_FIELDS.filter(key => key in work).map(key => [key, work[key]]))) } : {}) } }
   }
-  return { ...answer, state: { ...state, conversations: list(state.conversations).filter(c => c.kind !== 'leads' && c.id !== leadsConversationId) } }
+  return { ...answer, state: { ...state, conversations } }
 }
 
 /** A post's mentions name people by id or email; the backend takes person ids. A name that is nobody in the Swarm is refused

@@ -1092,7 +1092,8 @@ void main() {
           ...conversationFixture('ask', 'Pick a sign-in page'),
           'assignment': {'agentId': 'agent-3', 'status': 'needs_human'},
         },
-        // As the backend sends it: no project, kind `leads`.
+        // As an older backend still sends it: no project, kind `leads`.
+        // It is gone (Dee, 2026-10-31), and no chat lists anyone from it.
         {
           ...conversationFixture('leads', 'Leads'),
           'kind': 'leads',
@@ -1106,10 +1107,11 @@ void main() {
       await f.controller.refresh();
       // Needs input first; then idle in today's order, the Leads first.
       const order = [3, 0, 2, 1];
+      expect(f.controller.snapshot!.conversation('leads'), isNull);
       final saved = grid.AppTheme.brightness.value;
       addTearDown(() => grid.AppTheme.brightness.value = saved);
       for (final brightness in Brightness.values) {
-        for (final chat in ['lead', 'os-lead', 'buddy-owner-lead', 'leads']) {
+        for (final chat in ['lead', 'os-lead', 'buddy-owner-lead']) {
           f.controller.select(chat);
           // The app's tokens follow their own brightness, not the theme's.
           grid.AppTheme.brightness.value = brightness;
@@ -1144,7 +1146,6 @@ void main() {
         ('lead', true),
         ('os-lead', true),
         ('buddy-owner-lead', false),
-        ('leads', false),
       ]) {
         f.controller.select(chat);
         await tester.pumpAndSettle();
