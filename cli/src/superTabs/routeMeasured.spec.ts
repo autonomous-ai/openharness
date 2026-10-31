@@ -87,8 +87,20 @@ describe('routing by measured cost and results (Goals piece 3)', () => {
     const choice = route([row({ firstReviews: 12, firstReviewPassed: 11, shipped: 1, engine: 'opencode', model: 'big' }),
       row({ engine: 'codex', model: 'gpt-6.1-sol', firstReviews: 12, firstReviewPassed: 2, shipped: 2 })])
     expect(order(choice)).toEqual(['claude opus', 'codex gpt-6.1-sol'])
-    expect(mine(choice.shown[1]!)).toEqual([`${MEASURED}: build work, last 7 days: 2 of 12 first reviews passed, clearly fewer than opencode big high's 11 of 12, so it ranks after its strength's other choices, too few shipped changes with known costs to compare cost (2 shipped)`])
+    expect(mine(choice.shown[1]!)).toEqual([`${MEASURED}: build work, last 7 days: 2 of 12 first reviews passed, clearly fewer than another measured choice's 11 of 12, so it ranks after its strength's other choices, too few shipped changes with known costs to compare cost (2 shipped)`])
     expect(mine(choice.shown[0]!)).toEqual([])
+  })
+
+  it('a reason built from other groups\' runs names nothing from them: only numbers, the task\'s kind and catalog models', () => {
+    // Runs whose model an agent was configured with as a path or a person's share name, in groups the reader may not open.
+    const leaky = [row({ firstReviews: 12, firstReviewPassed: 11, model: '/Users/ken/models/secret-plan.gguf', effort: 'default', fullCostPerShipped: 9 }),
+      row({ engine: 'codex', model: 'gpt-6.1-sol', firstReviews: 12, firstReviewPassed: 2, fullCostPerShipped: 3 })]
+    const choice = route(leaky)
+    const reasons = choice.shown.flatMap(mine).join(' ')
+    expect(reasons).toContain('clearly fewer than another measured choice\'s 11 of 12')
+    for (const leak of ['Users', 'ken', 'secret', 'gguf', '/']) expect(reasons).not.toContain(leak)
+    // A kind that is no plain word (an old record's free text) is dropped before any reason can carry it.
+    expect(measuredFrom({ ok: true, value: { rows: [row({ kind: 'Fix Ana\'s login (#2101)' })] } })).toEqual({ rows: [], truncated: false })
   })
 
   it('a Claude model it has no family for is matched by its own name', () => {

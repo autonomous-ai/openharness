@@ -122,6 +122,14 @@ describe('the full cost per shipped change (routing, Goals piece 3)', () => {
     expect(summary.rows.find(r => r.model === 'opus')).toMatchObject({ reviewAttempts: 1, shipped: 1 })
   })
 
+  it('names no group, title, person or id: only choices, kinds and numbers', () => {
+    const rows = [row('b1', { conversationId: 'g-secret' }), row('r1', { conversationId: 'v-secret', kind: 'review', run: reviewRun(10 * MINUTE) })]
+    const groups = [{ ...group('g-secret', [{ assignmentId: 'b1', firstReview: true }], 30 * MINUTE), title: 'Ana private plan', leadId: 'agent-ana' },
+      { ...reviewGroup('v-secret', 'g-secret'), title: 'Review: Ana private plan' }] as Conversation[]
+    const text = JSON.stringify(summarizeCosts(rows, groups))
+    for (const leak of ['secret', 'Ana', 'plan', 'agent-ana', 'b1', 'r1', '"m"', '"h"']) expect(text).not.toContain(leak)
+  })
+
   it('fills an unknown attempt cost with the mean of known ones on the same choice, and gives no figure when under half are known', () => {
     const known = [row('a1', { conversationId: 'g1' }), row('a2', { conversationId: 'g2' }), row('a3', { conversationId: 'g3', run: run({ start: null }) })]
     const half = summarizeCosts(known, [group('g1', [], 30 * MINUTE), group('g2', [], 30 * MINUTE), group('g3', [], 30 * MINUTE)])

@@ -48,7 +48,7 @@ export function measuredFrom(answer: unknown): Measured | null {
   if (reply.ok !== true || !Array.isArray(value.rows)) return null
   const rows = value.rows.map(object).flatMap((r): MeasuredRow[] => {
     const full = r.fullCostPerShipped ?? null, own = r.costPerShipped ?? null
-    if (![r.engine, r.model, r.effort, r.kind].every(s => typeof s === 'string') || !count(r.firstReviews) || !count(r.firstReviewPassed)
+    if (![r.engine, r.model, r.effort, r.kind].every(s => typeof s === 'string') || !KIND.test(r.kind as string) || !count(r.firstReviews) || !count(r.firstReviewPassed)
       || r.firstReviewPassed > r.firstReviews || !count(r.shipped) || !(full === null || money(full)) || !(own === null || money(own))) return []
     return [{ engine: r.engine as string, model: r.model as string, effort: r.effort as string, kind: r.kind as string, firstReviews: r.firstReviews,
       firstReviewPassed: r.firstReviewPassed, shipped: r.shipped, costPerShipped: own, fullCostPerShipped: full }]
@@ -76,7 +76,13 @@ function ranAs(p: Pick<Probe, 'engine' | 'model' | 'gridModel'>): string {
   if (p.gridModel) return p.gridModel
   return p.engine === 'claude' ? claudeAliasForModel(p.model.replace(/\[1m\]$/i, '')) ?? p.model : p.model
 }
-const nameOf = (r: MeasuredRow) => `${ENGINE[r.engine] ?? r.engine} ${r.model} ${r.effort}`
+/** Another choice as a reason names it: only a model of the catalog, whose names every reader of the route log already sees.
+ *  A row's model is what an agent was configured with, and a grid or local model's can be a file path or a person's share
+ *  name: such a row is "another measured choice" (hook review, 2026-10-31: reasons hold numbers and kinds of work only). */
+const nameOf = (r: MeasuredRow, catalog: Catalog) => catalog.models.some(m => m.engine === r.engine && m.model === r.model && m.effort === r.effort)
+  ? `${ENGINE[r.engine]} ${r.model} ${r.effort}` : 'another measured choice'
+/** A kind of work as the route takes it (route.ts parseAssessment): one lowercase word. A row of any other kind is dropped. */
+const KIND = /^[a-z][a-z0-9-]{0,39}$/
 const costed = (r: MeasuredRow) => r.shipped >= MIN_SHIPPED && r.fullCostPerShipped !== null
 const reviewed = (r: MeasuredRow) => r.firstReviews >= MIN_FIRST_REVIEWS
 
@@ -116,7 +122,7 @@ export function measuredPlugin(measured: Measured): RoutePlugin {
       if (!costed(mine) && !worse) return null
       const pass = !reviewed(mine) ? `first reviews too few to compare (${mine.firstReviews})`
         : `${mine.firstReviewPassed} of ${mine.firstReviews} first reviews passed${worse
-          ? `, clearly fewer than ${nameOf(best!.r)}'s ${best!.r.firstReviewPassed} of ${best!.r.firstReviews}, so it ranks after its strength's other choices` : ''}`
+          ? `, clearly fewer than ${nameOf(best!.r, catalog)}'s ${best!.r.firstReviewPassed} of ${best!.r.firstReviews}, so it ranks after its strength's other choices` : ''}`
       let cost: string, shift = 0
       if (!costed(mine)) cost = `too few shipped changes with known costs to compare cost (${mine.shipped} shipped)`
       else {
