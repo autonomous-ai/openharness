@@ -1373,7 +1373,7 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
     const { host, shot, delivered } = buddyOn(message, { agents: [agent], conversations: [chat] })
     await host.tick()
     expect(delivered[0]!.list).toMatchObject({ files: [{ path: shot }] })
-    expect(delivered[0]!.list.wide).toBe(false)
+    expect((delivered[0]!.list as { wide?: unknown }).wide).toBe(false)
   })
   it.each([
     ['a project\'s Buddy', buddyAgent],
