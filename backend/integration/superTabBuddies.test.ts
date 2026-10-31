@@ -98,6 +98,16 @@ async function buddy(f: Awaited<ReturnType<typeof swarm>>, projectId = 'lead') {
   return { chat, agentId, pool }
 }
 
+describe('a Buddy and the route\'s reads', () => {
+  // Scholes's goals, piece 5: the route's read of running CI jobs is the project's agents'; a Buddy routes nothing.
+  it('refuses a Buddy the project\'s CI read, as an unavailable project, while the PM reads it', async () => {
+    const f = await swarm()
+    const { agentId } = await buddy(f)
+    await expect(f.store.ciRepository(peer, f.tab, 'lead', agentId)).rejects.toMatchObject({ code: 'NOT_FOUND', status: 404 })
+    expect(await f.store.ciRepository(owner, f.tab, 'lead', f.lead)).toEqual({ repositoryUrl: null, approvalRequired: false })
+  })
+})
+
 /** A complete PNG: one opaque red pixel, its chunks' checksums real, as a screenshot tool writes one. */
 function png(): Buffer {
   const chunk = (type: string, data: Buffer) => {

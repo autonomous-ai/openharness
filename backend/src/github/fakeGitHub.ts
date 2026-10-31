@@ -24,11 +24,15 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
   const protection = new Map<string, { rules?: unknown[]; protected?: boolean; branch?: string; fail?: boolean }>()
   /** Pull requests by `owner/name#number`, lower case: GitHub's state and when it was merged. */
   const pulls = new Map<string, { state: 'open' | 'closed'; merged_at: string | null }>()
+  /** Workflow runs by `owner/name`, lower case: each run's status and its jobs' statuses and runner labels. */
+  const actions = new Map<string, Array<{ id: number; status: string; jobs: Array<{ status: string; labels: string[] }> }>>()
   const calls: FakeCall[] = []
   const issued = new Set<string>()
   const revoked: string[] = []
   let minted = 0
-  const control = { revokeStatus: 204, tokenStatus: 201 as number, tokenMessage: '', down: false, botId: 4242 as number | null }
+  const control = { revokeStatus: 204, tokenStatus: 201 as number, tokenMessage: '', down: false, botId: 4242 as number | null, actionsStatus: 200, jobsStatus: 200 }
+  /** Each token's permissions, as it was minted. */
+  const permissions = new Map<string, unknown>()
   const json = (status: number, body?: unknown) => new Response(body === undefined ? null : JSON.stringify(body), { status })
   const jwtValid = (auth: string) => {
     const jwt = auth.replace(/^Bearer /, '')
@@ -70,6 +74,7 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
       if (control.tokenStatus !== 201) return json(control.tokenStatus, { message: control.tokenMessage })
       const token = `ghs_fixture_${++minted}`
       issued.add(token)
+      permissions.set(token, (body as { permissions: unknown }).permissions)
       return json(201, { token, expires_at: new Date(now() + 3600_000).toISOString(), permissions: (body as { permissions: unknown }).permissions })
     }
     if (method === 'DELETE' && url.pathname === '/installation/token') {
@@ -88,6 +93,18 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
       const branch = known.branch ?? 'main'
       // A renamed repository: GitHub redirects its old name to its id, and fetch follows, so the body names it as it is now.
       if (!repoPath[3]) return json(200, { full_name: renamed.get(`${repoPath[1]}/${repoPath[2]}`.toLowerCase()) ?? `${repoPath[1]}/${repoPath[2]}`, default_branch: branch })
+      const runs = actions.get(`${repoPath[1]}/${repoPath[2]}`.toLowerCase()) ?? []
+      if (repoPath[3] === '/actions/runs') {
+        if (control.actionsStatus !== 200) return json(control.actionsStatus, { message: 'Server Error' })
+        const matching = runs.filter(r => r.status === url.searchParams.get('status'))
+        return json(200, { total_count: matching.length, workflow_runs: matching.slice(0, Number(url.searchParams.get('per_page') ?? 30)).map(r => ({ id: r.id, status: r.status, name: `run ${r.id}`, head_branch: 'secret-branch' })) })
+      }
+      const jobs = /^\/actions\/runs\/(\d+)\/jobs$/.exec(repoPath[3] ?? '')
+      if (jobs) {
+        if (control.jobsStatus !== 200) return json(control.jobsStatus, { message: 'Server Error' })
+        const run = runs.find(r => r.id === Number(jobs[1]))
+        return run ? json(200, { total_count: run.jobs.length, jobs: run.jobs.map((j, i) => ({ id: i, name: `job ${i}`, ...j })) }) : json(404, { message: 'Not Found' })
+      }
       const pull = /^\/pulls\/(\d+)$/.exec(repoPath[3] ?? '')
       if (pull) {
         const known = pulls.get(`${repoPath[1]}/${repoPath[2]}#${pull[1]}`.toLowerCase())
@@ -98,7 +115,7 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
     }
     return json(404, { message: 'Not Found' })
   }) as typeof globalThis.fetch
-  return { fetch, calls, installed, owners, renamed, protection, pulls, revoked, issued, control }
+  return { fetch, calls, installed, owners, renamed, protection, pulls, revoked, issued, control, actions, permissions }
 }
 
 /** A configured app talking to [github]. */

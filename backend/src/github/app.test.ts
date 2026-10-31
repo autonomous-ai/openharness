@@ -1,6 +1,6 @@
 import { createPublicKey, generateKeyPairSync, verify } from 'node:crypto'
-import { describe, expect, it } from 'vitest'
-import { cacheSecret, githubAppConfig, GitHubAppError, PULL_READ_PERMISSIONS, readPrivateKey, TOKEN_PERMISSIONS } from './app.js'
+import { describe, expect, it, vi } from 'vitest'
+import { ACTIONS_READ_PERMISSIONS, CI_LOAD_TTL_MS, CI_MAX_CALLS, CI_MAX_RUNS, CI_READS_PER_HOUR, CI_STALE_MS, cacheSecret, githubAppConfig, GitHubAppError, PULL_READ_PERMISSIONS, readPrivateKey, TOKEN_PERMISSIONS } from './app.js'
 import { FAKE_API, fakeApp, fakeGitHub, throwawayKey } from './fakeGitHub.js'
 import { githubRepository } from './repository.js'
 
@@ -252,5 +252,136 @@ describe('default branch protection', () => {
 
   it('never talks to the real GitHub in these tests', () => {
     expect(FAKE_API).not.toContain('api.github.com')
+  })
+})
+
+describe('the CI load', () => {
+  const job = (status: string, ...labels: string[]) => ({ status, labels: labels.length ? labels : ['ubuntu-latest'] })
+  const busy = () => {
+    const env = setup()
+    env.github.installed.set('acme/app', 77)
+    env.github.actions.set('acme/app', [
+      { id: 1, status: 'in_progress', jobs: [job('in_progress'), job('in_progress', 'macos-15'), job('completed'), job('queued', 'macos-15')] },
+      { id: 2, status: 'queued', jobs: [job('waiting'), job('pending'), job('requested'), job('queued', 'self-hosted', 'macOS', 'arm64')] },
+      { id: 3, status: 'completed', jobs: [job('in_progress')] },
+    ])
+    return env
+  }
+  it('counts the running and waiting jobs, in all and on macOS, of runs in progress or queued', async () => {
+    const { app } = busy()
+    expect(await app.ciLoad(repo)).toEqual({ running: 2, queued: 5, macosRunning: 1, macosQueued: 2 })
+  })
+  it('reads with a token that only reads workflow runs, for that repository alone, revoked at once', async () => {
+    const { app, github } = busy()
+    await app.ciLoad(repo)
+    const minted = github.calls.filter(c => c.path.endsWith('/access_tokens'))
+    expect(minted).toHaveLength(1)
+    expect(minted[0]!.body).toEqual({ repositories: ['app'], permissions: ACTIONS_READ_PERMISSIONS })
+    expect(ACTIONS_READ_PERMISSIONS).toEqual({ actions: 'read', metadata: 'read' })
+    expect(github.revoked).toHaveLength(1)
+    expect(github.issued.size).toBe(0)
+  })
+  it('keeps a load for its time, routes asking at once share one read, and a later route reads again', async () => {
+    const { app, github, time } = busy()
+    const [x, y] = await Promise.all([app.ciLoad(repo), app.ciLoad(repo)])
+    expect(x).toEqual(y)
+    await app.ciLoad(githubRepository('https://github.com/ACME/App')!)
+    const runReads = () => github.calls.filter(c => c.path.endsWith('/actions/runs')).length
+    expect(runReads()).toBe(2)
+    time.advance(CI_LOAD_TTL_MS)
+    github.actions.set('acme/app', [])
+    expect(await app.ciLoad(repo)).toEqual({ running: 0, queued: 0, macosRunning: 0, macosQueued: 0 })
+    expect(runReads()).toBe(4)
+  })
+  it('reads at most its limit of runs, and counts every run beyond it as one waiting job', async () => {
+    const { app, github } = busy()
+    github.actions.set('acme/app', [...Array.from({ length: 30 }, (_, i) => ({ id: i + 1, status: 'in_progress', jobs: [job('in_progress')] })),
+      ...Array.from({ length: 4 }, (_, i) => ({ id: 100 + i, status: 'queued', jobs: [job('queued', 'macos-15')] }))])
+    expect(await app.ciLoad(repo)).toEqual({ running: CI_MAX_RUNS, queued: 34 - CI_MAX_RUNS, macosRunning: 0, macosQueued: 0 })
+    expect(github.calls.filter(c => c.path.endsWith('/jobs'))).toHaveLength(CI_MAX_RUNS)
+  })
+  // Lead, 10-31: a read's GitHub calls are counted and capped.
+  it('makes at most its limit of GitHub calls in one read, from the token to its revoke', async () => {
+    const { app, github } = busy()
+    github.actions.set('acme/app', Array.from({ length: 40 }, (_, i) => ({ id: i + 1, status: i % 2 ? 'queued' : 'in_progress', jobs: [job('in_progress')] })))
+    await app.ciLoad(repo)
+    const first = github.calls.findIndex(c => c.path.endsWith('/access_tokens'))
+    const read = github.calls.slice(first)
+    expect(read.at(-1)).toMatchObject({ method: 'DELETE', path: '/installation/token' })
+    expect(read.length).toBeLessThanOrEqual(CI_MAX_CALLS)
+    expect(CI_MAX_CALLS * CI_READS_PER_HOUR).toBeLessThanOrEqual(5000 * 0.05)
+  })
+  it('reads one repository at most its hourly number of times, then answers the last load for a few minutes, then none', async () => {
+    const { app, github, time } = busy()
+    for (let i = 0; i < CI_READS_PER_HOUR; i++) { await app.ciLoad(repo); time.advance(CI_LOAD_TTL_MS) }
+    const reads = () => github.calls.filter(c => c.path.endsWith('/access_tokens')).length
+    expect(reads()).toBe(CI_READS_PER_HOUR)
+    github.actions.set('acme/app', [])
+    // Spent: the last load read, while it is recent, and no call to GitHub.
+    expect(await app.ciLoad(repo)).toMatchObject({ running: 2 })
+    expect(reads()).toBe(CI_READS_PER_HOUR)
+    time.advance(CI_STALE_MS)
+    await expect(app.ciLoad(repo)).rejects.toMatchObject({ code: 'GITHUB_CI_BUDGET', status: 429 })
+    expect(reads()).toBe(CI_READS_PER_HOUR)
+    // An hour after the first read, reads come back.
+    time.advance(3_600_000 - CI_READS_PER_HOUR * CI_LOAD_TTL_MS - CI_STALE_MS)
+    expect(await app.ciLoad(repo)).toEqual({ running: 0, queued: 0, macosRunning: 0, macosQueued: 0 })
+    expect(reads()).toBe(CI_READS_PER_HOUR + 1)
+  })
+  it('reads the same run listed under both statuses once', async () => {
+    const { github, time } = busy()
+    github.actions.set('acme/app', [{ id: 9, status: 'in_progress', jobs: [job('in_progress')] }])
+    const fetch = github.fetch
+    let second = false
+    // A run that moved from queued to in progress between the two reads is listed by both.
+    github.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input))
+      if (url.pathname.endsWith('/actions/runs') && url.searchParams.get('status') === 'queued') return new Response(JSON.stringify({ total_count: 1, workflow_runs: [{ id: 9 }, { id: 'x' }, null] }), { status: 200 })
+      // An answer without its list or count reads as none.
+      if (url.pathname.endsWith('/actions/runs') && url.searchParams.get('status') === 'in_progress' && second) return new Response('{}', { status: 200 })
+      return fetch(input, init)
+    }) as typeof globalThis.fetch
+    const twice = fakeApp(key.privateKey, github, { now: time.now })
+    expect(await twice.ciLoad(repo)).toEqual({ running: 1, queued: 0, macosRunning: 0, macosQueued: 0 })
+    second = true
+    time.advance(CI_LOAD_TTL_MS)
+    expect(await twice.ciLoad(repo)).toEqual({ running: 1, queued: 0, macosRunning: 0, macosQueued: 0 })
+  })
+  it('is null where the app is not installed, minting nothing', async () => {
+    const { app, github } = setup()
+    expect(await app.ciLoad(repo)).toBeNull()
+    expect(github.calls.some(c => c.path.endsWith('/access_tokens'))).toBe(false)
+  })
+  it('says GitHub could not say, still revokes the token, and keeps no failed read', async () => {
+    for (const fault of ['actionsStatus', 'jobsStatus'] as const) {
+      const { app, github } = busy()
+      github.control[fault] = 500
+      await expect(app.ciLoad(repo)).rejects.toMatchObject({ code: 'GITHUB_UNAVAILABLE', status: 502 })
+      expect(github.revoked).toHaveLength(1)
+      github.control[fault] = 200
+      expect(await app.ciLoad(repo)).toMatchObject({ running: 2 })
+    }
+  })
+  it('a token GitHub would not revoke is said without the token, and the counts still come back', async () => {
+    const { app, github } = busy()
+    github.control.revokeStatus = 500
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect(await app.ciLoad(repo)).toMatchObject({ running: 2 })
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(String(warn.mock.calls[0]![0])).not.toContain('ghs_')
+    } finally { warn.mockRestore() }
+  })
+  it('leaves the expired loads of many repositories behind', async () => {
+    const { app, github, time } = busy()
+    for (let i = 0; i < 199; i++) await app.ciLoad(githubRepository(`https://github.com/acme/r${i}`)!)
+    // Past the hour too, so their read counts go as well.
+    time.advance(3_600_000)
+    await app.ciLoad(repo)
+    github.installed.set('acme/fresh', 78)
+    expect(await app.ciLoad(githubRepository('https://github.com/acme/fresh')!)).toEqual({ running: 0, queued: 0, macosRunning: 0, macosQueued: 0 })
+    // The fresh one stays beside the new one; the 199 expired ones are gone.
+    expect([...(app as unknown as { ciLoads: Map<string, unknown> }).ciLoads.keys()]).toEqual(['acme/app', 'acme/fresh'])
+    expect([...(app as unknown as { ciReads: Map<string, unknown> }).ciReads.keys()]).toEqual(['acme/app', 'acme/fresh'])
   })
 })
