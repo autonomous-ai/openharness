@@ -61,6 +61,7 @@ class SuperTabParts {
     final derived = Map.of(superTabMap(answer['derived'] ?? const {}));
     final marks = derived.remove('readMarks');
     final threadMarks = derived.remove('threadMarks');
+    final chatSettings = derived.remove('chatSettings');
     final parts = SuperTabParts._(
       _envelope(answer['head'], live: true),
       derived,
@@ -81,6 +82,7 @@ class SuperTabParts {
     }
     parts._takeReadMarks(marks);
     parts._takeThreadMarks(threadMarks);
+    parts._takeChatSettings(chatSettings);
     return parts;
   }
 
@@ -104,6 +106,7 @@ class SuperTabParts {
     }
     parts._takeReadMarks(json['readMarks']);
     parts._takeThreadMarks(json['threadMarks']);
+    parts._takeChatSettings(json['chatSettings']);
     return parts;
   }
 
@@ -169,6 +172,25 @@ class SuperTabParts {
     return moved;
   }
 
+  /// The reader's own notification setting by conversation (backend chatSettings.ts): `all`, `mentions` or `muted`.
+  /// A first load sends every one, a change read those moved since its cursor; the newest wins, and a setting goes
+  /// with its conversation.
+  final _chatSettings = <String, String>{};
+
+  /// Keeps each setting in [settings] the server knows; whether any moved.
+  bool _takeChatSettings(Object? settings) {
+    var moved = false;
+    if (settings is! Map) return moved;
+    for (final MapEntry(:key, :value) in settings.entries) {
+      if (key is! String || value is! String) continue;
+      if (!const {'all', 'mentions', 'muted'}.contains(value)) continue;
+      if (_chatSettings[key] == value) continue;
+      _chatSettings[key] = value;
+      moved = true;
+    }
+    return moved;
+  }
+
   /// Dormant groups held with their data from before a stub closed them: a read by id at the stub's version is
   /// their current data.
   final _stale = <String>{};
@@ -224,6 +246,7 @@ class SuperTabParts {
             _stale.remove(key);
             _readMarks.remove(key);
             _threadMarks.remove(key);
+            _chatSettings.remove(key);
             removed.add(key);
           }
         } else if (kind == 'groups' && part['dormant'] == true) {
@@ -254,7 +277,9 @@ class SuperTabParts {
     final readMarksMoved = _takeReadMarks(derived.remove('readMarks'));
     // Both run: one moving never skips the other.
     final marksMoved =
-        _takeThreadMarks(derived.remove('threadMarks')) | readMarksMoved;
+        _takeThreadMarks(derived.remove('threadMarks')) |
+        _takeChatSettings(derived.remove('chatSettings')) |
+        readMarksMoved;
     if (!const DeepCollectionEquality().equals(derived, _derived)) {
       _derived = derived;
       changed = true;
@@ -344,6 +369,9 @@ class SuperTabParts {
     if (_derived['decisionsDigest'] case final String digest) {
       state['decisionsDigest'] = digest;
     }
+    if (_derived['activityDigest'] case final String digest) {
+      state['activityDigest'] = digest;
+    }
     // Sent only where the server does not try Harness Team accounts yet.
     if (_derived['teamAccounts'] == false) state['teamAccounts'] = false;
     // Sent by a server that takes a thread reply's New session.
@@ -351,6 +379,9 @@ class SuperTabParts {
     // And one that also takes it on a top-level message in a Buddy chat.
     if (_derived['sessionsFromChat'] == true) state['sessionsFromChat'] = true;
     if (_readMarks.isNotEmpty) state['readMarks'] = Map.of(_readMarks);
+    if (_chatSettings.isNotEmpty) {
+      state['chatSettings'] = Map.of(_chatSettings);
+    }
     if (_threadMarks.isNotEmpty) {
       state['threadMarks'] = {
         for (final MapEntry(:key, :value) in _threadMarks.entries)
@@ -377,6 +408,7 @@ class SuperTabParts {
     'seen': Map<String, int>.of(_seen),
     'stale': _stale.toList(),
     'readMarks': Map<String, int>.of(_readMarks),
+    'chatSettings': Map<String, String>.of(_chatSettings),
     'threadMarks': {
       for (final MapEntry(:key, :value) in _threadMarks.entries)
         key: Map<String, int>.of(value),

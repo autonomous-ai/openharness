@@ -38,6 +38,7 @@ abstract final class AppIcons {
   static const arrowDown = LucideIcons.arrowDown400;
   static const arrowUpRight = LucideIcons.arrowUpRight400;
   static const bell = LucideIcons.bell400;
+  static const bellOff = LucideIcons.bellOff400;
   static const bellRing = LucideIcons.bellRing400;
   static const book = LucideIcons.book400;
   static const bookOpen = LucideIcons.bookOpen400;

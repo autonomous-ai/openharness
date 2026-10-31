@@ -86,6 +86,8 @@ class SwarmPartsBackend {
           'githubApp',
           'readMarks',
           'threadMarks',
+          'chatSettings',
+          'activityDigest',
           'teamAccounts',
           'threadSessions',
           'sessionsFromChat',
@@ -173,6 +175,13 @@ class SwarmPartsBackend {
     // The reader's own read marks alone, as backend readMarks.ts sends them.
     if ((state['readMarks'] as Map?)?[reader ?? 'owner'] case final Map marks)
       'readMarks': Map<String, dynamic>.from(marks),
+    // Their own Activity digest and chat settings (backend activity.ts,
+    // chatSettings.ts): every setting on every read, which the app keeps.
+    if (state['activityDigest'] != null)
+      'activityDigest': state['activityDigest'],
+    if ((state['chatSettings'] as Map?)?[reader ?? 'owner'] case final Map set
+        when set.isNotEmpty)
+      'chatSettings': Map<String, dynamic>.from(set),
     // Their own thread marks alone, by conversation, absent when none.
     if ((state['threadMarks'] as Map?)?[reader ?? 'owner'] case final Map marks
         when marks.isNotEmpty)
@@ -470,6 +479,21 @@ class ConversationServer {
   // fields such as `credentialNotice`.
   final commandResult = <String, dynamic>{};
   final posts = <Map<String, dynamic>>[];
+
+  /// Notification settings sent (backend chatSettings.ts), in order; while
+  /// [failNotify], each is refused as if offline; [holdNotify] keeps each
+  /// waiting.
+  final notifyPosts = <Map<String, dynamic>>[];
+  bool failNotify = false;
+  Completer<void>? holdNotify;
+
+  /// The Activity list answered (backend activity.ts); null answers 404, as a
+  /// server before it. [activityStatus], when not 0, fails each read with it.
+  Map<String, dynamic>? activity = {'items': <dynamic>[], 'more': false};
+  int activityStatus = 0;
+  Completer<void>? holdActivity;
+  final activityReads = <String>[];
+  final activityReadPosts = <Map<String, dynamic>>[];
 
   /// Refuses the next lead.start with this code and message, as the backend
   /// refuses a machine that cannot take the Product Manager (leadStart.ts).
@@ -935,6 +959,29 @@ class ConversationServer {
         ? RegExp(r'/conversations/([^/]+)/threads/([^/]+)/follow$')
               .firstMatch(path)
         : null;
+    final notify = method == 'POST'
+        ? RegExp(r'/conversations/([^/]+)/notifications$').firstMatch(path)
+        : null;
+    if (notify != null) {
+      final id = Uri.decodeComponent(notify.group(1)!);
+      notifyPosts.add({'conversationId': id, 'notify': body!['notify']});
+      if (holdNotify case final hold?) await hold.future;
+      if (failNotify) {
+        throw const SuperTabFailure(
+          'OFFLINE',
+          'No connection.',
+          statusCode: 503,
+        );
+      }
+      final settings = (state['chatSettings'] ??= <String, dynamic>{}) as Map;
+      ((settings[reader ?? 'owner'] ??= <String, dynamic>{}) as Map)[id] =
+          body['notify'];
+      return {'notify': body['notify']};
+    }
+    if (method == 'POST' && path.endsWith('/activity/read')) {
+      activityReadPosts.add(Map<String, dynamic>.from(body!));
+      return {'marked': 1};
+    }
     if (follow != null) {
       followPosts.add({
         'conversationId': Uri.decodeComponent(follow.group(1)!),
@@ -1449,6 +1496,22 @@ class ConversationServer {
       final answer = uri.pathSegments.last == 'threads'
           ? followedThreads
           : inbox;
+      if (answer == null) {
+        throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
+      }
+      return jsonDecode(jsonEncode(answer)) as Map<String, dynamic>;
+    }
+    if (uri.pathSegments.last == 'activity') {
+      activityReads.add(path);
+      if (holdActivity case final hold?) await hold.future;
+      if (activityStatus != 0) {
+        throw SuperTabFailure(
+          'OFFLINE',
+          'No connection.',
+          statusCode: activityStatus,
+        );
+      }
+      final answer = activity;
       if (answer == null) {
         throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
       }

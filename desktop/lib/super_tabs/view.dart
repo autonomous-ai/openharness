@@ -34,6 +34,8 @@ import 'composer_files.dart';
 import 'composer_newline.dart';
 import 'composer_tags.dart';
 import 'composer_toggle.dart';
+import 'activity.dart';
+import 'activity_view.dart';
 import 'attention.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
@@ -627,6 +629,93 @@ class _SuperTabViewState extends State<SuperTabView>
   }
 
   /// Esc: everything loaded in the open conversation is read, line and all.
+  /// Keeps the reader's notification setting for [id]; says so when the
+  /// server did not keep it.
+  Future<void> _setNotify(String id, SuperTabNotify level) async {
+    if (await c.setNotify(id, level) || !mounted || c.accessRevoked) return;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      const SnackBar(
+        content: Text('Could not change notifications. Try again.'),
+      ),
+    );
+  }
+
+  /// Slack's Shift+Esc: every chat read, with an Undo while the marks wait.
+  bool _markAllRead() {
+    final held = c.markAllRead();
+    if (held == null) return false;
+    setState(() {
+      _unread.clear(c.selectedId);
+      _newAfter.remove(c.selectedId);
+    });
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    messenger
+      ?..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          key: const ValueKey('super-mark-all-toast'),
+          duration: SuperTabController.markAllHold,
+          content: Text(
+            held.count == 1
+                ? 'Marked 1 chat read'
+                : 'Marked ${held.count} chats read',
+          ),
+          action: SnackBarAction(label: 'Undo', onPressed: held.undo),
+        ),
+      );
+    return true;
+  }
+
+  /// Slack's Option+Shift+Down and Up: the next or previous chat with
+  /// something unread, in the sidebar's order, skipping muted ones. At either
+  /// end nothing moves.
+  bool _jumpUnread(int step) {
+    final snapshot = c.snapshot;
+    if (snapshot == null || c.accessRevoked) return false;
+    final order = superTabSidebarOrder(c);
+    var at = order.indexOf(c.selectedId);
+    if (at < 0) at = step > 0 ? -1 : order.length;
+    for (var i = at + step; i >= 0 && i < order.length; i += step) {
+      final group = snapshot.conversation(order[i]);
+      if (group == null || !c.unreadShown(group)) continue;
+      widget.onCloseTerminal?.call();
+      setState(() {
+        _showNotifications = _showThreads = false;
+        _showPullRequests = false;
+      });
+      unawaited(c.select(group.id));
+      return true;
+    }
+    return false;
+  }
+
+  /// The Swarm's own keys, heard from anywhere in it that leaves them.
+  KeyEventResult _attentionKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    final keys = HardwareKeyboard.instance;
+    if (keys.isControlPressed || keys.isMetaPressed) {
+      return KeyEventResult.ignored;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.escape &&
+        keys.isShiftPressed &&
+        !keys.isAltPressed) {
+      _markAllRead();
+      return KeyEventResult.handled;
+    }
+    if (keys.isAltPressed && keys.isShiftPressed) {
+      final step = switch (event.logicalKey) {
+        LogicalKeyboardKey.arrowDown => 1,
+        LogicalKeyboardKey.arrowUp => -1,
+        _ => 0,
+      };
+      if (step != 0) {
+        _jumpUnread(step);
+        return KeyEventResult.handled;
+      }
+    }
+    return KeyEventResult.ignored;
+  }
+
   bool _readAll() {
     final id = c.selectedId, group = c.selected;
     if (group == null || (!c.unread(group) && _unread.lineAt(id) == null)) {
@@ -1381,6 +1470,7 @@ class _SuperTabViewState extends State<SuperTabView>
     devicesSelected: _devicesVisible,
     notificationsSelected: _notificationsVisible,
     attention: SuperTabAttention.of(c),
+    activity: SuperTabActivity.of(c),
     threadsSelected: _threadsVisible,
     onThreads: () {
       _closeSidebar();
@@ -1391,19 +1481,17 @@ class _SuperTabViewState extends State<SuperTabView>
       });
       widget.onCloseTerminal?.call();
     },
-    // On a Mac what needs the person is in the menu bar's Harness menu and on
-    // the Dock's badge, so the sidebar keeps no Notifications row.
-    onNotifications: superTabNoticesInMenuBar
-        ? null
-        : () {
-            _closeSidebar();
-            setState(() {
-              _showNotifications = true;
-              _showThreads = false;
-              _showPullRequests = false;
-            });
-            widget.onCloseTerminal?.call();
-          },
+    // Activity on every platform (Lead, 10-31): the Mac's menu bar and Dock
+    // still say what waits, and the sidebar lists it as Slack does.
+    onNotifications: () {
+      _closeSidebar();
+      setState(() {
+        _showNotifications = true;
+        _showThreads = false;
+        _showPullRequests = false;
+      });
+      widget.onCloseTerminal?.call();
+    },
     onOpenAgent: (agent) {
       _closeSidebar();
       setState(() {
@@ -1945,7 +2033,7 @@ class _SuperTabViewState extends State<SuperTabView>
     final name = _devicesVisible
         ? 'Your devices'
         : _notificationsVisible
-        ? 'Notifications'
+        ? 'Activity'
         : _threadsVisible
         ? 'Threads'
         : group == null
@@ -2268,6 +2356,30 @@ class _SuperTabViewState extends State<SuperTabView>
             ),
           ],
         ],
+        // The reader's own setting for this chat, kept on every device
+        // (Slack's channel notifications); a viewer has one too.
+        SubmenuButton(
+          key: const ValueKey('super-notify-menu'),
+          menuChildren: [
+            for (final (level, label) in const [
+              (SuperTabNotify.all, 'All new messages'),
+              (SuperTabNotify.mentions, 'Mentions only'),
+              (SuperTabNotify.muted, 'Muted'),
+            ])
+              MenuItemButton(
+                key: ValueKey('super-notify-${level.name}'),
+                leadingIcon: SizedBox(
+                  width: 16,
+                  child: c.notifyOf(group.id) == level
+                      ? const Icon(AppIcons.check, size: 14)
+                      : null,
+                ),
+                onPressed: () => unawaited(_setNotify(group.id, level)),
+                child: Text(label),
+              ),
+          ],
+          child: const Text('Notifications'),
+        ),
         // Until all of the project's closed groups are read, it may have
         // archived ones: the list reads them when it opens.
         if (!c.dormantLoaded(group.projectId) ||
@@ -3401,6 +3513,7 @@ class _SuperTabViewState extends State<SuperTabView>
                 if (picked != null) return picked;
                 if (event is KeyDownEvent &&
                     event.logicalKey == LogicalKeyboardKey.escape &&
+                    !HardwareKeyboard.instance.isShiftPressed &&
                     _readAll()) {
                   return KeyEventResult.handled;
                 }
@@ -3672,152 +3785,92 @@ class _SuperTabViewState extends State<SuperTabView>
           unawaited(c.select(id));
         },
       );
-      return Stack(
-        children: [
-          ExcludeFocus(
-            excluding: chatCovered,
-            child: SuperTabPaneLayout(
-              storage: widget.app?.localStore,
-              onLeave: _leaveResize,
-              left: narrow ? null : _sidebar(),
-              // An open thread takes the roster's side, as in Slack.
-              right: !showRoster ? null : thread ?? roster,
-              rightDefault: thread == null
-                  ? SuperTabPaneLayout.rightWidth
-                  : SuperTabPaneLayout.threadWidth,
-              center: Column(
-                children: [
-                  _header(c.selected, narrow, showRoster),
-                  Expanded(
-                    child: IndexedStack(
-                      index: _devicesVisible
-                          ? 1
-                          : _notificationsVisible
-                          ? 3
-                          : _threadsVisible
-                          ? 4
-                          : c.snapshot?.projects.isEmpty == true
-                          ? 0
-                          : _terminalsVisible
-                          ? 1
-                          : _showPullRequests
-                          ? 2
-                          : 0,
-                      children: [
-                        _conversation(narrow),
-                        terminal ?? const SizedBox.shrink(),
-                        _showPullRequests
-                            ? SuperTabPullRequests(
-                                controller: c,
-                                app: widget.app,
-                                visible: !_terminalsVisible,
-                              )
-                            : const SizedBox.shrink(),
-                        _notificationsVisible
-                            ? SuperTabNotifications(
-                                mentions: SuperTabMentions.of(c),
-                                onOpen: (mention) =>
-                                    unawaited(_openMention(mention)),
-                                leading: SuperTabDecisionList(
-                                  decisions: SuperTabDecisions.of(c),
-                                ),
-                              )
-                            : const SizedBox.shrink(),
-                        _threadsVisible
-                            ? SuperTabThreadsView(
-                                attention: SuperTabAttention.of(c),
-                                onOpen: _openThreadFromList,
-                                machineName: widget.machineName,
-                              )
-                            : const SizedBox.shrink(),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          if (threadDrawer)
-            Positioned.fill(
-              child: BlockSemantics(
-                child: GestureDetector(
-                  onTap: c.closeThread,
-                  child: ColoredBox(
-                    color: grid.AppDesktop.veil(Theme.of(context).brightness),
-                    child: Align(
-                      alignment: Alignment.centerRight,
-                      child: GestureDetector(
-                        // A click inside the thread stays there.
-                        onTap: () {},
-                        child: SizedBox(
-                          width: SuperTabPaneLayout.drawerWidth(
-                            constraints.maxWidth,
-                            max: SuperTabPaneLayout.threadWidth,
-                          ),
-                          child: thread,
-                        ),
+      return Focus(
+        canRequestFocus: false,
+        skipTraversal: true,
+        onKeyEvent: _attentionKey,
+        child: Stack(
+          children: [
+            ExcludeFocus(
+              excluding: chatCovered,
+              child: SuperTabPaneLayout(
+                storage: widget.app?.localStore,
+                onLeave: _leaveResize,
+                left: narrow ? null : _sidebar(),
+                // An open thread takes the roster's side, as in Slack.
+                right: !showRoster ? null : thread ?? roster,
+                rightDefault: thread == null
+                    ? SuperTabPaneLayout.rightWidth
+                    : SuperTabPaneLayout.threadWidth,
+                center: Column(
+                  children: [
+                    _header(c.selected, narrow, showRoster),
+                    Expanded(
+                      child: IndexedStack(
+                        index: _devicesVisible
+                            ? 1
+                            : _notificationsVisible
+                            ? 3
+                            : _threadsVisible
+                            ? 4
+                            : c.snapshot?.projects.isEmpty == true
+                            ? 0
+                            : _terminalsVisible
+                            ? 1
+                            : _showPullRequests
+                            ? 2
+                            : 0,
+                        children: [
+                          _conversation(narrow),
+                          terminal ?? const SizedBox.shrink(),
+                          _showPullRequests
+                              ? SuperTabPullRequests(
+                                  controller: c,
+                                  app: widget.app,
+                                  visible: !_terminalsVisible,
+                                )
+                              : const SizedBox.shrink(),
+                          _notificationsVisible
+                              ? SuperTabActivityView(
+                                  activity: SuperTabActivity.of(c),
+                                  onOpenMention: (mention) =>
+                                      unawaited(_openMention(mention)),
+                                  onOpenMessage: (id, messageId) =>
+                                      unawaited(_openMessage(id, messageId)),
+                                )
+                              : const SizedBox.shrink(),
+                          _threadsVisible
+                              ? SuperTabThreadsView(
+                                  attention: SuperTabAttention.of(c),
+                                  onOpen: _openThreadFromList,
+                                  machineName: widget.machineName,
+                                )
+                              : const SizedBox.shrink(),
+                        ],
                       ),
                     ),
-                  ),
+                  ],
                 ),
               ),
             ),
-          if (!showRoster && _rosterOpen && !threadDrawer)
-            Positioned.fill(
-              child: BlockSemantics(
-                child: FocusScope(
-                  autofocus: true,
-                  onKeyEvent: (_, event) {
-                    if (event is KeyDownEvent &&
-                        event.logicalKey == LogicalKeyboardKey.escape) {
-                      _closeRoster();
-                      return KeyEventResult.handled;
-                    }
-                    return KeyEventResult.ignored;
-                  },
+            if (threadDrawer)
+              Positioned.fill(
+                child: BlockSemantics(
                   child: GestureDetector(
-                    onTap: _closeRoster,
+                    onTap: c.closeThread,
                     child: ColoredBox(
                       color: grid.AppDesktop.veil(Theme.of(context).brightness),
                       child: Align(
                         alignment: Alignment.centerRight,
-                        child: SizedBox(
-                          width: SuperTabPaneLayout.drawerWidth(
-                            constraints.maxWidth,
-                          ),
-                          child: roster,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          if (narrow && _sidebarOpen)
-            Positioned.fill(
-              child: BlockSemantics(
-                child: FocusScope(
-                  autofocus: true,
-                  onKeyEvent: (_, event) {
-                    if (event is KeyDownEvent &&
-                        event.logicalKey == LogicalKeyboardKey.escape) {
-                      _closeSidebar();
-                      return KeyEventResult.handled;
-                    }
-                    return KeyEventResult.ignored;
-                  },
-                  child: GestureDetector(
-                    onTap: _closeSidebar,
-                    child: ColoredBox(
-                      color: grid.AppDesktop.veil(Theme.of(context).brightness),
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: SizedBox(
-                          width: 240,
-                          child: Material(
-                            color: DesktopChrome.surface,
-                            elevation: 8,
-                            child: _sidebar(),
+                        child: GestureDetector(
+                          // A click inside the thread stays there.
+                          onTap: () {},
+                          child: SizedBox(
+                            width: SuperTabPaneLayout.drawerWidth(
+                              constraints.maxWidth,
+                              max: SuperTabPaneLayout.threadWidth,
+                            ),
+                            child: thread,
                           ),
                         ),
                       ),
@@ -3825,8 +3878,76 @@ class _SuperTabViewState extends State<SuperTabView>
                   ),
                 ),
               ),
-            ),
-        ],
+            if (!showRoster && _rosterOpen && !threadDrawer)
+              Positioned.fill(
+                child: BlockSemantics(
+                  child: FocusScope(
+                    autofocus: true,
+                    onKeyEvent: (_, event) {
+                      if (event is KeyDownEvent &&
+                          event.logicalKey == LogicalKeyboardKey.escape) {
+                        _closeRoster();
+                        return KeyEventResult.handled;
+                      }
+                      return KeyEventResult.ignored;
+                    },
+                    child: GestureDetector(
+                      onTap: _closeRoster,
+                      child: ColoredBox(
+                        color: grid.AppDesktop.veil(
+                          Theme.of(context).brightness,
+                        ),
+                        child: Align(
+                          alignment: Alignment.centerRight,
+                          child: SizedBox(
+                            width: SuperTabPaneLayout.drawerWidth(
+                              constraints.maxWidth,
+                            ),
+                            child: roster,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            if (narrow && _sidebarOpen)
+              Positioned.fill(
+                child: BlockSemantics(
+                  child: FocusScope(
+                    autofocus: true,
+                    onKeyEvent: (_, event) {
+                      if (event is KeyDownEvent &&
+                          event.logicalKey == LogicalKeyboardKey.escape) {
+                        _closeSidebar();
+                        return KeyEventResult.handled;
+                      }
+                      return KeyEventResult.ignored;
+                    },
+                    child: GestureDetector(
+                      onTap: _closeSidebar,
+                      child: ColoredBox(
+                        color: grid.AppDesktop.veil(
+                          Theme.of(context).brightness,
+                        ),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: SizedBox(
+                            width: 240,
+                            child: Material(
+                              color: DesktopChrome.surface,
+                              elevation: 8,
+                              child: _sidebar(),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
       );
     },
   );
