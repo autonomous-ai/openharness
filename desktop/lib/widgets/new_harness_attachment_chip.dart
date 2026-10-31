@@ -48,11 +48,13 @@ class NewHarnessAttachmentChip extends StatelessWidget {
       size: 13,
       color: DesktopChrome.muted,
     );
-    if (!looksLikeImage(file.bytes)) return icon;
+    // A file left on disk is heavy: its kind's mark, not a preview read whole.
+    final bytes = file.bytes;
+    if (bytes == null || !looksLikeImage(bytes)) return icon;
     return ClipRRect(
       borderRadius: BorderRadius.circular(3),
       child: Image.memory(
-        file.bytes,
+        bytes,
         key: ValueKey('new-harness-attachment-preview:${file.name}'),
         width: _previewSize,
         height: _previewSize,

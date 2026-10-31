@@ -14,6 +14,7 @@ import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_file_picker.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
+import 'package:harness_mobile/swarm/swarm_outgoing_files.dart';
 import 'package:image_picker/image_picker.dart' show XFile;
 
 import '../voice_fakes.dart';
@@ -174,7 +175,7 @@ void main() {
     required String conversationId,
     required String name,
     required String mime,
-    required Uint8List bytes,
+    required SwarmOutgoingFile file,
     required dynamic cancel,
     required void Function(double sent) onProgress,
   }) {

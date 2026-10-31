@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/clipboard/copied_files.dart';
+import 'package:harness/clipboard/pasted_files.dart';
 import 'package:harness/clipboard/pasted_text.dart';
 import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/widgets/new_harness_attachments.dart';
@@ -43,10 +44,15 @@ void main() {
   Future<({HarnessAttachments files, TextEditingController task})> mount(
     WidgetTester tester, {
     Uint8List? image,
-    CopiedFiles copied = (files: const [], tooLarge: const []),
+    CopiedFiles copied = (
+      files: const [],
+      tooLarge: const [],
+      onDisk: const [],
+    ),
     bool enabled = true,
+    int limitBytes = HarnessAttachments.maxBytes,
   }) async {
-    final files = HarnessAttachments();
+    final files = HarnessAttachments(limitBytes: limitBytes);
     final task = TextEditingController();
     final focus = FocusNode();
     addTearDown(files.dispose);
@@ -142,6 +148,7 @@ void main() {
           (name: 'shot.png', bytes: _png),
         ],
         tooLarge: const [],
+        onDisk: const [],
       ),
     );
     await paste(tester);
@@ -169,11 +176,37 @@ void main() {
           (name: 'notes.txt', bytes: Uint8List.fromList([1])),
         ],
         tooLarge: const ['movie.mov'],
+        onDisk: const [],
       ),
     );
     await paste(tester);
     expect(names(box.files), ['notes.txt']);
     expect(find.textContaining('movie.mov is over'), findsOneWidget);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('a copied file too heavy to read is attached from disk where '
+      'the box takes it, and refused by its size where not', (tester) async {
+    const size = 30 * 1024 * 1024;
+    const copied = (
+      files: <PastedFile>[],
+      tooLarge: <String>[],
+      onDisk: [(name: 'cad.step', path: '/nowhere/cad.step', size: size)],
+    );
+    final chat = await mount(
+      tester,
+      copied: copied,
+      limitBytes: 256 * 1024 * 1024,
+    );
+    await paste(tester);
+    expect(names(chat.files), ['cad.step']);
+    expect(chat.files.files.single.onDisk, isTrue);
+    expect(chat.files.files.single.size, size);
+
+    final harness = await mount(tester, copied: copied);
+    await paste(tester);
+    expect(harness.files.isEmpty, isTrue);
+    expect(find.text('cad.step is over 20 MB.'), findsOneWidget);
     debugDefaultTargetPlatformOverride = null;
   });
 

@@ -641,6 +641,28 @@ Design:
 - Platforms: the counts come from Claude Code and Codex transcripts on macOS,
   Linux and Windows hosts alike.
 
+## Chat files
+
+A message carries up to 10 files, each up to 256 MB. A bigger file is refused
+before it is sent, with "Files can be up to 256 MB."
+
+- A file up to 10 MB goes to the server in one request, as since the first
+  version. Production sits behind Cloudflare, which refuses request bodies over
+  100 MB on plans below Business, so bigger files do not pass through the server.
+- A file over 10 MB goes straight to the attachments bucket. The server first
+  checks that the sender may post in that conversation and is under 200 uploads
+  an hour, then signs a link that writes one new object of exactly that size,
+  served as a download. The upload must start within 10 minutes. A second write
+  to the same link, another size, or a changed header is refused by storage
+  itself. The sender then asks the server to finish the upload. Only the same
+  person or agent, still able to post there, can finish it, and only once
+  storage holds exactly that size. Until then no message can carry the file. An
+  image keeps its type only when its first bytes are one.
+- An upload that is never finished or never sent is an unsent file, like any
+  other.
+- Agents' computers save each message's files straight to disk, never more than
+  the size the message names.
+
 ## Avatars, status and celebrations
 
 People and agents each show one avatar wherever they appear: messages, the

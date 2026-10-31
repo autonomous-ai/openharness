@@ -656,7 +656,7 @@ class SuperTabLaunch {
                     conversationId: conversationId,
                     name: file.name,
                     mime: mimeForName(file.name),
-                    bytes: file.bytes,
+                    file: file,
                     cancel: CancelToken(),
                     onProgress: (_) {},
                   ))['attachment'],
@@ -889,7 +889,7 @@ class SuperTabLaunch {
     checkAccount();
     saved['files'] = [
       for (final file in files)
-        {'name': file.name, 'bytes': base64Encode(file.bytes)},
+        {'name': file.name, 'bytes': base64Encode(await file.readBytes())},
     ];
     saved['launchPrompt'] = prompt;
     saved['filesState'] = 'pending';

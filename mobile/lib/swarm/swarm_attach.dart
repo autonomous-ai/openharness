@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
@@ -254,17 +256,26 @@ class _Chip extends StatelessWidget {
             borderRadius: BorderRadius.circular(AppCard.insetRadius),
             child: SizedBox.square(
               dimension: _thumbnail,
-              child: picture
-                  ? Image.memory(
-                      file.bytes,
-                      fit: BoxFit.cover,
-                      // Decoded small: a thumbnail, not the photo — three
-                      // pixels a point, a phone's sharpest.
-                      cacheWidth: (_thumbnail * 3).round(),
-                      gaplessPlayback: true,
-                      errorBuilder: (_, _, _) => Center(child: mark),
-                    )
-                  : Center(child: mark),
+              child: switch ((picture, file.bytes, file.path)) {
+                // Decoded small: a thumbnail, not the photo — three pixels a
+                // point, a phone's sharpest. A large picture is decoded from
+                // its file, never read whole into memory to show.
+                (true, final bytes?, _) => Image.memory(
+                  bytes,
+                  fit: BoxFit.cover,
+                  cacheWidth: (_thumbnail * 3).round(),
+                  gaplessPlayback: true,
+                  errorBuilder: (_, _, _) => Center(child: mark),
+                ),
+                (true, null, final path?) => Image.file(
+                  File(path),
+                  fit: BoxFit.cover,
+                  cacheWidth: (_thumbnail * 3).round(),
+                  gaplessPlayback: true,
+                  errorBuilder: (_, _, _) => Center(child: mark),
+                ),
+                _ => Center(child: mark),
+              },
             ),
           ),
           const SizedBox(width: AppSpace.s),
@@ -281,7 +292,7 @@ class _Chip extends StatelessWidget {
                 ),
                 if (going == null)
                   Text(
-                    swarmFileSize(file.bytes.length),
+                    swarmFileSize(file.size),
                     style: AppType.caption(
                       color: AppPalette.textFaint,
                       fontFeatures: const [FontFeature.tabularFigures()],

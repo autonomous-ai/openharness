@@ -13,7 +13,8 @@ import '../widgets/desktop_chrome.dart';
 import 'model.dart';
 
 /// The largest file read into the chat's text viewer; a bigger one opens in
-/// the browser. Specs and logs sit well under it, and the backend takes 10 MB.
+/// the browser. Specs and logs sit well under it, though a message's file may
+/// weigh up to 256 MB.
 const kAttachmentTextMaxBytes = 2 * 1024 * 1024;
 
 /// Reads a file off the attachments host, when a person asks for it.

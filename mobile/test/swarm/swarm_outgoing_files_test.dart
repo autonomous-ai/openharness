@@ -10,6 +10,13 @@ void main() {
   SwarmOutgoingFile file(String name, int size) =>
       SwarmOutgoingFile(name, Uint8List(size));
 
+  /// A file of [size] bytes on disk, never read here: no test holds hundreds
+  /// of megabytes.
+  SwarmOutgoingFile sized(String name, int size) =>
+      SwarmOutgoingFile.onDisk(name, '/nowhere/$name', size);
+
+  const mb = 1024 * 1024;
+
   test('takes files in the order picked', () {
     final files = SwarmOutgoingFiles();
     addTearDown(files.dispose);
@@ -19,30 +26,54 @@ void main() {
     expect([for (final f in files.files) f.name], ['a.jpg', 'b.pdf']);
   });
 
-  test('a file over 10 MB is left out and named', () {
+  test('a file just over 10 MB is taken', () {
     final files = SwarmOutgoingFiles();
     addTearDown(files.dispose);
 
-    final said = files.add([
-      file('big.jpg', 10 * 1024 * 1024 + 1),
-      file('ok.jpg', 10 * 1024 * 1024),
-    ]);
+    final said = files.add([file('big.jpg', 10 * mb + 1)]);
 
-    expect(said, 'big.jpg is over 10 MB.');
-    expect([for (final f in files.files) f.name], ['ok.jpg']);
+    expect(said, isNull);
+    expect([for (final f in files.files) f.name], ['big.jpg']);
   });
 
-  test('several files over 10 MB are counted', () {
+  test('a file over 256 MB is left out and named', () {
     final files = SwarmOutgoingFiles();
     addTearDown(files.dispose);
 
     final said = files.add([
-      file('a.jpg', 11 * 1024 * 1024),
-      file('b.jpg', 12 * 1024 * 1024),
+      sized('big.zip', 256 * mb + 1),
+      sized('ok.zip', 256 * mb),
     ]);
 
-    expect(said, '2 files are over 10 MB.');
+    expect(said, 'big.zip is over 256 MB.');
+    expect([for (final f in files.files) f.name], ['ok.zip']);
+  });
+
+  test('several files over 256 MB are counted', () {
+    final files = SwarmOutgoingFiles();
+    addTearDown(files.dispose);
+
+    final said = files.add([
+      sized('a.zip', 257 * mb),
+      sized('b.zip', 300 * mb),
+    ]);
+
+    expect(said, '2 files are over 256 MB.');
     expect(files.files, isEmpty);
+  });
+
+  test('a photo numbered beside another still goes up from its file', () {
+    final files = SwarmOutgoingFiles();
+    addTearDown(files.dispose);
+    files.add([file('photo.png', 1)]);
+
+    files.addNumbered([sized('photo.png', 20 * mb)]);
+
+    final numbered = files.files.last;
+    expect(numbered.name, 'photo-2.png');
+    expect(numbered.bytes, isNull);
+    expect(numbered.path, '/nowhere/photo.png');
+    expect(numbered.size, 20 * mb);
   });
 
   test('an eleventh file is refused', () {
@@ -145,10 +176,10 @@ void main() {
 
     final said = files.add([
       for (var i = 0; i < 11; i++) file('f$i.txt', 1),
-      file('big.jpg', 10 * 1024 * 1024 + 1),
+      sized('big.jpg', 256 * mb + 1),
     ]);
 
-    expect(said, 'Attach at most 10 files. big.jpg is over 10 MB.');
+    expect(said, 'Attach at most 10 files. big.jpg is over 256 MB.');
     expect(files.files, hasLength(10));
   });
 }
