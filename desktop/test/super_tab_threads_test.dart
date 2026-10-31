@@ -509,20 +509,26 @@ void main() {
   });
 
   testWidgets('a reply from the thread composer goes to the root, and '
-      '"Also send to the project chat" sends it to both', (tester) async {
+      '"Also post to #Pilot" sends it to both', (tester) async {
     final server = threaded();
     final c = await show(tester, server);
+    // The test platform's touch handles sit under a typed reply's end:
+    // where the wide pane puts it, over send. Leaving the box hides them.
+    void hideHandles() => FocusManager.instance.primaryFocus?.unfocus();
     await tester.tap(line('message-1'));
     await tester.pumpAndSettle();
-    expect(inPanel(find.text('Also send')), findsOneWidget);
+    // The label shortens where the test font leaves no room; its hint keeps
+    // the full wording (super_tab_reply_box_test.dart covers the label).
     expect(
-      inPanel(find.byTooltip('Also send to the project chat')),
+      inPanel(find.byTooltip('Also post to #Pilot as well as this thread')),
       findsOneWidget,
     );
     await tester.enterText(
       find.byKey(const ValueKey('super-thread-composer')),
       'In the thread only.',
     );
+    await tester.pump();
+    hideHandles();
     await tester.pump();
     await tester.tap(find.byKey(const ValueKey('super-thread-send')));
     await tester.pumpAndSettle();
@@ -540,6 +546,8 @@ void main() {
       find.byKey(const ValueKey('super-thread-composer')),
       'Everyone should see this.',
     );
+    await tester.pump();
+    hideHandles();
     await tester.pump();
     await tester.tap(find.byKey(const ValueKey('super-thread-send')));
     await tester.pumpAndSettle();
