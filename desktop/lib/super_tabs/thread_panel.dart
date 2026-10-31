@@ -18,6 +18,7 @@ import 'composer_toggle.dart';
 import 'controller.dart';
 import 'jump_to_latest.dart';
 import 'model.dart';
+import 'thread_scroll.dart';
 import 'project_sidebar.dart' show kProductManagersChannel;
 
 /// One thread beside the chat (Dee, 2026-10-29): its root, a "N replies"
@@ -54,7 +55,8 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     text: c.threadDraft(widget.root),
   );
   final _focus = FocusNode();
-  final _scroll = ScrollController();
+  // Opens at the newest reply and follows it until the reader scrolls up.
+  final _scroll = SuperTabThreadScroll();
   bool _alsoSend = false;
   // The reply starts this thread's own Buddy session (reader's Buddy chat).
   bool _newSession = false;
@@ -63,9 +65,10 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
   // the thread's replies are known), and the latest replies and rows (replies
   // and those on their way): what came since is the control's count.
   bool _away = false, _atEnd = false, _baselined = false;
-  int _repliesAtEnd = 0, _replies = 0, _rows = 0, _rowsMeasured = 0;
-  // Each jump to the end supersedes the one before it.
-  int _jumpRequest = 0;
+  int _repliesAtEnd = 0, _replies = 0;
+  // The newest row (reply or one on its way), as built and as last measured:
+  // earlier replies arriving above do not change it.
+  String? _newest, _newestMeasured;
 
   SuperTabController get c => widget.controller;
 
@@ -80,14 +83,13 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
   void didUpdateWidget(SuperTabThreadPanel old) {
     super.didUpdateWidget(old);
     if (old.root != widget.root) {
-      // Another thread starts from its top, with nothing counted.
+      // Another thread opens at its newest reply, with nothing counted.
       _away = false;
       _atEnd = false;
       _baselined = false;
       _repliesAtEnd = 0;
-      _rowsMeasured = 0;
-      _jumpRequest++;
-      if (_scroll.hasClients) _scroll.jumpTo(0);
+      _newestMeasured = null;
+      _scroll.followEnd();
       // Each thread keeps its own draft.
       _composer.text = c.threadDraft(widget.root);
       _alsoSend = false;
@@ -97,7 +99,6 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
 
   @override
   void dispose() {
-    _jumpRequest++;
     _scroll.dispose();
     _composer.dispose();
     _focus.dispose();
@@ -113,11 +114,12 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
   void _measure() {
     if (!mounted || !_scroll.hasClients) return;
     final position = _scroll.position;
-    if (_rows > _rowsMeasured && _atEnd && position.extentAfter >= 40) {
-      _rowsMeasured = _rows;
-      position.jumpTo(position.maxScrollExtent);
+    // Near the end (not quite at it, where the scroll follows by itself), a
+    // new row still brings the reader down to it.
+    if (_newest != _newestMeasured && _atEnd && position.extentAfter >= 40) {
+      _scroll.followEnd();
     }
-    _rowsMeasured = _rows;
+    _newestMeasured = _newest;
     final away = position.extentAfter >= 40;
     final atEnd = !away;
     // What the thread held when it opened is not new; nor is what the reader
@@ -133,31 +135,11 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     });
   }
 
-  /// Scrolls to the newest reply. A lazy list refines its extent as rows near
-  /// the end are laid out, so one jump can stop above the last reply: jump
-  /// again, a bounded number of times, until nothing is left below.
+  /// Scrolls to the newest reply and follows it again; the scroll settles on
+  /// the real end as the rows there are laid out.
   void _jumpToLatest() {
-    final request = ++_jumpRequest;
-    void advance(int attempt) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted || request != _jumpRequest || !_scroll.hasClients) return;
-        _scroll.jumpTo(_scroll.position.maxScrollExtent);
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!mounted || request != _jumpRequest || !_scroll.hasClients) {
-            return;
-          }
-          if (_scroll.position.extentAfter > 1 && attempt < 12) {
-            advance(attempt + 1);
-          } else {
-            _measure();
-          }
-        });
-        WidgetsBinding.instance.scheduleFrame();
-      });
-      WidgetsBinding.instance.scheduleFrame();
-    }
-
-    advance(0);
+    _scroll.followEnd();
+    _measureAfterFrame();
   }
 
   /// Where "Also send" also puts the reply, full wording first (Scholes,
@@ -273,7 +255,7 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     final count =
         c.thread(c.selectedId, widget.root)?.replies ?? replies.length;
     _replies = count > replies.length ? count : replies.length;
-    _rows = replies.length + pending.length;
+    _newest = '${replies.lastOrNull?.id}/${pending.length}';
     if (!_baselined &&
         (c.thread(c.selectedId, widget.root) != null || replies.isNotEmpty)) {
       _baselined = true;
@@ -372,9 +354,11 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
                                 key: const ValueKey('super-thread-earlier'),
                                 onPressed: c.readingEarlierReplies
                                     ? null
-                                    : () => unawaited(
-                                        c.loadThread(earlier: true),
-                                      ),
+                                    : () {
+                                        // They read on from where they are.
+                                        _scroll.holdPlace();
+                                        unawaited(c.loadThread(earlier: true));
+                                      },
                                 child: Text(
                                   c.readingEarlierReplies
                                       ? 'Loading earlier replies…'
