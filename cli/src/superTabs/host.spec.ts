@@ -16,6 +16,7 @@ vi.mock('../lib/buddyGuard.js', async original => {
 })
 import type { BackendNotice, CoreApi, TurnDelivery } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
+import type { attachedFiles as attachedFilesType } from './attachments.js'
 import { backend, BUDDY_SESSION_GONE_MS, BUDDY_SESSION_IDLE_MS, BUDDY_SESSION_SLEEP_GAP_MS, buddyChatIdOf, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
 import { TerminalHost } from './terminal.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
@@ -1259,6 +1260,39 @@ describe('Super Tab attachments in delivered input', () => {
     expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
     expect(vi.mocked(t.core.turns.deliver).mock.calls[1]?.[1]).toContain('/drops/1-screen.png')
     expect(attachedFiles).toHaveBeenCalledTimes(1)
+  })
+  // Chat files open through short-lived signed links (backend superTabs/fileLinks.ts): a retry whose link is over gets a fresh one,
+  // read as the agent reads the message now, and nothing once it may no longer read it.
+  it('gives the download a fresh link, read as its agent reads the message, and nothing once it may not', async () => {
+    const file = { id: 'a1', name: 'a.log', mime: 'text/plain', size: 1, url: 'https://storage.googleapis.com/b/super-tabs/tab/k/a.log?X-Goog-Signature=old', expiresAt: 1 }
+    const t = setup({ text: 'Logs.', attachments: [file] })
+    const answer = vi.mocked(t.call).getMockImplementation()!
+    const asked: string[] = []
+    let gone = false
+    vi.mocked(t.call).mockImplementation(async (method, path, body) => {
+      if (!path.includes('/attachments/')) return answer(method, path, body)
+      asked.push(`${method} ${path}`)
+      return gone ? { status: 404, body: { success: false, error: { code: 'FILE_UNAVAILABLE', message: 'This file is no longer available.' } } }
+        : { status: 200, body: { success: true, data: { attachment: { ...file, url: 'https://storage.googleapis.com/b/super-tabs/tab/k/a.log?X-Goog-Signature=new', expiresAt: 2 } } } }
+    })
+    const seen: Array<{ fresh?: unknown; refused?: unknown; outside?: unknown }> = []
+    const attachedFiles = vi.fn(async (_message: Record<string, unknown>, options: Parameters<typeof attachedFilesType>[1] = {}) => {
+      const fresh = await options.relink!(file)
+      gone = true
+      const refused = await options.relink!(file).catch((error: unknown) => error)
+      const outside = await options.relink!({ ...file, id: '../other' }).catch((error: unknown) => error)
+      seen.push({ fresh, refused, outside })
+      return { text: 'Attached files:\n- /drops/a.log (a.log, 1 B)', complete: true, paths: ['/drops/a.log'] }
+    })
+    const host = new SuperTabHost(t.core, 'machine-1', { log: vi.fn(), attachedFiles }); hosts.push(host)
+    await host.tick()
+    const path = 'GET /api/super-tabs/tab/conversations/lead/messages/message/attachments/a1?asAgentId=agent'
+    expect(asked).toEqual([path, path])
+    expect(seen[0]!.fresh).toEqual({ ...file, url: 'https://storage.googleapis.com/b/super-tabs/tab/k/a.log?X-Goog-Signature=new', expiresAt: 2 })
+    expect(seen[0]!.refused).toMatchObject({ status: 404 })
+    expect(seen[0]!.outside).toMatchObject({ status: 404 })
+    // The link never reaches the prompt.
+    expect(String(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1])).not.toContain('X-Goog-Signature')
   })
   it('downloads a failed file again before the next delivery of the held input', async () => {
     const t = setup({ text: 'Logs.', attachments: [{ id: 'a1', name: 'a.log', mime: 'text/plain', size: 1, url: 'https://cdn.example.test/a.log' }] })

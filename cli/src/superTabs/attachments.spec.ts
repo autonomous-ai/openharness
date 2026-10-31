@@ -60,7 +60,7 @@ describe('Super Tab attachment downloads', () => {
     expect(flaky).toHaveBeenCalledTimes(2)
     const down = replying(new Uint8Array(0), 503)
     expect(await attachedFiles({ attachments: [file()] }, { base, fetch: down }))
-      .toEqual({ text: `Attached files:\n- Could not download ${file().url} (sent as "screen.png", 5 B): HTTP 503`, complete: false, paths: [] })
+      .toEqual({ text: `Attached files:\n- Could not download a file (sent as "screen.png", 5 B): HTTP 503`, complete: false, paths: [] })
     expect(down).toHaveBeenCalledTimes(3)
     const short = replying(new Uint8Array(2))
     expect((await attachedFiles({ attachments: [file()] }, { base, fetch: short })).text).toContain('incomplete download')
@@ -71,7 +71,7 @@ describe('Super Tab attachment downloads', () => {
     expect(await attachedFiles({ attachments: [file()] }, { base, fetch: slow, now: () => clock, budgetMs: 45_000 })).toMatchObject({ complete: false })
     expect(slow).toHaveBeenCalledTimes(2)
     expect(await attachedFiles({ attachments: [file()] }, { base, fetch: slow, now: () => clock, budgetMs: 0 }))
-      .toEqual({ text: `Attached files:\n- Could not download ${file().url} (sent as "screen.png", 5 B): out of time`, complete: false, paths: [] })
+      .toEqual({ text: `Attached files:\n- Could not download a file (sent as "screen.png", 5 B): out of time`, complete: false, paths: [] })
   })
   it('fetches only from the public base, and never retries a refusal', async () => {
     const fetcher = replying(new Uint8Array(5))
@@ -79,7 +79,7 @@ describe('Super Tab attachment downloads', () => {
       file({ url: `${base}/y.png`, size: 3 })] }, { base: `${base}/`, fetch: fetcher })
     expect(listed.text).toContain('- Could not download a file (sent as "screen.png", 5 B): not a Harness file address')
     expect(listed.text).not.toContain('evil')
-    expect(listed.text).toContain(`- Could not download ${base}/y.png (sent as "screen.png", 3 B): larger than declared`)
+    expect(listed.text).toContain(`- Could not download a file (sent as "screen.png", 3 B): larger than declared`)
     expect(fetcher).toHaveBeenCalledTimes(1)
     const missing = replying(new Uint8Array(0), 404)
     expect((await attachedFiles({ attachments: [file()] }, { base, fetch: missing })).text).toContain('HTTP 404')
@@ -168,7 +168,7 @@ describe('Super Tab attachment downloads', () => {
     // Room for the file but not the 512 MB kept free beside it.
     const statfs = vi.fn(async () => ({ bavail: (size + 256 * 1024 * 1024) / 4096, bsize: 4096 }))
     const listed = await attachedFiles({ attachments: [file({ size })] }, { base, fetch: fetcher, statfs })
-    expect(listed).toEqual({ text: `Attached files:\n- Could not download ${file().url} (sent as "screen.png", 100.0 MB): not enough free disk space`,
+    expect(listed).toEqual({ text: `Attached files:\n- Could not download a file (sent as "screen.png", 100.0 MB): not enough free disk space`,
       complete: false, paths: [] })
     expect(fetcher).not.toHaveBeenCalled()
     expect(statfs).toHaveBeenCalledWith(PASTE_DROPS_DIR)
@@ -219,5 +219,96 @@ describe('Super Tab attachment downloads', () => {
     expect([formatSize(12), formatSize(2048), formatSize(3 * 1024 * 1024)]).toEqual(['12 B', '2.0 KB', '3.0 MB'])
     expect([servedFrom(base, `${base}/a`), servedFrom(`${base}/files`, `${base}/filesx/a`), servedFrom(base, 'not a url'),
       servedFrom(base, `https://user:pw@cdn.example.test/a`)]).toEqual([true, false, false, false])
+  })
+
+  // Chat files open through short-lived signed links (backend superTabs/fileLinks.ts, security review of Delete Swarm 10-31).
+  describe('signed links', () => {
+    const signedBase = 'https://storage.example.test'
+    const signed = (over: Record<string, unknown> = {}) => file({ url: `${signedBase}/bucket/super-tabs/tab/abc/screen.png?X-Goog-Signature=secret`,
+      expiresAt: 600_000, ...over })
+    const fresh = (url = `${signedBase}/bucket/super-tabs/tab/abc/screen.png?X-Goog-Signature=fresh`) =>
+      vi.fn(async (sent: { id: string }) => ({ ...signed(), id: sent.id, url, expiresAt: 1_200_000 }))
+
+    it('downloads from the signed-link host, and from nowhere that only looks like it', async () => {
+      const fetcher = replying(new Uint8Array(5))
+      expect((await attachedFiles({ attachments: [signed()] }, { base, signedBase, fetch: fetcher, now: () => 0 })).complete).toBe(true)
+      expect([servedFrom(base, `${signedBase}/b/k`, signedBase), servedFrom(base, 'https://storage.example.test.evil/b/k', signedBase),
+        servedFrom(base, 'http://storage.example.test/b/k', signedBase), servedFrom(base, 'https://u:p@storage.example.test/b/k', signedBase)])
+        .toEqual([true, false, false, false])
+    })
+
+    it('never writes a link into the prompt, only the file\'s name and size', async () => {
+      const listed = await attachedFiles({ attachments: [signed()] }, { base, signedBase, fetch: replying(new Uint8Array(0), 503), now: () => 0 })
+      expect(listed.complete).toBe(false)
+      expect(listed.text).toBe('Attached files:\n- Could not download a file (sent as "screen.png", 5 B): HTTP 503')
+      expect(listed.text).not.toContain('Signature')
+    })
+
+    it('starts with a fresh link when its own is about to end, and takes a fresh one when storage says it is over', async () => {
+      const ending = fresh(), fetcher = replying(new Uint8Array(5))
+      expect((await attachedFiles({ attachments: [signed({ expiresAt: 10_000 })] }, { base, signedBase, fetch: fetcher, now: () => 0, relink: ending })).complete).toBe(true)
+      expect(ending).toHaveBeenCalledTimes(1)
+      expect(fetcher).toHaveBeenCalledWith(expect.stringContaining('Signature=fresh'), expect.anything())
+      // A link that was over by the time the request started (403): one fresh link, then the bytes.
+      const over = vi.fn().mockResolvedValueOnce(new Response(null, { status: 403 })).mockResolvedValue(new Response(new Uint8Array(5)))
+      const relink = fresh()
+      expect((await attachedFiles({ attachments: [signed()] }, { base, signedBase, fetch: over, now: () => 0, relink })).complete).toBe(true)
+      expect(relink).toHaveBeenCalledTimes(1)
+      expect(over.mock.calls.map(c => String(c[0]).split('=').at(-1))).toEqual(['secret', 'fresh'])
+    })
+
+    it('stops at once when the reader may no longer read the file, and never retries without a way to relink', async () => {
+      const over = vi.fn(async () => new Response(null, { status: 403 }))
+      const refused = vi.fn(async () => { throw Object.assign(new Error('This file is no longer available.'), { status: 404 }) })
+      const listed = await attachedFiles({ attachments: [signed()] }, { base, signedBase, fetch: over, now: () => 0, relink: refused })
+      expect(listed).toEqual({ text: 'Attached files:\n- Could not download a file (sent as "screen.png", 5 B): no longer available', complete: false, paths: [] })
+      expect([over.mock.calls.length, refused.mock.calls.length]).toEqual([1, 1])
+      // The backend could not answer just now: said so, not as access lost.
+      const down = vi.fn(async () => { throw Object.assign(new Error('Could not reach this Super Tab.'), { status: 503 }) })
+      expect((await attachedFiles({ attachments: [signed()] }, { base, signedBase, fetch: vi.fn(async () => new Response(null, { status: 403 })), now: () => 0,
+        relink: down })).text).toContain('could not get a fresh link')
+      // No relink: one try, the expired link is not fetched again.
+      const alone = vi.fn(async () => new Response(null, { status: 403 }))
+      expect((await attachedFiles({ attachments: [signed()] }, { base, signedBase, fetch: alone, now: () => 0 })).complete).toBe(false)
+      expect(alone).toHaveBeenCalledTimes(1)
+      // A file the server could not link reads as not available, and is never fetched.
+      const none = vi.fn()
+      expect((await attachedFiles({ attachments: [signed({ url: '' })] }, { base, signedBase, fetch: none, now: () => 0 })).text).toContain('no longer available')
+      expect(none).not.toHaveBeenCalled()
+    })
+
+    it('lets a slow download that started in time finish after its link ends', async () => {
+      // Storage checks a signed link when the request starts (fileLinks.ts): the bytes keep coming after expiresAt.
+      let clock = 0
+      const chunk = new Uint8Array(64 * 1024)
+      const slow = vi.fn(async () => new Response(new ReadableStream<Uint8Array>({ async pull(controller) {
+        clock += 60_000
+        await new Promise(resolve => setTimeout(resolve, 1))
+        if (clock > 16 * 60_000) { controller.close(); return }
+        controller.enqueue(chunk)
+      } })))
+      const relink = fresh()
+      const big = signed({ size: 16 * chunk.byteLength, expiresAt: 5 * 60_000 })
+      const listed = await attachedFiles({ attachments: [big] }, { base, signedBase, fetch: slow, now: () => clock, relink, idleMs: 60_000 })
+      expect(listed.complete).toBe(true)
+      expect(clock).toBeGreaterThan(big.expiresAt as number)
+      expect([slow.mock.calls.length, relink.mock.calls.length]).toEqual([1, 0])
+    })
+
+    it('shares one download of a file between deliveries whose links differ', async () => {
+      const inFlight = new Map()
+      const fetcher = replying(new Uint8Array(5))
+      const [one, two] = await Promise.all([
+        attachedFiles({ attachments: [signed()] }, { base, signedBase, fetch: fetcher, now: () => 0, inFlight }),
+        attachedFiles({ attachments: [signed({ url: `${signedBase}/bucket/super-tabs/tab/abc/screen.png?X-Goog-Signature=other` })] },
+          { base, signedBase, fetch: fetcher, now: () => 0, inFlight })])
+      expect([one.complete, two.complete]).toEqual([true, true])
+      expect(fetcher).toHaveBeenCalledTimes(1)
+    })
+
+    it('reads a file\'s link expiry, and nothing else it does not know', () => {
+      expect(attachmentsOf({ attachments: [{ ...signed(), extra: 'x' }, { ...file(), expiresAt: 'soon' }] }))
+        .toEqual([signed(), file()])
+    })
   })
 })
