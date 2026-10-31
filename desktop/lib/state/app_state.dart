@@ -10038,10 +10038,36 @@ class AppNotifier extends ChangeNotifier {
     }
     if (localEndpoint != null) _updateLocalProjectSnapshot(localEndpoint);
     _autoConnectAndLoadMachines();
+    _startBackgroundRereads();
+    notifyListeners();
+    // A grant that has just arrived places what waited for it (R2).
+    _placeSharedPanesSoon();
+  }
+
+  /// The background re-reads a signed-in window keeps: each connected
+  /// machine's agent sync and the machine list's safety net. A guest keeps
+  /// none (an unattended computer on the sign-in page goes idle); the local
+  /// service itself stays supervised. Sign-out cancels them in
+  /// [_clearAccountWorkspace], and sign-in starts them here again.
+  void _startBackgroundRereads() {
+    if (_disposed || isGuest) return;
+    for (final machine in machineStates.values) {
+      if (machine.connectionStatus == ConnectionStatus.connected) {
+        _startAgentSyncTimer(machine.machine.machineId);
+      }
+    }
     // The list is pushed (`machines_changed`); this only catches a missed push.
     _sharingDiscoveryTimer ??= Timer.periodic(machineListSafetyNetInterval, (
-      _,
+      timer,
     ) {
+      // Belt and braces: sign-out cancels it, and a guest never arms it.
+      if (isGuest) {
+        timer.cancel();
+        if (identical(_sharingDiscoveryTimer, timer)) {
+          _sharingDiscoveryTimer = null;
+        }
+        return;
+      }
       // The desk is pushed too, and a missed desk push is caught here as well:
       // one small GET, and an unchanged revision applies nothing.
       if (!_disposed &&
@@ -10060,9 +10086,6 @@ class AppNotifier extends ChangeNotifier {
       }
       unawaited(_rereadMachinesInBackground(pushed: false));
     });
-    notifyListeners();
-    // A grant that has just arrived places what waited for it (R2).
-    _placeSharedPanesSoon();
   }
 
   /// The inventory has answered, and answered for now: loaded, not loading,
@@ -10414,6 +10437,9 @@ class AppNotifier extends ChangeNotifier {
   }
 
   void _startAgentSyncTimer(String machineId) {
+    // A guest asks nothing on a timer: an unattended computer on the sign-in
+    // page must go idle. Sign-in starts it ([_startBackgroundRereads]).
+    if (isGuest) return;
     if (_agentSyncTimers.containsKey(machineId)) return;
     _agentSyncTimers[machineId] = Timer.periodic(agentSyncInterval, (_) {
       final machine = machineStates[machineId];
