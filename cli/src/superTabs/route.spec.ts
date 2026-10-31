@@ -1,7 +1,7 @@
 // cli/src/superTabs/route.spec.ts
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { API_BUILDERS, catalogFrom, catalogRow, choose, decide, gridStrength, LOCAL_NONE, OTHER_REPOSITORY, parseAssessment, quotaOf2, recordOf, repoMatch, repositoryKey, strengthOf,
-  type Assessment, type Catalog, type Commitment, type MemberFrame, type Probe, type TaskFolder } from './route.js'
+  type Assessment, type Catalog, type Commitment, type MemberFrame, type Probe, type RoutePlugin, type TaskFolder } from './route.js'
 
 const object = (v: unknown) => v as Record<string, unknown>
 
@@ -699,6 +699,8 @@ describe('ranking by facts', () => {
       grid: { strength: 1, models: [{ model: 'kimi k3', strength: 2 }] } })
     // Nothing readable is an empty catalog, not a throw.
     expect(catalogFrom({})).toEqual({ models: [], grid: { strength: 1, models: [] } })
+    // A served grid with no strength of its own counts as 1; a grid row without a strength is dropped.
+    expect(catalogFrom({ catalog: { models: [], grid: { models: [{ model: 'kimi k3' }, { strength: 2 }] } } }).grid).toEqual({ strength: 1, models: [] })
   })
 
   it('rates a model by its exact row, its other effort, the engine\'s default row when launched on it, else unrated', () => {
@@ -710,5 +712,215 @@ describe('ranking by facts', () => {
     expect(strengthOf(catalog, 'codex', 'gpt-5.5-mini', 'high', true)).toBeNull()
     expect(gridStrength(catalog, 'moonshotai/kimi-k3', '')).toBe(2)
     expect(gridStrength(catalog, 'qwen3:4b', 'Qwen 3 4B')).toBe(1)
+  })
+})
+
+/** Scholes's goals, pieces 3 to 6, each change the ranking; they plug into choose() rather than edit it. These are today's
+ *  answers for a fixed set of tasks and machines, captured before the hook existed: with no plug-ins every answer, label and
+ *  record must stay byte for byte the same. */
+describe('route answers without plug-ins', () => {
+  const OPUS = { model: 'opus', effort: 'high', quality: 3, cost: 3 } as const
+  const CODEX = { engine: 'codex', model: 'default', effort: 'default', quality: 3, cost: 2 } as const
+  const on = (machine: string, row: Partial<Probe>, quota: Probe['quota'] = windows([80, 3 * H], [90, 5 * D], machine)) =>
+    probe({ machineId: machine, machineName: machine, ...row, quota })
+  const frame: MemberFrame = { title: 'Fix the dial', project: 'openharness', cwd: '/r', root: '/r', remote: 'github.com/o/r', branch: 'fix/dial', updatedAt: NOW - 20 * M }
+  const grid = (patch: Partial<Probe> = {}) => probe({ model: 'default', effort: 'default', quality: 1, cost: 1, quota: { known: false, leftPercent: null, resetsAt: null },
+    gridModel: 'qwen3', gridName: 'swarm-0123456789ab', gridLabel: 'Qwen 3', ...patch })
+  type Args = Parameters<typeof choose>
+  const SCENARIOS: Array<[string, Args]> = [
+    ['mixed members and new agents', [[on('a', OPUS), on('b', {}), on('a', {}, windows([60, 3 * H], [90, 5 * D], 'a')),
+      on('a', { kind: 'member', agentId: 'm1', name: 'Multiply', activity: 'idle', repo: 'same', frame, earlier: [{ group: 'Dial fix', outcome: 'merged' }] }),
+      on('b', { kind: 'member', agentId: 'm2', name: 'Elsewhere', activity: 'idle', repo: 'different', frame: null }),
+      on('a', { model: 'haiku', effort: 'auto', quality: 1, cost: 1 })], policy, a(), NOW]],
+    ['high, large: strong pick short, weaker one fits', [[on('a', OPUS, windows([20, 4 * H], [50, 5 * D], 'A')), on('b', CODEX, windows([5, 4 * H], [60, 3 * D], 'B')),
+      on('c', {}, windows([90, 4 * H], [90, 6 * D], 'C'))], policy, a({ difficulty: 'high', size: 'large' }), NOW]],
+    ['low, small: weekly day budget and an expiring window', [[on('a', OPUS, windows([70, 20 * M], [10, 6 * D], 'A')), on('b', OPUS, windows([40, 4 * H], [80, 2 * D], 'B')),
+      on('c', CODEX, windows(null, [30, 6 * D], 'C'))], policy, a({ difficulty: 'low', size: 'small', kind: 'docs' }), NOW]],
+    ['picks still at work hold their quota', [[on('a', OPUS, windows([50, 3 * H], [50, 5 * D], 'A')), on('b', OPUS, windows([45, 3 * H], [50, 5 * D], 'B'))],
+      policy, a({ difficulty: 'high' }), NOW, [{ account: 'A', spend: { '5-hour': 30, weekly: 4 }, size: 'medium', createdAt: NOW - 10 * M }]]],
+    ['metered, unknown and unreadable quota', [[on('a', CODEX, { known: true, leftPercent: null, resetsAt: null, metered: true }),
+      on('b', CODEX, { known: false, leftPercent: null, resetsAt: null, why: 'signed out of usage' }), on('c', CODEX, { known: true, leftPercent: 40, resetsAt: NOW + 2 * H }),
+      on('d', CODEX, { known: true, leftPercent: 40, resetsAt: null, from: 'Team Mac' })], policy, a(), NOW]],
+    ['more machines than rows shown', [Array.from({ length: 15 }, (_, i) => on(`m${String(i).padStart(2, '0')}`, i % 2 ? OPUS : {},
+      windows([30 + i * 4, 3 * H], [90, 5 * D], `acct${i}`))), policy, a(), NOW]],
+    ['a task naming a repository leaves out a member in another', [[on('a', {}), on('b', { kind: 'member', agentId: 'm2', name: 'Zed', activity: 'idle', repo: 'different' }),
+      on('c', { refusals: ['Machine is offline.'] }), on('d', { load: { agents: 2, freeMemoryBytes: 8e9, hasFolder: true }, notes: ['Its last task here was lost.'] })],
+      policy, a({ needs: { tools: ['git'], devices: [], cwd: '/repo' } }), NOW]],
+    ['a person asked for a local model', [[on('a', OPUS), grid(), grid({ machineId: 'b', machineName: 'b', gridModel: 'kimi-k3', gridLabel: 'Kimi K3', gridKind: 'api' })],
+      { ...policy, grid: { strength: 1, models: [{ model: 'kimi k3', strength: 2 }] } }, a({ local: true, difficulty: 'low', kind: 'docs' }), NOW]],
+    ['a named model the catalog does not list', [[on('a', OPUS), on('b', CODEX), on('c', {})], policy, a({ model: 'claude-opus-6' }), NOW]],
+    ['a named model somebody holds', [[on('a', OPUS)], policy, a({ model: 'deepseek 4.1' }), NOW,
+      [], [{ model: 'deepseek/deepseek-v4.1', label: 'DeepSeek v4.1', kind: 'api', holders: ['Wren', 'Ada'] }]]],
+    ['a named model served by a host now offline', [[on('a', OPUS)], policy, a({ model: 'qwen coder' }), NOW, [], [],
+      [{ title: 'Qwen Coder 32B', reason: 'Its host Rig is offline, so an agent on it would never start.' }]]],
+    ['nothing can run', [[on('a', { refusals: ['Machine is offline.'] }), on('b', CODEX, undefined)].map((p, i) => i ? { ...p, refusals: ['Codex is signed out.'] } : p),
+      policy, a(), NOW]],
+    ['an unrated member and a single candidate', [[on('a', { kind: 'member', agentId: 'm3', model: 'gpt-x', unrated: true, quality: 1, cost: 1, activity: 'working',
+      terminalUnverified: true, frame: { ...frame, title: null, project: null, branch: null, updatedAt: null } })], policy, a({ size: 'small' }), NOW]],
+  ]
+  const answer = ([name, args]: [string, Args]) => {
+    const choice = choose(...args)
+    if ('error' in choice) return { name, choice }
+    const verdict = decide(choice)
+    return { name, choice, verdict, record: recordOf(choice, verdict, args[2]) }
+  }
+
+  it('answers every scenario exactly as before the hook', async () => {
+    await expect(`${JSON.stringify(SCENARIOS.map(answer), null, 1)}\n`).toMatchFileSnapshot('./__snapshots__/route.answers.json')
+  })
+  it('answers the same with an empty plug-in list, and with plug-ins that have nothing to say', () => {
+    const before = JSON.stringify(SCENARIOS.map(answer))
+    const silent: RoutePlugin[] = [{ name: 'Quiet' }, { name: 'Nothing to add', candidates: () => [], adjust: () => null }]
+    for (const plugins of [[], silent]) {
+      const full = ([probes, catalog, task, now, open = [], held = [], offline = []]: Args): Args => [probes, catalog, task, now, open, held, offline, plugins]
+      expect(JSON.stringify(SCENARIOS.map(([name, args]) => answer([name, full(args)])))).toBe(before)
+    }
+  })
+})
+
+/** The hook pieces 3 to 6 plug into: an ordered list of plug-ins, each able to add candidates and to adjust a candidate's place
+ *  with a reason people read. */
+describe('routing plug-ins', () => {
+  const OPUS = { model: 'opus', effort: 'high', quality: 3, cost: 3 } as const
+  const on = (machine: string, row: Partial<Probe> = {}) => probe({ machineId: machine, machineName: machine, ...OPUS, quota: windows([80, 3 * H], [90, 5 * D], machine), ...row })
+  const route = (probes: Probe[], plugins: RoutePlugin[], task: Partial<Assessment> = {}) => choose(probes, policy, a(task), NOW, [], [], [], plugins)
+  const titles = (r: ReturnType<typeof choose>) => ok(r).shown.map(s => s.machineName)
+
+  it('a plug-in\'s cost adjustment changes the order, and its reason shows on the candidate, in the label and in the record', () => {
+    expect(titles(route([on('a'), on('b')], []))).toEqual(['a', 'b'])
+    const measured: RoutePlugin = { name: 'Measured cost', adjust: c => c.machineId === 'b' ? { cost: -1, reason: 'its last 5 builds here cost half the catalog price' } : null }
+    const r = ok(route([on('a'), on('b')], [measured]))
+    expect(titles(r)).toEqual(['b', 'a'])
+    const reason = 'Measured cost: its last 5 builds here cost half the catalog price'
+    expect(r.shown[0]!.notes).toEqual([reason])
+    expect(r.shown[0]!.label).toContain(reason)
+    expect(r.shown[1]!.notes).toEqual([])
+    const verdict = decide(r)
+    expect(verdict.why).toBe('First by strength, then price and quota fit, with the plug-ins\' adjustments in each candidate\'s notes.')
+    const record = recordOf(r, verdict, a()) as { candidates: Array<{ label: string; fit: { effectiveCost: number }; quality: number; cost: number }> }
+    // What the candidate is and what its quota costs are recorded as measured; only the order and the reason change.
+    expect(record.candidates[0]).toMatchObject({ quality: 3, cost: 3, fit: { effectiveCost: ok(route([on('b')], [])).shown[0]!.fit.effectiveCost } })
+    expect(record.candidates[0]!.label).toContain(reason)
+  })
+  it('a strength adjustment ranks before price; adjustments of several plug-ins add up in their order', () => {
+    const weaker = on('s', { model: 'sonnet', effort: 'medium', quality: 2, cost: 2 })
+    const results: RoutePlugin = { name: 'Results', adjust: c => c.model === 'sonnet' ? { strength: 0.75, reason: 'merged 9 of its last 10 docs tasks' } : null }
+    const fit: RoutePlugin = { name: 'Machine fit', adjust: c => c.model === 'sonnet' ? { strength: 0.5, reason: 'has the task folder' } : null }
+    expect(titles(route([on('a'), weaker], [results]))).toEqual(['a', 's'])
+    const r = ok(route([on('a'), weaker], [results, fit]))
+    expect(titles(r)).toEqual(['s', 'a'])
+    expect(r.shown[0]!.notes).toEqual(['Results: merged 9 of its last 10 docs tasks', 'Machine fit: has the task folder'])
+    expect(r.shown[0]!.quality).toBe(2)
+  })
+  it('a refusal leaves a candidate out with the plug-in\'s reason; refusing every one is no candidate', () => {
+    const tooSmall: RoutePlugin = { name: 'Machine fit', adjust: c => c.machineId === 'a' ? { refuse: true, reason: 'has 1 GB free, the task needs 4 GB' } : null }
+    const r = ok(route([on('a'), on('b')], [tooSmall]))
+    expect(titles(r)).toEqual(['b'])
+    expect(r.excluded).toEqual([{ title: 'New agent · Claude opus high · a', reason: 'Machine fit: has 1 GB free, the task needs 4 GB', machine: 'a' }])
+    expect(decide(r).via).toBe('only')
+    const none = route([on('a')], [tooSmall])
+    expect(none).toEqual({ error: 'NO_CANDIDATE', excluded: [{ title: 'New agent · Claude opus high · a', reason: 'Machine fit: has 1 GB free, the task needs 4 GB', machine: 'a' }] })
+  })
+  // Lead, 10-31: a plug-in can never bring back a choice the route rules out. The route's filters are facts of a machine and
+  // engine (offline, engine signed out, tools, devices, a stalled machine), carried as refusals on its probes, and choose()'s own
+  // rules (catalog rows offered, a named or local model, the repository); the owner's rules and review limits are no longer the
+  // route's (project instructions, phase 4).
+  it('a plug-in cannot bring back a choice the route rules out: an added candidate stands on a machine and engine the route probed, with their refusals and notes', () => {
+    const given = [on('a', { notes: ['Its last task here was lost.'] }), on('b', { refusals: ['Machine is offline.'] }),
+      on('k', { kind: 'member', agentId: 'k1', name: 'Kai', activity: 'idle' })]
+    const sonnet = { model: 'sonnet', effort: 'medium', quality: 2, cost: 2 } as const
+    const sneaky: RoutePlugin = { name: 'More models', candidates: () => [
+      on('a', { ...sonnet, quota: windows([100, 3 * H], [100, 5 * D], 'fresh') }),
+      on('b', sonnet),
+      on('a', { engine: 'codex', model: 'default', effort: 'default', cost: 2 }),
+      on('k', sonnet),
+      on('z', sonnet),
+      on('a', { kind: 'member', agentId: 'ghost', name: 'Ghost', activity: 'idle' }),
+      on('a', { model: 'haiku', effort: 'auto', quality: 1, cost: 1 }),
+    ] }
+    const r = ok(choose(given, policy, a(), NOW, [], [], [], [sneaky]))
+    // An idle member before a new agent at equal strength and price, as without plug-ins.
+    expect(r.shown.map(s => s.title)).toEqual(['Kai · Claude opus high · k', 'New agent · Claude opus high · a', 'New agent · Claude sonnet medium · a'])
+    // The added Sonnet on a keeps a's note and quota reading, not its own.
+    expect(r.shown[2]).toMatchObject({ notes: ['Its last task here was lost.'], quota: given[0]!.quota })
+    expect(r.excluded).toEqual([
+      { title: 'New agent · Claude opus high · b', reason: 'Machine is offline.', machine: 'b' },
+      { title: 'New agent · Claude sonnet medium · b', reason: 'Machine is offline.', machine: 'b' },
+      { title: 'New agent · Codex default default · a', reason: 'More models: this route offers no new agent on Codex on a, so one added there is left out.', machine: 'a' },
+      { title: 'New agent · Claude sonnet medium · k', reason: 'More models: this route offers no new agent on Claude on k, so one added there is left out.', machine: 'k' },
+      { title: 'New agent · Claude sonnet medium · z', reason: 'More models: this route offers no new agent on Claude on z, so one added there is left out.', machine: 'z' },
+      { title: 'Ghost · Claude opus high · a', reason: 'More models: a plug-in adds new agents only; it adjusts the agents the route found.', machine: 'a' },
+    ].sort((x, y) => (x.reason === 'Machine is offline.' ? 0 : 1) - (y.reason === 'Machine is offline.' ? 0 : 1)))
+    // Not offered by default, so left out as any Haiku row is, unless a person names it.
+    expect(r.shown.some(s => s.model === 'haiku')).toBe(false)
+    // Its own refusals and notes add to the machine's, once each; the machine's load goes with it; a model on the grid keeps its
+    // own quota, as a local probe does (routeCommand.ts localProbes).
+    const load = { agents: 1, freeMemoryBytes: 8e9, hasFolder: true }
+    const own: RoutePlugin = { name: 'Own', candidates: () => [
+      on('c', { ...sonnet, refusals: ['No room.'], notes: ['Base note.', 'Own note.'] }),
+      on('c', { ...sonnet, model: 'default', effort: 'default', quality: 1, cost: 1, gridModel: 'qwen3', gridName: 'swarm-1', quota: { known: false, leftPercent: null, resetsAt: null } }),
+    ] }
+    const withOwn = ok(choose([on('c', { notes: ['Base note.'], load })], policy, a(), NOW, [], [], [], [own]))
+    expect(withOwn.excluded).toEqual([{ title: 'New agent · Claude sonnet medium · c', reason: 'No room.', machine: 'c' }])
+    expect(withOwn.shown.map(s => [s.gridModel ?? s.model, s.notes, s.load, s.quota.known])).toEqual([
+      ['opus', ['Base note.'], load, true], ['qwen3', ['Base note.'], load, false]])
+  })
+  it('a plug-in adds candidates, which every rule then treats like the others; a later plug-in sees an earlier one\'s', () => {
+    const seen: string[][] = []
+    const given = [on('a'), on('x', { model: 'sonnet', effort: 'medium', quality: 2, cost: 2 })]
+    const extra: RoutePlugin = { name: 'More models', candidates: probes => [on('x', {}),
+      // A catalog row not offered by default stays out unless a person names it, as for any candidate.
+      on('x', { model: 'haiku', effort: 'auto', quality: 1, cost: 1 })].filter(() => probes.length > 0) }
+    const watch: RoutePlugin = { name: 'Watch', candidates: probes => { seen.push(probes.map(p => `${p.model} on ${p.machineId}`)); return [] } }
+    const r = ok(route(given, [extra, watch]))
+    expect(r.shown.map(s => `${s.model} on ${s.machineName}`)).toEqual(['opus on a', 'opus on x', 'sonnet on x'])
+    expect(seen).toEqual([['opus on a', 'sonnet on x', 'opus on x', 'haiku on x']])
+    // A person naming a model still considers that model alone.
+    expect(titles(route(given, [extra], { model: 'haiku' }))).toEqual(['x'])
+  })
+  it('a plug-in sees the task, the time, the catalog, the picks at work and each candidate\'s fit', () => {
+    const contexts: unknown[] = [], fits: string[] = []
+    const look: RoutePlugin = { name: 'Look', candidates: (_p, context) => { contexts.push(context); return [] }, adjust: (c, context) => { contexts.push(context); fits.push(c.fit.status); return null } }
+    const open: Commitment[] = [{ account: 'z', spend: { weekly: 1 }, size: 'small', createdAt: NOW }]
+    choose([on('a')], policy, a({ kind: 'docs' }), NOW, open, [], [], [look])
+    expect(contexts).toEqual([{ assessment: a({ kind: 'docs' }), now: NOW, catalog: policy, open }, { assessment: a({ kind: 'docs' }), now: NOW, catalog: policy, open }])
+    expect(fits).toEqual(['fits'])
+  })
+  afterEach(() => { vi.restoreAllMocks() })
+  it('a plug-in that runs too long is skipped whole: the route answers as without it and says so', () => {
+    let clock = 0
+    vi.spyOn(performance, 'now').mockImplementation(() => clock)
+    const plain = ok(route([on('a'), on('b')], []))
+    const slowAdjust: RoutePlugin = { name: 'Slow', adjust: c => { clock += 150; return { cost: -5, reason: `looked at ${c.machineId}` } } }
+    const slowAdd: RoutePlugin = { name: 'Slow add', candidates: () => { clock += 201; return [on('a', { model: 'sonnet', effort: 'medium', quality: 2, cost: 2 })] } }
+    const quick: RoutePlugin = { name: 'Quick', adjust: () => { clock += 10; return null } }
+    const { warnings, ...rest } = ok(route([on('a'), on('b')], [slowAdd, slowAdjust, quick]))
+    expect(rest).toEqual(plain)
+    expect(warnings).toEqual(['Slow add', 'Slow'].map(n => `The routing plug-in "${n}" was skipped: it took longer than 200 ms. The route is ranked without it.`))
+  })
+  it('plug-ins run in their list\'s fixed order, and the same route answers the same every time', () => {
+    const one: RoutePlugin = { name: 'One', adjust: () => ({ cost: 0.5, reason: 'first' }) }
+    const two: RoutePlugin = { name: 'Two', adjust: () => ({ cost: -0.5, reason: 'second' }) }
+    const r = ok(route([on('a'), on('b')], [one, two]))
+    expect(r.shown[0]!.notes).toEqual(['One: first', 'Two: second'])
+    expect(ok(route([on('a'), on('b')], [two, one])).shown[0]!.notes).toEqual(['Two: second', 'One: first'])
+    expect(JSON.stringify(route([on('a'), on('b')], [one, two]))).toBe(JSON.stringify(r))
+  })
+  it('a plug-in that throws or answers what cannot be ranked is skipped whole and named in a warning, never with its error', () => {
+    const plain = ok(route([on('a'), on('b')], []))
+    const half: RoutePlugin = { name: 'Half', adjust: c => { if (c.machineId === 'b') throw new Error('token=secret at /Users/x'); return { cost: -5, reason: 'x' } } }
+    const nan: RoutePlugin = { name: 'NaN', adjust: () => ({ cost: Number.NaN, reason: 'x' }) }
+    const blank: RoutePlugin = { name: 'Blank', adjust: () => ({ strength: 1, reason: ' ' }) }
+    const broken: RoutePlugin = { name: 'Broken', candidates: () => { throw new Error('secret') } }
+    const junk: RoutePlugin = { name: 'Junk', candidates: () => [{ machineId: 'q' } as Probe] }
+    const notList: RoutePlugin = { name: 'Not a list', candidates: () => null as unknown as Probe[] }
+    const r = ok(route([on('a'), on('b')], [half, nan, blank, broken, junk, notList]))
+    const { warnings, ...rest } = r
+    expect(rest).toEqual(plain)
+    // Candidates are gathered before any is judged, so those plug-ins are named first.
+    expect(warnings).toEqual(['Broken', 'Junk', 'Not a list', 'Half', 'NaN', 'Blank'].map(n => `The routing plug-in "${n}" was skipped: it failed. The route is ranked without it.`))
+    expect(JSON.stringify(r)).not.toContain('secret')
+    // Nothing can run: the warning still goes with the answer.
+    expect(route([on('a', { refusals: ['Machine is offline.'] })], [broken])).toMatchObject({ error: 'NO_CANDIDATE', warnings: [expect.stringContaining('"Broken"')] })
   })
 })
