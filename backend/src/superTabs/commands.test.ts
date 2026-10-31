@@ -825,6 +825,18 @@ describe('agent.start on the Swarm\'s listed machines', () => {
     expect(f.state.starts).toHaveLength(1)
   })
 
+  // Scholes's goals, piece 5: a start says the heavy work it runs, which later routes count on its machine.
+  it('keeps the heavy work a start declares, and refuses any other value', () => {
+    const f = fixture(), group = f.group()
+    f.run({ type: 'agent.start', request: { ...request(group, 'my-laptop'), heavy: ['build', 'e2e'] } }, owner, { contribution: grant })
+    expect(f.state.starts![0]!.request.heavy).toEqual(['build', 'e2e'])
+    const parse = (heavy: unknown) => commandSchema.safeParse({ type: 'agent.start', request: { ...request(group, 'm'), heavy } }).success
+    expect(parse(['e2e'])).toBe(true)
+    for (const heavy of [[], ['compile'], ['build', 'build'], 'build', ['build', 'e2e', 'build']]) expect(parse(heavy)).toBe(false)
+    // A start without it is as before.
+    expect(commandSchema.safeParse({ type: 'agent.start', request: request(group, 'm') }).success).toBe(true)
+  })
+
   it('keeps a person\'s start on a machine of their own, before anything is listed', () => {
     const f = fixture(), group = f.group()
     f.run({ type: 'agent.start', request: request(group, 'my-laptop') }, owner, { contribution: grant })

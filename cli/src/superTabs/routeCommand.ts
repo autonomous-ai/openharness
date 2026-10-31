@@ -384,7 +384,8 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
       // instructions takes no roleName (it came with them, phase 2).
       : `Start with: start OPERATION_ID ${JSON.stringify({ conversationId: input.conversationId, name: 'NAME', ...(instructions ? { roleName: 'ROLE' } : {}),
         cwd: text(machines.get(verdict.pick.machineId)?.pool?.cwd) ?? assessment.needs.cwd ?? '/absolute/repo/on/that/machine',
-        worktree: true, requirements: startRequirements(assessment.needs), machineId: verdict.pick.machineId, engine: verdict.pick.engine,
+        worktree: true, requirements: startRequirements(assessment.needs), ...(assessment.needs.heavy ? { heavy: assessment.needs.heavy } : {}),
+        machineId: verdict.pick.machineId, engine: verdict.pick.engine,
         // A local model is named by the grid alone: no subscription model or effort goes with it.
         ...(verdict.pick.gridModel ? { gridModel: verdict.pick.gridModel, gridName: verdict.pick.gridName } : { model: verdict.pick.model, effort: verdict.pick.effort }),
         ...(typeof routeDecisionId === 'string' ? { routeDecisionId } : {}) })}, then assign the started agent${decision ? ' with the same routeDecisionId' : ''}. `

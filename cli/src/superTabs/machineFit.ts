@@ -47,13 +47,11 @@ export const floorOf = (need: Pick<Need, 'memoryBytes' | 'diskBytes'>) => ({ mem
 /** Heavy work already placed on each machine: what it is expected to use, and how many agents. */
 export interface Placed { memoryBytes: number; diskBytes: number; agents: number }
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
-/** The heavy work a start asked for, read back from the memory its requirements asked of the machine: the largest kind whose
- *  whole memory need it asked (capacity.ts startRequirements), or none. An ordinary Builder's start asks 4 GB, under every
- *  heavy need, so it never counts (review of #2426). */
+/** The heavy work a start declared in its own field (backend superTabs/model.ts AgentStartRequest.heavy), or none. Never read
+ *  from the memory it asked: an ordinary Builder's start may ask as much as a heavy one (review of #2426). */
 function heavyOfStart(start: Json): Need | null {
-  const memory = object(object(start.request).requirements).memoryBytes
-  if (!finite(memory)) return null
-  return heavyNeed({ heavy: (Object.keys(HEAVY_NEEDS) as HeavyWork[]).filter(k => memory >= HEAVY_NEEDS[k].memoryBytes) })
+  const heavy = object(start.request).heavy
+  return Array.isArray(heavy) ? heavyNeed({ heavy: heavy.filter((k): k is HeavyWork => typeof k === 'string' && Object.hasOwn(HEAVY_NEEDS, k)) }) : null
 }
 /** A start stamped this far ahead of this machine's clock still counts: clocks differ a little (as the window pull allows). */
 export const CLOCK_SKEW_MS = 60_000

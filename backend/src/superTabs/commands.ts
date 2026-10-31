@@ -95,6 +95,8 @@ export const startRequestSchema = z.object({
   model: z.string().trim().min(1).max(200).optional(), effort: z.string().trim().min(1).max(80).optional(),
   permissionMode: z.string().min(1).max(80).optional(), codexHome: path.optional(),
   gridModel: z.string().min(1).max(2048).optional(), gridName: z.string().min(1).max(2048).optional(),
+  // The heavy work the task declared (model.ts AgentStartRequest.heavy). An older client sends none.
+  heavy: z.array(z.enum(['build', 'e2e'])).min(1).max(2).refine(h => new Set(h).size === h.length, 'Name each kind of heavy work once.').optional(),
   requirements: z.object({ memoryBytes: z.number().int().nonnegative().safe(), diskBytes: z.number().int().nonnegative().safe(),
     maxCpuPercent: z.number().min(0).max(100), tools: z.array(z.string().regex(/^[A-Za-z0-9_.+-]{1,80}$/)).max(20),
     devices: z.array(path).max(20), quotaRequired: z.boolean() }).strict(),

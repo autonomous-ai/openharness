@@ -20,8 +20,9 @@ const on = (machine: string, free: { memory: number | null; disk: number | null;
     ...(free.cpu === undefined ? {} : { cpuPercent: free.cpu }) }, ...patch })
 const ok = (r: ReturnType<typeof choose>) => { if ('error' in r) throw new Error(JSON.stringify(r)); return r }
 const route = (probes: Probe[], task: Assessment, plugin = machineFit()) => choose(probes, catalog, task, NOW, [], [], [], [plugin])
+/** A start as the route's hint makes it: its requirements, and the heavy work it declared in its own field. */
 const heavyStart = (machineId: string, at: number, heavy: Assessment['needs']['heavy'] = ['build'], patch: Record<string, unknown> = {}) =>
-  ({ request: { machineId, requirements: startRequirements({ tools: [], devices: [], heavy }) }, requestedAt: at, ...patch })
+  ({ request: { machineId, requirements: startRequirements({ tools: [], devices: [], heavy }), ...(heavy?.length ? { heavy } : {}) }, requestedAt: at, ...patch })
 
 describe('the task says its heavy work and its CI', () => {
   it('parses heavy work and the CI jobs it starts, and leaves both out when not given', () => {
@@ -46,11 +47,11 @@ describe('the task says its heavy work and its CI', () => {
     expect(heavyNeed({ heavy: ['e2e'] })).toEqual({ memoryBytes: 6 * GB, diskBytes: 10 * GB, words: 'end-to-end tests' })
     expect(heavyNeed({ heavy: ['e2e', 'build'] })).toEqual({ memoryBytes: 8 * GB, diskBytes: 30 * GB, words: 'end-to-end tests and a heavy build' })
   })
-  it('a heavy task\'s start asks its whole memory need and half its disk; any other start asks what it always did', () => {
+  it('a heavy task\'s start asks its machine for half the need, so a machine ranked later still admits it; any other start asks what it always did', () => {
     expect(startRequirements({ tools: [], devices: [] })).toEqual(START_REQUIREMENTS)
-    expect(startRequirements({ tools: [], devices: [], heavy: ['build'] })).toMatchObject({ memoryBytes: 8 * GB, diskBytes: 15 * GB })
+    expect(startRequirements({ tools: [], devices: [], heavy: ['build'] })).toMatchObject({ memoryBytes: 4 * GB, diskBytes: 15 * GB })
     // End-to-end's half of the disk is less than any start asks, so the start's own stays.
-    expect(startRequirements({ tools: [], devices: [], heavy: ['e2e'] })).toMatchObject({ memoryBytes: 6 * GB, diskBytes: START_REQUIREMENTS.diskBytes })
+    expect(startRequirements({ tools: [], devices: [], heavy: ['e2e'] })).toMatchObject({ memoryBytes: 3 * GB, diskBytes: START_REQUIREMENTS.diskBytes })
     expect(floorOf({ memoryBytes: 8 * GB, diskBytes: 30 * GB })).toEqual({ memoryBytes: 4 * GB, diskBytes: 15 * GB })
   })
 })
@@ -130,9 +131,12 @@ describe('heavy work placed but not yet in the reading', () => {
       heavyStart('m', NOW - M, ['build'], { error: 'Refused.' }),
       heavyStart('m', NOW - M, []),
       { request: { machineId: 'm', requirements: startRequirements({ tools: [], devices: [] }) }, requestedAt: NOW - M },
-      { request: { machineId: 'm', requirements: { memoryBytes: 'lots' } }, requestedAt: NOW - M },
-      { request: { requirements: startRequirements({ tools: [], devices: [], heavy: ['build'] }) }, requestedAt: NOW - M },
-      { request: { machineId: 'm', requirements: startRequirements({ tools: [], devices: [], heavy: ['build'] }) } },
+      // Asking as much memory as heavy work does not make a start heavy: only its own field does.
+      { request: { machineId: 'm', requirements: { ...startRequirements({ tools: [], devices: [] }), memoryBytes: 16 * GB } }, requestedAt: NOW - M },
+      { request: { machineId: 'm', heavy: 'build' }, requestedAt: NOW - M },
+      { request: { machineId: 'm', heavy: ['compile', 3] }, requestedAt: NOW - M },
+      { request: { heavy: ['build'] }, requestedAt: NOW - M },
+      { request: { machineId: 'm', heavy: ['build'] } },
       heavyStart('m', NOW - PLACED_RECENT_MS),
       heavyStart('m', NOW + 2 * M),
       // An ordinary Builder's start asks 4 GB, under every heavy need.
@@ -140,7 +144,7 @@ describe('heavy work placed but not yet in the reading', () => {
     ]
     expect(placedHeavyWork(starts, NOW).size).toBe(0)
     // Its kind is read back from the memory its start asked for, and a start known only by its dispatch time counts too.
-    const e2e = { request: { machineId: 'm', requirements: startRequirements({ tools: [], devices: [], heavy: ['e2e'] }) }, dispatchedAt: NOW - M }
+    const e2e = { request: { machineId: 'm', requirements: startRequirements({ tools: [], devices: [], heavy: ['e2e'] }), heavy: ['e2e'] }, dispatchedAt: NOW - M }
     expect(placedHeavyWork([e2e, heavyStart('m', NOW - M)], NOW).get('m')).toEqual({ memoryBytes: 14 * GB, diskBytes: 40 * GB, agents: 2 })
     // A start stamped up to a minute ahead of this clock counts.
     expect(placedHeavyWork([heavyStart('m', NOW + 50_000)], NOW).get('m')).toMatchObject({ agents: 1 })
@@ -201,7 +205,7 @@ describe('its maker', () => {
   it('reads the heavy work just started off the route\'s own read, a Harness Team account\'s on its Mac', async () => {
     const now = Date.now()
     const state = { machines: [{ machineId: 'team', hostMachineId: 'mac' }, { machineId: 'mac' }],
-      starts: [{ request: { machineId: 'team', requirements: startRequirements({ tools: [], devices: [], heavy: ['build'] }) }, requestedAt: now - M }] }
+      starts: [{ request: { machineId: 'team', requirements: startRequirements({ tools: [], devices: [], heavy: ['build'] }), heavy: ['build'] }, requestedAt: now - M }] }
     const plugin = (await MACHINE_FIT_MAKER.make(input(a({ heavy: ['build'] }), state)))!
     const choice = ok(choose([on('mac', { memory: 12, disk: 100 }), on('z', { memory: 12, disk: 100 })], catalog, a({ heavy: ['build'] }), now, [], [], [], [plugin]))
     expect(choice.shown.map(s => s.machineId)).toEqual(['z', 'mac'])
