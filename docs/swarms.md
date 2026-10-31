@@ -670,6 +670,87 @@ before it is sent, with "Files can be up to 256 MB."
 - Agents' computers save each message's files straight to disk, never more than
   the size the message names.
 
+### Chat file links
+
+A file opens only for someone who can read its message now. Each read of a
+message gives each of its files a signed link that opens for 5 to 10 minutes
+(`backend/src/superTabs/fileLinks.ts`). It stays the same link through each 5
+minutes, so a picture is not fetched again on every poll. Links are made only
+for files in the reading Swarm's own folder.
+
+- Desktop, the web and the phone open a file through its link. When the link
+  has less than a minute left, they first ask the server for a fresh one. The
+  server answers that request as it answers reading that exact message:
+  someone removed from the Swarm or the project, a deleted Swarm, a private
+  chat or another project's chat all get the same "This file is no longer
+  available."
+- Agents' computers download through the same links. A try whose link is over
+  asks for a fresh one, read as the agent reads the message now. Storage checks
+  a link when a download starts, so a slow download that started in time
+  finishes. A link never appears in an agent's prompt.
+- Uploaded avatars kept in the chat files' bucket get signed links too, which
+  stop opening within an hour.
+- Reads still carry each file's public address, because apps from before signed
+  links open nothing else. It keeps working only until the release step below
+  makes the bucket private. Until then, anyone who once had a file's address
+  can still open it.
+
+**Release step (Ken's go, after a migration window).** The code never changes
+the bucket. In order:
+
+1. Before the backend release, check that the backend can sign: with
+   `SUPER_TAB_ATTACHMENTS_CREDENTIALS` set, the key signs. Without it, the
+   backend's service account needs `iam.serviceAccounts.signBlob` on itself
+   (Service Account Token Creator). Otherwise every file and uploaded avatar
+   reads without a link, and the backend logs
+   `[file-links] could not sign a chat file link`.
+2. Release the backend, then the CLI, Desktop and the phone.
+3. For the web build's text viewer, add `GET` for `https://harness.autonomous.ai`
+   to the bucket's CORS rule (today it allows only `PUT`).
+4. Wait out the migration window, until product usage by release shows that
+   the current apps and CLI are what people run (at least 7 days).
+5. Make the bucket private: remove the `allUsers` (and any
+   `allAuthenticatedUsers`) `roles/storage.objectViewer` binding.
+6. Rewrite the cache setting that files stored before this release kept
+   (`public, max-age=31536000, immutable`, chat files and avatars alike), so
+   nothing keeps serving a cached copy:
+   `gcloud storage objects update "gs://BUCKET/PREFIX/**" "gs://BUCKET/avatars/**" --cache-control="private, max-age=600"`.
+7. Purge the CDN in front of the bucket (`SUPER_TAB_ATTACHMENTS_PUBLIC_BASE`),
+   and remove the bucket as its origin.
+8. Check: an old public address and an expired signed link answer 403. A file
+   and an avatar still open in Desktop, on the phone and for an agent.
+
+Rollback: add the `allUsers` binding back. Old apps open files again; new ones
+never stopped. A later release can stop sending the public address, so that
+an old app says the file is not on Harness's file storage instead of opening a
+dead link.
+
+Design (`backend/src/superTabs/fileLinks.ts`):
+
+- Growth: nothing is stored. Links live in a per-server cache of the current
+  5 minutes, at most 20,000, cleared when the window turns.
+- Concurrency: no writes. Reads asking at the same moment share one signature
+  per file.
+- Read cost: only the rows a reader is shown are signed, once per file per
+  5 minutes, at most 8 at a time. With a key, a signature is local (under 1 ms).
+  Without one, each is a call to the cloud's signing API.
+- Scale: at 10x files per page, the first read in a window signs 10x. The
+  first metric to warn is message page latency (`recordMessageRead`), and the
+  signing warnings in the log.
+- Compatibility: new apps use the link and fall back to the address on an
+  older server. Old apps and old agents' computers use the address until the
+  bucket is private. The fresh-link read is new; an older server answers it
+  404.
+- Migration + rollback: no data migration. The release step above is the
+  migration. Its rollback restores public reading.
+- Audience: the server decides every link from the reader's access at that
+  read. Storage enforces the end time.
+- Identity: the signed-in person's or the agent's own read. A Team account's
+  session reads as its agent.
+- Failure: a file that cannot be signed reads without a link, the apps say it
+  is not available, and the backend logs the storage error's code.
+- Platforms: backend, CLI host, Desktop (and the web build), phone.
+
 ## Avatars, status and celebrations
 
 People and agents each show one avatar wherever they appear: messages, the
@@ -702,13 +783,11 @@ server:
   gets no new links.
 - Without one (production today, by the owner's choice on 2026-10-28),
   pictures are kept in the chat files' bucket, in a folder of their own
-  (`avatars/`), and linked on the same public CDN. **They work like chat files:
-  a picture's link never expires.** Anyone who once had it, including someone
-  later removed from the Swarm or anyone they pass it to, can still open that
-  picture. Only the 128 random bits in its address keep it from being guessed.
-  A new picture gets a new address; the old one stays reachable. Chat files
-  never go in the avatar folder, and the server makes avatar links for that
-  folder alone.
+  (`avatars/`). They are linked like chat files (see Chat file links): signed
+  links that stop opening within an hour. Until the release step makes that
+  bucket private, a picture's old public address also still opens it. Chat
+  files never go in the avatar folder, and the server makes avatar links for
+  that folder alone.
 
 A server with no attachments bucket refuses uploads; the eight pictures still
 work.
@@ -1051,7 +1130,8 @@ cannot be deleted, and only the owner sees the item.
 - For 7 days its owner can restore it from the same dropdown (**Restore "name"**, with the days left). People, projects,
   chats and files come back; agents and machines do not, and are added again.
 - After the 7 days the worker removes its records and stored files, and only its own (`backend/src/superTabs/purge.ts`).
-  Chat file links keep working until then.
+  From the delete on, nobody gets a new file link. Links already handed out stop opening within 10 minutes, once the
+  bucket is private (see Chat file links).
 
 Design (`backend/src/superTabs/deletion.ts`):
 

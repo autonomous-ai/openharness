@@ -3,10 +3,11 @@ import { Readable, Transform, Writable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { z } from 'zod'
 
-/** Metadata as a message stores it. The bytes stay in the bucket. A stored `url` is the file's old public address: it names the
- *  object, and no reader is ever handed it. Each read swaps it for a short-lived signed link and says when that link stops
- *  opening, `expiresAt` (epoch ms; fileLinks.ts); a read that could not sign one hands `url` empty. */
-export interface Attachment { id: string; name: string; mime: string; size: number; url: string; expiresAt?: number }
+/** Metadata as a message stores it. The bytes stay in the bucket. `url` is the file's public address on the CDN: it names the
+ *  object, and apps from before signed links open it, until the bucket is no longer public (docs/swarms.md, "Chat file
+ *  links"). Each read adds `link`, a short-lived signed link of that read, and `expiresAt` (epoch ms), when it stops opening
+ *  (fileLinks.ts); a read that could not sign one adds neither. Neither is ever stored. */
+export interface Attachment { id: string; name: string; mime: string; size: number; url: string; link?: string; expiresAt?: number }
 
 /** One chat file, whichever way it comes. Every client checks the same number before it sends (attachments.limits.test.ts). */
 export const MAX_ATTACHMENT_BYTES = 256 * 1024 * 1024

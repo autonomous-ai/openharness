@@ -6,10 +6,10 @@ import { object } from './wire.js'
 /** The most a file sent by the multipart route may be (lib/superTabAttachmentProxy.ts); a larger one goes by a link. */
 export { MAX_FORM_ATTACHMENT_BYTES } from '../lib/superTabAttachmentProxy.js'
 
-/** As the backend hands it with a message (backend/src/superTabs/attachments.ts): `url` is a signed link of that read, which
- *  opens until `expiresAt` (epoch ms), or '' when the server could not link it; an older backend sends its permanent public
- *  address and no expiry. */
-export interface MessageAttachment { id: string; name: string; mime: string; size: number; url: string; expiresAt?: number }
+/** As the backend hands it with a message (backend/src/superTabs/attachments.ts): `link` is a signed link of that read, which
+ *  opens until `expiresAt` (epoch ms); `url` is the file's public address, which an older backend sends alone and which stops
+ *  opening once the bucket is private. The link is used whenever there is one. */
+export interface MessageAttachment { id: string; name: string; mime: string; size: number; url: string; link?: string; expiresAt?: number }
 /** A fresh link to [file], from the backend, for whoever this host delivers to (superTabs/host.ts): the read checks that they
  *  may still read the message. It throws when they may not, or the file is gone. */
 export type Relink = (file: MessageAttachment) => Promise<MessageAttachment>
@@ -53,7 +53,8 @@ export function attachmentsOf(message: Record<string, unknown>): MessageAttachme
     typeof a.name === 'string' && typeof a.url === 'string' && typeof a.mime === 'string'
     && Number.isSafeInteger(a.size) && (a.size as number) >= 0)
     .map(a => ({ id: typeof a.id === 'string' ? a.id : '', name: a.name, mime: a.mime, size: a.size, url: a.url,
-      ...typeof a.expiresAt === 'number' && Number.isFinite(a.expiresAt) ? { expiresAt: a.expiresAt } : {} }))
+      ...typeof a.link === 'string' && a.link ? { link: a.link,
+        ...typeof a.expiresAt === 'number' && Number.isFinite(a.expiresAt) ? { expiresAt: a.expiresAt } : {} } : {} }))
 }
 
 export const formatSize = (bytes: number) => bytes < 1024 ? `${bytes} B`
@@ -84,8 +85,9 @@ class Expired extends Error {}
 
 async function download(file: MessageAttachment, base: string, signedBase: string, fetcher: typeof fetch, ms: number, idleMs: number,
   stop: AbortSignal | undefined, statfs: Statfs): Promise<string> {
-  if (!file.url) throw new Expired('no longer available')
-  if (!servedFrom(base, file.url, signedBase)) throw new Refused('not a Harness file address')
+  const address = file.link ?? file.url
+  if (!address) throw new Refused('no longer available')
+  if (!servedFrom(base, address, signedBase)) throw new Refused('not a Harness file address')
   if (file.size > MAX_ATTACHMENT_BYTES) throw new Refused(`over the ${megabytes(MAX_ATTACHMENT_BYTES)} limit`)
   // Another try would find the same disk: refused, not tried again.
   if (!await roomFor(file.size, statfs)) throw new Refused('not enough free disk space')
@@ -100,11 +102,11 @@ async function download(file: MessageAttachment, base: string, signedBase: strin
   moved()
   try {
     // A redirect could leave the public base, so it is a failure, not followed.
-    const response = await fetcher(file.url, { redirect: 'error', signal: AbortSignal.any([idle.signal, AbortSignal.timeout(ms), ...stop ? [stop] : []]) })
+    const response = await fetcher(address, { redirect: 'error', signal: AbortSignal.any([idle.signal, AbortSignal.timeout(ms), ...stop ? [stop] : []]) })
     if (!response.ok || !response.body) {
       await response.body?.cancel().catch(() => {})
       // A signed link that is over, or whose file is no longer readable through it: a fresh link may still open it.
-      if ((response.status === 400 || response.status === 403) && file.expiresAt !== undefined) throw new Expired(`HTTP ${response.status}`)
+      if ((response.status === 400 || response.status === 403) && file.link) throw new Expired(`HTTP ${response.status}`)
       const Failure = response.status >= 400 && response.status < 500 && ![408, 429].includes(response.status) ? Refused : Error
       throw new Failure(`HTTP ${response.status}`)
     }

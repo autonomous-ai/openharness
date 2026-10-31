@@ -4,8 +4,9 @@ import { errorCode, trimPrefix, type Attachment, type AttachmentStore } from './
 /**
  * Chat files are opened only through short-lived signed links, made on each read for whoever can read the message now
  * (security review of Delete Swarm, 10-31): a member removed from a project or a Swarm, or anyone once the Swarm is deleted,
- * gets no new link, and a link already handed out stops opening within FILE_LINK_TTL_MS. Messages keep the address they
- * were stored with; it names the object and is never handed to a reader.
+ * gets no new link, and a link already handed out stops opening within FILE_LINK_TTL_MS. Reads still carry each file's
+ * public address too (`url`), which apps from before this open: it keeps working only until the release step makes the
+ * bucket private (docs/swarms.md, "Chat file links"), and from then only a signed link opens a file.
  *
  * A link is the same through each five minutes, so a picture is fetched once in that window rather than on every poll, and
  * signing (a network call when the cloud signs it) happens at most once per file and window on a server. It opens for ten
@@ -40,8 +41,8 @@ export class FileLinks {
     return key.startsWith(folder) && !/[?#\\%]/.test(key) && parts.every(part => part && part !== '.' && part !== '..') ? key : null
   }
 
-  /** [rows] with each file's address swapped for a signed link and its expiry; a file that cannot be linked reads with an empty
-   *  address, which every client shows as not available. Only the fields a message stores for a file are kept. */
+  /** [rows] with each file's signed link and its expiry added; a file that cannot be linked reads without them, which every
+   *  app that knows links shows as not available. Only the fields a message stores for a file are kept. */
   async forRows<T extends { attachments?: unknown }>(tabId: string, rows: T[], now: number): Promise<T[]> {
     if (!rows.some(row => Array.isArray(row.attachments) && row.attachments.length)) return rows
     const expiresAt = fileLinkExpiry(now)
@@ -51,7 +52,8 @@ export class FileLinks {
     const links = await this.signAll([...keys], expiresAt)
     return rows.map(row => !Array.isArray(row.attachments) ? row : { ...row, attachments: files(row).map(file => {
       const key = this.keyOf(tabId, file.url), url = key ? links.get(key) : undefined
-      return { id: file.id, name: file.name, mime: file.mime, size: file.size, url: url ?? '', ...url ? { expiresAt } : {} } satisfies Attachment
+      return { id: file.id, name: file.name, mime: file.mime, size: file.size, url: typeof file.url === 'string' ? file.url : '',
+        ...url ? { link: url, expiresAt } : {} } satisfies Attachment
     }) })
   }
 

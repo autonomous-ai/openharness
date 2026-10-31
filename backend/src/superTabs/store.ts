@@ -2358,12 +2358,10 @@ export class SuperTabStore {
   /** One page of a conversation, read by (sequence, id): rows written by one command before the store by parts share a
    *  sequence, so a page edge inside such a run must not skip any (design section 4.6). `after` alone reads strictly after
    *  a sequence, which is enough to poll for new messages. */
-  /** [rows] as a reader is handed them: each file's stored address swapped for a signed link of this read (fileLinks.ts). A server
-   *  without a bucket links nothing: every file reads with an empty address, never the stored one. */
+  /** [rows] as a reader is handed them: each file with a signed link of this read (fileLinks.ts). A server without a bucket
+   *  links nothing. */
   private async linked<T extends { attachments?: unknown }>(tabId: string, rows: T[]): Promise<T[]> {
-    if (this.fileLinks) return this.fileLinks.forRows(tabId, rows, this.now())
-    return rows.map(row => Array.isArray(row.attachments)
-      ? { ...row, attachments: row.attachments.map(file => ({ ...(file as Attachment), url: '', expiresAt: undefined })) } : row)
+    return this.fileLinks ? this.fileLinks.forRows(tabId, rows, this.now()) : rows
   }
   private async linkedFile(tabId: string, file: Attachment): Promise<Attachment> {
     return (await this.linked(tabId, [{ attachments: [file] }]))[0]!.attachments[0] as Attachment
@@ -2376,7 +2374,7 @@ export class SuperTabStore {
     const page = await this.messages(user, tabId, conversationId, { messageId }, asAgentId)
     const message = page.messages.find(m => m.id === messageId)
     const file = Array.isArray(message?.attachments) ? (message.attachments as unknown as Attachment[]).find(a => a.id === attachmentId) : undefined
-    if (!file?.url) fail('FILE_UNAVAILABLE', 'This file is no longer available.', 404)
+    if (!file?.link) fail('FILE_UNAVAILABLE', 'This file is no longer available.', 404)
     return { attachment: file }
   }
 

@@ -1747,7 +1747,7 @@ export class SuperTabHost {
       const data = object(await backend(this.core, 'GET',
         `/api/super-tabs/${tabId}/conversations/${conversationId}/messages/${messageId}/attachments/${attachmentId}?asAgentId=${agentId}`))
       const [fresh] = attachmentsOf({ attachments: [data.attachment] })
-      if (!fresh?.url || fresh.id !== file.id) throw new SuperTabHostError('FILE_UNAVAILABLE', 'This file is no longer available.', 404)
+      if (!fresh?.link || fresh.id !== file.id) throw new SuperTabHostError('FILE_UNAVAILABLE', 'This file is no longer available.', 404)
       return fresh
     }
   }

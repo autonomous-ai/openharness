@@ -224,14 +224,19 @@ describe('Super Tab attachment downloads', () => {
   // Chat files open through short-lived signed links (backend superTabs/fileLinks.ts, security review of Delete Swarm 10-31).
   describe('signed links', () => {
     const signedBase = 'https://storage.example.test'
-    const signed = (over: Record<string, unknown> = {}) => file({ url: `${signedBase}/bucket/super-tabs/tab/abc/screen.png?X-Goog-Signature=secret`,
+    const signed = (over: Record<string, unknown> = {}) => file({ link: `${signedBase}/bucket/super-tabs/tab/abc/screen.png?X-Goog-Signature=secret`,
       expiresAt: 600_000, ...over })
-    const fresh = (url = `${signedBase}/bucket/super-tabs/tab/abc/screen.png?X-Goog-Signature=fresh`) =>
-      vi.fn(async (sent: { id: string }) => ({ ...signed(), id: sent.id, url, expiresAt: 1_200_000 }))
+    const fresh = (link = `${signedBase}/bucket/super-tabs/tab/abc/screen.png?X-Goog-Signature=fresh`) =>
+      vi.fn(async (sent: { id: string }) => ({ ...signed(), id: sent.id, link, expiresAt: 1_200_000 }))
 
-    it('downloads from the signed-link host, and from nowhere that only looks like it', async () => {
+    it('downloads by the signed link over the public address, from the signed-link host, and from nowhere that only looks like it', async () => {
       const fetcher = replying(new Uint8Array(5))
       expect((await attachedFiles({ attachments: [signed()] }, { base, signedBase, fetch: fetcher, now: () => 0 })).complete).toBe(true)
+      expect(fetcher).toHaveBeenCalledWith(expect.stringContaining("Signature=secret"), expect.anything())
+      // An older backend sends no link: the public address, as before.
+      const older = replying(new Uint8Array(5))
+      expect((await attachedFiles({ attachments: [file()] }, { base, signedBase, fetch: older, now: () => 0 })).complete).toBe(true)
+      expect(older).toHaveBeenCalledWith(file().url, expect.anything())
       expect([servedFrom(base, `${signedBase}/b/k`, signedBase), servedFrom(base, 'https://storage.example.test.evil/b/k', signedBase),
         servedFrom(base, 'http://storage.example.test/b/k', signedBase), servedFrom(base, 'https://u:p@storage.example.test/b/k', signedBase)])
         .toEqual([true, false, false, false])
@@ -273,7 +278,7 @@ describe('Super Tab attachment downloads', () => {
       expect(alone).toHaveBeenCalledTimes(1)
       // A file the server could not link reads as not available, and is never fetched.
       const none = vi.fn()
-      expect((await attachedFiles({ attachments: [signed({ url: '' })] }, { base, signedBase, fetch: none, now: () => 0 })).text).toContain('no longer available')
+      expect((await attachedFiles({ attachments: [signed({ link: '', url: '' })] }, { base, signedBase, fetch: none, now: () => 0 })).text).toContain('no longer available')
       expect(none).not.toHaveBeenCalled()
     })
 
@@ -300,15 +305,15 @@ describe('Super Tab attachment downloads', () => {
       const fetcher = replying(new Uint8Array(5))
       const [one, two] = await Promise.all([
         attachedFiles({ attachments: [signed()] }, { base, signedBase, fetch: fetcher, now: () => 0, inFlight }),
-        attachedFiles({ attachments: [signed({ url: `${signedBase}/bucket/super-tabs/tab/abc/screen.png?X-Goog-Signature=other` })] },
+        attachedFiles({ attachments: [signed({ link: `${signedBase}/bucket/super-tabs/tab/abc/screen.png?X-Goog-Signature=other` })] },
           { base, signedBase, fetch: fetcher, now: () => 0, inFlight })])
       expect([one.complete, two.complete]).toEqual([true, true])
       expect(fetcher).toHaveBeenCalledTimes(1)
     })
 
     it('reads a file\'s link expiry, and nothing else it does not know', () => {
-      expect(attachmentsOf({ attachments: [{ ...signed(), extra: 'x' }, { ...file(), expiresAt: 'soon' }] }))
-        .toEqual([signed(), file()])
+      expect(attachmentsOf({ attachments: [{ ...signed(), extra: 'x' }, { ...file(), expiresAt: 'soon' }, { ...file(), expiresAt: 5 }, { ...file(), link: 7 }] }))
+        .toEqual([signed(), file(), file(), file()])
     })
   })
 })

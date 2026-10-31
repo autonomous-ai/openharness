@@ -1264,7 +1264,8 @@ describe('Super Tab attachments in delivered input', () => {
   // Chat files open through short-lived signed links (backend superTabs/fileLinks.ts): a retry whose link is over gets a fresh one,
   // read as the agent reads the message now, and nothing once it may no longer read it.
   it('gives the download a fresh link, read as its agent reads the message, and nothing once it may not', async () => {
-    const file = { id: 'a1', name: 'a.log', mime: 'text/plain', size: 1, url: 'https://storage.googleapis.com/b/super-tabs/tab/k/a.log?X-Goog-Signature=old', expiresAt: 1 }
+    const file = { id: 'a1', name: 'a.log', mime: 'text/plain', size: 1, url: 'https://cdn.example.test/super-tabs/tab/k/a.log',
+      link: 'https://storage.googleapis.com/b/super-tabs/tab/k/a.log?X-Goog-Signature=old', expiresAt: 1 }
     const t = setup({ text: 'Logs.', attachments: [file] })
     const answer = vi.mocked(t.call).getMockImplementation()!
     const asked: string[] = []
@@ -1273,7 +1274,7 @@ describe('Super Tab attachments in delivered input', () => {
       if (!path.includes('/attachments/')) return answer(method, path, body)
       asked.push(`${method} ${path}`)
       return gone ? { status: 404, body: { success: false, error: { code: 'FILE_UNAVAILABLE', message: 'This file is no longer available.' } } }
-        : { status: 200, body: { success: true, data: { attachment: { ...file, url: 'https://storage.googleapis.com/b/super-tabs/tab/k/a.log?X-Goog-Signature=new', expiresAt: 2 } } } }
+        : { status: 200, body: { success: true, data: { attachment: { ...file, link: 'https://storage.googleapis.com/b/super-tabs/tab/k/a.log?X-Goog-Signature=new', expiresAt: 2 } } } }
     })
     const seen: Array<{ fresh?: unknown; refused?: unknown; outside?: unknown }> = []
     const attachedFiles = vi.fn(async (_message: Record<string, unknown>, options: Parameters<typeof attachedFilesType>[1] = {}) => {
@@ -1288,7 +1289,7 @@ describe('Super Tab attachments in delivered input', () => {
     await host.tick()
     const path = 'GET /api/super-tabs/tab/conversations/lead/messages/message/attachments/a1?asAgentId=agent'
     expect(asked).toEqual([path, path])
-    expect(seen[0]!.fresh).toEqual({ ...file, url: 'https://storage.googleapis.com/b/super-tabs/tab/k/a.log?X-Goog-Signature=new', expiresAt: 2 })
+    expect(seen[0]!.fresh).toEqual({ ...file, link: 'https://storage.googleapis.com/b/super-tabs/tab/k/a.log?X-Goog-Signature=new', expiresAt: 2 })
     expect(seen[0]!.refused).toMatchObject({ status: 404 })
     expect(seen[0]!.outside).toMatchObject({ status: 404 })
     // The link never reaches the prompt.
