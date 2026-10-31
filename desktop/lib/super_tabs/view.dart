@@ -27,6 +27,7 @@ import 'roster.dart';
 import 'recording_notice.dart';
 import 'profile_actions.dart';
 import 'live_card.dart';
+import 'personal_projects.dart';
 import 'pull_request_facts.dart';
 import 'pull_requests.dart';
 import 'composer_files.dart';
@@ -2000,10 +2001,19 @@ class _SuperTabViewState extends State<SuperTabView>
   bool get _menuNamesViews =>
       _phone && !_devicesVisible && !_notificationsVisible;
 
+  /// How many terminals [group]'s [term] opens: its agents', and in the
+  /// person's own Personal Swarm their panes of its project.
+  int _terminalCount(SuperTabConversation group) =>
+      group.agentIds.length +
+      switch (widget.app) {
+        final app? => PersonalProjects.of(app).panesFor(c, group.id).length,
+        null => 0,
+      };
+
   /// Opens the group's terminals beside the chat; null when it has none this
   /// reader may open (a read-only viewer's terminal reads are refused).
   VoidCallback? _openTerminals(SuperTabConversation group) =>
-      group.agentIds.isNotEmpty && c.canWrite
+      _terminalCount(group) > 0 && c.canWrite
       ? () {
           setState(() => _showPullRequests = false);
           widget.onOpenGroupTerminals?.call();
@@ -2150,7 +2160,7 @@ class _SuperTabViewState extends State<SuperTabView>
                   key: const ValueKey('super-terminals'),
                   icon: AppIcons.terminal,
                   size: AppIcons.inlineSize,
-                  tooltip: 'Group terminals (${group.agentIds.length})',
+                  tooltip: 'Group terminals (${_terminalCount(group)})',
                   selected: _terminalsVisible,
                   color: _terminalsVisible
                       ? DesktopChrome.foreground
@@ -2218,7 +2228,7 @@ class _SuperTabViewState extends State<SuperTabView>
       menuChildren: [
         if (views) ...[
           item(
-            'Group terminals (${group.agentIds.length})',
+            'Group terminals (${_terminalCount(group)})',
             _openTerminals(group),
           ),
           item('Pull requests', _openPullRequests),

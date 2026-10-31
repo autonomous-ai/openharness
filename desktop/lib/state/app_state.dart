@@ -18774,6 +18774,52 @@ class AppNotifier extends ChangeNotifier {
   }
 
   /// Keep a group member visible while its terminal is unavailable.
+  /// Takes pane [paneId] out of Swarm tab [swarmId] only: one of the person's
+  /// own panes a Personal project showed behind its [term]
+  /// (super_tabs/personal_projects.dart). The tab it lives in keeps it and its
+  /// session, and nothing is remembered as closed.
+  Future<void> releaseSuperTabView(String swarmId, int paneId) async {
+    final tab = swarms
+        .where((s) => s.id == swarmId && s.isSuperTab)
+        .firstOrNull;
+    final pane = tab?.panes.where((p) => p.id == paneId).firstOrNull;
+    if (tab == null || pane == null || _disposed) return;
+    final wasFocused = identical(activeSwarm, tab) && focusedPaneId == paneId;
+    tab.remove(pane);
+    _settlePins(tab);
+    _persistLayout();
+    selectedMachineId = focusedPane?.machineId;
+    if (wasFocused) _announceAppFocus();
+    notifyListeners();
+    if (!allPanes.contains(pane)) await _detachSession(pane, sendClose: true);
+  }
+
+  /// Swarm tab [swarmId] lays out its panes as [source] does: a Personal
+  /// project's panes that are exactly one tab's keep that tab's split sizes.
+  void copySuperTabLayout(String swarmId, Swarm source) {
+    final tab = swarms
+        .where((s) => s.id == swarmId && s.isSuperTab)
+        .firstOrNull;
+    if (tab == null || _disposed || tab.panes.length != source.panes.length) {
+      return;
+    }
+    final count = '${tab.panes.length}:';
+    tab.presets.remove(tab.panes.length);
+    if (source.presets[source.panes.length] case final preset?) {
+      tab.presets[tab.panes.length] = preset;
+    }
+    tab.paneSizes.removeWhere((key, _) => key.startsWith(count));
+    for (final MapEntry(:key, :value) in source.paneSizes.entries) {
+      if (key.startsWith(count)) tab.paneSizes[key] = value;
+    }
+    final arranged = source.arrangedKey?.startsWith(count) == true;
+    tab.arranged = arranged ? source.arranged : null;
+    tab.arrangedKey = arranged ? source.arrangedKey : null;
+    tab.gridColumns = source.gridColumns;
+    _persistLayout();
+    notifyListeners();
+  }
+
   void reserveSuperTabPane(String swarmId, String machineId, String harnessId) {
     final tab = swarms
         .where((s) => s.id == swarmId && s.superTabId != null)
