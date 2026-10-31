@@ -28,7 +28,7 @@ class SuperTabComposerToggle extends StatelessWidget {
       child: DesktopPill(
         label: label,
         compact: true,
-        dense: true,
+        choice: true,
         textSize: 12,
         selected: on,
         foregroundColor: on ? DesktopChrome.accent : null,

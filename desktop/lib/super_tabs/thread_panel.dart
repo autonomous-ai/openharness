@@ -412,16 +412,24 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   _composerBox(),
-                  if (_startsSession)
+                  // Its place is kept while New session is offered, so the
+                  // box never moves as the choice is toggled.
+                  if (_offersSession)
                     Padding(
                       padding: const EdgeInsets.only(
                         top: grid.AppDesktop.controlGap,
                       ),
-                      child: Text(
-                        'Your reply starts a new Buddy session',
-                        key: const ValueKey('super-thread-session-note'),
-                        style: DesktopChrome.metadata(
-                          color: DesktopChrome.muted,
+                      child: Visibility(
+                        visible: _startsSession,
+                        maintainSize: true,
+                        maintainAnimation: true,
+                        maintainState: true,
+                        child: Text(
+                          'Your reply starts a new Buddy session',
+                          key: const ValueKey('super-thread-session-note'),
+                          style: DesktopChrome.metadata(
+                            color: DesktopChrome.muted,
+                          ),
                         ),
                       ),
                     ),

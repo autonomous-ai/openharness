@@ -243,7 +243,13 @@ void main() {
       expect(rect.height, lessThanOrEqualTo(row.height));
       expect(surface.contains(rect.center), isTrue);
     }
-    final note = find.byKey(const ValueKey('super-thread-session-note'));
+    // The muted line shows only while the reply starts a session; its place
+    // is kept, so it never pushes the box up under the cursor.
+    final note = find
+        .byKey(const ValueKey('super-thread-session-note'))
+        .hitTestable();
+    final boxAt = find.byKey(const ValueKey('super-thread-composer-surface'));
+    final restingBox = tester.getRect(boxAt);
     expect(note, findsNothing);
 
     await tester.tap(newSession);
@@ -254,6 +260,7 @@ void main() {
       tester.widget<Text>(note).data,
       'Your reply starts a new Buddy session',
     );
+    expect(tester.getRect(boxAt).bottom, restingBox.bottom);
     // Its line sits under the box.
     expect(
       tester.getRect(note).top,
@@ -271,6 +278,7 @@ void main() {
     expect(box(tester, newSession).on, isFalse);
     expect(alsoSend, findsOneWidget);
     expect(note, findsNothing);
+    expect(tester.getRect(boxAt).bottom, restingBox.bottom);
   });
 
   testSessions('a reply takes at most 10 files, and the box says so', (
