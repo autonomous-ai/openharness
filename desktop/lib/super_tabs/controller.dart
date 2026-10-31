@@ -192,6 +192,7 @@ class SuperTabController extends ChangeNotifier {
       );
       devicesSelected = initial['devicesSelected'] == true;
       projectsGroupOpen = initial['projectsGroupOpen'] as bool? ?? true;
+      unreadOnly = initial['unreadOnly'] == true;
       machinesGroupOpen = initial['machinesGroupOpen'] as bool? ?? true;
       buddiesGroupOpen = initial['buddiesGroupOpen'] as bool? ?? true;
       modelsGroupOpen = initial['modelsGroupOpen'] as bool? ?? true;
@@ -2207,6 +2208,7 @@ class SuperTabController extends ChangeNotifier {
     }
     accessRevoked = true;
     devicesSelected = false;
+    _forgetAttention();
     error = message;
     snapshot = null;
     _parts = null;
@@ -2243,6 +2245,7 @@ class SuperTabController extends ChangeNotifier {
     'statusFolded': _statusFolded.toList(),
     'devicesSelected': devicesSelected,
     'projectsGroupOpen': projectsGroupOpen,
+    'unreadOnly': unreadOnly,
     'machinesGroupOpen': machinesGroupOpen,
     'buddiesGroupOpen': buddiesGroupOpen,
     'modelsGroupOpen': modelsGroupOpen,
@@ -2692,7 +2695,10 @@ class SuperTabController extends ChangeNotifier {
   /// lines among them, for the Swarm badge.
   int get buddyUnread => [
     for (final project in snapshot?.projects ?? const <SuperTabProject>[])
-      if (buddyChat(project.id) case final chat?) unreadCount(chat),
+      // A muted chat never counts (Slack).
+      if (buddyChat(project.id) case final chat?
+          when notifyOf(chat.id) != SuperTabNotify.muted)
+        unreadCount(chat),
   ].fold(0, (a, b) => a + b);
 
   /// Reads each Buddy chat whose count is still open ([_countOpen]), page by
@@ -2905,6 +2911,137 @@ class SuperTabController extends ChangeNotifier {
     return true;
   }
 
+  /// The reader's notification setting for [id] (backend chatSettings.ts):
+  /// the one being sent, else the server's, else Mentions only.
+  SuperTabNotify notifyOf(String id) =>
+      _notifySending[id] ??
+      _notifyKept[id]?.$1 ??
+      snapshot?.chatSettings[id] ??
+      SuperTabNotify.mentions;
+
+  /// Settings sent and not yet seen back in a read, newest choice per chat.
+  final _notifySending = <String, SuperTabNotify>{};
+  int _notifyAsked = 0;
+
+  /// Whether [group] shows as unread in the sidebar: unread, and not muted.
+  /// A muted chat stays listed, greyed, and never counts (Slack).
+  bool unreadShown(SuperTabConversation group) =>
+      notifyOf(group.id) != SuperTabNotify.muted && unread(group);
+
+  /// Keeps [level] for [id] on every device of the reader. Shown at once;
+  /// false, and the old setting back, when the server did not keep it. A
+  /// later choice for the same chat wins over an earlier one still on its way.
+  Future<bool> setNotify(String id, SuperTabNotify level) async {
+    if (_disposed || accessRevoked || snapshot?.conversation(id) == null) {
+      return false;
+    }
+    final asked = ++_notifyAsked;
+    final epoch = visibilityEpoch;
+    _notifySending[id] = level;
+    _changed();
+    var kept = false;
+    try {
+      final answer = await request(
+        'POST',
+        '$_path/conversations/${Uri.encodeComponent(id)}/notifications',
+        body: {'notify': level.name},
+      );
+      return kept = SuperTabNotify.parse(answer['notify'] as String?) == level;
+    } catch (_) {
+      return false;
+    } finally {
+      // Only the newest choice for this chat settles it; a read since
+      // carries the server's, which [notifyOf] reads once this is gone.
+      if (!_disposed && asked == _notifyAsked) {
+        _notifySending.remove(id);
+        if (kept && !accessRevoked && visibilityEpoch == epoch) {
+          _notifyKept[id] = (level, _readSerial);
+        }
+        _changed();
+      }
+    }
+  }
+
+  /// Settings the server answered for, until a read carries them: without
+  /// it a chat would flick back to the last read's setting meanwhile.
+  /// With the number of the newest read started when the answer came: a
+  /// read started after it carries the setting, and replaces it.
+  final _notifyKept = <String, (SuperTabNotify, int)>{};
+
+  /// Reads started, in order ([_read]).
+  int _readSerial = 0;
+
+  /// The one Mark all read that waits for its Undo, if any.
+  SuperTabMarkAll? _markAll;
+
+  /// How long Mark all read waits before the marks go to the server: read
+  /// marks never move back there, so Undo works by not sending them yet.
+  static const markAllHold = Duration(seconds: 6);
+
+  /// Marks every chat of this Swarm the sidebar shows unread as read (Slack's
+  /// Shift+Esc): at once on this device, on the server once [markAllHold]
+  /// passes without [SuperTabMarkAll.undo]. Null when nothing is unread. A
+  /// second one sends the first's marks before it starts.
+  SuperTabMarkAll? markAllRead() {
+    final snapshot = this.snapshot;
+    if (_disposed || accessRevoked || snapshot == null) return null;
+    _markAll?._commit();
+    final before = <String, int?>{}, through = <String, int>{};
+    for (final group in snapshot.conversations) {
+      if (group.dormant || !unreadShown(group)) continue;
+      final top = max(
+        group.lastMainSequence ?? group.lastMessageSequence,
+        _loadedMessageSequence(group.id),
+      );
+      before[group.id] = _readAt[group.id];
+      through[group.id] = top;
+      _readAt[group.id] = max(_readAt[group.id] ?? 0, top);
+    }
+    if (through.isEmpty) return null;
+    final epoch = visibilityEpoch;
+    late final SuperTabMarkAll held;
+    held = _markAll = SuperTabMarkAll._(
+      count: through.length,
+      commit: () {
+        if (_markAll == held) _markAll = null;
+        if (_disposed || accessRevoked || visibilityEpoch != epoch) return;
+        for (final MapEntry(key: id, value: top) in through.entries) {
+          if (snapshot.conversation(id) == null) continue;
+          _serverMarks.mark(id, top, kept: this.snapshot?.readMarks[id] ?? 0);
+        }
+      },
+      undo: () {
+        if (_markAll == held) _markAll = null;
+        if (_disposed) return;
+        for (final MapEntry(key: id, value: was) in before.entries) {
+          // Only what this Mark all read moved: a chat read since keeps it.
+          if (_readAt[id] != through[id]) continue;
+          if (was == null) {
+            _readAt.remove(id);
+          } else {
+            _readAt[id] = was;
+          }
+        }
+        _saveSoon();
+        _changed();
+      },
+      hold: markAllHold,
+    );
+    _saveSoon();
+    _changed();
+    return held;
+  }
+
+  /// The sidebar lists only chats with something unread (and the open one):
+  /// Slack's unread filter, kept on this computer.
+  bool unreadOnly = false;
+
+  void toggleUnreadOnly() {
+    unreadOnly = !unreadOnly;
+    _saveSoon();
+    _changed();
+  }
+
   /// A visible transcript passes the boundary it displayed. The loaded messages
   /// are authoritative: snapshots can arrive either before or after their tail.
   void markRead(String id, {int? through}) {
@@ -2933,6 +3070,7 @@ class SuperTabController extends ChangeNotifier {
     // An adapting read that changes nothing redraws nothing: on a phone each
     // redraw of the whole tab is a long frame, every poll.
     final quiet = _policy.adapts && snapshot != null;
+    final serial = ++_readSerial;
     final before = _shown;
     var stateChanged = false;
     loading = snapshot == null;
@@ -3002,6 +3140,7 @@ class SuperTabController extends ChangeNotifier {
           throw const FormatException('A different Swarm was returned.');
         }
         snapshot = next;
+        _notifyKept.removeWhere((_, kept) => kept.$2 < serial);
         final allowed = next.conversations.map((c) => c.id).toSet();
         // What this device keeps of a group goes with the group itself (a
         // tombstone), not when a read leaves it out: a closed group is out of
@@ -3428,6 +3567,7 @@ class SuperTabController extends ChangeNotifier {
         const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) {
       accessRevoked = true;
       devicesSelected = false;
+      _forgetAttention();
       snapshot = null;
       _parts = null;
       _messages.clear();
@@ -4288,8 +4428,20 @@ class SuperTabController extends ChangeNotifier {
   }
 
   Future<void> flush() async {
+    // Closing or changing account is no Undo: held marks go now.
+    _markAll?._commit();
     _draftSave?.cancel();
     await _persist();
+  }
+
+  /// Access went: a held Mark all read sends nothing, and settings on their
+  /// way or answered belong to the access that is gone.
+  void _forgetAttention() {
+    _markAll?._cancel();
+    _markAll = null;
+    _notifySending.clear();
+    _notifyKept.clear();
+    _notifyAsked++;
   }
 
   /// Runs [then] when this controller is disposed: a helper that keeps a
@@ -4299,6 +4451,8 @@ class SuperTabController extends ChangeNotifier {
 
   @override
   void dispose() {
+    // Closing the Swarm is no Undo: the held marks go before anything stops.
+    _markAll?._commit();
     _disposed = true;
     for (final then in _onDispose) {
       then();
@@ -4324,5 +4478,47 @@ class SuperTabController extends ChangeNotifier {
     }
     // The owner awaits flush when changing account or closing the tab.
     super.dispose();
+  }
+}
+
+/// One Mark all read waiting for its Undo ([SuperTabController.markAllRead]).
+class SuperTabMarkAll {
+  SuperTabMarkAll._({
+    required this.count,
+    required void Function() commit,
+    required void Function() undo,
+    required Duration hold,
+  }) : _onCommit = commit,
+       _onUndo = undo {
+    _timer = Timer(hold, _commit);
+  }
+
+  /// How many chats it marked read.
+  final int count;
+  final void Function() _onCommit, _onUndo;
+  late final Timer _timer;
+  bool _done = false;
+
+  /// Whether its marks went to the server, or it was undone or dropped.
+  bool get done => _done;
+
+  /// Puts every chat it marked back as it was, if the marks are not sent yet.
+  void undo() {
+    if (_done) return;
+    _done = true;
+    _timer.cancel();
+    _onUndo();
+  }
+
+  void _commit() {
+    if (_done) return;
+    _done = true;
+    _timer.cancel();
+    _onCommit();
+  }
+
+  void _cancel() {
+    _done = true;
+    _timer.cancel();
   }
 }

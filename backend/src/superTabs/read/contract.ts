@@ -79,6 +79,9 @@ export interface Derived {
   decisionsWaiting?: number
   /** A person only: a digest of which decisions are open, moving when they change though the count may not. */
   decisionsDigest?: string
+  /** A person only: a digest of which of their Activity rows are unread (activity.ts), moving when one is written, read or
+   *  removed. No count and no chat: the client reads its list again when it moves. Absent from an older backend. */
+  activityDigest?: string
   /** A person only: their own read marks (readMarks.ts), the newest message sequence read by conversation. A first load has
    *  every one of the conversations it holds; a changes read only those moved since its cursor, kept by the client as the
    *  higher of the two. Never another person's. */
@@ -87,6 +90,10 @@ export interface Derived {
    *  Like `readMarks`: a first load has those of the conversations it holds, a changes read those moved since its cursor.
    *  Absent when there are none, and from an older backend. Never another person's. */
   threadMarks?: Record<string, Record<string, number>>
+  /** A person only: their own notification setting by conversation (chatSettings.ts), `all`, `mentions` or `muted`. Like
+   *  `readMarks`: a first load has every one of the conversations it holds (a chat with none is at `mentions`), a changes read
+   *  those moved since its cursor. Absent when there are none, and from an older backend. Never another person's. */
+  chatSettings?: Record<string, 'all' | 'mentions' | 'muted'>
   /** Present, and false, only in a Swarm Harness Team accounts are not tried in yet (machines.ts teamAccountSwarm): this
    *  Mac's daemon and Desktop then offer no team account for it. Absent is every older backend's "yes". */
   teamAccounts?: false

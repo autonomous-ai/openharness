@@ -7,6 +7,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/decisions_view.dart';
 import 'package:harness/super_tabs/decisions.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/view.dart';
@@ -91,8 +92,7 @@ Future<SuperTabController> showView(
   return c;
 }
 
-Finder notificationsEntry() =>
-    find.byKey(const ValueKey('super-notifications'));
+Finder notificationsEntry() => find.byKey(const ValueKey('super-activity'));
 Finder option(String id, int index) =>
     find.byKey(ValueKey('super-decision-$id-$index'));
 Finder letPmDecide(String id) =>
@@ -241,7 +241,13 @@ void main() {
         );
         await tester.tap(notificationsEntry());
         await tester.pumpAndSettle();
-        expect(find.text('Decisions'), findsOneWidget);
+        expect(
+          find.descendant(
+            of: find.byType(SuperTabDecisionList),
+            matching: find.text('Decisions'),
+          ),
+          findsOneWidget,
+        );
         expect(
           find.text('Wren asked 2 questions · web-project · Lead'),
           findsOneWidget,

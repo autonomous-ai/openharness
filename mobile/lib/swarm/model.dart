@@ -528,6 +528,12 @@ class SuperTabSnapshot {
       mentionsDigest = row['mentionsDigest'] as String?,
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
       decisionsDigest = row['decisionsDigest'] as String?,
+      activityDigest = row['activityDigest'] as String?,
+      chatSettings = Map.unmodifiable({
+        if (row['chatSettings'] case final Map settings)
+          for (final MapEntry(:key, :value) in settings.entries)
+            if (key is String && value is String) key: value,
+      }),
       teamAccounts = row['teamAccounts'] != false,
       readMarks = Map.unmodifiable({
         if (row['readMarks'] case final Map marks)
@@ -624,6 +630,14 @@ class SuperTabSnapshot {
   /// Which decisions wait, as a digest that moves when they change though the
   /// count may not; null from a backend before it (superTabs/decisions.ts).
   final String? decisionsDigest;
+
+  /// Which of the reader's Activity rows are unread, as a digest (backend superTabs/activity.ts); null from a backend
+  /// before it. Read as the desktop's model reads it; the phone shows no Activity yet.
+  final String? activityDigest;
+
+  /// The reader's own notification setting by conversation, `all`, `mentions` or `muted` (backend chatSettings.ts).
+  /// Read as the desktop's model reads it; the phone does not apply it yet.
+  final Map<String, String> chatSettings;
 
   /// False only where the server does not try Harness Team accounts yet
   /// (backend read/contract.ts `teamAccounts`), as on the desktop.
