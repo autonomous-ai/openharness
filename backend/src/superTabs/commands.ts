@@ -33,7 +33,7 @@ import { shipNotice, shippedAt } from './ship.js'
 import { assignedNotice, tellBuddies } from './buddyNews.js'
 import { bindPullRequestCards, bindTaskCard, pullRequestCard, recordCardMerged } from './cards.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
-import { BUILT_IN_ROLE_DEFAULTS, agentProjectId, audienceOf, canReadProject, deleteProject, isConfidential, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject } from './projects.js'
+import { BUILT_IN_ROLE_DEFAULTS, agentProjectId, audienceOf, canReadProject, deleteProject, isConfidential, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
 import { BUDDY_SESSION_CAPABILITY, chatOwner, endSessionEntry, entryProject, liveSessions, mainBuddyOf, MAX_BUDDY_SESSIONS, MAX_SESSION_WAITING, requireChatOwner, SESSION_ENDED_KIND, sessionAgentsOf, sessionOf, setSessions, type SessionEndReason } from './buddySessions.js'
 import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, isSwarmBuddy, isSwarmBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, openBuddyChat, openSwarmBuddyChat, PM_LINE_KIND, PROPOSAL_ASK_MS, proposalText, renameBuddy, requireBuddyCommand, swarmBuddyChatId } from './buddies.js'
 import { BUDDY_OWN_MACHINE_REFUSAL, CODEX_BUDDY_REFUSAL } from './buddyContract.js'
@@ -143,7 +143,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   // `through`: each conversation's sequence the Lead read, as its wake-up names them. `throughRevision` is the tab revision a
   // wake-up from before the store by parts named; it is accepted only up to that split (projectUpdates.ts).
   z.object({ type: z.literal('project.report'), projectId: id, through: z.record(id, z.number().int().nonnegative().safe()).optional(),
-    throughRevision: z.number().int().nonnegative().safe().optional(), text: text.nullable() }).strict()
+    throughRevision: z.number().int().nonnegative().safe().optional(),
+    text: z.string().trim().min(1).max(PROJECT_STATUS_MAX, `Keep the status card under ${PROJECT_STATUS_MAX.toLocaleString('en-US')} characters: one short line per active task.`).nullable() }).strict()
     .refine(c => (c.through === undefined) !== (c.throughRevision === undefined), 'Acknowledge with through, the map your wake-up names.'),
   z.object({ type: z.literal('project.repository'), projectId: id, repositoryUrl }).strict(),
   // The project's instructions, saved on the revision the writer read (instructions.ts). `askedBy`: the member whose words it
@@ -1237,12 +1238,16 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     }
     case 'project.report': {
       const project = coordinatorOf(readProject(state, actor, command.projectId), 'The project\'s coordinator writes its progress updates.')
-      const group = conversation(state, project.leadConversationId)
       if (command.throughRevision !== undefined && command.throughRevision > (state.sequenceBase ?? 0)) {
         fail('THROUGH_REQUIRED', 'Acknowledge with through, the map of workgroups your latest wake-up names.', 400)
       }
       summarize(state, project, command.through ?? Object.fromEntries(reportGroups(state, project).map(g => [g.id, command.throughRevision!])))
-      if (command.text) message(group.id, command.text, [], null, { kind: 'project-report' })
+      // The text is the project's status card, replacing the one before; it posts nothing to the chat (Dee, 2026-10-31).
+      // Without text the report only acknowledges, and the card stays.
+      if (command.text) {
+        mutableProjects(state)
+        projectOf(state, project.id).status = { text: command.text, at: new Date(context.now).toISOString(), by: (actor as Extract<Actor, { kind: 'agent' }>).agentId }
+      }
       break
     }
     case 'project.repository': {
@@ -1415,8 +1420,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (!knownTimeZone(command.timeZone)) fail('TIME_ZONE', 'Name a time zone such as Asia/Ho_Chi_Minh.', 400)
       mutableProjects(state)
       const stored = projectOf(state, project.id)
-      if (command.time === null) delete stored.digest
-      else {
+      // Off stays off: the default (digest.ts defaultDigest) is not filled in again.
+      if (command.time === null) {
+        delete stored.digest
+        stored.digestOff = true
+      } else {
+        delete stored.digestOff
         // Set after today's time, the first digest comes tomorrow rather than at once; moved later on a day its digest went
         // out, it stays sent for today.
         const lastOn = digestStartsAfter(command.time, command.timeZone, context.now, stored.digest?.lastOn)

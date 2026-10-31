@@ -114,7 +114,7 @@ describe('the project report a Lead is shown how to send', () => {
     const { help } = await swarm().ask({ action: 'help' }, owner) as { help: { commands: Json[] } }
     const report = help.commands.find(c => c.type === 'project.report')
     expect(report).toEqual({ type: 'project.report', projectId: 'PROJECT', through: { GROUP: 214031 },
-      text: 'What changed, what is blocked, and what comes next. Use null when nothing merits repeating.' })
+      text: 'The whole status card, one short line per active task; it replaces the last one and posts nothing. Use null when the card is still right.' })
     expect(JSON.stringify(help)).not.toContain('throughRevision')
   })
 })

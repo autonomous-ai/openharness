@@ -1308,9 +1308,9 @@ describe('the delivery poll of an agent with nothing waiting', () => {
     // Typed into the Lead's terminal, never answered.
     await f.timed.delivery(host, f.tab, f.lead, first!.id, { type: 'claim', claimId: 'claim' })
     await f.timed.delivery(host, f.tab, f.lead, first!.id, { type: 'ack', claimId: 'claim', receipt: 'typed', uncertain: false })
-    // New reports keep coming.
+    // New work changes keep coming (an ordinary progress note would wake nobody: Dee, 2026-10-31).
     f.clock.now += MINUTE
-    await f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: 'Halfway' }, host, f.worker)
+    await f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'review', result: 'Halfway' }, host, f.worker)
     f.clock.now += 59 * MINUTE
     expect(await requests()).toEqual([])
     f.clock.now += 61 * MINUTE
