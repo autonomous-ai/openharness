@@ -203,15 +203,18 @@ const NAME_CUTS = [24, 12, 6, 3, 1, 0]
  * doubles, past it even with no Buddy names at all (review of #2146). Last, whole Buddy blocks go, from the least urgent Lead
  * up: engines of control characters (six bytes each in JSON) leave a Buddy frame at 8,275 bytes with every name empty, and
  * without its Buddies a frame is today's swarmChat one, about 5.3 KB at most. A frame that fits is sent as it is.
+ * With `tokens`, as for the Harness Pro, whose guard refuses a JSON frame over 512 tokens, a frame fits only if it is also
+ * within that many JSON tokens. Shorter names do not lower that count, so only the Buddy blocks go for it.
  */
-function fitFrame(frame: { name: string; leads: Array<Record<string, unknown>> }): void {
-  const fits = () => Buffer.byteLength(JSON.stringify(frame)) < CABLE_MAX_PAYLOAD
+function fitFrame(frame: { name: string; leads: Array<Record<string, unknown>> }, tokens?: number): void {
+  const small = () => Buffer.byteLength(JSON.stringify(frame)) < CABLE_MAX_PAYLOAD
+  const fits = () => small() && (tokens === undefined || jsonTokens(frame) <= tokens)
   type Named = { [key: string]: unknown }
   const buddies: Array<[Named, string]> = frame.leads.map((l) => l.buddy as Named | undefined).filter((b) => b !== undefined).map((b) => [b, 'name'])
   const names: Array<[Named, string]> = [[frame, 'name'], ...frame.leads.flatMap((l) => ['project', 'owner', 'chatName'].filter((key) => key in l).map((key): [Named, string] => [l, key]))]
   for (const fields of [buddies, [...buddies, ...names]]) {
     for (const bytes of NAME_CUTS) {
-      if (fits()) return
+      if (small()) break
       for (const [holder, key] of fields) holder[key] = truncateUtf8(String(holder[key]), bytes)
     }
   }
@@ -2881,7 +2884,7 @@ export class CableSession {
       const frame = { t: 'supertab', id: card.id, tab, name: card.name, count: card.count, ...(this.swarmBuddy ? { side: card.side ?? 'pm' } : {}),
         leads: card.leads.slice(0, SWARM_LEADS_MAX).map((l) => this.swarmBuddy ? buddyLead(l) : this.swarmChat ? chatLead(l) : { id: l.id, projectId: l.projectId, project: l.project,
           engine: l.engine, owner: l.owner, local: l.local, state: l.state, order: l.order, ...(l.since === undefined ? {} : { since: l.since }) }) }
-      fitFrame(frame)
+      fitFrame(frame, this.seqOn ? SWARM_TOKENS_MAX : undefined)
       const key = JSON.stringify(frame)
       if (this.cardKeys.get(card.id) === key) continue
       this.cardKeys.set(card.id, key)

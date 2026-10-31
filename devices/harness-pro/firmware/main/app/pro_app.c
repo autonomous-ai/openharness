@@ -17,6 +17,7 @@
 #include "app/pro_voice.h"
 #include "audio/audio_capture.h"
 #include "audio/pro_recorder.h"
+#include "cable/cable_features.h"
 #include "cable/cable_link.h"
 #include "cable/pro_cable.h"
 #include "pro_app_api.h"
@@ -164,12 +165,21 @@ static __attribute__((noinline)) void send_supertabs(void)
     const int n = pod_ui_take_supertab(&s_pod, q, POD_SUPERTAB_OUT_MAX);
     if (s_pod.model.revision != rev) change();   // asking for a recap puts it LOADING: a change no feed announced (the flag is the model's revision: not consumed here)
     pro_app_unlock();
-    bool lost[POD_SUPERTAB_OUT_MAX] = {0};
+    bool lost[POD_SUPERTAB_OUT_MAX] = {0}, side_lost[POD_SUPERTAB_OUT_MAX] = {0};
     bool any = false;
-    for (int i = 0; i < n; i++) any |= lost[i] = !pro_cable_supertab_send(q[i].t, q[i].tab, q[i].lead);
+    for (int i = 0; i < n; i++) {
+        if (!strcmp(q[i].t, "supertab.side")) {   // not owed again: the next supertab frame shows the true side
+            if (!pro_cable_supertab_side(q[i].tab, q[i].side)) { lost[i] = false; side_lost[i] = true; any = true; }
+            continue;
+        }
+        any |= lost[i] = !pro_cable_supertab_send(q[i].t, q[i].tab, q[i].lead);
+    }
     if (!any) return;
     pro_app_lock();   // a frame the link dropped is owed again (open / recap.get are retried)
-    for (int i = 0; i < n; i++) if (lost[i]) pod_ui_supertab_unsent(&s_pod, &q[i]);
+    for (int i = 0; i < n; i++) {
+        if (lost[i]) pod_ui_supertab_unsent(&s_pod, &q[i]);
+        if (side_lost[i]) { pod_ui_side_unsent(&s_pod, q[i].tab); change(); }   // the tapped segment would never be answered
+    }
     pro_app_unlock();
 }
 
@@ -307,6 +317,13 @@ static void show_updated(void);
 
 // ---- the link -------------------------------------------------------------------------------------------
 
+void pro_app_features(uint32_t features)
+{
+    pro_app_lock();
+    pod_ui_set_swarm_remote(&s_pod, (features & CABLE_FEATURE_SWARM_REMOTE) != 0);
+    pro_app_unlock();
+}
+
 void pro_app_link(bool up, const char *machine)
 {
     (void)machine;
@@ -388,10 +405,10 @@ void pro_app_supertab(const pod_swarm_t *sw)
     leave();
 }
 
-void pro_app_supertab_recap(const char *tab, const char *lead, const char *text, uint32_t at, bool none)
+void pro_app_supertab_recap(const char *tab, const char *lead, const char *chat_id, const char *text, uint32_t at, bool none)
 {
     pro_app_lock();
-    settle(pod_ui_supertab_recap(&s_pod, tab, lead, text, at, none));
+    settle(pod_ui_supertab_recap(&s_pod, tab, lead, chat_id, text, at, none));
     leave();
 }
 
@@ -399,6 +416,22 @@ void pro_app_supertab_focus(const char *tab, const char *lead)
 {
     pro_app_lock();
     settle(pod_ui_supertab_focus(&s_pod, tab, lead, ms()));
+    leave();
+}
+
+void pro_app_supertab_notice(const char *tab, const char *lead, const char *chat, const char *chat_id, const char *text)
+{
+    pro_app_lock();
+    if (pod_ui_swarm_notice(&s_pod, tab, lead, chat, chat_id, text, !pro_app_asleep(), ms())) alert_locked();
+    settle((pod_out_t){0});
+    leave();
+}
+
+void pro_app_supertab_notice_read(const char *tab, const char *lead, const char *chat_id)
+{
+    pro_app_lock();
+    pod_ui_swarm_notice_read(&s_pod, tab, lead, chat_id);
+    settle((pod_out_t){0});
     leave();
 }
 
@@ -657,7 +690,8 @@ const char *pro_app_voice_block_reason(const char *agent_id)
 {
     const char *why = NULL;
     pro_app_lock();
-    const pod_agent_t *pa = id_ok(agent_id) ? pod_model_find(&s_pod.model, agent_id) : NULL;
+    // Words for a Swarm face go to its chat (the round's rule): the terminal's pane type, machine and question gate nothing there.
+    const pod_agent_t *pa = id_ok(agent_id) && !pod_ui_talking_to_swarm(&s_pod) ? pod_model_find(&s_pod.model, agent_id) : NULL;
     if (pod_ui_updating(&s_pod) || atomic_load(&s_updating)) {   // the flag alone: an offer's gate holds voice off before its screen
         why = "Updating";   // a recording over a firmware write would starve it (owner, 2026-10-11)
     } else if (!s_linked) {
@@ -686,8 +720,10 @@ void pro_app_voice_result(int kind, const char *text)
     if (!pro_voice_open()) return;   // a reply nobody waits for
     pro_voice_close();               // MUST end the state, or the next start is refused (P22)
     pro_app_lock();
-    if (kind != PRO_VOICE_OK) pod_ui_talk_over(&s_pod);   // an error leaves the voice screen; a sent clip stays on it, sending
-    if (kind == PRO_VOICE_OK && text && text[0] && held(text)) settle(pod_ui_sent(&s_pod, text, ms()));   // Working until its turn speaks
+    // An error leaves the voice screen; a sent clip stays on it, sending, until its turn speaks. Words for a Swarm face were posted in
+    // its chat (the round's rule): no turn of that harness follows, so the transcript is the end.
+    if (kind != PRO_VOICE_OK || pod_ui_talking_to_swarm(&s_pod)) pod_ui_talk_over(&s_pod);
+    else if (text && text[0] && held(text)) settle(pod_ui_sent(&s_pod, text, ms()));   // Working until its turn speaks
     if (kind == PRO_VOICE_ERROR)     // owner decision 2: the daemon's message, as Pod's notice
         pod_ui_notice(&s_pod, text && text[0] ? text : "Voice failed", ms());
     change();

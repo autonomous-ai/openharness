@@ -30,6 +30,8 @@ typedef struct {
     uint8_t work_page;     // Home's Working card: the page of three pets shown (0-based; reset when the card is not shown)
     uint8_t swarm_page;    // Home's Swarm card: the page of three Lead pets shown (0-based; reset when the card is not shown or the person pages cards)
     pod_view_t talk_prev;  // AGENT or RECAP: the screen TALK was opened from (talk_over goes back to it)
+    bool talk_buddy;       // the voice view shows the Buddy (pinned at TALK's begin, like the daemon's face): its name and engine below
+    char talk_name[49], talk_engine[16];
     bool sending;          // TALK after the stop tap: the voice screen shows SEND until the agent's real turn begins (or POD_SENT_WAIT_MS)
     bool sent_seen;        // the model has marked sent_agent's optimistic Working (pod_model_sent) since the stop tap
     char seen_agent[ID_MAX];   // the open agent as pod_nav_flip_recaps last saw it (empty: none), and whether it was
@@ -51,7 +53,8 @@ typedef enum {
     POD_A_FOLLOW,       // arg: index into model->agents: open that agent from anywhere (Inbox rows with no unread entry); the glue resolves the id
     POD_A_SCROLL,       // arg: signed delta added to the top frame's scroll (clamped to >= 0): rows, whatever the screen draws as one.
     POD_A_ENTER_TAB,    // arg: tab index, only from the TABS frame: push the TAB frame and the tab's first agent (AGENT_OPEN). An empty or unknown tab: nothing.
-    POD_A_LEAD          // hit only for now (the Swarm card's Lead pets): arg = the Lead's index in its Swarm, hit id = the Swarm's id. The nav ignores it
+    POD_A_LEAD,         // hit only for now (the Swarm card's Lead pets): arg = the Lead's index in its Swarm, hit id = the Swarm's id. The nav ignores it
+    POD_A_SIDE          // hit only (the Lead view's PM | Buddy pill): arg = POD_SIDE_PM or POD_SIDE_BUDDY, hit id = the Swarm's id. The nav ignores it; the glue sends supertab.side and never talks on it
 } pod_action_t;
 
 typedef enum { POD_FX_NONE, POD_FX_VOICE_BEGIN, POD_FX_VOICE_END, POD_FX_VOICE_ABORT, POD_FX_AGENT_OPEN } pod_effect_t;
