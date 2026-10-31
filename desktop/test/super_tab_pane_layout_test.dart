@@ -255,4 +255,59 @@ void main() {
     await mount(tester, chosen, rightDefault: SuperTabPaneLayout.threadWidth);
     expect(tester.getSize(right).width, 310);
   });
+
+  testWidgets('a thread dragged to its 280px minimum keeps 280 after a '
+      'restart, and the roster keeps its own', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = MemoryStore();
+    const thread = SuperTabPaneLayout.threadWidth;
+    await mount(tester, store, rightDefault: thread);
+    expect(tester.getSize(right).width, 340);
+    await tester.drag(rightHandle, const Offset(1000, 0));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(right).width, closeTo(280, 1));
+    final saved = jsonDecode(store.values[SuperTabPaneLayout.storageKey]!);
+    expect(saved['right'], closeTo(280, 1));
+    expect(saved['rightChosen'], isTrue);
+
+    // A restart: the layout is built afresh from what was saved.
+    await tester.pumpWidget(const SizedBox());
+    await mount(tester, store, rightDefault: thread);
+    expect(tester.getSize(right).width, closeTo(280, 1));
+    await tester.pumpWidget(const SizedBox());
+    await mount(tester, store);
+    expect(tester.getSize(right).width, closeTo(280, 1));
+
+    // Moving the left divider afterwards keeps the choice.
+    await tester.drag(leftHandle, const Offset(40, 0));
+    await tester.pumpAndSettle();
+    final again = jsonDecode(store.values[SuperTabPaneLayout.storageKey]!);
+    expect(again['rightChosen'], isTrue);
+    await tester.pumpWidget(const SizedBox());
+    await mount(tester, store, rightDefault: thread);
+    expect(tester.getSize(right).width, closeTo(280, 1));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a saved width marked as chosen is kept exactly; an old one '
+      'without the mark keeps today\'s reading', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    const thread = SuperTabPaneLayout.threadWidth;
+    for (final (saved, expected) in [
+      ('{"left":400,"right":280,"rightChosen":true}', 280.0),
+      ('{"left":400,"right":310,"rightChosen":true}', 310.0),
+      ('{"left":400,"right":280}', 340.0),
+      ('{"left":400,"right":310}', 310.0),
+      ('{"left":400,"right":280,"rightChosen":"yes"}', 340.0),
+    ]) {
+      final store = MemoryStore()
+        ..values[SuperTabPaneLayout.storageKey] = saved;
+      await tester.pumpWidget(const SizedBox());
+      await mount(tester, store, rightDefault: thread);
+      expect(tester.getSize(right).width, expected, reason: saved);
+      expect(tester.getSize(left).width, 400, reason: saved);
+    }
+  });
 }

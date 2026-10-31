@@ -88,11 +88,13 @@ class _SuperTabPaneLayoutState extends State<SuperTabPaneLayout> {
           : fallback;
       setState(() {
         _left = width('left', _left);
-        // Builds before 10-31 saved the right pane's default with any
-        // divider move: 280 is that default (and the minimum), so it reads as
-        // no choice and a thread still opens at its own width.
+        // A width the person chose is saved with that mark and kept
+        // exactly, 280 included. Builds before the mark saved the right
+        // pane's default (280, also the minimum) with any divider move: an
+        // unmarked 280 reads as no choice, so a thread opens at its own width.
         final right = width('right', -1);
-        if (right > 0 && right != SuperTabPaneLayout.rightWidth) {
+        final chosen = value is Map && value['rightChosen'] == true;
+        if (right > 0 && (chosen || right != SuperTabPaneLayout.rightWidth)) {
           _right = right;
         }
       });
@@ -104,7 +106,11 @@ class _SuperTabPaneLayoutState extends State<SuperTabPaneLayout> {
   void _save() {
     final store = widget.storage;
     if (store == null) return;
-    final value = jsonEncode({'left': _left, 'right': ?_right});
+    final right = _right;
+    final value = jsonEncode({
+      'left': _left,
+      if (right != null) ...{'right': right, 'rightChosen': true},
+    });
     _writing = _writing
         .then((_) => store.write(SuperTabPaneLayout.storageKey, value))
         .catchError((Object _) {});
