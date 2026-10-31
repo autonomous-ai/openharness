@@ -9,7 +9,7 @@ import type { Prisma } from '@prisma/client'
 import { z } from 'zod'
 import { agentDisplayName } from './agentNames.js'
 import { AGENT_ONLY, fail, isLeads, person, stableId, type Actor, type Author, type Conversation, type SuperTabState } from './model.js'
-import { agentProjectId, canReadGroup, groupProject, isClosedPmChat, ledProject, projectAgent, projectOf, readsRecordsIn } from './projects.js'
+import { agentProjectId, canReadGroup, groupProject, isClosedPmChat, ledProject, projectAgent, projectOf, projectsOf, readsRecordsIn } from './projects.js'
 import { LEDGER_WEEKS } from './leaderboard/record.js'
 import { coordinatorNameOf } from './instructions.js'
 import { WEEK_MS } from './leaderboard/week.js'
@@ -47,6 +47,8 @@ export interface DecisionTarget {
   /** When it was asked, and the task whose needs_human asked it: the leaderboard credits the answer (leaderboard/record.ts). */
   createdAt: number; assignmentId: string | null
   kind?: string | null
+  /** Closed unanswered once its work was over (withdrawIn). */
+  withdrawn?: boolean
 }
 /** `delegated`: the person asked left it to the PM, who took the recommended option. */
 export interface DecisionAnswer { id: string; choice: number; note: string | null; delegated?: true }
@@ -59,6 +61,8 @@ export function askDecisions(state: SuperTabState, group: Conversation, personId
     fail('INVALID_PERSON', `${asked.email} cannot read this conversation.`, 400)
   }
   for (const q of questions) if (q.recommended >= q.options.length) fail('INVALID_DECISION', 'A question must recommend one of its options.', 400)
+  // It would wait for nobody: none waits where the work is over (workOver).
+  if (workOver(state, group)) fail('WORK_FINISHED', 'This work is finished, so a decision asked here would not wait. Ask in the project chat, or reopen the task first.', 400)
   const projectId = groupProject(state, group).id
   return questions.map((q, index) => ({ ...q, id: stableId(from.operationId, 'decision', String(index)), batchId: from.operationId,
     conversationId: group.id, projectId, personId, askerAgentId: from.askerAgentId, assignmentId: from.assignmentId, ...from.kind ? { kind: from.kind } : {} }))
@@ -72,6 +76,19 @@ export function checkAsker(state: SuperTabState, actor: Actor, group: Conversati
   }
   return actor.agentId
 }
+
+/** Whether the work a decision was asked about is over, so it waits no more (Dee, 10-31: decisions of tasks already done and
+ *  merged still said they waited): a work group whose task is done or cancelled, or which is archived. Never a project chat,
+ *  a Buddy chat or a closed Chat with PM, which hold no task of their own (tidy.ts archivable leaves them out alike). A
+ *  deleted group is none: the reads find no conversation for its decisions. Reads only what an access check of a quiet
+ *  conversation brings (ACCESS_FIELDS). */
+export function workOver(state: SuperTabState, group: Pick<Conversation, 'id' | 'kind' | 'audience' | 'archived' | 'assignment'>): boolean {
+  if (group.kind || group.audience || projectsOf(state).some(p => p.leadConversationId === group.id)) return false
+  return group.archived === true || ['done', 'cancelled'].includes(group.assignment?.status ?? '')
+}
+
+/** The answer a decision whose work is over gets: the code an answered one gets, which a client already takes as gone. */
+const NO_LONGER_WAITS = 'This decision no longer waits: its work is finished.'
 
 /** The conversation a decision was asked in, while the person asked is still in the Swarm and still reads it, or read it
  *  before it closed as a Chat with PM: checked on every answer and on every retry of one (review of #1753). Anyone else is
@@ -106,6 +123,7 @@ export function answerDecision(state: SuperTabState, actor: Actor, decision: Dec
   if ((given.choice === undefined) === !given.delegate) fail('INVALID_DECISION', 'Choose one of its options, or leave it to the PM.', 400)
   const group = answerable(state, actor, decision)
   const asked = decision!
+  if (asked.withdrawn || workOver(state, group)) fail('DECISION_ANSWERED', NO_LONGER_WAITS)
   if (asked.answeredAt !== null) fail('DECISION_ANSWERED', 'This decision is already answered.')
   if (given.delegate && !(asked.recommended >= 0 && asked.recommended < asked.options.length)) {
     fail('INVALID_DECISION', 'This decision has no recommended option to leave to the PM.', 400)
@@ -143,14 +161,29 @@ function delegatedLine(state: SuperTabState, projectId: string, leadId: string, 
 /** Mongo omits unset fields, so `answeredAt: null` alone would miss a row written without it. */
 const waiting: Prisma.SuperTabDecisionWhereInput = { OR: [{ answeredAt: null }, { answeredAt: { isSet: false } }] }
 
-/** Whether a person's decision asked in this conversation still waits: a group that has one is never archived by itself. */
-export async function waitingIn(tx: Tx, tabId: string, conversationId: string): Promise<boolean> {
-  return !!await tx.superTabDecision.findFirst({ where: { tabId, conversationId, ...waiting }, select: { id: true } })
-}
-
 /** How many decisions asked of `personId` in this conversation still wait for them (catchUp.ts). */
 export async function waitingFor(tx: Tx, tabId: string, conversationId: string, personId: string): Promise<number> {
   return tx.superTabDecision.count({ where: { tabId, conversationId, personId, ...waiting } })
+}
+
+/** Closes the decisions still waiting in these conversations, whose work is over (workOver), as withdrawn: answered at
+ *  [now] with no choice, so none waits, none is listed, none can be answered and a new ask of the same question is a new
+ *  decision. Never a routing reflection's, which expires on its own (expireReflections). Run in the transaction that ends
+ *  the work (store.ts), so a concurrent answer conflicts with it and only one of them counts. The number closed. */
+export async function withdrawIn(tx: Tx, tabId: string, conversationIds: readonly string[], now: number): Promise<number> {
+  let closed = 0
+  // One by one through the conversation index: a command ends one conversation's work, rarely a few (hotFilters.test.ts).
+  for (const conversationId of new Set(conversationIds)) {
+    closed += (await tx.superTabDecision.updateMany({ where: { tabId, conversationId, AND: [waiting, notReflection] },
+      data: { answeredAt: new Date(now), withdrawn: true } })).count
+  }
+  return closed
+}
+
+/** The conversations whose work this write ended (workOver in [after], not in [before]): their waiting decisions close. */
+export function workEnded(before: SuperTabState, after: SuperTabState): string[] {
+  const was = new Map(before.conversations.map(c => [c.id, c]))
+  return after.conversations.filter(c => workOver(after, c) && !(was.has(c.id) && workOver(before, was.get(c.id)!))).map(c => c.id)
 }
 
 /** What makes an ask a repeat: the same asker, task, person, conversation, question, options, recommendation and what it
@@ -216,8 +249,9 @@ export async function expireReflections(tx: Tx, tabId: string, projectId: string
 export async function readAskedDecision(tx: Tx, tabId: string, id: string): Promise<DecisionTarget | undefined> {
   const row = await tx.superTabDecision.findFirst({ where: { id, tabId },
     select: { id: true, personId: true, conversationId: true, projectId: true, askerAgentId: true, question: true, options: true, recommended: true,
-      answeredAt: true, createdAt: true, assignmentId: true, kind: true } })
-  return row ? { ...row, answeredAt: row.answeredAt?.getTime() ?? null, createdAt: row.createdAt.getTime(), assignmentId: row.assignmentId ?? null } : undefined
+      answeredAt: true, createdAt: true, assignmentId: true, kind: true, withdrawn: true } })
+  return row ? { ...row, answeredAt: row.answeredAt?.getTime() ?? null, createdAt: row.createdAt.getTime(), assignmentId: row.assignmentId ?? null,
+    withdrawn: row.withdrawn === true } : undefined
 }
 
 /** Conflicts with a concurrent answer of the same decision: only the first one counts. */
@@ -242,8 +276,8 @@ function readerWhere(state: SuperTabState, actor: Actor): Prisma.SuperTabDecisio
   return { OR: [{ askerAgentId: actor.agentId }, ...led ? [{ projectId: led.id }] : []] }
 }
 
-/** What an access check reads of a conversation (projects.ts canReadGroup). */
-const ACCESS_FIELDS = ['id', 'kind', 'projectId', 'audience'] as const
+/** What an access check reads of a conversation (projects.ts canReadGroup), and whether its work is over (workOver). */
+const ACCESS_FIELDS = ['id', 'kind', 'projectId', 'audience', 'archived', 'assignment.status'] as const
 
 /** The conversations [ids] names: those the read loaded, and the rest (quiet, archived, or left out of a light read) read
  *  here, so a decision in one still counts. With [only], the rest bring only those fields. A deleted conversation is none. */
@@ -269,6 +303,8 @@ const readableIn = (state: SuperTabState, actor: Actor, groups: Map<string, Conv
 
 /** Answered by the person themself: as `waiting`, a row written before `delegated` has no such field. */
 const yours: Prisma.SuperTabDecisionWhereInput = { OR: [{ delegated: { isSet: false } }, { delegated: null }, { delegated: false }] }
+/** Answered by someone: not closed unanswered (withdrawIn), which every row from before `withdrawn` was not. */
+const notWithdrawn: Prisma.SuperTabDecisionWhereInput = { OR: [{ withdrawn: { isSet: false } }, { withdrawn: null }, { withdrawn: false }] }
 
 /** Which decisions a list holds: those still open, or those answered. `settled` is every answered one, those left to the
  *  PM included; `answered` is what an older Desktop reads and labels each "You chose", so for a person it leaves out those
@@ -279,14 +315,15 @@ const LIST_PAGE = 200
 /** ponytail: the newest LIST_PAGE per list; `more` says when there are others. Page it if a reader ever has more. */
 async function readable(tx: Tx, tabId: string, state: SuperTabState, actor: Actor, list: DecisionList) {
   const which = list === 'open' ? [waiting] : list === 'answered' && actor.kind === 'person'
-    ? [{ answeredAt: { not: null } }, yours] : [{ answeredAt: { not: null } }]
+    ? [{ answeredAt: { not: null } }, yours, notWithdrawn] : [{ answeredAt: { not: null } }, notWithdrawn]
   const read = await tx.superTabDecision.findMany({ where: { tabId, AND: [readerWhere(state, actor), ...which] },
     orderBy: { createdAt: 'desc' }, take: LIST_PAGE + 1 })
   const rows = read.slice(0, LIST_PAGE)
   const groups = await conversationsOf(tx, tabId, state, rows.map(r => r.conversationId))
   return { more: read.length > LIST_PAGE, rows: rows.flatMap(row => {
     const group = readableIn(state, actor, groups, row.conversationId)
-    return group ? [{ row, group }] : []
+    // An open one whose work is over waits no more, closed or not yet (one from before withdrawIn).
+    return group && !(list === 'open' && workOver(state, group)) ? [{ row, group }] : []
   }) }
 }
 
@@ -314,7 +351,10 @@ export async function decisionsWaiting(tx: Tx, tabId: string, state: SuperTabSta
   actor: Extract<Actor, { kind: 'person' }>): Promise<{ count: number; digest: string }> {
   const rows = await tx.superTabDecision.findMany({ where: { tabId, AND: [readerWhere(state, actor), waiting] }, select: { id: true, conversationId: true } })
   const groups = await conversationsOf(tx, tabId, state, rows.map(r => r.conversationId), ACCESS_FIELDS)
-  const ids = rows.filter(row => readableIn(state, actor, groups, row.conversationId)).map(row => row.id).sort()
+  const ids = rows.filter(row => {
+    const group = readableIn(state, actor, groups, row.conversationId)
+    return group && !workOver(state, group)
+  }).map(row => row.id).sort()
   return { count: ids.length, digest: createHash('sha256').update(ids.join('\n')).digest('base64url').slice(0, 16) }
 }
 

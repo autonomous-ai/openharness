@@ -240,13 +240,16 @@ describe('a finished group', () => {
     }
   })
 
-  it('stays open while a person\'s decision asked there waits', async () => {
+  // Dee, 10-31: a decision asked in finished work waits no more, so it no longer holds the group open.
+  it('archives finished work with a person\'s decision still open there, closing it as withdrawn', async () => {
     const f = await swarm()
-    await db.superTabDecision.create({ data: { id: randomUUID(), tabId: f.tab, batchId: 'b', conversationId: f.group, projectId: 'p', personId: owner.sub,
+    const id = randomUUID()
+    await db.superTabDecision.create({ data: { id, tabId: f.tab, batchId: 'b', conversationId: f.group, projectId: 'p', personId: owner.sub,
       askerAgentId: f.lead, assignmentId: null, question: 'Ship it?', options: ['Yes', 'No'], recommended: 0, unblocks: 'Release', createdAt: new Date(f.clock.now) } })
     f.clock.now += 40 * MINUTE
     await archiveFinishedGroups(db, f.timed, github({}), f.clock.now)
-    expect(await archived(f)).toBe(false)
+    expect(await archived(f)).toBe(true)
+    expect(await db.superTabDecision.findUnique({ where: { id } })).toMatchObject({ withdrawn: true, choice: null, answeredAt: new Date(f.clock.now) })
   })
 
   it('stays open once the owner turned tidying off, and never archives the Lead conversation', async () => {
@@ -342,7 +345,8 @@ describe('a review nobody reviews', () => {
   it('stays open when a Ready for review with a new pull request commits during its close, so the work keeps a review', async () => {
     const f = await waiting()
     let during: (() => Promise<unknown>) | null = () => f.ready('Ready: yes, revision fff. https://github.com/example/parser/pull/11')
-    const hooked = db.$extends({ query: { superTabDecision: { async findFirst({ args, query }) {
+    // Paused at the close's first write, which closes the decisions still waiting there.
+    const hooked = db.$extends({ query: { superTabDecision: { async updateMany({ args, query }) {
       if (during && (args.where as { conversationId?: string } | undefined)?.conversationId === f.review.key) { const run = during; during = null; await run() }
       return query(args)
     } } } })

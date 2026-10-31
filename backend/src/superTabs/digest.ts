@@ -2,6 +2,7 @@ import { activeWork, author, stableId, type Agent, type Conversation, type Messa
 import { agentDisplayName } from './agentNames.js'
 import { canReadGroup, ledProject, type SwarmProject } from './projects.js'
 import { reportGroups } from './projectUpdates.js'
+import { workOver } from './decisions.js'
 import { DEFAULT_TIME_ZONE } from './costs/reflection.js'
 
 // Night shift (v2 B): people wake to one message per project saying what the Swarm did overnight. At the project's local
@@ -96,7 +97,8 @@ export function decisionLines(state: SuperTabState, project: SwarmProject, waiti
   const counts = new Map<string, Map<string, number>>()
   for (const { conversationId, personId, count } of waiting) {
     const group = groups.find(g => g.id === conversationId), asked = state.people.find(p => p.id === personId)
-    if (!group || !asked || !canReadGroup(state, { kind: 'person', userId: asked.id, email: asked.email }, group)) continue
+    // None waits where the work is over (decisions.ts workOver).
+    if (!group || !asked || workOver(state, group) || !canReadGroup(state, { kind: 'person', userId: asked.id, email: asked.email }, group)) continue
     const people = counts.get(group.id) ?? new Map<string, number>()
     counts.set(group.id, people.set(asked.email, (people.get(asked.email) ?? 0) + count))
   }
