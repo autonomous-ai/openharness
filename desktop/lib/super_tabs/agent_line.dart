@@ -75,8 +75,14 @@ SuperTabAgentGlance superTabAgentGlance(
     _
         when work == 'review' ||
             (info.taskGroup != null &&
-                SuperTabAgentWork(info.taskGroup!).handedOver) =>
-      'In review',
+                SuperTabAgentWork(
+                  info.taskGroup!,
+                  readsHandoff: superTabReadsHandoff(
+                    info.controller,
+                    info.taskGroup!,
+                  ),
+                ).handedOver) =>
+      'Waiting on others',
     _ when work == 'reconciling' => 'Checking',
     _ when activity == HarnessActivity.working => 'Working',
     _ when work == 'planned' || work == 'working' => 'Assigned',

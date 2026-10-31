@@ -15,6 +15,7 @@ import { guardedSendJson } from './wsSend.js'
 import { trackSocketLiveness } from './hub.js'
 import { createOrderedInbox } from './orderedInbox.js'
 import { declaredKind, trackSocket } from './wsAttribution.js'
+import { markCpuKind } from './selfProfile.js'
 
 const wss = createWss(WS_LIMITS.web, { echoFirstProtocol: true })
 const RECHECK_MS = 60_000
@@ -122,5 +123,5 @@ export async function attachObserver(ws: WebSocket, user: AuthUser | null,
       await down('observer_frame', frame.payload).catch(() => ws.close(1013, 'Owner unavailable'))
     } else ws.close(1008, 'Observer connections are view only')
   }, () => ws.close(1013, 'Sharing temporarily unavailable'), () => ws.close(1008, 'Too many observer messages'))
-  ws.on('message', (raw, binary) => inbox.enqueue({ raw, binary }))
+  ws.on('message', (raw, binary) => { markCpuKind('observer-ws'); inbox.enqueue({ raw, binary }) })
 }

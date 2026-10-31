@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { cloneData } from './cloneData.js'
 import { lostReasonWithoutMachine } from './lostReason.js'
 import type { RouteDecisionEffect } from './routeRecord.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
@@ -6,6 +7,7 @@ import { withAvatarView } from './profile.js'
 import { swarmUsernames } from './usernames.js'
 import { downSince, expireRemovals, startPreparing } from './machines.js'
 import { publicReason, readsRawReason } from './startFailure.js'
+import { FIRST_INSTRUCTIONS } from './instructions.js'
 import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
@@ -40,16 +42,25 @@ export interface Agent {
   name: string
   /** A stable member name; native session and routing names remain in `name`. */
   displayName?: string
-  /** Chosen at start and kept for the session. Absent reads as builder (agentRole); the Lead is derived from leadId. */
+  /** The kind an older client started or added it as, kept for older readers. Absent reads as builder (agentRole); the Lead
+   *  is derived from leadId. It decides nothing (project instructions, phase 4): roleNameOf names an agent without a role
+   *  name by it. */
   role?: AgentRole
-  /** The project's custom role it runs, chosen at start or assignment (projects.ts agentSetRole). */
+  /** The custom role an older client started, added or assigned it in, kept for older readers (projects.ts agentSetRole). */
   roleId?: string | null
-  /** A finished worker stays undecided even when its group receives a new brief. */
+  /** The role it was started in, free text from the project's instructions (project instructions, phase 2). The server checks
+   *  nothing against them. Absent on agents from before: reads name one by what it is (instructions.ts roleNameOf). */
+  roleName?: string
+  /** `awaiting`: its task's work ended (finishWorker), shown and read by no command; `keep` and `stop`: asked for
+   *  (agent.release, tidy.ts). Kept when its group receives a new brief. */
   workDecision?: 'awaiting' | 'keep' | 'stop'
   /** When its Lead last decided keep: a kept worker is idle from then (tidy.ts). */
   keptAt?: number
-  /** Set while its stop is the idle check's (tidy.ts), with the decision it had before: its host withdraws that stop when
-   *  the session's folder has changes by the time it would close it (agent.stopRefused). */
+  /** When its last idle spell began, once its coordinator was told of it (tidy.ts idleNotices): one notice per spell. */
+  idleNoticedAt?: number
+  /** Set while its stop was the server's idle stop, written before project instructions (phase 4: idle agents are a notice),
+   *  with the decision it had before: its host withdraws that stop when the session's folder has changes by the time it would
+   *  close it (agent.stopRefused). */
   idleStop?: { previous: 'awaiting' | 'keep' | null }
   releaseId?: string
   /** Captured from the original Swarm launch, never inferred from a later live session with the same id. */
@@ -102,6 +113,8 @@ export interface AgentStartRequest {
   conversationId: string
   role?: AgentRole
   roleId?: string
+  /** The agent's role name (Agent.roleName), kept on it once it starts. */
+  roleName?: string
   machineId: string
   engine: string
   model?: string
@@ -180,20 +193,37 @@ export interface Assignment {
   progressAt?: number
   /** While it needs a human: the person its agent asked (work.status with ask), whom its wait names (liveness.ts). */
   askedOf?: string
-  /** When a review last found problems in its hand-off: the hand-off no longer pauses its quiet time (liveness.ts
-   *  waitingForReview). Its next status clears it. */
+  /** When someone else's verdict found problems in a working hand-off of the older built-in skills, which then stops waiting
+   *  for its review (liveness.ts waitingForReview). Its next status clears it. */
   reviewFoundAt?: number
+  /** A two-review task's hand-overs and reviewers' verdicts, from the automatic reviews (#2382) before project instructions;
+   *  never written since (phase 4: the server opens and counts no review), kept on older rows. */
+  handoffs?: number
+  verdicts?: ReviewVerdict[]
   /** Why and when it was lost (status `lost`); after a usage limit whose screen gave a reset time, when its own agent may
    *  take it back (work.resume) unless it was handed on first. */
   lost?: { reason: string; at: number; resumeAt?: string }
 }
+/** One reviewer's (actorKey) verdict on a two-review task's independent checks, on an older row (Assignment.verdicts). */
+export interface ReviewVerdict { by: string; passed: boolean; handoff: number; review?: string }
+/** The hand-over an automatic review of a two-review task was opened for, on an older row (Conversation.reviewStamp). */
+export interface ReviewStamp { assignmentId: string; handoff: number }
 export interface WorkTask {
   goal: string
   changes: string
   constraints: string
   owns: string[]
   requires?: TaskRequirement
+  /** What its reviews check first, and how many independent reviews it wants: written into its brief (renderWorkTask), which
+   *  whoever opens its review reads. The server opens and counts no review (project instructions, phase 4). */
+  review?: ReviewPlan
 }
+/** A task's review plan (#2382; nightly reflection 10-30: the Lead hand-sent a focus to 20+ reviews that day). `focus` and
+ *  `reviews: 2` are said in its brief, so the agent opening its review passes them on (project instructions, phase 4). */
+export interface ReviewPlan { focus?: string; reviews?: 1 | 2 }
+
+/** How many independent reviews [task] wants: 2 only when its review plan says so. */
+export const reviewsWanted = (task: WorkTask | undefined): number => task?.review?.reviews === 2 ? 2 : 1
 /** Where a task can be done at all (2026-10-27: a task to check a device plugged into one person's Mac was routed to another
  *  machine by policy order). `machines`: it runs only there, or on a Mac's Harness Team account of one of them. `devices`:
  *  full paths every start for it asks its machine to check (cli superTabs/capacity.ts). Never in the rendered brief, since
@@ -213,8 +243,11 @@ export function withSeenRequirement<T extends Pick<Conversation, 'task'>>(group:
     unseenMachines: (requires.unseenMachines ?? 0) + requires.machines.length - machines.length } } }
 }
 
+export const TWO_REVIEWS = 'Two independent reviews, each by a different Reviewer.'
 export function renderWorkTask(task: WorkTask): string {
+  const review = [...task.review?.focus ? [task.review.focus] : [], ...reviewsWanted(task) === 2 ? [TWO_REVIEWS] : []]
   return `Goal:\n${task.goal}\n\nChanges:\n${task.changes}\n\nConstraints:\n${task.constraints}\n\nOwns:\n${task.owns.map(area => `- ${area}`).join('\n')}`
+    + (review.length ? `\n\nReview:\n${review.join('\n')}` : '')
 }
 
 export interface Conversation {
@@ -232,6 +265,8 @@ export interface Conversation {
   task?: WorkTask
   /** A review group names the group whose work it reviews; only a Reviewer is assigned it, and a Reviewer nothing else. */
   reviewOf?: string
+  /** An automatic review's hand-over of a two-review task (#2382); never written since project instructions, phase 4. */
+  reviewStamp?: ReviewStamp
   checks: Check[]
   assignment: Assignment | null
   lastMessageSequence: number
@@ -270,14 +305,19 @@ export interface Conversation {
   ledger?: import('./leaderboard/record.js').GroupLedger
   /** Whether its task is moving, waiting on purpose or stuck, as the time checks last found it (liveness.ts recordTaskStates). */
   liveness?: TaskLiveness
-  /** Its last step up from a cheaper model (stepUp.ts); absent until one. */
-  stepUp?: import('./stepUp.js').StepUp
-  /** The Lead's last action on its task: an assignment, route, start or post here (commands.ts). */
+  /** Its last step up from a cheaper model, on a task from before project instructions; never written since (phase 4: a
+   *  failed first review or start is a notice to the coordinator). The leaderboard still reads it on such a task. */
+  stepUp?: StepUp
+  /** The last route, start or assignment on its task by an agent of its project, or its coordinator's post there (commands.ts). */
   leadAction?: { kind: 'assign' | 'route' | 'start' | 'post'; at: number }
 }
+/** A step up: the attempt it opened (2 or 3), the least quality from then on, why, when, and what the failed attempt left for
+ *  the next one's brief; the failed start that caused it, if one did. */
+export interface StepUp { attempt: number; floor: number; reason: string; at: number; carry: string; startId?: string }
 /** Absent while its task is working (its agent reported in the last 30 minutes; its last progress is its assignment's
  *  `progressAt`) or there is none. `waiting`: on a person (`personId`), a review, its stated
- *  blocker, the new revision of the build it reviews, or its agent's start. `quiet`: its agent has reported nothing for 30 minutes. `orphaned`: nobody holds it — its
+ *  blocker, the new revision of the build it reviews, or its agent's start. `quiet`: its agent has reported nothing for 30 minutes
+ *  (`silent`), or it has been in review for 30 minutes with no linked task open (`review`). `orphaned`: nobody holds it — its
  *  agent was removed or lost it, or its start failed or never launched. `since`: when that began, as first recorded. */
 export interface TaskLiveness {
   state: 'waiting' | 'quiet' | 'orphaned'
@@ -424,16 +464,27 @@ export const NOTICE_READERS = {
   // The Lead's wakes and requests, and the worker's "moved" line (liveness.ts, tidy.ts, projectUpdates.ts, digest.ts); two
   // projects changing the same code, to both their Leads in the Leads chat (commands.ts).
   'work-stalled': 'recipients', 'work-lost': 'recipients', 'work-resumed': 'recipients', 'idle-stop': 'recipients',
+  // An agent with no open task for 15 minutes, and a grid attempt's failed first review, told to the coordinator (tidy.ts
+  // idleNotices, commands.ts work.check; project instructions, phase 4). `idle-stop` rows are from before.
+  idle: 'recipients', 'review-failed': 'recipients',
   'update-request': 'recipients', 'digest-request': 'recipients', overlap: 'recipients',
+  // Two agents that may be talking in a loop, told to the coordinator (commands.ts pairLoop, project instructions phase 1).
+  'pair-loop': 'recipients',
   // Each its own case in commands.ts, decided by the row (forRecipients): statuses, briefs, merges, starts, removals.
   system: 'people',
-  rule: 'people', 'project-report': 'people', route: 'people', 'route-override': 'people', 'buddy-proposal': 'people', 'buddy-session-ended': 'people',
-  'decision-delegated': 'people', 'machine-removed': 'people', 'machine-left': 'people', ship: 'people', 'auto-review': 'people',
+  // A save of the project's instructions, with its summary: the team sees it without opening the document (instructions.ts).
+  instructions: 'people',
+  // A member removed one of the coordinator's notes: told to the coordinator alone (instructions.ts).
+  'note-removed': 'recipients',
+  'project-report': 'people', route: 'people', 'route-override': 'people', 'buddy-proposal': 'people', 'buddy-session-ended': 'people',
+  'decision-delegated': 'people', 'machine-removed': 'people', 'machine-left': 'people', ship: 'people',
   'auto-archive': 'people', native: 'people',
   // The nightly routing reflection, for the project's people; never a Buddy's (buddies.ts routingRow).
   'routing-reflection': 'people',
-  // No new Reviewer can start, or soon none will, tagging who can fix it (reviewCapacity.ts).
-  'review-capacity': 'people',
+  // No new agent can start, or soon none will, told to the coordinator; with none in the chat, people read it, tagging who can
+  // fix it (reviewCapacity.ts; final review). Older rows, written for no one, still read as people's. Older rows of kinds no
+  // longer written (the automatic review's `auto-review`, a routing rule's `rule`) read as people's, as any kind not listed does.
+  'review-capacity': 'recipients',
   // #2177's rulings: a failed start and a terminal's alert or typed input stay the people's to see.
   'start-timeout': 'people', 'terminal-alert': 'people', 'terminal-input': 'people',
 } as const satisfies Record<string, 'people' | 'recipients' | 'agent'>
@@ -494,56 +545,44 @@ export interface CommandEffects {
   decisionAnswer?: import('./decisions.js').DecisionAnswer
   /** Deliveries of messages already stored: a Buddy thread session's first messages, sent while it started (buddySessions.ts). */
   lateDeliveries?: Array<{ messageId: string; conversationId: string; agentId: string; author: { kind: 'person'; id: string; generation: string } }>
+  /** A project's new instructions revision, written outside the tab state by the store (instructions.ts). */
+  instructions?: import('./instructions.js').InstructionsWrite
+  /** A coordinator's note kept or a note removed, written outside the tab state by the store (instructions.ts). */
+  notes?: import('./instructions.js').NotesWrite
 }
+/** `details` go to the caller with the code: what it needs to act on the refusal (a stale save's current text). */
 export class SuperTabError extends Error {
   /** `unreachable`: the caller cannot reach this Swarm at all (not, or no longer, a member). The person routes answer it as
    *  they answer a Swarm that does not exist (routes/superTabs.ts NOT_AVAILABLE), so the answer never says which. */
-  constructor(readonly code: string, message: string, readonly status = 409, readonly unreachable = false) {
+  constructor(readonly code: string, message: string, readonly status = 409, readonly unreachable = false, readonly details?: Record<string, unknown>) {
     super(message)
     this.name = 'SuperTabError'
   }
 }
-export function fail(code: string, message: string, status = 409): never { throw new SuperTabError(code, message, status) }
+export function fail(code: string, message: string, status = 409, details?: Record<string, unknown>): never { throw new SuperTabError(code, message, status, false, details) }
 export const stableId = (...parts: string[]): string => createHash('sha256').update(JSON.stringify(parts)).digest('hex').slice(0, 24)
 export const actorKey = (actor: Actor): string => actor.kind === 'person' ? `person:${actor.userId}` : `agent:${actor.agentId}`
 export const activeWork = (group: Conversation): boolean => !!group.assignment &&
   !['done', 'stopped', 'cancelled', 'lost'].includes(group.assignment.status)
 
-/** Old states derive pending decisions from their closed assignments; new states persist them on the worker. */
+/** Old states derive the finished-work mark from their closed assignments; new states persist it on the worker. */
 export function awaitingWorkers(state: SuperTabState, projectId: string): Agent[] {
   return state.agents.filter(a => {
-    // A Reviewer never waits for a decision: a finished one is kept until the Lead stops it (finishWorker), and one an older
-    // release left waiting must not hold up routing either.
-    if (agentRole(a) === 'reviewer' || state.conversations.some(c => c.leadId === a.id)
+    if (state.conversations.some(c => c.leadId === a.id)
       || state.conversations.some(c => activeWork(c) && c.assignment?.agentId === a.id)) return false
-    // A lost task's agent is not waiting for a decision, even once the task is cancelled: it may be gone, and it must not
-    // hold up the next assignment.
+    // A lost task's agent did not finish it, even once the task is cancelled: it may be gone.
     const groups = state.conversations.filter(c => c.assignment?.agentId === a.id && !c.assignment.lost)
     return (a.projectId ?? groups.map(c => groupProject(state, c).id)[0] ?? 'lead') === projectId &&
       (a.workDecision === 'awaiting' || (!a.workDecision && groups.some(c => !activeWork(c))))
   })
 }
-export function requireWorkerDecisions(state: SuperTabState, actor: Actor, group: Conversation, reuseId?: string): void {
-  if (actor.kind !== 'agent') return
-  // A Reviewer that stays in the group being started or assigned is reused for it.
-  const waiting = awaitingWorkers(state, groupProject(state, group).id)
-    .filter(a => a.id !== reuseId && !(agentRole(a) === 'reviewer' && group.agentIds.includes(a.id)))
-  if (waiting.length) fail('WORKER_DECISION_REQUIRED', `Decide what to do with ${waiting.map(a => a.displayName ?? a.name).join(', ')}: reuse, keep or stop. Prefer stop unless more work is coming soon.`)
-}
-/** A group's work ended: its worker awaits the Lead's decision. A finished Reviewer, and each of the group's Reviewers not
- *  reviewing other active work, is kept instead: the Lead never has to decide about one, only stop it when it wants. */
-export function finishWorker(state: SuperTabState, workerId: string, group?: Conversation): void {
-  const ids = [workerId, ...(group?.agentIds ?? []).filter(id => id !== workerId &&
-    state.agents.some(a => a.id === id && agentRole(a) === 'reviewer') && !reviewing(state, id))]
-  for (const target of state.agents.filter(a => ids.includes(a.id))) {
-    if (state.conversations.some(c => c.leadId === target.id) || target.workDecision === 'stop') continue
-    target.workDecision = agentRole(target) === 'reviewer' ? 'keep' : 'awaiting'
-  }
-}
-/** A Reviewer is busy while any group it is in has active work. */
-export function reviewing(state: SuperTabState, agentId: string): boolean {
-  return state.agents.some(a => a.id === agentId && agentRole(a) === 'reviewer') &&
-    state.conversations.some(c => activeWork(c) && c.agentIds.includes(agentId))
+/** A task's work ended: its worker is marked `awaiting`, whatever its kind. People see the mark; no command reads it, so
+ *  nothing waits for a keep or stop (project instructions, phase 4, decision 17). A coordinator, and a worker already
+ *  stopping, keep what they have. */
+export function finishWorker(state: SuperTabState, workerId: string): void {
+  const target = state.agents.find(a => a.id === workerId)
+  if (!target || state.conversations.some(c => c.leadId === target.id) || target.workDecision === 'stop') return
+  target.workDecision = 'awaiting'
 }
 
 export function person(state: SuperTabState, id: string): Person {
@@ -646,7 +685,8 @@ export function createSuperTab(id: string, name: string, owner: { id: string; em
     conversations: [{ id: 'lead', title: 'Lead', leadId: null, agentIds: [], archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0 }],
   }
   // A new Swarm's first project starts in Default; only a project from before skill modes reads as Harness orchestration.
-  state.projects = [{ ...projectsOf(state)[0]!, ...(visibility ? { visibility } : {}), skillMode: 'default' }]
+  // It starts on a copy of the built-in instructions, which the store writes beside it (store.ts create).
+  state.projects = [{ ...projectsOf(state)[0]!, ...(visibility ? { visibility } : {}), skillMode: 'default', ...FIRST_INSTRUCTIONS }]
   // Its models are on from the start (owner, 2026-10-24): the owner's computer makes the Swarm's grid in the background
   // (CLI `superTabs/swarmGrids.ts`) and reports how it went. Fire and forget: a grid that could not be made leaves the
   // Swarm as it is, and the owner's first share or run in Your models sets the models up then.
@@ -658,14 +698,18 @@ export function createSuperTab(id: string, name: string, owner: { id: string; em
 /** Pending invitations are management data, not part of the shared conversation. */
 export function visibleState(state: SuperTabState, actor: Actor, now = Date.now()): SuperTabState {
   author(state, actor)
-  const visible = structuredClone(state)
+  // The copy leaves out what no reader gets and no step below reads: the owner-only sharing, the hosts' slot claims, released
+  // and closing sessions (only that machine's host roster lists them: read/hostRows.ts; a removed private agent's session is
+  // not every member's), and overlap alerts. Nor a dormant conversation: it is read on demand, never in a whole-Swarm read
+  // (spec, Archive); a command may still load one.
+  const { sharing: _sharing, harnessReservations: _reservations, releasedHarnesses: _released, overlapAlerts: _alerts, closingSessions: _closing,
+    ...kept } = state
+  const visible = cloneData({ ...kept, conversations: state.conversations.filter(c => !c.dormant) })
   // A Buddy-only machine is no machine of the Swarm to anyone, its own person included (machines.ts buddyOnly): their Buddy
   // shows as a Buddy, and their machine stays theirs. Machines, status and the leaderboard's lent hours all read this.
   if (visible.machines) visible.machines = visible.machines.filter(m => !m.buddyOnly)
   // Nor its id, which a Buddy's row carries (machineHiddenFrom).
   visible.agents = visible.agents.map(a => machineHiddenFrom(state, actor, a) ? agentWithoutMachine(a) : a)
-  // A dormant conversation is read on demand, never in a whole-Swarm read (spec, Archive); a command may still load one.
-  visible.conversations = visible.conversations.filter(c => !c.dormant)
   syncLeads(visible)
   // People and Leads read the Leads conversation; it is not there for any other agent.
   if (actor.kind === 'agent' && !ledProject(visible, actor.agentId)) {
@@ -682,12 +726,6 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     if (target.limitedUntil && Date.parse(target.limitedUntil) <= now) target.limitedUntil = null
   }
   visible.buddies = true
-  delete visible.sharing
-  delete visible.harnessReservations
-  delete visible.releasedHarnesses
-  delete visible.overlapAlerts
-  // Only that machine's host roster lists them (read/hostRows.ts); a removed private agent's session is not every member's.
-  delete visible.closingSessions
   // A failing privacy check's detail is its contributor's: an error from the check can name paths on their Mac. Everyone
   // else reads which item failed (machines.ts teamWorkRefusal).
   for (const pool of visible.machines ?? []) {

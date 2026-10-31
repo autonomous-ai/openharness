@@ -177,6 +177,49 @@ it('reuses the host timestamp at the same stamp, including a repeated wake with 
   expect((await direct.changes(owner, s.machineId, { full: true })).tabs).toEqual(changed.tabs)
 })
 
+/** What lastChangedAt answered before it read one key per Swarm: the newest changedAt over every part, by full scan. */
+async function newestByScan(tabIds: string[]): Promise<Map<string, number>> {
+  const newest = new Map<string, number>()
+  for (const name of ['SwarmHead', 'SwarmMember', 'SwarmAgent', 'SwarmGroup', 'SwarmMachine', 'SwarmStart', 'SwarmProgress']) {
+    const reply = await db.$runCommandRaw({ aggregate: name, cursor: {}, pipeline: [{ $match: { tabId: { $in: tabIds } } },
+      { $group: { _id: '$tabId', at: { $max: '$changedAt' } } }] }) as unknown as { cursor: { firstBatch: Array<{ _id: string; at: { $date: string } | null }> } }
+    for (const row of reply.cursor.firstBatch) {
+      const at = row.at ? Date.parse(row.at.$date) : 0
+      if (at > (newest.get(row._id) ?? 0)) newest.set(row._id, at)
+    }
+  }
+  return newest
+}
+
+it('reads each Swarm\'s newest change from one index key per part collection, with the answer a full scan gives', async () => {
+  const a = await scene(), b = await scene()
+  clock = Date.now()
+  await store.execute(owner, b.tabId, { operationId: randomUUID(), command: {
+    type: 'message.send', conversationId: b.web, text: 'A newer change', replyTo: null, recipientIds: [] } })
+  const expected = await newestByScan([a.tabId, b.tabId])
+  const entries = await profiled(async () => expect(await lastChangedAt(db, [a.tabId, b.tabId])).toEqual(expected))
+  const scans = entries.filter(e => timestampScans([e]).length)
+  expect(scans).toHaveLength(7)
+  // A busy Swarm's scan read every key of its parts (prod's largest: 1,300 groups, 873 starts, 721 agents, 2026-10-30).
+  for (const scan of scans) expect(scan.keysExamined ?? 0, `${scan.command?.aggregate} ${scan.planSummary}`).toBeLessThanOrEqual(4)
+  // A head is one document per Swarm, so its plan may stay an IXSCAN; collections with many parts per Swarm skip them.
+  expect(scans.find(s => s.command?.aggregate === 'SwarmGroup')?.planSummary).toMatch(/DISTINCT_SCAN/)
+})
+
+it('lists Swarms with their newest change read once per stamp, not on every list', async () => {
+  const s = await scene()
+  const reads = new SwarmReads(store, { now: () => Date.now() })
+  swarmReadCache()!.drop(s.tabId)
+  const first = await reads.list(owner)
+  expect(first.tabs.find(t => t.id === s.tabId)?.lastChangedAt).toBe((await newestByScan([s.tabId])).get(s.tabId))
+  expect(timestampScans(await profiled(() => reads.list(owner)))).toEqual([])
+  clock = Date.now()
+  await store.execute(owner, s.tabId, { operationId: randomUUID(), command: {
+    type: 'message.send', conversationId: s.web, text: 'Listed again', replyTo: null, recipientIds: [] } })
+  const again = await reads.list(owner)
+  expect(again.tabs.find(t => t.id === s.tabId)?.lastChangedAt).toBe((await newestByScan([s.tabId])).get(s.tabId))
+})
+
 describe('delivery authority reads', () => {
   it.each(['person', 'agent'] as const)('claim, hold and ack from a %s leave unrelated conversations and machine parts unread', async sender => {
     const s = await scene()

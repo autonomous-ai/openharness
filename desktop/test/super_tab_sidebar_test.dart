@@ -468,7 +468,7 @@ void main() {
     final server = ConversationServer();
     final controller = await projectSidebar(server);
     await pumpSidebar(tester, controller, app);
-    const machinesBody = 'Add a machine for the product manager to use.';
+    const machinesBody = "Add a machine for this Swarm's agents to use.";
     expect(inRow('super-group-lead', find.text('web-project')), findsOneWidget);
     expect(find.text(machinesBody), findsOneWidget);
 

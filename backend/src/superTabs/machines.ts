@@ -159,6 +159,54 @@ export type MachineObservation = z.infer<typeof machineObservationSchema>
 /** A machine reports every 15 seconds (cli/src/superTabs/machines.ts); three missed beats is offline. */
 export const MACHINE_FRESH_MS = 45_000
 
+/** A machine's reading as its pool keeps it. */
+export type StoredReading = NonNullable<ContributedMachine['observation']>
+
+/** A start this machine may say it is preparing: one it launched that neither runs nor failed (liveness.ts). */
+export const preparableStart = (start: AgentStart, machineId: string): boolean =>
+  start.request.machineId === machineId && !!start.dispatched && !start.harnessId && !start.error
+
+/**
+ * What a report stores of [observation] on [pool]: progress and tokens of running sessions only (leases and attempts read
+ * them), the preparing starts [preparable] allows, the contributed engines' quotas, privacy only from a team session
+ * (observedPrivacy), and how the machine is signed in, from the session and never from the report (lib/teamSession.ts).
+ * A full report and a reading-only one (DB 2.5) store the same.
+ */
+export function storedObservation(pool: ContributedMachine, observation: MachineObservation,
+  opts: { team: boolean; now: number; preparable: (startId: string) => boolean }): StoredReading {
+  const { privacy: reported, harnessProgress, harnessTokens, preparingStartIds, ...reading } = observation
+  const running = (id: string) => observation.runningHarnessIds.includes(id)
+  const progress = harnessProgress && Object.fromEntries(Object.entries(harnessProgress).filter(([id]) => running(id)))
+  const tokens = harnessTokens && Object.fromEntries(Object.entries(harnessTokens).filter(([id]) => running(id)))
+  const preparing = preparingStartIds?.filter(opts.preparable)
+  const privacy = observedPrivacy(pool.observation?.privacy, reported, opts.team, opts.now)
+  return { ...reading, quotas: observation.quotas.filter(q => contributedEngines(pool, observation).includes(q.engine)), receivedAt: opts.now,
+    sessionKind: opts.team ? 'team' : 'computer', ...(privacy ? { privacy } : {}), ...(progress ? { harnessProgress: progress } : {}),
+    ...(tokens ? { harnessTokens: tokens } : {}), ...(preparing ? { preparingStartIds: preparing } : {}) }
+}
+
+const sameSet = (a: readonly string[] = [], b: readonly string[] = []) => {
+  const left = new Set(a), right = new Set(b)
+  return left.size === right.size && [...left].every(id => right.has(id))
+}
+
+/**
+ * Whether [next] changes nothing a report decides from, against [previous] (DB 2.5 spec, section 1 condition 2): the same
+ * running and stopped sessions, no stop proof, the same preparing starts. Progress renews leases (liveness.ts
+ * reportRenewedAt), so it also keeps its shape, and no session's progress goes back: a lease then ends no sooner than the
+ * last full report saw.
+ */
+export function readingOnly(previous: StoredReading | undefined, next: StoredReading): boolean {
+  // How the machine is signed in decides who may host it (store.ts teamByRecord reads the stored one): a reading from the
+  // other kind of session runs in full, so the full report's refusal is never skipped (review of #2378).
+  if (!previous || next.stoppedReservations?.length || previous.sessionKind !== next.sessionKind) return false
+  if (!sameSet(previous.runningHarnessIds, next.runningHarnessIds) || !sameSet(previous.stoppedHarnessIds, next.stoppedHarnessIds)
+    || !sameSet(previous.preparingStartIds, next.preparingStartIds)) return false
+  if (!previous.harnessProgress || !next.harnessProgress) return !previous.harnessProgress && !next.harnessProgress
+  const before = previous.harnessProgress, after = next.harnessProgress
+  return sameSet(Object.keys(before), Object.keys(after)) && Object.entries(before).every(([id, at]) => after[id]! >= at)
+}
+
 /** Whether [start] is preparing now: launched, neither running nor failed, and named by a fresh report of its own machine.
  *  Read from that report, never written into the start, so a report a minute per start writes nothing more. */
 export function startPreparing(state: SuperTabState, start: AgentStart, now: number): boolean {
@@ -515,33 +563,61 @@ export function removalEnded(state: SuperTabState, pool: ContributedMachine, how
 /** Pending intents reserve slots too. Only an explicit host stop frees a launched slot. A Mac and its Harness Team account
  *  share the Mac's slots (One machine, teamStartRequest): each counts what runs on both. */
 export function machineSlots(state: SuperTabState, pool: ContributedMachine) {
-  const mac = pool.hostMachineId ? state.machines?.find(m => m.machineId === pool.hostMachineId && m.contributorId === pool.contributorId) : pool
-  const team = mac && teamPoolOf(state, mac)
-  return [...new Set([pool, mac, team])].reduce((sum, each) => sum + (each ? poolSlots(state, each) : 0), 0)
+  return slotCounter(state)(pool)
 }
 
-function poolSlots(state: SuperTabState, pool: ContributedMachine) {
-  const reservations = (state.harnessReservations ?? []).filter(r => r.machineId === pool.machineId)
-  const live = new Set(reservations.map(r => r.harnessId))
-  const released = (state.releasedHarnesses ?? []).filter(r => r.machineId === pool.machineId && !live.has(r.harnessId)).map(r => r.harnessId)
-  const observed = pool.observation?.stoppedHarnessIds ?? []
-  const stopped = new Set([...observed.filter(id => {
-    const reservation = reservations.find(r => r.harnessId === id)
-    // Older hosts can prove a first launch stopped, but cannot distinguish a resumed runtime from its predecessor.
-    return !reservation || !reservation.renewed || pool.observation?.stoppedReservations?.some(r => r.harnessId === id && r.generation === reservation.generation)
-  }), ...released])
-  const running = new Set((pool.observation?.runningHarnessIds ?? []).filter(id => !stopped.has(id)))
-  for (const a of state.agents) if (a.machineId === pool.machineId && !stopped.has(a.harnessId)) running.add(a.harnessId)
-  for (const r of reservations) if (!stopped.has(r.harnessId)) running.add(r.harnessId)
-  let pending = 0
-  for (const start of state.starts ?? []) {
-    if (start.request.machineId !== pool.machineId || start.error) continue
-    // A finished start's harness counts through its agent or its host's report. Reads keep finished starts until they expire,
-    // and counted every harness ever started there (Mac Studio, 10-29: 13 running, 121 counted, no free agents shown).
-    if (start.harnessId) { if (!startFinished(start) && !stopped.has(start.harnessId)) running.add(start.harnessId) }
-    else pending++
+/**
+ * The slots each pool of `state` holds, for every pool a read lists: the Swarm's reservations, released harnesses, agents
+ * and starts are grouped by machine once, where each pool used to filter the whole lists again (prod 10-31: 543 released
+ * harnesses on 17 machines, ~27 k callbacks per change read, a quarter of its CPU). Counts the state as it is when called;
+ * a command that changes the state asks again (machineSlots).
+ */
+export function slotCounter(state: SuperTabState): (pool: ContributedMachine) => number {
+  const group = <T>(items: readonly T[] | undefined, machineOf: (item: T) => string) => {
+    const by = new Map<string, T[]>()
+    for (const item of items ?? []) {
+      const list = by.get(machineOf(item))
+      if (list) list.push(item)
+      else by.set(machineOf(item), [item])
+    }
+    return by
   }
-  return running.size + pending
+  const reservationsBy = group(state.harnessReservations, r => r.machineId)
+  const releasedBy = group(state.releasedHarnesses, r => r.machineId)
+  const agentsBy = group(state.agents, a => a.machineId)
+  const startsBy = group(state.starts, s => s.request.machineId)
+  const counted = new Map<ContributedMachine, number>()
+  const poolSlots = (pool: ContributedMachine) => {
+    const known = counted.get(pool)
+    if (known !== undefined) return known
+    const reservations = reservationsBy.get(pool.machineId) ?? []
+    const live = new Set(reservations.map(r => r.harnessId))
+    const released = (releasedBy.get(pool.machineId) ?? []).filter(r => !live.has(r.harnessId)).map(r => r.harnessId)
+    const observed = pool.observation?.stoppedHarnessIds ?? []
+    const stopped = new Set([...observed.filter(id => {
+      const reservation = reservations.find(r => r.harnessId === id)
+      // Older hosts can prove a first launch stopped, but cannot distinguish a resumed runtime from its predecessor.
+      return !reservation || !reservation.renewed || pool.observation?.stoppedReservations?.some(r => r.harnessId === id && r.generation === reservation.generation)
+    }), ...released])
+    const running = new Set((pool.observation?.runningHarnessIds ?? []).filter(id => !stopped.has(id)))
+    for (const a of agentsBy.get(pool.machineId) ?? []) if (!stopped.has(a.harnessId)) running.add(a.harnessId)
+    for (const r of reservations) if (!stopped.has(r.harnessId)) running.add(r.harnessId)
+    let pending = 0
+    for (const start of startsBy.get(pool.machineId) ?? []) {
+      if (start.error) continue
+      // A finished start's harness counts through its agent or its host's report. Reads keep finished starts until they expire,
+      // and counted every harness ever started there (Mac Studio, 10-29: 13 running, 121 counted, no free agents shown).
+      if (start.harnessId) { if (!startFinished(start) && !stopped.has(start.harnessId)) running.add(start.harnessId) }
+      else pending++
+    }
+    counted.set(pool, running.size + pending)
+    return running.size + pending
+  }
+  return pool => {
+    const mac = pool.hostMachineId ? state.machines?.find(m => m.machineId === pool.hostMachineId && m.contributorId === pool.contributorId) : pool
+    const team = mac && teamPoolOf(state, mac)
+    return [...new Set([pool, mac, team])].reduce((sum, each) => sum + (each ? poolSlots(each) : 0), 0)
+  }
 }
 
 /** Machines of the Swarm serving models on its grid now, by model: only fresh readings count. */
@@ -581,7 +657,9 @@ export function localModelAllowed(state: SuperTabState, request: AgentStartReque
 /** [forProject]: the project it is for when that is not yet its conversation's, as New Project's Product Manager before the
  *  project exists (leadStart.ts leadChoices). */
 export function admitMachineStart(state: SuperTabState, request: AgentStartRequest, now: number, start?: AgentStart, teamMachines: readonly string[] = [],
-  otherWorkspaceMachines: readonly string[] = [], forProject?: SwarmProject) {
+  otherWorkspaceMachines: readonly string[] = [], forProject?: SwarmProject,
+  /** A read that admits many machines against one state counts their slots once (leadStart.ts leadChoices). */
+  slots: (pool: ContributedMachine) => number = pool => machineSlots(state, pool)) {
   const pool = machineContribution(state, request.machineId)
   if (!pool) return null
   if (pool.buddyOnly && request.buddyOf?.personId !== pool.contributorId) fail('NOT_SWARM_MACHINE', NOT_SWARM_MACHINE, 403)
@@ -620,7 +698,7 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   }
   // A Buddy-only machine is recorded with its Buddy's start, before its host ever read the Swarm: the start waits for it.
   if (machineOffline(pool, now) && !(pool.buddyOnly && !pool.observation)) fail('MACHINE_OFFLINE', 'Wait for a fresh reading from the contributed machine.')
-  if (!start && machineSlots(state, pool) >= pool.maxAgents) fail('MACHINE_FULL', 'This machine has reached its contributed agent limit.')
+  if (!start && slots(pool) >= pool.maxAgents) fail('MACHINE_FULL', 'This machine has reached its contributed agent limit.')
   // A new start only: a grid model runs without the engine's subscription, and one already asked for is settled by its host.
   const unusable = !start && !local ? engineUnusable(pool, request.engine, now) : null
   if (unusable) fail('ENGINE_UNAVAILABLE', unusable)

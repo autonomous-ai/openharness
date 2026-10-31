@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { activeWork, agent, agentRole, author, conversation, fail, isLeads, nextConversationNumber, person, type Actor, type Agent, type Conversation, type SuperTabState } from './model.js'
+import { activeWork, agent, agentRole, author, conversation, fail, isLeads, nextConversationNumber, person, type Actor, type Agent, type Conversation, type Person, type SuperTabState } from './model.js'
 import type { SwarmRule } from './rules.js'
 import { buddyReads, isBuddy, isBuddyChat } from './buddies.js'
 
@@ -15,15 +15,10 @@ export type RoleKind = 'lead' | 'builder' | 'reviewer'
 export interface ProjectRole { id: string; name: string; kind: RoleKind; version: string; defaults?: RoleDefaults }
 /** What an agent of a role starts on when its start names no model: an engine, and on it a model and effort. */
 export interface RoleDefaults { engine: 'claude' | 'codex'; model?: string; effort?: string }
-/** The built-in sets' defaults (Scholes's roadmap, piece 1, 10-30): the Product Manager runs Claude Opus 5.5 at xhigh. Engineers
- *  and temporary agents are left to routing; a Reviewer's is a route floor, the reviewed Builder's strength (cli route.ts). */
+/** The coordinator's first start runs Claude Opus 5.5 at xhigh when its person names no model (Scholes's roadmap, piece 1,
+ *  10-30): the project's instructions cannot choose a model before any agent reads them. No other start takes a default now;
+ *  routing lives in the instructions (project instructions, phase 4). */
 export const BUILT_IN_ROLE_DEFAULTS: Partial<Record<RoleKind, RoleDefaults>> = { lead: { engine: 'claude', model: 'opus', effort: 'xhigh' } }
-
-/** The defaults an agent of [kind] (by [roleId] in a custom set) starts with: its custom role's own, else the built-in ones. */
-export function roleDefaults(project: SwarmProject, kind: RoleKind, roleId?: string): RoleDefaults | undefined {
-  const custom = skillSetOf(project) === 'custom' ? project.roles?.find(r => r.id === roleId && r.kind === kind) ?? project.roles?.find(r => r.kind === kind) : undefined
-  return custom?.defaults ?? BUILT_IN_ROLE_DEFAULTS[kind]
-}
 
 /** [request] with its role's [defaults] filled in when it names no model, on the defaults' engine alone; a named effort is kept. A
  *  grid model chooses its own. */
@@ -59,6 +54,14 @@ export interface SwarmProject {
   /** What its chat was last told of new Reviewers (reviewCapacity.ts), under `any`: none can start, or they soon will not.
    *  Absent once a machine is usable again, so the next shortage is told. Per engine before 2026-10-30, never read since. */
   reviewCapacity?: Partial<Record<'any' | 'claude' | 'codex', 'out' | 'low'>>
+  /** Its instructions' revision and short hash (instructions.ts): the text lives outside the state. Absent on a project
+   *  from before instructions until the migration writes its document; it runs on the built-in template meanwhile. */
+  instructionsRevision?: number
+  instructionsHash?: string
+  /** Moves on each note the coordinator keeps or a member removes (instructions.ts), so an open panel knows to read them. */
+  notesRevision?: number
+  /** What its coordinator is called; reads give "Product Manager" when absent (instructions.ts coordinatorNameOf). */
+  coordinatorName?: string
 }
 
 export const skillModeOf = (project: SwarmProject): SkillMode => project.skillMode ?? 'orchestration'
@@ -159,19 +162,20 @@ export function readsRecordsIn(state: SuperTabState, actor: Actor, group: Conver
   const project = groupProject(state, group)
   if (!canReadProject(state, actor, project)) return false
   const buddy = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId && isBuddy(a)) : undefined
-  if (buddy) {
-    // Checked as its person at the membership they added it in: a person who left, rejoined or lost a private project's
-    // membership takes their Buddy's reads with them.
-    const person = state.people.find(p => p.id === buddy.buddyOf!.personId && p.generation === buddy.buddyOf!.generation)
-    const reads = !!person && canReadProject(state, { kind: 'person', userId: person.id, email: person.email }, project)
-    return buddyReads(buddy, group, project.leadConversationId, reads ? person : undefined)
-  }
+  if (buddy) return buddyReads(buddy, group, project.leadConversationId, buddyPerson(state, buddy, project))
   if (!group.audience) return true
   // A Buddy chat has no private channel to the PM: only its owner and its Buddy read it (buddies.ts).
   if (actor.kind === 'agent') return !isBuddyChat(group) && ledProject(state, actor.agentId)?.id === project.id
   const member = state.people.find(p => p.id === actor.userId)
   return !!member && (group.audience.people.some(p => p.id === member.id && p.generation === member.generation)
     || (PRIVATE_VISIBLE_TO_OWNERS && (member.id === project.ownerId || member.id === state.ownerId)))
+}
+
+/** A Buddy's person, while they read [project] at the membership they added it in: a person who left, rejoined or lost a
+ *  private project's membership takes their Buddy's reads with them, the instructions' included (review of phase 2). */
+export function buddyPerson(state: SuperTabState, buddy: Agent, project: SwarmProject): Person | undefined {
+  const person = state.people.find(p => p.id === buddy.buddyOf!.personId && p.generation === buddy.buddyOf!.generation)
+  return person && canReadProject(state, { kind: 'person', userId: person.id, email: person.email }, project) ? person : undefined
 }
 
 /** A private conversation's audience: each person a member who reads its project, captured at their generation. */
@@ -301,6 +305,14 @@ export const accessInputs = (state: SuperTabState): string => JSON.stringify([st
   projectsOf(state).map(p => [p.id, p.visibility, p.ownerId, p.members, p.leadConversationId]),
   state.agents.map(a => [a.id, a.machineId, a.harnessId, a.machineOwnerId, a.projectId, a.confidential]),
   state.conversations.map(c => [c.id, c.kind, c.projectId, c.leadId, c.archived, c.agentIds, c.audience])])
+
+/** Whether [actor] is an agent working in [projectId], as its host speaks for it: any of the project's agents but a Buddy, which
+ *  only talks with its owner. Which of them does what is the project's instructions' to say (project instructions, phase 4). */
+export function projectAgent(state: SuperTabState, actor: Actor, projectId: string): actor is Extract<Actor, { kind: 'agent' }> {
+  if (actor.kind !== 'agent') return false
+  const self = state.agents.find(a => a.id === actor.agentId)
+  return !!self && !isBuddy(self) && self.machineOwnerId === actor.machineOwnerId && agentProjectId(state, self) === projectId
+}
 
 /** The only actors a confidential session admits: the person whose machine runs it, or the session itself. */
 export const ownSession = (actor: Actor, target: Agent): boolean =>

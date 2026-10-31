@@ -1,13 +1,19 @@
 import { spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { prepareSwarmSkill } from '../lib/swarmSkills.js'
-import { allowBuddyReads, buddyAccountFile, buddyApprovalsOf, buddyGuardSource, buddyLaunchFile, buddyReadsOf, buddyWideOf } from '../lib/buddyGuard.js'
+import { allowBuddyReads, buddyAccountFile, buddyApprovalsOf, buddyGuardSource, buddyLaunchFile, buddyReadsOf, buddyWideOf, forgetBuddyReads } from '../lib/buddyGuard.js'
 import { env } from '../config/env.js'
 import { PASTE_DROPS_DIR } from '../lib/pasteDropFiles.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// The real lists cleanup, which one test makes throw what it never throws today: an error that is not its own.
+vi.mock('../lib/buddyGuard.js', async original => {
+  const actual = await original<typeof import('../lib/buddyGuard.js')>()
+  return { ...actual, forgetBuddyReads: vi.fn(actual.forgetBuddyReads) }
+})
 import type { BackendNotice, CoreApi, TurnDelivery } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { backend, BUDDY_SESSION_GONE_MS, BUDDY_SESSION_IDLE_MS, BUDDY_SESSION_SLEEP_GAP_MS, buddyChatIdOf, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
@@ -44,6 +50,8 @@ function setup(messageFields: Record<string, unknown> = {}, claimFields: Record<
   let clock = 0
   const call: CoreApi['account']['backend'] = vi.fn(async (method, path, body) => {
     let data: unknown
+    // A backend from before one call for all of a machine's readings (DB 2.5): the host sends each Swarm's on its own.
+    if (path.endsWith('/readings')) return { status: 404, body: { message: `Route POST:${path} not found`, error: 'Not Found', statusCode: 404 } }
     if (path.includes('/hosts/')) data = hostForm(removed ? [] : [row], { tabs: ['tab'] })
     else if (path.includes('asAgentId=')) data = swarmReply(path, { conversations: [{ id: 'lead' }] })
     else if (revoked) return { status: 403, body: { success: false, error: { code: 'FORBIDDEN', message: 'Grant removed' } } }
@@ -77,6 +85,27 @@ function setup(messageFields: Record<string, unknown> = {}, claimFields: Record<
 }
 
 describe('current Swarm role lookup', () => {
+  // Project instructions, phase 4 (decision 1): the role's name is the project's document's; the session is a coordinator,
+  // an agent or a Buddy, and an older client's Reviewer keeps its swarm-review file.
+  it('reads a session\'s role without its kind', async () => {
+    const t = setup()
+    let agent: Record<string, unknown> = { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }
+    let groups: unknown[] = [{ leadId: 'agent', agentIds: [] }]
+    vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
+      path.includes('/hosts/') ? hostForm([{ tabId: 'tab', agent }]) : swarmReply(path, { agents: [agent], conversations: groups }) } }))
+    const sources = sourcesOf(t.core)
+    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'coordinator', mode: 'orchestration' })
+    groups = [{ leadId: 'other', agentIds: ['agent'] }]
+    agent = { ...agent, role: 'reviewer' }
+    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'agent', fallback: 'review', mode: 'orchestration' })
+    for (const role of ['builder', 'Tester', undefined]) {
+      agent = { ...agent, role }
+      expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'agent', mode: 'orchestration' })
+    }
+    agent = { ...agent, role: 'builder', buddyOf: { personId: 'peer', generation: 'g' } }
+    groups = [{ id: 'chat', kind: 'buddy', leadId: null, agentIds: ['agent'] }]
+    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'buddy', mode: 'orchestration' })
+  })
   it('derives a Reviewer from its stored role while it is in a current group', async () => {
     const t = setup()
     const agent = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', role: 'reviewer' }
@@ -84,7 +113,7 @@ describe('current Swarm role lookup', () => {
     vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
       path.includes('/hosts/') ? hostForm([{ tabId: 'tab', agent }]) : swarmReply(path, { agents: [agent], conversations: groups }) } }))
     const sources = sourcesOf(t.core)
-    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'review', mode: 'orchestration' })
+    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'agent', fallback: 'review', mode: 'orchestration' })
     groups = []
     expect(await swarmRoleFor(sources, 'harness')).toBeNull()
   })
@@ -153,7 +182,7 @@ describe('current Swarm role lookup', () => {
     vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
       path.includes('/hosts/') ? hostForm([{ tabId: 'tab', agent }]) : swarmReply(path, { agents: [agent], conversations: [group] }) } }))
     const sources = sourcesOf(t.core)
-    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: kind === 'lead' ? 'lead' : 'dev', mode: 'orchestration' })
+    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: kind === 'lead' ? 'coordinator' : 'agent', mode: 'orchestration' })
     expect(await swarmRoleFor(sources, 'personal')).toBeNull()
   })
   it('gives the mode of the project whose group made the role, Lead first', async () => {
@@ -164,12 +193,12 @@ describe('current Swarm role lookup', () => {
     vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
       path.includes('/hosts/') ? hostForm([{ tabId: 'tab', agent }]) : swarmReply(path, { agents: [agent], conversations, projects }) } }))
     const sources = sourcesOf(t.core)
-    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'lead', mode: 'default' })
+    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'coordinator', mode: 'default' })
     conversations = [{ projectId: 'p2', leadId: 'other', agentIds: ['agent'] }]
-    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'dev', mode: 'orchestration' })
+    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'agent', mode: 'orchestration' })
     // A group from before projects is in the first project.
     conversations = [{ leadId: 'other', agentIds: ['agent'] }]
-    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'dev', mode: 'default' })
+    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'agent', mode: 'default' })
   })
   it.each(['removed-roster', 'foreign', 'removed-state', 'archived', 'released', 'none', 'malformed'] as const)
     ('never adopts a session whose membership is %s', async kind => {
@@ -189,7 +218,7 @@ describe('current Swarm role lookup', () => {
       ? hostForm(present ? [{ tabId: 'tab', agent }] : [], { tabs: ['tab'] })
       : swarmReply(path, { agents: [agent], conversations: [{ agentIds: ['agent'] }, { leadId: 'agent' }] }) } }))
     const sources = sourcesOf(t.core)
-    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'lead', mode: 'orchestration' })
+    expect(await swarmRoleFor(sources, 'harness')).toEqual({ role: 'coordinator', mode: 'orchestration' })
     present = false
     expect(await swarmRoleFor(sources, 'harness')).toBeNull()
     expect(await swarmRoleFor(sources, 'harness')).toBeNull()
@@ -302,11 +331,6 @@ describe('Super Tab native delivery handoff', () => {
     expect(lead.core.turns.deliver).toHaveBeenCalledTimes(1)
     expect(vi.mocked(lead.call).mock.calls.some(([, path]) => path.includes('asAgentId='))).toBe(false)
   })
-  it('names all five task parts in the worker delivery header', async () => {
-    const t = setup()
-    await t.open().tick()
-    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('goal, changes, constraints, owned code and acceptance checks')
-  })
   it('keeps roster members through host failure and restart, releasing only a confirmed removal', async () => {
     const t = setup(), first = t.open()
     await first.tick()
@@ -337,8 +361,6 @@ describe('Super Tab native delivery handoff', () => {
       'In reply to message question-2. Read it before interpreting the answer:'
     ), 'team:service:superTabs:delivery')
     expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('Message message from Collaborator:\nYes, keep them.')
-    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('On Claude Code or Codex, Leads use swarm-lead, Builders swarm-dev and Reviewers swarm-review.')
-    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('Leads coordinate: assign multi-part or 15+ minute work to Swarm agent groups; do only answers, lookups and work under 15 minutes yourself; your subagents only read/look up.')
   })
 
   describe('the replied-to message', () => {
@@ -511,6 +533,157 @@ describe('Super Tab native delivery handoff', () => {
     expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
     expect(t.saved().entries).toEqual({})
   })
+  describe('an acknowledgement the backend could not take', () => {
+    /** Typed, then every POST answers busy until `up`; the list and the receipt read say what the backend holds. */
+    const outage = (t: ReturnType<typeof setup>) => {
+      const original = vi.mocked(t.core.account.backend).getMockImplementation()!
+      const s = { down: true, ended: false, refusal: null as null | { status: number; code: string }, acks: 0 }
+      vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => {
+        const command = body as Record<string, unknown> | undefined
+        if (command?.type === 'ack') s.acks++
+        if (method === 'POST' && path.endsWith('/deliveries/delivery')) {
+          if (s.down) return { status: 503, body: { success: false, error: { code: 'SWARM_BUSY', message: 'The Swarm is busy.' } } }
+          if (s.refusal) return { status: s.refusal.status, body: { success: false, error: { code: s.refusal.code, message: 'Refused.' } } }
+        }
+        if (s.ended && method === 'GET' && path.endsWith('/deliveries/delivery')) return { status: 200, body: { success: true, data: { id: 'delivery', status: 'cancelled' } } }
+        if (s.ended && method === 'GET' && path.endsWith('/deliveries')) return { status: 200, body: { success: true, data: [] } }
+        return original(method, path, body)
+      })
+      return s
+    }
+    const typed = async (t: ReturnType<typeof setup>) => {
+      const host = t.open()
+      await host.tick(); t.event('delivered')
+      expect(t.saved().entries.delivery.stage).toBe('delivered')
+      return host
+    }
+
+    it('is sent again with backoff: one that fails twice, then gets in, leaves the delivery delivered and the journal empty', async () => {
+      const t = setup(), host = await typed(t), s = outage(t)
+      const claimId = t.saved().entries.delivery.claimId
+      await host.tick().catch(() => {}); t.wait(1_000)
+      await host.tick().catch(() => {}); t.wait(2_000)
+      expect(s.acks).toBe(2)
+      expect(t.saved().entries.delivery.stage).toBe('delivered')
+      s.down = false
+      await host.tick()
+      expect(t.receipts).toEqual([expect.objectContaining({ type: 'ack', claimId, uncertain: false })])
+      expect(t.saved().entries).toEqual({})
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    })
+
+    // The 10-30 SWARM_BUSY outage: acknowledgements failed for longer than the backend's 10-minute claim quiet time, so its
+    // delivery pass ended claims the agents had in fact received, and their senders saw Not sent.
+    it('is still sent once the backend\'s delivery pass ended the quiet claim, so the message counts as delivered', async () => {
+      const t = setup(), host = await typed(t), s = outage(t)
+      const claimId = t.saved().entries.delivery.claimId
+      await host.tick().catch(() => {}); t.wait(11 * 60_000)
+      s.down = false; s.ended = true
+      await host.tick(); await host.reconcileReceipts()
+      expect(t.receipts).toEqual([expect.objectContaining({ type: 'ack', claimId, uncertain: false })])
+      expect(t.saved().entries).toEqual({})
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    })
+
+    it('is not sent again once the backend refuses it, as for a delivery an archive ended, and the entry goes', async () => {
+      for (const refusal of [{ status: 403, code: 'DELIVERY_REVOKED' }, { status: 403, code: 'FORBIDDEN' }, { status: 409, code: 'CLAIM_CONFLICT' }]) {
+        const t = setup(), host = await typed(t), s = outage(t)
+        s.down = false; s.ended = true; s.refusal = refusal
+        await host.reconcileReceipts()
+        expect(s.acks).toBe(1)
+        expect(t.saved().entries).toEqual({})
+        t.wait(10 * 60_000)
+        await host.tick(); await host.reconcileReceipts()
+        expect(s.acks).toBe(1)
+        expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+      }
+    })
+
+    it('keeps the entry while the backend still cannot take it, trying again only after a growing wait, until it gets through', async () => {
+      const t = setup(), host = await typed(t), s = outage(t)
+      // The list says nothing waits, the receipt says ended, and the acknowledgement still answers busy.
+      s.ended = true
+      await host.reconcileReceipts()
+      expect(s.acks).toBe(1)
+      // 10 s, then 20 s: the receipts pass itself runs every 5 s.
+      t.wait(5_000); await host.reconcileReceipts()
+      expect(s.acks).toBe(1)
+      t.wait(6_000); await host.reconcileReceipts()
+      expect(s.acks).toBe(2)
+      t.wait(6_000); await host.reconcileReceipts()
+      expect(s.acks).toBe(2)
+      t.wait(15_000); await host.reconcileReceipts()
+      expect(s.acks).toBe(3)
+      expect(t.saved().entries.delivery.stage).toBe('delivered')
+      t.wait(41_000); s.down = false
+      await host.reconcileReceipts()
+      expect(s.acks).toBe(4)
+      expect(t.receipts).toEqual([expect.objectContaining({ type: 'ack', uncertain: false })])
+      expect(t.saved().entries).toEqual({})
+      expect(t.log).toHaveBeenCalledWith(expect.stringContaining('Delivery delivery was acknowledged after the backend ended it, 4 tries'))
+    })
+
+    it.each([['answers busy', null], ['drops the connection', 'socket closed']])('gives up after a day while the backend %s, said once, so the journal never fills', async (_case, dropped) => {
+      const t = setup(), host = await typed(t), s = outage(t)
+      s.ended = true
+      if (dropped) {
+        const original = vi.mocked(t.core.account.backend).getMockImplementation()!
+        vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => {
+          if (method === 'POST' && path.endsWith('/deliveries/delivery')) { s.acks++; throw dropped }
+          return original(method, path, body)
+        })
+      }
+      await host.reconcileReceipts()
+      for (let i = 0; i < 400; i++) { t.wait(5 * 60_000); await host.reconcileReceipts() }
+      expect(t.saved().entries).toEqual({})
+      expect(t.log).toHaveBeenCalledWith(expect.stringContaining(`Gave up acknowledging delivery delivery to agent agent in Swarm tab after a day: ${dropped ?? 'The Swarm is busy.'}`))
+      expect(vi.mocked(t.log).mock.calls.filter(([line]) => String(line).startsWith('Gave up'))).toHaveLength(1)
+      const tries = s.acks
+      t.wait(10 * 60_000); await host.reconcileReceipts()
+      expect(s.acks).toBe(tries)
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    })
+
+    it('writes nothing once the host stops during a late acknowledgement, and keeps the entry for the next host', async () => {
+      const t = setup(), host = await typed(t), s = outage(t)
+      s.down = false; s.ended = true
+      const original = vi.mocked(t.core.account.backend).getMockImplementation()!
+      vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => {
+        if ((body as Record<string, unknown> | undefined)?.type === 'ack') host.stop()
+        return original(method, path, body)
+      })
+      await host.reconcileReceipts()
+      expect(s.acks).toBe(1)
+      expect(t.saved().entries.delivery.stage).toBe('delivered')
+    })
+
+    it('never retires an entry that replaced the one it acknowledged late while the answer was on its way', async () => {
+      const t = setup(), host = await typed(t), s = outage(t)
+      s.down = false; s.ended = true
+      const journal = (host as unknown as { journal: { entries: Record<string, Record<string, unknown>> } }).journal
+      const original = vi.mocked(t.core.account.backend).getMockImplementation()!
+      vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => {
+        if ((body as Record<string, unknown> | undefined)?.type === 'ack') journal.entries.delivery = { ...journal.entries.delivery, claimId: 'newer' }
+        return original(method, path, body)
+      })
+      await host.reconcileReceipts()
+      expect(s.acks).toBe(1)
+      expect(journal.entries.delivery).toMatchObject({ claimId: 'newer' })
+    })
+
+    it('never acknowledges late a delivery it reported uncertain, nor one its host never typed', async () => {
+      for (const stage of ['unknown', 'held'] as const) {
+        const t = setup(), host = t.open()
+        await host.tick()
+        if (stage === 'held') t.event('rejected', 'team_waiting_busy'); else t.event('unknown', 'lost acknowledgement')
+        const s = outage(t)
+        s.down = false; s.ended = true
+        await host.reconcileReceipts()
+        expect(s.acks).toBe(0)
+        expect(t.saved().entries).toEqual({})
+      }
+    })
+  })
   it('drops the lease of a held delivery answered while its lease was being granted', async () => {
     const t = setup(), host = t.open()
     await host.tick(); t.event('rejected', 'team_waiting_busy')
@@ -567,6 +740,26 @@ describe('Super Tab native delivery handoff', () => {
     expect(prompt).toContain('Answer each message once')
     expect(prompt).not.toContain('email addresses')
     expect(prompt).not.toContain('Report exact revisions')
+  })
+  // Final review: with no --to a reply reaches the coordinator (or, from the coordinator, the task's assignee), so an Engineer
+  // answering a Reviewer reached the PM, and the PM answering an agent that was not the assignee reached no one.
+  it('names an agent author with --to in the reply line, and no one for a person', async () => {
+    const t = setup({ author: { kind: 'agent', id: 'a0000000000000000000000r', name: 'Reviewer 1' }, text: 'Two findings.' })
+    await t.open().tick()
+    const prompt = vi.mocked(t.core.turns.deliver).mock.calls[0]![1] as string
+    expect(prompt).toContain("post 'lead' 'your message' UNIQUE_OPERATION_ID --reply-to 'message' --to 'a0000000000000000000000r'\n")
+    const person = setup({ author: { kind: 'person', id: 'p1', name: 'sam@example.com' }, text: 'Hi' })
+    await person.open().tick()
+    expect(vi.mocked(person.core.turns.deliver).mock.calls[0]![1] as string).not.toContain('--to')
+  })
+  it('keeps workflow out of the delivered prompt (it lives in the project instructions)', async () => {
+    const t = setup({ author: { kind: 'person', id: 'p1', name: 'sam@example.com' }, text: 'Hi' })
+    await t.open().tick()
+    const prompt = vi.mocked(t.core.turns.deliver).mock.calls[0]![1] as string
+    for (const gone of ['Leads:', 'decide reuse, keep or stop', 'swarm-lead', 'swarm-dev', 'swarm-review', 'Each task needs goal', 'Leads coordinate'])
+      expect(prompt).not.toContain(gone)
+    expect(prompt).toContain('Manage agreed work and delegation:')
+    expect(prompt).toContain('Answer each message once')
   })
   it('persists before typing, keeps one native delivery during polls, and acknowledges the exact receipt', async () => {
     const t = setup(), host = t.open()
@@ -998,7 +1191,7 @@ describe('the super-tab command in delivered input', () => {
     const text = String(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1])
     expect(text).toContain(`Read its state: harness super-tab --tab 'tab' --agent 'agent' status`)
     expect(text).toContain(`harness super-tab --tab 'tab' --agent 'agent' message 'lead' 'earlier'`)
-    expect(text).toContain(`harness super-tab --tab 'tab' --agent 'agent' route GROUP JSON`)
+    expect(text).toContain(`harness super-tab --tab 'tab' --agent 'agent' help`)
     expect(text).not.toContain('--port')
     t.event('rejected', 'team_waiting_busy')
     await host.tick()
@@ -2611,6 +2804,350 @@ describe('built-in skill text after a CLI update', () => {
   })
 })
 
+// Project instructions (spec 2026-10-30, How agents read it): the roster names each agent's project, the document's revision
+// and the agent's role name, never the text. The host reads the text once per revision and project, installs it as the
+// agent's swarm-instructions skill beside its tools skill, and tells the agent once per change. An old backend's rows carry
+// no `instructions` key, and everything there runs as before.
+describe('project instructions from the roster', () => {
+  const NOTE = 'Ship on Fridays only.'
+  const START = '# How this project works\nTesters test every change.\n'
+  const older = (role: string) => `---\nname: swarm-${role}\n---\nAn older release of this skill.\n`
+  /** A save's time before any launch in these tests: a session launched since has read that revision. */
+  const LONG_AGO = '2026-01-01T00:00:00.000Z'
+  type Name = 'pm' | 'tester' | 'reviewer' | 'buddy'
+  const AGENTS: Record<Name, { role: 'lead' | 'dev' | 'review' | 'buddy'; roleName: string; lead?: true }> = {
+    pm: { role: 'lead', roleName: 'PM', lead: true }, tester: { role: 'dev', roleName: 'Tester' },
+    reviewer: { role: 'review', roleName: 'Reviewer' }, buddy: { role: 'buddy', roleName: 'Buddy' } }
+  /** What a Buddy's guard at [guard], for its folder [folder], answers a shell [command]. */
+  const guardRuns = (guard: string, folder: string, command: string): string => {
+    const run = spawnSync(process.execPath, [guard], { encoding: 'utf8', timeout: 10_000,
+      input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd: folder }) })
+    return JSON.parse(run.stdout).hookSpecificOutput.permissionDecision
+  }
+  function docFixture(names: Name[] = ['tester'], options: { stale?: Name[] } = {}) {
+    const t = setup(), workspace = mkdtempSync(join(tmpdir(), 'super-tab-instructions-')); roots.push(workspace)
+    const folder = mkdtempSync(join(tmpdir(), 'buddy-folder-')); roots.push(folder)
+    const sessions: Record<string, unknown> = {}, roleFiles: Partial<Record<Name, string>> = {}, launched: Partial<Record<Name, string>> = {}
+    for (const name of names) {
+      const { role } = AGENTS[name], cwd = role === 'buddy' ? folder : workspace
+      const { file } = prepareSwarmSkill(cwd, { role, key: `key-${name}` }, folderOnly)
+      launched[name] = readFileSync(file, 'utf8')
+      // What an older CLI left: its own text and no record of which text it was.
+      if (options.stale?.includes(name)) { writeFileSync(file, older(role)); rmSync(join(dirname(file), 'version.json')) }
+      roleFiles[name] = file
+      sessions[`h-${name}`] = { agentId: `h-${name}`, cwd, swarmSkill: { role, key: `key-${name}` } }
+    }
+    const agents = names.map(name => ({ id: `a-${name}`, harnessId: `h-${name}`, machineId: 'machine-1',
+      ...(name === 'buddy' ? { buddyOf: { personId: 'peer', generation: 'g' } } : {}) }))
+    const groups = [
+      { id: 'lead-group', leadId: 'a-pm', agentIds: ['a-pm', 'a-tester', 'a-reviewer'] },
+      { id: 'work', leadId: 'a-pm', agentIds: ['a-pm', 'a-tester'], assignment: { agentId: 'a-tester', status: 'working' } },
+      { id: 'chat', kind: 'buddy', leadId: null, agentIds: ['a-buddy'] },
+    ]
+    /** The project's saved revisions, oldest first, the first long before any launch here. The backend serves the newest, or
+     *  revision `lag` (a read behind the roster); `history` refuses the revisions read (an outage). */
+    const saves = [{ revision: 1, hash: 'hash-1', summary: 'Started from the built-in instructions.', text: START, at: LONG_AGO }]
+    let lag: number | undefined, history = true
+    /** What the roster says of the agent's project: undefined leaves the keys out, as an old backend does. */
+    let doc: Record<string, unknown> | null | undefined = { projectId: 'app', revision: 1, hash: 'hash-1', coordinatorName: 'Product Manager' }
+    const rows = () => agents.map(agent => {
+      const { roleName, lead } = AGENTS[agent.id.slice(2) as Name]
+      return { tabId: 'tab', agent, lead: lead === true, ...(doc === undefined ? {} : { roleName, instructions: doc }) }
+    })
+    const reads: string[] = []
+    const sent: Array<{ operationId: string; asAgentId: string; command: Record<string, any> }> = []
+    const receipts = new Map<string, string>()
+    const holds: Array<{ match: (path: string) => boolean; until: Promise<void> }> = []
+    let inFlight = 0
+    t.core.agents.byAgent = vi.fn(id => sessions[id] as never)
+    t.core.agents.terminalAvailable = vi.fn(() => true)
+    t.core.account.backend = vi.fn(async (_method, path, body) => {
+      const held = holds.findIndex(h => h.match(path))
+      if (held >= 0) await holds.splice(held, 1)[0]!.until
+      inFlight++
+      await Promise.resolve()
+      inFlight--
+      const request = body as any
+      if (path.includes('/hosts/')) return { status: 200, body: { data: hostForm(rows(), { tabs: ['tab'] }) } }
+      const read = /^\/api\/super-tabs\/tab\/projects\/app\/instructions(\/revisions)?\?asAgentId=(a-[a-z]+)$/.exec(path)
+      if (read) {
+        reads.push(path)
+        // As the backend answers a Buddy: no notes, and none of the history, which names who asked for what.
+        const buddy = read[2] === 'a-buddy'
+        if (read[1]) {
+          if (!history) return { status: 503, body: { success: false, error: { code: 'INSTRUCTIONS_UNAVAILABLE', message: 'Try again in a moment.' } } }
+          return buddy ? { status: 404, body: { success: false, error: { code: 'NOT_FOUND', message: 'This project is unavailable.' } } }
+            : { status: 200, body: { data: { projectId: 'app', revisions: saves.map(({ text: _text, ...save }) => ({ ...save,
+              writtenBy: { kind: 'person', id: 'ken' }, askedBy: 'ken' })).reverse() } } }
+        }
+        const at = saves[(lag ?? saves.length) - 1]!
+        return { status: 200, body: { data: { projectId: 'app', revision: at.revision, hash: at.hash, text: at.text, template: false,
+          coordinatorName: 'Product Manager', notesRevision: 1,
+          ...(buddy ? {} : { notes: [{ id: 'note', text: NOTE, askedBy: 'ken', at: '2026-10-30T09:00:00.000Z', expiresAt: null }] }) } } }
+      }
+      if (path.endsWith('/deliveries')) return { status: 200, body: { data: [] } }
+      if (request?.command?.type === 'message.send') {
+        const prior = receipts.get(request.operationId), same = JSON.stringify(request.command)
+        if (prior !== undefined && prior !== same) return { status: 409, body: { success: false, error: { code: 'OPERATION_REUSED', message: 'Use a new operation ID for a different request.' } } }
+        if (prior === undefined) { receipts.set(request.operationId, same); sent.push(request) }
+        return { status: 200, body: { data: {} } }
+      }
+      return { status: 200, body: { data: swarmReply(path, { agents, conversations: groups }) } }
+    })
+    const pass = async (host = t.open(), advance = 0) => {
+      t.wait(advance); await host.tick()
+      for (let idle = 0; idle < 3;) { await new Promise(resolve => setImmediate(resolve)); idle = inFlight ? 0 : idle + 1 }
+      return host
+    }
+    const holdNext = (match: (path: string) => boolean) => {
+      let release!: () => void
+      holds.push({ match, until: new Promise<void>(resolve => { release = resolve }) })
+      return release
+    }
+    /** One of a session's skill files: its role file's neighbours. */
+    const file = (name: Name, skill = 'swarm-instructions') => join(dirname(dirname(roleFiles[name]!)), skill, 'SKILL.md')
+    return { t, sent, reads, pass, holdNext, file, roleFiles, launched, folder, agents,
+      save: (summary: string, text: string, at = LONG_AGO) => { const revision = saves.length + 1; saves.push({ revision, hash: `hash-${revision}`, summary, text, at }); return revision },
+      move: (revision: number) => { doc = { projectId: 'app', revision, hash: `hash-${revision}`, coordinatorName: 'Product Manager' } },
+      setDoc: (next: typeof doc) => { doc = next }, setLag: (revision: number | undefined) => { lag = revision }, setHistory: (served: boolean) => { history = served } }
+  }
+  const instructionsRead = (agentId: string) => `/api/super-tabs/tab/projects/app/instructions?asAgentId=${agentId}`
+  const historyRead = (agentId: string) => `/api/super-tabs/tab/projects/app/instructions/revisions?asAgentId=${agentId}`
+
+  it('installs a Tester\'s instructions from the roster and tells it nothing at first', async () => {
+    const f = docFixture()
+    const role = readFileSync(f.roleFiles.tester!, 'utf8')
+    const host = await f.pass()
+    const text = readFileSync(f.file('tester'), 'utf8')
+    expect(text).toContain('\nYou are this project\'s Tester. Product Manager is the project\'s coordinator.\n')
+    expect(text.endsWith(`Instructions revision 1:\n\n${START}`)).toBe(true)
+    // The notes are the PM's to print with the instructions command; the skill holds the document alone.
+    expect(text).not.toContain(NOTE)
+    // Its role file stays as the launch wrote it, beside the tools skill.
+    expect(readFileSync(f.roleFiles.tester!, 'utf8')).toBe(role)
+    expect(existsSync(f.file('tester', 'swarm-tools'))).toBe(true)
+    expect(f.sent).toEqual([])
+    expect(f.reads).toEqual([instructionsRead('a-tester'), historyRead('a-tester')])
+    // Read once per revision: later rosters naming the same one read nothing and tell nothing.
+    for (let i = 1; i <= 3; i++) await f.pass(host, i * 120_000)
+    expect(f.reads).toHaveLength(2)
+    expect(f.sent).toEqual([])
+  })
+
+  // Task 3's review: the launch line sends a new session to the instructions command, so its first install is told nothing only
+  // for a revision saved by its launch. One saved after it is told once.
+  it('tells a new session about a revision saved after its launch', async () => {
+    const f = docFixture()
+    f.move(f.save('Reviews go to the Reviewer', 'Revision two.\n', new Date(Date.now() + 60_000).toISOString()))
+    const host = await f.pass()
+    expect(readFileSync(f.file('tester'), 'utf8').endsWith('Instructions revision 2:\n\nRevision two.\n')).toBe(true)
+    expect(f.sent.map(s => s.command.text)).toEqual([expect.stringMatching(/^The project's instructions changed: Reviews go to the Reviewer\. /)])
+    expect(f.sent[0]!.command.text).toContain(JSON.stringify(f.file('tester')))
+    await f.pass(host, 1_000)
+    expect(f.sent).toHaveLength(1)
+  })
+
+  // Task 4's review: one failed history read kept every notice of that revision without its summary, and gave each fresh
+  // launch an extra notice (its save time unknown). It is read again at the next pass, and said once.
+  it('retries a failed history read at the next pass', async () => {
+    const f = docFixture()
+    const host = await f.pass()
+    const before = readFileSync(f.file('tester'), 'utf8')
+    f.move(f.save('Reviews go to the Reviewer', 'Revision two.\n'))
+    f.setHistory(false)
+    await f.pass(host, 1_000)
+    expect(readFileSync(f.file('tester'), 'utf8')).toBe(before)
+    expect(f.sent).toEqual([])
+    f.setHistory(true)
+    await f.pass(host, 60_000)
+    expect(f.reads.filter(path => path === historyRead('a-tester'))).toHaveLength(3)
+    // The text was kept: only the history was read again.
+    expect(f.reads.filter(path => path === instructionsRead('a-tester'))).toHaveLength(2)
+    expect(readFileSync(f.file('tester'), 'utf8').endsWith('Instructions revision 2:\n\nRevision two.\n')).toBe(true)
+    expect(f.sent.map(s => s.command.text)).toEqual([expect.stringMatching(/^The project's instructions changed: Reviews go to the Reviewer\. /)])
+    expect(f.t.log).toHaveBeenCalledTimes(1)
+    expect(f.t.log).toHaveBeenCalledWith(expect.stringContaining('history'))
+  })
+
+  // A history that stays unreadable never holds the instructions back for long: after five minutes they go out without the
+  // summary, and a new session whose save time is unknown is told once, as Task 3 decides.
+  it('installs without a summary once the history read has failed for five minutes, and says so once', async () => {
+    const f = docFixture()
+    f.move(f.save('Reviews go to the Reviewer', 'Revision two.\n'))
+    f.setHistory(false)
+    const host = await f.pass()
+    for (let i = 1; i < 5; i++) await f.pass(host, 60_000)
+    expect(f.sent).toEqual([])
+    expect(existsSync(f.file('tester'))).toBe(false)
+    await f.pass(host, 60_000)
+    expect(readFileSync(f.file('tester'), 'utf8').endsWith('Instructions revision 2:\n\nRevision two.\n')).toBe(true)
+    expect(f.sent.map(s => s.command.text)).toEqual([expect.stringMatching(/^The project's instructions changed\. /)])
+    expect(f.t.log).toHaveBeenCalledTimes(1)
+    await f.pass(host, 60_000)
+    expect(f.sent).toHaveLength(1)
+  })
+
+  // Task 4's review: a Buddy has no tools skill, so its own Buddy skill stays its Harness text (spec: "The Buddy skill stays,
+  // and a Buddy also gets the project's document"), kept current by a CLI release as before.
+  it('keeps a Buddy\'s own skill current on an instructions row', async () => {
+    const f = docFixture(['buddy'], { stale: ['buddy'] })
+    const host = await f.pass()
+    expect(readFileSync(f.roleFiles.buddy!, 'utf8')).toBe(f.launched.buddy)
+    expect(readFileSync(f.file('buddy'), 'utf8').endsWith(`Instructions revision 1:\n\n${START}`)).toBe(true)
+    expect(f.sent.map(s => [s.asAgentId, s.command.conversationId])).toEqual([['a-buddy', 'chat'], ['a-buddy', 'chat']])
+    expect(f.sent[0]!.command.text).toMatch(/^Harness updated your built-in swarm-buddy skill\. /)
+    expect(f.sent[0]!.command.text).toContain(JSON.stringify(f.roleFiles.buddy))
+    expect(f.sent[1]!.command.text).toContain(JSON.stringify(f.file('buddy')))
+    await f.pass(host, 1_000)
+    await f.pass()
+    expect(f.sent).toHaveLength(2)
+  })
+
+  it('tells it once when a save moves the revision', async () => {
+    const f = docFixture()
+    const host = await f.pass()
+    f.move(f.save('Reviews go to the Reviewer', '# How this project works\nTesters test; the Reviewer reviews.\n'))
+    await f.pass(host, 1_000)
+    expect(readFileSync(f.file('tester'), 'utf8').endsWith('Instructions revision 2:\n\n# How this project works\nTesters test; the Reviewer reviews.\n')).toBe(true)
+    expect(f.sent).toHaveLength(1)
+    const [notice] = f.sent
+    expect(notice!.asAgentId).toBe('a-tester')
+    expect(notice!.operationId).toMatch(/^skill-a-tester-[0-9a-f]{32}-1$/)
+    expect(notice!.command).toMatchObject({ type: 'message.send', conversationId: 'work', replyTo: null, recipientIds: ['a-tester'], agentOnly: true })
+    expect(notice!.command.text.startsWith('The project\'s instructions changed: Reviews go to the Reviewer.')).toBe(true)
+    expect(notice!.command.text).toContain(JSON.stringify(f.file('tester')))
+    // A third poll, and a restarted host, find it told.
+    await f.pass(host, 1_000)
+    await f.pass()
+    expect(f.sent).toHaveLength(1)
+  })
+
+  it.each([
+    ['an old backend\'s rows (no instructions key)', undefined],
+    ['an agent in no project (instructions null)', null],
+  ])('keeps %s on the built-in skills', async (_case, doc) => {
+    const f = docFixture(['tester'], { stale: ['tester'] })
+    f.setDoc(doc)
+    const host = await f.pass()
+    expect(vi.mocked(f.t.core.account.backend).mock.calls.some(([, path]) => path.includes('/instructions'))).toBe(false)
+    expect(existsSync(dirname(f.file('tester')))).toBe(false)
+    // Today's refresh: the role file on this release's text, and its notice.
+    expect(readFileSync(f.roleFiles.tester!, 'utf8')).toBe(f.launched.tester)
+    expect(f.sent.map(s => s.command.text)).toEqual([expect.stringMatching(/^Harness updated your built-in swarm-dev skill\. /)])
+    await f.pass(host, 120_000)
+    expect(f.sent).toHaveLength(1)
+    expect(f.reads).toEqual([])
+  })
+
+  it('retries a read that answers another revision', async () => {
+    const f = docFixture()
+    const host = await f.pass()
+    const before = readFileSync(f.file('tester'), 'utf8')
+    f.move(f.save('Reviews go to the Reviewer', 'Revision two.\n'))
+    f.setLag(1)
+    await f.pass(host, 1_000)
+    expect(readFileSync(f.file('tester'), 'utf8')).toBe(before)
+    expect(f.sent).toEqual([])
+    expect(f.t.log).toHaveBeenCalledWith(expect.stringContaining('instructions'))
+    // Not read again on every poll: a minute later, as a role text.
+    const reads = f.reads.length
+    await f.pass(host, 1_000)
+    expect(f.reads).toHaveLength(reads)
+    f.setLag(undefined)
+    await f.pass(host, 60_000)
+    expect(readFileSync(f.file('tester'), 'utf8').endsWith('Instructions revision 2:\n\nRevision two.\n')).toBe(true)
+    expect(f.sent.map(s => s.command.text)).toEqual([expect.stringMatching(/^The project's instructions changed: Reviews go to the Reviewer\. /)])
+  })
+
+  // Several saves between two roster passes make one notice, for the newest: never one per save.
+  it('tells once, for the newest, when revisions 2 and 3 come in one pass', async () => {
+    const f = docFixture()
+    const host = await f.pass()
+    f.save('Reviews go to the Reviewer', 'Revision two.\n')
+    f.move(f.save('Testers write the release notes', 'Revision three.\n'))
+    await f.pass(host, 1_000)
+    expect(readFileSync(f.file('tester'), 'utf8').endsWith('Instructions revision 3:\n\nRevision three.\n')).toBe(true)
+    expect(f.sent.map(s => s.command.text)).toEqual([expect.stringMatching(/^The project's instructions changed: Testers write the release notes\. /)])
+    await f.pass(host, 1_000)
+    expect(f.sent).toHaveLength(1)
+  })
+
+  // The review of #1660, for instructions: a refresh works from the roster it started with. One whose revision moved on while
+  // it read installs and tells nothing; the newer roster's refresh does, once.
+  it('tells once, for the newest, when revision 3 arrives while revision 2 is being read', async () => {
+    const f = docFixture()
+    const host = await f.pass()
+    f.move(f.save('Reviews go to the Reviewer', 'Revision two.\n'))
+    const release = f.holdNext(path => path === instructionsRead('a-tester'))
+    await host.tick()
+    await vi.waitFor(() => expect(vi.mocked(f.t.core.account.backend).mock.calls.filter(([, path]) => path === instructionsRead('a-tester'))).toHaveLength(2))
+    f.move(f.save('Testers write the release notes', 'Revision three.\n'))
+    await host.tick()
+    release()
+    await f.pass(host, 1_000)
+    expect(readFileSync(f.file('tester'), 'utf8').endsWith('Instructions revision 3:\n\nRevision three.\n')).toBe(true)
+    expect(f.sent.map(s => s.command.text)).toEqual([expect.stringMatching(/^The project's instructions changed: Testers write the release notes\. /)])
+    expect(f.t.log).not.toHaveBeenCalled()
+    await f.pass(host, 1_000)
+    expect(f.sent).toHaveLength(1)
+  })
+
+  it('reads the text once for the project\'s agents here, each with its own role line, the coordinator\'s too', async () => {
+    const f = docFixture(['pm', 'tester'])
+    const host = await f.pass()
+    expect(f.reads).toEqual([instructionsRead('a-pm'), historyRead('a-pm')])
+    expect(readFileSync(f.file('pm'), 'utf8')).toContain('\nYou are this project\'s PM, its coordinator: ')
+    expect(readFileSync(f.file('tester'), 'utf8')).toContain('\nYou are this project\'s Tester. Product Manager is the project\'s coordinator.\n')
+    f.move(f.save('Reviews go to the Reviewer', 'Revision two.\n'))
+    await f.pass(host, 1_000)
+    expect(f.reads).toHaveLength(4)
+    expect(f.sent.map(s => s.asAgentId).sort()).toEqual(['a-pm', 'a-tester'])
+    expect(new Set(f.sent.map(s => s.operationId)).size).toBe(2)
+  })
+
+  // Diego's issue, 2026-10-27, for instructions: a daemon running for weeks kept every text it read.
+  it('forgets a project\'s instructions text once no roster row names that project', async () => {
+    const f = docFixture()
+    const host = await f.pass()
+    const texts = (host as unknown as { instructionTexts: Map<string, unknown> }).instructionTexts
+    expect(texts.size).toBe(1)
+    f.agents.splice(0, f.agents.length)
+    await f.pass(host, 1_000)
+    expect(texts.size).toBe(0)
+  })
+
+  it('gives a Buddy the text without notes or summary', async () => {
+    const f = docFixture(['tester', 'buddy'])
+    const buddyRole = readFileSync(f.roleFiles.buddy!, 'utf8')
+    const host = await f.pass()
+    const file = f.file('buddy')
+    const text = readFileSync(file, 'utf8')
+    expect(text).toContain('\nYou are this project\'s Buddy. ')
+    expect(text.endsWith(`Instructions revision 1:\n\n${START}`)).toBe(true)
+    expect(text).not.toContain(NOTE)
+    // Only its instructions file beside its Buddy skill, which stays as it was: no tools skill.
+    expect(readdirSync(dirname(dirname(file))).sort()).toEqual(['swarm-buddy', 'swarm-instructions'])
+    expect(readFileSync(f.roleFiles.buddy!, 'utf8')).toBe(buddyRole)
+    // Its own read, never a member's text: and never the history, which names who asked for what.
+    expect(f.reads.filter(path => path.includes('a-buddy'))).toEqual([instructionsRead('a-buddy')])
+    const toBuddy = () => f.sent.filter(s => s.asAgentId === 'a-buddy')
+    expect(toBuddy().map(s => [s.command.conversationId, s.command.recipientIds])).toEqual([['chat', ['a-buddy']]])
+    expect(toBuddy()[0]!.command.text).toContain(JSON.stringify(file))
+    // A save reaches it with no summary.
+    f.move(f.save('Reviews go to the Reviewer', 'Revision two.\n'))
+    await f.pass(host, 1_000)
+    expect(readFileSync(file, 'utf8').endsWith('Instructions revision 2:\n\nRevision two.\n')).toBe(true)
+    expect(toBuddy()).toHaveLength(2)
+    expect(toBuddy()[1]!.command.text).toMatch(/^The project's instructions changed\. /)
+    expect(f.reads.filter(path => path.includes('a-buddy'))).toEqual([instructionsRead('a-buddy'), instructionsRead('a-buddy')])
+    // It reads the file inside its folder, which its guard allows, and gains no command: instructions stays refused.
+    const guard = join(f.folder, '.claude', 'buddy-guard.mjs')
+    expect(guardReads(guard, f.folder, file)).toBe('allow')
+    expect(guardRuns(guard, f.folder, 'harness super-tab --tab tab instructions')).toBe('deny')
+    expect(guardRuns(guard, f.folder, 'harness super-tab --tab tab status')).toBe('allow')
+  })
+})
+
 /** A host on this machine whose roster is [rows] (changeable), with the core's keep-alive and member close mocked. */
 function lifeFixture(rows: Record<string, unknown>[], options: SuperTabHostOptions = {}) {
   const t = setup(), host = t.open(options)
@@ -2875,7 +3412,7 @@ describe('closing the sessions the backend ends', () => {
         JSON.stringify({ sessionId: 'buddy-sid', project: folder, pastedContents: { 1: { contentHash: 'ownpaste' } } }),
         JSON.stringify({ sessionId: 'other-sid', project: other, pastedContents: { 1: { contentHash: 'theirpaste' } } }),
       ].join('\n') + '\n')
-      const t = lifeFixture([ended()], { claudeHome: home })
+      const t = lifeFixture([ended()], { claudeHome: home, startReceipt: () => 'super-buddy-session' })
       t.core.agents.byAgent = vi.fn(() => ({ agentId: 'harness', sessionId: 'buddy-sid', engine: 'claude', cwd: folder, swarmSkill: { role: 'buddy', key: 'k' } }) as never)
       await t.poll()
       await vi.waitFor(() => expect(t.commands).toHaveLength(1))
@@ -2891,25 +3428,280 @@ describe('closing the sessions the backend ends', () => {
   // Security re-check 2 of #2345: what to scrub was known only in memory, so a host restarted between the close and the scrub
   // left the transcript for good. It is written to the journal before the close, and the restarted host scrubs from there.
   it('still scrubs an ended Buddy session\'s traces when its host restarts between the close and the scrub', async () => {
-    const home = realpathSync(mkdtempSync(join(tmpdir(), 'buddy-home-'))), claude = join(home, '.claude')
-    const folder = '/work/worktrees/openharness/buddy-session', slug = (cwd: string) => cwd.replace(/[^A-Za-z0-9]/g, '-')
+    const home = realpathSync(mkdtempSync(join(tmpdir(), 'buddy-home-'))), claude = join(home, '.claude'), worktrees = join(home, 'harnesses', 'worktrees')
+    const folder = join(worktrees, 'openharness', 'buddy-session'), slug = (cwd: string) => cwd.replace(/[^A-Za-z0-9]/g, '-')
     try {
+      mkdirSync(folder, { recursive: true })
       mkdirSync(join(claude, 'projects', slug(folder)), { recursive: true })
       writeFileSync(join(claude, 'projects', slug(folder), 'x.jsonl'), 'transcript')
-      const t = lifeFixture([ended()], { claudeHome: home })
-      t.core.agents.byAgent = vi.fn(() => ({ agentId: 'harness', sessionId: 'buddy-sid', engine: 'claude', cwd: folder, swarmSkill: { role: 'buddy', key: 'k' } }) as never)
+      const t = lifeFixture([ended()], { claudeHome: home, worktrees, startReceipt: () => 'super-buddy-session' })
+      const sid = '33333333-3333-4333-8333-333333333333'
+      t.core.agents.byAgent = vi.fn(() => ({ agentId: 'harness', sessionId: sid, engine: 'claude', cwd: folder, swarmSkill: { role: 'buddy', key: 'k' } }) as never)
       // The first host's close never returns: it stops before the scrub.
       t.closeMember.mockImplementation(() => new Promise(() => {}))
       await t.poll()
-      expect(t.saved().scrubs).toEqual({ agent: { agentId: 'agent', sessionId: 'buddy-sid', cwd: folder, engine: 'claude', codexHome: null } })
+      expect(t.saved().scrubs).toEqual({ agent: { agentId: 'agent', sessionId: sid, cwd: folder, engine: 'claude', codexHome: null } })
       t.host.stop()
       // Restarted: the session is no longer registered here, and the close goes through.
       t.core.agents.byAgent = vi.fn(() => undefined as never)
       t.closeMember.mockImplementation(async () => ({ closed: true as const }))
-      const again = t.open({ claudeHome: home })
+      const again = t.open({ claudeHome: home, worktrees, startReceipt: () => 'super-buddy-session' })
       await again.tick()
       await vi.waitFor(() => expect(existsSync(join(claude, 'projects', slug(folder)))).toBe(false))
       await vi.waitFor(() => expect(t.saved().scrubs).toBeUndefined())
+    } finally { rmSync(home, { recursive: true, force: true }) }
+  })
+
+  // Follow-up to security review 1 of #2345: a reloaded target was trusted for any absolute folder, so a hand-edited or
+  // corrupted journal could point the scrub at another folder's Claude Code transcripts. Only a Buddy worktree's is kept:
+  // `<worktrees>/<repository>/<leaf>` as written and once its symlinks are resolved, or one already removed from there.
+  it('scrubs after a restart only a saved folder in this machine\'s worktrees, never one outside, through a symlink or with ..', async () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), 'buddy-home-'))), claude = join(home, '.claude'), worktrees = join(home, 'harnesses', 'worktrees')
+    const slug = (cwd: string) => cwd.replace(/[^A-Za-z0-9]/g, '-')
+    const mine = join(home, 'code', 'mine'), repository = join(worktrees, 'openharness')
+    const cwds: Record<string, string> = {
+      real: join(repository, 'buddy-session'),
+      removed: join(repository, 'removed-session'),
+      outside: mine,
+      symlinked: join(repository, 'link-out'),
+      dangling: join(repository, 'link-gone'),
+      dotted: `${repository}/../../../code/mine`,
+      dottedInside: `${repository}/../openharness/buddy-session`,
+      shallow: repository,
+      deep: join(repository, 'buddy-session', 'sub'),
+      into: join(home, 'code', 'link-in'),
+      relative: 'harnesses/worktrees/openharness/buddy-session',
+    }
+    try {
+      mkdirSync(join(cwds.real, 'sub'), { recursive: true })
+      mkdirSync(mine, { recursive: true })
+      symlinkSync(mine, cwds.symlinked)
+      symlinkSync(cwds.real, cwds.into)
+      symlinkSync(join(home, 'code', 'gone'), cwds.dangling)
+      for (const cwd of new Set([...Object.values(cwds), mine])) {
+        mkdirSync(join(claude, 'projects', slug(cwd)), { recursive: true })
+        writeFileSync(join(claude, 'projects', slug(cwd), 'x.jsonl'), 'transcript')
+      }
+      const rows = Object.keys(cwds).map(id => ended({ agent: { id, harnessId: `h-${id}`, machineId: 'machine-1' } }))
+      const t = lifeFixture(rows, { claudeHome: home, worktrees })
+      t.host.stop()
+      // A journal as this host writes it, each target hand-edited to another folder but for the real and the removed one.
+      const scrubs = Object.fromEntries(Object.entries(cwds).map(([agentId, cwd]) => [agentId, { agentId, sessionId: null, cwd, engine: 'claude', codexHome: null }]))
+      writeFileSync(hostJournalFile(t.dir, 'machine-1'), JSON.stringify({ ...t.saved(), scrubs }))
+      t.core.agents.byAgent = vi.fn(() => undefined as never)
+      const again = t.open({ claudeHome: home, worktrees, startReceipt: harnessId => `super-${cwds[harnessId.slice(2)].split('/').pop()}` })
+      expect(Object.keys(t.saved().scrubs).sort()).toEqual(['real', 'removed'])
+      for (const id of ['outside', 'symlinked', 'dangling', 'dotted', 'dottedInside', 'shallow', 'deep', 'into', 'relative']) {
+        expect(t.log).toHaveBeenCalledWith(`Dropped a saved Buddy session scrub this host did not write: agent ${id}`)
+      }
+      // By agent id only: no folder of any of them is logged.
+      expect(t.log.mock.calls.flat().join('\n')).not.toContain(home)
+      await again.tick()
+      await vi.waitFor(() => expect(t.commands).toHaveLength(rows.length))
+      await vi.waitFor(() => expect(t.saved().scrubs).toBeUndefined())
+      expect(existsSync(join(claude, 'projects', slug(cwds.real)))).toBe(false)
+      expect(existsSync(join(claude, 'projects', slug(cwds.removed)))).toBe(false)
+      for (const id of ['outside', 'symlinked', 'dangling', 'dotted', 'dottedInside', 'shallow', 'deep', 'into', 'relative']) {
+        expect(existsSync(join(claude, 'projects', slug(cwds[id]), 'x.jsonl'))).toBe(true)
+      }
+      expect(existsSync(join(claude, 'projects', slug(mine), 'x.jsonl'))).toBe(true)
+    } finally { rmSync(home, { recursive: true, force: true }) }
+  })
+
+  // Security review 2 of #2375: the saved session id was trusted, so a person's own session id beside a real worktree took
+  // their prompt history, a paste, file history and debug log. It is used only when nothing ties it to another folder: a
+  // history line with another project, or a transcript in another folder's transcript folder. The folder's cleanup stays.
+  it('keeps a person\'s own session when a saved scrub names its id, and still removes the worktree\'s transcripts', async () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), 'buddy-home-'))), claude = join(home, '.claude'), worktrees = join(home, 'harnesses', 'worktrees')
+    const slug = (cwd: string) => cwd.replace(/[^A-Za-z0-9]/g, '-')
+    const folder = join(worktrees, 'openharness', 'buddy-session'), mine = join(home, 'code', 'mine')
+    // Theirs by a history line; theirs by a transcript in their own folder's transcript folder, with no history line.
+    const byHistory = '11111111-1111-4111-8111-111111111111', byTranscript = '22222222-2222-4222-8222-222222222222'
+    try {
+      mkdirSync(folder, { recursive: true })
+      for (const sub of ['paste-cache', 'todos', 'debug', `projects/${slug(folder)}`, `projects/${slug(mine)}`]) mkdirSync(join(claude, sub), { recursive: true })
+      writeFileSync(join(claude, 'projects', slug(folder), 'own.jsonl'), JSON.stringify({ cwd: folder }))
+      writeFileSync(join(claude, 'projects', slug(mine), `${byTranscript}.jsonl`), JSON.stringify({ cwd: mine }))
+      writeFileSync(join(claude, 'history.jsonl'), `${JSON.stringify({ sessionId: byHistory, project: mine, pastedContents: { 1: { contentHash: 'theirpaste' } } })}\n`)
+      writeFileSync(join(claude, 'paste-cache', 'theirpaste.txt'), 'secret')
+      for (const id of [byHistory, byTranscript]) {
+        mkdirSync(join(claude, 'file-history', id), { recursive: true })
+        writeFileSync(join(claude, 'debug', `${id}.txt`), 'debug')
+        writeFileSync(join(claude, 'todos', `${id}-agent-${id}.json`), '[]')
+      }
+      const rows = ['history', 'transcript'].map(id => ended({ agent: { id, harnessId: `h-${id}`, machineId: 'machine-1' } }))
+      const t = lifeFixture(rows, { claudeHome: home, worktrees, startReceipt: () => 'super-buddy-session' })
+      t.host.stop()
+      const scrubs = { history: { agentId: 'history', sessionId: byHistory, cwd: folder, engine: 'claude', codexHome: null },
+        transcript: { agentId: 'transcript', sessionId: byTranscript, cwd: folder, engine: 'claude', codexHome: null } }
+      writeFileSync(hostJournalFile(t.dir, 'machine-1'), JSON.stringify({ ...t.saved(), scrubs }))
+      t.core.agents.byAgent = vi.fn(() => undefined as never)
+      const again = t.open({ claudeHome: home, worktrees, startReceipt: () => 'super-buddy-session' })
+      await again.tick()
+      await vi.waitFor(() => expect(t.saved().scrubs).toBeUndefined())
+      expect(existsSync(join(claude, 'projects', slug(folder)))).toBe(false)
+      expect(readFileSync(join(claude, 'history.jsonl'), 'utf8')).toContain(byHistory)
+      expect(existsSync(join(claude, 'paste-cache', 'theirpaste.txt'))).toBe(true)
+      expect(existsSync(join(claude, 'projects', slug(mine), `${byTranscript}.jsonl`))).toBe(true)
+      for (const id of [byHistory, byTranscript]) {
+        for (const kept of [`file-history/${id}`, `debug/${id}.txt`, `todos/${id}-agent-${id}.json`]) expect(existsSync(join(claude, kept)), kept).toBe(true)
+      }
+      for (const id of ['history', 'transcript']) expect(t.log).toHaveBeenCalledWith(`Kept another folder's session that a Buddy session scrub named: agent ${id}`)
+      expect(t.log.mock.calls.flat().join('\n')).not.toContain(home)
+    } finally { rmSync(home, { recursive: true, force: true }) }
+  })
+
+  // Security review 1 of #2375: any Harness worktree passed, so a saved entry naming a person's own Desktop worktree or another
+  // agent's, both in the same folder, took every transcript, history line and config entry of it. Only the worktree named
+  // for this agent's own Swarm start is scrubbed (its name, or with -2, -3), and with no start receipt, none is.
+  it('scrubs only the worktree of the agent\'s own Swarm start, never another agent\'s or a person\'s', async () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), 'buddy-home-'))), claude = join(home, '.claude'), worktrees = join(home, 'harnesses', 'worktrees')
+    const slug = (cwd: string) => cwd.replace(/[^A-Za-z0-9]/g, '-'), repository = join(worktrees, 'openharness')
+    // Each agent's own start is `own`; the folder each saved entry names.
+    const cwds: Record<string, string> = {
+      own: join(repository, 'own'), taken: join(repository, 'own-2'),
+      otherAgent: join(repository, 'other-start'), person: join(repository, 'my-feature'), prefix: join(repository, 'own-x'), noReceipt: join(repository, 'own-3'),
+    }
+    try {
+      for (const cwd of new Set(Object.values(cwds))) {
+        mkdirSync(cwd, { recursive: true })
+        mkdirSync(join(claude, 'projects', slug(cwd)), { recursive: true })
+        writeFileSync(join(claude, 'projects', slug(cwd), 'x.jsonl'), JSON.stringify({ cwd }))
+      }
+      const rows = Object.keys(cwds).map(id => ended({ agent: { id, harnessId: `h-${id}`, machineId: 'machine-1' } }))
+      const startReceipt = (harnessId: string) => harnessId === 'h-noReceipt' ? null : 'super-own'
+      const t = lifeFixture(rows, { claudeHome: home, worktrees, startReceipt })
+      t.host.stop()
+      const scrubs = Object.fromEntries(Object.entries(cwds).map(([agentId, cwd]) => [agentId, { agentId, sessionId: null, cwd, engine: 'claude', codexHome: null }]))
+      writeFileSync(hostJournalFile(t.dir, 'machine-1'), JSON.stringify({ ...t.saved(), scrubs }))
+      t.core.agents.byAgent = vi.fn(() => undefined as never)
+      const again = t.open({ claudeHome: home, worktrees, startReceipt })
+      await again.tick()
+      await vi.waitFor(() => expect(t.commands).toHaveLength(rows.length))
+      await vi.waitFor(() => expect(t.saved().scrubs).toBeUndefined())
+      expect([cwds.own, cwds.taken].map(cwd => existsSync(join(claude, 'projects', slug(cwd))))).toEqual([false, false])
+      for (const cwd of [cwds.otherAgent, cwds.person, cwds.prefix, cwds.noReceipt]) expect(existsSync(join(claude, 'projects', slug(cwd), 'x.jsonl')), cwd).toBe(true)
+      for (const id of ['otherAgent', 'person', 'prefix', 'noReceipt']) {
+        expect(t.log).toHaveBeenCalledWith(`Dropped a Buddy session scrub that names no worktree of its own start: agent ${id}`)
+      }
+      expect(t.log).not.toHaveBeenCalledWith('Dropped a Buddy session scrub that names no worktree of its own start: agent own')
+      expect(t.log).not.toHaveBeenCalledWith('Dropped a Buddy session scrub that names no worktree of its own start: agent taken')
+    } finally { rmSync(home, { recursive: true, force: true }) }
+  })
+
+  // Security review 2 of #2375: a saved session id is a Claude Code session's, a UUID; another is dropped on reload, the folder kept.
+  it('drops a saved session id that is not a UUID on reload, and keeps the folder\'s scrub', async () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), 'buddy-home-'))), worktrees = join(home, 'harnesses', 'worktrees')
+    const folder = join(worktrees, 'openharness', 'buddy-session')
+    try {
+      mkdirSync(folder, { recursive: true })
+      const t = lifeFixture([], { claudeHome: home, worktrees })
+      t.host.stop()
+      writeFileSync(hostJournalFile(t.dir, 'machine-1'), JSON.stringify({ ...t.saved(), scrubs: {
+        agent: { agentId: 'agent', sessionId: 'a', cwd: folder, engine: 'claude', codexHome: null } } }))
+      t.open({ claudeHome: home, worktrees })
+      expect(t.saved().scrubs).toEqual({ agent: { agentId: 'agent', sessionId: null, cwd: folder, engine: 'claude', codexHome: null } })
+      expect(t.log).toHaveBeenCalledWith('Dropped the session id of a saved Buddy session scrub: agent agent')
+    } finally { rmSync(home, { recursive: true, force: true }) }
+  })
+
+  // Security review 2 of #2375: a failed scrub logged its raw error, which names the transcript folder's path.
+  it('logs a failed scrub as a fixed code, never its path, and scrubs on a later try', async () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), 'buddy-home-'))), claude = join(home, '.claude'), worktrees = join(home, 'harnesses', 'worktrees')
+    const folder = join(worktrees, 'openharness', 'buddy-session'), transcripts = join(claude, 'projects', folder.replace(/[^A-Za-z0-9]/g, '-'))
+    try {
+      mkdirSync(folder, { recursive: true })
+      mkdirSync(transcripts, { recursive: true })
+      writeFileSync(join(transcripts, 'own.jsonl'), JSON.stringify({ cwd: folder }))
+      chmodSync(join(claude, 'projects'), 0o555)
+      const t = lifeFixture([ended()], { claudeHome: home, worktrees, startReceipt: () => 'super-buddy-session' })
+      t.core.agents.byAgent = vi.fn(() => ({ agentId: 'harness', sessionId: null, engine: 'claude', cwd: folder, swarmSkill: { role: 'buddy', key: 'k' } }) as never)
+      await t.poll()
+      await vi.waitFor(() => expect(t.log).toHaveBeenCalledWith('Could not remove an ended Buddy session\'s Claude Code traces yet: agent agent, SCRUB_FAILED'))
+      expect(t.log.mock.calls.flat().join('\n')).not.toContain(home)
+      expect(t.commands).toEqual([])
+      chmodSync(join(claude, 'projects'), 0o755)
+      await t.poll(60_000)
+      await vi.waitFor(() => expect(t.commands).toHaveLength(1))
+      expect(existsSync(transcripts)).toBe(false)
+    } finally { chmodSync(join(claude, 'projects'), 0o755); rmSync(home, { recursive: true, force: true }) }
+  })
+
+  // Re-check 2 of 68ec6f0: a Buddy's transcript folder that could not be listed, or one of its own transcripts that could not
+  // be read, was skipped, and with no sweep after it the cleanup marked itself done and left the person's transcript for good.
+  it.each(['folder', 'transcript'] as const)('fails an ended Buddy\'s cleanup by a fixed code when its transcript %s cannot be read, and finishes it later', async unread => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), 'buddy-home-'))), claude = join(home, '.claude'), worktrees = join(home, 'harnesses', 'worktrees')
+    const folder = join(worktrees, 'openharness', 'buddy-session'), transcripts = join(claude, 'projects', folder.replace(/[^A-Za-z0-9]/g, '-'))
+    const locked = unread === 'folder' ? transcripts : join(transcripts, 'own.jsonl')
+    try {
+      mkdirSync(folder, { recursive: true })
+      mkdirSync(transcripts, { recursive: true })
+      writeFileSync(join(transcripts, 'own.jsonl'), JSON.stringify({ cwd: folder }))
+      chmodSync(locked, 0o000)
+      const t = lifeFixture([ended()], { claudeHome: home, worktrees, startReceipt: () => 'super-buddy-session' })
+      t.core.agents.byAgent = vi.fn(() => ({ agentId: 'harness', sessionId: null, engine: 'claude', cwd: folder, swarmSkill: { role: 'buddy', key: 'k' } }) as never)
+      await t.poll()
+      await vi.waitFor(() => expect(t.log).toHaveBeenCalledWith('Could not remove an ended Buddy session\'s Claude Code traces yet: agent agent, TRANSCRIPTS_UNREAD'))
+      const said = t.log.mock.calls.flat().join('\n')
+      expect(said).not.toContain(home)
+      expect(said).not.toContain('Kept another folder\'s transcripts')
+      // Not done: its end is not acknowledged, and the journal still says what to scrub.
+      expect(t.commands).toEqual([])
+      expect(Object.keys(t.saved().scrubs ?? {})).toEqual(['agent'])
+      chmodSync(locked, unread === 'folder' ? 0o755 : 0o644)
+      await t.poll(60_000)
+      await vi.waitFor(() => expect(t.commands).toHaveLength(1))
+      expect(existsSync(transcripts)).toBe(false)
+      expect(t.saved().scrubs).toBeUndefined()
+    } finally { if (existsSync(locked)) chmodSync(locked, 0o755); rmSync(home, { recursive: true, force: true }) }
+  })
+
+  // Re-check of 8c0b019: a todos or config backups folder that could not be listed was read as empty, and with no sweep after
+  // it the cleanup marked itself done and left the Buddy's todo file and its folder in the backups for good.
+  it.each([['todos', 'TODOS_UNREAD'], ['backups', 'CONFIG_BACKUPS_UNREAD']] as const)(
+    'fails an ended Buddy\'s cleanup by a fixed code when its %s folder cannot be listed, and finishes it later', async (sub, code) => {
+      const home = realpathSync(mkdtempSync(join(tmpdir(), 'buddy-home-'))), claude = join(home, '.claude'), worktrees = join(home, 'harnesses', 'worktrees')
+      const folder = join(worktrees, 'openharness', 'buddy-session'), locked = join(claude, sub)
+      const todo = join(claude, 'todos', 'buddy-sid-agent-buddy-sid.json'), backup = join(claude, 'backups', '.claude.json.backup.1')
+      try {
+        mkdirSync(folder, { recursive: true })
+        mkdirSync(join(claude, 'todos'), { recursive: true })
+        mkdirSync(join(claude, 'backups'), { recursive: true })
+        writeFileSync(todo, '[]')
+        writeFileSync(backup, JSON.stringify({ projects: { [folder]: {}, '/elsewhere': {} } }))
+        chmodSync(locked, 0o000)
+        const t = lifeFixture([ended()], { claudeHome: home, worktrees, startReceipt: () => 'super-buddy-session' })
+        t.core.agents.byAgent = vi.fn(() => ({ agentId: 'harness', sessionId: 'buddy-sid', engine: 'claude', cwd: folder, swarmSkill: { role: 'buddy', key: 'k' } }) as never)
+        await t.poll()
+        await vi.waitFor(() => expect(t.log).toHaveBeenCalledWith(`Could not remove an ended Buddy session's Claude Code traces yet: agent agent, ${code}`))
+        expect(t.log.mock.calls.flat().join('\n')).not.toContain(home)
+        // Not done: its end is not acknowledged, and the journal still says what to scrub.
+        expect(t.commands).toEqual([])
+        expect(Object.keys(t.saved().scrubs ?? {})).toEqual(['agent'])
+        chmodSync(locked, 0o755)
+        await t.poll(60_000)
+        await vi.waitFor(() => expect(t.commands).toHaveLength(1))
+        expect(existsSync(todo)).toBe(false)
+        expect(JSON.parse(readFileSync(backup, 'utf8')).projects).toEqual({ '/elsewhere': {} })
+        expect(t.saved().scrubs).toBeUndefined()
+      } finally { if (existsSync(locked)) chmodSync(locked, 0o755); rmSync(home, { recursive: true, force: true }) }
+    })
+
+  // A machine with no worktrees folder made no Buddy worktree, and an id that is not one is logged as such, never as itself.
+  it('drops every saved scrub when this machine has no worktrees folder, and never logs an id that is not one', async () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), 'buddy-home-'))), worktrees = join(home, 'harnesses', 'worktrees')
+    try {
+      const t = lifeFixture([], { claudeHome: home, worktrees })
+      t.host.stop()
+      const cwd = join(worktrees, 'openharness', 'buddy-session')
+      writeFileSync(hostJournalFile(t.dir, 'machine-1'), JSON.stringify({ ...t.saved(), scrubs: {
+        agent: { agentId: 'agent', sessionId: null, cwd, engine: 'claude', codexHome: null },
+        '../not an id': { agentId: '../not an id', sessionId: null, cwd, engine: 'claude', codexHome: null } } }))
+      t.open({ claudeHome: home, worktrees })
+      expect(t.saved().scrubs).toBeUndefined()
+      expect(t.log).toHaveBeenCalledWith('Dropped a saved Buddy session scrub this host did not write: agent agent')
+      expect(t.log).toHaveBeenCalledWith('Dropped a saved Buddy session scrub this host did not write: an unreadable agent id')
+      expect(t.log.mock.calls.flat().join('\n')).not.toContain('not an id')
     } finally { rmSync(home, { recursive: true, force: true }) }
   })
 
@@ -2977,6 +3769,52 @@ describe('closing the sessions the backend ends', () => {
     for (const file of [buddyReadsOf('other-buddy').file, shot]) rmSync(file)
   })
 
+  // Follow-up to #2389's security re-check 2: a lists folder that could not be read threw the read's own error into this log,
+  // its path under the person's home with it. It is logged by a fixed code, once, nothing is deleted, and the end waits.
+  it('logs a lists folder it cannot read by a fixed code, with no path, deletes nothing, and acknowledges the end once it can', async () => {
+    const t = lifeFixture([leadRow({ lead: false })])
+    mkdirSync(PASTE_DROPS_DIR, { recursive: true })
+    const shot = join(PASTE_DROPS_DIR, `${randomUUID().slice(0, 8)}-screen.png`)
+    writeFileSync(shot, 'png')
+    const reads = buddyReadsOf('unread-folder-buddy'), lists = dirname(reads.file)
+    allowBuddyReads(reads, { session: 'harness', files: [shot], links: [] })
+    const before = readdirSync(lists).sort()
+    await t.poll()
+    chmodSync(lists, 0o000)
+    try {
+      t.rows.splice(0, 1, ended())
+      await t.poll()
+      await vi.waitFor(() => expect(t.closeMember).toHaveBeenCalledTimes(1))
+      for (let i = 0; i < 3; i++) await t.poll(60_000)
+      expect(t.commands).toEqual([])
+      const line = 'Could not delete what session harness\'s person sent it, so its end is not acknowledged yet: SENT_LISTS_UNREAD'
+      expect(t.log.mock.calls.filter(([said]) => said === line)).toHaveLength(1)
+      const said = t.log.mock.calls.flat().join('\n')
+      for (const path of [lists, env.ADAPTER_DATA_DIR, tmpdir()]) expect(said).not.toContain(path)
+    } finally { chmodSync(lists, 0o700) }
+    expect(readdirSync(lists).sort()).toEqual(before)
+    await t.poll()
+    await vi.waitFor(() => expect(t.commands).toHaveLength(1))
+    expect(existsSync(reads.file)).toBe(false)
+    rmSync(shot)
+  })
+
+  // Follow-up to #2389's security re-check 2: the host logs an end's failure by its codes alone. One that is not the cleanup's
+  // own, whose message may name a path, is logged by kind, never by its message.
+  it('logs a failure that is not the lists cleanup\'s own by kind, never by its message', async () => {
+    const t = lifeFixture([leadRow({ lead: false })])
+    await t.poll()
+    vi.mocked(forgetBuddyReads).mockImplementationOnce(() => { throw new Error('EACCES: permission denied, scandir \'/Users/person/.harness/buddy-reads\'') })
+    t.rows.splice(0, 1, ended())
+    await t.poll()
+    expect(t.log).toHaveBeenCalledWith('Could not delete what session harness\'s person sent it, so its end is not acknowledged yet: SENT_LISTS_FAILED')
+    expect(t.log.mock.calls.flat().join('\n')).not.toContain('/Users/person')
+    await vi.waitFor(() => expect(t.closeMember).toHaveBeenCalledTimes(1))
+    expect(t.commands).toEqual([])
+    await t.poll()
+    await vi.waitFor(() => expect(t.commands).toHaveLength(1))
+  })
+
   // Re-check 2 of #2248: a list the host could not delete was only logged; the end was acknowledged, the backend dropped the
   // row, and nothing tried again, so the list kept allowing its file for the rest of the day.
   it('acknowledges a Buddy session\'s end only once its list is deleted, and its guard allows nothing meanwhile', async () => {
@@ -3001,7 +3839,9 @@ describe('closing the sessions the backend ends', () => {
       expect(t.commands).toEqual([])
       expect(existsSync(reads.file)).toBe(true)
       expect(guardReads(guard, folder, shot)).toBe('deny')
-      expect(t.log).toHaveBeenCalledWith(expect.stringContaining('so its end is not acknowledged yet'))
+      // By its kind alone (follow-up to #2389's security re-check 2): the error it caught named the list's path.
+      expect(t.log).toHaveBeenCalledWith('Could not delete what session harness\'s person sent it, so its end is not acknowledged yet: SENT_LIST_KEPT')
+      expect(t.log.mock.calls.flat().join('\n')).not.toContain(dirname(reads.file))
     } finally { chmodSync(dirname(reads.file), 0o700) }
     await t.poll()
     await vi.waitFor(() => expect(t.commands).toHaveLength(1))

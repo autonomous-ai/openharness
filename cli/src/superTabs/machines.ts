@@ -12,10 +12,10 @@ import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
 import { readCapabilities, quotaOf, meteredEngine, quotaUnknownReason } from './capacity.js'
 import { startAgent, type ScopedRequest } from './start.js'
-import { prepareSwarmStart } from './projectFolder.js'
+import { PrepareRetryError, prepareSwarmStart } from './projectFolder.js'
 import { readAuthSession } from '../lib/authSession.js'
 import { createSwarmCloneTrustRepair, swarmCloneRoots } from './cloneTrust.js'
-import { git, sweepOne } from '../lib/worktreeSweep.js'
+import { git, sweepOne, WorktreeKept } from '../lib/worktreeSweep.js'
 import { projectsRoot } from '../lib/projectFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 import { teamPrivacyObserver } from '../team/observer.js'
@@ -152,6 +152,20 @@ const CLEANING_WAIT = 'Waiting for this machine to finish cleaning up this Swarm
  * hold up a delivery lease. Only a tab's explicit owner grant wakes this queue. */
 /** A pool's starts this host launches: its agents', and its Buddies', which the backend lists apart so that a host from before
  *  Buddies never launches one as a Builder (backend read/hostRows.ts). */
+/** How long this machine sends one reading per Swarm after its backend had no route for all of them in one call (an older
+ *  backend, DB roadmap 2.5): a backend deployed meanwhile is asked again within this long. */
+export const READINGS_RETRY_MS = 10 * 60_000
+/** The most Swarms' readings the backend takes in one call (backend routes/superTabs.ts READINGS_MAX). */
+const READINGS_MAX = 64
+/** The batch route is not there: an older backend answers 404, and its team gate 403 for a route it does not list. A body
+ *  past its limit (413) is sent per Swarm too. */
+const readingsMissing = (error: unknown) => error instanceof SuperTabHostError
+  && (error.status === 404 || error.status === 413 || (error.status === 403 && error.code === 'TEAM_SESSION_LIMITED'))
+/** A reading the backend would not validate: the next, older form of it is tried (an older backend refusing a newer field). */
+const fieldRefused = (error: unknown) => error instanceof SuperTabHostError && error.status === 400 && error.code === 'VALIDATION_ERROR'
+/** One Swarm's reading of this pass, to send. */
+interface Reading { tab: string; observation: Record<string, unknown>; localModels: LocalModelReading[] | null; signature: string }
+
 /** A host's starts: its workers', and its Buddies' and Product Managers', which the backend lists apart so that a host from
  *  before them never launches one as a worker. */
 const startsOf = (row: Record<string, unknown>) => [...list(row.starts), ...list(row.buddyStarts), ...list(row.leadStarts)]
@@ -211,6 +225,8 @@ export class ContributedMachines {
   private readonly cleanupRetries = new Map<string, { failures: number; at: number }>()
   /** The last removal asked for each stopped agent's worktree, by tab and agent: the next one waits for it (removeStoppedWorktree). */
   private readonly removals = new Map<string, Promise<void>>()
+  /** Until when this machine sends one reading per Swarm, its backend having no route for all of them in one call. */
+  private readingsRefusedUntil = 0
   /** Until when the reading leaves out its privacy field, which the backend refused. */
   private privacyRefusedUntil = 0
   /** Until when the reading leaves out its progress, which the backend refused. */
@@ -367,12 +383,31 @@ export class ContributedMachines {
     if (now - began >= BEAT_LIMIT_MS) return
     const due = [...this.lastSent].filter(([tab, sent]) => !this.sending.has(tab) && now - sent.at >= MACHINE_HEARTBEAT_MS)
     if (!due.length) return
+    const failed = (error: unknown) => this.log(`Could not send this machine's reading again: ${error instanceof Error ? error.message : String(error)}`)
     this.beating = (async () => {
-      for (const [, sent] of due) {
-        // A failed one waits a whole beat too, rather than being asked again every second.
-        sent.at = now
-        try { await this.deps.backend(this.core, 'POST', sent.path, sent.body) }
-        catch (error) { this.log(`Could not send this machine's reading again: ${error instanceof Error ? error.message : String(error)}`) }
+      // A failed one waits a whole beat too, rather than being asked again every second.
+      for (const [, sent] of due) sent.at = now
+      let alone = due
+      if (now >= this.readingsRefusedUntil) {
+        alone = []
+        for (let i = 0; i < due.length; i += READINGS_MAX) {
+          const chunk = due.slice(i, i + READINGS_MAX)
+          try {
+            const answer = object(await this.deps.backend(this.core, 'POST', `/api/super-tabs/hosts/${this.machineId}/readings`,
+              { readings: chunk.map(([tabId, sent]) => ({ tabId, observation: sent.body })) }))
+            for (const result of Array.isArray(answer.results) ? answer.results : []) {
+              const refusal = object(object(result).error)
+              if (object(result).ok !== true) failed(new Error(String(refusal.message ?? 'The backend did not take it.')))
+            }
+          } catch (error) {
+            if (!readingsMissing(error)) { failed(error); continue }
+            this.readingsRefusedUntil = now + READINGS_RETRY_MS
+            alone.push(...chunk)
+          }
+        }
+      }
+      for (const [, sent] of alone) {
+        try { await this.deps.backend(this.core, 'POST', sent.path, sent.body) } catch (error) { failed(error) }
       }
     })().finally(() => { this.beating = null })
   }
@@ -398,6 +433,9 @@ export class ContributedMachines {
     let local: Awaited<ReturnType<typeof openDaemon>> | null = null
     let usage: { value: Record<string, unknown>; at: number } | null = null
     try {
+      // Every Swarm's reading first, sent in one call (DB roadmap 2.5), then each Swarm's starts.
+      const looked: Array<{ row: Record<string, unknown>; pool: Record<string, unknown>; pending: ReturnType<typeof startsOf> }> = []
+      const due: Reading[] = []
       for (const row of pools) {
         try {
         if (this.stopped || !identifier(row.tabId)) return
@@ -413,6 +451,7 @@ export class ContributedMachines {
         }
         const running = ids.filter(id => !!this.core.agents.byAgent(id) && !stopped.includes(id))
         const pending = startsOf(row)
+        looked.push({ row, pool, pending })
         const preparing = began >= this.preparingRefusedUntil ? pending.flatMap(start => this.preparing.has(String(start.id)) ? [String(start.id)] : []) : []
         const tools = [...new Set([...COMMON_TOOLS, ...pending.flatMap(start => {
           const wanted = object(object(start.request).requirements).tools
@@ -505,59 +544,22 @@ export class ContributedMachines {
           quotas: allowances.map(q => ({ engine: q.engine, known: q.known, windows: q.windows })), runningHarnessIds: running, stoppedHarnessIds: stopped,
           ...(Array.isArray(row.reservations) ? { stoppedReservations: list(row.reservations).filter(r => stopped.includes(String(r.harnessId))
             && identifier(r.harnessId) && identifier(r.generation)).map(r => ({ harnessId: r.harnessId, generation: r.generation })) } : {}) }
-        this.sending.add(String(row.tabId))
-        try {
-          await this.beating
-          const path = `/api/super-tabs/${row.tabId}/machines/${this.machineId}`
-          const refused = (error: unknown) => error instanceof SuperTabHostError && error.status === 400 && error.code === 'VALIDATION_ERROR'
-          // Older backends reject the additive fields. The newest go alone first (the starts it is preparing, uncommitted work,
-          // readiness, progress, then privacy): a backend that takes everything else keeps the local models it reads. Their
-          // boolean-only view still safely refuses an unverified tool, and a reading without privacy is never one a Team
-          // machine passes on.
-          const { quotaReasons: _reasons, ...unreasoned } = observation
-          const { harnessTokens: _tokens, ...untokened } = unreasoned
-          const { preparingStartIds: _preparing, ...unprepared } = untokened
-          const { harnessUncommitted: _uncommitted, ...known } = unprepared
-          const { readiness: _readiness, ...ready } = known
-          const { harnessProgress: _progress, ...withoutProgress } = ready
-          const { privacy: _privacy, ...withoutPrivacy } = withoutProgress
-          const { toolProbeErrors: _probeErrors, localModels: _served, refusedModels: _refused, ...legacy } = withoutPrivacy
-          // A backend before `starting` refuses it: it gets the models the grid lists, as before, not none at all.
-          const listedOnly = localModels?.some(m => m.starting)
-            ? [{ ...withoutPrivacy, localModels: localModels.filter(m => !m.starting) }] : []
-          const attempts = [...('quotaReasons' in observation ? [observation] : []), ...('harnessTokens' in unreasoned ? [unreasoned] : []), ...('preparingStartIds' in untokened ? [untokened] : []),
-            ...('harnessUncommitted' in unprepared ? [unprepared] : []),
-            ...('readiness' in known ? [known] : []), ready, ...('harnessProgress' in ready ? [withoutProgress] : []),
-            ...('privacy' in withoutProgress ? [withoutPrivacy] : []), ...listedOnly,
-            ...('toolProbeErrors' in observation || 'localModels' in observation || 'refusedModels' in observation ? [legacy] : [])]
-          for (const [index, attempt] of attempts.entries()) {
-            try {
-              await this.deps.backend(this.core, 'POST', path, attempt)
-              const { harnessUncommitted: _fresh, ...taken } = attempt as Record<string, unknown>
-              this.lastSent.set(String(row.tabId), { path, body: taken, at: this.deps.now() })
-              break
-            } catch (error) {
-              if (!refused(error) || index === attempts.length - 1) throw error
-              if ('quotaReasons' in attempt) this.quotaReasonsRefusedUntil = began + FIELD_REFUSED_MS
-              else if ('harnessTokens' in attempt) this.tokensRefusedUntil = began + FIELD_REFUSED_MS
-              else if ('preparingStartIds' in attempt) this.preparingRefusedUntil = began + FIELD_REFUSED_MS
-              else if ('harnessUncommitted' in attempt) this.uncommittedRefusedUntil = began + FIELD_REFUSED_MS
-              else if ('readiness' in attempt) this.readinessRefusedUntil = began + FIELD_REFUSED_MS
-              else if ('harnessProgress' in attempt) this.progressRefusedUntil = began + FIELD_REFUSED_MS
-              else if ('privacy' in attempt) this.privacyRefusedUntil = began + FIELD_REFUSED_MS
-            }
-          }
-          this.published.set(String(row.tabId), { at: began, signature, starting: !!localModels?.some(m => m.starting) })
-        } finally { this.sending.delete(String(row.tabId)) }
-        this.noteReading(String(row.tabId), null)
+        due.push({ tab: String(row.tabId), observation, localModels, signature })
         } catch (error) {
+          // A reading this machine could not put together (its daemon unreachable, say): its starts still run.
           this.failed = true
           this.noteReading(String(row.tabId), error)
-          // Only a refusal that this machine lost access to the Swarm stops its starts; a timeout, a 5xx or a reading the
-          // backend would not validate says nothing about the starts, which keep their own receipts (Diego's Mac, 2026-10-28).
-          if (lostAccess(error)) throw error
         }
         }
+        } catch { /* One unavailable project cannot block another contribution. */ }
+      }
+      const lost = await this.publish(due, began)
+      for (const { row, pool, pending } of looked) {
+        if (this.stopped) return
+        // Only a refusal that this machine lost access to the Swarm stops its starts; a timeout, a 5xx or a reading the
+        // backend would not validate says nothing about the starts, which keep their own receipts (Diego's Mac, 2026-10-28).
+        if (lost.has(String(row.tabId))) continue
+        try {
         this.repairTrust ??= createSwarmCloneTrustRepair(this.core, this.deps.now)
         try { await this.repairTrust(row) }
         catch { /* Trust migration cannot prevent this pass from picking up pending starts. */ }
@@ -596,6 +598,14 @@ export class ContributedMachines {
                   github = (await (this.deps.prepare ?? ((core, pooled, queued) => prepareSwarmStart(core, pooled, queued,
                     { backend: this.deps.backend, team: (this.deps.team ?? (() => readAuthSession()?.kind === 'team'))() })))(this.core, row, start)) ?? null
                 } catch (error) {
+                  // A token call that got no answer is tried again on the next passes, on the clock of a refused start, and
+                  // fails it with the last reason once that runs out (Diego's Mac, 2026-10-30: one timeout failed a start).
+                  if (error instanceof PrepareRetryError) {
+                    const since = this.refusedSince.get(start.id) ?? began
+                    this.refusedSince.set(start.id, since)
+                    this.noteWaiting(start.id, error.message)
+                    if (began - since < START_REFUSED_MS) continue
+                  }
                   await scoped({ action: 'command', operationId: `prepare-failed-${start.id}`,
                     command: { type: 'agent.startFailed', startId: start.id,
                       error: error instanceof Error ? error.message : 'Could not prepare this project on the machine.' } })
@@ -648,6 +658,121 @@ export class ContributedMachines {
       }
     } finally { local?.close() }
   }
+  /**
+   * Sends this pass's readings: one call for every Swarm (DB roadmap 2.5), or one per Swarm to a backend without that route,
+   * asked again after READINGS_RETRY_MS. A Swarm's own refusal is handled as its own call's was: a field an older backend
+   * does not know sends that Swarm's older readings alone (sendAlone). Answers the Swarms this machine lost access to.
+   */
+  private async publish(due: Reading[], began: number): Promise<Set<string>> {
+    const lost = new Set<string>()
+    if (!due.length) return lost
+    for (const reading of due) this.sending.add(reading.tab)
+    try {
+      // A re-send landing after this pass's reading would put the older one back.
+      await this.beating
+      const answers = new Map<string, SuperTabHostError | null>()
+      let alone = due
+      if (began >= this.readingsRefusedUntil) {
+        alone = []
+        for (let i = 0; i < due.length; i += READINGS_MAX) {
+          const chunk = due.slice(i, i + READINGS_MAX)
+          try {
+            const answer = object(await this.deps.backend(this.core, 'POST', `/api/super-tabs/hosts/${this.machineId}/readings`,
+              { readings: chunk.map(reading => ({ tabId: reading.tab, observation: reading.observation })) }))
+            for (const result of Array.isArray(answer.results) ? answer.results.map(object) : []) {
+              const error = object(result.error)
+              answers.set(String(result.tabId), result.ok === true ? null : new SuperTabHostError(String(error.code ?? 'BACKEND_UNAVAILABLE'),
+                String(error.message ?? 'Could not reach this Super Tab.'), typeof error.status === 'number' ? error.status : 503))
+            }
+          } catch (error) {
+            if (readingsMissing(error)) {
+              this.readingsRefusedUntil = began + READINGS_RETRY_MS
+              alone.push(...chunk)
+            } else for (const reading of chunk) answers.set(reading.tab, error instanceof SuperTabHostError ? error : new SuperTabHostError('BACKEND_UNAVAILABLE', String(error)))
+          }
+        }
+      }
+      for (const reading of due) {
+        try {
+          if (alone.includes(reading)) await this.sendAlone(reading, began)
+          else {
+            const answer = answers.get(reading.tab)
+            if (answer === undefined) throw new SuperTabHostError('BACKEND_UNAVAILABLE', 'The backend did not answer for this Swarm.')
+            if (answer && !fieldRefused(answer)) throw answer
+            if (answer) await this.sendAlone(reading, began, answer)
+            else this.taken(reading.tab, reading.observation)
+          }
+          this.published.set(reading.tab, { at: began, signature: reading.signature, starting: !!reading.localModels?.some(m => m.starting) })
+          this.noteReading(reading.tab, null)
+        } catch (error) {
+          this.failed = true
+          this.noteReading(reading.tab, error)
+          if (lostAccess(error)) lost.add(reading.tab)
+        }
+      }
+    } finally {
+      for (const reading of due) this.sending.delete(reading.tab)
+    }
+    return lost
+  }
+
+  /** What [beat] sends again for a Swarm: the reading the backend took, without whether folders hold uncommitted work. */
+  private taken(tab: string, body: Record<string, unknown>) {
+    const { harnessUncommitted: _fresh, ...kept } = body
+    this.lastSent.set(tab, { path: `/api/super-tabs/${tab}/machines/${this.machineId}`, body: kept, at: this.deps.now() })
+  }
+
+  /**
+   * One Swarm's reading through its own route, newest form first. Older backends reject the additive fields. The newest go
+   * alone first (the starts it is preparing, uncommitted work, readiness, progress, then privacy): a backend that takes
+   * everything else keeps the local models it reads. Their boolean-only view still safely refuses an unverified tool, and a
+   * reading without privacy is never one a Team machine passes on. [refused]: the batch already refused the newest form.
+   */
+  private async sendAlone({ tab, observation, localModels }: Reading, began: number, refused?: SuperTabHostError): Promise<void> {
+    const path = `/api/super-tabs/${tab}/machines/${this.machineId}`
+    const { quotaReasons: _reasons, ...unreasoned } = observation
+    const { harnessTokens: _tokens, ...untokened } = unreasoned
+    const { preparingStartIds: _preparing, ...unprepared } = untokened
+    const { harnessUncommitted: _uncommitted, ...known } = unprepared
+    const { readiness: _readiness, ...ready } = known
+    const { harnessProgress: _progress, ...withoutProgress } = ready
+    const { privacy: _privacy, ...withoutPrivacy } = withoutProgress
+    const { toolProbeErrors: _probeErrors, localModels: _served, refusedModels: _refused, ...legacy } = withoutPrivacy
+    // A backend before `starting` refuses it: it gets the models the grid lists, as before, not none at all.
+    const listedOnly = localModels?.some(m => m.starting)
+      ? [{ ...withoutPrivacy, localModels: localModels.filter(m => !m.starting) }] : []
+    const attempts = [...('quotaReasons' in observation ? [observation] : []), ...('harnessTokens' in unreasoned ? [unreasoned] : []), ...('preparingStartIds' in untokened ? [untokened] : []),
+      ...('harnessUncommitted' in unprepared ? [unprepared] : []),
+      ...('readiness' in known ? [known] : []), ready, ...('harnessProgress' in ready ? [withoutProgress] : []),
+      ...('privacy' in withoutProgress ? [withoutPrivacy] : []), ...listedOnly,
+      ...('toolProbeErrors' in observation || 'localModels' in observation || 'refusedModels' in observation ? [legacy] : [])]
+    const refuse = (attempt: Record<string, unknown>) => {
+      if ('quotaReasons' in attempt) this.quotaReasonsRefusedUntil = began + FIELD_REFUSED_MS
+      else if ('harnessTokens' in attempt) this.tokensRefusedUntil = began + FIELD_REFUSED_MS
+      else if ('preparingStartIds' in attempt) this.preparingRefusedUntil = began + FIELD_REFUSED_MS
+      else if ('harnessUncommitted' in attempt) this.uncommittedRefusedUntil = began + FIELD_REFUSED_MS
+      else if ('readiness' in attempt) this.readinessRefusedUntil = began + FIELD_REFUSED_MS
+      else if ('harnessProgress' in attempt) this.progressRefusedUntil = began + FIELD_REFUSED_MS
+      else if ('privacy' in attempt) this.privacyRefusedUntil = began + FIELD_REFUSED_MS
+    }
+    // The batch sent the newest form, which is the first attempt: it is not sent again.
+    if (refused) {
+      if (attempts.length === 1) throw refused
+      refuse(attempts[0]!)
+    }
+    for (const [index, attempt] of attempts.entries()) {
+      if (refused && index === 0) continue
+      try {
+        await this.deps.backend(this.core, 'POST', path, attempt)
+        this.taken(tab, attempt)
+        return
+      } catch (error) {
+        if (!fieldRefused(error) || index === attempts.length - 1) throw error
+        refuse(attempt)
+      }
+    }
+  }
+
   private unconfirmedLoaded = false
   /** The launches an earlier run of this daemon kept ([swarmUnconfirmedFile]), once, before the first pass looks at them. */
   private loadUnconfirmed(): void {
@@ -780,14 +905,24 @@ export class ContributedMachines {
     // Diego, 10-30: a folder deleted by hand kept its record for good, and every later stop tried it again. Only a folder
     // that is not there drops it; one that cannot be read for any other reason keeps it. Nothing on disk is touched.
     if (await folderGone(record.path)) return writeWorktrees(file, readWorktrees(file).filter(w => !mine(w)))
-    if (!await swarmWorktree(record.path, record.source, record.startId)) return
-    if (this.core.agents.live().some(a => !!a.cwd && within(record.path, a.cwd))) return
+    if (!await swarmWorktree(record.path, record.source, record.startId)) {
+      // The record no longer proves this belongs to Harness. Keep it; never loosen the proof to recover it.
+      if (await folderGone(record.path)) return writeWorktrees(file, readWorktrees(file).filter(w => !mine(w)))
+      this.log('Kept a Swarm worktree: WORKTREE_UNPROVEN')
+      return
+    }
     // Review of #2266: like the weekly sweep (services/workspaces.ts), a paused session of another agent can be resumed
-    // there, so its folder stays. This agent's own paused session is not kept: it was stopped or removed.
-    if (this.core.agents.all().some(a => a.agentId !== harnessId && !!a.cwd && within(record.path, a.cwd))) return
+    // there, so its folder stays. This agent's own paused session is not kept: it was stopped or removed. Asked again just
+    // before git removes it (lib/worktreeSweep.ts sweepOne).
+    const unused = () => !this.core.agents.live().some(a => !!a.cwd && within(record.path, a.cwd))
+      && !this.core.agents.all().some(a => a.agentId !== harnessId && !!a.cwd && within(record.path, a.cwd))
+    if (!unused()) return
     // File times are wall-clock, so the sweep's idle check reads the real clock; no idle wait is asked.
-    // A failed git read (a locked worktree, a handle still open on Windows) keeps the folder; the log names no path.
-    if (!await sweepOne(record.path, Date.now(), 0).catch(() => { this.log('Kept a Swarm worktree: WORKTREE_CHECK_FAILED'); return false })) return
+    // A failed git read (a locked worktree, a handle still open on Windows) keeps the folder; the log names no path. A folder git
+    // could not empty keeps its record and this one, and says which kind it was (lib/worktreeSweep.ts WorktreeKept).
+    if (!await sweepOne(record.path, Date.now(), 0, unused).catch(error => {
+      this.log(`Kept a Swarm worktree: ${error instanceof WorktreeKept ? error.code : 'WORKTREE_CHECK_FAILED'}`); return false
+    })) return
     writeWorktrees(file, readWorktrees(file).filter(w => !mine(w)))
   }
 
@@ -1088,7 +1223,7 @@ export function offered(shared: LocalModelReading[], answer: unknown): LocalMode
 }
 
 /** The models a `grid_fleet_models_list` answer says this machine serves on [grid], by the name grid lists each under,
- *  each with why Builders are not offered it when it is too small or too slow to drive a coding agent (lib/codingModel.ts). */
+ *  each with why it is too small or too slow to drive a coding agent, when it is (lib/codingModel.ts). */
 function fleetOn(answer: unknown, grid: string): Array<LocalModelReading & { why: string | null }> {
   const out: Array<LocalModelReading & { why: string | null }> = []
   const num = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined
@@ -1104,14 +1239,14 @@ function fleetOn(answer: unknown, grid: string): Array<LocalModelReading & { why
   return out
 }
 
-/** The models this machine serves on [grid] that Builders may run on. One too small or too slow to drive a coding agent is
- *  left out: the route never offers it ([refusedOn] says why). */
+/** The models this machine serves on [grid] that can drive a coding agent. One too small or too slow is reported apart
+ *  ([refusedOn]), and the route offers it with that note (project instructions, phase 4, decision 19). */
 export function servedOn(answer: unknown, grid: string): LocalModelReading[] {
   return fleetOn(answer, grid).filter(m => m.why === null).map(({ why: _why, ...reading }) => reading)
 }
 
-/** The models this machine serves on [grid] that Builders are not offered, with why: a Lead asked for one is told that,
- *  not to share a model the Swarm already has (2026-10-24). */
+/** The models this machine serves on [grid] too small or too slow for a coding agent, with why: the route offers them with
+ *  that note (routeCommand.ts servedModels), rather than telling the agent to share a model the Swarm already has (2026-10-24). */
 export function refusedOn(answer: unknown, grid: string): Array<{ grid: string; model: string; name?: string; why: string }> {
   return fleetOn(answer, grid).flatMap(({ grid: g, model, name, why }) => why === null ? [] : [{ grid: g, model, ...(name ? { name } : {}), why: why.slice(0, 300) }])
 }

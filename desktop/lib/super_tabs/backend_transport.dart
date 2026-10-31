@@ -16,11 +16,12 @@ const _tab =
 const _id = r'[A-Za-z0-9_-]+';
 final _swarmRoute = RegExp(
   '^/api/super-tabs(?:'
-  '|/list|/invitations|/routing-policy'
+  '|/list|/invitations'
   '|/$_tab/(?:parts|changes|commands|mentions|decisions|leaderboard|sharing'
   '|routing-policy|groups|groups/$_id|join|join/preview|native'
-  '|conversations/$_id/(?:messages|catch-up|read)'
-  '|projects/$_id/(?:github|github/approve|roles/$_id)'
+  '|conversations/$_id/(?:messages|catch-up|read|threads/$_id/read)'
+  '|projects/$_id/(?:github|github/approve'
+  '|instructions(?:/revisions(?:/[0-9]+)?)?)'
   '|route-decisions/$_id|machines/$_id/removal)'
   r')(?:\?[A-Za-z0-9_=&%-]+)?$',
 );

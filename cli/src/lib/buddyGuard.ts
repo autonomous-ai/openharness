@@ -580,7 +580,11 @@ function pastedOutput(json) {
   const text = [proposal?.goal, proposal?.scope].filter((part) => typeof part === 'string').join('\n')
   return text.includes('\x60\x60\x60') || text.split('\n').length > 10
 }
-const SUMMARIZE = 'A proposal carries your summary of what you read, never its output: no code block and at most 10 lines. Nothing ' +
+const STDIN = (action) => (action === 'post' ? 'A Buddy passes its message as TEXT itself' : 'A Buddy passes its proposal\'s JSON itself') +
+  ': - in its place reads it from stdin, where Harness cannot check it for secrets. Nothing was sent, and nobody will be asked. ' +
+  'Send again with it in quotes where the - was: ' + (action === 'post' ? 'harness super-tab post GROUP \'your message\' OPERATION_ID'
+    + ', or in double quotes when it holds an apostrophe: "it\'s done"' : 'harness super-tab propose OPERATION_ID \'{"conversationId":"...","goal":"..."}\'') + '.'
+const SUMMARIZE ='A proposal carries your summary of what you read, never its output: no code block and at most 10 lines. Nothing ' +
   'was sent, and nobody will be asked. Summarize the numbers and findings in a few lines and send again.'
 
 // harness super-tab [--tab ID] ACTION ...: only a Buddy's actions, an --attach only from its folder, and nothing it sends
@@ -593,6 +597,11 @@ function superTabAllowed(rest) {
   if (after.some((word, at) => (word === '--attach' && (after[at + 1] === undefined || outward(after[at + 1])))
     || ['--agent', '--port', '--machine'].includes(word))) return false
   if (rest[i] !== 'post' && rest[i] !== 'propose') return true
+  // A post's TEXT or a proposal's JSON that is exactly - is read from stdin (superTabs/command.ts, post since #2355), where
+  // this guard sees only the dash and cannot check what is sent for secrets. A Buddy cannot feed stdin today (no pipes,
+  // redirects or heredocs above), but the secret check must not rest on that. Any other text, -- or "- P1" among them, is
+  // the message itself and is checked as it is.
+  if (after[1] === '-') { reason = STDIN(rest[i]); return false }
   const attached = after.flatMap((word, at) => after[at - 1] === '--attach' ? [fileText(word)] : [])
   if (attached.includes(null)) return false
   // Its words one by one, and what it says run together: the post's text or the proposal's decoded fields, with its files.
@@ -1109,47 +1118,64 @@ export function recordBuddyApprovals(input: { reads: BuddyReads; session: string
  * an own list it cannot delete (a folder it cannot write to), which it empties in place where it can, needing only the
  * file, so the guard allows nothing meanwhile, keeping that list's mark and its session so the next try finds it; and a
  * mark it cannot delete. A list that went between the folder's read and its own counts as gone.
+ *
+ * It fails by fixed codes alone (`SentListsError`), never with the error it caught: the host logs what it failed with, and
+ * a filesystem error's message names its path, in the person's home (follow-up to #2389's security re-check 2).
  */
 export function forgetBuddyReads(session: string, dir = listsDir()): void {
   let names: string[]
   try { names = readdirSync(dir) } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
-    throw error
+    throw new SentListsError(['SENT_LISTS_UNREAD'])
   }
   const own = `.${sha256(session)}.owner`
   const marked = new Set(names.filter(name => name.endsWith(own)).map(name => `${name.slice(0, -own.length)}.json`))
   const kept = new Set<string>()
-  let failed: unknown
+  const failed = new Set<SentListsFailure>()
   // Only a list's own name: a .tmp is a write not yet renamed, which no guard reads.
   for (const name of names) {
     if (!name.endsWith('.json')) continue
     const file = join(dir, name)
-    let text: string | undefined, unreadable: unknown
-    try { text = readFileSync(file, 'utf8') } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') unreadable = error }
+    let text: string | undefined, unreadable = false
+    try { text = readFileSync(file, 'utf8') } catch (error) { unreadable = (error as NodeJS.ErrnoException).code !== 'ENOENT' }
     let named: unknown
     try { named = text === undefined ? undefined : (JSON.parse(text) as { session?: unknown } | null)?.session } catch { /* not JSON: it names no session */ }
     if (!marked.has(name)) {
       // Not its own by mark. One it cannot read is another session's to remove when that session's mark is beside it, and
       // otherwise whose it is cannot be told: kept, and the end fails so it is tried again, as before marks (review of #2261).
-      if (unreadable !== undefined) {
+      if (unreadable) {
         const base = `${name.slice(0, -'.json'.length)}.`
-        if (!names.some(other => other.startsWith(base) && MARK.test(other))) failed ??= unreadable
+        if (!names.some(other => other.startsWith(base) && MARK.test(other))) failed.add('SENT_LIST_UNREAD')
         continue
       }
       if (named !== session) continue
     } else if (typeof named === 'string' && named !== session) continue
-    try { rmSync(file, { force: true }) } catch (error) {
+    try { rmSync(file, { force: true }) } catch {
       const empty: List = { version: 1, session, files: [], links: [] }
       try { writeFileSync(file, `${JSON.stringify(empty)}\n`) } catch { /* neither: the host's next try is all that is left */ }
       kept.add(name)
-      failed ??= error
+      failed.add('SENT_LIST_KEPT')
     }
   }
   for (const name of names) {
     if (!name.endsWith(own) || kept.has(`${name.slice(0, -own.length)}.json`)) continue
-    try { rmSync(join(dir, name), { force: true }) } catch (error) { failed ??= error }
+    try { rmSync(join(dir, name), { force: true }) } catch { failed.add('SENT_LIST_MARK_KEPT') }
   }
-  if (failed) throw failed
+  if (failed.size) throw new SentListsError(SENT_LISTS_FAILURES.filter(code => failed.has(code)))
+}
+
+/** What kept an ended session's lists from all going, in the order they are named: its lists folder could not be read; a list
+ *  whose session could not be told could not be read, and was kept; one of its own lists could not be deleted, and was emptied
+ *  where it could be; or the mark beside one could not be deleted. */
+const SENT_LISTS_FAILURES = ['SENT_LISTS_UNREAD', 'SENT_LIST_UNREAD', 'SENT_LIST_KEPT', 'SENT_LIST_MARK_KEPT'] as const
+export type SentListsFailure = typeof SENT_LISTS_FAILURES[number]
+
+/** `forgetBuddyReads`'s failure: its codes, each once, and nothing of the errors behind them, whose messages name paths. */
+export class SentListsError extends Error {
+  constructor(readonly codes: readonly SentListsFailure[]) {
+    super(codes.join(', '))
+    this.name = 'SentListsError'
+  }
 }
 
 const shellQuote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`

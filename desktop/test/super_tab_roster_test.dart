@@ -1001,31 +1001,31 @@ void main() {
     },
   );
 
-  testWidgets('custom role name appears in the roster and agent details', (
-    tester,
-  ) async {
+  testWidgets('shows the role an agent goes by', (tester) async {
     final f = await fixture(tester);
-    final project = (f.server.state['projects'] as List).first as Map;
-    project['skillSet'] = 'custom';
-    project['roles'] = [
-      {
-        'id': 'lead',
-        'name': 'Product Manager',
-        'kind': 'lead',
-        'version': 'v1',
-      },
-      {
-        'id': 'research',
-        'name': 'Research Engineer',
-        'kind': 'builder',
-        'version': 'v1',
-      },
-    ];
-    (f.server.state['agents'] as List)[1]['roleId'] = 'research';
+    final agents = f.server.state['agents'] as List;
+    agents[1]['roleName'] = 'Tester';
+    agents[3]['roleName'] = 'Quality assurance lead';
+    // The coordinator's role name in the template.
+    agents[0]['roleName'] = 'PM';
     await f.controller.refresh();
     await f.show(tester);
-    expect(f.inRow(1, find.text('Research Engineer')), findsOneWidget);
+    expect(f.inRow(1, find.text('Tester')), findsOneWidget);
     expect(f.inRow(1, find.text('Dev')), findsNothing);
+    expect(rowTooltip(tester, f, 1), startsWith('Sage · Tester · '));
+    expect(
+      f.inRow(
+        1,
+        find.byWidgetPredicate(
+          (w) => w is Semantics && w.properties.label == 'Tester',
+        ),
+      ),
+      findsOneWidget,
+    );
+    // A long name's badge is cut; the tooltip and the label keep it whole.
+    expect(f.inRow(3, find.text('Quality ass…')), findsOneWidget);
+    expect(rowTooltip(tester, f, 3), contains(' · Quality assurance lead · '));
+    expect(f.inRow(0, find.text('PM')), findsOneWidget);
     final details = showSuperTabAgentDetails(
       tester.element(f.row(1)),
       f.controller,
@@ -1034,7 +1034,7 @@ void main() {
       (_) {},
     );
     await tester.pumpAndSettle();
-    expect(find.text('Research Engineer'), findsWidgets);
+    expect(find.text('Tester'), findsWidgets);
     await tester.tap(find.widgetWithText(TextButton, 'Close'));
     await tester.pumpAndSettle();
     await details;
@@ -1402,10 +1402,10 @@ void main() {
       ),
       (
         'review',
-        // In review waits on its reviewer whatever this Mac reads (Dee, 2026-10-30).
+        // In review waits on others whatever this Mac reads (Dee, 2026-10-30).
         HarnessActivity.done,
-        'Waiting for review on "Polish navigation"',
-        'In review · Test host',
+        'Waiting on others for "Polish navigation"',
+        'Waiting on others · Test host',
       ),
       (
         'reconciling',
@@ -2543,10 +2543,10 @@ void main() {
         await f.show(tester);
         expect(f.activity(tester, 1), HarnessActivity.done);
         // Its words say so too, as for work in review.
-        expect(f.glanceText(tester, 1), startsWith('In review'));
+        expect(f.glanceText(tester, 1), startsWith('Waiting on others'));
         expect(
           rowTooltip(tester, f, 1),
-          contains('Waiting for review on "Agents list marks"'),
+          contains('Waiting on others for "Agents list marks"'),
         );
         expect(rowTooltip(tester, f, 1), isNot(contains('Assigned')));
         // Once a review finds problems, it is the Engineer's to fix again.
@@ -2555,6 +2555,31 @@ void main() {
         await f.controller.refresh();
         await tester.pumpAndSettle();
         expect(f.activity(tester, 1), HarnessActivity.unknown);
+        await f.close(tester);
+      },
+    );
+
+    testWidgets(
+      'a project with instructions does not read "ready for review" as a hand-off',
+      (tester) async {
+        final f = await fixture(tester);
+        (f.server.state['projects'] as List)[0]['coordinatorName'] =
+            'Product Manager';
+        final said = task(
+          't1',
+          'Agents list marks',
+          'agent-1',
+          'working',
+          ago: const Duration(minutes: 40),
+        );
+        (said['assignment'] as Map)['result'] =
+            'Ready for review: PR #2281 at b4c4fa903';
+        (f.server.state['conversations'] as List).add(said);
+        await f.controller.refresh();
+        seenIdleHere(f);
+        await f.show(tester);
+        expect(f.activity(tester, 1), isNot(HarnessActivity.done));
+        expect(f.glanceText(tester, 1), isNot(startsWith('Waiting on others')));
         await f.close(tester);
       },
     );

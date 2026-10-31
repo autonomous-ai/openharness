@@ -37,7 +37,7 @@ const age = (dir: string, ms: number) => {
 function setup(routes: (method: string, path: string, body: unknown) => Reply, sessions: Array<{ id: string; plain?: boolean }> = [{ id: 'harness-1' }]) {
   const dataDir = join(root, `data-${made++}`)
   const session = (s: { id: string; plain?: boolean }) =>
-    ({ agentId: s.id, swarmSkill: { role: 'dev', key: `harness-codex-${s.id}`, ...(s.plain ? {} : { github: true }) } }) as unknown as RegisteredSession
+    ({ agentId: s.id, swarmSkill: { role: 'agent', key: `harness-codex-${s.id}`, ...(s.plain ? {} : { github: true }) } }) as unknown as RegisteredSession
   const live = sessions.map(session)
   /** Sessions stopped but still on this machine, which may run again. */
   const stopped: RegisteredSession[] = []
@@ -88,6 +88,20 @@ describe('a local agent\'s GitHub token', () => {
     expect(hosts()).toContain('ghs_fixtureToken0000003')
     reply = refuse(503, 'GITHUB_APP_NOT_CONFIGURED')
     await githubToken(core, 'harness-1', sourcesOf(core)())
+    expect(hosts()).toBe('{}\n')
+  })
+
+  // Security review of #2390: a server whose app GitHub refuses (backend github/app.ts `misconfigured`: GitHub answered 401
+  // to the app's own credentials) answers a 503 the backend decided, unlike GitHub not answering (GITHUB_UNAVAILABLE).
+  it('empties the gh login when GitHub refuses the server\'s app, and keeps it while GitHub does not answer', async () => {
+    let reply = issued('ghs_fixtureToken0000004')
+    const { core, hosts } = setup((method) => method === 'GET' ? ok(hostForm([row('tab-1', 'agent-1')])) : reply)
+    await githubToken(core, 'harness-1', sourcesOf(core)())
+    reply = refuse(503, 'GITHUB_UNAVAILABLE')
+    await githubToken(core, 'harness-1', sourcesOf(core)())
+    expect(hosts()).toContain('ghs_fixtureToken0000004')
+    reply = refuse(503, 'GITHUB_APP_MISCONFIGURED')
+    expect(await githubToken(core, 'harness-1', sourcesOf(core)())).toMatchObject({ error: 'GITHUB_APP_MISCONFIGURED', status: 503 })
     expect(hosts()).toBe('{}\n')
   })
 

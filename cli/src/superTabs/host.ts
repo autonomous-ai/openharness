@@ -6,8 +6,9 @@ import { configurationObservation } from './configuration.js'
 import { NativeRecorder, nativeJournalFile } from './native.js'
 import { attachedFiles, attachmentsOf } from './attachments.js'
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
+import { readdir, readFile } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, join, normalize, relative, sep } from 'node:path'
 import type { BackendNotice, CoreApi, TurnDelivery } from '../core/api.js'
 import { shellQuote } from '../orchestrator/prompts.js'
 import { agentCommandPrefix, fullCommandPrefix } from './shortCommand.js'
@@ -17,13 +18,15 @@ import { noticeReason, WithheldDeliveries } from './withheld.js'
 import { attentionOf } from './attention.js'
 import { prepareContribution, prepareTeamContribution } from './contribution.js'
 import { homedir, hostname } from 'node:os'
-import { scrubClaudeSession, type PurgeTarget } from './inCore/teamPurge.js'
+import { recordsOtherFolder, scrubClaudeSession, type PurgeTarget, type ScrubTold } from './inCore/teamPurge.js'
 import { replacementObservations } from './replacements.js'
 import { TerminalHost } from './terminal.js'
 import { LimitResume } from './limitResume.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
 import { UPDATE_REQUIRED } from './readContract.js'
+import { projectsRoot } from '../lib/projectFolder.js'
+import { worktreeFolderName } from '../lib/agentNames.js'
 
 type Json = Record<string, unknown>
 // A Buddy is told its commands without --agent: the pane it runs in says who it is (command.ts callerOf), and its guard
@@ -34,9 +37,11 @@ const readCommand = (entry: Entry, prefix: string, group: string, id: string, bu
   `${agentCommandOf(entry, prefix, buddy)} message ${shellQuote(group)} ${shellQuote(id)}`
 export { backend, identifier, object, SuperTabHostError } from './wire.js'
 import { backend, ENDED_WORK, identifier, object, SuperTabHostError } from './wire.js'
-import { recordSwarmSkillNotice, refreshSwarmSkill, type SkillRefresh, type SwarmSkillGrant, type SwarmSkillMode } from '../lib/swarmSkills.js'
+import { parseSwarmSkill, recordSwarmSkillNotice, refreshSwarmSkill, wireRole, type CustomSwarmRole, type SkillRefresh, type SwarmSkill, type SwarmSkillGrant,
+  type SwarmSkillMode } from '../lib/swarmSkills.js'
+import { recordProjectSkillsNotice, refreshProjectSkills } from '../lib/swarmInstructionsSkill.js'
 import { allowBuddyReads, artifactLinks, buddyApprovalsOf, buddyLaunchOf, buddyReadsOf, forgetBuddyReads, grantBuddyWide, hasBuddyApprovals,
-  judgeBuddyApprovals, recordBuddyApprovals, writeBuddyAccount, type JudgedApprovals } from '../lib/buddyGuard.js'
+  judgeBuddyApprovals, recordBuddyApprovals, SentListsError, writeBuddyAccount, type JudgedApprovals } from '../lib/buddyGuard.js'
 
 /** The skills of a group's project in a tab state: a group from before projects is in the first, and a project from before
  *  modes, or a Swarm from before projects, is orchestration. */
@@ -77,12 +82,14 @@ export async function swarmRoleFor(sources: SwarmSources, harnessId: string): Pr
     if (!agent) return null
     if (isBuddy(agent)) return { role: 'buddy' as const, mode: groupSkillMode(state, member) }
     const led = groups.find(group => group.leadId === target.id)
-    if (led) return { role: 'lead' as const, mode: groupSkillMode(state, led) }
-    const role = agent.role === 'reviewer' ? 'review' as const : 'dev' as const
-    return member ? { role, mode: groupSkillMode(state, member) } : null
+    if (led) return { role: 'coordinator' as const, mode: groupSkillMode(state, led) }
+    // Every other member is an agent, whatever its role's name (project instructions, phase 4); one an older client started
+    // as a Reviewer (`role: 'reviewer'`) keeps its swarm-review file for a Swarm with no instructions.
+    return member ? { role: 'agent' as const, ...(agent.role === 'reviewer' ? { fallback: 'review' as const } : {}), mode: groupSkillMode(state, member) } : null
   }))
-  // A Buddy first: a session that is a Buddy anywhere keeps its guard, whatever else it is elsewhere.
-  return (['buddy', 'lead', 'dev', 'review'] as const).map(role => grants.find(grant => grant?.role === role)).find(Boolean) ?? null
+  // A Buddy first: a session that is a Buddy anywhere keeps its guard, whatever else it is elsewhere. Then the coordinator, an
+  // agent, and last an agent that was a Reviewer.
+  return (['buddy', 'lead', 'dev', 'review'] as const).map(role => grants.find(grant => grant && wireRole(grant) === role)).find(Boolean) ?? null
 }
 /** A Buddy names its owner (backend buddies.ts); its role field stays a builder's for older readers. */
 const isBuddy = (agent: Record<string, unknown>) => !!agent.buddyOf && typeof agent.buddyOf === 'object'
@@ -123,9 +130,10 @@ interface Entry {
 /** `scrubs`: the Claude Code traces of ended Buddy sessions still to remove, by agent id, written before their close, so a host
  *  restarted between the close and the scrub still removes them (security re-check 2 of #2345). Older hosts drop it. */
 interface Journal { version: 1; machineId: string; entries: Record<string, Entry>; scrubs?: Record<string, PurgeTarget> }
-/** `skillMode` is the agent's project's skills; a row without it (an older backend, a project from before modes) is orchestration. */
+/** `skillMode` is the agent's project's skills; a row without it (an older backend, a project from before modes) is orchestration.
+ *  `roleName` and `instructions` name its project's instructions (backend read/hostRows.ts); an older backend sends neither. */
 interface HostAgent { tabId: string; agent: { id: string; harnessId: string; machineId: string; releaseId?: string }; skillMode?: unknown; lead?: unknown; role?: unknown
-  leadsConversationId?: unknown }
+  leadsConversationId?: unknown; roleName?: unknown; instructions?: unknown }
 export interface SuperTabHostOptions {
   now?: () => number
   write?: (file: string, journal: Journal) => void
@@ -141,6 +149,9 @@ export interface SuperTabHostOptions {
   startReceipt?: (harnessId: string) => string | null
   /** The home whose Claude Code data an ended Buddy session's own traces are removed from; this user's, unless a spec says. */
   claudeHome?: string
+  /** Harness's worktrees folder, where every Buddy session's folder is (lib/gitProject.ts): a scrub the journal saved names
+   *  only a folder there. This user's, unless a spec says. */
+  worktrees?: string
   /** The machine's host form and Swarm reads, shared with the service's other readers (superTabs/service.ts). */
   sources?: SwarmSources
   /** What the contributed-machine executor reaches the local daemon with (superTabs/machines.ts), for a spec. */
@@ -150,13 +161,65 @@ export interface SuperTabHostOptions {
 const defaultAgentCommand = (core: CoreApi, machineId: string) => agentCommandPrefix(core.daemon, machineId,
   () => readAuthSession()?.machineId || computerId())
 export const hostJournalFile = (dataDir: string, machineId: string) => join(dataDir, 'super-tabs', `host-${machineId}.json`)
+/** Whether [cwd] is a folder this host records a Buddy session's scrub for: a worktree, `<worktrees>/<repository>/<leaf>`
+ *  (lib/gitProject.ts; the backend starts every Buddy session in one), as written and once its symlinks are resolved, so
+ *  neither a `..` nor a link leads the scrub to another folder's transcripts (follow-up to security review 1 of #2345). One
+ *  already removed still is: its missing part cannot lead anywhere, and its traces must still go. */
+function buddyWorktree(cwd: string, worktrees: string): boolean {
+  const leafOf = (root: string, path: string) => { const parts = relative(root, path).split(sep); return parts.length === 2 && parts.every(p => p && p !== '..') }
+  try {
+    const home = realpathSync(worktrees)
+    if (!isAbsolute(cwd) || normalize(cwd) !== cwd || cwd.endsWith(sep) || !(leafOf(worktrees, cwd) || leafOf(home, cwd))) return false
+    // The deepest part of it that is there, resolved; a part that is not there at all (lstat: not even a dangling link) is kept as named.
+    let found = cwd
+    const missing: string[] = []
+    for (;;) {
+      try { found = realpathSync(found); break } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || lstatSync(found, { throwIfNoEntry: false })) return false
+        missing.unshift(basename(found))
+        found = dirname(found)
+      }
+    }
+    return leafOf(home, join(found, ...missing))
+  } catch { return false }
+}
+/** A Claude Code session id: a saved one of another shape is dropped (security review 2 of #2375). */
+const CLAUDE_SESSION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+/** The fixed code an ended Buddy's cleanup fails with for each kind of folder or file it could not read: never its path. */
+const UNREAD_CODES: Record<Exclude<ScrubTold, 'shared'>, string> = {
+  unread: 'TRANSCRIPTS_UNREAD',
+  unreadTodos: 'TODOS_UNREAD',
+  unreadBackups: 'CONFIG_BACKUPS_UNREAD',
+}
+
+/** Whether [sessionId] is [folder]'s session: no prompt history line names it with another project, and no transcript of
+ *  it records another folder. A person's own session id beside a Buddy's worktree took their history, a paste, file history
+ *  and debug log (security review 2 of #2375). A file that cannot be read is no answer: the scrub fails and is tried again. */
+async function sessionOfFolder(home: string, sessionId: string, folder: string): Promise<boolean> {
+  const claude = join(home, '.claude'), own = (cwd: unknown) => cwd === folder || (typeof cwd === 'string' && cwd.startsWith(`${folder}/`))
+  const missing = (error: NodeJS.ErrnoException) => { if (error?.code === 'ENOENT') return null; throw error }
+  for (const line of (await readFile(join(claude, 'history.jsonl'), 'utf8').catch(missing) ?? '').split('\n')) {
+    if (!line.includes(sessionId)) continue
+    let row: { sessionId?: unknown; project?: unknown }
+    try { row = JSON.parse(line) } catch { continue }
+    if (row.sessionId === sessionId && !own(row.project)) return false
+  }
+  for (const name of await readdir(join(claude, 'projects')).catch(missing) ?? []) {
+    const transcript = join(claude, 'projects', name, `${sessionId}.jsonl`)
+    if (existsSync(transcript) && await recordsOtherFolder(transcript, folder)) return false
+  }
+  return true
+}
 /** How long after an add the roster may ask for another (a roster read may predate the add), and the first wait after a
  *  failed one. Each try probes every engine's account (about 14 login shells), so the wait doubles up to half an hour:
  *  a refusal such as a dispatched start that never reports, or no signed-in engine, can last for days. */
 const JOIN_RETRY_MS = 60_000
 /** How long a skill re-read notice that could not be sent (no open group yet, or the backend failed) waits to retry. */
 const SKILL_RETRY_MS = 60_000
-/** Which skill each kind of Custom role is installed as. */
+/** How long new instructions wait for their history (the save's summary and time) once its read fails, read again each
+ *  SKILL_RETRY_MS: long enough for a backend blip, short enough that an unreadable history never keeps them from agents. */
+const HISTORY_WAIT_MS = 5 * 60_000
+/** Which skill each kind of Custom role is installed as, by the session's role file's name (wireRole). */
 const KIND_SKILLS: Record<string, string> = { lead: 'lead', builder: 'dev', reviewer: 'review' }
 interface CustomRole { id: string; name: string; kind: string; version: string; projectId: string }
 /** The roster's Custom role for this agent, or null: a built-in set, a role that is gone, or one not fit to use. */
@@ -165,9 +228,24 @@ function customRole(target: HostAgent): CustomRole | null {
   return identifier(role.id) && identifier(role.projectId) && typeof role.name === 'string' && role.name
     && typeof role.version === 'string' && role.version && typeof role.kind === 'string' ? role as unknown as CustomRole : null
 }
-/** What a session's skill comes from: a built-in mode, or a Custom role's version and name (a rename rewrites the front
+/** The project instructions the roster names for this agent (project instructions, phase 3), or null: an older backend's row
+ *  has no `instructions` key and one in no project has null, and both keep their role files as before. */
+interface RowInstructions { projectId: string; revision: number; hash: string | null; coordinatorName: string; roleName: string }
+function rowInstructions(target: HostAgent): RowInstructions | null {
+  const { projectId, revision, hash, coordinatorName } = object(target.instructions)
+  return identifier(projectId) && Number.isSafeInteger(revision) && (revision as number) >= 0 && (hash === null || typeof hash === 'string')
+    && typeof coordinatorName === 'string' && coordinatorName !== '' && typeof target.roleName === 'string' && target.roleName !== ''
+    ? { projectId, revision: revision as number, hash, coordinatorName, roleName: target.roleName } : null
+}
+/** The instructions text held for one project of a tab, shared by its agents here. A Buddy holds its own: the backend may
+ *  refuse it a project its member lost while the project's agents still read it. */
+const instructionsKey = (tabId: string, projectId: string, buddyId?: string) => JSON.stringify(buddyId ? [tabId, projectId, buddyId] : [tabId, projectId])
+/** What a session's skill comes from: its project's instructions at a revision, in its role (a save is acted on at the next
+ *  roster, not the next CLI release); else a built-in mode, or a Custom role's version and name (a rename rewrites the front
  *  matter without a fetch), or nothing (a role gone or unusable). */
 function skillSetOf(target: HostAgent): string {
+  const doc = rowInstructions(target)
+  if (doc) return JSON.stringify(['instructions', doc.projectId, doc.revision, doc.hash, doc.roleName, doc.coordinatorName, target.lead === true])
   if (!('role' in target)) return target.skillMode === 'default' ? 'default' : 'orchestration'
   const role = customRole(target)
   return role ? JSON.stringify([role.projectId, role.id, role.version, role.name]) : 'none'
@@ -199,6 +277,16 @@ const PUSH_LEASE_MS = 10 * 60_000
 const LEAD_RETRY_MS = 5_000
 const LEAD_RETRY_MAX_MS = 30 * 60_000
 const LEAD_REOPEN_WAIT_MS = 60_000
+/** Prod 10-30: acknowledgements failed through two hours of SWARM_BUSY, past the backend's 10-minute claim quiet time
+ *  (backend superTabs/deliverySettle.ts CLAIM_QUIET_MS), so its delivery pass ended claims the agents had in fact received and
+ *  their senders saw Not sent. A typed delivery the backend ended is acknowledged again after 10 s, doubling to 5 minutes, for
+ *  a day; the backend takes it for a claim its pass ended, and refuses it for one a person, an archive or a stop ended. */
+const LATE_ACK_RETRY_MS = 10_000
+const LATE_ACK_RETRY_MAX_MS = 5 * 60_000
+const LATE_ACK_GIVE_UP_MS = 24 * 60 * 60_000
+/** A refusal no later acknowledgement can change: the delivery is no longer this agent's, or another claim or receipt holds it.
+ *  A sign-in (401), an update (426), throttling (429) and a server failure (5xx) say nothing of the delivery. */
+const ackRefused = (error: unknown) => error instanceof SuperTabHostError && [400, 403, 404, 409].includes(error.status)
 /** The first wait after a session the backend ended could not be closed or acknowledged, doubling up to ten minutes. */
 const END_RETRY_MS = 5_000
 const END_RETRY_MAX_MS = 10 * 60_000
@@ -236,8 +324,7 @@ const SUPER_TAB_REPLY_STYLE = 'Write to the people in this tab like a helpful co
   + 'Do not show commands, message or sequence ids, field names or error codes. '
   + 'Do not describe your own tools or permission prompts unless that blocks what they asked. '
   + 'Answer each message once: post with --reply-to MESSAGE_ID. If you have already answered a message, do not post again. '
-  + 'When you hand over finished work, give the result with the revision and links they need. '
-  + 'Lead: when a Builder finishes, decide reuse, keep or stop; prefer stop unless more work is coming soon.'
+  + 'When you hand over finished work, give the result with the revision and links they need.'
 
 /** Owns only the handoff between a durable backend claim and the core's native input.
  * A process restart never interprets a lost acknowledgement as permission to type twice. */
@@ -296,6 +383,7 @@ export class SuperTabHost {
   private readonly agentCommand: (core: CoreApi, machineId: string) => Promise<string>
   private readonly startReceipt: (harnessId: string) => string | null
   private readonly claudeHome: string
+  private readonly worktrees: string
   /** Asked once, on the first delivery: the answer cannot change while this daemon runs (superTabs/shortCommand.ts). */
   private prefix: Promise<string> | null = null
   private configurationsRunning: Promise<void> | null = null
@@ -305,6 +393,8 @@ export class SuperTabHost {
   private timer: ReturnType<typeof setTimeout> | null = null
   /** Per agent's delivery list and per delivery's claim, the failures in a row and when it may be asked again. */
   private readonly deliveryRetries = new Map<string, { failures: number; retryAt: number; since: number; saidAt?: number; said?: string; list?: string }>()
+  /** Per typed delivery the backend ended before it heard the acknowledgement: the failed late tries and when the next may run. */
+  private readonly lateAcks = new Map<string, { failures: number; retryAt: number; since: number }>()
   private native: NativeRecorder | null = null
   private machines: ContributedMachines | null = null
   private readonly machineDeps: Partial<MachineDeps>
@@ -325,6 +415,11 @@ export class SuperTabHost {
   private readonly rosterSkills = new Map<string, string>()
   /** Per session, the Custom role text last fetched and the roster version it is: fetched again only when that changes. */
   private readonly roleTexts = new Map<string, { version: string; text: string }>()
+  /** Per tab and project (instructionsKey), the instructions text last read, its revision, and that revision's summary and
+   *  save time once a history read answered (`failedSince`: when it first failed): read again only when the roster's
+   *  revision moves, and dropped once no roster row names the project. */
+  private readonly instructionTexts = new Map<string, { revision: number; text: string
+    history: { summary: string | null; savedAt: number | null } | null; failedSince?: number }>()
   private skillsRunning: Promise<void> | null = null
   private missing = new Map<string, number>()
   /** Per Lead harness here: a reopen in progress, its failures, when the next may run, and the reason last logged. */
@@ -355,6 +450,7 @@ export class SuperTabHost {
     this.agentCommand = options.agentCommand ?? defaultAgentCommand
     this.startReceipt = options.startReceipt ?? (() => null)
     this.claudeHome = options.claudeHome ?? homedir()
+    this.worktrees = options.worktrees ?? join(projectsRoot(), 'worktrees')
     this.now = options.now ?? Date.now
     this.write = options.write ?? writeJournal
     this.log = options.log ?? (message => console.warn(`[super-tabs] ${message}`))
@@ -383,14 +479,17 @@ export class SuperTabHost {
         }
         this.journal.entries[id] = entry
       }
-      // Only a target this host could have written: its own agent id, a Claude Code session in a folder. Another is dropped,
-      // never trusted, so a hand-edited journal cannot point the scrub elsewhere than a session folder's own traces.
+      // Only a target this host could have written: its own agent id, a Claude Code session in a Buddy's worktree here. Another
+      // is dropped, never trusted, so a hand-edited or corrupted journal cannot point the scrub at another folder's transcripts
+      // (follow-up to security review 1 of #2345). Said by agent id alone: the folder is what may not be trusted, or shown.
       for (const [agentId, value] of Object.entries(object(saved.scrubs))) {
         const t = object(value)
-        if (agentId === t.agentId && identifier(agentId) && t.engine === 'claude' && typeof t.cwd === 'string' && t.cwd.startsWith('/')
+        if (agentId === t.agentId && identifier(agentId) && t.engine === 'claude' && typeof t.cwd === 'string' && buddyWorktree(t.cwd, this.worktrees)
           && (t.sessionId === null || typeof t.sessionId === 'string') && t.codexHome === null) {
-          (this.journal.scrubs ??= {})[agentId] = { agentId, sessionId: t.sessionId as string | null, cwd: t.cwd, engine: 'claude', codexHome: null }
-        }
+          const sessionId = typeof t.sessionId === 'string' && !CLAUDE_SESSION.test(t.sessionId) ? null : t.sessionId as string | null
+          if (sessionId !== t.sessionId) this.log(`Dropped the session id of a saved Buddy session scrub: agent ${agentId}`)
+          ;(this.journal.scrubs ??= {})[agentId] = { agentId, sessionId, cwd: t.cwd, engine: 'claude', codexHome: null }
+        } else this.log(`Dropped a saved Buddy session scrub this host did not write: ${identifier(agentId) ? `agent ${agentId}` : 'an unreadable agent id'}`)
       }
     }
     this.persist()
@@ -679,10 +778,45 @@ export class SuperTabHost {
         const terminal = entry.stage === 'prepared' ? ['answered', 'cancelled'] : ['delivered', 'confirmed', 'superseded', 'cancelled', 'answered']
         if (result.id !== entry.deliveryId || !terminal.includes(String(result.status))) continue
         if (this.journal.entries[entry.deliveryId] !== entry || this.active.has(typedId(entry))) continue
-        delete this.journal.entries[entry.deliveryId]
-        this.withheld.clear(entry.deliveryId)
-        this.persist()
+        if (entry.stage === 'delivered' && result.status === 'cancelled') {
+          const done = await this.ackLate(entry)
+          if (this.stopped) return
+          if (!done) continue
+        }
+        this.retireEntry(entry)
       } catch { /* Missing authority or a network failure is not a receipt. */ }
+    }
+  }
+  /** Only while it is still this entry: a late acknowledgement's answer must not retire one that replaced it meanwhile. */
+  private retireEntry(entry: Entry): void {
+    if (this.journal.entries[entry.deliveryId] !== entry) return
+    delete this.journal.entries[entry.deliveryId]
+    this.lateAcks.delete(entry.deliveryId)
+    this.withheld.clear(entry.deliveryId)
+    this.persist()
+  }
+  /** The agent has a delivery the backend ended, as cancelled, before this host's acknowledgement got through: it is sent again,
+   *  with the same claim and receipt. Whether the entry is done: taken, refused for good, or a day of failures. Only a typed one:
+   *  one reported uncertain, or never typed, is never confirmed this way. */
+  private async ackLate(entry: Entry): Promise<boolean> {
+    const now = this.now(), late = this.lateAcks.get(entry.deliveryId)
+    if (late && now < late.retryAt) return false
+    try {
+      await backend(this.core, 'POST', `/api/super-tabs/${entry.tabId}/agents/${entry.agentId}/deliveries/${entry.deliveryId}`,
+        { type: 'ack', claimId: entry.claimId, receipt: entry.receipt, uncertain: false })
+      if (late) this.log(`Delivery ${entry.deliveryId} was acknowledged after the backend ended it, ${late.failures + 1} tries, ${Math.round((this.now() - late.since) / 60_000)} min.`)
+      return true
+    } catch (error) {
+      if (ackRefused(error)) return true
+      const retry = late ?? { failures: 0, retryAt: 0, since: now }
+      if (this.now() - retry.since >= LATE_ACK_GIVE_UP_MS) {
+        this.log(`Gave up acknowledging delivery ${entry.deliveryId} to agent ${entry.agentId} in Swarm ${entry.tabId} after a day: `
+          + `${error instanceof Error ? error.message : String(error)}. Its sender sees Not sent.`)
+        return true
+      }
+      retry.retryAt = this.now() + Math.min(LATE_ACK_RETRY_MAX_MS, LATE_ACK_RETRY_MS * 2 ** retry.failures++)
+      this.lateAcks.set(entry.deliveryId, retry)
+      return false
     }
   }
 
@@ -746,10 +880,16 @@ export class SuperTabHost {
     // Set as the roster arrives, before any delivery read can stall this poll: a refresh started from an older roster must
     // see this one at once (round 2 of the review of #1660).
     this.rosterSkills.clear()
+    /** The instructions texts this roster still names: a project's, and each of its agents' own (a Buddy's). */
+    const instructionKeys = new Set<string>()
     for (const item of data) {
       const row = object(item), agent = object(row.agent)
       if (identifier(agent.harnessId) && agent.machineId === this.machineId && row.closeSession !== true && row.stopRequested !== true) {
         this.rosterSkills.set(agent.harnessId, skillSetOf(row as unknown as HostAgent))
+        const doc = rowInstructions(row as unknown as HostAgent)
+        if (doc && identifier(row.tabId) && identifier(agent.id)) {
+          instructionKeys.add(instructionsKey(row.tabId, doc.projectId)).add(instructionsKey(row.tabId, doc.projectId, agent.id))
+        }
       }
     }
     const stopKeys = new Set(data.filter(item => object(item).stopRequested === true).map(item => { const row = object(item); return `${row.tabId}:${object(row.agent).id}` }))
@@ -865,6 +1005,7 @@ export class SuperTabHost {
     for (const skills of [this.skillChecks, this.skillModes, this.roleTexts]) {
       for (const harnessId of skills.keys()) if (!this.rosterSkills.has(harnessId)) skills.delete(harnessId)
     }
+    for (const key of this.instructionTexts.keys()) if (!instructionKeys.has(key)) this.instructionTexts.delete(key)
     // A wait outlives a list that failed or was skipped: that says nothing of the delivery. It goes when a list that was read no
     // longer has the delivery, or when its agent is no longer here.
     for (const [key, retry] of this.deliveryRetries) {
@@ -991,7 +1132,9 @@ export class SuperTabHost {
     // could not be read held back every Buddy's end on the machine (follow-up to #2248, lib/buddyGuard.ts `forgetBuddyReads`).
     if (!state.forgotten) {
       try { forgetBuddyReads(agent.harnessId); state.forgotten = true; delete state.unforgotten } catch (error) {
-        const why = error instanceof Error ? error.message : String(error)
+        // By fixed codes alone: a filesystem error's message names its path, in the person's home (follow-up to #2389's
+        // security re-check 2). Anything else it might throw is named by kind too, never by its message.
+        const why = error instanceof SentListsError ? error.message : 'SENT_LISTS_FAILED'
         if (why !== state.unforgotten) {
           this.log(`Could not delete what session ${agent.harnessId.slice(0, 8)}'s person sent it, so its end is not acknowledged yet: ${why}`)
         }
@@ -1027,7 +1170,20 @@ export class SuperTabHost {
         state.closed = true
       }
       if (state.scrub && !state.scrubbed) {
-        await scrubClaudeSession(this.claudeHome, state.scrub)
+        // A fixed code: the error's own text names the transcript folder's path (security review 2 of #2375).
+        const scrub = await this.ownScrub(agent.id, agent.harnessId, state.scrub)
+          .catch(() => { throw new Error(`Could not remove an ended Buddy session's Claude Code traces yet: agent ${agent.id}, SCRUB_FAILED`) })
+        if (scrub) {
+          const unread = new Set<string>()
+          await scrubClaudeSession(this.claudeHome, scrub, [], undefined, what => {
+            if (what === 'shared') this.log(`Kept another folder's transcripts that share a Buddy session's transcript folder: agent ${agent.id}`)
+            else unread.add(UNREAD_CODES[what])
+          }).catch(() => { throw new Error(`Could not remove an ended Buddy session's Claude Code traces yet: agent ${agent.id}, SCRUB_FAILED`) })
+          // No sweep follows a Buddy's cleanup: a transcript folder or transcript it could not read would be left behind for good
+          // once this marked itself done (re-check 2 of 68ec6f0), and so would its todo file or its folder in a config backup
+          // (re-check of 8c0b019). It fails, by fixed codes, and is tried again.
+          if (unread.size) throw new Error(`Could not remove an ended Buddy session's Claude Code traces yet: agent ${agent.id}, ${[...unread].join(', ')}`)
+        }
         state.scrubbed = true
         if (this.journal.scrubs?.[agent.id]) {
           delete this.journal.scrubs[agent.id]
@@ -1050,18 +1206,42 @@ export class SuperTabHost {
     }).finally(() => { state.running = false })
   }
 
+  /** What of [target] an ended Buddy session's scrub removes, or null when its folder is not this agent's own. Any Harness
+   *  worktree passed, a person's own (Desktop makes them there too) or another agent's included (security review 1 of
+   *  #2375): only the one named for this agent's own Swarm start is (start.ts names its branch super-tab/<start>, the
+   *  folder is named after it, -2, -3 when taken; machines.ts swarmWorktree checks the same). Its session id goes only when
+   *  it is that folder's. */
+  private async ownScrub(agentId: string, harnessId: string, target: PurgeTarget): Promise<PurgeTarget | null> {
+    const creation = this.startReceipt(harnessId), folder = target.cwd ?? ''
+    const leaf = creation?.startsWith('super-') ? worktreeFolderName(`super-tab/${creation.slice('super-'.length)}`) : null
+    const name = basename(folder)
+    if (!leaf || (name !== leaf && !/^\d+$/.test(name.startsWith(`${leaf}-`) ? name.slice(leaf.length + 1) : ''))) {
+      this.log(`Dropped a Buddy session scrub that names no worktree of its own start: agent ${agentId}`)
+      return null
+    }
+    if (target.sessionId && !await sessionOfFolder(this.claudeHome, target.sessionId, folder)) {
+      this.log(`Kept another folder's session that a Buddy session scrub named: agent ${agentId}`)
+      return { ...target, sessionId: null }
+    }
+    return target
+  }
+
   /** A CLI update can ship new built-in skill text while Swarm sessions run; until now a running agent kept the text it
    *  read at start, so a skill release reached nobody until each agent restarted (owner, 2026-10-22). Rewrite a role
    *  session's file at once; tell its agent through the Swarm, as any delivery, once it is in an open group. The
    *  operation id names the agent and the text, so a retry, a restart or a second daemon never sends it twice. */
   private async refreshSkill(target: HostAgent): Promise<void> {
     const session = this.core.agents.byAgent(target.agent.harnessId)
-    const skill = session?.swarmSkill
+    // Read as every saved row is (project instructions, phase 4): a core from before role kinds answers in the wire's values.
+    const skill = parseSwarmSkill(session?.swarmSkill)
     const mode: SwarmSkillMode = target.skillMode === 'default' ? 'default' : 'orchestration'
+    // Project instructions (spec 2026-10-30): a row naming them installs them for every session, a Buddy too, in place of
+    // the role file's refresh (a Buddy keeps that too, below); its Custom role is one of the document's roles now.
+    const doc = rowInstructions(target)
     // Custom roles and skills per project (spec 2026-10-23): on Custom the roster names the agent's role and its text's
     // version. A role that is gone (null) keeps its file; the backend tells the agent to finish its current work.
-    const custom = customRole(target)
-    if ('role' in target && (!custom || KIND_SKILLS[custom.kind] !== skill?.role)) return
+    const custom = doc ? null : customRole(target)
+    if (!doc && 'role' in target && (!custom || !skill || KIND_SKILLS[custom.kind] !== wireRole(skill))) return
     const set = skillSetOf(target)
     const current = () => this.rosterSkills.get(target.agent.harnessId) === set
     // A checked session waits for the next host (Infinity); the project's owner switching its skills must reach it now.
@@ -1070,9 +1250,18 @@ export class SuperTabHost {
       this.skillChecks.delete(target.agent.harnessId)
     }
     const due = this.skillChecks.get(target.agent.harnessId) ?? 0
-    if (!skill || !session.cwd || this.now() < due) return
+    if (!session || !skill || !session.cwd || this.now() < due) return
     this.skillChecks.set(target.agent.harnessId, Infinity)
     try {
+      if (doc) {
+        // A Buddy has no tools skill: its Buddy skill stays its Harness text, kept current by a CLI release as before (spec:
+        // "The Buddy skill stays, and a Buddy also gets the project's document"; Task 4's review). Its text is every mode's.
+        if (skill.role === 'buddy') {
+          if (!current()) { this.skillChecks.delete(target.agent.harnessId); return }
+          if (!await this.refreshRoleFile(target, session.cwd, skill, mode, undefined, current)) return
+        }
+        return await this.refreshInstructions(target, session.cwd, skill, doc, current)
+      }
       let text: { name: string; text: string } | undefined
       if (custom) {
         let held = this.roleTexts.get(target.agent.harnessId)
@@ -1088,18 +1277,82 @@ export class SuperTabHost {
       }
       // Dropped, but due again: the roster may come back to this very role before anything was installed.
       if (!current()) { this.skillChecks.delete(target.agent.harnessId); return }
-      const refresh = refreshSwarmSkill(session.cwd, skill, mode, text)
-      if (!refresh?.owed) return
-      if (await this.tellSkill(target, refresh, current)) recordSwarmSkillNotice(session.cwd, skill, refresh)
-      else if (!current()) this.skillChecks.delete(target.agent.harnessId)
-      else this.skillChecks.set(target.agent.harnessId, this.now() + SKILL_RETRY_MS)
+      await this.refreshRoleFile(target, session.cwd, skill, mode, text, current)
     } catch (error) {
       this.log(error instanceof Error ? error.message : String(error))
       this.skillChecks.set(target.agent.harnessId, this.now() + SKILL_RETRY_MS)
     }
   }
+  /** Put the session's role file on its text and tell its agent if owed. False when that notice could not be sent: it is
+   *  due again later, or dropped for a newer roster's refresh. */
+  private async refreshRoleFile(target: HostAgent, cwd: string, skill: SwarmSkill, mode: SwarmSkillMode, text: CustomSwarmRole | undefined,
+    current: () => boolean): Promise<boolean> {
+    const refresh = refreshSwarmSkill(cwd, skill, mode, text)
+    if (!refresh?.owed) return true
+    if (await this.tellSkill(target, refresh, current)) { recordSwarmSkillNotice(cwd, skill, refresh); return true }
+    if (!current()) this.skillChecks.delete(target.agent.harnessId)
+    else this.skillChecks.set(target.agent.harnessId, this.now() + SKILL_RETRY_MS)
+    return false
+  }
+  /** Project instructions (spec 2026-10-30, How agents read it): the roster names the revision, never the text. The text is
+   *  read once per revision for the project's agents here, a Buddy's on its own, and installed beside the tools skill; the
+   *  agent is told once per change, however many saves came between two rosters. A read that answers another revision
+   *  installs nothing and is tried again later, as a Custom role's text. */
+  private async refreshInstructions(target: HostAgent, cwd: string, skill: SwarmSkill, doc: RowInstructions, current: () => boolean): Promise<void> {
+    const buddy = skill.role === 'buddy', harnessId = target.agent.harnessId
+    const key = instructionsKey(target.tabId, doc.projectId, buddy ? target.agent.id : undefined)
+    const path = `/api/super-tabs/${target.tabId}/projects/${doc.projectId}/instructions`, as = `asAgentId=${target.agent.id}`
+    let held = this.instructionTexts.get(key)
+    if (held?.revision !== doc.revision) {
+      const answer = object(await backend(this.core, 'GET', `${path}?${as}`))
+      // A newer roster's refresh reads its own revision: this one installs and says nothing.
+      if (!current()) { this.skillChecks.delete(harnessId); return }
+      if (answer.revision !== doc.revision || typeof answer.text !== 'string') {
+        throw new Error(`The project's instructions read back are not revision ${doc.revision}, which this machine was told to install. Trying again later.`)
+      }
+      // A Buddy reads no history: it names who asked for what. Revision 0 is the built-in template: nothing was saved.
+      held = { revision: doc.revision, text: answer.text, history: buddy || !doc.revision ? { summary: null, savedAt: null } : null }
+      this.instructionTexts.set(key, held)
+    }
+    // Task 4's review: a failed history read kept for the revision's life left every notice without its summary and gave each
+    // fresh launch an extra notice (its save time unknown). Only a read that answered is kept; a failure is said once and
+    // read again at the next pass, for at most HISTORY_WAIT_MS: a history that stays unreadable never holds them back.
+    let unread = false
+    if (!held.history) {
+      try {
+        held.history = await this.instructionsHistory(`${path}/revisions?${as}`, doc.revision)
+      } catch (error) {
+        unread = true
+        if (held.failedSince === undefined) {
+          held.failedSince = this.now()
+          this.log(`Could not read the history of project ${doc.projectId}'s instructions in Swarm ${target.tabId} (${error instanceof Error ? error.message : String(error)}). `
+            + `Revision ${doc.revision} waits up to ${HISTORY_WAIT_MS / 60_000} minutes for its summary, then goes out without it.`)
+        }
+      }
+    }
+    if (!current()) { this.skillChecks.delete(harnessId); return }
+    if (unread && this.now() - held.failedSince! < HISTORY_WAIT_MS) { this.skillChecks.set(harnessId, this.now() + SKILL_RETRY_MS); return }
+    const { summary, savedAt } = held.history ?? { summary: null, savedAt: null }
+    const refresh = refreshProjectSkills(cwd, skill, { revision: doc.revision, text: held.text, summary, savedAt,
+      roleName: doc.roleName, coordinatorName: doc.coordinatorName, coordinator: target.lead === true })
+    if (!refresh?.owed) return
+    if (await this.tellSkill(target, refresh, current)) recordProjectSkillsNotice(cwd, skill, refresh)
+    else if (!current()) this.skillChecks.delete(target.agent.harnessId)
+    else this.skillChecks.set(target.agent.harnessId, this.now() + SKILL_RETRY_MS)
+  }
+  /** From the project's kept revisions (newest first): the newest one's one-line summary when it is [revision], and when
+   *  [revision] was saved (epoch ms), which tells whether a session launched since has read it. Either is null when the
+   *  answer does not say; a read that fails throws. */
+  private async instructionsHistory(path: string, revision: number): Promise<{ summary: string | null; savedAt: number | null }> {
+    const revisions = object(await backend(this.core, 'GET', path)).revisions
+    const list = (Array.isArray(revisions) ? revisions : []).map(object)
+    const newest = list[0], entry = list.find(r => r.revision === revision)
+    const at = typeof entry?.at === 'string' ? Date.parse(entry.at) : NaN
+    return { summary: newest?.revision === revision && typeof newest.summary === 'string' ? newest.summary : null,
+      savedAt: Number.isFinite(at) ? at : null }
+  }
   /** False when nothing was sent: no open group, or the roster has moved on (`current`) and the next refresh decides. */
-  private async tellSkill(target: HostAgent, refresh: SkillRefresh, current: () => boolean): Promise<boolean> {
+  private async tellSkill(target: HostAgent, refresh: Pick<SkillRefresh, 'version' | 'change' | 'notice'>, current: () => boolean): Promise<boolean> {
     const id = target.agent.id
     const { state } = await this.sources.reads.read(target.tabId, id)
     const groups = (Array.isArray(state.conversations) ? state.conversations : []).map(object)
@@ -1227,6 +1480,7 @@ export class SuperTabHost {
     if (!entry) return
     const id = typedId(entry)
     delete this.journal.entries[deliveryId]
+    this.lateAcks.delete(deliveryId)
     this.withheld.clear(deliveryId)
     this.authorized.delete(id)
     if (this.active.delete(id)) this.core.turns.cancelDelivery(id)
@@ -1474,10 +1728,14 @@ export class SuperTabHost {
     const native = source.kind === 'native'
       ? `This is an observed native ${String(source.phase)} in ${String(object(message.author).name ?? 'an agent')}’s terminal, opened by ${String(object(source.operator).name ?? 'a collaborator')}. The input already reached that agent. Keep the shared work coordinated; do not replay the same instruction.\n\n`
       : ''
+    // A post that names no one reaches the coordinator, or from the coordinator the task's assignee: a reply to another agent
+    // names it, or an Engineer answering a Reviewer reaches the PM instead (final review). A person reads the chat itself.
+    const author = object(message.author)
+    const to = author.kind === 'agent' && identifier(author.id) ? ` --to ${shellQuote(author.id)}` : ''
     return `You are participating in a shared Super Tab conversation (${group}). Other humans and agents see messages posted there.\n`
       + `Read its state: ${command} status\nRead this conversation: ${command} messages ${shellQuote(group)}\n`
-      + `Reply there: ${command} post ${shellQuote(group)} 'your message' UNIQUE_OPERATION_ID --reply-to ${shellQuote(String(message.id))}\n`
-      + `Manage agreed work and delegation: ${command} help. Leads: route only when starting an agent or assigning work to another agent (not work you do yourself): ${command} route GROUP JSON. Each task needs goal, changes, constraints, owned code and acceptance checks. On Claude Code or Codex, Leads use swarm-lead, Builders swarm-dev and Reviewers swarm-review. Leads coordinate: assign multi-part or 15+ minute work to Swarm agent groups; do only answers, lookups and work under 15 minutes yourself; your subagents only read/look up.\n`
+      + `Reply there: ${command} post ${shellQuote(group)} 'your message' UNIQUE_OPERATION_ID --reply-to ${shellQuote(String(message.id))}${to}\n`
+      + `Manage agreed work and delegation: ${command} help.\n`
       + `Ask questions and post results in this conversation. ${SUPER_TAB_REPLY_STYLE} Replies to these delivered instructions must be posted here explicitly.\n\n`
       + native + reply + said
   }

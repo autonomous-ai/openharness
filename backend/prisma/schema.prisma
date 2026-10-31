@@ -1185,6 +1185,29 @@ model SuperTabThreadMark {
   @@index([updatedAt])
 }
 
+/// One thread with at least one reply, summed up as pageThreads' $facet gives it (pageReads.ts refreshThreads): rewritten in the
+/// transaction that inserts each reply, and read by root id instead of the $facet once its Swarm is backfilled
+/// (SuperTabThreadBackfill). No text; never returned as is. Kept with its messages.
+model SuperTabThread {
+  /// The root message's id.
+  id             String   @id @map("_id")
+  tabId          String
+  conversationId String
+  /// The $facet's `parts` and `mentions` for this thread (pageReads.ts ThreadFacet).
+  parts          Json
+  mentions       Json
+  updatedAt      DateTime
+
+  @@index([tabId, conversationId])
+}
+
+/// A Swarm whose thread summaries hold every reply created before `through` (threadBackfill.ts); its pages read them. Written
+/// by the singleton worker alone; id = the Swarm's id.
+model SuperTabThreadBackfill {
+  id      String   @id @map("_id")
+  through DateTime
+}
+
 /// Where a Swarm sweep reads on from between passes and releases, one row per sweep (readMarks.ts sweepThreadMarks: id
 /// "thread-marks", the last Swarm whose people check finished). Written by the singleton worker alone.
 model SuperTabSweepCursor {
@@ -1321,6 +1344,23 @@ model SuperTabDelivery {
   /// An ended task's open deliveries, cancelled with it (store.ts releaseRuns and stopped): by [tabId, status] alone the
   /// planner sometimes walked every delivery of the Swarm (180 read for 1 in the benchmark).
   @@index([tabId, assignmentId])
+  /// Finished deliveries by their last change: the hourly compaction reads only those past 14 days (deliveryCompaction.ts).
+  @@index([status, updatedAt])
+}
+
+// One message's finished deliveries, moved here 14 days after their last change (superTabs/deliveryCompaction.ts): message
+// history and its receipts are kept forever, while delivery rows hold only the recent and open ones. Never on the message
+// row, never returned whole: a page reads each receipt as a delivery and filters it per reader (pageReads.ts pageDeliveries).
+model SuperTabReceipt {
+  id             String   @id @map("_id") // the message id
+  tabId          String
+  conversationId String
+  /// By agent id: the delivery row as it was, but for the fields above (pageReads.ts receiptFields).
+  receipts       Json
+  /// The compacted deliveries' ids, so a host's receipt read finds one by its id (pageReads.ts compactedDelivery).
+  deliveryIds    String[]
+
+  @@index([tabId, deliveryIds])
 }
 
 // One independent harness owns at most one active assignment across all Super Tabs.
@@ -1457,6 +1497,55 @@ model SuperTabRoleText {
   roleId    String
   version   String
   text      String
+
+  @@index([tabId, projectId])
+}
+
+// A project's instructions (superTabs/instructions.ts): one Markdown document outside the tab snapshot, as role texts are. The
+// snapshot keeps only the project's revision and hash, so reads stay light; hosts and the Instructions panel read the text
+// when the revision changes. id = stableId(tabId, projectId). Deleted with the project (store.ts project.delete).
+model SuperTabInstructions {
+  id        String   @id @map("_id")
+  tabId     String
+  projectId String
+  revision  Int
+  hash      String
+  text      String
+  updatedAt DateTime
+
+  @@index([tabId, projectId])
+}
+
+// Every save of a project's instructions, the current one included: its last 50 (instructions.ts MAX_REVISIONS); the save
+// that writes the 51st deletes the oldest. `writtenBy` is a person's or the coordinator's id (`writtenByKind`), `askedBy` the
+// member whose words it carries. id = stableId(tabId, projectId, revision).
+model SuperTabInstructionsRevision {
+  id            String   @id @map("_id")
+  tabId         String
+  projectId     String
+  revision      Int
+  hash          String
+  text          String
+  summary       String
+  writtenByKind String
+  writtenBy     String
+  askedBy       String?
+  at            DateTime
+
+  @@index([tabId, projectId, revision])
+}
+
+// The small things a member tells a project's coordinator, kept beside its instructions so they survive a restart or a move
+// (instructions.ts): at most 100 live per project, each up to 300 characters. An expired one is never read and is deleted
+// by the next note write of its project; all go with the project.
+model SuperTabPmNote {
+  id        String    @id @map("_id")
+  tabId     String
+  projectId String
+  text      String
+  askedBy   String
+  at        DateTime
+  expiresAt DateTime?
 
   @@index([tabId, projectId])
 }

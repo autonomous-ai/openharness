@@ -120,7 +120,8 @@ void main() {
     },
   };
 
-  /// Ivy reviewed #12 in the review chat g2 of [projectId].
+  /// #13, a task of [projectId] linked to #12 (`reviewOf`), whose one check
+  /// passed. Its agent's result carries a `Ready:` line nothing reads.
   Map<String, dynamic> review({String projectId = project}) => {
     ...groupData(
       'g2',
@@ -132,6 +133,14 @@ void main() {
     ),
     'projectId': projectId,
     'reviewOf': 'g1',
+    'checks': [
+      {
+        'id': 'r',
+        'description': 'Reviewed',
+        'evidence': 'Two findings, fixed',
+        'passedBy': 'agent:agent-review',
+      },
+    ],
     'assignment': {
       'id': 'attempt-g2',
       'agentId': 'agent-review',
@@ -139,6 +148,8 @@ void main() {
       'result': 'Ready: no — revision 050bab807. Two findings.',
     },
   };
+
+  const linkedLine = '#13 Review: Fix login: passed';
 
   FakeSwarm backend({
     List<Map<String, dynamic>>? groups,
@@ -235,17 +246,17 @@ void main() {
   Finder inCard(String messageId, String text) =>
       find.descendant(of: card(messageId), matching: find.text(text));
 
-  testWidgets('a task card shows its title, status, checks, PRs and the '
-      'verdict from the review chat', (tester) async {
+  testWidgets('a task card shows its title, status, checks, PRs and its '
+      'linked tasks', (tester) async {
     await pump(tester, backend());
     expect(card('m1'), findsOneWidget);
     expect(inCard('m1', '#12 Fix login'), findsOneWidget);
     expect(inCard('m1', 'Working · 1 of 2 checks passed'), findsOneWidget);
     expect(inCard('m1', 'app · PR #7'), findsOneWidget);
-    expect(
-      inCard('m1', 'Reviewer: Ivy · Ready: no on 050bab807'),
-      findsOneWidget,
-    );
+    expect(inCard('m1', linkedLine), findsOneWidget);
+    // No reviewer by kind, no parsed `Ready:` line.
+    expect(find.textContaining('Reviewer: '), findsNothing);
+    expect(find.textContaining('050bab807'), findsNothing);
     // A later link of the same PR stays a plain message.
     expect(card('m3'), findsNothing);
   });
@@ -280,7 +291,10 @@ void main() {
     final fake = backend();
     final host = await pump(tester, fake);
     await change(tester, host, fake, [part('g1', 9, work(status: 'review'))]);
-    expect(inCard('m1', 'In review · 1 of 2 checks passed'), findsOneWidget);
+    expect(
+      inCard('m1', 'Waiting on others · 1 of 2 checks passed'),
+      findsOneWidget,
+    );
     await change(tester, host, fake, [
       part('g1', 10, work(status: 'done', prs: [pr, other])),
     ]);
@@ -302,7 +316,7 @@ void main() {
     expect(find.text('#12 Fix login'), findsNothing);
   });
 
-  testWidgets('a review chat of another project is never read for a card', (
+  testWidgets('a task of another project linked to it is never on its card', (
     tester,
   ) async {
     await pump(
@@ -315,7 +329,7 @@ void main() {
       ),
     );
     expect(inCard('m1', '#12 Fix login'), findsOneWidget);
-    expect(find.textContaining('Ivy'), findsNothing);
+    expect(find.textContaining('Review: Fix login'), findsNothing);
     expect(find.textContaining('050bab807'), findsNothing);
   });
 
@@ -362,11 +376,10 @@ void main() {
     grid.AppTheme.brightness.value = Brightness.dark;
   }, skip: shots == null || !Platform.isMacOS);
 
-  testWidgets('another project\'s reviewer of the same name is never read', (
-    tester,
-  ) async {
-    // Two Ivys: this project's reviews #12 here; another project's Ivy
-    // "reviews" it from a chat of that project.
+  testWidgets('another project\'s task linking it is left out, this '
+      'project\'s stays', (tester) async {
+    // Two Ivys: this project's task #13 links #12; another project's #14
+    // links it too, from a chat of that project.
     final elsewhere = {
       ...review(projectId: 'other'),
       'id': 'g3',
@@ -392,14 +405,12 @@ void main() {
         ],
       ),
     );
-    expect(
-      inCard('m1', 'Reviewer: Ivy · Ready: no on 050bab807'),
-      findsOneWidget,
-    );
+    expect(inCard('m1', linkedLine), findsOneWidget);
+    expect(find.textContaining('#14'), findsNothing);
     expect(find.textContaining('deadbeef1'), findsNothing);
   });
 
-  testWidgets('a Buddy chat or the Leads chat is never read as a review', (
+  testWidgets('a Buddy chat or the Leads chat is never a linked task', (
     tester,
   ) async {
     Map<String, dynamic> posing(String id, Map<String, dynamic> chat) => {
@@ -427,21 +438,27 @@ void main() {
       ),
     );
     expect(inCard('m1', '#12 Fix login'), findsOneWidget);
-    expect(find.textContaining('Ivy'), findsNothing);
+    expect(
+      find.descendant(of: card('m1'), matching: find.textContaining('Buddy')),
+      findsNothing,
+    );
+    expect(
+      find.descendant(of: card('m1'), matching: find.textContaining('Leads')),
+      findsNothing,
+    );
     expect(find.textContaining('deadbeef1'), findsNothing);
   });
 
-  testWidgets('the verdict goes when the review chat is taken away, and the '
+  testWidgets('the linked line goes when its task is taken away, and the '
       'task card stays', (tester) async {
     final fake = backend();
     final host = await pump(tester, fake);
-    expect(find.textContaining('050bab807'), findsWidgets);
+    expect(inCard('m1', linkedLine), findsOneWidget);
     await change(tester, host, fake, [
       {'key': 'g2', 'version': 9, 'changedAt': 9, 'deleted': true},
     ]);
     expect(inCard('m1', '#12 Fix login'), findsOneWidget);
-    expect(find.textContaining('050bab807'), findsNothing);
-    expect(find.textContaining('Ivy'), findsNothing);
+    expect(inCard('m1', linkedLine), findsNothing);
   });
 
   testWidgets('a failed read keeps the card as it was, with no loading left', (

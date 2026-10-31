@@ -504,7 +504,7 @@ describe('buildLaunchOverrides — what the app is told about web search', () =>
 })
 
 describe('buildLaunchOverrides — a Swarm session on the Harness GitHub App', () => {
-  const skill = { role: 'dev' as const, key: 'harness-claude-github-fixture', github: true as const }
+  const skill = { role: 'agent' as const, key: 'harness-claude-github-fixture', github: true as const }
   const workspace = () => mkdtempSync(join(tmpdir(), 'overrides-github-'))
 
   it('relaunches with the app\'s git and gh, and clears inherited GitHub token variables', async () => {
@@ -519,7 +519,7 @@ describe('buildLaunchOverrides — a Swarm session on the Harness GitHub App', (
 
   it('relaunches a session without the flag exactly as before', async () => {
     const { d } = deps()
-    const result = await buildLaunchOverrides(d, 'claude', { cwd: workspace(), swarmSkill: { role: 'dev', key: 'harness-claude-plain' } }, 'agent-1', () => true)
+    const result = await buildLaunchOverrides(d, 'claude', { cwd: workspace(), swarmSkill: { role: 'agent', key: 'harness-claude-plain' } }, 'agent-1', () => true)
     if (!result.ok) throw new Error(result.error)
     expect(result.overrides.env).not.toHaveProperty('GIT_CONFIG_PARAMETERS')
     expect(result.overrides.clearEnv).not.toContain('GH_TOKEN')
@@ -527,7 +527,7 @@ describe('buildLaunchOverrides — a Swarm session on the Harness GitHub App', (
 
   it('relaunches a Swarm Codex without its startup update check, and a Codex the Swarm never started with it', async () => {
     const { d } = deps()
-    const swarm = await buildLaunchOverrides(d, 'codex', { cwd: workspace(), swarmSkill: { role: 'dev', key: 'harness-codex-plain' } }, 'agent-1', () => true)
+    const swarm = await buildLaunchOverrides(d, 'codex', { cwd: workspace(), swarmSkill: { role: 'agent', key: 'harness-codex-plain' } }, 'agent-1', () => true)
     const own = await buildLaunchOverrides(d, 'codex', { cwd: workspace() }, 'agent-1', () => true)
     if (!swarm.ok || !own.ok) throw new Error('relaunch refused')
     expect(swarm.overrides.extraArgs.join(' ')).toContain('-c check_for_update_on_startup=false')
@@ -538,7 +538,7 @@ describe('buildLaunchOverrides — a Swarm session on the Harness GitHub App', (
   it('refuses a Swarm session with the Swarm off, before it asks or writes anything', async () => {
     const native = vi.fn(), dshLaunch = vi.fn()
     const { d, calls } = deps({ swarm: undefined, native, dshLaunch })
-    for (const swarmSkill of [skill, { role: 'lead' as const, key: 'harness-claude-plain' }]) {
+    for (const swarmSkill of [skill, { role: 'coordinator' as const, key: 'harness-claude-plain' }]) {
       expect(await buildLaunchOverrides(d, 'claude', { cwd: workspace(), dsh: 'fixture/blender', swarmSkill }, 'agent-1', () => true))
         .toEqual({ ok: false, error: 'SWARM_SKILL_FAILED', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' })
     }

@@ -4,6 +4,8 @@ import { createSuperTab, forRecipients, type Actor, type Conversation, type Mess
 import { buddyChatId } from './buddies.js'
 import { assignedNotice, buddiesTold } from './buddyNews.js'
 import { SHIP_KIND } from './ship.js'
+import { leaderboard } from './leaderboard/stats.js'
+import { weekStart } from './leaderboard/week.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -152,5 +154,70 @@ describe('the assignment notice a Buddy gets for work its person requested', () 
     delete nobody.f.state.conversations.find(c => c.id === nobody.group)!.requesterId
     expect(notices(nobody.assign())).toEqual([])
     expect(notices(requested({ requesterId: 'owner' }).assign())).toEqual([])
+  })
+})
+
+describe('work the PM opens from a Buddy\'s proposal without naming anyone (groups #294 and #327, 10-30)', () => {
+  /** peer's Buddy proposes; the PM opens a group from it, the store loading the proposal row by its id. */
+  function opened(extra: Record<string, unknown> = {}) {
+    const f = setup(), sent = f.propose()
+    const created = f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Offline edits', brief: 'Save edits offline.',
+      checks: [{ description: 'Tests pass', independent: false }], proposalMessageId: sent.id, ...extra } as Command, agentActor(f.pm),
+      { proposal: { id: sent.id, conversationId: sent.conversationId, author: sent.author, source: sent.source ?? null } })
+    const group = created.result.conversationId as string
+    return { f, group, created, find: () => f.state.conversations.find(c => c.id === group)! }
+  }
+
+  it('is requested by the person the proposal was sent for, who gets the assignment news, the ship news and the Shipped points', () => {
+    const { f, group, created, find } = opened()
+    expect(find().requesterId).toBe('peer')
+    expect(created.result.requesterUnknown).toBeUndefined()
+    const worker = f.add(group, 'worker')
+    expect(f.run({ type: 'work.assign', conversationId: group, agentId: worker }).messages.filter(m => m.recipients.includes('buddy')))
+      .toEqual([expect.objectContaining({ conversationId: group, recipients: ['buddy'], source: { kind: 'agent-only' } })])
+    const assignmentId = find().assignment!.id
+    for (const check of find().checks) f.run({ type: 'work.check', conversationId: group, assignmentId, checkId: check.id, passed: true, evidence: 'ok' })
+    const done = f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'done', result: 'Merged https://github.com/o/r/pull/7' },
+      agentActor(worker)).messages.find(m => m.source?.kind === SHIP_KIND)!
+    expect(done).toMatchObject({ conversationId: f.app.conversationId, source: { requesterId: 'peer' }, buddyRecipients: ['buddy'] })
+    expect(done.text).toContain('requested by peer')
+    const board = leaderboard({ state: f.state, groups: f.state.conversations, machines: [], projectId: f.app.projectId, week: weekStart(1000), now: 1000 })
+    expect(board.people.find(p => p.personId === 'peer')).toMatchObject({ points: 3, shipped: { count: 1 } })
+  })
+
+  it('keeps the requester the PM names, even someone else', () => {
+    const { find } = opened({ requesterId: 'owner' })
+    expect(find().requesterId).toBe('owner')
+  })
+
+  it('names nobody, and says so, when the proposal\'s person left the Swarm or no longer reads the project; the group still opens', () => {
+    for (const lose of [(f: ReturnType<typeof setup>) => { f.state.people = f.state.people.filter(p => p.id !== 'peer') },
+      (f: ReturnType<typeof setup>) => { f.state.projects!.find(p => p.id === f.app.projectId)!.visibility = 'private' }]) {
+      const f = setup(), sent = f.propose()
+      lose(f)
+      const created = f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Offline edits', brief: 'Save edits offline.',
+        checks: [{ description: 'Tests pass', independent: false }], proposalMessageId: sent.id } as Command, agentActor(f.pm),
+        { proposal: { id: sent.id, conversationId: sent.conversationId, author: sent.author, source: sent.source ?? null } })
+      const group = f.state.conversations.find(c => c.id === created.result.conversationId)!
+      expect(group.requesterId).toBeUndefined()
+      expect(group.ledger?.proposal).toEqual({ buddyId: 'buddy', messageId: sent.id })
+      expect(created.result).toMatchObject({ requesterUnknown: true, warnings: [expect.stringContaining('Name the person who asked')] })
+    }
+  })
+
+  it('credits nobody from a proposal posted in another project\'s chat, a private chat or by anyone but a Buddy: refused alike, nothing opened', () => {
+    const f = setup(), sent = f.propose()
+    const web = f.run({ type: 'project.create', name: 'Web', visibility: 'public', brief: '' }).result as { projectId: string; conversationId: string }
+    const before = f.state.conversations.length
+    const wrongs = [{ ...sent, conversationId: web.conversationId }, { ...sent, conversationId: f.chat },
+      { ...sent, author: { kind: 'person' as const, id: 'peer', name: 'peer', membershipGeneration: 'first' } },
+      { ...sent, author: { ...sent.author, id: f.pm } }, { ...sent, source: { kind: 'route', personId: 'peer' } }]
+    for (const wrong of wrongs) {
+      expect(() => f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Offline', brief: 'Save.',
+        checks: [{ description: 'Done', independent: false }], proposalMessageId: wrong.id } as Command, agentActor(f.pm),
+        { proposal: { id: wrong.id, conversationId: wrong.conversationId, author: wrong.author, source: wrong.source ?? null } }), JSON.stringify(wrong))
+        .toThrow('Name a Buddy\'s proposal posted in this project\'s chat, or leave the proposal out.')
+    }
+    expect(f.state.conversations.length).toBe(before)
   })
 })

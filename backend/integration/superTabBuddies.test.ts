@@ -584,6 +584,22 @@ describe('a person\'s Buddy chat before any Buddy, and the PM\'s private lines (
     expect(await chats()).toEqual([chat])
     expect((await f.store.messages(peer, f.tab, chat!, {})).messages.map(m => m.text)).toEqual(['First.', 'Second.'])
   })
+
+  // Any agent of the project tells a person now (project instructions, phase 4): its quiet Buddy chat is loaded for that
+  // agent's line too, not only the coordinator's (final review of the branch).
+  it('takes any agent\'s line in a quiet chat rather than opening a second one', async () => {
+    const f = await swarm()
+    const engineer = String((await f.execute({ type: 'agent.add', conversationId: 'lead', machineId: 'owner-mac', harnessId: randomUUID(), name: 'Engineer',
+      configuration: config, lead: false })).result.agentId)
+    await f.execute(tell('First.'), owner, f.lead)
+    const chats = async () => (await db.swarmGroup.findMany({ where: { tabId: f.tab, deleted: false } }))
+      .filter(row => (row.data as { kind?: string }).kind === 'buddy').map(row => row.key)
+    const [chat] = await chats()
+    await db.swarmGroup.updateMany({ where: { tabId: f.tab, key: chat }, data: { dormant: true } })
+    await f.execute(tell('From the Engineer.'), owner, engineer)
+    expect(await chats()).toEqual([chat])
+    expect((await f.store.messages(peer, f.tab, chat!, {})).messages.map(m => m.text)).toEqual(['First.', 'From the Engineer.'])
+  })
 })
 
 describe('naming a Buddy through the store (Diego, 10-29)', () => {
@@ -727,6 +743,22 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
     expect(shown.deliveries.map(d => d.agentId)).not.toContain(agentId)
     expect((await f.store.messages(owner, f.tab, group, {})).messages.map(m => m.id)).not.toContain(notice.id)
     expect((await f.store.messages(peer, f.tab, group, {}, agentId)).messages.map(m => m.id)).toContain(notice.id)
+  })
+
+  it('is told of work the PM opens from its proposal without naming anyone: the proposal\'s person is its requester (groups #294, #327)', async () => {
+    const { f, agentId, proposal, heard } = await proposed()
+    const created = await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Offline sync', brief: 'Desktop keeps edits offline.',
+      checks: [{ description: 'Edits survive a restart', independent: false }], proposalMessageId: proposal }, owner, f.lead)
+    const group = String(created.result.conversationId)
+    expect(created.result.requesterUnknown).toBeUndefined()
+    const stored = (await f.store.read(owner, f.tab)).state.conversations.find(c => c.id === group)!
+    expect(stored.requesterId).toBe(peer.sub)
+    const builder = String((await f.execute({ type: 'agent.add', conversationId: group, machineId: 'owner-mac', harnessId: randomUUID(), name: 'Builder',
+      configuration: config, lead: false })).result.agentId)
+    await f.execute({ type: 'work.assign', conversationId: group, agentId: builder })
+    const notice = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, conversationId: group, recipientIds: { has: agentId } } })
+    expect(notice.text).toMatch(/^News for your owner: #\d+ "Offline sync", which they requested, is assigned and working\.$/)
+    expect(await heard()).toEqual([notice.id])
   })
 
   it('stops hearing once its person stops reading the project: nothing new is sent, and what waits is refused at pickup', async () => {

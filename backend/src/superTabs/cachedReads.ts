@@ -52,22 +52,45 @@ export async function readParts(db: Db, view: CacheView, tabId: string, named: R
   for (const id of named.groupIds ?? []) {
     if (!held.has(id)) add(await view.get(tabId, `group:${id}`, 'main', () => store.loadGroups(db, tabId, 'key', { key: id })))
   }
+  return { ...active, machines, groups: extra.length ? [...active.groups, ...extra] : active.groups, starts: namedStarts(active.starts, named) }
+}
+
+/** The starts loadActive gives for `named`: every unfinished one, and the finished ones named by id or by the agent they
+ *  started (or all of them with `includeRecentStarts`). A finished start's agent is a sha256 (stableId), so it is worked
+ *  out only when the read names an agent: hashing every finished start was ~40% of a messages read's CPU (local profile of
+ *  prod's busiest Swarm, 873 starts, 2026-10-30). */
+export function namedStarts(starts: Part<AgentStart>[], named: ReadNamed): Part<AgentStart>[] {
+  if (named.includeRecentStarts) return starts
   const startIds = new Set(named.startIds ?? []), startAgents = new Set(named.startAgentIds ?? [])
   const agentOf = (start: AgentStart) => start.harnessId ? stableId(start.request.machineId, start.harnessId) : null
-  const starts = named.includeRecentStarts ? active.starts : active.starts.filter(s => !startFinished(s.data!) || startIds.has(s.key)
-    || startAgents.has(agentOf(s.data!) ?? ''))
-  return { ...active, machines, groups: extra.length ? [...active.groups, ...extra] : active.groups, starts }
+  return starts.filter(s => !startFinished(s.data!) || startIds.has(s.key) || (startAgents.size > 0 && startAgents.has(agentOf(s.data!) ?? '')))
 }
 
 /** The parts loadLight gives for `opts`, held whole by what it selects. */
 export async function readLight(db: Db, view: CacheView, tabId: string, opts: Omit<LightOptions, 'machines'>): Promise<SwarmParts> {
-  const name = `light:${JSON.stringify([opts.groups ?? 'active', !!opts.includeRecentStarts, !!opts.recentStartGroups, ...(['groupIds', 'agentIds', 'projectIds'] as const)
+  const name = `light:${JSON.stringify([opts.groups ?? 'active', !!opts.includeRecentStarts, ...(['groupIds', 'agentIds', 'projectIds'] as const)
     .map(key => [...opts[key] ?? []].sort())])}`
   const [light, machines] = await Promise.all([
     view.get(tabId, name, 'main', () => retryTransient(() => retryStaleIndex(() => db.$transaction(tx => store.loadLight(tx, tabId, { ...opts, machines: false }))))),
     readMachines(db, view, tabId),
   ])
   return { ...light, machines }
+}
+
+/** Light conversations by id (parts/light.ts loadLightGroups), dormant ones too, in the order named: each held at the
+ *  Swarm's main stamp, an id no live conversation has held as none. A read's misses are one query, as readLastChangedAts
+ *  batches them; without stamps every id is read, still in one query. */
+export async function readLightGroups(db: Db, view: CacheView, tabId: string, ids: readonly string[]): Promise<Part<GroupData>[]> {
+  const missing: string[] = []
+  let batch: Promise<Map<string, Part<GroupData>>> | undefined
+  const groups = await Promise.all([...new Set(ids)].map(id => view.get(tabId, `light-group:${id}`, 'main', () => {
+    missing.push(id)
+    // As readLastChangedAts: every miss of this read joins before the query starts.
+    batch ??= Promise.resolve().then(async () => new Map((await retryStaleIndex(() => store.loadLightGroups(db, tabId, 'key', { key: { $in: missing } })))
+      .map(group => [group.key, group])))
+    return batch.then(found => found.get(id) ?? null)
+  })))
+  return groups.filter((group): group is Part<GroupData> => group !== null)
 }
 
 /** The Swarm's newest data change (parts/load.ts lastChangedAt), held at its main stamp: a machine's reading leaves it. */

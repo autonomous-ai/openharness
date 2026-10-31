@@ -1,5 +1,8 @@
 # Super Tab routing v1
 
+> Replaced by [2026-10-30-project-instructions-design.md](../../plans/2026-10-30-project-instructions-design.md): the instruction document and agents' direct messages
+> replace what this describes. Kept as history; do not build from it.
+
 Date: 2026-10-19. Status: design approved and implemented on branch `feat/super-tab-routing-v1`; not yet merged.
 
 ## Purpose

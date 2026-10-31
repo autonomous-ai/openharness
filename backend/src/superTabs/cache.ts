@@ -24,7 +24,7 @@ export interface SwarmStamps {
   subscribe(listener: (tabId: string, scopes: readonly StampScope[]) => void): () => void
 }
 
-interface Entry { stamp: Stamp; scope: StampScope | 'all'; at: number; bytes: number; value: unknown }
+interface Entry { tabId: string; stamp: Stamp; scope: StampScope | 'all'; at: number; bytes: number; value: unknown }
 
 export interface CacheOptions {
   /** What the held values may take, counted as their JSON size. */
@@ -62,6 +62,8 @@ export function freeze(value: unknown): number {
 
 export class SwarmCache {
   private readonly entries = new Map<string, Entry>()
+  /** Each Swarm's entry names, so a bump touches only that Swarm's entries, not every Swarm's. */
+  private readonly bySwarm = new Map<string, Set<string>>()
   private readonly loading = new Map<string, Promise<unknown>>()
   private bytes = 0
   private readonly maxBytes: number
@@ -94,11 +96,9 @@ export class SwarmCache {
 
   /** Forgets what this process holds of a Swarm that these stamps' moves make stale; everything, by default. */
   drop(tabId: string, scopes: readonly StampScope[] = ['main']): void {
-    const prefix = key(tabId, ''), main = scopes.includes('main')
-    for (const [name, entry] of this.entries) {
-      if (!name.startsWith(prefix) || !main && entry.scope === 'main') continue
-      this.entries.delete(name)
-      this.bytes -= entry.bytes
+    const main = scopes.includes('main')
+    for (const name of this.bySwarm.get(tabId) ?? []) {
+      if (main || this.entries.get(name)!.scope !== 'main') this.drop1(name)
     }
   }
 
@@ -108,8 +108,7 @@ export class SwarmCache {
     if (!entry) return undefined
     const fresh = entry.stamp.main === stamp.main && (entry.scope === 'main' || entry.stamp.machine === stamp.machine) && this.now() - entry.at < this.maxAgeMs
     if (!fresh) {
-      this.entries.delete(key(tabId, name))
-      this.bytes -= entry.bytes
+      this.drop1(key(tabId, name))
       return undefined
     }
     // Most recently used last.
@@ -128,12 +127,13 @@ export class SwarmCache {
       const bytes = freeze(value)
       if (bytes <= this.maxBytes) {
         this.drop1(key(tabId, name))
-        this.entries.set(key(tabId, name), { stamp, scope, at, bytes, value })
+        this.entries.set(key(tabId, name), { tabId, stamp, scope, at, bytes, value })
         this.bytes += bytes
-        for (const [oldest, entry] of this.entries) {
+        const names = this.bySwarm.get(tabId) ?? new Set<string>()
+        this.bySwarm.set(tabId, names.add(key(tabId, name)))
+        for (const oldest of this.entries.keys()) {
           if (this.bytes <= this.maxBytes) break
-          this.entries.delete(oldest)
-          this.bytes -= entry.bytes
+          this.drop1(oldest)
         }
       }
       return value
@@ -147,6 +147,9 @@ export class SwarmCache {
     if (!entry) return
     this.entries.delete(name)
     this.bytes -= entry.bytes
+    const names = this.bySwarm.get(entry.tabId)!
+    names.delete(name)
+    if (!names.size) this.bySwarm.delete(entry.tabId)
   }
 }
 
@@ -240,6 +243,24 @@ export function configureSwarmStamps(next: SwarmStamps | null, options: CacheOpt
 }
 export const swarmReadCache = (): SwarmCache | null => readCache
 
+/** These Swarms' stamps now, or null without stamps, when they fail, or past STAMP_TIMEOUT_MS: a reading-only machine
+ *  report then runs in full (machineReports.ts). */
+export async function readStamps(tabIds: readonly string[]): Promise<Map<string, Stamp> | null> {
+  if (!stamps) return null
+  let timer: NodeJS.Timeout | undefined
+  const late = new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), STAMP_TIMEOUT_MS) })
+  try {
+    return await Promise.race([stamps.read(tabIds), late])
+  } catch {
+    return null
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** Whether this process committed a change of the Swarm whose bump Redis has not taken yet: its stamps say nothing new. */
+export const stampOwed = (tabId: string): boolean => owed.has(tabId) || settling.has(tabId)
+
 /** The Swarms a transaction changed, by stamp scope: bumped once it commits (`swarmTransaction`). */
 type Changes = Map<string, Set<StampScope>>
 const changesOf = new WeakMap<object, Changes>()
@@ -268,6 +289,8 @@ export async function swarmTransaction<T>(db: Pick<PrismaClient, '$transaction'>
 }
 
 const owed: Changes = new Map()
+/** Owed bumps being paid now, out of `owed` until Redis takes them or they are owed again. */
+const settling = new Set<string>()
 let paying: NodeJS.Timeout | null = null
 export const OWED_RETRY_MS = 1_000
 
@@ -291,6 +314,11 @@ async function payOwed(): Promise<void> {
   paying = null
   const due = [...owed]
   owed.clear()
-  await announce(new Map(due))
+  for (const [tabId] of due) settling.add(tabId)
+  try {
+    await announce(new Map(due))
+  } finally {
+    for (const [tabId] of due) settling.delete(tabId)
+  }
   if (!owed.size && due.length) logger.info('[swarm-cache] owed stamp bumps paid', { swarms: due.length })
 }

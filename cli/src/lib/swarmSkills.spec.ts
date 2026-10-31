@@ -4,7 +4,8 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { prepareSwarmSkill, parseSwarmSkill, recordSwarmSkillNotice, refreshSwarmSkill } from './swarmSkills.js'
+import { SWARM_TOOLS_SKILL } from './swarmTools.js'
+import { prepareSwarmSkill, parseSwarmSkill, recordSwarmSkillNotice, refreshSwarmSkill, roleFromWire, skillFile } from './swarmSkills.js'
 import { agentLaunchArgs } from './agentAttribution.js'
 import { buildLaunchOverrides } from './launchOverrides.js'
 import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
@@ -21,11 +22,41 @@ const folderOnly = () => null
 /** The Swarm's relaunch preparation, as the core hands it in while the Swarm is on (lib/launchOverrides.ts `swarm`). */
 const SWARM = { prepare: prepareSwarmSkill, github: () => null, args: () => [] }
 
+const sha256 = (text: string) => createHash('sha256').update(text).digest('hex')
 const roots: string[] = []
 const fixture = () => { const root = mkdtempSync(join(tmpdir(), 'swarm-skills-')); roots.push(root); return root }
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
 
 describe('built-in Swarm skills', () => {
+  it('writes the tools skill beside the role\'s and sends the agent to its instructions', () => {
+    for (const role of ['lead', 'dev', 'review'] as const) for (const mode of ['default', 'orchestration'] as const) {
+      const workspace = fixture(), saved = { role, key: `${role}-${mode}`, mode }
+      const prepared = prepareSwarmSkill(workspace, saved)
+      const tools = join(dirname(dirname(prepared.file)), 'swarm-tools', 'SKILL.md')
+      expect(readFileSync(tools, 'utf8')).toBe(SWARM_TOOLS_SKILL)
+      expect(skillFile(workspace, saved, 'swarm-tools', false)).toBe(tools)
+      expect(readFileSync(prepared.file, 'utf8')).toContain(`name: swarm-${role}`)
+      expect(prepared.instructions).toBe(`Use the built-in swarm-tools skill for Harness's Swarm commands: read ${JSON.stringify(tools)} before working. Your role and how this project works are in its instructions: read them with the instructions command (harness super-tab --tab TAB instructions), and work by them. If that command says this Swarm has no project instructions, use the swarm-${role} skill instead: read ${JSON.stringify(prepared.file)}.`)
+      const record = JSON.parse(readFileSync(join(dirname(tools), 'version.json'), 'utf8'))
+      expect(record).toEqual({ text: sha256(SWARM_TOOLS_SKILL), notified: sha256(SWARM_TOOLS_SKILL), change: 0, toldChange: 0 })
+      // A relaunch keeps both files' bytes, even after the agent's edits.
+      writeFileSync(prepared.file, 'edited role\n')
+      writeFileSync(tools, 'edited tools\n')
+      const again = prepareSwarmSkill(workspace, saved)
+      expect(again.file).toBe(prepared.file)
+      expect(readFileSync(prepared.file, 'utf8')).toBe('edited role\n')
+      expect(readFileSync(tools, 'utf8')).toBe('edited tools\n')
+    }
+  })
+
+  it('gives a Buddy no tools file and leaves its line unchanged', () => {
+    const workspace = fixture()
+    const prepared = prepareSwarmSkill(workspace, { role: 'buddy', key: 'buddy-session' }, folderOnly)
+    expect(prepared.instructions).toBe(`Use the built-in swarm-buddy skill for this session. Before working, read ${JSON.stringify(prepared.file)} with your file or shell tool.`)
+    expect(readdirSync(dirname(dirname(prepared.file)))).toEqual(['swarm-buddy'])
+    expect(skillFile(workspace, { role: 'buddy', key: 'buddy-session' }, 'swarm-tools', false)).toBeNull()
+  })
+
   it.each(['claude', 'codex'] as const)('gives %s only its role skill in each session, preserving the shared project', engine => {
     const workspace = fixture(), data = fixture()
     writeFileSync(join(workspace, 'AGENTS.md'), 'Project rules\n')
@@ -41,7 +72,7 @@ describe('built-in Swarm skills', () => {
         expect(text).toContain("Do not touch other groups' code.")
       }
       expect(text).not.toContain(`name: swarm-${role === 'lead' ? 'dev' : 'lead'}`)
-      expect(readdirSync(dirname(dirname(prepared.file)))).toEqual([`swarm-${role}`])
+      expect(readdirSync(dirname(dirname(prepared.file))).sort()).toEqual([`swarm-${role}`, 'swarm-tools'])
       const args = agentLaunchArgs(engine, null, { cwd: workspace, read: () => null, swarmInstructions: prepared.instructions }, data)
       expect(args.join(' ')).toContain(prepared.file)
       expect(args.join(' ')).not.toContain('harness new')
@@ -153,8 +184,14 @@ describe('built-in Swarm skills', () => {
   const reactions = (role: 'lead' | 'dev' | 'review') => `## Reactions\n${react}${substance}${role === 'lead' ? rocket : ''}\n`
   // Before a section that is last: after a blank line, without its own.
   const reactionsBefore = (role: 'lead' | 'dev' | 'review') => `\n${reactions(role).trimEnd()}\n`
+  // Who a post reaches (project instructions, phase 1): every role, in both modes, in a section of its own right before Reactions.
+  const reaches = '- A post reaches only the agents you name with --to <agent id>, any agent of this project; they join the group if they are not in it.'
+  const whoReaches = (role: 'lead' | 'dev' | 'review') => `## Who a post reaches\n${reaches}${role === 'lead' ? ' Your post in a task that names no one reaches its assigned agent.\n'
+    : ` A post that names no one reaches the Lead.\n${role === 'dev' ? '- Answer your Reviewer, and tell it a fix is pushed, with --to its agent id.\n' : '- Send your verdict and findings to the Builder with --to its agent id.\n'}`}\n`
   // The Builder's 👀 replaces its "say that you took it" line, in both modes.
   const took = '- React 👀 to the message that assigned it and mark it working; your first post is your plan or a first result, never that you took it.\n'
+  // The task's review plan (nightly reflection 10-30): a new bullet right after each Lead's review line, nothing replaced.
+  const reviewPlan = '- Put what every review must check first (the most-likely-wrong list, the privacy edges) in the task\'s review focus when you create or define it, and ask for two reviews when the work needs two independent ones: every review the Swarm opens for it, re-checks too, starts with that focus, two open at once on different Reviewers with no holder group, and the task is done only once both pass at the revision handed over last.\n'
   const reactionTake: Array<['orchestration' | 'default', 'dev', string, string]> = [
     ['orchestration', 'dev', took, '- Say in the group chat that you took it and what your first step is; mark it working.\n'],
     ['default', 'dev', took, '- Say in the group that you took it and what you will do first; mark it working.\n'],
@@ -169,9 +206,19 @@ describe('built-in Swarm skills', () => {
       expect(text, `${mode} ${role}`).not.toContain('that you took it and')
     }
   })
+  // Project instructions, phase 1: agents talk to each other by name; only an unnamed post goes to the Lead.
+  it('tells every role who a post reaches, the Builder to answer its Reviewer and the Reviewer its Builder by name', () => {
+    for (const mode of ['orchestration', 'default'] as const) for (const role of ['lead', 'dev', 'review'] as const) {
+      const text = readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode }).file, 'utf8')
+      expect(text.split('## Who a post reaches\n'), `${mode} ${role}`).toHaveLength(2)
+      expect(text, `${mode} ${role}`).toContain('A post reaches only the agents you name with --to <agent id>, any agent of this project')
+      expect(text, `${mode} ${role}`).toContain(role === 'lead' ? 'Your post in a task that names no one reaches its assigned agent.' : 'A post that names no one reaches the Lead.')
+      expect(text, `${mode} ${role}`).toContain(`\n\n${whoReaches(role)}## Reactions\n`)
+    }
+  })
   // By role too: the Builder's and the Reviewer's tool-check line is the same, and only the Builder's replaced an approved one.
   const approved = (text: string, mode: 'orchestration' | 'default', role: 'lead' | 'dev' | 'review') =>
-    [...autoReview, ...failFast, ...stallWake, ...reactionTake].filter(([m, r]) => m === mode && r === role).reduce((t, [, , line, before]) => t.replace(line, before), text)
+    [...autoReview, ...failFast, ...stallWake, ...reactionTake].filter(([m, r]) => m === mode && r === role).reduce((t, [, , line, before]) => t.replace(line, before), role === 'lead' ? text.replace(reviewPlan, '') : text)
   it('tells each Lead to act within minutes on the Swarm\'s stall wake-up, in place of the 6-hour rule, and no other role', () => {
     for (const [mode, , line, before] of stallWake) {
       expect(readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode }).file, 'utf8').split(line), mode).toHaveLength(2)
@@ -179,6 +226,16 @@ describe('built-in Swarm skills', () => {
         const text = readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode }).file, 'utf8')
         expect(text, `${mode} ${role}`).not.toContain(before)
         if (role !== 'lead') expect(text, `${mode} ${role}`).not.toContain('a task stalled')
+      }
+    }
+  })
+  it('tells each Lead, once and right after its review line, to put the review focus and two reviews on the task, and no other role', () => {
+    for (const mode of ['orchestration', 'default'] as const) {
+      for (const role of ['lead', 'dev', 'review'] as const) {
+        const text = readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode }).file, 'utf8')
+        expect(text.split(reviewPlan), `${mode} ${role}`).toHaveLength(role === 'lead' ? 2 : 1)
+        const reviewLine = autoReview.find(([m, r]) => m === mode && r === 'lead')![2].replace(/\n?$/, '\n')
+        if (role === 'lead') expect(text, mode).toContain(`${reviewLine}${reviewPlan}`)
       }
     }
   })
@@ -197,10 +254,10 @@ describe('built-in Swarm skills', () => {
     ['dev', 'e78ce31a71f169d8956a2acd46e8bb43b79bd654b80b0fe3c33dbced9d2c3c75'],
     ['review', '424dc9db5642ed7093128525f30877ffc301eb6957b33e8234916de0f0eaa208'],
   ] as const)('writes the owner\'s Harness orchestration %s skill byte for byte', (role, sha256) => {
-    expect(parseSwarmSkill({ role, key: 'session' })).toEqual({ role, key: 'session' })
+    expect(parseSwarmSkill({ role, key: 'session' })).toEqual({ ...roleFromWire(role), key: 'session' })
     for (const mode of [undefined, 'orchestration'] as const) {
       const prepared = prepareSwarmSkill(fixture(), { role, key: 'session', ...(mode ? { mode } : {}) })
-      expect(prepared.instructions).toBe(`Use the built-in swarm-${role} skill for this session. Before working, read ${JSON.stringify(prepared.file)} with your file or shell tool.`)
+      expect(prepared.instructions).toContain(`use the swarm-${role} skill instead: read ${JSON.stringify(prepared.file)}.`)
       const text = readFileSync(prepared.file, 'utf8')
       expect(text.startsWith(`---\nname: swarm-${role}\n`)).toBe(true)
       expect(text.split(twoHours)).toHaveLength(role === 'lead' ? 2 : 1)
@@ -226,7 +283,7 @@ describe('built-in Swarm skills', () => {
       expect(text.split(moveMissing)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(thread)).toHaveLength(role === 'lead' ? 2 : 1)
       expect([cardLead, cardDev, cardReview].map(line => text.split(line).length)).toEqual([role === 'lead' ? 2 : 1, role === 'dev' ? 2 : 1, role === 'review' ? 2 : 1])
-      expect(sha(approved(text, 'orchestration', role).replace(reactions(role), '').replace(twoHours, '').replace(terminal, '').replace(update, '').replace(overlap, '').replace(local, '').replace(failedStart, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
+      expect(sha(approved(text, 'orchestration', role).replace(whoReaches(role), '').replace(reactions(role), '').replace(twoHours, '').replace(terminal, '').replace(update, '').replace(overlap, '').replace(local, '').replace(failedStart, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
         .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requests, '').replace(shared, '').replace(report, '')
         .replace(missingStop, '').replace(reviewCheck, '').replace(moveMissing, '').replace(thread, '')
         .replace(cardLead, '').replace(cardDev, '').replace(cardReview, ''))).toBe(sha256)
@@ -289,7 +346,7 @@ describe('built-in Swarm skills', () => {
     const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
     expect(orchestration).toContain(`\n\n${requests}## Red flags`)
     const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
-    expect(plain.endsWith(`Call the roles Product Manager, Engineer and Reviewer.\n${thread}${reactionsBefore('lead')}${requestsLast}`)).toBe(true)
+    expect(plain.endsWith(`Call the roles Product Manager, Engineer and Reviewer.\n${thread}\n${whoReaches('lead')}${reactionsBefore('lead').slice(1)}${requestsLast}`)).toBe(true)
   })
   it('gives each Builder and Reviewer skill its shared-machine rules in a section of their own: before the red flags, or last', () => {
     const lastBefore = { dev: '- Write to people in their language, without commands or internal ids. Call the roles Product Manager, Engineer and Reviewer.\n',
@@ -298,7 +355,7 @@ describe('built-in Swarm skills', () => {
       const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session' }).file, 'utf8')
       expect(orchestration, role).toContain(`\n\n${shared}## Red flags`)
       const plain = readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode: 'default' }).file, 'utf8')
-      expect(plain.endsWith(`${lastBefore[role]}${reactionsBefore(role)}${sharedLast}`), role).toBe(true)
+      expect(plain.endsWith(`${lastBefore[role]}\n${whoReaches(role)}${reactionsBefore(role).slice(1)}${sharedLast}`), role).toBe(true)
     }
   })
   it('adds the update-request line right after each Lead skill\'s cadence rule', () => {
@@ -364,7 +421,7 @@ describe('built-in Swarm skills', () => {
     ['dev', '9294ae0dfe48a5c9185638ecb8f7cb2c2903253e5e823eb69592f3eb85455f12'],
     ['review', '56c1a9bfbe7cf2ff9ded4c83cebe9e801f8846250ec80849aa6afe41685db7d9'],
   ] as const)('writes the owner\'s Default %s skill byte for byte, with a prompt line that fits it', (role, sha256) => {
-    expect(parseSwarmSkill({ role, key: 'session', mode: 'default' })).toEqual({ role, key: 'session', mode: 'default' })
+    expect(parseSwarmSkill({ role, key: 'session', mode: 'default' })).toEqual({ ...roleFromWire(role), key: 'session', mode: 'default' })
     const prepared = prepareSwarmSkill(fixture(), { role, key: 'session', mode: 'default' })
     const text = readFileSync(prepared.file, 'utf8')
     expect(text.split(terminal)).toHaveLength(role === 'lead' ? 2 : 1)
@@ -389,11 +446,12 @@ describe('built-in Swarm skills', () => {
     expect(text.split(moveMissing)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(text.split(thread)).toHaveLength(role === 'lead' ? 2 : 1)
     expect([cardLead, cardDev, cardReview].map(line => text.split(line).length)).toEqual([role === 'lead' ? 2 : 1, role === 'dev' ? 2 : 1, role === 'review' ? 2 : 1])
-    expect(sha(approved(text, 'default', role).replace(reactions(role), '').replace(terminal, '').replace(update, '').replace(overlap, '').replace(localDefault, '').replace(failedStart, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
+    expect(sha(approved(text, 'default', role).replace(whoReaches(role), '').replace(reactions(role), '').replace(terminal, '').replace(update, '').replace(overlap, '').replace(localDefault, '').replace(failedStart, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
       .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requestsLast, '').replace(sharedLast, '').replace(report, '')
       .replace(missingStop, '').replace(reviewCheck, '').replace(moveMissing, '').replace(thread, '')
         .replace(cardLead, '').replace(cardDev, '').replace(cardReview, ''))).toBe(sha256)
-    expect(prepared.instructions).toBe(`Use the swarm-${role} skill for this session: the team process; otherwise work your usual way. Before working, read ${JSON.stringify(prepared.file)} with your file or shell tool.`)
+    expect(prepared.instructions).toMatch(/^Use the built-in swarm-tools skill /)
+    expect(prepared.instructions).toContain(`use the swarm-${role} skill instead: read ${JSON.stringify(prepared.file)}.`)
   })
 
   // Custom roles and skills per project (spec 2026-10-23, call 14): a custom role's text is installed as the skill of its
@@ -493,10 +551,10 @@ describe('built-in Swarm skills', () => {
       // The same text as at launch, but a new change: its notice is not the launch's (there was none) nor a retry of another.
       recordSwarmSkillNotice(workspace, skill, back)
       expect(refreshSwarmSkill(workspace, skill, 'default')).toMatchObject({ owed: false, change: 2 })
-      // A relaunch keeps the file and says what it holds, whatever mode the session was first started in.
+      // A relaunch keeps the file and names it as the fallback, whatever mode the session was first started in.
       refreshSwarmSkill(workspace, skill, 'orchestration')
       expect(prepareSwarmSkill(workspace, { ...skill, mode: 'default' }).instructions)
-        .toBe(`Use the built-in swarm-dev skill for this session. Before working, read ${JSON.stringify(file)} with your file or shell tool.`)
+        .toContain(`use the swarm-dev skill instead: read ${JSON.stringify(file)}.`)
     })
     it('puts back the mode\'s text when a switch was cut off after its file and before its record', () => {
       const workspace = fixture(), { file } = prepareSwarmSkill(workspace, { ...skill, mode: 'default' })
@@ -650,18 +708,18 @@ describe('built-in Swarm skills', () => {
 
   it('validates persisted role metadata and refuses an empty key', () => {
     for (const value of [null, undefined, {}, { role: 'builder', key: 'x' }, { role: 'dev', key: '' }, { role: 'lead', key: 7 }]) expect(parseSwarmSkill(value)).toBeUndefined()
-    expect(parseSwarmSkill({ role: 'dev', key: 'x' })).toEqual({ role: 'dev', key: 'x' })
+    expect(parseSwarmSkill({ role: 'dev', key: 'x' })).toEqual({ role: 'agent', key: 'x' })
     // An unknown mode is dropped, not refused: the session keeps its role and launches as before modes.
-    expect(parseSwarmSkill({ role: 'dev', key: 'x', mode: 'light' })).toEqual({ role: 'dev', key: 'x' })
-    expect(parseSwarmSkill({ role: 'dev', key: 'x', mode: 'orchestration' })).toEqual({ role: 'dev', key: 'x', mode: 'orchestration' })
+    expect(parseSwarmSkill({ role: 'dev', key: 'x', mode: 'light' })).toEqual({ role: 'agent', key: 'x' })
+    expect(parseSwarmSkill({ role: 'dev', key: 'x', mode: 'orchestration' })).toEqual({ role: 'agent', key: 'x', mode: 'orchestration' })
     // The Harness GitHub App's flag is kept for relaunches, and only as true.
-    expect(parseSwarmSkill({ role: 'dev', key: 'x', github: true })).toEqual({ role: 'dev', key: 'x', github: true })
-    expect(parseSwarmSkill({ role: 'dev', key: 'x', github: 'yes' })).toEqual({ role: 'dev', key: 'x' })
+    expect(parseSwarmSkill({ role: 'dev', key: 'x', github: true })).toEqual({ role: 'agent', key: 'x', github: true })
+    expect(parseSwarmSkill({ role: 'dev', key: 'x', github: 'yes' })).toEqual({ role: 'agent', key: 'x' })
     expect(() => prepareSwarmSkill(fixture(), { role: 'lead', key: '' })).toThrow()
   })
 
   it.each(['claude', 'codex'] as const)('restores %s skill on relaunch without overwriting the saved content', async engine => {
-    const cwd = fixture(), swarmSkill = { role: 'dev' as const, key: 'original' }
+    const cwd = fixture(), swarmSkill = { role: 'agent' as const, key: 'original' }
     const first = prepareSwarmSkill(cwd, swarmSkill)
     const result = await buildLaunchOverrides({ capabilities: async () => ({ sessionEnv: true }), installCodexHooks: () => true, machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(),
       writeGridConfigDir: async () => '/unused', readCodexConfig: () => null, readAttribution: () => null, swarm: SWARM }, engine, { cwd, swarmSkill }, 'new-registry-id')
@@ -671,7 +729,7 @@ describe('built-in Swarm skills', () => {
   })
 
   it('refuses relaunch with a missing workspace or a redirected runtime', async () => {
-    const cwd = fixture(), swarmSkill = { role: 'dev' as const, key: 'original' }
+    const cwd = fixture(), swarmSkill = { role: 'agent' as const, key: 'original' }
     symlinkSync(fixture(), join(cwd, '.harness'))
     const deps = { capabilities: async () => ({ sessionEnv: true }), installCodexHooks: () => true, machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(), writeGridConfigDir: async () => '/unused', swarm: SWARM }
     expect(await buildLaunchOverrides(deps, 'claude', { swarmSkill }, 'a')).toMatchObject({ ok: false, error: 'SWARM_SKILL_FAILED', detail: expect.stringContaining('no saved workspace') })
@@ -897,5 +955,42 @@ describe('a Buddy\'s folder (Lead\'s ruling on the privacy review of #1992)', ()
     prepareSwarmSkill(workspace, { role: 'dev', key: 'session' })
     expect(statSync(join(workspace, 'README.md')).mode & 0o200).toBe(0o200)
     expect(existsSync(join(workspace, '.claude', 'settings.local.json'))).toBe(false)
+  })
+})
+
+// Project instructions, phase 4 (decision 1): a session is a coordinator, an agent or a Buddy. Its role file stays the
+// built-in text it launched with, for a Swarm with no instructions, and a row an older CLI saved relaunches onto its own.
+describe('role kinds keep their role files', () => {
+  /** The whole file a Reviewer's launch writes in each mode, byte for byte, as before role kinds. */
+  const REVIEW = { orchestration: '9ce49d67c7dcb7cdf7ee5dcd1bcc8551eeb7e4f5f8e99e637cf39e25efcf5550', default: 'ef55546c73320571db46d05eecba56761b53697e2144a9cf59cba596d70ba57e' }
+  const folder = (workspace: string, key: string, name: string) =>
+    join(realpathSync(workspace), '.harness', 'runtime', sha256(key), 'swarm', 'skills', name)
+  it('keeps each session\'s role file', () => {
+    for (const mode of ['orchestration', 'default'] as const) {
+      const workspace = fixture(), skill = { role: 'agent', fallback: 'review', key: 'reviewer', mode } as const
+      const prepared = prepareSwarmSkill(workspace, skill)
+      expect(prepared.file).toBe(join(folder(workspace, 'reviewer', 'swarm-review'), 'SKILL.md'))
+      expect(sha256(readFileSync(prepared.file, 'utf8'))).toBe(REVIEW[mode])
+      expect(prepared.instructions).toContain(`use the swarm-review skill instead: read ${JSON.stringify(prepared.file)}.`)
+      expect(refreshSwarmSkill(workspace, skill, mode === 'default' ? 'orchestration' : 'default')!.notice).toContain('in place of your earlier swarm-review skill.')
+    }
+    for (const [role, name] of [['coordinator', 'swarm-lead'], ['agent', 'swarm-dev'], ['buddy', 'swarm-buddy']] as const) {
+      const workspace = fixture()
+      const prepared = prepareSwarmSkill(workspace, { role, key: role }, folderOnly)
+      expect(prepared.file).toBe(join(folder(workspace, role, name), 'SKILL.md'))
+      expect(readFileSync(prepared.file, 'utf8').startsWith(`---\nname: ${name}\n`)).toBe(true)
+    }
+    // A row an older CLI saved, read back as the registry reads it, relaunches onto the file that CLI wrote, its bytes kept.
+    for (const [role, name] of [['dev', 'swarm-dev'], ['lead', 'swarm-lead'], ['review', 'swarm-review']] as const) {
+      const workspace = fixture(), dir = folder(workspace, `old-${role}`, name)
+      mkdirSync(dir, { recursive: true, mode: 0o700 })
+      writeFileSync(join(dir, 'SKILL.md'), `---\nname: ${name}\n---\nAn older release's text.\n`)
+      const row = parseSwarmSkill({ role, key: `old-${role}` })!
+      expect(row.role).toBe(role === 'lead' ? 'coordinator' : 'agent')
+      const prepared = prepareSwarmSkill(workspace, row)
+      expect(prepared.file).toBe(join(dir, 'SKILL.md'))
+      expect(readFileSync(prepared.file, 'utf8')).toBe(`---\nname: ${name}\n---\nAn older release's text.\n`)
+      expect(readdirSync(dirname(dir)).sort()).toEqual([name, 'swarm-tools'].sort())
+    }
   })
 })

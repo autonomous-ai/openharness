@@ -342,11 +342,15 @@ it('climbs again from the start once a pass launches an agent, and when a person
     await h.held.boot(async () => {})
     await h.held.restoreHeld()
     await vi.advanceTimersByTimeAsync(2_000 + 4_000 + 8_000 + 16_000 + 30_000)
+    // How long until the next pass, timer to timer. Stepping 1 ms at a time took 30,000 event-loop turns a call: at
+    // load ~85 (MacBook-Pro-19, 2026-10-30) it ran 17 s and timed the test out.
     const nextPass = async () => {
-      const before = h.restore.mock.calls.length
-      for (let ms = 1; ms <= 30_000; ms++) {
-        await vi.advanceTimersByTimeAsync(1)
-        if (h.restore.mock.calls.length > before) return ms
+      const before = h.restore.mock.calls.length, start = Date.now()
+      while (vi.getTimerCount() > 0) {
+        await vi.advanceTimersToNextTimerAsync()
+        const waited = Date.now() - start
+        if (waited > 30_000) return null
+        if (h.restore.mock.calls.length > before) return waited
       }
       return null
     }

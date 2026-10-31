@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentStart, Assignment, SuperTabState } from './model.js'
-import { LEASE_MS, QUIET_RUNNING_MS, sweepForLead, sweepLiveness } from './liveness.js'
+import { LEASE_MS, loseTasks, nextLossAt, QUIET_RUNNING_MS, sweepForLead, sweepLiveness, waitingForReview } from './liveness.js'
 import { MACHINE_FRESH_MS, startPreparing } from './machines.js'
 import { split } from './parts/index.js'
 
@@ -58,37 +58,21 @@ describe('a task waiting for review', () => {
     expect(status(quiet('working', 30), handedOver + 30 * MINUTE + 1)).toMatchObject({ status: 'lost', lost: { reason: 'no progress for 30 minutes' } })
   })
 
-  // Engineers stay working with a "Ready for review" result, since done is refused until the review passes (Lead, 2026-10-29).
-  const working = (result: string, patch: Partial<Assignment> = {}) => status(swarm(assignment({ result, leaseUntil: handedOver + LEASE_MS,
-    progressAt: handedOver, ...patch }), { receivedAt: handedOver + 45 * MINUTE, harnessProgress: { h: handedOver } }), handedOver + 45 * MINUTE)
-
-  it('stays with its Engineer through 45 quiet minutes while working with a ready-for-review hand-off naming a revision', () => {
-    expect(working('Ready for review: https://github.com/example/project/pull/2180 at 4f9c2e1').status).toBe('working')
-    expect(working('ready for review — PR #2180, head 4f9c2e1d8a').status).toBe('working')
-  })
-
-  // A short hash can be all digits or all letters (review of #2176): after '@', 'at ' or 'head ' any 7-40 hex counts.
-  it('takes an all-digit or all-letter revision named right after @, at or head', () => {
-    for (const revision of ['1234567', 'abcdefa']) {
-      expect(working(`Ready for review: PR #2180 @${revision}`).status).toBe('working')
-      expect(working(`Ready for review: PR #2180 at ${revision}`).status).toBe('working')
-      expect(working(`Ready for review — PR #2180, head ${revision}`).status).toBe('working')
-      expect(working(`Ready for review: PR #2180 HEAD ${revision}`).status).toBe('working')
-    }
-  })
-
-  it('does not take an all-digit or all-letter run anywhere else as a revision', () => {
-    expect(working('Ready for review on 20261029, PR #2180').status).toBe('lost')
-    expect(working('Ready for review: 1234567').status).toBe('lost')
-    expect(working('Ready for review: abcdefa').status).toBe('lost')
-    expect(working('Ready for review: PR #2180 at 12345678901234567890123456789012345678901').status).toBe('lost')
-    expect(working('Ready for review: chat 12:00 at 1234567x').status).toBe('lost')
-  })
-
-  it('counts quiet time for a hand-off without a revision, any other result, or one a review has since found problems in', () => {
-    expect(working('Ready for review soon, running the suite').status).toBe('lost')
-    expect(working('Fixed 4f9c2e1; running the suite').status).toBe('lost')
-    expect(working('Ready for review: 4f9c2e1', { reviewFoundAt: handedOver }).status).toBe('lost')
+  // Agents on the older built-in skills hand over as working with a "ready for review" result naming a revision, since their
+  // skills had Done refused until a review passed. While such agents exist (this release), that result still waits, until a
+  // review finds problems in it (final review of the project instructions branch).
+  it('waits in the review status, and in an older skill\'s working hand-off until a review finds problems in it', () => {
+    expect(waitingForReview(assignment({ status: 'review', result: 'Ready for review @abc1234' }))).toBe(true)
+    expect(waitingForReview(assignment({ status: 'review', result: null }))).toBe(true)
+    expect(waitingForReview(assignment({ status: 'working', result: 'Ready for review @abc1234' }))).toBe(true)
+    expect(waitingForReview(assignment({ status: 'working', result: 'Ready for review @abc1234', reviewFoundAt: 5 }))).toBe(false)
+    // No revision named, or no hand-off: working work counts its quiet time.
+    expect(waitingForReview(assignment({ status: 'working', result: 'Ready for review on 2026-10-30' }))).toBe(false)
+    expect(waitingForReview(assignment({ status: 'working', result: 'Pushed abc1234' }))).toBe(false)
+    const handOff = (patch: Partial<Assignment> = {}) => status(swarm(assignment({ result: 'Ready for review: https://github.com/example/project/pull/2180 at 4f9c2e1',
+      leaseUntil: handedOver + LEASE_MS, progressAt: handedOver, ...patch }), { receivedAt: handedOver + 45 * MINUTE, harnessProgress: { h: handedOver } }), handedOver + 45 * MINUTE)
+    expect(handOff()).toMatchObject({ status: 'working' })
+    expect(handOff({ reviewFoundAt: handedOver })).toMatchObject({ status: 'lost', lost: { reason: 'no progress for 45 minutes' } })
   })
 
   it('is still lost at once when its session stops or its machine goes offline', () => {
@@ -156,13 +140,43 @@ describe('a start its machine has launched', () => {
     expect(told[2]!.text).not.toContain('suspended')
   })
 
-  it('steps its group up when it ran a grid model, and tells the Lead in the same notice', () => {
+  // Project instructions, phase 4 (decision 18): the coordinator and the agent that made the start hear it, with the model it
+  // asked for; nothing is stepped up or started elsewhere.
+  it('tells a failed grid start to the coordinator and the agent that made it, naming its model, and steps nothing up', () => {
     const at = LAUNCHED + 3 * MINUTE + 1
-    const state = launched([{ receivedAt: at }], { request: { conversationId: 'lead', machineId: 'm', name: 'Builder', gridModel: 'moonshotai/kimi-k3' } })
-    Object.assign(state.conversations[0]!, { number: 7 })
-    expect(sweep(state, at).told).toEqual(['Could not start Builder: its machine did not start it within 3 minutes.\n\n#7 stepped up to attempt 2: its grid host did not start the agent. '
-      + 'Route it again: the route leaves out models on the grid and below quality 2, and the new attempt\'s brief carries the branch, the last result and the findings.'])
-    expect(state.conversations[0]!.stepUp).toMatchObject({ attempt: 2, floor: 2 })
+    const state = launched([{ receivedAt: at }], { actorKey: 'agent:E',
+      request: { conversationId: 'lead', machineId: 'm', name: 'Builder', gridModel: 'moonshotai/kimi-k3' } })
+    state.agents.push({ ...structuredClone(state.agents[0]!), id: 'E', name: 'Engineer' })
+    state.conversations[0]!.agentIds.push('E')
+    const rows = sweepLiveness(state, at).filter(row => row.source?.kind === 'start-timeout')
+    expect(rows).toEqual([expect.objectContaining({ recipients: ['L', 'E'],
+      text: 'Could not start Builder on moonshotai/kimi-k3: its machine did not start it within 3 minutes.' })])
+    expect(state.conversations[0]!.stepUp).toBeUndefined()
+  })
+
+  // A task with no lead (opened before its project had a coordinator) still hears its failed start: the agent that made it,
+  // and the coordinator in its own chat when it is not in the task. Nothing is ever written for no one (final review).
+  it('tells a failed start on a task with no lead to the agent that made it, and the coordinator in its chat', () => {
+    const at = LAUNCHED + 3 * MINUTE + 1
+    const withTask = (actorKey: string) => {
+      const state = launched([{ receivedAt: at }], { actorKey, request: { conversationId: 'g1', machineId: 'm', name: 'Builder' } })
+      state.agents.push({ ...structuredClone(state.agents[0]!), id: 'E', name: 'Engineer' })
+      state.conversations.push({ id: 'g1', number: 3, title: 'Task', leadId: null, agentIds: ['E'], archived: false, brief: '', checks: [], assignment: null,
+        lastMessageSequence: 0 } as never)
+      return state
+    }
+    const told = 'Could not start Builder: its machine did not start it within 3 minutes.'
+    const rows = sweepLiveness(withTask('agent:E'), at).filter(row => row.source?.kind === 'start-timeout')
+    expect(rows).toEqual([
+      expect.objectContaining({ conversationId: 'g1', recipients: ['E'], author: expect.objectContaining({ kind: 'agent', id: 'E' }), text: told }),
+      expect.objectContaining({ conversationId: 'lead', recipients: ['L'], text: told, source: { kind: 'start-timeout', startId: 's1', recipientsOnly: true } })])
+    // A person's start, with no coordinator either: still said in the task, for people, under the Swarm's owner.
+    const alone = withTask('person:p')
+    alone.ownerId = 'p'
+    alone.conversations[0]!.leadId = null
+    alone.conversations[0]!.agentIds = []
+    expect(sweepLiveness(alone, at).filter(row => row.source?.kind === 'start-timeout')).toEqual([
+      expect.objectContaining({ conversationId: 'g1', recipients: [], author: expect.objectContaining({ kind: 'person', id: 'p' }), text: told })])
   })
 
   it('waits while its machine\'s reports say it is preparing, and fails it 15 minutes after launch', () => {
@@ -217,6 +231,10 @@ describe('the state of each task, and the Lead woken when one stalls', () => {
   } as unknown as SuperTabState)
   const task = (state: SuperTabState) => state.conversations.find(c => c.id === 'g1')!
   const wakes = (rows: ReturnType<typeof sweepLiveness>) => rows.filter(r => r.source?.kind === 'work-stalled')
+  /** Task r1 (#8), linked to g1 (reviewOf), with [work] on it. */
+  const linkedTask = (work: Partial<Assignment> | null, patch: Record<string, unknown> = {}) => ({ id: 'r1', number: 8, title: 'Review: Ship it', leadId: 'L',
+    agentIds: ['L'], archived: false, brief: 'Review it', checks: [], lastMessageSequence: 0, reviewOf: 'g1',
+    assignment: work && assignment({ id: 'a2', agentId: 'L', ...work }), ...patch }) as unknown as SuperTabState['conversations'][number]
 
   it('is never recorded by a machine\'s reading, which loads only running work and writes no group', () => {
     const state = project({ progressAt: NOW - 40 * MINUTE })
@@ -241,8 +259,8 @@ describe('the state of each task, and the Lead woken when one stalls', () => {
     expect(rows).toHaveLength(1)
     expect(rows[0]).toMatchObject({ conversationId: 'lead', recipients: ['L'], author: { kind: 'agent', id: 'L' },
       source: { kind: 'work-stalled', tasks: [{ conversationId: 'g1', state: 'quiet', why: 'silent' }] } })
-    expect(rows[0]!.text).toBe('A task needs you:\n- #7 "Ship it": quiet, Luna has reported nothing for 30 minutes.\n'
-      + 'Act on it now: nudge its agent, reassign it, or post in its chat why it waits.')
+    // What happened, never the next step (project instructions, phase 4).
+    expect(rows[0]!.text).toBe('A task is stalled:\n- #7 "Ship it": quiet, Luna has reported nothing for 30 minutes.')
     // Every later sweep, on any server, sees it already quiet.
     expect(wakes(sweepForLead(state, NOW + 30_000))).toEqual([])
     expect(wakes(sweepForLead(state, NOW + 60 * MINUTE))).toEqual([])
@@ -270,12 +288,46 @@ describe('the state of each task, and the Lead woken when one stalls', () => {
     task(asked).ledger = { waiting: { assignmentId: 'a1', since: NOW - 12 * MINUTE, messageId: 'm1' } }
     expect(wakes(sweepForLead(asked, NOW))).toEqual([])
     expect(task(asked).liveness).toEqual({ state: 'waiting', why: 'person', personId: 'p', since: NOW - 12 * MINUTE })
+    // In review with its review task open.
     const review = project({ status: 'review', progressAt: NOW - 3 * 60 * MINUTE })
+    review.conversations.push(linkedTask(null))
     expect(wakes(sweepForLead(review, NOW))).toEqual([])
     expect(task(review).liveness).toEqual({ state: 'waiting', why: 'review', since: NOW - 3 * 60 * MINUTE })
     const blocked = project({ status: 'blocked', progressAt: NOW - 3 * 60 * MINUTE })
     expect(wakes(sweepForLead(blocked, NOW))).toEqual([])
     expect(task(blocked).liveness).toEqual({ state: 'waiting', why: 'blocked', since: NOW - 3 * 60 * MINUTE })
+  })
+
+  // Nothing opens a review by itself any more (project instructions, phase 4): work handed over with no review task open would
+  // wait for good, and nothing else tells anyone (final review of the branch).
+  it('tells the coordinator once when a task has waited in review 30 minutes with no review task open', () => {
+    const state = project({ status: 'review', progressAt: NOW - 30 * MINUTE + 1 })
+    expect(wakes(sweepForLead(state, NOW))).toEqual([])
+    expect(task(state).liveness).toEqual({ state: 'waiting', why: 'review', since: NOW - 30 * MINUTE + 1 })
+    const rows = wakes(sweepForLead(state, NOW + 1))
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ conversationId: 'lead', recipients: ['L'],
+      source: { kind: 'work-stalled', tasks: [{ conversationId: 'g1', state: 'quiet', why: 'review' }] } })
+    expect(rows[0]!.text).toBe('A task is stalled:\n- #7 "Ship it": waited for review for 30 minutes; no review task is open.')
+    expect(task(state).liveness).toEqual({ state: 'quiet', why: 'review', since: NOW - 30 * MINUTE + 1 })
+    // Once per spell: later sweeps find it recorded.
+    expect(wakes(sweepForLead(state, NOW + 60 * MINUTE))).toEqual([])
+  })
+
+  it('waits in review while a linked task is open, and counts its 30 minutes again from when the last one ended', () => {
+    const state = project({ status: 'review', progressAt: NOW - 3 * 60 * MINUTE })
+    state.conversations.push(linkedTask({ status: 'working', progressAt: NOW }))
+    expect(wakes(sweepForLead(state, NOW))).toEqual([])
+    expect(task(state).liveness).toMatchObject({ state: 'waiting', why: 'review' })
+    // The review ends; its Engineer has 30 minutes to act on it before the coordinator hears.
+    const review = state.conversations.find(c => c.id === 'r1')!
+    review.assignment!.status = 'done'
+    review.lastActivityAt = new Date(NOW + MINUTE).toISOString()
+    // Its machine still reports the session running.
+    state.machines![0]!.observation = { ...state.machines![0]!.observation!, receivedAt: NOW + 31 * MINUTE }
+    expect(wakes(sweepForLead(state, NOW + 30 * MINUTE))).toEqual([])
+    expect(wakes(sweepForLead(state, NOW + 31 * MINUTE))[0]!.text).toContain('waited for review for 30 minutes; no review task is open.')
+    expect(task(state).liveness).toEqual({ state: 'quiet', why: 'review', since: NOW + MINUTE })
   })
 
   it('waits, never quiet, while it reviews a build that is back in progress, and turns quiet once that build is ready again', () => {
@@ -361,7 +413,7 @@ describe('the state of each task, and the Lead woken when one stalls', () => {
     const rows = wakes(sweepForLead(state, NOW))
     expect(rows).toHaveLength(1)
     expect(rows[0]!.source!.tasks).toEqual([{ conversationId: 'g1', state: 'quiet', why: 'silent' }, { conversationId: 'g2', state: 'orphaned', why: 'removed' }])
-    expect(rows[0]!.text.startsWith('2 tasks need you:\n')).toBe(true)
+    expect(rows[0]!.text.startsWith('2 tasks are stalled:\n')).toBe(true)
     expect(state.conversations.find(c => c.id === 'g3')!.liveness).toBeUndefined()
     expect(state.conversations.find(c => c.id === 'lead')!.liveness).toBeUndefined()
   })
@@ -425,5 +477,27 @@ describe('the state of each task, and the Lead woken when one stalls', () => {
     task(state).assignment!.status = 'done'
     sweepForLead(state, NOW + MINUTE)
     expect(task(state).liveness).toBeUndefined()
+  })
+})
+
+describe('the next time a machine\'s worker can lose its task (DB 2.5)', () => {
+  const progress = 1_000_000
+  /** Its machine reported at [at], its session's screen last changed at `progress`. */
+  const reported = (at: number, task = assignment({ leaseUntil: 1 })) => swarm(task, { receivedAt: at, harnessProgress: { h: progress } })
+  const ownLoss = (state: SuperTabState, now: number) => (loseTasks(state, now, worker => worker.machineId === 'm'), state.conversations[1]!.assignment!.status)
+
+  it('is when its lease ends, so a report up to then loses nothing and the first after it loses the task', () => {
+    const at = nextLossAt(reported(progress + 26 * MINUTE), 'm')!
+    expect(at).toBeGreaterThan(progress)
+    expect(ownLoss(reported(at), at)).toBe('working')
+    expect(ownLoss(reported(at + 1), at + 1)).toBe('lost')
+  })
+
+  it('is none for another machine, a task waiting for review, or no task', () => {
+    expect(nextLossAt(reported(progress), 'other')).toBeUndefined()
+    expect(nextLossAt(reported(progress, assignment({ status: 'review', result: 'Ready for review', leaseUntil: 1 })), 'm')).toBeUndefined()
+    const idle = reported(progress)
+    idle.conversations[1]!.assignment = null
+    expect(nextLossAt(idle, 'm')).toBeUndefined()
   })
 })

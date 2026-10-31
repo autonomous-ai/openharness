@@ -9,6 +9,7 @@ import { hostLocalGrid, machineContribution, teamAccountSwarm, type MachineClean
 import { agentProjectId, agentSetRole, canWatchAgent, isConfidential, groupProject, ledProject, projectsOf, skillModeOf, skillSetOf, watchClosed } from '../projects.js'
 import type { HostAgentRow, HostPool, HostRosterRow, HostTabRows } from './contract.js'
 import { hostEtag } from './hostEtag.js'
+import { coordinatorNameOf, roleNameOf } from '../instructions.js'
 
 export interface HostLookups {
   /** The Swarm's people with their account emails (observers). */
@@ -80,6 +81,10 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
     joinSwarm: state.ownerId === user.sub && target.contributorId === user.sub && !state.machines?.some(m => m.machineId === machineId && !m.buddyOnly)
       && state.conversations.some(c => !c.archived && c.leadId === target.id),
     skillMode: home ? skillModeOf(home) : 'orchestration',
+    // What the host installs as the agent's instructions, read again when the revision moves (project instructions, phase 3).
+    roleName: roleNameOf(state, target),
+    instructions: home ? { projectId: home.id, revision: home.instructionsRevision ?? 0, hash: home.instructionsHash ?? null,
+      coordinatorName: coordinatorNameOf(home) } : null,
     ...(custom ? { role: chosen && { ...chosen, projectId: custom.id } } : {}),
     lead: !!ledProject(state, target.id),
     leadsConversationId: state.leadsConversationId ?? null,

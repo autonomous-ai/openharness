@@ -10,7 +10,7 @@ import { FleetError, type FleetEvent, type FleetMachine, type MachineFleet } fro
 import type { CableAgent } from '../cable/cableSession.js'
 import type { RecentTurn } from '../cable/cableHost.js'
 import type { MachineListCache } from './machineList.js'
-import { SESSION_GONE, type DeviceFrame, type DeviceLink, type Undelivered } from './deviceLink.js'
+import { SELECT_SUPERSEDED, SESSION_GONE, type DeviceFrame, type DeviceLink, type Undelivered } from './deviceLink.js'
 
 /** How long the socket lingers after the dial goes back to local, so flicking between two machines does
  *  not pay a full dial each way. Mirrors RemoteRelayPool's own linger for the same reason. */
@@ -89,10 +89,18 @@ export class DeviceFleet implements MachineFleet {
   private readonly health = new Map<string, { ok: boolean; at: number }>()
   /** Consecutive failed round trips per machine — the counter behind RESET_AFTER_FAILURES. */
   private readonly misses = new Map<string, number>()
+  /**
+   * How many times each machine has answered under its own session (DeviceLink.onAlive): a request it answered
+   * anything during is no miss, however it ended. Diego, 10-30: a slow Mac's answers came 5 to 25 s after their
+   * requests timed out, so every pair of timeouts threw away a session that was answering (42 drops in a day).
+   */
+  private readonly answers = new Map<string, number>()
 
   constructor(private readonly opts: DeviceFleetOpts) {
     this.opts.link.onFrame((frame) => this.onFrame(frame))
     this.opts.link.onUndelivered((what) => this.onUndelivered(what))
+    this.opts.link.onAlive((machineId) => this.alive(machineId))
+    this.opts.link.onGone((machineId) => this.gone(machineId))
   }
 
   async list(): Promise<{ machines: FleetMachine[]; source: 'backend' | 'local' | 'signed-out' }> {
@@ -198,6 +206,7 @@ export class DeviceFleet implements MachineFleet {
    * untouched — this is a witness, not a handler.
    */
   private async rpc(machineId: string, type: string, payload: Record<string, unknown>, again = false): Promise<Record<string, unknown>> {
+    const heard = this.answers.get(machineId) ?? 0
     try {
       const res = await this.opts.link.rpc(type, payload, machineId)
       this.health.set(machineId, { ok: true, at: Date.now() })
@@ -207,6 +216,9 @@ export class DeviceFleet implements MachineFleet {
       // Its session went before the answer came (the far daemon restarted): a read is asked once more, on
       // the new session, and is no miss — nothing about the machine is known yet.
       if (!again && (err as Error).message === SESSION_GONE && READS.has(type)) return this.rpc(machineId, type, payload, true)
+      // The machine answered something of its own while this was out (a late reply to an earlier request, or this
+      // one's error): it is up, and slow or refusing, not gone. No miss, and its session stays.
+      if ((this.answers.get(machineId) ?? 0) !== heard) throw err
       this.health.set(machineId, { ok: false, at: Date.now() })
       const missed = (this.misses.get(machineId) ?? 0) + 1
       this.misses.set(machineId, missed)
@@ -226,6 +238,24 @@ export class DeviceFleet implements MachineFleet {
       }
       throw err
     }
+  }
+
+  /** A machine answered under its own session (DeviceLink.onAlive): it is up, and its misses start again. */
+  private alive(machineId: string): void {
+    this.answers.set(machineId, (this.answers.get(machineId) ?? 0) + 1)
+    this.health.set(machineId, { ok: true, at: Date.now() })
+    this.misses.delete(machineId)
+  }
+
+  /**
+   * A machine went away (DeviceLink.onGone): the backend said it went offline, or the lane under its session closed. A
+   * turn to it is refused from now, not sent to be lost, until it answers again under a new session (`alive`). Its misses
+   * stay as they were: the word may be the relay's, so it throws nothing more away (#2387's review: a turn to a Mac that
+   * had just gone was lost for up to 50 s while a list to it waited out its time).
+   */
+  private gone(machineId: string): void {
+    this.health.set(machineId, { ok: false, at: Date.now() })
+    this.opts.log(`device: ${machineId.slice(0, 8)} went away — turns to it are refused until it answers again`)
   }
 
   /**
@@ -442,6 +472,8 @@ export class DeviceFleet implements MachineFleet {
 
   /** Map the far end's words onto a code the dial can act on. Unknown reasons stay unreachable. */
   private codeFor(message: string): string {
+    // Replaced by a select of another machine: nothing is wrong with this one (deviceLink.ts SELECT_SUPERSEDED).
+    if (message === SELECT_SUPERSEDED) return 'SUPERSEDED'
     if (message.includes('NOT_YOUR_MACHINE')) return 'NOT_YOURS'
     if (message.includes('MACHINE_ENV_MISMATCH')) return 'NOT_YOURS'
     if (message.includes('PAYMENT') || message.includes('SUBSCRIPTION')) return 'BILLING'
@@ -450,6 +482,7 @@ export class DeviceFleet implements MachineFleet {
   }
 
   private messageFor(message: string, name: string): string {
+    if (message === SELECT_SUPERSEDED) return 'Another machine was chosen'
     if (message.includes('NOT_YOUR_MACHINE') || message.includes('MACHINE_ENV_MISMATCH')) {
       return `${name} is not on this account`
     }

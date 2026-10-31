@@ -72,11 +72,12 @@ export function loadActive(tx: Transaction, tabId: string,
  * checks read, whole, since it may write them: running work, the Lead conversations, the unfinished starts' conversations,
  * the conversations of agents stored with no project (projects.ts agentProjectId), and the private chats of this machine's
  * working agents (leaderboard/lent.ts accrueLent). A busy Swarm's finished conversations, briefs and checks were ~1.1 MB
- * read every 15 s per machine; the commit compares only what was loaded, so the others stay as they are.
+ * read every 15 s per machine; the commit compares only what was loaded, so the others stay as they are. No project's report
+ * progress either: only commands and native events note reports (projectUpdates.ts), so none is loaded or committed.
  */
 export async function loadObserved(tx: Transaction, tabId: string, machineId: string): Promise<SwarmParts> {
   const live = { deleted: false }
-  const loaded = await assemble(tx, tabId, { member: live, agent: live, machine: live, progress: live, start: { ...live, finishedAt: null }, group: [] })
+  const loaded = await assemble(tx, tabId, { member: live, agent: live, machine: live, progress: null, start: { ...live, finishedAt: null }, group: [] })
   const { projects, leadsConversationId } = loaded.head.data!
   // A head that never stored the Leads conversation's id finds it where model.ts syncLeads would make it.
   const leads = [...projects ? projects.map(p => p.leadConversationId) : ['lead'], leadsConversationId ?? stableId(tabId, 'leads')]
@@ -90,6 +91,15 @@ export async function loadObserved(tx: Transaction, tabId: string, machineId: st
     ...lending.length ? [['agents', { agentIds: { $in: lending }, dormant: false, 'data.audience': { $ne: null } }] as const] : []])
   const rows = [...new Map([...groups, ...more].map(row => [row.key, row])).values()]
   return { ...loaded, groups: rows.map(row => toPart<GroupData>('group', row)) }
+}
+
+/** Machine parts by id (`${tabId}:${machineId}`), with their version, in one read by `_id`: what a reading-only report reads
+ *  (DB 2.5, superTabs/machineReports.ts). Raw, so many ids are one plain `$in`. */
+export async function loadMachineParts(tx: Transaction, ids: string[]): Promise<Map<string, { version: number; deleted: boolean; data: MachineData }>> {
+  if (!ids.length) return new Map()
+  const rows = await tx.swarmMachine.aggregateRaw({ pipeline: [{ $match: { _id: { $in: ids } } }, { $project: { version: 1, deleted: 1, data: 1 } }] }) as
+    unknown as Array<{ _id: string; version: number; deleted: boolean; data: MachineData }>
+  return new Map(rows.map(row => [row._id, { version: Number(row.version), deleted: !!row.deleted, data: row.data }]))
 }
 
 /** What the read cache keeps of a Swarm at its main stamp (cache.ts): `loadActive`'s parts with every live start, and no
@@ -189,8 +199,10 @@ export async function lastChangedAt(tx: Transaction, tabIds: string[]): Promise<
   const newest = new Map<string, number>()
   if (!tabIds.length) return newest
   for (const kind of PART_KINDS) {
+    // Sorted as the (tabId, changedAt) index is, read backwards, the newest per Swarm is one key (DISTINCT_SCAN): a $max read every key of
+    // the Swarm's parts (prod's largest: 1,300 groups, 873 starts, 721 agents, 2026-10-30), on every list.
     const rows = await delegate(tx, kind).aggregateRaw({ pipeline: [{ $match: { tabId: { $in: tabIds } } },
-      { $group: { _id: '$tabId', at: { $max: '$changedAt' } } }] }) as Array<{ _id: string; at: unknown }>
+      { $sort: { tabId: -1, changedAt: -1 } }, { $group: { _id: '$tabId', at: { $first: '$changedAt' } } }] }) as Array<{ _id: string; at: unknown }>
     for (const row of rows) {
       const at = row.at ? ms(row.at) : 0
       if (at > (newest.get(row._id) ?? 0)) newest.set(row._id, at)

@@ -62,4 +62,17 @@ describe('Change agent keeps the Swarm member', () => {
     }
     expect(f.state.agents[0]!.harnessId).toBe(before.agents[0]!.harnessId)
   })
+  // After a rebind the member keeps its old id, so adding its current terminal must find it by machine + harness, not id.
+  it('finds a rebound session by its current terminal when a person adds it', () => {
+    const f = fixture(), rebound = f.run().state
+    const other = applyCommand(rebound, person, { type: 'project.create', name: 'Other', visibility: 'public', brief: '' }, { now: 3, operationId: 'other' })
+    const chat = (other.result as { conversationId: string }).conversationId
+    const add = (state: typeof rebound, conversationId: string, machineOwnerId = 'owner') => applyCommand(state, person,
+      commandSchema.parse({ type: 'agent.add', conversationId, machineId: 'machine', harnessId: 'new', name: 'Lead', lead: false, configuration: next }),
+      { now: 4, operationId: 'again', contribution: { machineOwnerId, contributorId: 'owner' } })
+    expect(() => add(other.state, chat)).toThrow(expect.objectContaining({ code: 'PROJECT_SESSION' }))
+    expect(() => add(rebound, 'lead', 'someone-else')).toThrow(expect.objectContaining({ code: 'ALREADY_SHARED' }))
+    expect(other.state.agents).toHaveLength(1)
+    expect(add(rebound, 'lead').state.agents).toHaveLength(1)
+  })
 })

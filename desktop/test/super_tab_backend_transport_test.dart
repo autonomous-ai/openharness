@@ -13,7 +13,9 @@ import 'package:harness/core/config.dart';
 import 'package:harness/super_tabs/backend_transport.dart';
 import 'package:harness/super_tabs/client.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/model.dart';
 
+import 'support/super_tab_fixture.dart';
 import 'swarm_state_test.dart' show MemoryStore;
 
 class _Token implements AccessTokenSource, SignInRevision {
@@ -49,6 +51,10 @@ class _Backend {
 
   /// Runs as each request arrives, before it is answered.
   void Function()? onRequest;
+
+  /// Answers each request in place of [status] and [answer], when set.
+  Future<(int, Object?)> Function(String method, String path, Object? body)?
+  handle;
   Object? answer = {
     'success': true,
     'data': {'ok': 1},
@@ -68,10 +74,17 @@ class _Backend {
         },
         body: text.isEmpty ? null : jsonDecode(text),
       ));
+      final (code, reply) =
+          await handle?.call(
+            request.method,
+            request.uri.toString(),
+            text.isEmpty ? null : jsonDecode(text),
+          ) ??
+          (status, answer);
       request.response
-        ..statusCode = status
+        ..statusCode = code
         ..headers.contentType = ContentType.json
-        ..write(jsonEncode(answer));
+        ..write(jsonEncode(reply));
       await request.response.close();
     });
   }
@@ -236,6 +249,10 @@ void main() {
       ('GET', '/api/super-tabs/tab1/costs'),
       ('GET', '/api/super-tabs/workspaces'),
       ('GET', '/api/super-tabs/grids'),
+      ('GET', '/api/super-tabs/routing-policy'),
+      ('POST', '/api/super-tabs/routing-policy'),
+      ('GET', '/api/super-tabs/tab1/projects/p1/roles/r1'),
+      ('POST', '/api/super-tabs/tab1/projects/p1/roles/r1'),
     ]) {
       final failure = await refusal(transport(method, path));
       expect(failure.code, 'INVALID_REQUEST', reason: '$method $path');
@@ -247,8 +264,6 @@ void main() {
     const routes = [
       ('GET', '/api/super-tabs/list?mentions=1&after=abc'),
       ('GET', '/api/super-tabs/invitations'),
-      ('GET', '/api/super-tabs/routing-policy'),
-      ('POST', '/api/super-tabs/routing-policy'),
       ('POST', '/api/super-tabs'),
       ('GET', '/api/super-tabs/tab1/parts'),
       ('GET', '/api/super-tabs/tab1/changes?cursor=c%3D1'),
@@ -265,9 +280,12 @@ void main() {
       ('GET', '/api/super-tabs/tab1/conversations/c1/messages?before=5'),
       ('GET', '/api/super-tabs/tab1/conversations/c1/catch-up?after=4'),
       ('POST', '/api/super-tabs/tab1/conversations/c1/read'),
+      ('POST', '/api/super-tabs/tab1/conversations/c1/threads/m1/read'),
       ('GET', '/api/super-tabs/tab1/projects/p1/github'),
       ('POST', '/api/super-tabs/tab1/projects/p1/github/approve'),
-      ('POST', '/api/super-tabs/tab1/projects/p1/roles/r1'),
+      ('GET', '/api/super-tabs/tab1/projects/p1/instructions'),
+      ('GET', '/api/super-tabs/tab1/projects/p1/instructions/revisions'),
+      ('GET', '/api/super-tabs/tab1/projects/p1/instructions/revisions/4'),
       ('GET', '/api/super-tabs/tab1/route-decisions/d1'),
       ('POST', '/api/super-tabs/tab1/machines/m1/removal'),
       ('POST', '/api/super-tabs/tab1/join'),
@@ -280,6 +298,141 @@ void main() {
     expect(backend.requests.map((r) => '${r.method} ${r.path}'), [
       for (final (method, path) in routes) '$method $path',
     ]);
+  });
+
+  // A thread read on the web reads as read on the person's other devices
+  // (#2327): its mark goes to the backend like the chat's own mark.
+  test('a thread\'s read mark goes to the backend, and only that exact '
+      'route', () async {
+    final value = await transport(
+      'POST',
+      '/api/super-tabs/tab1/conversations/c1/threads/m1/read',
+      body: {'sequence': 7},
+    );
+    expect(value, {'ok': 1});
+    final sent = backend.requests.single;
+    expect(sent.method, 'POST');
+    expect(sent.path, '/api/super-tabs/tab1/conversations/c1/threads/m1/read');
+    expect(sent.body, {'sequence': 7});
+    expect(sent.headers['authorization'], 'Bearer browser-token');
+    backend.requests.clear();
+    for (final path in [
+      '/api/super-tabs/hosts/conversations/c1/threads/m1/read',
+      '/api/super-tabs/hosts/m1/conversations/c1/threads/m1/read',
+      '/api/super-tabs/tab1/conversations/c1/threads/read',
+      '/api/super-tabs/tab1/conversations/c1/threads//read',
+      '/api/super-tabs/tab1/conversations/c1/threads/m1',
+      '/api/super-tabs/tab1/conversations/c1/threads/m1/read/x',
+      '/api/super-tabs/tab1/conversations/c1/threads/m1/m2/read',
+      '/api/super-tabs/tab1/conversations/c1/threads/../read',
+      '/api/super-tabs/tab1/conversations/c1/threads/m%2F1/read',
+      '/api/super-tabs/tab1/conversations/c1/threads/m1/messages',
+      '/api/super-tabs/tab1/threads/m1/read',
+    ]) {
+      final failure = await refusal(
+        transport('POST', path, body: {'sequence': 7}),
+      );
+      expect(failure.code, 'INVALID_REQUEST', reason: path);
+    }
+    expect(backend.requests, isEmpty);
+  });
+
+  /// A chat on the web, read through this transport from a backend holding
+  /// a root and one reply in its thread; [refuseThreadMarks] answers each
+  /// thread mark as a backend that no longer lets this person in.
+  Future<(ConversationServer, SuperTabController)> webChat({
+    bool refuseThreadMarks = false,
+  }) async {
+    final server = ConversationServer()..threads = true;
+    server.append('Should we do thread replies?');
+    server.append('Yes, like Slack.');
+    server.messages.last
+      ..['thread'] = 'message-1'
+      ..['replyTo'] = 'message-1'
+      ..['author'] = {
+        'kind': 'person',
+        'id': 'peer',
+        'name': 'peer@example.com',
+      };
+    server.markReadElsewhere('lead', 1);
+    backend.handle = (method, path, body) async {
+      if (refuseThreadMarks && path.contains('/threads/')) {
+        return (
+          403,
+          {
+            'success': false,
+            'error': {'code': 'FORBIDDEN', 'message': 'No access.'},
+          },
+        );
+      }
+      try {
+        final data = await server.request(
+          method,
+          path,
+          body: body as Map<String, dynamic>?,
+        );
+        return (200, {'success': true, 'data': data});
+      } on SuperTabFailure catch (failure) {
+        return (
+          failure.statusCode,
+          {
+            'success': false,
+            'error': {'code': failure.code, 'message': failure.message},
+          },
+        );
+      }
+    };
+    final c = SuperTabController(
+      tabId: 'tab',
+      accountId: 'owner',
+      // As the web's Swarm client hands the transport's answer to a chat.
+      request: (method, path, {body}) async =>
+          superTabMap(await transport(method, path, body: body)),
+      save: server.save,
+      pollInterval: Duration.zero,
+    );
+    addTearDown(c.dispose);
+    await c.refresh();
+    await c.loadMessages('lead');
+    c.select('lead');
+    return (server, c);
+  }
+
+  const threadMark =
+      'POST /api/super-tabs/tab/conversations/lead/threads/message-1/read';
+  Iterable<String> sent() =>
+      backend.requests.map((r) => '${r.method} ${r.path}');
+  Future<void> settle() async {
+    for (var i = 0; i < 20; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+  }
+
+  test('on the web, opening a thread sends its mark to the backend, and the '
+      'next poll reads it back as every device does', () async {
+    final (server, c) = await webChat();
+    c.openThread('message-1');
+    await settle();
+    expect(server.threadMarkPosts, [
+      {'conversationId': 'lead', 'root': 'message-1', 'sequence': 2},
+    ]);
+    expect(sent().where((r) => r == threadMark), hasLength(1));
+    await c.refresh();
+    expect(c.snapshot!.threadMarks['lead'], {'message-1': 2});
+  });
+
+  test('on the web, a thread mark the backend refuses leaves the thread read '
+      'here, and is not sent again within the minute', () async {
+    final (server, c) = await webChat(refuseThreadMarks: true);
+    c.openThread('message-1');
+    await settle();
+    expect(c.threadUnread(c.thread('lead', 'message-1')!), isFalse);
+    c.closeThread();
+    c.openThread('message-1');
+    await settle();
+    expect(sent().where((r) => r == threadMark), hasLength(1));
+    expect(server.threadMarkPosts, isEmpty);
+    expect(c.snapshot!.threadMarks, isEmpty);
   });
 
   test('a refused call whose sign-in changed meanwhile is not retried as the '

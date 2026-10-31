@@ -50,7 +50,8 @@ import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
 import { redeemHandoff, startHandoff } from '../lib/harnessSession.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { SuperTabError } from '../superTabs/model.js'
-import { HOT_BODY_LIMIT, NOT_AVAILABLE, superTabRoutes } from './superTabs.js'
+import { HOT_BODY_LIMIT, NOT_AVAILABLE, READINGS_MAX, superTabRoutes } from './superTabs.js'
+import { machineObservationSchema } from '../superTabs/machines.js'
 import { logger } from '../utils/logger.js'
 import { WORKSPACE_ACCESS_REVOKED } from '../superTabs/workspaceStore.js'
 
@@ -253,5 +254,55 @@ describe('the browser\'s own sign-in on Swarm routes', () => {
     const res = await app.inject({ method: 'POST', url: '/api/super-tabs/tab-1/commands', payload: command })
     expect(res.statusCode).toBe(401)
     expect(seen).toEqual([])
+  })
+})
+
+describe('a machine\'s readings for all its Swarms in one call (DB 2.5)', () => {
+  let app: FastifyInstance
+  let calls: Array<{ machineId: string; readings: Array<{ tabId: string }> }>
+  let answers: Array<{ tabId: string; error?: unknown }> | null
+  beforeEach(async () => {
+    calls = []
+    answers = null
+    app = Fastify()
+    app.setErrorHandler(errorHandler)
+    app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
+    const store = { observeMachines: async (_user: unknown, machineId: string, readings: Array<{ tabId: string }>) => {
+      calls.push({ machineId, readings })
+      return answers ?? readings.map(r => ({ tabId: r.tabId }))
+    } }
+    await app.register(superTabRoutes, { store: store as never, github: null, reads: {} as never, hosts: {} as never })
+    await app.ready()
+  })
+  afterEach(async () => { await app.close(); vi.restoreAllMocks() })
+  const post = (body: unknown) => app.inject({ method: 'POST', url: '/api/super-tabs/hosts/m1/readings', payload: body as object })
+  const readings = (n: number) => Array.from({ length: n }, (_, i) => ({ tabId: `tab-${i}`, observation: { any: 'shape' } }))
+
+  it('answers each Swarm on its own, as the per-Swarm route would answer it', async () => {
+    vi.spyOn(logger, 'error').mockImplementation(() => {})
+    vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    answers = [{ tabId: 'tab-0' }, { tabId: 'tab-1', error: new SuperTabError('CONTRIBUTION_REVOKED', 'Read the current machine contribution.', 403) },
+      { tabId: 'tab-2', error: new SuperTabError('NOT_FOUND', 'This Super Tab is unavailable.', 404) },
+      { tabId: 'tab-3', error: machineObservationSchema.safeParse({ generation: 1 }).error }, { tabId: 'tab-4', error: new Error('boom') }]
+    const res = await post({ readings: readings(5) })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().data.results).toEqual([{ tabId: 'tab-0', ok: true },
+      { tabId: 'tab-1', error: { code: 'CONTRIBUTION_REVOKED', message: 'Read the current machine contribution.', status: 403 } },
+      { tabId: 'tab-2', error: { ...NOT_AVAILABLE } },
+      { tabId: 'tab-3', error: { code: 'VALIDATION_ERROR', message: expect.any(String), status: 400 } },
+      { tabId: 'tab-4', error: { code: 'INTERNAL_ERROR', message: expect.any(String), status: 500 } }])
+    // Each observation reaches the store as sent: it is checked there, Swarm by Swarm.
+    expect(calls).toEqual([{ machineId: 'm1', readings: readings(5) }])
+  })
+
+  it(`takes up to ${READINGS_MAX} readings, each Swarm once, and refuses any other body before reaching the store`, async () => {
+    expect((await post({ readings: readings(READINGS_MAX) })).statusCode).toBe(200)
+    for (const body of [{ readings: readings(READINGS_MAX + 1) }, { readings: [] }, { readings: [...readings(1), ...readings(1)] },
+      { readings: [{ tabId: 'bad id!', observation: {} }] }, { readings: readings(1), extra: true }]) {
+      const res = await post(body)
+      expect(res.statusCode, JSON.stringify(body).slice(0, 80)).toBe(400)
+      expect(res.json().error.code).toBe('VALIDATION_ERROR')
+    }
+    expect(calls).toHaveLength(1)
   })
 })
