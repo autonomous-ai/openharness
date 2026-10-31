@@ -174,15 +174,17 @@ describe('routeTask', () => {
     } finally { vi.useRealTimers() }
   })
   // A member at work is not offered; one whose task was lost is, with a note ('a member whose last task was lost').
-  it('judges heavy work by a machine reached directly, its members too; the task folder\'s disk only when a folder is named', async () => {
+  it('judges heavy work by a machine reached directly, its members too, by the disk its capacity read measured', async () => {
     const heavy = (needs: Record<string, unknown>) => ({ ...input, assessment: { ...input.assessment, needs: { heavy: ['build'], ...needs } } })
     const answer = await routeTask(heavy({}), scoped(), where as never, opener())
-    const short = 'Machine fit: Short for a heavy build: 7.0 GB memory free; it needs 8.0 GB memory and 30.0 GB disk, so equally strong candidates that have it rank first.'
+    const short = 'Machine fit: Short for a heavy build: 7.0 GB memory free, 100.0 GB disk free; it needs 8.0 GB memory and 30.0 GB disk, so equally strong candidates that have it rank first.'
     expect(answer).toMatchObject({ ok: true, pick: { notes: expect.arrayContaining([short]) } })
     expect([answer.pick, ...answer.alternatives as unknown[]].find(c => (c as { kind: string }).kind === 'member')).toMatchObject({ notes: expect.arrayContaining([short]) })
     const folder = { describe: async () => null, isDirectory: async () => true }
-    const named = await routeTask(heavy({ cwd: '/repo' }), scoped(), where as never, opener(), () => 'op', folder)
-    expect(named).toMatchObject({ ok: true, pick: { notes: expect.arrayContaining([expect.stringContaining('7.0 GB memory free, 100.0 GB disk free;')]) } })
+    expect(await routeTask(heavy({ cwd: '/repo' }), scoped(), where as never, opener(), () => 'op', folder)).toMatchObject({ ok: true, pick: { notes: expect.arrayContaining([short]) } })
+    // A read that measured no disk says so.
+    const blind = opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], capacity: { resources: { memoryTotalBytes: 8e9, memoryUsedBytes: 1e9, cpuPercent: 10 }, tools: { git: true }, devices: {} } }))
+    expect(await routeTask(heavy({}), scoped(), where as never, blind)).toMatchObject({ pick: { notes: expect.arrayContaining([expect.stringMatching(/^Machine fit: Short for a heavy build: 7\.0 GB memory free;/)]) } })
   })
   it('does not offer a member whose task is working', async () => {
     const state = tab({ id: 'x', agentId: 'a1', status: 'working' })

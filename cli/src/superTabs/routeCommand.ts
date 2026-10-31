@@ -507,10 +507,11 @@ export function offlineModels(state: Json, now: number = Date.now()): Array<{ ti
   return out
 }
 
-/** What a machine reached directly has, from its capacity read: the task folder's disk only when a folder was named. */
+/** What a machine reached directly has, from its capacity read. Its disk is the task folder's, or with none named the disk the
+ *  read was asked about (`/`), which still says whether heavy work fits there; whether it has the folder only when one was named. */
 function loadOf(resources: Json, agents: number | null, cwd: string | undefined): NonNullable<Probe['load']> {
   return { agents, freeMemoryBytes: finite(resources.memoryTotalBytes) && finite(resources.memoryUsedBytes) ? resources.memoryTotalBytes - resources.memoryUsedBytes : null,
-    hasFolder: cwd ? finite(resources.projectDiskFreeBytes) : null, freeDiskBytes: cwd && finite(resources.projectDiskFreeBytes) ? resources.projectDiskFreeBytes : null,
+    hasFolder: cwd ? finite(resources.projectDiskFreeBytes) : null, freeDiskBytes: finite(resources.projectDiskFreeBytes) ? resources.projectDiskFreeBytes : null,
     cpuPercent: finite(resources.cpuPercent) ? resources.cpuPercent : null }
 }
 
