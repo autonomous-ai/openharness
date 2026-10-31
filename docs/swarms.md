@@ -670,6 +670,106 @@ before it is sent, with "Files can be up to 256 MB."
 - Agents' computers save each message's files straight to disk, never more than
   the size the message names.
 
+### Chat file links
+
+A file opens only for someone who can read its message now. Each read of a
+message gives each of its files a signed link that opens for 5 to 10 minutes
+(`backend/src/superTabs/fileLinks.ts`). It stays the same link through each 5
+minutes, so a picture is not fetched again on every poll. Links are made only
+for files in the reading Swarm's own folder.
+
+- Desktop, the web and the phone open a file through its link. When the link
+  has less than a minute left, they first ask the server for a fresh one. The
+  server answers that request as it answers reading that exact message:
+  someone removed from the Swarm or the project, a deleted Swarm, a private
+  chat or another project's chat all get the same "This file is no longer
+  available."
+- A file the server could not sign just now (the cloud's signing failed) is
+  marked as such. The apps then ask for a fresh link, and the server answers
+  "Couldn't open the file just now. Try again." while signing still fails. They
+  never open the public address instead. Only a file with no link and no such
+  mark, which comes from a server from before signed links, opens by its public
+  address.
+- Agents' computers download through the same links. A try whose link is over
+  asks for a fresh one, read as the agent reads the message now. Storage checks
+  a link when a download starts, so a slow download that started in time
+  finishes. A link never appears in an agent's prompt.
+- Uploaded avatars kept in the chat files' bucket get signed links too, which
+  stop opening within an hour.
+- Reads still carry each file's public address, because apps from before signed
+  links open nothing else.
+
+**The guarantee starts only when the bucket goes private.** Until then, the
+public address of every file still opens it, for anyone who once had it: a
+removed member, someone after a Swarm was deleted, anyone they passed it to.
+Signed links alone do not end that; the release step does.
+
+**Release step (Ken's go).** The code never changes the bucket. In order:
+
+1. **Before the backend ships**, grant the signing permission: the same one
+   the 256 MB upload links need (step 2 of "Release steps for Ken" in #2441).
+   Then ship the backend, then the CLI, Desktop and the phone. Without the
+   permission, every file reads as not
+   signed, new apps say "Try again" instead of opening it, uploaded avatars show
+   the default face, and the backend logs
+   `[file-links] could not sign a chat file link` and
+   `[avatar-links] could not sign an avatar link`. For the web build's text
+   viewer, also add `GET` to the bucket's CORS rule from #2441's step 1.
+2. Wait until old apps are rare. Run `cd backend && npm run usage:daily -- 7`
+   with a read-only `DATABASE_URL` (docs/product-measurement.md), and read the
+   share of Desktop, phone and CLI activity by release
+   (`breakdown:release:<platform>:<version>` counters in
+   `product_usage_totals`). Go on once releases from before this one are under
+   5% of each for two days running. An old app can then still read messages,
+   but it cannot open their files.
+3. Make the bucket private. Remove the `allUsers` (and any
+   `allAuthenticatedUsers`) `roles/storage.objectViewer` binding. Then rewrite
+   the cache setting that files stored before this release kept
+   (`public, max-age=31536000, immutable`, chat files and avatars alike), so
+   nothing keeps serving a cached copy:
+   `gcloud storage objects update "gs://BUCKET/PREFIX/**" "gs://BUCKET/avatars/**" --cache-control="private, max-age=600"`.
+   Purge the CDN in front of the bucket (`SUPER_TAB_ATTACHMENTS_PUBLIC_BASE`)
+   and remove the bucket as its origin.
+4. Check: an old public address and an expired signed link answer 403. A file
+   and an avatar still open in Desktop, on the phone and for an agent.
+
+Rollback: add the `allUsers` binding back. Old apps open files again; new ones
+never stopped. That rollback covers only the bucket. **Once the bucket is
+private, rolling the backend back past this release breaks every chat file and
+uploaded avatar at once**: an older backend hands out only public addresses,
+and a private bucket refuses them. So roll back in this order: make the bucket
+public again first, then roll the backend back. A later release can stop sending the public address, so that
+an old app says the file is not on Harness's file storage instead of opening a
+dead link.
+
+Design (`backend/src/superTabs/fileLinks.ts`):
+
+- Growth: nothing is stored. Links live in a per-server cache of the current
+  5 minutes, at most 20,000, cleared when the window turns.
+- Concurrency: no writes. Reads asking at the same moment share one signature
+  per file.
+- Read cost: only the rows a reader is shown are signed, once per file per
+  5 minutes, at most 8 at a time. With a key, a signature is local (under 1 ms).
+  Without one, each is a call to the cloud's signing API.
+- Scale: at 10x files per page, the first read in a window signs 10x. The
+  first metric to warn is message page latency (`recordMessageRead`), and the
+  signing warnings in the log.
+- Compatibility: new apps use the link, and use the address only for a file
+  with neither a link nor the not-signed mark, which only an older server sends. Old apps and old agents' computers use the address until the
+  bucket is private. The fresh-link read is new; an older server answers it
+  404.
+- Migration + rollback: no data migration. The release step above is the
+  migration. Its rollback restores public reading.
+- Audience: the server decides every link from the reader's access at that
+  read. Storage enforces the end time.
+- Identity: the signed-in person's or the agent's own read. A Team account's
+  session reads as its agent.
+- Failure: a file that cannot be signed is marked not signed. Its fresh-link
+  read answers "try again" (503), never "no longer available", and the apps and
+  agents say to try again. An avatar that cannot be signed is left out of that
+  read alone. The backend logs the storage error's code only.
+- Platforms: backend, CLI host, Desktop (and the web build), phone.
+
 ## Avatars, status and celebrations
 
 People and agents each show one avatar wherever they appear: messages, the
@@ -702,13 +802,11 @@ server:
   gets no new links.
 - Without one (production today, by the owner's choice on 2026-10-28),
   pictures are kept in the chat files' bucket, in a folder of their own
-  (`avatars/`), and linked on the same public CDN. **They work like chat files:
-  a picture's link never expires.** Anyone who once had it, including someone
-  later removed from the Swarm or anyone they pass it to, can still open that
-  picture. Only the 128 random bits in its address keep it from being guessed.
-  A new picture gets a new address; the old one stays reachable. Chat files
-  never go in the avatar folder, and the server makes avatar links for that
-  folder alone.
+  (`avatars/`). They are linked like chat files (see Chat file links): signed
+  links that stop opening within an hour. Until the release step makes that
+  bucket private, a picture's old public address also still opens it. Chat
+  files never go in the avatar folder, and the server makes avatar links for
+  that folder alone.
 
 A server with no attachments bucket refuses uploads; the eight pictures still
 work.
@@ -1051,7 +1149,8 @@ cannot be deleted, and only the owner sees the item.
 - For 7 days its owner can restore it from the same dropdown (**Restore "name"**, with the days left). People, projects,
   chats and files come back; agents and machines do not, and are added again.
 - After the 7 days the worker removes its records and stored files, and only its own (`backend/src/superTabs/purge.ts`).
-  Chat file links keep working until then.
+  From the delete on, nobody gets a new file link. Links already handed out stop opening within 10 minutes, once the
+  bucket is private (see Chat file links).
 
 Design (`backend/src/superTabs/deletion.ts`):
 

@@ -11,6 +11,7 @@ import '../core/open_in_browser.dart';
 import '../finder/finder_file_kind.dart';
 import '../widgets/desktop_chrome.dart';
 import 'attachment_upload.dart' show kSuperTabFormAttachmentMaxBytes;
+import 'file_links.dart';
 import 'model.dart';
 
 /// The largest file read into the chat's text viewer; a bigger one opens in
@@ -94,16 +95,20 @@ Future<bool> downloadAttachment(SuperTabAttachment file, Uri url) async {
   return true;
 }
 
-/// A viewer's buttons: save the file, open it in the browser, or close.
+/// A viewer's buttons: save the file, open it in the browser, or close. A
+/// viewer may stay open longer than [url] lasts: with [ref], each button asks
+/// for a link that opens now first.
 class AttachmentViewerActions extends StatefulWidget {
   const AttachmentViewerActions({
     super.key,
     required this.file,
     required this.url,
+    this.ref,
   });
 
   final SuperTabAttachment file;
   final Uri url;
+  final SuperTabFileRef? ref;
 
   @override
   State<AttachmentViewerActions> createState() =>
@@ -114,6 +119,18 @@ class _AttachmentViewerActionsState extends State<AttachmentViewerActions> {
   bool _saving = false;
   String? _outcome;
 
+  /// A link that opens now, or null with the reason shown.
+  Future<Uri?> _link() async {
+    final ref = widget.ref;
+    if (ref == null) return widget.url;
+    try {
+      return await ref.link();
+    } on SuperTabFileUnavailable catch (problem) {
+      if (mounted) setState(() => _outcome = problem.message);
+      return null;
+    }
+  }
+
   Future<void> _download() async {
     setState(() {
       _saving = true;
@@ -121,7 +138,12 @@ class _AttachmentViewerActionsState extends State<AttachmentViewerActions> {
     });
     String? outcome;
     try {
-      if (await downloadAttachment(widget.file, widget.url)) outcome = 'Saved';
+      final url = await _link();
+      if (url == null || !mounted) {
+        if (mounted) setState(() => _saving = false);
+        return;
+      }
+      if (await downloadAttachment(widget.file, url)) outcome = 'Saved';
     } catch (_) {
       outcome = 'Couldn’t save this file.';
     }
@@ -130,6 +152,11 @@ class _AttachmentViewerActionsState extends State<AttachmentViewerActions> {
       _saving = false;
       _outcome = outcome;
     });
+  }
+
+  Future<void> _openInBrowser() async {
+    final url = await _link();
+    if (url != null && mounted) await openInBrowser(url);
   }
 
   @override
@@ -144,7 +171,7 @@ class _AttachmentViewerActionsState extends State<AttachmentViewerActions> {
           child: const Text('Download'),
         ),
       TextButton(
-        onPressed: () => openInBrowser(widget.url),
+        onPressed: _openInBrowser,
         child: const Text('Open in browser'),
       ),
       TextButton(

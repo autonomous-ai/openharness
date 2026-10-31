@@ -253,6 +253,13 @@ void main() {
       ('POST', '/api/super-tabs/routing-policy'),
       ('GET', '/api/super-tabs/tab1/projects/p1/roles/r1'),
       ('POST', '/api/super-tabs/tab1/projects/p1/roles/r1'),
+      // A file link names one message and one file, nothing above or past it.
+      ('GET', '/api/super-tabs/tab1/conversations/c1/messages/m1/attachments'),
+      ('GET', '/api/super-tabs/tab1/conversations/c1/attachments/a1'),
+      (
+        'GET',
+        '/api/super-tabs/tab1/conversations/c1/messages/m1/attachments/a1/x',
+      ),
     ]) {
       final failure = await refusal(transport(method, path));
       expect(failure.code, 'INVALID_REQUEST', reason: '$method $path');
@@ -279,6 +286,11 @@ void main() {
       ('GET', '/api/super-tabs/tab1/groups/g1'),
       ('GET', '/api/super-tabs/tab1/conversations/c1/messages?before=5'),
       ('GET', '/api/super-tabs/tab1/conversations/c1/catch-up?after=4'),
+      // A fresh short-lived link to one file (backend fileLinks.ts).
+      (
+        'GET',
+        '/api/super-tabs/tab1/conversations/c1/messages/m1/attachments/a1',
+      ),
       ('POST', '/api/super-tabs/tab1/conversations/c1/read'),
       ('POST', '/api/super-tabs/tab1/conversations/c1/threads/m1/read'),
       ('GET', '/api/super-tabs/tab1/projects/p1/github'),

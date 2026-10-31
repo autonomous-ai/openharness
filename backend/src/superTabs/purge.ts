@@ -1,6 +1,6 @@
 import type { PrismaClient } from '@prisma/client'
 import { logger } from '../utils/logger.js'
-import { AVATAR_PURPOSE, attachmentsFromEnv, CdnAvatarStore, errorCode, trimPrefix, type Attachments, type AttachmentStore } from './attachments.js'
+import { AVATAR_PURPOSE, attachmentsFromEnv, SharedAvatarStore, errorCode, trimPrefix, type Attachments, type AttachmentStore } from './attachments.js'
 import { readBy } from './parts/indexed.js'
 import { ms } from './parts/light.js'
 
@@ -30,7 +30,7 @@ export interface PurgeFiles { chat: FileRemover | null; prefix: string; avatars:
 
 const removerOf = (store: AttachmentStore | null | undefined): FileRemover | null => {
   if (!store) return null
-  if (store instanceof CdnAvatarStore) return removerOf(store.store)
+  if (store instanceof SharedAvatarStore) return removerOf(store.store)
   return 'delete' in store && typeof store.delete === 'function' ? store as unknown as FileRemover : null
 }
 export function purgeFiles(attachments: Attachments | null): PurgeFiles | null {

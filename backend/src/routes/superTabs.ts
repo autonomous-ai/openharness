@@ -79,6 +79,7 @@ const followBody = z.object({ follow: z.boolean().nullable() }).strict()
 const notifyBody = z.object({ notify: z.enum(NOTIFY_LEVELS) }).strict()
 const activityReadBody = z.object({ through: z.string().datetime() }).strict()
 const threadParams = messageParams.extend({ threadId: id })
+const fileParams = messageParams.extend({ messageId: id, attachmentId: id })
 const noQuery = z.object({}).strict()
 // The reader's own catch-up (superTabs/catchUp.ts): no asAgentId, since agents read every message as it comes.
 const catchUpQuery = z.object({ after: z.coerce.number().int().nonnegative().safe() }).strict()
@@ -143,6 +144,7 @@ export const NOT_AVAILABLE_ROUTES: ReadonlySet<string> = new Set([
   'GET /api/super-tabs/:tabId/groups', 'GET /api/super-tabs/:tabId/groups/:conversationId',
   'POST /api/super-tabs/:tabId/join', 'POST /api/super-tabs/:tabId/join/preview', 'POST /api/super-tabs/:tabId/native',
   'GET /api/super-tabs/:tabId/conversations/:conversationId/messages', 'GET /api/super-tabs/:tabId/conversations/:conversationId/catch-up',
+  'GET /api/super-tabs/:tabId/conversations/:conversationId/messages/:messageId/attachments/:attachmentId',
   'POST /api/super-tabs/:tabId/conversations/:conversationId/read', 'POST /api/super-tabs/:tabId/conversations/:conversationId/threads/:threadId/follow',
   'GET /api/super-tabs/:tabId/projects/:projectId/github', 'POST /api/super-tabs/:tabId/projects/:projectId/github/approve',
   'GET /api/super-tabs/:tabId/projects/:projectId/ci-load',
@@ -600,6 +602,11 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof messageParams>; Querystring: z.infer<typeof messageQuery> }>('/api/super-tabs/:tabId/conversations/:conversationId/messages',
     { preHandler: [validateParams(messageParams), validateQuery(messageQuery)] },
     (req, reply) => respond(reply, () => store.messages(req.user!, req.params.tabId, req.params.conversationId, req.query, req.query.asAgentId)))
+  // A fresh short-lived link to one file of one message, for whoever may read that message now (superTabs/fileLinks.ts).
+  app.get<{ Params: z.infer<typeof fileParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/conversations/:conversationId/messages/:messageId/attachments/:attachmentId',
+    { preHandler: [validateParams(fileParams), validateQuery(agentQuery)] },
+    (req, reply) => respond(reply, () => store.fileLink(req.user!, req.params.tabId, req.params.conversationId, req.params.messageId,
+      req.params.attachmentId, req.query.asAgentId)))
   app.post<{ Params: z.infer<typeof messageParams>; Querystring: z.infer<typeof noQuery>; Body: z.infer<typeof readMarkBody> }>('/api/super-tabs/:tabId/conversations/:conversationId/read',
     { preHandler: [validateParams(messageParams), validateQuery(noQuery), validateBody(readMarkBody)] },
     (req, reply) => respond(reply, () => reads.markRead(req.user!, req.params.tabId, req.params.conversationId, req.body.sequence)))

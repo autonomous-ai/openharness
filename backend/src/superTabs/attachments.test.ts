@@ -50,12 +50,15 @@ describe('attachment bucket credentials', () => {
     expect(attachmentsFromEnv({ ...env(''), NODE_ENV: 'production' })?.publicBase).toBe('https://cdn.example.test')
   })
 
-  // Prod has the attachments bucket only (Ken, 2026-10-28): avatars live there under their own folder and are linked on
-  // its CDN like chat files, so nothing is signed (no signing permission is needed either).
-  it('keeps avatars in the attachments bucket under avatars/, on its CDN, without a bucket of their own', async () => {
+  // Prod has the attachments bucket only (Ken, 2026-10-28): avatars live there under their own folder and are linked as chat
+  // files are, by signed links (fileLinks.ts), so they keep opening once the bucket is no longer public, and a copied link stops.
+  it('keeps avatars in the attachments bucket under avatars/, by signed links, without a bucket of their own', async () => {
     const shared = attachmentsFromEnv(env(encoded(key)))!
     expect(shared.avatarPrefix).toBe('avatars')
-    expect(await shared.avatars!.signedUrl('avatars/tab/0123/avatar', Date.now() + 3_600_000)).toBe('https://cdn.example.test/avatars/tab/0123/avatar')
+    const link = new URL(await shared.avatars!.signedUrl('avatars/tab/0123/avatar', Date.now() + 3_600_000))
+    expect(link.host).toBe('storage.googleapis.com')
+    expect(link.pathname).toBe('/attachments/avatars/tab/0123/avatar')
+    expect(Number(link.searchParams.get('X-Goog-Expires'))).toBeLessThanOrEqual(3600)
     const bucket = await (shared.avatars as unknown as { store: { files(): Promise<import('@google-cloud/storage').Bucket> } }).store.files()
     expect(bucket.name).toBe('attachments')
   })
@@ -97,8 +100,20 @@ describe('attachment bucket credentials', () => {
     expect(link.searchParams.get('X-Goog-SignedHeaders')!.split(';')).toEqual(['cache-control', 'content-disposition', 'content-type', 'host',
       'x-goog-content-length-range', 'x-goog-if-generation-match'])
     expect(headers).toEqual({ 'content-type': 'application/octet-stream', 'content-disposition': "attachment; filename*=UTF-8''AC4%20-%2026%20Oct%20v2.step",
-      'cache-control': 'public, max-age=31536000, immutable', 'x-goog-content-length-range': '157286400,157286400', 'x-goog-if-generation-match': '0' })
+      'cache-control': 'private, max-age=600', 'x-goog-content-length-range': '157286400,157286400', 'x-goog-if-generation-match': '0' })
     expect(directUploads(store)).toBe(store)
+  })
+
+  // Each read of a chat file hands one of these (fileLinks.ts): a GET of one object, for minutes, opening whether or not the
+  // bucket is public.
+  it('signs a chat file read link with the configured key, for minutes, without a network call', async () => {
+    const store = attachmentsFromEnv(env(encoded(key)))!.store
+    const link = new URL(await store.signedUrl('super-tabs/tab/0123/notes.txt', Date.now() + 600_000))
+    expect(link.host).toBe('storage.googleapis.com')
+    expect(link.pathname).toBe('/attachments/super-tabs/tab/0123/notes.txt')
+    expect(link.searchParams.get('X-Goog-Credential')).toContain(key.client_email)
+    expect(Number(link.searchParams.get('X-Goog-Expires'))).toBeLessThanOrEqual(600)
+    expect(link.searchParams.get('X-Goog-SignedHeaders')).toBe('host')
   })
 
   it('builds the storage client from the configured key, without a network call', async () => {

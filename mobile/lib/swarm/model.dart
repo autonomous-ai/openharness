@@ -977,9 +977,32 @@ class SuperTabAttachment {
       name = _text(row, 'name'),
       mime = _text(row, 'mime'),
       size = (row['size'] as num).toInt(),
-      url = _text(row, 'url');
+      url = _text(row, 'url'),
+      // Read defensively: a field of the wrong type reads as absent, never as
+      // a failed row.
+      link = row['link'] is String ? row['link'] as String : null,
+      unlinked = row['unlinked'] == true,
+      expiresAt = row['expiresAt'] is num
+          ? (row['expiresAt'] as num).toInt()
+          : null;
+
+  /// [url] is the address the file was stored with, on the attachments CDN:
+  /// what an older server hands out, and what stops opening once the bucket
+  /// is private.
   final String id, name, mime, url;
   final int size;
+
+  /// A short-lived signed link to the file (backend fileLinks.ts), made for
+  /// this read; null from an older server, or when none could be signed.
+  /// Opened in place of [url] whenever there is one (swarm_file_links.dart).
+  final String? link;
+
+  /// The server could not sign a link this time: [url] is never opened then,
+  /// a fresh link is asked for first (it may sign now).
+  final bool unlinked;
+
+  /// When [link] stops opening, in epoch milliseconds.
+  final int? expiresAt;
 
   /// The kinds the backend serves to be seen in place; every other kind is
   /// served as a download.

@@ -4,7 +4,7 @@ import { SwarmGrids } from './swarmGrids.js'
 import { retainContributions } from './retention.js'
 import { configurationObservation } from './configuration.js'
 import { NativeRecorder, nativeJournalFile } from './native.js'
-import { attachedFiles, attachmentsOf, formatSize, type FilesInFlight } from './attachments.js'
+import { attachedFiles, attachmentsOf, formatSize, type FilesInFlight, type Relink } from './attachments.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
 import { readdir, readFile } from 'node:fs/promises'
@@ -1618,7 +1618,7 @@ export class SuperTabHost {
     // Downloaded before the lease: a large file must not use up the 2.5 s the core gives a write.
     let files = this.files.get(deliveryId)
     if (files === undefined) {
-      const downloaded = await this.downloaded(deliveryId, message, `list:${target.tabId}:${target.agent.id}`)
+      const downloaded = await this.downloaded(deliveryId, message, `list:${target.tabId}:${target.agent.id}`, this.relink(target, message))
       files = { text: downloaded.text, paths: downloaded.paths }
       if (downloaded.complete) this.files.set(deliveryId, files)
     }
@@ -1706,11 +1706,11 @@ export class SuperTabHost {
   /** A delivery's files, downloaded off the poll loop. A pass waits only on the downloads it starts, all together for at most
    *  downloadWaitMs (passWait); one still running is FilesDownloading, checked without a wait, and starts a pass of its own once
    *  in. A download whose tries all failed answers its "Could not download" lines, delivered as before. */
-  private async downloaded(deliveryId: string, message: Json, listKey: string): Promise<Awaited<ReturnType<typeof attachedFiles>>> {
+  private async downloaded(deliveryId: string, message: Json, listKey: string, relink: Relink): Promise<Awaited<ReturnType<typeof attachedFiles>>> {
     let download = this.downloads.get(deliveryId)
     if (!download) {
       const stop = new AbortController()
-      const pending = this.attachedFiles(message, { inFlight: this.inFlight, signal: stop.signal })
+      const pending = this.attachedFiles(message, { inFlight: this.inFlight, signal: stop.signal, relink })
         .then(done => ({ done }), (error: unknown) => ({ error }))
       const started: Download = download = { pending, stop, said: false }
       this.downloads.set(deliveryId, started)
@@ -1735,6 +1735,21 @@ export class SuperTabHost {
     this.downloads.delete(deliveryId)
     if ('error' in download.result) throw download.result.error
     return download.result.done
+  }
+
+  /** A fresh link to one of [message]'s files, read as [target]'s agent reads the message now (backend superTabs/fileLinks.ts):
+   *  refused once it may no longer read it, so a removed agent's retry gets nothing. */
+  private relink(target: HostAgent, message: Json): Relink {
+    return async file => {
+      const ids = [target.tabId, message.conversationId, message.id, file.id, target.agent.id]
+      if (!ids.every(identifier)) throw new SuperTabHostError('FILE_UNAVAILABLE', 'This file is no longer available.', 404)
+      const [tabId, conversationId, messageId, attachmentId, agentId] = ids as string[]
+      const data = object(await backend(this.core, 'GET',
+        `/api/super-tabs/${tabId}/conversations/${conversationId}/messages/${messageId}/attachments/${attachmentId}?asAgentId=${agentId}`))
+      const [fresh] = attachmentsOf({ attachments: [data.attachment] })
+      if (!fresh?.link || fresh.id !== file.id) throw new SuperTabHostError('FILE_UNAVAILABLE', 'This file is no longer available.', 404)
+      return fresh
+    }
   }
 
   /** A delivery's download it no longer waits for: stopped, unless another delivery shares its file (attachments.ts). */

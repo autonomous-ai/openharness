@@ -11,29 +11,14 @@ import 'package:harness_mobile/shared/theme/app_ink.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 
+export 'swarm_file_links.dart' show swarmAttachmentHost, swarmAttachmentLink;
+
 import 'model.dart';
 import 'swarm_attachment.dart';
 import 'swarm_code_block.dart';
+import 'swarm_file_links.dart';
 import 'swarm_face.dart';
 import 'swarm_ship_row.dart';
-
-/// The host the backend serves message files from: a link anywhere else is
-/// not opened (the desktop's `attachmentLink`).
-const swarmAttachmentHost = String.fromEnvironment(
-  'SUPER_TAB_ATTACHMENTS_HOST',
-  defaultValue: 'cdn.harness.autonomous.ai',
-);
-
-/// [url] as a link to open, or null unless it is https on
-/// [swarmAttachmentHost]: a message's url is whatever its sender's row says.
-Uri? swarmAttachmentLink(String url) {
-  final link = Uri.tryParse(url);
-  return link != null &&
-          link.scheme == 'https' &&
-          link.host == swarmAttachmentHost
-      ? link
-      : null;
-}
 
 /// The chat's prose in the app's own face, as prototype v2 draws it: the
 /// messages, quotes, names and the field. Times, roles and day dividers stay
@@ -370,6 +355,24 @@ class SwarmMessageRow extends StatelessWidget {
   /// Opens its long-press sheet: reactions, Copy link to message.
   final VoidCallback? onLongPress;
 
+  /// One of the message's files, with what asks for a fresh link to it
+  /// (swarm_file_links.dart): the chat's Swarm, this message and the file.
+  Widget _attachment(BuildContext context, SuperTabAttachment file) {
+    final ref = SwarmFileRef(
+      file,
+      conversationId: message.conversationId,
+      messageId: message.id,
+      reader: SwarmFiles.of(context),
+    );
+    final link = ref.current;
+    return SwarmAttachment(
+      file: file,
+      link: link,
+      fileRef: ref,
+      chip: SwarmFileChip(file: file, link: link, fileRef: ref),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     // A ship line is a card, not a message from its author.
@@ -442,15 +445,7 @@ class SwarmMessageRow extends StatelessWidget {
                 ),
               ),
             ),
-        for (final file in message.attachments)
-          SwarmAttachment(
-            file: file,
-            link: swarmAttachmentLink(file.url),
-            chip: SwarmFileChip(
-              file: file,
-              link: swarmAttachmentLink(file.url),
-            ),
-          ),
+        for (final file in message.attachments) _attachment(context, file),
         ?card,
         ?reactions,
         ?thread,
@@ -793,32 +788,79 @@ String swarmFileSize(int bytes) {
   return kb < 1024 ? '$kb KB' : '${(kb / 1024).toStringAsFixed(1)} MB';
 }
 
+/// Opens a chat file's link; tests replace it.
+@visibleForTesting
+Future<bool> Function(Uri url) swarmOpenFile = (url) =>
+    launchUrl(url, mode: LaunchMode.inAppBrowserView);
+
 /// A message's file: opened in the browser when its link is the backend's.
-class SwarmFileChip extends StatelessWidget {
-  const SwarmFileChip({super.key, required this.file, required this.link});
+/// With [fileRef], a link about to end is asked for again first
+/// (swarm_file_links.dart); a reader who lost access is told so, and a
+/// failed ask can be tapped again.
+class SwarmFileChip extends StatefulWidget {
+  const SwarmFileChip({
+    super.key,
+    required this.file,
+    required this.link,
+    this.fileRef,
+  });
 
   final SuperTabAttachment file;
   final Uri? link;
+  final SwarmFileRef? fileRef;
+
+  @override
+  State<SwarmFileChip> createState() => _SwarmFileChipState();
+}
+
+class _SwarmFileChipState extends State<SwarmFileChip> {
+  /// A fresh link is being asked for: another tap waits for it.
+  bool _opening = false;
+
+  bool get _opens =>
+      widget.fileRef != null ? !widget.fileRef!.refused : widget.link != null;
+
+  Future<void> _open() async {
+    final ref = widget.fileRef;
+    if (ref == null) {
+      if (widget.link case final url?) unawaited(swarmOpenFile(url));
+      return;
+    }
+    if (_opening) return;
+    setState(() => _opening = true);
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final Uri? found;
+    try {
+      found = await swarmOpenableLink(
+        context,
+        ref,
+        onProblem: (text) =>
+            messenger?.showSnackBar(SnackBar(content: Text(text))),
+      );
+    } finally {
+      if (mounted) setState(() => _opening = false);
+    }
+    final url = found;
+    if (url != null && mounted) unawaited(swarmOpenFile(url));
+  }
 
   @override
   Widget build(BuildContext context) {
+    final file = widget.file;
     final tty = Tty.of(context);
     final size = swarmFileSize(file.size);
-    final url = link;
-    final color = url == null ? AppPalette.textFaint : tty.blue;
+    final opens = _opens;
+    final color = !opens ? AppPalette.textFaint : tty.blue;
     return Padding(
       padding: const EdgeInsets.only(top: AppSpace.s),
       child: Semantics(
-        button: url != null,
+        button: opens,
         label: 'File: ${file.name}, $size',
         excludeSemantics: true,
         child: GestureDetector(
+          key: ValueKey('swarm-file-chip-${file.id}'),
           behavior: HitTestBehavior.opaque,
-          onTap: url == null
-              ? null
-              : () => unawaited(
-                  launchUrl(url, mode: LaunchMode.inAppBrowserView),
-                ),
+          onTap: !opens || _opening ? null : () => unawaited(_open()),
           child: Container(
             constraints: const BoxConstraints(minHeight: 40),
             padding: const EdgeInsets.symmetric(horizontal: AppSpace.m),

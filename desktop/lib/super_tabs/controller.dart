@@ -1921,6 +1921,25 @@ class SuperTabController extends ChangeNotifier {
   int readMark(String id) =>
       max(_readAt[id] ?? 0, snapshot?.readMarks[id] ?? 0);
 
+  /// A fresh short-lived link to one file of one message (backend
+  /// fileLinks.ts), answered only while the reader may read that message.
+  Future<SuperTabAttachment> readFileLink(
+    String conversationId,
+    String messageId,
+    String attachmentId,
+  ) async => SuperTabAttachment.fromJson(
+    superTabMap(
+      superTabMap(
+        await request(
+          'GET',
+          '$_path/conversations/${Uri.encodeComponent(conversationId)}'
+              '/messages/${Uri.encodeComponent(messageId)}'
+              '/attachments/${Uri.encodeComponent(attachmentId)}',
+        ),
+      )['attachment'],
+    ),
+  );
+
   /// What the reader missed in [id] after [after] (backend catchUp.ts).
   Future<SuperTabCatchUp> readCatchUp(
     String id,

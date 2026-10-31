@@ -24,6 +24,7 @@ import 'swarm_post_line.dart';
 import 'swarm_attach.dart';
 import 'swarm_buddy.dart';
 import 'swarm_buddy_chat.dart';
+import 'swarm_file_links.dart';
 import 'swarm_choices.dart';
 import 'swarm_conversation.dart';
 import 'swarm_face.dart';
@@ -804,21 +805,25 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     unawaited(
       Navigator.of(context).push(
         phoneRoute(
-          (_) => SwarmThreadPage(
-            swarmId: widget.swarmId,
-            chat: c,
-            root: root,
-            title: _view.value?.title,
-            row: (t, m, {required grouped, required acting, required onTap}) =>
-                _threadRow(
-                  c,
-                  t,
-                  m,
-                  grouped: grouped,
-                  acting: acting,
-                  onTap: onTap,
-                ),
-            pending: (t, text) => _threadPending(c, t, text),
+          (_) => SwarmFiles(
+            reader: c.reader,
+            child: SwarmThreadPage(
+              swarmId: widget.swarmId,
+              chat: c,
+              root: root,
+              title: _view.value?.title,
+              row:
+                  (t, m, {required grouped, required acting, required onTap}) =>
+                      _threadRow(
+                        c,
+                        t,
+                        m,
+                        grouped: grouped,
+                        acting: acting,
+                        onTap: onTap,
+                      ),
+              pending: (t, text) => _threadPending(c, t, text),
+            ),
           ),
           listensForItself: true,
         ),
@@ -1024,10 +1029,13 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               )
             : c == null
             ? _unopened(context, session, tty)
-            : ValueListenableBuilder(
-                valueListenable: _view,
-                builder: (context, view, _) =>
-                    _page(context, session, c, view!, tty),
+            : SwarmFiles(
+                reader: c.reader,
+                child: ValueListenableBuilder(
+                  valueListenable: _view,
+                  builder: (context, view, _) =>
+                      _page(context, session, c, view!, tty),
+                ),
               ),
       ),
     );

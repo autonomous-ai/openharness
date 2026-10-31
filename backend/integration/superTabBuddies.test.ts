@@ -416,6 +416,8 @@ describe('a Buddy through the store', () => {
       ['plan.md', 'text/markdown', true], ['shot.png', 'image/png', true], ['sync.log', 'text/plain', true]])
     expect((await f.store.messages(owner, f.tab, 'lead', {})).messages.find(m => m.id === id)?.attachments).toHaveLength(3)
     // Each opens from its link as the apps open it: the picture shown in place, the plan and the log as their own text.
+    // And from the signed link each read adds (fileLinks.ts), as apps that know links open it.
+    expect(read!.attachments!.map(a => f.files.open(a.link!)?.length)).toEqual(read!.attachments!.map(a => a.size))
     const opened = (url: string) => f.files.objects.get(new URL(url).pathname.slice(1))!
     const [planFile, shotFile, logFile] = read!.attachments!.map(a => opened(a.url))
     expect(openPng(shotFile!.bytes)).toEqual({ width: 1, height: 1, pixel: [255, 0, 0, 255] })

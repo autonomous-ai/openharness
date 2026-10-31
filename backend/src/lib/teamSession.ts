@@ -134,6 +134,8 @@ export const TEAM_ROUTES: readonly TeamRoute[] = [
   // The decisions its agent asked of people, and their answers (superTabs/decisions.ts).
   { method: 'GET', url: '/api/super-tabs/:tabId/decisions', scope: 'agent' },
   { method: 'GET', url: '/api/super-tabs/:tabId/conversations/:conversationId/messages', scope: 'agent' },
+  // A fresh link to one file of a message its agent may read (superTabs/fileLinks.ts).
+  { method: 'GET', url: '/api/super-tabs/:tabId/conversations/:conversationId/messages/:messageId/attachments/:attachmentId', scope: 'agent' },
   { method: 'GET', url: '/api/super-tabs/:tabId/conversations/:conversationId/attempts', scope: 'agent' },
   { method: 'GET', url: '/api/super-tabs/:tabId/terminal/:requestId', scope: 'agent' },
   { method: 'POST', url: '/api/super-tabs/:tabId/attachments', scope: 'agent' },

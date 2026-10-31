@@ -20,6 +20,7 @@ import { restoreDelivery } from './deliveryCompaction.js'
 import { threadSummaries } from './threads.js'
 import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, directUploads, errorCode, HOURLY_UPLOAD_BYTES, HOURLY_UPLOADS, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, MAX_FORM_ATTACHMENT_BYTES, objectKeyFor, peekType, PENDING_UPLOAD_PURPOSE, publicUrl, TOO_LARGE_MESSAGE, trimPrefix, typeFromHead, UPLOAD_LINK_MS,
   type Attachment, type Attachments, type AttachmentStore, type AvatarStore } from './attachments.js'
+import { FileLinks } from './fileLinks.js'
 import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
@@ -518,9 +519,12 @@ export class SuperTabStore {
   /** No Harness GitHub App on this server: Team accounts take no teammates' work (SuperTabStoreHooks.teamAccountsIdle). Reads
    *  decide New Project's Product Manager host as its start does (read/views.ts). */
   get teamAccountsIdle(): boolean { return this.hooks.teamAccountsIdle === true }
+  /** Signs the links every read hands out for chat files (fileLinks.ts); null without a bucket. */
+  private readonly fileLinks: FileLinks | null
 
   constructor(readonly db: PrismaClient, readonly now: () => number = Date.now,
     private readonly attachments: Attachments | null = null, private readonly hooks: SuperTabStoreHooks = {}) {
+    this.fileLinks = attachments ? new FileLinks(attachments.store, attachments.publicBase, attachments.prefix) : null
     this.polls = hooks.polls ?? localPollMemory(now)
     this.reports = hooks.reports ?? localReportMemory(now)
     this.native = new SuperTabNativeStore({
@@ -1787,7 +1791,7 @@ export class SuperTabStore {
     const key = await this.uploader(tabId, tx => this.poster(tx, user, tabId, conversationId, asAgentId).then(p => p.actor))
     const row = await this.keep(attachments.store, attachments.prefix, tabId, key, { name: name.data, conversationId },
       async () => checkedType(mime.data, file.body), file.body, MAX_FORM_ATTACHMENT_BYTES)
-    return { attachment: { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey) } satisfies Attachment }
+    return { attachment: await this.linkedFile(tabId, { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey) }) }
   }
 
   /** A link to put one file of `size` bytes straight into the bucket, for a file too big for this server's form route. The
@@ -1856,7 +1860,8 @@ export class SuperTabStore {
       await this.poster(tx, user, tabId, found!.conversationId, asAgentId)
       return found!
     })
-    const sendable = (mime: string) => ({ attachment: { id: row.id, name: row.name, mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey) } satisfies Attachment })
+    const sendable = async (mime: string) => ({ attachment: await this.linkedFile(tabId, { id: row.id, name: row.name, mime, size: row.size,
+      url: publicUrl(attachments.publicBase, row.objectKey) }) })
     if (!row.purpose) return sendable(row.mime)
     let stored: { size: number } | null, head: Buffer
     try {
@@ -2350,6 +2355,28 @@ export class SuperTabStore {
     if (told) afterCommit(tx, () => told(waiting))
   }
 
+  /** [rows] as a reader is handed them: each file with a signed link of this read (fileLinks.ts). A server without a bucket
+   *  links nothing. */
+  private async linked<T extends { attachments?: unknown }>(tabId: string, rows: T[]): Promise<T[]> {
+    return this.fileLinks ? this.fileLinks.forRows(tabId, rows, this.now()) : rows
+  }
+  private async linkedFile(tabId: string, file: Attachment): Promise<Attachment> {
+    return (await this.linked(tabId, [{ attachments: [file] }]))[0]!.attachments[0] as Attachment
+  }
+
+  /** A fresh link to one file of one message, for a client whose earlier link is about to stop opening. Read as that exact
+   *  message is (messages() with its id), so who may open it is exactly who may read the message now: anyone else, a message
+   *  that is not there, and a file it does not carry are answered alike. A file the reader may open whose link could not be
+   *  signed just now is answered as a failure to try again (503), never as lost access (review 1 of #2460). */
+  async fileLink(user: AuthUser, tabId: string, conversationId: string, messageId: string, attachmentId: string, asAgentId?: string) {
+    const page = await this.messages(user, tabId, conversationId, { messageId }, asAgentId)
+    const message = page.messages.find(m => m.id === messageId)
+    const file = Array.isArray(message?.attachments) ? (message.attachments as unknown as Attachment[]).find(a => a.id === attachmentId) : undefined
+    if (!file || !this.fileLinks?.keyOf(tabId, file.url)) fail('FILE_UNAVAILABLE', 'This file is no longer available.', 404)
+    if (!file!.link) fail('FILE_LINK_UNAVAILABLE', 'Couldn\'t open the file just now. Try again.', 503)
+    return { attachment: file }
+  }
+
   /** One page of a conversation, read by (sequence, id): rows written by one command before the store by parts share a
    *  sequence, so a page edge inside such a run must not skip any (design section 4.6). `after` alone reads strictly after
    *  a sequence, which is enough to poll for new messages. */
@@ -2441,7 +2468,9 @@ export class SuperTabStore {
     // A session's own thread read carries the main-chat excerpt it started from (buddySessions.ts sessionContext).
     // A project session of a person's one Buddy chat reads no excerpt: the main chat may hold any project's material (spec: Guard).
     const context = own && !own.projectId && !forward && cursor.before === undefined && !cursor.messageId ? await this.sessionExcerpt(tx, tabId, conversationId, own.from, m => rowRead(m) && sessionReadsRow(undefined, group, state)(m)) : undefined
-    return { messages: shown.map(m => ({ ...m, mentions: m.mentions ?? [], reactions: reactions.get(m.id) ?? [],
+    // Only the rows this reader is shown get file links, each signed afresh for this read (fileLinks.ts).
+    const linked = await this.linked(tabId, shown)
+    return { messages: linked.map(m => ({ ...m, mentions: m.mentions ?? [], reactions: reactions.get(m.id) ?? [],
       deliveries: deliveries.filter(d => d.messageId === m.id && shownTo(m, d)).sort(receiptOrder(m)) })), next, threads, ...(context ? { context } : {}),
       // A poll for new messages learns here that a reaction changed on a message it already shows (reactions.ts).
       reactionSeq: group.reactionSeq ?? 0 }
@@ -3145,7 +3174,11 @@ export class SuperTabStore {
       | { type: 'hold'; claimId: string; reason: HoldReason }) {
     const reached = { authorized: false }
     try {
-      return await this.deliver(user, tabId, agentId, deliveryId, action, reached)
+      const answer = await this.deliver(user, tabId, agentId, deliveryId, action, reached)
+      // The claimed message's files as links of this claim, signed after its transaction (fileLinks.ts): a claim again, as the host
+      // makes when a download failed, links them afresh.
+      if (!('message' in answer) || !answer.message) return answer
+      return { ...answer, message: (await this.linked(tabId, [answer.message]))[0]! }
     } catch (error) {
       // Prod 10-30, v1.3.71: 2 hours of SWARM_BUSY claims left no trace on the delivery. Retries end that way (retry.ts), so it is
       // the only code to record; the client still gets the original error. Only once an attempt got past the authorization
