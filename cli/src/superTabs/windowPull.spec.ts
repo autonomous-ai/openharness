@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import { choose, decide, recordOf, type Assessment, type Catalog, type Commitment, type Fit, type Probe, type RoutePlugin } from './route.js'
 import { makePlugins, ROUTE_PLUGIN_MAKERS, type PluginInput } from './routePlugins.js'
+import { MEASURED, measuredPlugin } from './routeMeasured.js'
 import { MAX_DISCOUNT, pendingPicks, PENDING_MS, WINDOW_PULL, windowPull, windowPullAdjust, windowPullMaker, weeklyUnused } from './windowPull.js'
 
 /** Today's rows (route.spec.ts): Opus high and Codex default both strength 3, Codex cheaper; Sonnet weaker. */
@@ -69,14 +70,17 @@ describe('the window pull ranks', () => {
     // At most half, however much would go unused.
     expect(windowPullAdjust(fitted(codex('zulu', SOON)), NOW, [])?.cost).toBe(-2 * MAX_DISCOUNT)
     expect(windowPullAdjust(fitted(codex('zulu', SOON), { effectiveCost: 1.2 }), NOW, [])?.cost).toBe(-0.6)
-    // A stand-in for piece 3's measured plug-in until it merges: a first-review record worth more than half the price.
-    const measured: RoutePlugin = { name: 'Measured', adjust: c => c.machineId === 'alpha' ? { cost: -1.2, reason: 'passed first review on 9 of its last 10 builds' } : null }
-    const probes = [codex('alpha', FRESH), codex('zulu', SOON)]
-    expect(route(probes, [pull]).shown[0]!.machineId).toBe('zulu')
+    // Piece 3's measured plug-in: Opus high passed 9 of 10 first reviews at $3 per shipped change in full, Codex 6 of 10 at $9.
+    const row = (engine: string, model: string, effort: string, firstReviewPassed: number, fullCostPerShipped: number) => ({ engine, model, effort, kind: 'build',
+      firstReviews: 10, firstReviewPassed, shipped: 10, costPerShipped: 1, fullCostPerShipped, fullCostKnown: 1 })
+    const measured = measuredPlugin({ truncated: false, rows: [row('claude', 'opus', 'high', 9, 3), row('codex', 'default', 'default', 6, 9)] })
+    const probes = [codex('alpha', FRESH, { engine: 'claude', model: 'opus', effort: 'high', cost: 3 }), codex('zulu', SOON)]
+    expect(route(probes, [pull], [], { kind: 'build' }).shown[0]!.machineId).toBe('zulu')
     for (const plugins of [[measured, pull], [pull, measured]]) {
-      const choice = route(probes, plugins)
+      const choice = route(probes, plugins, [], { kind: 'build' })
       expect(choice.shown.map(s => s.machineId)).toEqual(['alpha', 'zulu'])
       expect(noteOf(choice.shown[1]!)).toBeDefined()
+      expect(choice.shown[0]!.notes.some(n => n.startsWith(`${MEASURED}: build work`))).toBe(true)
     }
   })
   it('takes off only the part of the task the window would leave unused', () => {
