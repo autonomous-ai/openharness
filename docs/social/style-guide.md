@@ -39,3 +39,27 @@ mirrors refused older history. Update the table when more posts are readable.
 4. One visual from our own committed screenshots; no names, no private
    chats, nothing unreleased-sensitive.
 5. Drafts only: Dee posts them himself.
+
+## Daily run (for the agent drafting today)
+
+Dee asked on 2026-10-31 for one draft a day at about 19:00 VN, as a reply in
+his thread in the project chat (his message asking for daily X posts).
+
+1. `TZ=Asia/Ho_Chi_Minh date`. If `log.md` already has today's VN date, stop.
+2. Pick one topic not in `log.md`, from PRs merged since the last row:
+   `gh pr list -R autonomous-ai/openharness --state merged --search "merged:>=YYYY-MM-DD"`.
+   Prefer a feature a user can see, with a screenshot committed in the PR.
+3. Get the screenshot: copy its `blob/<sha>/<path>?raw=true` link from the PR
+   body, then `gh api -H "Accept: application/vnd.github.raw"
+   "repos/autonomous-ai/openharness/contents/<path>?ref=<sha>" > shot.png`.
+   Crop to what tells the story (`sips -c HEIGHT WIDTH --cropOffset Y X`;
+   dark theme, no empty panels). Look at it before using it.
+4. Write the copy with the pattern above. Check the count:
+   `python3 -I docs/social/count.py docs/social/drafts/DATE.txt` (under 280).
+5. Check the release: `gh release list -R autonomous-ai/openharness`. If the
+   feature merged after the latest Desktop release, add a one-line note that
+   it isn't downloadable yet.
+6. Save `drafts/DATE.txt` and `drafts/DATE.png`, add a row to `log.md`,
+   commit those files by name and push this branch.
+7. Post the draft and the image as one reply in Dee's thread. Nothing else in
+   the project chat. Never post to X or sign in anywhere.
