@@ -674,4 +674,28 @@ void main() {
       });
     });
   });
+
+  group('whether the sign-in page calls this computer set up', () {
+    test('not on the launch that first installs Harness', () async {
+      final app = _Desktop(_Login());
+      addTearDown(app.dispose);
+      await app.bootstrap();
+      expect(app.harnessSetUpBefore, isFalse);
+    });
+
+    test('yes on a relaunch, which installs nothing', () async {
+      final app = _Desktop(_Login(), installed: true);
+      addTearDown(app.dispose);
+      await app.bootstrap();
+      expect(app.signInStepShowing, isTrue);
+      expect(app.harnessSetUpBefore, isTrue);
+    });
+
+    test('yes when only a repair ran on a computer that had Harness', () async {
+      final app = _Desktop(_Login())..harnessInstalledBefore = () => true;
+      addTearDown(app.dispose);
+      await app.bootstrap();
+      expect(app.harnessSetUpBefore, isTrue);
+    });
+  });
 }
