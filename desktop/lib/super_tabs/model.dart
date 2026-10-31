@@ -952,9 +952,23 @@ class SuperTabAttachment {
       name = _text(row, 'name'),
       mime = _text(row, 'mime'),
       size = (row['size'] as num).toInt(),
-      url = _text(row, 'url');
+      url = _text(row, 'url'),
+      link = row['link'] is String ? row['link'] as String : null,
+      expiresAt = (row['expiresAt'] as num?)?.toInt();
+
+  /// [url] is the address the file was stored with, on the attachments CDN:
+  /// what an older server hands out, and what stops opening once the bucket
+  /// is private.
   final String id, name, mime, url;
   final int size;
+
+  /// A short-lived signed link to the file (backend fileLinks.ts), made for
+  /// this read; null from an older server, or when none could be signed.
+  /// Opened in place of [url] whenever there is one.
+  final String? link;
+
+  /// When [link] stops opening, in epoch milliseconds.
+  final int? expiresAt;
 
   /// The kinds the backend serves to be seen in place; every other kind is
   /// served as a download.

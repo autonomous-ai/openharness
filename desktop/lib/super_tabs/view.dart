@@ -39,6 +39,7 @@ import 'activity.dart';
 import 'activity_view.dart';
 import 'attention.dart';
 import 'controller.dart';
+import 'file_links.dart';
 import 'dialog_scope.dart';
 import 'folder_zip.dart';
 import 'instructions_panel.dart';
@@ -3930,8 +3931,15 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
+  // Every message's files ask this Swarm's controller for fresh links; another
+  // Swarm or account is another source, so a late answer is dropped.
   @override
-  Widget build(BuildContext context) => LayoutBuilder(
+  Widget build(BuildContext context) => SuperTabFiles(
+    fresh: widget.controller.readFileLink,
+    child: _swarm(context),
+  );
+
+  Widget _swarm(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
       grid.AppTheme.watch(context);
       final terminal = widget.terminal;

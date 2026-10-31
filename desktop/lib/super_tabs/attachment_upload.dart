@@ -57,13 +57,29 @@ const kSuperTabAttachmentHost = String.fromEnvironment(
   defaultValue: 'cdn.harness.autonomous.ai',
 );
 
-/// [url] as a link to open, or null unless it is https on the attachments host:
-/// a message's url is whatever its sender's backend row says.
-Uri? attachmentLink(String url) {
+/// Where the backend's short-lived signed links to chat files point (backend
+/// superTabs/fileLinks.ts): Cloud Storage's own host.
+const kSuperTabFilesHost = String.fromEnvironment(
+  'SUPER_TAB_FILES_HOST',
+  defaultValue: 'storage.googleapis.com',
+);
+
+/// A message file's stored address as a link to open, or null unless it is
+/// https, with no sign-in in it, on the attachments host: a message's url is
+/// whatever its sender's backend row says. An empty one is no address.
+Uri? attachmentLink(String url) => _https(url, kSuperTabAttachmentHost);
+
+/// A file's short-lived signed link (its `link`) as a link to open, or null
+/// unless it is https, with no sign-in in it, on [kSuperTabFilesHost].
+Uri? attachmentSignedLink(String? link) =>
+    link == null ? null : _https(link, kSuperTabFilesHost);
+
+Uri? _https(String url, String host) {
   final link = Uri.tryParse(url);
   return link != null &&
           link.scheme == 'https' &&
-          link.host == kSuperTabAttachmentHost
+          link.userInfo.isEmpty &&
+          link.host == host
       ? link
       : null;
 }

@@ -632,6 +632,12 @@ class ConversationServer {
   /// The read marks this device sent, in order: {conversationId, sequence}.
   final readMarkPosts = <Map<String, dynamic>>[];
 
+  /// Every fresh file-link read (backend fileLinks.ts), by path. [fileLink]
+  /// answers one, by attachment id: an attachment row, or a throw; unset, it
+  /// answers as a server that no longer shows the reader that message.
+  final fileLinkReads = <String>[];
+  FutureOr<Map<String, dynamic>> Function(String attachmentId)? fileLink;
+
   /// The catch-up summary the backend answers per conversation (catchUp.ts);
   /// one not set answers an empty summary.
   final catchUps = <String, Map<String, dynamic>>{};
@@ -1488,6 +1494,19 @@ class ConversationServer {
         uri.pathSegments[3] == 'projects' &&
         uri.pathSegments[5] == 'instructions') {
       return _readInstructions(path, uri);
+    }
+    if (uri.pathSegments.length > 2 &&
+        uri.pathSegments[uri.pathSegments.length - 2] == 'attachments') {
+      fileLinkReads.add(path);
+      final answer = fileLink;
+      if (answer == null) {
+        throw const SuperTabFailure(
+          'FILE_UNAVAILABLE',
+          'This file is no longer available.',
+          statusCode: 404,
+        );
+      }
+      return {'attachment': await answer(uri.pathSegments.last)};
     }
     if (uri.pathSegments.last == 'catch-up') {
       catchUpReads.add(path);

@@ -508,6 +508,8 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                     ),
                                     child: SuperTabAttachments(
                                       message.attachments,
+                                      conversationId: message.conversationId,
+                                      messageId: message.id,
                                     ),
                                   ),
                                 ),
