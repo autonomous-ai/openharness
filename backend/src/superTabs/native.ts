@@ -60,6 +60,19 @@ const gapReasons = {
   prompt_missing: 'A terminal answer was observed without its recorded prompt.',
 }
 
+/** A required recovery's notice: what happened to [target]'s recording on [group]'s task, and the last checkpoint, with no next
+ *  step and no change to the task (project instructions, phase 4: the instructions say what the coordinator does). */
+export function recoveryText(target: { name: string; displayName?: string }, group: { title: string }, reason: string, checkpointAt: string | null): string {
+  return `${target.displayName ?? target.name}'s terminal recording on "${group.title}" has a gap. ${reason}\n\n`
+    + `Last recorded checkpoint: ${checkpointAt ?? 'time unavailable'}. Input and commands before the gap may already have taken effect.`
+}
+
+/** Who a recorded terminal turn reaches: its task's coordinator for a required recovery, and nobody for a typed prompt, its
+ *  answer or any other gap, which name no one (phase 1's deferred ruling); never the coordinator for its own terminal. */
+export function turnRecipients(group: { leadId: string | null }, target: { id: string }, required: boolean): string[] {
+  return required && group.leadId && group.leadId !== target.id ? [group.leadId] : []
+}
+
 /** A host reports what its native engine observed; it cannot create human-authored
  * messages. The human attached to the source is the authenticated opener of that
  * terminal context, not an inference from a device name or the machine owner. */
@@ -187,12 +200,8 @@ export class SuperTabNativeStore {
       detectedAt: event.gap.detectedAt, checkpoint, required }
     const reason = assignment.status === 'review' && event.gap.reason === 'recording_restarted'
       ? 'Terminal recording restarted while the task was in review.' : gapReasons[event.gap.reason]
-    const next = assignment.status === 'review' ? 'Keep this task in review while you check the agent’s session.'
-      : 'Check the agent’s session, then ask it to continue from the checkpoint and report working.'
-    const text = `Recovery needed for ${target.displayName ?? target.name} on “${group.title}”. ${reason}\n\n`
-      + `Last recorded checkpoint: ${checkpoint.recordedAt ?? 'time unavailable'}.\n\n`
-      + `${next} Do not replay earlier input or commands; they may already have taken effect.`
-    if (required && assignment.status === 'working') { assignment.status = 'blocked'; assignment.result = text }
+    // What happened, for the coordinator; its task keeps its status (project instructions, phase 4).
+    const text = recoveryText(target, group, reason, checkpoint.recordedAt)
     if (!prior) await tx.superTabOperation.create({ data: { id: receiptId, tabId, actorKey: `agent:${target.id}`,
       requestHash: digest([assignment.id, incidentId]), revision: 0, result: json({ eventId, recovery }) } })
     return { source: recovery, text }
@@ -222,9 +231,8 @@ export class SuperTabNativeStore {
         ? 'Some terminal activity could not be recorded. Check the native session for the full conversation.' : redactCredentials(event.text).text
       // Leave a legacy group's list absent so the next read can recover its older links too.
       if (group.pullRequestUrls !== undefined) appendPullRequestUrls(group, [text])
-      // Inform the coordinating lead without replaying this input into the agent
-      // that already received it. Its resulting programmatic turn is not native input.
-      const recipients = (event.kind !== 'gap' || recovery?.source.required) && group.leadId && group.leadId !== target.id ? [group.leadId] : []
+      // A required recovery reaches the coordinator; a typed prompt, its answer or any other gap names no one (phase 1).
+      const recipients = turnRecipients(group, target, !!recovery?.source.required)
       const draft = { id: eventId, conversationId: group.id, author: observedBy, text, replyTo: null, recipients }
       const now = Date.now(), sequences = numberMessages(state, [draft], now), sequence = sequences.get(eventId)!
       noteProjectReports(state, [draft], sequences, now)

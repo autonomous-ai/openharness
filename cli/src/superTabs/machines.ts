@@ -1218,7 +1218,7 @@ export function offered(shared: LocalModelReading[], answer: unknown): LocalMode
 }
 
 /** The models a `grid_fleet_models_list` answer says this machine serves on [grid], by the name grid lists each under,
- *  each with why Builders are not offered it when it is too small or too slow to drive a coding agent (lib/codingModel.ts). */
+ *  each with why it is too small or too slow to drive a coding agent, when it is (lib/codingModel.ts). */
 function fleetOn(answer: unknown, grid: string): Array<LocalModelReading & { why: string | null }> {
   const out: Array<LocalModelReading & { why: string | null }> = []
   const num = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined
@@ -1234,14 +1234,14 @@ function fleetOn(answer: unknown, grid: string): Array<LocalModelReading & { why
   return out
 }
 
-/** The models this machine serves on [grid] that Builders may run on. One too small or too slow to drive a coding agent is
- *  left out: the route never offers it ([refusedOn] says why). */
+/** The models this machine serves on [grid] that can drive a coding agent. One too small or too slow is reported apart
+ *  ([refusedOn]), and the route offers it with that note (project instructions, phase 4, decision 19). */
 export function servedOn(answer: unknown, grid: string): LocalModelReading[] {
   return fleetOn(answer, grid).filter(m => m.why === null).map(({ why: _why, ...reading }) => reading)
 }
 
-/** The models this machine serves on [grid] that Builders are not offered, with why: a Lead asked for one is told that,
- *  not to share a model the Swarm already has (2026-10-24). */
+/** The models this machine serves on [grid] too small or too slow for a coding agent, with why: the route offers them with
+ *  that note (routeCommand.ts servedModels), rather than telling the agent to share a model the Swarm already has (2026-10-24). */
 export function refusedOn(answer: unknown, grid: string): Array<{ grid: string; model: string; name?: string; why: string }> {
   return fleetOn(answer, grid).flatMap(({ grid: g, model, name, why }) => why === null ? [] : [{ grid: g, model, ...(name ? { name } : {}), why: why.slice(0, 300) }])
 }

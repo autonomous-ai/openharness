@@ -193,7 +193,7 @@ describe('production resume handler', () => {
   })
 
   it('persists an adopted old worker role in the resumed registry row', async () => {
-    const swarmSkill = { role: 'dev' as const, key: saved.agentId }
+    const swarmSkill = { role: 'agent' as const, key: saved.agentId }
     deps.adoptSwarmSkill = async row => ({ ...row, swarmSkill })
     expect(await start()).toMatchObject({ ok: true, session: { swarmSkill } })
     registry.load()

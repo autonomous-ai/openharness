@@ -11,6 +11,7 @@ import { slotCounter, machineTeamWork, teamAccountSwarm, type ContributedMachine
 import * as store from '../parts/index.js'
 import type { Part, SwarmParts } from '../parts/index.js'
 import { canReadGroup } from '../projects.js'
+import { coordinatorNameOf, roleNameOf } from '../instructions.js'
 import { withAvatarView } from '../profile.js'
 import { swarmUsernames } from '../usernames.js'
 import type { AgentView, Derived, GroupView, HeadView, LivePart, MachineView, MemberView, ProgressView, StartView } from './contract.js'
@@ -88,7 +89,8 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
   const part = <T>(list: Part<T>[]) => { const keyed = new Map(list.map(p => [p.key, p])); return (key: string) => keyed.get(key)! }
   const agentPart = part(parts.agents), groupPart = part(parts.groups), machinePart = part(parts.machines), startPart = part(parts.starts)
   const head = Object.fromEntries(HEAD_FIELDS.filter(field => visible[field] !== undefined).map(field => [field, visible[field]])) as HeadView
-  if (head.projects) head.projects = head.projects.map(({ progress: _progress, ...project }) => project)
+  // Every project names its coordinator; one from before the field reads as the Product Manager (instructions.ts).
+  if (head.projects) head.projects = head.projects.map(({ progress: _progress, ...project }) => ({ ...project, coordinatorName: coordinatorNameOf(project) }))
   head.invitations = visible.invitations.filter(i => readable.has(i.conversationId))
   const projects = new Set((visible.projects ?? []).map(p => p.id)), seen = seenMachineIds(visible), names = swarmUsernames(state)
   const buddy = isBuddyReader(state, actor)
@@ -137,7 +139,9 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
   return {
     agents: Object.fromEntries(visible.agents.map(seen => [seen.id, { downSince: seen.downSince ?? null, limitedUntil: seen.limitedUntil ?? null,
       workDecision: seen.workDecision === 'awaiting' && state.agents.find(a => a.id === seen.id)!.workDecision !== 'awaiting' ? 'awaiting' as const : null,
-      roleId: seen.roleId ?? null }])),
+      roleId: seen.roleId ?? null,
+      // Derived on every read: who leads a project, and its role set, live outside the agent's own part.
+      roleName: roleNameOf(state, state.agents.find(a => a.id === seen.id)!) }])),
     machines: Object.fromEntries((visible.machines ?? []).map(machine)),
     ...(visible.otherProjectsWork ? { otherProjectsWork: visible.otherProjectsWork } : {}),
     ...(actor.kind === 'person' && extras.mentionsWaiting !== undefined ? { mentionsWaiting: extras.mentionsWaiting } : {}),

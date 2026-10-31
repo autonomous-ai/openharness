@@ -7,5 +7,6 @@ export default defineConfig({ test: { include: ['integration/superTabs.test.ts',
     'integration/superTabObserver.test.ts', 'integration/productUsageConflicts.test.ts', 'integration/productUsageReceipts.test.ts', 'integration/schemaRelease.test.ts', 'integration/superTabBuddies.test.ts', 'integration/superTabNotAvailable.test.ts',
     'integration/superTabBuddyProbes.test.ts', 'integration/superTabBuddySessions.test.ts', 'integration/superTabCosts.test.ts', 'integration/harnessSharesList.test.ts', 'integration/atlasSnapshot.test.ts', 'integration/queryStats.test.ts',
     'integration/superTabEvidence.test.ts', 'integration/superTabAttemptModels.test.ts', 'integration/superTabNamedReads.test.ts', 'integration/swarmSweepPlans.test.ts', 'integration/workerIndexPlans.test.ts', 'integration/superTabReflection.test.ts',
-    'integration/superTabMessagePages.test.ts', 'integration/superTabDeliveryCompaction.test.ts', 'integration/superTabThreads.test.ts'], hookTimeout: 120000, testTimeout: 30000, setupFiles: ['integration/cacheOn.test-support.ts'],
+    'integration/superTabMessagePages.test.ts', 'integration/superTabDeliveryCompaction.test.ts', 'integration/superTabThreads.test.ts',
+    'integration/superTabInstructions.test.ts', 'integration/superTabWorkflow.test.ts'], hookTimeout: 120000, testTimeout: 30000, setupFiles: ['integration/cacheOn.test-support.ts'],
   fileParallelism: false, env: { NODE_ENV: 'test', HARNESS_CREDENTIAL_ENCRYPTION_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' } } })

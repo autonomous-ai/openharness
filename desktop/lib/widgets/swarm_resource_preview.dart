@@ -1878,13 +1878,11 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
                         entry.gridModel?.grid ?? '',
                         entry.gridModel?.id ?? '',
                       )
-                      ? 'Offered: the PM can start Builders on your machines on it'
-                      : 'Offer to Swarm lets the PM start Builders on your machines on it'
-                : codingRefusal(local) != null
-                ? 'The Lead routes Builders only onto models that can drive a coding agent.'
+                      ? 'Offered: agents in this Swarm can run on it on your machines'
+                      : 'Offer to Swarm lets agents in this Swarm run on it on your machines'
                 : local.servedOn(swarm.grid)
-                ? 'Running for this Swarm: the Lead can route Builders on any machine in it onto this model.'
-                : 'Run for Swarm lets the Lead route Builders on any machine in the Swarm onto this model.',
+                ? 'Running for this Swarm: agents on any machine in it can run on this model.'
+                : 'Run for Swarm lets agents on any machine in the Swarm run on this model.',
           ),
         if (local != null) ...[
           // A model another app downloaded starts in that app, joined to the grid from there.
@@ -2026,17 +2024,12 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
           : statusWord,
       live: kind == SwarmModelKind.live,
       blurb: kind == SwarmModelKind.get
-          ? 'Get downloads it to $machineName. Then run it for the Swarm, and the Lead can route Builders onto it.'
+          ? 'Get downloads it to $machineName. Then run it for the Swarm, and agents in it can run on it.'
           : swarmBlurb,
       facts: facts,
       errors: errors,
-      // Too small or too slow for a coding agent: Builders are never offered it, running or not (coding_model.dart).
-      note: switch (codingRefusal(local!)) {
-        final why? when local.servedOn(widget.search.swarmModels!.grid) =>
-          'Not offered to Builders: $why',
-        final why? => why,
-        null => null,
-      },
+      // Small or slow for a coding agent: offered all the same, with a note (coding_model.dart).
+      note: codingNote(local!),
     );
   }
 
@@ -2079,7 +2072,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     final hostLabel = widget.search.models!.manager.apis.hostLabel;
     if (widget.search.swarmModels case final swarm? when _swarmCards) {
       const charged =
-          'Builders who use a shared model run on this key, and every request they send is charged to it.';
+          'Agents who use a shared model run on this key, and every request they send is charged to it.';
       if (model != null) {
         final shared = swarm.shared(api.id, model.id);
         return _swarmCard(
@@ -2115,8 +2108,8 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
         blurb: !api.servesModels
             ? 'Harness agents on this computer can call it as a tool. It has no models to share with the Swarm.'
             : shares > 0
-            ? 'Builders anywhere in the Swarm can run on what it shares, through $hostLabel. Show its models to share another.'
-            : 'Show its models to share one with the Swarm. Builders anywhere in it can then run on it, through $hostLabel.',
+            ? 'Agents anywhere in the Swarm can run on what it shares, through $hostLabel. Show its models to share another.'
+            : 'Show its models to share one with the Swarm. Agents anywhere in it can then run on it, through $hostLabel.',
         facts: [
           ('Endpoint', api.baseUrl),
           ('Key', 'Saved on $hostLabel'),

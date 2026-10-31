@@ -61,8 +61,8 @@ browser coming back online, not on a machine connecting. The machine-connect tri
 
 ### Authentication, CORS, CSRF
 
-- Routes: the transport signs only the Swarm routes the web's screens call (list, invitations, routing policy, create;
-  per Swarm: parts, changes, commands, mentions, decisions, leaderboard, sharing, routing policy, groups, conversations'
+- Routes: the transport signs only the Swarm routes the web's screens call (list, invitations, create;
+  per Swarm: parts, changes, commands, mentions, decisions, leaderboard, sharing, groups, conversations'
   messages, catch-up and read marks, project GitHub and roles, route decisions, machine removal, join, terminal
   sharing). Host, start, GitHub token, delivery and terminal routes are refused before anything is sent.
 - Token: the browser's own sign-in, which the web already sends on every other direct call (desk, machines, uploads):

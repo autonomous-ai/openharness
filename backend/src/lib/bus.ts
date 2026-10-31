@@ -274,6 +274,69 @@ export function publishTerminalDown(machineId: string, payload: Uint8Array): Pro
   return safePublish(terminalDownChannel(machineId), Buffer.from(payload))
 }
 
+// ── per-process channels for frames addressed to one viewer (lib/terminalRoute.ts) ─────────────────
+
+/** How long a viewer's record lives without its process renewing it (hub heartbeat every 25 s). */
+export const CONN_OWNER_TTL_MS = 60_000
+const connOwnerKey = (connId: string): string => `conn:${connId}`
+const podHopChannel = (processId: string): string => `termpod:${processId}`
+const podJsonChannel = (processId: string): string => `uppod:${processId}`
+
+/** Records that these viewer connections live on `processId`, in one pipeline. A failure leaves them unrecorded: frames
+ *  for them then go through the machine's channels, as before records existed. */
+export async function recordConnOwners(connIds: readonly string[], processId: string): Promise<void> {
+  if (connIds.length === 0) return
+  const p = pub.pipeline()
+  for (const connId of connIds) p.set(connOwnerKey(connId), processId, 'PX', CONN_OWNER_TTL_MS)
+  try { await p.exec() } catch (err) { logger.debug('[bus] conn owner record failed', { error: String(err) }) }
+}
+export async function forgetConnOwner(connId: string): Promise<void> {
+  try { await pub.del(connOwnerKey(connId)) } catch { /* expires on its own */ }
+}
+/** The process holding this viewer connection, or null when none is recorded (or Redis cannot say). */
+export async function connOwner(connId: string): Promise<string | null> {
+  try { return await pub.get(connOwnerKey(connId)) } catch { return null }
+}
+
+/** A terminal hop for one process: the machine id (2-byte length + UTF-8) before the hop, so the receiver delivers only
+ *  to that machine's viewer with the hop's connection id. */
+export function encodePodHop(machineId: string, packet: Uint8Array): Buffer {
+  const id = Buffer.from(machineId, 'utf8')
+  const out = Buffer.allocUnsafe(2 + id.length + packet.length)
+  out.writeUInt16BE(id.length, 0)
+  id.copy(out, 2)
+  out.set(packet, 2 + id.length)
+  return out
+}
+export function decodePodHop(payload: Buffer): { machineId: string; packet: Uint8Array } | null {
+  if (payload.length < 2) return null
+  const length = payload.readUInt16BE(0)
+  if (payload.length < 2 + length) return null
+  return { machineId: payload.toString('utf8', 2, 2 + length), packet: payload.subarray(2 + length) }
+}
+export function publishPodHop(processId: string, machineId: string, packet: Uint8Array): Promise<number> {
+  return safePublish(podHopChannel(processId), encodePodHop(machineId, packet))
+}
+export function publishPodJson(processId: string, machineId: string, msg: UpBusMsg): Promise<number> {
+  return safePublish(podJsonChannel(processId), JSON.stringify({ machineId, msg }))
+}
+/** This process's own channels: hops on the terminal subscriber connection, JSON frames on the main one, the same
+ *  connections the machine's channels use, so a viewer's frames keep their order on each. */
+export async function subscribePod(processId: string, on: { hop(machineId: string, packet: Uint8Array): void; json(machineId: string, msg: UpBusMsg): void }): Promise<() => void> {
+  const subscribed = await Promise.allSettled([
+    addBinarySub(podHopChannel(processId), payload => { const hop = decodePodHop(payload); if (hop) on.hop(hop.machineId, hop.packet) }),
+    // Only a frame for one connection comes here; anything else would reach every viewer of the machine on this process.
+    addSub(podJsonChannel(processId), message => {
+      const { machineId, msg } = (message ?? {}) as { machineId?: unknown; msg?: UpBusMsg }
+      if (typeof machineId === 'string' && msg && typeof msg.targetConnId === 'string') on.json(machineId, msg)
+    }),
+  ])
+  const stops = subscribed.flatMap(each => each.status === 'fulfilled' ? [each.value] : [])
+  const failed = subscribed.find((each): each is PromiseRejectedResult => each.status === 'rejected')
+  if (failed) { for (const stop of stops) stop(); throw failed.reason }
+  return () => { for (const stop of stops) stop() }
+}
+
 // ── up / down data channels ──────────────────────────────────────────────────────────────────────
 
 export function subscribeUp(machineId: string, cb: (msg: UpBusMsg) => void): Promise<() => void> {

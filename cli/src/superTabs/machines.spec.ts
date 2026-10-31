@@ -1160,10 +1160,10 @@ describe('contributed machine executor', () => {
       on('llama3.2:3b', { name: 'llama3.2:3b', sizeBytes: 2e9 }), on('Qwen3-4B'), on('slow', { name: 'Qwen3.6-35B-A3B', estTokS: 3 }),
       on('fast', { name: 'Qwen3.6-35B-A3B', estTokS: 3, tokensPerSecond: 40, paramsB: 35, quant: 'Q4_K_M' }), on('gemma', { name: 'gemma-4-E2B-it', sizeBytes: 3.2e9 }),
     ] }, GRID).map(m => m.model)).toEqual(['fast'])
-    // What is left out is reported with why, so a Lead asked for it hears that rather than to share it.
+    // What is left out is reported with why, which the route offers it with (project instructions, phase 4, decision 19).
     expect(refusedOn({ models: [on('llama3.2:3b', { name: 'llama3.2:3b', sizeBytes: 2e9 }), on('Qwen3-4B'), on('fast', { paramsB: 35, tokensPerSecond: 40 })] }, GRID)).toEqual([
-      { grid: GRID, model: 'llama3.2:3b', name: 'llama3.2:3b', why: 'llama3.2:3b is too small for a coding agent (about 3B parameters; Builders need 7B or more).' },
-      { grid: GRID, model: 'Qwen3-4B', why: 'Qwen3-4B is too small for a coding agent (about 4B parameters; Builders need 7B or more).' },
+      { grid: GRID, model: 'llama3.2:3b', name: 'llama3.2:3b', why: 'llama3.2:3b is too small for a coding agent (about 3B parameters; a coding agent needs 7B or more).' },
+      { grid: GRID, model: 'Qwen3-4B', why: 'Qwen3-4B is too small for a coding agent (about 4B parameters; a coding agent needs 7B or more).' },
     ])
     expect(refusedOn(null, GRID)).toEqual([])
   })

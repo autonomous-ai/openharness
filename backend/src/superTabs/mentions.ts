@@ -1,11 +1,11 @@
-/** A person, or a project's Lead, tags people in a message; each tag waits in the person's Swarm-wide list until they reply in that
- *  conversation or mark it done. Tags live in SuperTabMention, never in the tab state, so an older backend still
+/** A person, or any agent of the project but a Buddy, tags people in a message; each tag waits in the person's Swarm-wide list
+ *  until they reply in that conversation or mark it done. Tags live in SuperTabMention, never in the tab state, so an older backend still
  *  reads and writes a tab that has them. Called inside SuperTabStore's transactions. */
 import { createHash } from 'node:crypto'
 import type { Prisma, PrismaClient } from '@prisma/client'
 import { ensureIndex } from '../lib/db/indexes.js'
 import { activeWork, fail, isLeads, person, stableId, type Actor, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
-import { canReadGroup, groupProject, ledProject, projectOf } from './projects.js'
+import { canReadGroup, groupProject, projectAgent, projectOf } from './projects.js'
 import { groupsBy } from './parts/indexed.js'
 import { usernameOf } from './usernames.js'
 
@@ -104,13 +104,11 @@ const OPENS_BLOCK = new RegExp('^(?: {4}|\\t| {0,3}(?:[-*+](?:[ \\t\\n]|$)|#{1,6
   + '|\\d{1,9}[.)](?:[ \\t\\n]|$)|```|~~~|\\||\\[[^\\]\\n]+\\]:'
   + '|(?:(?:\\*[ \\t]*){3,}|(?:-[ \\t]*){3,}|(?:_[ \\t]*){3,})(?:\\n|$)))')
 
-/** Whether [actor] may tag people in [group]: a person who can post there; among agents only the project's Lead, in its own
- *  project's conversations; nobody in the Leads conversation. */
+/** Whether [actor] may tag people in [group]: a person who can post there; any agent of the project but a Buddy, in its own
+ *  project's conversations (project instructions, phase 4); nobody in the Leads conversation. */
 function mayTag(state: SuperTabState, actor: Actor, group: Conversation): boolean {
   if (isLeads(group)) return false
-  if (actor.kind !== 'agent') return true
-  const led = ledProject(state, actor.agentId)
-  return !!led && groupProject(state, group).id === led.id
+  return actor.kind !== 'agent' || projectAgent(state, actor, groupProject(state, group).id)
 }
 
 /** The people [named] by a post's text whom it tags: only when [actor] may tag here, only people who can read [group], never
@@ -121,16 +119,14 @@ export function textTags(state: SuperTabState, actor: Actor, group: Conversation
     && canReadGroup(state, { kind: 'person', userId: p.id, email: p.email }, group)))
 }
 
-/** A person who can post here tags people; among agents only the project's Lead, in that project's conversations. Never in
- *  the Leads conversation, and only people who can read the conversation. A person's tag of themselves is dropped. */
+/** A person who can post here tags people; so does any agent of the project but a Buddy, in that project's conversations.
+ *  Never in the Leads conversation, and only people who can read the conversation. A person's tag of themselves is dropped. */
 export function checkMentions(state: SuperTabState, actor: Actor, group: Conversation, personIds: string[]): string[] {
   const ids = [...new Set(personIds)].filter(id => actor.kind !== 'person' || id !== actor.userId)
   if (!ids.length) return ids
-  if (isLeads(group)) fail('MENTION_FORBIDDEN', 'Nobody is tagged in the Leads conversation.', 403)
-  if (actor.kind === 'agent') {
-    const led = ledProject(state, actor.agentId)
-    if (!led) fail('MENTION_FORBIDDEN', 'Only a project’s Lead can tag people.', 403)
-    if (groupProject(state, group).id !== led.id) fail('MENTION_FORBIDDEN', 'A Lead can tag people only in its own project’s conversations.', 403)
+  if (isLeads(group)) fail('INVALID_MENTION', 'Nobody is tagged in the Leads conversation.', 400)
+  if (actor.kind === 'agent' && !projectAgent(state, actor, groupProject(state, group).id)) {
+    fail('FORBIDDEN', 'Only a person or an agent of this project tags people here.', 403)
   }
   for (const id of ids) {
     const member = state.people.find(p => p.id === id) ?? fail('INVALID_MENTION', 'Tag a person in this Swarm.', 400)
@@ -164,7 +160,8 @@ export async function resolveWhenWorked(tx: Tx, tabId: string, conversationId: s
   await tx.superTabMention.deleteMany({ where: held })
 }
 
-/** The group's Lead acted on it (leadAction in the state): the held tags made before that are dropped for good, listed or not.
+/** The task was handled (leadAction in the state: any agent's route, start or assignment there, or its coordinator's post): the
+ *  held tags made before that are dropped for good, listed or not.
  *  Dropped, not resolved, so a later reply or assignment cannot bring one back in Earlier. */
 export async function dropHeldTags(tx: Tx, tabId: string, conversationId: string, now: number): Promise<void> {
   await tx.superTabMention.deleteMany({ where: { tabId, conversationId, holdUntil: { isSet: true }, createdAt: { lt: new Date(now) }, ...waiting } })

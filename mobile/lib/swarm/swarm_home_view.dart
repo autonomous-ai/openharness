@@ -84,7 +84,7 @@ Map<String, dynamic> _project(SuperTabProject p) => {
     for (final id in p.memberIds) {'id': id},
   ],
   'skillMode': p.skillMode,
-  'skillSet': p.skillSet,
+  'coordinatorName': ?p.coordinatorName,
   'updateMinutes': p.updateMinutes,
 };
 
@@ -99,6 +99,7 @@ Map<String, dynamic> _agent(SuperTabAgent a) => {
   'machineOwnerId': a.machineOwnerId,
   'role': ?a.role,
   'roleId': ?a.roleId,
+  'roleName': ?a.roleName,
   'limitedUntil': ?a.limitedUntil?.toIso8601String(),
   'downSince': ?a.downSince?.toIso8601String(),
   'avatar': ?_preset(a.avatar),

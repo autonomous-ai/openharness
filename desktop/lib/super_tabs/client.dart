@@ -367,7 +367,17 @@ class SuperTabClient {
   Iterable<SuperTabController> get loadedControllers => _loaded.values;
 
   /// Native close actions name the machine's harness id, not the Swarm agent id.
-  String? leadProtectionReasonForHarness(String machineId, String harnessId) {
+  String? leadProtectionReasonForHarness(String machineId, String harnessId) =>
+      _leadOfHarness(machineId, harnessId)?.reason;
+
+  /// The coordinator's name in the project the machine's harness coordinates.
+  String? leadCoordinatorForHarness(String machineId, String harnessId) =>
+      _leadOfHarness(machineId, harnessId)?.coordinator;
+
+  ({String reason, String coordinator})? _leadOfHarness(
+    String machineId,
+    String harnessId,
+  ) {
     for (final snapshot in [
       for (final controller in loadedControllers) ?controller.snapshot,
       ..._closedSnapshots.values,
@@ -377,7 +387,11 @@ class SuperTabClient {
           continue;
         }
         if (snapshot.leadProtectionReason(agent.id) case final reason?) {
-          return reason;
+          final project = snapshot.leadProjectForAgent(agent.id)!;
+          return (
+            reason: reason,
+            coordinator: snapshot.coordinatorNameOf(project.id),
+          );
         }
       }
     }

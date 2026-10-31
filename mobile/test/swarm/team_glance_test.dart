@@ -69,7 +69,7 @@ void main() {
     );
 
     expect(stateOf(glance, 'a-work'), 'Working');
-    expect(stateOf(glance, 'a-review'), 'In review');
+    expect(stateOf(glance, 'a-review'), 'Waiting on others');
     expect(stateOf(glance, 'a-check'), 'Checking');
     expect(stateOf(glance, 'a-wait'), 'Waiting');
     expect(stateOf(glance, 'a-stuck'), 'Stuck');

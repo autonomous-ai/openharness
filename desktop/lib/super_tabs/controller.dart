@@ -21,7 +21,7 @@ import 'project_github.dart';
 import 'parts.dart';
 import 'read_marks.dart';
 import 'reading.dart';
-import 'review_verdict.dart';
+import 'linked_tasks.dart';
 
 /// A messages read started beside a state read, and what it asked for.
 typedef _EarlyRead = ({String query, Future<Map<String, dynamic>> page});
@@ -333,7 +333,13 @@ class SuperTabController extends ChangeNotifier {
     return _uploadErrors[conversationId];
   }
 
-  /// Sets [operationError] for [command], remembering its conversation.
+  /// The thread the last failed reply was going to: the thread of the message
+  /// it answers, or that message itself, as the backend files a reply. Null
+  /// when the failure was not a reply.
+  String? _operationErrorRoot;
+
+  /// Sets [operationError] for [command], remembering its conversation and,
+  /// for a reply, its thread.
   void _failOperation(
     String message, {
     required Map<String, dynamic> command,
@@ -343,11 +349,28 @@ class SuperTabController extends ChangeNotifier {
     operationErrorCode = code;
     final id = command['conversationId'];
     _operationErrorFor = id is String ? id : null;
+    final replyTo = command['replyTo'];
+    _operationErrorRoot = id is String && replyTo is String
+        ? _threadOf(id, replyTo) ?? replyTo
+        : null;
   }
 
-  /// The same for the reply box of [root]'s thread in [conversationId].
-  String? threadComposerError(String conversationId, String root) =>
-      operationError ?? _uploadErrors[(conversationId, root)];
+  /// The same for the reply box of [root]'s thread in [conversationId]: the
+  /// last action's [operationError] when it was a reply in this thread, for
+  /// no conversation, or is still unconfirmed; else the thread's own upload
+  /// failure. A failure in another chat, or in this chat's main stream, is
+  /// not said here.
+  String? threadComposerError(String conversationId, String root) {
+    final failure = operationError;
+    if (failure != null &&
+        (_operationErrorFor == null ||
+            (_operationErrorFor == conversationId &&
+                _operationErrorRoot == root) ||
+            _pending != null)) {
+      return failure;
+    }
+    return _uploadErrors[(conversationId, root)];
+  }
 
   /// One line for the sender after a command succeeds, from the backend: that a
   /// credential was removed from what they sent and should be revoked.
@@ -1515,42 +1538,13 @@ class SuperTabController extends ChangeNotifier {
   static bool _listed(SuperTabMessage m) =>
       m.source['kind'] != 'update-request';
 
-  /// "Reviewer: Ada · Ready: yes on 1a2b3c4d5". The verdict is the newest
-  /// review group's for [group], as its Reviewer recorded it (its result or
-  /// check evidence), else the newest `Ready:` message a reviewer of [group]
-  /// posted in the loaded history. Null without a reviewer.
-  String? reviewLine(SuperTabConversation? group) {
+  /// [group]'s linked tasks with their checks' results ([superTabLinkedLine]);
+  /// null without any.
+  String? linkedLine(SuperTabConversation? group) {
     final state = snapshot;
-    if (group == null || state == null) return null;
-    final reviews =
-        state.conversations.where((c) => c.reviewOf == group.id).toList()
-          ..sort((a, b) => (b.number ?? 0).compareTo(a.number ?? 0));
-    final reviewers = {
-      for (final r in [
-        ...state.reviewers(group),
-        for (final review in reviews) ...state.reviewers(review),
-      ])
-        r.id: r,
-    }.values;
-    if (reviewers.isEmpty) return null;
-    final ids = {for (final r in reviewers) r.id};
-    final recorded = reviews
-        .expand(
-          (review) => [
-            review.assignment?['result'],
-            for (final check in review.checks) check['evidence'],
-          ],
-        )
-        .whereType<String>();
-    final posted = messages(group.id).reversed
-        .where((m) => m.fromAgent && ids.contains(m.authorId))
-        .map((m) => m.text);
-    final verdict = [
-      ...recorded,
-      ...posted,
-    ].map(parseSuperTabVerdict).nonNulls.firstOrNull;
-    final names = reviewers.map((r) => state.agentName(r.id)).join(', ');
-    return 'Reviewer: $names · ${verdict?.label ?? 'No verdict yet'}';
+    return group == null || state == null
+        ? null
+        : superTabLinkedLine(state, group);
   }
 
   bool hasOlder(String id) => _before[id] != null;

@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { agent, fail, person, type Actor, type SuperTabState } from './model.js'
-import { agentProjectId, ledProject } from './projects.js'
+import { agentProjectId, projectAgent } from './projects.js'
 
 /** The emoji a status may wear. Desktop offers each with its words (focus, coffee, lunch, out, away, sick). */
 export const STATUS_EMOJI = ['🎯', '☕', '🍽️', '🌴', '🚶', '🤒'] as const
@@ -62,12 +62,12 @@ export function setMemberAvatar(state: SuperTabState, actor: Actor, choice: Avat
   member.avatar = chosen(choice, upload)
 }
 
-/** `agent.avatar`: the person who contributed the agent, or the Lead of its project, sets or clears its avatar. */
+/** `agent.avatar`: the person who contributed the agent, or any agent of its project (project instructions, phase 4), sets or
+ *  clears its avatar. */
 export function setAgentAvatar(state: SuperTabState, actor: Actor, agentId: string, choice: AvatarChoice, upload: AvatarUpload | undefined): void {
   const target = agent(state, agentId)
-  const allowed = actor.kind === 'person' ? actor.userId === target.contributorId
-    : ledProject(state, actor.agentId)?.id === agentProjectId(state, target)
-  if (!allowed) fail('FORBIDDEN', 'Only the agent\'s contributor or its project\'s Lead can change its avatar.', 403)
+  const allowed = actor.kind === 'person' ? actor.userId === target.contributorId : projectAgent(state, actor, agentProjectId(state, target))
+  if (!allowed) fail('FORBIDDEN', 'Only the agent\'s contributor or an agent of its project can change its avatar.', 403)
   if (!choice) return void delete target.avatar
   target.avatar = chosen(choice, upload)
 }

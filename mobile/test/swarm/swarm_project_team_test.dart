@@ -95,7 +95,7 @@ void main() {
           '${of(team, id).label}';
       expect(said('a-input'), 'needsInput: Needs input');
       expect(said('a-stuck'), 'needsInput: Stuck');
-      expect(said('a-review'), 'waiting: Waiting for review');
+      expect(said('a-review'), 'waiting: Waiting on others');
       expect(said('a-limit'), 'waiting: Limited until 09:05');
       expect(said('a-down'), 'offline: Offline');
       expect(said('a-lost'), 'offline: Offline');
@@ -345,7 +345,7 @@ void main() {
         {
           'a-input': 'Needs input · Task of a-input · 4m',
           'a-stuck': 'Stuck · Task of a-stuck · 2h',
-          'a-review': 'Waiting for review · Task of a-review · 40m',
+          'a-review': 'Waiting on others · Task of a-review · 40m',
           'a-limit': 'Limited until 09:05 · Task of a-limit · 12m',
           'a-down': 'Offline · Task of a-down · 3d',
           'a-work': 'Working · Task of a-work · now',

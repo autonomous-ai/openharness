@@ -4,7 +4,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor } from './model.js'
-import { DEFAULT_ROUTING_POLICY } from './routingPolicy.js'
 import { servedLocalModels, type ContributedMachine } from './machines.js'
 import { buddyChatId } from './buddies.js'
 import { LEAD_CAPABILITY } from './leadStart.js'
@@ -26,15 +25,12 @@ const setupOf = { name: 'Peer Laptop', cwd: '/home/peer/harness-swarm', engines:
 const own = (userId: string) => ({ machineOwnerId: userId, contributorId: userId, hostGrant: null })
 
 /** A Swarm of two public projects, each with its Lead on the owner's Swarm machine, and peer, who has added no machine. */
-/** The default table, with Claude launched on its own model (these fixtures' agents) at the top tier so they build. */
-const FIXTURE_POLICY = { ...DEFAULT_ROUTING_POLICY, models: [...DEFAULT_ROUTING_POLICY.models,
-  { engine: 'claude' as const, model: 'default', effort: 'default', quality: 3, cost: 3, enabled: true }] }
 function setup() {
   let state = createSuperTab('swarm', 'Team', { id: 'owner', email: owner.email }, 'test')
   state.people.push({ id: 'peer', email: peer.email, role: 'collaborator', generation: 'first' })
   let next = 0
   const run = (command: Command, actor: Actor = owner, context: Partial<CommandContext> = {}) => {
-    const effects = applyCommand(state, actor, command, { operationId: `op${next++}`, now: 1000, routingPolicy: FIXTURE_POLICY,
+    const effects = applyCommand(state, actor, command, { operationId: `op${next++}`, now: 1000,
       contribution: own(actor.kind === 'person' ? actor.userId : 'owner'), ...context })
     state = effects.state
     return effects

@@ -75,8 +75,8 @@ void main() {
       );
     });
 
-    test('an engine not offered, not installed, signed out, out of quota or '
-        'suspended is ruled out with why; one left runs', () {
+    test('an engine not offered, not installed, signed out or suspended is '
+        'ruled out with why; one left runs; quota rules nothing out', () {
       final [codexOnly] = machines([
         leadPool(
           'mac-1',
@@ -90,7 +90,9 @@ void main() {
         'claude': 'Claude Code isn’t signed in',
       });
 
-      final [none] = machines([
+      // An engine at 100% stays startable: quota is information, and an older
+      // server's own refusal shows as the start's error.
+      final [spent] = machines([
         leadPool(
           'mac-1',
           engines: ['claude'],
@@ -105,12 +107,10 @@ void main() {
           ],
         ),
       ]);
-      expect(none.startable, isFalse);
-      expect(
-        none.detail,
-        'Can’t run a Product Manager: Claude Code has no quota left until it '
-        'resets, Codex isn’t offered here',
-      );
+      expect(spent.startable, isTrue);
+      expect(spent.engine, 'claude');
+      expect(spent.engineRefusals, {'codex': 'Codex isn’t offered here'});
+      expect(spent.detail, isNot(contains('quota')));
 
       final [suspended] = machines([
         leadPool(
@@ -123,22 +123,32 @@ void main() {
       expect(suspended.engineRefusals['claude'], contains('failed to start'));
     });
 
-    test('the Swarm\'s model list rules an engine out on every machine', () {
-      final [studio] = machines(
-        [leadPool('mac-1')],
-        modelList: swarmLeadModelListRefusals({
-          'models': [
-            {'engine': 'claude', 'model': 'opus', 'enabled': false},
-            {'engine': 'codex', 'model': 'gpt-5', 'enabled': true},
-          ],
-        }),
-      );
+    test('an older Swarm\'s model list rules an engine out on every machine; '
+        'one that sends its catalog rules nothing out', () {
+      final policy = {
+        'models': [
+          {'engine': 'claude', 'model': 'opus', 'enabled': false},
+          {'engine': 'codex', 'model': 'gpt-5', 'enabled': true},
+        ],
+      };
+      // The tab's routing-policy read, as an older backend answers it.
+      final [studio] = machines([
+        leadPool('mac-1'),
+      ], modelList: swarmLeadModelListRefusals({'policy': policy}));
       expect(studio.engine, 'codex');
       expect(
         studio.engineRefusals['claude'],
         'The Swarm’s model list has no enabled Claude model',
       );
       expect(swarmLeadModelListRefusals(null), isEmpty);
+      // With its catalog, the list is the Swarm's advice: nothing is refused.
+      expect(
+        swarmLeadModelListRefusals({
+          'policy': policy,
+          'catalog': {'models': <Object>[]},
+        }),
+        isEmpty,
+      );
     });
 
     test('a teammate\'s machine runs it as the server decided for each '

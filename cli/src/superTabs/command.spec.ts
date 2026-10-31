@@ -501,6 +501,15 @@ it('refuses to set a machine\'s agents for an agent: a Swarm agent\'s pane, an o
   }
   expect(request.mock.calls.some(c => c[0] === 'super_tabs')).toBe(false)
 })
+// Project instructions, phase 1: an agent names the agents a post reaches; with none it reaches the PM.
+it('passes each --to as a recipient, at most 16, and keeps a post without one unnamed', () => {
+  expect(parseSuperTabArgs([...prefix, 'post', 'g1', 'Ready', 'op-1', '--to', 'a1', '--to', 'a2', '--to', 'a1'], where).payload.command)
+    .toMatchObject({ type: 'message.send', conversationId: 'g1', recipientIds: ['a1', 'a2'] })
+  expect(parseSuperTabArgs([...prefix, 'post', 'g1', 'Ready', 'op-1'], where).payload.command).toMatchObject({ recipientIds: [] })
+  expect(() => parseSuperTabArgs([...prefix, 'post', 'g1', 'Ready', 'op-1', '--to'], where)).toThrow('harness super-tab')
+  const many = Array.from({ length: 17 }, (_, i) => ['--to', `a${i}`]).flat()
+  expect(() => parseSuperTabArgs([...prefix, 'post', 'g1', 'Ready', 'op-1', ...many], where)).toThrow('harness super-tab')
+})
 // Lead mentions (spec 2026-10-24-lead-mentions): each --mention names a person by id or email; the service maps them.
 it('passes each --mention as written, and leaves a post without one unchanged', () => {
   expect(parseSuperTabArgs([...prefix, 'post', 'lead', 'Please confirm', 'op-1', '--mention', 'ken@example.com', '--reply-to', 'm1', '--mention', 'person-2'], where).payload.command)
@@ -544,6 +553,39 @@ it('reads the caller\'s open decisions, or with --answered the answered ones', (
   expect(parseSuperTabArgs([...prefix, 'decisions'], where).payload).toMatchObject({ action: 'decisions', state: 'open' })
   expect(parseSuperTabArgs([...prefix, 'decisions', '--answered'], where).payload).toMatchObject({ action: 'decisions', state: 'answered' })
   for (const argv of [[...prefix, 'decisions', 'extra'], [...prefix, 'decisions', '--answered', 'extra']]) expect(() => parseSuperTabArgs(argv, where)).toThrow('harness super-tab')
+})
+
+// Project instructions (phase 3, task 5): the agent prints its project's instructions and the PM's notes.
+it('parses instructions and instructions PROJECT, and refuses anything else', () => {
+  expect(parseSuperTabArgs([...prefix, 'instructions'], where).payload).toMatchObject({ action: 'instructions', tabId: 'tab' })
+  expect(parseSuperTabArgs([...prefix, 'instructions'], where).payload).not.toHaveProperty('projectId')
+  expect(parseSuperTabArgs([...prefix, 'instructions', 'p1'], where).payload).toMatchObject({ action: 'instructions', projectId: 'p1' })
+  for (const argv of [[...prefix, 'instructions', '../x'], [...prefix, 'instructions', 'p1', 'p2']]) expect(() => parseSuperTabArgs(argv, where)).toThrow('harness super-tab')
+})
+// Final review: the notes print their ids (note.remove takes one), under the coordinator's own name, with who asked by name
+// where the status read has it, and their times (epoch ms from the backend) as ISO.
+it('prints the instructions as text with the header and the coordinator\'s notes, and a failure as JSON', async () => {
+  const print = vi.fn(), close = vi.fn()
+  const answers: Record<string, unknown>[] = [
+    { ok: true, value: { projectId: 'p1', revision: 4, text: 'Work by this.\nSecond line.', template: true, coordinatorName: 'Ana',
+      notes: [{ id: 'n1', text: 'Use the staging branch', askedBy: '6a0000000000000000000001', askedByName: 'ken', at: Date.parse('2026-10-30T01:00:00Z'), expiresAt: Date.parse('2026-11-01T00:00:00Z') },
+        { id: 'n2', text: 'Ask before merging', askedBy: '6a0000000000000000000002', at: Date.parse('2026-10-30T02:00:00Z'), expiresAt: null }] } },
+    { ok: true, value: { projectId: 'p1', revision: 5, text: 'Plain.', template: false, coordinatorName: 'Ana' } },
+    { error: 'INSTRUCTIONS_UNAVAILABLE', detail: 'This Swarm has no project instructions yet: work by the swarm skill Harness gave you at start.' },
+  ]
+  const request = vi.fn(async () => answers.shift()!)
+  const deps = { where: () => where, pane: undefined, open: async () => ({ request, close, machineId: 'machine' }), print }
+  expect(await superTabCommand([...prefix, 'instructions'], deps)).toBe(0)
+  expect(request).toHaveBeenCalledWith('super_tabs', expect.objectContaining({ action: 'instructions', tabId: 'tab', agentId: 'agent' }), expect.anything())
+  expect(print).toHaveBeenLastCalledWith([
+    'Instructions of project p1, revision 4 (the built-in template)', '', 'Work by this.\nSecond line.', '',
+    "Ana's notes:",
+    '- Use the staging branch (note n1, asked by ken, 2026-10-30T01:00:00.000Z, until 2026-11-01T00:00:00.000Z)',
+    '- Ask before merging (note n2, asked by 6a0000000000000000000002, 2026-10-30T02:00:00.000Z)'].join('\n'))
+  expect(await superTabCommand([...prefix, 'instructions', 'p1'], deps)).toBe(0)
+  expect(print).toHaveBeenLastCalledWith('Instructions of project p1, revision 5\n\nPlain.')
+  expect(await superTabCommand([...prefix, 'instructions'], deps)).toBe(1)
+  expect(JSON.parse(print.mock.calls.at(-1)![0])).toMatchObject({ error: 'INSTRUCTIONS_UNAVAILABLE' })
 })
 
 it('parses a Buddy\'s propose OPERATION_ID JSON as its proposal command, whatever type the JSON names', () => {
@@ -748,7 +790,7 @@ describe("a Buddy's usage line and JSON hints", () => {
 
   it('has no stdin form for a Buddy: its post line takes TEXT, and its JSON goes in single quotes', async () => {
     const { run } = buddyDeps(true)
-    expect(await run(['post', 'lead', 'Ready'])).toContain('post GROUP TEXT OPERATION_ID [--reply-to')
+    expect(await run(['post', 'lead', 'Ready'])).toContain('post GROUP TEXT OPERATION_ID [--to AGENT]... [--reply-to')
     expect(await run(['propose', 'op-1', '{"goal":'])).toMatch(/^The propose JSON is not valid \(.*\)\. Pass it as one argument, with the JSON in single quotes: propose OPERATION_ID '\{\.\.\.\}' \(an apostrophe inside it as \\u0027\)\.$/)
     expect(await run(['propose'])).toContain("A line break without \\ before it ends the command; send it again with the JSON in single quotes: propose OPERATION_ID '{...}'")
     expect(await run(['propose', 'op-1'])).toBe("propose needs its JSON after OPERATION_ID: propose op-1 JSON, with the JSON in single quotes: propose OPERATION_ID '{...}' (an apostrophe inside it as \\u0027).")

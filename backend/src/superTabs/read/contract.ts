@@ -56,7 +56,8 @@ export interface ProgressView {
  *  clients overlay it on the parts. */
 export interface Derived {
   /** Every agent the reader can see. `workDecision` is null when the stored value stands; `roleId` null outside Custom. */
-  agents: Record<string, { downSince: string | null; limitedUntil: string | null; workDecision: 'awaiting' | null; roleId: string | null }>
+  /** `roleName`: the role it goes by (instructions.ts roleNameOf), its stored one or what it is. */
+  agents: Record<string, { downSince: string | null; limitedUntil: string | null; workDecision: 'awaiting' | null; roleId: string | null; roleName: string }>
   /** Every contributed machine the reader can see. */
   /** `clientVersion`: the CLI version its daemon last connected with (routing reads a machine updated since its failed starts). */
   machines: Record<string, { availableSlots: number; teamWork: { allowed: true } | { allowed: false; reason: string; [key: string]: unknown }; clientVersion?: string
@@ -228,6 +229,11 @@ export interface HostAgentRow {
   joinSwarm: boolean
   skillMode: 'default' | 'orchestration'
   role?: { id: string; name: string; kind: string; version: string; projectId: string } | null
+  /** The role it goes by (instructions.ts roleNameOf). */
+  roleName: string
+  /** Its project's instructions as the state names them: the host reads the text when `revision` moves. Revision 0 (no
+   *  `hash`): no document yet, so the built-in template. */
+  instructions: { projectId: string; revision: number; hash: string | null; coordinatorName: string } | null
   lead: boolean
   /** New: lets the host decide what it may read without a full Swarm read. */
   leadsConversationId: string | null

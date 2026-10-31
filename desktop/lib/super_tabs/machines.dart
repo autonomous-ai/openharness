@@ -1088,11 +1088,14 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
               engine,
               row,
               stale: stale,
-              struck:
-                  suspended[engine] ??
-                  (!stale && (row['remainingPercent'] as num) <= 0
-                      ? _noQuotaLeft
-                      : null),
+              struck: suspended[engine],
+              // Information only: quota never makes a machine unusable.
+              notice:
+                  suspended[engine] == null &&
+                      !stale &&
+                      (row['remainingPercent'] as num) <= 0
+                  ? _noQuotaLeft
+                  : null,
             ),
             null => _unfigured(
               engine,
@@ -1123,6 +1126,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     Map<String, Object?> row, {
     required bool stale,
     String? struck,
+    String? notice,
   }) {
     final account = WorkspaceSubscriptionUsage.fromRows([row]).accounts.first;
     return _Allowance(
@@ -1132,6 +1136,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       left: (row['remainingPercent'] as num).toDouble().clamp(0, 100),
       stale: stale,
       struck: struck,
+      notice: notice,
       note: superMachineAllowanceNote(switch (row['details']) {
         final List lines => lines.whereType<String>(),
         _ => const <String>[],
@@ -1482,7 +1487,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                   final preview = previewState.data;
                   final blockedReason = preview?.blockedProjectName == null
                       ? null
-                      : 'This machine runs the Product Manager of project ${preview!.blockedProjectName}. Delete the project first.';
+                      : 'This machine runs the ${c.snapshot?.coordinatorNameOf(preview!.blockedProjectId ?? '') ?? kDefaultCoordinatorName} of project ${preview!.blockedProjectName}. Delete the project first.';
                   final refusal = reason ?? blockedReason;
                   final enabled =
                       permitted &&
@@ -1534,7 +1539,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                                     ),
                                     if (agent.task != null)
                                       Text(
-                                        'The open task “${agent.task}” goes back to the Product Manager.',
+                                        'The open task “${agent.task}” loses its agent.',
                                       ),
                                   ],
                                 ],
@@ -2008,22 +2013,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     HarnessActivity activity,
   ) {
     final name = c.snapshot!.agentName(agent.id);
-    final lead = c.snapshot!.isLead(agent.id);
-    final customRole = c.snapshot!.activeRoleForAgent(agent);
-    final role =
-        customRole?.name ??
-        (lead
-            ? 'Product Manager'
-            : agent.isReviewer
-            ? 'Reviewer'
-            : 'Engineer');
-    final badge =
-        customRole?.name ??
-        (lead
-            ? 'PM'
-            : agent.isReviewer
-            ? 'Rev'
-            : 'Dev');
+    final (name: role, :badge) =
+        c.snapshot!.roleOf(agent.id) ?? (name: 'Engineer', badge: 'Dev');
     final info = SuperTabAgentInfo(c, widget.app, agent, activity: activity);
     final theme = terminalThemeFor(
       grid.AppTheme.surfacePalette,
@@ -2166,7 +2157,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
           Padding(
             padding: const EdgeInsets.fromLTRB(36, 8, 16, 16),
             child: Text(
-              'Add a machine for the product manager to use.',
+              "Add a machine for this Swarm's agents to use.",
               style: DesktopChrome.metadata(),
             ),
           )
@@ -2192,6 +2183,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
 class _RemovalPreview {
   const _RemovalPreview({
     required this.blockedProjectName,
+    this.blockedProjectId,
     required this.agents,
     required this.soleSourceProjects,
   });
@@ -2234,12 +2226,19 @@ class _RemovalPreview {
     }
     return _RemovalPreview(
       blockedProjectName: blockedName as String?,
+      blockedProjectId: switch (blocked) {
+        {'projectId': final String id} => id,
+        _ => null,
+      },
       agents: agents,
       soleSourceProjects: projects,
     );
   }
 
   final String? blockedProjectName;
+
+  /// The project whose coordinator runs there, to call it what that project calls it.
+  final String? blockedProjectId;
   final List<_RemovalAgent> agents;
   final List<String> soleSourceProjects;
 }
@@ -2383,6 +2382,7 @@ class _Allowance {
     this.note,
     this.stale = false,
     this.struck,
+    this.notice,
   });
 
   final String engine, name, figure, detail;
@@ -2394,9 +2394,12 @@ class _Allowance {
   /// The share left, 0–100; null when there is no figure.
   final double? left;
 
-  /// Why new work does not go to this engine here (out of quota, or suspended after failed starts), shown on hover
+  /// Why new work does not go to this engine here (the server suspended it after failed starts), shown on hover
   /// with its name struck through; null when it takes work.
   final String? struck;
+
+  /// A fact said on hover, never struck: no quota left until it resets. Quota makes no machine unusable.
+  final String? notice;
 
   /// The last figure an offline machine read: shown muted, never as now.
   final bool stale;
@@ -2420,9 +2423,8 @@ class _Allowance {
   );
 }
 
-/// What hovering an engine with no quota left on a machine says (the route leaves it out the same way).
-const _noQuotaLeft =
-    'Not used for new work here: no quota left until it resets.';
+/// What hovering an engine with no quota left on a machine says: a fact, never a refusal.
+const _noQuotaLeft = 'No quota left until it resets.';
 
 /// The same leading icon/name and trailing status column as projects.
 class _MachineLine extends StatelessWidget {
@@ -2813,9 +2815,10 @@ class _MachineReadings extends StatelessWidget {
   Widget _allowance(_Allowance allowance) {
     final left = allowance.left;
     final struck = allowance.struck;
+    final said = struck ?? allowance.notice;
     return Tooltip(
       message: [
-        ?struck,
+        ?said,
         if (allowance.detail.isNotEmpty) allowance.detail,
       ].join('\n\n'),
       child: Semantics(
@@ -2823,7 +2826,7 @@ class _MachineReadings extends StatelessWidget {
             (left == null
                 ? '${allowance.name}: ${allowance.note}'
                 : '${allowance.name} ${allowance.figure} remaining') +
-            (struck == null ? '' : '. $struck'),
+            (said == null ? '' : '. $said'),
         excludeSemantics: true,
         child: Container(
           key: ValueKey(

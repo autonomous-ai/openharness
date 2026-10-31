@@ -417,13 +417,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       return remoteWorker(event.machineId, event.agentId).then((worker) => worker ? quiet() : shown())
     }
   }
-  /** A Builder or Reviewer the Swarm started here (its record's Swarm role, and an agent started it, as every Swarm start
-   *  is), or any agent on a Harness Team account. A Lead is the person's own agent leading the Swarm, and one the person
-   *  started by hand is theirs whatever its role: their failures reach the dial as before. */
+  /** An agent the Swarm started here, a Builder or Reviewer as it was (its record's Swarm role, and an agent started it, as
+   *  every Swarm start is), or any agent on a Harness Team account. The coordinator is the person's own agent leading the
+   *  Swarm, and one the person started by hand is theirs whatever its role: their failures reach the dial as before. */
   const swarmWorker = (event: DialEvent): boolean => {
     const session = event.machineId ? undefined : core.agents.byAgent(event.agentId)
     const role = session?.startedBy === 'agent' ? session.swarmSkill?.role : undefined
-    return role === 'dev' || role === 'review' || (!!event.machineId && teamMachines.has(event.machineId))
+    return role === 'agent' || (!!event.machineId && teamMachines.has(event.machineId))
   }
   /** Whether an agent on another machine is a Swarm's Builder or Reviewer, as the Swarm service read it last
    *  (superTabs/cards.ts `worker`). Asked once a minute at most per agent: a failing worker fails every 1-2 s. */

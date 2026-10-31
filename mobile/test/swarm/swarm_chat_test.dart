@@ -99,6 +99,7 @@ void main() {
     List<String>? audience,
     List<Map<String, dynamic>>? members,
     List<Map<String, dynamic>>? projects,
+    List<Map<String, dynamic>>? agents,
     Map<String, dynamic> g1 = const {},
   }) {
     // The Swarm's counts say a decision waits: what has its list read.
@@ -113,6 +114,7 @@ void main() {
     fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
       ...firstLoad(
         head: projects == null ? null : headData(projects: projects),
+        agents: agents,
         groups: [
           {
             ...groupData(
@@ -308,6 +310,54 @@ void main() {
     expect(find.text(time(1)), findsNothing, reason: 'a follow-up has none');
     expect(find.text(time(2)), findsOneWidget);
     expect(find.text('Then the build'), findsOneWidget);
+  });
+
+  testWidgets('each message shows the role its agent goes by; the '
+      'coordinator keeps its face whatever it is called', (tester) async {
+    await pump(
+      tester,
+      backend(
+        [
+          message('m1', 1, author: 'agent-lead', text: 'Plan for today'),
+          message('m2', 2, text: 'On it', minute: 1),
+        ],
+        agents: [
+          {
+            ...agent('agent-lead', name: 'Lead', displayName: 'River'),
+            'roleName': 'Coordinator',
+          },
+          {
+            ...agent('agent-builder', displayName: 'Nova'),
+            'roleName': 'Tester',
+          },
+        ],
+      ),
+    );
+
+    expect(
+      find.descendant(
+        of: key('swarm-message-m2'),
+        matching: find.text('Tester'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: key('swarm-message-m1'),
+        matching: find.text('Coordinator'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Dev'), findsNothing);
+    expect(find.text('PM'), findsNothing);
+    SwarmChatAvatar face(String id) => tester.widget<SwarmChatAvatar>(
+      find.descendant(
+        of: key('swarm-message-$id'),
+        matching: find.byType(SwarmChatAvatar),
+      ),
+    );
+    expect(face('m1').pm, isTrue);
+    expect(face('m2').pm, isFalse);
   });
 
   // Scholes, 10-29: his Buddy's "waiting at a prompt" line stayed after the

@@ -37,7 +37,7 @@ const age = (dir: string, ms: number) => {
 function setup(routes: (method: string, path: string, body: unknown) => Reply, sessions: Array<{ id: string; plain?: boolean }> = [{ id: 'harness-1' }]) {
   const dataDir = join(root, `data-${made++}`)
   const session = (s: { id: string; plain?: boolean }) =>
-    ({ agentId: s.id, swarmSkill: { role: 'dev', key: `harness-codex-${s.id}`, ...(s.plain ? {} : { github: true }) } }) as unknown as RegisteredSession
+    ({ agentId: s.id, swarmSkill: { role: 'agent', key: `harness-codex-${s.id}`, ...(s.plain ? {} : { github: true }) } }) as unknown as RegisteredSession
   const live = sessions.map(session)
   /** Sessions stopped but still on this machine, which may run again. */
   const stopped: RegisteredSession[] = []
