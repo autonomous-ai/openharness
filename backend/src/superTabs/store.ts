@@ -16,7 +16,7 @@ import { reactionCounts, type ReactionTarget } from './reactions.js'
 import { agentOpenDeliveries, compactedDelivery, deliveredCopies, messagesById, messagesPast, OPEN_DELIVERY, type MessageEdge, pageDeliveries, pageReactions, pageThreads, refreshReplies, type PageDelivery } from './pageReads.js'
 import { restoreDelivery } from './deliveryCompaction.js'
 import { threadSummaries } from './threads.js'
-import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, objectKeyFor, peekType, publicUrl, trimPrefix,
+import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, directUploads, errorCode, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, MAX_FORM_ATTACHMENT_BYTES, objectKeyFor, peekType, PENDING_UPLOAD_PURPOSE, publicUrl, TOO_LARGE_MESSAGE, trimPrefix, typeFromHead, UPLOAD_LINK_MS,
   type Attachment, type Attachments, type AttachmentStore, type AvatarStore } from './attachments.js'
 import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
@@ -1724,8 +1724,70 @@ export class SuperTabStore {
     if (!name.success || !mime.success) fail('INVALID_ATTACHMENT', 'Attach a file with a printable name and a content type.', 400)
     const key = await this.uploader(tabId, tx => this.poster(tx, user, tabId, conversationId, asAgentId).then(p => p.actor))
     const row = await this.keep(attachments.store, attachments.prefix, tabId, key, { name: name.data, conversationId },
-      async () => checkedType(mime.data, file.body), file.body, MAX_ATTACHMENT_BYTES)
+      async () => checkedType(mime.data, file.body), file.body, MAX_FORM_ATTACHMENT_BYTES)
     return { attachment: { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey) } satisfies Attachment }
+  }
+
+  /** A link to put one file of `size` bytes straight into the bucket, for a file too big for this server's form route. The
+   *  checks are upload()'s: the actor may post in this conversation and is under its hourly allowance, before any link is
+   *  signed. The row is written pending: no message can name it until completeUpload() has seen the stored bytes. An upload
+   *  never completed, like an unsent file, is an unused row the unsent-file sweep removes with its object (#2268). */
+  async uploadLink(user: AuthUser, tabId: string, conversationId: string, file: { name: string; mime: string; size: number }, asAgentId?: string) {
+    const attachments = this.attachments ?? fail('ATTACHMENTS_UNAVAILABLE', 'File attachments are not available on this server.', 503)
+    const direct = directUploads(attachments.store) ?? fail('ATTACHMENTS_UNAVAILABLE', 'Files this big cannot be sent to this server.', 503)
+    const name = attachmentName.transform(value => redactCredentials(value).text).safeParse(file.name), mime = attachmentMime.safeParse(file.mime)
+    if (!name.success || !mime.success) fail('INVALID_ATTACHMENT', 'Attach a file with a printable name and a content type.', 400)
+    if (!Number.isSafeInteger(file.size) || file.size < 1) fail('INVALID_ATTACHMENT', 'Name the file\'s size in bytes.', 400)
+    if (file.size > MAX_ATTACHMENT_BYTES) fail('ATTACHMENT_TOO_LARGE', TOO_LARGE_MESSAGE, 413)
+    const key = await this.uploader(tabId, tx => this.poster(tx, user, tabId, conversationId, asAgentId).then(p => p.actor))
+    const objectKey = objectKeyFor(attachments.prefix, tabId, name.data), expiresAt = this.now() + UPLOAD_LINK_MS
+    let link: { url: string; headers: Record<string, string> }
+    try { link = await direct.uploadLink(objectKey, { name: name.data }, file.size, expiresAt) } catch (error) {
+      // The signing error's text is never logged: it may carry the object's key, which is the file's link.
+      logger.error('super-tab upload link failed', { tabId, code: errorCode(error) })
+      fail('ATTACHMENTS_UNAVAILABLE', 'Could not prepare the upload just now. Try again.', 503)
+    }
+    const row = await this.db.superTabAttachment.create({ data: { id: randomBytes(12).toString('hex'), tabId, conversationId, actorKey: key,
+      name: name.data, mime: mime.data, size: file.size, objectKey, purpose: PENDING_UPLOAD_PURPOSE } })
+    return { upload: { id: row.id, url: link.url, method: 'PUT' as const, headers: link.headers, expiresAt } }
+  }
+
+  /** Makes a link's upload sendable once its bytes are in the bucket: only by the actor that asked for the link, while it may
+   *  still post in that conversation, and only when storage holds exactly the size it asked for. An image keeps its type only
+   *  when its first bytes agree. Answered again, the same way, after a lost answer. */
+  async completeUpload(user: AuthUser, tabId: string, uploadId: string, asAgentId?: string) {
+    const attachments = this.attachments ?? fail('ATTACHMENTS_UNAVAILABLE', 'File attachments are not available on this server.', 503)
+    const direct = directUploads(attachments.store) ?? fail('ATTACHMENTS_UNAVAILABLE', 'Files this big cannot be sent to this server.', 503)
+    // Someone else's upload, another Swarm's and one that never was answer alike, so nobody learns that it exists.
+    const unavailable = () => fail('ATTACHMENT_UNAVAILABLE', 'Attach this file again before sending it.', 400)
+    const row = await transaction(this.db, async tx => {
+      const { state } = await this.load(tx, user, tabId, {})
+      const actor = await this.actor(tx, user, state, asAgentId)
+      const found = await tx.superTabAttachment.findFirst({ where: { tabId, id: uploadId } })
+      if (!found || found.actorKey !== actorKey(actor) || found.usedBy || (found.purpose && found.purpose !== PENDING_UPLOAD_PURPOSE)) unavailable()
+      // Access may have gone while the bytes moved: the actor must still be able to post there.
+      await this.poster(tx, user, tabId, found!.conversationId, asAgentId)
+      return found!
+    })
+    const sendable = (mime: string) => ({ attachment: { id: row.id, name: row.name, mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey) } satisfies Attachment })
+    if (!row.purpose) return sendable(row.mime)
+    let stored: { size: number } | null, head: Buffer
+    try {
+      stored = await direct.stored(row.objectKey)
+      head = stored && stored.size === row.size ? await direct.head(row.objectKey, 16) : Buffer.alloc(0)
+    } catch (error) {
+      logger.error('super-tab upload check failed', { tabId, code: errorCode(error) })
+      fail('ATTACHMENTS_UNAVAILABLE', 'Could not check the file just now. Try again.', 503)
+    }
+    if (!stored) fail('UPLOAD_INCOMPLETE', 'The file did not finish uploading. Try again.', 409)
+    if (stored!.size !== row.size) {
+      // Storage enforces the size the link signed, so this is never expected; the object goes and the row stays for the sweep.
+      await direct.delete(row.objectKey).catch(() => {})
+      unavailable()
+    }
+    const mime = typeFromHead(row.mime, head!)
+    await this.db.superTabAttachment.updateMany({ where: { id: row.id, tabId, purpose: PENDING_UPLOAD_PURPOSE }, data: { purpose: { unset: true }, mime } })
+    return sendable(mime)
   }
 
   /** A picture for a person's or an agent's avatar (profile.ts): png, jpg or webp by its real bytes, at most 1 MB. Any
