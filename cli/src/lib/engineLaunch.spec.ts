@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
-import { constants, tmpdir } from 'node:os'
+import { constants, homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
 import {
@@ -29,6 +29,7 @@ import {
   permissionModeFlags,
   refusePermissionFlagIfUnsupported,
   engineUpdateCommand,
+  updateDetail,
   unsupportedLaunchModelFlag,
   resetCommandFlagSupportCache,
   engineFallbackPrelude,
@@ -1225,20 +1226,54 @@ describe('the permission gates', () => {
     expect(refusal?.detail).toContain('--auto')
   })
 
-  // The install lines are POSIX shell: on Windows only an npm line runs as written (in PowerShell too).
-  it('names an update command only where it runs as written', () => {
-    expect(engineUpdateCommand('opencode', 'darwin')).toBe('curl -fsSL https://opencode.ai/install | bash')
-    expect(engineUpdateCommand('opencode', 'win32')).toBeNull()
-    expect(engineUpdateCommand('codex', 'win32')).toBe('npm install -g @openai/codex')
-    expect(engineUpdateCommand('terminal', 'darwin')).toBeNull()
+  // The copy Harness runs is the first on the login shell's PATH. On the Mac Studio (2026-10-28) codex was a Homebrew cask
+  // and claude the native installer's: `npm install -g …` from the install line would have added a copy PATH never reaches.
+  describe('the update command for the copy Harness runs', () => {
+    const at = (path: string, link?: string) => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), 'harness-engine-copy-')))
+      dirs.push(root)
+      mkdirSync(join(root, path, '..'), { recursive: true })
+      writeFileSync(join(root, path), '')
+      if (!link) return { root, binary: join(root, path) }
+      mkdirSync(join(root, link, '..'), { recursive: true })
+      symlinkSync(join(root, path), join(root, link))
+      return { root, binary: join(root, link) }
+    }
+    it('updates an npm copy in its own prefix', () => {
+      const { root, binary } = at('prefix/lib/node_modules/@openai/codex/bin/codex.js', 'prefix/bin/codex')
+      expect(engineUpdateCommand('codex', binary, 'darwin')).toBe(`npm install -g --prefix ${join(root, 'prefix')} @openai/codex`)
+      const spaced = at('my prefix/lib/node_modules/opencode-ai/bin/opencode', 'my prefix/bin/opencode')
+      expect(engineUpdateCommand('opencode', spaced.binary, 'darwin')).toBe(`npm install -g --prefix '${join(spaced.root, 'my prefix')}' opencode-ai`)
+    })
+    it('updates a Homebrew cask or formula with brew', () => {
+      expect(engineUpdateCommand('codex', at('homebrew/Caskroom/codex/0.164.0/bin/codex', 'homebrew/bin/codex').binary, 'darwin'))
+        .toBe('brew upgrade --cask codex')
+      expect(engineUpdateCommand('opencode', at('homebrew/Cellar/opencode/1.2.0/bin/opencode', 'homebrew/bin/opencode').binary, 'darwin'))
+        .toBe('brew upgrade opencode')
+    })
+    it('updates a Windows npm shim in the folder it sits in', () => {
+      const { root } = at('npm/node_modules/@openai/codex/package.json')
+      writeFileSync(join(root, 'npm', 'codex.cmd'), '')
+      expect(engineUpdateCommand('codex', join(root, 'npm', 'codex.cmd'), 'win32')).toBe(`npm install -g --prefix ${join(root, 'npm')} @openai/codex`)
+    })
+    it('names no command for a copy it cannot tell the source of, or none at all', () => {
+      expect(engineUpdateCommand('claude', at('share/claude/versions/2.1.312', 'bin/claude').binary, 'darwin')).toBeNull()
+      expect(engineUpdateCommand('codex', null, 'darwin')).toBeNull()
+    })
   })
 
-  // codex_cli_too_old, 2–4 a day: "Update opencode" did not say how.
-  it('gives the command that updates the engine', async () => {
+  // codex_cli_too_old, 2–4 a day: "Update opencode" did not say how, or which copy.
+  it('names the copy to update when it cannot tell how it was installed', async () => {
     const shell = withFakeOpencode('--auto-update')
     const refusal = await refusePermissionFlagIfUnsupported('opencode', { permissionMode: 'auto' }, shell)
-    expect(refusal?.detail).toBe('The opencode CLI on this machine does not support --auto, which Harness uses for this permission mode. '
-      + 'Update opencode by running curl -fsSL https://opencode.ai/install | bash, then try again, or choose Ask permissions for this harness.')
+    expect(refusal?.detail).toBe('The OpenCode CLI on this machine does not support --auto, which Harness uses for this permission mode. '
+      + `Update OpenCode at ${join(process.env.HARNESS_ENGINE_TEST_PATH!, 'opencode')} and try again, or choose Ask permissions for this harness.`)
+  })
+
+  it('writes a copy in the home folder with ~, so the refusal does not show the account name', () => {
+    expect(updateDetail('codex', null, join(homedir(), '.local/bin/codex'))).toBe(`Update Codex at ~/.local/bin/codex and try again`)
+    expect(updateDetail('claude', 'npm install -g @anthropic-ai/claude-code', null)).toBe('Update Claude Code by running npm install -g @anthropic-ai/claude-code, then try again')
+    expect(updateDetail('codex', null, null)).toBe('Update Codex and try again')
   })
 
   it('lets a create through when the flag is there, and when there is no flag to check', async () => {
@@ -1266,7 +1301,7 @@ describe('the permission gates', () => {
     }
     // A create in Ask is told to update, never to choose the Ask it chose.
     const refusal = await refusePermissionFlagIfUnsupported('claude', { permissionMode: 'ask' }, shell)
-    expect(refusal?.detail).toContain('Update claude by running npm install -g @anthropic-ai/claude-code, then try again.')
+    expect(refusal?.detail).toContain(`Update Claude Code at ${join(binDir, 'claude')} and try again.`)
     expect(refusal?.detail).not.toContain('choose Ask')
   })
 
