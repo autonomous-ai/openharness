@@ -17,7 +17,6 @@ import 'dialog_scope.dart';
 import 'identity.dart';
 import 'model.dart';
 import 'profile_sheet.dart';
-import 'project_sidebar.dart' show kProductManagersChannel;
 
 const _gap = grid.AppDesktop.controlGap;
 
@@ -219,8 +218,6 @@ bool _readable(SuperTabController c, SuperTabConversation? g) {
   if (c.accessRevoked || g == null) return false;
   if (c.hiddenByBuddies(g)) return false;
   if (g.isBuddyChat) return g.buddyOwnerId == c.accountId;
-  // Match the sidebar: the server returned this channel for this reader.
-  if (g.id == c.snapshot?.leadsConversationId) return true;
   if (g.audience != null && !g.audience!.contains(c.accountId)) return false;
   return c.snapshot?.projects.any((p) => p.id == g.projectId) == true;
 }
@@ -251,14 +248,8 @@ List<_Destination> _destinations(SuperTabController c) {
       if (_readable(c, g))
         _Destination(
           'conversation:${g.id}',
-          g.id == s.leadsConversationId
-              ? kProductManagersChannel
-              : s.isProjectLead(g.id)
-              ? projects[g.projectId]!.name
-              : g.label,
-          g.id == s.leadsConversationId
-              ? 'Swarm chat'
-              : g.isBuddyChat
+          s.isProjectLead(g.id) ? projects[g.projectId]!.name : g.label,
+          g.isBuddyChat
               ? 'Your Buddy'
               : s.isProjectLead(g.id)
               ? 'Project chat'

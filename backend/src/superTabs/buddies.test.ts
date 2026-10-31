@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { storeOldLeads } from './leads.test-support.js'
 import { CODEX_BUDDY_REFUSAL } from './buddyContract.js'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, stableId, visibleState, type Actor, type Conversation } from './model.js'
@@ -82,8 +83,10 @@ describe('what a Buddy reads', () => {
     expect(canReadGroup(f.state, buddy, group(f, f.pmChat))).toBe(false)
     expect(canReadGroup(f.state, buddy, group(f, f.web.conversationId))).toBe(false)
     expect(canReadGroup(f.state, buddy, group(f, web))).toBe(false)
-    expect(canReadGroup(f.state, peer, group(f, f.state.leadsConversationId!))).toBe(true)
-    expect(canReadGroup(f.state, buddy, group(f, f.state.leadsConversationId!))).toBe(false)
+    // Removed for everyone (model.ts leadsRemoved): an older Swarm's stored one is nobody's, its person's neither.
+    const leads = storeOldLeads(f.state)
+    expect(canReadGroup(f.state, peer, group(f, leads))).toBe(false)
+    expect(canReadGroup(f.state, buddy, group(f, leads))).toBe(false)
     expect(visibleState(f.state, buddy).conversations.map(c => c.id).sort()).toEqual([f.app.conversationId, f.chat, f.group].sort())
   })
 

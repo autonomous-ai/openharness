@@ -87,8 +87,9 @@ describe('built-in Swarm skills', () => {
   const sha = (text: string) => createHash('sha256').update(text).digest('hex')
   // The approved terminal line (spec/2026-10-23-lead-sees-agent-terminal.md), the Lead's alone, in both modes.
   const terminal = '- When a worker seems stuck, read its terminal; answer prompts within its task; ask the owner before approving anything risky.\n'
-  // The approved overlap line (spec/2026-10-23-leads-see-and-talk.md, call 6), the Lead's alone, in both modes.
-  const overlap = '- Before assigning, look at other projects\' active work; if your task touches the same code, say so in the Leads conversation and agree an order first.\n'
+  // The approved overlap line (spec/2026-10-23-leads-see-and-talk.md, call 6), the Lead's alone, in both modes; the Leads
+  // conversation it named is removed (Dee, 10-31), so the Lead says so in its own project chat.
+  const overlap = '- Before assigning, look at other projects\' active work; if your task touches the same code, say so in your project chat and let that work land first.\n'
   // The Local models line (owner, 2026-10-23: the Lead considers Builders on local models; docs/plans/2026-10-23-swarm-local-models.md).
   const local = '- Local models: when the Swarm serves one (a member\'s model, a shared API, a model shared with a member), the route may pick it for low-difficulty, well-specified work; it costs no subscription. Set "local":true in the route only when a person asks for a local model. When a person names a model, set "model" to their words ("deepseek 4.1 flash"): the route then offers that model alone. Start the pick with the gridModel and gridName the route gives, never a model or effort.\n'
   const localDefault = '- Local models: the route may pick one for low-difficulty, well-specified work; set "local":true only when a person asks for one, set "model" to a model a person names, and start it with the route\'s gridModel and gridName.\n'
@@ -323,6 +324,15 @@ describe('built-in Swarm skills', () => {
     expect(orchestration).toContain(`Never pass your chat history; put everything needed in the brief.\n${overlap}\n## 7. Run the work`)
     const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
     expect(plain).toContain(`- The brief is all a Builder gets; never rely on chat history.\n${overlap}\n## 4. Keep work moving`)
+  })
+  // Dee, 10-31: the Leads (Product Managers) conversation is removed; no skill, in any role or mode, sends an agent there.
+  it('points no role at the removed Leads conversation, in either mode', () => {
+    for (const role of ['lead', 'dev', 'review', 'buddy'] as const) {
+      for (const mode of ['orchestration', 'default'] as const) {
+        expect(readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode }, folderOnly).file, 'utf8')).not.toMatch(/Leads conversation/)
+      }
+    }
+    expect(SWARM_TOOLS_SKILL).not.toMatch(/Leads conversation/)
   })
   it('adds the plan line right after each Lead skill\'s first routing rule', () => {
     const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')

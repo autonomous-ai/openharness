@@ -4,6 +4,7 @@ import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { stableId } from '../src/superTabs/model.js'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
@@ -267,7 +268,7 @@ describe('the nightly routing reflection', () => {
       week: new Date(Date.UTC(2026, 9, 26)), updatedAt: new Date(f.clock.now) } })
     // Attempts in a private chat and in the Leads conversation of this project's Swarm.
     const chat = String((await f.execute({ type: 'buddy.chat', projectId: 'lead' }, host)).result.conversationId)
-    const leads = (await f.store.read(owner, f.tab)).state.leadsConversationId!
+    const leads = stableId(f.tab, 'leads')
     for (const conversationId of [chat, leads, 'lead', hidden.conversationId]) await f.seed(conversationId, { at: f.clock.now - HOUR })
     f.clock.now = NIGHT
     const pass = await reflectNightly(db, f.store, NIGHT)

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { storeOldLeads } from './leads.test-support.js'
 import type { Prisma } from '@prisma/client'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
@@ -83,7 +84,7 @@ describe('asking a person for decisions', () => {
     expect(asked.decisions).toEqual([expect.objectContaining({ askerAgentId: s.worker, conversationId: s.group })])
     const other = s.run({ type: 'project.create', name: 'Other', visibility: 'public', brief: '' }).result as { projectId: string }
     const elsewhere = s.run({ type: 'conversation.create', projectId: other.projectId, title: 'Elsewhere', brief: '', checks: [] }).result.conversationId as string
-    const leads = s.state.conversations.find(c => c.id === s.state.leadsConversationId)!
+    const state = structuredClone(s.state), leadsId = storeOldLeads(state), leads = state.conversations.find(c => c.id === leadsId)!
     for (const group of [leads, s.state.conversations.find(c => c.id === elsewhere)!]) {
       expect(() => checkAsker(s.state, asAgent(s.worker), group)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
     }

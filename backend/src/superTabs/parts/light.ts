@@ -80,8 +80,9 @@ const toPart = <T>(kind: PartKind, row: PartRow): Part<T> => ({ kind, key: row.k
 export async function loadDeliveryParts(tx: Transaction, tabId: string, groupIds: string[], agentIds: string[], nativeAgentId?: string): Promise<SwarmParts> {
   const head = await tx.swarmHead.findUnique({ where: { id: partId(tabId, 'head') } })
   if (!head) throw Object.assign(new Error(`Swarm ${tabId} has no parts`), { code: 'PARTS_MISSING' })
-  const { projects, leadsConversationId } = head.data as unknown as HeadData
-  const keys = [...projects ? projects.map(p => p.leadConversationId) : ['lead'], leadsConversationId ?? '']
+  const { projects } = head.data as unknown as HeadData
+  // The removed Leads conversation is no longer read (model.ts leadsRemoved).
+  const keys = projects ? projects.map(p => p.leadConversationId) : ['lead']
   const [members, agents] = await Promise.all([
     tx.swarmMember.findMany({ where: { tabId, deleted: false } }),
     tx.swarmAgent.findMany({ where: { tabId, deleted: false } }),
@@ -127,10 +128,10 @@ export async function loadLight(tx: Transaction, tabId: string,
   if (!head) throw Object.assign(new Error(`Swarm ${tabId} has no parts`), { code: 'PARTS_MISSING' })
   const live = { tabId, deleted: false }
   const starts = (await delegate(tx, 'start').findMany({ where: opts.includeRecentStarts ? live : { ...live, finishedAt: null } })).map(row => toPart<AgentStart>('start', row))
-  const { projects, leadsConversationId, invitations } = head.data as unknown as HeadData
+  const { projects, invitations } = head.data as unknown as HeadData
   // Besides the Lead conversations and running work, the conversations a start or an invitation names: a reader sees
   // those only alongside their conversation (model.ts visibleState).
-  const working = [...projects ? projects.map(p => p.leadConversationId) : ['lead'], leadsConversationId ?? '',
+  const working = [...projects ? projects.map(p => p.leadConversationId) : ['lead'],
     ...starts.map(s => s.data!.request.conversationId), ...invitations.map(i => i.conversationId)]
   // One read per index, never one $or over several: Mongo plans an $or again whenever its plan cache misses (parts/indexed.ts).
   const keys = [...opts.groups === 'working' ? working : [], ...opts.groupIds ?? []]

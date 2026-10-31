@@ -1,10 +1,10 @@
 import { admitMachineStart, BUDDY_WINDOWS_REFUSAL, cleanupOverdue, dropIdleBuddyMachines, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, machineSlots, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
-import { assignAgentDisplayNames } from './agentNames.js'
+import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { keepUsernames, setUsername, swarmUsernames } from './usernames.js'
 import { z } from 'zod'
 import { tokensByModelSchema } from './costs/tokens.js'
 import {
-  activeWork, actorKey, agent, appendPullRequestUrls, author, conversation, crossProjectActive, fail, isLeads, person, stableId, syncLeads, numberConversations, nextConversationNumber, renderWorkTask,
+  activeWork, actorKey, agent, appendPullRequestUrls, author, conversation, crossProjectActive, fail, isLeads, person, stableId, numberConversations, nextConversationNumber, renderWorkTask,
   finishWorker, seenMachineIds, swarmGridName, visibleState, AGENT_ONLY, STATUS_LABELS, forRecipients,
   type Actor, type AgentConfiguration, type AgentStart, type AgentStartRequest, type BuddySessionEntry, type WorkTask, type Agent, type Author, type Check, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
@@ -532,8 +532,7 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   if (buddy) requireBuddyCommand(buddy, command, state.conversations)
   // An invitation's group is only where the person lands, and invite.create replaces a deleted one (inviteLanding).
   if ('conversationId' in command && command.type !== 'invite.create') {
-    const group = readConversation(state, actor, command.conversationId)
-    if (isLeads(group) && command.type !== 'message.send') groupProject(state, group)
+    readConversation(state, actor, command.conversationId)
   }
   if ('projectId' in command && command.projectId) readProject(state, actor, command.projectId)
   if ('agentId' in command) readAgent(state, actor, command.agentId)
@@ -636,7 +635,6 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   const removed: CredentialKind[] = []
   const command = withoutCredentials(commandSchema.parse(input), removed)
   const state = cloneData(original)
-  syncLeads(state)
   numberConversations(state)
   placeRules(state)
   const ended = expireRemovals(state, context.now)
@@ -770,10 +768,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   /** Any other row the system writes in the actor's name. Without a source, a notice written as the owner read as the owner
    * asking, and a Lead could quote it to change rules (review of #1594). Only `message.send` and an initial message stay plain. */
   const SYSTEM_ROW = { kind: 'system' }
-  /** Agent bookkeeping, a routing line or an agent joined or ready: no one's in the project chat or the Leads chat, which
-   *  carry only what people read or decide on (the Lead's ruling, 2026-10-29); a task's chat keeps it as its record. */
+  /** Agent bookkeeping, a routing line or an agent joined or ready: no one's in the project chat, which carries only what
+   *  people read or decide on (the Lead's ruling, 2026-10-29); a task's chat keeps it as its record. */
   const bookkeeping = (conversationId: string, source: Record<string, unknown>) =>
-    conversationId === state.leadsConversationId || projectsOf(state).some(p => p.leadConversationId === conversationId) ? forRecipients(source) : source
+    projectsOf(state).some(p => p.leadConversationId === conversationId) ? forRecipients(source) : source
   const who = sender.kind === 'person' ? sender.name.split('@')[0]! : sender.name
   /** [project], when the actor is its coordinator: the one agent that keeps its notes and names itself (design, PM notes). */
   const coordinatorOf = (project: SwarmProject, why = 'Of its agents, only this project\'s coordinator does this.'): SwarmProject => {
@@ -1058,7 +1056,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   }
 
   /** Projects in one Swarm changed the same code without knowing it (2026-10-23). When a task is created, defined or assigned,
-   *  its Leads hear once per pair of tasks that it owns code another shared project's active task owns too. */
+   *  its Leads hear once per pair of tasks that it owns code another shared project's active task owns too: each Lead in its
+   *  own project chat, as a notice only it reads (the Leads conversation is removed, model.ts leadsRemoved). */
   const alertOverlaps = (group: Conversation) => {
     const project = groupProject(state, group)
     const mine = (group.task?.owns ?? []).flatMap(entry => ownedPath(entry) ?? [])
@@ -1075,11 +1074,16 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (!shared.length || state.overlapAlerts?.includes(pair)) continue
       (state.overlapAlerts ??= []).push(pair)
       const ours = leadOf(project), their = leadOf(theirs)
-      effects.messages.push({ id: stableId(operationId, 'overlap', pair), conversationId: state.leadsConversationId!, author: sender,
-        text: `"${group.title}" (${project.name}, ${named(ours)}) and "${other.title}" (${theirs.name}, ${named(their)}) both change `
-          + `${shared.join(', ')}.`,
-        replyTo: null, recipients: [ours, their].flatMap(a => a && !(actor.kind === 'agent' && a.id === actor.agentId) ? [a.id] : []),
-        source: { kind: 'overlap', conversationIds: [group.id, other.id] } })
+      const text = `"${group.title}" (${project.name}, ${named(ours)}) and "${other.title}" (${theirs.name}, ${named(their)}) both change `
+        + `${shared.join(', ')}.`
+      // Written as that Lead, like its other notices (liveness.ts work-stalled): a sender from another project reads none of it.
+      for (const [chat, lead] of [[project, ours], [theirs, their]] as const) {
+        if (!lead || actor.kind === 'agent' && lead.id === actor.agentId) continue
+        effects.messages.push({ id: stableId(operationId, 'overlap', pair, chat.id), conversationId: chat.leadConversationId,
+          author: { kind: 'agent', id: lead.id, name: lead.name, displayName: agentDisplayName(state.agents, lead.id), membershipGeneration: lead.membershipGeneration },
+          text, replyTo: null,
+          recipients: [lead.id], source: { kind: 'overlap', conversationIds: [group.id, other.id] } })
+      }
     }
   }
 
@@ -2263,10 +2267,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // A Buddy chat has no Lead: its owner talks to its Buddy.
       const automatic = actor.kind === 'person' ? (isBuddyChat(group) ? (session?.inSession ? session.to : mainBuddyOf(state, group)?.id ?? null)
         : replyAgent && group.agentIds.includes(replyAgent) ? replyAgent : group.leadId) : agentRecipient
-      // In the Leads conversation everything posted reaches every other Lead; naming some only adds emphasis.
-      const everyLead = isLeads(group) ? group.agentIds.filter(id => actor.kind !== 'agent' || id !== actor.agentId) : []
-      const recipients = [...new Set([...addressed, ...everyLead, ...memberToLead,
-        ...(addressed.length || everyLead.length || !automatic ? [] : [automatic])])]
+      const recipients = [...new Set([...addressed, ...memberToLead, ...(addressed.length || !automatic ? [] : [automatic])])]
       for (const id of recipients) {
         const target = agent(state, id)
         // In a Buddy chat a session hears its own thread alone, and the main Buddy none of it.
@@ -2658,7 +2659,6 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     if (!acknowledged && !state.agents.some(a => a.id === target.id)) fail('STOP_REQUESTED', 'Wait for the execution host to finish stopping its workers before withdrawing them.')
   }
   dropIdleBuddyMachines(state, context.now)
-  syncLeads(state)
   if (context.registrations) requireSingleRegistration(original, state, context.registrations)
   markConfidential(state)
   assignAgentDisplayNames(state.agents)

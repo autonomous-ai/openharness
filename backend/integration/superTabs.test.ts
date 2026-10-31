@@ -608,7 +608,7 @@ describe('deleting abandoned swarm projects', () => {
     expect(await run(tab, command, owner, undefined, deleteId)).toEqual(response.json().data)
     const state = (await store.read(owner, tab)).state
     expect(state.projects!.map(p => p.id)).toEqual(['lead'])
-    expect(state.conversations.map(c => c.id)).toEqual(['lead', state.leadsConversationId])
+    expect(state.conversations.map(c => c.id)).toEqual(['lead'])
     // An invitation is to the Swarm: it moves to the project that is left rather than disappearing.
     expect(state.invitations.map(i => [i.email, i.conversationId])).toEqual([['abandoned@example.com', 'lead']])
     for (const id of [conversationId, group]) {
@@ -629,8 +629,8 @@ describe('deleting abandoned swarm projects', () => {
     await run(tab, { type: 'project.delete', projectId: 'lead' })
     const empty = (await store.read(owner, tab)).state
     expect(empty.projects).toEqual([])
-    // Only the Swarm-wide Leads conversation is left.
-    expect(empty.conversations.map(c => c.kind)).toEqual(['leads'])
+    // No conversation is left: a Swarm has no Swarm-wide Leads conversation now (model.ts leadsRemoved).
+    expect(empty.conversations).toEqual([])
     expect(empty.agents).toEqual([])
     expect(empty.people).toHaveLength(1)
     const projectId = String((await run(tab, { type: 'project.create', name: 'Fresh project', visibility: 'public', brief: '' })).result.projectId)
@@ -2431,7 +2431,7 @@ it('allocates workgroup numbers transactionally and replays the same number afte
   const results = await Promise.all(operations.map(id => run(tab, command, owner, undefined, id)))
   expect(results.map(r => r.result.number).sort()).toEqual([1, 2, 3])
   expect((await run(tab, command, owner, undefined, operations[0])).result).toEqual(results[0]!.result)
-  expect((await store.read(owner, tab)).state.conversations.map(c => c.number)).toEqual([undefined, 1, 2, 3, undefined])
+  expect((await store.read(owner, tab)).state.conversations.map(c => c.number)).toEqual([undefined, 1, 2, 3])
 })
 
 describe('Super Tab chat attachments', () => {
@@ -3094,41 +3094,52 @@ describe('the Lead reads and types in an agent terminal', () => {
   })
 })
 
-describe('Leads conversation', () => {
-  it('appears in an old Swarm, lets people and Leads post, and delivers only to the other Leads', async () => {
+describe('Product Managers chat, removed (Dee, 2026-10-31)', () => {
+  it('is never made, and an old Swarm\'s stored one reaches nobody, takes no post and keeps its history', async () => {
     const { tab, lead } = await fixture()
-    // A Swarm stored before the Leads conversation existed.
-    const stored = await storedState(tab)
-    const leads = stored.leadsConversationId!
-    delete stored.leadsConversationId
-    stored.conversations = stored.conversations.filter(c => c.kind !== 'leads')
-    await saveState(tab, stored)
-    // Clients find it without a project: by the tab's id for it and its kind.
-    const read = (await store.read(owner, tab)).state
-    expect(read.leadsConversationId).toBe(leads)
-    const found = read.conversations.find(c => c.id === leads)!
-    expect(found.kind).toBe('leads')
-    expect(found).not.toHaveProperty('projectId')
-    expect((await store.messages(owner, tab, leads, {})).messages).toEqual([])
-
+    expect((await storedState(tab)).conversations.filter(c => c.kind === 'leads')).toEqual([])
     const docs = String((await run(tab, { type: 'project.create', name: 'Docs', visibility: 'public', brief: '' })).result.conversationId)
     const docsLead = (await run(tab, { type: 'agent.add', conversationId: docs, machineId: 'test-host', harnessId: randomUUID(), name: 'Docs Lead',
       configuration: config, lead: true })).result.agentId as string
     const worker = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(), name: 'Worker',
       configuration: config, lead: false })).result.agentId as string
-    const post = (text: string, user = owner, asAgentId?: string) => store.execute(user, tab, { operationId: randomUUID(),
-      command: { type: 'message.send', conversationId: leads, text, replyTo: null, recipientIds: [] } }, asAgentId)
-    await post('Who goes first?')
-    const waiting = async (agentId: string) => (await store.deliveries(host, tab, agentId)).filter(d => d.conversationId === leads).length
-    expect([await waiting(lead), await waiting(docsLead), await waiting(worker)]).toEqual([1, 1, 0])
-    await post('Pilot goes first.', host, lead)
-    expect([await waiting(lead), await waiting(docsLead)]).toEqual([1, 2])
-    await expect(post('Me too', host, worker)).rejects.toMatchObject({ code: 'NOT_FOUND' })
-    await expect(store.messages(host, tab, leads, {}, worker)).rejects.toMatchObject({ code: 'NOT_FOUND' })
-    expect((await store.messages(owner, tab, leads, {})).messages.map(m => m.text)).toEqual(['Who goes first?', 'Pilot goes first.'])
+    // A Swarm stored before the removal: its Leads conversation, a message posted there and a delivery still queued for a Lead.
+    const leads = stableId(tab, 'leads')
+    const stored = await storedState(tab)
+    stored.leadsConversationId = leads
+    stored.conversations.push({ id: leads, kind: 'leads', title: 'Leads', leadId: null, agentIds: [lead, docsLead], archived: false, brief: '',
+      checks: [], assignment: null, lastMessageSequence: 1 })
+    await saveState(tab, stored)
+    const said = String((await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Status?', replyTo: null, recipientIds: [] })).result.messageId)
+    const template = await db.superTabMessage.findUniqueOrThrow({ where: { id: said } })
+    const old = await db.superTabMessage.create({ data: { ...template, id: `m-${randomUUID()}`, conversationId: leads, sequence: 1, text: 'Who goes first?',
+      thread: null, author: template.author as never, source: undefined } })
+    const delivery = await db.superTabDelivery.findFirstOrThrow({ where: { tabId: tab, messageId: said } })
+    const { id: _id, createdAt: _created, updatedAt: _updated, ...fields } = delivery
+    const planted = await db.superTabDelivery.create({ data: { ...fields, id: randomUUID().replaceAll('-', '').slice(0, 24), conversationId: leads,
+      messageId: old.id, agentId: docsLead, status: 'queued', claimId: null } })
+
+    for (const [user, asAgentId] of [[owner, undefined], [host, lead], [host, docsLead], [host, worker]] as const) {
+      const state = (await store.read(user, tab, asAgentId)).state
+      expect(state.conversations.filter(c => c.id === leads || c.kind === 'leads')).toEqual([])
+      expect(state).not.toHaveProperty('leadsConversationId')
+      await expect(store.messages(user, tab, leads, {}, asAgentId)).rejects.toMatchObject({ code: 'LEADS_CONVERSATION_REMOVED' })
+      await expect(store.execute(user, tab, { operationId: randomUUID(), command: { type: 'message.send', conversationId: leads, text: 'Who goes first?',
+        replyTo: null, recipientIds: [] } }, asAgentId)).rejects.toMatchObject({ code: 'LEADS_CONVERSATION_REMOVED',
+        message: 'The Product Managers chat was removed. Post in your project\'s chat instead.' })
+    }
+    expect((await store.deliveries(host, tab, docsLead)).map(d => d.id)).not.toContain(planted.id)
+    await expect(store.delivery(host, tab, docsLead, planted.id, { type: 'claim', claimId: randomUUID() })).rejects.toThrow('no longer authorized')
+    // Nothing of it is deleted: its record and its message stay as stored through later writes.
+    await run(tab, { type: 'tab.rename', name: 'Renamed' })
+    expect((await storedState(tab)).conversations.find(c => c.id === leads)).toMatchObject({ kind: 'leads', agentIds: [lead, docsLead] })
+    expect((await storedState(tab)).leadsConversationId).toBe(leads)
+    expect(await db.superTabMessage.findUnique({ where: { id: old.id } })).toMatchObject({ text: 'Who goes first?', conversationId: leads })
+    // Project chats work as before.
+    expect((await store.messages(owner, tab, 'lead', {})).messages.map(m => m.text)).toContain('Status?')
   })
 
-  it('shows Leads the other projects\' work and posts one overlap alert for both Leads', async () => {
+  it('shows Leads the other projects\' work and tells the other Lead of an overlap in its own project chat alone', async () => {
     const { tab, lead } = await fixture()
     const docs = String((await run(tab, { type: 'project.create', name: 'Docs', visibility: 'public', brief: '' })).result.projectId)
     const docsChat = (await store.read(owner, tab)).state.projects!.find(p => p.id === docs)!.leadConversationId
@@ -3148,14 +3159,14 @@ describe('Leads conversation', () => {
     const filter = String((await run(tab, { type: 'conversation.create', title: 'Agents filter', task: task(['desktop/lib/super_tabs/roster.dart']), checks },
       host, lead)).result.conversationId)
     await run(tab, { type: 'work.define', conversationId: filter, task: task(['desktop/lib/super_tabs']), checks }, host, lead)
-    const leads = (await store.read(owner, tab)).state.leadsConversationId!
-    const alerts = await db.superTabMessage.findMany({ where: { tabId: tab, conversationId: leads } })
-    expect(alerts).toEqual([expect.objectContaining({ source: { kind: 'overlap', conversationIds: [filter, roster] }, recipientIds: [docsLead],
-      text: expect.stringContaining('"Agents filter" (Pilot') })])
-    expect((await store.deliveries(host, tab, docsLead)).filter(d => d.conversationId === leads)).toHaveLength(1)
-    // The two Leads' to settle (Ken, 2026-10-29): the Lead it reaches reads it; people in the Leads chat do not.
-    expect((await store.messages(host, tab, leads, {}, docsLead)).messages.map(m => m.id)).toContain(alerts[0]!.id)
-    expect((await store.messages(owner, tab, leads, {})).messages.map(m => m.id)).not.toContain(alerts[0]!.id)
+    const alerts = await db.superTabMessage.findMany({ where: { tabId: tab, source: { equals: { kind: 'overlap', conversationIds: [filter, roster] } } } })
+    // The Lead that made the overlap knows it; the other project's Lead hears it in its own project chat, written as itself.
+    expect(alerts).toEqual([expect.objectContaining({ conversationId: docsChat, recipientIds: [docsLead],
+      author: expect.objectContaining({ id: docsLead }), text: expect.stringContaining('"Agents filter" (Pilot') })])
+    expect((await store.deliveries(host, tab, docsLead)).filter(d => d.messageId === alerts[0]!.id)).toHaveLength(1)
+    // The two Leads' to settle (Ken, 2026-10-29): the Lead it reaches reads it; people in the project chat do not.
+    expect((await store.messages(host, tab, docsChat, {}, docsLead)).messages.map(m => m.id)).toContain(alerts[0]!.id)
+    expect((await store.messages(owner, tab, docsChat, {})).messages.map(m => m.id)).not.toContain(alerts[0]!.id)
   })
 })
 
@@ -3175,7 +3186,7 @@ describe('a Swarm written by a later release', () => {
     stored.conversations.push(later)
     await saveState(tab, stored as unknown as SuperTabState)
 
-    expect((await store.read(owner, tab)).state.conversations.map(c => c.id)).toEqual([chat.id, stored.leadsConversationId])
+    expect((await store.read(owner, tab)).state.conversations.map(c => c.id)).toEqual([chat.id])
     await run(tab, { type: 'message.send', conversationId: chat.id as string, text: 'Still writable', replyTo: null, recipientIds: [] })
     expect((await store.messages(owner, tab, chat.id as string, {})).messages.map(m => m.text)).toEqual(['Still writable'])
     await expect(store.messages(owner, tab, 'later', {})).rejects.toMatchObject({ code: 'NOT_FOUND' })
