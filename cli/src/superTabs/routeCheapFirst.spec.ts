@@ -1,7 +1,7 @@
 // cli/src/superTabs/routeCheapFirst.spec.ts
 import { describe, expect, it, vi } from 'vitest'
 import { choose, decide, recordOf, type Assessment, type Catalog, type Probe } from './route.js'
-import { makePlugins, MAKER_TIMEOUT_MS } from './routePlugins.js'
+import { makePlugins, MAKER_TIMEOUT_MS, ROUTE_PLUGIN_MAKERS } from './routePlugins.js'
 import { CHEAP_FIRST, CHEAP_FIRST_MAKER, CHEAP_FIRST_MAKERS, cheapFirst, cheapTaskOf, EARLIER_UNREADABLE, GRID_KINDS, GRID_KINDS_ONLY, GRID_LIMITS, GRID_LIMITS_MAKER, gridLimits, HISTORY_WAIT_MS, FIRST_ATTEMPT_ONLY, GRID_FIRST, MAX_OWNED, NEVER_REVIEWS, NEVER_SECURITY, type CheapTask } from './routeCheapFirst.js'
 
 const NOW = 1_000_000_000, H = 3_600_000, D = 86_400_000
@@ -169,6 +169,12 @@ describe('what the route reads of a task before it is ranked', () => {
 })
 
 describe('the maker', () => {
+  it('is in the route\'s makers list, the guard before the ranking', () => {
+    const at = CHEAP_FIRST_MAKERS.map(m => ROUTE_PLUGIN_MAKERS.indexOf(m))
+    expect(at.every(i => i >= 0)).toBe(true)
+    expect(at[0]).toBeLessThan(at[1]!)
+  })
+
   const read = (conversations: unknown[] = [{ id: 'g1', task: { owns: ['docs/a.md'] } }]) => ({ tab: { state: { conversations, agents: [], starts: [] } } })
   const make = (history: Promise<Record<string, unknown> | null>, tab = read()) =>
     CHEAP_FIRST_MAKER.make({ conversationId: 'g1', assessment: a(), read: tab, catalog, history, request: async () => ({}) })
