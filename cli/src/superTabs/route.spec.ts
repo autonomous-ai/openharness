@@ -1,5 +1,5 @@
 // cli/src/superTabs/route.spec.ts
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { API_BUILDERS, catalogFrom, catalogRow, choose, decide, gridStrength, LOCAL_NONE, OTHER_REPOSITORY, parseAssessment, quotaOf2, recordOf, repoMatch, repositoryKey, strengthOf,
   type Assessment, type Catalog, type Commitment, type MemberFrame, type Probe, type RoutePlugin, type TaskFolder } from './route.js'
 
@@ -699,6 +699,8 @@ describe('ranking by facts', () => {
       grid: { strength: 1, models: [{ model: 'kimi k3', strength: 2 }] } })
     // Nothing readable is an empty catalog, not a throw.
     expect(catalogFrom({})).toEqual({ models: [], grid: { strength: 1, models: [] } })
+    // A served grid with no strength of its own counts as 1; a grid row without a strength is dropped.
+    expect(catalogFrom({ catalog: { models: [], grid: { models: [{ model: 'kimi k3' }, { strength: 2 }] } } }).grid).toEqual({ strength: 1, models: [] })
   })
 
   it('rates a model by its exact row, its other effort, the engine\'s default row when launched on it, else unrated', () => {
@@ -819,17 +821,62 @@ describe('routing plug-ins', () => {
     const none = route([on('a')], [tooSmall])
     expect(none).toEqual({ error: 'NO_CANDIDATE', excluded: [{ title: 'New agent · Claude opus high · a', reason: 'Machine fit: has 1 GB free, the task needs 4 GB', machine: 'a' }] })
   })
+  // Lead, 10-31: a plug-in can never bring back a choice the route rules out. The route's filters are facts of a machine and
+  // engine (offline, engine signed out, tools, devices, a stalled machine), carried as refusals on its probes, and choose()'s own
+  // rules (catalog rows offered, a named or local model, the repository); the owner's rules and review limits are no longer the
+  // route's (project instructions, phase 4).
+  it('a plug-in cannot bring back a choice the route rules out: an added candidate stands on a machine and engine the route probed, with their refusals and notes', () => {
+    const given = [on('a', { notes: ['Its last task here was lost.'] }), on('b', { refusals: ['Machine is offline.'] }),
+      on('k', { kind: 'member', agentId: 'k1', name: 'Kai', activity: 'idle' })]
+    const sonnet = { model: 'sonnet', effort: 'medium', quality: 2, cost: 2 } as const
+    const sneaky: RoutePlugin = { name: 'More models', candidates: () => [
+      on('a', { ...sonnet, quota: windows([100, 3 * H], [100, 5 * D], 'fresh') }),
+      on('b', sonnet),
+      on('a', { engine: 'codex', model: 'default', effort: 'default', cost: 2 }),
+      on('k', sonnet),
+      on('z', sonnet),
+      on('a', { kind: 'member', agentId: 'ghost', name: 'Ghost', activity: 'idle' }),
+      on('a', { model: 'haiku', effort: 'auto', quality: 1, cost: 1 }),
+    ] }
+    const r = ok(choose(given, policy, a(), NOW, [], [], [], [sneaky]))
+    // An idle member before a new agent at equal strength and price, as without plug-ins.
+    expect(r.shown.map(s => s.title)).toEqual(['Kai · Claude opus high · k', 'New agent · Claude opus high · a', 'New agent · Claude sonnet medium · a'])
+    // The added Sonnet on a keeps a's note and quota reading, not its own.
+    expect(r.shown[2]).toMatchObject({ notes: ['Its last task here was lost.'], quota: given[0]!.quota })
+    expect(r.excluded).toEqual([
+      { title: 'New agent · Claude opus high · b', reason: 'Machine is offline.', machine: 'b' },
+      { title: 'New agent · Claude sonnet medium · b', reason: 'Machine is offline.', machine: 'b' },
+      { title: 'New agent · Codex default default · a', reason: 'More models: this route offers no new agent on Codex on a, so one added there is left out.', machine: 'a' },
+      { title: 'New agent · Claude sonnet medium · k', reason: 'More models: this route offers no new agent on Claude on k, so one added there is left out.', machine: 'k' },
+      { title: 'New agent · Claude sonnet medium · z', reason: 'More models: this route offers no new agent on Claude on z, so one added there is left out.', machine: 'z' },
+      { title: 'Ghost · Claude opus high · a', reason: 'More models: a plug-in adds new agents only; it adjusts the agents the route found.', machine: 'a' },
+    ].sort((x, y) => (x.reason === 'Machine is offline.' ? 0 : 1) - (y.reason === 'Machine is offline.' ? 0 : 1)))
+    // Not offered by default, so left out as any Haiku row is, unless a person names it.
+    expect(r.shown.some(s => s.model === 'haiku')).toBe(false)
+    // Its own refusals and notes add to the machine's, once each; the machine's load goes with it; a model on the grid keeps its
+    // own quota, as a local probe does (routeCommand.ts localProbes).
+    const load = { agents: 1, freeMemoryBytes: 8e9, hasFolder: true }
+    const own: RoutePlugin = { name: 'Own', candidates: () => [
+      on('c', { ...sonnet, refusals: ['No room.'], notes: ['Base note.', 'Own note.'] }),
+      on('c', { ...sonnet, model: 'default', effort: 'default', quality: 1, cost: 1, gridModel: 'qwen3', gridName: 'swarm-1', quota: { known: false, leftPercent: null, resetsAt: null } }),
+    ] }
+    const withOwn = ok(choose([on('c', { notes: ['Base note.'], load })], policy, a(), NOW, [], [], [], [own]))
+    expect(withOwn.excluded).toEqual([{ title: 'New agent · Claude sonnet medium · c', reason: 'No room.', machine: 'c' }])
+    expect(withOwn.shown.map(s => [s.gridModel ?? s.model, s.notes, s.load, s.quota.known])).toEqual([
+      ['opus', ['Base note.'], load, true], ['qwen3', ['Base note.'], load, false]])
+  })
   it('a plug-in adds candidates, which every rule then treats like the others; a later plug-in sees an earlier one\'s', () => {
     const seen: string[][] = []
-    const extra: RoutePlugin = { name: 'More models', candidates: probes => [on('x', { engine: 'codex', model: 'default', effort: 'default', cost: 2 }),
+    const given = [on('a'), on('x', { model: 'sonnet', effort: 'medium', quality: 2, cost: 2 })]
+    const extra: RoutePlugin = { name: 'More models', candidates: probes => [on('x', {}),
       // A catalog row not offered by default stays out unless a person names it, as for any candidate.
-      on('y', { model: 'haiku', effort: 'auto', quality: 1, cost: 1 })].filter(() => probes.length > 0) }
-    const watch: RoutePlugin = { name: 'Watch', candidates: probes => { seen.push(probes.map(p => p.machineId)); return [] } }
-    const r = ok(route([on('a')], [extra, watch]))
-    expect(titles(r)).toEqual(['x', 'a'])
-    expect(seen).toEqual([['a', 'x', 'y']])
+      on('x', { model: 'haiku', effort: 'auto', quality: 1, cost: 1 })].filter(() => probes.length > 0) }
+    const watch: RoutePlugin = { name: 'Watch', candidates: probes => { seen.push(probes.map(p => `${p.model} on ${p.machineId}`)); return [] } }
+    const r = ok(route(given, [extra, watch]))
+    expect(r.shown.map(s => `${s.model} on ${s.machineName}`)).toEqual(['opus on a', 'opus on x', 'sonnet on x'])
+    expect(seen).toEqual([['opus on a', 'sonnet on x', 'opus on x', 'haiku on x']])
     // A person naming a model still considers that model alone.
-    expect(titles(route([on('a')], [extra], { model: 'haiku' }))).toEqual(['y'])
+    expect(titles(route(given, [extra], { model: 'haiku' }))).toEqual(['x'])
   })
   it('a plug-in sees the task, the time, the catalog, the picks at work and each candidate\'s fit', () => {
     const contexts: unknown[] = [], fits: string[] = []
@@ -838,6 +885,26 @@ describe('routing plug-ins', () => {
     choose([on('a')], policy, a({ kind: 'docs' }), NOW, open, [], [], [look])
     expect(contexts).toEqual([{ assessment: a({ kind: 'docs' }), now: NOW, catalog: policy, open }, { assessment: a({ kind: 'docs' }), now: NOW, catalog: policy, open }])
     expect(fits).toEqual(['fits'])
+  })
+  afterEach(() => { vi.restoreAllMocks() })
+  it('a plug-in that runs too long is skipped whole: the route answers as without it and says so', () => {
+    let clock = 0
+    vi.spyOn(performance, 'now').mockImplementation(() => clock)
+    const plain = ok(route([on('a'), on('b')], []))
+    const slowAdjust: RoutePlugin = { name: 'Slow', adjust: c => { clock += 150; return { cost: -5, reason: `looked at ${c.machineId}` } } }
+    const slowAdd: RoutePlugin = { name: 'Slow add', candidates: () => { clock += 201; return [on('a', { model: 'sonnet', effort: 'medium', quality: 2, cost: 2 })] } }
+    const quick: RoutePlugin = { name: 'Quick', adjust: () => { clock += 10; return null } }
+    const { warnings, ...rest } = ok(route([on('a'), on('b')], [slowAdd, slowAdjust, quick]))
+    expect(rest).toEqual(plain)
+    expect(warnings).toEqual(['Slow add', 'Slow'].map(n => `The routing plug-in "${n}" was skipped: it took longer than 200 ms. The route is ranked without it.`))
+  })
+  it('plug-ins run in their list\'s fixed order, and the same route answers the same every time', () => {
+    const one: RoutePlugin = { name: 'One', adjust: () => ({ cost: 0.5, reason: 'first' }) }
+    const two: RoutePlugin = { name: 'Two', adjust: () => ({ cost: -0.5, reason: 'second' }) }
+    const r = ok(route([on('a'), on('b')], [one, two]))
+    expect(r.shown[0]!.notes).toEqual(['One: first', 'Two: second'])
+    expect(ok(route([on('a'), on('b')], [two, one])).shown[0]!.notes).toEqual(['Two: second', 'One: first'])
+    expect(JSON.stringify(route([on('a'), on('b')], [one, two]))).toBe(JSON.stringify(r))
   })
   it('a plug-in that throws or answers what cannot be ranked is skipped whole and named in a warning, never with its error', () => {
     const plain = ok(route([on('a'), on('b')], []))
@@ -851,7 +918,7 @@ describe('routing plug-ins', () => {
     const { warnings, ...rest } = r
     expect(rest).toEqual(plain)
     // Candidates are gathered before any is judged, so those plug-ins are named first.
-    expect(warnings).toEqual(['Broken', 'Junk', 'Not a list', 'Half', 'NaN', 'Blank'].map(n => `The routing plug-in "${n}" failed, so the route was ranked without it.`))
+    expect(warnings).toEqual(['Broken', 'Junk', 'Not a list', 'Half', 'NaN', 'Blank'].map(n => `The routing plug-in "${n}" was skipped: it failed. The route is ranked without it.`))
     expect(JSON.stringify(r)).not.toContain('secret')
     // Nothing can run: the warning still goes with the answer.
     expect(route([on('a', { refusals: ['Machine is offline.'] })], [broken])).toMatchObject({ error: 'NO_CANDIDATE', warnings: [expect.stringContaining('"Broken"')] })

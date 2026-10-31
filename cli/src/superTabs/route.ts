@@ -98,41 +98,72 @@ export interface RoutePlugin {
 }
 /** The order's two adjustable terms for one candidate ([compare]); with no plug-in they are its strength and effective cost. */
 interface Ranked { strength: number; cost: number }
-const pluginFailed = (name: string) => `The routing plug-in "${cut(name, 80)}" failed, so the route was ranked without it.`
+/** How long one plug-in may take over a route's candidates, per step. Plug-ins are pure and synchronous, so a route of a few
+ *  dozen candidates takes them well under a millisecond; one over this is doing work it should have done before the route
+ *  (Lead, 10-31: a plug-in that runs too long is skipped). A plug-in that never returns cannot be stopped from inside: that is
+ *  why they must be synchronous and read nothing. */
+export const PLUGIN_BUDGET_MS = 200
+export const pluginSkipped = (name: string, why: string) => `The routing plug-in "${cut(name, 80)}" was skipped: ${why}. The route is ranked without it.`
+const FAILED = 'it failed', SLOW = `it took longer than ${PLUGIN_BUDGET_MS} ms`
+/** Runs [step] for one plug-in, timed: its answer, or why it is skipped. Its error text is never kept, since it may hold
+ *  anything (a path, a token). */
+function timed<T>(step: () => T, valid: (answer: T) => boolean): { answer: T } | { why: string } {
+  const started = performance.now()
+  try {
+    const answer = step()
+    if (performance.now() - started > PLUGIN_BUDGET_MS) return { why: SLOW }
+    return valid(answer) ? { answer } : { why: FAILED }
+  } catch { return { why: FAILED } }
+}
 const isProbe = (p: unknown): p is Probe => {
   const v = object(p)
   return typeof v.machineId === 'string' && typeof v.machineName === 'string' && ENGINES.includes(String(v.engine)) && typeof v.model === 'string'
     && typeof v.effort === 'string' && finite(v.quality) && finite(v.cost) && Array.isArray(v.refusals) && Array.isArray(v.notes) && !!v.quota
 }
-/** The probes with each plug-in's added candidates, in the plug-ins' order. A plug-in whose answer is not a list of probes adds
- *  nothing and is named in [warnings]. */
-function withPluginCandidates(probes: Probe[], plugins: readonly RoutePlugin[], context: RouteContext, warnings: string[]): Probe[] {
-  let all = probes
+const baseKey = (p: Pick<Probe, 'machineId' | 'engine'>) => `${p.machineId}\0${p.engine}`
+/** A plug-in's candidate as the route may consider it: a new agent standing on a machine and engine the route probed itself
+ *  ([bases]), with that probe's refusals, notes, load and quota reading (a model on the grid keeps its own quota, as
+ *  routeCommand.ts localProbes does), so it can never bring back a choice the route rules out. Otherwise why it is left out. */
+function anchored(added: Probe, bases: Map<string, Probe>, name: string): Probe | Excluded {
+  const out = (reason: string): Excluded => ({ title: titleOf(added), reason: `${cut(name, 80)}: ${reason}`, machine: added.machineName })
+  if (added.kind !== 'new') return out('a plug-in adds new agents only; it adjusts the agents the route found.')
+  const base = bases.get(baseKey(added))
+  if (!base) return out(`this route offers no new agent on ${ENGINE[added.engine]} on ${added.machineName}, so one added there is left out.`)
+  const { agentId: _a, name: _n, frame: _f, repo: _r, earlier: _e, terminalUnverified: _t, ...own } = added
+  const more = (theirs: string[], ours: string[]) => [...theirs, ...ours.filter(x => !theirs.includes(x))]
+  return { ...own, kind: 'new', machineName: base.machineName, activity: base.activity, known: base.known, ...(base.load ? { load: base.load } : {}),
+    quota: added.gridModel ? added.quota : base.quota, refusals: more(base.refusals, added.refusals), notes: more(base.notes, added.notes) }
+}
+/** The probes with each plug-in's added candidates ([anchored]), in the plug-ins' order, and those left out. A plug-in whose
+ *  answer is not a list of probes, or that runs too long, adds nothing and is named in [warnings]. */
+function withPluginCandidates(given: Probe[], plugins: readonly RoutePlugin[], context: RouteContext, warnings: string[]): { probes: Probe[]; out: Excluded[] } {
+  const bases = new Map<string, Probe>()
+  for (const p of given) if (p.kind === 'new' && !p.gridModel && !bases.has(baseKey(p))) bases.set(baseKey(p), p)
+  let probes = given
+  const out: Excluded[] = []
   for (const plugin of plugins) {
     if (!plugin.candidates) continue
-    try {
-      const added: unknown = plugin.candidates(all, context)
-      if (!Array.isArray(added) || !added.every(isProbe)) throw new Error('not a list of candidates')
-      all = [...all, ...added]
-    } catch { warnings.push(pluginFailed(plugin.name)) }
+    const run = timed(() => plugin.candidates!(probes, context) as unknown, added => Array.isArray(added) && added.every(isProbe))
+    if ('why' in run) { warnings.push(pluginSkipped(plugin.name, run.why)); continue }
+    const placed = (run.answer as Probe[]).map(p => anchored(p, bases, plugin.name))
+    probes = [...probes, ...placed.filter((p): p is Probe => 'engine' in p)]
+    out.push(...placed.filter((p): p is Excluded => !('engine' in p)))
   }
-  return all
+  return { probes, out }
 }
 const validAdjustment = (x: Adjustment | null): x is Adjustment | null => x === null || (typeof x === 'object' && typeof x.reason === 'string'
   && !!x.reason.trim() && (x.strength === undefined || finite(x.strength)) && (x.cost === undefined || finite(x.cost))
   && (x.refuse === undefined || x.refuse === true))
-/** Every plug-in's adjustments of [ranked], plug-in by plug-in: one that throws or answers what cannot be ranked for any
- *  candidate is dropped for all of them and named in [warnings]. */
+/** Every plug-in's adjustments of [ranked], plug-in by plug-in in the list's order: one that throws, runs too long or answers
+ *  what cannot be ranked for any candidate is dropped for all of them and named in [warnings]. */
 function pluginAdjustments<T extends Probe & { fit: Fit }>(ranked: T[], plugins: readonly RoutePlugin[], context: RouteContext,
   warnings: string[]): Array<Array<{ name: string; adjustment: Adjustment }>> {
   const each = ranked.map(() => [] as Array<{ name: string; adjustment: Adjustment }>)
   for (const plugin of plugins) {
     if (!plugin.adjust) continue
-    try {
-      const answers = ranked.map(p => plugin.adjust!(p, context))
-      if (!answers.every(validAdjustment)) throw new Error('not an adjustment')
-      answers.forEach((adjustment, i) => { if (adjustment) each[i]!.push({ name: plugin.name, adjustment }) })
-    } catch { warnings.push(pluginFailed(plugin.name)) }
+    const run = timed(() => ranked.map(p => plugin.adjust!(p, context)), answers => answers.every(validAdjustment))
+    if ('why' in run) { warnings.push(pluginSkipped(plugin.name, run.why)); continue }
+    run.answer.forEach((adjustment, i) => { if (adjustment) each[i]!.push({ name: plugin.name, adjustment }) })
   }
   return each
 }
@@ -451,7 +482,7 @@ export function choose(given: Probe[], catalog: Catalog, a: Assessment, now: num
   offline: Array<{ title: string; reason: string }> = [], plugins: readonly RoutePlugin[] = []): Choice | NoCandidate {
   const named = a.model
   const context: RouteContext = { assessment: a, now, catalog, open }, warnings: string[] = []
-  const probes = withPluginCandidates(given, plugins, context, warnings)
+  const { probes, out: addedOut } = withPluginCandidates(given, plugins, context, warnings)
   const warned = () => warnings.length ? { warnings } : {}
   const noted = probes.flatMap(p => {
     const row = p.gridModel ? null : p.kind === 'new' ? catalog.models.find(m => m.engine === p.engine && m.model === p.model && m.effort === p.effort) ?? null
@@ -473,7 +504,7 @@ export function choose(given: Probe[], catalog: Catalog, a: Assessment, now: num
   // serves it now, which the answer says, rather than "Codex kimi-k3" unrated (final review).
   const ofGrid = !!named && (catalog.grid.models.some(row => names(row.model, named)) || offline.some(m => names(m.title, named)))
   if (named && !considered.length && !heldNamed.length && !a.local && !ofGrid) considered = unratedProbes(probes, named)
-  const excluded: Excluded[] = considered.filter(p => p.refusals.length).map(p => ({ title: titleOf(p), reason: p.refusals.join(' '), machine: p.machineName }))
+  const excluded: Excluded[] = [...considered.filter(p => p.refusals.length).map(p => ({ title: titleOf(p), reason: p.refusals.join(' '), machine: p.machineName })), ...addedOut]
   const viable = considered.filter(p => !p.refusals.length)
   // Nothing offered: a model that is served but taken says who has it, rather than reading as unshared.
   if (named && !considered.length) {

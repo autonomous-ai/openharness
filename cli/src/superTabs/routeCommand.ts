@@ -7,7 +7,8 @@ import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
 import { RELAYED_QUOTA, requiredToolReason, startRequirements, USED_UP_WINDOW } from './capacity.js'
 import { inspectCapacity, type ScopedRequest } from './start.js'
 import { ENDED_WORK, object, within } from './wire.js'
-import { accountOf, API_BUILDERS, catalogFrom, catalogRow, choose, decide, gridStrength, parseAssessment, quotaOf2, recordOf, repoMatch, repositoryKey, type Assessment, type Catalog, type CatalogModel, type RecordShape, type Commitment, type Excluded, type HeldModel, type MemberFrame, type Probe, type RoutePlugin, type TaskFolder } from './route.js'
+import { accountOf, API_BUILDERS, catalogFrom, catalogRow, choose, decide, gridStrength, parseAssessment, quotaOf2, recordOf, repoMatch, repositoryKey, type Assessment, type Catalog, type CatalogModel, type RecordShape, type Commitment, type Excluded, type HeldModel, type MemberFrame, type Probe, type TaskFolder } from './route.js'
+import { makePlugins, ROUTE_PLUGIN_MAKERS, type PluginMaker } from './routePlugins.js'
 import { stat } from 'node:fs/promises'
 import { describeScmProject } from '../scm/scmProjects.js'
 
@@ -199,9 +200,10 @@ function frameOf(frame: Json): MemberFrame {
     branch: text(object(object(frame.gitContext).current).branch) ?? text(project.branch), updatedAt: Number.isFinite(updatedAt) ? updatedAt : null }
 }
 
-/** `plugins`: the routing plug-ins this route ranks with (route.ts RoutePlugin), in order; none today. */
+/** `makers`: what makes the routing plug-ins this route ranks with (routePlugins.ts), in their order. */
 export async function routeTask(input: { tabId: string; conversationId: string; assessment: unknown }, request: ScopedRequest, where: Where,
-  open: typeof openDaemon = openDaemon, newId: () => string = randomUUID, reader: FolderReader = FOLDER_READER, plugins: readonly RoutePlugin[] = []): Promise<Json> {
+  open: typeof openDaemon = openDaemon, newId: () => string = randomUUID, reader: FolderReader = FOLDER_READER,
+  makers: readonly PluginMaker[] = ROUTE_PLUGIN_MAKERS): Promise<Json> {
   // A lost connection is an answer here, never a throw: the agent must still get a decision or a reason.
   const scoped: ScopedRequest = async payload => {
     try { return await request(payload) } catch (error) {
@@ -281,13 +283,16 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   // The probes do not wait for the context reads: the machines, the task's folder and the group's talk and log are read
   // together, and each read that is only context gives up after three seconds. What needs several of them (whether a
   // member is in the task's repository, what it did before) is joined afterwards.
-  const [probed, read, history, instructed] = await Promise.all([
+  // The plug-ins' makers start here too: each piece's outside read runs beside the probes, and they share the history read.
+  const historyRead = within(scoped({ action: 'routeHistory', conversationId: input.conversationId }))
+  const [probed, read, history, instructed, made] = await Promise.all([
     Promise.all([...machines].map(([machineId, machine]) =>
       probeMachine(machineId, machine, members.filter(m => m.machineId === machineId), rows, catalog, assessment, where, open))),
     cwd ? within(readFolder(cwd, reader)) : null,
-    within(scoped({ action: 'routeHistory', conversationId: input.conversationId })),
+    historyRead,
     // The project's instructions ride on the answer: the agent routes by them. A backend without them is an unreadable read.
     within(scoped({ action: 'instructions', projectId })),
+    makePlugins(makers, { conversationId: input.conversationId, assessment, read: value, catalog, history: historyRead, request: scoped }),
   ])
   const written = object(instructed?.ok === true ? instructed.value : {})
   const instructions = typeof written.text === 'string' ? { revision: written.revision, text: written.text, notes: Array.isArray(written.notes) ? written.notes : [] } : null
@@ -342,10 +347,11 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     .map(d => ({ account: d.account, spend: object(d.spend), size: d.size, createdAt: Date.parse(String(d.createdAt)) }) as Commitment)
   // A model a host now offline served is left out with that reason, and a person naming it gets no stand-in (route.ts choose).
   const offline = offlineModels(state)
-  const choice = choose(probes, catalog, assessment, Date.now(), working, heldLocalModels(state), offline, plugins)
+  const choice = choose(probes, catalog, assessment, Date.now(), working, heldLocalModels(state), offline, made.plugins)
+  const skipped = [...made.warnings, ...(choice.warnings ?? [])]
   choice.excluded.push(...offline, ...(catalog.models.length ? [] : [{ title: 'New agents', reason: CATALOG_UNREADABLE }]))
   // The task stays in the agent's queue rather than going where it cannot be done.
-  if ('error' in choice) return { ...choice, leftOut: leftOut(choice.excluded, []), ...required.machines || required.devices.length ? { waiting: true, detail: WAITING } : {} }
+  if ('error' in choice) return { ...choice, ...(skipped.length ? { warnings: skipped } : {}), leftOut: leftOut(choice.excluded, []), ...required.machines || required.devices.length ? { waiting: true, detail: WAITING } : {} }
   const verdict = decide(choice)
   const operationId = `route-${newId()}`
   const record = (shape: RecordShape) => scoped({ action: 'command', operationId,
@@ -371,7 +377,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     warnings: [...(Array.isArray(effective.warnings) ? effective.warnings : []), ...(value.machinesUnreadable === true ? [MACHINES_UNREADABLE] : []),
       ...(catalog.models.length ? [] : [CATALOG_UNREADABLE]),
       ...(choice.shown.some(p => p.kind === 'member' && p.terminalUnverified) ? ["A member's terminal could not be verified from its machine's snapshot. Check it before assignment."] : []),
-      ...(choice.short ? [choice.short] : []), ...(choice.warnings ?? [])],
+      ...(choice.short ? [choice.short] : []), ...skipped],
     next: verdict.pick.kind === 'member'
       ? `Assign with: command OPERATION_ID {"type":"work.assign","conversationId":"${input.conversationId}","agentId":"${verdict.pick.agentId}"${decision}}`
       // No fixed role name: NAME and ROLE are the agent's to fill from the project's instructions. A backend without
