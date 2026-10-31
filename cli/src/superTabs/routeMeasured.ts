@@ -32,7 +32,9 @@ export const READ_MS = 2000
 
 /** One choice's results for one kind of work, as the costs read gives them (backend costs/read.ts CostSummaryRow, FullCost). */
 export interface MeasuredRow { engine: string; model: string; effort: string; kind: string; firstReviews: number; firstReviewPassed: number
-  shipped: number; costPerShipped: number | null; fullCostPerShipped: number | null }
+  shipped: number; costPerShipped: number | null; fullCostPerShipped: number | null
+  /** The share of the full cost's attempts whose cost is known; the rest were filled with their choice's mean. */
+  fullCostKnown: number | null }
 /** `truncated`: the read reached its row limit, so it holds only the newest attempts. */
 export interface Measured { rows: MeasuredRow[]; truncated: boolean }
 
@@ -47,11 +49,12 @@ export function measuredFrom(answer: unknown): Measured | null {
   const reply = object(answer), value = object(reply.value)
   if (reply.ok !== true || !Array.isArray(value.rows)) return null
   const rows = value.rows.map(object).flatMap((r): MeasuredRow[] => {
-    const full = r.fullCostPerShipped ?? null, own = r.costPerShipped ?? null
+    const full = r.fullCostPerShipped ?? null, own = r.costPerShipped ?? null, known = r.fullCostKnown ?? null
     if (![r.engine, r.model, r.effort, r.kind].every(s => typeof s === 'string') || !KIND.test(r.kind as string) || !count(r.firstReviews) || !count(r.firstReviewPassed)
-      || r.firstReviewPassed > r.firstReviews || !count(r.shipped) || !(full === null || money(full)) || !(own === null || money(own))) return []
+      || r.firstReviewPassed > r.firstReviews || !count(r.shipped) || !(full === null || money(full)) || !(own === null || money(own))
+      || !(known === null || money(known) && known <= 1)) return []
     return [{ engine: r.engine as string, model: r.model as string, effort: r.effort as string, kind: r.kind as string, firstReviews: r.firstReviews,
-      firstReviewPassed: r.firstReviewPassed, shipped: r.shipped, costPerShipped: own, fullCostPerShipped: full }]
+      firstReviewPassed: r.firstReviewPassed, shipped: r.shipped, costPerShipped: own, fullCostPerShipped: full, fullCostKnown: known }]
   })
   return { rows, truncated: value.truncated === true }
 }
@@ -76,11 +79,14 @@ function ranAs(p: Pick<Probe, 'engine' | 'model' | 'gridModel'>): string {
   if (p.gridModel) return p.gridModel
   return p.engine === 'claude' ? claudeAliasForModel(p.model.replace(/\[1m\]$/i, '')) ?? p.model : p.model
 }
+const listed = (r: MeasuredRow, catalog: Catalog) => catalog.models.some(m => m.engine === r.engine && m.model === r.model && m.effort === r.effort)
+/** Kinds whose attempts have no result of their own: a review is credited with the reviewed work's ship, and its cost is
+ *  already in that build's full cost, so by cost alone Opus high reviews read as 76 shipped changes at $0.95 (review of #2423). */
+const UNMEASURED_KINDS = new Set(['review'])
 /** Another choice as a reason names it: only a model of the catalog, whose names every reader of the route log already sees.
  *  A row's model is what an agent was configured with, and a grid or local model's can be a file path or a person's share
  *  name: such a row is "another measured choice" (hook review, 2026-10-31: reasons hold numbers and kinds of work only). */
-const nameOf = (r: MeasuredRow, catalog: Catalog) => catalog.models.some(m => m.engine === r.engine && m.model === r.model && m.effort === r.effort)
-  ? `${ENGINE[r.engine]} ${r.model} ${r.effort}` : 'another measured choice'
+const nameOf = (r: MeasuredRow, catalog: Catalog) => listed(r, catalog) ? `${ENGINE[r.engine]} ${r.model} ${r.effort}` : 'another measured choice'
 /** A kind of work as the route takes it (route.ts parseAssessment): one lowercase word. A row of any other kind is dropped. */
 const KIND = /^[a-z][a-z0-9-]{0,39}$/
 const costed = (r: MeasuredRow) => r.shipped >= MIN_SHIPPED && r.fullCostPerShipped !== null
@@ -90,12 +96,12 @@ const reviewed = (r: MeasuredRow) => r.firstReviews >= MIN_FIRST_REVIEWS
 export function measuredPlugin(measured: Measured): RoutePlugin {
   /** Per kind: its rows, and the measured costs' scale on the catalog's: dollars per cost point, so the measured choices keep
    *  their mean place against unmeasured ones. Null when fewer than two choices have a cost to compare. */
-  const byKind = new Map<string, { rows: MeasuredRow[]; scale: number | null }>()
+  const byKind = new Map<string, { rows: MeasuredRow[]; scale: number | null; results: boolean }>()
   const scaleOf = (rows: MeasuredRow[], catalog: Catalog) => {
-    // A row the catalog does not rate (a grid or unrated model) counts at cost 1, as its candidate does (route.ts localProbes).
-    // A run whose model or effort was never known is no choice anyone can pick.
-    const scaled = rows.filter(r => costed(r) && r.model !== 'unknown' && r.effort !== 'unknown')
-    const points = scaled.reduce((sum, r) => sum + (catalogRow(catalog, r.engine, r.model, r.effort)?.cost ?? 1), 0)
+    // Only the catalog's own choices set the scale: a run of a model nobody offers (an effort the catalog has no row for, a
+    // model never reported) would move every candidate without being one (review of #2423).
+    const scaled = rows.filter(r => costed(r) && listed(r, catalog))
+    const points = scaled.reduce((sum, r) => sum + catalogRow(catalog, r.engine, r.model, r.effort)!.cost, 0)
     const dollars = scaled.reduce((sum, r) => sum + r.fullCostPerShipped!, 0)
     // All free (own hardware): nothing to tell them apart by.
     return scaled.length >= 2 && dollars > 0 ? dollars / points : null
@@ -104,13 +110,15 @@ export function measuredPlugin(measured: Measured): RoutePlugin {
     name: MEASURED,
     adjust(candidate, { assessment, catalog }) {
       const kind = assessment.kind
-      if (!kind) return null
+      if (!kind || UNMEASURED_KINDS.has(kind)) return null
       let ofKind = byKind.get(kind)
       if (!ofKind) {
         const rows = measured.rows.filter(r => r.kind === kind)
-        ofKind = { rows, scale: scaleOf(rows, catalog) }
+        // A kind with no first review at all has no results to go by: cost alone ranks it as nothing else does.
+        ofKind = { rows, scale: rows.some(r => r.firstReviews > 0) ? scaleOf(rows, catalog) : null, results: rows.some(r => r.firstReviews > 0) }
         byKind.set(kind, ofKind)
       }
+      if (!ofKind.results) return null
       const name = ranAs(candidate)
       const mine = ofKind.rows.find(r => r.engine === candidate.engine && r.model === name && r.effort === candidate.effort)
       if (!mine) return null
@@ -126,7 +134,8 @@ export function measuredPlugin(measured: Measured): RoutePlugin {
       let cost: string, shift = 0
       if (!costed(mine)) cost = `too few shipped changes with known costs to compare cost (${mine.shipped} shipped)`
       else {
-        const full = `$${mine.fullCostPerShipped!.toFixed(2)} per shipped change over ${mine.shipped} (failed attempts and every review round included)`
+        const estimated = mine.fullCostKnown !== null && mine.fullCostKnown < 1 ? `; ${Math.round((1 - mine.fullCostKnown) * 100)}% of the costs estimated` : ''
+        const full = `$${mine.fullCostPerShipped!.toFixed(2)} per shipped change over ${mine.shipped} (failed attempts and every review round included${estimated})`
         if (ofKind.scale === null) cost = `${full}; no other choice for ${kind} work has a cost to compare, so its place is unchanged`
         else {
           const points = mine.fullCostPerShipped! / ofKind.scale

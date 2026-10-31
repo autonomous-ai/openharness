@@ -183,10 +183,12 @@ function reviewsByBuild(rows: CostRow[], groups: Conversation[]): Map<string, Co
 
 /** [group]'s full cost (FullCost): its own ended attempts and the reviews charged to them, an unknown cost filled with the
  *  mean known cost of its own choice ([means], by [keyOf]). */
-function fullCost(group: CostRow[], shipped: number, reviews: Map<string, CostRow[]>, means: Map<string, number>, keyOf: (row: CostRow) => string): FullCost {
+function fullCost(group: CostRow[], shipped: number, shippedAt: Map<string, number>, reviews: Map<string, CostRow[]>, means: Map<string, number>,
+  keyOf: (row: CostRow) => string): FullCost {
   const charged = group.flatMap(row => reviews.get(row.assignmentId) ?? [])
-  // Open attempts are still going: their cost is neither known nor unknown yet.
-  const ended = [...group, ...charged].filter(row => row.outcome !== null)
+  // Open attempts are still going: their cost is neither known nor unknown yet. One that already shipped (merged mid-attempt)
+  // counts, filled like an unknown cost, or its ship would come free (review of #2423).
+  const ended = [...group, ...charged].filter(row => row.outcome !== null || shippedAt.has(row.assignmentId))
   let total = 0, known = 0, unfilled = false
   for (const row of ended) {
     const cost = attemptCost(row.run, row.fresh).apiCost
@@ -223,7 +225,7 @@ export function summarizeCosts(rows: CostRow[], groups: Conversation[]): CostSum
   const means = new Map([...sums].map(([k, s]) => [k, s.cost / s.n]))
   const summary = grouped(keyOf).map(([[engine, model, effort, kind], group]) => {
     const summed = summarize(group, firstReview, shippedAt, prices)
-    return { engine, model, effort, kind, ...summed, ...fullCost(group, summed.shipped, reviews, means, key) }
+    return { engine, model, effort, kind, ...summed, ...fullCost(group, summed.shipped, shippedAt, reviews, means, key) }
   })
   const models = grouped(row => [row.run.engine, row.run.grid ?? row.run.model] as const)
     .map(([[engine, model], group]) => ({ engine, model, ...summarize(group, firstReview, shippedAt, new Set()) }))

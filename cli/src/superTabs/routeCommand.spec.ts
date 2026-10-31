@@ -1711,7 +1711,7 @@ describe('routing by facts', () => {
 /** Piece 3 through the route itself, with the makers it ships with (routePlugins.ts ROUTE_PLUGIN_MAKERS). */
 describe('routing by measured cost and results', () => {
   const row = (model: string, effort: string, fullCostPerShipped: number) => ({ engine: 'claude', model, effort, kind: 'build', firstReviews: 10,
-    firstReviewPassed: 8, shipped: 6, costPerShipped: 1, fullCostPerShipped })
+    firstReviewPassed: 8, shipped: 6, costPerShipped: 1, fullCostPerShipped, fullCostKnown: 1 })
   const built = { ...input, assessment: { ...input.assessment, kind: 'build' } }
   const withCosts = (base: ReturnType<typeof scoped>, answer: (payload: Record<string, unknown>) => Promise<Answer>) =>
     vi.fn(async (payload: Record<string, any>) => payload.action === 'costs' ? answer(payload) : base(payload))

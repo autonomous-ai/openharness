@@ -140,5 +140,9 @@ describe('the full cost per shipped change (routing, Goals piece 3)', () => {
     // Open attempts are still going: they are neither known nor unknown yet.
     const open = summarizeCosts([row('c1'), row('c2', { outcome: null, run: run({ endedAt: undefined, end: undefined }) })], [group('g1', [], 30 * MINUTE)])
     expect(open.rows[0]).toMatchObject({ fullCostKnown: 1, fullCostPerShipped: 4 })
+    // An open attempt that already shipped (merged mid-attempt) counts, its cost filled like an unknown one (review of #2423).
+    const shippedOpen = summarizeCosts([row('k1', { run: run({ startedAt: 0 }) }), row('o1', { outcome: null, run: run({ startedAt: 10 * MINUTE, endedAt: undefined, end: undefined }) })],
+      [group('g1', [], 20 * MINUTE)])
+    expect(shippedOpen.rows[0]).toMatchObject({ shipped: 1, fullCostKnown: 0.5, fullCostPerShipped: 8 })
   })
 })

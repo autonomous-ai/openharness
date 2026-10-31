@@ -18,7 +18,7 @@ const probe = (patch: Partial<Probe> = {}): Probe => ({ kind: 'new', machineId: 
   quality: 3, cost: 3, quota: { known: true, leftPercent: null, resetsAt: null, metered: true }, activity: 'new', known: true, refusals: [], notes: [], ...patch })
 const opus = probe(), codex = probe({ machineId: 'm2', machineName: 'mac-2', engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', cost: 2 })
 const row = (patch: Partial<MeasuredRow>): MeasuredRow => ({ engine: 'claude', model: 'opus', effort: 'high', kind: 'build', firstReviews: 10, firstReviewPassed: 9,
-  shipped: 10, costPerShipped: 5, fullCostPerShipped: 6, ...patch })
+  shipped: 10, costPerShipped: 5, fullCostPerShipped: 6, fullCostKnown: 1, ...patch })
 /** Opus passes 9 of 10 first reviews; Codex 6 of 10. Codex's own attempts are cheaper per shipped change ($3 against $5), but
  *  its failed reviews take rework rounds and their reviews: in full it costs $9 against Opus's $6. */
 const measured = [row({}), row({ engine: 'codex', model: 'gpt-6.1-sol', firstReviewPassed: 6, costPerShipped: 3, fullCostPerShipped: 9 })]
@@ -109,6 +109,28 @@ describe('routing by measured cost and results (Goals piece 3)', () => {
     expect(order(choice)).toEqual(['codex gpt-6.1-sol', 'claude claude-experimental'])
   })
 
+  it('review work, and any kind with no first reviews, ranks as today: cost alone says nothing of how it went', () => {
+    // A review attempt is credited with the reviewed work's ship, and its cost is already in that build's full cost (review of
+    // #2423: Opus high reviews read as 76 shipped changes at $0.95).
+    const reviews = measured.map(r => ({ ...r, kind: 'review', firstReviews: 0, firstReviewPassed: 0 }))
+    for (const [rows, a] of [[reviews, task({ kind: 'review' })], [measured.map(r => ({ ...r, kind: 'review' })), task({ kind: 'review' })],
+      [measured.map(r => ({ ...r, firstReviews: 0, firstReviewPassed: 0 })), task()]] as const) {
+      const choice = route([...rows], [opus, codex], a)
+      expect(order(choice)).toEqual(['codex gpt-6.1-sol', 'claude opus'])
+      expect(choice.shown.flatMap(mine)).toEqual([])
+    }
+  })
+
+  it('only choices a candidate can be set the cost scale, so a run of a model nobody offers moves nothing', () => {
+    const odd = row({ model: 'sonnet', effort: 'high', fullCostPerShipped: 300 })
+    expect(route([...measured, odd]).shown.flatMap(mine)).toEqual(route(measured).shown.flatMap(mine))
+  })
+
+  it('says how much of a choice\'s cost is estimated', () => {
+    const choice = route([{ ...measured[0]!, fullCostKnown: 0.6 }, measured[1]!])
+    expect(mine(choice.shown[0]!)[0]).toContain('$6.00 per shipped change over 10 (failed attempts and every review round included; 40% of the costs estimated)')
+  })
+
   it('a task with no kind, or a kind nothing was measured for, ranks as today', () => {
     for (const a of [task({ kind: undefined }), task({ kind: 'docs' })]) {
       const choice = route(measured, [opus, codex], a)
@@ -158,8 +180,9 @@ describe('reading the measures', () => {
     // A row it cannot read is dropped; the rest count.
     expect(measuredFrom(answer([{ engine: 'claude' }, row({}), { ...row({}), shipped: -1 }, { ...row({}), fullCostPerShipped: Number.NaN }]))).toEqual({ rows: [row({})], truncated: false })
     // A backend before full costs sends none: read as unknown.
-    const { fullCostPerShipped: _f, ...older } = row({})
-    expect(measuredFrom(answer([older]))).toEqual({ rows: [row({ fullCostPerShipped: null })], truncated: false })
+    const { fullCostPerShipped: _f, fullCostKnown: _k, ...older } = row({})
+    expect(measuredFrom(answer([older]))).toEqual({ rows: [row({ fullCostPerShipped: null, fullCostKnown: null })], truncated: false })
+    expect(measuredFrom(answer([{ ...row({}), fullCostKnown: 2 }]))).toEqual({ rows: [], truncated: false })
   })
 })
 
