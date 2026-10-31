@@ -1298,7 +1298,7 @@ model SuperTabDecision {
   @@index([tabId, personId, createdAt])
   @@index([tabId, askerAgentId, createdAt])
   @@index([tabId, projectId, createdAt])
-  /// Whether a decision waits in a conversation (decisions.ts waitingIn).
+  /// The decisions waiting in a conversation whose work ended (decisions.ts withdrawIn).
   @@index([tabId, conversationId])
 }
 
