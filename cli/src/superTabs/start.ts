@@ -175,24 +175,38 @@ async function watchQueued(queued: Json, scoped: ScopedRequest, pause: (ms: numb
   return queued
 }
 
+/** How a backend from before `heavy` (backend superTabs/commands.ts startRequestSchema) refuses it, word for word. */
+export const HEAVY_REFUSED = 'command.request: Unrecognized key: "heavy"'
+export const HEAVY_NOT_RECORDED = 'This server cannot record that the start runs heavy work, so routes in the next minutes will not count it on its machine. Update the Harness server.'
+
 async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open: typeof openDaemon): Promise<Json> {
   let startId = input.startId
   let routed: unknown
-  let permissionWarning: string | undefined
+  let permissionWarning: string | undefined, heavyWarning: string | undefined
   if (input.action === 'start') {
     // The routing decision belongs to the command, not to the machine-side request.
     const { routeDecisionId, overrideReason, ...request } = object(input.request)
     routed = routeDecisionId
     const submit = (request: Json) => scoped({ action: 'command', operationId: input.operationId,
       command: { type: 'agent.start', request, ...(routeDecisionId ? { routeDecisionId } : {}), ...(overrideReason ? { overrideReason } : {}) } })
-    let reply = await submit({ ...request, permissionMode: 'full' })
+    let sent = request
+    let reply = await submit({ ...sent, permissionMode: 'full' })
+    // A backend from before heavy work was recorded refuses that field in its body check, before it records anything: that
+    // refusal alone sends the start again without it. A timeout or any other refusal may have started an agent, so it never
+    // does (Lead, 10-31).
+    if (reply.error === 'VALIDATION_ERROR' && reply.detail === HEAVY_REFUSED && sent.heavy !== undefined) {
+      const { heavy: _heavy, ...plain } = sent
+      sent = plain
+      heavyWarning = HEAVY_NOT_RECORDED
+      reply = await submit({ ...sent, permissionMode: 'full' })
+    }
     // Older backends refused this field before recording a start. A recorded
     // legacy retry may instead report a hash mismatch after its reply was lost:
     // replay its exact payload with the same operation ID to recover that receipt.
     // Other refusals and uncertain replies never authorize another intent.
     if (reply.error === 'OPERATION_REUSED' || (reply.error === 'OUTSIDE_CONTRIBUTION' && typeof reply.detail === 'string' &&
       reply.detail.endsWith('Refused: permissionMode (it runs with its own default account settings, so leave it out).'))) {
-      const { permissionMode: _mode, ...legacyRequest } = request
+      const { permissionMode: _mode, ...legacyRequest } = sent
       if (reply.error === 'OUTSIDE_CONTRIBUTION') {
         permissionWarning = "This backend cannot request full permissions. Older machine hosts run the agent with the machine's default. Update Harness on the backend and machine."
       }
@@ -214,15 +228,15 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
     return { error: 'SWARM_ENGINE', startId, detail }
   }
   if (start.harnessId && (!start.poolGeneration || start.poolSettled)) return { ok: true, startId, machineId: request.machineId, harnessId: start.harnessId,
-    ...(permissionWarning ? { permissionWarning } : {}) }
+    ...(permissionWarning ? { permissionWarning } : {}), ...(heavyWarning ? { heavyWarning } : {}) }
   // Contributed capacity is executed by its owner. A collaborator receives no
   // machine credentials and cannot issue arbitrary commands to that computer.
   // Its machine reports it preparing (backend liveness.ts): the backend waits up to 15 minutes, and so should the Lead.
   if (start.poolGeneration && input.hostDispatch !== true) return start.preparing === true
-    ? { ok: true, queued: true, preparing: true, startId, machineId: request.machineId, ...(permissionWarning ? { permissionWarning } : {}),
+    ? { ok: true, queued: true, preparing: true, startId, machineId: request.machineId, ...(permissionWarning ? { permissionWarning } : {}), ...(heavyWarning ? { heavyWarning } : {}),
       detail: 'Its machine is still preparing it (fetching the project, checking its worktree out); that can take up to 15 minutes. Resume this start ID to read its receipt; do not start another.' }
     : { ok: true, queued: true, startId, machineId: request.machineId,
-      ...(permissionWarning ? { permissionWarning } : {}),
+      ...(permissionWarning ? { permissionWarning } : {}), ...(heavyWarning ? { heavyWarning } : {}),
       detail: 'Queued on the contributed machine. Resume this start ID to read its receipt.' }
   const target = await open(where, request.machineId)
   /** What the agent runs now, and its frame, as the frame says; null when the frame cannot say. */
@@ -536,6 +550,6 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       engineVersion: text(last.frame.engineVersion)?.slice(0, 160) ?? null } : null
     return { ok: true, startId, machineId: request.machineId, harnessId: nativeId, ...object(joined.result),
       ...(settledConfiguration ? { configuration: settledConfiguration } : {}),
-      ...(permissionWarning ? { permissionWarning } : {}), ...(modelWarning ? { modelWarning } : {}) }
+      ...(permissionWarning ? { permissionWarning } : {}), ...(heavyWarning ? { heavyWarning } : {}), ...(modelWarning ? { modelWarning } : {}) }
   } finally { target.close() }
 }

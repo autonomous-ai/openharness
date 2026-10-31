@@ -8,6 +8,9 @@ import type { describeScmProject } from '../scm/scmProjects.js'
 import { admission, quotaOf, RELAYED_QUOTA, USED_UP_WINDOW } from './capacity.js'
 import { OTHER_REPOSITORY, type Catalog, type Probe, type RoutePlugin } from './route.js'
 import { MAKER_TIMEOUT_MS, type PluginInput, type PluginMaker } from './routePlugins.js'
+import { placedHeavyWork } from './machineFit.js'
+import { inspectCapacity } from './start.js'
+import { EARLIER_UNREADABLE, FIRST_ATTEMPT_ONLY, GRID_FIRST, GRID_LIMITS, NEVER_REVIEWS } from './routeCheapFirst.js'
 
 // Sonnet rated 3, as an owner who wants Sonnet Builders rates it (a build needs 3: route.ts buildRefusals), so the member these
 // specs probe can build; the specs of the floor itself use a table of their own ([floorPolicy]).
@@ -144,6 +147,20 @@ describe('routeTask', () => {
     expect(await routeTask(input, s, where as never, opener(), () => 'op')).toMatchObject({ instructions: { revision: 1, notes: [] } })
     expect(leftOut([{ title: 't', reason: 'x'.repeat(301), machine: 'm' }], [])).toEqual([{ machine: 'm', reasons: [`${'x'.repeat(299)}…`] }])
   })
+  it('pulls the task onto the account whose weekly window resets soon with quota left, through its listed maker (piece 6)', async () => {
+    const reading = (account: string, weeklyUsed: number, weeklyResetsIn: number) => ({ providers: [{ provider: 'claude', outcome: 'answered', httpStatus: 200, account,
+      body: { five_hour: { utilization: 20, resets_at: new Date(Date.now() + 3 * 3_600_000).toISOString() },
+        seven_day: { utilization: weeklyUsed, resets_at: new Date(Date.now() + weeklyResetsIn).toISOString() } } }] })
+    // m1 (remote-1) has a fresh week; m2 (mac) resets in 12 hours with 60% left.
+    const machines = opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], usage: id === 'm2' ? reading('acct-soon', 40, 12 * 3_600_000) : reading('acct-fresh', 10, 5 * 86_400_000) }))
+    const plain = await routeTask(input, scoped(), where as never, machines, () => 'op', undefined, [])
+    expect(plain).toMatchObject({ ok: true, pick: { title: expect.stringContaining('remote-1') } })
+    const s = scoped()
+    const pulled = await routeTask(input, s, where as never, machines, () => 'op')
+    expect(pulled).toMatchObject({ ok: true, pick: { title: expect.stringContaining('mac') } })
+    expect(labels(s)[0]).toContain('Window pull: its account\'s weekly window resets in 12h')
+    expect(JSON.stringify(pulled)).not.toContain('acct-soon')
+  })
   it('answers exactly as before with no makers, and with makers that have nothing to say', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     try {
@@ -174,6 +191,39 @@ describe('routeTask', () => {
     } finally { vi.useRealTimers() }
   })
   // A member at work is not offered; one whose task was lost is, with a note ('a member whose last task was lost').
+  it('judges heavy work by a machine reached directly, its members too, by the disk its capacity read measured', async () => {
+    const heavy = (needs: Record<string, unknown>) => ({ ...input, assessment: { ...input.assessment, needs: { heavy: ['build'], ...needs } } })
+    const reading = (resources: Record<string, unknown>) => opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], capacity: { resources, tools: { git: true }, devices: {} } }))
+    const disky = { memoryTotalBytes: 16e9, memoryUsedBytes: 2e9, cpuPercent: 10, projectDiskFreeBytes: 20e9 }
+    const short = 'Machine fit: Short of free disk for a heavy build: it needs 8 GB memory and 30 GB disk free, so equally strong candidates that have it rank first.'
+    const answer = await routeTask(heavy({}), scoped(), where as never, reading(disky))
+    const shown = [answer.pick, ...answer.alternatives as unknown[]] as Array<{ kind: string; notes?: string[] }>
+    expect(new Set(shown.map(c => c.kind))).toEqual(new Set(['member', 'new']))
+    for (const c of shown) expect(c.notes).toContain(short)
+    const folder = { describe: async () => null, isDirectory: async () => true }
+    expect(await routeTask(heavy({ cwd: '/repo' }), scoped(), where as never, reading(disky), () => 'op', folder)).toMatchObject({ ok: true, pick: { notes: expect.arrayContaining([short]) } })
+    // A read that measured no disk says so; its new agents' starts could not verify the disk either.
+    const blind = await routeTask(heavy({}), scoped(), where as never, reading({ memoryTotalBytes: 16e9, memoryUsedBytes: 2e9, cpuPercent: 10 }))
+    expect(blind).toMatchObject({ pick: { kind: 'member', notes: expect.arrayContaining(['Machine fit: Free disk unknown here; a heavy build: it needs 8 GB memory and 30 GB disk free.']) } })
+  })
+  // Lead, 10-31: a routed heavy start is never refused on the machine the route offered.
+  it('ranks a machine between half the need and the need later, and the start there is admitted and counts as heavy', async () => {
+    const between = { memoryTotalBytes: 16e9, memoryUsedBytes: 10e9, cpuPercent: 10, projectDiskFreeBytes: 100e9 }
+    const roomy = { memoryTotalBytes: 32e9, memoryUsedBytes: 2e9, cpuPercent: 10, projectDiskFreeBytes: 100e9 }
+    const machines = (id: string) => daemon(id, { capacity: { resources: id === 'm1' ? between : roomy, tools: { git: true }, devices: {} } })
+    const heavy = { ...input, assessment: { ...input.assessment, needs: { heavy: ['build'] } } }
+    const noMembers = tab(); noMembers.state.agents = agents.filter(a => a.id === 'a2') as never
+    const answer = await routeTask(heavy, scoped({ tab: noMembers }), where as never, opener(machines))
+    expect(answer).toMatchObject({ ok: true, pick: { machineId: 'm2' } })
+    const later = (answer.alternatives as Array<{ machineId: string; engine: string; notes?: string[] }>).find(c => c.machineId === 'm1')!
+    expect(later.notes).toContain('Machine fit: Short of free memory for a heavy build: it needs 8 GB memory and 30 GB disk free, so equally strong candidates that have it rank first.')
+    // The start the route suggests, on that machine: its own check admits it, and later routes count it as heavy work there.
+    const hint = JSON.parse(String(answer.next).replace(/^Start with: start OPERATION_ID /, '').replace(/, then assign[\s\S]*$/, ''))
+    const request = { ...hint, machineId: 'm1', engine: later.engine }
+    expect(await inspectCapacity(machines('m1') as never, request)).toMatchObject({ allowed: true })
+    expect(request.heavy).toEqual(['build'])
+    expect(placedHeavyWork([{ request, requestedAt: Date.now() }], Date.now()).get('m1')).toMatchObject({ agents: 1, memoryBytes: 8e9 })
+  })
   it('does not offer a member whose task is working', async () => {
     const state = tab({ id: 'x', agentId: 'a1', status: 'working' })
     const s = scoped({ tab: state })
@@ -1000,6 +1050,32 @@ describe('routing contributed capacity', () => {
     const member = await runPool(healthy(), true)
     expect(member.answer.ok).toBe(true)
   })
+  // Scholes's goals, piece 5 (machineFit.ts): heavy work is judged by the machine's reading, for its members as for new agents.
+  it('judges heavy work by the contributed machine\'s free memory, disk and CPU, for members too, and its start says it is heavy', async () => {
+    const pool = healthy(); Object.assign(pool.observation.resources, { memoryUsedBytes: 26e9, cpuPercent: 92 })
+    const { answer } = await runPool(pool, true, { heavy: ['build'] })
+    const short = 'Machine fit: Short of free memory for a heavy build: it needs 8 GB memory and 30 GB disk free, so equally strong candidates that have it rank first. Its CPU is busy.'
+    const shown = [answer.pick, ...answer.alternatives as unknown[]] as Array<{ kind: string; notes?: string[] }>
+    expect(new Set(shown.map(c => c.kind))).toEqual(new Set(['member', 'new']))
+    for (const c of shown) expect(c.notes).toContain(short)
+    expect((await runPool(healthy(), false, { heavy: ['build'] })).answer.next).toContain('"requirements":{"memoryBytes":4000000000,"diskBytes":15000000000')
+    expect((await runPool(healthy(), false, { heavy: ['build'] })).answer.next).toContain('"heavy":["build"]')
+    expect((await runPool(healthy(), false)).answer.next).not.toContain('heavy')
+    // A reading with no CPU says nothing of it, and a machine that has what it needs says nothing at all.
+    const roomy = await runPool(healthy(), true, { heavy: ['build'] })
+    expect((roomy.answer.pick as { notes?: string[] }).notes ?? []).not.toEqual(expect.arrayContaining([expect.stringContaining('Machine fit')]))
+  })
+  // Review of #2426 (privacy): every reader of the route log reads the reasons, also for a machine the route shows nothing else
+  // of. A paused machine offers no new agent, so its reading was never shown; its member's reason must not show it either.
+  it('never shows a paused machine\'s measured memory, disk or CPU in its member\'s reason, the answer or the record', async () => {
+    const pool = { ...healthy(), paused: true }; Object.assign(pool.observation.resources, { memoryUsedBytes: 26e9, cpuPercent: 92 })
+    const { answer, s } = await runPool(pool, true, { heavy: ['build'] })
+    expect(answer).toMatchObject({ ok: true, pick: { kind: 'member', notes: expect.arrayContaining([
+      'Machine fit: Short of free memory for a heavy build: it needs 8 GB memory and 30 GB disk free, so equally strong candidates that have it rank first. Its CPU is busy.']) } })
+    for (const text of [JSON.stringify(answer), JSON.stringify(recorded(s).command.decision)]) {
+      for (const measured of ['6.0 GB', '200.0 GB', '92%', '6 GB', '200 GB']) expect(text).not.toContain(measured)
+    }
+  })
   it('reads an old OpenCode contribution as its installed Claude observation', async () => {
     const pool = healthy()
     pool.engines = ['opencode']
@@ -1571,7 +1647,8 @@ describe('local models on the Swarm\'s grid', () => {
         { grid: GRID, model: 'deepseek/deepseek-v4.1', kind: 'api' }, { grid: GRID, model: 'starting', starting: true }, { grid: 7, model: 'odd' }] } },
       { machineId: 'old', observation: { receivedAt: 'never', localModels: [{ grid: GRID, model: 'unnamed-host' }] } }] })
     const s = scoped({ tab: t })
-    const result = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'low', local: true } }, s, where as never, opener(), () => 'op')
+    // A grid model takes only work of a listed kind (routeCheapFirst.ts GRID_KINDS).
+    const result = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'low', local: true, kind: 'docs' } }, s, where as never, opener(), () => 'op')
     const excluded = recorded(s).command.decision.excluded as Array<{ title: string; reason: string }>
     expect(excluded.filter(e => /offline/.test(e.reason))).toEqual([
       { title: 'Kimi K3', reason: 'Its host 2x 4090 Rig is offline, so an agent on it would never start.' },
@@ -1591,7 +1668,8 @@ describe('local models on the Swarm\'s grid', () => {
     const t = tab(); Object.assign(t.state, { localModels: { grid: GRID, enabled: true },
       machines: [{ machineId: 'm1', observation: { receivedAt: Date.now(), localModels: [{ grid: GRID, model: 'qwen3', name: 'Qwen 3' }] } }] })
     const s = scoped({ tab: t })
-    const result = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'low', local: true } }, s, where as never, opener(), () => 'op')
+    // A grid model takes only work of a listed kind (routeCheapFirst.ts GRID_KINDS).
+    const result = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'low', local: true, kind: 'docs' } }, s, where as never, opener(), () => 'op')
     expect(result).toMatchObject({ ok: true, pick: { kind: 'new', gridModel: 'qwen3', gridName: GRID } })
     const hint = JSON.parse(/start OPERATION_ID (\{.*\}), then/.exec(result.next as string)![1]!)
     expect(hint).toMatchObject({ engine: 'claude', gridModel: 'qwen3', gridName: GRID })
@@ -1682,7 +1760,8 @@ describe('routing by facts', () => {
     const t = tab(); Object.assign(t.state, { localModels: { grid: GRID, enabled: true },
       machines: [{ machineId: 'rig', name: 'Rig', observation: { receivedAt: Date.now(), localModels: [], refusedModels: [{ grid: GRID, model: 'llama3.2:3b', why }] } }] })
     const s = scoped({ tab: t })
-    const result = await routeTask({ ...input, assessment: { ...input.assessment, local: true } }, s, where as never, opener(), () => 'op')
+    // A grid model takes only work of a listed kind (routeCheapFirst.ts GRID_KINDS).
+    const result = await routeTask({ ...input, assessment: { ...input.assessment, local: true, kind: 'tests' } }, s, where as never, opener(), () => 'op')
     expect(result).toMatchObject({ ok: true, pick: { gridModel: 'llama3.2:3b', notes: [why] } })
     expect(shown(s).every(r => r.gridModel === 'llama3.2:3b' && r.label.includes(why))).toBe(true)
   })
@@ -1705,5 +1784,94 @@ describe('routing by facts', () => {
     // A backend without instructions takes no roleName.
     const old = await routeTask(hard, scoped({ tab: crew(), policy: floorPolicy, instructions: { error: 'NOT_FOUND' } }), where as never, opener(), () => 'op')
     expect(old.next).not.toContain('roleName')
+  })
+})
+
+/** Cheap first (Scholes's goals, piece 4) through the whole route: what it reads of the task comes from the tab and the log. */
+describe('cheap first, through the route', () => {
+  const GRID = 'swarm-0123456789ab', KIMI = 'moonshotai/kimi-k3'
+  /** The Swarm serves Kimi K3 on its grid beside the Claude agents of remote-1 and the member Multiply; g1 is a one-file fix. */
+  const cheap = (group: Record<string, unknown> = {}, more: Record<string, unknown> = {}) => {
+    const t = tab()
+    Object.assign(t.state, { localModels: { grid: GRID, enabled: true },
+      machines: [{ machineId: 'gpu', name: 'rig', observation: { receivedAt: Date.now(), localModels: [{ grid: GRID, model: KIMI, name: 'Kimi K3', kind: 'api' }] } }], ...more })
+    Object.assign(t.state.conversations[1]!, { task: { goal: 'Fix the typo.', owns: ['docs/guide.md'] } }, group)
+    return t
+  }
+  const small = { ...input, assessment: { difficulty: 'low', risk: 'low', size: 'small', why: 'A typo in one doc.', kind: 'docs' } }
+  /** The table with the catalog's grid ratings: Kimi K3 at 2. */
+  const rated = { ...policy, localModels: { quality: 1, enabled: true, models: [{ model: 'kimi k3', quality: 2 }] } } as typeof policy
+  const route = (t: ReturnType<typeof tab>, task = small, history?: Record<string, unknown>) => {
+    const s = scoped({ tab: t, policy: rated, ...(history ? { history } : {}) })
+    return routeTask(task, s, where as never, opener(), () => 'op').then(answer => ({ answer, s, excluded: recorded(s).command.decision.excluded as Array<{ reason: string }> }))
+  }
+
+  it('a small, low-risk build\'s first attempt is started on Kimi K3, with why', async () => {
+    const { answer, s } = await route(cheap())
+    expect(answer).toMatchObject({ ok: true, pick: { kind: 'new', gridModel: KIMI, gridName: GRID, notes: [`Cheap first: ${GRID_FIRST}`] } })
+    expect(recorded(s).command.decision.candidates[0]).toMatchObject({ gridModel: KIMI, quality: 2 })
+    // A medium task keeps today's order: the grid model ranks below the strong ones.
+    const medium = await route(cheap(), { ...small, assessment: { ...small.assessment, difficulty: 'medium' } })
+    expect(medium.answer).toMatchObject({ ok: true, pick: { kind: 'member', model: 'sonnet' } })
+  })
+
+  it('steps up: once the task had an attempt on Kimi K3, the next route leaves the grid out and starts a strong model (Sonnet is rated 3 in this table)', async () => {
+    const tried = cheap({ assignment: { id: 'w1', agentId: 'a3', status: 'cancelled', result: 'Its first review said Ready no.' } }, {
+      agents: [...agents, { id: 'a3', name: 'Kestrel', machineId: 'm1', harnessId: 'h3', configuration: { engine: 'claude', model: 'default', effort: 'default' } }],
+      starts: [{ id: 's1', harnessId: 'h3', request: { conversationId: 'g1', machineId: 'm1', gridModel: KIMI, gridName: GRID } }] })
+    const { answer, excluded } = await route(tried)
+    expect(answer).toMatchObject({ ok: true, pick: { kind: 'member', model: 'sonnet' } })
+    expect((answer.pick as Record<string, unknown>).gridModel).toBeUndefined()
+    expect(excluded).toContainEqual(expect.objectContaining({ reason: `Cheap first: ${FIRST_ATTEMPT_ONLY} Its earlier attempt ran on ${KIMI} on the Swarm's grid.` }))
+    // A log that could not be read is no proof of a first attempt.
+    const unread = await route(cheap(), small, { error: 'BACKEND_UNAVAILABLE' })
+    expect(unread.answer).toMatchObject({ ok: true, pick: { kind: 'member', model: 'sonnet' } })
+    expect(unread.excluded).toContainEqual(expect.objectContaining({ reason: `Cheap first: ${FIRST_ATTEMPT_ONLY} ${EARLIER_UNREADABLE}` }))
+  })
+
+  it('the review of a grid-built pull request still runs on a strong model: the grid is left out with why', async () => {
+    // g1 was built on Kimi K3; its review task r1 is routed as small and low-risk as the build was, with no kind given.
+    const built = cheap({ assignment: { id: 'w1', agentId: 'a3', status: 'review' }, pullRequestUrls: ['https://github.com/o/r/pull/1'] }, {
+      agents: [...agents, { id: 'a3', name: 'Kestrel', machineId: 'm1', harnessId: 'h3', configuration: { engine: 'claude', model: 'default', effort: 'default' } }],
+      starts: [{ id: 's1', harnessId: 'h3', request: { conversationId: 'g1', machineId: 'm1', gridModel: KIMI, gridName: GRID } }] })
+    built.state.conversations.push({ id: 'r1', title: 'Review: API', leadId: 'lead', agentIds: ['lead'], archived: false, brief: '', checks: [{ description: 'Verdict' }],
+      assignment: null, reviewOf: 'g1', task: { goal: 'Review it.', owns: ['docs/guide.md'] } } as never)
+    const { answer, s, excluded } = await route(built, { ...small, conversationId: 'r1' })
+    expect(answer).toMatchObject({ ok: true, pick: { kind: 'member', model: 'sonnet' } })
+    const candidates = recorded(s).command.decision.candidates as Array<{ gridModel?: string; quality: number }>
+    expect(candidates.some(c => c.gridModel)).toBe(false)
+    expect(candidates[0]!.quality).toBe(3)
+    expect(excluded).toContainEqual(expect.objectContaining({ reason: `${GRID_LIMITS}: ${NEVER_REVIEWS}` }))
+    // Even when a person names the grid model for it.
+    const named = await routeTask({ ...small, conversationId: 'r1', assessment: { ...small.assessment, model: 'kimi' } }, scoped({ tab: built, policy: rated }), where as never, opener(), () => 'op')
+    expect(named).toMatchObject({ error: 'NO_CANDIDATE' })
+  })
+})
+
+/** Piece 3 through the route itself, with the makers it ships with (routePlugins.ts ROUTE_PLUGIN_MAKERS). */
+describe('routing by measured cost and results', () => {
+  const row = (model: string, effort: string, fullCostPerShipped: number) => ({ engine: 'claude', model, effort, kind: 'build', firstReviews: 10,
+    firstReviewPassed: 8, shipped: 6, costPerShipped: 1, fullCostPerShipped, fullCostKnown: 1 })
+  const built = { ...input, assessment: { ...input.assessment, kind: 'build' } }
+  const withCosts = (base: ReturnType<typeof scoped>, answer: (payload: Record<string, unknown>) => Promise<Answer>) =>
+    vi.fn(async (payload: Record<string, any>) => payload.action === 'costs' ? answer(payload) : base(payload))
+
+  it('reads the last 7 days\' results and ranks the choice that costs less per shipped change first, with its numbers', async () => {
+    const base = scoped()
+    // Sonnet ranks first today (cost 2 against Opus's 3); measured in full, Opus costs $3 per shipped change and Sonnet $9.
+    const plain = await routeTask(input, scoped(), where as never, opener(), () => 'op')
+    expect(plain).toMatchObject({ pick: { model: 'sonnet' } })
+    const s = withCosts(base, async () => ({ ok: true, value: { truncated: false, rows: [row('opus', 'high', 3), row('sonnet', 'medium', 9)] } }))
+    const result = await routeTask(built, s, where as never, opener(), () => 'op')
+    expect(s.mock.calls.filter(c => c[0].action === 'costs').map(c => c[0])).toEqual([{ action: 'costs', days: 7 }])
+    expect(result).toMatchObject({ ok: true, pick: { model: 'opus', notes: expect.arrayContaining([expect.stringMatching(/^measured results: build work, last 7 days: 8 of 10 first reviews passed, \$3\.00 per shipped change over 6/)]) } })
+    expect(labels(base)[0]).toContain('measured results: build work')
+  })
+
+  it('a failed read leaves today\'s ranking and says so', async () => {
+    const s = withCosts(scoped(), async () => ({ error: 'FORBIDDEN' }))
+    const result = await routeTask(built, s, where as never, opener(), () => 'op')
+    expect(result).toMatchObject({ ok: true, pick: { model: 'sonnet' },
+      warnings: expect.arrayContaining(['The routing plug-in "measured results" was skipped: its maker failed. The route is ranked without it.']) })
   })
 })

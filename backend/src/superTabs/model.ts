@@ -127,6 +127,10 @@ export interface AgentStartRequest {
   codexHome?: string
   gridModel?: string
   gridName?: string
+  /** The heavy work the task declared it runs on its machine (a heavy build, end-to-end tests): later routes count such a start
+   *  on its machine for a few minutes, before the machine's reading shows it (cli superTabs/machineFit.ts, Scholes's goals,
+   *  piece 5). Its requirements ask only the least the work runs with, so this says what it is. */
+  heavy?: Array<'build' | 'e2e'>
   requirements: { memoryBytes: number; diskBytes: number; maxCpuPercent: number; tools: string[]; devices: string[]; quotaRequired: boolean }
   /** A Buddy's start (buddies.ts): written by buddy.create alone, never taken from an agent.start. */
   buddyOf?: { personId: string; generation: string }
@@ -305,15 +309,18 @@ export interface Conversation {
   ledger?: import('./leaderboard/record.js').GroupLedger
   /** Whether its task is moving, waiting on purpose or stuck, as the time checks last found it (liveness.ts recordTaskStates). */
   liveness?: TaskLiveness
-  /** Its last step up from a cheaper model, on a task from before project instructions; never written since (phase 4: a
-   *  failed first review or start is a notice to the coordinator). The leaderboard still reads it on such a task. */
+  /** Its last step up from a cheaper model: written when a grid attempt's first review fails (commands.ts reviewFailed, goals
+   *  piece 4; before project instructions also by the server's step up). Nothing is cancelled: the route reads it to leave the
+   *  grid out of the next attempt, route records carry it for the costs report, and the leaderboard reads it. */
   stepUp?: StepUp
   /** The last route, start or assignment on its task by an agent of its project, or its coordinator's post there (commands.ts). */
   leadAction?: { kind: 'assign' | 'route' | 'start' | 'post'; at: number }
 }
 /** A step up: the attempt it opened (2 or 3), the least quality from then on, why, when, and what the failed attempt left for
  *  the next one's brief; the failed start that caused it, if one did. */
-export interface StepUp { attempt: number; floor: number; reason: string; at: number; carry: string; startId?: string }
+export interface StepUp { attempt: number; floor: number; reason: string; at: number; carry: string; startId?: string
+  /** A route record carries it already (commands.ts route.record): later routes of the task do not, so it counts once. */
+  recorded?: true }
 /** Absent while its task is working (its agent reported in the last 30 minutes; its last progress is its assignment's
  *  `progressAt`) or there is none. `waiting`: on a person (`personId`), a review, its stated
  *  blocker, the new revision of the build it reviews, or its agent's start. `quiet`: its agent has reported nothing for 30 minutes

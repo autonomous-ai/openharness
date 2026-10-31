@@ -653,6 +653,17 @@ describe('deleting abandoned swarm projects', () => {
     await expect(run(tab, command, peer, undefined, operationId)).rejects.toMatchObject({ code: 'FORBIDDEN' })
   })
 
+  // Scholes's goals, piece 5: the heavy work a start declares is stored with it and read back, so later routes count it.
+  it('stores the heavy work a start declares and reads it back with the start and the Super Tab', async () => {
+    const { tab } = await fixture()
+    const { conversationId } = (await run(tab, { type: 'project.create', name: 'Heavy start', visibility: 'public', brief: '' })).result as { conversationId: string }
+    const request = { conversationId, machineId: 'test-host', engine: 'codex', name: 'Builder', cwd: '/work', worktree: true, heavy: ['build'],
+      requirements: { memoryBytes: 4e9, diskBytes: 15e9, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
+    const startId = String((await run(tab, { type: 'agent.start', request } as Command)).result.startId)
+    expect((await store.start(owner, tab, startId)).request).toMatchObject({ heavy: ['build'] })
+    expect((await store.read(owner, tab)).state.starts?.find(s => s.id === startId)?.request).toMatchObject({ heavy: ['build'], requirements: { memoryBytes: 4e9 } })
+  })
+
   it('refuses pending starts and prevents a failed start from joining after deletion', async () => {
     const { tab } = await fixture()
     const { projectId, conversationId } = (await run(tab, { type: 'project.create', name: 'Failed start', visibility: 'public', brief: '' })).result as { projectId: string; conversationId: string }
