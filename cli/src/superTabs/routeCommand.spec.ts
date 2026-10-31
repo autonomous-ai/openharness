@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { ELSEWHERE, heldLocalModels, localProbes, NO_SWARM_AGENTS_ON, offlineModels, routeTask, servedModels, STALL_RETRY_MS, stalled } from './routeCommand.js'
 import type { describeScmProject } from '../scm/scmProjects.js'
 import { admission, quotaOf, RELAYED_QUOTA, USED_UP_WINDOW } from './capacity.js'
-import { OTHER_REPOSITORY, type Catalog, type Probe } from './route.js'
+import { OTHER_REPOSITORY, type Catalog, type Probe, type RoutePlugin } from './route.js'
 
 // Sonnet rated 3, as an owner who wants Sonnet Builders rates it (a build needs 3: route.ts buildRefusals), so the member these
 // specs probe can build; the specs of the floor itself use a table of their own ([floorPolicy]).
@@ -113,6 +113,21 @@ describe('routeTask', () => {
     const titles = (record.command.decision.candidates as Array<{ title: string }>).map(c => c.title)
     expect(titles).toContain('Multiply · Claude sonnet medium · remote-1')
     expect((result.alternatives as unknown[]).length).toBeLessThanOrEqual(2)
+  })
+  it('ranks with the plug-ins it is given: their reasons in the answer and the record, a failed one named in the warnings', async () => {
+    const s = scoped()
+    const plugins: RoutePlugin[] = [{ name: 'Machine fit', adjust: c => c.kind === 'new' ? { strength: 5, reason: 'a fresh worktree here' } : null },
+      { name: 'Broken', adjust: () => { throw new Error('secret') } }]
+    const result = await routeTask(input, s, where as never, opener(), () => 'op', undefined, plugins)
+    expect(result).toMatchObject({ ok: true, pick: { kind: 'new', notes: expect.arrayContaining(['Machine fit: a fresh worktree here']) },
+      why: expect.stringContaining('plug-ins'), warnings: ['w', 'The routing plug-in "Broken" failed, so the route was ranked without it.'] })
+    expect(labels(s)[0]).toContain('Machine fit: a fresh worktree here')
+    expect(JSON.stringify(result)).not.toContain('secret')
+    // Nothing can run: the answer still names the failed plug-in.
+    const none = await routeTask(input, scoped(), where as never, opener(), () => 'op', undefined, [{ name: 'Nobody', adjust: () => ({ refuse: true, reason: 'no room' }) },
+      { name: 'Broken', candidates: () => { throw new Error('secret') } }])
+    expect(none).toMatchObject({ error: 'NO_CANDIDATE', warnings: ['The routing plug-in "Broken" failed, so the route was ranked without it.'],
+      leftOut: expect.arrayContaining([{ machine: 'remote-1', reasons: expect.arrayContaining(['Nobody: no room']) }]) })
   })
   // A member at work is not offered; one whose task was lost is, with a note ('a member whose last task was lost').
   it('does not offer a member whose task is working', async () => {

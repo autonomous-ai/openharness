@@ -72,8 +72,70 @@ export interface Shown extends Probe { id: string; title: string; label: string;
 /** A candidate left out and why; [machine] names its machine, absent for a model that is not offered anywhere. */
 export interface Excluded { title: string; reason: string; machine?: string }
 /** `floor` and `belowFloor` are what the decision log still takes (backend routeRecord.ts): there is no floor, so 1 and false.
- *  `short` says when the pick is not expected to cover the task on its quota. */
-export interface Choice { shown: Shown[]; excluded: Excluded[]; floor: 1; belowFloor: false; short?: string }
+ *  `short` says when the pick is not expected to cover the task on its quota. `adjusted`: a plug-in moved a candidate or left
+ *  one out ([RoutePlugin]). `warnings`: the plug-ins that failed and were left out of this route. */
+export interface Choice { shown: Shown[]; excluded: Excluded[]; floor: 1; belowFloor: false; short?: string; adjusted?: true; warnings?: string[] }
+export type NoCandidate = { error: 'NO_CANDIDATE'; excluded: Excluded[]; warnings?: string[] }
+
+/** What a plug-in sees of the route it ranks: the task, the time, the catalog, and the picks still at work. */
+export interface RouteContext { readonly assessment: Assessment; readonly now: number; readonly catalog: Catalog; readonly open: readonly Commitment[] }
+/** A plug-in's word on one candidate. `strength` and `cost` shift the two terms the order ranks by (stronger first, then
+ *  cheaper in effect), in the catalog's units: +0.5 strength or -1 cost moves it up. Neither changes what the candidate is
+ *  shown and recorded as (its strength, cost and fit stay as measured). `refuse` leaves it out, only for a fact that it cannot
+ *  run there. `reason` is what people read, on the candidate's notes as "name: reason", so it holds only what every reader of
+ *  the Swarm's route log may see: never one member's raw usage or anything private to a person or chat. */
+export interface Adjustment { reason: string; strength?: number; cost?: number; refuse?: true }
+/** One piece of the ranking that is not the route's own (Scholes's goals, pieces 3 to 6: measured cost and results, more model
+ *  candidates, machine fit, window pull). Plug-ins run in their list's order: each `candidates` call sees the probes so far,
+ *  earlier plug-ins' among them, and returns more, which every rule of [choose] then treats like the others; `adjust` judges
+ *  each candidate that can run, after its quota fit is known. A plug-in must be pure and synchronous: what it needs from
+ *  outside is read before the route and given to it when it is made. One that throws, or answers what cannot be ranked, is
+ *  left out of the whole route, so it never judges some candidates and not others, and the answer names it. */
+export interface RoutePlugin {
+  readonly name: string
+  candidates?(probes: readonly Probe[], context: RouteContext): Probe[]
+  adjust?(candidate: Readonly<Probe & { fit: Fit }>, context: RouteContext): Adjustment | null
+}
+/** The order's two adjustable terms for one candidate ([compare]); with no plug-in they are its strength and effective cost. */
+interface Ranked { strength: number; cost: number }
+const pluginFailed = (name: string) => `The routing plug-in "${cut(name, 80)}" failed, so the route was ranked without it.`
+const isProbe = (p: unknown): p is Probe => {
+  const v = object(p)
+  return typeof v.machineId === 'string' && typeof v.machineName === 'string' && ENGINES.includes(String(v.engine)) && typeof v.model === 'string'
+    && typeof v.effort === 'string' && finite(v.quality) && finite(v.cost) && Array.isArray(v.refusals) && Array.isArray(v.notes) && !!v.quota
+}
+/** The probes with each plug-in's added candidates, in the plug-ins' order. A plug-in whose answer is not a list of probes adds
+ *  nothing and is named in [warnings]. */
+function withPluginCandidates(probes: Probe[], plugins: readonly RoutePlugin[], context: RouteContext, warnings: string[]): Probe[] {
+  let all = probes
+  for (const plugin of plugins) {
+    if (!plugin.candidates) continue
+    try {
+      const added: unknown = plugin.candidates(all, context)
+      if (!Array.isArray(added) || !added.every(isProbe)) throw new Error('not a list of candidates')
+      all = [...all, ...added]
+    } catch { warnings.push(pluginFailed(plugin.name)) }
+  }
+  return all
+}
+const validAdjustment = (x: Adjustment | null): x is Adjustment | null => x === null || (typeof x === 'object' && typeof x.reason === 'string'
+  && !!x.reason.trim() && (x.strength === undefined || finite(x.strength)) && (x.cost === undefined || finite(x.cost))
+  && (x.refuse === undefined || x.refuse === true))
+/** Every plug-in's adjustments of [ranked], plug-in by plug-in: one that throws or answers what cannot be ranked for any
+ *  candidate is dropped for all of them and named in [warnings]. */
+function pluginAdjustments<T extends Probe & { fit: Fit }>(ranked: T[], plugins: readonly RoutePlugin[], context: RouteContext,
+  warnings: string[]): Array<Array<{ name: string; adjustment: Adjustment }>> {
+  const each = ranked.map(() => [] as Array<{ name: string; adjustment: Adjustment }>)
+  for (const plugin of plugins) {
+    if (!plugin.adjust) continue
+    try {
+      const answers = ranked.map(p => plugin.adjust!(p, context))
+      if (!answers.every(validAdjustment)) throw new Error('not an adjustment')
+      answers.forEach((adjustment, i) => { if (adjustment) each[i]!.push({ name: plugin.name, adjustment }) })
+    } catch { warnings.push(pluginFailed(plugin.name)) }
+  }
+  return each
+}
 export interface Verdict { pick: Shown; via: 'order' | 'only'; p: null; why: string }
 
 const LEVELS: Level[] = ['low', 'medium', 'high']
@@ -347,15 +409,15 @@ const FIT_ORDER = { fits: 0, unknown: 1, short: 2 } as const
 /** The order: a member in another repository last; then stronger, cheaper in effect (price, less with a 5-hour window that
  *  would otherwise go unused), a better quota fit, an idle member in the task's repository before a new agent, then by title
  *  (project instructions, phase 4). */
-function compare(x: Probe & Sized, y: Probe & Sized): number {
+function compare(x: Probe & Sized & { rank: Ranked }, y: Probe & Sized & { rank: Ranked }): number {
   // A member in another repository tied a new agent and its name decided whether it took the task (Diego, 2026-10-30, #2377);
   // ranked only after a new agent, a cheaper model or more quota still won it. The route no longer tells a build from a
   // review, which needs no worktree, so it is shown last with OTHER_REPOSITORY as a note (choose), never left out.
   const elsewhere = (p: Probe) => p.kind === 'member' && p.repo === 'different' ? 1 : 0
   const placed = (p: Probe) => p.kind === 'member' && (p.repo ?? 'same') === 'same' ? 0 : 1
   return elsewhere(x) - elsewhere(y)
-    || y.quality - x.quality
-    || x.fit.effectiveCost - y.fit.effectiveCost
+    || y.rank.strength - x.rank.strength
+    || x.rank.cost - y.rank.cost
     || FIT_ORDER[x.fit.status] - FIT_ORDER[y.fit.status]
     || placed(x) - placed(y)
     || titleOf(x).localeCompare(titleOf(y))
@@ -383,10 +445,14 @@ function unratedProbes(probes: Probe[], named: string): Probe[] {
 /** The candidates that can run the task, ranked ([compare]), and those that cannot, with why. A catalog row not offered by
  *  default (Sonnet, Haiku) is offered when a person names it; its note goes with it, and with a member already on it.
  *  `held`: models served for the Swarm that take no more agents, to say who holds a named or local model none offers.
- *  `offline`: models a host now offline served (routeCommand.ts offlineModels), by name. */
-export function choose(probes: Probe[], catalog: Catalog, a: Assessment, now: number = Date.now(), open: Commitment[] = [], held: HeldModel[] = [],
-  offline: Array<{ title: string; reason: string }> = []): Choice | { error: 'NO_CANDIDATE'; excluded: Excluded[] } {
+ *  `offline`: models a host now offline served (routeCommand.ts offlineModels), by name. `plugins`: [RoutePlugin]; with none
+ *  the answer is exactly what it was before plug-ins existed (route.spec.ts, route answers without plug-ins). */
+export function choose(given: Probe[], catalog: Catalog, a: Assessment, now: number = Date.now(), open: Commitment[] = [], held: HeldModel[] = [],
+  offline: Array<{ title: string; reason: string }> = [], plugins: readonly RoutePlugin[] = []): Choice | NoCandidate {
   const named = a.model
+  const context: RouteContext = { assessment: a, now, catalog, open }, warnings: string[] = []
+  const probes = withPluginCandidates(given, plugins, context, warnings)
+  const warned = () => warnings.length ? { warnings } : {}
   const noted = probes.flatMap(p => {
     const row = p.gridModel ? null : p.kind === 'new' ? catalog.models.find(m => m.engine === p.engine && m.model === p.model && m.effort === p.effort) ?? null
       : catalogRow(catalog, p.engine, p.model, p.effort)
@@ -417,11 +483,26 @@ export function choose(probes: Probe[], catalog: Catalog, a: Assessment, now: nu
     if (held.length) excluded.push(...held.map(m => ({ title: 'Local models', reason: heldReason(m) })))
     else excluded.push({ title: 'Local models', reason: LOCAL_NONE })
   }
-  if (!viable.length) return { error: 'NO_CANDIDATE', excluded }
-  const ranked = viable.map(p => ({ ...p, ...sizeUp(p, a, now, open) })).sort(compare)
-  const shown = withEveryMachine(ranked).map(({ tight, text, ...p }, i) => ({ ...p, id: `c${i}`, title: titleOf(p), label: labelOf({ ...p, tight, text }, now) }))
+  if (!viable.length) return { error: 'NO_CANDIDATE', excluded, ...warned() }
+  const sized = viable.map(p => ({ ...p, ...sizeUp(p, a, now, open) }))
+  const adjustments = pluginAdjustments(sized, plugins, context, warnings)
+  const adjusted = adjustments.some(list => list.length)
+  const ranked = sized.flatMap((p, i) => {
+    const mine = adjustments[i]!, rank = { strength: p.quality, cost: p.fit.effectiveCost }
+    if (!mine.length) return [{ ...p, rank }]
+    const reasons = mine.map(({ name, adjustment }) => `${name}: ${adjustment.reason.trim()}`)
+    if (mine.some(m => m.adjustment.refuse)) {
+      excluded.push({ title: titleOf(p), reason: reasons.filter((_, j) => mine[j]!.adjustment.refuse).join(' '), machine: p.machineName })
+      return []
+    }
+    for (const { adjustment } of mine) { rank.strength += adjustment.strength ?? 0; rank.cost += adjustment.cost ?? 0 }
+    return [{ ...p, notes: [...p.notes, ...reasons], rank }]
+  }).sort(compare)
+  if (!ranked.length) return { error: 'NO_CANDIDATE', excluded, ...warned() }
+  const shown = withEveryMachine(ranked).map(({ tight, text, rank: _rank, ...p }, i) => ({ ...p, id: `c${i}`, title: titleOf(p), label: labelOf({ ...p, tight, text }, now) }))
   const first = ranked[0]!
-  return { shown, excluded, floor: 1, belowFloor: false, ...(first.fit.status === 'short' ? { short: shortOf(first, ranked) } : {}) }
+  return { shown, excluded, floor: 1, belowFloor: false, ...(first.fit.status === 'short' ? { short: shortOf(first, ranked) } : {}),
+    ...(adjusted ? { adjusted: true as const } : {}), ...warned() }
 }
 
 /** What the agent choosing is told when the pick is not expected to cover the task on its quota: a candidate further down
@@ -436,7 +517,8 @@ function shortOf(first: Probe & Sized, ranked: Array<Probe & Sized>): string {
 export function decide(choice: Choice): Verdict {
   const pick = choice.shown[0]!
   return choice.shown.length === 1 ? { pick, via: 'only', p: null, why: 'Only candidate that can run this task.' }
-    : { pick, via: 'order', p: null, why: 'First by strength, then price and quota fit.' }
+    : { pick, via: 'order', p: null, why: choice.adjusted ? 'First by strength, then price and quota fit, with the plug-ins\' adjustments in each candidate\'s notes.'
+      : 'First by strength, then price and quota fit.' }
 }
 
 /** The record in the shape a backend takes: `current` with the job's kind (what attempts are compared by, backend costs/read.ts),

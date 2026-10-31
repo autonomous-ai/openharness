@@ -7,7 +7,7 @@ import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
 import { RELAYED_QUOTA, requiredToolReason, startRequirements, USED_UP_WINDOW } from './capacity.js'
 import { inspectCapacity, type ScopedRequest } from './start.js'
 import { ENDED_WORK, object, within } from './wire.js'
-import { accountOf, API_BUILDERS, catalogFrom, catalogRow, choose, decide, gridStrength, parseAssessment, quotaOf2, recordOf, repoMatch, repositoryKey, type Assessment, type Catalog, type CatalogModel, type RecordShape, type Commitment, type Excluded, type HeldModel, type MemberFrame, type Probe, type TaskFolder } from './route.js'
+import { accountOf, API_BUILDERS, catalogFrom, catalogRow, choose, decide, gridStrength, parseAssessment, quotaOf2, recordOf, repoMatch, repositoryKey, type Assessment, type Catalog, type CatalogModel, type RecordShape, type Commitment, type Excluded, type HeldModel, type MemberFrame, type Probe, type RoutePlugin, type TaskFolder } from './route.js'
 import { stat } from 'node:fs/promises'
 import { describeScmProject } from '../scm/scmProjects.js'
 
@@ -199,8 +199,9 @@ function frameOf(frame: Json): MemberFrame {
     branch: text(object(object(frame.gitContext).current).branch) ?? text(project.branch), updatedAt: Number.isFinite(updatedAt) ? updatedAt : null }
 }
 
+/** `plugins`: the routing plug-ins this route ranks with (route.ts RoutePlugin), in order; none today. */
 export async function routeTask(input: { tabId: string; conversationId: string; assessment: unknown }, request: ScopedRequest, where: Where,
-  open: typeof openDaemon = openDaemon, newId: () => string = randomUUID, reader: FolderReader = FOLDER_READER): Promise<Json> {
+  open: typeof openDaemon = openDaemon, newId: () => string = randomUUID, reader: FolderReader = FOLDER_READER, plugins: readonly RoutePlugin[] = []): Promise<Json> {
   // A lost connection is an answer here, never a throw: the agent must still get a decision or a reason.
   const scoped: ScopedRequest = async payload => {
     try { return await request(payload) } catch (error) {
@@ -341,7 +342,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     .map(d => ({ account: d.account, spend: object(d.spend), size: d.size, createdAt: Date.parse(String(d.createdAt)) }) as Commitment)
   // A model a host now offline served is left out with that reason, and a person naming it gets no stand-in (route.ts choose).
   const offline = offlineModels(state)
-  const choice = choose(probes, catalog, assessment, Date.now(), working, heldLocalModels(state), offline)
+  const choice = choose(probes, catalog, assessment, Date.now(), working, heldLocalModels(state), offline, plugins)
   choice.excluded.push(...offline, ...(catalog.models.length ? [] : [{ title: 'New agents', reason: CATALOG_UNREADABLE }]))
   // The task stays in the agent's queue rather than going where it cannot be done.
   if ('error' in choice) return { ...choice, leftOut: leftOut(choice.excluded, []), ...required.machines || required.devices.length ? { waiting: true, detail: WAITING } : {} }
@@ -370,7 +371,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     warnings: [...(Array.isArray(effective.warnings) ? effective.warnings : []), ...(value.machinesUnreadable === true ? [MACHINES_UNREADABLE] : []),
       ...(catalog.models.length ? [] : [CATALOG_UNREADABLE]),
       ...(choice.shown.some(p => p.kind === 'member' && p.terminalUnverified) ? ["A member's terminal could not be verified from its machine's snapshot. Check it before assignment."] : []),
-      ...(choice.short ? [choice.short] : [])],
+      ...(choice.short ? [choice.short] : []), ...(choice.warnings ?? [])],
     next: verdict.pick.kind === 'member'
       ? `Assign with: command OPERATION_ID {"type":"work.assign","conversationId":"${input.conversationId}","agentId":"${verdict.pick.agentId}"${decision}}`
       // No fixed role name: NAME and ROLE are the agent's to fill from the project's instructions. A backend without

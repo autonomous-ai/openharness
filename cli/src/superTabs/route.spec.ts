@@ -1,7 +1,7 @@
 // cli/src/superTabs/route.spec.ts
 import { describe, expect, it } from 'vitest'
 import { API_BUILDERS, catalogFrom, catalogRow, choose, decide, gridStrength, LOCAL_NONE, OTHER_REPOSITORY, parseAssessment, quotaOf2, recordOf, repoMatch, repositoryKey, strengthOf,
-  type Assessment, type Catalog, type Commitment, type MemberFrame, type Probe, type TaskFolder } from './route.js'
+  type Assessment, type Catalog, type Commitment, type MemberFrame, type Probe, type RoutePlugin, type TaskFolder } from './route.js'
 
 const object = (v: unknown) => v as Record<string, unknown>
 
@@ -765,5 +765,95 @@ describe('route answers without plug-ins', () => {
 
   it('answers every scenario exactly as before the hook', async () => {
     await expect(`${JSON.stringify(SCENARIOS.map(answer), null, 1)}\n`).toMatchFileSnapshot('./__snapshots__/route.answers.json')
+  })
+  it('answers the same with an empty plug-in list, and with plug-ins that have nothing to say', () => {
+    const before = JSON.stringify(SCENARIOS.map(answer))
+    const silent: RoutePlugin[] = [{ name: 'Quiet' }, { name: 'Nothing to add', candidates: () => [], adjust: () => null }]
+    for (const plugins of [[], silent]) {
+      const full = ([probes, catalog, task, now, open = [], held = [], offline = []]: Args): Args => [probes, catalog, task, now, open, held, offline, plugins]
+      expect(JSON.stringify(SCENARIOS.map(([name, args]) => answer([name, full(args)])))).toBe(before)
+    }
+  })
+})
+
+/** The hook pieces 3 to 6 plug into: an ordered list of plug-ins, each able to add candidates and to adjust a candidate's place
+ *  with a reason people read. */
+describe('routing plug-ins', () => {
+  const OPUS = { model: 'opus', effort: 'high', quality: 3, cost: 3 } as const
+  const on = (machine: string, row: Partial<Probe> = {}) => probe({ machineId: machine, machineName: machine, ...OPUS, quota: windows([80, 3 * H], [90, 5 * D], machine), ...row })
+  const route = (probes: Probe[], plugins: RoutePlugin[], task: Partial<Assessment> = {}) => choose(probes, policy, a(task), NOW, [], [], [], plugins)
+  const titles = (r: ReturnType<typeof choose>) => ok(r).shown.map(s => s.machineName)
+
+  it('a plug-in\'s cost adjustment changes the order, and its reason shows on the candidate, in the label and in the record', () => {
+    expect(titles(route([on('a'), on('b')], []))).toEqual(['a', 'b'])
+    const measured: RoutePlugin = { name: 'Measured cost', adjust: c => c.machineId === 'b' ? { cost: -1, reason: 'its last 5 builds here cost half the catalog price' } : null }
+    const r = ok(route([on('a'), on('b')], [measured]))
+    expect(titles(r)).toEqual(['b', 'a'])
+    const reason = 'Measured cost: its last 5 builds here cost half the catalog price'
+    expect(r.shown[0]!.notes).toEqual([reason])
+    expect(r.shown[0]!.label).toContain(reason)
+    expect(r.shown[1]!.notes).toEqual([])
+    const verdict = decide(r)
+    expect(verdict.why).toBe('First by strength, then price and quota fit, with the plug-ins\' adjustments in each candidate\'s notes.')
+    const record = recordOf(r, verdict, a()) as { candidates: Array<{ label: string; fit: { effectiveCost: number }; quality: number; cost: number }> }
+    // What the candidate is and what its quota costs are recorded as measured; only the order and the reason change.
+    expect(record.candidates[0]).toMatchObject({ quality: 3, cost: 3, fit: { effectiveCost: ok(route([on('b')], [])).shown[0]!.fit.effectiveCost } })
+    expect(record.candidates[0]!.label).toContain(reason)
+  })
+  it('a strength adjustment ranks before price; adjustments of several plug-ins add up in their order', () => {
+    const weaker = on('s', { model: 'sonnet', effort: 'medium', quality: 2, cost: 2 })
+    const results: RoutePlugin = { name: 'Results', adjust: c => c.model === 'sonnet' ? { strength: 0.75, reason: 'merged 9 of its last 10 docs tasks' } : null }
+    const fit: RoutePlugin = { name: 'Machine fit', adjust: c => c.model === 'sonnet' ? { strength: 0.5, reason: 'has the task folder' } : null }
+    expect(titles(route([on('a'), weaker], [results]))).toEqual(['a', 's'])
+    const r = ok(route([on('a'), weaker], [results, fit]))
+    expect(titles(r)).toEqual(['s', 'a'])
+    expect(r.shown[0]!.notes).toEqual(['Results: merged 9 of its last 10 docs tasks', 'Machine fit: has the task folder'])
+    expect(r.shown[0]!.quality).toBe(2)
+  })
+  it('a refusal leaves a candidate out with the plug-in\'s reason; refusing every one is no candidate', () => {
+    const tooSmall: RoutePlugin = { name: 'Machine fit', adjust: c => c.machineId === 'a' ? { refuse: true, reason: 'has 1 GB free, the task needs 4 GB' } : null }
+    const r = ok(route([on('a'), on('b')], [tooSmall]))
+    expect(titles(r)).toEqual(['b'])
+    expect(r.excluded).toEqual([{ title: 'New agent · Claude opus high · a', reason: 'Machine fit: has 1 GB free, the task needs 4 GB', machine: 'a' }])
+    expect(decide(r).via).toBe('only')
+    const none = route([on('a')], [tooSmall])
+    expect(none).toEqual({ error: 'NO_CANDIDATE', excluded: [{ title: 'New agent · Claude opus high · a', reason: 'Machine fit: has 1 GB free, the task needs 4 GB', machine: 'a' }] })
+  })
+  it('a plug-in adds candidates, which every rule then treats like the others; a later plug-in sees an earlier one\'s', () => {
+    const seen: string[][] = []
+    const extra: RoutePlugin = { name: 'More models', candidates: probes => [on('x', { engine: 'codex', model: 'default', effort: 'default', cost: 2 }),
+      // A catalog row not offered by default stays out unless a person names it, as for any candidate.
+      on('y', { model: 'haiku', effort: 'auto', quality: 1, cost: 1 })].filter(() => probes.length > 0) }
+    const watch: RoutePlugin = { name: 'Watch', candidates: probes => { seen.push(probes.map(p => p.machineId)); return [] } }
+    const r = ok(route([on('a')], [extra, watch]))
+    expect(titles(r)).toEqual(['x', 'a'])
+    expect(seen).toEqual([['a', 'x', 'y']])
+    // A person naming a model still considers that model alone.
+    expect(titles(route([on('a')], [extra], { model: 'haiku' }))).toEqual(['y'])
+  })
+  it('a plug-in sees the task, the time, the catalog, the picks at work and each candidate\'s fit', () => {
+    const contexts: unknown[] = [], fits: string[] = []
+    const look: RoutePlugin = { name: 'Look', candidates: (_p, context) => { contexts.push(context); return [] }, adjust: (c, context) => { contexts.push(context); fits.push(c.fit.status); return null } }
+    const open: Commitment[] = [{ account: 'z', spend: { weekly: 1 }, size: 'small', createdAt: NOW }]
+    choose([on('a')], policy, a({ kind: 'docs' }), NOW, open, [], [], [look])
+    expect(contexts).toEqual([{ assessment: a({ kind: 'docs' }), now: NOW, catalog: policy, open }, { assessment: a({ kind: 'docs' }), now: NOW, catalog: policy, open }])
+    expect(fits).toEqual(['fits'])
+  })
+  it('a plug-in that throws or answers what cannot be ranked is skipped whole and named in a warning, never with its error', () => {
+    const plain = ok(route([on('a'), on('b')], []))
+    const half: RoutePlugin = { name: 'Half', adjust: c => { if (c.machineId === 'b') throw new Error('token=secret at /Users/x'); return { cost: -5, reason: 'x' } } }
+    const nan: RoutePlugin = { name: 'NaN', adjust: () => ({ cost: Number.NaN, reason: 'x' }) }
+    const blank: RoutePlugin = { name: 'Blank', adjust: () => ({ strength: 1, reason: ' ' }) }
+    const broken: RoutePlugin = { name: 'Broken', candidates: () => { throw new Error('secret') } }
+    const junk: RoutePlugin = { name: 'Junk', candidates: () => [{ machineId: 'q' } as Probe] }
+    const notList: RoutePlugin = { name: 'Not a list', candidates: () => null as unknown as Probe[] }
+    const r = ok(route([on('a'), on('b')], [half, nan, blank, broken, junk, notList]))
+    const { warnings, ...rest } = r
+    expect(rest).toEqual(plain)
+    // Candidates are gathered before any is judged, so those plug-ins are named first.
+    expect(warnings).toEqual(['Broken', 'Junk', 'Not a list', 'Half', 'NaN', 'Blank'].map(n => `The routing plug-in "${n}" failed, so the route was ranked without it.`))
+    expect(JSON.stringify(r)).not.toContain('secret')
+    // Nothing can run: the warning still goes with the answer.
+    expect(route([on('a', { refusals: ['Machine is offline.'] })], [broken])).toMatchObject({ error: 'NO_CANDIDATE', warnings: [expect.stringContaining('"Broken"')] })
   })
 })
