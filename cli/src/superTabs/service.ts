@@ -39,7 +39,7 @@ import { createPullRequestsStatusReader } from '../lib/pullRequestsStatus.js'
 import { buddyArchived, buddyStatus, isBuddyIn, isSwarmBuddyIn, projectNamed, type BuddyStatusDeps } from './buddyStatus.js'
 import { startSubscriptionRelay } from '../lib/subscriptionRelay.js'
 
-const POST_ABOUT = 'reply in that conversation. Use a unique ID per message and reuse it after an interrupted request. Answer a message once, with --reply-to its ID. --attach sends a file (a screenshot, a log; up to 10 files of 10 MB each), and TEXT may then be empty. --to names the agents it reaches (any agent of this project, by id from status; up to 16): they join the conversation if they are not in it. With no --to, your post reaches the PM.'
+const POST_ABOUT = 'reply in that conversation. Use a unique ID per message and reuse it after an interrupted request. Answer a message once, with --reply-to its ID. --attach sends a file (a screenshot, a log; up to 10 files of 256 MB each), and TEXT may then be empty. --to names the agents it reaches (any agent of this project, by id from status; up to 16): they join the conversation if they are not in it. With no --to, your post reaches the PM.'
 const POST_HELP = `${POST_ABOUT} TEXT is one argument: when it holds quotes, or is only -, put - in its place and send the message on stdin (post GROUP - OPERATION_ID <<'MSG' … MSG); an empty stdin is refused and nothing is posted.`
 /** A Buddy's guard refuses TEXT - (#2358): on stdin its message would skip the secret check. A Buddy that followed the stdin
  *  hint was refused and tried again, so its help passes the message in quotes, as the guard's refusal says. */

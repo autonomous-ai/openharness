@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { Readable } from 'node:stream'
 import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
@@ -14,6 +15,8 @@ import { HostReads } from '../src/superTabs/read/host.js'
 import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
 import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
+import { logger } from '../src/utils/logger.js'
+import { sweepPendingUploads } from '../src/lib/pendingUploadSweep.js'
 import { IGNORED_NOTE, type Command } from '../src/superTabs/commands.js'
 import { nextMachineShareGrants } from '../src/lib/machineSharePolicy.js'
 import { DEFAULT_ROUTING_POLICY } from '../src/superTabs/routingPolicy.js'
@@ -2520,7 +2523,8 @@ describe('Super Tab chat attachments', () => {
   it('refuses an oversized, second, misordered or hidden-named file, and a server with no bucket', async () => {
     const { tab } = await fixture()
     const before = files.objects.size
-    expect(await file(tab, 'big.bin', new Uint8Array(10 * 1024 * 1024 + 1), 'application/octet-stream')).toMatchObject({ status: 413, code: 'ATTACHMENT_TOO_LARGE' })
+    const big = await post(tab, [['conversationId', 'lead'], ['file', new Uint8Array(10 * 1024 * 1024 + 1), 'big.bin', 'application/octet-stream']])
+    expect(big).toMatchObject({ status: 413, code: 'ATTACHMENT_TOO_LARGE' })
     expect(await file(tab, 'exact.bin', new Uint8Array(10 * 1024 * 1024), 'application/octet-stream')).toMatchObject({ status: 200 })
     expect(await post(tab, [['conversationId', 'lead'], ['file', new Uint8Array(1), 'a.png', 'image/png'], ['file', new Uint8Array(1), 'b.png', 'image/png']]))
       .toMatchObject({ status: 400, code: 'INVALID_ATTACHMENT' })
@@ -2571,6 +2575,211 @@ describe('Super Tab chat attachments', () => {
     const sent = await send(tab, [fromAgent.id], host, lead, 'Here is the screenshot.')
     expect((await store.messages(owner, tab, 'lead', {})).messages.find(m => m.id === sent.result.messageId))
       .toMatchObject({ author: { kind: 'agent', id: lead }, attachments: [{ name: 'result.png', size: 7 }] })
+  })
+
+  type Link = { id: string; url: string; method: string; headers: Record<string, string>; expiresAt: number }
+  const linkFor = async (tab: string, body: Record<string, unknown>, user = owner, asAgentId?: string) => {
+    const response = await upload.inject({ method: 'POST', url: `/api/super-tabs/${tab}/attachments/uploads${asAgentId ? `?asAgentId=${asAgentId}` : ''}`,
+      headers: { authorization: `Bearer ${user.sub}` }, payload: { conversationId: 'lead', name: 'AC4 - 26 Oct v2.step', mime: 'application/octet-stream', ...body } })
+    const answer = response.json()
+    return { status: response.statusCode, code: answer.error?.code ?? answer.code, message: answer.error?.message as string | undefined, upload: answer.data?.upload as Link }
+  }
+  const complete = async (tab: string, uploadId: string, user = owner, asAgentId?: string) => {
+    const response = await upload.inject({ method: 'POST', url: `/api/super-tabs/${tab}/attachments/uploads/${uploadId}/complete${asAgentId ? `?asAgentId=${asAgentId}` : ''}`,
+      headers: { authorization: `Bearer ${user.sub}` }, payload: {} })
+    const answer = response.json()
+    return { status: response.statusCode, code: answer.error?.code ?? answer.code, attachment: answer.data?.attachment as Uploaded }
+  }
+  /** `size` bytes in 1 MiB chunks, made as they are read: the bytes go to the bucket as a stream. */
+  const streamOf = (size: number, first = Buffer.alloc(0)) => Readable.from((function* () {
+    if (first.length) yield first
+    for (let left = size - first.length; left > 0; left -= 1024 * 1024) yield Buffer.alloc(Math.min(left, 1024 * 1024), 7)
+  })())
+
+  it('takes a 256 MB file straight to the bucket on a one-write link, and delivers it to the agent once checked', async () => {
+    const { tab, lead } = await fixture()
+    const size = 256 * 1024 * 1024
+    const { status, upload: link } = await linkFor(tab, { size })
+    expect(status).toBe(200)
+    expect(link.method).toBe('PUT')
+    expect(link.expiresAt - Date.now()).toBeLessThanOrEqual(10 * 60_000)
+    expect(link.headers).toMatchObject({ 'x-goog-content-length-range': `${size},${size}`, 'x-goog-if-generation-match': '0', 'content-type': 'application/octet-stream' })
+    // Not sendable, by this server or an older one, until the server has seen the bytes.
+    await expect(send(tab, [link.id])).rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' })
+    expect(await complete(tab, link.id)).toMatchObject({ status: 409, code: 'UPLOAD_INCOMPLETE' })
+    expect(await files.receive(link.url, link.headers, streamOf(size))).toBe(200)
+    const done = await complete(tab, link.id)
+    expect(done.status).toBe(200)
+    expect(done.attachment).toMatchObject({ id: link.id, name: 'AC4 - 26 Oct v2.step', mime: 'application/octet-stream', size })
+    expect(done.attachment.url).toMatch(new RegExp(`^https://cdn\\.example\\.test/super-tabs/${tab}/[0-9a-f]{32}/AC4_-_26_Oct_v2\\.step$`))
+    expect(files.objects.get(objectKey(done.attachment.url))).toMatchObject({ contentType: 'application/octet-stream', contentDisposition: "attachment; filename*=UTF-8''AC4%20-%2026%20Oct%20v2.step" })
+    // A lost answer is answered again the same way.
+    expect(await complete(tab, link.id)).toEqual(done)
+    const sent = await send(tab, [link.id])
+    const delivery = (await store.deliveries(host, tab, lead)).find(d => d.messageId === sent.result.messageId)!
+    expect((await store.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: randomUUID() })).message!.attachments).toEqual([done.attachment])
+    files.objects.delete(objectKey(done.attachment.url))
+  })
+
+  it('refuses a link past 256 MB with the limit, and one with no size, before any is signed', async () => {
+    const { tab } = await fixture()
+    const rows = await db.superTabAttachment.count({ where: { tabId: tab } })
+    expect(await linkFor(tab, { size: 256 * 1024 * 1024 + 1 })).toMatchObject({ status: 413, code: 'ATTACHMENT_TOO_LARGE', message: 'Files can be up to 256 MB.' })
+    expect(await linkFor(tab, { size: 0 })).toMatchObject({ status: 400, code: 'INVALID_ATTACHMENT' })
+    expect(await linkFor(tab, { size: 1.5 })).toMatchObject({ status: 400 })
+    expect(await linkFor(tab, { size: 5, name: 'evil‮gnp.exe' })).toMatchObject({ status: 400, code: 'INVALID_ATTACHMENT' })
+    expect(await db.superTabAttachment.count({ where: { tabId: tab } })).toBe(rows)
+    const old = await post(tab, [['conversationId', 'lead'], ['file', new Uint8Array(10 * 1024 * 1024 + 1), 'big.bin', 'application/octet-stream']])
+    expect(old).toMatchObject({ status: 413, code: 'ATTACHMENT_TOO_LARGE' })
+  })
+
+  it('lets only the actor that asked attach a link\'s upload, while it may still post there; others are refused alike', async () => {
+    const { tab, lead } = await fixture()
+    await invite(tab)
+    const other = (await fixture()).tab
+    const { upload: link } = await linkFor(tab, { size: 11 })
+    expect(await files.receive(link.url, link.headers, Buffer.alloc(11))).toBe(200)
+    const unknown = await complete(tab, 'aaaaaaaaaaaaaaaaaaaaaaaa')
+    expect(unknown).toMatchObject({ status: 400, code: 'ATTACHMENT_UNAVAILABLE' })
+    // Another member, the owner's own agent, and the same id in another Swarm: the same answer as an id that never was.
+    expect(await complete(tab, link.id, peer)).toEqual(unknown)
+    expect(await complete(tab, link.id, host, lead)).toEqual(unknown)
+    expect((await complete(other, link.id)).code).toBe('ATTACHMENT_UNAVAILABLE')
+    // Nobody but its owner can ask for a link where they cannot post, nor an agent its host does not run.
+    expect(await linkFor(tab, { size: 11, conversationId: 'no-such-group' })).toMatchObject({ status: 404 })
+    expect(await linkFor(tab, { size: 11 }, peer, lead)).toMatchObject({ status: 403, code: 'FORBIDDEN' })
+    const agents = await linkFor(tab, { size: 11 }, host, lead)
+    expect(agents.status).toBe(200)
+    // Access gone while the bytes moved: the upload is not made sendable.
+    const { upload: peers } = await linkFor(tab, { size: 3, name: 'notes.txt', mime: 'text/plain' }, peer)
+    expect(await files.receive(peers.url, peers.headers, Buffer.from('abc'))).toBe(200)
+    await run(tab, { type: 'member.remove', userId: peer.sub })
+    expect((await complete(tab, peers.id, peer)).status).toBeGreaterThanOrEqual(403)
+    expect((await db.superTabAttachment.findFirst({ where: { id: peers.id } }))!.purpose).toBe('pending-upload')
+  })
+
+  it('keeps a declared image\'s type only when its first bytes are one, and counts links in the hourly allowance', async () => {
+    const { tab } = await fixture()
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    const real = (await linkFor(tab, { size: 12 * 1024 * 1024, name: 'shot.png', mime: 'image/png' })).upload
+    expect(await files.receive(real.url, real.headers, streamOf(12 * 1024 * 1024, png))).toBe(200)
+    expect((await complete(tab, real.id)).attachment.mime).toBe('image/png')
+    const page = Buffer.from('<html><script>alert(1)</script></html>')
+    const fake = (await linkFor(tab, { size: page.length, name: 'cat.png', mime: 'image/png' })).upload
+    expect(await files.receive(fake.url, fake.headers, page)).toBe(200)
+    const disguised = (await complete(tab, fake.id)).attachment
+    expect(disguised.mime).toBe('application/octet-stream')
+    expect(files.objects.get(objectKey(disguised.url))!.contentType).toBe('application/octet-stream')
+    await db.superTabAttachment.createMany({ data: Array.from({ length: 198 }, () => ({ id: randomUUID().replaceAll('-', '').slice(0, 24), tabId: tab, conversationId: 'lead',
+      actorKey: `person:${owner.sub}`, name: 'x', mime: 'text/plain', size: 1, objectKey: 'x' })) })
+    expect(await linkFor(tab, { size: 11 })).toMatchObject({ status: 429, code: 'RATE_LIMITED' })
+  })
+
+  it('holds the hourly limits under parallel link requests: 200 uploads and 4 GB a sender', async () => {
+    const { tab } = await fixture()
+    const old = (n: number, size = 1) => db.superTabAttachment.createMany({ data: Array.from({ length: n }, () => ({ id: randomUUID().replaceAll('-', '').slice(0, 24),
+      tabId: tab, conversationId: 'lead', actorKey: `person:${owner.sub}`, name: 'x', mime: 'text/plain', size, objectKey: 'x' })) })
+    await old(190)
+    const answers = await Promise.all(Array.from({ length: 60 }, () => linkFor(tab, { size: 11 })))
+    expect(answers.filter(a => a.status === 200)).toHaveLength(10)
+    expect(answers.filter(a => a.status === 429).every(a => a.code === 'RATE_LIMITED')).toBe(true)
+    expect(answers.filter(a => a.status !== 200 && a.status !== 429)).toEqual([])
+    expect(await db.superTabAttachment.count({ where: { tabId: tab, actorKey: `person:${owner.sub}` } })).toBe(200)
+    // Bytes: another sender, 3.9 GB already this hour.
+    const { tab: other } = await fixture()
+    await db.superTabAttachment.create({ data: { id: randomUUID().replaceAll('-', '').slice(0, 24), tabId: other, conversationId: 'lead',
+      actorKey: `person:${owner.sub}`, name: 'x', mime: 'text/plain', size: 3900 * 1024 * 1024, objectKey: 'x' } })
+    expect(await linkFor(other, { size: 200 * 1024 * 1024 })).toMatchObject({ status: 429, code: 'RATE_LIMITED', message: 'You attached 4 GB of files in the last hour. Wait before attaching more.' })
+    expect((await linkFor(other, { size: 100 * 1024 * 1024 })).status).toBe(200)
+  })
+
+  it('removes an upload never finished, and what it stored, an hour after its link expired; nothing else', async () => {
+    const { tab } = await fixture()
+    const ask = async (size: number) => (await linkFor(tab, { size })).upload
+    const [stale, unstored, finished, young, stuck] = [await ask(5), await ask(5), await ask(5), await ask(5), await ask(5)]
+    for (const link of [stale, finished, young, stuck]) expect(await files.receive(link.url, link.headers, Buffer.alloc(5))).toBe(200)
+    const done = await complete(tab, finished.id)
+    const keyOf = async (id: string) => (await db.superTabAttachment.findFirst({ where: { id } }))!.objectKey
+    const keys = { stale: await keyOf(stale.id), stuck: await keyOf(stuck.id), young: await keyOf(young.id) }
+    const aged = new Date(Date.now() - 71 * 60_000)
+    await db.superTabAttachment.updateMany({ where: { id: { in: [stale.id, unstored.id, finished.id, stuck.id] } }, data: { createdAt: aged } })
+    const remove = vi.spyOn(files, 'delete')
+    remove.mockImplementation(async key => { if (key === keys.stuck) throw Object.assign(new Error(`DELETE ${key} failed`), { code: 503 }); files.objects.delete(key) })
+    const warn = vi.spyOn(logger, 'warn')
+    expect(await sweepPendingUploads(db, files, Date.now())).toEqual({ removed: 2, failed: 1 })
+    remove.mockRestore()
+    expect(files.objects.has(keys.stale)).toBe(false)
+    expect(await db.superTabAttachment.findFirst({ where: { id: { in: [stale.id, unstored.id] } } })).toBeNull()
+    // A failed delete keeps the row for the next pass, and logs no key.
+    expect(await db.superTabAttachment.findFirst({ where: { id: stuck.id } })).not.toBeNull()
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(keys.stuck)
+    warn.mockRestore()
+    // A finished upload and one whose link is young are kept, bytes and all.
+    expect(files.objects.has(objectKey(done.attachment.url))).toBe(true)
+    expect(files.objects.has(keys.young)).toBe(true)
+    expect(await complete(tab, young.id)).toMatchObject({ status: 200 })
+    expect(await sweepPendingUploads(db, files, Date.now())).toEqual({ removed: 1, failed: 0 })
+  })
+
+  it('never leaves a finished upload without its file when a finish races the sweep: the finish wins or is refused', async () => {
+    const { tab } = await fixture()
+    const aged = new Date(Date.now() - 71 * 60_000)
+    const stored = async () => {
+      const link = (await linkFor(tab, { size: 5 })).upload
+      expect(await files.receive(link.url, link.headers, Buffer.from('bytes'))).toBe(200)
+      await db.superTabAttachment.updateMany({ where: { id: link.id }, data: { createdAt: aged } })
+      return { link, key: (await db.superTabAttachment.findFirst({ where: { id: link.id } }))!.objectKey }
+    }
+    // The finish lands after the sweep picked the row, before it claims it: the finish wins, and the sweep leaves it alone.
+    const first = await stored()
+    let finished: Awaited<ReturnType<typeof complete>> | null = null
+    expect(await sweepPendingUploads(db, files, Date.now(), 100, async () => { finished = await complete(tab, first.link.id) })).toEqual({ removed: 0, failed: 0 })
+    expect(finished!.status).toBe(200)
+    expect(files.objects.has(first.key)).toBe(true)
+    expect(await send(tab, [first.link.id])).toBeTruthy()
+    // The sweep claims the row while a finish is checking the bytes: the finish is refused, and nothing sendable is left.
+    const second = await stored()
+    const head = vi.spyOn(files, 'head').mockImplementationOnce(async (key, bytes) => {
+      const read = files.objects.get(key)!.bytes.subarray(0, bytes)
+      await sweepPendingUploads(db, files, Date.now())
+      return read
+    })
+    expect(await complete(tab, second.link.id)).toMatchObject({ status: 400, code: 'ATTACHMENT_UNAVAILABLE' })
+    head.mockRestore()
+    expect(files.objects.has(second.key)).toBe(false)
+    expect(await db.superTabAttachment.findFirst({ where: { id: second.link.id } })).toBeNull()
+    await expect(send(tab, [second.link.id])).rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' })
+  })
+
+  it('asks for a link even when the sweep removes the sender\'s allowance row between its create and its use', async () => {
+    const { tab } = await fixture()
+    await db.superTabUploadAllowance.deleteMany({})
+    // As if the sweep removed it right after it was made.
+    const made = vi.spyOn(db.superTabUploadAllowance, 'create').mockResolvedValueOnce({ id: 'gone', at: new Date() } as never)
+    expect((await linkFor(tab, { size: 11 })).status).toBe(200)
+    made.mockRestore()
+  })
+
+  it('answers a signing or bucket failure as unavailable, never with the object\'s key', async () => {
+    const { tab } = await fixture()
+    const error = vi.spyOn(logger, 'error')
+    const rows = await db.superTabAttachment.count({ where: { tabId: tab } })
+    let pendingWhenSigned = -1
+    const signing = vi.spyOn(files, 'uploadLink').mockImplementationOnce(async () => {
+      pendingWhenSigned = await db.superTabAttachment.count({ where: { tabId: tab, purpose: 'pending-upload' } })
+      throw Object.assign(new Error('cannot sign super-tabs/secret-key'), { code: 'ENOSIGN' })
+    })
+    expect(await linkFor(tab, { size: 11 })).toMatchObject({ status: 503, code: 'ATTACHMENTS_UNAVAILABLE' })
+    // The row was written before signing, and goes when no link was handed out.
+    expect(pendingWhenSigned).toBe(1)
+    expect(await db.superTabAttachment.count({ where: { tabId: tab } })).toBe(rows)
+    signing.mockRestore()
+    const { upload: link } = await linkFor(tab, { size: 11 })
+    const stat = vi.spyOn(files, 'stored').mockRejectedValueOnce(Object.assign(new Error(`GET ${link.url} failed`), { code: 503 }))
+    expect(await complete(tab, link.id)).toMatchObject({ status: 503, code: 'ATTACHMENTS_UNAVAILABLE' })
+    stat.mockRestore()
+    expect(JSON.stringify(error.mock.calls)).not.toMatch(/secret-key|super-tabs\//)
+    error.mockRestore()
   })
 
   it('refuses a viewer before storing anything', async () => {

@@ -33,6 +33,7 @@ import 'package:harness_mobile/viewer/viewer_services.dart';
 import 'package:harness_mobile/ws/relay_codec.dart';
 import 'package:harness_mobile/ws/terminal_transport_plugin.dart';
 import 'package:harness_mobile/ws/ws_conn.dart';
+import 'package:harness_mobile/swarm/swarm_outgoing_files.dart';
 
 import 'agent_pager_fixture.dart';
 import 'viewer/fake_http.dart';
@@ -188,6 +189,10 @@ class FakeApi extends ApiClient {
   /// Answers each Swarm chat file sent; records what was sent, by
   /// `tab/conversation/name`. Never the network.
   final List<String> swarmUploads = [];
+
+  /// The cancel token each chat file upload was handed.
+  final swarmUploadCancels = <CancelToken>[];
+
   Future<Map<String, dynamic>> Function() onSwarmUpload = () async => {
     'attachment': <String, dynamic>{'id': 'att'},
   };
@@ -198,10 +203,12 @@ class FakeApi extends ApiClient {
     required String conversationId,
     required String name,
     required String mime,
-    required Uint8List bytes,
+    required SwarmOutgoingFile file,
     required CancelToken cancel,
     required void Function(double sent) onProgress,
+    bool Function()? stillWanted,
   }) {
+    swarmUploadCancels.add(cancel);
     swarmUploads.add('$tabId/$conversationId/$name');
     return onSwarmUpload();
   }

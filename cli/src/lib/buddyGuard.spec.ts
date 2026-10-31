@@ -337,6 +337,19 @@ describe('a Buddy\'s guard (Ken, 10-29: reads without a prompt, refuses everythi
     expect(permissionDecisionReason).toContain("harness super-tab post GROUP 'your message' OPERATION_ID")
     expect(permissionDecisionReason).toContain('in double quotes when it holds an apostrophe')
   })
+  // A Buddy's own files are checked for secrets whole before they go, so they stay at the 10 MB the guard reads: a larger one
+  // would now go by a link, with only its first 10 MB checked.
+  it('refuses to attach a file of its folder over 10 MB, and says so', () => {
+    const big = join(root, 'big.log')
+    writeFileSync(big, 'start\n'); truncateSync(big, 10 * 1024 * 1024 + 1)
+    try {
+      const { permissionDecision, permissionDecisionReason } = refusal('harness super-tab --tab t post chat x op-1 --attach big.log')
+      expect(permissionDecision).toBe('deny')
+      expect(permissionDecisionReason).toContain('up to 10 MB')
+      truncateSync(big, 10 * 1024 * 1024)
+      expect(bash('harness super-tab --tab t post chat x op-1 --attach big.log')).toBe('allow')
+    } finally { rmSync(big) }
+  })
   // The fix it names goes through: a message with an apostrophe, the one a Buddy might have sent on stdin, in double quotes.
   it('sends the message the refusal tells it to, in double quotes when it holds an apostrophe', () => {
     expect(bash('harness super-tab --tab t post chat "it\'s done: the - case is refused" op-1 --reply-to m1')).toBe('allow')
@@ -636,10 +649,23 @@ describe('the host\'s list of what a Buddy\'s person sent it', () => {
     ['a file with a second name', () => { const twin = join(drops, 'aaaa0004-twin'); rmSync(twin, { force: true }); linkSync(later, twin); return later }],
     ['a folder', () => drops],
     ['a file that is gone', () => join(drops, 'aaaa0005-gone.png')],
-    ['a file larger than a message\'s file can be', () => { const big = join(drops, 'aaaa0006-big'); writeFileSync(big, Buffer.alloc(10 * 1024 * 1024 + 1)); return big }],
+    // Past the 256 MB a chat file can be: sparse, so it takes no room.
+    ['a file larger than a message\'s file can be', () => { const big = join(drops, 'aaaa0006-big'); writeFileSync(big, ''); truncateSync(big, 256 * 1024 * 1024 + 1); return big }],
   ])('lists no %s', (_, path) => {
     allowBuddyReads(mine, { session: 'harness-1', files: [sent, path()], links: [] }, 1_000)
     expect(held().files).toEqual([{ ...identity(sent), at: 1_000 }])
+  })
+
+  // A chat file may be 256 MB since files over 10 MB go straight to storage: one past the old 10 MB is its person's too. Its
+  // bytes are hashed 64 KiB at a time, never held whole.
+  it('lists a file past the old 10 MB limit, and the guard lets the Buddy read it', () => {
+    const big = join(drops, 'aaaa0007-model.step')
+    writeFileSync(big, 'head'); truncateSync(big, 20 * 1024 * 1024)
+    const now = Date.now()
+    allowBuddyReads(mine, { session: 'harness-1', files: [big], links: [] }, now)
+    expect(held().files).toEqual([{ ...identity(big), at: now }])
+    expect(decide('Read', { file_path: big }, guard)).toBe('allow')
+    rmSync(big)
   })
 
   it('lists only claude.ai Artifact links', () => {

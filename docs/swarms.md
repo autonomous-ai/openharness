@@ -363,7 +363,8 @@ Buddies are on in every Swarm; there is no setting. They replaced Chat with PM (
   or one from the last hour, and only once for each such message. The server writes the "on behalf of" label, so a Buddy cannot leave it out or change it.
 - A proposal's files are only ones its owner handed it: a file inside the Buddy's own copy of the project (checked by
   its real path on its own machine, so never through a link out of it, and never the repository's or Harness's own
-  records), or a file its owner sent in their Buddy chat. Each file has a chat file's limits (10 MB). The server accepts
+  records), or a file its owner sent in their Buddy chat. A file from its own copy is at most 10 MB, since its guard reads
+  it whole to check it for secrets; a file its owner sent has a chat file's limit (256 MB). The server accepts
   a Buddy's file only in its own chat and only on a proposal, so it cannot post a file in the project chat any other way.
   The files show on the proposal message like any message's files, for the product manager and every member.
 - Nobody else reads a Buddy chat: not the product manager, and not the project's or the Swarm's owner. Private matters
@@ -640,6 +641,34 @@ Design:
   apart, never as zero.
 - Platforms: the counts come from Claude Code and Codex transcripts on macOS,
   Linux and Windows hosts alike.
+
+## Chat files
+
+A message carries up to 10 files, each up to 256 MB. A bigger file is refused
+before it is sent, with "Files can be up to 256 MB."
+
+- A file up to 10 MB goes to the server in one request, as since the first
+  version. Production sits behind Cloudflare, which refuses request bodies over
+  100 MB on plans below Business, so bigger files do not pass through the server.
+- A file over 10 MB goes straight to the attachments bucket. The server first
+  checks that the sender may post in that conversation and is under 200 uploads
+  and 4 GB an hour (counted together with the new upload, so requests at once
+  cannot pass it), records the upload, then signs a link that writes one new object of exactly that size,
+  served as a download. The upload must start within 10 minutes. A second write
+  to the same link, another size, or a changed header is refused by storage
+  itself. The sender then asks the server to finish the upload. Only the same
+  person or agent, still able to post there, can finish it, and only once
+  storage holds exactly that size. Until then no message can carry the file. An
+  image keeps its type only when its first bytes are one.
+- An upload that is never finished is removed, with anything it stored, an
+  hour after its link expired. One finished but never sent is an unsent file,
+  like any other.
+- Desktop in a browser sends straight to the bucket only once the bucket allows
+  it: a CORS rule for `https://harness.autonomous.ai` alone, method `PUT` alone,
+  and the five headers the link signs (`Content-Type`, `Content-Disposition`,
+  `Cache-Control`, `x-goog-content-length-range`, `x-goog-if-generation-match`).
+- Agents' computers save each message's files straight to disk, never more than
+  the size the message names.
 
 ## Avatars, status and celebrations
 

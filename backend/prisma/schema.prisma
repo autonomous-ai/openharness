@@ -1276,6 +1276,16 @@ model SuperTabAttachment {
   createdAt      DateTime @default(now())
 
   @@index([tabId, actorKey, createdAt])
+  /// Unfinished uploads by age, for the pending-upload sweep (lib/pendingUploadSweep.ts).
+  @@index([purpose, createdAt])
+}
+
+/// One per sender per Swarm while it asks for upload links (superTabs/store.ts uploadLink): each link request writes it in the
+/// transaction that counts the sender's last hour and adds the pending upload, so two requests at once conflict and one retries,
+/// and the hourly limits hold. The pending-upload sweep (lib/pendingUploadSweep.ts) removes it an hour after its last use.
+model SuperTabUploadAllowance {
+  id String   @id @map("_id")
+  at DateTime
 }
 
 model SuperTabOperation {

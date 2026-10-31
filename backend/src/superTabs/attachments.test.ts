@@ -1,7 +1,7 @@
 import { generateKeyPairSync } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { Readable } from 'node:stream'
-import { AttachmentTooLarge, attachmentName, attachmentsFromEnv, checkedType, imageTypeOf, GcsAttachmentStore, GcsAvatarStore, MemoryAttachmentStore, objectKeyFor, served, serviceAccountFrom } from './attachments.js'
+import { AttachmentTooLarge, attachmentName, attachmentsFromEnv, checkedType, directUploads, imageTypeOf, GcsAttachmentStore, GcsAvatarStore, MAX_ATTACHMENT_BYTES, MAX_FORM_ATTACHMENT_BYTES, MemoryAttachmentStore, objectKeyFor, served, serviceAccountFrom, typeFromHead, UPLOAD_LINK_MS } from './attachments.js'
 
 const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
 const key = { type: 'service_account', project_id: 'harness-test', client_email: 'uploads@harness-test.iam.gserviceaccount.com',
@@ -84,6 +84,23 @@ describe('attachment bucket credentials', () => {
     expect(Number(link.searchParams.get('X-Goog-Expires'))).toBeLessThanOrEqual(3600)
   })
 
+  it('signs an upload link for one new object of one exact size, as a download, for minutes, without a network call', async () => {
+    const store = attachmentsFromEnv(env(encoded(key)))!.store as GcsAttachmentStore
+    const expires = Date.now() + UPLOAD_LINK_MS
+    const { url, headers } = await store.uploadLink('super-tabs/tab/0123/AC4.step', { name: 'AC4 - 26 Oct v2.step' }, 150 * 1024 * 1024, expires)
+    const link = new URL(url)
+    expect(link.host).toBe('storage.googleapis.com')
+    expect(link.pathname).toBe('/attachments/super-tabs/tab/0123/AC4.step')
+    expect(link.searchParams.get('X-Goog-Credential')).toContain(key.client_email)
+    expect(Number(link.searchParams.get('X-Goog-Expires'))).toBeLessThanOrEqual(600)
+    // Every rule is a signed header: storage refuses a request that drops or changes one.
+    expect(link.searchParams.get('X-Goog-SignedHeaders')!.split(';')).toEqual(['cache-control', 'content-disposition', 'content-type', 'host',
+      'x-goog-content-length-range', 'x-goog-if-generation-match'])
+    expect(headers).toEqual({ 'content-type': 'application/octet-stream', 'content-disposition': "attachment; filename*=UTF-8''AC4%20-%2026%20Oct%20v2.step",
+      'cache-control': 'public, max-age=31536000, immutable', 'x-goog-content-length-range': '157286400,157286400', 'x-goog-if-generation-match': '0' })
+    expect(directUploads(store)).toBe(store)
+  })
+
   it('builds the storage client from the configured key, without a network call', async () => {
     const store = attachmentsFromEnv(env(encoded(key)))!.store as GcsAttachmentStore
     const bucket = await (store as unknown as { files(): Promise<import('@google-cloud/storage').Bucket> }).files()
@@ -151,5 +168,40 @@ describe('attachment files', () => {
     expect(store.objects.get('k1')).toMatchObject({ contentType: 'application/octet-stream', contentDisposition: "attachment; filename*=UTF-8''x.html" })
     await expect(store.put('k2', { name: 'b.bin', mime: 'application/octet-stream' }, Readable.from([Buffer.alloc(6)]), 5)).rejects.toBeInstanceOf(AttachmentTooLarge)
     expect(store.objects.has('k2')).toBe(false)
+  })
+})
+
+describe('upload links on the memory bucket, with storage\'s rules', () => {
+  const at = 1_800_000_000_000
+  it('writes the linked object once, of exactly its size, before it expires, with its headers unchanged', async () => {
+    let now = at
+    const store = new MemoryAttachmentStore(() => now)
+    const link = await store.uploadLink('k/big.bin', { name: 'big.bin' }, 5, at + UPLOAD_LINK_MS)
+    expect(await store.receive(link.url, link.headers, Buffer.alloc(6))).toBe(400)
+    expect(await store.receive(link.url, link.headers, Buffer.alloc(4))).toBe(400)
+    expect(await store.receive(link.url, { ...link.headers, 'content-type': 'text/html' }, Buffer.alloc(5))).toBe(403)
+    const { 'x-goog-if-generation-match': _, ...overwriting } = link.headers
+    expect(await store.receive(link.url, overwriting, Buffer.alloc(5))).toBe(403)
+    expect(await store.receive(link.url.replace('k%2Fbig.bin', 'k%2Fother.bin'), link.headers, Buffer.alloc(5))).toBe(403)
+    expect(await store.stored('k/big.bin')).toBeNull()
+    expect(await store.receive(link.url, link.headers, Buffer.from('hello'))).toBe(200)
+    expect(store.objects.get('k/big.bin')).toMatchObject({ contentType: 'application/octet-stream', contentDisposition: "attachment; filename*=UTF-8''big.bin" })
+    expect(await store.receive(link.url, link.headers, Buffer.from('HELLO'))).toBe(412)
+    expect((await store.head('k/big.bin', 16)).toString()).toBe('hello')
+    now = at + UPLOAD_LINK_MS
+    const late = await store.uploadLink('k/late.bin', { name: 'late.bin' }, 1, at + UPLOAD_LINK_MS)
+    expect(await store.receive(late.url, late.headers, Buffer.alloc(1))).toBe(403)
+    await store.delete('k/big.bin')
+    expect(await store.stored('k/big.bin')).toBeNull()
+  })
+  it('keeps a declared image only when its first bytes are one', () => {
+    expect(typeFromHead('image/png', Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))).toBe('image/png')
+    expect(typeFromHead('image/png', Buffer.from('<html>'))).toBe('application/octet-stream')
+    expect(typeFromHead('model/step', Buffer.from('ISO-10303-21;'))).toBe('model/step')
+  })
+  it('caps a file at 256 MB, and a form at 10 MB, with the message that names the limit', () => {
+    expect(MAX_ATTACHMENT_BYTES).toBe(256 * 1024 * 1024)
+    expect(MAX_FORM_ATTACHMENT_BYTES).toBe(10 * 1024 * 1024)
+    expect(new AttachmentTooLarge().message).toBe('Files can be up to 256 MB.')
   })
 })
