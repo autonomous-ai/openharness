@@ -1216,6 +1216,53 @@ class SuperTabController extends ChangeNotifier {
     _saveSoon();
   }
 
+  /// [root]'s thread in [conversationId] was read through [sequence] outside
+  /// the thread pane (the Threads view): kept here and sent to the server,
+  /// so it reads as read on every device. Nothing once access is gone.
+  void markThreadRead(String conversationId, String root, int sequence) {
+    if (_disposed ||
+        accessRevoked ||
+        sequence <= 0 ||
+        snapshot?.conversation(conversationId) == null) {
+      return;
+    }
+    _serverThreadMarks.mark(
+      (conversationId, root),
+      sequence,
+      kept: snapshot?.threadMarks[conversationId]?[root] ?? 0,
+    );
+    if ((_threadSeen[root] ?? 0) >= sequence) return;
+    _threadSeen.remove(root);
+    _threadSeen[root] = sequence;
+    _saveSoon();
+    _changed();
+  }
+
+  /// Replies [text] in [root]'s thread of [conversationId] from outside the
+  /// thread pane (the Threads view); null when it was not sent.
+  Future<Map<String, dynamic>?> replyInThread(
+    String conversationId,
+    String root,
+    String text,
+  ) {
+    final trimmed = text.trim();
+    final group = snapshot?.conversation(conversationId);
+    if (trimmed.isEmpty ||
+        group == null ||
+        group.archived ||
+        accessRevoked ||
+        !canWrite) {
+      return Future.value();
+    }
+    return command({
+      'type': 'message.send',
+      'conversationId': conversationId,
+      'text': trimmed,
+      'replyTo': root,
+      'recipientIds': const <String>[],
+    });
+  }
+
   /// The root and replies of [root]'s thread in the selected conversation,
   /// oldest first: what its own read brought, and replies polled since.
   List<SuperTabMessage> threadMessages(String root) {
@@ -1782,12 +1829,24 @@ class SuperTabController extends ChangeNotifier {
 
   /// Each conversation's reaction counter as its last page said it.
   final _reactionSeq = <String, int>{};
-  int _loadedMessageSequence(String id) =>
-      _messages[id]?.reversed
-          .where((m) => m.source['kind'] != 'update-request')
-          .firstOrNull
-          ?.sequence ??
-      0;
+
+  /// The newest message held for [id] that reading the chat reads: one in
+  /// its main stream. A reply only in its thread is read in that thread, as in
+  /// Slack, so the chat's mark stops short of it and the thread stays unread
+  /// (backend read/inbox.ts counts replies past the chat's mark). From a
+  /// server before main-stream numbers, any row, as before.
+  int _loadedMessageSequence(String id) {
+    final mainOnly = snapshot?.conversation(id)?.lastMainSequence != null;
+    return _messages[id]?.reversed
+            .where(
+              (m) =>
+                  m.source['kind'] != 'update-request' &&
+                  (!mainOnly || m.inMainStream),
+            )
+            .firstOrNull
+            ?.sequence ??
+        0;
+  }
 
   /// How far the reader has read [id]: the higher of the mark kept on the
   /// server, from any of their devices, and this device's own, which stands
