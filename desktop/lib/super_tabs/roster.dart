@@ -32,8 +32,9 @@ import 'section_heading.dart';
 import 'agent_line.dart';
 
 /// The current Swarm's authorized people, each with their week on the
-/// leaderboard of the open conversation's project, and agents from the
-/// selected project.
+/// leaderboard of the open conversation's project, and every agent of the
+/// Swarm: the same list whichever chat is open, as Slack's and Discord's member
+/// lists are (Dee, 2026-10-31).
 class SuperTabRoster extends StatefulWidget {
   const SuperTabRoster({
     super.key,
@@ -440,32 +441,18 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
 
   List<Widget> _members() {
     final state = c.snapshot;
-    // The backend already scopes this snapshot to projects the person can
-    // access. The roster follows the selected project; without one it keeps
-    // the full directory, as the Product Managers' conversation, which belongs
-    // to no project, does. Local machine inventory is not membership here.
+    // The whole Swarm the person may see, whichever chat is open (Dee,
+    // 2026-10-31): the backend already scopes this snapshot to the projects
+    // they can read. Local machine inventory is not membership here.
     final projectId = c.selected?.projectId == ''
         ? null
         : c.selected?.projectId;
-    // A private conversation lists only who reads it: its people and the
-    // agents in it, the project's Lead.
+    // Who reads a private conversation still decides its +, never the list.
     final audience = c.selected?.audience;
-    final members =
-        state?.teamAgents
-            .where(
-              (agent) =>
-                  (projectId == null || _agentProjectId(agent) == projectId) &&
-                  (audience == null || c.selected!.agentIds.contains(agent.id)),
-            )
-            .toList() ??
-        const <SuperTabAgent>[];
+    final members = state?.teamAgents ?? const <SuperTabAgent>[];
     final leads = members.where((a) => state!.isLead(a.id)).toList();
     final agents = members.where((a) => !state!.isLead(a.id)).toList();
-    final people =
-        state?.people
-            .where((p) => audience == null || audience.contains(p.id))
-            .toList() ??
-        const <SuperTabPerson>[];
+    final people = state?.people ?? const <SuperTabPerson>[];
     // Only the open project's board: an answer for any other never lends
     // its numbers to these rows.
     final board = switch (_board.board) {

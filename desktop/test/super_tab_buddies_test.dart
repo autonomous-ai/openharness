@@ -1351,7 +1351,7 @@ void main() {
     });
 
     testWidgets(
-      'the Buddy chat lists only its person and its Buddy, and offers no Add agent',
+      'the Buddy chat lists the whole Swarm, never its Buddy, and offers no Add agent',
       (tester) async {
         final server = buddySwarm();
         giveBuddy(server);
@@ -1363,12 +1363,17 @@ void main() {
         await tester.tap(buddyEntry);
         await tester.pumpAndSettle();
 
+        // The same people and agents as every chat (Dee, 2026-10-31).
         expect(find.byKey(const ValueKey('super-person-peer')), findsOneWidget);
-        expect(find.byKey(const ValueKey('super-person-owner')), findsNothing);
+        expect(
+          find.byKey(const ValueKey('super-person-owner')),
+          findsOneWidget,
+        );
         expect(
           find.byKey(const ValueKey('super-member-lead-agent')),
-          findsNothing,
+          findsOneWidget,
         );
+        expect(find.byKey(const ValueKey('super-member-wren')), findsNothing);
         expect(find.byTooltip('Add agent'), findsNothing);
         await close(tester, c);
       },
