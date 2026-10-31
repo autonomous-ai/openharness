@@ -417,6 +417,7 @@ class SuperTabProject {
           superTabMap(member)['id'] as String,
       ],
       updateMinutes = (row['updateMinutes'] as num?)?.toInt() ?? 5,
+      status = SuperTabProjectStatus.read(row['status']),
       repository = row['repository'] is Map
           ? Map.unmodifiable(superTabMap(row['repository']))
           : null;
@@ -434,7 +435,44 @@ class SuperTabProject {
   final bool isPrivate;
   final List<String> memberIds;
   final int updateMinutes;
+
+  /// What the coordinator last said of the project's progress, shown in the
+  /// status card at the top of its chat; null from an older backend and
+  /// before the first report.
+  final SuperTabProjectStatus? status;
   final Map<String, dynamic>? repository;
+}
+
+/// A project's status card text: one per project, replaced by each report
+/// (`project.report` with text), never posted to its chat.
+class SuperTabProjectStatus {
+  const SuperTabProjectStatus({required this.text, this.at, this.by});
+
+  /// The longest text the backend keeps; a longer one is cut here too.
+  static const maxText = 2000;
+
+  /// Null for anything but a status with text: a missing or malformed field,
+  /// or an empty report, shows no card.
+  static SuperTabProjectStatus? read(Object? value) {
+    if (value is! Map) return null;
+    final text = value['text'];
+    if (text is! String || text.trim().isEmpty) return null;
+    final at = value['at'];
+    final by = value['by'];
+    return SuperTabProjectStatus(
+      text: text.length > maxText ? text.substring(0, maxText) : text,
+      at: at is String ? DateTime.tryParse(at) : null,
+      by: by is String ? by : null,
+    );
+  }
+
+  final String text;
+
+  /// When it was written; null when the backend sent no readable time.
+  final DateTime? at;
+
+  /// The agent that wrote it.
+  final String? by;
 }
 
 class SuperTabSnapshot {

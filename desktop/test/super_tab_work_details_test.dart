@@ -47,6 +47,44 @@ void main() {
     },
   );
 
+  // Quiet project chats (Dee, 2026-10-31): a Lead started from Desktop keeps
+  // progress in the status card and posts only what needs people.
+  test('launch prompt keeps a Lead\'s progress in the status card, never cadence posts', () {
+    final lead = superTabLaunchPrompt(
+      tabId: 'tab',
+      conversationId: 'lead',
+      lead: true,
+    );
+    expect(
+      lead,
+      contains("Keep the project's status card current with project.report"),
+    );
+    expect(
+      lead,
+      contains(
+        'Post in the Lead chat only when work merges or ships, a person must decide something new, or work is badly stuck',
+      ),
+    );
+    expect(
+      lead,
+      contains('Ask a person a question once, as a decision; never repeat it.'),
+    );
+    for (final gone in [
+      'cadence',
+      'consolidate',
+      'Update Lead chat',
+      'progress, blockers, next steps',
+    ]) {
+      expect(lead, isNot(contains(gone)), reason: gone);
+    }
+    final builder = superTabLaunchPrompt(
+      tabId: 'tab',
+      conversationId: 'group',
+      lead: false,
+    );
+    expect(builder, isNot(contains('status card')));
+  });
+
   for (final structured in [true, false]) {
     testWidgets(
       'work details show the brief as written${structured ? ', never a task\'s five parts' : ''}',
