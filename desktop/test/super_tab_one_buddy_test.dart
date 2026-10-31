@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/super_tabs/attention.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/section_heading.dart';
+import 'package:harness/super_tabs/threads_view.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/buddy_fixture.dart';
@@ -420,5 +422,79 @@ void main() {
         await close(tester, c);
       },
     );
+  });
+
+  testWidgets('the Threads list offers no reply in an earlier Buddy chat, '
+      'and still offers one in # buddy (merge with #2434)', (tester) async {
+    final server = oneBuddySwarm()..threads = true;
+    giveSwarmBuddy(server);
+    giveBuddy(server, id: 'old', name: 'Wren');
+    Map<String, dynamic> thread(String chat) {
+      server.append('Root in $chat', conversationId: chat);
+      final root = server.messages.last['id'] as String;
+      server.append('New reply in $chat', conversationId: chat);
+      server.messages.last['thread'] = root;
+      return {
+        'conversationId': chat,
+        'rootId': root,
+        'root': {
+          'id': root,
+          'sequence': 1,
+          'author': {'kind': 'agent', 'id': 'wren', 'name': 'Wren'},
+          'text': 'Root in $chat',
+          'createdAt': '2026-10-31T01:00:00Z',
+          'attachments': 0,
+        },
+        'lastReplyAt': '2026-10-31T02:00:00Z',
+        'lastReplySequence': 2,
+        'lastReplier': {'kind': 'agent', 'id': 'wren', 'name': 'Wren'},
+        'unreadReplies': 1,
+        'follow': null,
+      };
+    }
+
+    final earlier = thread('buddy-peer-lead');
+    final current = thread('swarm-buddy-peer');
+    server.followedThreads = {
+      'unread': [earlier, current],
+      'read': [],
+      'more': false,
+    };
+    final c = server.controller(account: 'peer');
+    await c.refresh();
+    final attention = SuperTabAttention.of(c);
+    await attention.load();
+    expect(attention.shown, hasLength(2));
+    await tester.binding.setSurfaceSize(const Size(700, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: grid.buildAppTheme(brightness: Brightness.dark),
+        home: Scaffold(
+          body: SuperTabThreadsView(attention: attention, onOpen: (_, _) {}),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Root in buddy-peer-lead'), findsOneWidget);
+    expect(
+      find.byKey(
+        ValueKey(
+          'super-thread-open-reply-buddy-peer-lead/${earlier['rootId']}',
+        ),
+      ),
+      findsNothing,
+    );
+    expect(
+      find.byKey(
+        ValueKey(
+          'super-thread-open-reply-swarm-buddy-peer/${current['rootId']}',
+        ),
+      ),
+      findsOneWidget,
+    );
+    await tester.pumpWidget(const SizedBox());
+    await c.flush();
+    c.dispose();
   });
 }

@@ -14,6 +14,7 @@ import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/harness_activity_mark.dart';
+import 'attention.dart';
 import 'controller.dart';
 import 'identity.dart';
 import 'leaderboard/models_section.dart';
@@ -59,6 +60,9 @@ class ProjectSidebar extends StatelessWidget {
     this.devicesSelected = false,
     this.onNotifications,
     this.notificationsSelected = false,
+    this.attention,
+    this.onThreads,
+    this.threadsSelected = false,
     this.onOpenAgent,
     this.onOpenBuddyChat,
     this.readLocal,
@@ -81,6 +85,21 @@ class ProjectSidebar extends StatelessWidget {
   /// The reader's tags from every project's Lead; its count is what waits.
   final VoidCallback? onNotifications;
   final bool notificationsSelected;
+
+  /// What needs the reader, as Slack shows it: each row's red number counts
+  /// only tags of them (decisions asked of them among them), and Threads is
+  /// bold while a thread they follow has replies they have not read. Without
+  /// it rows carry no number.
+  final SuperTabAttention? attention;
+
+  /// Opens the Threads view; no Threads row without it.
+  final VoidCallback? onThreads;
+  final bool threadsSelected;
+
+  /// Whether a row other than a conversation (devices, Notifications,
+  /// Threads) holds the main pane.
+  bool get _paneCovered =>
+      devicesSelected || notificationsSelected || threadsSelected;
   final ValueChanged<SuperTabAgent>? onOpenAgent;
 
   /// Opens the reader's Buddy chat in a project, by project id; the
@@ -112,6 +131,7 @@ class ProjectSidebar extends StatelessWidget {
     bool selected = false,
     int badge = 0,
     Widget? trailing,
+    bool? unread,
   }) => Padding(
     padding: const EdgeInsets.only(bottom: 2),
     child: Material(
@@ -149,12 +169,21 @@ class ProjectSidebar extends StatelessWidget {
                       label,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: DesktopChrome.control(
-                        medium: selected,
-                        color: onTap == null
-                            ? DesktopChrome.muted
-                            : DesktopChrome.foreground,
-                      ),
+                      // A row that reads or not ([unread] given) is drawn as
+                      // conversations are: muted when read, full strength
+                      // and bold when not.
+                      style:
+                          DesktopChrome.control(
+                            medium: selected,
+                            color:
+                                onTap == null || (unread == false && !selected)
+                                ? DesktopChrome.muted
+                                : DesktopChrome.foreground,
+                          ).copyWith(
+                            fontWeight: unread == true
+                                ? grid.AppFont.semibold
+                                : null,
+                          ),
                     ),
                   ),
                 ),
@@ -188,16 +217,23 @@ class ProjectSidebar extends StatelessWidget {
     String? key,
   }) {
     final project = reading?.project;
-    final selected =
-        !devicesSelected &&
-        !notificationsSelected &&
-        controller.selectedId == group.id;
+    final selected = !_paneCovered && controller.selectedId == group.id;
     final waiting = reading == null
         ? needsHuman(group) > 0
         : reading.waiting.isNotEmpty;
-    final unread = reading == null
+    // Open, a project's row is its own chat's, as each workgroup under it
+    // has its own; collapsed, it is bold for anything it hides.
+    final unread =
+        reading == null || controller.expandedProjects.contains(project?.id)
         ? controller.unread(group)
         : reading.unread.isNotEmpty;
+    // A collapsed project counts the tags in the conversations it hides, as
+    // Slack's collapsed section does; open, each row has its own.
+    final badge = attention == null
+        ? 0
+        : reading == null || controller.expandedProjects.contains(project?.id)
+        ? attention!.mentionsIn(group.id)
+        : reading.mentions;
     return _drawRow(
       group,
       project: project,
@@ -205,6 +241,7 @@ class ProjectSidebar extends StatelessWidget {
       selected: selected,
       waiting: waiting,
       unread: unread,
+      badge: badge,
       buddyChat: reading?.buddyChat,
       selectedProjectId: reading?.sidebar.selectedProjectId,
     );
@@ -236,12 +273,10 @@ class ProjectSidebar extends StatelessWidget {
   Widget _workgroupRow(SuperTabConversation group, _ProjectReading reading) =>
       _drawRow(
         group,
-        selected:
-            !devicesSelected &&
-            !notificationsSelected &&
-            controller.selectedId == group.id,
+        selected: !_paneCovered && controller.selectedId == group.id,
         waiting: reading.waiting.contains(group.id),
         unread: reading.unread.contains(group.id),
+        badge: attention?.mentionsIn(group.id) ?? 0,
       );
 
   Widget _drawRow(
@@ -253,6 +288,7 @@ class ProjectSidebar extends StatelessWidget {
     required bool selected,
     required bool waiting,
     required bool unread,
+    int badge = 0,
     SuperTabConversation? buddyChat,
     String? selectedProjectId,
     Widget? trailing,
@@ -267,23 +303,24 @@ class ProjectSidebar extends StatelessWidget {
         selected ||
         (project != null &&
             !expanded &&
-            !devicesSelected &&
-            !notificationsSelected &&
+            !_paneCovered &&
             selectedProjectId == project.id &&
             controller.selectedId != buddyChat?.id);
-    // Unread is the name in bold and nothing else, no dot (Dee, 2026-10-29).
+    // As Slack draws it (Dee, 10-31): a read row in the muted text colour, an
+    // unread one at full strength and bold, no dot; the open row keeps its
+    // highlight.
     final style = DesktopChrome.control(
       medium: highlighted,
-      color: highlighted || unread || project != null || label != null
+      color: highlighted || unread
           ? DesktopChrome.foreground
           : DesktopChrome.muted,
     ).copyWith(fontWeight: unread ? grid.AppFont.semibold : null);
     return Padding(
       padding: const EdgeInsets.only(bottom: 2),
-      child: Material(
-        color: highlighted ? grid.AppSurface.selectedFill : Colors.transparent,
-        borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-        clipBehavior: Clip.antiAlias,
+      // Hover lights the whole row, chevron included, in the selected
+      // highlight's shape (Dee, 10-31): the row draws it, not each click.
+      child: _RowSurface(
+        selected: highlighted,
         // The chevron stands beside the row's own click, not inside it: the
         // name opens and the chevron toggles.
         child: Row(
@@ -295,7 +332,7 @@ class ProjectSidebar extends StatelessWidget {
                 child: InkWell(
                   key: ValueKey(key ?? 'super-group-${group.id}'),
                   onTap: !tappable ? null : onTap ?? () => onSelect(group.id),
-                  hoverColor: grid.AppSurface.hoverFill,
+                  hoverColor: Colors.transparent,
                   focusColor: grid.AppSurface.hoverFill,
                   borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
                   child: Row(
@@ -383,6 +420,21 @@ class ProjectSidebar extends StatelessWidget {
                                                 ],
                                               ),
                                       ),
+                                      if (badge > 0) ...[
+                                        const SizedBox(width: 8),
+                                        Semantics(
+                                          label: badge == 1
+                                              ? '1 mention'
+                                              : '$badge mentions',
+                                          excludeSemantics: true,
+                                          child: SuperTabCountBadge(
+                                            badge,
+                                            key: ValueKey(
+                                              'super-mentions-${group.id}',
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                       if (project?.isPrivate == true) ...[
                                         const SizedBox(width: 8),
                                         Tooltip(
@@ -480,7 +532,8 @@ class ProjectSidebar extends StatelessWidget {
         child: InkWell(
           key: ValueKey('super-project-toggle-${project.id}'),
           onTap: () => controller.toggleProject(project.id),
-          hoverColor: grid.AppSurface.hoverFill,
+          // Its row lights whole on hover (_RowSurface).
+          hoverColor: Colors.transparent,
           focusColor: grid.AppSurface.hoverFill,
           borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
           child: Tooltip(
@@ -632,11 +685,9 @@ class ProjectSidebar extends StatelessWidget {
         _ => null,
       },
       selected:
-          chat != null &&
-          !devicesSelected &&
-          !notificationsSelected &&
-          controller.selectedId == chat.id,
+          chat != null && !_paneCovered && controller.selectedId == chat.id,
       unread: chat != null && controller.unread(chat),
+      badge: chat == null ? 0 : attention?.mentionsIn(chat.id) ?? 0,
       onTap: chat != null
           ? () => onSelect(chat.id)
           : controller.saving || controller.hasPendingAction
@@ -793,11 +844,11 @@ class ProjectSidebar extends StatelessWidget {
               // Never behind "… N more": the open one, and those with
               // something to read or answer.
               kept: {
-                if (!devicesSelected && !notificationsSelected)
-                  controller.selectedId,
+                if (!_paneCovered) controller.selectedId,
                 for (final group in groups)
                   if (reading.unread.contains(group.id) ||
-                      reading.waiting.contains(group.id))
+                      reading.waiting.contains(group.id) ||
+                      (attention?.mentionsIn(group.id) ?? 0) > 0)
                     group.id,
               },
               more: (hidden, onTap) => _moreRow(project, hidden, onTap),
@@ -829,10 +880,18 @@ class ProjectSidebar extends StatelessWidget {
   ]..sort((a, b) => a.$1.toLowerCase().compareTo(b.$1.toLowerCase()));
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => switch (attention) {
+    final attention? => ListenableBuilder(
+      listenable: attention,
+      builder: (context, _) => _build(context),
+    ),
+    null => _build(context),
+  };
+
+  Widget _build(BuildContext context) {
     final snapshot = controller.snapshot;
     final projects = snapshot?.projects ?? const <SuperTabProject>[];
-    final reading = _SidebarReading(controller, needsHuman);
+    final reading = _SidebarReading(controller, needsHuman, attention);
     return Material(
       color: DesktopChrome.surface,
       child: ListView(
@@ -882,6 +941,16 @@ class ProjectSidebar extends StatelessWidget {
               onTap: () =>
                   showSwarmLocalModels(context, controller, app: app, now: now),
             ),
+          if (onThreads != null)
+            _navigationRow(
+              key: 'super-threads',
+              label: 'Threads',
+              icon: AppIcons.messagesSquare,
+              onTap: onThreads,
+              selected: threadsSelected,
+              unread: attention?.threadsUnread ?? false,
+              badge: attention?.threadMentions ?? 0,
+            ),
           if (onNotifications != null)
             _navigationRow(
               key: 'super-notifications',
@@ -896,6 +965,7 @@ class ProjectSidebar extends StatelessWidget {
           if (onNewProject != null ||
               onYourDevices != null ||
               onNotifications != null ||
+              onThreads != null ||
               controller.isOwner ||
               snapshot?.localModels?.enabled == true)
             const SizedBox(height: 20),
@@ -975,6 +1045,37 @@ class ProjectSidebar extends StatelessWidget {
   }
 }
 
+/// A sidebar row's ground: the selected fill, or the hover fill while the
+/// pointer is anywhere over it, one shape across the row's whole width.
+class _RowSurface extends StatefulWidget {
+  const _RowSurface({required this.selected, required this.child});
+  final bool selected;
+  final Widget child;
+
+  @override
+  State<_RowSurface> createState() => _RowSurfaceState();
+}
+
+class _RowSurfaceState extends State<_RowSurface> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) => MouseRegion(
+    onEnter: (_) => setState(() => _hovered = true),
+    onExit: (_) => setState(() => _hovered = false),
+    child: Material(
+      color: widget.selected
+          ? grid.AppSurface.selectedFill
+          : _hovered
+          ? grid.AppSurface.hoverFill
+          : Colors.transparent,
+      borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+      clipBehavior: Clip.antiAlias,
+      child: widget.child,
+    ),
+  );
+}
+
 /// A project's open conversations, newest first: the first
 /// [_NewestConversations.shown] and the [_NewestConversations.kept] ones, then
 /// a "… N more" row that shows the rest. Showing the rest lasts until the
@@ -1033,9 +1134,10 @@ class _NewestConversationsState extends State<_NewestConversations> {
 /// thousands of conversations were scanned again on every rebuild (Diego,
 /// 10-29).
 class _SidebarReading {
-  _SidebarReading(this.controller, this.needsHuman);
+  _SidebarReading(this.controller, this.needsHuman, this.attention);
   final SuperTabController controller;
   final int Function(SuperTabConversation group) needsHuman;
+  final SuperTabAttention? attention;
   final _projects = <String, _ProjectReading>{};
 
   _ProjectReading of(SuperTabProject project) =>
@@ -1066,6 +1168,22 @@ class _ProjectReading {
   /// never the reader's Buddy chat, which has its own row under Buddies.
   Set<String> get waiting => _open.waiting;
   Set<String> get unread => _open.unread;
+
+  /// Tags of the reader in the project's chat and its open workgroups: a
+  /// collapsed project's number.
+  late final int mentions = switch (sidebar.attention) {
+    null => 0,
+    final attention =>
+      attention.mentionsIn(project.leadConversationId) +
+          [
+            for (final g in conversations)
+              if (!g.closed &&
+                  !g.isBuddyChat &&
+                  g.audience == null &&
+                  g.id != project.leadConversationId)
+                attention.mentionsIn(g.id),
+          ].fold(0, (a, b) => a + b),
+  };
   late final _open = () {
     final waiting = <String>{}, unread = <String>{};
     for (final g in conversations) {

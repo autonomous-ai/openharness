@@ -4,10 +4,11 @@
 import { createHash } from 'node:crypto'
 import type { Prisma, PrismaClient } from '@prisma/client'
 import { ensureIndex } from '../lib/db/indexes.js'
-import { activeWork, fail, isLeads, person, stableId, type Actor, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
+import { activeWork, agentOnly, fail, isLeads, person, stableId, type Actor, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { canReadGroup, groupProject, projectAgent, projectOf } from './projects.js'
 import { isSwarmBuddyChat } from './buddies.js'
-import { groupsBy } from './parts/indexed.js'
+import { groupsBy, readBy } from './parts/indexed.js'
+import { deliveredCopies } from './pageReads.js'
 import { usernameOf } from './usernames.js'
 
 type Tx = Prisma.TransactionClient
@@ -255,7 +256,8 @@ export function mentionsDigest(ids: string[]): string {
 export async function listMentions(tx: Tx, tabId: string, state: SuperTabState, actor: Extract<Actor, { kind: 'person' }>, now: number, open: boolean) {
   const tagged = await readable(tx, tabId, state, actor, now, open)
   const messages = tagged.length ? await tx.superTabMessage.findMany({ where: { tabId, id: { in: tagged.map(t => t.row.messageId) } },
-    select: { id: true, text: true, author: true } }) : []
+    select: { id: true, text: true, author: true, conversationId: true, thread: true, alsoInChat: true, sequence: true } }) : []
+  const threads = await threadsOf(tx, tabId, messages)
   return tagged.map(({ row, group }) => {
     const message = messages.find(m => m.id === row.messageId)
     const author = message?.author as { kind?: string; name?: string; displayName?: string } | undefined
@@ -264,6 +266,25 @@ export async function listMentions(tx: Tx, tabId: string, state: SuperTabState, 
     return { id: row.id, projectId: row.projectId, projectName: projectOf(state, group.projectId ?? 'lead').name,
       conversationId: row.conversationId, conversationTitle: group.title, messageId: row.messageId,
       leadId: row.authorAgentId, leadName: authorName, text: (message?.text ?? '').slice(0, 200),
-      createdAt: row.createdAt, resolvedAt: row.resolvedAt, resolvedBy: row.resolvedBy }
+      createdAt: row.createdAt, resolvedAt: row.resolvedAt, resolvedBy: row.resolvedBy, threadId: message ? threads.get(message.id) ?? null : null,
+      // Where the tagged message is in its chat: Desktop clears its red number once the reader has read past it (Slack).
+      messageSequence: message?.sequence ?? null }
   })
+}
+
+/** For each tagged message that is a thread reply only (not also sent to the chat), its thread's root: the tag belongs to the
+ *  thread, not the chat's main stream (Desktop counts it on Threads, as Slack does). Only a root the person may read, in the
+ *  tag's own conversation, roots its own thread: an agent-only or delivered-copy root reads as none, so the tag counts as the
+ *  chat's and no root id they cannot open leaves here. The roots by id in one read. */
+async function threadsOf(tx: Tx, tabId: string, messages: Array<{ id: string; conversationId: string; thread: string | null; alsoInChat: boolean | null }>):
+  Promise<Map<string, string>> {
+  const replies = messages.filter(m => m.thread && m.thread !== m.id && m.alsoInChat !== true)
+  if (!replies.length) return new Map()
+  const found = await readBy(tx, 'SuperTabMessage', 'id', [{ $match: { _id: { $in: [...new Set(replies.map(m => m.thread!))] }, tabId } },
+    { $project: { conversationId: 1, thread: 1, source: 1, recipientIds: 1 } }])
+  const roots = found.map(r => ({ id: r._id as string, conversationId: r.conversationId as string, thread: r.thread, source: r.source ?? null,
+    recipientIds: (r.recipientIds as string[] | undefined) ?? [] })).filter(r => r.thread === r.id && !agentOnly(r.source, r.recipientIds))
+  const copies = await deliveredCopies(tx, tabId, roots)
+  const shown = new Map(roots.filter(r => !copies.has(r.id)).map(r => [r.id, r.conversationId]))
+  return new Map(replies.filter(m => shown.get(m.thread!) === m.conversationId).map(m => [m.id, m.thread!]))
 }

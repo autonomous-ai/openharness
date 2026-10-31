@@ -1178,7 +1178,11 @@ model SuperTabThreadMark {
   conversationId String
   /// The thread's root message id.
   threadId       String
+  /// 0 on a row a Follow or Unfollow created before the person read the thread anywhere.
   sequence       Int
+  /// The person's own choice for the thread (readMarks.ts writeThreadFollow): true Follow, false Unfollow; unset or null
+  /// leaves it to whether they started it, replied in it or were tagged in it. Never cleared by a read mark.
+  follow         Boolean?
   updatedAt      DateTime
 
   /// A person's marks: every one (a first load, the inbox, the cap's count and oldest) or those moved since a change read's

@@ -34,6 +34,7 @@ import 'composer_files.dart';
 import 'composer_newline.dart';
 import 'composer_tags.dart';
 import 'composer_toggle.dart';
+import 'attention.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'folder_zip.dart';
@@ -54,6 +55,7 @@ import 'route_row.dart';
 import 'ship_row.dart';
 import 'terminal_row.dart';
 import 'thread_panel.dart';
+import 'threads_view.dart';
 import 'work_details.dart';
 import 'project_sidebar.dart';
 import 'buddy_sessions.dart';
@@ -142,6 +144,9 @@ class _SuperTabViewState extends State<SuperTabView>
   bool _showPullRequests = false;
 
   bool _showNotifications = false;
+
+  /// The Threads view holds the main pane (threads_view.dart).
+  bool _showThreads = false;
   // The message a tag opened, scrolled to once it is laid out.
   String? _target;
   // The conversation a link or tag opened at its own message this visit: its
@@ -447,7 +452,8 @@ class _SuperTabViewState extends State<SuperTabView>
         _devicesVisible ||
         _terminalsVisible ||
         _showPullRequests ||
-        _showNotifications) {
+        _showNotifications ||
+        _showThreads) {
       return false;
     }
     final lifecycle = WidgetsBinding.instance.lifecycleState;
@@ -1456,6 +1462,17 @@ class _SuperTabViewState extends State<SuperTabView>
     onNewSwarm: widget.onNewSwarm,
     devicesSelected: _devicesVisible,
     notificationsSelected: _notificationsVisible,
+    attention: SuperTabAttention.of(c),
+    threadsSelected: _threadsVisible,
+    onThreads: () {
+      _closeSidebar();
+      setState(() {
+        _showThreads = true;
+        _showNotifications = false;
+        _showPullRequests = false;
+      });
+      widget.onCloseTerminal?.call();
+    },
     // On a Mac what needs the person is in the menu bar's Harness menu and on
     // the Dock's badge, so the sidebar keeps no Notifications row.
     onNotifications: superTabNoticesInMenuBar
@@ -1464,6 +1481,7 @@ class _SuperTabViewState extends State<SuperTabView>
             _closeSidebar();
             setState(() {
               _showNotifications = true;
+              _showThreads = false;
               _showPullRequests = false;
             });
             widget.onCloseTerminal?.call();
@@ -1472,7 +1490,7 @@ class _SuperTabViewState extends State<SuperTabView>
       _closeSidebar();
       setState(() {
         _showPullRequests = false;
-        _showNotifications = false;
+        _showNotifications = _showThreads = false;
       });
       (widget.onChooseAgentTerminal ?? widget.onOpenTerminal)(agent);
     },
@@ -1480,12 +1498,12 @@ class _SuperTabViewState extends State<SuperTabView>
         ? null
         : () {
             _closeSidebar();
-            setState(() => _showNotifications = false);
+            setState(() => _showNotifications = _showThreads = false);
             widget.app!.openDevices();
           },
     needsHuman: (group) => _needsHuman(group).length,
     onSelect: (id) {
-      setState(() => _showNotifications = false);
+      setState(() => _showNotifications = _showThreads = false);
       c.select(id);
       _closeSidebar();
     },
@@ -1498,7 +1516,7 @@ class _SuperTabViewState extends State<SuperTabView>
   /// ([SuperTabController.buddyChatOpener]).
   Future<bool> _openBuddyChat(String projectId) {
     setState(() {
-      _showNotifications = false;
+      _showNotifications = _showThreads = false;
       _showPullRequests = false;
     });
     widget.onCloseTerminal?.call();
@@ -1515,6 +1533,7 @@ class _SuperTabViewState extends State<SuperTabView>
     widget.onCloseTerminal?.call();
     setState(() {
       _showNotifications = true;
+      _showThreads = false;
       _showPullRequests = false;
     });
     if (request.kind != 'mention') return;
@@ -1526,6 +1545,30 @@ class _SuperTabViewState extends State<SuperTabView>
 
   bool get _notificationsVisible =>
       _showNotifications && !_devicesVisible && !c.accessRevoked;
+
+  /// Notifications or Threads holds the main pane, with no chat header.
+  bool get _listViewHoldsThePane => _notificationsVisible || _threadsVisible;
+
+  bool get _threadsVisible =>
+      _showThreads &&
+      !_showNotifications &&
+      !_devicesVisible &&
+      !c.accessRevoked;
+
+  /// Opens [root]'s thread in its chat from the Threads view.
+  void _openThreadFromList(String conversationId, String root) {
+    if (c.accessRevoked || c.snapshot?.conversation(conversationId) == null) {
+      return;
+    }
+    widget.onCloseTerminal?.call();
+    _closeSidebar();
+    setState(() {
+      _showThreads = _showNotifications = false;
+      _showPullRequests = false;
+    });
+    c.select(conversationId);
+    c.openThread(root);
+  }
 
   /// [messageId] of [id], read from the pages held, then what arrived after
   /// them, then older pages, up to 50 (5,000 messages); null when it is not
@@ -1598,7 +1641,7 @@ class _SuperTabViewState extends State<SuperTabView>
     }
     final shownBy = _rowShowing(id, messageId) ?? messageId;
     setState(() {
-      _showNotifications = false;
+      _showNotifications = _showThreads = false;
       _showPullRequests = false;
       _back = null;
       _target = shownBy;
@@ -1985,6 +2028,8 @@ class _SuperTabViewState extends State<SuperTabView>
         ? 'Your devices'
         : _notificationsVisible
         ? 'Notifications'
+        : _threadsVisible
+        ? 'Threads'
         : group == null
         ? c.snapshot?.projects.isEmpty == true
               ? c.snapshot!.name
@@ -2027,7 +2072,7 @@ class _SuperTabViewState extends State<SuperTabView>
 
   /// Whether ⋮ carries the views a wider header draws as icons.
   bool get _menuNamesViews =>
-      _phone && !_devicesVisible && !_notificationsVisible;
+      _phone && !_devicesVisible && !_listViewHoldsThePane;
 
   /// How many terminals [group]'s [term] opens: its agents', and in the
   /// person's own Personal Swarm their panes of its project.
@@ -2152,7 +2197,7 @@ class _SuperTabViewState extends State<SuperTabView>
                       )
                     else
                       _title(group),
-                    if (!_devicesVisible && !_notificationsVisible)
+                    if (!_devicesVisible && !_listViewHoldsThePane)
                       ?_subtitle(group),
                   ],
                 ),
@@ -2160,7 +2205,7 @@ class _SuperTabViewState extends State<SuperTabView>
             ),
             if (group != null &&
                 !_devicesVisible &&
-                !_notificationsVisible) ...[
+                !_listViewHoldsThePane) ...[
               fingerTarget(
                 enabled: _phone,
                 AppIconButton(
@@ -3789,6 +3834,8 @@ class _SuperTabViewState extends State<SuperTabView>
                           ? 1
                           : _notificationsVisible
                           ? 3
+                          : _threadsVisible
+                          ? 4
                           : c.snapshot?.projects.isEmpty == true
                           ? 0
                           : _terminalsVisible
@@ -3814,6 +3861,13 @@ class _SuperTabViewState extends State<SuperTabView>
                                 leading: SuperTabDecisionList(
                                   decisions: SuperTabDecisions.of(c),
                                 ),
+                              )
+                            : const SizedBox.shrink(),
+                        _threadsVisible
+                            ? SuperTabThreadsView(
+                                attention: SuperTabAttention.of(c),
+                                onOpen: _openThreadFromList,
+                                machineName: widget.machineName,
                               )
                             : const SizedBox.shrink(),
                       ],

@@ -1224,6 +1224,28 @@ class SuperTabController extends ChangeNotifier {
     _saveSoon();
   }
 
+  /// [root]'s thread in [conversationId] was read through [sequence] outside
+  /// the thread pane (the Threads view): kept here and sent to the server,
+  /// so it reads as read on every device. Nothing once access is gone.
+  void markThreadRead(String conversationId, String root, int sequence) {
+    if (_disposed ||
+        accessRevoked ||
+        sequence <= 0 ||
+        snapshot?.conversation(conversationId) == null) {
+      return;
+    }
+    _serverThreadMarks.mark(
+      (conversationId, root),
+      sequence,
+      kept: snapshot?.threadMarks[conversationId]?[root] ?? 0,
+    );
+    if ((_threadSeen[root] ?? 0) >= sequence) return;
+    _threadSeen.remove(root);
+    _threadSeen[root] = sequence;
+    _saveSoon();
+    _changed();
+  }
+
   /// The root and replies of [root]'s thread in the selected conversation,
   /// oldest first: what its own read brought, and replies polled since.
   List<SuperTabMessage> threadMessages(String root) {
@@ -1333,10 +1355,14 @@ class SuperTabController extends ChangeNotifier {
   Map<String, String> threadMentions(String conversationId, String root) =>
       Map.unmodifiable(_threadMentions[(conversationId, root)] ?? const {});
 
-  /// [id] picked as [token] in the open thread's reply box, while its draft
-  /// says it.
-  void threadMention(String id, String token) {
-    final open = openedThread;
+  /// [id] picked as [token] in the open thread's reply box, or [to]'s (the
+  /// Threads view), while its draft says it.
+  void threadMention(
+    String id,
+    String token, {
+    ({String conversationId, String root})? to,
+  }) {
+    final open = to ?? openedThread;
     if (open == null || accessRevoked) return;
     if (!containsMention(threadDraft(open.root), token)) return;
     (_threadMentions[(open.conversationId, open.root)] ??= {})[id] = token;
@@ -1428,22 +1454,25 @@ class SuperTabController extends ChangeNotifier {
     }
   }
 
-  /// Sends the open thread's draft and files to its root; [alsoSend] shows it in the
-  /// main stream too. [onSending] is told when the reply is on its way, which
-  /// is after its files have gone up.
+  /// Sends the open thread's draft and files to its root, or [to]'s (the
+  /// Threads view replies without opening the thread); [alsoSend] shows it in
+  /// the main stream too. [onSending] is told when the reply is on its way,
+  /// which is after its files have gone up.
   Future<Map<String, dynamic>?> sendThreadReply({
     bool alsoSend = false,
     bool newSession = false,
     VoidCallback? onSending,
+    ({String conversationId, String root})? to,
   }) async {
-    final open = openedThread;
-    if (open == null) return null;
+    final open = to ?? openedThread;
+    if (open == null || accessRevoked) return null;
     final text = threadDraft(open.root).trim();
     final owner = threadAttachments(open.conversationId, open.root);
     final files = owner.files;
+    final group = snapshot?.conversation(open.conversationId);
     if ((text.isEmpty && files.isEmpty) ||
-        selected == null ||
-        selected!.archived ||
+        group == null ||
+        group.archived ||
         !canWrite ||
         uploading ||
         saving ||
@@ -1454,7 +1483,9 @@ class SuperTabController extends ChangeNotifier {
     // The tags as picked when sent: the box may take new ones meanwhile.
     final picked = Map<String, String>.of(_threadMentions[thread] ?? const {});
     final (:tagged, :addressed) = _tagsSaid(picked, text);
-    final failure = addressed.any((id) => !selected!.agentIds.contains(id))
+    // The thread's own chat: a reply from the Threads view goes to a chat
+    // that may not be the one selected, or none may be.
+    final failure = addressed.any((id) => !group.agentIds.contains(id))
         ? 'A mentioned agent is no longer in this conversation. Remove its mention or choose another agent.'
         // Only its own session hears a session's thread (backend
         // routeBuddySession): another agent's tag there would be refused.
@@ -1839,12 +1870,24 @@ class SuperTabController extends ChangeNotifier {
 
   /// Each conversation's reaction counter as its last page said it.
   final _reactionSeq = <String, int>{};
-  int _loadedMessageSequence(String id) =>
-      _messages[id]?.reversed
-          .where((m) => m.source['kind'] != 'update-request')
-          .firstOrNull
-          ?.sequence ??
-      0;
+
+  /// The newest message held for [id] that reading the chat reads: one in
+  /// its main stream. A reply only in its thread is read in that thread, as in
+  /// Slack, so the chat's mark stops short of it and the thread stays unread
+  /// (backend read/inbox.ts counts replies past the chat's mark). From a
+  /// server before main-stream numbers, any row, as before.
+  int _loadedMessageSequence(String id) {
+    final mainOnly = snapshot?.conversation(id)?.lastMainSequence != null;
+    return _messages[id]?.reversed
+            .where(
+              (m) =>
+                  m.source['kind'] != 'update-request' &&
+                  (!mainOnly || m.inMainStream),
+            )
+            .firstOrNull
+            ?.sequence ??
+        0;
+  }
 
   /// How far the reader has read [id]: the higher of the mark kept on the
   /// server, from any of their devices, and this device's own, which stands
@@ -4219,9 +4262,18 @@ class SuperTabController extends ChangeNotifier {
     await _persist();
   }
 
+  /// Runs [then] when this controller is disposed: a helper that keeps a
+  /// timer of its own (attention.dart) stops with it.
+  void onDispose(VoidCallback then) => _onDispose.add(then);
+  final _onDispose = <VoidCallback>[];
+
   @override
   void dispose() {
     _disposed = true;
+    for (final then in _onDispose) {
+      then();
+    }
+    _onDispose.clear();
     for (final queued in _queuedSends) {
       queued.result.complete(null);
     }
