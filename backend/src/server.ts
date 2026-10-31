@@ -34,6 +34,8 @@ import { selfProfileFromEnv } from './lib/selfProfile.js'
 import { startRelayUsageFlush } from './lib/productUsage.js'
 import { registerWorkContext, startQueryStats } from './lib/queryStats.js'
 import { startRetryStats } from './superTabs/retryStats.js'
+import { startRelayStats } from './lib/relayStats.js'
+import { startPodRoutes } from './lib/hub.js'
 import { registerRouteLatency, startRouteLatency } from './lib/routeLatency.js'
 import { drainAllSockets, openSocketCount, RELEASE_UPGRADE_SLOT, type SlotSocket } from './lib/wsServer.js'
 import { endpointOf, refusedUpgrade, startWsCounterLog, watchUpgrade } from './lib/wsAttribution.js'
@@ -150,6 +152,13 @@ async function start(): Promise<void> {
   const stopRouteLatency = startRouteLatency(registerRouteLatency(app))
   // Every minute: who reads messages how, with the rows each page decoded and showed (superTabs/messageReadStats.ts).
   const stopMessageReadStats = startMessageReadStats()
+  // Every minute: how each frame an adapter sends for one viewer reached it, and how many processes each publish woke.
+  const stopRelayStats = startRelayStats()
+  // Frames for one viewer go to the process holding it (lib/terminalRoute.ts), unless TERMINAL_POD_ROUTES=off.
+  let stopPodRoutes = (): void => {}
+  if (env.TERMINAL_POD_ROUTES !== 'off') {
+    startPodRoutes().then(stop => { stopPodRoutes = stop }, err => logger.warn('pod routes failed to start; frames use the machine channels', { error: String(err) }))
+  }
 
   app.setErrorHandler(errorHandler)
 
@@ -231,6 +240,8 @@ async function start(): Promise<void> {
       stopRouteLatency()
       stopMachineReportLog()
       stopMessageReadStats()
+      stopRelayStats()
+      stopPodRoutes()
       // The database stays connected through the drain, for the requests still being served (lib/prisma.ts).
       await Promise.allSettled([prisma.$disconnect(), closeBus()])
       process.exit(exitCode)

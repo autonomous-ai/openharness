@@ -59,9 +59,13 @@ release, which will say exactly how much is terminal relay.
   is per Node worker, so "local" means the same worker), the frame is delivered there directly with today's send rules
   (`deliverTerminalUpLocal` for a hop; for JSON the same per-connection path `deliverUpLocal` takes, from the adapter's
   already-parsed frame, stringified once) and is not published.
-- **Sticky route:** the first frame of a connection on an adapter socket decides its path (local or published) and it
-  stays so until that connection detaches or the adapter socket closes. A connection is local or not for its whole life
-  (`connId` is a new `randomUUID()` per attach and never moves), so the rule only makes that explicit.
+- **Local is for good:** a connection is local or not for its whole life (`connId` is a new `randomUUID()` per attach
+  and never moves), so a local route never changes.
+- **Untargeted frames go local first too** *(after the independent review)*: an adapter frame for every client of the
+  machine is delivered to this process's clients first, then published with `originPid` (this process's own Redis
+  subscription skips it), as `managerWs` does. Otherwise a local viewer's targeted reply would overtake an event the
+  daemon sent before it. Observers and `nodeRpc` ignore `originPid` and still get the Redis copy.
+- A `targetConnId` that is not a string of 1–128 characters is published as before, never used as a route or a key.
 - **Receiver count:** `PUBLISH` answers how many subscriptions received a message. A per-minute log `terminal relay`
   counts, per channel kind (`termup`, `up` targeted, `up` broadcast): frames delivered locally, frames published, and the
   receivers they reached in total. That says how many pods each published frame wakes for nothing.
@@ -70,27 +74,30 @@ release, which will say exactly how much is terminal relay.
 
 - On attach a pod records `conn:{connId} → PROCESS_ID` in Redis (`SET … PX 60 000`, renewed with the client heartbeat,
   deleted on detach) and each process subscribes to its own `pod:{PROCESS_ID}` channel(s).
-- A published per-connection frame goes to `pod:{owner}`; the route is decided by the first frame and sticky as above,
-  including "no owner known" (old pod, expired record, failed lookup), which stays on today's channels for that
-  connection. Each `pod:` channel rides the same subscriber connection as the channel it replaces (`terminalSub` for hops,
-  `sub` for JSON), so a connection's frames never cross subscriber connections.
-- The receiver delivers as in Phase 1 without parsing a JSON frame's text, **after checking that the `connId` is one of
-  its clients of the frame's `machineId`** (the message carries both): a daemon's frame never reaches another machine's
-  connection, as `deliverTerminalUpLocal` checks today.
+- **One switch, in order** *(after the independent review; replaces a queue and a 250 ms lookup timeout)*: a
+  non-local connection's frames go to the machine's channels while its owner is looked up, then, if another process
+  owns it, to that process's channels; with no owner (old process, expired record, failed lookup) they stay on the
+  machine's channels. The switch keeps order: both channels are published from the one `pub` connection; the owner reads
+  `up:`/`uppod:` on `sub` and `termup:`/`termpod:` on `terminalSub`, one subscriber connection per kind; and the owner holds
+  a viewer of the machine, so it reads the machine's channels. Nothing waits for the lookup, so untargeted frames sent
+  after a targeted one never overtake it.
+- The receiver delivers with the existing functions: a hop with `deliverTerminalUpLocal`, a JSON message (the whole
+  `UpBusMsg`, *author's call during implementation*: a device connection's frames need the machine tag and the voice
+  queue `deliverUpLocal` applies) with `deliverUpLocal`. Both only reach that process's clients **of the message's
+  `machineId`** with that `connId`, so a daemon's frame never reaches another machine's connection. A `uppod:` message
+  without a string `targetConnId` is ignored.
 - **Kill switch:** `TERMINAL_POD_ROUTES=off` stops writing records and routing to `pod:` (on by default). With it off,
   Phase 1 still runs; records already written expire within 60 s.
-- **First frames wait for the lookup, in order:** while a connection's first owner lookup is in flight, its later frames
-  queue behind it; a lookup that fails or times out (250 ms) decides "today's channels" for that connection.
 
 ### Risks (and what covers each)
 
 | Risk | Cover |
 |---|---|
-| A frame lost or reordered when the path changes | The route never changes after the first frame (sticky, including "today's channels"); each `pod:` channel rides the same subscriber connection as the channel it replaces; a 1,000-frame order test with a real Redis |
+| A frame lost or reordered when the path changes | A route changes at most once, machine → owner, which keeps order (one publisher connection, one subscriber connection per kind); real-Redis tests of 1,000 frames across that switch |
 | A viewer on an old pod during the rolling deploy | No record from old pods → today's channels; new pods keep today's subscriptions |
 | A pod that crashed leaves records for 60 s | Frames to its `pod:` channel reach nobody, as frames to its dead sockets do today; its viewers reconnect elsewhere with a new `connId`, which gets a new record |
 | A daemon targeting another machine's connection | The receiver checks `connId` against its clients of the frame's `machineId` |
-| More Redis writes: a record per attach, renewed per heartbeat (Desktop re-attaches on every agent switch) | One `SET` per attach and per 25 s per connection, in the heartbeat's existing pipeline; one `GET` per connection, once |
+| More Redis writes: a record per attach, renewed per heartbeat (Desktop re-attaches on every agent switch) | One `SET` per attach and per 25 s per connection, one pipeline per heartbeat; one `GET` per connection, once; at most 2,000 routes kept per adapter socket |
 | A bug that only shows across real pods | A real-Redis test (two subscriber connections standing for two processes, `REDIS_TEST_URL`), the kill switch, and the `terminal relay` log after release |
 | Little gain if most machines have viewers on one pod | `terminal relay` counts receivers per publish before and after; the kill switch turns Phase 2 off if it does not pay |
 

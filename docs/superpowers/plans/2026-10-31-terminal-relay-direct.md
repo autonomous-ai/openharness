@@ -1,5 +1,7 @@
 # Terminal relay: per-connection frames go straight to their connection (Phases 1 and 2) — Implementation Plan
 
+> **Implemented 2026-10-31** with the review changes noted in the spec (one switch instead of a queue; whole `UpBusMsg` on `uppod:`; untargeted frames local first). Task text below is the original plan.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** An `adapter-ws` up frame for one connection is delivered directly when that connection is on this worker, and otherwise published only to the worker that holds it; a per-minute log says how many workers each published frame reaches.
@@ -13,8 +15,9 @@
 ## Global Constraints
 
 - Both phases ship together. Phase 2 runs unless `TERMINAL_POD_ROUTES=off`; with it off, Phase 1 alone runs.
-- Owner record `PX 60 000`, renewed every `CLIENT_HEARTBEAT_MS` (25 s); first-lookup timeout **250 ms**; a failed or timed-out lookup means today's channels for that connection's life.
-- A `pod:` message carries `machineId` and `connId`; the receiver delivers only to its own client of that machine with that `connId`.
+- Owner record `PX 60 000`, renewed every `CLIENT_HEARTBEAT_MS` (25 s). A non-local connection uses the machine's channels until its owner is known, then the owner's; no owner or a failed lookup keeps the machine's channels (spec, Phase 2 "One switch, in order").
+- A `pod:` message carries `machineId`; a JSON one carries the whole `UpBusMsg` and is delivered with `deliverUpLocal` (implementation call, see spec); both reach only that machine's client with that `connId`.
+- Untargeted adapter frames are delivered locally first, then published with `originPid` (independent review).
 - Each `pod:` channel rides the subscriber connection of the channel it replaces: binary on `terminalSub`, JSON on `sub`.
 - A connection's frames arrive once, in order, byte-identical to today; send rules unchanged (`guardedSend` "must", kill-water).
 - "Local" means this Node worker (`registry.PROCESS_ID`), not this pod.
