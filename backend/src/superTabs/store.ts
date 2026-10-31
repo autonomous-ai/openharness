@@ -69,7 +69,7 @@ import { APPROVE, approvedLine, localDate, MAX_PROPOSALS, proposalQuestion, prop
 import { readEvidence, recordEvidence } from './evidence/store.js'
 import { closeAssignment, closeUnassignedStart, LIST_SIZE, newestConversations, newestDecisions, readDecision, recentDecisions, recordAttempts, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { dropHeldTags, listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByReply, resolveWhenWorked, writeMentions } from './mentions.js'
-import { answerable, askDecisions, MAX_OPEN_DECISIONS, REFLECTION_DECISION, reflectionDecisions, expireReflections, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingFor, waitingIn, waitingInProject, writeDecisions } from './decisions.js'
+import { answerable, askDecisions, MAX_OPEN_DECISIONS, REFLECTION_DECISION, reflectionDecisions, expireReflections, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingFor, waitingInProject, withdrawIn, workEnded, workOver, writeDecisions } from './decisions.js'
 import { CATCH_UP_SCAN, catchUpSummary, type CatchUp } from './catchUp.js'
 import { recordMessageRead, type MessageReadKey } from './messageReadStats.js'
 import { DEFAULT_ROUTING_POLICY, type RoutingPolicy } from './routingPolicy.js'
@@ -1614,6 +1614,10 @@ export class SuperTabStore {
         if (command.type === 'decision.ask') effects.result.decisionIds = ids
       }
       if (effects.decisionAnswer) await recordAnswer(tx, tabId, effects.decisionAnswer, context.now)
+      // Work this command ended (done, cancelled, archived) closes the decisions still waiting there (Dee, 10-31). After this
+      // command's own answer and asks, so an answer in the same write counts and a reopened task's new ask is a new decision.
+      const over = workEnded(original, effects.state)
+      if (over.length) await withdrawIn(tx, tabId, over, context.now)
       if (claimed.length) {
         // Conflicts with a concurrent send of the same file: only one message can take it.
         const taken = await tx.superTabAttachment.updateMany({ where: { tabId, id: { in: claimed }, ...unused },
@@ -2431,7 +2435,8 @@ export class SuperTabStore {
     const [rows, decisions] = await Promise.all([
       this.db.superTabMessage.findMany({ where: { tabId, conversationId, sequence: { gt: after } }, orderBy: [{ sequence: 'asc' }, { id: 'asc' }],
         take: CATCH_UP_SCAN + 1 }),
-      waitingFor(this.db, tabId, conversationId, user.sub),
+      // None waits where the work is over, closed or not yet (decisions.ts workOver).
+      workOver(state, group) ? 0 : waitingFor(this.db, tabId, conversationId, user.sub),
     ])
     const scanned = rows.slice(0, CATCH_UP_SCAN), reads = readsRow(actor, buddy)
     // A task chat's copy of a Lead's notice stored before it was marked is read by no one, as on the page (pageReads.ts).
@@ -3302,7 +3307,8 @@ export class SuperTabStore {
       // Only the group it reviews as the pass read it: one this write did not load would hide its open pull requests.
       const review = !finished && !!reviewOf && group.reviewOf === reviewOf && reviewClosable(state, group, now) && read(reviewPullRequests(state, group))
       if (!finished && !review) return false
-      if (await waitingIn(tx, tabId, groupId)) return false
+      // Its work is over: a decision still waiting there waits no more (Dee, 10-31), as when the work ended by a command.
+      await withdrawIn(tx, tabId, [groupId], now)
       group.archived = true
       const line = finished ? archiveLine(state, group, now) : reviewCloseLine(state, group, checked, now), rows = line ? [line] : []
       const sequences = numberMessages(state, rows, now)

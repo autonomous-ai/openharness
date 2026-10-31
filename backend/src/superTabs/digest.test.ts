@@ -83,6 +83,14 @@ describe('a project\'s morning digest', () => {
     expect(decisionLines(state, lampOS(state), [])).toEqual([])
   })
 
+  it('leaves out decisions in work that is over: its task done or cancelled, or archived (Dee, 10-31)', () => {
+    const state = fixture()
+    const group = state.conversations.find(c => c.id === 'g7')!
+    group.assignment = { ...group.assignment!, status: 'done' }
+    expect(decisionLines(state, lampOS(state), [{ conversationId: 'g7', personId: 'owner', count: 1 }, { conversationId: 'g3', personId: 'ann', count: 1 }]))
+      .toEqual(['- #3 Lexer: 1 for ann@example.com'])
+  })
+
   it('puts the decisions waiting in the Lead\'s digest wake-up only when there are some', () => {
     const state = fixture(), lead = state.agents.find(a => a.id === 'lead')!
     expect(digestRequest(state, lead, EIGHT, [{ conversationId: 'g7', personId: 'ann', count: 1 }])!.text).toMatch(/\nDecisions waiting:\n- #7 Pricing: 1 for ann@example\.com$/)

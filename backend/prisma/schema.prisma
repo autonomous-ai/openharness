@@ -1290,6 +1290,10 @@ model SuperTabDecision {
   /// "routing-reflection" for a proposal of the nightly routing reflection (costs/reflection.ts): never a Buddy's to read,
   /// and an approved one is kept past the ledger's weeks. Absent on every other decision.
   kind           String?
+  /// Closed unanswered because the work it was asked about is over: its task done or cancelled, or its group archived
+  /// (decisions.ts withdrawIn; Dee, 10-31). Set with answeredAt and no choice, so it waits no more, is in no list and goes
+  /// with the answered ones after the ledger's weeks. Absent on every other decision.
+  withdrawn      Boolean?
 
   @@index([tabId, personId, createdAt])
   @@index([tabId, askerAgentId, createdAt])

@@ -1587,15 +1587,7 @@ class _SuperTabViewState extends State<SuperTabView>
     },
     // Activity on every platform (Lead, 10-31): the Mac's menu bar and Dock
     // still say what waits, and the sidebar lists it as Slack does.
-    onNotifications: () {
-      _closeSidebar();
-      setState(() {
-        _showNotifications = true;
-        _showThreads = false;
-        _showPullRequests = false;
-      });
-      widget.onCloseTerminal?.call();
-    },
+    onNotifications: _openActivity,
     onOpenAgent: (agent) {
       _closeSidebar();
       setState(() {
@@ -1651,6 +1643,25 @@ class _SuperTabViewState extends State<SuperTabView>
         .where((m) => m.id == request.id)
         .firstOrNull;
     if (mention != null) unawaited(_openMention(mention));
+  }
+
+  /// Shows Activity in the main pane, as its sidebar row does; with [filter],
+  /// on that list (the catch-up card's counts). [from] is the controller the
+  /// asking widget was built for: a press arriving once the view has moved to
+  /// another Swarm opens nothing.
+  void _openActivity({
+    SuperTabActivityFilter? filter,
+    SuperTabController? from,
+  }) {
+    if (!mounted || (from != null && from != c)) return;
+    if (filter != null) SuperTabActivity.of(c).setFilter(filter);
+    _closeSidebar();
+    setState(() {
+      _showNotifications = true;
+      _showThreads = false;
+      _showPullRequests = false;
+    });
+    widget.onCloseTerminal?.call();
   }
 
   bool get _notificationsVisible =>
@@ -3138,6 +3149,8 @@ class _SuperTabViewState extends State<SuperTabView>
           _ => false,
         },
       );
+    // The controller these rows were built for, read when a row is pressed.
+    final shownFor = c;
     Widget row(int index) {
       final entry = entries[index];
       final message = entry.message;
@@ -3165,6 +3178,15 @@ class _SuperTabViewState extends State<SuperTabView>
                     unawaited(_openMessage(c.selectedId, messageId)),
                 onClose: () =>
                     setState(() => _unread.catchUps.dismiss(c.selectedId)),
+                // Activity lists only the reader's own decisions and tags.
+                onOpenDecisions: () => _openActivity(
+                  filter: SuperTabActivityFilter.decisions,
+                  from: shownFor,
+                ),
+                onOpenMentions: () => _openActivity(
+                  filter: SuperTabActivityFilter.mentions,
+                  from: shownFor,
+                ),
               ),
           ],
           // The message itself is kept in place: its

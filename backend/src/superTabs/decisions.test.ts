@@ -3,7 +3,7 @@ import { storeOldLeads } from './leads.test-support.js'
 import type { Prisma } from '@prisma/client'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
-import { checkAsker, listDecisions, waitingInProject, type DecisionTarget } from './decisions.js'
+import { checkAsker, decisionsWaiting, listDecisions, waitingInProject, withdrawIn, workEnded, workOver, type DecisionTarget } from './decisions.js'
 import { buddyChatId } from './buddies.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
@@ -235,5 +235,94 @@ describe('the decisions waiting in a project', () => {
       { conversationId: 'c2', personId: 'peer', count: 1 }, { conversationId: 'c1', personId: 'peer', count: 1 }])
     expect(asked).toEqual([{ where: { tabId: 'tab', projectId: 'web', OR: [{ answeredAt: null }, { answeredAt: { isSet: false } }] },
       select: { conversationId: true, personId: true } }])
+  })
+})
+
+// Dee, 10-31: "4 decisions wait for you", two of them asked in tasks already done and merged.
+describe('a decision whose work is over', () => {
+  const at = (s: ReturnType<typeof swarm>, id: string) => s.state.conversations.find(c => c.id === id)!
+  const ended = (s: ReturnType<typeof swarm>, change: (state: ReturnType<typeof swarm>['state']) => void) => {
+    const before = structuredClone(s.state), after = structuredClone(s.state)
+    change(after)
+    return workEnded(before, after)
+  }
+
+  it('is over once its work group\'s task is done or cancelled, or the group archived; not while its task is open or reopened', () => {
+    const s = swarm()
+    const group = at(s, s.group)
+    expect(workOver(s.state, group)).toBe(false)
+    for (const status of ['done', 'cancelled'] as const) expect(workOver(s.state, { ...group, assignment: { ...group.assignment!, status } })).toBe(true)
+    for (const status of ['working', 'needs_human', 'blocked', 'review', 'stopped', 'lost'] as const) {
+      expect(workOver(s.state, { ...group, assignment: { ...group.assignment!, status } })).toBe(false)
+    }
+    expect(workOver(s.state, { ...group, archived: true })).toBe(true)
+    expect(workOver(s.state, { ...group, assignment: null })).toBe(false)
+  })
+
+  it('is never over in a project chat, a Buddy chat or a closed Chat with PM, whatever they hold', () => {
+    const s = swarm()
+    const finished = { archived: true, assignment: { ...at(s, s.group).assignment!, status: 'cancelled' as const } }
+    expect(workOver(s.state, { ...at(s, 'lead'), ...finished })).toBe(false)
+    expect(workOver(s.state, { ...at(s, s.group), ...finished, kind: 'buddy' })).toBe(false)
+    expect(workOver(s.state, { ...at(s, s.group), ...finished, audience: { people: [] } })).toBe(false)
+  })
+
+  it('names the conversations a write ended, once: not those already over, nor one reopened', () => {
+    const s = swarm()
+    expect(ended(s, state => { state.conversations.find(c => c.id === s.group)!.assignment!.status = 'done' })).toEqual([s.group])
+    expect(ended(s, state => { state.conversations.find(c => c.id === s.group)!.archived = true })).toEqual([s.group])
+    expect(ended(s, state => { state.conversations.find(c => c.id === s.group)!.assignment!.status = 'review' })).toEqual([])
+    s.run({ type: 'work.cancel', conversationId: s.group, assignmentId: s.assignmentId, reason: 'Not needed' })
+    expect(ended(s, state => { state.conversations.find(c => c.id === s.group)!.archived = true })).toEqual([])
+    expect(ended(s, state => { state.conversations.find(c => c.id === s.group)!.assignment = null })).toEqual([])
+  })
+
+  it('closes those still waiting there as withdrawn, never a routing reflection\'s, and only in the conversations named', async () => {
+    const calls: unknown[] = []
+    const tx = { superTabDecision: { updateMany: async (args: unknown) => { calls.push(args); return { count: 2 } } } } as unknown as Prisma.TransactionClient
+    expect(await withdrawIn(tx, 'tab', [], 5)).toBe(0)
+    expect(calls).toEqual([])
+    expect(await withdrawIn(tx, 'tab', ['g1', 'g1'], 5)).toBe(2)
+    expect(calls).toEqual([{ where: { tabId: 'tab', conversationId: 'g1', AND: [
+      { OR: [{ answeredAt: null }, { answeredAt: { isSet: false } }] },
+      { OR: [{ kind: { isSet: false } }, { kind: null }, { kind: { not: 'routing-reflection' } }] }] },
+    data: { answeredAt: new Date(5), withdrawn: true } }])
+  })
+
+  it('leaves the open list and the count, closed or not yet, while one in an open task stays', async () => {
+    const s = swarm()
+    const other = s.run({ type: 'conversation.create', title: 'Search', brief: 'Find things.', checks: [] }).result.conversationId as string
+    at(s, other).assignment = { ...at(s, s.group).assignment!, id: 'old', status: 'done' }
+    const row = (id: string, conversationId: string) => ({ id, batchId: id, projectId: 'lead', conversationId, assignmentId: null, personId: 'peer',
+      askerAgentId: s.lead, question: id, options: ['A', 'B'], recommended: 0, unblocks: 'X', createdAt: new Date(1), answeredAt: null, choice: null,
+      note: null, delegated: null })
+    const rows = [row('open-task', s.group), row('done-task', other), row('project-chat', 'lead')]
+    const tx = { superTabDecision: { findMany: async () => rows } } as unknown as Prisma.TransactionClient
+    expect((await listDecisions(tx, 'tab', s.state, peer, 'open')).decisions.map(d => d.id)).toEqual(['open-task', 'project-chat'])
+    expect((await decisionsWaiting(tx, 'tab', s.state, peer)).count).toBe(2)
+    // Its answered history stays: a decision answered before the work ended is still listed as answered.
+    const answered = rows.map(r => ({ ...r, answeredAt: new Date(2), choice: 0 }))
+    const read = { superTabDecision: { findMany: async () => answered } } as unknown as Prisma.TransactionClient
+    expect((await listDecisions(read, 'tab', s.state, peer, 'settled')).decisions.map(d => d.id)).toEqual(['open-task', 'done-task', 'project-chat'])
+  })
+
+  it('takes no new question in finished work, where it would wait for nobody', () => {
+    const s = swarm()
+    const ask = () => s.run({ type: 'decision.ask', conversationId: s.group, personId: 'peer', questions: [question('Reopen it?')] }, asAgent(s.lead))
+    expect(ask().decisions).toHaveLength(1)
+    s.run({ type: 'work.cancel', conversationId: s.group, assignmentId: s.assignmentId, reason: 'Not needed' })
+    expect(ask).toThrow(expect.objectContaining({ code: 'WORK_FINISHED' }))
+    // The project chat always takes one.
+    expect(s.run({ type: 'decision.ask', conversationId: 'lead', personId: 'peer', questions: [question('Reopen it?')] }, asAgent(s.lead)).decisions).toHaveLength(1)
+  })
+
+  it('takes no answer, closed or not yet, with the code an answered one gets', () => {
+    const s = swarm()
+    const decision: DecisionTarget = { id: 'decision-1', personId: 'peer', conversationId: s.group, projectId: 'lead', askerAgentId: s.worker,
+      question: 'Ship how?', options: ['A', 'B'], recommended: 0, answeredAt: null, createdAt: 0, assignmentId: null }
+    const answer = (d: DecisionTarget) => () => s.run({ type: 'decision.answer', decisionId: d.id, choice: 0 }, peer, { decision: d })
+    expect(answer({ ...decision, answeredAt: 5, withdrawn: true })).toThrow(expect.objectContaining({ code: 'DECISION_ANSWERED', message: expect.stringContaining('no longer waits') }))
+    s.run({ type: 'work.cancel', conversationId: s.group, assignmentId: s.assignmentId, reason: 'Not needed' })
+    expect(answer(decision)).toThrow(expect.objectContaining({ code: 'DECISION_ANSWERED', message: expect.stringContaining('no longer waits') }))
   })
 })
