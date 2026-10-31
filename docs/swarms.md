@@ -691,33 +691,37 @@ for files in the reading Swarm's own folder.
 - Uploaded avatars kept in the chat files' bucket get signed links too, which
   stop opening within an hour.
 - Reads still carry each file's public address, because apps from before signed
-  links open nothing else. It keeps working only until the release step below
-  makes the bucket private. Until then, anyone who once had a file's address
-  can still open it.
+  links open nothing else.
 
-**Release step (Ken's go, after a migration window).** The code never changes
-the bucket. In order:
+**The guarantee starts only when the bucket goes private.** Until then, the
+public address of every file still opens it, for anyone who once had it: a
+removed member, someone after a Swarm was deleted, anyone they passed it to.
+Signed links alone do not end that; the release step does.
 
-1. Before the backend release, check that the backend can sign: with
-   `SUPER_TAB_ATTACHMENTS_CREDENTIALS` set, the key signs. Without it, the
-   backend's service account needs `iam.serviceAccounts.signBlob` on itself
-   (Service Account Token Creator). Otherwise every file and uploaded avatar
-   reads without a link, and the backend logs
-   `[file-links] could not sign a chat file link`.
-2. Release the backend, then the CLI, Desktop and the phone.
-3. For the web build's text viewer, add `GET` for `https://harness.autonomous.ai`
-   to the bucket's CORS rule (today it allows only `PUT`).
-4. Wait out the migration window, until product usage by release shows that
-   the current apps and CLI are what people run (at least 7 days).
-5. Make the bucket private: remove the `allUsers` (and any
-   `allAuthenticatedUsers`) `roles/storage.objectViewer` binding.
-6. Rewrite the cache setting that files stored before this release kept
+**Release step (Ken's go).** The code never changes the bucket. In order:
+
+1. Ship the backend, then the CLI, Desktop and the phone. The backend signs
+   links with the same permission as the 256 MB upload links: see step 2 of
+   "Release steps for Ken" in #2441. Without it, files read without a link,
+   apps fall back to the public address, and the backend logs
+   `[file-links] could not sign a chat file link`. For the web build's text
+   viewer, also add `GET` to the bucket's CORS rule from #2441's step 1.
+2. Wait until old apps are rare. Run `cd backend && npm run usage:daily -- 7`
+   with a read-only `DATABASE_URL` (docs/product-measurement.md), and read the
+   share of Desktop, phone and CLI activity by release
+   (`breakdown:release:<platform>:<version>` counters in
+   `product_usage_totals`). Go on once releases from before this one are under
+   5% of each for two days running. An old app can then still read messages,
+   but it cannot open their files.
+3. Make the bucket private. Remove the `allUsers` (and any
+   `allAuthenticatedUsers`) `roles/storage.objectViewer` binding. Then rewrite
+   the cache setting that files stored before this release kept
    (`public, max-age=31536000, immutable`, chat files and avatars alike), so
    nothing keeps serving a cached copy:
    `gcloud storage objects update "gs://BUCKET/PREFIX/**" "gs://BUCKET/avatars/**" --cache-control="private, max-age=600"`.
-7. Purge the CDN in front of the bucket (`SUPER_TAB_ATTACHMENTS_PUBLIC_BASE`),
+   Purge the CDN in front of the bucket (`SUPER_TAB_ATTACHMENTS_PUBLIC_BASE`)
    and remove the bucket as its origin.
-8. Check: an old public address and an expired signed link answer 403. A file
+4. Check: an old public address and an expired signed link answer 403. A file
    and an avatar still open in Desktop, on the phone and for an agent.
 
 Rollback: add the `allUsers` binding back. Old apps open files again; new ones
