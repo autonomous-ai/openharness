@@ -85,10 +85,13 @@ export const CI_LOAD_TTL_MS = 30_000
 export const CI_MAX_CALLS = 10
 /** The most runs whose jobs are read in one CI load; a run beyond it counts as one waiting job, on no particular runner. */
 export const CI_MAX_RUNS = CI_MAX_CALLS - 4
-/** The most CI loads read for one repository in an hour: past it, the last load is answered while it is at most
- *  [CI_STALE_MS] old, and after that none, which the route says as "not checked". With [CI_MAX_CALLS] that is at most 200
- *  calls an hour per repository, 4% of an installation's 5,000. */
-export const CI_READS_PER_HOUR = 20
+/** The most CI loads one server process reads for one repository in an hour: past it, the last load is answered while it is
+ *  at most [CI_STALE_MS] old, and after that none, which the route says as "not checked". The count, like the 30 s cache, is
+ *  per server process, and production runs 2 to 8 pods (security review 2 of #2428): the worst case is 8 × 3 = 24 reads and,
+ *  with [CI_MAX_CALLS], 240 calls an hour per repository, about 5% of an installation's 5,000. */
+export const CI_READS_PER_HOUR = 3
+/** The most server processes production runs (its autoscaler's maximum), for the worst case above. */
+export const SERVER_PROCESSES_MAX = 8
 export const CI_STALE_MS = 5 * 60_000
 const CI_WAITING = new Set(['queued', 'waiting', 'requested', 'pending'])
 const IDENTITY_RETRY_MS = 10 * 60_000
@@ -115,7 +118,7 @@ export class GitHubApp {
   /** A repository's name now, by the name asked for (lower case): null when it was not renamed. */
   private readonly renames = new Map<string, { repository: GitHubRepository | null; until: number }>()
   private readonly shownNames = new Map<string, { name: string; until: number }>()
-  /** Each repository's CI load while fresh, or being read ([ciLoad]), by its name in lower case. */
+  /** Each repository's CI load while fresh, or being read ([ciLoad]), by its name in lower case; per server process. */
   private readonly ciLoads = new Map<string, { value: Promise<CiLoad | null>; until: number }>()
   /** Each repository's CI reads in the last hour, and its last load read, for [CI_READS_PER_HOUR]. */
   private readonly ciReads = new Map<string, { at: number[]; last: { load: CiLoad | null; at: number } | null }>()
@@ -361,7 +364,8 @@ export class GitHubApp {
     reads.at.push(now)
     const value = this.readCiLoad(repository)
     this.ciLoads.set(key, { value, until: now + CI_LOAD_TTL_MS })
-    value.then(load => { reads.last = { load, at: now } }, () => { this.ciLoads.delete(key) })
+    // A failed read leaves the cache only if it is still this read's: one that fails late never drops a newer read's entry.
+    value.then(load => { reads.last = { load, at: now } }, () => { if (this.ciLoads.get(key)?.value === value) this.ciLoads.delete(key) })
     return value
   }
 

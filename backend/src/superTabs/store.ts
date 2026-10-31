@@ -2480,13 +2480,13 @@ export class SuperTabStore {
   /** A project's repository for the route's read of its running CI jobs (github/ciLoad.ts), by a person or an agent of the
    *  project, as any read of the project: another project's, or one this reader cannot see, is unavailable alike. A Buddy
    *  routes nothing, so it reads none. */
-  async ciRepository(user: AuthUser, tabId: string, projectId: string, asAgentId?: string): Promise<{ repositoryUrl: string | null; approvalRequired: boolean }> {
+  async ciRepository(user: AuthUser, tabId: string, projectId: string, asAgentId?: string): Promise<{ repositoryUrl: string | null }> {
     return transaction(this.db, async tx => {
       const { state } = await this.load(tx, user, tabId)
       const actor = await this.actor(tx, user, state, asAgentId)
       const project = readProject(state, actor, projectId)
       if (actor.kind === 'agent' && state.agents.some(a => a.id === actor.agentId && isBuddy(a))) fail('NOT_FOUND', 'This project is unavailable.', 404)
-      return { repositoryUrl: project.repository?.repositoryUrl ?? null, approvalRequired: teamAccountRequired(state) }
+      return { repositoryUrl: project.repository?.repositoryUrl ?? null }
     })
   }
 

@@ -104,7 +104,7 @@ describe('a Buddy and the route\'s reads', () => {
     const f = await swarm()
     const { agentId } = await buddy(f)
     await expect(f.store.ciRepository(peer, f.tab, 'lead', agentId)).rejects.toMatchObject({ code: 'NOT_FOUND', status: 404 })
-    expect(await f.store.ciRepository(owner, f.tab, 'lead', f.lead)).toEqual({ repositoryUrl: null, approvalRequired: false })
+    expect(await f.store.ciRepository(owner, f.tab, 'lead', f.lead)).toEqual({ repositoryUrl: null })
   })
 })
 

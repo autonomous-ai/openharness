@@ -578,21 +578,35 @@ describe('the CI load', () => {
       expect(r.body).not.toContain('Secret Plans')
     }
     expect(refusals[0]!.json().error).toEqual(refusals[1]!.json().error)
-    // A person outside the Swarm reads nothing of it; as the host of an agent of the project, it reads what that agent may.
+    // A person outside the Swarm reads nothing of it, answered as any Swarm it cannot reach (security review 1 of #2428); as
+    // the host of an agent of the project, it reads what that agent may.
     const outsider = await load(env, tab, 'lead', host)
-    expect(outsider.statusCode).toBe(403)
+    expect(outsider.statusCode).toBe(404)
+    expect(outsider.json().error).toEqual({ code: 'NOT_FOUND', message: 'This is not available to you. It may have been removed, or your access changed.' })
     expect(outsider.body).not.toContain('running')
     expect((await load(env, tab, secret, host, worker)).statusCode).toBe(404)
     expect((await load(env, tab, 'lead', host, worker)).json().data).toMatchObject({ state: 'read' })
   })
-  it('reads nothing for a repository not approved for the project, and says when the server has no app', async () => {
-    teamAccounts()
+  it('reads the counts once someone who can push approved the repository for the project, in a Swarm without the team account', async () => {
     const env = await fresh({ approveAll: false })
     busy(env)
     const { tab } = await working(env)
     expect((await load(env, tab, 'lead')).json().data).toEqual({ state: 'not-approved' })
-    expect(env.github.calls.some(c => c.path.endsWith('/access_tokens'))).toBe(false)
-    vi.unstubAllEnvs()
+    // As the app's sign-in records it for someone who can push (github/approvals.ts).
+    env.approved.push({ tabId: tab, projectId: 'lead', repository: 'example/app', scope: 'project', login: 'olive' })
+    expect((await load(env, tab, 'lead')).json().data).toEqual({ state: 'read', load: { running: 2, queued: 1, macosRunning: 1, macosQueued: 1 } })
+  })
+  it('reads nothing for a repository not approved for the project, in a Swarm with the team account or without, and says when the server has no app', async () => {
+    // Security review 1 of #2428: tokens ask approval only where the team account is tried; this read asks it everywhere.
+    for (const team of [true, false]) {
+      if (team) teamAccounts()
+      const env = await fresh({ approveAll: false })
+      busy(env)
+      const { tab } = await working(env)
+      expect((await load(env, tab, 'lead')).json().data).toEqual({ state: 'not-approved' })
+      expect(env.github.calls.some(c => c.path.endsWith('/access_tokens'))).toBe(false)
+      vi.unstubAllEnvs()
+    }
     const off = await fresh({ github: false })
     const other = await working(off)
     expect((await load(off, other.tab, 'lead')).json().data).toEqual({ state: 'unavailable' })

@@ -1,6 +1,6 @@
 import { createPublicKey, generateKeyPairSync, verify } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import { ACTIONS_READ_PERMISSIONS, CI_LOAD_TTL_MS, CI_MAX_CALLS, CI_MAX_RUNS, CI_READS_PER_HOUR, CI_STALE_MS, cacheSecret, githubAppConfig, GitHubAppError, PULL_READ_PERMISSIONS, readPrivateKey, TOKEN_PERMISSIONS } from './app.js'
+import { ACTIONS_READ_PERMISSIONS, CI_LOAD_TTL_MS, CI_MAX_CALLS, CI_MAX_RUNS, CI_READS_PER_HOUR, CI_STALE_MS, SERVER_PROCESSES_MAX, cacheSecret, githubAppConfig, GitHubAppError, PULL_READ_PERMISSIONS, readPrivateKey, TOKEN_PERMISSIONS } from './app.js'
 import { FAKE_API, fakeApp, fakeGitHub, throwawayKey } from './fakeGitHub.js'
 import { githubRepository } from './repository.js'
 
@@ -309,7 +309,8 @@ describe('the CI load', () => {
     const read = github.calls.slice(first)
     expect(read.at(-1)).toMatchObject({ method: 'DELETE', path: '/installation/token' })
     expect(read.length).toBeLessThanOrEqual(CI_MAX_CALLS)
-    expect(CI_MAX_CALLS * CI_READS_PER_HOUR).toBeLessThanOrEqual(5000 * 0.05)
+    // Per server process: every pod production may run, reading its full budget, stays about 5% of the installation's 5,000.
+    expect(CI_MAX_CALLS * CI_READS_PER_HOUR * SERVER_PROCESSES_MAX).toBeLessThanOrEqual(5000 * 0.05)
   })
   it('reads one repository at most its hourly number of times, then answers the last load for a few minutes, then none', async () => {
     const { app, github, time } = busy()
@@ -346,6 +347,34 @@ describe('the CI load', () => {
     second = true
     time.advance(CI_LOAD_TTL_MS)
     expect(await twice.ciLoad(repo)).toEqual({ running: 1, queued: 0, macosRunning: 0, macosQueued: 0 })
+  })
+  it('a read that fails after a newer one took its place leaves the newer one cached', async () => {
+    const { github, time } = busy()
+    let failFirst: (() => void) | undefined
+    const fetch = github.fetch
+    let held = true
+    github.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input))
+      // The first read's run list waits, then GitHub fails it.
+      if (held && url.pathname.endsWith('/actions/runs') && url.searchParams.get('status') === 'in_progress') {
+        held = false
+        await new Promise<void>(resolve => { failFirst = resolve })
+        return new Response('{}', { status: 500 })
+      }
+      return fetch(input, init)
+    }) as typeof globalThis.fetch
+    const app = fakeApp(key.privateKey, github, { now: time.now })
+    const slow = app.ciLoad(repo).catch(error => error)
+    await new Promise(resolve => setTimeout(resolve, 10))
+    time.advance(CI_LOAD_TTL_MS)
+    const newer = await app.ciLoad(repo)
+    failFirst!()
+    expect(await slow).toMatchObject({ code: 'GITHUB_UNAVAILABLE' })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    // The newer read is still the cached one: asking again reads nothing from GitHub.
+    const tokens = github.calls.filter(c => c.path.endsWith('/access_tokens')).length
+    expect(await app.ciLoad(repo)).toEqual(newer)
+    expect(github.calls.filter(c => c.path.endsWith('/access_tokens')).length).toBe(tokens)
   })
   it('is null where the app is not installed, minting nothing', async () => {
     const { app, github } = setup()
