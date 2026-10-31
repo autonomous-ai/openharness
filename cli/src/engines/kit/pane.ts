@@ -255,6 +255,8 @@ export function inspectPane(engine: AgentEngine, capture: string, takeover: Take
   const rawMarker = prompt.search(rawMarks)
   const rawTail = rawMarker >= 0 ? prompt.slice(rawMarker + 1) : ''
   // Devin 3000.11 greys its placeholder in truecolor, with no dim or italic: all of it muted, it is the placeholder.
+  // Bound (Nine's P3 on #2195): a theme that draws typed text in a mid grey too would read a draft as the
+  // placeholder, as OpenCode's rule would; one normal-coloured character still makes it a draft.
   const placeholder = hasPlaceholderSgr(rawTail) || (engine === 'devin' && allVisibleTextIsMuted(rawTail))
   if (placeholder || IDE_CONTEXT_CHIPS.test(visible)) visible = ''
   const draft = visible.length > 0
@@ -298,6 +300,9 @@ export function paneModal(engine: AgentEngine, capture: string, readTakeover: Ta
   return DIALOG_UI.test(currentUi.replace(/Starting MCP servers?/gi, '')) ? 'menu' : null
 }
 
+// `(?<!between )Available models` lets go only of Devin's idle footer, "Press alt+m to switch between available models",
+// with the footer on one line. A pane narrow enough to wrap it at "between" reads as a dialog again and holds its
+// mailbox: the safe side, but a fresh Devin in a narrow pane is then not idle (Nine's P3 on #2195).
 const DIALOG_UI = /Select Model(?: and Effort)?|Select Reasoning Level|Advanced Reasoning|(?<!between )Available models|Models matching|Edit Parameters|Type to filter.*Tab to edit|Esc to go back|Press enter to confirm|Do you want to proceed|Allow this action|permission required|Starting MCP servers?/i
 
 /** The approval prompts among them. */

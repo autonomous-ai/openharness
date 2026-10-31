@@ -77,10 +77,13 @@ Says which of a machine's harnesses in a pane <words> belong to, as the person's
 With --send, words for an idle one are typed into it, as harness reply does; nothing is ever started. For a program
 acting for the person, while they allow it (harness settings programs-reply).
 --json answers {"decided":"session","id","name","machine","confidence","reason"} or {"decided":"new","reason"},
-and with --send "sent": {"state":"queued"} or {"error":"NOT_IDLE"|"NOT_RUNNING",…}. NOT_IDLE: it is still working
+and with --send "sent": {"state":"queued"} or {"error":"NOT_IDLE"|"NOT_RUNNING"|"FAILED"|<its machine's code>,…},
+nothing typed (FAILED: its machine's mailbox refused them), or with "uncertain":true when the send ended unconfirmed
+and it may have them: read it (harness show) before sending again. NOT_IDLE: it is still working
 on the last words or waits for the person. Wait for it (harness wait <name>) and send them with harness reply, or
 say so: never start new work for them, or a follow-up ("how is it going?") becomes a second harness.
-Exit status: 0 once decided (sent or not: read "sent"), 5 refused (switch off), 1 nothing decided (ROUTER_UNAVAILABLE).
+Exit status: 0 once decided (sent or not: read "sent"), 5 refused (switch off), 1 nothing decided (ROUTER_UNAVAILABLE:
+Jev unreachable, the router busy, or a caller it does not take; its detail says which).
 ${ON_MACHINE}`
 export const TELL_USAGE = `Usage: harness tell [--machine <name>] <name> [--json] -- <work…>
 
@@ -797,6 +800,11 @@ export function replyCommand(argv: readonly string[], deps: ClientDeps = {}): Pr
   })
 }
 
+/** How a send through its machine's mailbox can end after the words may have reached it (messages/rpc.ts): no answer
+ *  in time, the line gone, an answer it cannot read, or cancelled. Every other refusal is the machine's own, before
+ *  anything is typed. */
+const SEND_UNCONFIRMED: ReadonlySet<string> = new Set(['UNCONFIRMED', 'DISCONNECTED', 'INVALID_RESPONSE', 'CANCELLED'])
+
 /** How long words sent from here still steer a follow-up that names nothing ("and the other one?") to where they went. */
 const ROUTE_LAST_MS = 10 * 60_000
 
@@ -861,14 +869,17 @@ export function routeCommand(argv: readonly string[], deps: ClientDeps = {}): Pr
           ? { error: 'FAILED', detail: typeof reply.reason === 'string' ? reply.reason : 'its machine refused it' }
           : { state: typeof reply.state === 'string' ? reply.state : 'queued', message: reply.id ?? null }
       } catch (error) {
-        if (!(error instanceof AgentClientError) || !['NOT_IDLE', 'NOT_RUNNING'].includes(error.code)) throw error
-        sent = { error: error.code, detail: error.message }
+        if (!(error instanceof AgentClientError)) throw error
+        // Once decided, how the send ended is said under `sent`, beside the decision, never as a bare error: a caller
+        // that reads a bare error as "nothing typed" would start new work for words the harness may have.
+        sent = { error: error.code, detail: error.message, ...(SEND_UNCONFIRMED.has(error.code) ? { uncertain: true } : {}) }
       }
       const next: NextStep[] = sent.error === 'NOT_IDLE'
         ? [{ run: step(s.env, 'wait', at), when: 'it is still on the last words: then send these with harness reply. Never start new work for them' }]
+        : sent.uncertain ? [{ run: step(s.env, 'show', at), when: 'it may have them: read it before sending them again. Never start new work for them' }]
         : sent.error ? [] : [{ run: step(s.env, 'wait', at), when: 'for its answer' }]
       s.out(flags.has('--json') ? JSON.stringify({ ...decided, sent, next })
-        : [`${row.name} on ${on.machine}: ${sent.error ? `not sent (${sent.detail})` : 'has it: typed once its composer is free.'}`, formatNext(next)].filter(Boolean).join('\n'))
+        : [`${row.name} on ${on.machine}: ${sent.uncertain ? `may have it (${sent.detail})` : sent.error ? `not sent (${sent.detail})` : 'has it: typed once its composer is free.'}`, formatNext(next)].filter(Boolean).join('\n'))
       return EXIT.ok
     } finally { line?.close(); o.daemon.close() }
   })

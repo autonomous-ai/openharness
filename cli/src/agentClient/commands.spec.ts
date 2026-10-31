@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { addressOf, agentOrigin, AGENTS_START_AGENTS_OFF, closeCommand, DEPTH_REFUSAL, EXIT, parseDuration, psCommand, refusalNext, replyCommand, routeCommand, showCommand, spawnCheck, spawnCount, spawnRefusal, SPAWN_LIMITS, step, tellCommand, waitCommand, watchCommand, whoamiCommand, type ClientDeps } from './commands.js'
 import { RefusedError, type Rpc } from '../messages/rpc.js'
+import { MessageError } from '../messages/model.js'
 import { AgentClientError, type Daemon, type Where } from './daemon.js'
 import { Ledger, ledgerPath } from './ledger.js'
 import { agentSettingsPath } from '../lib/agentSettings.js'
@@ -2293,6 +2294,21 @@ describe('harness route (a program acting for the person picks the harness)', ()
     expect(said.next[0].when).toMatch(/Never start new work/)
     expect(r.calls).toEqual([])
     expect(h.ledger.lastToldBy({ machineId: 'm', agentId: 'person' }, 'm2')).toBeNull()
+  })
+
+  it('says a send that ended unconfirmed under sent, as uncertain, and a machine\'s own refusal as not sent', async () => {
+    const d = new FakeDaemon(), office = new FakeDaemon('m2')
+    office.frames = [frame('week')]
+    decides(d, { decided: 'session', id: 'week', via: 'jev', p: 0.9, trace: 't' })
+    let h = program(d, office, { record: async () => { throw new MessageError('UNCONFIRMED', 'The daemon did not answer in time.') } })
+    expect(await routeCommand(['--machine', 'office', '--send', '--json', '--', 'x'], h.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(h.out.join('\n'))).toMatchObject({ decided: 'session', id: 'week', sent: { error: 'UNCONFIRMED', uncertain: true },
+      next: [{ run: 'harness show --machine office week' }] })
+    h = program(d, office, { record: async () => { throw new RefusedError('RATE_LIMITED', 'Too many messages.') } })
+    expect(await routeCommand(['--machine', 'office', '--send', '--json', '--', 'x'], h.deps)).toBe(EXIT.ok)
+    const said = JSON.parse(h.out.join('\n'))
+    expect(said).toMatchObject({ decided: 'session', sent: { error: 'RATE_LIMITED' }, next: [] })
+    expect(said.sent.uncertain).toBeUndefined()
   })
 
   it('is refused while the switch is off and for an agent, and asks the router nothing', async () => {
