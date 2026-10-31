@@ -794,10 +794,14 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     if (machines.some(m => !seen.has(m))) fail('MACHINE_UNKNOWN', 'Name a machine of this Swarm that you can see.', 400)
   }
   /** A grid attempt's first review failed (project instructions, phase 4, decision 8): its coordinator hears what happened, with
-   *  the model and the findings; nothing is cancelled or stepped up, and the findings reach the agent as they do any verdict. */
+   *  the model and the findings; nothing is cancelled, and the findings reach the agent as they do any verdict. The task keeps
+   *  the step up (goals piece 4): the route reads it to leave the grid out of the next attempt (cli routeCheapFirst.ts), and
+   *  route records carry it for the costs report (costs/read.ts stepUps). Its reason names only the model, never the findings,
+   *  since every reader of the task sees it. */
   const reviewFailed = (group: Conversation, model: string, evidence: string) => {
     const worker = state.agents.find(a => a.id === group.assignment?.agentId)
     if (!worker) return
+    group.stepUp = { attempt: (group.stepUp?.attempt ?? 1) + 1, floor: 3, reason: `Its first review failed on ${model} on the Swarm's grid.`, at: context.now, carry: '' }
     const findings = evidence.length > FINDINGS_CHARS ? `${evidence.slice(0, FINDINGS_CHARS - 1)}…` : evidence
     effects.messages.push(...leadNoticeRows(toLead(state, worker, { id: stableId(operationId, 'review-failed'), conversationId: group.id, author: sender,
       replyTo: null, recipients: [], text: `#${group.number} ${group.title}: its first review failed. It ran on ${model} on the Swarm's grid. Findings: ${findings}`,
@@ -2339,14 +2343,19 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const routedGroup = open(state, command.conversationId)
       const via = decision.via === 'jev' ? `Jev ${Math.round((decision.p ?? 0) * 100)}%`
         : decision.via === 'only' ? 'only candidate' : 'by policy order'
-      // The server's own fields are never taken from the route: no step up any more, and the instructions revision the route
-      // relied on, stamped now (project instructions, phase 4). An older CLI's same-engine note, as a field or at the start of
-      // its why, is not kept.
+      // The server's own fields are never taken from the route: the task's step up (a grid attempt's failed first review, goals
+      // piece 4), cut to what a record keeps, and the instructions revision the route relied on, stamped now (project
+      // instructions, phase 4). An older CLI's same-engine note, as a field or at the start of its why, is not kept.
       const { stepUp: _sent, sameEngine: _said, jobKind: _kind, instructionsRevision: _revision, ...sent } = decision
       const made = { ...sent, why: sent.why.replace(OLD_SAME_ENGINE, '') || sent.why }
       const jobKind = jobKindOf(routedGroup, decision.assessment.kind)
       const instructionsRevision = groupProject(state, routedGroup).instructionsRevision ?? 0
-      effects.routeDecisions.push({ op: 'create', id: operationId, conversationId: command.conversationId, record: { ...made, jobKind, instructionsRevision } })
+      // Only the first route after a step up carries it, so the costs report counts one step up per task, not one per route
+      // (review of #2422); a later failure is a new step up, carried again.
+      const step = routedGroup.stepUp && !routedGroup.stepUp.recorded ? routedGroup.stepUp : null
+      if (step) step.recorded = true
+      const stepUp = step ? { stepUp: { attempt: Math.min(3, step.attempt), reason: step.reason.slice(0, 200) } } : {}
+      effects.routeDecisions.push({ op: 'create', id: operationId, conversationId: command.conversationId, record: { ...made, ...stepUp, jobKind, instructionsRevision } })
       result.routeDecisionId = operationId
       // The row quotes the Lead's reason for the task; the verdict's own text stays in the decision record.
       const reason = decision.assessment.why

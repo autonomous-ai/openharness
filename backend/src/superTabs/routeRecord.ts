@@ -58,8 +58,8 @@ export const routeRecordSchema = z.object({
   why: z.string().trim().min(1).max(300),
   /** How much context Jev was given and which sources could not be read, so pick quality can later be compared with completeness. */
   context: z.object({ chars: z.number().int().min(0).max(30_000), missing: z.array(z.string().min(1).max(40)).max(10) }).strict().optional(),
-  /** The step up this attempt was (the server's step up, gone since project instructions phase 4), on records from before project instructions. Never written since, never taken
-   *  from the route. */
+  /** The step up this attempt was: its task's step up (model.ts Conversation.stepUp), stamped by the server when the route is
+   *  recorded, never taken from the route. */
   stepUp: z.object({ attempt: z.number().int().min(2).max(3), reason: z.string().min(1).max(200) }).strict().optional(),
   /** Why a review ran on its Builder's own engine, on records from before 2026-10-30, when another engine had to review when it could. Never written since, never taken from the route. */
   sameEngine: z.string().min(1).max(300).optional(),

@@ -1,6 +1,8 @@
 /** The mechanics of the Swarm commands every agent uses, with no workflow and no role names: what to do, and who does it, is
  *  the project's instructions (swarmInstructionsSkill.ts). Built in, so it needs no backend read, and written at launch
  *  beside today's role file. Every command and flag here is checked against superTabs/command.ts and service.ts HELP. */
+import { CHEAP_FIRST_HELP, ROUTE_KIND_HELP } from '../superTabs/routeCheapFirst.js'
+
 export const SWARM_TOOLS_SKILL = `---
 name: swarm-tools
 description: Use whenever you work in a Harness Swarm project and need the mechanics of harness super-tab: reading status and messages, posting, reacting, commands, starting agents, routing, instructions, decisions, costs and terminals.
@@ -77,10 +79,11 @@ Swarm and machine settings (each refused unless you may change that setting; a p
 - Remove a note: \`{"type":"note.remove","projectId":"PROJECT","noteId":"NOTE"}\` (each note's id is in the \`instructions\` output): the coordinator, or a person who reads the project. An expired note is already gone.
 
 ## Route and start
-- \`route GROUP JSON\` ranks who could do a group's work, before you start an agent or assign it. Work you do yourself is not routed. JSON: \`{"difficulty":"low|medium|high","risk":"low|medium|high","size":"small|medium|large","why":"one sentence","kind":"optional word such as ui or docs","local":true,"model":"optional","needs":{"tools":[],"devices":[],"cwd":"/absolute/repo"}}\`.
+- \`route GROUP JSON\` ranks who could do a group's work, before you start an agent or assign it. Work you do yourself is not routed. JSON: \`{"difficulty":"low|medium|high","risk":"low|medium|high","size":"small|medium|large","why":"one sentence","kind":"${ROUTE_KIND_HELP}","local":true,"model":"optional","needs":{"tools":[],"devices":[],"cwd":"/absolute/repo"}}\`.
   - size is how long the work runs: small about 20 minutes, medium about an hour, large about three hours.
   - \`local\` only when a person asked for a local model. When a person names a model, set \`model\` to their words ("deepseek 4.1 flash"): the route then offers that model alone, unrated when the catalog does not list it.
-  - It leaves out only what cannot run (a machine offline, paused or full, an engine signed out or suspended, tools or devices the work needs, a machine that cannot take a teammate's project), and says why.
+  - It leaves out what cannot run (a machine offline, paused or full, an engine signed out or suspended, tools or devices the work needs, a machine that cannot take a teammate's project), and says why.
+  - ${CHEAP_FIRST_HELP}
   - It ranks the rest by strength, then price and quota fit, then an idle agent before a new one. What else it knows is a note on the candidate: a used-up quota, a lost task, a machine whose last starts failed, a task requirement naming another machine, a model not offered by default. Your instructions say how to choose; where they say nothing, choose by strength, quota and price.
   - A pick on a model served on the Swarm's grid starts with the \`gridModel\` and \`gridName\` the route gives, in place of model and effort.
 - Start or assign any candidate with the decision's \`routeDecisionId\`; a reason for choosing another (\`overrideReason\`) is optional.

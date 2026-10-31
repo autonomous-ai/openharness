@@ -10,6 +10,7 @@ import { OTHER_REPOSITORY, type Catalog, type Probe, type RoutePlugin } from './
 import { MAKER_TIMEOUT_MS, type PluginInput, type PluginMaker } from './routePlugins.js'
 import { placedHeavyWork } from './machineFit.js'
 import { inspectCapacity } from './start.js'
+import { EARLIER_UNREADABLE, FIRST_ATTEMPT_ONLY, GRID_FIRST, GRID_LIMITS, NEVER_REVIEWS } from './routeCheapFirst.js'
 
 // Sonnet rated 3, as an owner who wants Sonnet Builders rates it (a build needs 3: route.ts buildRefusals), so the member these
 // specs probe can build; the specs of the floor itself use a table of their own ([floorPolicy]).
@@ -1646,7 +1647,8 @@ describe('local models on the Swarm\'s grid', () => {
         { grid: GRID, model: 'deepseek/deepseek-v4.1', kind: 'api' }, { grid: GRID, model: 'starting', starting: true }, { grid: 7, model: 'odd' }] } },
       { machineId: 'old', observation: { receivedAt: 'never', localModels: [{ grid: GRID, model: 'unnamed-host' }] } }] })
     const s = scoped({ tab: t })
-    const result = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'low', local: true } }, s, where as never, opener(), () => 'op')
+    // A grid model takes only work of a listed kind (routeCheapFirst.ts GRID_KINDS).
+    const result = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'low', local: true, kind: 'docs' } }, s, where as never, opener(), () => 'op')
     const excluded = recorded(s).command.decision.excluded as Array<{ title: string; reason: string }>
     expect(excluded.filter(e => /offline/.test(e.reason))).toEqual([
       { title: 'Kimi K3', reason: 'Its host 2x 4090 Rig is offline, so an agent on it would never start.' },
@@ -1666,7 +1668,8 @@ describe('local models on the Swarm\'s grid', () => {
     const t = tab(); Object.assign(t.state, { localModels: { grid: GRID, enabled: true },
       machines: [{ machineId: 'm1', observation: { receivedAt: Date.now(), localModels: [{ grid: GRID, model: 'qwen3', name: 'Qwen 3' }] } }] })
     const s = scoped({ tab: t })
-    const result = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'low', local: true } }, s, where as never, opener(), () => 'op')
+    // A grid model takes only work of a listed kind (routeCheapFirst.ts GRID_KINDS).
+    const result = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'low', local: true, kind: 'docs' } }, s, where as never, opener(), () => 'op')
     expect(result).toMatchObject({ ok: true, pick: { kind: 'new', gridModel: 'qwen3', gridName: GRID } })
     const hint = JSON.parse(/start OPERATION_ID (\{.*\}), then/.exec(result.next as string)![1]!)
     expect(hint).toMatchObject({ engine: 'claude', gridModel: 'qwen3', gridName: GRID })
@@ -1757,7 +1760,8 @@ describe('routing by facts', () => {
     const t = tab(); Object.assign(t.state, { localModels: { grid: GRID, enabled: true },
       machines: [{ machineId: 'rig', name: 'Rig', observation: { receivedAt: Date.now(), localModels: [], refusedModels: [{ grid: GRID, model: 'llama3.2:3b', why }] } }] })
     const s = scoped({ tab: t })
-    const result = await routeTask({ ...input, assessment: { ...input.assessment, local: true } }, s, where as never, opener(), () => 'op')
+    // A grid model takes only work of a listed kind (routeCheapFirst.ts GRID_KINDS).
+    const result = await routeTask({ ...input, assessment: { ...input.assessment, local: true, kind: 'tests' } }, s, where as never, opener(), () => 'op')
     expect(result).toMatchObject({ ok: true, pick: { gridModel: 'llama3.2:3b', notes: [why] } })
     expect(shown(s).every(r => r.gridModel === 'llama3.2:3b' && r.label.includes(why))).toBe(true)
   })
@@ -1780,6 +1784,67 @@ describe('routing by facts', () => {
     // A backend without instructions takes no roleName.
     const old = await routeTask(hard, scoped({ tab: crew(), policy: floorPolicy, instructions: { error: 'NOT_FOUND' } }), where as never, opener(), () => 'op')
     expect(old.next).not.toContain('roleName')
+  })
+})
+
+/** Cheap first (Scholes's goals, piece 4) through the whole route: what it reads of the task comes from the tab and the log. */
+describe('cheap first, through the route', () => {
+  const GRID = 'swarm-0123456789ab', KIMI = 'moonshotai/kimi-k3'
+  /** The Swarm serves Kimi K3 on its grid beside the Claude agents of remote-1 and the member Multiply; g1 is a one-file fix. */
+  const cheap = (group: Record<string, unknown> = {}, more: Record<string, unknown> = {}) => {
+    const t = tab()
+    Object.assign(t.state, { localModels: { grid: GRID, enabled: true },
+      machines: [{ machineId: 'gpu', name: 'rig', observation: { receivedAt: Date.now(), localModels: [{ grid: GRID, model: KIMI, name: 'Kimi K3', kind: 'api' }] } }], ...more })
+    Object.assign(t.state.conversations[1]!, { task: { goal: 'Fix the typo.', owns: ['docs/guide.md'] } }, group)
+    return t
+  }
+  const small = { ...input, assessment: { difficulty: 'low', risk: 'low', size: 'small', why: 'A typo in one doc.', kind: 'docs' } }
+  /** The table with the catalog's grid ratings: Kimi K3 at 2. */
+  const rated = { ...policy, localModels: { quality: 1, enabled: true, models: [{ model: 'kimi k3', quality: 2 }] } } as typeof policy
+  const route = (t: ReturnType<typeof tab>, task = small, history?: Record<string, unknown>) => {
+    const s = scoped({ tab: t, policy: rated, ...(history ? { history } : {}) })
+    return routeTask(task, s, where as never, opener(), () => 'op').then(answer => ({ answer, s, excluded: recorded(s).command.decision.excluded as Array<{ reason: string }> }))
+  }
+
+  it('a small, low-risk build\'s first attempt is started on Kimi K3, with why', async () => {
+    const { answer, s } = await route(cheap())
+    expect(answer).toMatchObject({ ok: true, pick: { kind: 'new', gridModel: KIMI, gridName: GRID, notes: [`Cheap first: ${GRID_FIRST}`] } })
+    expect(recorded(s).command.decision.candidates[0]).toMatchObject({ gridModel: KIMI, quality: 2 })
+    // A medium task keeps today's order: the grid model ranks below the strong ones.
+    const medium = await route(cheap(), { ...small, assessment: { ...small.assessment, difficulty: 'medium' } })
+    expect(medium.answer).toMatchObject({ ok: true, pick: { kind: 'member', model: 'sonnet' } })
+  })
+
+  it('steps up: once the task had an attempt on Kimi K3, the next route leaves the grid out and starts a strong model (Sonnet is rated 3 in this table)', async () => {
+    const tried = cheap({ assignment: { id: 'w1', agentId: 'a3', status: 'cancelled', result: 'Its first review said Ready no.' } }, {
+      agents: [...agents, { id: 'a3', name: 'Kestrel', machineId: 'm1', harnessId: 'h3', configuration: { engine: 'claude', model: 'default', effort: 'default' } }],
+      starts: [{ id: 's1', harnessId: 'h3', request: { conversationId: 'g1', machineId: 'm1', gridModel: KIMI, gridName: GRID } }] })
+    const { answer, excluded } = await route(tried)
+    expect(answer).toMatchObject({ ok: true, pick: { kind: 'member', model: 'sonnet' } })
+    expect((answer.pick as Record<string, unknown>).gridModel).toBeUndefined()
+    expect(excluded).toContainEqual(expect.objectContaining({ reason: `Cheap first: ${FIRST_ATTEMPT_ONLY} Its earlier attempt ran on ${KIMI} on the Swarm's grid.` }))
+    // A log that could not be read is no proof of a first attempt.
+    const unread = await route(cheap(), small, { error: 'BACKEND_UNAVAILABLE' })
+    expect(unread.answer).toMatchObject({ ok: true, pick: { kind: 'member', model: 'sonnet' } })
+    expect(unread.excluded).toContainEqual(expect.objectContaining({ reason: `Cheap first: ${FIRST_ATTEMPT_ONLY} ${EARLIER_UNREADABLE}` }))
+  })
+
+  it('the review of a grid-built pull request still runs on a strong model: the grid is left out with why', async () => {
+    // g1 was built on Kimi K3; its review task r1 is routed as small and low-risk as the build was, with no kind given.
+    const built = cheap({ assignment: { id: 'w1', agentId: 'a3', status: 'review' }, pullRequestUrls: ['https://github.com/o/r/pull/1'] }, {
+      agents: [...agents, { id: 'a3', name: 'Kestrel', machineId: 'm1', harnessId: 'h3', configuration: { engine: 'claude', model: 'default', effort: 'default' } }],
+      starts: [{ id: 's1', harnessId: 'h3', request: { conversationId: 'g1', machineId: 'm1', gridModel: KIMI, gridName: GRID } }] })
+    built.state.conversations.push({ id: 'r1', title: 'Review: API', leadId: 'lead', agentIds: ['lead'], archived: false, brief: '', checks: [{ description: 'Verdict' }],
+      assignment: null, reviewOf: 'g1', task: { goal: 'Review it.', owns: ['docs/guide.md'] } } as never)
+    const { answer, s, excluded } = await route(built, { ...small, conversationId: 'r1' })
+    expect(answer).toMatchObject({ ok: true, pick: { kind: 'member', model: 'sonnet' } })
+    const candidates = recorded(s).command.decision.candidates as Array<{ gridModel?: string; quality: number }>
+    expect(candidates.some(c => c.gridModel)).toBe(false)
+    expect(candidates[0]!.quality).toBe(3)
+    expect(excluded).toContainEqual(expect.objectContaining({ reason: `${GRID_LIMITS}: ${NEVER_REVIEWS}` }))
+    // Even when a person names the grid model for it.
+    const named = await routeTask({ ...small, conversationId: 'r1', assessment: { ...small.assessment, model: 'kimi' } }, scoped({ tab: built, policy: rated }), where as never, opener(), () => 'op')
+    expect(named).toMatchObject({ error: 'NO_CANDIDATE' })
   })
 })
 

@@ -1371,12 +1371,22 @@ describe('the route is advice', () => {
     expect(route().record.instructionsRevision).toBe(3)
     delete f.state.projects![0]!.instructionsRevision
     expect(route().record.instructionsRevision).toBe(0)
-    // Stamped by the server, never taken from the route; and a step up is no longer written on it.
+    // Stamped by the server, never taken from the route: the revision, and the task's own step up (a grid attempt's failed first
+    // review, goals piece 4), which the costs report counts.
     f.state.projects![0]!.instructionsRevision = 5
-    f.state.conversations.find(c => c.id === 'lead')!.stepUp = { attempt: 2, floor: 2, reason: 'Its first review said Ready no.', at: 1, carry: '' }
+    expect(route({ stepUp: { attempt: 3, reason: 'Mine.' } }).record).not.toHaveProperty('stepUp')
+    const lead = () => f.state.conversations.find(c => c.id === 'lead')!
+    lead().stepUp = { attempt: 2, floor: 3, reason: `Its first review failed on ${'m'.repeat(300)}.`, at: 1, carry: '' }
     const sent = route({ instructionsRevision: 1, stepUp: { attempt: 3, reason: 'Mine.' } })
     expect(sent.record.instructionsRevision).toBe(5)
-    expect(sent.record).not.toHaveProperty('stepUp')
+    expect(sent.record.stepUp).toEqual({ attempt: 2, reason: `Its first review failed on ${'m'.repeat(300)}.`.slice(0, 200) })
+    // Only the first route after it carries it: the costs report counts one step up per task, however often it is routed.
+    expect(lead().stepUp).toMatchObject({ attempt: 2, recorded: true })
+    expect(route().record).not.toHaveProperty('stepUp')
+    // A step up from before project instructions, past the third attempt, is kept at the record's last attempt.
+    lead().stepUp = { attempt: 4, floor: 3, reason: 'Old.', at: 1, carry: '' }
+    expect(route().record.stepUp).toEqual({ attempt: 3, reason: 'Old.' })
+    expect(route().record).not.toHaveProperty('stepUp')
   })
 
   it('starts with no role default', () => {
@@ -4246,7 +4256,7 @@ describe('notices of failed work', () => {
   }
   const failed = (effects: { messages: Array<{ source?: Record<string, unknown> | null }> }) => effects.messages.filter(m => m.source?.kind === 'review-failed')
 
-  it('tells the coordinator of a grid attempt\'s failed first review and steps nothing up', () => {
+  it('tells the coordinator of a grid attempt\'s failed first review, and records the step up for the next route', () => {
     const { f, group, builder, assign, check, fail, g } = task()
     const kimi = builder('kimi', 'default', 'moonshotai/kimi-k3')
     const assignmentId = assign(kimi)
@@ -4258,18 +4268,21 @@ describe('notices of failed work', () => {
     // The findings, up to 500 characters.
     expect(text.length).toBeLessThanOrEqual(`#${g().number} Offline editing: its first review failed. It ran on moonshotai/kimi-k3 on the Swarm's grid. Findings: `.length + 500)
     expect(agentOnly(notices[0]!.source, (notices[0] as { recipients: string[] }).recipients)).toBe(true)
-    // Nothing is cancelled or stepped up, and the agent is told nothing to stop.
+    // Nothing is cancelled and the agent is told nothing to stop. The task records the step up (goals piece 4): the next route
+    // leaves the grid out, and route records carry it for the costs report.
     expect(g().assignment).toMatchObject({ id: assignmentId, status: 'review' })
-    expect(g().stepUp).toBeUndefined()
+    expect(g().stepUp).toEqual({ attempt: 2, floor: 3, reason: 'Its first review failed on moonshotai/kimi-k3 on the Swarm\'s grid.', at: 1000, carry: '' })
     expect(effects.messages.filter(m => m.recipients.includes(kimi))).toEqual([])
-    // A second failed verdict in the same attempt: no other notice.
+    // A second failed verdict in the same attempt: no other notice, and no second step up.
     expect(failed(check(assignmentId, 'Ready: no. Still broken.'))).toEqual([])
+    expect(g().stepUp).toMatchObject({ attempt: 2 })
     // A subscription attempt's failed first review: its findings reach its agent as they are, and no notice.
     const { builder: other, assign: give, fail: failIt, g: mine } = task()
     const sonnet = other('sonnet', 'claude-sonnet-4-5')
     const attempt = give(sonnet)
     expect(failed(failIt(attempt, sonnet))).toEqual([])
     expect(mine().assignment).toMatchObject({ id: attempt, status: 'review' })
+    expect(mine().stepUp).toBeUndefined()
   })
 
   it('tells a failed start to the coordinator and the agent that made it', () => {
