@@ -928,16 +928,17 @@ and on which model is the document's to say, and the agents follow it.
   work they checked is open.
 - **Buddies** read the document as their member's helper, never the history or
   the notes, and change it only by asking the coordinator.
-- **Older projects** get their document from a one-off job, run from
+- **Older projects** start on the built-in template (revision 0) until their
+  first save; the release does not migrate them. An optional script, run from
   `backend/` as
-  `DATABASE_URL=… node --import tsx scripts/swarm-instructions/migrate.ts`
-  (a dry run that lists each document's project, origin and size; `--apply`
-  writes): the template for a built-in skill set, the custom role texts under
-  their role names for a custom set, and the project's rules and routing
-  policy differences as lines under Routing. It prints no document's text,
-  which holds a team's private role texts and rules; `--text TAB_ID` adds the
-  texts of that one Swarm. A second run writes nothing. Run it before the
-  clients ship; until it has run, a project reads the template as revision 0.
+  `DATABASE_URL=… node --import tsx scripts/swarm-instructions/migrate.ts`,
+  is a dry run that lists each document's project, origin and size (`--apply`
+  would write); it prints no document's text, which holds a team's private
+  role texts and rules. `--text TAB_ID` is a read-only dry run that prints the
+  texts of that one Swarm and writes nothing, so a custom set's former role
+  texts can be exported any time before that project's first save. A project
+  with custom roles has its coordinator (or owner) paste them into the
+  Instructions panel after the release.
 
 Design (docs/feature-design-rules.md):
 
@@ -962,15 +963,16 @@ Design (docs/feature-design-rules.md):
   `coordinatorName`, so it shows no Instructions and sends no `roleName`.
   Refusals may carry details beside `code` and `message`, which older clients
   ignore.
-- Migration and rollback: additive. Rolling back leaves the documents and notes
-  unread; the old rules, policy and role texts are untouched. The job is
-  idempotent and skips any project that has a document.
+- Migration and rollback: additive, and the release runs no migration: a project
+  without a document reads the built-in template. The optional script is
+  idempotent and skips any project that has a document. Rolling back leaves the
+  documents and notes unread; the old rules, policy and role texts are untouched.
 - Audience: every read checks the reader can read the project (`readProject`);
   a Buddy reads the text alone, and loses it with its member's access; private
   projects stay their people's.
 - Identity: `askedBy` is a member who can read the project, required of the
   coordinator; `writtenBy` is the person or the coordinator, never a machine
-  owner's login; the migration writes as `system`.
+  owner's login; the optional migration script writes as `system`.
 - Failure: a stale save is refused and the panel reads again; a document
   missing for its revision is said (`INSTRUCTIONS_UNAVAILABLE`), never replaced
   with another text; a backend without the route reads "This Swarm has no
@@ -1055,9 +1057,11 @@ Use the matching backend, CLI and Desktop versions together for this feature:
 The project instructions release (messaging, notices, instructions, routing as
 advice) ships in the same order, and its parts need each other:
 
-- Backend first. Run the instructions migration (`scripts/swarm-instructions/
-  migrate.ts`, above) before the clients ship, so each older project has a
-  document.
+- Backend first. The instructions migration (`scripts/swarm-instructions/
+  migrate.ts`, above) is not part of the release: every project without a
+  document reads the built-in template as revision 0. After the release, a
+  project with custom role texts has them pasted into its Instructions panel;
+  export them first with the script's `--text TAB_ID` dry run if needed.
 - Then the CLI. A newer CLI on an older backend gets `INSTRUCTIONS_UNAVAILABLE`
   and keeps today's role file; it still names recipients, and the older backend
   refuses it only when it names an agent outside the conversation.
