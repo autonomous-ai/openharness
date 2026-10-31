@@ -22,6 +22,7 @@ import 'core/windows_status_tray.dart';
 import 'settings/settings_screen.dart';
 import 'settings/settings_section.dart';
 import 'screens/login_screen.dart';
+import 'screens/swarm_menu_bus.dart';
 import 'state/app_state.dart';
 import 'stats/stats_lifecycle.dart';
 import 'viewer/viewer_services.dart';
@@ -42,6 +43,7 @@ import 'core/startup.dart';
 import 'logging/app_log.dart';
 import 'logging/install.dart';
 import 'shortcuts/app_keymap.dart';
+import 'shortcuts/keymap_native.dart';
 import 'shortcuts/keyboard_practice.dart';
 import 'widgets/shortcuts_sheet.dart';
 import 'widgets/new_device_notice.dart';
@@ -295,6 +297,17 @@ class _RootShellState extends ConsumerState<RootShell>
     switch (action) {
       case 'settings':
         final app = ref.read(appStateProvider);
+        // Before a workspace, nothing has told AppKit the keymap, so its File
+        // menu keeps ⌘W for Close Tab (off while signed out) and Settings
+        // never hears it. Hand it over as the workspace does: AppKit then
+        // leaves the keymap's keys to Flutter.
+        if (KeymapTheme.of(context, listen: false) case final keymap?) {
+          unawaited(
+            swarmMenuBus
+                .send('keymapState', nativeKeymapSnapshot(keymap))
+                .catchError((Object _) {}),
+          );
+        }
         await _menuDialog(
           () => showSettingsScreen(
             context,

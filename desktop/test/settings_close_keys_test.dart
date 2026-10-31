@@ -12,13 +12,15 @@ import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/measurement/product_measurement.dart';
 import 'package:harness/screens/login_screen.dart';
+import 'package:harness/screens/swarm_menu_bus.dart';
 import 'package:harness/settings/settings_screen.dart';
+import 'package:harness/shortcuts/app_keymap.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import 'support/memory_key_value_store.dart';
 
-Future<AppNotifier> _signedOut(WidgetTester tester) async {
+Future<AppNotifier> _signedOut(WidgetTester tester, {AppKeymap? keymap}) async {
   tester.view.devicePixelRatio = 1;
   tester.view.physicalSize = const Size(1100, 760);
   addTearDown(tester.view.reset);
@@ -41,7 +43,10 @@ Future<AppNotifier> _signedOut(WidgetTester tester) async {
   await tester.pumpWidget(
     ProviderScope(
       overrides: [appStateProvider.overrideWithValue(app)],
-      child: HarnessApp(authenticatedScreen: (_) => const SizedBox.shrink()),
+      child: HarnessApp(
+        keymap: keymap,
+        authenticatedScreen: (_) => const SizedBox.shrink(),
+      ),
     ),
   );
   await tester.pump(const Duration(milliseconds: 400));
@@ -131,6 +136,28 @@ void main() {
       await _press(tester, LogicalKeyboardKey.keyE, meta: true);
       expect(find.byType(SettingsScreen), findsOneWidget);
       expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.macOS),
+  );
+
+  testWidgets(
+    'signed out, Settings hands AppKit the keymap, so its File menu leaves '
+    '⌘W to Settings',
+    (tester) async {
+      // Before a workspace nothing else sends it, and AppKit's Close Tab,
+      // off while signed out, would take ⌘W first.
+      swarmMenuBus.state.hints = const {};
+      addTearDown(() => swarmMenuBus.state.hints = const {});
+      final keymap = AppKeymap();
+      addTearDown(keymap.dispose);
+      await _signedOut(tester, keymap: keymap);
+      expect(swarmMenuBus.state.hints, isEmpty);
+      await _openSettings(tester);
+      expect(swarmMenuBus.state.hints['closeActive'], isNotNull);
+      await _press(tester, LogicalKeyboardKey.keyW, meta: true);
+      expect(find.byType(SettingsScreen), findsNothing);
+      expect(find.byType(LoginScreen), findsOneWidget);
       await tester.pumpWidget(const SizedBox.shrink());
     },
     variant: TargetPlatformVariant.only(TargetPlatform.macOS),
