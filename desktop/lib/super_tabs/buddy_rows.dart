@@ -6,25 +6,33 @@ import 'buddy_chat.dart';
 import 'identity.dart';
 import 'section_heading.dart';
 
-/// A sidebar count, such as the tags waiting in Notifications.
+/// A sidebar count of what is for the reader, such as the tags waiting in
+/// Notifications or in a conversation: Slack's red number, white on the
+/// danger fill (5.4:1 or more in both themes, app_theme.dart dangerFill).
 class SuperTabCountBadge extends StatelessWidget {
   const SuperTabCountBadge(this.count, {super.key});
   final int count;
 
   @override
-  Widget build(BuildContext context) => Container(
-    constraints: const BoxConstraints(minWidth: 18),
-    padding: const EdgeInsets.symmetric(horizontal: grid.AppDesktop.badgeInset),
-    decoration: ShapeDecoration(
-      color: grid.AppPalette.warn.withValues(alpha: .16),
-      shape: const StadiumBorder(),
-    ),
-    child: Text(
-      countText(count),
-      textAlign: TextAlign.center,
-      style: DesktopChrome.metadata(color: grid.AppPalette.warn),
-    ),
-  );
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    return Container(
+      constraints: const BoxConstraints(minWidth: 18),
+      padding: const EdgeInsets.symmetric(
+        horizontal: grid.AppDesktop.badgeInset,
+      ),
+      decoration: ShapeDecoration(
+        color: grid.AppPalette.dangerFill,
+        shape: const StadiumBorder(),
+      ),
+      child: Text(
+        countText(count),
+        textAlign: TextAlign.center,
+        style: DesktopChrome.metadata(color: grid.AppPalette.onDangerFill)
+            .copyWith(fontWeight: grid.AppFont.semibold),
+      ),
+    );
+  }
 }
 
 /// A person's Buddy chat in a project, in the sidebar's Buddies: its Buddy's
@@ -42,6 +50,7 @@ class SuperTabBuddyRow extends StatelessWidget {
     this.project,
     this.selected = false,
     this.unread = false,
+    this.badge = 0,
     this.note,
     this.detail,
     this.status,
@@ -54,6 +63,9 @@ class SuperTabBuddyRow extends StatelessWidget {
   /// The project's name, shown when the Swarm has several.
   final String? project;
   final bool selected, unread;
+
+  /// Tags of the reader in this chat: the red number.
+  final int badge;
   final VoidCallback? onTap;
 
   /// What hovering says: "Your Buddy · openharness".
@@ -71,9 +83,10 @@ class SuperTabBuddyRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = onTap == null
-        ? DesktopChrome.muted
-        : DesktopChrome.foreground;
+    // Muted when read, full strength when unread or open (Dee, 10-31).
+    final color = onTap != null && (selected || unread)
+        ? DesktopChrome.foreground
+        : DesktopChrome.muted;
     return Padding(
       padding: const EdgeInsets.only(bottom: grid.AppDesktop.listRowGap),
       child: Material(
@@ -182,6 +195,17 @@ class SuperTabBuddyRow extends StatelessWidget {
                       ),
                     ),
                   ),
+                  if (badge > 0)
+                    Padding(
+                      padding: const EdgeInsets.only(
+                        left: grid.AppDesktop.controlGap,
+                      ),
+                      child: Semantics(
+                        label: badge == 1 ? '1 mention' : '$badge mentions',
+                        excludeSemantics: true,
+                        child: SuperTabCountBadge(badge),
+                      ),
+                    ),
                   SizedBox(
                     width: _column,
                     // Unread is drawn as a bold name and heard in words.
