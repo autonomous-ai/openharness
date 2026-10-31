@@ -5,7 +5,8 @@ Status: design, 2026-10-31. Requested by Ken.
 > **Status after the builder check (2026-10-31):** changes 2 (heartbeats) and 4 (slim transcript events) stand and
 > are built on branch `fewer-relay-frames` (2026-10-31; not released). Changes 1 (`swarm_changed`) and 3 (`agent_synced`) are **on hold** for the reasons in "On hold" below;
 > change 1 needs its own design with a client change, which Ken has not yet decided on. Change 5 (TUI-only events not
-> sent while no terminal app is open) was added on 2026-10-31 at Ken's request and is not built yet.
+> sent while no terminal app is open) was added on 2026-10-31 at Ken's request and is built on the same branch
+> (backend f90a30727, CLI d8a2b1d0f; not released). Release order: backend first, then the CLI.
 
 ## Why
 
