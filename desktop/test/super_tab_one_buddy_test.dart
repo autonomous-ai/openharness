@@ -200,16 +200,20 @@ void main() {
         findsOneWidget,
       );
       expect(
-        find.textContaining('Read only: talk to your Buddy in # buddy.'),
+        find.text('This is an earlier chat, kept to read.'),
         findsOneWidget,
       );
       expect(find.textContaining('Earlier Buddy chat · '), findsOneWidget);
-      expect(find.text('Read only'), findsOneWidget);
-      // Nothing is sent from it.
-      final field = tester.widget<TextField>(
+      // Nothing looks typeable: no box, no attach or send (Lead's review).
+      expect(
         find.byKey(const ValueKey('super-message-composer')),
+        findsNothing,
       );
-      expect(field.enabled, isFalse);
+      expect(find.byTooltip('Send message'), findsNothing);
+      // Its one action opens the one Buddy chat.
+      await tester.tap(find.byKey(const ValueKey('super-open-swarm-buddy')));
+      await tester.pumpAndSettle();
+      expect(c.selectedId, 'swarm-buddy-peer');
       await close(tester, c);
     });
 
@@ -246,11 +250,20 @@ void main() {
         await tester.pumpAndSettle();
         final menu = find.byKey(const ValueKey('super-chat-session-project'));
         expect(
-          find.descendant(of: menu, matching: find.text('Any project')),
+          find.descendant(of: menu, matching: find.text('All projects')),
           findsOneWidget,
         );
         await tester.tap(menu);
         await tester.pumpAndSettle();
+        // What each choice lets people do, its reason a hover away (Lead's review).
+        expect(find.text('All projects · ask anything'), findsWidgets);
+        expect(find.textContaining('· ask and hand off work'), findsWidgets);
+        expect(
+          find.byTooltip(
+            'Reads every project you read. Sends no work to a PM.',
+          ),
+          findsWidgets,
+        );
         await tester.tap(
           find.byKey(const ValueKey('super-chat-session-in-lead')).last,
         );
