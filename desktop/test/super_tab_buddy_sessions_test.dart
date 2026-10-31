@@ -44,9 +44,14 @@ void main() {
   /// The reader's own Buddy chat ('offline' in the fixture) with their Buddy
   /// running, a root, and a second thread to switch to, on a server that takes
   /// New session unless [sessions] is false (an older backend).
-  ConversationServer buddyChat({bool buddy = true, bool sessions = true}) {
+  ConversationServer buddyChat({
+    bool buddy = true,
+    bool sessions = true,
+    bool fromChat = true,
+  }) {
     final server = ConversationServer()..threads = true;
     if (sessions) server.state['threadSessions'] = true;
+    if (sessions && fromChat) server.state['sessionsFromChat'] = true;
     final chat = chatOf(server)
       ..['kind'] = 'buddy'
       ..['buddyOwnerId'] = 'owner'
@@ -176,6 +181,12 @@ void main() {
   SuperTabComposerToggle box(WidgetTester tester, Finder finder) =>
       tester.widget<SuperTabComposerToggle>(finder);
 
+  /// [finder] within the thread pane.
+  Finder inThread(Finder finder) => find.descendant(
+    of: find.byKey(const ValueKey('super-thread-panel')),
+    matching: finder,
+  );
+
   Map<String, dynamic> lastCommand(ConversationServer server) =>
       Map<String, dynamic>.from(server.posts.last['command'] as Map);
 
@@ -213,8 +224,9 @@ void main() {
     expect(sent['replyTo'], 'message-1');
     expect(sent['newSession'], isTrue);
     expect(sent.containsKey('alsoSend'), isFalse);
-    // The next reply starts as plain again.
-    expect(box(tester, newSession).on, isFalse);
+    // The thread's session is starting: no choice to make there now.
+    expect(tester.widget<Text>(state).data, 'Own session · Starting…');
+    expect(newSession, findsNothing);
   });
 
   testSessions('the choices are compact chips on the send row, not '
@@ -377,11 +389,11 @@ void main() {
     }
     final c = await show(tester, server);
     await openThread(tester, c, 'message-1');
-    expect(find.text('New session'), findsOneWidget);
+    expect(inThread(find.text('New session')), findsOneWidget);
     expect(box(tester, newSession).onChanged, isNull);
     expect(box(tester, newSession).on, isFalse);
     expect(
-      find.byTooltip('3 sessions running. End one to start another.'),
+      inThread(find.byTooltip('3 sessions running. End one to start another.')),
       findsOneWidget,
     );
     // Tapping the words does nothing either; a reply goes plain.
@@ -650,8 +662,8 @@ void main() {
       server.revision++;
       await c.refresh();
       await tester.pumpAndSettle();
-      expect(find.byTooltip(reason), findsOneWidget);
-      expect(find.text('New session'), findsOneWidget);
+      expect(inThread(find.byTooltip(reason)), findsOneWidget);
+      expect(inThread(find.text('New session')), findsOneWidget);
       expect(box(tester, newSession).onChanged, isNull);
       expect(box(tester, newSession).on, isFalse);
     }
@@ -682,7 +694,7 @@ void main() {
     server.revision++;
     await c.refresh();
     await tester.pumpAndSettle();
-    expect(find.text('New session'), findsOneWidget);
+    expect(inThread(find.text('New session')), findsOneWidget);
     expect(box(tester, newSession).onChanged, isNotNull);
   });
 
@@ -935,6 +947,149 @@ void main() {
     expect(find.text('Not sent'), findsOneWidget);
     expect(find.textContaining('Unrecognized key'), findsNothing);
     expect(find.text("The server couldn't take this message."), findsOneWidget);
+  });
+
+  // ── The main Buddy chat (Scholes's part 3): a message there can start its
+  // own thread's session. ─────────────────────────────────────────────────
+
+  final chatSession = find.byKey(const ValueKey('super-chat-new-session'));
+  final chatComposer = find.byKey(const ValueKey('super-message-composer'));
+  final chatSend = find.byTooltip('Send message');
+  final panel = find.byKey(const ValueKey('super-thread-panel'));
+
+  testSessions('the main Buddy chat offers New session as a chip, and a send '
+      'with it opens its own thread with its session starting', (tester) async {
+    final server = buddyChat();
+    final c = await show(tester, server);
+    expect(chatSession, findsOneWidget);
+    expect(box(tester, chatSession).on, isFalse);
+    expect(box(tester, chatSession).label, 'New session');
+    expect(
+      find.byTooltip('Starts a separate Buddy session for this message'),
+      findsOneWidget,
+    );
+    // Left of the attach and send buttons, on the composer's row.
+    expect(
+      tester.getRect(chatSession).right,
+      lessThan(tester.getRect(chatSend).left),
+    );
+    await tester.tap(chatSession);
+    await tester.pump();
+    expect(box(tester, chatSession).on, isTrue);
+    await tester.enterText(chatComposer, 'Measure prod CPU for the last day');
+    await tester.pump();
+    await tester.tap(chatSend);
+    await tester.pumpAndSettle();
+
+    final sent = lastCommand(server);
+    expect(sent['type'], 'message.send');
+    expect(sent['replyTo'], isNull);
+    expect(sent['newSession'], isTrue);
+    final root = server.messages.last['id'] as String;
+    // Its thread opens on the right, its session starting.
+    expect(panel, findsOneWidget);
+    expect(c.openedThread?.root, root);
+    expect(tester.widget<Text>(state).data, 'Own session · Starting…');
+    // The chip is off again, and the box empty.
+    expect(box(tester, chatSession).on, isFalse);
+    expect(tester.widget<TextField>(chatComposer).controller!.text, isEmpty);
+  });
+
+  testSessions('a server that takes New session only on replies never offers '
+      'it in the main chat', (tester) async {
+    final server = buddyChat(fromChat: false);
+    final c = await show(tester, server);
+    expect(chatSession, findsNothing);
+    // A thread still offers it.
+    await openThread(tester, c, 'message-1');
+    expect(newSession, findsOneWidget);
+    // And none at all from a server before New session.
+    await tester.pumpWidget(const SizedBox());
+    await shown.flush();
+    await show(tester, buddyChat(sessions: false));
+    expect(chatSession, findsNothing);
+  });
+
+  testSessions('New session in the main chat is greyed while it can\'t start, '
+      'its hover saying why', (tester) async {
+    final server = buddyChat()..state['paused'] = true;
+    await show(tester, server);
+    expect(chatSession, findsOneWidget);
+    expect(box(tester, chatSession).onChanged, isNull);
+    expect(box(tester, chatSession).on, isFalse);
+    expect(find.byTooltip('New work is paused in this Swarm'), findsOneWidget);
+    // Elsewhere (a workgroup) it isn't there at all.
+    await tester.pumpWidget(const SizedBox());
+    await shown.flush();
+    await show(tester, ConversationServer()..threads = true, select: false);
+    expect(chatSession, findsNothing);
+  });
+
+  testSessions('a main-chat New session the server refuses as unknown keeps '
+      'the text in the box and says so plainly', (tester) async {
+    final server = buddyChat();
+    final c = await show(tester, server);
+    refuseAsOlderServer(server);
+    await tester.tap(chatSession);
+    await tester.enterText(chatComposer, 'Measure it now');
+    await tester.pump();
+    await tester.tap(chatSend);
+    await tester.pumpAndSettle();
+    expect(lastCommand(server)['newSession'], isTrue);
+    expect(
+      tester.widget<TextField>(chatComposer).controller!.text,
+      'Measure it now',
+    );
+    expect(find.text(unavailable), findsOneWidget);
+    expect(find.textContaining('Unrecognized key'), findsNothing);
+    expect(c.outgoing('offline'), isEmpty);
+    expect(panel, findsNothing);
+    expect(chatSession, findsNothing);
+    server.refuse = null;
+    await tester.tap(chatSend);
+    await tester.pumpAndSettle();
+    expect(lastCommand(server).containsKey('newSession'), isFalse);
+    expect(lastCommand(server)['text'], 'Measure it now');
+  });
+
+  testSessions('a main-chat New session answered after another chat opened '
+      'opens no thread there', (tester) async {
+    final server = buddyChat();
+    final c = await show(tester, server);
+    final hold = server.holdCommands = Completer<void>();
+    await tester.tap(chatSession);
+    await tester.enterText(chatComposer, 'Measure it now');
+    await tester.pump();
+    await tester.tap(chatSend);
+    await tester.pump();
+    await c.select('lead');
+    await tester.pumpAndSettle();
+    hold.complete();
+    server.holdCommands = null;
+    await tester.pumpAndSettle();
+    expect(c.selectedId, 'lead');
+    expect(c.openedThread, isNull);
+    expect(panel, findsNothing);
+  });
+
+  testSessions('access lost while a main-chat New session is on its way opens '
+      'nothing and keeps nothing', (tester) async {
+    final server = buddyChat();
+    final c = await show(tester, server);
+    final hold = server.holdCommands = Completer<void>();
+    await tester.tap(chatSession);
+    await tester.enterText(chatComposer, 'Private words');
+    await tester.pump();
+    await tester.tap(chatSend);
+    await tester.pump();
+    c.revokeAccess('You no longer have access to this Swarm.');
+    hold.complete();
+    server.holdCommands = null;
+    await tester.pumpAndSettle();
+    expect(c.openedThread, isNull);
+    expect(panel, findsNothing);
+    expect(chatSession, findsNothing);
+    expect(find.text('Private words'), findsNothing);
   });
 
   testSessions('Ending… cannot be pressed again while its end is on its way', (

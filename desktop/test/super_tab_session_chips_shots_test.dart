@@ -24,6 +24,7 @@ void main() {
   ConversationServer buddyChat({bool paused = false}) {
     final server = ConversationServer()..threads = true;
     server.state['threadSessions'] = true;
+    server.state['sessionsFromChat'] = true;
     if (paused) server.state['paused'] = true;
     final chat = (server.state['conversations'] as List)[1] as Map;
     chat
@@ -56,12 +57,21 @@ void main() {
   }
 
   for (final brightness in Brightness.values) {
-    for (final scene in ['rest', 'on', 'unavailable']) {
+    for (final scene in [
+      'rest',
+      'on',
+      'unavailable',
+      'chat-off',
+      'chat-on',
+      'chat-unavailable',
+      'chat-started',
+    ]) {
+      final inChat = scene.startsWith('chat-');
       testWidgets('screenshots for review ($scene, ${brightness.name})', (
         tester,
       ) async {
         final picture = GlobalKey();
-        final server = buddyChat(paused: scene == 'unavailable');
+        final server = buddyChat(paused: scene.endsWith('unavailable'));
         final c = server.controller();
         addTearDown(c.dispose);
         await c.refresh();
@@ -87,30 +97,41 @@ void main() {
         );
         c.select('offline');
         await tester.pumpAndSettle();
-        c.openThread('message-1');
-        await tester.pumpAndSettle();
+        final chip = find.byKey(
+          ValueKey(
+            inChat ? 'super-chat-new-session' : 'super-thread-new-session',
+          ),
+        );
+        if (!inChat) {
+          c.openThread('message-1');
+          await tester.pumpAndSettle();
+        }
         await tester.enterText(
-          find.byKey(const ValueKey('super-thread-composer')),
-          'Measure it now, and compare with last week.',
+          find.byKey(
+            ValueKey(
+              inChat ? 'super-message-composer' : 'super-thread-composer',
+            ),
+          ),
+          inChat
+              ? 'Check the release notes for 1.3.80 against the merged PRs.'
+              : 'Measure it now, and compare with last week.',
         );
         await tester.pump();
-        if (scene == 'on') {
-          await tester.tap(
-            find.byKey(const ValueKey('super-thread-new-session')),
-          );
+        if (const {'on', 'chat-on', 'chat-started'}.contains(scene)) {
+          await tester.tap(chip);
           await tester.pump();
         }
-        if (scene == 'unavailable') {
+        if (scene == 'chat-started') {
+          await tester.tap(find.byTooltip('Send message'));
+          await tester.pumpAndSettle();
+        }
+        if (scene.endsWith('unavailable')) {
           final gesture = await tester.createGesture(
             kind: ui.PointerDeviceKind.mouse,
           );
           await gesture.addPointer(location: Offset.zero);
           addTearDown(gesture.removePointer);
-          await gesture.moveTo(
-            tester.getCenter(
-              find.byKey(const ValueKey('super-thread-new-session')),
-            ),
-          );
+          await gesture.moveTo(tester.getCenter(chip));
           await tester.pump(const Duration(seconds: 2));
         }
         await tester.pumpAndSettle();

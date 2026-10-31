@@ -1452,13 +1452,13 @@ class SuperTabController extends ChangeNotifier {
     return result;
   }
 
-  /// A reply the server refused only for New session goes back into its
-  /// thread's box, ready to send without it, when nothing was typed there
-  /// since and it carries no files; else it stays Not sent, and its Retry
-  /// goes without New session.
+  /// A message the server refused only for New session goes back into its
+  /// box (the thread of [root], or the chat's own when null), ready to send
+  /// without it, when nothing was typed there since and it carries no files;
+  /// else it stays Not sent, and its Retry goes without New session.
   void _restoreSessionRefusal(
     String conversationId,
-    String root,
+    String? root,
     String operationId,
   ) {
     final kept = _refused[conversationId];
@@ -1468,13 +1468,22 @@ class SuperTabController extends ChangeNotifier {
     final files = refused.command['attachmentIds'];
     if (refused.error != superTabSessionsUnavailable ||
         (files is List && files.isNotEmpty) ||
-        threadDraft(root).trim().isNotEmpty) {
+        (root == null ? draft(conversationId) : threadDraft(root))
+            .trim()
+            .isNotEmpty) {
       return;
     }
     kept.removeAt(i);
     if (kept.isEmpty) _refused.remove(conversationId);
     _sendOrder.remove(operationId);
-    _threadDrafts[root] = refused.command['text'] as String? ?? '';
+    final text = refused.command['text'] as String? ?? '';
+    if (root == null) {
+      _drafts[conversationId] = text;
+      if (refused.mentions.isNotEmpty)
+        _mentions[conversationId] = refused.mentions;
+    } else {
+      _threadDrafts[root] = text;
+    }
     unawaited(
       _persist().catchError((Object _) {
         error = 'Could not save this change on this computer.';
@@ -1506,8 +1515,11 @@ class SuperTabController extends ChangeNotifier {
 
   /// The open thread's chat when it is the reader's own Buddy chat, where a
   /// thread may have a session of its own; null anywhere else.
-  SuperTabConversation? get _ownBuddyChat {
-    final id = openedThread?.conversationId ?? selectedId;
+  SuperTabConversation? get _ownBuddyChat =>
+      _ownBuddyChatOf(openedThread?.conversationId ?? selectedId);
+
+  /// Chat [id] when it is the reader's own Buddy chat; null anywhere else.
+  SuperTabConversation? _ownBuddyChatOf(String id) {
     final chat = snapshot?.conversation(id);
     return chat != null &&
             chat.isBuddyChat &&
@@ -1515,6 +1527,18 @@ class SuperTabController extends ChangeNotifier {
             !accessRevoked
         ? chat
         : null;
+  }
+
+  /// Whether the selected chat's own composer shows New session: the reader's
+  /// own Buddy chat, with a Buddy, on a server that takes New session on a
+  /// top-level message. It may still show disabled, saying why
+  /// ([threadSessionBlocked]).
+  bool get offersChatSessions {
+    final chat = _ownBuddyChatOf(selectedId);
+    return chat != null &&
+        snapshot?.sessionsFromChat == true &&
+        _serverTakesThreadSessions &&
+        buddy(chat.projectId) != null;
   }
 
   /// Whether the open chat's thread composer shows New session: the reader's
@@ -3779,10 +3803,15 @@ class SuperTabController extends ChangeNotifier {
 
   /// Sends the selected conversation's draft. [onSending] is told when the
   /// message is on its way and shows in [outgoing].
+  ///
+  /// With [newSession], in the reader's own Buddy chat, the message starts its
+  /// own thread's session (a top-level one roots that thread), and the thread
+  /// opens once the server took it, if this chat is still the one shown.
   Future<Map<String, dynamic>?> send({
     String? replyTo,
     List<String> recipients = const [],
     VoidCallback? onSending,
+    bool newSession = false,
   }) async {
     final text = draft(selectedId).trim();
     final files = attachments(selectedId).files;
@@ -3791,7 +3820,9 @@ class SuperTabController extends ChangeNotifier {
         selected!.archived ||
         !canWrite ||
         uploading ||
-        ((saving || _pending != null) && (files.isNotEmpty || !canQueueText))) {
+        (newSession && !offersChatSessions) ||
+        ((saving || _pending != null) &&
+            (files.isNotEmpty || newSession || !canQueueText))) {
       return null;
     }
     // A tag the text still says: an agent's is a recipient, a person's a tag.
@@ -3812,7 +3843,9 @@ class SuperTabController extends ChangeNotifier {
       return null;
     }
     final conversationId = selectedId;
-    if (files.isEmpty) {
+    // A text alone waits in the queue; one that starts a session goes now,
+    // so its answer can open its thread.
+    if (files.isEmpty && !newSession) {
       final operationId = superTabOperationId();
       _sendOrder.add(operationId);
       final result = Completer<Map<String, dynamic>?>();
@@ -3857,6 +3890,7 @@ class SuperTabController extends ChangeNotifier {
       'recipientIds': addressed,
       if (tagged.isNotEmpty) 'mentions': tagged,
       if (ids.isNotEmpty) 'attachmentIds': ids,
+      if (newSession) 'newSession': true,
     });
     // On its way: the message shows in the chat, and the draft is free for
     // the next one. Both are in the save made before the request.
@@ -3871,6 +3905,17 @@ class SuperTabController extends ChangeNotifier {
     }
     final result = await sending;
     _forgetRefusedUploads(result);
+    if (newSession && result == null) {
+      _restoreSessionRefusal(conversationId, null, operationId);
+    } else if (result?['messageId'] case final String id
+        when newSession &&
+            !_disposed &&
+            !accessRevoked &&
+            selectedId == conversationId) {
+      // Its thread opens beside the chat: the session answers there. A top-
+      // level message is its own thread's root.
+      openThread(_threadOf(conversationId, replyTo) ?? replyTo ?? id);
+    }
     return result;
   }
 

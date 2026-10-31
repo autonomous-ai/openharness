@@ -441,6 +441,7 @@ class SuperTabSnapshot {
       localModels = SuperTabLocalModels.read(row['localModels']),
       teamAccounts = row['teamAccounts'] != false,
       threadSessions = row['threadSessions'] == true,
+      sessionsFromChat = row['sessionsFromChat'] == true,
       mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0,
       mentionsDigest = row['mentionsDigest'] as String?,
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
@@ -527,6 +528,11 @@ class SuperTabSnapshot {
   /// where it says so (backend read/contract.ts `threadSessions`); an older
   /// server's schema refuses the field.
   final bool threadSessions;
+
+  /// Whether that server also takes New session on a top-level message in a
+  /// Buddy chat, which then roots its own thread (read/contract.ts
+  /// `sessionsFromChat`); false from an older one.
+  final bool sessionsFromChat;
   final int mentionsWaiting;
 
   /// Which tags wait, as a digest that moves when they change though the

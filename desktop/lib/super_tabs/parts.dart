@@ -348,6 +348,8 @@ class SuperTabParts {
     if (_derived['teamAccounts'] == false) state['teamAccounts'] = false;
     // Sent by a server that takes a thread reply's New session.
     if (_derived['threadSessions'] == true) state['threadSessions'] = true;
+    // And one that also takes it on a top-level message in a Buddy chat.
+    if (_derived['sessionsFromChat'] == true) state['sessionsFromChat'] = true;
     if (_readMarks.isNotEmpty) state['readMarks'] = Map.of(_readMarks);
     if (_threadMarks.isNotEmpty) {
       state['threadMarks'] = {
