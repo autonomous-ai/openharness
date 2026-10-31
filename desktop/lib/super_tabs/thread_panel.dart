@@ -234,6 +234,17 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
         }
       },
     );
+    // Refused for New session, the reply's text is back as this thread's
+    // draft: it shows in the box, ready to send without it, unless another
+    // thread is shown or something was typed meanwhile.
+    if (!mounted || widget.root != root || _composer.text.isNotEmpty) return;
+    final restored = c.threadDraft(root);
+    if (restored.isEmpty) return;
+    _composer.value = TextEditingValue(
+      text: restored,
+      selection: TextSelection.collapsed(offset: restored.length),
+    );
+    setState(() {});
   }
 
   @override
