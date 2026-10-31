@@ -36,7 +36,7 @@ import { homedir, userInfo } from 'node:os'
 import { delimiter, isAbsolute, join } from 'node:path'
 import { createOwnerSubscriptions } from '../lib/ownerSubscriptions.js'
 import { createPullRequestsStatusReader } from '../lib/pullRequestsStatus.js'
-import { buddyArchived, buddyStatus, isBuddyIn, type BuddyStatusDeps } from './buddyStatus.js'
+import { buddyArchived, buddyStatus, isBuddyIn, isSwarmBuddyIn, projectNamed, type BuddyStatusDeps } from './buddyStatus.js'
 import { startSubscriptionRelay } from '../lib/subscriptionRelay.js'
 
 const POST_ABOUT = 'reply in that conversation. Use a unique ID per message and reuse it after an interrupted request. Answer a message once, with --reply-to its ID. --attach sends a file (a screenshot, a log; up to 10 files of 10 MB each), and TEXT may then be empty. --to names the agents it reaches (any agent of this project, by id from status; up to 16): they join the conversation if they are not in it. With no --to, your post reaches the PM.'
@@ -554,17 +554,24 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           pullRequests ??= options.pullRequests ?? createPullRequestsStatusReader()
           const deps: BuddyStatusDeps = { pullRequests: pullRequests!,
             decisions: () => backend(core, 'GET', `${path}/decisions?state=open&${identity}`) }
+          const project = typeof payload.project === 'string' ? payload.project : undefined
           if (payload.archived === true) {
-            const projectId = String(list(read.state.agents).find(a => a.id === agentId)?.projectId ?? 'lead')
+            // A person's one Buddy names the project whose archive it reads (status --project NAME --archived).
+            const named = project ? projectNamed(read.state, project) : undefined
+            if (isSwarmBuddyIn(read.state, agentId) && !named) return { ok: true, value: { lastChangedAt: read.lastChangedAt, summary: { error: 'Name the project: status --project NAME --archived.' } } }
+            const projectId = String(named?.id ?? list(read.state.agents).find(a => a.id === agentId)?.projectId ?? 'lead')
             const before = typeof payload.before === 'string' && /^[A-Za-z0-9_-]{1,512}$/.test(payload.before) ? `&before=${payload.before}` : ''
             const page = await backend(core, 'GET', `${path}/groups?dormant=1&projectId=${encodeURIComponent(projectId)}${before}&${identity}`)
             return { ok: true, value: { lastChangedAt: read.lastChangedAt, summary: await buddyArchived(page, read.state, agentId, deps) } }
           }
           const key = `${payload.tabId}:${agentId}`
           const summary = await buddyStatus({ state: read.state, lastChangedAt: read.lastChangedAt, groupChangedAt: read.groupChangedAt, agentId,
-            since: buddySince.get(key) ?? null }, deps)
-          buddySince.delete(key)
-          buddySince.set(key, read.lastChangedAt)
+            since: buddySince.get(key) ?? null, ...(project ? { project } : {}) }, deps)
+          // One project's read leaves the index's "changed since" where it was.
+          if (!project) {
+            buddySince.delete(key)
+            buddySince.set(key, read.lastChangedAt)
+          }
           // One per Buddy on this machine; a machine runs a few at most, so a small cap only guards against a leak.
           for (const oldest of buddySince.keys()) { if (buddySince.size <= 64) break; buddySince.delete(oldest) }
           return { ok: true, value: { lastChangedAt: read.lastChangedAt, summary } }

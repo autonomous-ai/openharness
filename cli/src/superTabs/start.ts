@@ -10,6 +10,10 @@ import { permissionModeFlags } from '../lib/engineLaunch.js'
 import type { AgentEngine } from '../engines/types.js'
 import { isSwarmSkillMode, swarmSkillUse, wireRole, type SwarmSkillMode } from '../lib/swarmSkills.js'
 import { isTeamDaemon, pmEngineHome } from './teamDaemon.js'
+import { BUDDY_HOMES, buddyProjectsOf, prepareBuddyHome } from './buddyHome.js'
+import { projectsRoot } from '../lib/projectFolder.js'
+import { worktreeFolderName } from '../lib/agentNames.js'
+import { join as joinPath } from 'node:path'
 import { codexModelNotOffered, NO_PM_RELAY, offeredCodexModels, teamRelayed } from '../team/relay.js'
 
 type Json = Record<string, unknown>
@@ -78,6 +82,20 @@ function buddyPrompt(tabId: string, chat: string, mode: SwarmSkillMode | null): 
  *  thread of its owner's chat. Ids only, never a message's text: a start record is listed in the Lead's status. */
 function buddySessionPrompt(tabId: string, chat: string, thread: string, mode: SwarmSkillMode | null): string {
   return `You are a person's Buddy in a shared Super Tab, in a session of your own for one thread of your owner's chat. ${mode ? `${swarmSkillUse({ role: 'buddy' }, mode)} ` : ''}Run harness super-tab --tab ${tabId} status until this harness appears in the roster. Your thread is the one rooted at message ${thread} in conversation ${chat}. Read it, with the main-chat messages it started from, with harness super-tab --tab ${tabId} messages ${chat} --thread ${thread}. Answer your owner only in this thread: harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID --reply-to MESSAGE_ID, naming a message in this thread. Your owner's newest message in the thread is the one to answer first. Your Buddy's other rules are unchanged. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
+}
+
+/** A person's one Buddy for the Swarm (docs/specs/2026-10-31-one-buddy-per-swarm.md): it reads every project its person
+ *  reads, each project's code in its own folder under projects/, and writes only in its person's chat. Names only, never a
+ *  message's text: a start record is listed in the Lead's status. */
+function swarmBuddyPrompt(tabId: string, chat: string, home: { ready: string[]; missing: string[] }, mode: SwarmSkillMode | null): string {
+  const code = home.ready.length ? `Each project's code is in its own folder under projects/ (${home.ready.join(', ')}).` : 'No project\'s code is on this machine.'
+  const none = home.missing.length ? ` Not on this machine: ${home.missing.join(', ')}; you still read their chats and tasks.` : ''
+  return `You are a person's one Buddy in a shared Super Tab, for every project they read. ${mode ? `${swarmSkillUse({ role: 'buddy' }, mode)} ` : ''}Run harness super-tab --tab ${tabId} status until this harness appears in the roster: it lists your owner's projects, one line each, and the newest tasks; status --project NAME reads one project's tasks. ${code}${none} Your chat with your owner is conversation ${chat}: read it with harness super-tab --tab ${tabId} messages ${chat}, and reply there with harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID. You send nothing into a project: when your owner wants something sent to a project's PM, tell them to start a New session in that project. Then greet your owner there and ask what they have in mind. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
+}
+/** A project session of a person's one Buddy chat: the Buddy for that one project, in one thread, the only Buddy that sends
+ *  into it. It reads that project and its owner's words in its thread alone. */
+function projectSessionPrompt(tabId: string, chat: string, thread: string, mode: SwarmSkillMode | null): string {
+  return `You are a person's Buddy in a shared Super Tab, in a session of your own for one project, in one thread of your owner's chat. ${mode ? `${swarmSkillUse({ role: 'buddy' }, mode)} ` : ''}Run harness super-tab --tab ${tabId} status until this harness appears in the roster: it is your project's tasks, and your folder is its code. Your thread is the one rooted at message ${thread} in conversation ${chat}. Read it with harness super-tab --tab ${tabId} messages ${chat} --thread ${thread}: you read your owner's words there and your own, nothing else of the chat. Answer your owner only in this thread: harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID --reply-to MESSAGE_ID, naming a message in this thread. When your owner asks, send their proposal to this project's PM, for their message in this thread. Your owner's newest message in the thread is the one to answer first. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
 }
 
 /** Why a thread session that is not Claude Code's never starts. */
@@ -346,6 +364,16 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       const buddy = !!request.buddyOf && typeof request.buddyOf === 'object'
       // A thread session (spec 2026-10-30-buddy-thread-sessions): launched as a Buddy in every way, its prompt aside.
       const session = buddy ? buddySessionThread(request) : null
+      // A person's one Buddy for the Swarm, or a plain session of it (spec 2026-10-31-one-buddy-per-swarm): its folder, made
+      // here, holds a worktree of each project's checkout on this machine (buddyHome.ts). A project session runs in that
+      // project's own worktree, as a project's Buddy always has.
+      const swarmBuddy = buddy && request.buddyScope === 'swarm'
+      const projectSession = !!session && identifier(object(request.buddySession).projectId)
+      // Its folder is in Harness's worktrees folder, named for its start as a Buddy's worktree is, so the cleanup of an ended
+      // Buddy's Claude Code traces covers it (host.ts buddyWorktree and ownScrub; security reviews of #2345 and #2375). The
+      // backend's folder for it only admits the start.
+      const homeFolder = swarmBuddy ? joinPath(projectsRoot(), 'worktrees', BUDDY_HOMES, worktreeFolderName(`super-tab/${startId}`)) : null
+      const home = homeFolder ? await prepareBuddyHome(homeFolder, buddyProjectsOf(request)) : null
       // A project's Product Manager (backend leadStart.ts): the Lead of its project's conversation once it runs.
       const lead = !buddy && !!request.leadFor && typeof request.leadFor === 'object'
       // A contributed machine's host cannot read the tab as a Lead does: it asked the backend whose work this is when it
@@ -371,10 +399,12 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
         ...(mode ? { swarmRole: role, swarmSkillMode: mode } : {}),
         ...(github ? { swarmGitHub: true } : {}),
         // A thread session (#2345) gets its own Buddy note; a coordinator's and an agent's notes name their role (phase 3).
-        prompt: buddy ? (session ? buddySessionPrompt(String(input.tabId), String(request.conversationId), session, mode)
+        prompt: buddy ? (session ? projectSession ? projectSessionPrompt(String(input.tabId), String(request.conversationId), session, mode)
+          : buddySessionPrompt(String(input.tabId), String(request.conversationId), session, mode)
+          : home ? swarmBuddyPrompt(String(input.tabId), String(request.conversationId), home, mode)
           : buddyPrompt(String(input.tabId), String(request.conversationId), mode))
           : `${lead ? leadPrompt(String(input.tabId), String(request.conversationId), roleName) : workerPrompt(String(input.tabId), String(request.conversationId), roleName)}${github ? ` ${githubPromptLine(github.requester)}` : ''}`,
-        ...(request.worktree ? { projectSource: 'worktree', gitSource: request.cwd, branchName: `super-tab/${startId}`,
+        ...(homeFolder ? { cwd: homeFolder } : request.worktree ? { projectSource: 'worktree', gitSource: request.cwd, branchName: `super-tab/${startId}`,
           // No branch named: the repository's default branch, fetched, not the host checkout's old HEAD.
           ...(request.branchRef ? { branchRef: request.branchRef } : { branchBase: 'default' }) } : { cwd: request.cwd }),
       }
