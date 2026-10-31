@@ -3774,6 +3774,9 @@ class _SuperTabViewState extends State<SuperTabView>
               left: narrow ? null : _sidebar(),
               // An open thread takes the roster's side, as in Slack.
               right: !showRoster ? null : thread ?? roster,
+              rightDefault: thread == null
+                  ? SuperTabPaneLayout.rightWidth
+                  : SuperTabPaneLayout.threadWidth,
               center: Column(
                 children: [
                   _header(c.selected, narrow, showRoster),
@@ -3832,6 +3835,7 @@ class _SuperTabViewState extends State<SuperTabView>
                         child: SizedBox(
                           width: SuperTabPaneLayout.drawerWidth(
                             constraints.maxWidth,
+                            max: SuperTabPaneLayout.threadWidth,
                           ),
                           child: thread,
                         ),

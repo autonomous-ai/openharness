@@ -144,12 +144,17 @@ class DesktopPill extends StatelessWidget {
     this.truncateFromStart = false,
     this.menuIcon = AppIcons.chevronDown,
     this.highlightFocus = false,
+    this.leadingGap = 7,
   });
 
   final String label;
   final VoidCallback? onPressed;
   final IconData? icon;
   final Widget? leading;
+
+  /// The space between [leading] (or [icon]) and the label: a narrow row's
+  /// on/off choice (a reply box's options) sets it tighter.
+  final double leadingGap;
   final bool menu, monospace;
   final bool? selected;
   final String? tooltip;
@@ -262,7 +267,7 @@ class DesktopPill extends StatelessWidget {
         children: [
           if (leading != null || icon != null) ...[
             leading ?? Icon(icon, size: 16),
-            const SizedBox(width: 7),
+            SizedBox(width: leadingGap),
           ],
           Flexible(
             child: truncateFromStart

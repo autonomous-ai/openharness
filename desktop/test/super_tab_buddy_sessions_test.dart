@@ -200,10 +200,9 @@ void main() {
     expect(newSession, findsOneWidget);
     expect(alsoSend, findsOneWidget);
     expect(box(tester, newSession).on, isFalse);
-    // Before Also send in reading order: left of it on one row, or above it
-    // where a narrow pane wraps them.
+    // Left of Also send on one row, at any width (Scholes, 10-31).
     final a = tester.getRect(newSession), b = tester.getRect(alsoSend);
-    expect(a.top < b.top || (a.top == b.top && a.left < b.left), isTrue);
+    expect(a.top == b.top && a.left < b.left, isTrue);
     expect(
       find.byTooltip('Starts a separate Buddy session for this thread'),
       findsOneWidget,
@@ -240,8 +239,13 @@ void main() {
       findsNothing,
     );
     expect(box(tester, newSession).label, 'New session');
-    expect(box(tester, alsoSend).label, 'Also send');
-    expect(find.byTooltip('Also send to the chat'), findsOneWidget);
+    // The default 280px pane has no room for the full wording beside New
+    // session: its hint keeps it.
+    expect(box(tester, alsoSend).label, 'Also to chat');
+    expect(
+      find.byTooltip('Also post to the main chat as well as this thread'),
+      findsOneWidget,
+    );
     // Both sit on the send row, left of its buttons, and are compact: no
     // taller than the send button. (One line at real fonts: the PR's
     // screenshots; the test font is far wider.)
