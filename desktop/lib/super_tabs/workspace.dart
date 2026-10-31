@@ -187,8 +187,9 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
           if (!shown) {
             if (!current()) return;
             // One of the person's own panes leaves this view only: its tab
-            // keeps it, and it is no closed harness.
-            if (_isPersonsOwn(pane, swarmId)) {
+            // keeps it, or its tab's close already put it in recently closed.
+            if (_isPersonsOwn(pane, swarmId) || _shownFromTab[pane] == true) {
+              _shownFromTab[pane] = null;
               await app.releaseSuperTabView(swarmId, pane.id);
             } else {
               await app.closePane(pane.id, swarmId: swarmId);
@@ -216,6 +217,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
           if (!current()) return;
           // The very pane its tab shows, as it is there: same session, same
           // input and composer. No Swarm terminal sharing is asked for.
+          _shownFromTab[pane] = true;
           await app.assignAgentToPane(
             null,
             pane.machineId,
@@ -256,6 +258,12 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
       });
     });
   }
+
+  /// The person's own panes this view showed from their tabs. One of them
+  /// stays theirs after its tab closes: that close already went into recently
+  /// closed, so the view lets the pane go without a second entry. Weak, so a
+  /// pane gone everywhere is forgotten with it.
+  static final _shownFromTab = Expando<bool>('shownFromTab');
 
   /// Whether [pane] in Swarm tab [swarmId] is one of the person's own panes,
   /// held by one of their other tabs too.

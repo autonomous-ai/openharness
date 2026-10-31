@@ -170,7 +170,8 @@ class SuperTabAttention extends ChangeNotifier {
   static const _unknown = 1 << 52;
 
   /// The Threads row's number: tags of the reader inside threads they have
-  /// not read past, in chats this Swarm still lists for them.
+  /// not read past, in chats this Swarm still lists for them. A muted chat's
+  /// threads never count, as its main stream does not ([mentionsIn]).
   int get threadMentions {
     final snapshot = controller.snapshot;
     if (controller.accessRevoked || snapshot == null) return 0;
@@ -180,6 +181,7 @@ class SuperTabAttention extends ChangeNotifier {
           (m) =>
               m.threadId != null &&
               chats.contains(m.conversationId) &&
+              controller.notifyOf(m.conversationId) != SuperTabNotify.muted &&
               (m.messageSequence ?? _unknown) >
                   controller.threadReadMark(m.threadId!),
         )
