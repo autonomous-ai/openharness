@@ -80,6 +80,7 @@ void main() {
     expect(swarmKeyAccount('super_tab.launch.owner.desk.lead'), 'owner');
     expect(swarmKeyAccount('super_tab.hidden.owner'), 'owner');
     expect(swarmKeyAccount('super_tab.personal.owner'), 'owner');
+    expect(swarmKeyAccount('super_tab.repos.owner'), 'owner');
     for (final key in [
       'super_tab.view.owner.tab',
       'super_tab.views.owner',
