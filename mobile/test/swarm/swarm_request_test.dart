@@ -1,14 +1,18 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart' show CancelToken;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/swarm/swarm_conversation.dart';
+import 'package:harness_mobile/swarm/swarm_file_picker.dart'
+    show swarmPickerCopyFolders;
 import 'package:harness_mobile/swarm/swarm_inbox.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/ws/ws_conn.dart';
+import 'package:harness_mobile/swarm/swarm_outgoing_files.dart';
 
 import '../viewer_app_fixture.dart';
 import 'swarm_fixture.dart' show changes, firstLoad, groupData, me, tab;
@@ -662,7 +666,7 @@ void main() {
       conversationId: 'g1',
       name: 'shot.jpg',
       mime: 'image/jpeg',
-      bytes: Uint8List(1),
+      file: SwarmOutgoingFile('shot.jpg', Uint8List(1)),
       cancel: CancelToken(),
       onProgress: (_) {},
     );
@@ -678,6 +682,93 @@ void main() {
       });
       expect(rig.api.swarmUploads, ['t/g1/shot.jpg']);
       expect(rig.conn('m').payloadsOf('super_tabs'), isEmpty);
+    });
+
+    test('signing out while a file goes up stops it, and it lands '
+        'nowhere', () async {
+      final rig = await signedInWith({'m': []});
+      addTearDown(rig.app.dispose);
+      final answer = Completer<Map<String, dynamic>>();
+      rig.api.onSwarmUpload = () => answer.future;
+      final callers = CancelToken();
+
+      final sending = rig.app.swarmUpload(
+        tabId: 't',
+        conversationId: 'g1',
+        name: 'AC4.step',
+        mime: 'application/octet-stream',
+        file: SwarmOutgoingFile.streamed(
+          'AC4.step',
+          50 * 1024 * 1024,
+          () => Stream.value([1]),
+        ),
+        cancel: callers,
+        onProgress: (_) {},
+      );
+      await settle();
+      await rig.app.logout();
+
+      expect(rig.api.swarmUploadCancels.single.isCancelled, isTrue);
+      expect(callers.isCancelled, isFalse, reason: 'the chat\'s own token');
+      answer.complete({
+        'attachment': {'id': 'late'},
+      });
+      await expectLater(
+        sending,
+        throwsA(
+          isA<SuperTabFailure>().having(
+            (f) => f.code,
+            'code',
+            'ACCOUNT_CHANGED',
+          ),
+        ),
+      );
+    });
+
+    test('the chat giving its upload up still stops it', () async {
+      final rig = await signedInWith({'m': []});
+      addTearDown(rig.app.dispose);
+      rig.api.onSwarmUpload = () => Completer<Map<String, dynamic>>().future;
+      final callers = CancelToken();
+
+      unawaited(
+        rig.app
+            .swarmUpload(
+              tabId: 't',
+              conversationId: 'g1',
+              name: 'a.zip',
+              mime: 'application/zip',
+              file: SwarmOutgoingFile('a.zip', Uint8List(1)),
+              cancel: callers,
+              onProgress: (_) {},
+            )
+            .catchError((_) => <String, dynamic>{}),
+      );
+      await settle();
+      callers.cancel('closed');
+      await settle();
+
+      expect(rig.api.swarmUploadCancels.single.isCancelled, isTrue);
+    });
+
+    test('signing out deletes the copies large files were kept in, and only '
+        'those', () async {
+      final temp = Directory.systemTemp.createTempSync('swarm-copies');
+      addTearDown(() => temp.deleteSync(recursive: true));
+      final before = swarmPickerCopyFolders;
+      swarmPickerCopyFolders = () async => [temp.path];
+      addTearDown(() => swarmPickerCopyFolders = before);
+      final kept = File('${temp.path}/harness-swarm-outgoing/1-AC4.step')
+        ..createSync(recursive: true);
+      final other = File('${temp.path}/someone-elses.tmp')..createSync();
+      final rig = await signedInWith({'m': []});
+      addTearDown(rig.app.dispose);
+
+      await rig.app.logout();
+      await settle();
+
+      expect(kept.existsSync(), isFalse);
+      expect(other.existsSync(), isTrue);
     });
 
     test('an answer that lands after sign-out is dropped', () async {

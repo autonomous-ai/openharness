@@ -6,7 +6,7 @@
 import { suspendedEngines } from '../engineHealth.js'
 import { leadChoices } from '../leadStart.js'
 import { isBuddyChat, isBuddyReader } from '../buddies.js'
-import { agentForBuddy, agentWithoutMachine, groupWithoutMachines, machineHiddenFrom, seenMachineIds, visibleState, withSeenRequirement, type Actor, type Agent, type Conversation, type SuperTabState } from '../model.js'
+import { agentForBuddy, agentWithoutMachine, groupForBuddy, machineHiddenFrom, seenMachineIds, visibleState, withSeenRequirement, type Actor, type Agent, type Conversation, type SuperTabState } from '../model.js'
 import { slotCounter, machineTeamWork, teamAccountSwarm, type ContributedMachine } from '../machines.js'
 import * as store from '../parts/index.js'
 import type { Part, SwarmParts } from '../parts/index.js'
@@ -108,7 +108,7 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
         return envelope(agentPart(a.id), buddy && actor.kind === 'agent' ? agentForBuddy(view, actor.agentId)
           : machineHiddenFrom(state, actor, stored) ? agentWithoutMachine(view) : view)
       }),
-      groups: groups.map(g => envelope(groupPart(g.id), groupView(buddy ? groupWithoutMachines(g) : g, seen))),
+      groups: groups.map(g => envelope(groupPart(g.id), groupView(buddy ? groupForBuddy(g) : g, seen))),
       machines: (visible.machines ?? []).map(m => envelope(machinePart(m.machineId), m)),
       starts: (visible.starts ?? []).filter(s => readable.has(s.request.conversationId)).map(s => envelope(startPart(s.id), s)),
       progress: parts.progress.filter(p => !p.deleted && projects.has(p.key)).map(p => envelope(p, progressView(p.data!))),
@@ -153,5 +153,7 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
     ...(teamAccountSwarm(state) ? {} : { teamAccounts: false as const }),
     threadSessions: true as const,
     sessionsFromChat: true as const,
+    // One Buddy per person per Swarm (Dee, 10-31): an app shows # buddy and New session in a project only when the server says so.
+    swarmBuddy: true as const,
   }
 }

@@ -105,6 +105,9 @@ export interface Derived {
    *  own thread, which gets the session (commands.ts routeBuddySession). Desktop offers New session in that chat's main
    *  composer only where it is true. Absent from an older backend, which refuses it. */
   sessionsFromChat?: true
+  /** One Buddy per person per Swarm (Dee, 10-31): a person's one Buddy chat, its Buddy reading every project they read, and New
+   *  session in one project. An older server says nothing, and its app keeps a Buddy per project. */
+  swarmBuddy?: true
 }
 export interface OtherProjectWorkView {
   conversationId: string; projectName: string; title: string; owns: string[]; status: WorkStatus; agentName: string; pr: string | null

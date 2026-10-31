@@ -115,10 +115,15 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       member(command.personId ?? undefined)
       break
     case 'message.send': {
-      // A thread session's start counts its machine's slots, as buddy.create's does (buddySessions.ts).
-      if (command.newSession) {
-        const start = effects.state.starts?.find(s => !before.starts?.some(b => b.id === s.id))
-        if (start) { slots(start.request.machineId); head() }
+      // Every start a post makes, a thread session's or the one Buddy's in an older project chat (commands.ts
+      // startOldChatBuddy), counts its machine's slots, as buddy.create's does, and meets a concurrent removal of the Buddy it
+      // runs beside: a Remove racing it can never leave it running (security review 2 of #2435).
+      const start = effects.state.starts?.find(s => !before.starts?.some(b => b.id === s.id))
+      if (start) {
+        slots(start.request.machineId)
+        head()
+        const person = start.request.buddyOf?.personId
+        for (const main of before.agents.filter(a => person && a.buddyOf?.personId === person && !a.buddySession)) agent(main.id)
       }
       // An answer to waiting work is credited to the person it waits on (leaderboard/record.ts): a concurrent change to who
       // that is meets the answer here.

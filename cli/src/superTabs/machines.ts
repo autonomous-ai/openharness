@@ -169,9 +169,10 @@ interface Reading { tab: string; observation: Record<string, unknown>; localMode
 /** A host's starts: its workers', and its Buddies' and Product Managers', which the backend lists apart so that a host from
  *  before them never launches one as a worker. */
 const startsOf = (row: Record<string, unknown>) => [...list(row.starts), ...list(row.buddyStarts), ...list(row.leadStarts)]
-/** What this host launches beyond workers, said in its reading (backend leadStart.ts): a project's Product Manager, and a
- *  Buddy's thread sessions (spec 2026-10-30-buddy-thread-sessions), which the backend offers only on a host that says so. */
-const CAPABILITIES = ['leadStart', 'buddySessions']
+/** What this host launches beyond workers, said in its reading (backend leadStart.ts): a project's Product Manager, a
+ *  Buddy's thread sessions (spec 2026-10-30-buddy-thread-sessions), and a person's one Buddy for the Swarm in its folder of
+ *  project worktrees (spec 2026-10-31-one-buddy-per-swarm), which the backend offers only on a host that says so. */
+const CAPABILITIES = ['leadStart', 'buddySessions', 'swarmBuddy']
 /** The backend's answer that this machine may no longer act in the Swarm: signed out, its contribution revoked or its host
  *  unavailable (backend store.ts observeMachine), or the Swarm gone. */
 const lostAccess = (error: unknown) => error instanceof SuperTabHostError && [401, 403, 404].includes(error.status)
