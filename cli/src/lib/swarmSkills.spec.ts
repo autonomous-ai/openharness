@@ -104,7 +104,8 @@ describe('built-in Swarm skills', () => {
   // alone, in both modes, right after its write-like-a-colleague line.
   const thread = '- Answer a message inside its thread: post with --reply-to that message, and your reply joins its thread. Many people talk to you at once; answers in the main chat bury each other. Post at the top level only to start a new topic.\n'
   const limit = '- A task lost to a usage limit resumes by itself in the same session when the limit resets (its wake-up says when). Hand it on at once only to another account or engine with allowance now, with its pushed branch and last progress note.\n'
-  const digest = '- Morning digest: when a person asks for one, set the project\'s digest to their local time and time zone ("project.digest" with time "08:00" and timeZone "Asia/Ho_Chi_Minh"). When it wakes you, check that each pull request under Shipped is merged, then post one message to the people in the project chat.\n'
+  // On by default since quiet project chats (Dee, 2026-10-31); a person moves it or turns it off.
+  const digest = '- Morning digest: every project has one by default, at 08:00 Vietnam time. When a person asks, move it to their local time and time zone ("project.digest" with time "08:00" and timeZone "Asia/Ho_Chi_Minh"), or turn it off with time null. When it wakes you, check that each pull request under Shipped is merged, then post one message to the people in the project chat.\n'
   const checkpoint = '- Push your work branch at least every 30 minutes, and set your work status to working with a one-line note of what is done and what is next, so another agent can continue if you stop.\n'
   // The plan line (Lead's brief for v2 M, 2026-10-27; docs/plans/2026-10-27-swarm-scheduler.md): the Lead's alone, in both modes.
   const plan = '- With 3 or more groups waiting, run plan first: it places them all at once on the best machines and models. Then route each group in the plan\'s order and start the plan\'s pick, with overrideReason "scheduler plan" when the route picks otherwise. If plan cannot run here, route as usual.\n'
@@ -125,8 +126,19 @@ describe('built-in Swarm skills', () => {
     + '- Never remove a worktree that a live process still uses. A fresh worktree on the default branch may belong to an agent that is just starting.\n'
     + '- Install nothing system-wide on a shared machine; put the tools you need in your session folder.\n\n'
   const sharedLast = `\n${shared.trimEnd()}\n`
-  // The update-request line (Ken, 2026-10-28): the Lead's alone, in both modes, right after its cadence rule.
-  const report = '- Answer each scheduled project update request as soon as it arrives: project.report through the revisions it names, with text null when nothing changed. An unanswered request blocks the later ones and keeps finished groups from archiving.\n'
+  // The update-request line (Ken, 2026-10-28): the Lead's alone, in both modes, right after its status-card rule. Quiet project
+  // chats (Dee, 2026-10-31): the report writes the status card, and the chat gets a post only when work ships, a person must
+  // decide or work is badly stuck, right after it.
+  const report = '- Answer each scheduled update request as soon as it arrives: project.report through the conversations it names, with the whole card as text, or text null when the card is still right. An unanswered request blocks the later ones and keeps finished groups from archiving.\n'
+  const quiet = '- Post in the project chat only when work merges or ships, a person must decide something new, or work is badly stuck: one or two lines with the link. Ask a person a question once, as a decision; it shows in the card until answered, and no later post repeats it.\n'
+  // The status card replaces each Lead's cadence post, and the card's lines the scored table (Dee, 2026-10-31).
+  const card = '- Keep the project\'s status card current: it sits at the top of the project chat and updates in place. Write it with project.report, the whole card as text: one short line per active task saying where it is and what it waits on, nothing repeated. It posts nothing to the chat.\n'
+  const quietChat: Array<['orchestration' | 'default', 'lead', string, string]> = [
+    ['orchestration', 'lead', card, '- At project cadence, post progress, blockers and next steps in the project chat; if nothing changed, post nothing.\n'],
+    ['orchestration', 'lead', '- The card names each active task in a few words, then where it is and what it waits on; a task leaves it once it is done and verified.\n',
+      '- Progress is a scored table: one row per group with a score from 0 to 1, its owner, and what it waits on. Only done and verified scores 1.0. Every row below 1.0 has an owner or says what it waits on.\n'],
+    ['default', 'lead', card, '- At the project\'s cadence, post a scored table: one row per group, 0 to 1, its owner and what it waits on. Only merged and tried scores 1.0. If nothing changed, post nothing.\n'],
+  ]
   // The live-card lines (Dee's Slack parity, 2026-10-29; backend superTabs/cards.ts): a task and each linked pull request are one
   // card that updates itself, so no role posts a line that only repeats it. Each role's own line, in both modes: the Lead's after
   // its update-request line, the Builder's after its checkpoint line, the Reviewer's after its independent check.
@@ -219,7 +231,7 @@ describe('built-in Swarm skills', () => {
   })
   // By role too: the Builder's and the Reviewer's tool-check line is the same, and only the Builder's replaced an approved one.
   const approved = (text: string, mode: 'orchestration' | 'default', role: 'lead' | 'dev' | 'review') =>
-    [...autoReview, ...failFast, ...stallWake, ...reactionTake].filter(([m, r]) => m === mode && r === role).reduce((t, [, , line, before]) => t.replace(line, before), role === 'lead' ? text.replace(reviewPlan, '') : text)
+    [...autoReview, ...failFast, ...stallWake, ...reactionTake, ...quietChat].filter(([m, r]) => m === mode && r === role).reduce((t, [, , line, before]) => t.replace(line, before), role === 'lead' ? text.replace(reviewPlan, '') : text)
   it('tells each Lead to act within minutes on the Swarm\'s stall wake-up, in place of the 6-hour rule, and no other role', () => {
     for (const [mode, , line, before] of stallWake) {
       expect(readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode }).file, 'utf8').split(line), mode).toHaveLength(2)
@@ -285,7 +297,7 @@ describe('built-in Swarm skills', () => {
       expect(text.split(thread)).toHaveLength(role === 'lead' ? 2 : 1)
       expect([cardLead, cardDev, cardReview].map(line => text.split(line).length)).toEqual([role === 'lead' ? 2 : 1, role === 'dev' ? 2 : 1, role === 'review' ? 2 : 1])
       expect(sha(approved(text, 'orchestration', role).replace(whoReaches(role), '').replace(reactions(role), '').replace(twoHours, '').replace(terminal, '').replace(update, '').replace(overlap, '').replace(local, '').replace(failedStart, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
-        .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requests, '').replace(shared, '').replace(report, '')
+        .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requests, '').replace(shared, '').replace(report, '').replace(quiet, '')
         .replace(missingStop, '').replace(reviewCheck, '').replace(moveMissing, '').replace(thread, '')
         .replace(cardLead, '').replace(cardDev, '').replace(cardReview, ''))).toBe(sha256)
     }
@@ -294,7 +306,7 @@ describe('built-in Swarm skills', () => {
     const read = (role: 'lead' | 'dev' | 'review', mode: 'orchestration' | 'default') =>
       readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode }).file, 'utf8')
     for (const mode of ['orchestration', 'default'] as const) {
-      expect(read('lead', mode)).toContain(`${report}${cardLead}`)
+      expect(read('lead', mode)).toContain(`${report}${quiet}${cardLead}`)
       expect(read('dev', mode)).toContain(`${checkpoint}${cardDev}`)
     }
     expect(read('review', 'orchestration')).toContain(`- Pass or fail the independent check, with the revision and verdict as evidence.\n${cardReview}`)
@@ -368,11 +380,15 @@ describe('built-in Swarm skills', () => {
       expect(plain.endsWith(`${lastBefore[role]}\n${whoReaches(role)}${reactionsBefore(role).slice(1)}${sharedLast}`), role).toBe(true)
     }
   })
-  it('adds the update-request line right after each Lead skill\'s cadence rule', () => {
-    const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
-    expect(orchestration).toContain(`- At project cadence, post progress, blockers and next steps in the project chat; if nothing changed, post nothing.\n${report}`)
-    const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
-    expect(plain).toContain(`Only merged and tried scores 1.0. If nothing changed, post nothing.\n${report}`)
+  it('keeps each Lead\'s progress in the status card and its chat quiet, right after the card rule, and no other role', () => {
+    for (const mode of ['orchestration', 'default'] as const) {
+      for (const role of ['lead', 'dev', 'review'] as const) {
+        const text = readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode }).file, 'utf8')
+        expect(text.split(quiet), `${mode} ${role}`).toHaveLength(role === 'lead' ? 2 : 1)
+        expect(text, `${mode} ${role}`).not.toMatch(/project cadence|project's cadence|scored table/)
+        if (role === 'lead') expect(text, mode).toContain(`${card}${report}${quiet}${cardLead}`)
+      }
+    }
   })
   it('adds the lost-work line right after each Lead skill\'s 2-hour rule', () => {
     const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
@@ -457,7 +473,7 @@ describe('built-in Swarm skills', () => {
     expect(text.split(thread)).toHaveLength(role === 'lead' ? 2 : 1)
     expect([cardLead, cardDev, cardReview].map(line => text.split(line).length)).toEqual([role === 'lead' ? 2 : 1, role === 'dev' ? 2 : 1, role === 'review' ? 2 : 1])
     expect(sha(approved(text, 'default', role).replace(whoReaches(role), '').replace(reactions(role), '').replace(terminal, '').replace(update, '').replace(overlap, '').replace(localDefault, '').replace(failedStart, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
-      .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requestsLast, '').replace(sharedLast, '').replace(report, '')
+      .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requestsLast, '').replace(sharedLast, '').replace(report, '').replace(quiet, '')
       .replace(missingStop, '').replace(reviewCheck, '').replace(moveMissing, '').replace(thread, '')
         .replace(cardLead, '').replace(cardDev, '').replace(cardReview, ''))).toBe(sha256)
     expect(prepared.instructions).toMatch(/^Use the built-in swarm-tools skill /)

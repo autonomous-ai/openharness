@@ -109,13 +109,16 @@ describe('a project\'s morning digest', () => {
     expect(digestRequest(state, lead, EIGHT + 24 * HOUR)).not.toBeNull()
   })
 
-  it('wakes nobody for a project with no digest time, in a paused Swarm, or for an agent that is not the Lead', () => {
+  it('wakes nobody for a project whose digest a person turned off, in a paused Swarm, or for an agent that is not the Lead', () => {
     const state = fixture()
     expect(digestRequest(state, state.agents.find(a => a.id === 'nico')!, EIGHT)).toBeNull()
     state.paused = true
     expect(digestRequest(state, state.agents.find(a => a.id === 'lead')!, EIGHT)).toBeNull()
     state.paused = false
+    // Never set, it is on by default at 08:00 Vietnam time (Dee, 2026-10-31); turned off, it stays off.
     delete lampOS(state).digest
+    expect(digestRequest(state, state.agents.find(a => a.id === 'lead')!, EIGHT)?.text).toContain('(08:00, Asia/Ho_Chi_Minh)')
+    lampOS(state).digestOff = true
     expect(digestRequest(state, state.agents.find(a => a.id === 'lead')!, EIGHT)).toBeNull()
   })
 })

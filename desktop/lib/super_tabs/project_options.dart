@@ -96,7 +96,6 @@ Future<void> showProjectAction(
   var name = project.name;
   var visibility = project.isPrivate ? 'private' : 'public';
   final members = project.memberIds.toSet();
-  var minutes = project.updateMinutes;
   var busy = false;
   await showAppDialog<void>(
     context: context,
@@ -113,11 +112,7 @@ Future<void> showProjectAction(
                 .firstOrNull;
             final canManage = current?.ownerId == c.accountId;
             return AlertDialog(
-              title: Text(switch (action) {
-                'rename' => 'Rename project',
-                'sharing' => 'Sharing',
-                _ => 'Project updates',
-              }),
+              title: Text(action == 'rename' ? 'Rename project' : 'Sharing'),
               content: SizedBox(
                 width: 400,
                 child: SingleChildScrollView(
@@ -174,33 +169,6 @@ Future<void> showProjectAction(
                                     ),
                             ),
                       ],
-                      if (action == 'cadence') ...[
-                        Text(
-                          '${c.snapshot?.coordinatorNameOf(project.id) ?? kDefaultCoordinatorName} gathers new task reports while work is active.',
-                          style: DesktopChrome.text(),
-                        ),
-                        const SizedBox(height: 12),
-                        DropdownButton<int>(
-                          value: minutes,
-                          items: [
-                            for (final value in const [1, 5, 15, 30])
-                              DropdownMenuItem(
-                                value: value,
-                                child: Text(
-                                  'Every $value ${value == 1 ? 'minute' : 'minutes'}',
-                                ),
-                              ),
-                          ],
-                          onChanged: busy
-                              ? null
-                              : (value) => update(() => minutes = value!),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Questions, blockers and completion are reported immediately. No new progress means no update.',
-                          style: DesktopChrome.metadata(),
-                        ),
-                      ],
                       if (c.operationError != null) ...[
                         const SizedBox(height: 12),
                         Text(c.operationError!),
@@ -225,24 +193,20 @@ Future<void> showProjectAction(
                           c.saving ||
                           c.hasPendingAction ||
                           name.trim().isEmpty ||
-                          (action != 'cadence' && !canManage)
+                          !canManage
                       ? null
                       : () async {
                           update(() => busy = true);
                           final result = await c.command({
-                            'type':
-                                'project.${action == 'rename'
-                                    ? 'rename'
-                                    : action == 'sharing'
-                                    ? 'sharing'
-                                    : 'cadence'}',
+                            'type': action == 'rename'
+                                ? 'project.rename'
+                                : 'project.sharing',
                             'projectId': project.id,
                             if (action == 'rename') 'name': name.trim(),
                             if (action == 'sharing') ...{
                               'visibility': visibility,
                               'memberIds': members.toList(),
                             },
-                            if (action == 'cadence') 'minutes': minutes,
                           });
                           if (!context.mounted) return;
                           if (result != null) {
