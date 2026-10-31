@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -9,12 +8,9 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
 import '../state/harness_attachments.dart';
 import '../widgets/desktop_chrome.dart';
-import '../widgets/new_harness_attachments.dart';
-import '../widgets/new_harness_paste.dart';
 import 'buddy_sessions.dart';
-import 'composer_files.dart';
-import 'composer_newline.dart';
 import 'composer_toggle.dart';
+import 'reply_box.dart';
 import 'controller.dart';
 import 'jump_to_latest.dart';
 import 'model.dart';
@@ -432,132 +428,19 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     );
   }
 
-  Widget _composerBox() {
-    final writable = _writable;
-    final files = _files;
-    final busy = _busy;
-    final error = c.threadComposerError(c.selectedId, widget.root);
-    return NewHarnessDropZone(
-      attachments: files,
-      enabled: writable && !busy,
-      // A folder has no bytes to attach, and its path means nothing to a
-      // reader on another computer: say so, as the chat does for a browser.
-      onFolders: kIsWeb
-          ? null
-          : (_) => reportAttachProblem(
-              context,
-              'A folder can\'t be attached to a reply. Drop its files instead.',
-            ),
-      child: DecoratedBox(
-        key: const ValueKey('super-thread-composer-surface'),
-        decoration: BoxDecoration(
-          color: DesktopChrome.field,
-          borderRadius: BorderRadius.circular(DesktopChrome.controlRadius),
-          border: Border.all(color: DesktopChrome.rim),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(
-            grid.AppDesktop.groupGap,
-            grid.AppDesktop.controlGap,
-            grid.AppDesktop.controlGap,
-            grid.AppDesktop.controlGap,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              SuperTabComposerChips(controller: c, files: files),
-              Focus(
-                onKeyEvent: (_, event) {
-                  switch (composerEnter(
-                    event,
-                    focused: _focus.hasFocus,
-                    value: _composer.value,
-                  )) {
-                    case ComposerEnter.ignore:
-                      return KeyEventResult.ignored;
-                    case ComposerEnter.newline:
-                      insertComposerNewline(_composer, _edited);
-                      return KeyEventResult.handled;
-                    case ComposerEnter.send:
-                      unawaited(_send());
-                      return KeyEventResult.handled;
-                  }
-                },
-                child: NewHarnessPasteTarget(
-                  attachments: files,
-                  enabled: writable && !busy,
-                  focusNode: _focus,
-                  child: TextField(
-                    key: const ValueKey('super-thread-composer'),
-                    controller: _composer,
-                    focusNode: _focus,
-                    enabled: c.canWrite && c.selected?.archived == false,
-                    minLines: 1,
-                    maxLines: 6,
-                    maxLength: kComposerMaxLength,
-                    keyboardType: TextInputType.multiline,
-                    style: DesktopChrome.text(),
-                    decoration: InputDecoration(
-                      isCollapsed: true,
-                      constraints: const BoxConstraints(),
-                      hintText: 'Reply',
-                      hintStyle: DesktopChrome.text(color: DesktopChrome.muted),
-                      contentPadding: EdgeInsets.zero,
-                      border: InputBorder.none,
-                      enabledBorder: InputBorder.none,
-                      focusedBorder: InputBorder.none,
-                      disabledBorder: InputBorder.none,
-                      filled: false,
-                      counterText: '',
-                    ),
-                    onChanged: _edited,
-                  ),
-                ),
-              ),
-              if (error != null)
-                Padding(
-                  padding: const EdgeInsets.only(
-                    top: grid.AppDesktop.controlGap,
-                  ),
-                  child: Text(
-                    error,
-                    key: const ValueKey('super-thread-error'),
-                    style: DesktopChrome.control(),
-                  ),
-                ),
-              const SizedBox(height: grid.AppDesktop.controlGap),
-              Row(
-                children: [
-                  Expanded(child: _choices(writable)),
-                  NewHarnessAttachButton(
-                    attachments: files,
-                    enabled: writable && !busy,
-                  ),
-                  ListenableBuilder(
-                    listenable: files,
-                    builder: (context, _) => AppIconButton(
-                      key: const ValueKey('super-thread-send'),
-                      icon: AppIcons.arrowUp,
-                      tooltip: 'Send reply',
-                      color: DesktopChrome.accent,
-                      onPressed:
-                          writable &&
-                              !busy &&
-                              (_composer.text.trim().isNotEmpty ||
-                                  !files.isEmpty)
-                          ? () => unawaited(_send())
-                          : null,
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
+  Widget _composerBox() => SuperTabReplyBox(
+    controller: c,
+    text: _composer,
+    focus: _focus,
+    files: _files,
+    enabled: c.canWrite && c.selected?.archived == false,
+    writable: _writable,
+    busy: _busy,
+    error: c.threadComposerError(c.selectedId, widget.root),
+    onEdited: _edited,
+    onSend: () => unawaited(_send()),
+    options: _choices(_writable),
+  );
 
   /// The send row's options, left of attach and send, on one line at any
   /// width (Scholes, 10-31): Also send names where it posts in full where

@@ -28,7 +28,7 @@ class SuperTabCountBadge extends StatelessWidget {
       child: Text(
         countText(count),
         textAlign: TextAlign.center,
-        style: DesktopChrome.metadata(color: Colors.white)
+        style: DesktopChrome.metadata(color: grid.AppPalette.onDangerFill)
             .copyWith(fontWeight: grid.AppFont.semibold),
       ),
     );
@@ -197,7 +197,9 @@ class SuperTabBuddyRow extends StatelessWidget {
                   ),
                   if (badge > 0)
                     Padding(
-                      padding: const EdgeInsets.only(left: 8),
+                      padding: const EdgeInsets.only(
+                        left: grid.AppDesktop.controlGap,
+                      ),
                       child: Semantics(
                         label: badge == 1 ? '1 mention' : '$badge mentions',
                         excludeSemantics: true,

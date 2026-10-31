@@ -1238,31 +1238,6 @@ class SuperTabController extends ChangeNotifier {
     _changed();
   }
 
-  /// Replies [text] in [root]'s thread of [conversationId] from outside the
-  /// thread pane (the Threads view); null when it was not sent.
-  Future<Map<String, dynamic>?> replyInThread(
-    String conversationId,
-    String root,
-    String text,
-  ) {
-    final trimmed = text.trim();
-    final group = snapshot?.conversation(conversationId);
-    if (trimmed.isEmpty ||
-        group == null ||
-        group.archived ||
-        accessRevoked ||
-        !canWrite) {
-      return Future.value();
-    }
-    return command({
-      'type': 'message.send',
-      'conversationId': conversationId,
-      'text': trimmed,
-      'replyTo': root,
-      'recipientIds': const <String>[],
-    });
-  }
-
   /// The root and replies of [root]'s thread in the selected conversation,
   /// oldest first: what its own read brought, and replies polled since.
   List<SuperTabMessage> threadMessages(String root) {
@@ -1443,22 +1418,25 @@ class SuperTabController extends ChangeNotifier {
     }
   }
 
-  /// Sends the open thread's draft and files to its root; [alsoSend] shows it in the
-  /// main stream too. [onSending] is told when the reply is on its way, which
-  /// is after its files have gone up.
+  /// Sends the open thread's draft and files to its root, or [to]'s (the
+  /// Threads view replies without opening the thread); [alsoSend] shows it in
+  /// the main stream too. [onSending] is told when the reply is on its way,
+  /// which is after its files have gone up.
   Future<Map<String, dynamic>?> sendThreadReply({
     bool alsoSend = false,
     bool newSession = false,
     VoidCallback? onSending,
+    ({String conversationId, String root})? to,
   }) async {
-    final open = openedThread;
-    if (open == null) return null;
+    final open = to ?? openedThread;
+    if (open == null || accessRevoked) return null;
     final text = threadDraft(open.root).trim();
     final owner = threadAttachments(open.conversationId, open.root);
     final files = owner.files;
+    final group = snapshot?.conversation(open.conversationId);
     if ((text.isEmpty && files.isEmpty) ||
-        selected == null ||
-        selected!.archived ||
+        group == null ||
+        group.archived ||
         !canWrite ||
         uploading ||
         saving ||

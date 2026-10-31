@@ -5,10 +5,14 @@ import 'package:flutter/material.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
 import 'attention.dart';
+import '../shared/theme/app_icons.dart';
+import 'controller.dart';
 import 'identity.dart';
+import 'message_more_menu.dart';
 import 'machine_status.dart' show superTabAgo;
 import 'model.dart';
 import 'project_sidebar.dart' show kProductManagersChannel;
+import 'reply_box.dart';
 import 'section_heading.dart';
 import 'workgroup_name.dart';
 
@@ -40,8 +44,6 @@ class SuperTabThreadsView extends StatefulWidget {
 }
 
 class _SuperTabThreadsViewState extends State<SuperTabThreadsView> {
-  final _drafts = <String, TextEditingController>{};
-  final _sending = <String>{};
   late SuperTabAttention _attention;
 
   @override
@@ -62,281 +64,7 @@ class _SuperTabThreadsViewState extends State<SuperTabThreadsView> {
   @override
   void dispose() {
     _attention.closed();
-    for (final draft in _drafts.values) {
-      draft.dispose();
-    }
     super.dispose();
-  }
-
-  SuperTabSnapshot? get _snapshot => _attention.controller.snapshot;
-
-  /// Where a thread is, named as the sidebar names it.
-  String _place(SuperTabFollowedThread thread) {
-    final snapshot = _snapshot;
-    final group = snapshot?.conversation(thread.conversationId);
-    if (snapshot == null || group == null) return '';
-    if (group.id == snapshot.leadsConversationId) {
-      return '# $kProductManagersChannel';
-    }
-    final project = snapshot.projectFor(group.id);
-    if (snapshot.isProjectLead(group.id)) return '# ${project?.name ?? ''}';
-    if (group.isBuddyChat) return 'Buddy · ${project?.name ?? ''}';
-    final name = SuperTabWorkgroupName.plain(group);
-    return project == null ? name : '# ${project.name} · $name';
-  }
-
-  /// An author as the chat names them now.
-  String _name(Map<String, dynamic> author) {
-    final snapshot = _snapshot;
-    final id = author['id'] as String? ?? '';
-    final recorded =
-        author['displayName'] as String? ?? author['name'] as String? ?? '';
-    if (author['kind'] == 'agent') {
-      return snapshot?.agentName(id, fallback: recorded) ?? recorded;
-    }
-    return snapshot?.people.where((p) => p.id == id).firstOrNull?.username ??
-        superTabPersonName(recorded);
-  }
-
-  Widget? _face(Map<String, dynamic> author) {
-    final snapshot = _snapshot;
-    final id = author['id'] as String? ?? '';
-    if (author['kind'] == 'agent') {
-      return switch (snapshot?.agent(id)) {
-        final agent? => SuperTabAvatar.agent(
-          agent,
-          name: _name(author),
-          size: 24,
-          engineBadge: false,
-        ),
-        null => null,
-      };
-    }
-    return switch (snapshot?.people.where((p) => p.id == id).firstOrNull) {
-      final person? => SuperTabAvatar.person(person, size: 24),
-      null => null,
-    };
-  }
-
-  Future<void> _reply(SuperTabFollowedThread thread) async {
-    final draft = _drafts[thread.key];
-    final text = draft?.text.trim() ?? '';
-    if (draft == null || text.isEmpty || !_sending.add(thread.key)) return;
-    setState(() {});
-    final sent = await _attention.controller.replyInThread(
-      thread.conversationId,
-      thread.rootId,
-      text,
-    );
-    if (!mounted) return;
-    setState(() => _sending.remove(thread.key));
-    if (sent == null) {
-      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        const SnackBar(content: Text('Reply not sent. Try again.')),
-      );
-      return;
-    }
-    if (draft.text.trim() == text) draft.clear();
-  }
-
-  Future<void> _follow(SuperTabFollowedThread thread, bool follow) async {
-    final kept = await _attention.setFollow(thread, follow);
-    if (!mounted || kept) return;
-    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-      SnackBar(
-        content: Text(
-          follow ? 'Could not follow this thread.' : 'Could not unfollow.',
-        ),
-      ),
-    );
-  }
-
-  Widget _message(
-    Map<String, dynamic> author,
-    String text, {
-    DateTime? at,
-    required bool strong,
-    int lines = 3,
-  }) {
-    final face = _face(author);
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.only(right: 10, top: 2),
-          child: SizedBox(width: 24, height: 24, child: face),
-        ),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Flexible(
-                    child: Text(
-                      _name(author),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: DesktopChrome.control(medium: true).copyWith(
-                        fontWeight: strong ? grid.AppFont.semibold : null,
-                      ),
-                    ),
-                  ),
-                  if (at != null) ...[
-                    const SizedBox(width: 8),
-                    Text(
-                      superTabAgo(widget.now().difference(at)),
-                      style: DesktopChrome.metadata(),
-                    ),
-                  ],
-                ],
-              ),
-              const SizedBox(height: 2),
-              Text(
-                text,
-                maxLines: lines,
-                overflow: TextOverflow.ellipsis,
-                style: DesktopChrome.control(
-                  color: strong ? null : DesktopChrome.muted,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _thread(SuperTabFollowedThread thread) {
-    final fresh = _attention.isNew(thread);
-    final replies = _attention.newReplies[thread.key];
-    final snapshot = _snapshot;
-    final accent = DesktopChrome.accent;
-    final canReply =
-        fresh &&
-        _attention.controller.canWrite &&
-        snapshot?.conversation(thread.conversationId)?.archived == false;
-    final draft = canReply
-        ? _drafts.putIfAbsent(thread.key, TextEditingController.new)
-        : null;
-    final followed = thread.follow != false;
-    final count = thread.unreadReplies;
-    return Padding(
-      key: ValueKey('super-thread-${thread.key}'),
-      padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
-      child: Material(
-        color: Colors.transparent,
-        borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-        clipBehavior: Clip.antiAlias,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      _place(thread),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: DesktopChrome.metadata(),
-                    ),
-                  ),
-                  if (_attention.followSupported)
-                    TextButton(
-                      key: ValueKey('super-thread-follow-${thread.key}'),
-                      onPressed: _attention.following.contains(thread.key)
-                          ? null
-                          : () => unawaited(_follow(thread, !followed)),
-                      child: Text(followed ? 'Unfollow' : 'Follow'),
-                    ),
-                ],
-              ),
-              InkWell(
-                key: ValueKey('super-thread-open-${thread.key}'),
-                onTap: () =>
-                    widget.onOpen(thread.conversationId, thread.rootId),
-                hoverColor: grid.AppSurface.hoverFill,
-                focusColor: grid.AppSurface.hoverFill,
-                borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 4),
-                  child: _message(
-                    thread.rootAuthor,
-                    thread.rootText,
-                    at: DateTime.tryParse(
-                      thread.root['createdAt'] as String? ?? '',
-                    ),
-                    strong: fresh,
-                  ),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.only(left: 34, top: 2),
-                child: fresh
-                    ? Text(
-                        count == 1 ? '1 new reply' : '$count new replies',
-                        style: DesktopChrome.metadata(color: accent)
-                            .copyWith(fontWeight: grid.AppFont.semibold),
-                      )
-                    : Text(
-                        [
-                          if (thread.replies case final n?)
-                            n == 1 ? '1 reply' : '$n replies',
-                          if (thread.lastReplyAt case final at?)
-                            'last ${superTabAgo(widget.now().difference(at))}',
-                        ].join(' · '),
-                        style: DesktopChrome.metadata(),
-                      ),
-              ),
-              if (fresh && replies != null)
-                for (final reply in replies)
-                  Padding(
-                    padding: const EdgeInsets.only(left: 34, top: 8),
-                    child: _message(
-                      reply.author,
-                      reply.text,
-                      at: reply.createdAt,
-                      strong: true,
-                      lines: 4,
-                    ),
-                  ),
-              if (draft != null)
-                Padding(
-                  padding: const EdgeInsets.only(left: 34, top: 8),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          key: ValueKey('super-thread-reply-${thread.key}'),
-                          controller: draft,
-                          minLines: 1,
-                          maxLines: 4,
-                          style: DesktopChrome.control(),
-                          decoration: const InputDecoration(
-                            hintText: 'Reply…',
-                            isDense: true,
-                          ),
-                          onSubmitted: (_) => unawaited(_reply(thread)),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      TextButton(
-                        key: ValueKey('super-thread-send-${thread.key}'),
-                        onPressed: _sending.contains(thread.key)
-                            ? null
-                            : () => unawaited(_reply(thread)),
-                        child: const Text('Send'),
-                      ),
-                    ],
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
   }
 
   @override
@@ -357,11 +85,16 @@ class _SuperTabThreadsViewState extends State<SuperTabThreadsView> {
       });
       return ListView(
         key: const ValueKey('super-threads-view'),
-        padding: const EdgeInsets.only(bottom: 16),
+        padding: const EdgeInsets.only(bottom: grid.AppDesktop.groupGap),
         children: [
           if (a.error case final error?)
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+              padding: const EdgeInsets.fromLTRB(
+                grid.AppDesktop.groupGap,
+                grid.AppDesktop.controlGap,
+                grid.AppDesktop.groupGap,
+                0,
+              ),
               child: Row(
                 children: [
                   Expanded(child: Text(error, style: DesktopChrome.control())),
@@ -374,12 +107,22 @@ class _SuperTabThreadsViewState extends State<SuperTabThreadsView> {
             ),
           if (!a.loaded && a.error == null)
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              padding: const EdgeInsets.fromLTRB(
+                grid.AppDesktop.groupGap,
+                grid.AppDesktop.groupGap,
+                grid.AppDesktop.groupGap,
+                grid.AppDesktop.controlGap,
+              ),
               child: Text('Loading threads…', style: DesktopChrome.metadata()),
             )
           else if (a.loaded && shown.isEmpty)
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              padding: const EdgeInsets.fromLTRB(
+                grid.AppDesktop.groupGap,
+                grid.AppDesktop.groupGap,
+                grid.AppDesktop.groupGap,
+                grid.AppDesktop.controlGap,
+              ),
               child: Text(
                 'No threads yet. Threads you start, reply in or are '
                 'tagged in show here.',
@@ -388,21 +131,50 @@ class _SuperTabThreadsViewState extends State<SuperTabThreadsView> {
             ),
           if (fresh.isNotEmpty) ...[
             const Padding(
-              padding: EdgeInsets.fromLTRB(12, 16, 12, 4),
+              padding: EdgeInsets.fromLTRB(
+                grid.AppDesktop.groupGap,
+                grid.AppDesktop.groupGap,
+                grid.AppDesktop.groupGap,
+                grid.AppDesktop.controlGap,
+              ),
               child: SuperTabSectionHeading('New replies', endInset: 0),
             ),
-            for (final thread in fresh) _thread(thread),
+            for (final thread in fresh)
+              _ThreadCard(
+                key: ValueKey('super-thread-${thread.key}'),
+                attention: a,
+                thread: thread,
+                onOpen: widget.onOpen,
+                now: widget.now,
+              ),
           ],
           if (rest.isNotEmpty) ...[
             const Padding(
-              padding: EdgeInsets.fromLTRB(12, 16, 12, 4),
+              padding: EdgeInsets.fromLTRB(
+                grid.AppDesktop.groupGap,
+                grid.AppDesktop.groupGap,
+                grid.AppDesktop.groupGap,
+                grid.AppDesktop.controlGap,
+              ),
               child: SuperTabSectionHeading('Earlier', endInset: 0),
             ),
-            for (final thread in rest) _thread(thread),
+            for (final thread in rest)
+              _ThreadCard(
+                key: ValueKey('super-thread-${thread.key}'),
+                attention: a,
+                thread: thread,
+                onOpen: widget.onOpen,
+                now: widget.now,
+              ),
           ],
           if (a.more)
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+              padding: const EdgeInsets.fromLTRB(
+                grid.AppDesktop.groupGap,
+                grid.AppDesktop.controlGap,
+                grid.AppDesktop.groupGap,
+                grid.AppDesktop.controlGap,
+              ),
               child: Text(
                 'Older threads are not listed.',
                 style: DesktopChrome.metadata(),
@@ -412,4 +184,349 @@ class _SuperTabThreadsViewState extends State<SuperTabThreadsView> {
       );
     },
   );
+}
+
+/// One followed thread in the list: where it is, its root, its new replies
+/// and a reply box while it is new, else its reply count. Follow or Unfollow
+/// waits behind a quiet ⋯ that shows on hover or focus, as in Slack.
+class _ThreadCard extends StatefulWidget {
+  const _ThreadCard({
+    super.key,
+    required this.attention,
+    required this.thread,
+    required this.onOpen,
+    required this.now,
+  });
+
+  final SuperTabAttention attention;
+  final SuperTabFollowedThread thread;
+  final void Function(String conversationId, String rootId) onOpen;
+  final DateTime Function() now;
+
+  @override
+  State<_ThreadCard> createState() => _ThreadCardState();
+}
+
+class _ThreadCardState extends State<_ThreadCard> {
+  /// An avatar, and the column the text beside it starts at.
+  static const _face = SuperTabAvatar.rowSize;
+  static const _indent = _face + grid.AppDesktop.controlGap;
+
+  late final _text = TextEditingController(
+    text: _c.threadDraft(widget.thread.rootId),
+  );
+  final _focus = FocusNode(debugLabel: 'Threads reply');
+  bool _hovered = false, _focused = false;
+
+  SuperTabController get _c => widget.attention.controller;
+  SuperTabFollowedThread get _thread => widget.thread;
+  SuperTabSnapshot? get _snapshot => _c.snapshot;
+
+  @override
+  void dispose() {
+    _text.dispose();
+    _focus.dispose();
+    super.dispose();
+  }
+
+  /// Where the thread is, named as the sidebar names it.
+  String _place() {
+    final snapshot = _snapshot;
+    final group = snapshot?.conversation(_thread.conversationId);
+    if (snapshot == null || group == null) return '';
+    if (group.id == snapshot.leadsConversationId) {
+      return '# $kProductManagersChannel';
+    }
+    final project = snapshot.projectFor(group.id);
+    if (snapshot.isProjectLead(group.id)) return '# ${project?.name ?? ''}';
+    if (group.isBuddyChat) return 'Buddy · ${project?.name ?? ''}';
+    final name = SuperTabWorkgroupName.plain(group);
+    return project == null ? name : '# ${project.name} · $name';
+  }
+
+  /// An author as the chat names them now.
+  String _name(Map<String, dynamic> author) {
+    final id = author['id'] as String? ?? '';
+    final recorded =
+        author['displayName'] as String? ?? author['name'] as String? ?? '';
+    if (author['kind'] == 'agent') {
+      return _snapshot?.agentName(id, fallback: recorded) ?? recorded;
+    }
+    return _snapshot?.people.where((p) => p.id == id).firstOrNull?.username ??
+        superTabPersonName(recorded);
+  }
+
+  Widget? _avatar(Map<String, dynamic> author) {
+    final id = author['id'] as String? ?? '';
+    if (author['kind'] == 'agent') {
+      return switch (_snapshot?.agent(id)) {
+        final agent? => SuperTabAvatar.agent(
+          agent,
+          name: _name(author),
+          size: _face,
+          engineBadge: false,
+        ),
+        null => null,
+      };
+    }
+    return switch (_snapshot?.people.where((p) => p.id == id).firstOrNull) {
+      final person? => SuperTabAvatar.person(person, size: _face),
+      null => null,
+    };
+  }
+
+  Widget _message(
+    Map<String, dynamic> author,
+    String text, {
+    DateTime? at,
+    required bool strong,
+    int lines = 3,
+  }) => Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      SizedBox(width: _face, height: _face, child: _avatar(author)),
+      const SizedBox(width: grid.AppDesktop.controlGap),
+      Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Flexible(
+                  child: Text(
+                    _name(author),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: DesktopChrome.control(medium: true).copyWith(
+                      fontWeight: strong ? grid.AppFont.semibold : null,
+                    ),
+                  ),
+                ),
+                if (at != null) ...[
+                  const SizedBox(width: grid.AppDesktop.controlGap),
+                  Text(
+                    superTabAgo(widget.now().difference(at)),
+                    style: DesktopChrome.metadata(),
+                  ),
+                ],
+              ],
+            ),
+            Text(
+              text,
+              maxLines: lines,
+              overflow: TextOverflow.ellipsis,
+              style: DesktopChrome.control(
+                color: strong ? null : DesktopChrome.muted,
+              ),
+            ),
+          ],
+        ),
+      ),
+    ],
+  );
+
+  /// The thread's root, for a reply sent from here.
+  ({String conversationId, String root}) get _target =>
+      (conversationId: _thread.conversationId, root: _thread.rootId);
+
+  bool get _writable =>
+      _c.canWrite &&
+      _snapshot?.conversation(_thread.conversationId)?.archived == false &&
+      !_c.hasPendingAction;
+
+  bool get _busy => _c.uploading || _c.saving;
+
+  void _edited(String text) {
+    _c.setThreadDraft(_thread.rootId, text);
+    setState(() {});
+  }
+
+  Future<void> _send() async {
+    final files = _c.threadAttachments(_thread.conversationId, _thread.rootId);
+    if (!_writable || _busy || (_text.text.trim().isEmpty && files.isEmpty)) {
+      return;
+    }
+    final root = _thread.rootId;
+    _c.setThreadDraft(root, _text.text);
+    await _c.sendThreadReply(
+      to: _target,
+      onSending: () {
+        if (mounted && _c.threadDraft(root).isEmpty) _text.clear();
+      },
+    );
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _follow(bool follow) async {
+    final kept = await widget.attention.setFollow(_thread, follow);
+    if (!mounted || kept) return;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(
+        content: Text(
+          follow ? 'Could not follow this thread.' : 'Could not unfollow.',
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final a = widget.attention;
+    final fresh = a.isNew(_thread);
+    final replies = a.newReplies[_thread.key];
+    final count = _thread.unreadReplies;
+    final followed = _thread.follow != false;
+    final canReply =
+        fresh &&
+        _c.canWrite &&
+        _snapshot?.conversation(_thread.conversationId)?.archived == false;
+    final showMore = _hovered || _focused;
+    return Focus(
+      canRequestFocus: false,
+      skipTraversal: true,
+      onFocusChange: (focused) => setState(() => _focused = focused),
+      child: MouseRegion(
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() => _hovered = false),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(
+            grid.AppDesktop.groupGap,
+            grid.AppDesktop.controlGap,
+            grid.AppDesktop.controlGap,
+            grid.AppDesktop.controlGap,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _place(),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: DesktopChrome.metadata(),
+                    ),
+                  ),
+                  // Quiet until the card is pointed at or focused: the
+                  // replies are what the eye is for (Lead's review, 10-31).
+                  if (a.followSupported)
+                    Opacity(
+                      opacity: showMore ? 1 : 0,
+                      child: KeyedSubtree(
+                        key: ValueKey('super-thread-more-${_thread.key}'),
+                        child: SuperTabMessageMoreMenu(
+                          actions: [
+                            followed
+                                ? (
+                                    label: 'Unfollow thread',
+                                    icon: AppIcons.eyeOff,
+                                    onPressed: () => unawaited(_follow(false)),
+                                  )
+                                : (
+                                    label: 'Follow thread',
+                                    icon: AppIcons.bell,
+                                    onPressed: () => unawaited(_follow(true)),
+                                  ),
+                          ],
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              InkWell(
+                key: ValueKey('super-thread-open-${_thread.key}'),
+                onTap: () =>
+                    widget.onOpen(_thread.conversationId, _thread.rootId),
+                hoverColor: grid.AppSurface.hoverFill,
+                focusColor: grid.AppSurface.hoverFill,
+                borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    vertical: grid.AppDesktop.listRowGap,
+                  ),
+                  child: _message(
+                    _thread.rootAuthor,
+                    _thread.rootText,
+                    at: DateTime.tryParse(
+                      _thread.root['createdAt'] as String? ?? '',
+                    ),
+                    strong: fresh,
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(left: _indent),
+                child: fresh
+                    ? Text(
+                        count == 1 ? '1 new reply' : '$count new replies',
+                        style: DesktopChrome.metadata(
+                          color: DesktopChrome.accent,
+                        ).copyWith(fontWeight: grid.AppFont.semibold),
+                      )
+                    : Text(
+                        [
+                          if (_thread.replies case final n?)
+                            n == 1 ? '1 reply' : '$n replies',
+                          if (_thread.lastReplyAt case final at?)
+                            'last ${superTabAgo(widget.now().difference(at))}',
+                        ].join(' · '),
+                        style: DesktopChrome.metadata(),
+                      ),
+              ),
+              if (fresh && replies != null)
+                for (final reply in replies)
+                  Padding(
+                    padding: const EdgeInsets.only(
+                      left: _indent,
+                      top: grid.AppDesktop.controlGap,
+                    ),
+                    child: _message(
+                      reply.author,
+                      reply.text,
+                      at: reply.createdAt,
+                      strong: true,
+                      lines: 4,
+                    ),
+                  ),
+              if (canReply)
+                Padding(
+                  padding: const EdgeInsets.only(
+                    left: _indent,
+                    top: grid.AppDesktop.controlGap,
+                  ),
+                  child: ListenableBuilder(
+                    listenable: _c,
+                    builder: (context, _) => SuperTabReplyBox(
+                      controller: _c,
+                      text: _text,
+                      focus: _focus,
+                      files: _c.threadAttachments(
+                        _thread.conversationId,
+                        _thread.rootId,
+                      ),
+                      enabled: _c.canWrite,
+                      writable: _writable,
+                      busy: _busy,
+                      error: _c.threadComposerError(
+                        _thread.conversationId,
+                        _thread.rootId,
+                      ),
+                      onEdited: _edited,
+                      onSend: () => unawaited(_send()),
+                      surfaceKey: ValueKey(
+                        'super-thread-reply-surface-${_thread.key}',
+                      ),
+                      fieldKey: ValueKey('super-thread-reply-${_thread.key}'),
+                      sendKey: ValueKey('super-thread-send-${_thread.key}'),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }

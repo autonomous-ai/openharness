@@ -622,9 +622,59 @@ void main() {
     expect(server.threadMarkPosts.last['root'], 'message-1');
     await tester.tap(find.text('Root'));
     expect(opened, 'lead/message-1');
-    await tester.tap(
-      find.byKey(const ValueKey('super-thread-follow-lead/message-7')),
+    // The reply box is the thread pane's own: attach and the arrow send.
+    final box = find.byKey(
+      const ValueKey('super-thread-reply-surface-lead/message-1'),
     );
+    expect(
+      find.descendant(of: box, matching: find.byTooltip('Send reply')),
+      findsOneWidget,
+    );
+    expect(find.text('Send'), findsNothing);
+    await tester.enterText(
+      find.byKey(const ValueKey('super-thread-reply-lead/message-1')),
+      'On it',
+    );
+    await tester.pump();
+    await tester.tap(
+      find.byKey(const ValueKey('super-thread-send-lead/message-1')),
+    );
+    await tester.pumpAndSettle();
+    final sent = server.posts.last['command'] as Map;
+    expect(sent['type'], 'message.send');
+    expect(sent['conversationId'], 'lead');
+    expect(sent['replyTo'], 'message-1');
+    expect(sent['text'], 'On it');
+    Opacity more(String key) => tester.widget<Opacity>(
+      find
+          .ancestor(
+            of: find.byKey(ValueKey('super-thread-more-$key')),
+            matching: find.byType(Opacity),
+          )
+          .first,
+    );
+    // Unfollow is quiet: its ⋯ shows only while the card is pointed at, or
+    // focused (the reply box focused shows its card's).
+    expect(more('lead/message-1').opacity, 1);
+    FocusManager.instance.primaryFocus?.unfocus();
+    await tester.pumpAndSettle();
+    expect(find.text('Unfollow'), findsNothing);
+    expect(more('lead/message-7').opacity, 0);
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(tester.getCenter(find.text('Settled question')));
+    await tester.pumpAndSettle();
+    expect(more('lead/message-7').opacity, 1);
+    expect(more('lead/message-1').opacity, 0);
+    await tester.tap(
+      find.descendant(
+        of: find.byKey(const ValueKey('super-thread-more-lead/message-7')),
+        matching: find.byTooltip('More'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Unfollow thread'));
     await tester.pumpAndSettle();
     expect(server.followPosts.single['follow'], isFalse);
     await close(tester, c);

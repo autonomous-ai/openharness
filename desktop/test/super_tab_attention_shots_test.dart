@@ -125,7 +125,7 @@ void main() {
   setUpAll(() => loadCaptureFonts(shots));
 
   for (final brightness in Brightness.values) {
-    for (final scene in ['sidebar', 'threads', 'hover']) {
+    for (final scene in ['sidebar', 'threads', 'threads-hover', 'hover']) {
       testWidgets('attention: $scene in ${brightness.name}', (tester) async {
         if (shots == null) return;
         final previous = grid.AppTheme.brightness.value;
@@ -173,10 +173,25 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
-        if (scene == 'threads') {
+        if (scene.startsWith('threads')) {
           await tester.tap(find.byKey(const ValueKey('super-threads')));
           await tester.pumpAndSettle();
           await tester.pumpAndSettle();
+        }
+        if (scene == 'threads-hover') {
+          final mouse = await tester.createGesture(
+            kind: PointerDeviceKind.mouse,
+          );
+          await mouse.addPointer(location: Offset.zero);
+          await mouse.moveTo(
+            tester.getCenter(
+              find.text(
+                'Should heavy CI wait while the account is at its job limit?',
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+          addTearDown(mouse.removePointer);
         }
         if (scene == 'hover') {
           final mouse = await tester.createGesture(
