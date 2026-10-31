@@ -362,6 +362,26 @@ describe('security reviews of #2435', () => {
 })
 
 describe('security re-check 2 of #2435', () => {
+  it('keeps a phone\'s message in an older Buddy chat and starts nothing when the machine is full, paused, or the Swarm is paused', async () => {
+    // Security review 1 re-check of #2435: a machine that cannot take a one-project Buddy now refuses nothing the person wrote.
+    const cases: Array<[string, (f: Swarm) => Promise<unknown>]> = [
+      ['at its limit', async () => undefined],
+      ['paused by its owner', f => f.execute({ type: 'machine.pause', machineId: 'peer-mac', paused: true }, peer)],
+      ['in a paused Swarm', f => f.execute({ type: 'tab.pause', paused: true })],
+    ]
+    for (const [label, pause] of cases) {
+      // At its limit: the one Buddy takes the machine's only slot.
+      const f = await swarm({ maxAgents: label === 'at its limit' ? 1 : 8 })
+      await buddy(f)
+      const old = String((await f.execute({ type: 'buddy.chat', projectId: f.web.projectId }, peer)).result.conversationId)
+      await pause(f)
+      const sent = await send(f, old, `From the phone, ${label}`)
+      expect(sent.result.startId, label).toBeUndefined()
+      expect(((await f.store.read(peer, f.tab)).state.starts ?? []).filter(s => s.request.conversationId === old), label).toEqual([])
+      expect(await texts(f, old, peer), label).toContain(`From the phone, ${label}`)
+    }
+  })
+
   it('reads the machine again for a phone\'s Buddy start: a host that stops offering it while it starts gets no start', async () => {
     // The machine's own report, from its host, changes while the phone's message starts its Buddy: it no longer says it runs
     // the one Buddy. Only the machine's part ties the two writes (touches.ts: every start a post makes reads its machine).
