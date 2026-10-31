@@ -88,6 +88,12 @@ describe('cheap first: a small, low-risk build goes to a cheap grid model first'
     expect(route({ ...earlier, review: true }, { model: 'kimi' })).toMatchObject({ error: 'NO_CANDIDATE' })
   })
 
+  it('adds no candidate: it only ranks and leaves out the grid models the route itself found served and rated', () => {
+    // Grid candidates come only from routeCommand.ts localProbes: models a fresh reading says are served, rated from the catalog.
+    expect(cheapFirst(first).candidates).toBeUndefined()
+    expect(ok(route(first)).shown).toHaveLength(5)
+  })
+
   it('leaves subscription candidates and members alone in every case', () => {
     const member: Probe = { ...opus, kind: 'member', agentId: 'a1', name: 'Wren' }
     for (const task of [first, { ...first, review: true }, { ...first, earlier: 'x' }]) {
