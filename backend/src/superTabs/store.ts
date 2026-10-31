@@ -69,7 +69,7 @@ import { APPROVE, approvedLine, localDate, MAX_PROPOSALS, proposalQuestion, prop
 import { readEvidence, recordEvidence } from './evidence/store.js'
 import { closeAssignment, closeUnassignedStart, LIST_SIZE, newestConversations, newestDecisions, readDecision, recentDecisions, recordAttempts, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { dropHeldTags, listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByReply, resolveWhenWorked, writeMentions } from './mentions.js'
-import { answerable, askDecisions, MAX_OPEN_DECISIONS, REFLECTION_DECISION, reflectionDecisions, expireReflections, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingFor, waitingInProject, withdrawIn, workEnded, workOver, writeDecisions } from './decisions.js'
+import { answerable, askDecisions, MAX_OPEN_DECISIONS, REFLECTION_DECISION, reflectionDecisions, expireReflections, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingConversations, waitingFor, waitingInProject, withdrawIn, workEnded, workOver, writeDecisions } from './decisions.js'
 import { CATCH_UP_SCAN, catchUpSummary, type CatchUp } from './catchUp.js'
 import { recordMessageRead, type MessageReadKey } from './messageReadStats.js'
 import { DEFAULT_ROUTING_POLICY, type RoutingPolicy } from './routingPolicy.js'
@@ -3289,11 +3289,35 @@ export class SuperTabStore {
     })
   }
 
+  /** Closes as withdrawn the decisions still waiting in work that was over before #2454 closed them where the work ends
+   *  (Dee, 10-31): hidden from every list, they still counted toward the asker's open limit (MAX_OPEN_DECISIONS) and came
+   *  back when the task reopened. Run once at worker startup; remove it in the release after the one that ran it. Reads the
+   *  waiting decisions, then each Swarm's conversations they are in, and closes those whose work is over (decisions.ts
+   *  workOver: never open work, a project chat or a Buddy chat), asked by the time of that read. One Swarm's failure skips
+   *  that Swarm with a warning. The number closed. */
+  async withdrawEndedDecisions(): Promise<number> {
+    let closed = 0
+    for (const [tabId, conversationIds] of await waitingConversations(this.db)) {
+      try {
+        closed += await transaction(this.db, async tx => {
+          const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
+          if (row?.format !== 2) return 0
+          const { state } = await loadRow(tx, row, { groupIds: conversationIds }), now = this.now()
+          const over = conversationIds.filter(id => { const group = state.conversations.find(c => c.id === id); return !!group && workOver(state, group) })
+          return over.length ? withdrawIn(tx, tabId, over, now, now) : 0
+        })
+      } catch (error) {
+        logger.warn('[swarm-decisions] Swarm skipped', { tabId, error: error instanceof Error ? error.message : String(error) })
+      }
+    }
+    return closed
+  }
+
   /** Archives a finished group whose pull requests `checked` were all read merged or closed (archive.ts), only if it still
-   *  qualifies inside this write: no message since, no decision waiting and no pull request linked since the read. Its
-   *  waiting deliveries end, as a person's archive ends them. With `reviewOf`, the group the pass read as the one it
-   *  reviews, a review nobody is reviewing closes the same way once those of the work it reviews are too (tidy.ts
-   *  reviewClosable). True when it archived. */
+   *  qualifies inside this write: no message and no pull request linked since the read. A decision still waiting there
+   *  closes as withdrawn (decisions.ts withdrawIn), and its waiting deliveries end, as a person's archive ends them. With
+   *  `reviewOf`, the group the pass read as the one it reviews, a review nobody is reviewing closes the same way once those
+   *  of the work it reviews are too (tidy.ts reviewClosable). True when it archived. */
   async archiveFinished(tabId: string, groupId: string, checked: Readonly<Record<string, 'merged' | 'closed'>>, reviewOf?: string): Promise<boolean> {
     return transaction(this.db, async tx => {
       const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
