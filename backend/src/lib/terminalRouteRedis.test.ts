@@ -6,7 +6,7 @@ import type { UpBusMsg } from './tunnel.js'
 // so subscribing to another id here is what that other process would do.
 const url = process.env.REDIS_TEST_URL
 vi.hoisted(() => { if (process.env.REDIS_TEST_URL) process.env.REDIS_URL = process.env.REDIS_TEST_URL })
-// The only unit test with a real Redis client: the shared setup's never connects (noRedis.test-support.ts).
+// A real client: the shared setup's never connects (noRedis.test-support.ts).
 vi.unmock('ioredis')
 vi.mock('../utils/logger.js', () => ({ logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() } }))
 

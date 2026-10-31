@@ -1,8 +1,11 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { createServer, type AddressInfo } from 'node:net'
 import { Redis } from 'ioredis'
 import { redisWindowCounter } from './redisRateCounter.js'
+
+// A real client: the shared setup's never connects (noRedis.test-support.ts).
+vi.unmock('ioredis')
 
 // Against a real redis-server, so the script is what is tested. Skipped where none is installed (CI's Linux runners).
 const hasRedis = (() => { try { execFileSync('redis-server', ['--version'], { stdio: 'pipe' }); return true } catch { return false } })()

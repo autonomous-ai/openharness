@@ -3,8 +3,9 @@
 // even through another module, opened four real connections whose reconnect errors logged after the file ended ("Closing
 // rpc while onUserConsoleLog was pending").
 // Here every client stays unconnected: its commands fail at once, as in a Redis outage, and a subscription waits.
-// A file that stubs ioredis or the bus itself keeps its own stub; one that needs real clients calls vi.unmock('ioredis'):
-// against a fake server of its own (redisGuard.test.ts) or a real Redis (terminalRouteRedis.test.ts).
+// A file that stubs ioredis or the bus itself keeps its own stub. Every file that needs real clients calls
+// vi.unmock('ioredis'): against a fake server of its own (redisGuard.test.ts), or a real Redis (redisRateCounter.test.ts
+// where redis-server is installed; terminalRouteRedis.test.ts and superTabs/cacheRedis.test.ts with REDIS_TEST_URL).
 import { vi } from 'vitest'
 
 vi.mock('ioredis', async original => {
