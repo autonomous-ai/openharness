@@ -1089,7 +1089,8 @@ void main() {
       // Each `](` without a `)` once scanned to the end: about 3 s to draw.
       final watch = Stopwatch()..start();
       expect(SuperTabMessageText.tagsIn('${'](' * 15995}@dee.'), ['dee']);
-      expect(watch.elapsedMilliseconds, lessThan(50));
+      // Leave room for shared runners; the regression this guards took about 3 s (#2331).
+      expect(watch.elapsedMilliseconds, lessThan(500));
     });
 
     testWidgets('a tag by its full address is said, and is its pill', (

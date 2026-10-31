@@ -3,10 +3,11 @@ import type { openDaemon } from '../agentClient/daemon.js'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ELSEWHERE, heldLocalModels, localProbes, NO_SWARM_AGENTS_ON, offlineModels, routeTask, servedModels, STALL_RETRY_MS, stalled } from './routeCommand.js'
+import { ELSEWHERE, heldLocalModels, leftOut, localProbes, NO_SWARM_AGENTS_ON, offlineModels, routeTask, servedModels, STALL_RETRY_MS, stalled } from './routeCommand.js'
 import type { describeScmProject } from '../scm/scmProjects.js'
 import { admission, quotaOf, RELAYED_QUOTA, USED_UP_WINDOW } from './capacity.js'
-import { OTHER_REPOSITORY, type Catalog, type Probe } from './route.js'
+import { OTHER_REPOSITORY, type Catalog, type Probe, type RoutePlugin } from './route.js'
+import { MAKER_TIMEOUT_MS, type PluginInput, type PluginMaker } from './routePlugins.js'
 
 // Sonnet rated 3, as an owner who wants Sonnet Builders rates it (a build needs 3: route.ts buildRefusals), so the member these
 // specs probe can build; the specs of the floor itself use a table of their own ([floorPolicy]).
@@ -113,6 +114,64 @@ describe('routeTask', () => {
     const titles = (record.command.decision.candidates as Array<{ title: string }>).map(c => c.title)
     expect(titles).toContain('Multiply · Claude sonnet medium · remote-1')
     expect((result.alternatives as unknown[]).length).toBeLessThanOrEqual(2)
+  })
+  it('ranks with the plug-ins its makers make: their reasons in the answer and the record, a failed one named in the warnings', async () => {
+    const s = scoped()
+    const plugins: RoutePlugin[] = [{ name: 'Machine fit', adjust: c => c.kind === 'new' ? { strength: 5, reason: 'a fresh worktree here' } : null },
+      { name: 'Broken', adjust: () => { throw new Error('secret') } }]
+    const inputs: PluginInput[] = []
+    const result = await routeTask(input, s, where as never, opener(), () => 'op', undefined, plugins.map(p => ({ name: p.name, make: async (i: PluginInput) => { inputs.push(i); return p } })))
+    expect(result).toMatchObject({ ok: true, pick: { kind: 'new', notes: expect.arrayContaining(['Machine fit: a fresh worktree here']) },
+      why: expect.stringContaining('plug-ins'), warnings: ['w', 'The routing plug-in "Broken" was skipped: it failed. The route is ranked without it.'] })
+    expect(labels(s)[0]).toContain('Machine fit: a fresh worktree here')
+    expect(JSON.stringify(result)).not.toContain('secret')
+    // Each maker gets the task, the route's backend read, the group's history (read once, shared) and the agent's request.
+    expect(inputs[0]).toMatchObject({ conversationId: 'g1', assessment: { why: 'Endpoint.' }, read: { agentId: 'lead' }, catalog: { models: expect.any(Array) } })
+    expect(await inputs[0]!.history).toEqual({ ok: true, value: { decisions: [], attempts: [] } })
+    expect(s.mock.calls.filter(c => c[0].action === 'routeHistory')).toHaveLength(1)
+    expect(await inputs[0]!.request({ action: 'instructions' })).toMatchObject({ ok: true })
+    // Nothing can run: the answer still names the failed plug-in and the failed maker.
+    const none = await routeTask(input, scoped(), where as never, opener(), () => 'op', undefined, [
+      { name: 'Nobody', make: async () => ({ name: 'Nobody', adjust: () => ({ refuse: true, reason: 'no room' }) }) },
+      { name: 'Broken', make: async () => ({ name: 'Broken', candidates: () => { throw new Error('secret') } }) },
+      { name: 'Maker fails', make: async () => { throw new Error('secret') } }])
+    expect(none).toMatchObject({ error: 'NO_CANDIDATE', warnings: ['The routing plug-in "Maker fails" was skipped: its maker failed. The route is ranked without it.',
+      'The routing plug-in "Broken" was skipped: it failed. The route is ranked without it.'],
+      leftOut: expect.arrayContaining([{ machine: 'remote-1', reasons: expect.arrayContaining(['Nobody: no room']) }]) })
+  })
+  it('reads instructions without notes as none, and cuts a long reason a machine is left out for', async () => {
+    const s = scoped({ instructions: { ok: true, value: { projectId: 'p1', revision: 1, text: 'Work by this.' } } })
+    expect(await routeTask(input, s, where as never, opener(), () => 'op')).toMatchObject({ instructions: { revision: 1, notes: [] } })
+    expect(leftOut([{ title: 't', reason: 'x'.repeat(301), machine: 'm' }], [])).toEqual([{ machine: 'm', reasons: [`${'x'.repeat(299)}…`] }])
+  })
+  it('answers exactly as before with no makers, and with makers that have nothing to say', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(Date.parse('2026-10-31T04:00:00Z'))
+      const answer = async (makers?: PluginMaker[]) => { const s = scoped(); return { answer: await routeTask(input, s, where as never, opener(), () => 'op', undefined, makers), record: recorded(s) } }
+      const before = JSON.stringify(await answer())
+      expect(JSON.stringify(await answer([]))).toBe(before)
+      expect(JSON.stringify(await answer([{ name: 'Idle', make: async () => null }]))).toBe(before)
+    } finally { vi.useRealTimers() }
+  })
+  it('a slow or failing maker is left out with a warning, and the route answers as it would without it', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(Date.parse('2026-10-31T04:00:00Z'))
+    let plain: Answer
+    try { plain = await routeTask(input, scoped(), where as never, opener(), () => 'op') } finally { vi.useRealTimers() }
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
+    try {
+      vi.setSystemTime(Date.parse('2026-10-31T04:00:00Z'))
+      const pending = routeTask(input, scoped(), where as never, opener(), () => 'op', undefined, [
+        { name: 'Slow', make: () => new Promise(() => {}) }, { name: 'Fails', make: async () => { throw new Error('secret') } }])
+      await vi.advanceTimersByTimeAsync(MAKER_TIMEOUT_MS + 1)
+      vi.setSystemTime(Date.parse('2026-10-31T04:00:00Z'))
+      const { warnings, ...rest } = await pending as Answer
+      const { warnings: plainWarnings, ...plainRest } = plain
+      expect(rest).toEqual(plainRest)
+      expect(warnings).toEqual([...(plainWarnings as string[]), 'The routing plug-in "Slow" was skipped: its maker took longer than 3 s. The route is ranked without it.',
+        'The routing plug-in "Fails" was skipped: its maker failed. The route is ranked without it.'])
+    } finally { vi.useRealTimers() }
   })
   // A member at work is not offered; one whose task was lost is, with a note ('a member whose last task was lost').
   it('does not offer a member whose task is working', async () => {
