@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { CODEX_BUDDY_REFUSAL } from './buddyContract.js'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
-import { createSuperTab, visibleState, type Actor, type Conversation } from './model.js'
+import { createSuperTab, stableId, visibleState, type Actor, type Conversation } from './model.js'
 import { canReadGroup, canWatchAgent, isConfidential, readsRecordsIn } from './projects.js'
 import { CLOSED_CHAT_ANSWERED_NOTICE } from './decisions.js'
 import { buddyChatId } from './buddies.js'
@@ -123,7 +123,9 @@ describe('what a Buddy reads', () => {
   it('shows no machines, starts or rules in its Swarm read: only names in the roster', () => {
     const f = setup()
     machine(f, 'peer-mac', 'peer')
-    f.run({ type: 'rule.set', projectId: f.app.projectId, rule: { kind: 'preferIdle' }, text: 'Idle first.' })
+    // A rule an older client saved before project instructions, still in the state.
+    f.state.rules = [{ id: 'r1', projectId: f.app.projectId, rule: { kind: 'preferIdle' }, text: 'Idle first.', askedBy: 'owner', askedIn: null,
+      addedBy: 'person:owner', createdAt: '' }]
     // A start names the machine and the folder on it: a workgroup the Buddy reads still shows none of its starts.
     f.state.starts = [{ id: 'start', creationId: 'c', actorKey: 'k', contributorId: 'owner', membershipGeneration: 'g', machineOwnerId: 'owner',
       hostGrant: null, harnessId: null, dispatched: false, error: null,
@@ -390,6 +392,16 @@ describe('a Buddy\'s start on its machine', () => {
     expect(sweepLiveness(f.state, 1000 + 10 * 60_000)).toEqual([])
     expect(f.state.starts!.find(s => s.id === added.result.startId)!.error).toBeNull()
   })
+
+  // Security review L1: its name and model are its owner's, so its host's failure stays in their chat. The coordinator's
+  // copy, for a task with no lead, put both in front of the PM and whoever watches its terminal.
+  it('tells a failure its host reports to its owner alone, in their chat: never the coordinator', () => {
+    const f = fresh()
+    const added = addBuddy(f, peer, f.app.projectId)
+    const rows = f.run({ type: 'agent.startFailed', startId: added.result.startId as string, error: 'peer-mac: /Users/peer/secret failed' }, peer).messages
+    expect(rows.map(r => r.conversationId)).toEqual([added.result.conversationId])
+    expect(rows.flatMap(r => r.recipients)).toEqual([])
+  })
 })
 
 describe('what a Buddy may do', () => {
@@ -579,20 +591,40 @@ describe('a Buddy is never a worker', () => {
     expect(() => f.run({ type: 'conversation.agent', conversationId: f.group, agentId: 'buddy', present: true, lead: false })).toThrow('A Buddy stays in its own chat')
   })
 
-  it('is left alone by the idle tidy-up: it waits for its owner', async () => {
-    const { stopIdleWorkers } = await import('./tidy.js')
+  // Security review S2: agent.add naming a session already in the Swarm skipped conversation.agent's checks. An agent never
+  // adds one (it starts a new one); a person adding one meets the same checks.
+  it('is never added again elsewhere by agent.add, nor anyone added to its chat, by an agent or a person', () => {
+    const f = setup()
+    const add = (conversationId: string, harnessId: string) =>
+      ({ type: 'agent.add', conversationId, machineId: 'machine', harnessId, name: 'Helper', configuration, lead: false }) as Command
+    // The Buddy keyed as the store keys every session, by its machine and harness.
+    const buddyId = stableId('machine', 'buddy-harness')
+    f.state.agents.find(a => a.id === 'buddy')!.id = buddyId
+    group(f, f.chat).agentIds = [buddyId]
+    const worker = f.run(add(f.group, 'worker-harness'), peer).result.agentId as string
+    const before = structuredClone(f.state)
+    expect(() => f.run(add(f.group, 'buddy-harness'), peer)).toThrow(expect.objectContaining({ code: 'BUDDY_CHAT_ONLY' }))
+    expect(() => f.run(add(f.app.conversationId, 'buddy-harness'), peer)).toThrow(expect.objectContaining({ code: 'BUDDY_CHAT_ONLY' }))
+    expect(() => f.run(add(f.chat, 'worker-harness'), peer)).toThrow(expect.objectContaining({ code: 'BUDDY_CHAT_FIXED' }))
+    // An agent the Buddy's person contributed, with the grant the store reads for it, adds nothing.
+    for (const conversationId of [f.group, f.app.conversationId]) {
+      expect(() => f.run(add(conversationId, 'buddy-harness'), agentActor(worker), { contribution: { machineOwnerId: 'host', contributorId: 'peer' } }))
+        .toThrow(expect.objectContaining({ code: 'HUMAN_REQUIRED' }))
+    }
+    expect(f.state).toEqual(before)
+  })
+
+  it('is never told as idle: it waits for its owner', async () => {
+    const { idleNotices } = await import('./tidy.js')
     const f = setup(), now = 10 * 3_600_000
     machine(f, 'machine', 'owner')
     const buddy = f.state.agents.find(a => a.id === 'buddy')!
     buddy.startedSession = { creationId: 'c', sessionId: 's', createdAt: new Date(0).toISOString() }
-    // An Engineer just like it, in the same chat, idle as long and reported clean, is stopped: the Buddy is not.
+    // An Engineer just like it, in the same chat, idle as long, is told to the coordinator: the Buddy is not.
     f.state.agents.push({ ...structuredClone(buddy), id: 'builder', harnessId: 'builder-harness', buddyOf: undefined })
     group(f, f.chat).agentIds.push('builder')
-    Object.assign(f.state.machines![0]!.observation!, { receivedAt: now, runningHarnessIds: ['buddy-harness', 'builder-harness'],
-      harnessUncommitted: { 'buddy-harness': false, 'builder-harness': false } })
-    // Its line, and the Lead's copy in its own chat (tidy.ts), name only the Engineer.
-    expect([...new Set(stopIdleWorkers(f.state, f.app.projectId, now, new Set()).map(row => row.source?.agentId))]).toEqual(['builder'])
-    expect(buddy.workDecision).toBeUndefined()
+    expect([...new Set(idleNotices(f.state, f.app.projectId, now, new Set()).map(row => row.source?.agentId))]).toEqual(['builder'])
+    expect(buddy.idleNoticedAt).toBeUndefined()
   })
 })
 
@@ -696,15 +728,16 @@ describe('the PM\'s private line to a person (Ken, 10-29)', () => {
     expect(f.run(tell('peer', 'Again.'), agentActor(f.pm)).messages[0]).toMatchObject({ conversationId: chat.id, recipients: [] })
   })
 
-  it('is a project Lead\'s alone, to a person in the Swarm, and needs a line', () => {
+  it('is any agent\'s of the project, never a person\'s, to a person in the Swarm, and needs a line', () => {
     const f = fresh()
     const worker = f.run({ type: 'agent.add', conversationId: f.group, harnessId: 'worker-harness', machineId: 'machine', name: 'Worker',
       configuration, lead: false }).result.agentId as string
-    expect(() => f.run(tell(), peer)).toThrow('Only a project\'s Lead')
-    expect(() => f.run(tell(), agentActor(worker))).toThrow('Only a project\'s Lead')
+    expect(() => f.run(tell(), peer)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
     expect(() => f.run(tell('stranger'), agentActor(f.pm))).toThrow('person in this Swarm')
     expect(() => f.run(tell('peer', '  '), agentActor(f.pm))).toThrow()
     expect(f.state.conversations.filter(c => c.kind === 'buddy')).toEqual([])
+    // Who tells a person is workflow (project instructions, phase 4).
+    expect(f.run(tell(), agentActor(worker)).messages).toEqual([expect.objectContaining({ text: 'Your fix is merged.', recipients: [] })])
   })
 
   it('reaches only a person who reads the Lead\'s project, and only in that project', () => {

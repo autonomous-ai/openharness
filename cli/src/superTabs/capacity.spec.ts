@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest'
-import { admission, quotaOf, quotaUnknownReason, readCapabilities, START_REQUIREMENTS, startRequirements } from './capacity.js'
+import { admission, quotaOf, quotaUnknownReason, readCapabilities, START_REQUIREMENTS, startRequirements, USED_UP_WINDOW } from './capacity.js'
 const requirements = { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: ['/dev/test'], quotaRequired: false }
 it('uses the destination filesystem and reports missing tools/devices without executing commands', async () => {
   const deps = { resources: vi.fn(async () => ({ cpuPercent: 25, memoryTotalBytes: 1000, memoryUsedBytes: 300 })),
@@ -36,7 +36,9 @@ it('keeps unknown quota distinct from unused quota and honors all limiting windo
   const capacity = { resources: { cpuPercent: 95, memoryTotalBytes: 1000, memoryUsedBytes: 950, projectDiskFreeBytes: 10 }, tools: {}, devices: {} }
   const result = admission(capacity, { installed: true }, quota, requirements)
   expect(result.allowed).toBe(false)
-  expect(result.reasons).toHaveLength(6)
+  // CPU, memory, disk, the tool and the device; the used-up weekly window is information (project instructions, phase 4).
+  expect(result.reasons).toHaveLength(5)
+  expect(result.unknown).toContain(USED_UP_WINDOW)
   expect(admission({}, { installed: true, signedIn: false }, quotaOf({}, 'codex', false), requirements).reasons).not.toContain('The selected agent engine is not signed in on this machine.')
   expect(admission({}, {}, quotaOf({}, 'claude', false), { ...requirements, quotaRequired: true }).reasons).toContain('The requested subscription allowance could not be verified.')
 })
@@ -102,4 +104,15 @@ it('admits a Product Manager, Buddy or template start on a busy CPU, as a routed
     expect(admission({ ...busy, resources: { ...busy.resources, memoryPressure: 'critical' } }, { installed: true }, quotaOf({}, 'claude', false), wanted).reasons)
       .toEqual(['The machine reports critical memory pressure.'])
   }
+})
+
+// Project instructions, phase 4: quota is information, not a gate. A start on a used-up account goes ahead and waits for
+// the reset there; the admission says so.
+it('starts on a used-up account and says so', () => {
+  const used = quotaOf({ providers: [{ provider: 'claude', outcome: 'answered', httpStatus: 200, body: { five_hour: { utilization: 100 } } }] }, 'claude', false)
+  const fine = { resources: { cpuPercent: 10, memoryTotalBytes: 1000, memoryUsedBytes: 100, projectDiskFreeBytes: 500 }, tools: {}, devices: {} }
+  const result = admission(fine, { installed: true }, used, { ...requirements, tools: [], devices: [] })
+  expect(result).toMatchObject({ allowed: true, reasons: [] })
+  expect(result.unknown).toContain(USED_UP_WINDOW)
+  expect(USED_UP_WINDOW).toMatch(/used-up usage window/)
 })

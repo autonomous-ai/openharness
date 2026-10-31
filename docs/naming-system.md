@@ -56,10 +56,11 @@ and **Browser**. Technical documentation may still call the terminal interface a
 | **Swarm** | A collaborative tab containing projects, people, agents and contributed machines. Invite-only by default; its owner can enable joining by email domain or a shared link. | Open your company Swarm beside your regular tabs. |
 | **Workspace** | The level above Swarms: several Swarms on one account and the people who may be in them, each with a role (owner, admin, member or guest). A person can belong to several Workspaces. Not the Harness **Team account**, a Mac's privacy-checked account for teammates' work. System name: workspace. | Create the Swarm in your company Workspace. |
 | **Project in a Swarm** | An initiative with its own product manager, repository, sharing and workgroups. | Discuss Lamp OS with its product manager; expand it to follow a workgroup. |
-| **Instructions** | The visible name for a project's skill set and each role's text. System name: skill. | Open Instructions; edit Product Manager instructions. |
-| **Product Manager** | The agent coordinating a Swarm project. Use **PM** in a compact role badge. System name: lead. | Message Product Manager. |
-| **Engineer** | An agent carrying out project work. Use **Dev** in a compact role badge. System name: builder. | Atlas is an engineer on Lamp OS. |
-| **Reviewer** | An agent that reviews project work. Use **Rev** in a compact role badge. System name: reviewer. | Atlas is a reviewer on Lamp OS. |
+| **Instructions** | The visible name for a project's instruction document (on an older backend, its skill set). System name: instructions; the agent skills are `swarm-tools` and `swarm-instructions`. See [Instructions](swarms.md#instructions). | Open Instructions; edit the Reviewer section. |
+| **Product Manager** | The agent coordinating a Swarm project. A project may name it otherwise, and then that name replaces Product Manager wherever the screen names the coordinator; a badge shows the agent's own role name. Use **PM** in a compact role badge for the default name. System name: coordinator (the saved and wire value stays `lead`). | Message Product Manager. |
+| **Engineer** | An agent carrying out project work. Use **Dev** in a compact role badge. System name: agent (wire `dev`). | Atlas is an engineer on Lamp OS. |
+| **Reviewer** | An agent that reviews project work. Use **Rev** in a compact role badge. System name: agent (wire `review`, sent only for an older client's start). | Atlas is a reviewer on Lamp OS. |
+| **Notice** | A message the server posts to the coordinator about what happened. See [Notices to the coordinator](swarms.md#notices-to-the-coordinator). | Atlas's task is Ready for review. |
 | **Workgroup** | A numbered conversation for an independently assignable outcome within a project. | Follow #12 Offline editing. |
 | **Points** | A person's or agent's score in a Swarm's rankings. Other measures are lowercase words after their number, joined by a spaced middle dot; a measure at zero is left out. Presentation follows [Numbers and rankings](../desktop/design/desktop-design-system.md#numbers-and-rankings). | 42 points; 3 shipped · 2 unblocked. |
 | **Pane** | A visible view of a harness, terminal, or viewer. | Split right; close pane. |
@@ -75,17 +76,19 @@ and **Browser**. Technical documentation may still call the terminal interface a
 | **Conversation** | An agent's conversation history, including histories started outside Harness. | Provider usage counts native conversations. |
 | **Recorded run** | A saved demonstration of a harness doing work. | Watch the recorded run in the Store. |
 
-The three Swarm roles, on screen and inside the system:
+The template's roles, on screen and inside the system. These are the defaults of the
+built-in instructions; a project's document may rename or replace them.
 
 | Role | On screen | Short label | System name | Skill |
 | --- | --- | --- | --- | --- |
-| Coordinates | Product Manager | PM | lead | swarm-lead |
-| Builds | Engineer | Dev | builder | swarm-dev |
-| Reviews | Reviewer | Rev | reviewer | swarm-review |
+| Coordinates | Product Manager | PM | coordinator (wire `lead`) | `swarm-instructions` |
+| Builds | Engineer | Dev | agent (wire `dev`) | `swarm-instructions` |
+| Reviews | Reviewer | Rev | agent (wire `review`, sent only for an older client's start) | `swarm-instructions` |
 
-People see the on-screen name and short label. Agent-facing text (prompts, skills,
-CLI help) may use the system names Lead, Builder and Reviewer. The Lead does only
-answers, lookups and work under 15 minutes itself, and routes the rest.
+Roles are names in the project's document; the server checks none of them. Badges show
+the role name cut to 12 characters. People see the on-screen name and short label.
+Agent-facing text (prompts, skills, CLI help) may use the system names coordinator and
+agent. The wire values `lead | dev | review | buddy` stay for older CLIs.
 
 Use lowercase *harness* and *tab* in ordinary sentences. The action and context
 distinguish the two uses of *harness*: install or update a package in the Store;
@@ -149,7 +152,7 @@ A click on the row expands it, and its labeled details are in the right-click me
 on a touch screen). Expanded, it shows agents with their names, role badges
 and status, followed by known resources and model allowances. Offline machines stay in the
 same list and omit stale readings. Rows share the projects' alignment and full-width highlight.
-The stored `lead` and `builder` routing roles and native harness names remain compatible.
+The wire role values `lead | dev | review | buddy` and native harness names remain compatible for older CLIs.
 People, agents and machines belong to the Swarm. A project's **Public** visibility means everyone
 in that Swarm; **Private** means its owner and explicitly invited project members. Swarms are
 invite-only by default. Their owner can allow signed-in people with a chosen email domain or a

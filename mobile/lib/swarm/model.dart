@@ -33,6 +33,18 @@ bool superTabWorkWaits(Object? status) =>
 String superTabWorkStatusLabel(String status) =>
     status == 'blocked' ? 'stuck' : status.replaceAll('_', ' ');
 
+/// What a project calls its coordinator when the backend names none (one from before project instructions), and
+/// what every new project starts with.
+const kDefaultCoordinatorName = 'Product Manager';
+
+/// A role's compact badge: the name when it is 12 characters or fewer, else its first 11 and "…".
+String superTabRoleBadge(String roleName) {
+  final characters = roleName.runes.toList();
+  return characters.length <= 12
+      ? roleName
+      : '${String.fromCharCodes(characters.take(11))}…';
+}
+
 class SuperTabPerson {
   SuperTabPerson.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
@@ -125,6 +137,7 @@ class SuperTabAgent {
           row['machineOwnerId'] as String? ?? _text(row, 'contributorId'),
       role = row['role'] as String?,
       roleId = row['roleId'] as String?,
+      roleName = row['roleName'] as String?,
       buddyOf = switch (row['buddyOf']) {
         {'personId': final String person} => person,
         _ => null,
@@ -181,7 +194,9 @@ class SuperTabAgent {
   // Absent until the backend sends one; an agent without a role is a Builder.
   final String? role;
   final String? roleId;
-  bool get isReviewer => role == 'reviewer';
+
+  /// The role the project's document gives it; null from a backend before project instructions.
+  final String? roleName;
 
   /// A person's private agent for one project (spec: Buddies, 10-28); it
   /// never takes work. The backend gives it no role, only its person.
@@ -378,24 +393,6 @@ class SuperTabConversation {
   final Map<String, dynamic>? leadAction;
 }
 
-class SuperTabRole {
-  SuperTabRole.fromJson(Map<String, dynamic> row)
-    : id = _text(row, 'id'),
-      name = _text(row, 'name'),
-      kind = _text(row, 'kind'),
-      version = _text(row, 'version'),
-      defaults = row['defaults'] is Map
-          ? Map.unmodifiable(superTabMap(row['defaults']))
-          : null;
-
-  final String id, name, kind, version;
-
-  /// The engine, model and effort its agents start on when a start names
-  /// none (backend projects.ts RoleDefaults). Read and kept as the desktop's
-  /// model does; the phone shows none of it.
-  final Map<String, dynamic>? defaults;
-}
-
 class SuperTabProject {
   SuperTabProject.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
@@ -403,15 +400,10 @@ class SuperTabProject {
       ownerId = _text(row, 'ownerId'),
       leadConversationId = _text(row, 'leadConversationId'),
       skillMode = row['skillMode'] == 'default' ? 'default' : 'orchestration',
-      skillSet =
-          const {'default', 'orchestration', 'custom'}.contains(row['skillSet'])
-          ? row['skillSet'] as String
-          : row['skillMode'] == 'default'
-          ? 'default'
-          : 'orchestration',
-      roles = row['roles'] is List
-          ? _list(row['roles'], SuperTabRole.fromJson)
-          : null,
+      coordinatorName = row['coordinatorName'] as String?,
+      instructionsRevision =
+          (row['instructionsRevision'] as num?)?.toInt() ?? 0,
+      notesRevision = (row['notesRevision'] as num?)?.toInt() ?? 0,
       isPrivate = row['visibility'] == 'private',
       memberIds = [
         for (final member in row['members'] as List? ?? const [])
@@ -427,9 +419,16 @@ class SuperTabProject {
           ? Map.unmodifiable(superTabMap(row['repository']))
           : null;
   final String id, name, ownerId, leadConversationId;
+
+  /// Read as the desktop's model reads it; the phone starts no agents.
   final String skillMode;
-  final String skillSet;
-  final List<SuperTabRole>? roles;
+
+  /// What this project calls its coordinator; null from a backend before project instructions.
+  final String? coordinatorName;
+  final int instructionsRevision, notesRevision;
+
+  /// Whether the backend keeps an instruction document for it.
+  bool get hasInstructions => coordinatorName != null;
   final bool isPrivate;
   final List<String> memberIds;
 
@@ -610,33 +609,29 @@ class SuperTabSnapshot {
 
   bool isLead(String agentId) => leadProjectForAgent(agentId) != null;
 
-  SuperTabRole? activeRoleForAgent(SuperTabAgent agent) {
-    final leadProject = leadProjectForAgent(agent.id);
-    final roleKind = leadProject != null
-        ? 'lead'
-        : agent.isReviewer
-        ? 'reviewer'
-        : 'builder';
-    final project = leadProject ?? projectById(agent.projectId);
-    if (project?.skillSet != 'custom') return null;
-    final roles = project?.roles ?? const <SuperTabRole>[];
-    return roles
-            .where((role) => role.id == agent.roleId && role.kind == roleKind)
-            .firstOrNull ??
-        roles.where((role) => role.kind == roleKind).firstOrNull;
+  /// What [projectId] calls its coordinator: its `coordinatorName`, or [kDefaultCoordinatorName] from a backend
+  /// that names none.
+  String coordinatorNameOf(String projectId) =>
+      projectById(projectId)?.coordinatorName ?? kDefaultCoordinatorName;
+
+  /// The role [agentId] goes by, and its badge: the role the project's document gives it, or, from a backend before
+  /// project instructions, its kind's (Product Manager/PM, Reviewer/Rev, Engineer/Dev). Null for an unknown agent and
+  /// a Buddy, which has no role.
+  ({String name, String badge})? roleOf(String agentId) {
+    final agent = this.agent(agentId);
+    if (agent == null || agent.isBuddy) return null;
+    final name = agent.roleName?.trim() ?? '';
+    if (name.isNotEmpty) return (name: name, badge: superTabRoleBadge(name));
+    if (isLead(agentId)) return (name: 'Product Manager', badge: 'PM');
+    if (agent.role == 'reviewer') return (name: 'Reviewer', badge: 'Rev');
+    return (name: 'Engineer', badge: 'Dev');
   }
 
   String? leadProtectionReason(String agentId) {
     final project = leadProjectForAgent(agentId);
     if (project == null) return null;
-    return '${agentName(agentId)} is the Product Manager of project ${project.name}. Delete the project first.';
+    return '${agentName(agentId)} is the ${coordinatorNameOf(project.id)} of project ${project.name}. Delete the project first.';
   }
-
-  /// The agents of a workgroup whose role is Reviewer.
-  List<SuperTabAgent> reviewers(SuperTabConversation group) => [
-    for (final id in group.agentIds)
-      if (agent(id) case final a? when a.isReviewer) a,
-  ];
 
   String agentName(String id, {String fallback = 'Agent'}) {
     final found = agent(id);
@@ -866,9 +861,7 @@ class SuperTabRoute {
     this.decisionId,
     this.via,
     this.p,
-    this.belowFloor,
     this.why,
-    this.fallback,
     this.pick,
     this.alternatives,
   );
@@ -889,9 +882,7 @@ class SuperTabRoute {
       decisionId,
       via is String ? via : 'order',
       s['p'] is num ? (s['p'] as num).toDouble() : null,
-      s['belowFloor'] == true,
       why is String ? why : '',
-      s['fallback'] is String ? s['fallback'] as String : null,
       SuperTabRouteChoice(pick['id'] as String, pick['title'] as String),
       [
         if (alternatives is List)
@@ -902,12 +893,10 @@ class SuperTabRoute {
     );
   }
 
-  /// The Lead's reason for the task. Why the policy order decided, when it did,
-  /// is [fallback]: `unsure` or `unavailable`.
+  /// The reason for the task. An older backend's quality-floor flag and
+  /// policy-order fallback are not read: nothing is refused for a floor.
   final String decisionId, via, why;
-  final String? fallback;
   final double? p;
-  final bool belowFloor;
   final SuperTabRouteChoice pick;
   final List<SuperTabRouteChoice> alternatives;
 }
@@ -998,6 +987,7 @@ class SuperTabDelivery {
   final DateTime? claimFailingSince;
   final int? claimFailures;
   final DateTime? holdSince, deliveredAt, answeredAt, updatedAt;
+
   static DateTime? _date(Object? value) =>
       value is String ? DateTime.tryParse(value) : null;
   bool get pending => status == 'queued' || status == 'claimed';

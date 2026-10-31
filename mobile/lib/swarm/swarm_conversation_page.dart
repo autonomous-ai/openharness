@@ -845,6 +845,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       name: _nameOf(c, m),
       look: _lookOf(c, m),
       role: m.fromAgent && !pm ? view.roles[m.authorId] : null,
+      pm: m.fromAgent && view.leads.contains(m.authorId),
       mentions: view.mentions,
       tagged: _taggedOf(c, m).keys.toList(),
       taggedAddresses: _taggedOf(c, m),
@@ -1310,7 +1311,10 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
 
   String _nameOf(SwarmConversation c, SuperTabMessage m) {
     final name = c.reader.snapshot?.authorName(m) ?? m.authorName;
-    return swarmIsPmLine(c.reader, m) ? '$name (PM) → you' : name;
+    if (!swarmIsPmLine(c.reader, m)) return name;
+    // The coordinator's own badge, whatever its role is called.
+    final badge = c.reader.snapshot?.roleOf(m.authorId)?.badge ?? 'PM';
+    return '$name ($badge) → you';
   }
 
   SwarmLook _lookOf(SwarmConversation c, SuperTabMessage m) =>
@@ -1491,12 +1495,14 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
           final line = root == m.id ? c.thread(m.id) : null;
           final faces = line == null
               ? const <SwarmThreadFace>[]
-              : swarmThreadFaces(snapshot, line, roles: view.roles);
+              : swarmThreadFaces(snapshot, line);
           final name = _nameOf(c, m);
           final look = _lookOf(c, m);
           final pm = swarmIsPmLine(c.reader, m);
           // "River (PM) → you" says the role already.
           final role = m.fromAgent && !pm ? view.roles[m.authorId] : null;
+          // The coordinator's face, whatever its role is called.
+          final coordinator = m.fromAgent && view.leads.contains(m.authorId);
           // The PM cannot read this chat: its line is answered in the
           // project chat, where everyone reads it (Tony, mockup A, 10-29).
           final answerIn = pm && view.canPost ? view.buddyProject : null;
@@ -1512,7 +1518,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
           final group = c.conversation;
           final card = snapshot == null || group == null
               ? null
-              : SwarmCardFacts.of(snapshot, group, m.id, c.messages);
+              : SwarmCardFacts.of(snapshot, group, m.id);
           return _row(
             key,
             (
@@ -1521,6 +1527,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               name,
               swarmLookKey(look),
               role,
+              coordinator,
               grouped,
               lit,
               followed,
@@ -1549,6 +1556,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               name: name,
               look: look,
               role: role,
+              pm: coordinator,
               mentions: view.mentions,
               tagged: tagged.keys.toList(),
               taggedAddresses: tagged,
@@ -1635,6 +1643,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
         case _AskEntry(:final need, :final grouped):
           final asker = snapshot == null ? null : swarmAsker(snapshot, need);
           final role = asker == null ? null : view.roles[asker.id];
+          final coordinator = asker != null && view.leads.contains(asker.id);
           return _row(
             key,
             (
@@ -1642,6 +1651,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               grouped,
               asker?.id,
               role,
+              coordinator,
               swarmLookKey(_agentLook(asker)),
               _decisionTarget == need.decision.id,
             ),
@@ -1653,6 +1663,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                 grouped: grouped,
                 askerId: asker?.id,
                 role: role,
+                pm: coordinator,
                 picture: asker?.avatar,
               ),
             ),
@@ -1980,6 +1991,7 @@ class _ChatView {
     required this.names,
     required this.mentions,
     required this.roles,
+    required this.leads,
     required this.mentionable,
     required this.decisions,
     required this.buddyProject,
@@ -2037,6 +2049,10 @@ class _ChatView {
         for (final agent in agents)
           agent.id: ?swarmAgentRole(snapshot!, agent.id),
       },
+      leads: {
+        for (final agent in agents)
+          if (snapshot!.isLead(agent.id)) agent.id,
+      },
       mentionable: [for (final agent in c.mentionable) agent.id],
       decisions: before != null && _sameAsks(before.decisions, decisions)
           ? before.decisions
@@ -2053,7 +2069,7 @@ class _ChatView {
                 ?group.cards.task,
                 for (final pull in group.cards.pullRequests) pull.messageId,
               })
-                id: ?SwarmCardFacts.of(snapshot, group, id, c.messages),
+                id: ?SwarmCardFacts.of(snapshot, group, id),
             },
     );
   }
@@ -2069,8 +2085,13 @@ class _ChatView {
   final List<String> names;
   final SwarmMentions mentions;
 
-  /// Each agent's compact role, by agent id: PM, Dev or Rev.
+  /// Each agent's compact role badge, by agent id: the role it goes by, cut
+  /// to 12 characters.
   final Map<String, String> roles;
+
+  /// The agents that coordinate a project: they wear manager blue, whatever
+  /// their role is called.
+  final Set<String> leads;
 
   /// The agents a post can mention, by id.
   final List<String> mentionable;
@@ -2116,6 +2137,7 @@ class _ChatView {
       other.archived == archived &&
       listEquals(other.names, names) &&
       mapEquals(other.roles, roles) &&
+      setEquals(other.leads, leads) &&
       listEquals(other.mentionable, mentionable) &&
       identical(other.decisions, decisions) &&
       other.buddyProject == buddyProject &&
@@ -2329,21 +2351,17 @@ Set<String> swarmGroupedMessages(List<SuperTabMessage> messages) {
   return joined;
 }
 
-/// An agent's role as its compact badge says it (the Naming System): PM for
-/// a project's Product Manager, Rev for a reviewer, Dev for an engineer;
-/// none for a person, a Buddy (no engineer, though it runs as one; Desktop
-/// shows it none either), or an agent no longer in the Swarm.
+/// An agent's role as its compact badge says it: the role the project's
+/// document gives it, cut to 12 characters (an older backend's PM, Rev or
+/// Dev); none for a person, a Buddy (Desktop shows it none either), or an
+/// agent no longer in the Swarm.
 String? swarmRole(SuperTabSnapshot snapshot, SuperTabMessage message) {
   if (!message.fromAgent) return null;
   return swarmAgentRole(snapshot, message.authorId);
 }
 
-String? swarmAgentRole(SuperTabSnapshot snapshot, String agentId) {
-  if (snapshot.isLead(agentId)) return 'PM';
-  final agent = snapshot.agent(agentId);
-  if (agent == null || agent.isBuddy) return null;
-  return agent.isReviewer ? 'Rev' : 'Dev';
-}
+String? swarmAgentRole(SuperTabSnapshot snapshot, String agentId) =>
+    snapshot.roleOf(agentId)?.badge;
 
 /// The agent asking [need], found by the name it asked under: a decision
 /// names its asker, not their id.
@@ -2656,6 +2674,7 @@ class _Ask extends StatelessWidget {
     required this.grouped,
     required this.askerId,
     required this.role,
+    required this.pm,
     required this.picture,
   });
 
@@ -2668,6 +2687,9 @@ class _Ask extends StatelessWidget {
 
   /// Its asker in the Swarm and their role; null for one no longer in it.
   final String? askerId, role;
+
+  /// Its asker is its project's coordinator, whatever its role is called.
+  final bool pm;
 
   @override
   Widget build(BuildContext context) {
@@ -2685,7 +2707,7 @@ class _Ask extends StatelessWidget {
           name: decision.askerName,
           id: askerId ?? decision.askerName,
           agent: true,
-          pm: role == 'PM',
+          pm: pm,
           picture: picture,
         ),
         header: SwarmMessageHeader(

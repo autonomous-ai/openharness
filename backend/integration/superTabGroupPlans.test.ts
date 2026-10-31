@@ -17,7 +17,6 @@ import { recentDormantGroups } from '../src/superTabs/leaderboard/read.js'
 import { decisionsWaiting, listDecisions } from '../src/superTabs/decisions.js'
 import { GROUP_INDEX, groupsBy, listGroupIndexes, retryStaleIndex } from '../src/superTabs/parts/indexed.js'
 import { logger } from '../src/utils/logger.js'
-import { IDLE_STOP_MS } from '../src/superTabs/tidy.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, owner as ownerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
@@ -287,7 +286,7 @@ describe('hot SwarmGroup reads name their index and read only what they return (
     }
   })
 
-  it('a Lead\'s poll with a digest due reads the quiet conversations its project finished since the last one, and those its Reviewers are in, by index', async () => {
+  it('a Lead\'s poll with a digest due reads the quiet conversations its project finished since the last one by index, and none for its agents', async () => {
     clock = MIGRATED + 60_000
     const expected = s.quietLead.filter(r => r.lastActivityAt.getTime() >= clock - DAY).length
     const all = await profiled(() => store.deliveries(owner, s.tabId, s.lead))
@@ -296,24 +295,9 @@ describe('hot SwarmGroup reads name their index and read only what they return (
     expectIndexed(reads)
     expect(reads[0]!.returned).toBe(expected)
     expect(reads[0]!.docsExamined, JSON.stringify(reads)).toBeLessThanOrEqual(expected)
-    // The same poll reads the quiet conversations its project's kept Reviewer is in, through the Reviewer's conversations: no
-    // index has both. Only those active in the last 15 minutes can still keep it (tidy.ts); none reviews open work here.
-    const asleep = where(all, ['tabId', 'dormant', 'agentIds'])
-    expect(asleep).toHaveLength(1)
-    expectIndexed(asleep)
-    const recent = [...s.quietLead, ...s.quietOther].filter(r => r.lastActivityAt.getTime() > clock - IDLE_STOP_MS).length
-    expect(asleep[0]!.returned).toBe(recent)
-    const its = await db.swarmGroup.count({ where: { tabId: s.tabId, agentIds: { has: s.reviewer } } })
-    expect(asleep[0]!.docsExamined, JSON.stringify(asleep)).toBeLessThanOrEqual(its)
-  })
-
-  it('a Lead\'s poll reads none of the briefs or checks of the quiet conversations its Reviewers are in (Diego, 10-29)', async () => {
-    clock = MIGRATED + 60_000
-    const reads = where(await profiled(() => store.deliveries(owner, s.tabId, s.lead)), ['tabId', 'dormant', 'agentIds'])
-    expect(reads).toHaveLength(1)
-    // Each conversation here has a 2000-byte brief: a row that carried one, or its checks, would pass this alone.
-    expect(reads[0]!.returned).toBeGreaterThan(0)
-    expect(reads[0]!.bytes / reads[0]!.returned, JSON.stringify(reads)).toBeLessThan(500)
+    // It reads no quiet conversation for its project's agents, its kept Reviewer's included: only loaded tasks' active work
+    // keeps an agent from being idle, and the server stops none (tidy.ts idleNotices; project instructions, phase 4).
+    expect(where(all, ['tabId', 'dormant', 'agentIds'])).toEqual([])
   })
 
   it('the host\'s wake check finds a change that concerns its machine, reading only the conversations changed since the cursor', async () => {

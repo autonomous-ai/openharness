@@ -897,7 +897,7 @@ class _SwarmProjectSheetState extends State<SwarmProjectSheet> {
         null => _team ? const _MatesLoading() : const _WorkLoading(),
       };
     } else if (_team) {
-      body = _mates(glance!, pmId);
+      body = _mates(snapshot, glance!, pmId);
     } else if (work == null) {
       body = const SizedBox.shrink();
     } else {
@@ -1075,7 +1075,11 @@ class _SwarmProjectSheetState extends State<SwarmProjectSheet> {
   }
 
   /// The team part: each agent, the Product Manager first.
-  Widget _mates(SwarmTeamGlance glance, String? pmId) {
+  Widget _mates(
+    SuperTabSnapshot snapshot,
+    SwarmTeamGlance glance,
+    String? pmId,
+  ) {
     if (glance.agents.isEmpty) {
       return Padding(
         padding: const EdgeInsets.symmetric(
@@ -1095,11 +1099,7 @@ class _SwarmProjectSheetState extends State<SwarmProjectSheet> {
           Divider(height: 1, thickness: 1, color: AppGlass.hair),
       itemBuilder: (context, i) => _Mate(
         glance: agents[i],
-        role: agents[i].agent.id == pmId
-            ? 'PM'
-            : agents[i].agent.isReviewer
-            ? 'Rev'
-            : 'Dev',
+        role: snapshot.roleOf(agents[i].agent.id)?.badge ?? 'Dev',
       ),
     );
   }
@@ -1419,7 +1419,8 @@ class _Mate extends StatelessWidget {
 
   final SwarmAgentGlance glance;
 
-  /// Its role in a tag: PM, Dev (a Builder) or Rev (a Reviewer).
+  /// Its role in a tag: the role it goes by, cut to 12 characters (PM, Dev or
+  /// Rev from an older backend).
   final String role;
 
   @override

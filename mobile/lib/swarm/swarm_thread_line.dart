@@ -31,13 +31,13 @@ typedef SwarmThreadFace = ({
 
 /// The newest reply authors of [thread] as [snapshot] names and dresses them:
 /// an agent by the Swarm's name for it, a person by their address's first
-/// part, as the chat names a message's author. [roles] are the chat's agent
-/// roles: the PM wears manager blue here as on its own messages.
+/// part, as the chat names a message's author. The project's coordinator
+/// wears manager blue here as on its own messages, whatever its role is
+/// called.
 List<SwarmThreadFace> swarmThreadFaces(
   SuperTabSnapshot? snapshot,
-  SuperTabThread thread, {
-  Map<String, String> roles = const {},
-}) => [
+  SuperTabThread thread,
+) => [
   for (final author in thread.authors)
     if (author['id'] case final String id)
       author['kind'] == 'agent'
@@ -53,7 +53,7 @@ List<SwarmThreadFace> swarmThreadFaces(
                       as String,
               id: id,
               agent: true,
-              pm: roles[id] == 'PM',
+              pm: snapshot?.isLead(id) ?? false,
               look: snapshot?.agentLook(id) ?? (picture: null, status: null),
             )
           : (

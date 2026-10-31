@@ -179,7 +179,7 @@ SwarmAgentGlance _glance(
     ),
     _ when work == 'blocked' => (SwarmAgentState.stuck, 'Stuck'),
     _ when work == 'needs_human' => (SwarmAgentState.waiting, 'Waiting'),
-    _ when work == 'review' => (SwarmAgentState.working, 'In review'),
+    _ when work == 'review' => (SwarmAgentState.working, 'Waiting on others'),
     _ when work == 'reconciling' => (SwarmAgentState.working, 'Checking'),
     _ when work == 'planned' || work == 'working' => (
       SwarmAgentState.working,

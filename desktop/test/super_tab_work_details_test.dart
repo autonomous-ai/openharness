@@ -31,7 +31,7 @@ void main() {
   );
 
   test(
-    'launch prompt names the five task parts and stays within the limit',
+    'launch prompt points to the instructions and stays within the limit',
     () {
       for (final lead in [true, false]) {
         final prompt = superTabLaunchPrompt(
@@ -39,10 +39,9 @@ void main() {
           conversationId: 'c' * 160,
           lead: lead,
         );
-        expect(
-          prompt,
-          contains('goal, changes, constraints, owned paths, checks'),
-        );
+        expect(prompt, contains('instructions'));
+        expect(prompt, isNot(contains('swarm-lead')));
+        expect(prompt, isNot(contains('swarm-dev')));
         expect(prompt.length, lessThanOrEqualTo(2000));
       }
     },
@@ -50,7 +49,7 @@ void main() {
 
   for (final structured in [true, false]) {
     testWidgets(
-      'work details show ${structured ? 'five labelled parts' : 'the legacy brief'}',
+      'work details show the brief as written${structured ? ', never a task\'s five parts' : ''}',
       (tester) async {
         final server = ConversationServer();
         final row =
@@ -85,29 +84,16 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.text('Acceptance checks'), findsOneWidget);
         expect(find.text('Draft survives reconnect'), findsOneWidget);
-        if (structured) {
-          for (final heading in ['Goal', 'Changes', 'Constraints', 'Owns']) {
-            expect(find.text(heading), findsOneWidget);
-          }
-          final texts = tester
-              .widgetList<SuperTabMessageText>(find.byType(SuperTabMessageText))
-              .map((widget) => widget.text)
-              .join('\n');
-          expect(texts, contains('Keep drafts'));
-          expect(texts, contains('Store pending edits'));
-          expect(texts, contains('No dependencies'));
-          expect(texts, contains('cli/src/superTabs'));
-          expect(texts, contains('desktop/lib/super_tabs'));
-          expect(texts, isNot(contains('Legacy instructions')));
-        } else {
-          expect(find.byType(SuperTabMessageText), findsOneWidget);
-          expect(
-            tester
-                .widget<SuperTabMessageText>(find.byType(SuperTabMessageText))
-                .text,
-            'Legacy instructions',
-          );
+        for (final heading in ['Goal', 'Changes', 'Constraints', 'Owns']) {
+          expect(find.text(heading), findsNothing);
         }
+        expect(find.byType(SuperTabMessageText), findsOneWidget);
+        expect(
+          tester
+              .widget<SuperTabMessageText>(find.byType(SuperTabMessageText))
+              .text,
+          'Legacy instructions',
+        );
         expect(tester.takeException(), isNull);
       },
     );
@@ -119,9 +105,11 @@ void main() {
     final server = ConversationServer();
     final row =
         (server.state['conversations'] as List)[1] as Map<String, dynamic>;
+    // The backend writes a task's brief from its parts.
     row
       ..['archived'] = true
-      ..['task'] = task;
+      ..['task'] = task
+      ..['brief'] = 'Goal: Keep drafts\n\nChanges: Store pending edits';
     final controller = server.controller();
     addTearDown(controller.dispose);
     await controller.refresh();
@@ -140,12 +128,12 @@ void main() {
     );
     await tester.tap(find.text('Open'));
     await tester.pumpAndSettle();
-    expect(find.text('Goal'), findsOneWidget);
+    expect(find.text('Goal'), findsNothing);
     expect(
       tester
           .widgetList<SuperTabMessageText>(find.byType(SuperTabMessageText))
           .map((widget) => widget.text),
-      contains('Keep drafts'),
+      ['Goal: Keep drafts\n\nChanges: Store pending edits'],
     );
     expect(tester.takeException(), isNull);
   });

@@ -23,7 +23,6 @@
   "src/superTabs/store.ts superTabDelivery.updateMany": 11,
   "src/superTabs/store.ts superTabMessage.findMany": 1,
   "src/superTabs/store.ts superTabOperation.findMany": 1,
-  "src/superTabs/store.ts superTabRoleText.deleteMany": 1,
   "src/superTabs/store.ts superTabRun.deleteMany": 1,
   "src/superTabs/store.ts superTabTerminalRequest.count": 1,
   "src/superTabs/store.ts swarmHead.findMany": 2,

@@ -249,6 +249,10 @@ void main() {
       ('GET', '/api/super-tabs/tab1/costs'),
       ('GET', '/api/super-tabs/workspaces'),
       ('GET', '/api/super-tabs/grids'),
+      ('GET', '/api/super-tabs/routing-policy'),
+      ('POST', '/api/super-tabs/routing-policy'),
+      ('GET', '/api/super-tabs/tab1/projects/p1/roles/r1'),
+      ('POST', '/api/super-tabs/tab1/projects/p1/roles/r1'),
     ]) {
       final failure = await refusal(transport(method, path));
       expect(failure.code, 'INVALID_REQUEST', reason: '$method $path');
@@ -260,8 +264,6 @@ void main() {
     const routes = [
       ('GET', '/api/super-tabs/list?mentions=1&after=abc'),
       ('GET', '/api/super-tabs/invitations'),
-      ('GET', '/api/super-tabs/routing-policy'),
-      ('POST', '/api/super-tabs/routing-policy'),
       ('POST', '/api/super-tabs'),
       ('GET', '/api/super-tabs/tab1/parts'),
       ('GET', '/api/super-tabs/tab1/changes?cursor=c%3D1'),
@@ -281,7 +283,9 @@ void main() {
       ('POST', '/api/super-tabs/tab1/conversations/c1/threads/m1/read'),
       ('GET', '/api/super-tabs/tab1/projects/p1/github'),
       ('POST', '/api/super-tabs/tab1/projects/p1/github/approve'),
-      ('POST', '/api/super-tabs/tab1/projects/p1/roles/r1'),
+      ('GET', '/api/super-tabs/tab1/projects/p1/instructions'),
+      ('GET', '/api/super-tabs/tab1/projects/p1/instructions/revisions'),
+      ('GET', '/api/super-tabs/tab1/projects/p1/instructions/revisions/4'),
       ('GET', '/api/super-tabs/tab1/route-decisions/d1'),
       ('POST', '/api/super-tabs/tab1/machines/m1/removal'),
       ('POST', '/api/super-tabs/tab1/join'),

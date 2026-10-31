@@ -166,13 +166,13 @@ class SwarmLeadMachine {
 /// Why each of [swarmLeadEngines] cannot run a Product Manager on a machine,
 /// from what the Swarm reads of it: the engines it offers ([offered], null when
 /// not reported), each engine's install and sign-in ([readiness], null for not
-/// known), its subscription windows' use ([usedPercents]) and the engines the
-/// server suspended there ([suspended], with why). What is not known rules
-/// nothing out (Desktop's `leadEngineRefusals`).
+/// known) and the engines the server suspended there ([suspended], with why).
+/// What is not known rules nothing out, and quota never does: an older
+/// server's own refusal shows as the start's error (Desktop's
+/// `leadEngineRefusals`).
 Map<String, String> swarmLeadEngineRefusals({
   Set<String>? offered,
   Map<String, ({bool? installed, bool? signedIn})> readiness = const {},
-  Map<String, List<num>> usedPercents = const {},
   Map<String, String> suspended = const {},
 }) {
   String? refusal(String engine) {
@@ -182,20 +182,21 @@ Map<String, String> swarmLeadEngineRefusals({
     }
     if (readiness[engine]?.installed == false) return '$label isn’t installed';
     if (readiness[engine]?.signedIn == false) return '$label isn’t signed in';
-    if ((usedPercents[engine] ?? const []).any((used) => used >= 100)) {
-      return '$label has no quota left until it resets';
-    }
     return suspended[engine];
   }
 
   return {for (final engine in swarmLeadEngines) engine: ?refusal(engine)};
 }
 
-/// The engines the Swarm's model list ([policy], its routing policy) has no
-/// enabled model of, with why: none of them may run a new project's Product
-/// Manager (Desktop's `LeadModelList.engineRefusal`). Null or unread rules
-/// nothing out.
-Map<String, String> swarmLeadModelListRefusals(Map<String, dynamic>? policy) {
+/// The engines the Swarm's model list has no enabled model of, with why, from
+/// the tab's routing-policy read ([answer]): none of them may run a new
+/// project's Product Manager on an older backend, which enforces its list
+/// (Desktop's `LeadModelList.engineRefusal`). A backend that sends its
+/// `catalog` refuses nothing for the list, so neither does the phone. Null or
+/// unread rules nothing out.
+Map<String, String> swarmLeadModelListRefusals(Map<String, dynamic>? answer) {
+  if (answer == null || answer.containsKey('catalog')) return const {};
+  final policy = answer['policy'] is Map ? superTabMap(answer['policy']) : null;
   final byEngine = <String, bool>{};
   for (final row in policy?['models'] as List? ?? const []) {
     if (row case {'engine': final String engine, 'enabled': final bool on}) {
@@ -323,19 +324,6 @@ List<SwarmLeadMachine> swarmLeadMachines(
                       installed: row['installed'] as bool?,
                       signedIn: row['signedIn'] as bool?,
                     ),
-              },
-              usedPercents: {
-                for (final raw in hostReading['quotas'] as List? ?? const [])
-                  if (part(raw) case {
-                    'engine': final String engine,
-                    'known': true,
-                    'windows': final List windows,
-                  })
-                    engine: [
-                      for (final window in windows)
-                        if (part(window)['usedPercent'] case final num used)
-                          used,
-                    ],
               },
               suspended: {
                 for (final source in {pool, host})
@@ -1150,9 +1138,7 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
           '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}/routing-policy',
         ),
       );
-      refusals = swarmLeadModelListRefusals(
-        answer['policy'] is Map ? superTabMap(answer['policy']) : null,
-      );
+      refusals = swarmLeadModelListRefusals(answer);
     } catch (_) {
       // Unread: the start's own checks still apply.
     }

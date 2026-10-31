@@ -57,7 +57,7 @@ function writtenKinds(): Map<string, string[]> {
     const locals = new Map<string, ts.Expression[]>()
     const at: ts.Node[] = []
     const visit = (node: ts.Node) => {
-      // A variable, or a parameter's default (autoReview.ts row's source).
+      // A variable, or a parameter's default.
       if ((ts.isVariableDeclaration(node) || ts.isParameter(node)) && ts.isIdentifier(node.name) && node.initializer) add(locals, node.name.text, node.initializer)
       if (ts.isPropertyAssignment(node) && ts.isIdentifier(node.name) && node.name.text === 'source') at.push(node.initializer)
       if (ts.isShorthandPropertyAssignment(node) && node.name.text === 'source') at.push(node.name)
@@ -76,13 +76,17 @@ describe('the notices the Swarm writes into a chat', () => {
   const written = writtenKinds()
 
   it('finds the notices it is known to write, so a change in how they are written cannot empty this check', () => {
-    expect([...written.keys()]).toEqual(expect.arrayContaining(['system', 'rule', 'agent-only', 'idle-stop', 'work-lost', 'terminal-alert', 'native', 'ship']))
+    expect([...written.keys()]).toEqual(expect.arrayContaining(['system', 'instructions', 'agent-only', 'idle', 'review-failed', 'work-lost', 'terminal-alert', 'native', 'ship']))
   })
 
   it('classifies every kind it writes, and only those', () => {
     const unclassified = [...written].filter(([kind]) => !Object.hasOwn(NOTICE_READERS, kind)).map(([kind, files]) => `${kind} (${files.join(', ')})`)
     expect(unclassified, 'add each to NOTICE_READERS in model.ts: who reads it?').toEqual([])
-    expect(Object.keys(NOTICE_READERS).filter(kind => !written.has(kind))).toEqual([])
+    // A kind no longer written keeps its readers for the rows stored before: the server's idle stop (project instructions,
+    // phase 4) told only the Lead.
+    const retired = ['idle-stop']
+    expect(Object.keys(NOTICE_READERS).filter(kind => !written.has(kind) && !retired.includes(kind))).toEqual([])
+    expect(retired.filter(kind => written.has(kind))).toEqual([])
   })
 
   it('shows people a notice of theirs, and one for an agent only while it reaches none', () => {

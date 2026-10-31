@@ -7,15 +7,17 @@ import { isManagedHook } from '../engines/kit/notifyHooks.js'
 import { homedir } from 'node:os'
 import { createHash, randomUUID } from 'node:crypto'
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { join, relative, sep } from 'node:path'
-import { isSwarmRole, isSwarmSkillMode, parseSwarmSkill, type SwarmRole, type SwarmSkill, type SwarmSkillGrant, type SwarmSkillMode } from './savedSkill.js'
+import { dirname, join, relative, sep } from 'node:path'
+import { SWARM_TOOLS_SKILL } from './swarmTools.js'
+import { fallbackSkillName, isSwarmRole, isSwarmSkillMode, parseSwarmSkill, roleFromWire, wireRole, type SavedSwarmSkill, type SwarmRole, type SwarmSkill,
+  type SwarmSkillGrant, type SwarmSkillMode, type WireRole } from './savedSkill.js'
 
 // The saved record's shape and parse live with the registry's rows (lib/savedSkill.ts), which load without the Swarm.
-export { isSwarmRole, isSwarmSkillMode, parseSwarmSkill }
-export type { SwarmRole, SwarmSkill, SwarmSkillGrant, SwarmSkillMode }
+export { fallbackSkillName, isSwarmRole, isSwarmSkillMode, parseSwarmSkill, roleFromWire, wireRole }
+export type { SavedSwarmSkill, SwarmRole, SwarmSkill, SwarmSkillGrant, SwarmSkillMode, WireRole }
 
-/** The owner's texts, used verbatim. */
-const orchestration: Record<Exclude<SwarmRole, 'buddy'>, string> = {
+/** The owner's texts, used verbatim, under the role file names they have always had (fallbackSkillName). */
+const orchestration: Record<Exclude<WireRole, 'buddy'>, string> = {
   lead: `---
 name: swarm-lead
 description: Use when coordinating a Harness Swarm project as its Lead (shown as Product Manager), before discussing, specifying, splitting, routing, assigning, reviewing or closing work.
@@ -161,6 +163,9 @@ For large work, post the group plan and get the owner's ok before assigning; onc
 - Answer a message inside its thread: post with --reply-to that message, and your reply joins its thread. Many people talk to you at once; answers in the main chat bury each other. Post at the top level only to start a new topic.
 - When talking to people, call the roles Product Manager, Engineer and Reviewer.
 
+## Who a post reaches
+- A post reaches only the agents you name with --to <agent id>, any agent of this project; they join the group if they are not in it. Your post in a task that names no one reaches its assigned agent.
+
 ## Reactions
 - Acknowledge with a reaction instead of a post, as Slack bots do: react 👀 to a message addressed to you when you start on it; when you have done what it asked, take the 👀 back and react ✅. Use harness super-tab react GROUP MESSAGE_ID eyes|check OPERATION_ID, with --off to take one back. A reaction tells the people in the chat; your work status still tells the Swarm.
 - Post only substance: a plan, a question, a ruling, a finding, a verdict, a handoff, a blocker or a result with its evidence; never an acknowledgement alone ("on it", "took it", "thanks", "done").
@@ -294,6 +299,10 @@ Record each acceptance check with the exact command, revision and observed resul
 - If your task is cancelled, stop and say where you left it.
 - Print little to save quota. Keep progress and blockers in the group chat.
 
+## Who a post reaches
+- A post reaches only the agents you name with --to <agent id>, any agent of this project; they join the group if they are not in it. A post that names no one reaches the Lead.
+- Answer your Reviewer, and tell it a fix is pushed, with --to its agent id.
+
 ## Reactions
 - Acknowledge with a reaction instead of a post, as Slack bots do: react 👀 to a message addressed to you when you start on it; when you have done what it asked, take the 👀 back and react ✅. Use harness super-tab react GROUP MESSAGE_ID eyes|check OPERATION_ID, with --off to take one back. A reaction tells the people in the chat; your work status still tells the Swarm.
 - Post only substance: a plan, a question, a ruling, a finding, a verdict, a handoff, a blocker or a result with its evidence; never an acknowledgement alone ("on it", "took it", "thanks", "done").
@@ -365,6 +374,10 @@ Review only the changes since the revision you reviewed. Mark each finding fixed
 ## 5. Finish
 Mark your review assignment done with the verdict and revision. Print little.
 
+## Who a post reaches
+- A post reaches only the agents you name with --to <agent id>, any agent of this project; they join the group if they are not in it. A post that names no one reaches the Lead.
+- Send your verdict and findings to the Builder with --to its agent id.
+
 ## Reactions
 - Acknowledge with a reaction instead of a post, as Slack bots do: react 👀 to a message addressed to you when you start on it; when you have done what it asked, take the 👀 back and react ✅. Use harness super-tab react GROUP MESSAGE_ID eyes|check OPERATION_ID, with --off to take one back. A reaction tells the people in the chat; your work status still tells the Swarm.
 - Post only substance: a plan, a question, a ruling, a finding, a verdict, a handoff, a blocker or a result with its evidence; never an acknowledgement alone ("on it", "took it", "thanks", "done").
@@ -388,7 +401,7 @@ Mark your review assignment done with the verdict and revision. Print little.
 `,
 }
 
-const defaults: Record<Exclude<SwarmRole, 'buddy'>, string> = {
+const defaults: Record<Exclude<WireRole, 'buddy'>, string> = {
   lead: `---
 name: swarm-lead
 description: Use when coordinating a Harness Swarm project as its Lead (shown as Product Manager): taking requests, splitting work into groups, assigning, tracking and closing them.
@@ -466,6 +479,9 @@ When the project owner asks in chat to switch this project's skills (Default or 
 - Write like a colleague: short, in their language, no commands or internal ids. Call the roles Product Manager, Engineer and Reviewer.
 - Answer a message inside its thread: post with --reply-to that message, and your reply joins its thread. Many people talk to you at once; answers in the main chat bury each other. Post at the top level only to start a new topic.
 
+## Who a post reaches
+- A post reaches only the agents you name with --to <agent id>, any agent of this project; they join the group if they are not in it. Your post in a task that names no one reaches its assigned agent.
+
 ## Reactions
 - Acknowledge with a reaction instead of a post, as Slack bots do: react 👀 to a message addressed to you when you start on it; when you have done what it asked, take the 👀 back and react ✅. Use harness super-tab react GROUP MESSAGE_ID eyes|check OPERATION_ID, with --off to take one back. A reaction tells the people in the chat; your work status still tells the Swarm.
 - Post only substance: a plan, a question, a ruling, a finding, a verdict, a handoff, a blocker or a result with its evidence; never an acknowledgement alone ("on it", "took it", "thanks", "done").
@@ -529,6 +545,10 @@ You finish one group's work completely, inside its brief, as if nobody will come
 - Every post carries a result, a question, or a fault; never an acknowledgement alone.
 - Write to people in their language, without commands or internal ids. Call the roles Product Manager, Engineer and Reviewer.
 
+## Who a post reaches
+- A post reaches only the agents you name with --to <agent id>, any agent of this project; they join the group if they are not in it. A post that names no one reaches the Lead.
+- Answer your Reviewer, and tell it a fix is pushed, with --to its agent id.
+
 ## Reactions
 - Acknowledge with a reaction instead of a post, as Slack bots do: react 👀 to a message addressed to you when you start on it; when you have done what it asked, take the 👀 back and react ✅. Use harness super-tab react GROUP MESSAGE_ID eyes|check OPERATION_ID, with --off to take one back. A reaction tells the people in the chat; your work status still tells the Swarm.
 - Post only substance: a plan, a question, a ruling, a finding, a verdict, a handoff, a blocker or a result with its evidence; never an acknowledgement alone ("on it", "took it", "thanks", "done").
@@ -572,6 +592,10 @@ Start within 30 minutes of being asked; oldest ready work first. If you cannot, 
 
 ## 4. Finish
 Mark your review done with the verdict and revision.
+
+## Who a post reaches
+- A post reaches only the agents you name with --to <agent id>, any agent of this project; they join the group if they are not in it. A post that names no one reaches the Lead.
+- Send your verdict and findings to the Builder with --to its agent id.
 
 ## Reactions
 - Acknowledge with a reaction instead of a post, as Slack bots do: react 👀 to a message addressed to you when you start on it; when you have done what it asked, take the 👀 back and react ✅. Use harness super-tab react GROUP MESSAGE_ID eyes|check OPERATION_ID, with --off to take one back. A reaction tells the people in the chat; your work status still tells the Swarm.
@@ -641,13 +665,22 @@ You are one person's Buddy for one project. You help them think a request throug
 - Say "I don't know" rather than guess, and point your owner to the PM in the project chat for anything you cannot answer.
 `
 
-const skills: Record<SwarmSkillMode, Record<SwarmRole, string>> = { default: { ...defaults, buddy }, orchestration: { ...orchestration, buddy } }
+const skills: Record<SwarmSkillMode, Record<WireRole, string>> = { default: { ...defaults, buddy }, orchestration: { ...orchestration, buddy } }
+/** A session's built-in role text in a mode: a coordinator's is the Lead's, an agent's the Builder's, a Reviewer's its own. */
+const textOf = (skill: Pick<SwarmSkill, 'role' | 'fallback'>, mode: SwarmSkillMode) => skills[mode][wireRole(skill)]
+/** A row from any release, read as this one keeps it (a row from before role kinds names the wire's values); refused when
+ *  it is none. */
+function skillOf(saved: SavedSwarmSkill): SwarmSkill {
+  const skill = parseSwarmSkill(saved)
+  if (!skill) throw new Error('A Swarm skill needs a role and session key')
+  return skill
+}
 
 /** What a session is told to use, in its mode's words: a Default agent otherwise works its usual way. */
-export function swarmSkillUse(role: SwarmRole, mode: SwarmSkillMode): string {
+export function swarmSkillUse(skill: Pick<SwarmSkill, 'role' | 'fallback'>, mode: SwarmSkillMode): string {
   // A Buddy's text is the same in every mode, and no team process applies to it.
-  return mode === 'default' && role !== 'buddy' ? `Use the swarm-${role} skill for this session: the team process; otherwise work your usual way.`
-    : `Use the built-in swarm-${role} skill for this session.`
+  return mode === 'default' && skill.role !== 'buddy' ? `Use the ${fallbackSkillName(skill)} skill for this session: the team process; otherwise work your usual way.`
+    : `Use the built-in ${fallbackSkillName(skill)} skill for this session.`
 }
 const MODE_NAMES: Record<SwarmSkillMode, string> = { default: 'Default', orchestration: 'Harness orchestration' }
 /** Which set a session's file was last written from: a built-in mode, or the project's Custom set (spec 2026-10-23). */
@@ -657,37 +690,47 @@ const isSkillSet = (value: unknown): value is SkillSet => isSwarmSkillMode(value
 export interface CustomSwarmRole { name: string; text: string }
 /** Installed under the kind's own skill name, with the one front matter block Harness writes: any block the owner's text
  *  starts with (the copied Default texts bring one) is dropped. */
-function customText(role: SwarmRole, custom: CustomSwarmRole): string {
+function customText(skill: SwarmSkill, custom: CustomSwarmRole): string {
   const body = custom.text.replace(/^\uFEFF?---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/, '')
-  return `---\nname: swarm-${role}\ndescription: ${JSON.stringify(`The ${custom.name} role of this project's Custom skills.`)}\n---\n${body}`
+  return `---\nname: ${fallbackSkillName(skill)}\ndescription: ${JSON.stringify(`The ${custom.name} role of this project's Custom skills.`)}\n---\n${body}`
 }
 /** The mode whose current text this is; null for any other text (an older release, or the agent's own edits). */
-const modeOf = (role: SwarmRole, version: string) =>
-  (['default', 'orchestration'] as const).find(mode => textVersion(skills[mode][role]) === version) ?? null
+const modeOf = (skill: SwarmSkill, version: string) =>
+  (['default', 'orchestration'] as const).find(mode => textVersion(textOf(skill, mode)) === version) ?? null
 
 /** Launch and relaunch keep a session's saved bytes; only refreshSwarmSkill moves a running session to new built-in text.
  * A new file holds the text of the session's saved mode; a kept one is described by the text it holds, so the prompt line
  * never names one mode while the file holds the other. No project-wide native skill links: two roles may share a workspace. */
 /** [wideOf]: whether a Buddy launched here reads beyond its folder (lib/buddyGuard.ts buddyLaunchWide); tests name it. */
-export function prepareSwarmSkill(workspace: string, saved: SwarmSkill, wideOf: (root: string) => BuddyWide | null = buddyLaunchWide): { file: string; instructions: string } {
-  if (!parseSwarmSkill(saved)) throw new Error('A Swarm skill needs a role and session key')
+export function prepareSwarmSkill(workspace: string, saved: SavedSwarmSkill, wideOf: (root: string) => BuddyWide | null = buddyLaunchWide): { file: string; instructions: string } {
+  const skill = skillOf(saved)
   const root = realpathSync(workspace)
   // First, so a skill that cannot be prepared still leaves a Buddy's folder locked (re-check of #1992).
-  if (saved.role === 'buddy') lockBuddyFolder(root, saved.key, wideOf(root))
-  const dir = skillDirectory(root, saved, true)!
+  if (skill.role === 'buddy') lockBuddyFolder(root, skill.key, wideOf(root))
+  const dir = skillDirectory(root, skill, true)!
   ignoreHarnessRuntime(root)
   const file = join(dir, 'SKILL.md')
-  let mode = saved.mode ?? 'orchestration'
+  let mode = skill.mode ?? 'orchestration'
   if (existsSync(file)) {
     plainFile(file)
     // Read now so an unreadable saved skill refuses launch, rather than silently dropping the role.
-    mode = modeOf(saved.role, textVersion(readFileSync(file, 'utf8'))) ?? mode
+    mode = modeOf(skill, textVersion(readFileSync(file, 'utf8'))) ?? mode
   } else {
-    const text = skills[mode][saved.role], version = textVersion(text)
+    const text = textOf(skill, mode), version = textVersion(text)
     writeFileSync(file, text, { flag: 'wx', mode: 0o600 })
     writeRecord(dir, { text: version, notified: version, mode, told: mode, change: 0, toldChange: 0 })
   }
-  return { file, instructions: `${swarmSkillUse(saved.role, mode)} Before working, read ${JSON.stringify(file)} with your file or shell tool.` }
+  if (skill.role === 'buddy') return { file, instructions: `${swarmSkillUse(skill, mode)} Before working, read ${JSON.stringify(file)} with your file or shell tool.` }
+  // The tools skill is built in and kept like the role file on a relaunch; its record tells a later release's refresh that this
+  // CLI launched the session (a session from before this release has no swarm-tools folder).
+  const tools = skillFile(root, skill, 'swarm-tools', true)!
+  if (existsSync(tools)) plainFile(tools)
+  else {
+    const version = textVersion(SWARM_TOOLS_SKILL)
+    writeFileSync(tools, SWARM_TOOLS_SKILL, { flag: 'wx', mode: 0o600 })
+    writeRecord(dirname(tools), { text: version, notified: version, change: 0, toldChange: 0 })
+  }
+  return { file, instructions: `Use the built-in swarm-tools skill for Harness's Swarm commands: read ${JSON.stringify(tools)} before working. Your role and how this project works are in its instructions: read them with the instructions command (harness super-tab --tab TAB instructions), and work by them. If that command says this Swarm has no project instructions, use the ${fallbackSkillName(skill)} skill instead: read ${JSON.stringify(file)}.` }
 }
 
 /** Claude Code's settings in a Buddy's folder, the only ones it reads (it launches with `--setting-sources local` in dontAsk
@@ -793,17 +836,17 @@ export interface SkillRefresh { file: string; version: string; owed: boolean; ch
  * notice for it; recordSwarmSkillNotice clears that once the notice is sent. A file from before records gets its record
  * first, and the record moves to the new text only after the file is replaced, so an interrupted pass rewrites again and
  * the notice stays owed until it is recorded. Null when this workspace never prepared the session's skill. */
-export function refreshSwarmSkill(workspace: string, saved: SwarmSkill, mode: SwarmSkillMode, custom?: CustomSwarmRole): SkillRefresh | null {
-  if (!parseSwarmSkill(saved)) throw new Error('A Swarm skill needs a role and session key')
+export function refreshSwarmSkill(workspace: string, saved: SavedSwarmSkill, mode: SwarmSkillMode, custom?: CustomSwarmRole): SkillRefresh | null {
+  const skill = skillOf(saved)
   // A removed worktree has nothing to refresh; the host would otherwise retry and log it every minute.
   if (!existsSync(workspace)) return null
-  const dir = skillDirectory(realpathSync(workspace), saved, false)
+  const dir = skillDirectory(realpathSync(workspace), skill, false)
   const file = dir && join(dir, 'SKILL.md')
   if (!dir || !file || !existsSync(file)) return null
   plainFile(file)
   // A Custom role's file is overwritten on each new text (call 14): the agent's own edits are kept for built-in texts only.
   const set: SkillSet = custom ? 'custom' : mode
-  const text = custom ? customText(saved.role, custom) : skills[mode][saved.role], version = textVersion(text)
+  const text = custom ? customText(skill, custom) : textOf(skill, mode), version = textVersion(text)
   const held = textVersion(readFileSync(file, 'utf8'))
   let record = readRecord(dir) ?? { text: held, notified: held }
   if (record.toldChange === undefined) {
@@ -814,14 +857,14 @@ export function refreshSwarmSkill(workspace: string, saved: SwarmSkill, mode: Sw
     writeRecord(dir, record)
   }
   if (record.text !== version) {
-    replaceFile(file, text)
+    replaceSkillFile(file, text)
     record = { ...record, text: version, mode: set, change: (record.change ?? 0) + 1 }
     writeRecord(dir, record)
-  } else if (held !== version && modeOf(saved.role, held)) {
+  } else if (held !== version && modeOf(skill, held)) {
     // A switch stopped after replacing the file and before its record, and the project switched back: the record already
     // describes this text and no notice went out for the other, so only the file is put back. The agent's own edits are
     // no built-in text and stay.
-    replaceFile(file, text)
+    replaceSkillFile(file, text)
   }
   const change = record.change ?? 0
   // A notice counts once it is recorded: one sent whose record was lost may have moved the agent to another text, so a
@@ -829,23 +872,36 @@ export function refreshSwarmSkill(workspace: string, saved: SwarmSkill, mode: Sw
   const owed = record.toldChange !== change
   const switched = (record.told ?? 'orchestration') !== set || owed && record.notified === version
   const reread = `Before your next step, read ${JSON.stringify(file)} again with your file or shell tool and follow`
-  const instead = `${reread} it in place of your earlier swarm-${saved.role} skill.`
+  const instead = `${reread} it in place of your earlier ${fallbackSkillName(skill)} skill.`
   return { file, version, owed, change, set,
     notice: custom ? switched ? `This project now uses its Custom skills, as ${custom.name}. ${instead}` : `The project owner updated your ${custom.name} role. ${reread} the new version.`
       : switched ? `This project now uses the ${MODE_NAMES[mode]} skills. ${instead}`
-        : `Harness updated your ${mode === 'default' ? '' : 'built-in '}swarm-${saved.role} skill. ${reread} the new version.` }
+        : `Harness updated your ${mode === 'default' ? '' : 'built-in '}${fallbackSkillName(skill)} skill. ${reread} the new version.` }
 }
 /** The notice for that refresh's rewrite was sent. A later rewrite since then stays owed. */
-export function recordSwarmSkillNotice(workspace: string, saved: SwarmSkill, sent: Pick<SkillRefresh, 'version' | 'change' | 'set'>): void {
-  const dir = skillDirectory(realpathSync(workspace), saved, false)
+export function recordSwarmSkillNotice(workspace: string, saved: SavedSwarmSkill, sent: Pick<SkillRefresh, 'version' | 'change' | 'set'>): void {
+  const skill = skillOf(saved)
+  const dir = skillDirectory(realpathSync(workspace), skill, false)
   const record = dir && readRecord(dir)
-  if (dir && record) writeRecord(dir, { ...record, notified: sent.version, toldChange: sent.change, told: sent.set ?? modeOf(saved.role, sent.version) ?? record.told })
+  if (dir && record) writeRecord(dir, { ...record, notified: sent.version, toldChange: sent.change, told: sent.set ?? modeOf(skill, sent.version) ?? record.told })
 }
 
 const textVersion = (text: string) => createHash('sha256').update(text).digest('hex')
+/** The SKILL.md of one of the session's skills (the tools skill, or the project instructions the host writes); null when
+ * its folder is missing and not [create]d. Every part is a plain directory, as for the role file. */
+export function skillFile(workspace: string, saved: SavedSwarmSkill, name: 'swarm-tools' | 'swarm-instructions', create: boolean): string | null {
+  const skill = skillOf(saved)
+  // A Buddy is not part of a project's workflow: no tools skill. It still reads the project's instructions, as its member's
+  // helper (swarmInstructionsSkill.ts).
+  if (skill.role === 'buddy' && name === 'swarm-tools') return null
+  const dir = skillFolder(realpathSync(workspace), skill, name, create)
+  return dir && join(dir, 'SKILL.md')
+}
+/** The session's role file's folder, by the name it has always had: a row from before role kinds finds the file it wrote. */
+const skillDirectory = (root: string, skill: SwarmSkill, create: boolean) => skillFolder(root, skill, fallbackSkillName(skill), create)
 /** Every part under the workspace is a plain directory; `create` makes missing ones, otherwise a missing one is null. */
-function skillDirectory(root: string, saved: SwarmSkill, create: boolean): string | null {
-  const dir = join(root, '.harness', 'runtime', createHash('sha256').update(saved.key).digest('hex'), 'swarm', 'skills', `swarm-${saved.role}`)
+function skillFolder(root: string, saved: SwarmSkill, name: string, create: boolean): string | null {
+  const dir = join(root, '.harness', 'runtime', createHash('sha256').update(saved.key).digest('hex'), 'swarm', 'skills', name)
   let path = root
   for (const part of relative(root, dir).split(sep)) {
     path = join(path, part)
@@ -875,10 +931,10 @@ function readRecord(dir: string): SkillRecord | null {
       ...(typeof record.toldChange === 'number' ? { toldChange: record.toldChange } : {}) } : null
 }
 function writeRecord(dir: string, record: SkillRecord): void {
-  replaceFile(join(dir, 'version.json'), JSON.stringify(record))
+  replaceSkillFile(join(dir, 'version.json'), JSON.stringify(record))
 }
 /** A fresh temporary name created exclusively, so nothing planted at a fixed name is written through (as native.ts does). */
-function replaceFile(file: string, text: string): void {
+export function replaceSkillFile(file: string, text: string): void {
   const temporary = `${file}.${randomUUID()}.next`
   writeFileSync(temporary, text, { mode: 0o600, flush: true, flag: 'wx' })
   renameSync(temporary, file)

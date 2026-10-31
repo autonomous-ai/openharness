@@ -35,6 +35,7 @@ import 'controller.dart';
 import 'dialog_scope.dart';
 import 'folder_zip.dart';
 import 'identity.dart';
+import 'instructions_panel.dart';
 import 'model.dart';
 import 'prompt_alerts.dart';
 import 'workgroup_name.dart';
@@ -218,8 +219,9 @@ class _SuperTabViewState extends State<SuperTabView>
       c.snapshot?.authorName(message) ?? message.authorName;
 
   /// Your own message reads You, in the row and in the quote of it. In your
-  /// Buddy chat the PM's private lines read as lines to you, "River (PM) →
-  /// you": the PM writes there but cannot read it (Lead, 10-29).
+  /// Buddy chat the coordinator's private lines read as lines to you, "River
+  /// (PM) → you" with its role's badge: it writes there but cannot read it
+  /// (Lead, 10-29).
   String _shownAuthor(SuperTabController c, SuperTabMessage message) {
     if (message.authorId == c.accountId && !message.fromAgent) return 'You';
     // The controller's own snapshot names the author: a preview may be of
@@ -232,7 +234,7 @@ class _SuperTabViewState extends State<SuperTabView>
             chat?.id == message.conversationId &&
             snapshot!.conversation(project!.leadConversationId)?.leadId ==
                 message.authorId
-        ? '$name (PM) → you'
+        ? '$name (${snapshot.roleOf(message.authorId)?.badge ?? 'PM'}) → you'
         : name;
   }
 
@@ -1194,8 +1196,11 @@ class _SuperTabViewState extends State<SuperTabView>
 
   Future<void> _groupAction(String action, SuperTabConversation group) async {
     final c = this.c;
-    if (action == 'routing') {
-      await showSuperTabRouting(context, c);
+    if (action == 'instructions') {
+      final project = c.snapshot?.projectFor(group.id);
+      if (project != null) {
+        await showSuperTabInstructions(context, c, project.id);
+      }
       return;
     }
     if (c.snapshot?.isProjectLead(group.id) == true && action != 'archived') {
@@ -1981,20 +1986,20 @@ class _SuperTabViewState extends State<SuperTabView>
       : null;
 
   /// The line under the header's title: on a phone the open view, then the
-  /// group's review line.
+  /// group's linked tasks.
   Widget? _subtitle(SuperTabConversation? group) {
-    final line = c.reviewLine(group);
-    final review = line == null
+    final line = c.linkedLine(group);
+    final linked = line == null
         ? null
         : Text(
             line,
-            key: const ValueKey('super-review-line'),
+            key: const ValueKey('super-linked-line'),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: DesktopChrome.metadata(),
           );
     final view = _openViewName;
-    if (view == null) return review;
+    if (view == null) return linked;
     return Row(
       children: [
         Flexible(
@@ -2006,9 +2011,9 @@ class _SuperTabViewState extends State<SuperTabView>
             style: DesktopChrome.metadata(color: DesktopChrome.foreground),
           ),
         ),
-        if (review != null) ...[
+        if (linked != null) ...[
           Text(' · ', style: DesktopChrome.metadata()),
-          Flexible(child: review),
+          Flexible(child: linked),
         ],
       ],
     );
@@ -2192,11 +2197,12 @@ class _SuperTabViewState extends State<SuperTabView>
           item('Project details', () => _groupAction('details', group)),
           if (editable && project?.ownerId == c.accountId)
             item('Sharing', () => _groupAction('sharing', group)),
-          if (editable && project?.ownerId == c.accountId)
-            item('Instructions', () => _groupAction('skills', group)),
+          // Every member reads the project's instructions; a backend without
+          // them sends no coordinatorName.
+          if (project?.hasInstructions == true)
+            item('Instructions', () => _groupAction('instructions', group)),
           if (editable)
             item('Update cadence', () => _groupAction('cadence', group)),
-          item('Swarm routing', () => _groupAction('routing', group)),
           if (editable && project?.ownerId == c.accountId)
             item('Delete Project', () => _groupAction('delete', group)),
         ] else if (_isBuddyChat(group)) ...[
@@ -2995,9 +3001,9 @@ class _SuperTabViewState extends State<SuperTabView>
                           : group == null
                           ? 'Loading conversation…'
                           : c.snapshot!.isProjectLead(group.id)
-                          ? 'Discuss the plan with your product manager.'
+                          ? 'Discuss the plan with ${c.snapshot!.coordinatorNameOf(group.projectId)}.'
                           : _buddyName(group) != null
-                          ? "Only you and ${_buddyName(group)} read this chat. Say what you want to build; say 'send to the PM' when it's ready."
+                          ? "Only you and ${_buddyName(group)} read this chat. Say what you want to build; say 'send to the ${c.snapshot!.coordinatorNameOf(group.projectId)}' when it's ready."
                           : 'Start the conversation.',
                       textAlign: TextAlign.center,
                       style: DesktopChrome.text(color: DesktopChrome.muted),

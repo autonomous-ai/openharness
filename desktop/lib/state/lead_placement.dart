@@ -103,14 +103,13 @@ String leadEngineLabel(String engine) =>
 /// Why each of [kLeadEngines] cannot run a Product Manager on a machine, from
 /// what the Swarm reads of it: the engines it offers the Swarm ([offered],
 /// null when not reported), each engine's install and sign-in as its host
-/// reported them ([readiness], null for not known), its subscription windows'
-/// use ([usedPercents], absent when unread) and the engines the server
+/// reported them ([readiness], null for not known) and the engines the server
 /// suspended there after failed starts ([suspended], with why). What is not
-/// known does not rule an engine out, as the route does not.
+/// known does not rule an engine out, as the route does not. Quota never
+/// does: an older server's own refusal shows as the start's error.
 Map<String, String> leadEngineRefusals({
   Set<String>? offered,
   Map<String, ({bool? installed, bool? signedIn})> readiness = const {},
-  Map<String, List<num>> usedPercents = const {},
   Map<String, String> suspended = const {},
 }) => {
   for (final engine in kLeadEngines)
@@ -118,7 +117,6 @@ Map<String, String> leadEngineRefusals({
       leadEngineLabel(engine),
       offered: offered == null || offered.contains(engine),
       readiness: readiness[engine],
-      used: usedPercents[engine] ?? const [],
       suspended: suspended[engine],
     ),
 };
@@ -127,15 +125,11 @@ String? _engineRefusal(
   String label, {
   required bool offered,
   required ({bool? installed, bool? signedIn})? readiness,
-  required List<num> used,
   required String? suspended,
 }) {
   if (!offered) return '$label isn’t offered here';
   if (readiness?.installed == false) return '$label isn’t installed';
   if (readiness?.signedIn == false) return '$label isn’t signed in';
-  if (used.any((percent) => percent >= 100)) {
-    return '$label has no quota left until it resets';
-  }
   return suspended;
 }
 
@@ -220,7 +214,9 @@ const kLeadChooseMachine = 'Choose the machine the Product Manager runs on.';
 const kLeadSwarmPaused = 'New work is paused in this Swarm';
 
 /// The Swarm's model list (its routing policy) for a new project's Product
-/// Manager: engines and models it turns off. Empty, it rules nothing out.
+/// Manager: engines and models it turns off, as an older backend enforces
+/// them. Empty, it rules nothing out: always, once the Swarm sends its
+/// catalog, which makes the list advice (project instructions, decision 14).
 ///
 /// The owners' per-project rules (preferred engine, forbidden models) are not
 /// read here: a new project has none until it is created.
@@ -272,8 +268,17 @@ class LeadModelList {
     return null;
   }
 
-  /// Read from the Swarm's routing policy; null reads as an empty list.
-  factory LeadModelList.of(Map<String, dynamic>? policy) {
+  /// Read from the tab's routing-policy read ([answer]: `policy`, and
+  /// `catalog` from a backend whose route reads the instructions). With a
+  /// catalog, or no answer, the list is empty: that server refuses no model
+  /// for the list, so neither does New Project.
+  factory LeadModelList.of(Map<String, dynamic>? answer) {
+    if (answer == null || answer.containsKey('catalog')) {
+      return const LeadModelList();
+    }
+    final policy = answer['policy'] is Map
+        ? Map<String, dynamic>.from(answer['policy'] as Map)
+        : null;
     final byModel = <(String, String), bool>{};
     final rows = <(String, String, String), bool>{};
     final byEngine = <String, bool>{};

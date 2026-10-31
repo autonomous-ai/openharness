@@ -286,6 +286,7 @@ class SwarmMessageRow extends StatelessWidget {
     required this.name,
     required this.look,
     required this.role,
+    this.pm = false,
     required this.mentions,
     this.tagged = const [],
     this.taggedAddresses = const {},
@@ -313,6 +314,10 @@ class SwarmMessageRow extends StatelessWidget {
   /// What its author wears.
   final SwarmLook look;
   final String? role;
+
+  /// Its author is its project's coordinator ([SuperTabSnapshot.isLead]),
+  /// whatever its role is called: it wears manager blue.
+  final bool pm;
 
   final SwarmMentions mentions;
 
@@ -391,7 +396,7 @@ class SwarmMessageRow extends StatelessWidget {
         name: name,
         id: message.authorId,
         agent: message.fromAgent,
-        pm: role == 'PM',
+        pm: pm,
         picture: look.picture,
         status: look.status,
       ),
@@ -630,7 +635,8 @@ class SwarmChatAvatar extends StatelessWidget {
   final String name, id;
   final bool agent;
 
-  /// A project's Product Manager: the prototype's blue, kept for them alone.
+  /// A project's coordinator, whatever its role is called: the prototype's
+  /// blue, kept for them alone.
   final bool pm;
 
   /// What they chose to wear; null wears the initial.

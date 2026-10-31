@@ -160,6 +160,9 @@ export function admission(capacity: Json, engine: Json, quota: ReturnType<typeof
   if (!quota.known) {
     unknown.push('Subscription allowance is unknown for this account.')
     if (requirements.quotaRequired) reasons.push('The requested subscription allowance could not be verified.')
-  } else if (quota.windows.some(w => w.usedPercent >= 100)) reasons.push('The subscription has an exhausted usage window. Wait for a fresh allowance reading or choose another account.')
+  } else if (quota.windows.some(w => w.usedPercent >= 100)) unknown.push(USED_UP_WINDOW)
   return { allowed: reasons.length === 0, reasons, unknown }
 }
+/** Quota is information, not a gate (project instructions, phase 4): a start on a used-up account goes ahead, its engine
+ *  shows its usage limit, and the agent resumes when the window resets (superTabs/limitResume.ts). The route says it too. */
+export const USED_UP_WINDOW = 'The subscription has a used-up usage window: work there waits until it resets.'

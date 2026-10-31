@@ -91,7 +91,7 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
     const view = readerView(parts, peer, NOW, { teamMachines: [] })
     const worker = view.parts.agents.find(a => a.key === s.worker)!
     for (const hidden of ['downNamed', 'downSince', 'limitedUntil', 'roleId']) expect(worker.data).not.toHaveProperty(hidden)
-    expect(view.derived.agents[s.worker]).toEqual({ downSince: new Date(NOW - 5 * MINUTE).toISOString(), limitedUntil: null, workDecision: null, roleId: null })
+    expect(view.derived.agents[s.worker]).toEqual({ downSince: new Date(NOW - 5 * MINUTE).toISOString(), limitedUntil: null, workDecision: null, roleId: null, roleName: 'Engineer' })
     expect(Object.keys(view.derived.agents).sort()).toEqual([s.lead, s.worker].sort())
   })
 
@@ -153,5 +153,22 @@ describe('reader view over what the read cache holds', () => {
       expect(view.state).toBe(state)
       if (actor === peer) expect({ parts: view.parts, derived: view.derived }).toEqual({ parts: expected.parts, derived: expected.derived })
     }
+  })
+})
+
+describe('instructions in the reader\'s view (project instructions, phase 2)', () => {
+  it('gives every agent a role name and every project its coordinator\'s name, defaulted for older data', () => {
+    const s = richSwarm()
+    s.edit(state => {
+      state.agents.find(a => a.id === s.worker)!.roleName = 'Tester'
+      state.projects![0]!.instructionsRevision = 4
+    })
+    const view = readerView(store.split(s.state, { tabId: 'tab', version: R, now: NOW }), owner, NOW, { teamMachines: [] })
+    expect(view.derived.agents[s.lead]!.roleName).toBe('PM')
+    expect(view.derived.agents[s.worker]!.roleName).toBe('Tester')
+    expect(view.parts.head.data.projects![0]).toMatchObject({ instructionsRevision: 4, coordinatorName: 'Product Manager' })
+    s.edit(state => { state.projects![0]!.coordinatorName = 'Lead engineer' })
+    expect(readerView(store.split(s.state, { tabId: 'tab', version: R, now: NOW }), owner, NOW, { teamMachines: [] }).parts.head.data.projects![0]!.coordinatorName)
+      .toBe('Lead engineer')
   })
 })

@@ -1,5 +1,5 @@
-/** Whether an engine on a contributed machine can take new work: what its reading says (signed out, out of quota) and the
- *  server's own count of its failed starts there. Work kept landing on engines that could not run, Codex with no tokens on
+/** Whether an engine on a contributed machine can take new work: what its reading says (signed out; quota is shown, not
+ *  refused) and the server's own count of its failed starts there. Work kept landing on engines that could not run, Codex with no tokens on
  *  Diego's Mac among them, until a person told the Product Manager (Ken, 2026-10-28). Unknown is never unusable: a
  *  machine from before these readings keeps today's behaviour. */
 import type { ContributedMachine } from './machines.js'
@@ -84,13 +84,12 @@ export function suspendedEngines(machine: ContributedMachine, now: number): Reco
     .map(([engine, s]) => [engine, suspensionReason(engine, s.fine)]))
 }
 
-/** Why a new start of [engine] on the machine is refused, or null: signed out or out of quota in its reading, or suspended.
- *  What the reading does not say stays usable. */
+/** Why a new start of [engine] on the machine is refused, or null: signed out in its reading, or suspended. Quota is
+ *  information, not a gate (project instructions, phase 4): a used-up window refuses nothing. What the reading does not say
+ *  stays usable. */
 export function engineUnusable(machine: ContributedMachine, engine: string, now: number): string | null {
   const reading = machine.observation
   if (reading?.readiness?.engines?.find(e => e.engine === engine)?.signedIn === false) return `${named(engine)} is not signed in to a subscription on this machine.`
-  const quota = reading?.quotas?.find(q => q.engine === engine)
-  if (quota?.known && quota.windows.some(w => w.usedPercent >= 100)) return `${named(engine)} has no subscription quota left on this machine until its usage window resets.`
   const suspension = active(machine, engine, now)
   return suspension ? suspensionReason(engine, suspension.fine) : null
 }

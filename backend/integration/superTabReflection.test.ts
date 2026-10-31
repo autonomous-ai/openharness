@@ -141,7 +141,7 @@ describe('the nightly routing reflection', () => {
     expect(decisions).toEqual([expect.objectContaining({ personId: owner.sub, askerAgentId: f.lead, conversationId: 'lead', assignmentId: null,
       question: 'Start parser work on a subscription model instead of the grid? Expected saving: about 3 hours to ship a week. '
         + '3 of 3 parser tasks started on the grid stepped up after their grid attempt failed. Only 3 tasks.',
-      options: ['Yes: the Lead is reminded each night and routes this way; nothing changes by itself', 'No: keep routing as it is',
+      options: ['Yes: the coordinator writes this into the Routing section of the instructions', 'No: keep routing as it is',
         'Not yet: ask again when there is more evidence'],
       // Three tasks are too few to recommend Yes (review of #2276).
       recommended: 2, kind: 'routing-reflection' })])
@@ -154,7 +154,9 @@ describe('the nightly routing reflection', () => {
     expect((await f.store.messages(host, f.tab, 'lead', {})).messages.map(m => m.id)).toContain(report!.id)
   })
 
-  it('asks an answered proposal again only after 14 days, and lists an approved one each night for 30 days, to people and to the Lead (reviews of #2276)', async () => {
+  // Project instructions, phase 4 (decision 21): a Yes is a line the coordinator writes into the instructions. No approved
+  // list, no nightly reminder to the coordinator; the reflection reads the instructions instead.
+  it('asks an answered proposal again only after 14 days, posts no reminder of approved changes, and reports one the instructions hold', async () => {
     const f = await swarm()
     await f.ship()
     for (let i = 0; i < 3; i++) await f.stepUpFromGrid()
@@ -177,35 +179,32 @@ describe('the nightly routing reflection', () => {
     expect(await night('2026-11-01', 2)).toContain(`${GRID_TITLE}: about 3 hours`)
     const again = (await db.superTabDecision.findMany({ where: { tabId: f.tab, OR: [{ answeredAt: null }, { answeredAt: { isSet: false } }] } }))
     expect(again.map(d => proposalTitle(d.question))).toEqual([GRID_TITLE])
-    // Approved after midnight in Vietnam (18:10 UTC): every later night lists it under the local date, to people and to the Lead.
+    // The owner says Yes: no list of approved changes, and no reminder to the coordinator, that night or after.
     f.clock.now = NIGHT + 2 * DAY + 2 * HOUR
     await f.execute({ type: 'decision.answer', decisionId: again[0]!.id, choice: 0 })
     const approved = await night('2026-11-02', 3)
-    expect(approved.split('\n')).toEqual(expect.arrayContaining([
-      'Approved changes: the Lead is reminded each night and routes this way; each is listed for 30 days:',
-      `- ${GRID_TITLE} (approved 2026-11-02)`, 'No change proposed.']))
-    expect(await db.superTabDecision.count({ where: { tabId: f.tab } })).toBe(2)
-    // The Lead's own reminder (delta review of #2276): to it alone, not a line people read.
-    const reminder = `Approved routing changes: route this way until routing does it by itself. This reminder repeats each night for 30 days `
-      + `after each approval.\n- ${GRID_TITLE} (approved 2026-11-02)`
-    const toLead = (await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: 'lead', text: reminder } }))
-    expect(toLead.map(m => m.recipientIds)).toEqual([[f.lead]])
-    expect((await f.store.messages(host, f.tab, 'lead', {})).messages.map(m => m.id)).not.toContain(toLead[0]!.id)
-    expect((await f.store.messages(host, f.tab, 'lead', {}, f.lead)).messages.map(m => m.id)).toContain(toLead[0]!.id)
-    // Thirty days on, the approval is no longer listed or reminded, and the change may be proposed again.
+    expect(approved).not.toContain('Approved changes')
+    expect(approved).toContain('No change proposed.')
+    // Until its line is in the instructions, each report says so: a Yes is never lost silently (final review of the branch).
+    const line = 'Parser work starts on a subscription model, not on the grid.'
+    expect(approved.split('\n')).toContain(`Approved 2026-11-02; not in the instructions yet: ${line}`)
+    expect((await db.superTabMessage.findMany({ where: { tabId: f.tab, recipientIds: { has: f.lead } } }))
+      .filter(m => (m.source as { kind?: string } | null)?.kind === 'routing-reflection')).toEqual([])
+    expect((await db.superTabMessage.findMany({ where: { tabId: f.tab } })).filter(m => m.text.startsWith('Approved routing'))).toEqual([])
+    // The coordinator writes its line into Routing, as the template's PM section says, naming the owner as who asked.
+    const doc = await f.store.instructions(owner, f.tab, 'lead')
+    await f.execute({ type: 'instructions.save', projectId: 'lead', baseRevision: doc.revision, text: `${doc.text.trimEnd()}\n- ${line}\n`,
+      summary: `Routing: ${line}`, askedBy: owner.sub }, host, f.lead)
+    // Approved lately and in the instructions: reported as there, not as missing.
+    const written = await night('2026-11-03', 4)
+    expect(written).toContain(`In the instructions: ${line}`)
+    expect(written).not.toContain('not in the instructions yet')
+    // Answered over 14 days ago: the instructions alone keep it from being asked again, and the report says how the week ran.
     await db.superTabDecision.update({ where: { id: again[0]!.id }, data: { answeredAt: new Date(NIGHT - 28 * DAY) } })
-    const later = await night('2026-11-03', 4)
-    expect(later).not.toContain('Approved changes')
-    expect(later).toContain(`${GRID_TITLE}: about 3 hours`)
-    // Its 30 days just ended and the last 7 days still route the old way: the proposal says so, and so does the question.
-    expect(later).toContain('Approved on 2026-10-02; the last 7 days still route the old way.')
-    const reasked = await db.superTabDecision.findMany({ where: { tabId: f.tab, OR: [{ answeredAt: null }, { answeredAt: { isSet: false } }] } })
-    expect(reasked.map(d => d.question)).toEqual([expect.stringContaining('Approved on 2026-10-02; the last 7 days still route the old way.')])
-    expect(await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: 'lead', recipientIds: { has: f.lead }, text: { startsWith: 'Approved routing' } } })).toBe(1)
-    // Left to the PM, an approval says the PM decided, never the owner.
-    const [third] = (await db.superTabDecision.findMany({ where: { tabId: f.tab, OR: [{ answeredAt: null }, { answeredAt: { isSet: false } }] } }))
-    await db.superTabDecision.update({ where: { id: third!.id }, data: { choice: 0, delegated: true, answeredAt: new Date(f.clock.now) } })
-    expect(await night('2026-11-04', 5)).toContain(`- ${GRID_TITLE} (PM decided 2026-11-03)`)
+    const later = await night('2026-11-04', 5)
+    expect(later).toContain(`In the instructions: ${line} The last 7 days ran 3 parser tasks on the grid.`)
+    expect(later).toContain('No change proposed.')
+    expect(await db.superTabDecision.count({ where: { tabId: f.tab, OR: [{ answeredAt: null }, { answeredAt: { isSet: false } }] } })).toBe(0)
   })
 
   it('keeps at most three proposals open, says when one was not asked, and lets one unanswered for 7 days expire (review of #2276)', async () => {

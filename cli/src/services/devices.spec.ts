@@ -1170,8 +1170,8 @@ describe('a failed turn of a Swarm worker', () => {
 
   it('the Swarm started on this computer, a Builder or a Reviewer, never reaches the dial as an error', async () => {
     const { port } = start({ core: swarmAgents([
-      { agentId: 'builder', startedBy: 'agent', swarmSkill: { role: 'dev', key: 'k1' } },
-      { agentId: 'reviewer', startedBy: 'agent', swarmSkill: { role: 'review', key: 'k2' } },
+      { agentId: 'builder', startedBy: 'agent', swarmSkill: { role: 'agent', key: 'k1' } },
+      { agentId: 'reviewer', startedBy: 'agent', swarmSkill: { role: 'agent', fallback: 'review', key: 'k2' } },
     ]) })
     port.card({ type: 'commander_event', agentId: 'builder', payload: { kind: 'error', text: 'boom' } })
     port.card({ type: 'commander_event', agentId: 'reviewer', payload: { kind: 'error', text: 'boom' } })
@@ -1182,7 +1182,7 @@ describe('a failed turn of a Swarm worker', () => {
 
   it('the person has on a desk tab still reaches the dial as an error, as every desk agent\'s does', async () => {
     const { core, port } = start({ core: swarmAgents([
-      { agentId: 'builder', startedBy: 'agent', swarmSkill: { role: 'dev', key: 'k1' } },
+      { agentId: 'builder', startedBy: 'agent', swarmSkill: { role: 'agent', key: 'k1' } },
       { agentId: 'mine' },
     ]) })
     await teamAccount(core)
@@ -1202,8 +1202,8 @@ describe('a failed turn of a Swarm worker', () => {
 
   it('a person started by hand still reaches the dial as an error, even with a Builder\'s or Reviewer\'s role', async () => {
     const { port } = start({ core: swarmAgents([
-      { agentId: 'builder', swarmSkill: { role: 'dev', key: 'k1' } },
-      { agentId: 'reviewer', startedBy: undefined, swarmSkill: { role: 'review', key: 'k2' } },
+      { agentId: 'builder', swarmSkill: { role: 'agent', key: 'k1' } },
+      { agentId: 'reviewer', startedBy: undefined, swarmSkill: { role: 'agent', fallback: 'review', key: 'k2' } },
     ]) })
     port.card({ type: 'commander_event', agentId: 'builder', payload: { kind: 'error', text: 'builder broke' } })
     port.card({ type: 'commander_event', agentId: 'reviewer', payload: { kind: 'error', text: 'reviewer broke' } })
@@ -1289,7 +1289,7 @@ describe('a failed turn of a Swarm worker', () => {
   })
 
   it('leaves a Lead\'s own failure as it was', async () => {
-    const { port } = start({ core: swarmAgents([{ agentId: 'lead', swarmSkill: { role: 'lead', key: 'k' } }]) })
+    const { port } = start({ core: swarmAgents([{ agentId: 'lead', swarmSkill: { role: 'coordinator', key: 'k' } }]) })
     port.card({ type: 'commander_event', agentId: 'lead', payload: { kind: 'error', text: 'lead broke' } })
     await vi.waitFor(() => expect(calls('turnError')).toEqual([['lead', 'lead broke']]))
     expect(calls('turnDone')).toEqual([])
