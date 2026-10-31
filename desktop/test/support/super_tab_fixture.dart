@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:cryptography/dart.dart' show DartSha256;
 import 'package:dio/dio.dart' show CancelToken;
+import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/super_tabs/attachment_upload.dart';
 import 'package:harness/super_tabs/buddies.dart' show kBuddyEngineRefusals;
 import 'package:harness/super_tabs/controller.dart';
@@ -877,7 +878,7 @@ class ConversationServer {
     required String conversationId,
     required String name,
     required String mime,
-    required Uint8List bytes,
+    required HarnessAttachment file,
     required CancelToken cancel,
     required void Function(double sent) onProgress,
   }) async {
@@ -894,7 +895,7 @@ class ConversationServer {
       'conversationId': conversationId,
       'name': name,
       'mime': mime,
-      'file': bytes,
+      'file': await file.readBytes(),
       'id': id,
     });
     onProgress(1);

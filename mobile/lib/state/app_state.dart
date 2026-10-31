@@ -84,7 +84,9 @@ import '../phone/phone_name_store.dart';
 import '../viewer/device_log.dart';
 import '../viewer/device_history.dart';
 import '../viewer/device_log_sync.dart';
+import '../swarm/swarm_file_picker.dart' show clearSwarmPickerCopies;
 import '../swarm/swarm_notices.dart';
+import '../swarm/swarm_outgoing_files.dart' show SwarmOutgoingFile;
 import '../swarm/swarm_request.dart';
 
 enum AppStatus { bootstrapping, unauthenticated, authenticated }
@@ -561,6 +563,14 @@ class AppNotifier extends ChangeNotifier {
       !_disposed && revision == _authRevision;
 
   int _invalidateAuthWork() {
+    // A chat file on its way stops: the next account takes no step of it, and its bytes stop
+    // going to the link the last one was given.
+    for (final upload in _swarmUploadsGoing) {
+      upload.cancel('account changed');
+    }
+    _swarmUploadsGoing.clear();
+    // The copies large chat files were kept in went with the chats that held them.
+    unawaited(clearSwarmPickerCopies());
     _profileInFlight = null;
     _retryInFlight = null;
     machinesLoading = false;
@@ -1652,6 +1662,8 @@ class AppNotifier extends ChangeNotifier {
     // ([_warmStartMachines]). Started after the config and the sign-in check, they landed after
     // the first frame, ~250ms into the dial's wait. Disk only; dropped when nobody is signed in.
     lastOpenedAgent.prefetch();
+    // Copies of large chat files a run that ended first left behind; none is held yet.
+    unawaited(clearSwarmPickerCopies());
     final cache = _machineCache;
     if (cache != null) {
       // Read before the first frame by `startHarness` — see [_preDialFromHint].
@@ -6421,13 +6433,14 @@ class AppNotifier extends ChangeNotifier {
   /// Sends one Swarm chat file to the backend ([SwarmUpload]): straight from this phone with its own
   /// sign-in ([ApiClient.uploadSwarmAttachment]), not through a machine as [swarmRequest] goes — the
   /// backend takes a chat file only from the client, and a machine forwards only JSON. An answer
-  /// that lands after the account changed is dropped.
+  /// that lands after the account changed is dropped, and a sign-out or another sign-in stops the
+  /// upload where it is ([_invalidateAuthWork]).
   Future<Map<String, dynamic>> swarmUpload({
     required String tabId,
     required String conversationId,
     required String name,
     required String mime,
-    required Uint8List bytes,
+    required SwarmOutgoingFile file,
     required CancelToken cancel,
     required void Function(double sent) onProgress,
   }) async {
@@ -6441,23 +6454,35 @@ class AppNotifier extends ChangeNotifier {
       }
     }
 
+    // A token of this sign-in's, which the chat's [cancel] also ends.
+    final going = CancelToken();
+    _swarmUploadsGoing.add(going);
+    unawaited(cancel.whenCancel.then((_) => going.cancel('given up')));
     try {
       final answer = await api.uploadSwarmAttachment(
         tabId: tabId,
         conversationId: conversationId,
         name: name,
         mime: mime,
-        bytes: bytes,
-        cancel: cancel,
+        file: file,
+        cancel: going,
         onProgress: onProgress,
+        // A file large enough to go up in steps stops between them once the
+        // account changed: no step is taken for the next one.
+        stillWanted: () => _authWorkCurrent(revision),
       );
       stillThisAccount();
       return answer;
     } catch (_) {
       stillThisAccount();
       rethrow;
+    } finally {
+      _swarmUploadsGoing.remove(going);
     }
   }
+
+  /// The chat file uploads of this sign-in on their way ([swarmUpload]).
+  final _swarmUploadsGoing = <CancelToken>{};
 
   /// How many machines one Swarm call asks at most, one after another.
   static const _swarmAsksPerCall = 5;

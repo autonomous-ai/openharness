@@ -9,8 +9,14 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Readable, Transform } from 'node:stream'
 
-/** The backend takes 10 MB a file; the multipart framing around it is a few hundred bytes. */
-export const ATTACHMENT_UPLOAD_MAX_BYTES = 11 * 1024 * 1024
+/** The most one file sent by this multipart route may be. A larger one, up to 256 MB, goes straight to storage by a signed
+ *  link (superTabs/attach.ts): production sits behind Cloudflare, which may refuse a request body over 100 MB. */
+export const MAX_FORM_ATTACHMENT_BYTES = 10 * 1024 * 1024
+/** The form's file and its multipart framing, a few hundred bytes. */
+export const ATTACHMENT_UPLOAD_MAX_BYTES = MAX_FORM_ATTACHMENT_BYTES + 1024 * 1024
+/** Said of a form past that cap. Every client sends a file over 10 MB by the link, and an older one refused it before
+ *  sending, so only a client in error meets this. */
+const TOO_LARGE = 'A file can be at most 10 MB.'
 /** No bytes moving for this long ends an upload: a slow uplink keeps going, a stalled one does not hold the request. */
 export const ATTACHMENT_IDLE_MS = 30_000
 /** The ceiling however steadily it moves: 11 MB at about 100 kbit/s. */
@@ -44,7 +50,7 @@ export async function forwardAttachmentUpload(req: IncomingMessage, res: ServerR
   // A declared length already over the cap is refused before a byte is read or sent on.
   if (Number(req.headers['content-length'] ?? 0) > max) {
     req.resume()
-    return answer(413, 'ATTACHMENT_TOO_LARGE', 'A file can be at most 10 MB.')
+    return answer(413, 'ATTACHMENT_TOO_LARGE', TOO_LARGE)
   }
   let token: string
   try { token = await deps.accessToken() } catch {
@@ -79,7 +85,7 @@ export async function forwardAttachmentUpload(req: IncomingMessage, res: ServerR
   } catch (error) {
     clearTimeout(quiet)
     req.resume()
-    if (seen > max) return answer(413, 'ATTACHMENT_TOO_LARGE', 'A file can be at most 10 MB.')
+    if (seen > max) return answer(413, 'ATTACHMENT_TOO_LARGE', TOO_LARGE)
     const timedOut = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')
     return answer(timedOut ? 504 : 502, timedOut ? 'BACKEND_TIMEOUT' : 'BACKEND_UNREACHABLE',
       timedOut ? 'The Harness backend did not finish taking the file. Try again.' : 'Could not reach the Harness backend. Check the connection and try again.')

@@ -317,7 +317,7 @@ void main() {
     expect(controller.draft('lead'), 'Look at ');
     expect(hint, findsNothing);
     final zip = ZipDecoder().decodeBytes(
-      controller.attachments('lead').files.single.bytes,
+      controller.attachments('lead').files.single.bytes!,
     );
     final entries = {
       for (final entry in zip.files)
@@ -335,7 +335,7 @@ void main() {
     final controller = await open(tester, machineId: 'studio');
     final big = folder('big');
     File('${big.path}/blob.bin')
-        .writeAsBytesSync(List.filled(kSuperTabAttachmentMaxBytes + 1, 0));
+        .writeAsBytesSync(List.filled(kSuperTabFolderZipMaxBytes + 1, 0));
     await drop(tester, [
       big.path,
     ], until: () => field(tester).text.contains(big.path));
@@ -452,7 +452,7 @@ void main() {
     // compress, and the archive adds its headers.
     final random = Random(1);
     File('${src.path}/noise.bin').writeAsBytesSync([
-      for (var i = 0; i < kSuperTabAttachmentMaxBytes - 16; i++)
+      for (var i = 0; i < kSuperTabFolderZipMaxBytes - 16; i++)
         random.nextInt(256),
     ]);
     await drop(tester, [

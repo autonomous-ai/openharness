@@ -204,13 +204,15 @@ it('parses repeated --attach, allows empty text with a file, and refuses empty t
   }
 })
 it('uploads each --attach file to the daemon\'s local upload route as the agent, then sends the message with their ids', async () => {
-  const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs')
+  const { mkdtempSync, writeFileSync, rmSync, truncateSync } = await import('node:fs')
   const { join } = await import('node:path')
   const { tmpdir } = await import('node:os')
   const dir = mkdtempSync(join(tmpdir(), 'super-tab-attach-'))
   try {
     writeFileSync(join(dir, 'shot.png'), Buffer.from([1, 2, 3]))
-    writeFileSync(join(dir, 'big.bin'), Buffer.alloc(10 * 1024 * 1024 + 1))
+    // Sparse: past the 256 MB limit without taking the room.
+    writeFileSync(join(dir, 'big.bin'), '')
+    truncateSync(join(dir, 'big.bin'), 256 * 1024 * 1024 + 1)
     const calls: Array<Record<string, unknown>> = []
     const request = vi.fn(async (_type: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
       calls.push(payload)
@@ -254,8 +256,9 @@ it('uploads each --attach file to the daemon\'s local upload route as the agent,
     expect(await superTabCommand([...prefix, 'post', 'lead', 'x', 'op2', '--attach', join(dir, 'denied.png')], deps)).toBe(1)
     expect(JSON.parse(deps.print.mock.calls.at(-1)![0]).error).toBe('Not in this conversation.')
     expect(await superTabCommand([...prefix, 'post', 'lead', 'x', 'op3', '--attach', join(dir, 'big.bin')], deps)).toBe(1)
-    expect(JSON.parse(deps.print.mock.calls.at(-1)![0]).error).toContain('over the 10.0 MB limit')
-    expect(calls.map(c => c.step ?? c.action)).toEqual(['sent', 'sent'])
+    expect(JSON.parse(deps.print.mock.calls.at(-1)![0]).error).toBe(`big.bin is over the 256 MB limit (${256 * 1024 * 1024 + 1} bytes).`)
+    // Refused before any request: not even the check for an earlier send.
+    expect(calls.map(c => c.step ?? c.action)).toEqual(['sent'])
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 it('parses propose with up to 5 --attach files, always as a proposal', () => {

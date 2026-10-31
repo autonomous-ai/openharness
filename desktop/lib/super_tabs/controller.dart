@@ -936,6 +936,8 @@ class SuperTabController extends ChangeNotifier {
     final files = HarnessAttachments(
       limitBytes: kSuperTabAttachmentMaxBytes,
       limitFiles: kSuperTabAttachmentMaxFiles,
+      // A heavier file stays on disk until it goes, straight to storage.
+      readUpTo: kSuperTabFormAttachmentMaxBytes,
     );
     files.addListener(() {
       // Changing the files answers a refused upload.
@@ -2223,6 +2225,9 @@ class SuperTabController extends ChangeNotifier {
     }
     _queuedSends.clear();
     _poll?.cancel();
+    // A file on its way stops: a large one would go on to storage for an
+    // account that no longer reads this Swarm.
+    cancelUpload();
     _changed();
   }
 
@@ -3405,6 +3410,7 @@ class SuperTabController extends ChangeNotifier {
       _quoting.clear();
       _forgetThreads();
       _poll?.cancel();
+      cancelUpload();
     }
   }
 
@@ -4209,7 +4215,7 @@ class SuperTabController extends ChangeNotifier {
           conversationId: conversationId,
           name: file.name,
           mime: mimeForName(file.name),
-          bytes: file.bytes,
+          file: file,
           cancel: token,
           onProgress: (sent) {
             watch();
@@ -4259,6 +4265,8 @@ class SuperTabController extends ChangeNotifier {
       then();
     }
     _onDispose.clear();
+    // Closing the tab or signing out stops a file on its way.
+    cancelUpload();
     for (final queued in _queuedSends) {
       queued.result.complete(null);
     }

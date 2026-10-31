@@ -88,7 +88,7 @@ void main() {
             required conversationId,
             required name,
             required mime,
-            required bytes,
+            required file,
             required cancel,
             required onProgress,
           }) {

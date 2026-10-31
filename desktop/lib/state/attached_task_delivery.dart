@@ -108,7 +108,7 @@ Future<String?> deliverAttachedTask(
     if (stillWanted != null && !stillWanted()) {
       return 'Attachment delivery stopped.';
     }
-    if (!await session.pasteFile(file.name, file.bytes) ||
+    if (!await session.pasteFile(file.name, await file.readBytes()) ||
         !await session.pasteText(' ')) {
       appLog.warn('attach', '${file.name} did not reach $agentId');
       return 'Could not attach ${file.name}. Attach it in the pane.';
