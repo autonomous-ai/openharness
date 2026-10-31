@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { Readable } from 'node:stream'
 import { crc32, deflateSync, inflateSync } from 'node:zlib'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { storeOldLeads } from './oldLeads.test-support.js'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
@@ -240,11 +241,12 @@ describe('a Buddy through the store', () => {
     const web = (await f.execute({ type: 'project.create', name: 'Web', visibility: 'public', brief: '' })).result as { projectId: string; conversationId: string }
     const landing = String((await f.execute({ type: 'conversation.create', projectId: web.projectId, title: 'Landing', brief: '', checks: [] })).result.conversationId)
     const { agentId } = await buddy(f)
-    const leads = (await f.store.read(owner, f.tab)).state.leadsConversationId
-    expect(leads).toBeTruthy()
-    for (const conversationId of [owners, web.conversationId, landing, leads!]) {
+    // An older Swarm's stored Leads conversation: removed for everyone (model.ts leadsRemoved), its Buddy included.
+    const { id: leads } = await storeOldLeads(db, f.tab, [f.lead], { kind: 'person', id: owner.sub, name: owner.email, membershipGeneration: f.tab })
+    for (const conversationId of [owners, web.conversationId, landing]) {
       await expect(f.store.messages(peer, f.tab, conversationId, {}, agentId)).rejects.toThrow('unavailable')
     }
+    await expect(f.store.messages(peer, f.tab, leads, {}, agentId)).rejects.toMatchObject({ code: 'LEADS_CONVERSATION_REMOVED' })
     const read = await new SwarmReads(f.store).firstLoad(peer, f.tab, agentId)
     for (const id of [owners, web.conversationId, landing, leads]) expect(read.groups.map(g => g.key)).not.toContain(id)
   })
@@ -858,8 +860,7 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
 
   it('is refused at pickup in the Leads conversation, even with a delivery row there (security review 2 of #2178)', async () => {
     const { f, agentId } = await proposed()
-    const leads = (await f.store.read(owner, f.tab)).state.leadsConversationId!
-    const said = String((await f.execute({ type: 'message.send', conversationId: leads, text: 'Leads only.', replyTo: null, recipientIds: [] }, owner, f.lead)).result.messageId)
+    const { id: leads, messageId: said } = await storeOldLeads(db, f.tab, [f.lead], { kind: 'person', id: owner.sub, name: owner.email, membershipGeneration: f.tab }, 'Leads only.')
     const template = await db.superTabDelivery.findFirstOrThrow({ where: { tabId: f.tab, agentId } })
     const { id: _id, createdAt: _created, updatedAt: _updated, ...fields } = template
     const planted = await db.superTabDelivery.create({ data: { ...fields, id: randomUUID().replaceAll('-', '').slice(0, 24), conversationId: leads, messageId: said,

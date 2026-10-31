@@ -4,6 +4,7 @@ import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { storeOldLeads } from '../src/superTabs/leads.test-support.js'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import Fastify, { type FastifyInstance } from 'fastify'
@@ -86,6 +87,8 @@ async function scene(extra: (s: ReturnType<typeof swarm>) => void = () => {}) {
     Object.assign(chat, { id: buddyId, kind: 'buddy', leadId: null, agentIds: [], audience: { people: [{ id: peer.sub, generation }] } })
   })
   extra(s)
+  // Stored before its removal: the Swarm-wide Leads conversation, which no inbox lists now (model.ts leadsRemoved).
+  s.edit(state => { storeOldLeads(state) })
   const tabId = `tab-${randomUUID()}`
   const state = { ...structuredClone(s.state), id: tabId } as SuperTabState
   await writeLegacySwarm(db, { state, revision: 3 })
@@ -161,7 +164,7 @@ const latestOf = (data: any) => Object.fromEntries((data.latest as any[]).map(l 
  *  Secret work (owner's private project): owner's root, a worker reply, then "Secret latest".
  *  Peer's Buddy chat: peer's root, the Buddy's reply, then the Buddy's "Buddy latest".
  *  Peer's closed Chat with PM: a root, a reply and "Closed latest", read by nobody.
- *  Leads: the owner's "Leads note". */
+ *  The removed Leads conversation (still stored): the owner's "Leads note", which nobody's inbox shows. */
 async function busyScene() {
   const s = await scene()
   const [webRootId] = await insert(s.tabId, s.web, [{ text: 'Web root', author: personAuthor(owner), mentions: [peer.sub, outsider.sub] }])
@@ -179,7 +182,7 @@ async function busyScene() {
   await insert(s.tabId, s.secretGroup, [{ text: 'Secret reply', author: agentAuthor(s.worker), thread: secretRoot }, { text: 'Secret latest', author: personAuthor(owner) }])
   await insert(s.tabId, s.buddyId, [{ text: 'Buddy reply', author: agentAuthor('buddy-agent'), thread: buddyRoot }, { text: 'Buddy latest', author: agentAuthor('buddy-agent') }])
   await insert(s.tabId, s.closedId, [{ text: 'Closed reply', author: agentAuthor(s.worker), thread: closedRoot }, { text: 'Closed latest', author: personAuthor(peer) }])
-  await send(s.tabId, s.leads, 'Leads note')
+  await insert(s.tabId, s.leads, [{ text: 'Leads note', author: personAuthor(owner) }])
   return { ...s, webRoot, webLatest }
 }
 
@@ -194,7 +197,7 @@ describe('a person\'s inbox: unread threads and each chat\'s latest message', ()
       { chat: s.buddyId, root: 'Buddy root', unread: 1, last: 'buddy-agent' },
       { chat: s.web, root: 'Web root', unread: 3, last: s.worker },
     ])
-    expect(latestOf(body.data)).toEqual({ [s.web]: 'Web latest', [s.buddyId]: 'Buddy latest', [s.leads]: 'Leads note' })
+    expect(latestOf(body.data)).toEqual({ [s.web]: 'Web latest', [s.buddyId]: 'Buddy latest' })
     expect(body.data.more).toBe(false)
     expect(JSON.stringify(body.data)).not.toMatch(/Secret|Closed|secret|closed/)
     expect(JSON.stringify(body.data)).not.toContain(s.secretGroup)
@@ -210,7 +213,7 @@ describe('a person\'s inbox: unread threads and each chat\'s latest message', ()
       { chat: s.secretGroup, root: 'Secret root', unread: 1, last: s.worker },
       { chat: s.web, root: 'Web root', unread: 1, last: s.worker },
     ])
-    expect(latestOf(body.data)).toEqual({ [s.web]: 'Web latest', [s.secretGroup]: 'Secret latest', [s.leads]: 'Leads note' })
+    expect(latestOf(body.data)).toEqual({ [s.web]: 'Web latest', [s.secretGroup]: 'Secret latest' })
     expect(JSON.stringify(body.data)).not.toMatch(/Buddy|Closed/)
     expect(JSON.stringify(body.data)).not.toContain(s.buddyId)
   })
@@ -220,7 +223,7 @@ describe('a person\'s inbox: unread threads and each chat\'s latest message', ()
     const { status, body } = await inbox(s.tabId, outsider)
     expect(status).toBe(200)
     expect(threadsOf(body.data)).toEqual([{ chat: s.web, root: 'Web root', unread: 3, last: s.worker }])
-    expect(latestOf(body.data)).toEqual({ [s.web]: 'Web latest', [s.leads]: 'Leads note' })
+    expect(latestOf(body.data)).toEqual({ [s.web]: 'Web latest' })
     expect(JSON.stringify(body.data)).not.toMatch(/Secret|Buddy|Closed/)
   })
 
@@ -405,7 +408,7 @@ describe('thread unread as Desktop marks it (controller.dart threadUnread)', () 
     await editChat(s.tabId, s.web, data => { data.archived = true })
     const { body } = await inbox(s.tabId, peer)
     expect(threadsOf(body.data)).toEqual([{ chat: s.buddyId, root: 'Buddy root', unread: 1, last: 'buddy-agent' }])
-    expect(latestOf(body.data)).toEqual({ [s.buddyId]: 'Buddy latest', [s.leads]: 'Leads note' })
+    expect(latestOf(body.data)).toEqual({ [s.buddyId]: 'Buddy latest' })
   })
 
   it('gives an older chat whose newest rows are all thread replies its latest top-level message', async () => {

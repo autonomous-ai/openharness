@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Prisma } from '@prisma/client'
-import { isLeads, type Agent, type SuperTabState } from './model.js'
+import type { Agent, SuperTabState } from './model.js'
 import { recoveryText, revokeConditions, turnRecipients } from './native.js'
 import { canReadAgent, canReadGroup, ownSession, projectsOf, watchClosed } from './projects.js'
 import { outsider, owner, peer, richSwarm } from './read/fixture.test-support.js'
@@ -30,7 +30,7 @@ function everyCheck(before: SuperTabState, after: SuperTabState): Prisma.SuperTa
   for (const group of before.conversations) {
     const current = after.conversations.find(c => c.id === group.id)
     if (!current || (current.archived && !group.archived)) conditions.push({ conversationId: group.id })
-    else if (!isLeads(current)) {
+    else {
       for (const member of after.people) {
         const reader = { kind: 'person' as const, userId: member.id, email: member.email }
         if (canReadGroup(before, reader, group) && !canReadGroup(after, reader, current)) conditions.push({ conversationId: group.id, userId: member.id })
@@ -99,14 +99,13 @@ describe('which terminals a commit revokes (item 7: only what changed access is 
     expect(got.conditions).toEqual(expected)
   })
 
-  // A conversation's kind alone decides who reads it: every person reads the Leads conversation, but as a project group only
-  // that project's readers do. A Buddy chat's kind narrows only what agents read, and no agent reader is checked here.
+  // A conversation's kind alone decides who reads it: nobody reads the removed Leads conversation (model.ts leadsRemoved), but
+  // as a project group that project's readers do. A Buddy chat's kind narrows only what agents read, and no agent reader is
+  // checked here.
   it('revokes exactly what every check revokes when only a conversation\'s kind changes', () => {
     const ids = swarm()
-    const leads = ids.before.conversations.find(isLeads)!
-    leads.projectId = ids.s.secret
-    const { got, expected } = ids.revokes(after => { delete group(after, leads.id).kind })
-    expect(expected).toEqual([{ conversationId: leads.id, userId: outsider.userId }])
+    const { got, expected } = ids.revokes(after => { group(after, ids.s.secretGroup).kind = 'leads' })
+    expect(expected).toEqual([{ conversationId: ids.s.secretGroup, userId: owner.userId }, { conversationId: ids.s.secretGroup, userId: peer.userId }])
     expect(got.conditions).toEqual(expected)
   })
 

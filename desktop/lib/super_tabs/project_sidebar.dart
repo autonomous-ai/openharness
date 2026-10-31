@@ -29,9 +29,6 @@ import 'task_status.dart';
 import 'workgroup_name.dart';
 import 'project_github.dart';
 
-/// The Swarm's Product Managers' conversation, listed as a channel among the projects.
-const kProductManagersChannel = 'product-managers';
-
 class ProjectSidebar extends StatelessWidget {
   const ProjectSidebar({
     super.key,
@@ -172,7 +169,6 @@ class ProjectSidebar extends StatelessWidget {
   Widget _row(
     SuperTabConversation group, {
     _ProjectReading? reading,
-    String? label,
     String? key,
   }) {
     final project = reading?.project;
@@ -189,7 +185,6 @@ class ProjectSidebar extends StatelessWidget {
     return _drawRow(
       group,
       project: project,
-      label: label,
       key: key,
       selected: selected,
       waiting: waiting,
@@ -236,7 +231,6 @@ class ProjectSidebar extends StatelessWidget {
   Widget _drawRow(
     SuperTabConversation group, {
     SuperTabProject? project,
-    String? label,
     String? key,
     required bool selected,
     required bool waiting,
@@ -259,7 +253,7 @@ class ProjectSidebar extends StatelessWidget {
     // Unread is the name in bold and nothing else, no dot (Dee, 2026-10-29).
     final style = DesktopChrome.control(
       medium: highlighted,
-      color: highlighted || unread || project != null || label != null
+      color: highlighted || unread || project != null
           ? DesktopChrome.foreground
           : DesktopChrome.muted,
     ).copyWith(fontWeight: unread ? grid.AppFont.semibold : null);
@@ -288,9 +282,7 @@ class ProjectSidebar extends StatelessWidget {
                       SizedBox(width: SuperTabSectionHeading.indentFor(0)),
                       SizedBox(
                         width: _iconColumn,
-                        child: project != null || label != null
-                            ? _channelMark()
-                            : null,
+                        child: project != null ? _channelMark() : null,
                       ),
                       Expanded(
                         child: Semantics(
@@ -300,10 +292,9 @@ class ProjectSidebar extends StatelessWidget {
                           selected: selected,
                           child: _withTaskStatus(
                             group,
-                            task: label == null && project == null,
+                            task: project == null,
                             (status) => Tooltip(
                               message:
-                                  label ??
                                   project?.name ??
                                   [
                                     SuperTabWorkgroupName.plain(group),
@@ -321,7 +312,7 @@ class ProjectSidebar extends StatelessWidget {
                                   child: Row(
                                     children: [
                                       Expanded(
-                                        child: label == null && project == null
+                                        child: project == null
                                             ? Column(
                                                 crossAxisAlignment:
                                                     CrossAxisAlignment.start,
@@ -347,18 +338,17 @@ class ProjectSidebar extends StatelessWidget {
                                                 mainAxisSize: MainAxisSize.min,
                                                 children: [
                                                   Text(
-                                                    label ?? project!.name,
+                                                    project.name,
                                                     maxLines: 1,
                                                     overflow:
                                                         TextOverflow.ellipsis,
                                                     style: style,
                                                   ),
                                                   // Teammates' agents cannot push to its repository yet (project_github.dart).
-                                                  if (project != null)
-                                                    ProjectGitHubLine(
-                                                      controller: controller,
-                                                      project: project,
-                                                    ),
+                                                  ProjectGitHubLine(
+                                                    controller: controller,
+                                                    project: project,
+                                                  ),
                                                 ],
                                               ),
                                       ),
@@ -399,7 +389,7 @@ class ProjectSidebar extends StatelessWidget {
                                       ),
                                     ),
                                   )
-                                : label == null && project == null
+                                : project == null
                                 ? SuperTabTaskMark(group)
                                 : null,
                           ),
@@ -755,15 +745,11 @@ class ProjectSidebar extends StatelessWidget {
           ];
   }
 
-  /// Every project with its workgroups, and the Product Managers'
-  /// conversation, which every person in the Swarm reads, by name from A to Z.
+  /// Every project with its workgroups, by name from A to Z.
   List<(String, Widget)> _channels(
     SuperTabSnapshot? snapshot,
     _SidebarReading reading,
   ) => [
-    if (snapshot?.conversation(snapshot.leadsConversationId ?? '')
-        case final leads?)
-      (kProductManagersChannel, _row(leads, label: kProductManagersChannel)),
     for (final project in snapshot?.projects ?? const <SuperTabProject>[])
       if (reading.of(project) case final read when read.lead != null)
         (

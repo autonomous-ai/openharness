@@ -254,13 +254,15 @@ void main() {
   }
 
   testWidgets('reads like a chat app: utilities, Projects A to Z with their '
-      'workgroups and # product-managers, Buddies, then Machines', (
+      'workgroups, Buddies, then Machines; no # product-managers', (
     tester,
   ) async {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final app = createApp(connected: true);
     addTearDown(app.dispose);
     final server = ConversationServer();
+    // An older server still sends the Leads conversation; it is gone
+    // (Dee, 2026-10-31).
     (server.state['conversations'] as List).add({
       ...conversationFixture('leads', 'Leads'),
       'kind': 'leads',
@@ -277,7 +279,6 @@ void main() {
       find.byKey(const ValueKey('super-your-devices')),
       find.byKey(const ValueKey('super-local-models')),
       find.text('Projects'),
-      find.byKey(const ValueKey('super-group-leads')),
       find.byKey(const ValueKey('super-group-empty-lead')),
       find.text('No workgroups yet'),
       find.byKey(const ValueKey('super-group-lead')),
@@ -295,18 +296,14 @@ void main() {
       );
     }
     for (final (key, name) in [
-      ('leads', 'product-managers'),
       ('empty-lead', 'sample-project'),
       ('lead', 'web-project'),
     ]) {
       expect(inRow('super-group-$key', find.text('#')), findsOneWidget);
       expect(inRow('super-group-$key', find.text(name)), findsOneWidget);
     }
-    // The product managers' channel has no workgroups to disclose.
-    expect(
-      inRow('super-group-leads', find.byIcon(AppIcons.chevronRight)),
-      findsNothing,
-    );
+    expect(find.byKey(const ValueKey('super-group-leads')), findsNothing);
+    expect(find.text('product-managers'), findsNothing);
     expect(
       inRow('super-buddy-lead', find.text('(web-project)')),
       findsOneWidget,

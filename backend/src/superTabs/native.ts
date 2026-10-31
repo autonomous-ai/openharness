@@ -3,7 +3,7 @@ import type { Prisma, SuperTabNativeContext } from '@prisma/client'
 import { z } from 'zod'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
-import { activeWork, agent, appendPullRequestUrls, author, conversation, fail, isLeads, stableId, SuperTabError,
+import { activeWork, agent, appendPullRequestUrls, author, conversation, fail, stableId, SuperTabError,
   type Actor, type Agent, type Author, type Conversation, type SuperTabState } from './model.js'
 import { accessInputs, canReadGroup, groupProject, readConversation, watchersLost } from './projects.js'
 import { mayDrive } from './terminal.js'
@@ -306,8 +306,8 @@ export function revokeConditions(before: SuperTabState, after: SuperTabState) {
   for (const group of before.conversations) {
     const current = groups.get(group.id)
     if (!current || (current.archived && !group.archived)) conditions.push({ conversationId: group.id })
-    // No terminal opens in the Leads conversation (open), so it holds no context to revoke.
-    else if (!isLeads(current)) {
+    // The removed Leads conversation is nobody's to read (model.ts leadsRemoved), so whoever read a group that turns into one loses it.
+    else {
       for (const member of after.people) {
         const reader = { kind: 'person' as const, userId: member.id, email: member.email }
         if (canReadGroup(before, reader, group) && !canReadGroup(after, reader, current)) conditions.push({ conversationId: group.id, userId: member.id })

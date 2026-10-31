@@ -364,12 +364,12 @@ it('explains starting an agent in a role of the instructions', async () => {
   expect(answer.help.startRequest).toMatchObject({ roleName: 'ROLE' })
   expect(JSON.stringify(answer.help)).not.toMatch(/Custom skills|roleId/)
 })
-it('explains to the PM other projects\' work and the Leads conversation', async () => {
-  const answer = await setup().ask({ action: 'help' }, owner) as { help: { status: string; leads: string } }
+// Dee, 10-31: the Leads (Product Managers) chat is gone; no help points an agent at it.
+it('explains to the PM other projects\' work, and points nobody at the removed Leads conversation', async () => {
+  const answer = await setup().ask({ action: 'help' }, owner) as { help: Record<string, unknown> }
   expect(answer.help.status).toContain('The PM\'s status also lists otherProjectsWork: the active work of the Swarm\'s other projects')
-  expect(answer.help.leads).toContain('leadsConversationId')
-  expect(answer.help.leads).toContain('Only Leads (the projects\' PMs) and people post there, and only Leads among agents receive it.')
-  expect(answer.help.leads).not.toContain('agree an order')
+  expect(answer.help).not.toHaveProperty('leads')
+  expect(JSON.stringify(answer.help)).not.toMatch(/Leads conversation|leadsConversationId/)
 })
 it('resolves a native caller to its exact contribution and rechecks it before every agent command', async () => {
   const t = setup()
@@ -386,8 +386,8 @@ it('resolves a native caller to its exact contribution and rechecks it before ev
   expect(await t.ask({ action: 'status', tabId: 'tab', agentId: t.agentId }, owner)).toMatchObject({ error: 'AGENT_UNAVAILABLE' })
 })
 
-// Leads see each other's work and talk (spec 2026-10-23): a Lead's status carries other projects' active work, in the
-// backend's own fields and nothing more; an agent that leads nothing never sees it nor the Leads conversation.
+// Leads see each other's work (spec 2026-10-23): a Lead's status carries other projects' active work, in the backend's own
+// fields and nothing more; an agent that leads nothing never sees it. Nobody reads the removed Leads conversation (10-31).
 describe('other projects\' work in status', () => {
   const work = { conversationId: 'docs-roster', projectName: 'Docs', title: 'Roster', owns: ['desktop/lib/super_tabs'], status: 'review',
     agentName: 'Builder', pr: 'https://github.com/example/project/pull/12' }
@@ -406,8 +406,9 @@ describe('other projects\' work in status', () => {
     swarm(t, t.agentId)
     const state = await status(t)
     expect(state.otherProjectsWork).toEqual([work])
-    expect(state.leadsConversationId).toBe('leads')
-    expect(list(state.conversations).map(c => c.id)).toEqual(['pilot', 'leads'])
+    // Dee, 10-31: the Leads conversation is removed; a Lead no longer reads it either, even from an older server.
+    expect(state).not.toHaveProperty('leadsConversationId')
+    expect(list(state.conversations).map(c => c.id)).toEqual(['pilot'])
   })
 
   it('shows the Lead of a Swarm from before projects that work too', async () => {

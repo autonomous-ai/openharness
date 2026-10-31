@@ -109,8 +109,8 @@ the person is in the menu bar's Harness menu and on the Dock's badge), then thre
 order: **Projects**,
 **Buddies** and **Machines**. Projects and Machines have section headings with disclosure
 after the label and an add action at the right. Project rows read as channels, from A to Z:
-**#** at the left, then their name and status, with no chevron. The Product Managers'
-conversation is one of them, **# product-managers**, with no workgroups. A click on a project row
+**#** at the left, then their name and status, with no chevron. (The Swarm-wide
+**# product-managers** row was removed on 2026-10-31: it was not a project.) A click on a project row
 opens its product manager chat and reveals its workgroups; a second click on the open project
 hides them. Workgroups are shown by their number in grey with no **#**
 and then their title (`12  Offline editing`), aligned with the project name. An expanded project

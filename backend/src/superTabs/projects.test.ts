@@ -33,7 +33,7 @@ describe('projects inside an invite-only swarm', () => {
     const original = f.run({ type: 'conversation.create', title: 'First', brief: '', checks: [] })
     const p = f.project()
     const next = f.run({ type: 'conversation.create', projectId: p.projectId, title: 'Second', brief: '', checks: [] })
-    expect(f.state.conversations.map(c => c.number)).toEqual([undefined, 1, undefined, 2, undefined])
+    expect(f.state.conversations.map(c => c.number)).toEqual([undefined, 1, undefined, 2])
     expect(f.state.conversations.map(c => c.id)).toContain(original.conversationId)
     expect(next.number).toBe(2)
     expect(() => f.run({ type: 'conversation.archive', conversationId: p.conversationId, archived: true })).toThrow('stays available')
@@ -44,7 +44,7 @@ describe('projects inside an invite-only swarm', () => {
     const id = f.add(p.conversationId, 'private-lead')
     const visible = visibleState(f.state, peer)
     expect(visible.projects!.map(p => p.id)).toEqual(['lead'])
-    expect(visible.conversations.map(c => c.id)).toEqual(['lead', f.state.leadsConversationId])
+    expect(visible.conversations.map(c => c.id)).toEqual(['lead'])
     expect(visible.agents).toEqual([])
     expect(canReadAgent(f.state, peer, f.state.agents[0]!)).toBe(false)
     expect(() => readConversation(f.state, peer, p.conversationId)).toThrow('unavailable')
@@ -97,8 +97,8 @@ describe('projects inside an invite-only swarm', () => {
     f.run({ type: 'invite.create', email: 'new@example.com', role: 'collaborator', conversationId: 'lead' })
     expect(f.run({ type: 'project.delete', projectId: 'lead' })).toEqual({})
     expect(projectsOf(f.state)).toEqual([])
-    // Only the Swarm-wide Leads conversation is left.
-    expect(f.state.conversations.map(c => c.kind)).toEqual(['leads'])
+    // No conversation is left: a new Swarm has no Swarm-wide Leads conversation (model.ts leadsRemoved).
+    expect(f.state.conversations).toEqual([])
     expect(f.state.invitations).toEqual([])
     expect(f.state.project).toBeUndefined()
     expect(f.state.machines?.map(m => m.machineId)).toEqual(['shared'])

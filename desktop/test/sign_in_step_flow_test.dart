@@ -674,6 +674,7 @@ void main() {
       });
     });
   });
+
   group('whether the sign-in page calls this computer set up', () {
     test('not on the launch that first installs Harness', () async {
       final app = _Desktop(_Login());

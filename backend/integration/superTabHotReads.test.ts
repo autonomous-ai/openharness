@@ -235,8 +235,8 @@ describe('delivery authority reads', () => {
       const groups = entries.filter(e => e.ns.endsWith('.SwarmGroup') && e.op !== 'update')
       const returned = groups.reduce((sum, e) => sum + (e.nreturned ?? 0), 0)
       console.log(`delivery ${action.type}: groups=${returned}, docs=${entries.reduce((sum, e) => sum + (e.docsExamined ?? 0), 0)}`)
-      // The project and Swarm Lead conversations plus the receiver's group; no quiet groups or finished work.
-      expect(returned, `${action.type}: ${JSON.stringify(plan(groups))}`).toBe(3)
+      // The project's Lead conversation plus the receiver's group; no quiet groups, finished work or removed Leads conversation.
+      expect(returned, `${action.type}: ${JSON.stringify(plan(groups))}`).toBe(2)
       expect(groups.every(e => !!e.command?.hint), 'delivery reads use the installed group indexes').toBe(true)
       expect(entries.filter(e => e.ns.endsWith('.SwarmMachine'))).toEqual([])
     }

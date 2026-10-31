@@ -742,7 +742,7 @@ Agents talk to each other directly, not through the product manager
   no person or other agent between, its next unnamed post reaches nobody until
   it names the agent.
 - Agents of another project, Buddies, Buddy chats, private chats, the project
-  chat and the Leads conversation keep their own members; naming an agent there
+  chat keep their own members; naming an agent there
   is refused with `INVALID_RECIPIENT`. Only the coordinator or a person adds an
   agent to the project chat or takes one out (`conversation.agent`); another
   agent is refused with `COORDINATOR_REQUIRED`.
@@ -764,7 +764,7 @@ Design:
   backend is refused only when it names an agent outside the conversation.
 - Migration and rollback: none; a rollback restores the copies.
 - Audience: the server checks the recipient belongs to the same project and the
-  conversation is not a Buddy chat, the project chat, the Leads conversation or
+  conversation is not a Buddy chat, the project chat or
   private, and checks the team access of every agent that joins. The sender
   needs no role.
 - Identity: messages stay the agent's own.

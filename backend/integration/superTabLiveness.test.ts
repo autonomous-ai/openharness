@@ -761,12 +761,10 @@ describe('a machine\'s report', () => {
     expect(await db.swarmGroup.findMany({ where: { tabId: f.tab, key: { in: finished } }, orderBy: { key: 'asc' } })).toEqual(before)
   })
 
-  it('finds the Leads conversation of a Swarm whose head never stored its id, as a full load does', async () => {
+  it('reports a machine of a Swarm whose head stored no Leads conversation, as every Swarm made now', async () => {
     const f = await swarm()
     const head = (await db.swarmHead.findFirst({ where: { tabId: f.tab } }))!
-    const { leadsConversationId, ...rest } = head.data as { leadsConversationId?: string }
-    expect(leadsConversationId).toBe(stableId(f.tab, 'leads'))
-    await db.swarmHead.update({ where: { id: head.id }, data: { data: rest as Prisma.InputJsonValue } })
+    expect(head.data).not.toHaveProperty('leadsConversationId')
     await f.beat(f.clock.now)
     expect((await f.timed.read(owner, f.tab)).state.machines!.map(m => m.observation?.receivedAt)).toEqual([f.clock.now, f.clock.now])
   })

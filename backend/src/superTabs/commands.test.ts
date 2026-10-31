@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { storeOldLeads } from './leads.test-support.js'
 import { applyCommand, commandSchema, LOOP_NOTICE_AT, PAIR_CHAIN_LIMIT, swarmGridName, withoutCredentials, type Command, type CommandContext } from './commands.js'
 import { CREDENTIAL_MARKER, type CredentialKind } from './credentials.js'
 import { sweepLiveness } from './liveness.js'
@@ -255,11 +256,11 @@ describe('Super Tab collaboration policy', () => {
     const lead = f.add('lead', 'owner', 'lead', true)
     const group = f.group()
     const worker = f.add('worker', 'owner', group)
-    expect(f.state.conversations.map(c => c.title)).toEqual(['Lead', 'Offline editing', 'Leads'])
+    expect(f.state.conversations.map(c => c.title)).toEqual(['Lead', 'Offline editing'])
     expect(f.state.conversations[1]).toMatchObject({ leadId: lead, agentIds: [lead, worker], assignment: null })
     f.run({ type: 'conversation.agent', conversationId: 'lead', agentId: worker, present: true, lead: false })
     expect(f.state.agents).toHaveLength(2)
-    expect(f.state.conversations).toHaveLength(3) // Lead, the group and Leads
+    expect(f.state.conversations).toHaveLength(2) // Lead and the group
   })
 
   it('routes a human reply to its author, and does not create agent chatter loops', () => {
@@ -376,8 +377,8 @@ describe('Super Tab collaboration policy', () => {
       expect(() => send(f, as(engineer), build, [outsider])).toThrow('Choose an agent in this conversation')
       expect(f.state.conversations.find(c => c.id === build)!.agentIds).not.toContain(outsider)
       expect(() => send(f, as(outsider), build, [])).toThrow()
-      const leads = f.state.conversations.find(c => c.title === 'Leads')!.id
-      expect(() => send(f, as(engineer), leads, [])).toThrow()
+      const leads = storeOldLeads(f.state)
+      expect(() => send(f, as(engineer), leads, [])).toThrow(expect.objectContaining({ code: 'LEADS_CONVERSATION_REMOVED' }))
       const buddy = f.add('buddy', 'owner', build)
       f.state.agents.find(a => a.id === buddy)!.buddyOf = { personId: 'owner', projectId: 'lead', generation: 'g' } as never
       const elsewhere = f.group()
@@ -768,7 +769,7 @@ it('starts only in the chosen conversation, captures authority, and never assign
   const startId = f.run({ type: 'agent.start', request, ...via }, actor, { contribution, ...decisionIn(group) }).result.startId as string
   expect(f.state.starts![0]).toMatchObject({ request, hostGrant: 'grant-1', dispatched: false })
   expect(f.state.agents).toHaveLength(1)
-  expect(f.state.conversations).toHaveLength(3) // Lead, the group and Leads
+  expect(f.state.conversations).toHaveLength(2) // Lead and the group
   expect(() => f.run({ type: 'agent.startDispatch', startId }, actor, { contribution: { ...contribution, hostGrant: 'new-grant' } })).toThrow('revoked')
   f.run({ type: 'agent.startDispatch', startId }, actor, { contribution })
   expect(() => f.run({ type: 'agent.startDispatch', startId }, actor, { contribution })).toThrow('already requested')
@@ -1406,18 +1407,18 @@ describe('the route is advice', () => {
 
 it('assigns stable workgroup numbers through old snapshots, rename, archive and new groups', () => {
   const f = fixture(), first = f.group(), second = f.group()
-  // The Lead and Leads conversations have no number.
-  expect(f.state.conversations.map(c => c.number)).toEqual([undefined, 1, 2, undefined])
+  // The Lead conversation has no number.
+  expect(f.state.conversations.map(c => c.number)).toEqual([undefined, 1, 2])
   // An old snapshot has neither the numbers nor the counter the store by parts keeps.
   delete f.state.conversations[1]!.number
   delete f.state.conversations[2]!.number
   delete f.state.groupCounter
-  expect(visibleState(f.state, owner).conversations.map(c => c.number)).toEqual([undefined, 1, 2, undefined])
+  expect(visibleState(f.state, owner).conversations.map(c => c.number)).toEqual([undefined, 1, 2])
   expect(f.state.conversations[1]!.number).toBeUndefined()
   f.run({ type: 'conversation.rename', conversationId: first, title: 'Renamed' })
   f.run({ type: 'conversation.archive', conversationId: second, archived: true })
   const third = f.group()
-  expect(f.state.conversations.map(c => [c.id, c.number])).toEqual([['lead', undefined], [first, 1], [second, 2], [third, 3], [f.state.leadsConversationId, undefined]])
+  expect(f.state.conversations.map(c => [c.id, c.number])).toEqual([['lead', undefined], [first, 1], [second, 2], [third, 3]])
 })
 it('records the lead project once and accepts only Claude Code and Codex contributions', () => {
   const f = fixture(), project = { cwd: '/repo', repositoryUrl: 'https://github.com/example/project' }
@@ -3331,63 +3332,69 @@ describe('Lead protection', () => {
   })
 })
 
-describe('Leads conversation', () => {
+describe('Product Managers chat, removed (Dee, 2026-10-31)', () => {
   const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
   const send = (conversationId: string, text: string, recipientIds: string[] = []): Command =>
     ({ type: 'message.send', conversationId, text, replyTo: null, recipientIds })
+  /** A Swarm from before the removal: the Leads conversation and its history are still stored. */
   const swarm = () => {
     const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), worker = f.add('worker')
     const docs = f.run({ type: 'project.create', name: 'Docs', visibility: 'public', brief: 'Docs' }).result as { projectId: string; conversationId: string }
     const docsLead = f.add('docs-lead', 'owner', docs.conversationId, true)
-    return { f, lead, worker, docs, docsLead, leads: f.state.leadsConversationId! }
+    const leads = 'stored-leads'
+    f.state.leadsConversationId = leads
+    f.state.conversations.push({ id: leads, kind: 'leads', title: 'Leads', leadId: null, agentIds: [lead, docsLead], archived: false,
+      brief: '', checks: [], assignment: null, lastMessageSequence: 7 })
+    return { f, lead, worker, docs, docsLead, leads }
   }
+  const REMOVED = expect.objectContaining({ code: 'LEADS_CONVERSATION_REMOVED',
+    message: 'The Product Managers chat was removed. Post in your project\'s chat instead.' })
 
-  it('gives every Swarm one, an old one too, outside every project', () => {
-    const f = fixture(), id = f.state.leadsConversationId!
-    expect(f.state.conversations.find(c => c.id === id)).toMatchObject({ kind: 'leads', title: 'Leads', archived: false, leadId: null })
-    expect(f.state.conversations.find(c => c.id === id)).not.toHaveProperty('number')
-
-    const old = fixture()
-    delete old.state.leadsConversationId
-    old.state.conversations = old.state.conversations.filter(c => c.id !== id)
-    expect(visibleState(old.state, owner).leadsConversationId).toBe(id)
-    old.run({ type: 'tab.rename', name: 'Renamed' })
-    expect(old.state.leadsConversationId).toBe(id)
-    expect(old.state.conversations.filter(c => c.kind === 'leads')).toHaveLength(1)
+  it('is not made for a new Swarm', () => {
+    const f = fixture()
+    expect(f.state.conversations.filter(c => c.kind === 'leads')).toEqual([])
+    expect(f.state).not.toHaveProperty('leadsConversationId')
+    f.run({ type: 'tab.rename', name: 'Renamed' })
+    expect(f.state.conversations.filter(c => c.kind === 'leads')).toEqual([])
+    expect(f.state).not.toHaveProperty('leadsConversationId')
   })
 
-  it('lets people and Leads post, delivers to every other Lead, and keeps it from other agents', () => {
+  it('reaches no reader of an old Swarm, person or agent, and keeps its stored history', () => {
     const { f, lead, worker, docsLead, leads } = swarm()
-    expect(f.run(send(leads, 'Who goes first?')).messages[0]!.recipients.sort()).toEqual([lead, docsLead].sort())
-    expect(f.run(send(leads, 'Docs waits for Pilot.'), as(docsLead)).messages[0]!.recipients).toEqual([lead])
-    // Naming a Lead adds emphasis; every other Lead still hears it.
-    expect(f.run(send(leads, 'Pilot, can you go first?', [lead])).messages[0]!.recipients.sort()).toEqual([lead, docsLead].sort())
-    expect(() => f.run(send(leads, 'Me too'), as(worker))).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
-    expect(() => f.run(send(leads, 'Hi', [worker]))).toThrow()
-    expect(visibleState(f.state, as(lead)).conversations.map(c => c.id)).toContain(leads)
-    const workerView = visibleState(f.state, as(worker))
-    expect(workerView.conversations.map(c => c.id)).not.toContain(leads)
-    expect(workerView).not.toHaveProperty('leadsConversationId')
-
     f.invite('viewer')
-    expect(visibleState(f.state, peer).conversations.map(c => c.id)).toContain(leads)
-    expect(() => f.run(send(leads, 'Viewer here'), peer)).toThrow(expect.objectContaining({ code: 'READ_ONLY' }))
+    for (const actor of [owner, peer, as(lead), as(docsLead), as(worker)]) {
+      const view = visibleState(f.state, actor)
+      expect(view.conversations.filter(c => c.id === leads || c.kind === 'leads')).toEqual([])
+      expect(view).not.toHaveProperty('leadsConversationId')
+    }
+    f.run({ type: 'tab.rename', name: 'Renamed' })
+    expect(f.state.conversations.find(c => c.id === leads)).toMatchObject({ kind: 'leads', lastMessageSequence: 7, agentIds: [lead, docsLead] })
   })
 
-  it('takes no work, members or archiving, and outlives every project', () => {
-    const { f, worker, docs, leads } = swarm()
+  it('refuses every post and command on it with one plain message, for people and Leads alike', () => {
+    const { f, lead, worker, docsLead, leads } = swarm()
     const checks = [{ description: 'Done', independent: false }]
+    for (const actor of [owner, as(lead), as(docsLead), as(worker)]) {
+      expect(() => f.run(send(leads, 'Who goes first?'), actor)).toThrow(REMOVED)
+    }
+    expect(() => f.run(send(leads, 'Pilot, can you go first?', [lead]))).toThrow(REMOVED)
     for (const command of [
       { type: 'conversation.archive', conversationId: leads, archived: true },
       { type: 'conversation.rename', conversationId: leads, title: 'Chat' },
       { type: 'work.define', conversationId: leads, brief: 'Work', checks },
       { type: 'conversation.agent', conversationId: leads, agentId: worker, present: true, lead: false },
-    ] as Command[]) expect(() => f.run(command)).toThrow(expect.objectContaining({ code: 'LEADS_CONVERSATION' }))
+    ] as Command[]) expect(() => f.run(command)).toThrow(REMOVED)
     // A task links only to a task of its own project: the Leads conversation reads as missing (project instructions, phase 4).
     expect(() => f.run({ type: 'conversation.create', title: 'Review', reviewOf: leads, brief: 'Review', checks } as Command))
       .toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
-    f.run({ type: 'project.delete', projectId: docs.projectId })
-    expect(f.state.conversations.some(c => c.id === leads)).toBe(true)
+  })
+
+  it('leaves project chats, workgroups and their recipients as before', () => {
+    const { f, lead, worker, docs, docsLead } = swarm()
+    expect(f.run(send('lead', 'Status?')).messages[0]!.recipients).toEqual([lead])
+    expect(f.run(send(docs.conversationId, 'Docs status?')).messages[0]!.recipients).toEqual([docsLead])
+    const group = f.group()
+    expect(visibleState(f.state, as(worker)).conversations.map(c => c.id)).toEqual(expect.arrayContaining(['lead', group]))
   })
 })
 
@@ -3431,26 +3438,36 @@ describe('other projects\' work for Leads', () => {
     expect(visibleState(f.state, owner)).not.toHaveProperty('otherProjectsWork')
   })
 
-  it('tells both Leads once when a task\'s owned code overlaps another project\'s active task', () => {
+  it('tells each Lead once, in its own project chat and to it alone, when a task\'s owned code overlaps another project\'s active task', () => {
     const { f, lead, project, work } = swarm()
     const docs = project('Docs', 'public')
     const roster = work(docs.projectId, 'Roster', ['desktop/lib/super_tabs'])
-    const alerts = () => f.state.leadsConversationId
     const name = (id: string) => f.state.agents.find(a => a.id === id)!.displayName
+    const overlaps = (effects: ReturnType<typeof f.run>) => effects.messages.filter(m => (m.source as { kind?: string } | undefined)?.kind === 'overlap')
     const created = f.run({ type: 'conversation.create', title: 'Agents filter', task: task([' ./desktop/lib/super_tabs/roster.dart ', 'cli']), checks }, as(lead))
     const group = created.result.conversationId as string
-    const alert = created.messages.find(m => m.conversationId === alerts())!
-    expect(alert).toMatchObject({ author: { id: lead }, recipients: [docs.lead],
-      source: { kind: 'overlap', conversationIds: [group, roster.group] } })
-    // The two Leads' to settle (Ken, 2026-10-29): people in the Leads chat do not read it.
-    expect(agentOnly(alert.source, alert.recipients)).toBe(true)
-    expect(alert.text).toBe(`"Agents filter" (Pilot, ${name(lead)}) and "Roster" (Docs, ${name(docs.lead)}) both change `
-      + 'desktop/lib/super_tabs/roster.dart.')
+    const text = `"Agents filter" (Pilot, ${name(lead)}) and "Roster" (Docs, ${name(docs.lead)}) both change desktop/lib/super_tabs/roster.dart.`
+    // The acting Lead created the overlap and is not told again; the other project's Lead hears it in its own project chat.
+    expect(overlaps(created)).toEqual([expect.objectContaining({ conversationId: docs.conversationId, author: expect.objectContaining({ id: docs.lead }),
+      recipients: [docs.lead], text, source: { kind: 'overlap', conversationIds: [group, roster.group] } })])
+    // The two Leads' to settle (Ken, 2026-10-29): people in the project chat do not read it.
+    expect(agentOnly(overlaps(created)[0]!.source, overlaps(created)[0]!.recipients)).toBe(true)
+    expect(f.state.conversations.some(c => c.kind === 'leads')).toBe(false)
     // The same pair is not alerted again.
     f.run({ type: 'work.define', conversationId: group, task: task(['desktop/lib/super_tabs/roster.dart']), checks }, as(lead))
     const worker = f.add('pilot-worker', 'owner', group)
-    expect(f.run({ type: 'work.assign', conversationId: group, agentId: worker }).messages.some(m => m.conversationId === alerts())).toBe(false)
+    expect(overlaps(f.run({ type: 'work.assign', conversationId: group, agentId: worker }))).toEqual([])
     expect(visibleState(f.state, owner)).not.toHaveProperty('overlapAlerts')
+  })
+
+  it('tells both Leads, each in its own project chat, when a person makes the overlap', () => {
+    const { f, lead, project, work } = swarm()
+    const docs = project('Docs', 'public')
+    const roster = work(docs.projectId, 'Roster', ['desktop/lib/super_tabs'])
+    const effects = f.run({ type: 'conversation.create', title: 'Agents filter', task: task(['desktop/lib']), checks })
+    expect(effects.messages.filter(m => (m.source as { kind?: string } | undefined)?.kind === 'overlap')
+      .map(m => [m.conversationId, m.recipients]).sort()).toEqual([['lead', [lead]], [docs.conversationId, [docs.lead]]].sort())
+    expect(roster.group).toBeTruthy()
   })
 
   it('stays silent within one project, for owned code that is not a path, and for private projects', () => {
@@ -3461,10 +3478,10 @@ describe('other projects\' work for Leads', () => {
     work(docs.projectId, 'Phrase', ['The Desktop roster'])
     for (const owns of [['desktop/lib/super_tabs'], ['The Desktop roster']]) {
       const effects = f.run({ type: 'conversation.create', title: 'More', task: task(owns), checks })
-      expect(effects.messages.filter(m => m.conversationId === f.state.leadsConversationId)).toEqual([])
+      expect(effects.messages.filter(m => (m.source as { kind?: string } | undefined)?.kind === 'overlap')).toEqual([])
     }
     expect(f.run({ type: 'conversation.create', projectId: secret.projectId, title: 'Secret too', task: task(['desktop/lib']), checks })
-      .messages.filter(m => m.conversationId === f.state.leadsConversationId)).toEqual([])
+      .messages.filter(m => (m.source as { kind?: string } | undefined)?.kind === 'overlap')).toEqual([])
   })
 })
 
@@ -3609,12 +3626,12 @@ describe('Lead mentions', () => {
     expect(f.run(send('lead', []), as(lead)).messages[0]).not.toHaveProperty('mentions')
   })
 
-  it('lets any agent of the project tag, and refuses another project’s Lead and any tag in the Leads conversation; a person tags (mentions.test.ts)', () => {
+  it('lets any agent of the project tag, and refuses another project’s Lead and the removed Leads conversation; a person tags (mentions.test.ts)', () => {
     const { f, lead, secret } = swarm(), group = f.group(), worker = f.add('worker', 'owner', group)
     expect(f.run(send(group, ['peer'])).messages[0]!.mentions).toEqual(['peer'])
     expect(f.run(send(group, ['peer']), as(worker)).messages[0]!.mentions).toEqual(['peer'])
     expect(() => f.run(send(group, ['owner']), as(secret.lead))).toThrow('This project is unavailable.')
-    expect(() => f.run(send(f.state.leadsConversationId!, ['owner']), as(lead))).toThrow('Nobody is tagged in the Leads conversation.')
+    expect(() => f.run(send(storeOldLeads(f.state), ['owner']), as(lead))).toThrow(expect.objectContaining({ code: 'LEADS_CONVERSATION_REMOVED' }))
   })
 
   it('refuses a person who cannot read the conversation or is not in the Swarm', () => {
@@ -4153,8 +4170,8 @@ describe('linked tasks', () => {
       return id
     }
     const buddy = chat('owner-buddy', { kind: 'buddy', audience: { people } }), secret = chat('private', { leadId: f.lead, agentIds: [f.lead], audience: { people } })
-    const before = f.state.conversations.length
-    for (const target of [theirs, archived, 'lead', buddy, secret, f.state.leadsConversationId!, 'missing']) {
+    const leads = storeOldLeads(f.state), before = f.state.conversations.length
+    for (const target of [theirs, archived, 'lead', buddy, secret, leads, 'missing']) {
       for (const actor of [as(f.worker), owner]) {
         expect(() => create('Review', target, actor), target).toThrow(expect.objectContaining({ code: 'NOT_FOUND', message: 'This conversation is unavailable.' }))
       }
