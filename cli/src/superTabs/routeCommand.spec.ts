@@ -206,6 +206,19 @@ describe('routeTask', () => {
     const blind = await routeTask(heavy({}), scoped(), where as never, reading({ memoryTotalBytes: 16e9, memoryUsedBytes: 2e9, cpuPercent: 10 }))
     expect(blind).toMatchObject({ pick: { kind: 'member', notes: expect.arrayContaining(['Machine fit: Free disk unknown here; a heavy build: it needs 8 GB memory and 30 GB disk free.']) } })
   })
+  it('answers work that starts heavy CI while the account is at its limit as waiting, with when to route it again', async () => {
+    const base = scoped()
+    const s = vi.fn(async (payload: Record<string, any>) => payload.action === 'ciLoad'
+      ? { ok: true, value: { state: 'read', load: { running: 15, queued: 4, macosRunning: 1, macosQueued: 0 } } } : base(payload)) as typeof base
+    const held = await routeTask({ ...input, assessment: { ...input.assessment, needs: { ci: { jobs: 2, macos: 0 } } } }, s, where as never, opener())
+    expect(held).toMatchObject({ error: 'NO_CANDIDATE', waiting: true, retryAfterMinutes: 10,
+      detail: 'This repository\'s CI jobs are at the account\'s limit: 19 running or queued against the account\'s limit of 20, 1 on macOS against 5, and this task starts 2 more. Route it again in 10 minutes.' })
+    expect(s.mock.calls.some(c => c[0].action === 'command')).toBe(false)
+    // Any other task routes as before, without asking for the CI.
+    const plain = await routeTask(input, s, where as never, opener())
+    expect(plain).toMatchObject({ ok: true })
+    expect(plain).not.toHaveProperty('waiting')
+  })
   // Lead, 10-31: a routed heavy start is never refused on the machine the route offered.
   it('ranks a machine between half the need and the need later, and the start there is admitted and counts as heavy', async () => {
     const between = { memoryTotalBytes: 16e9, memoryUsedBytes: 10e9, cpuPercent: 10, projectDiskFreeBytes: 100e9 }

@@ -1,7 +1,7 @@
 // cli/src/superTabs/machineFit.spec.ts
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { START_REQUIREMENTS, startRequirements } from './capacity.js'
-import { CI_LIMIT, CI_RETRY_MINUTES, CI_UNCHECKED, ciHold, floorOf, heavyNeed, MACHINE_FIT_MAKER, machineFit, PLACED_RECENT_MS, placedHeavyWork,
+import { CI_LIMIT, CI_READ_MS, CI_RETRY_MINUTES, CI_UNCHECKED, ciHold, ciLoadOf, floorOf, heavyNeed, MACHINE_FIT_MAKER, machineFit, PLACED_RECENT_MS, placedHeavyWork,
   type CiLoad } from './machineFit.js'
 import { choose, parseAssessment, type Assessment, type Catalog, type Probe } from './route.js'
 import { ROUTE_PLUGIN_MAKERS, type PluginInput } from './routePlugins.js'
@@ -172,11 +172,11 @@ describe('the CI jobs limit', () => {
   const load = (running: number, queued = 0, macosRunning = 0, macosQueued = 0): CiLoad => ({ running, queued, macosRunning, macosQueued })
   it('holds work that starts CI past the account\'s limit, counting queued jobs, with a time to route it again', () => {
     expect(ciHold({ ci: { jobs: 4, macos: 0 } }, load(16))).toBeNull()
-    expect(ciHold({ ci: { jobs: 4, macos: 0 } }, load(16, 1))).toBe(`CI is at the account's limit: 17 of ${CI_LIMIT.jobs} jobs running or queued, 0 of ${CI_LIMIT.macos} on macOS, `
-      + `and this task starts 4 more. Route it again in ${CI_RETRY_MINUTES} minutes.`)
+    expect(ciHold({ ci: { jobs: 4, macos: 0 } }, load(16, 1))).toBe(`This repository's CI jobs are at the account's limit: 17 running or queued against the account's limit of ${CI_LIMIT.jobs}, `
+      + `0 on macOS against ${CI_LIMIT.macos}, and this task starts 4 more. Route it again in ${CI_RETRY_MINUTES} minutes.`)
     // The macOS runners have their own, smaller limit.
     expect(ciHold({ ci: { jobs: 2, macos: 2 } }, load(4, 0, 3, 0))).toBeNull()
-    expect(ciHold({ ci: { jobs: 2, macos: 2 } }, load(4, 0, 3, 1))).toContain('4 of 5 on macOS, and this task starts 2 more (2 on macOS).')
+    expect(ciHold({ ci: { jobs: 2, macos: 2 } }, load(4, 0, 3, 1))).toContain('4 on macOS against 5, and this task starts 2 more (2 on macOS).')
   })
   it('never holds work that declares no CI of its own, nor when the load is unknown', () => {
     expect(ciHold({}, load(40, 10, 5, 5))).toBeNull()
@@ -191,7 +191,7 @@ describe('the CI jobs limit', () => {
   })
   it('a task that starts CI is told when the limit could not be checked, beside its fit', () => {
     expect(ok(route([on('a', { memory: 16, disk: 100 })], a({ ci: { jobs: 1, macos: 0 } }))).shown[0]!.notes).toEqual([`Machine fit: ${CI_UNCHECKED}`])
-    expect(ok(route([on('a', { memory: 5, disk: 100 })], a({ ci: { jobs: 1, macos: 0 }, heavy: ['build'] }))).shown[0]!.notes[0]).toMatch(/rank first\. The running CI jobs could not be read/)
+    expect(ok(route([on('a', { memory: 5, disk: 100 })], a({ ci: { jobs: 1, macos: 0 }, heavy: ['build'] }))).shown[0]!.notes[0]).toMatch(/rank first\. This repository's running CI jobs could not be read/)
   })
 })
 
@@ -213,8 +213,43 @@ describe('its maker', () => {
     // A tab read with no machines or starts reads as nothing placed.
     const bare = (await MACHINE_FIT_MAKER.make(input(a({ heavy: ['build'] }), {})))!
     expect(ok(choose([on('mac', { memory: 12, disk: 100 })], catalog, a({ heavy: ['build'] }), now, [], [], [], [bare])).shown).toHaveLength(1)
-    // The CI load is not read yet, so a task that starts CI hears that.
+    // A CI read the server does not answer leaves the limit unchecked, which a task that starts CI hears.
     const ci = (await MACHINE_FIT_MAKER.make(input(a({ ci: { jobs: 1, macos: 0 } }), {})))!
     expect(ok(choose([on('mac', { memory: 12, disk: 100 })], catalog, a({ ci: { jobs: 1, macos: 0 } }), now, [], [], [], [ci])).shown[0]!.notes).toEqual([`Machine fit: ${CI_UNCHECKED}`])
+  })
+})
+
+describe('the server\'s CI read', () => {
+  const read = (load: Record<string, unknown>) => ({ ok: true, value: { state: 'read', load } })
+  const full = { running: 19, queued: 0, macosRunning: 0, macosQueued: 0 }
+  it('takes the counts of a read, and nothing from any other answer', () => {
+    expect(ciLoadOf(read(full))).toEqual(full)
+    for (const answer of [null, {}, { ok: false, value: { state: 'read', load: full } }, { ok: true, value: { state: 'not-approved' } },
+      read({ ...full, running: -1 }), read({ ...full, queued: 1.5 }), read({ ...full, macosQueued: '1' }), { error: 'NOT_FOUND' }]) expect(ciLoadOf(answer)).toBeNull()
+  })
+  it('the maker asks for the group\'s own project, and a task past the limit is held; under it, or unread, it is not', async () => {
+    const asked: Array<Record<string, unknown>> = []
+    const make = async (answer: () => Promise<Record<string, unknown>>, conversationId = 'g2') => MACHINE_FIT_MAKER.make({ conversationId, assessment: a({ ci: { jobs: 2, macos: 0 } }),
+      read: { tab: { state: { conversations: [{ id: 'g2', projectId: 'p7' }] } } }, catalog, history: Promise.resolve(null),
+      request: async payload => { asked.push(payload); return answer() } })
+    const judge = async (plugin: Awaited<ReturnType<typeof make>>) => choose([on('m', { memory: 16, disk: 100 })], catalog, a({ ci: { jobs: 2, macos: 0 } }), NOW, [], [], [], [plugin!])
+    expect(await judge(await make(async () => read(full)))).toMatchObject({ error: 'NO_CANDIDATE', excluded: [{ reason: `Machine fit: ${ciHold({ ci: { jobs: 2, macos: 0 } }, full)}` }] })
+    expect(asked).toEqual([{ action: 'ciLoad', projectId: 'p7' }])
+    expect(ok(await judge(await make(async () => read({ ...full, running: 3 })))).shown[0]!.notes).toEqual([])
+    expect(ok(await judge(await make(async () => ({ ok: true, value: { state: 'unknown' } })))).shown[0]!.notes).toEqual([`Machine fit: ${CI_UNCHECKED}`])
+    expect(ok(await judge(await make(async () => { throw new Error('socket') }))).shown[0]!.notes).toEqual([`Machine fit: ${CI_UNCHECKED}`])
+    // A group the read does not list is the Lead's project's.
+    await make(async () => read(full), 'gone')
+    expect(asked.at(-1)).toEqual({ action: 'ciLoad', projectId: 'lead' })
+  })
+  it('a read slower than its limit leaves the CI unchecked rather than the plug-in skipped', async () => {
+    vi.useFakeTimers()
+    try {
+      const made = MACHINE_FIT_MAKER.make({ conversationId: 'g', assessment: a({ ci: { jobs: 1, macos: 0 } }), read: {}, catalog, history: Promise.resolve(null),
+        request: () => new Promise(() => {}) })
+      await vi.advanceTimersByTimeAsync(CI_READ_MS)
+      const plugin = (await made)!
+      expect(ok(choose([on('m', { memory: 16, disk: 100 })], catalog, a({ ci: { jobs: 1, macos: 0 } }), NOW, [], [], [], [plugin])).shown[0]!.notes).toEqual([`Machine fit: ${CI_UNCHECKED}`])
+    } finally { vi.useRealTimers() }
   })
 })

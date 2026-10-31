@@ -18,6 +18,7 @@ import { joinSwarmSchema, previewJoinSchema, saveSharingSchema } from '../superT
 import { holdReason } from '../superTabs/holdReason.js'
 import { GitHubAppError } from '../github/app.js'
 import { projectGitHubAccess } from '../github/projectAccess.js'
+import { projectCiLoad } from '../github/ciLoad.js'
 import { githubSignIn, PrismaApprovals, readState, signState, stateSecret, type Approvals, type GitHubSignIn } from '../github/approvals.js'
 import type { GitHubRepository } from '../github/repository.js'
 import { githubRepository } from '../github/repository.js'
@@ -133,6 +134,7 @@ export const NOT_AVAILABLE_ROUTES: ReadonlySet<string> = new Set([
   'GET /api/super-tabs/:tabId/conversations/:conversationId/messages', 'GET /api/super-tabs/:tabId/conversations/:conversationId/catch-up',
   'POST /api/super-tabs/:tabId/conversations/:conversationId/read',
   'GET /api/super-tabs/:tabId/projects/:projectId/github', 'POST /api/super-tabs/:tabId/projects/:projectId/github/approve',
+  'GET /api/super-tabs/:tabId/projects/:projectId/ci-load',
   'GET /api/super-tabs/:tabId/projects/:projectId/roles/:roleId', 'GET /api/super-tabs/:tabId/route-decisions/:decisionId',
   'GET /api/super-tabs/:tabId/machines/:machineId/removal',
   'POST /api/super-tabs/:tabId/attachments', 'POST /api/super-tabs/:tabId/avatars',
@@ -311,6 +313,17 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
         },
         you: repository => approvals.reader(req.user!.autonomousEnv, req.params.tabId, req.params.projectId, repository, req.user!.sub) },
         req.query.refresh === '1')
+    }))
+  // The jobs running and waiting on a project's GitHub Actions, for the route (github/ciLoad.ts): counts only, read through
+  // the app, by a person or an agent who may read the project. Only for a repository someone who can push to it approved for
+  // the project, in every Swarm, also where tokens ask no approval: otherwise a project could name another organisation's
+  // repository that has the app, read its counts and spend that installation's requests (security review 1 of #2428).
+  app.get<{ Params: z.infer<typeof projectParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/projects/:projectId/ci-load',
+    { preHandler: [validateParams(projectParams), validateQuery(agentQuery)] },
+    (req, reply) => respond(reply, async () => {
+      const project = await store.ciRepository(req.user!, req.params.tabId, req.params.projectId, req.query.asAgentId)
+      return projectCiLoad(github?.app ?? null, project.repositoryUrl,
+        repository => approvals.approved(req.user!.autonomousEnv, req.params.tabId, req.params.projectId, repository))
     }))
   // Approving a project's repository: the person signs in to GitHub through the app (or installs it, which signs them in
   // too), and GitHub sends them back to /api/github/callback with the state signed here for them, this project and scope.

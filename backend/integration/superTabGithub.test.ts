@@ -540,3 +540,75 @@ describe('revoking the token when the task ends', () => {
     expect(JSON.stringify(env.log.warn.mock.calls)).not.toContain(token)
   })
 })
+
+// Scholes's goals, piece 5: the route holds work that starts heavy CI while the account is at its limit of running jobs.
+describe('the CI load', () => {
+  const load = (env: Env, tab: string, projectId: string, user = owner, asAgentId?: string) => env.app.inject({ method: 'GET',
+    url: `/api/super-tabs/${tab}/projects/${projectId}/ci-load${asAgentId ? `?asAgentId=${asAgentId}` : ''}`, headers: { authorization: `Bearer ${user.sub}` } })
+  /** An agent of the project on the owner's own Mac, which the owner's sign-in speaks for. */
+  const own = async (env: Env, tab: string, group: string) => String((await env.run(tab, { type: 'agent.add', conversationId: group, machineId: 'owner-mac',
+    harnessId: randomUUID(), name: 'Router', configuration: config, lead: false } as Command)).result.agentId)
+  const busy = (env: Env) => env.github.actions.set('example/app', [
+    { id: 11, status: 'in_progress', jobs: [{ status: 'in_progress', labels: ['ubuntu-latest'] }, { status: 'in_progress', labels: ['macos-15'] }] },
+    { id: 12, status: 'queued', jobs: [{ status: 'queued', labels: ['macos-15'] }] }])
+
+  it('gives an agent of the project, and a person, the counts alone, read with a token that only reads runs and is revoked', async () => {
+    const env = await fresh()
+    busy(env)
+    const { tab, group } = await working(env)
+    const agent = await load(env, tab, 'lead', owner, await own(env, tab, group))
+    expect(agent.statusCode).toBe(200)
+    expect(agent.json().data).toEqual({ state: 'read', load: { running: 2, queued: 1, macosRunning: 1, macosQueued: 1 } })
+    // No run's name, branch or the token reaches the answer.
+    for (const text of ['secret-branch', 'run 11', 'ghs_', 'example/app']) expect(agent.body).not.toContain(text)
+    expect(env.github.calls.find(c => c.path.endsWith('/access_tokens'))!.body).toEqual({ repositories: ['app'], permissions: { actions: 'read', metadata: 'read' } })
+    expect(env.github.issued.size).toBe(0)
+    expect((await load(env, tab, 'lead')).json().data).toMatchObject({ state: 'read' })
+  })
+  it('refuses another project, one the reader cannot see, and an unknown one alike, naming none and reading nothing', async () => {
+    const env = await fresh()
+    busy(env)
+    const { tab, group, worker } = await working(env)
+    const router = await own(env, tab, group)
+    const secret = String((await env.run(tab, { type: 'project.create', name: 'Secret Plans', visibility: 'private', brief: '' } as Command)).result.projectId)
+    // The Lead's project's agent may not read the private project, which it cannot see: refused as a project that is not there.
+    const refusals = [await load(env, tab, secret, owner, router), await load(env, tab, 'nope', owner, router)]
+    for (const r of refusals) {
+      expect(r.statusCode).toBe(404)
+      expect(r.body).not.toContain('Secret Plans')
+    }
+    expect(refusals[0]!.json().error).toEqual(refusals[1]!.json().error)
+    // A person outside the Swarm reads nothing of it, answered as any Swarm it cannot reach (security review 1 of #2428); as
+    // the host of an agent of the project, it reads what that agent may.
+    const outsider = await load(env, tab, 'lead', host)
+    expect(outsider.statusCode).toBe(404)
+    expect(outsider.json().error).toEqual({ code: 'NOT_FOUND', message: 'This is not available to you. It may have been removed, or your access changed.' })
+    expect(outsider.body).not.toContain('running')
+    expect((await load(env, tab, secret, host, worker)).statusCode).toBe(404)
+    expect((await load(env, tab, 'lead', host, worker)).json().data).toMatchObject({ state: 'read' })
+  })
+  it('reads the counts once someone who can push approved the repository for the project, in a Swarm without the team account', async () => {
+    const env = await fresh({ approveAll: false })
+    busy(env)
+    const { tab } = await working(env)
+    expect((await load(env, tab, 'lead')).json().data).toEqual({ state: 'not-approved' })
+    // As the app's sign-in records it for someone who can push (github/approvals.ts).
+    env.approved.push({ tabId: tab, projectId: 'lead', repository: 'example/app', scope: 'project', login: 'olive' })
+    expect((await load(env, tab, 'lead')).json().data).toEqual({ state: 'read', load: { running: 2, queued: 1, macosRunning: 1, macosQueued: 1 } })
+  })
+  it('reads nothing for a repository not approved for the project, in a Swarm with the team account or without, and says when the server has no app', async () => {
+    // Security review 1 of #2428: tokens ask approval only where the team account is tried; this read asks it everywhere.
+    for (const team of [true, false]) {
+      if (team) teamAccounts()
+      const env = await fresh({ approveAll: false })
+      busy(env)
+      const { tab } = await working(env)
+      expect((await load(env, tab, 'lead')).json().data).toEqual({ state: 'not-approved' })
+      expect(env.github.calls.some(c => c.path.endsWith('/access_tokens'))).toBe(false)
+      vi.unstubAllEnvs()
+    }
+    const off = await fresh({ github: false })
+    const other = await working(off)
+    expect((await load(off, other.tab, 'lead')).json().data).toEqual({ state: 'unavailable' })
+  })
+})

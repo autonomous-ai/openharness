@@ -9,6 +9,7 @@ import { inspectCapacity, type ScopedRequest } from './start.js'
 import { ENDED_WORK, object, within } from './wire.js'
 import { accountOf, API_BUILDERS, catalogFrom, catalogRow, choose, decide, gridStrength, parseAssessment, quotaOf2, recordOf, repoMatch, repositoryKey, type Assessment, type Catalog, type CatalogModel, type RecordShape, type Commitment, type Excluded, type HeldModel, type MemberFrame, type Probe, type TaskFolder } from './route.js'
 import { makePlugins, ROUTE_PLUGIN_MAKERS, type PluginMaker } from './routePlugins.js'
+import { CI_HOLD_OPENING, CI_RETRY_MINUTES, MACHINE_FIT_MAKER } from './machineFit.js'
 import { stat } from 'node:fs/promises'
 import { describeScmProject } from '../scm/scmProjects.js'
 
@@ -351,7 +352,12 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   const skipped = [...made.warnings, ...(choice.warnings ?? [])]
   choice.excluded.push(...offline, ...(catalog.models.length ? [] : [{ title: 'New agents', reason: CATALOG_UNREADABLE }]))
   // The task stays in the agent's queue rather than going where it cannot be done.
-  if ('error' in choice) return { ...choice, ...(skipped.length ? { warnings: skipped } : {}), leftOut: leftOut(choice.excluded, []), ...required.machines || required.devices.length ? { waiting: true, detail: WAITING } : {} }
+  // Work that starts heavy CI while the account is at its limit waits, and says when to route it again (machineFit.ts), so the
+  // Lead's route queue retries it without a person.
+  const ciHeld = 'error' in choice ? choice.excluded.find(e => e.reason.startsWith(`${MACHINE_FIT_MAKER.name}: ${CI_HOLD_OPENING}`)) : undefined
+  if ('error' in choice) return { ...choice, ...(skipped.length ? { warnings: skipped } : {}), leftOut: leftOut(choice.excluded, []),
+    ...required.machines || required.devices.length ? { waiting: true, detail: WAITING } : {},
+    ...ciHeld ? { waiting: true, retryAfterMinutes: CI_RETRY_MINUTES, detail: ciHeld.reason.slice(MACHINE_FIT_MAKER.name.length + 2) } : {} }
   const verdict = decide(choice)
   const operationId = `route-${newId()}`
   const record = (shape: RecordShape) => scoped({ action: 'command', operationId,
