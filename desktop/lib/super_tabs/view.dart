@@ -1972,6 +1972,10 @@ class _SuperTabViewState extends State<SuperTabView>
               : 'Choose a project'
         : c.snapshot!.isProjectLead(group.id)
         ? '# ${c.snapshot!.projectFor(group.id)!.name}'
+        // An older Buddy chat in a project says which, as the menu that opens
+        // it does; the one Buddy chat is the sidebar's # buddy.
+        : c.isEarlierBuddyChat(group)
+        ? 'Earlier Buddy chat · ${c.snapshot!.projects.where((p) => p.id == group.projectId).firstOrNull?.name ?? 'a project'}'
         : _buddyName(group) == null
         ? null
         : c.buddy(group.projectId) == null && group.buddyName == null
@@ -1993,6 +1997,8 @@ class _SuperTabViewState extends State<SuperTabView>
     if (snapshot.isProjectLead(group.id)) {
       return 'Message #${snapshot.projectFor(group.id)!.name}';
     }
+    // Nothing is sent from an older Buddy chat: its box says so.
+    if (c.isEarlierBuddyChat(group)) return 'Read only';
     if (_buddyName(group) case final buddy?) return 'Message $buddy';
     return 'Message ${group.title}';
   }
