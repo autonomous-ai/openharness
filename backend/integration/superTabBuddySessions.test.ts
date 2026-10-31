@@ -8,6 +8,7 @@ import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
+import { SwarmReads } from '../src/superTabs/read/service.js'
 import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { poolRows } from './hostRows.test-support.js'
@@ -87,6 +88,16 @@ async function swarm({ capable = true, maxAgents = 6, engine = 'claude' } = {}) 
 const text = (page: { messages: Array<{ text: string }> }) => page.messages.map(m => m.text)
 
 describe('a Buddy thread session', () => {
+  it('is announced in every Swarm read, so an app offers New session only on a server that takes it', async () => {
+    const f = await swarm()
+    const reads = new SwarmReads(f.store)
+    const first = await reads.firstLoad(peer, f.tab)
+    expect(first.derived.threadSessions).toBe(true)
+    await f.say('Moving the cursor on')
+    const changes = await reads.changes(peer, f.tab, first.cursor)
+    expect(changes.reload === false && changes.derived.threadSessions).toBe(true)
+  })
+
   it('starts from a thread reply on its Buddy\'s machine, with no message text in its start, and hears that reply once it joins', async () => {
     const f = await swarm()
     const root = await f.say('Two things today')
@@ -251,7 +262,48 @@ describe('a Buddy thread session', () => {
     expect(read.state.starts?.find(s => s.id === pending)?.error).toBeTruthy()
   })
 
-  it('is refused without saying whose: an old host, no Buddy, another person, a made-up thread, a plain main message', async () => {
+  it('starts from the person\'s own main-chat message, which roots its thread: only its session hears it, only the chat\'s readers see it', async () => {
+    const f = await swarm()
+    await f.say('Earlier in the main chat')
+    const ask = 'Measure prod CPU for the last day'
+    const sent = await f.execute({ type: 'message.send', conversationId: f.chat, text: ask, replyTo: null, recipientIds: [], newSession: true }, peer)
+    const root = String(sent.result.messageId), startId = String(sent.result.startId)
+    expect((await f.store.read(peer, f.tab)).state.conversations.find(c => c.id === f.chat)!.buddySessions).toMatchObject([{ thread: root, startId }])
+    const start = (await poolRows(f.store, peer, 'peer-mac')).find(p => p.tabId === f.tab)!.buddyStarts!.find(s => s.id === startId)!
+    expect(start.request).toMatchObject({ conversationId: f.chat, buddyOf: { personId: peer.sub }, buddySession: { thread: root } })
+    expect(JSON.stringify(start)).not.toContain(ask)
+    // Nobody receives it while its session starts: not the main Buddy, nor anyone else.
+    expect(await db.superTabDelivery.findMany({ where: { tabId: f.tab, messageId: root } })).toEqual([])
+    await f.host({ type: 'agent.startDispatch', startId })
+    const agentId = String((await f.host({ type: 'agent.started', startId, harnessId: randomUUID(), configuration: config })).result.agentId)
+    // Then its session alone.
+    expect((await db.superTabDelivery.findMany({ where: { tabId: f.tab, messageId: root } })).map(d => d.agentId)).toEqual([agentId])
+    // The main Buddy never reads it; its session reads its own thread from that root.
+    const mainReads = text(await f.store.messages(peer, f.tab, f.chat, {}, f.main))
+    expect(mainReads).toContain('Earlier in the main chat')
+    expect(mainReads).not.toContain(ask)
+    expect(text(await f.store.messages(peer, f.tab, f.chat, { messageId: root }, f.main))).toEqual([])
+    expect(text(await f.store.messages(peer, f.tab, f.chat, {}, agentId))).toEqual([ask])
+    // The person reads it in the main chat, as the root of its thread.
+    expect(text(await f.store.messages(peer, f.tab, f.chat, {})).slice(-2)).toEqual(['Earlier in the main chat', ask])
+    // Another member reads none of the chat, as before.
+    await expect(f.store.messages(owner, f.tab, f.chat, {})).rejects.toThrow()
+    // A reply in its thread reaches its session alone.
+    const next = String((await f.reply(root, 'And memory too')).result.messageId)
+    expect((await db.superTabDelivery.findMany({ where: { tabId: f.tab, messageId: next } })).map(d => d.agentId)).toEqual([agentId])
+  })
+
+  it('roots a session only from the chat\'s own person: never another member, nor a Buddy, nor with a recipient', async () => {
+    const f = await swarm()
+    const top = (extra: Partial<Extract<Command, { type: 'message.send' }>> = {}) =>
+      ({ type: 'message.send' as const, conversationId: f.chat, text: 'x', replyTo: null, recipientIds: [], newSession: true as const, ...extra })
+    await expect(f.execute(top(), owner)).rejects.toThrow('unavailable')
+    await expect(f.execute(top(), peer, f.main)).rejects.toMatchObject({ code: 'BUDDY_SESSION_CHAT' })
+    await expect(f.execute(top({ recipientIds: [f.main] }), peer)).rejects.toMatchObject({ code: 'INVALID_RECIPIENT' })
+    expect((await f.store.read(peer, f.tab)).state.conversations.find(c => c.id === f.chat)!.buddySessions ?? []).toEqual([])
+  })
+
+  it('is refused without saying whose: an old host, no Buddy, another person, a made-up thread', async () => {
     const old = await swarm({ capable: false })
     const root = await old.say('Start')
     await expect(old.reply(root, 'x', { newSession: true })).rejects.toMatchObject({ code: 'BUDDY_SESSION_UNSUPPORTED' })
@@ -260,8 +312,6 @@ describe('a Buddy thread session', () => {
     await expect(f.execute({ type: 'message.send', conversationId: f.chat, text: 'x', replyTo: mine, recipientIds: [], newSession: true }, owner))
       .rejects.toThrow('unavailable')
     await expect(f.reply('ffffffffffffffffffffffff', 'x', { newSession: true })).rejects.toMatchObject({ code: 'INVALID_REPLY' })
-    await expect(f.execute({ type: 'message.send', conversationId: f.chat, text: 'x', replyTo: null, recipientIds: [], newSession: true }, peer))
-      .rejects.toMatchObject({ code: 'BUDDY_SESSION_CHAT' })
     await f.execute({ type: 'buddy.remove', projectId: 'lead' }, peer)
     await expect(f.reply(mine, 'x', { newSession: true })).rejects.toMatchObject({ code: 'BUDDY_SESSION_NO_BUDDY' })
   })

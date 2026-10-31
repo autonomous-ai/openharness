@@ -6,7 +6,7 @@
 import { suspendedEngines } from '../engineHealth.js'
 import { leadChoices } from '../leadStart.js'
 import { isBuddyChat, isBuddyReader } from '../buddies.js'
-import { agentForBuddy, agentWithoutMachine, groupWithoutMachines, isLeads, machineHiddenFrom, seenMachineIds, visibleState, withSeenRequirement, type Actor, type Agent, type Conversation, type SuperTabState } from '../model.js'
+import { agentForBuddy, agentWithoutMachine, groupWithoutMachines, machineHiddenFrom, seenMachineIds, visibleState, withSeenRequirement, type Actor, type Agent, type Conversation, type SuperTabState } from '../model.js'
 import { slotCounter, machineTeamWork, teamAccountSwarm, type ContributedMachine } from '../machines.js'
 import * as store from '../parts/index.js'
 import type { Part, SwarmParts } from '../parts/index.js'
@@ -66,10 +66,9 @@ export function groupView(group: Conversation, seenMachines: ReadonlySet<string>
   return { ...rest, messageSeq: messageSeq ?? 0, ...(dormant ? { dormant: true as const } : {}), ...readers }
 }
 
-/** A conversation's whole data as the reader may see it: the Leads conversation lists only the agents the reader can see, and a
- *  task's requirement only the machines they see. */
-export function visibleGroupView(group: Conversation, visibleAgents: ReadonlySet<string>, seenMachines: ReadonlySet<string>): GroupView {
-  return groupView(isLeads(group) ? { ...group, agentIds: group.agentIds.filter(id => visibleAgents.has(id)) } : group, seenMachines)
+/** A conversation's whole data as the reader may see it: a task's requirement lists only the machines they see. */
+export function visibleGroupView(group: Conversation, _visibleAgents: ReadonlySet<string>, seenMachines: ReadonlySet<string>): GroupView {
+  return groupView(group, seenMachines)
 }
 
 /** The machines a reader's view shows them: listed, or running an agent they see (model.ts seenMachineIds). */
@@ -149,5 +148,7 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
     ...(actor.kind === 'person' && extras.decisionsWaiting !== undefined ? { decisionsWaiting: extras.decisionsWaiting } : {}),
     ...(actor.kind === 'person' && extras.decisionsDigest !== undefined ? { decisionsDigest: extras.decisionsDigest } : {}),
     ...(teamAccountSwarm(state) ? {} : { teamAccounts: false as const }),
+    threadSessions: true as const,
+    sessionsFromChat: true as const,
   }
 }

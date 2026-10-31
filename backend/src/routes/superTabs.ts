@@ -18,6 +18,7 @@ import { joinSwarmSchema, previewJoinSchema, saveSharingSchema } from '../superT
 import { holdReason } from '../superTabs/holdReason.js'
 import { GitHubAppError } from '../github/app.js'
 import { projectGitHubAccess } from '../github/projectAccess.js'
+import { projectCiLoad } from '../github/ciLoad.js'
 import { githubSignIn, PrismaApprovals, readState, signState, stateSecret, type Approvals, type GitHubSignIn } from '../github/approvals.js'
 import type { GitHubRepository } from '../github/repository.js'
 import { githubRepository } from '../github/repository.js'
@@ -26,6 +27,7 @@ import { githubTokensFromEnv, type GitHubTokens } from '../github/tokens.js'
 import { logger } from '../utils/logger.js'
 import { SwarmReads } from '../superTabs/read/service.js'
 import { inboxWait, readInbox } from '../superTabs/read/inbox.js'
+import { readFollowedThreads, threadsWait } from '../superTabs/read/followedThreads.js'
 import { HostReads } from '../superTabs/read/host.js'
 import { UPDATE_REQUIRED } from '../superTabs/read/contract.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
@@ -67,6 +69,7 @@ const nativeParams = tabParams.extend({ contextId: id })
 const messageParams = tabParams.extend({ conversationId: id })
 // A person's own read mark (superTabs/readMarks.ts): no asAgentId, since agents keep none.
 const readMarkBody = z.object({ sequence: z.number().int().nonnegative().safe() }).strict()
+const followBody = z.object({ follow: z.boolean().nullable() }).strict()
 const threadParams = messageParams.extend({ threadId: id })
 const noQuery = z.object({}).strict()
 // The reader's own catch-up (superTabs/catchUp.ts): no asAgentId, since agents read every message as it comes.
@@ -125,14 +128,16 @@ const githubStartToken = z.object({ always: z.boolean().optional() }).strict()
  * access lost (cli superTabs/machines.ts, swarmReads.ts).
  */
 export const NOT_AVAILABLE_ROUTES: ReadonlySet<string> = new Set([
-  'GET /api/super-tabs/:tabId/parts', 'GET /api/super-tabs/:tabId/changes', 'GET /api/super-tabs/:tabId/inbox', 'POST /api/super-tabs/:tabId/commands',
+  'GET /api/super-tabs/:tabId/parts', 'GET /api/super-tabs/:tabId/changes', 'GET /api/super-tabs/:tabId/inbox', 'GET /api/super-tabs/:tabId/threads',
+  'POST /api/super-tabs/:tabId/commands',
   'GET /api/super-tabs/:tabId/mentions', 'GET /api/super-tabs/:tabId/decisions', 'GET /api/super-tabs/:tabId/leaderboard',
   'GET /api/super-tabs/:tabId/sharing', 'POST /api/super-tabs/:tabId/sharing', 'GET /api/super-tabs/:tabId/routing-policy',
   'GET /api/super-tabs/:tabId/groups', 'GET /api/super-tabs/:tabId/groups/:conversationId',
   'POST /api/super-tabs/:tabId/join', 'POST /api/super-tabs/:tabId/join/preview', 'POST /api/super-tabs/:tabId/native',
   'GET /api/super-tabs/:tabId/conversations/:conversationId/messages', 'GET /api/super-tabs/:tabId/conversations/:conversationId/catch-up',
-  'POST /api/super-tabs/:tabId/conversations/:conversationId/read',
+  'POST /api/super-tabs/:tabId/conversations/:conversationId/read', 'POST /api/super-tabs/:tabId/conversations/:conversationId/threads/:threadId/follow',
   'GET /api/super-tabs/:tabId/projects/:projectId/github', 'POST /api/super-tabs/:tabId/projects/:projectId/github/approve',
+  'GET /api/super-tabs/:tabId/projects/:projectId/ci-load',
   'GET /api/super-tabs/:tabId/projects/:projectId/roles/:roleId', 'GET /api/super-tabs/:tabId/route-decisions/:decisionId',
   'GET /api/super-tabs/:tabId/machines/:machineId/removal',
   'POST /api/super-tabs/:tabId/attachments', 'POST /api/super-tabs/:tabId/avatars',
@@ -312,6 +317,17 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
         you: repository => approvals.reader(req.user!.autonomousEnv, req.params.tabId, req.params.projectId, repository, req.user!.sub) },
         req.query.refresh === '1')
     }))
+  // The jobs running and waiting on a project's GitHub Actions, for the route (github/ciLoad.ts): counts only, read through
+  // the app, by a person or an agent who may read the project. Only for a repository someone who can push to it approved for
+  // the project, in every Swarm, also where tokens ask no approval: otherwise a project could name another organisation's
+  // repository that has the app, read its counts and spend that installation's requests (security review 1 of #2428).
+  app.get<{ Params: z.infer<typeof projectParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/projects/:projectId/ci-load',
+    { preHandler: [validateParams(projectParams), validateQuery(agentQuery)] },
+    (req, reply) => respond(reply, async () => {
+      const project = await store.ciRepository(req.user!, req.params.tabId, req.params.projectId, req.query.asAgentId)
+      return projectCiLoad(github?.app ?? null, project.repositoryUrl,
+        repository => approvals.approved(req.user!.autonomousEnv, req.params.tabId, req.params.projectId, repository))
+    }))
   // Approving a project's repository: the person signs in to GitHub through the app (or installs it, which signs them in
   // too), and GitHub sends them back to /api/github/callback with the state signed here for them, this project and scope.
   app.post<{ Params: z.infer<typeof projectParams>; Body: z.infer<typeof approveBody> }>('/api/super-tabs/:tabId/projects/:projectId/github/approve',
@@ -448,6 +464,13 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
       if (wait) return sendError(reply.header('Retry-After', String(wait)), 'Too many inbox reads. Try again in a moment.', 'RATE_LIMITED', 429)
       return respond(reply, () => readInbox(store, req.user!, req.params.tabId))
     })
+  // A person's followed threads, unread first (read/followedThreads.ts): Desktop's Threads view, read as the inbox is.
+  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof noQuery> }>('/api/super-tabs/:tabId/threads',
+    { preHandler: [validateParams(tabParams), validateQuery(noQuery)] }, async (req, reply) => {
+      const wait = await threadsWait(req.user!, req.params.tabId)
+      if (wait) return sendError(reply.header('Retry-After', String(wait)), 'Too many thread reads. Try again in a moment.', 'RATE_LIMITED', 429)
+      return respond(reply, () => readFollowedThreads(store, req.user!, req.params.tabId))
+    })
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof leaderboardQuery> }>('/api/super-tabs/:tabId/leaderboard',
     { preHandler: [validateParams(tabParams), validateQuery(leaderboardQuery)] },
     (req, reply) => respond(reply, () => reads.leaderboard(req.user!, req.params.tabId, req.query.projectId, req.query.week)))
@@ -553,6 +576,10 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.post<{ Params: z.infer<typeof threadParams>; Querystring: z.infer<typeof noQuery>; Body: z.infer<typeof readMarkBody> }>('/api/super-tabs/:tabId/conversations/:conversationId/threads/:threadId/read',
     { preHandler: [validateParams(threadParams), validateQuery(noQuery), validateBody(readMarkBody)] },
     (req, reply) => respond(reply, () => reads.markThreadRead(req.user!, req.params.tabId, req.params.conversationId, req.params.threadId, req.body.sequence)))
+  // A person's own Follow or Unfollow of a thread, kept on its thread mark (superTabs/readMarks.ts writeThreadFollow); null clears it.
+  app.post<{ Params: z.infer<typeof threadParams>; Querystring: z.infer<typeof noQuery>; Body: z.infer<typeof followBody> }>('/api/super-tabs/:tabId/conversations/:conversationId/threads/:threadId/follow',
+    { preHandler: [validateParams(threadParams), validateQuery(noQuery), validateBody(followBody)] },
+    (req, reply) => respond(reply, () => reads.followThread(req.user!, req.params.tabId, req.params.conversationId, req.params.threadId, req.body.follow)))
   app.get<{ Params: z.infer<typeof messageParams>; Querystring: z.infer<typeof catchUpQuery> }>('/api/super-tabs/:tabId/conversations/:conversationId/catch-up',
     { preHandler: [validateParams(messageParams), validateQuery(catchUpQuery)] },
     (req, reply) => respond(reply, () => store.catchUp(req.user!, req.params.tabId, req.params.conversationId, req.query.after)))

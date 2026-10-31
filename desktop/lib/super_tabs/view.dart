@@ -27,14 +27,17 @@ import 'roster.dart';
 import 'recording_notice.dart';
 import 'profile_actions.dart';
 import 'live_card.dart';
+import 'personal_projects.dart';
 import 'pull_request_facts.dart';
 import 'pull_requests.dart';
 import 'composer_files.dart';
 import 'composer_newline.dart';
+import 'composer_tags.dart';
+import 'composer_toggle.dart';
+import 'attention.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'folder_zip.dart';
-import 'identity.dart';
 import 'instructions_panel.dart';
 import 'model.dart';
 import 'prompt_alerts.dart';
@@ -52,6 +55,7 @@ import 'route_row.dart';
 import 'ship_row.dart';
 import 'terminal_row.dart';
 import 'thread_panel.dart';
+import 'threads_view.dart';
 import 'work_details.dart';
 import 'project_sidebar.dart';
 import 'buddy_sessions.dart';
@@ -60,15 +64,7 @@ import 'project_options.dart';
 import 'pane_layout.dart';
 import '../widgets/dial_list_scroll.dart';
 
-/// A completion row: a workgroup, or someone to tag with their face and
-/// whether they are a person or an agent ([kind]).
-typedef _ComposerChoice = ({
-  String label,
-  String? detail,
-  VoidCallback choose,
-  Widget? leading,
-  String? kind,
-});
+typedef _ComposerChoice = SuperTabComposerChoice;
 
 /// The contents of one app tab. Its title stays in the app's existing tab bar.
 /// [terminal] is the existing native pane, with its own controls and input.
@@ -132,6 +128,9 @@ class _SuperTabViewState extends State<SuperTabView>
   final _awayFromEnd = <String>{};
   final _unread = SuperTabUnreadLines();
   final _replies = <String, SuperTabMessage>{};
+
+  /// The Buddy chats whose next message starts its own thread's session.
+  final _chatSessions = <String>{};
   String? _selected;
   int _scrollRequest = 0;
   bool _jumpingToEnd = false;
@@ -140,6 +139,9 @@ class _SuperTabViewState extends State<SuperTabView>
   bool _showPullRequests = false;
 
   bool _showNotifications = false;
+
+  /// The Threads view holds the main pane (threads_view.dart).
+  bool _showThreads = false;
   // The message a tag opened, scrolled to once it is laid out.
   String? _target;
   // The conversation a link or tag opened at its own message this visit: its
@@ -175,7 +177,7 @@ class _SuperTabViewState extends State<SuperTabView>
   // The composer's completions are drawn by builders of their own, so typing
   // and choosing among them never rebuild the transcript.
   final _mentionIndex = ValueNotifier(0);
-  late final _tagBackspace = _TagBackspace(
+  late final _tagBackspace = SuperTabTagBackspace(
     () => c.mentions(c.selectedId).values,
   );
   final _dismissedMention = ValueNotifier<String?>(null);
@@ -187,7 +189,10 @@ class _SuperTabViewState extends State<SuperTabView>
 
   /// The chats whose dropped folders are being zipped.
   final _zipping = <String>{};
-  final _completionKeys = List.generate(6, (_) => GlobalKey());
+  final _completionKeys = List.generate(
+    superTabCompletionLimit,
+    (_) => GlobalKey(),
+  );
   SuperTabController get c => widget.controller;
 
   /// The open project's week board, read once for the right pane's members
@@ -212,8 +217,7 @@ class _SuperTabViewState extends State<SuperTabView>
       widget.app?.devicesEnabled == true &&
       !c.accessRevoked;
 
-  String _agentName(SuperTabAgent agent) =>
-      c.snapshot?.agentName(agent.id, fallback: agent.name) ?? agent.name;
+  String _agentName(SuperTabAgent agent) => superTabAgentName(c, agent);
 
   String _authorName(SuperTabMessage message) =>
       c.snapshot?.authorName(message) ?? message.authorName;
@@ -443,7 +447,8 @@ class _SuperTabViewState extends State<SuperTabView>
         _devicesVisible ||
         _terminalsVisible ||
         _showPullRequests ||
-        _showNotifications) {
+        _showNotifications ||
+        _showThreads) {
       return false;
     }
     final lifecycle = WidgetsBinding.instance.lifecycleState;
@@ -693,8 +698,14 @@ class _SuperTabViewState extends State<SuperTabView>
     // From here a zip still running belongs to neither this message, which
     // took its files already, nor the next.
     final dropped = _droppedFolders.remove(id);
+    final newSession =
+        _chatSessions.contains(id) &&
+        c.offersChatSessions &&
+        c.threadSessionBlocked == null &&
+        !c.buddySessionsFull;
     final result = await c.send(
       replyTo: _replies[id]?.id,
+      newSession: newSession,
       // The reply goes with the message, which shows at the end at once.
       onSending: () {
         if (!mounted) return;
@@ -703,6 +714,21 @@ class _SuperTabViewState extends State<SuperTabView>
       },
     );
     if (!mounted) return;
+    if (newSession && result != null) _chatSessions.remove(id);
+    // Refused for New session, its text is back as the chat's draft: it shows
+    // in the box, ready to send without it, unless another chat is shown or
+    // something was typed meanwhile.
+    if (result == null &&
+        newSession &&
+        c.selectedId == id &&
+        _composer.text.isEmpty &&
+        c.draft(id).isNotEmpty) {
+      final restored = c.draft(id);
+      _composer.value = TextEditingValue(
+        text: restored,
+        selection: TextSelection.collapsed(offset: restored.length),
+      );
+    }
     setState(() {
       if (result == null && dropped != null) {
         // Not sent: its paths are still offered as zips, in a new record
@@ -714,6 +740,30 @@ class _SuperTabViewState extends State<SuperTabView>
         ]);
       }
     });
+  }
+
+  /// New session in the reader's own Buddy chat's composer: the message
+  /// starts its own thread's session. Greyed while it can't start, its hover
+  /// saying why, as in a thread's reply box.
+  Widget _chatSessionChoice(bool writable) {
+    final id = c.selectedId;
+    final blocked = c.threadSessionBlocked;
+    final full = blocked == null && c.buddySessionsFull;
+    return SuperTabComposerToggle(
+      key: const ValueKey('super-chat-new-session'),
+      on: _chatSessions.contains(id) && blocked == null && !full,
+      label: 'New session',
+      hint:
+          blocked ??
+          (full
+              ? '${SuperTabController.maxBuddySessions} sessions running. End one to start another.'
+              : 'Starts a separate Buddy session for this message'),
+      onChanged: writable && blocked == null && !full
+          ? (on) => setState(
+              () => on ? _chatSessions.add(id) : _chatSessions.remove(id),
+            )
+          : null,
+    );
   }
 
   /// [path] as it goes into a message: as it is, or in double quotes when it
@@ -979,89 +1029,35 @@ class _SuperTabViewState extends State<SuperTabView>
     });
   }
 
-  ({int start, int end, String query})? get _mentionAtCursor {
-    final value = _composer.value;
-    if (!value.selection.isValid ||
-        !value.selection.isCollapsed ||
-        (value.composing.isValid && !value.composing.isCollapsed)) {
-      return null;
-    }
-    final end = value.selection.baseOffset;
-    final prefix = value.text.substring(0, end);
-    final match = RegExp(r'(?:^|\s)@([^@\n]*)$').firstMatch(prefix);
-    if (match == null || prefix == _dismissedMention.value) return null;
-    final start = prefix.lastIndexOf('@');
-    final query = match.group(1)!;
-    if (c.mentions(c.selectedId).values.contains('@${query.trimRight()}')) {
-      return null;
-    }
-    return (start: start, end: end, query: query.toLowerCase());
-  }
+  ({int start, int end, String query})? get _mentionAtCursor =>
+      superTabTagAtCaret(
+        _composer.value,
+        dismissed: _dismissedMention.value,
+        tags: c.mentions(c.selectedId).values,
+      );
 
-  /// Who `@` offers: the people who read this conversation, then its agents,
-  /// filtered by what follows the `@`. Never the reader; nobody is tagged in
-  /// the Leads conversation, so it offers agents alone.
+  /// Who `@` offers here ([superTabTagChoices]).
   List<_ComposerChoice> get _mentionChoices {
     final mention = _mentionAtCursor;
-    final snapshot = c.snapshot, group = c.selected;
-    if (mention == null || snapshot == null || group == null) return const [];
-    final project = snapshot.projectFor(group.id);
-    bool reads(SuperTabPerson person) => switch (group) {
-      _ when group.kind == 'leads' => false,
-      SuperTabConversation(:final audience?) => audience.contains(person.id),
-      _ when group.buddyOwnerId != null => person.id == group.buddyOwnerId,
-      _ =>
-        project == null ||
-            !project.isPrivate ||
-            project.ownerId == person.id ||
-            project.memberIds.contains(person.id),
-    };
-    final people = snapshot.people.where(
-      (person) =>
-          person.id != c.accountId &&
-          reads(person) &&
-          person.username.contains(mention.query),
+    final group = c.selected;
+    if (mention == null || group == null) return const [];
+    return superTabTagChoices(
+      c,
+      group,
+      mention.query,
+      machineName: widget.machineName,
+      choose: _chooseMention,
     );
-    final agents = snapshot.agents.where(
-      (agent) =>
-          group.agentIds.contains(agent.id) &&
-          // A thread's own session answers only there: nobody tags it.
-          agent.buddySession == null &&
-          '${_agentName(agent)} ${agent.engine}'.toLowerCase().contains(
-            mention.query,
-          ),
-    );
-    return [
-      for (final person in people)
-        (
-          label: person.username,
-          detail: null,
-          choose: () => _chooseMention(person.id, person.username),
-          leading: SuperTabAvatar.person(person, size: SuperTabAvatar.rowSize),
-          kind: 'person',
-        ),
-      for (final agent in agents)
-        (
-          label: _agentName(agent),
-          detail: '${agent.engine}  ${widget.machineName(agent.machineId)}',
-          choose: () => _chooseMention(agent.id, _agentName(agent)),
-          leading: SuperTabAvatar.agent(agent, size: SuperTabAvatar.rowSize),
-          kind: 'agent',
-        ),
-    ].take(_completionKeys.length).toList();
   }
 
   void _chooseMention(String id, String name) {
     final at = _mentionAtCursor;
     if (at == null) return;
     final token = '@$name';
-    final text = _composer.text.replaceRange(at.start, at.end, '$token ');
-    c.setDraft(c.selectedId, text);
+    final value = superTabInsertTag(_composer.value, at, token);
+    c.setDraft(c.selectedId, value.text);
     c.mention(c.selectedId, id, token);
-    _composer.value = TextEditingValue(
-      text: text,
-      selection: TextSelection.collapsed(offset: at.start + token.length + 1),
-    );
+    _composer.value = value;
     _mentionIndex.value = 0;
     _focus.requestFocus();
   }
@@ -1384,6 +1380,17 @@ class _SuperTabViewState extends State<SuperTabView>
     onNewSwarm: widget.onNewSwarm,
     devicesSelected: _devicesVisible,
     notificationsSelected: _notificationsVisible,
+    attention: SuperTabAttention.of(c),
+    threadsSelected: _threadsVisible,
+    onThreads: () {
+      _closeSidebar();
+      setState(() {
+        _showThreads = true;
+        _showNotifications = false;
+        _showPullRequests = false;
+      });
+      widget.onCloseTerminal?.call();
+    },
     // On a Mac what needs the person is in the menu bar's Harness menu and on
     // the Dock's badge, so the sidebar keeps no Notifications row.
     onNotifications: superTabNoticesInMenuBar
@@ -1392,6 +1399,7 @@ class _SuperTabViewState extends State<SuperTabView>
             _closeSidebar();
             setState(() {
               _showNotifications = true;
+              _showThreads = false;
               _showPullRequests = false;
             });
             widget.onCloseTerminal?.call();
@@ -1400,7 +1408,7 @@ class _SuperTabViewState extends State<SuperTabView>
       _closeSidebar();
       setState(() {
         _showPullRequests = false;
-        _showNotifications = false;
+        _showNotifications = _showThreads = false;
       });
       (widget.onChooseAgentTerminal ?? widget.onOpenTerminal)(agent);
     },
@@ -1408,12 +1416,12 @@ class _SuperTabViewState extends State<SuperTabView>
         ? null
         : () {
             _closeSidebar();
-            setState(() => _showNotifications = false);
+            setState(() => _showNotifications = _showThreads = false);
             widget.app!.openDevices();
           },
     needsHuman: (group) => _needsHuman(group).length,
     onSelect: (id) {
-      setState(() => _showNotifications = false);
+      setState(() => _showNotifications = _showThreads = false);
       c.select(id);
       _closeSidebar();
     },
@@ -1426,7 +1434,7 @@ class _SuperTabViewState extends State<SuperTabView>
   /// ([SuperTabController.buddyChatOpener]).
   Future<bool> _openBuddyChat(String projectId) {
     setState(() {
-      _showNotifications = false;
+      _showNotifications = _showThreads = false;
       _showPullRequests = false;
     });
     widget.onCloseTerminal?.call();
@@ -1443,6 +1451,7 @@ class _SuperTabViewState extends State<SuperTabView>
     widget.onCloseTerminal?.call();
     setState(() {
       _showNotifications = true;
+      _showThreads = false;
       _showPullRequests = false;
     });
     if (request.kind != 'mention') return;
@@ -1454,6 +1463,30 @@ class _SuperTabViewState extends State<SuperTabView>
 
   bool get _notificationsVisible =>
       _showNotifications && !_devicesVisible && !c.accessRevoked;
+
+  /// Notifications or Threads holds the main pane, with no chat header.
+  bool get _listViewHoldsThePane => _notificationsVisible || _threadsVisible;
+
+  bool get _threadsVisible =>
+      _showThreads &&
+      !_showNotifications &&
+      !_devicesVisible &&
+      !c.accessRevoked;
+
+  /// Opens [root]'s thread in its chat from the Threads view.
+  void _openThreadFromList(String conversationId, String root) {
+    if (c.accessRevoked || c.snapshot?.conversation(conversationId) == null) {
+      return;
+    }
+    widget.onCloseTerminal?.call();
+    _closeSidebar();
+    setState(() {
+      _showThreads = _showNotifications = false;
+      _showPullRequests = false;
+    });
+    c.select(conversationId);
+    c.openThread(root);
+  }
 
   /// [messageId] of [id], read from the pages held, then what arrived after
   /// them, then older pages, up to 50 (5,000 messages); null when it is not
@@ -1526,7 +1559,7 @@ class _SuperTabViewState extends State<SuperTabView>
     }
     final shownBy = _rowShowing(id, messageId) ?? messageId;
     setState(() {
-      _showNotifications = false;
+      _showNotifications = _showThreads = false;
       _showPullRequests = false;
       _back = null;
       _target = shownBy;
@@ -1913,14 +1946,14 @@ class _SuperTabViewState extends State<SuperTabView>
         ? 'Your devices'
         : _notificationsVisible
         ? 'Notifications'
+        : _threadsVisible
+        ? 'Threads'
         : group == null
         ? c.snapshot?.projects.isEmpty == true
               ? c.snapshot!.name
               : 'Choose a project'
         : c.snapshot!.isProjectLead(group.id)
         ? '# ${c.snapshot!.projectFor(group.id)!.name}'
-        : group.id == c.snapshot!.leadsConversationId
-        ? '# $kProductManagersChannel'
         : _buddyName(group) == null
         ? null
         : c.buddy(group.projectId) == null && group.buddyName == null
@@ -1936,14 +1969,11 @@ class _SuperTabViewState extends State<SuperTabView>
   }
 
   /// The composer's hint, naming the open conversation as its sidebar row
-  /// does: "Message #openharness", "Message #product-managers", "Message Wren".
+  /// does: "Message #openharness", "Message Wren".
   String _messageHint(SuperTabConversation group) {
     final snapshot = c.snapshot!;
     if (snapshot.isProjectLead(group.id)) {
       return 'Message #${snapshot.projectFor(group.id)!.name}';
-    }
-    if (group.id == snapshot.leadsConversationId) {
-      return 'Message #$kProductManagersChannel';
     }
     if (_buddyName(group) case final buddy?) return 'Message $buddy';
     return 'Message ${group.title}';
@@ -1956,12 +1986,21 @@ class _SuperTabViewState extends State<SuperTabView>
 
   /// Whether ⋮ carries the views a wider header draws as icons.
   bool get _menuNamesViews =>
-      _phone && !_devicesVisible && !_notificationsVisible;
+      _phone && !_devicesVisible && !_listViewHoldsThePane;
+
+  /// How many terminals [group]'s [term] opens: its agents', and in the
+  /// person's own Personal Swarm their panes of its project.
+  int _terminalCount(SuperTabConversation group) =>
+      group.agentIds.length +
+      switch (widget.app) {
+        final app? => PersonalProjects.of(app).panesFor(c, group.id).length,
+        null => 0,
+      };
 
   /// Opens the group's terminals beside the chat; null when it has none this
   /// reader may open (a read-only viewer's terminal reads are refused).
   VoidCallback? _openTerminals(SuperTabConversation group) =>
-      group.agentIds.isNotEmpty && c.canWrite
+      _terminalCount(group) > 0 && c.canWrite
       ? () {
           setState(() => _showPullRequests = false);
           widget.onOpenGroupTerminals?.call();
@@ -2019,138 +2058,134 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
-  Widget _header(
-    SuperTabConversation? group,
-    bool narrow,
-    bool showRoster,
-  ) => Container(
-    constraints: const BoxConstraints(minHeight: 52),
-    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
-    decoration: BoxDecoration(
-      border: Border(bottom: BorderSide(color: DesktopChrome.rim)),
-    ),
-    child: Row(
-      children: [
-        if (narrow)
-          fingerTarget(
-            enabled: _phone,
-            AppIconButton(
-              icon: AppIcons.columns2,
-              tooltip: 'Conversations',
-              onPressed: () => setState(() => _sidebarOpen = !_sidebarOpen),
-            ),
-          ),
-        Expanded(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // A view saved on this device, until the first read
-                // replaces it ([SuperTabReading.drawsSaved]).
-                if (c.showingSaved)
-                  Row(
-                    children: [
-                      Flexible(child: _title(group)),
-                      const SizedBox(width: 8),
-                      // Where the copy is; how long it stays and where
-                      // it is cleared, a hover or a long press away.
-                      Flexible(
-                        child: Tooltip(
-                          message:
-                              'This browser keeps a copy of the Super '
-                              'Tabs you open until you sign out. '
-                              'Settings ▸ Account clears it now.',
-                          child: Text(
-                            'Saved in this browser · Updating…',
-                            key: const ValueKey('super-updating'),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: DesktopChrome.metadata(),
-                          ),
-                        ),
-                      ),
-                    ],
-                  )
-                else
-                  _title(group),
-                if (!_devicesVisible && !_notificationsVisible)
-                  ?_subtitle(group),
-              ],
-            ),
-          ),
+  Widget _header(SuperTabConversation? group, bool narrow, bool showRoster) =>
+      Container(
+        constraints: const BoxConstraints(minHeight: 52),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
+        decoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: DesktopChrome.rim)),
         ),
-        if (group != null && !_devicesVisible && !_notificationsVisible) ...[
-          fingerTarget(
-            enabled: _phone,
-            AppIconButton(
-              key: const ValueKey('super-chat'),
-              icon: AppIcons.messageSquare,
-              size: AppIcons.inlineSize,
-              tooltip: 'Chat',
-              selected: !_terminalsVisible && !_showPullRequests,
-              color: !_terminalsVisible && !_showPullRequests
-                  ? DesktopChrome.foreground
-                  : DesktopChrome.muted,
-              onPressed: () {
-                setState(() => _showPullRequests = false);
-                widget.onCloseTerminal?.call();
-                _readVisibleTailAfterFrame();
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (mounted) _focus.requestFocus();
-                });
-              },
+        child: Row(
+          children: [
+            if (narrow)
+              fingerTarget(
+                enabled: _phone,
+                AppIconButton(
+                  icon: AppIcons.columns2,
+                  tooltip: 'Conversations',
+                  onPressed: () => setState(() => _sidebarOpen = !_sidebarOpen),
+                ),
+              ),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // A view saved on this device, until the first read
+                    // replaces it ([SuperTabReading.drawsSaved]).
+                    if (c.showingSaved)
+                      Row(
+                        children: [
+                          Flexible(child: _title(group)),
+                          const SizedBox(width: 8),
+                          // Where the copy is; how long it stays and where
+                          // it is cleared, a hover or a long press away.
+                          Flexible(
+                            child: Tooltip(
+                              message:
+                                  'This browser keeps a copy of the Super '
+                                  'Tabs you open until you sign out. '
+                                  'Settings ▸ Account clears it now.',
+                              child: Text(
+                                'Saved in this browser · Updating…',
+                                key: const ValueKey('super-updating'),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: DesktopChrome.metadata(),
+                              ),
+                            ),
+                          ),
+                        ],
+                      )
+                    else
+                      _title(group),
+                    if (!_devicesVisible && !_listViewHoldsThePane)
+                      ?_subtitle(group),
+                  ],
+                ),
+              ),
             ),
-          ),
-          if (!_menuNamesViews) ...[
-            const SizedBox(width: 4),
-            AppIconButton(
-              key: const ValueKey('super-terminals'),
-              icon: AppIcons.terminal,
-              size: AppIcons.inlineSize,
-              tooltip: 'Group terminals (${group.agentIds.length})',
-              selected: _terminalsVisible,
-              color: _terminalsVisible
-                  ? DesktopChrome.foreground
-                  : DesktopChrome.muted,
-              onPressed: _openTerminals(group),
-            ),
-            const SizedBox(width: 4),
-            AppIconButton(
-              key: const ValueKey('super-pull-requests'),
-              focusNode: _pullRequestsFocus,
-              icon: AppIcons.gitPullRequest,
-              size: AppIcons.inlineSize,
-              tooltip: 'Pull requests',
-              selected: !_terminalsVisible && _showPullRequests,
-              color: !_terminalsVisible && _showPullRequests
-                  ? DesktopChrome.foreground
-                  : DesktopChrome.muted,
-              onPressed: _openPullRequests,
-            ),
+            if (group != null &&
+                !_devicesVisible &&
+                !_listViewHoldsThePane) ...[
+              fingerTarget(
+                enabled: _phone,
+                AppIconButton(
+                  key: const ValueKey('super-chat'),
+                  icon: AppIcons.messageSquare,
+                  size: AppIcons.inlineSize,
+                  tooltip: 'Chat',
+                  selected: !_terminalsVisible && !_showPullRequests,
+                  color: !_terminalsVisible && !_showPullRequests
+                      ? DesktopChrome.foreground
+                      : DesktopChrome.muted,
+                  onPressed: () {
+                    setState(() => _showPullRequests = false);
+                    widget.onCloseTerminal?.call();
+                    _readVisibleTailAfterFrame();
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted) _focus.requestFocus();
+                    });
+                  },
+                ),
+              ),
+              if (!_menuNamesViews) ...[
+                const SizedBox(width: 4),
+                AppIconButton(
+                  key: const ValueKey('super-terminals'),
+                  icon: AppIcons.terminal,
+                  size: AppIcons.inlineSize,
+                  tooltip: 'Group terminals (${_terminalCount(group)})',
+                  selected: _terminalsVisible,
+                  color: _terminalsVisible
+                      ? DesktopChrome.foreground
+                      : DesktopChrome.muted,
+                  onPressed: _openTerminals(group),
+                ),
+                const SizedBox(width: 4),
+                AppIconButton(
+                  key: const ValueKey('super-pull-requests'),
+                  focusNode: _pullRequestsFocus,
+                  icon: AppIcons.gitPullRequest,
+                  size: AppIcons.inlineSize,
+                  tooltip: 'Pull requests',
+                  selected: !_terminalsVisible && _showPullRequests,
+                  color: !_terminalsVisible && _showPullRequests
+                      ? DesktopChrome.foreground
+                      : DesktopChrome.muted,
+                  onPressed: _openPullRequests,
+                ),
+              ],
+              fingerTarget(
+                enabled: _phone,
+                _options(group, views: _menuNamesViews),
+              ),
+            ],
+            if (!showRoster)
+              fingerTarget(
+                enabled: _phone,
+                AppIconButton(
+                  icon: AppIcons.users,
+                  tooltip: 'Members and machines',
+                  selected: _rosterOpen,
+                  onPressed: _toggleRoster,
+                ),
+              ),
           ],
-          // Not a workgroup: nothing to rename, archive or detail — but
-          // on a phone ⋮ still carries the views the bar leaves out.
-          if (_menuNamesViews || group.id != c.snapshot!.leadsConversationId)
-            fingerTarget(
-              enabled: _phone,
-              _options(group, views: _menuNamesViews),
-            ),
-        ],
-        if (!showRoster)
-          fingerTarget(
-            enabled: _phone,
-            AppIconButton(
-              icon: AppIcons.users,
-              tooltip: 'Members and machines',
-              selected: _rosterOpen,
-              onPressed: _toggleRoster,
-            ),
-          ),
-      ],
-    ),
-  );
+        ),
+      );
 
   /// The group's ⋮ menu. With [views] (a phone) it opens on the views the
   /// header has no room for — the group's terminals and its pull requests —
@@ -2158,7 +2193,6 @@ class _SuperTabViewState extends State<SuperTabView>
   Widget _options(SuperTabConversation group, {bool views = false}) {
     final project = c.snapshot?.projectFor(group.id);
     final isProject = c.snapshot?.isProjectLead(group.id) == true;
-    final isLeads = group.id == c.snapshot?.leadsConversationId;
     final editable = c.canWrite && !c.saving && !c.hasPendingAction;
     Widget item(String label, VoidCallback? action) => MenuItemButton(
       style: ButtonStyle(
@@ -2181,17 +2215,13 @@ class _SuperTabViewState extends State<SuperTabView>
       menuChildren: [
         if (views) ...[
           item(
-            'Group terminals (${group.agentIds.length})',
+            'Group terminals (${_terminalCount(group)})',
             _openTerminals(group),
           ),
           item('Pull requests', _openPullRequests),
-          if (!isLeads) const Divider(height: 9),
+          const Divider(height: 9),
         ],
-        // The leads' conversation is no workgroup: nothing to rename, archive
-        // or detail.
-        if (isLeads)
-          ...const <Widget>[]
-        else if (isProject) ...[
+        if (isProject) ...[
           if (editable && project?.ownerId == c.accountId)
             item('Rename project', () => _groupAction('rename', group)),
           item('Project details', () => _groupAction('details', group)),
@@ -2451,9 +2481,14 @@ class _SuperTabViewState extends State<SuperTabView>
         (fetched != null && _shown(fetched) ? fetched : null);
     final writable = c.canWrite && c.selected?.archived == false;
     final root = message.thread;
+    // A message that started a session has its line before any reply comes,
+    // so the session is found again after its pane closes.
     final thread = inThread || root != message.id
         ? null
-        : c.thread(message.conversationId, message.id);
+        : c.thread(message.conversationId, message.id) ??
+              (c.threadSession(message.id) != null
+                  ? SuperTabThread.empty(message.id)
+                  : null);
     final group = inThread
         ? null
         : c.snapshot?.conversation(message.conversationId);
@@ -2524,6 +2559,7 @@ class _SuperTabViewState extends State<SuperTabView>
         final session? => SuperTabThreadSessionMark(
           key: ValueKey('super-thread-session-mark-${thread!.id}'),
           activity: superTabSessionActivity(c, widget.app, session),
+          alone: thread.replies == 0,
         ),
         null => null,
       },
@@ -2586,6 +2622,7 @@ class _SuperTabViewState extends State<SuperTabView>
       outgoing: (sent) => _outgoingRow(sent, byId, grouped: false),
       sessionActivity: (session) =>
           superTabSessionActivity(c, widget.app, session),
+      machineName: widget.machineName,
     );
   }
 
@@ -3297,62 +3334,11 @@ class _SuperTabViewState extends State<SuperTabView>
             if (choices.isEmpty) return const SizedBox.shrink();
             return Padding(
               padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
-              child: Material(
-                color: DesktopChrome.surface,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(
-                    DesktopChrome.controlRadius,
-                  ),
-                  side: BorderSide(color: DesktopChrome.rim),
-                ),
-                clipBehavior: Clip.antiAlias,
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(
-                    maxHeight: MediaQuery.sizeOf(context).height * .3,
-                  ),
-                  child: ListView(
-                    key: const ValueKey('super-composer-completions'),
-                    shrinkWrap: true,
-                    padding: const EdgeInsets.symmetric(vertical: 4),
-                    children: [
-                      for (var i = 0; i < choices.length; i++)
-                        ListTile(
-                          key: _completionKeys[i],
-                          dense: true,
-                          selected:
-                              i ==
-                              _mentionIndex.value.clamp(0, choices.length - 1),
-                          selectedTileColor: grid.AppSurface.selectedFill,
-                          selectedColor: DesktopChrome.foreground,
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                          ),
-                          leading: choices[i].leading,
-                          trailing: choices[i].kind == null
-                              ? null
-                              : Text(
-                                  choices[i].kind!,
-                                  style: DesktopChrome.metadata(),
-                                ),
-                          title: Text(
-                            choices[i].label,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: DesktopChrome.control(),
-                          ),
-                          subtitle: choices[i].detail == null
-                              ? null
-                              : Text(
-                                  choices[i].detail!,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: DesktopChrome.metadata(),
-                                ),
-                          onTap: choices[i].choose,
-                        ),
-                    ],
-                  ),
-                ),
+              child: SuperTabCompletionList(
+                listKey: const ValueKey('super-composer-completions'),
+                choices: choices,
+                index: _mentionIndex.value,
+                rowKeys: _completionKeys,
               ),
             );
           },
@@ -3399,43 +3385,20 @@ class _SuperTabViewState extends State<SuperTabView>
             ),
             child: Focus(
               onKeyEvent: (node, event) {
-                final keys = HardwareKeyboard.instance;
                 final composing = _composer.value.composing;
-                final choices =
+                final picked =
                     _focus.hasFocus &&
-                        event is KeyDownEvent &&
-                        !keys.isControlPressed &&
-                        !keys.isMetaPressed &&
-                        !keys.isAltPressed &&
-                        !keys.isShiftPressed &&
                         !(composing.isValid && !composing.isCollapsed)
-                    ? _completionChoices
-                    : const <_ComposerChoice>[];
-                if (choices.isNotEmpty) {
-                  final key = event.logicalKey;
-                  if (key == LogicalKeyboardKey.arrowDown ||
-                      key == LogicalKeyboardKey.arrowUp) {
-                    _moveCompletion(
-                      (_mentionIndex.value +
-                              (key == LogicalKeyboardKey.arrowDown ? 1 : -1)) %
-                          choices.length,
-                    );
-                    return KeyEventResult.handled;
-                  }
-                  if (key == LogicalKeyboardKey.tab ||
-                      key == LogicalKeyboardKey.enter) {
-                    choices[_mentionIndex.value.clamp(0, choices.length - 1)]
-                        .choose();
-                    return KeyEventResult.handled;
-                  }
-                  if (key == LogicalKeyboardKey.escape) {
-                    _dismissedMention.value = _composer.text.substring(
-                      0,
-                      _composer.selection.baseOffset,
-                    );
-                    return KeyEventResult.handled;
-                  }
-                }
+                    ? superTabCompletionKey(
+                        event,
+                        choices: () => _completionChoices,
+                        index: _mentionIndex.value,
+                        move: _moveCompletion,
+                        dismiss: () => _dismissedMention.value = _composer.text
+                            .substring(0, _composer.selection.baseOffset),
+                      )
+                    : null;
+                if (picked != null) return picked;
                 if (event is KeyDownEvent &&
                     event.logicalKey == LogicalKeyboardKey.escape &&
                     _readAll()) {
@@ -3545,6 +3508,13 @@ class _SuperTabViewState extends State<SuperTabView>
                                     ),
                                   ),
                                 ),
+                                if (c.offersChatSessions)
+                                  Padding(
+                                    padding: const EdgeInsets.only(
+                                      left: grid.AppDesktop.controlGap,
+                                    ),
+                                    child: _chatSessionChoice(writable),
+                                  ),
                                 fingerTarget(
                                   enabled: _phone,
                                   NewHarnessAttachButton(
@@ -3586,6 +3556,31 @@ class _SuperTabViewState extends State<SuperTabView>
                     ),
                   ),
                 ),
+              ),
+            ),
+          ),
+        // While New session can be chosen here, its line's place is kept, so
+        // the box never moves as the choice is toggled.
+        if (c.offersChatSessions)
+          Container(
+            alignment: Alignment.centerLeft,
+            padding: const EdgeInsets.only(
+              left: grid.AppDesktop.panelPadding,
+              right: grid.AppDesktop.panelPadding,
+              bottom: grid.AppDesktop.controlGap,
+            ),
+            child: Visibility(
+              visible:
+                  _chatSessions.contains(chatId) &&
+                  c.threadSessionBlocked == null &&
+                  !c.buddySessionsFull,
+              maintainSize: true,
+              maintainAnimation: true,
+              maintainState: true,
+              child: Text(
+                'Your message starts its own thread and Buddy session',
+                key: const ValueKey('super-chat-session-note'),
+                style: DesktopChrome.metadata(color: DesktopChrome.muted),
               ),
             ),
           ),
@@ -3687,6 +3682,9 @@ class _SuperTabViewState extends State<SuperTabView>
               left: narrow ? null : _sidebar(),
               // An open thread takes the roster's side, as in Slack.
               right: !showRoster ? null : thread ?? roster,
+              rightDefault: thread == null
+                  ? SuperTabPaneLayout.rightWidth
+                  : SuperTabPaneLayout.threadWidth,
               center: Column(
                 children: [
                   _header(c.selected, narrow, showRoster),
@@ -3696,6 +3694,8 @@ class _SuperTabViewState extends State<SuperTabView>
                           ? 1
                           : _notificationsVisible
                           ? 3
+                          : _threadsVisible
+                          ? 4
                           : c.snapshot?.projects.isEmpty == true
                           ? 0
                           : _terminalsVisible
@@ -3723,6 +3723,13 @@ class _SuperTabViewState extends State<SuperTabView>
                                 ),
                               )
                             : const SizedBox.shrink(),
+                        _threadsVisible
+                            ? SuperTabThreadsView(
+                                attention: SuperTabAttention.of(c),
+                                onOpen: _openThreadFromList,
+                                machineName: widget.machineName,
+                              )
+                            : const SizedBox.shrink(),
                       ],
                     ),
                   ),
@@ -3745,6 +3752,7 @@ class _SuperTabViewState extends State<SuperTabView>
                         child: SizedBox(
                           width: SuperTabPaneLayout.drawerWidth(
                             constraints.maxWidth,
+                            max: SuperTabPaneLayout.threadWidth,
                           ),
                           child: thread,
                         ),
@@ -3822,51 +3830,6 @@ class _SuperTabViewState extends State<SuperTabView>
       );
     },
   );
-}
-
-/// Backspace right after a tag takes the whole tag, as in Slack: deleting the
-/// character before the caret, where one of [tags] ends, removes that tag.
-/// The draft then no longer holds it, so its agent is no longer addressed.
-class _TagBackspace extends TextInputFormatter {
-  _TagBackspace(this.tags);
-
-  final Iterable<String> Function() tags;
-
-  @override
-  TextEditingValue formatEditUpdate(
-    TextEditingValue oldValue,
-    TextEditingValue newValue,
-  ) {
-    final caret = oldValue.selection;
-    if (!caret.isValid ||
-        !caret.isCollapsed ||
-        caret.baseOffset == 0 ||
-        (newValue.composing.isValid && !newValue.composing.isCollapsed)) {
-      return newValue;
-    }
-    final end = caret.baseOffset;
-    if (newValue.selection != TextSelection.collapsed(offset: end - 1) ||
-        newValue.text != oldValue.text.replaceRange(end - 1, end, '')) {
-      return newValue;
-    }
-    final before = oldValue.text.substring(0, end);
-    final after = oldValue.text.substring(end);
-    if (after.isNotEmpty && !after.startsWith(RegExp(r'[\s.,!?;:]'))) {
-      return newValue;
-    }
-    for (final tag in tags()) {
-      final start = end - tag.length;
-      if (!before.endsWith(tag) ||
-          (start > 0 && !before[start - 1].contains(RegExp(r'\s')))) {
-        continue;
-      }
-      return TextEditingValue(
-        text: oldValue.text.replaceRange(start, end, ''),
-        selection: TextSelection.collapsed(offset: start),
-      );
-    }
-    return newValue;
-  }
 }
 
 /// Records its row's context while built, so [_SuperTabViewState] can find

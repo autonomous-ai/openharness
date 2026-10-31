@@ -927,12 +927,11 @@ void main() {
       expect(find.text('new-dee'), findsNothing);
     });
 
-    testWidgets('a Buddy chat and the Leads conversation offer no people', (
-      tester,
-    ) async {
+    // The Leads conversation is removed (Dee, 10-31) and in no read, so it
+    // opens nowhere (swarm_model_lookups_test.dart).
+    testWidgets('a Buddy chat offers no people', (tester) async {
       for (final kind in [
         {'kind': 'buddy', 'buddyOwnerId': me},
-        {'kind': 'leads'},
       ]) {
         await pump(
           tester,

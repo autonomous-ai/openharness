@@ -82,6 +82,7 @@ function calls(tab: string, chat: string, project: string) {
     json('GET', 'GET /api/super-tabs/:tabId/parts', `${t}/parts?asAgentId=${MISSING}`),
     json('GET', 'GET /api/super-tabs/:tabId/changes', `${t}/changes?cursor=abc`),
     json('GET', 'GET /api/super-tabs/:tabId/inbox', `${t}/inbox`),
+    json('GET', 'GET /api/super-tabs/:tabId/threads', `${t}/threads`),
     json('POST', 'POST /api/super-tabs/:tabId/commands', `${t}/commands`,
       { operationId: op(), command: { type: 'message.send', conversationId: chat, text: 'hello', replyTo: null, recipientIds: [] } }),
     json('GET', 'GET /api/super-tabs/:tabId/mentions', `${t}/mentions?state=waiting`),
@@ -98,9 +99,15 @@ function calls(tab: string, chat: string, project: string) {
     json('GET', 'GET /api/super-tabs/:tabId/conversations/:conversationId/messages', `${t}/conversations/${chat}/messages`),
     json('GET', 'GET /api/super-tabs/:tabId/conversations/:conversationId/catch-up', `${t}/conversations/${chat}/catch-up?after=0`),
     json('POST', 'POST /api/super-tabs/:tabId/conversations/:conversationId/read', `${t}/conversations/${chat}/read`, { sequence: 1 }),
+    json('POST', 'POST /api/super-tabs/:tabId/conversations/:conversationId/threads/:threadId/follow', `${t}/conversations/${chat}/threads/${MISSING}/follow`,
+      { follow: true }),
     json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/github', `${t}/projects/${project}/github`),
     json('POST', 'POST /api/super-tabs/:tabId/projects/:projectId/github/approve', `${t}/projects/${project}/github/approve`, { scope: 'project' }),
     json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/roles/:roleId', `${t}/projects/${project}/roles/${MISSING}`),
+    json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/ci-load', `${t}/projects/${project}/ci-load`),
+    // A made-up agent: an outsider is answered as for any Swarm it cannot reach. Asked of the Lead's project, so a member's
+    // in-Swarm refusal of an agent it does not run is not taken for the private project's answer.
+    json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/ci-load', `${t}/projects/lead/ci-load?asAgentId=${MISSING}`),
     json('GET', 'GET /api/super-tabs/:tabId/route-decisions/:decisionId', `${t}/route-decisions/${MISSING}`),
     json('GET', 'GET /api/super-tabs/:tabId/machines/:machineId/removal', `${t}/machines/${MISSING}/removal`),
     multipart('POST /api/super-tabs/:tabId/attachments', `${t}/attachments`, form([field('conversationId', chat), file('notes.txt', 'text/plain', 'hello')])),

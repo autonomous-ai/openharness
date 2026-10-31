@@ -12,6 +12,7 @@ import { object } from './wire.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
+import { CHEAP_FIRST_HELP, GRID_KINDS, MAX_OWNED, ROUTE_KIND_HELP } from './routeCheapFirst.js'
 
 const list = (value: unknown) => Array.isArray(value) ? value.map(object) : []
 import { hostJournalFile, SuperTabHostError, type SuperTabHost, type SuperTabHostOptions } from './host.js'
@@ -363,12 +364,12 @@ it('explains starting an agent in a role of the instructions', async () => {
   expect(answer.help.startRequest).toMatchObject({ roleName: 'ROLE' })
   expect(JSON.stringify(answer.help)).not.toMatch(/Custom skills|roleId/)
 })
-it('explains to the PM other projects\' work and the Leads conversation', async () => {
-  const answer = await setup().ask({ action: 'help' }, owner) as { help: { status: string; leads: string } }
+// Dee, 10-31: the Leads (Product Managers) chat is gone; no help points an agent at it.
+it('explains to the PM other projects\' work, and points nobody at the removed Leads conversation', async () => {
+  const answer = await setup().ask({ action: 'help' }, owner) as { help: Record<string, unknown> }
   expect(answer.help.status).toContain('The PM\'s status also lists otherProjectsWork: the active work of the Swarm\'s other projects')
-  expect(answer.help.leads).toContain('leadsConversationId')
-  expect(answer.help.leads).toContain('Only Leads (the projects\' PMs) and people post there, and only Leads among agents receive it.')
-  expect(answer.help.leads).not.toContain('agree an order')
+  expect(answer.help).not.toHaveProperty('leads')
+  expect(JSON.stringify(answer.help)).not.toMatch(/Leads conversation|leadsConversationId/)
 })
 it('resolves a native caller to its exact contribution and rechecks it before every agent command', async () => {
   const t = setup()
@@ -385,8 +386,8 @@ it('resolves a native caller to its exact contribution and rechecks it before ev
   expect(await t.ask({ action: 'status', tabId: 'tab', agentId: t.agentId }, owner)).toMatchObject({ error: 'AGENT_UNAVAILABLE' })
 })
 
-// Leads see each other's work and talk (spec 2026-10-23): a Lead's status carries other projects' active work, in the
-// backend's own fields and nothing more; an agent that leads nothing never sees it nor the Leads conversation.
+// Leads see each other's work (spec 2026-10-23): a Lead's status carries other projects' active work, in the backend's own
+// fields and nothing more; an agent that leads nothing never sees it. Nobody reads the removed Leads conversation (10-31).
 describe('other projects\' work in status', () => {
   const work = { conversationId: 'docs-roster', projectName: 'Docs', title: 'Roster', owns: ['desktop/lib/super_tabs'], status: 'review',
     agentName: 'Builder', pr: 'https://github.com/example/project/pull/12' }
@@ -405,8 +406,9 @@ describe('other projects\' work in status', () => {
     swarm(t, t.agentId)
     const state = await status(t)
     expect(state.otherProjectsWork).toEqual([work])
-    expect(state.leadsConversationId).toBe('leads')
-    expect(list(state.conversations).map(c => c.id)).toEqual(['pilot', 'leads'])
+    // Dee, 10-31: the Leads conversation is removed; a Lead no longer reads it either, even from an older server.
+    expect(state).not.toHaveProperty('leadsConversationId')
+    expect(list(state.conversations).map(c => c.id)).toEqual(['pilot'])
   })
 
   it('shows the Lead of a Swarm from before projects that work too', async () => {
@@ -829,9 +831,17 @@ it('says a server from before rules does not support them, and passes a malforme
 })
 
 // Project instructions, phase 4: the route ranks by facts and notes the rest; no build, review or grid rule is the help's.
-it('tells every agent the route leaves out only what cannot run, and how it ranks the rest', async () => {
+it('tells every agent what the route leaves out, how it ranks the rest, and which kinds of work may go to the grid', async () => {
   const help = (await setup().ask({ action: 'help' }, owner)).help as { commands: Array<{ type: string }>; command: string; route: string }
-  expect(help.route).toContain('The route leaves out only what cannot run')
+  expect(help.route).toContain('The route leaves out what cannot run, and says why')
+  // Besides what cannot run, the grid rules leave models out (routeCheapFirst.ts), so "only" is no longer said.
+  expect(help.route).not.toContain('leaves out only')
+  // Kind decides whether a grid model is offered (routeCheapFirst.ts): the help names the list from the same constant.
+  expect(help.route).toContain(`"kind":"${ROUTE_KIND_HELP}"`)
+  expect(help.route).toContain(CHEAP_FIRST_HELP)
+  for (const kind of GRID_KINDS) expect(ROUTE_KIND_HELP).toContain(kind)
+  expect(CHEAP_FIRST_HELP).toContain(`1 to ${MAX_OWNED} owned paths`)
+  expect(CHEAP_FIRST_HELP).toMatch(/never offered, even when named, for a review, security work .* or a task's second attempt/)
   expect(help.route).toContain('It ranks the rest by strength, then price and quota fit, then an idle agent before a new one')
   expect(help.route).toContain('Your project\'s instructions say how to choose')
   expect(`${help.route} ${help.command}`).not.toMatch(/noGridFirst|policy rates 3|low-risk work of kind docs|NO_CANDIDATE/)

@@ -8,6 +8,8 @@ import { RELAYED_QUOTA, requiredToolReason, startRequirements, USED_UP_WINDOW } 
 import { inspectCapacity, type ScopedRequest } from './start.js'
 import { ENDED_WORK, object, within } from './wire.js'
 import { accountOf, API_BUILDERS, catalogFrom, catalogRow, choose, decide, gridStrength, parseAssessment, quotaOf2, recordOf, repoMatch, repositoryKey, type Assessment, type Catalog, type CatalogModel, type RecordShape, type Commitment, type Excluded, type HeldModel, type MemberFrame, type Probe, type TaskFolder } from './route.js'
+import { makePlugins, ROUTE_PLUGIN_MAKERS, type PluginMaker } from './routePlugins.js'
+import { CI_HOLD_OPENING, CI_RETRY_MINUTES, MACHINE_FIT_MAKER } from './machineFit.js'
 import { stat } from 'node:fs/promises'
 import { describeScmProject } from '../scm/scmProjects.js'
 
@@ -199,8 +201,10 @@ function frameOf(frame: Json): MemberFrame {
     branch: text(object(object(frame.gitContext).current).branch) ?? text(project.branch), updatedAt: Number.isFinite(updatedAt) ? updatedAt : null }
 }
 
+/** `makers`: what makes the routing plug-ins this route ranks with (routePlugins.ts), in their order. */
 export async function routeTask(input: { tabId: string; conversationId: string; assessment: unknown }, request: ScopedRequest, where: Where,
-  open: typeof openDaemon = openDaemon, newId: () => string = randomUUID, reader: FolderReader = FOLDER_READER): Promise<Json> {
+  open: typeof openDaemon = openDaemon, newId: () => string = randomUUID, reader: FolderReader = FOLDER_READER,
+  makers: readonly PluginMaker[] = ROUTE_PLUGIN_MAKERS): Promise<Json> {
   // A lost connection is an answer here, never a throw: the agent must still get a decision or a reason.
   const scoped: ScopedRequest = async payload => {
     try { return await request(payload) } catch (error) {
@@ -280,13 +284,16 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   // The probes do not wait for the context reads: the machines, the task's folder and the group's talk and log are read
   // together, and each read that is only context gives up after three seconds. What needs several of them (whether a
   // member is in the task's repository, what it did before) is joined afterwards.
-  const [probed, read, history, instructed] = await Promise.all([
+  // The plug-ins' makers start here too: each piece's outside read runs beside the probes, and they share the history read.
+  const historyRead = within(scoped({ action: 'routeHistory', conversationId: input.conversationId }))
+  const [probed, read, history, instructed, made] = await Promise.all([
     Promise.all([...machines].map(([machineId, machine]) =>
       probeMachine(machineId, machine, members.filter(m => m.machineId === machineId), rows, catalog, assessment, where, open))),
     cwd ? within(readFolder(cwd, reader)) : null,
-    within(scoped({ action: 'routeHistory', conversationId: input.conversationId })),
+    historyRead,
     // The project's instructions ride on the answer: the agent routes by them. A backend without them is an unreadable read.
     within(scoped({ action: 'instructions', projectId })),
+    makePlugins(makers, { conversationId: input.conversationId, assessment, read: value, catalog, history: historyRead, request: scoped }),
   ])
   const written = object(instructed?.ok === true ? instructed.value : {})
   const instructions = typeof written.text === 'string' ? { revision: written.revision, text: written.text, notes: Array.isArray(written.notes) ? written.notes : [] } : null
@@ -341,10 +348,16 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     .map(d => ({ account: d.account, spend: object(d.spend), size: d.size, createdAt: Date.parse(String(d.createdAt)) }) as Commitment)
   // A model a host now offline served is left out with that reason, and a person naming it gets no stand-in (route.ts choose).
   const offline = offlineModels(state)
-  const choice = choose(probes, catalog, assessment, Date.now(), working, heldLocalModels(state), offline)
+  const choice = choose(probes, catalog, assessment, Date.now(), working, heldLocalModels(state), offline, made.plugins)
+  const skipped = [...made.warnings, ...(choice.warnings ?? [])]
   choice.excluded.push(...offline, ...(catalog.models.length ? [] : [{ title: 'New agents', reason: CATALOG_UNREADABLE }]))
   // The task stays in the agent's queue rather than going where it cannot be done.
-  if ('error' in choice) return { ...choice, leftOut: leftOut(choice.excluded, []), ...required.machines || required.devices.length ? { waiting: true, detail: WAITING } : {} }
+  // Work that starts heavy CI while the account is at its limit waits, and says when to route it again (machineFit.ts), so the
+  // Lead's route queue retries it without a person.
+  const ciHeld = 'error' in choice ? choice.excluded.find(e => e.reason.startsWith(`${MACHINE_FIT_MAKER.name}: ${CI_HOLD_OPENING}`)) : undefined
+  if ('error' in choice) return { ...choice, ...(skipped.length ? { warnings: skipped } : {}), leftOut: leftOut(choice.excluded, []),
+    ...required.machines || required.devices.length ? { waiting: true, detail: WAITING } : {},
+    ...ciHeld ? { waiting: true, retryAfterMinutes: CI_RETRY_MINUTES, detail: ciHeld.reason.slice(MACHINE_FIT_MAKER.name.length + 2) } : {} }
   const verdict = decide(choice)
   const operationId = `route-${newId()}`
   const record = (shape: RecordShape) => scoped({ action: 'command', operationId,
@@ -370,14 +383,15 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     warnings: [...(Array.isArray(effective.warnings) ? effective.warnings : []), ...(value.machinesUnreadable === true ? [MACHINES_UNREADABLE] : []),
       ...(catalog.models.length ? [] : [CATALOG_UNREADABLE]),
       ...(choice.shown.some(p => p.kind === 'member' && p.terminalUnverified) ? ["A member's terminal could not be verified from its machine's snapshot. Check it before assignment."] : []),
-      ...(choice.short ? [choice.short] : [])],
+      ...(choice.short ? [choice.short] : []), ...skipped],
     next: verdict.pick.kind === 'member'
       ? `Assign with: command OPERATION_ID {"type":"work.assign","conversationId":"${input.conversationId}","agentId":"${verdict.pick.agentId}"${decision}}`
       // No fixed role name: NAME and ROLE are the agent's to fill from the project's instructions. A backend without
       // instructions takes no roleName (it came with them, phase 2).
       : `Start with: start OPERATION_ID ${JSON.stringify({ conversationId: input.conversationId, name: 'NAME', ...(instructions ? { roleName: 'ROLE' } : {}),
         cwd: text(machines.get(verdict.pick.machineId)?.pool?.cwd) ?? assessment.needs.cwd ?? '/absolute/repo/on/that/machine',
-        worktree: true, requirements: startRequirements(assessment.needs), machineId: verdict.pick.machineId, engine: verdict.pick.engine,
+        worktree: true, requirements: startRequirements(assessment.needs), ...(assessment.needs.heavy ? { heavy: assessment.needs.heavy } : {}),
+        machineId: verdict.pick.machineId, engine: verdict.pick.engine,
         // A local model is named by the grid alone: no subscription model or effort goes with it.
         ...(verdict.pick.gridModel ? { gridModel: verdict.pick.gridModel, gridName: verdict.pick.gridName } : { model: verdict.pick.model, effort: verdict.pick.effort }),
         ...(typeof routeDecisionId === 'string' ? { routeDecisionId } : {}) })}, then assign the started agent${decision ? ' with the same routeDecisionId' : ''}. `
@@ -500,6 +514,14 @@ export function offlineModels(state: Json, now: number = Date.now()): Array<{ ti
   return out
 }
 
+/** What a machine reached directly has, from its capacity read. Its disk is the task folder's, or with none named the disk the
+ *  read was asked about (`/`), which still says whether heavy work fits there; whether it has the folder only when one was named. */
+function loadOf(resources: Json, agents: number | null, cwd: string | undefined): NonNullable<Probe['load']> {
+  return { agents, freeMemoryBytes: finite(resources.memoryTotalBytes) && finite(resources.memoryUsedBytes) ? resources.memoryTotalBytes - resources.memoryUsedBytes : null,
+    hasFolder: cwd ? finite(resources.projectDiskFreeBytes) : null, freeDiskBytes: finite(resources.projectDiskFreeBytes) ? resources.projectDiskFreeBytes : null,
+    cpuPercent: finite(resources.cpuPercent) ? resources.cpuPercent : null }
+}
+
 async function probeMachine(machineId: string, { name: machineName, status, account, pool, folded, unready = READY, stalled: stuck = false }: { name: string; status: string; account: boolean; pool?: Json; folded?: boolean; unready?: Unready; stalled?: boolean },
   members: Json[], allModels: CatalogModel[], catalog: Catalog, a: Assessment, where: Where, open: typeof openDaemon): Promise<Probe[]> {
   const listedEngines = Array.isArray(pool?.engines) ? pool.engines.filter((engine): engine is string => typeof engine === 'string') : []
@@ -550,17 +572,20 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
       ...(needs.devices.length ? ['Required devices have not been reported.'] : []),
       ...unready.all]
     const pushNote = unready.push ? [unready.push] : []
+    // What the machine has, for new agents and members alike: heavy work runs on the machine whoever does it (machineFit.ts).
+    const load: Probe['load'] = { agents: Array.isArray(observed.runningHarnessIds) ? observed.runningHarnessIds.length : null,
+      freeMemoryBytes: finite(resources.memoryTotalBytes) && finite(resources.memoryUsedBytes) ? resources.memoryTotalBytes - resources.memoryUsedBytes : null,
+      hasFolder: finite(resources.projectDiskFreeBytes), freeDiskBytes: finite(resources.projectDiskFreeBytes) ? resources.projectDiskFreeBytes : null,
+      cpuPercent: finite(resources.cpuPercent) ? resources.cpuPercent : null }
     return [...members.map(m => {
       const engine = String(object(m.configuration).engine), allowance = quota(engine)
       const running = Array.isArray(observed.runningHarnessIds) ? observed.runningHarnessIds.includes(m.harnessId) : null
       return { ...memberProbe(m, fresh ? [...memberRefusals(running, needs.tools, needs.devices, tools, object(observed.devices), object(observed.toolProbeErrors)),
         ...teammates(m.contributorId)] : [OFFLINE],
-        allowance, null, fresh && running === null, [...pushNote, ...usedUp(allowance)]) }
+        allowance, null, fresh && running === null, [...pushNote, ...usedUp(allowance)]), ...(fresh ? { load } : {}) }
     }),
       ...models.map(m => ({ ...newProbe(m, [...newReasons, ...(unready.engines[m.engine] ? [unready.engines[m.engine]!] : [])], quota(m.engine), fresh && quota(m.engine).known,
-        { agents: Array.isArray(observed.runningHarnessIds) ? observed.runningHarnessIds.length : null,
-          freeMemoryBytes: finite(resources.memoryTotalBytes) && finite(resources.memoryUsedBytes) ? resources.memoryTotalBytes - resources.memoryUsedBytes : null,
-          hasFolder: finite(resources.projectDiskFreeBytes) }, [...pushNote, ...(stuck ? [STALLED] : []), ...usedUp(quota(m.engine))]) }))]
+        load, [...pushNote, ...(stuck ? [STALLED] : []), ...usedUp(quota(m.engine))]) }))]
   }
   // The account says this machine is off, so nothing there can run or be asked.
   if (account && status === 'offline') return [...members.map(m => memberProbe(m, [OFFLINE])), ...offline()]
@@ -588,15 +613,14 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
       const refusals = memberRefusals(live.has(String(m.harnessId)), needs.tools, needs.devices,
         object(capacity.tools), object(capacity.devices), object(capacity.toolProbeErrors))
       const frame = frames.find(f => f.id === m.harnessId)
-      probes.push(memberProbe(m, refusals, allowance, frame ? frameOf(frame) : null, false, usedUp(allowance)))
+      probes.push({ ...memberProbe(m, refusals, allowance, frame ? frameOf(frame) : null, false, usedUp(allowance)),
+        load: loadOf(object(capacity.resources), Array.isArray(listed.agents) ? frames.length : null, a.needs.cwd) })
     }
     for (const m of models) {
       const inspected = byEngine.get(m.engine)!
       const resources = object(inspected.capacity.resources)
       // The capacity probe already measured the task's folder (its disk), so the answer is reused, not asked again.
-      const load = { agents: Array.isArray(listed.agents) ? frames.length : null,
-        freeMemoryBytes: finite(resources.memoryTotalBytes) && finite(resources.memoryUsedBytes) ? resources.memoryTotalBytes - resources.memoryUsedBytes : null,
-        hasFolder: a.needs.cwd ? finite(resources.projectDiskFreeBytes) : null }
+      const load = loadOf(resources, Array.isArray(listed.agents) ? frames.length : null, a.needs.cwd)
       // A machine listed only because an agent runs there may never have cloned the project. When its capacity read succeeded but
       // could not measure the named folder's disk, a missing folder is the likely cause; a failed or unsupported read says nothing.
       const noFolder = !!a.needs.cwd && machineId !== where.machineId && object(inspected.capacity).ok === true && !finite(resources.projectDiskFreeBytes)

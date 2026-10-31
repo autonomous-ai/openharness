@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { Readable } from 'node:stream'
 import { crc32, deflateSync, inflateSync } from 'node:zlib'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { storeOldLeads } from './oldLeads.test-support.js'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
@@ -97,6 +98,16 @@ async function buddy(f: Awaited<ReturnType<typeof swarm>>, projectId = 'lead') {
   await host({ type: 'agent.startSettled', startId, warning: null })
   return { chat, agentId, pool }
 }
+
+describe('a Buddy and the route\'s reads', () => {
+  // Scholes's goals, piece 5: the route's read of running CI jobs is the project's agents'; a Buddy routes nothing.
+  it('refuses a Buddy the project\'s CI read, as an unavailable project, while the PM reads it', async () => {
+    const f = await swarm()
+    const { agentId } = await buddy(f)
+    await expect(f.store.ciRepository(peer, f.tab, 'lead', agentId)).rejects.toMatchObject({ code: 'NOT_FOUND', status: 404 })
+    expect(await f.store.ciRepository(owner, f.tab, 'lead', f.lead)).toEqual({ repositoryUrl: null })
+  })
+})
 
 /** A complete PNG: one opaque red pixel, its chunks' checksums real, as a screenshot tool writes one. */
 function png(): Buffer {
@@ -230,11 +241,12 @@ describe('a Buddy through the store', () => {
     const web = (await f.execute({ type: 'project.create', name: 'Web', visibility: 'public', brief: '' })).result as { projectId: string; conversationId: string }
     const landing = String((await f.execute({ type: 'conversation.create', projectId: web.projectId, title: 'Landing', brief: '', checks: [] })).result.conversationId)
     const { agentId } = await buddy(f)
-    const leads = (await f.store.read(owner, f.tab)).state.leadsConversationId
-    expect(leads).toBeTruthy()
-    for (const conversationId of [owners, web.conversationId, landing, leads!]) {
+    // An older Swarm's stored Leads conversation: removed for everyone (model.ts leadsRemoved), its Buddy included.
+    const { id: leads } = await storeOldLeads(db, f.tab, [f.lead], { kind: 'person', id: owner.sub, name: owner.email, membershipGeneration: f.tab })
+    for (const conversationId of [owners, web.conversationId, landing]) {
       await expect(f.store.messages(peer, f.tab, conversationId, {}, agentId)).rejects.toThrow('unavailable')
     }
+    await expect(f.store.messages(peer, f.tab, leads, {}, agentId)).rejects.toMatchObject({ code: 'LEADS_CONVERSATION_REMOVED' })
     const read = await new SwarmReads(f.store).firstLoad(peer, f.tab, agentId)
     for (const id of [owners, web.conversationId, landing, leads]) expect(read.groups.map(g => g.key)).not.toContain(id)
   })
@@ -848,8 +860,7 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
 
   it('is refused at pickup in the Leads conversation, even with a delivery row there (security review 2 of #2178)', async () => {
     const { f, agentId } = await proposed()
-    const leads = (await f.store.read(owner, f.tab)).state.leadsConversationId!
-    const said = String((await f.execute({ type: 'message.send', conversationId: leads, text: 'Leads only.', replyTo: null, recipientIds: [] }, owner, f.lead)).result.messageId)
+    const { id: leads, messageId: said } = await storeOldLeads(db, f.tab, [f.lead], { kind: 'person', id: owner.sub, name: owner.email, membershipGeneration: f.tab }, 'Leads only.')
     const template = await db.superTabDelivery.findFirstOrThrow({ where: { tabId: f.tab, agentId } })
     const { id: _id, createdAt: _created, updatedAt: _updated, ...fields } = template
     const planted = await db.superTabDelivery.create({ data: { ...fields, id: randomUUID().replaceAll('-', '').slice(0, 24), conversationId: leads, messageId: said,

@@ -32,8 +32,9 @@ import 'section_heading.dart';
 import 'agent_line.dart';
 
 /// The current Swarm's authorized people, each with their week on the
-/// leaderboard of the open conversation's project, and agents from the
-/// selected project.
+/// leaderboard of the open conversation's project, and every agent of the
+/// Swarm: the same list whichever chat is open, as Slack's and Discord's member
+/// lists are (Dee, 2026-10-31).
 class SuperTabRoster extends StatefulWidget {
   const SuperTabRoster({
     super.key,
@@ -260,68 +261,93 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     widget.onOpenAgent,
   );
 
-  Widget _agentIdentity(String name, String role, String badge) =>
-      LayoutBuilder(
-        builder: (context, constraints) {
-          final nameStyle = DesktopChrome.control();
-          final tagStyle = DesktopChrome.metadata();
-          final scale = MediaQuery.textScalerOf(context);
-          double measure(String text, TextStyle style) {
-            final painter = TextPainter(
-              text: TextSpan(text: text, style: style),
-              textDirection: Directionality.of(context),
-              textScaler: scale,
-              maxLines: 1,
-            )..layout();
-            final width = painter.width;
-            painter.dispose();
-            return width;
-          }
+  /// Name, role chip, then the model and effort in the details line's grey
+  /// (Dee, 2026-10-31). The name and chip are measured first; the model takes
+  /// what is left and is cut before either shrinks.
+  Widget _agentIdentity(
+    String name,
+    String role,
+    String badge, {
+    String? model,
+    Key? modelKey,
+  }) => LayoutBuilder(
+    builder: (context, constraints) {
+      final nameStyle = DesktopChrome.control();
+      final tagStyle = DesktopChrome.metadata();
+      final scale = MediaQuery.textScalerOf(context);
+      double measure(String text, TextStyle style) {
+        final painter = TextPainter(
+          text: TextSpan(text: text, style: style),
+          textDirection: Directionality.of(context),
+          textScaler: scale,
+          maxLines: 1,
+        )..layout();
+        final width = painter.width;
+        painter.dispose();
+        return width;
+      }
 
-          final badgeWidth = (measure(badge, tagStyle) + 10).clamp(
-            0.0,
-            constraints.maxWidth,
-          );
-          final nameWidth = measure(name, nameStyle).clamp(
-            0.0,
-            (constraints.maxWidth - badgeWidth - 6).clamp(0.0, double.infinity),
-          );
-          Widget tag(String text) => Container(
-            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-            decoration: BoxDecoration(
-              color: grid.AppSurface.hoverFill,
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: Text(
-              text,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: tagStyle,
-            ),
-          );
-          return Row(
-            children: [
-              if (nameWidth > 0) ...[
-                SizedBox(
-                  width: nameWidth,
-                  child: Text(
-                    name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: nameStyle,
-                  ),
-                ),
-                const SizedBox(width: 6),
-              ],
-              Semantics(
-                label: role,
-                excludeSemantics: true,
-                child: SizedBox(width: badgeWidth, child: tag(badge)),
-              ),
-            ],
-          );
-        },
+      final badgeWidth = (measure(badge, tagStyle) + 10).clamp(
+        0.0,
+        constraints.maxWidth,
       );
+      // One gap between name, chip and model.
+      const gap = 6.0;
+      final nameWidth = measure(name, nameStyle).clamp(
+        0.0,
+        (constraints.maxWidth - badgeWidth - gap).clamp(0.0, double.infinity),
+      );
+      Widget tag(String text) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+        decoration: BoxDecoration(
+          color: grid.AppSurface.hoverFill,
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Text(
+          text,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: tagStyle,
+        ),
+      );
+      return Row(
+        children: [
+          if (nameWidth > 0) ...[
+            SizedBox(
+              width: nameWidth,
+              child: Text(
+                name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: nameStyle,
+              ),
+            ),
+            const SizedBox(width: gap),
+          ],
+          Semantics(
+            label: role,
+            excludeSemantics: true,
+            child: SizedBox(width: badgeWidth, child: tag(badge)),
+          ),
+          // The gap shrinks with the model, so a name that fills the row never overflows.
+          if (model != null)
+            Flexible(
+              child: Padding(
+                padding: const EdgeInsets.only(left: gap),
+                child: Text(
+                  model,
+                  key: modelKey,
+                  maxLines: 1,
+                  softWrap: false,
+                  overflow: TextOverflow.ellipsis,
+                  style: tagStyle,
+                ),
+              ),
+            ),
+        ],
+      );
+    },
+  );
 
   /// An agent's row, in the shape the people's rows share (Dee, 2026-10-29):
   /// avatar, name and role chip, today's one status line beneath, and the
@@ -330,7 +356,8 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     final name = c.snapshot!.agentName(agent.id), shown = state.mark;
     final info = SuperTabAgentInfo(c, widget.app, agent, activity: state.words);
     final work = state.work;
-    // The state in a word, where it runs, its engine, model and effort: on hover (Dee, 2026-10-30).
+    // The state in a word, where it runs, its engine, model and effort: on hover (Dee, 2026-10-30); the model and
+    // effort on the first line too (Dee, 2026-10-31).
     final glance = superTabAgentGlance(info, now: now);
     final project = c.snapshot!.projects
         .where((p) => p.id == _agentProjectId(agent))
@@ -414,7 +441,13 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             size: SuperTabAvatar.rowSize,
             engineBadge: false,
           ),
-          name: _agentIdentity(name, role, badge),
+          name: _agentIdentity(
+            name,
+            role,
+            badge,
+            model: glance.modelEffort,
+            modelKey: ValueKey('super-member-model-${agent.id}'),
+          ),
           detail: Text(
             detail,
             key: ValueKey('super-member-line-${agent.id}'),
@@ -440,32 +473,18 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
 
   List<Widget> _members() {
     final state = c.snapshot;
-    // The backend already scopes this snapshot to projects the person can
-    // access. The roster follows the selected project; without one it keeps
-    // the full directory, as the Product Managers' conversation, which belongs
-    // to no project, does. Local machine inventory is not membership here.
+    // The whole Swarm the person may see, whichever chat is open (Dee,
+    // 2026-10-31): the backend already scopes this snapshot to the projects
+    // they can read. Local machine inventory is not membership here.
     final projectId = c.selected?.projectId == ''
         ? null
         : c.selected?.projectId;
-    // A private conversation lists only who reads it: its people and the
-    // agents in it, the project's Lead.
+    // Who reads a private conversation still decides its +, never the list.
     final audience = c.selected?.audience;
-    final members =
-        state?.teamAgents
-            .where(
-              (agent) =>
-                  (projectId == null || _agentProjectId(agent) == projectId) &&
-                  (audience == null || c.selected!.agentIds.contains(agent.id)),
-            )
-            .toList() ??
-        const <SuperTabAgent>[];
+    final members = state?.teamAgents ?? const <SuperTabAgent>[];
     final leads = members.where((a) => state!.isLead(a.id)).toList();
     final agents = members.where((a) => !state!.isLead(a.id)).toList();
-    final people =
-        state?.people
-            .where((p) => audience == null || audience.contains(p.id))
-            .toList() ??
-        const <SuperTabPerson>[];
+    final people = state?.people ?? const <SuperTabPerson>[];
     // Only the open project's board: an answer for any other never lends
     // its numbers to these rows.
     final board = switch (_board.board) {
@@ -585,13 +604,8 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
       const SizedBox(height: DesktopChrome.groupGap),
       SuperTabSectionHeading(
         'Agents',
-        // An agent joins the Product Managers' conversation by leading a project,
-        // and a private conversation holds only the project's Lead.
-        onAdd:
-            c.canWrite &&
-                c.selected != null &&
-                c.selected!.id != c.snapshot?.leadsConversationId &&
-                audience == null
+        // A private conversation holds only the project's Lead.
+        onAdd: c.canWrite && c.selected != null && audience == null
             ? () => widget.onAddAgent(c.selected!)
             : null,
         addTooltip: 'Add agent',

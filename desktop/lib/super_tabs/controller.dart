@@ -62,6 +62,18 @@ String superTabMessageId({
 const _unsentReason = 'Not sent before this window closed.';
 const _unsentKey = 'unsent';
 
+/// What a thread reply refused for New session says: the server does not
+/// take it yet (an older backend, or one of its servers during a release).
+const superTabSessionsUnavailable =
+    "New sessions aren't available yet; send without it?";
+
+/// What a message refused for its form says, in place of the schema's own
+/// words ('command: Unrecognized key: ...'), which name fields, not causes.
+const superTabRefusedAsSent = "The server couldn't take this message.";
+
+/// The schema's own words, as a refusal saved before this version kept them.
+final _schemaWords = RegExp(r'Unrecognized key|^command(\.\w+)*: ');
+
 class SuperTabFailure implements Exception {
   const SuperTabFailure(this.code, this.message, {this.statusCode = 0});
   final String code, message;
@@ -241,7 +253,11 @@ class SuperTabController extends ChangeNotifier {
                         in superTabMap(row['mentions']).entries)
                       if (token is String) agent: token,
                   },
-                  error: row[_unsentKey] == true ? '' : row['error'] as String,
+                  error: row[_unsentKey] == true
+                      ? ''
+                      : _schemaWords.hasMatch(row['error'] as String)
+                      ? superTabRefusedAsSent
+                      : row['error'] as String,
                 ),
           ];
           if (kept.isNotEmpty) _refused[key] = kept;
@@ -665,6 +681,10 @@ class SuperTabController extends ChangeNotifier {
   final _threadBefore = <String, Map<String, dynamic>>{};
   final _threadDrafts = <String, String>{};
 
+  /// The people and agents picked with `@` in each thread's reply box, by its
+  /// conversation and root, as [_mentions] holds the chat's own.
+  final _threadMentions = <(String, String), Map<String, String>>{};
+
   /// The thread open beside the chat.
   ({String conversationId, String root})? openedThread;
   final _attachments = <String, HarnessAttachments>{};
@@ -927,6 +947,10 @@ class SuperTabController extends ChangeNotifier {
         .where((agent) => group.agentIds.contains(agent.id))
         .toList();
   }
+
+  /// Whether [conversationId]'s terminals are open as a group ([term]).
+  bool groupTerminalsOpen(String conversationId) =>
+      !accessRevoked && !devicesSelected && _terminals[conversationId] == '*';
 
   void selectGroupTerminals(String conversationId) {
     if (_disposed ||
@@ -1200,6 +1224,28 @@ class SuperTabController extends ChangeNotifier {
     _saveSoon();
   }
 
+  /// [root]'s thread in [conversationId] was read through [sequence] outside
+  /// the thread pane (the Threads view): kept here and sent to the server,
+  /// so it reads as read on every device. Nothing once access is gone.
+  void markThreadRead(String conversationId, String root, int sequence) {
+    if (_disposed ||
+        accessRevoked ||
+        sequence <= 0 ||
+        snapshot?.conversation(conversationId) == null) {
+      return;
+    }
+    _serverThreadMarks.mark(
+      (conversationId, root),
+      sequence,
+      kept: snapshot?.threadMarks[conversationId]?[root] ?? 0,
+    );
+    if ((_threadSeen[root] ?? 0) >= sequence) return;
+    _threadSeen.remove(root);
+    _threadSeen[root] = sequence;
+    _saveSoon();
+    _changed();
+  }
+
   /// The root and replies of [root]'s thread in the selected conversation,
   /// oldest first: what its own read brought, and replies polled since.
   List<SuperTabMessage> threadMessages(String root) {
@@ -1249,6 +1295,7 @@ class SuperTabController extends ChangeNotifier {
     _uploadErrors.removeWhere(
       (key, _) => key is (String, String) && gone(key.$1),
     );
+    _threadMentions.removeWhere((key, _) => gone(key.$1));
     if (openedThread case final open? when gone(open.conversationId)) {
       openedThread = null;
     }
@@ -1293,7 +1340,34 @@ class SuperTabController extends ChangeNotifier {
   }
 
   String threadDraft(String root) => _threadDrafts[root] ?? '';
-  void setThreadDraft(String root, String text) => _threadDrafts[root] = text;
+  void setThreadDraft(String root, String text) {
+    _threadDrafts[root] = text;
+    // A tag the text no longer says is no longer picked.
+    for (final MapEntry(key: thread, value: tags) in _threadMentions.entries) {
+      if (thread.$2 == root) {
+        tags.removeWhere((_, token) => !containsMention(text, token));
+      }
+    }
+    _threadMentions.removeWhere((_, tags) => tags.isEmpty);
+  }
+
+  /// The tags picked in the reply box of [root]'s thread in [conversationId].
+  Map<String, String> threadMentions(String conversationId, String root) =>
+      Map.unmodifiable(_threadMentions[(conversationId, root)] ?? const {});
+
+  /// [id] picked as [token] in the open thread's reply box, or [to]'s (the
+  /// Threads view), while its draft says it.
+  void threadMention(
+    String id,
+    String token, {
+    ({String conversationId, String root})? to,
+  }) {
+    final open = to ?? openedThread;
+    if (open == null || accessRevoked) return;
+    if (!containsMention(threadDraft(open.root), token)) return;
+    (_threadMentions[(open.conversationId, open.root)] ??= {})[id] = token;
+    _changed();
+  }
 
   /// How many pages a thread reads when it opens; past them "Show earlier
   /// replies" reads on, a page at a time.
@@ -1380,56 +1454,130 @@ class SuperTabController extends ChangeNotifier {
     }
   }
 
-  /// Sends the open thread's draft and files to its root; [alsoSend] shows it in the
-  /// main stream too. [onSending] is told when the reply is on its way, which
-  /// is after its files have gone up.
+  /// Sends the open thread's draft and files to its root, or [to]'s (the
+  /// Threads view replies without opening the thread); [alsoSend] shows it in
+  /// the main stream too. [onSending] is told when the reply is on its way,
+  /// which is after its files have gone up.
   Future<Map<String, dynamic>?> sendThreadReply({
     bool alsoSend = false,
     bool newSession = false,
     VoidCallback? onSending,
+    ({String conversationId, String root})? to,
   }) async {
-    final open = openedThread;
-    if (open == null) return null;
+    final open = to ?? openedThread;
+    if (open == null || accessRevoked) return null;
     final text = threadDraft(open.root).trim();
     final owner = threadAttachments(open.conversationId, open.root);
     final files = owner.files;
+    final group = snapshot?.conversation(open.conversationId);
     if ((text.isEmpty && files.isEmpty) ||
-        selected == null ||
-        selected!.archived ||
+        group == null ||
+        group.archived ||
         !canWrite ||
         uploading ||
         saving ||
         _pending != null) {
       return null;
     }
-    final ids = await _uploadAll(open.conversationId, owner, (
-      open.conversationId,
-      open.root,
-    ));
+    final thread = (open.conversationId, open.root);
+    // The tags as picked when sent: the box may take new ones meanwhile.
+    final picked = Map<String, String>.of(_threadMentions[thread] ?? const {});
+    final (:tagged, :addressed) = _tagsSaid(picked, text);
+    // The thread's own chat: a reply from the Threads view goes to a chat
+    // that may not be the one selected, or none may be.
+    final failure = addressed.any((id) => !group.agentIds.contains(id))
+        ? 'A mentioned agent is no longer in this conversation. Remove its mention or choose another agent.'
+        // Only its own session hears a session's thread (backend
+        // routeBuddySession): another agent's tag there would be refused.
+        : addressed.isNotEmpty &&
+              (newSession || threadSession(open.root) != null)
+        ? 'Only this thread\'s session hears a reply here. Remove the agent\'s mention.'
+        : null;
+    if (failure != null) {
+      _failOperation(
+        failure,
+        command: {'conversationId': open.conversationId, 'replyTo': open.root},
+      );
+      _changed();
+      return null;
+    }
+    final ids = await _uploadAll(open.conversationId, owner, thread);
     if (ids == null) return null;
     final before = _pending;
-    final sending = command({
+    final operationId = superTabOperationId();
+    final sending = command(operationId: operationId, {
       'type': 'message.send',
       'conversationId': open.conversationId,
       'text': text,
       'replyTo': open.root,
-      'recipientIds': const <String>[],
+      'recipientIds': addressed,
+      if (tagged.isNotEmpty) 'mentions': tagged,
       // A session's thread stays in the thread: never also sent.
       if (alsoSend && !newSession) 'alsoSend': true,
       if (newSession) 'newSession': true,
       if (ids.isNotEmpty) 'attachmentIds': ids,
     });
     if (_pending case final pending? when !identical(pending, before)) {
+      _sendingMentions[pending['operationId'] as String] = picked;
       // Only a draft still holding what went: more may have been typed since.
       if (_threadDrafts[open.root]?.trim() == text) {
         _threadDrafts.remove(open.root);
+        _threadMentions.remove(thread);
       }
       onSending?.call();
       _changed();
     }
     final result = await sending;
     _forgetRefusedUploads(result);
+    if (result == null && newSession) {
+      _restoreSessionRefusal(open.conversationId, open.root, operationId);
+    }
     return result;
+  }
+
+  /// A message the server refused only for New session goes back into its
+  /// box (the thread of [root], or the chat's own when null), ready to send
+  /// without it, when nothing was typed there since and it carries no files;
+  /// else it stays Not sent, and its Retry goes without New session.
+  void _restoreSessionRefusal(
+    String conversationId,
+    String? root,
+    String operationId,
+  ) {
+    final kept = _refused[conversationId];
+    final i = kept?.indexWhere((r) => r.operationId == operationId) ?? -1;
+    if (i < 0) return;
+    final refused = kept![i];
+    final files = refused.command['attachmentIds'];
+    if (refused.error != superTabSessionsUnavailable ||
+        (files is List && files.isNotEmpty) ||
+        (root == null ? draft(conversationId) : threadDraft(root))
+            .trim()
+            .isNotEmpty) {
+      return;
+    }
+    kept.removeAt(i);
+    if (kept.isEmpty) _refused.remove(conversationId);
+    _sendOrder.remove(operationId);
+    final text = refused.command['text'] as String? ?? '';
+    if (root == null) {
+      _drafts[conversationId] = text;
+      if (refused.mentions.isNotEmpty) {
+        _mentions[conversationId] = refused.mentions;
+      }
+    } else {
+      _threadDrafts[root] = text;
+      if (refused.mentions.isNotEmpty) {
+        _threadMentions[(conversationId, root)] = refused.mentions;
+      }
+    }
+    unawaited(
+      _persist().catchError((Object _) {
+        error = 'Could not save this change on this computer.';
+        _changed();
+      }),
+    );
+    _changed();
   }
 
   // ── Buddy thread sessions (spec 2026-10-30-buddy-thread-sessions) ───────
@@ -1437,10 +1585,28 @@ class SuperTabController extends ChangeNotifier {
   /// How many thread sessions a Buddy chat may run at once (backend limit).
   static const maxBuddySessions = 3;
 
+  /// When the server last refused a reply's New session as a field it does not
+  /// know, though it said it takes them (one of its servers older during a
+  /// release): New session is not offered for [_sessionsRefusedFor] after.
+  DateTime? _sessionsRefusedAt;
+  static const _sessionsRefusedFor = Duration(minutes: 10);
+
+  /// Whether this Swarm's server takes New session: it says so in its reads,
+  /// and has not just refused one.
+  bool get _serverTakesThreadSessions {
+    if (snapshot?.threadSessions != true) return false;
+    final refused = _sessionsRefusedAt;
+    return refused == null ||
+        clock.now().difference(refused) >= _sessionsRefusedFor;
+  }
+
   /// The open thread's chat when it is the reader's own Buddy chat, where a
   /// thread may have a session of its own; null anywhere else.
-  SuperTabConversation? get _ownBuddyChat {
-    final id = openedThread?.conversationId ?? selectedId;
+  SuperTabConversation? get _ownBuddyChat =>
+      _ownBuddyChatOf(openedThread?.conversationId ?? selectedId);
+
+  /// Chat [id] when it is the reader's own Buddy chat; null anywhere else.
+  SuperTabConversation? _ownBuddyChatOf(String id) {
     final chat = snapshot?.conversation(id);
     return chat != null &&
             chat.isBuddyChat &&
@@ -1450,13 +1616,25 @@ class SuperTabController extends ChangeNotifier {
         : null;
   }
 
+  /// Whether the selected chat's own composer shows New session: the reader's
+  /// own Buddy chat, with a Buddy, on a server that takes New session on a
+  /// top-level message. It may still show disabled, saying why
+  /// ([threadSessionBlocked]).
+  bool get offersChatSessions {
+    final chat = _ownBuddyChatOf(selectedId);
+    return chat != null &&
+        snapshot?.sessionsFromChat == true &&
+        _serverTakesThreadSessions &&
+        buddy(chat.projectId) != null;
+  }
+
   /// Whether the open chat's thread composer shows New session: the reader's
   /// own Buddy chat, with a Buddy, or in [root]'s thread that had a session
   /// (its reply must start a new one). It may still show disabled, saying why
   /// ([threadSessionBlocked]).
   bool offersThreadSessions([String? root]) {
     final chat = _ownBuddyChat;
-    if (chat == null) return false;
+    if (chat == null || !_serverTakesThreadSessions) return false;
     return buddy(chat.projectId) != null || (root != null && _hadSession(root));
   }
 
@@ -1690,12 +1868,24 @@ class SuperTabController extends ChangeNotifier {
 
   /// Each conversation's reaction counter as its last page said it.
   final _reactionSeq = <String, int>{};
-  int _loadedMessageSequence(String id) =>
-      _messages[id]?.reversed
-          .where((m) => m.source['kind'] != 'update-request')
-          .firstOrNull
-          ?.sequence ??
-      0;
+
+  /// The newest message held for [id] that reading the chat reads: one in
+  /// its main stream. A reply only in its thread is read in that thread, as in
+  /// Slack, so the chat's mark stops short of it and the thread stays unread
+  /// (backend read/inbox.ts counts replies past the chat's mark). From a
+  /// server before main-stream numbers, any row, as before.
+  int _loadedMessageSequence(String id) {
+    final mainOnly = snapshot?.conversation(id)?.lastMainSequence != null;
+    return _messages[id]?.reversed
+            .where(
+              (m) =>
+                  m.source['kind'] != 'update-request' &&
+                  (!mainOnly || m.inMainStream),
+            )
+            .firstOrNull
+            ?.sequence ??
+        0;
+  }
 
   /// How far the reader has read [id]: the higher of the mark kept on the
   /// server, from any of their devices, and this device's own, which stands
@@ -2116,6 +2306,22 @@ class SuperTabController extends ChangeNotifier {
       (_, token) => !containsMention(value, token),
     );
     _saveSoon();
+  }
+
+  /// The tags of [picked] that [text] still says: a person's is a tag, an
+  /// agent's makes it a recipient.
+  ({List<String> tagged, List<String> addressed}) _tagsSaid(
+    Map<String, String> picked,
+    String text,
+  ) {
+    final said = picked.entries
+        .where((entry) => containsMention(text, entry.value))
+        .map((entry) => entry.key);
+    bool isPerson(String id) => snapshot?.people.any((p) => p.id == id) == true;
+    return (
+      tagged: said.where(isPerson).toList(),
+      addressed: said.where((id) => !isPerson(id)).toList(),
+    );
   }
 
   static bool containsMention(String text, String token) =>
@@ -3550,11 +3756,12 @@ class SuperTabController extends ChangeNotifier {
           _pending = pending;
         }
       } else if (!_disposed && !accessRevoked) {
+        final command = superTabMap(pending['command']);
         _failOperation(
           failure is SuperTabFailure
-              ? failure.message
+              ? _refusalText(failure, command)
               : 'The action is not confirmed. Retry to check it.',
-          command: superTabMap(pending['command']),
+          command: command,
           code: failure is SuperTabFailure ? failure.code : null,
         );
         if (failure is SuperTabFailure &&
@@ -3563,7 +3770,20 @@ class SuperTabController extends ChangeNotifier {
             !const {408, 429}.contains(failure.statusCode)) {
           // A definitive rejection made no change. Keep the message for the
           // person to correct; a lost reply retains its exact receipt ID.
-          _refuse(pending, operationError!);
+          // One refused for New session is kept without it: its Retry, or
+          // its text back in the box, sends a plain reply.
+          final unsupported = operationError == superTabSessionsUnavailable;
+          if (unsupported) _sessionsRefusedAt = clock.now();
+          _refuse(
+            unsupported
+                ? {
+                    ...pending,
+                    'command': Map<String, dynamic>.of(command)
+                      ..remove('newSession'),
+                  }
+                : pending,
+            operationError!,
+          );
           _pending = null;
           try {
             await _persist();
@@ -3602,6 +3822,27 @@ class SuperTabController extends ChangeNotifier {
         );
       }
     }
+  }
+
+  /// What a person reads for [failure] of [command]: the server's own words,
+  /// except where a message was refused for its form (`VALIDATION_ERROR`, the
+  /// schema naming fields): a reply whose New session the server does not know
+  /// says so; any other says it plainly.
+  static String _refusalText(
+    SuperTabFailure failure,
+    Map<String, dynamic> command,
+  ) {
+    if (command['type'] != 'message.send' ||
+        failure.code != 'VALIDATION_ERROR') {
+      return failure.message;
+    }
+    // Only the field itself unknown means the server can't start sessions;
+    // a reply refused for anything else (too many files) keeps New session.
+    return command['newSession'] == true &&
+            failure.message.contains('Unrecognized key') &&
+            failure.message.contains('newSession')
+        ? superTabSessionsUnavailable
+        : superTabRefusedAsSent;
   }
 
   static String _excerpt(String text) {
@@ -3677,10 +3918,15 @@ class SuperTabController extends ChangeNotifier {
 
   /// Sends the selected conversation's draft. [onSending] is told when the
   /// message is on its way and shows in [outgoing].
+  ///
+  /// With [newSession], in the reader's own Buddy chat, the message starts its
+  /// own thread's session (a top-level one roots that thread), and the thread
+  /// opens once the server took it, if this chat is still the one shown.
   Future<Map<String, dynamic>?> send({
     String? replyTo,
     List<String> recipients = const [],
     VoidCallback? onSending,
+    bool newSession = false,
   }) async {
     final text = draft(selectedId).trim();
     final files = attachments(selectedId).files;
@@ -3689,18 +3935,14 @@ class SuperTabController extends ChangeNotifier {
         selected!.archived ||
         !canWrite ||
         uploading ||
-        ((saving || _pending != null) && (files.isNotEmpty || !canQueueText))) {
+        (newSession && !offersChatSessions) ||
+        ((saving || _pending != null) &&
+            (files.isNotEmpty || newSession || !canQueueText))) {
       return null;
     }
-    // A tag the text still says: an agent's is a recipient, a person's a tag.
-    final said = mentions(selectedId).entries
-        .where((entry) => containsMention(text, entry.value))
-        .map((entry) => entry.key);
-    bool isPerson(String id) => snapshot?.people.any((p) => p.id == id) == true;
-    final tagged = said.where(isPerson).toList();
-    final addressed = recipients.isEmpty
-        ? said.where((id) => !isPerson(id)).toList()
-        : recipients;
+    final said = _tagsSaid(mentions(selectedId), text);
+    final tagged = said.tagged;
+    final addressed = recipients.isEmpty ? said.addressed : recipients;
     if (addressed.any((id) => !selected!.agentIds.contains(id))) {
       _failOperation(
         'A mentioned agent is no longer in this conversation. Remove its mention or choose another agent.',
@@ -3710,7 +3952,9 @@ class SuperTabController extends ChangeNotifier {
       return null;
     }
     final conversationId = selectedId;
-    if (files.isEmpty) {
+    // A text alone waits in the queue; one that starts a session goes now,
+    // so its answer can open its thread.
+    if (files.isEmpty && !newSession) {
       final operationId = superTabOperationId();
       _sendOrder.add(operationId);
       final result = Completer<Map<String, dynamic>?>();
@@ -3755,6 +3999,7 @@ class SuperTabController extends ChangeNotifier {
       'recipientIds': addressed,
       if (tagged.isNotEmpty) 'mentions': tagged,
       if (ids.isNotEmpty) 'attachmentIds': ids,
+      if (newSession) 'newSession': true,
     });
     // On its way: the message shows in the chat, and the draft is free for
     // the next one. Both are in the save made before the request.
@@ -3769,6 +4014,17 @@ class SuperTabController extends ChangeNotifier {
     }
     final result = await sending;
     _forgetRefusedUploads(result);
+    if (newSession && result == null) {
+      _restoreSessionRefusal(conversationId, null, operationId);
+    } else if (result?['messageId'] case final String id
+        when newSession &&
+            !_disposed &&
+            !accessRevoked &&
+            selectedId == conversationId) {
+      // Its thread opens beside the chat: the session answers there. A top-
+      // level message is its own thread's root.
+      openThread(_threadOf(conversationId, replyTo) ?? replyTo ?? id);
+    }
     return result;
   }
 
@@ -3967,9 +4223,18 @@ class SuperTabController extends ChangeNotifier {
     await _persist();
   }
 
+  /// Runs [then] when this controller is disposed: a helper that keeps a
+  /// timer of its own (attention.dart) stops with it.
+  void onDispose(VoidCallback then) => _onDispose.add(then);
+  final _onDispose = <VoidCallback>[];
+
   @override
   void dispose() {
     _disposed = true;
+    for (final then in _onDispose) {
+      then();
+    }
+    _onDispose.clear();
     for (final queued in _queuedSends) {
       queued.result.complete(null);
     }

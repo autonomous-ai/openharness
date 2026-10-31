@@ -253,10 +253,8 @@ class SuperTabTask {
 class SuperTabConversation {
   SuperTabConversation.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
-      // The Product Managers' conversation belongs to no project; a group from
-      // before projects belongs to the first.
-      projectId =
-          row['projectId'] as String? ?? (row['kind'] == 'leads' ? '' : 'lead'),
+      // A group from before projects belongs to the first.
+      projectId = row['projectId'] as String? ?? 'lead',
       kind = row['kind'] as String?,
       buddyOwnerId = row['buddyOwnerId'] as String?,
       buddyName = row['buddyName'] as String?,
@@ -317,8 +315,9 @@ class SuperTabConversation {
           : null;
   final String id, projectId, title, brief;
 
-  /// What the backend calls it apart from a workgroup: `leads` for the Product
-  /// Managers' conversation, `buddy` for a person's chat with their Buddy.
+  /// What the backend calls it apart from a workgroup: `buddy` for a person's
+  /// chat with their Buddy. A `leads` one, the removed Product Managers'
+  /// conversation, is in no read ([SuperTabSnapshot.fromJson]).
   final String? kind;
   bool get isBuddyChat => kind == 'buddy';
 
@@ -460,15 +459,19 @@ class SuperTabSnapshot {
         row['machines'] ?? const [],
         (m) => Map<String, dynamic>.unmodifiable(m),
       ),
-      conversations = _list(
-        row['conversations'],
-        SuperTabConversation.fromJson,
+      // The Product Managers' (Leads) conversation is removed (Dee, 10-31): a
+      // server from before that still sends it has it listed and opened
+      // nowhere here.
+      conversations = List.unmodifiable(
+        _list(
+          row['conversations'],
+          SuperTabConversation.fromJson,
+        ).where((c) => c.kind != 'leads' && c.id != row['leadsConversationId']),
       ),
       invitations = _list(
         row['invitations'],
         (row) => Map<String, dynamic>.unmodifiable(row),
       ),
-      leadsConversationId = row['leadsConversationId'] as String?,
       startEfforts = Map.unmodifiable({
         for (final start
             in row['starts'] is List ? row['starts'] as List : const [])
@@ -479,6 +482,8 @@ class SuperTabSnapshot {
             harness: effort,
       }),
       localModels = SuperTabLocalModels.read(row['localModels']),
+      threadSessions = row['threadSessions'] == true,
+      sessionsFromChat = row['sessionsFromChat'] == true,
       mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0,
       mentionsDigest = row['mentionsDigest'] as String?,
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
@@ -547,12 +552,18 @@ class SuperTabSnapshot {
   /// kept on this device leaves them out).
   final Map<String, String> startEfforts;
 
-  /// Where the projects' Product Managers talk, Swarm-wide; null in a Swarm
-  /// from before it (spec 2026-10-23-leads-see-and-talk.md).
-  final String? leadsConversationId;
-
   /// The Local models add-on, once the owner has turned it on; null before.
   final SuperTabLocalModels? localModels;
+
+  /// Whether this Swarm's server takes a thread reply's New session: true only
+  /// where it says so (backend read/contract.ts `threadSessions`). Read as the
+  /// desktop reads it (desktop_parity_test.dart); the phone offers no New
+  /// session yet.
+  final bool threadSessions;
+
+  /// Whether that server also takes New session on a top-level message in a
+  /// Buddy chat (read/contract.ts `sessionsFromChat`); false from an older one.
+  final bool sessionsFromChat;
 
   /// The reader's tags still waiting for them, Swarm-wide; 0 from a backend
   /// before tags (spec 2026-10-24-lead-mentions.md).

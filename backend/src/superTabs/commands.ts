@@ -1,10 +1,10 @@
 import { admitMachineStart, BUDDY_WINDOWS_REFUSAL, cleanupOverdue, dropIdleBuddyMachines, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, machineSlots, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
-import { assignAgentDisplayNames } from './agentNames.js'
+import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { keepUsernames, setUsername, swarmUsernames } from './usernames.js'
 import { z } from 'zod'
 import { tokensByModelSchema } from './costs/tokens.js'
 import {
-  activeWork, actorKey, agent, appendPullRequestUrls, author, conversation, crossProjectActive, fail, isLeads, person, stableId, syncLeads, numberConversations, nextConversationNumber, renderWorkTask,
+  activeWork, actorKey, agent, appendPullRequestUrls, author, conversation, crossProjectActive, fail, isLeads, person, stableId, numberConversations, nextConversationNumber, renderWorkTask,
   finishWorker, seenMachineIds, swarmGridName, visibleState, AGENT_ONLY, STATUS_LABELS, forRecipients,
   type Actor, type AgentConfiguration, type AgentStart, type AgentStartRequest, type BuddySessionEntry, type WorkTask, type Agent, type Author, type Check, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
@@ -95,6 +95,8 @@ export const startRequestSchema = z.object({
   model: z.string().trim().min(1).max(200).optional(), effort: z.string().trim().min(1).max(80).optional(),
   permissionMode: z.string().min(1).max(80).optional(), codexHome: path.optional(),
   gridModel: z.string().min(1).max(2048).optional(), gridName: z.string().min(1).max(2048).optional(),
+  // The heavy work the task declared (model.ts AgentStartRequest.heavy). An older client sends none.
+  heavy: z.array(z.enum(['build', 'e2e'])).min(1).max(2).refine(h => new Set(h).size === h.length, 'Name each kind of heavy work once.').optional(),
   requirements: z.object({ memoryBytes: z.number().int().nonnegative().safe(), diskBytes: z.number().int().nonnegative().safe(),
     maxCpuPercent: z.number().min(0).max(100), tools: z.array(z.string().regex(/^[A-Za-z0-9_.+-]{1,80}$/)).max(20),
     devices: z.array(path).max(20), quotaRequired: z.boolean() }).strict(),
@@ -530,8 +532,7 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   if (buddy) requireBuddyCommand(buddy, command, state.conversations)
   // An invitation's group is only where the person lands, and invite.create replaces a deleted one (inviteLanding).
   if ('conversationId' in command && command.type !== 'invite.create') {
-    const group = readConversation(state, actor, command.conversationId)
-    if (isLeads(group) && command.type !== 'message.send') groupProject(state, group)
+    readConversation(state, actor, command.conversationId)
   }
   if ('projectId' in command && command.projectId) readProject(state, actor, command.projectId)
   if ('agentId' in command) readAgent(state, actor, command.agentId)
@@ -634,7 +635,6 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   const removed: CredentialKind[] = []
   const command = withoutCredentials(commandSchema.parse(input), removed)
   const state = cloneData(original)
-  syncLeads(state)
   numberConversations(state)
   placeRules(state)
   const ended = expireRemovals(state, context.now)
@@ -768,10 +768,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   /** Any other row the system writes in the actor's name. Without a source, a notice written as the owner read as the owner
    * asking, and a Lead could quote it to change rules (review of #1594). Only `message.send` and an initial message stay plain. */
   const SYSTEM_ROW = { kind: 'system' }
-  /** Agent bookkeeping, a routing line or an agent joined or ready: no one's in the project chat or the Leads chat, which
-   *  carry only what people read or decide on (the Lead's ruling, 2026-10-29); a task's chat keeps it as its record. */
+  /** Agent bookkeeping, a routing line or an agent joined or ready: no one's in the project chat, which carries only what
+   *  people read or decide on (the Lead's ruling, 2026-10-29); a task's chat keeps it as its record. */
   const bookkeeping = (conversationId: string, source: Record<string, unknown>) =>
-    conversationId === state.leadsConversationId || projectsOf(state).some(p => p.leadConversationId === conversationId) ? forRecipients(source) : source
+    projectsOf(state).some(p => p.leadConversationId === conversationId) ? forRecipients(source) : source
   const who = sender.kind === 'person' ? sender.name.split('@')[0]! : sender.name
   /** [project], when the actor is its coordinator: the one agent that keeps its notes and names itself (design, PM notes). */
   const coordinatorOf = (project: SwarmProject, why = 'Of its agents, only this project\'s coordinator does this.'): SwarmProject => {
@@ -792,10 +792,14 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     if (machines.some(m => !seen.has(m))) fail('MACHINE_UNKNOWN', 'Name a machine of this Swarm that you can see.', 400)
   }
   /** A grid attempt's first review failed (project instructions, phase 4, decision 8): its coordinator hears what happened, with
-   *  the model and the findings; nothing is cancelled or stepped up, and the findings reach the agent as they do any verdict. */
+   *  the model and the findings; nothing is cancelled, and the findings reach the agent as they do any verdict. The task keeps
+   *  the step up (goals piece 4): the route reads it to leave the grid out of the next attempt (cli routeCheapFirst.ts), and
+   *  route records carry it for the costs report (costs/read.ts stepUps). Its reason names only the model, never the findings,
+   *  since every reader of the task sees it. */
   const reviewFailed = (group: Conversation, model: string, evidence: string) => {
     const worker = state.agents.find(a => a.id === group.assignment?.agentId)
     if (!worker) return
+    group.stepUp = { attempt: (group.stepUp?.attempt ?? 1) + 1, floor: 3, reason: `Its first review failed on ${model} on the Swarm's grid.`, at: context.now, carry: '' }
     const findings = evidence.length > FINDINGS_CHARS ? `${evidence.slice(0, FINDINGS_CHARS - 1)}…` : evidence
     effects.messages.push(...leadNoticeRows(toLead(state, worker, { id: stableId(operationId, 'review-failed'), conversationId: group.id, author: sender,
       replyTo: null, recipients: [], text: `#${group.number} ${group.title}: its first review failed. It ran on ${model} on the Swarm's grid. Findings: ${findings}`,
@@ -878,7 +882,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
    */
   const routeBuddySession = (chat: Conversation): { inSession: boolean; to: string | null } => {
     if (command.type !== 'message.send') return { inSession: false, to: null }
-    const thread = command.replyTo && !context.reply?.agentOnly ? context.reply?.thread ?? null : null
+    // A person's own top-level New session message roots its own thread (the message is that thread's root, its id the
+    // thread's): its session starts there, and the main Buddy never hears it.
+    const roots = actor.kind === 'person' && !!command.newSession && !command.replyTo
+    const thread = roots ? operationId : command.replyTo && !context.reply?.agentOnly ? context.reply?.thread ?? null : null
     const self = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId) : undefined
     const entry = sessionOf(state, chat, thread)
     if (self?.buddySession) {
@@ -895,7 +902,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     if (actor.kind !== 'person') return { inSession: false, to: null }
     if (command.newSession) {
       const owner = requireChatOwner(state, chat, actor.userId)
-      if (!thread) fail('BUDDY_SESSION_CHAT', 'Start a session from a thread: reply to a message, then choose New session.', 400)
+      if (!thread) fail('BUDDY_SESSION_CHAT', 'Start a session from a message of your own, or a reply in a thread.', 400)
       if (entry) fail('BUDDY_SESSION_EXISTS', 'This thread already has its own session.')
       if (command.alsoSend) fail('BUDDY_SESSION_THREAD', 'A session\'s thread stays in the thread.', 400)
       if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
@@ -1049,7 +1056,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   }
 
   /** Projects in one Swarm changed the same code without knowing it (2026-10-23). When a task is created, defined or assigned,
-   *  its Leads hear once per pair of tasks that it owns code another shared project's active task owns too. */
+   *  its Leads hear once per pair of tasks that it owns code another shared project's active task owns too: each Lead in its
+   *  own project chat, as a notice only it reads (the Leads conversation is removed, model.ts leadsRemoved). */
   const alertOverlaps = (group: Conversation) => {
     const project = groupProject(state, group)
     const mine = (group.task?.owns ?? []).flatMap(entry => ownedPath(entry) ?? [])
@@ -1066,11 +1074,16 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (!shared.length || state.overlapAlerts?.includes(pair)) continue
       (state.overlapAlerts ??= []).push(pair)
       const ours = leadOf(project), their = leadOf(theirs)
-      effects.messages.push({ id: stableId(operationId, 'overlap', pair), conversationId: state.leadsConversationId!, author: sender,
-        text: `"${group.title}" (${project.name}, ${named(ours)}) and "${other.title}" (${theirs.name}, ${named(their)}) both change `
-          + `${shared.join(', ')}.`,
-        replyTo: null, recipients: [ours, their].flatMap(a => a && !(actor.kind === 'agent' && a.id === actor.agentId) ? [a.id] : []),
-        source: { kind: 'overlap', conversationIds: [group.id, other.id] } })
+      const text = `"${group.title}" (${project.name}, ${named(ours)}) and "${other.title}" (${theirs.name}, ${named(their)}) both change `
+        + `${shared.join(', ')}.`
+      // Written as that Lead, like its other notices (liveness.ts work-stalled): a sender from another project reads none of it.
+      for (const [chat, lead] of [[project, ours], [theirs, their]] as const) {
+        if (!lead || actor.kind === 'agent' && lead.id === actor.agentId) continue
+        effects.messages.push({ id: stableId(operationId, 'overlap', pair, chat.id), conversationId: chat.leadConversationId,
+          author: { kind: 'agent', id: lead.id, name: lead.name, displayName: agentDisplayName(state.agents, lead.id), membershipGeneration: lead.membershipGeneration },
+          text, replyTo: null,
+          recipients: [lead.id], source: { kind: 'overlap', conversationIds: [group.id, other.id] } })
+      }
     }
   }
 
@@ -2254,10 +2267,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // A Buddy chat has no Lead: its owner talks to its Buddy.
       const automatic = actor.kind === 'person' ? (isBuddyChat(group) ? (session?.inSession ? session.to : mainBuddyOf(state, group)?.id ?? null)
         : replyAgent && group.agentIds.includes(replyAgent) ? replyAgent : group.leadId) : agentRecipient
-      // In the Leads conversation everything posted reaches every other Lead; naming some only adds emphasis.
-      const everyLead = isLeads(group) ? group.agentIds.filter(id => actor.kind !== 'agent' || id !== actor.agentId) : []
-      const recipients = [...new Set([...addressed, ...everyLead, ...memberToLead,
-        ...(addressed.length || everyLead.length || !automatic ? [] : [automatic])])]
+      const recipients = [...new Set([...addressed, ...memberToLead, ...(addressed.length || !automatic ? [] : [automatic])])]
       for (const id of recipients) {
         const target = agent(state, id)
         // In a Buddy chat a session hears its own thread alone, and the main Buddy none of it.
@@ -2337,14 +2347,19 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const routedGroup = open(state, command.conversationId)
       const via = decision.via === 'jev' ? `Jev ${Math.round((decision.p ?? 0) * 100)}%`
         : decision.via === 'only' ? 'only candidate' : 'by policy order'
-      // The server's own fields are never taken from the route: no step up any more, and the instructions revision the route
-      // relied on, stamped now (project instructions, phase 4). An older CLI's same-engine note, as a field or at the start of
-      // its why, is not kept.
+      // The server's own fields are never taken from the route: the task's step up (a grid attempt's failed first review, goals
+      // piece 4), cut to what a record keeps, and the instructions revision the route relied on, stamped now (project
+      // instructions, phase 4). An older CLI's same-engine note, as a field or at the start of its why, is not kept.
       const { stepUp: _sent, sameEngine: _said, jobKind: _kind, instructionsRevision: _revision, ...sent } = decision
       const made = { ...sent, why: sent.why.replace(OLD_SAME_ENGINE, '') || sent.why }
       const jobKind = jobKindOf(routedGroup, decision.assessment.kind)
       const instructionsRevision = groupProject(state, routedGroup).instructionsRevision ?? 0
-      effects.routeDecisions.push({ op: 'create', id: operationId, conversationId: command.conversationId, record: { ...made, jobKind, instructionsRevision } })
+      // Only the first route after a step up carries it, so the costs report counts one step up per task, not one per route
+      // (review of #2422); a later failure is a new step up, carried again.
+      const step = routedGroup.stepUp && !routedGroup.stepUp.recorded ? routedGroup.stepUp : null
+      if (step) step.recorded = true
+      const stepUp = step ? { stepUp: { attempt: Math.min(3, step.attempt), reason: step.reason.slice(0, 200) } } : {}
+      effects.routeDecisions.push({ op: 'create', id: operationId, conversationId: command.conversationId, record: { ...made, ...stepUp, jobKind, instructionsRevision } })
       result.routeDecisionId = operationId
       // The row quotes the Lead's reason for the task; the verdict's own text stays in the decision record.
       const reason = decision.assessment.why
@@ -2644,7 +2659,6 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     if (!acknowledged && !state.agents.some(a => a.id === target.id)) fail('STOP_REQUESTED', 'Wait for the execution host to finish stopping its workers before withdrawing them.')
   }
   dropIdleBuddyMachines(state, context.now)
-  syncLeads(state)
   if (context.registrations) requireSingleRegistration(original, state, context.registrations)
   markConfidential(state)
   assignAgentDisplayNames(state.agents)

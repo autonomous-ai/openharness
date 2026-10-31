@@ -156,6 +156,9 @@ class SuperTabMessageRow extends StatefulWidget {
 
   static bool groupsWith(SuperTabMessage current, SuperTabMessage? previous) {
     if (previous == null ||
+        // A message that started a session stands on its own, with its line.
+        current.sessionRoot ||
+        previous.sessionRoot ||
         current.replyTo != null ||
         previous.replyTo != null ||
         current.text.length > 280 ||
@@ -806,6 +809,17 @@ class SuperTabThreadLine extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
+    // A session's thread with no reply yet: its mark is the line, and opens it.
+    if (thread.replies == 0 && trailing != null) {
+      return Padding(
+        padding: const EdgeInsets.only(top: grid.AppDesktop.menuInset),
+        child: SuperTabLink(
+          label: 'Open thread',
+          onTap: onOpen,
+          child: trailing!,
+        ),
+      );
+    }
     final count = thread.replies == 1 ? '1 reply' : '${thread.replies} replies';
     final last = thread.lastAt;
     final link = SuperTabLink(

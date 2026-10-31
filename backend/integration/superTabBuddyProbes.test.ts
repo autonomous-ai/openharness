@@ -123,7 +123,7 @@ describe('security review 1 of #2115: a Buddy\'s reads, probed by two people', (
     const gen=(await poolRows(f.store,owner,'owner-mac')).find(p=>p.tabId===f.tab)!.machine.generation
     await f.store.observeMachine(owner,f.tab,'owner-mac',{generation:gen,resources:{cpuPercent:10,memoryTotalBytes:32e9,memoryUsedBytes:4e9,diskFreeBytes:120e9,diskTotalBytes:500e9,projectDiskFreeBytes:120e9,deviceType:'Laptop',chip:'Fixture',os:'macOS',gpuPercent:null},quotas:[],tools:{},runningHarnessIds:[],stoppedHarnessIds:[]})
     const ownerBuddyChat=String((await f.execute({type:'buddy.create',projectId:'lead',machineId:'owner-mac',engine:'claude'})).result.conversationId)
-    const leads=(await f.store.read(owner,f.tab)).state.leadsConversationId!
+    const leads=stableId(f.tab,'leads')
     const reads=new SwarmReads(f.store)
     for(const id of [privateChat,ownerBuddyChat,leads,web.conversationId,other,'invented-group-id']){
       await expect(f.store.messages(peer,f.tab,id,{before:Number.MAX_SAFE_INTEGER,messageId:'invented-message-id'},agentId)).rejects.toThrow('unavailable')

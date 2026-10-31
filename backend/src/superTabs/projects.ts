@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { activeWork, agent, agentRole, author, conversation, fail, isLeads, nextConversationNumber, person, type Actor, type Agent, type Conversation, type Person, type SuperTabState } from './model.js'
+import { activeWork, agent, agentRole, author, conversation, fail, isLeads, leadsRemoved, nextConversationNumber, person, type Actor, type Agent, type Conversation, type Person, type SuperTabState } from './model.js'
 import type { SwarmRule } from './rules.js'
 import { buddyReads, isBuddy, isBuddyChat } from './buddies.js'
 
@@ -94,7 +94,7 @@ export function projectOf(state: SuperTabState, projectId: string): SwarmProject
 }
 
 export function groupProject(state: SuperTabState, group: Conversation): SwarmProject {
-  if (isLeads(group)) fail('LEADS_CONVERSATION', 'The Leads conversation is only for messages between Leads and people.')
+  if (isLeads(group)) leadsRemoved()
   return projectOf(state, group.projectId ?? 'lead')
 }
 
@@ -107,8 +107,7 @@ export function ledProject(state: SuperTabState, agentId: string): SwarmProject 
   return projectsOf(state).find(p => state.conversations.some(c => c.id === p.leadConversationId && c.leadId === agentId))
 }
 
-/** Whose active work other projects' Leads see and are alerted about. A private project's work stays with its own people:
- *  the Leads conversation is read by the whole Swarm. */
+/** Whose active work other projects' Leads see and are alerted about. A private project's work stays with its own people. */
 export const sharedWithLeads = (project: SwarmProject): boolean => project.visibility !== 'private'
 
 export function canReadProject(state: SuperTabState, actor: Actor, project: SwarmProject): boolean {
@@ -130,10 +129,10 @@ export function readProject(state: SuperTabState, actor: Actor, projectId: strin
 
 export function readConversation(state: SuperTabState, actor: Actor, conversationId: string): Conversation {
   const group = conversation(state, conversationId)
+  // Removed for everyone alike (model.ts leadsRemoved): a member of the Swarm reads one plain refusal, nothing of it.
   if (isLeads(group)) {
     author(state, actor)
-    if (actor.kind === 'agent' && !ledProject(state, actor.agentId)) fail('NOT_FOUND', 'This conversation is unavailable.', 404)
-    return group
+    leadsRemoved()
   }
   readProject(state, actor, groupProject(state, group).id)
   if (!canReadGroup(state, actor, group)) fail('NOT_FOUND', 'This conversation is unavailable.', 404)
@@ -148,7 +147,7 @@ export const PRIVATE_VISIBLE_TO_OWNERS = false
  *  one any more, and nobody reads one, the PM and its person included; its rows stay in the database. */
 export const isClosedPmChat = (group: Pick<Conversation, 'kind' | 'audience'>): boolean => !!group.audience && !isBuddyChat(group)
 
-/** Who reads a conversation: the Leads conversation's people and Leads; a project conversation's readers; and a Buddy
+/** Who reads a conversation: nobody the removed Leads conversation (model.ts leadsRemoved); a project conversation's readers; and a Buddy
  *  chat's owner and Buddy (buddies.ts), the PM never. A closed Chat with PM is nobody's. A Buddy reads what its person
  *  reads of its project, no private conversation but its own chat (buddies.ts). */
 export function canReadGroup(state: SuperTabState, actor: Actor, group: Conversation): boolean {
@@ -158,7 +157,7 @@ export function canReadGroup(state: SuperTabState, actor: Actor, group: Conversa
 /** Whether [actor] reads what was asked in [group] (decisions.ts): as canReadGroup, and in a closed Chat with PM still its
  *  person, at the generation they were listed with, and the project's Lead, so a decision asked there before stays theirs. */
 export function readsRecordsIn(state: SuperTabState, actor: Actor, group: Conversation): boolean {
-  if (isLeads(group)) return actor.kind === 'person' ? state.people.some(p => p.id === actor.userId) : !!ledProject(state, actor.agentId)
+  if (isLeads(group)) return false
   const project = groupProject(state, group)
   if (!canReadProject(state, actor, project)) return false
   const buddy = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId && isBuddy(a)) : undefined

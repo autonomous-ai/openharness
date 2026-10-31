@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { storeOldLeads } from '../leads.test-support.js'
 import * as store from '../parts/index.js'
 import { readerView } from './views.js'
 import { NOW, outsider, owner, peer, richSwarm } from './fixture.test-support.js'
@@ -78,12 +79,22 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
     for (const hidden of ['reportSeq', 'lastActivityAt', 'dormant', 'audience']) expect(web.data).not.toHaveProperty(hidden)
   })
 
-  it('shows the Leads conversation to people and Leads, not to another agent', () => {
+  it('shows an older Swarm\'s stored Leads conversation to nobody, its id neither (model.ts leadsRemoved)', () => {
+    const s = richSwarm()
+    s.edit(state => { storeOldLeads(state, [s.lead]) })
+    const parts = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
+    for (const actor of [owner, peer, agentActor(s.lead), agentActor(s.worker)]) {
+      const view = readerView(parts, actor, NOW, { teamMachines: [] })
+      expect(keys(view.parts.groups)).not.toContain('old-leads')
+      expect(view.parts.head.data).not.toHaveProperty('leadsConversationId')
+    }
+  })
+
+  it('says to every reader that this server takes New session in a thread reply', () => {
     const { s, parts } = scene()
-    const leads = s.state.leadsConversationId!
-    expect(keys(readerView(parts, peer, NOW, { teamMachines: [] }).parts.groups)).toContain(leads)
-    expect(keys(readerView(parts, agentActor(s.lead), NOW, { teamMachines: [] }).parts.groups)).toContain(leads)
-    expect(keys(readerView(parts, agentActor(s.worker), NOW, { teamMachines: [] }).parts.groups)).not.toContain(leads)
+    for (const actor of [owner, peer, agentActor(s.worker)]) {
+      expect(readerView(parts, actor, NOW, { teamMachines: [] }).derived).toMatchObject({ threadSessions: true, sessionsFromChat: true })
+    }
   })
 
   it('keeps time-based agent values out of the part and puts them in derived', () => {

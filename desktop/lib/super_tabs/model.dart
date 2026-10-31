@@ -247,10 +247,8 @@ class SuperTabTask {
 class SuperTabConversation {
   SuperTabConversation.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
-      // The Product Managers' conversation belongs to no project; a group from
-      // before projects belongs to the first.
-      projectId =
-          row['projectId'] as String? ?? (row['kind'] == 'leads' ? '' : 'lead'),
+      // A group from before projects belongs to the first.
+      projectId = row['projectId'] as String? ?? 'lead',
       kind = row['kind'] as String?,
       buddyOwnerId = row['buddyOwnerId'] as String?,
       buddyName = row['buddyName'] as String?,
@@ -304,8 +302,8 @@ class SuperTabConversation {
           : null;
   final String id, projectId, title, brief;
 
-  /// What the backend calls it apart from a workgroup: `leads` for the Product
-  /// Managers' conversation, `buddy` for a person's chat with their Buddy.
+  /// What the backend calls it apart from a workgroup: `buddy` for a person's
+  /// chat with their Buddy. A `leads` one is never kept ([SuperTabSnapshot]).
   final String? kind;
   bool get isBuddyChat => kind == 'buddy';
 
@@ -420,15 +418,19 @@ class SuperTabSnapshot {
         row['machines'] ?? const [],
         (m) => Map<String, dynamic>.unmodifiable(m),
       ),
-      conversations = _list(
-        row['conversations'],
-        SuperTabConversation.fromJson,
+      // The Product Managers chat is gone (Dee, 2026-10-31): an older server
+      // still sends it, by its kind or the id the head names, and no screen
+      // may list or open it.
+      conversations = List.unmodifiable(
+        _list(
+          row['conversations'],
+          SuperTabConversation.fromJson,
+        ).where((g) => g.kind != 'leads' && g.id != row['leadsConversationId']),
       ),
       invitations = _list(
         row['invitations'],
         (row) => Map<String, dynamic>.unmodifiable(row),
       ),
-      leadsConversationId = row['leadsConversationId'] as String?,
       startEfforts = Map.unmodifiable({
         for (final start
             in row['starts'] is List ? row['starts'] as List : const [])
@@ -440,6 +442,8 @@ class SuperTabSnapshot {
       }),
       localModels = SuperTabLocalModels.read(row['localModels']),
       teamAccounts = row['teamAccounts'] != false,
+      threadSessions = row['threadSessions'] == true,
+      sessionsFromChat = row['sessionsFromChat'] == true,
       mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0,
       mentionsDigest = row['mentionsDigest'] as String?,
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
@@ -509,10 +513,6 @@ class SuperTabSnapshot {
   /// kept on this device leaves them out).
   final Map<String, String> startEfforts;
 
-  /// Where the projects' Product Managers talk, Swarm-wide; null in a Swarm
-  /// from before it (spec 2026-10-23-leads-see-and-talk.md).
-  final String? leadsConversationId;
-
   /// The Local models add-on, once the owner has turned it on; null before.
   final SuperTabLocalModels? localModels;
 
@@ -521,6 +521,16 @@ class SuperTabSnapshot {
   /// Whether this Swarm's server uses Harness Team accounts: false only where
   /// it says it does not try them yet (backend read/contract.ts `teamAccounts`).
   final bool teamAccounts;
+
+  /// Whether this Swarm's server takes a thread reply's New session: true only
+  /// where it says so (backend read/contract.ts `threadSessions`); an older
+  /// server's schema refuses the field.
+  final bool threadSessions;
+
+  /// Whether that server also takes New session on a top-level message in a
+  /// Buddy chat, which then roots its own thread (read/contract.ts
+  /// `sessionsFromChat`); false from an older one.
+  final bool sessionsFromChat;
   final int mentionsWaiting;
 
   /// Which tags wait, as a digest that moves when they change though the
@@ -948,6 +958,14 @@ class SuperTabDelivery {
 /// What a page says about one thread (backend threads.ts): the line under its
 /// root, and who it marks unread for.
 class SuperTabThread {
+  /// A thread with no reply yet: a session's, started from the main chat.
+  SuperTabThread.empty(this.id)
+    : replies = 0,
+      lastSequence = 0,
+      lastAt = null,
+      authors = const [],
+      people = const [];
+
   SuperTabThread.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
       replies = (row['replies'] as num).toInt(),
@@ -1017,6 +1035,10 @@ class SuperTabMessage {
   String? get sessionEndReason =>
       sessionEnded ? source['reason'] as String? : null;
   bool get threadReply => thread != null && thread != id;
+
+  /// A Buddy chat message that started its own thread's session from the
+  /// main chat: its thread's root, in the session's thread.
+  bool get sessionRoot => buddySession && !threadReply;
 
   /// Whether the main stream lists it: a thread reply only when also sent.
   bool get inMainStream => !threadReply || alsoInChat;

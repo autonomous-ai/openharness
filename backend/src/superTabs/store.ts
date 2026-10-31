@@ -55,7 +55,7 @@ import { activeMember, addMember, hasWorkspaceAccess, listWorkspaces, memberId, 
 import { WORKSPACE_LABEL, type WorkspaceRole } from './workspaces.js'
 import {
   activeWork, actorKey, agent, agentOnly, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
-  SuperTabError, isLeads, knownKind, parkLaterConversations, syncLeads, type Actor, type Agent, type Assignment, type Author, type CommandEffects, type Conversation, type MessageDraft, type Person, type SuperTabState,
+  SuperTabError, isLeads, knownKind, parkLaterConversations, type Actor, type Agent, type Assignment, type Author, type CommandEffects, type Conversation, type MessageDraft, type Person, type SuperTabState,
 } from './model.js'
 import { QUIET_CLAIM, type HoldReason } from './holdReason.js'
 import { stuck } from './deliverySettle.js'
@@ -176,7 +176,6 @@ function loadedFrom(row: SwarmRow, parts: SwarmParts): Loaded {
   freeze(parts)
   const state = reassemble(parts, { share: true })
   parkLaterConversations(state)
-  syncLeads(state)
   return { row, parts, state }
 }
 
@@ -724,7 +723,6 @@ export class SuperTabStore {
     const parts = await readParts(this.db, view ?? await this.view([tabId]), tabId, named)
     const state = reassemble(parts, { share: true })
     parkLaterConversations(state)
-    syncLeads(state)
     return { row, parts, state }
   }
 
@@ -2388,12 +2386,12 @@ export class SuperTabStore {
       await check(wide.slice(0, WIDE_WINDOW))
       const readable = wide.slice(0, WIDE_WINDOW).filter(id => reads.get(id))
       if (readable.length >= LIST_SIZE || wide.length <= WIDE_WINDOW) return readable.length ? recentDecisions(tx, tabId, [...new Set(readable)]) : []
-      // Fewer than 100 of the reader's among the newest 500: an agent reads only its project's conversations (and the Leads
+      // Fewer than 100 of the reader's among the newest 500: an agent reads only its project's conversations (and the Lead
       // conversations, by key); a person's can be any.
       if (target) {
         const project = target.projectId!
         adopt(await loadLightGroups(tx, tabId, 'project', { projectId: { $in: project === 'lead' ? ['lead', null] : [project] }, dormant: true }))
-        const leads = [state.leadsConversationId, ...projectsOf(state).map(p => p.leadConversationId)].filter((id): id is string => !!id && !groups.has(id))
+        const leads = projectsOf(state).map(p => p.leadConversationId).filter((id): id is string => !!id && !groups.has(id))
         if (leads.length) adopt(await loadLightGroups(tx, tabId, 'key', { key: { $in: leads } }))
       } else {
         adopt(await loadLightGroups(tx, tabId, 'dormancy', { dormant: true }))
@@ -2474,6 +2472,19 @@ export class SuperTabStore {
       const project = projects.find(p => p.id === projectId) ?? fail('NOT_FOUND', 'This project is unavailable.', 404)
       return { repositoryUrl: project.repository?.repositoryUrl ?? null, approvalRequired: teamAccountRequired(state), name: project.name,
         others: projects.filter(p => p.id !== projectId).map(p => ({ id: p.id, name: p.name })) }
+    })
+  }
+
+  /** A project's repository for the route's read of its running CI jobs (github/ciLoad.ts), by a person or an agent of the
+   *  project, as any read of the project: another project's, or one this reader cannot see, is unavailable alike. A Buddy
+   *  routes nothing, so it reads none. */
+  async ciRepository(user: AuthUser, tabId: string, projectId: string, asAgentId?: string): Promise<{ repositoryUrl: string | null }> {
+    return transaction(this.db, async tx => {
+      const { state } = await this.load(tx, user, tabId)
+      const actor = await this.actor(tx, user, state, asAgentId)
+      const project = readProject(state, actor, projectId)
+      if (actor.kind === 'agent' && state.agents.some(a => a.id === actor.agentId && isBuddy(a))) fail('NOT_FOUND', 'This project is unavailable.', 404)
+      return { repositoryUrl: project.repository?.repositoryUrl ?? null }
     })
   }
 
@@ -2762,17 +2773,18 @@ export class SuperTabStore {
     const target = state.agents.find(a => a.id === delivery.agentId)
     const group = state.conversations.find(c => c.id === delivery.conversationId)
     if (!target || target.membershipGeneration !== delivery.membershipGeneration || !group || group.archived) return false
+    // The removed Leads conversation hands out nothing, a delivery stored before its removal included (model.ts leadsRemoved).
+    if (isLeads(group)) return false
     // A Buddy also hears its person's news outside its chat (buddyNews.ts), only where it reads as its person would (below).
-    if (!group.agentIds.includes(target.id) && (!isBuddy(target) || isLeads(group))) return false
+    if (!group.agentIds.includes(target.id) && !isBuddy(target)) return false
     const sender = delivery.authorKind === 'person' ? state.people.find(p => p.id === delivery.authorId) : state.agents.find(a => a.id === delivery.authorId)
     if (!sender) return false
     const actor: Actor = delivery.authorKind === 'person'
       ? { kind: 'person', userId: delivery.authorId, email: '' }
       : { kind: 'agent', agentId: delivery.authorId, machineOwnerId: (sender as Agent).machineOwnerId }
-    // The Leads conversation belongs to no project: its members are the Leads, and an agent posts there only as a Lead.
     // A private conversation's sender and receiver must still be in its audience or be its Lead (projects.ts canReadGroup).
-    if (isLeads(group) ? actor.kind === 'agent' && !ledProject(state, actor.agentId) : !canReadGroup(state, actor, group)) return false
-    if (!canReadAgent(state, { kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }, target) || !isLeads(group) &&
+    if (!canReadGroup(state, actor, group)) return false
+    if (!canReadAgent(state, { kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }, target) ||
       !canReadGroup(state, { kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }, group)) return false
     const generation = 'generation' in sender ? sender.generation : sender.membershipGeneration
     return generation === delivery.authorGeneration && (!('role' in sender) || sender.role !== 'viewer')
@@ -3002,7 +3014,6 @@ export class SuperTabStore {
         [agentId, ...delivery?.authorKind === 'agent' ? [delivery.authorId] : [], ...context ? [context.agentId] : []], context?.agentId)
       const state = reassemble(parts, { share: true })
       parkLaterConversations(state)
-      syncLeads(state)
       author(state, await this.actor(tx, user, state, agentId), true)
       // The delivery pass ended a hold (it keeps the hold's reason) as its host, its terminal free again, typed it, or a claim
       // whose acknowledgement could not get through for 10 minutes (QUIET_CLAIM): the host's own confirmation counts, or the

@@ -87,6 +87,8 @@ class SwarmPartsBackend {
           'readMarks',
           'threadMarks',
           'teamAccounts',
+          'threadSessions',
+          'sessionsFromChat',
         }.contains(entry.key))
           entry.key: entry.value,
     };
@@ -165,6 +167,9 @@ class SwarmPartsBackend {
     if (state['avatars'] != null) 'avatars': state['avatars'],
     // Only where the server does not try Team accounts (backend read/views.ts).
     if (state['teamAccounts'] == false) 'teamAccounts': false,
+    // A server that takes a thread reply's New session (backend read/views.ts).
+    if (state['threadSessions'] == true) 'threadSessions': true,
+    if (state['sessionsFromChat'] == true) 'sessionsFromChat': true,
     // The reader's own read marks alone, as backend readMarks.ts sends them.
     if ((state['readMarks'] as Map?)?[reader ?? 'owner'] case final Map marks)
       'readMarks': Map<String, dynamic>.from(marks),
@@ -483,6 +488,30 @@ class ConversationServer {
   var failLeaderboardReads = 0;
   // The reader's tags, newest last, answered by GET .../mentions?state=.
   final mentions = <Map<String, dynamic>>[];
+
+  /// The followed-threads read's answer (backend read/followedThreads.ts):
+  /// `{unread, read, more}`; null answers 404, as a server before it does,
+  /// and the inbox ([inbox]) is read instead.
+  Map<String, dynamic>? followedThreads;
+
+  /// The inbox read's answer (backend read/inbox.ts): `{threads, latest,
+  /// more}`; null answers 404.
+  Map<String, dynamic>? inbox;
+
+  /// Every followed-threads and inbox read, by path.
+  final threadListReads = <String>[];
+
+  /// While set, followed-threads reads wait for it: an answer that arrives
+  /// late.
+  Completer<void>? holdThreadLists;
+
+  /// Followed-threads reads fail as offline, or with [threadListStatus].
+  bool failThreadLists = false;
+  int threadListStatus = 503;
+
+  /// The Follow and Unfollow writes, in order: {conversationId, root, follow}.
+  final followPosts = <Map<String, dynamic>>[];
+  bool failFollows = false;
   // Decisions asked of the reader, newest last, answered by GET .../decisions?state=.
   final decisions = <Map<String, dynamic>>[];
   // How many times a decisions list was read (open and answered each count).
@@ -902,6 +931,25 @@ class ConversationServer {
         ? RegExp(r'/conversations/([^/]+)/threads/([^/]+)/read$')
               .firstMatch(path)
         : null;
+    final follow = method == 'POST'
+        ? RegExp(r'/conversations/([^/]+)/threads/([^/]+)/follow$')
+              .firstMatch(path)
+        : null;
+    if (follow != null) {
+      followPosts.add({
+        'conversationId': Uri.decodeComponent(follow.group(1)!),
+        'root': Uri.decodeComponent(follow.group(2)!),
+        'follow': body!['follow'],
+      });
+      if (failFollows) {
+        throw const SuperTabFailure(
+          'OFFLINE',
+          'No connection.',
+          statusCode: 503,
+        );
+      }
+      return {'follow': body['follow']};
+    }
     if (threadRead != null) {
       return _markThreadRead(
         Uri.decodeComponent(threadRead.group(1)!),
@@ -964,6 +1012,10 @@ class ConversationServer {
           ],
         );
         messages.last['replyTo'] = command['replyTo'];
+        // The people it tags, as the backend keeps them (commands.ts).
+        if (command['mentions'] case final List tagged) {
+          messages.last['mentions'] = [...tagged];
+        }
         // A reply joins its message's thread at the root; one to a message
         // written before threads stays inline (backend commands.ts).
         final target = messages
@@ -985,6 +1037,21 @@ class ConversationServer {
           messages.last['id'] = id;
         }
         output['messageId'] = messages.last['id'];
+        // New session starts the thread's own session (backend commands.ts
+        // routeBuddySession): a top-level message roots its own thread.
+        if (command['newSession'] == true) {
+          final sent = messages.last;
+          final thread = (sent['thread'] ?? sent['id']) as String;
+          sent['buddySession'] = true;
+          final chat = (state['conversations'] as List).cast<Map>().firstWhere(
+            (c) => c['id'] == command['conversationId'],
+          );
+          chat['buddySessions'] = [
+            ...(chat['buddySessions'] as List? ?? const []),
+            {'thread': thread, 'startId': operationId, 'at': 1},
+          ];
+          output['startId'] = operationId;
+        }
       } else if (command['type'] == 'member.status' ||
           command['type'] == 'member.username' ||
           command['type'] == 'member.avatar' ||
@@ -1368,6 +1435,25 @@ class ConversationServer {
       return jsonDecode(jsonEncode(_catchUp(id, after)))
           as Map<String, dynamic>;
     }
+    if (uri.pathSegments.last == 'threads' ||
+        uri.pathSegments.last == 'inbox') {
+      threadListReads.add(path);
+      if (holdThreadLists case final hold?) await hold.future;
+      if (failThreadLists) {
+        throw SuperTabFailure(
+          'OFFLINE',
+          'No connection.',
+          statusCode: threadListStatus,
+        );
+      }
+      final answer = uri.pathSegments.last == 'threads'
+          ? followedThreads
+          : inbox;
+      if (answer == null) {
+        throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
+      }
+      return jsonDecode(jsonEncode(answer)) as Map<String, dynamic>;
+    }
     if (uri.pathSegments.last == 'mentions') {
       mentionReads++;
       if (mentionsMissing) {
@@ -1538,9 +1624,13 @@ class ConversationServer {
     String text = 'Please confirm the release.',
     String createdAt = '2026-10-24T05:00:00Z',
     String? leadId,
+    String? threadId,
+    int? messageSequence,
   }) {
     mentions.add({
       'leadId': ?leadId,
+      'threadId': ?threadId,
+      'messageSequence': ?messageSequence,
       'id': 'mention-${mentions.length + 1}',
       'projectId': 'lead',
       'projectName': 'web-project',

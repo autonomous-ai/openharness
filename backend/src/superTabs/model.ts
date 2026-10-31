@@ -127,6 +127,10 @@ export interface AgentStartRequest {
   codexHome?: string
   gridModel?: string
   gridName?: string
+  /** The heavy work the task declared it runs on its machine (a heavy build, end-to-end tests): later routes count such a start
+   *  on its machine for a few minutes, before the machine's reading shows it (cli superTabs/machineFit.ts, Scholes's goals,
+   *  piece 5). Its requirements ask only the least the work runs with, so this says what it is. */
+  heavy?: Array<'build' | 'e2e'>
   requirements: { memoryBytes: number; diskBytes: number; maxCpuPercent: number; tools: string[]; devices: string[]; quotaRequired: boolean }
   /** A Buddy's start (buddies.ts): written by buddy.create alone, never taken from an agent.start. */
   buddyOf?: { personId: string; generation: string }
@@ -252,7 +256,8 @@ export function renderWorkTask(task: WorkTask): string {
 
 export interface Conversation {
   id: string
-  /** The Swarm-wide Leads conversation (syncLeads), or a person's Buddy chat (buddies.ts); absent on every other conversation. */
+  /** The removed Swarm-wide Leads conversation, still stored in an older Swarm (leadsRemoved), or a person's Buddy chat
+   *  (buddies.ts); absent on every other conversation. */
   kind?: 'leads' | 'buddy'
   projectId?: string
   /** Stable, tab-local workgroup reference. Lead has no number. */
@@ -305,15 +310,18 @@ export interface Conversation {
   ledger?: import('./leaderboard/record.js').GroupLedger
   /** Whether its task is moving, waiting on purpose or stuck, as the time checks last found it (liveness.ts recordTaskStates). */
   liveness?: TaskLiveness
-  /** Its last step up from a cheaper model, on a task from before project instructions; never written since (phase 4: a
-   *  failed first review or start is a notice to the coordinator). The leaderboard still reads it on such a task. */
+  /** Its last step up from a cheaper model: written when a grid attempt's first review fails (commands.ts reviewFailed, goals
+   *  piece 4; before project instructions also by the server's step up). Nothing is cancelled: the route reads it to leave the
+   *  grid out of the next attempt, route records carry it for the costs report, and the leaderboard reads it. */
   stepUp?: StepUp
   /** The last route, start or assignment on its task by an agent of its project, or its coordinator's post there (commands.ts). */
   leadAction?: { kind: 'assign' | 'route' | 'start' | 'post'; at: number }
 }
 /** A step up: the attempt it opened (2 or 3), the least quality from then on, why, when, and what the failed attempt left for
  *  the next one's brief; the failed start that caused it, if one did. */
-export interface StepUp { attempt: number; floor: number; reason: string; at: number; carry: string; startId?: string }
+export interface StepUp { attempt: number; floor: number; reason: string; at: number; carry: string; startId?: string
+  /** A route record carries it already (commands.ts route.record): later routes of the task do not, so it counts once. */
+  recorded?: true }
 /** Absent while its task is working (its agent reported in the last 30 minutes; its last progress is its assignment's
  *  `progressAt`) or there is none. `waiting`: on a person (`personId`), a review, its stated
  *  blocker, the new revision of the build it reviews, or its agent's start. `quiet`: its agent has reported nothing for 30 minutes
@@ -348,7 +356,7 @@ export interface SuperTabState {
   name: string
   project?: { machineId: string; cwd: string; repositoryUrl: string | null }
   projects?: SwarmProject[]
-  /** The Leads conversation, outside every project (syncLeads). */
+  /** The removed Leads conversation of an older Swarm, still stored (leadsRemoved); no read sends it. */
   leadsConversationId?: string
   /** Pairs of tasks ("a:b", sorted ids) whose Leads were told their owned code overlaps, so each pair is told once. */
   overlapAlerts?: string[]
@@ -632,17 +640,12 @@ export function otherProjectsWork(state: SuperTabState, own: SwarmProject): Othe
   })
 }
 
-/** The Swarm-wide conversation where Leads agree an order across projects and every person reads along. It belongs to no
- *  project and stays after the project conversations; an older Swarm gets it on its next read or write. Its members are
- *  always the projects' current Leads, so only they receive what is posted there. */
-export function syncLeads(state: SuperTabState): void {
-  const id = state.leadsConversationId ??= stableId(state.id, 'leads')
-  const group = state.conversations.find(c => c.id === id) ?? { id, kind: 'leads', title: 'Leads', leadId: null, agentIds: [],
-    archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0 }
-  // A new record, not the one found: a read's state shares the stored ones (parts/shape.ts reassemble).
-  state.conversations = [...state.conversations.filter(c => c !== group),
-    { ...group, agentIds: state.agents.filter(a => ledProject(state, a.id)).map(a => a.id) }]
-}
+/** The Swarm-wide Leads conversation ("Product Managers" in the apps) is removed (Dee, 2026-10-31): only agents posted
+ *  there and people did not know what it was for. A new Swarm gets none. An older Swarm keeps its stored record and
+ *  history untouched (no data is deleted), but no read sends it, no command or post reaches it (LEADS_REMOVED) and no
+ *  delivery from it is handed out. */
+export const LEADS_REMOVED = "The Product Managers chat was removed. Post in your project's chat instead."
+export function leadsRemoved(): never { fail('LEADS_CONVERSATION_REMOVED', LEADS_REMOVED, 410) }
 
 /** Legacy groups keep their append order, including archived groups. Persisted
  * numbers are never reassigned; the store serializes concurrent additions. */
@@ -691,7 +694,6 @@ export function createSuperTab(id: string, name: string, owner: { id: string; em
   // (CLI `superTabs/swarmGrids.ts`) and reports how it went. Fire and forget: a grid that could not be made leaves the
   // Swarm as it is, and the owner's first share or run in Your models sets the models up then.
   state.localModels = { grid: swarmGridName(id), enabled: true }
-  syncLeads(state)
   return state
 }
 
@@ -710,12 +712,9 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   if (visible.machines) visible.machines = visible.machines.filter(m => !m.buddyOnly)
   // Nor its id, which a Buddy's row carries (machineHiddenFrom).
   visible.agents = visible.agents.map(a => machineHiddenFrom(state, actor, a) ? agentWithoutMachine(a) : a)
-  syncLeads(visible)
-  // People and Leads read the Leads conversation; it is not there for any other agent.
-  if (actor.kind === 'agent' && !ledProject(visible, actor.agentId)) {
-    visible.conversations = visible.conversations.filter(c => !isLeads(c))
-    delete visible.leadsConversationId
-  }
+  // The removed Leads conversation reaches nobody (leadsRemoved), its id included.
+  visible.conversations = visible.conversations.filter(c => !isLeads(c))
+  delete visible.leadsConversationId
   assignAgentDisplayNames(visible.agents)
   const led = actor.kind === 'agent' ? ledProject(visible, actor.agentId) : undefined
   if (led) visible.otherProjectsWork = otherProjectsWork(visible, led)
@@ -744,9 +743,8 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   if (visible.rules) visible.rules = visible.rules.filter(r => projectsOf(state).some(p => p.id === r.projectId && canReadProject(state, actor, p)))
   if (visible.projects) {
     visible.projects = visible.projects.filter(p => canReadProject(state, actor, p))
-    visible.conversations = visible.conversations.filter(c => isLeads(c) || canReadGroup(state, actor, c))
+    visible.conversations = visible.conversations.filter(c => canReadGroup(state, actor, c))
     visible.agents = visible.agents.filter(a => canReadAgent(state, actor, a))
-    for (const group of visible.conversations.filter(isLeads)) group.agentIds = group.agentIds.filter(id => visible.agents.some(a => a.id === id))
     visible.starts = visible.starts?.filter(s => visible.conversations.some(c => c.id === s.request.conversationId))
     if (!visible.projects.some(p => p.id === 'lead')) {
       delete visible.project

@@ -119,12 +119,16 @@ void main() {
       for (final label in [
         'Continue with Google',
         'Continue with Apple',
-        'Continue with email',
+        'Email, GitHub or passkey',
+        // The ways a new or remote computer signs in with no browser of its own.
+        'Scan with your phone',
+        'Sign in on another device',
       ]) {
         expect(find.text(label), findsOneWidget);
       }
       expect(find.byType(LoginFleetMap), findsNothing);
-      expect(find.text('Scan with your phone'), findsNothing);
+      // The page's own buttons, not the old card's.
+      expect(find.byKey(const Key('login-scan-with-phone')), findsNothing);
       expect(find.byKey(const Key('login-close-button')), findsNothing);
     },
   );
@@ -184,7 +188,13 @@ void main() {
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
         expect(find.text('Continue with Google').hitTestable(), findsOneWidget);
-        expect(find.text('Continue with email').hitTestable(), findsOneWidget);
+        for (final label in const [
+          'Email, GitHub or passkey',
+          'Scan with your phone',
+          'Sign in on another device',
+        ]) {
+          expect(find.text(label).hitTestable(), findsOneWidget, reason: label);
+        }
         final page = tester.widget<Material>(
           find.byKey(const Key('sign-in-step')),
         );

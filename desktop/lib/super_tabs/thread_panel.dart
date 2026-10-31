@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -9,14 +8,14 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
 import '../state/harness_attachments.dart';
 import '../widgets/desktop_chrome.dart';
-import '../widgets/new_harness_attachments.dart';
-import '../widgets/new_harness_paste.dart';
 import 'buddy_sessions.dart';
-import 'composer_files.dart';
-import 'composer_newline.dart';
+import 'composer_tags.dart';
+import 'composer_toggle.dart';
+import 'reply_box.dart';
 import 'controller.dart';
 import 'jump_to_latest.dart';
 import 'model.dart';
+import 'thread_scroll.dart';
 
 /// One thread beside the chat (Dee, 2026-10-29): its root, a "N replies"
 /// divider, the replies, and a composer whose reply goes to the root.
@@ -28,6 +27,7 @@ class SuperTabThreadPanel extends StatefulWidget {
     required this.row,
     required this.outgoing,
     this.sessionActivity,
+    this.machineName,
   });
 
   final SuperTabController controller;
@@ -43,6 +43,9 @@ class SuperTabThreadPanel extends StatefulWidget {
   /// without it, what the Swarm alone says.
   final SuperTabSessionActivity? sessionActivity;
 
+  /// A machine's name, said beside an agent `@` offers.
+  final String Function(String machineId)? machineName;
+
   @override
   State<SuperTabThreadPanel> createState() => _SuperTabThreadPanelState();
 }
@@ -52,7 +55,8 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     text: c.threadDraft(widget.root),
   );
   final _focus = FocusNode();
-  final _scroll = ScrollController();
+  // Opens at the newest reply and follows it until the reader scrolls up.
+  final _scroll = SuperTabThreadScroll();
   bool _alsoSend = false;
   // The reply starts this thread's own Buddy session (reader's Buddy chat).
   bool _newSession = false;
@@ -61,11 +65,23 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
   // the thread's replies are known), and the latest replies and rows (replies
   // and those on their way): what came since is the control's count.
   bool _away = false, _atEnd = false, _baselined = false;
-  int _repliesAtEnd = 0, _replies = 0, _rows = 0, _rowsMeasured = 0;
-  // Each jump to the end supersedes the one before it.
-  int _jumpRequest = 0;
+  int _repliesAtEnd = 0, _replies = 0;
+  // The newest row (reply or one on its way), as built and as last measured:
+  // earlier replies arriving above do not change it.
+  String? _newest, _newestMeasured;
+  // `@` in the reply box, as in the chat's (composer_tags.dart): the choice
+  // selected, and the text before the caret where the list was dismissed.
+  final _tagIndex = ValueNotifier(0);
+  final _tagDismissed = ValueNotifier<String?>(null);
+  final _tagRows = List.generate(superTabCompletionLimit, (_) => GlobalKey());
+  late final _tagBackspace = SuperTabTagBackspace(
+    () => c.threadMentions(_conversationId, widget.root).values,
+  );
 
   SuperTabController get c => widget.controller;
+
+  /// The conversation this thread is in.
+  String get _conversationId => c.openedThread?.conversationId ?? c.selectedId;
 
   @override
   void initState() {
@@ -78,27 +94,29 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
   void didUpdateWidget(SuperTabThreadPanel old) {
     super.didUpdateWidget(old);
     if (old.root != widget.root) {
-      // Another thread starts from its top, with nothing counted.
+      // Another thread opens at its newest reply, with nothing counted.
       _away = false;
       _atEnd = false;
       _baselined = false;
       _repliesAtEnd = 0;
-      _rowsMeasured = 0;
-      _jumpRequest++;
-      if (_scroll.hasClients) _scroll.jumpTo(0);
+      _newestMeasured = null;
+      _scroll.followEnd();
       // Each thread keeps its own draft.
       _composer.text = c.threadDraft(widget.root);
       _alsoSend = false;
       _newSession = false;
+      _tagIndex.value = 0;
+      _tagDismissed.value = null;
     }
   }
 
   @override
   void dispose() {
-    _jumpRequest++;
     _scroll.dispose();
     _composer.dispose();
     _focus.dispose();
+    _tagIndex.dispose();
+    _tagDismissed.dispose();
     super.dispose();
   }
 
@@ -111,11 +129,12 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
   void _measure() {
     if (!mounted || !_scroll.hasClients) return;
     final position = _scroll.position;
-    if (_rows > _rowsMeasured && _atEnd && position.extentAfter >= 40) {
-      _rowsMeasured = _rows;
-      position.jumpTo(position.maxScrollExtent);
+    // Near the end (not quite at it, where the scroll follows by itself), a
+    // new row still brings the reader down to it.
+    if (_newest != _newestMeasured && _atEnd && position.extentAfter >= 40) {
+      _scroll.followEnd();
     }
-    _rowsMeasured = _rows;
+    _newestMeasured = _newest;
     final away = position.extentAfter >= 40;
     final atEnd = !away;
     // What the thread held when it opened is not new; nor is what the reader
@@ -131,43 +150,30 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     });
   }
 
-  /// Scrolls to the newest reply. A lazy list refines its extent as rows near
-  /// the end are laid out, so one jump can stop above the last reply: jump
-  /// again, a bounded number of times, until nothing is left below.
+  /// Scrolls to the newest reply and follows it again; the scroll settles on
+  /// the real end as the rows there are laid out.
   void _jumpToLatest() {
-    final request = ++_jumpRequest;
-    void advance(int attempt) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted || request != _jumpRequest || !_scroll.hasClients) return;
-        _scroll.jumpTo(_scroll.position.maxScrollExtent);
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!mounted || request != _jumpRequest || !_scroll.hasClients) {
-            return;
-          }
-          if (_scroll.position.extentAfter > 1 && attempt < 12) {
-            advance(attempt + 1);
-          } else {
-            _measure();
-          }
-        });
-        WidgetsBinding.instance.scheduleFrame();
-      });
-      WidgetsBinding.instance.scheduleFrame();
-    }
-
-    advance(0);
+    _scroll.followEnd();
+    _measureAfterFrame();
   }
 
-  /// Where "Also send" also puts the reply, as the chat is named.
-  String get _alsoSendLabel {
-    final group = c.selected;
-    if (group != null && c.snapshot?.isProjectLead(group.id) == true) {
-      return 'Also send to the project chat';
+  /// Where "Also send" also puts the reply, full wording first (Scholes,
+  /// 10-31): the project chat as its sidebar row names it, else the main
+  /// chat. A narrower send row takes the short one, never shorter: it still
+  /// says what the option does and where.
+  List<String> get _alsoSendLabels {
+    final group = c.selected, snapshot = c.snapshot;
+    String? channel;
+    if (group != null && snapshot != null && snapshot.isProjectLead(group.id)) {
+      channel = snapshot.projectFor(group.id)?.name;
     }
-    return group?.number != null
-        ? 'Also send to the workgroup'
-        : 'Also send to the chat';
+    return channel == null
+        ? const ['Also post to the main chat', 'Also to chat']
+        : ['Also post to #$channel', 'Also to #$channel'];
   }
+
+  /// One line, always the full wording.
+  String get _alsoSendHint => '${_alsoSendLabels.first} as well as this thread';
 
   bool get _writable =>
       c.canWrite && c.selected?.archived == false && !c.hasPendingAction;
@@ -207,7 +213,54 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
   /// The box was edited: keep it as this thread's draft.
   void _edited(String text) {
     c.setThreadDraft(widget.root, text);
+    _tagIndex.value = 0;
+    _tagDismissed.value = null;
     setState(() {});
+  }
+
+  /// The `@` tag typed at the caret.
+  ({int start, int end, String query})? get _tagAt => superTabTagAtCaret(
+    _composer.value,
+    dismissed: _tagDismissed.value,
+    tags: c.threadMentions(_conversationId, widget.root).values,
+  );
+
+  /// Who `@` offers in this reply: whom the chat's box offers, except agents
+  /// where the thread's own Buddy session alone hears the reply.
+  List<SuperTabComposerChoice> get _tagChoices {
+    final group = c.selected;
+    if (!_writable || group == null) return const [];
+    final at = _tagAt;
+    if (at == null) return const [];
+    return superTabTagChoices(
+      c,
+      group,
+      at.query,
+      machineName: widget.machineName ?? (_) => '',
+      choose: _chooseTag,
+      agents: !_startsSession && c.threadSession(widget.root) == null,
+    );
+  }
+
+  void _chooseTag(String id, String name) {
+    final at = _tagAt;
+    if (at == null) return;
+    final token = '@$name';
+    final value = superTabInsertTag(_composer.value, at, token);
+    c.setThreadDraft(widget.root, value.text);
+    c.threadMention(id, token);
+    _composer.value = value;
+    _tagIndex.value = 0;
+    _focus.requestFocus();
+    setState(() {});
+  }
+
+  void _moveTag(int index) {
+    _tagIndex.value = index;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final row = _tagRows[index].currentContext;
+      if (mounted && row != null) Scrollable.ensureVisible(row, alignment: .5);
+    });
   }
 
   Future<void> _send() async {
@@ -234,6 +287,17 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
         }
       },
     );
+    // Refused for New session, the reply's text is back as this thread's
+    // draft: it shows in the box, ready to send without it, unless another
+    // thread is shown or something was typed meanwhile.
+    if (!mounted || widget.root != root || _composer.text.isNotEmpty) return;
+    final restored = c.threadDraft(root);
+    if (restored.isEmpty) return;
+    _composer.value = TextEditingValue(
+      text: restored,
+      selection: TextSelection.collapsed(offset: restored.length),
+    );
+    setState(() {});
   }
 
   @override
@@ -249,7 +313,7 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     final count =
         c.thread(c.selectedId, widget.root)?.replies ?? replies.length;
     _replies = count > replies.length ? count : replies.length;
-    _rows = replies.length + pending.length;
+    _newest = '${replies.lastOrNull?.id}/${pending.length}';
     if (!_baselined &&
         (c.thread(c.selectedId, widget.root) != null || replies.isNotEmpty)) {
       _baselined = true;
@@ -348,9 +412,11 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
                                 key: const ValueKey('super-thread-earlier'),
                                 onPressed: c.readingEarlierReplies
                                     ? null
-                                    : () => unawaited(
-                                        c.loadThread(earlier: true),
-                                      ),
+                                    : () {
+                                        // They read on from where they are.
+                                        _scroll.holdPlace();
+                                        unawaited(c.loadThread(earlier: true));
+                                      },
                                 child: Text(
                                   c.readingEarlierReplies
                                       ? 'Loading earlier replies…'
@@ -394,7 +460,56 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
                 grid.AppDesktop.groupGap,
                 grid.AppDesktop.groupGap,
               ),
-              child: _composerBox(),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  ListenableBuilder(
+                    listenable: Listenable.merge([
+                      _composer,
+                      _tagIndex,
+                      _tagDismissed,
+                    ]),
+                    builder: (context, _) {
+                      final choices = _tagChoices;
+                      if (choices.isEmpty) return const SizedBox.shrink();
+                      return Padding(
+                        padding: const EdgeInsets.only(
+                          bottom: grid.AppDesktop.controlGap,
+                        ),
+                        child: SuperTabCompletionList(
+                          listKey: const ValueKey('super-thread-completions'),
+                          choices: choices,
+                          index: _tagIndex.value,
+                          rowKeys: _tagRows,
+                        ),
+                      );
+                    },
+                  ),
+                  _composerBox(),
+                  // Its place is kept while New session is offered, so the
+                  // box never moves as the choice is toggled.
+                  if (_offersSession)
+                    Padding(
+                      padding: const EdgeInsets.only(
+                        top: grid.AppDesktop.controlGap,
+                      ),
+                      child: Visibility(
+                        visible: _startsSession,
+                        maintainSize: true,
+                        maintainAnimation: true,
+                        maintainState: true,
+                        child: Text(
+                          'Your reply starts a new Buddy session',
+                          key: const ValueKey('super-thread-session-note'),
+                          style: DesktopChrome.metadata(
+                            color: DesktopChrome.muted,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
           ],
         ),
@@ -402,219 +517,110 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     );
   }
 
-  Widget _composerBox() {
-    final writable = _writable;
-    final files = _files;
-    final busy = _busy;
-    final error = c.threadComposerError(c.selectedId, widget.root);
-    return NewHarnessDropZone(
-      attachments: files,
-      enabled: writable && !busy,
-      // A folder has no bytes to attach, and its path means nothing to a
-      // reader on another computer: say so, as the chat does for a browser.
-      onFolders: kIsWeb
-          ? null
-          : (_) => reportAttachProblem(
-              context,
-              'A folder can\'t be attached to a reply. Drop its files instead.',
-            ),
-      child: DecoratedBox(
-        key: const ValueKey('super-thread-composer-surface'),
-        decoration: BoxDecoration(
-          color: DesktopChrome.field,
-          borderRadius: BorderRadius.circular(DesktopChrome.controlRadius),
-          border: Border.all(color: DesktopChrome.rim),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(
-            grid.AppDesktop.groupGap,
-            grid.AppDesktop.controlGap,
-            grid.AppDesktop.controlGap,
-            grid.AppDesktop.controlGap,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              SuperTabComposerChips(controller: c, files: files),
-              Focus(
-                onKeyEvent: (_, event) {
-                  switch (composerEnter(
-                    event,
-                    focused: _focus.hasFocus,
-                    value: _composer.value,
-                  )) {
-                    case ComposerEnter.ignore:
-                      return KeyEventResult.ignored;
-                    case ComposerEnter.newline:
-                      insertComposerNewline(_composer, _edited);
-                      return KeyEventResult.handled;
-                    case ComposerEnter.send:
-                      unawaited(_send());
-                      return KeyEventResult.handled;
-                  }
-                },
-                child: NewHarnessPasteTarget(
-                  attachments: files,
-                  enabled: writable && !busy,
-                  focusNode: _focus,
-                  child: TextField(
-                    key: const ValueKey('super-thread-composer'),
-                    controller: _composer,
-                    focusNode: _focus,
-                    enabled: c.canWrite && c.selected?.archived == false,
-                    minLines: 1,
-                    maxLines: 6,
-                    maxLength: kComposerMaxLength,
-                    keyboardType: TextInputType.multiline,
-                    style: DesktopChrome.text(),
-                    decoration: InputDecoration(
-                      isCollapsed: true,
-                      constraints: const BoxConstraints(),
-                      hintText: 'Reply',
-                      hintStyle: DesktopChrome.text(color: DesktopChrome.muted),
-                      contentPadding: EdgeInsets.zero,
-                      border: InputBorder.none,
-                      enabledBorder: InputBorder.none,
-                      focusedBorder: InputBorder.none,
-                      disabledBorder: InputBorder.none,
-                      filled: false,
-                      counterText: '',
-                    ),
-                    onChanged: _edited,
-                  ),
-                ),
+  Widget _composerBox() => SuperTabReplyBox(
+    controller: c,
+    text: _composer,
+    focus: _focus,
+    files: _files,
+    enabled: c.canWrite && c.selected?.archived == false,
+    writable: _writable,
+    busy: _busy,
+    error: c.threadComposerError(c.selectedId, widget.root),
+    onEdited: _edited,
+    onSend: () => unawaited(_send()),
+    options: _choices(_writable),
+    // `@` in the reply: the open completion list takes its keys first.
+    onKey: (event) {
+      final composing = _composer.value.composing;
+      return _focus.hasFocus && !(composing.isValid && !composing.isCollapsed)
+          ? superTabCompletionKey(
+              event,
+              choices: () => _tagChoices,
+              index: _tagIndex.value,
+              move: _moveTag,
+              dismiss: () => _tagDismissed.value = _composer.text.substring(
+                0,
+                _composer.selection.baseOffset,
               ),
-              if (error != null)
-                Padding(
-                  padding: const EdgeInsets.only(
-                    top: grid.AppDesktop.controlGap,
-                  ),
-                  child: Text(
-                    error,
-                    key: const ValueKey('super-thread-error'),
-                    style: DesktopChrome.control(),
-                  ),
-                ),
-              const SizedBox(height: grid.AppDesktop.controlGap),
-              Row(
-                children: [
-                  Expanded(
-                    child: Wrap(
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      spacing: grid.AppDesktop.controlGap,
-                      children: [
-                        if (_offersSession) _sessionChoice(writable),
-                        if (_offersAlsoSend)
-                          _choice(
-                            key: const ValueKey('super-thread-also-send'),
-                            value: _alsoSend,
-                            label: _alsoSendLabel,
-                            onChanged: writable
-                                ? (on) => setState(() => _alsoSend = on)
-                                : null,
-                          ),
-                      ],
-                    ),
-                  ),
-                  NewHarnessAttachButton(
-                    attachments: files,
-                    enabled: writable && !busy,
-                  ),
-                  ListenableBuilder(
-                    listenable: files,
-                    builder: (context, _) => AppIconButton(
-                      key: const ValueKey('super-thread-send'),
-                      icon: AppIcons.arrowUp,
-                      tooltip: 'Send reply',
-                      color: DesktopChrome.accent,
-                      onPressed:
-                          writable &&
-                              !busy &&
-                              (_composer.text.trim().isNotEmpty ||
-                                  !files.isEmpty)
-                          ? () => unawaited(_send())
-                          : null,
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
+            )
+          : null;
+    },
+    inputFormatters: [_tagBackspace],
+  );
 
-  /// New session, left of Also send: checked and locked once the thread's
-  /// session ended, unavailable (and saying why) at the limit.
+  /// The send row's options, left of attach and send, on one line at any
+  /// width (Scholes, 10-31): Also send names where it posts in full where
+  /// that fits beside New session, else its short wording; where even that
+  /// has no room (a window too narrow for the thread's default width), the
+  /// labels end in "…", their circles still showing.
+  Widget _choices(bool writable) => LayoutBuilder(
+    builder: (context, constraints) {
+      double width(String label) =>
+          SuperTabComposerToggle.widthOf(context, label);
+      final session = _offersSession ? _sessionLabel : null;
+      final alsos = _offersAlsoSend ? _alsoSendLabels : null;
+      final room =
+          constraints.maxWidth -
+          (session == null
+              ? 0
+              : width(session) + (alsos == null ? 0 : _choiceGap));
+      final also = alsos?.firstWhere(
+        (label) => width(label) <= room,
+        orElse: () => alsos.last,
+      );
+      // Fixed while both fit, Also send taking what is left; sharing the row
+      // otherwise.
+      final fits = room >= (also == null ? 0 : width(also));
+      return Row(
+        children: [
+          if (session != null)
+            fits && also != null
+                ? _sessionChoice(writable)
+                : Flexible(child: _sessionChoice(writable)),
+          if (session != null && also != null)
+            const SizedBox(width: _choiceGap),
+          if (also != null)
+            Flexible(
+              child: SuperTabComposerToggle(
+                key: const ValueKey('super-thread-also-send'),
+                on: _alsoSend,
+                label: also,
+                hint: _alsoSendHint,
+                onChanged: writable
+                    ? (on) => setState(() => _alsoSend = on)
+                    : null,
+              ),
+            ),
+        ],
+      );
+    },
+  );
+
+  static const _choiceGap = 4.0;
+  static const _sessionLabel = 'New session';
+
+  /// New session, left of Also send: on and locked once the thread's session
+  /// ended; greyed while it can't start, its hover saying why.
   Widget _sessionChoice(bool writable) {
     final locked = _sessionLocked;
     // What the server would refuse is said before sending: a block (paused,
     // no Buddy, an older host) before the limit.
     final blocked = c.threadSessionBlocked;
     final full = !locked && blocked == null && c.buddySessionsFull;
-    final choice = _choice(
+    return SuperTabComposerToggle(
       key: const ValueKey('super-thread-new-session'),
-      value: locked || (_newSession && !full && blocked == null),
-      label: blocked != null
-          ? 'New session · $blocked'
-          : full
-          ? 'New session · ${SuperTabController.maxBuddySessions} running, end one first'
-          : 'New session',
-      onChanged: writable && !locked && !full && blocked == null
-          ? (on) => setState(() => _newSession = on)
-          : null,
-    );
-    return Tooltip(
-      message:
+      on: locked || (_newSession && !full && blocked == null),
+      label: _sessionLabel,
+      hint:
           blocked ??
           (locked
               ? 'This thread\'s session ended. Your reply starts a new one.'
               : full
-              ? 'End a session to start another'
-              : 'Answer this thread in its own session, while your Buddy keeps '
-                    'answering the chat'),
-      child: choice,
+              ? '${SuperTabController.maxBuddySessions} sessions running. End one to start another.'
+              : 'Starts a separate Buddy session for this thread'),
+      onChanged: writable && !locked && !full && blocked == null
+          ? (on) => setState(() => _newSession = on)
+          : null,
     );
   }
-
-  /// A quiet checkbox and its label, both pressable, read as one control.
-  Widget _choice({
-    required Key key,
-    required bool value,
-    required String label,
-    required ValueChanged<bool>? onChanged,
-  }) => MergeSemantics(
-    child: Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Checkbox(
-          key: key,
-          visualDensity: VisualDensity.compact,
-          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          value: value,
-          onChanged: onChanged == null ? null : (on) => onChanged(on ?? false),
-        ),
-        Flexible(
-          child: GestureDetector(
-            onTap: onChanged == null ? null : () => onChanged(!value),
-            child: MouseRegion(
-              cursor: onChanged == null
-                  ? MouseCursor.defer
-                  : SystemMouseCursors.click,
-              child: Text(
-                label,
-                style: DesktopChrome.control(
-                  color: onChanged == null && !value
-                      ? DesktopChrome.muted
-                      : null,
-                ),
-              ),
-            ),
-          ),
-        ),
-      ],
-    ),
-  );
 }

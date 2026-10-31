@@ -53,7 +53,7 @@ export const BUDDY_ENGINE_HOMES: Record<Exclude<AgentEngine, 'terminal'>, readon
 /** Places in a home that hold secrets or other people's data (the Lead's list, 10-30): ssh, cloud, GitHub, ArgoCD and
  *  Harness credentials; keychains; browser profiles and mail; shell and database histories, which keep typed secrets; and
  *  the Claude Code and Codex folders, where agents on this machine keep transcripts and pasted Swarm messages from chats
- *  the Buddy may not read (the Leads conversation, private chats, other projects). */
+ *  the Buddy may not read (private chats, other projects, the Leads conversation from before its removal). */
 const CLOSED_IN_HOME = ['.ssh', '.aws', '.azure', '.config/gcloud', '.gnupg', '.kube', '.docker', '.config/gh', '.config/hub', '.config/anthropic', '.config/argocd',
   '.argocd', '.secrets', '.config/git/credentials', '.password-store', '.config/op', '.zsh_sessions', '.bash_sessions', '.local/share/fish',
   'Library/Caches/claude-cli-nodejs', ...Object.values(BUDDY_ENGINE_HOMES).flat(),
