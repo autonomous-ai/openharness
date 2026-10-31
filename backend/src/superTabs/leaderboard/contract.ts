@@ -1,5 +1,6 @@
 /**
- * The leaderboard read's response (`GET /api/super-tabs/:tabId/leaderboard?projectId=&week=`), the `data` of the usual
+ * The leaderboard read's response (`GET /api/super-tabs/:tabId/leaderboard?projectId=&week=`, or `/leaderboard/swarm?week=` for
+ * every project the reader may read), the `data` of the usual
  * envelope. Desktop/web (`desktop/lib/super_tabs/leaderboard`) mirror it by hand. Times are epoch milliseconds; people are
  * member ids. The only conversation text in it is the titles of conversations the reader may read (details); no message text.
  */
@@ -92,7 +93,8 @@ export interface RecentModel {
 }
 
 export interface Leaderboard {
-  projectId: string
+  /** Null for the Swarm-wide board (`GET /api/super-tabs/:tabId/leaderboard/swarm?week=`): every project the reader may read. */
+  projectId: string | null
   week: number
   /** The team's goal: everyone's points count toward it. */
   goal: { openRequests: number; thisWeek: WeekGoal; lastWeek: WeekGoal }

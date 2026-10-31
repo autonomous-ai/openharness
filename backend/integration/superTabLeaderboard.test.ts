@@ -162,3 +162,51 @@ describe('the leaderboard read', () => {
     expect(fresh.data).not.toHaveProperty('ledger')
   })
 })
+
+describe('the Swarm-wide leaderboard read', () => {
+  const swarmBoard = (tabId: string, as: AuthUser, week?: number) =>
+    get(`/api/super-tabs/${tabId}/leaderboard/swarm${week === undefined ? '' : `?week=${week}`}`, as)
+
+  it('sums every project the reader may read, and never a private chat', async () => {
+    const s = await scene()
+    // The owner reads the private project too: peer's request there counts for peer on the owner's board.
+    const own = await swarmBoard(s.tabId, owner)
+    expect(own.status).toBe(200)
+    expect(own.body.data).toMatchObject({ projectId: null, week: WEEK })
+    expect(score(own.body, peer.sub)).toMatchObject({ points: 6, shipped: { count: 2 } })
+    expect(own.body.data.goal.thisWeek.shipped).toBe(2)
+    expect(JSON.stringify(own.body.data)).not.toContain('Peer and PM')
+  })
+
+  it('leaves out a project the reader may not read, its titles too', async () => {
+    const s = await scene()
+    const { status, body } = await swarmBoard(s.tabId, peer)
+    expect(status).toBe(200)
+    expect(score(body, peer.sub)).toMatchObject({ points: 3, shipped: { count: 1 } })
+    expect(JSON.stringify(body.data)).not.toMatch(/Hidden|Peer and PM/)
+    expect(JSON.stringify(body.data)).not.toContain(s.secret)
+  })
+
+  it('lists every person of the Swarm, and who agents wait on across projects', async () => {
+    const s = await scene()
+    const { body } = await swarmBoard(s.tabId, outsider)
+    expect(body.data.people.map((p: { personId: string }) => p.personId).sort()).toEqual([owner.sub, peer.sub, outsider.sub].sort())
+    expect(body.data.waiting).toEqual({ total: 1, people: [{ personId: owner.sub, count: 1, conversationIds: [s.waiting] }] })
+    expect(body.data.agents).toEqual([])
+  })
+
+  it('reads last week from the groups that went dormant since', async () => {
+    const s = await scene()
+    const { body } = await swarmBoard(s.tabId, peer, WEEK - WEEK_MS)
+    expect(score(body, peer.sub).shipped.count).toBe(1)
+  })
+
+  it('answers someone outside the Swarm, and an agent, as unavailable or refused', async () => {
+    const s = await scene()
+    const stranger = await app.inject({ method: 'GET', url: `/api/super-tabs/tab-${randomUUID()}/leaderboard/swarm`,
+      headers: { authorization: `Bearer ${peer.sub}` } })
+    expect(stranger.statusCode).toBe(404)
+    expect((await get(`/api/super-tabs/${s.tabId}/leaderboard/swarm?asAgentId=${s.lead}`)).status).toBe(400)
+    expect((await swarmBoard(s.tabId, owner, WEEK + 1)).status).toBe(400)
+  })
+})

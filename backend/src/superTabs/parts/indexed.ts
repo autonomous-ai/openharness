@@ -174,9 +174,11 @@ export async function readBy<C extends NamedCollection>(tx: Transaction, collect
 export const groupsBy = (tx: Transaction, index: GroupIndex, pipeline: Prisma.InputJsonValue[]): Promise<Array<Record<string, unknown>>> =>
   readBy(tx, 'SwarmGroup', index, pipeline)
 
-/** A project's quiet conversations last active since `since`, as the project index serves them. A conversation stored with no
- *  project belongs to the first one (projects.ts groupProject); a null match is a missing field too. */
-export function quietSince(tabId: string, projectId: string, since: number): Record<string, Prisma.InputJsonValue> {
+/** A project's quiet conversations last active since `since`, as the project index serves them, or those of several projects
+ *  in one match. A conversation stored with no project belongs to the first one (projects.ts groupProject); a null match is a
+ *  missing field too. */
+export function quietSince(tabId: string, projectId: string | readonly string[], since: number): Record<string, Prisma.InputJsonValue> {
+  const ids = typeof projectId === 'string' ? [projectId] : [...projectId]
   return { tabId, deleted: false, dormant: true, lastActivityAt: { $gte: { $date: new Date(since).toISOString() } },
-    projectId: { $in: projectId === 'lead' ? ['lead', null] : [projectId] } }
+    projectId: { $in: ids.includes('lead') ? [...ids, null] : ids } }
 }

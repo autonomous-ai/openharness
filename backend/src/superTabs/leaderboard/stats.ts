@@ -7,7 +7,7 @@
 import type { ContributedMachine } from '../machines.js'
 import { isLeads, type Conversation, type SuperTabState } from '../model.js'
 import { isBuddy } from '../buddies.js'
-import { agentProjectId, canReadProject, projectOf } from '../projects.js'
+import { agentProjectId, canReadProject, projectOf, projectsOf } from '../projects.js'
 import { firstAssignedAt, waitedOn, waitsNow, type RanOn, type Unblock } from './record.js'
 import { DAY_MS, WEEK_MS } from './week.js'
 import type { AgentScore, Leaderboard, Medal, ModelScore, ModelShare, PersonDetails, PersonScore, RecentModel, WeekGoal } from './contract.js'
@@ -32,7 +32,9 @@ export interface LeaderboardInput {
   groups: Conversation[]
   /** The contributed machines the reader may see (model.ts visibleState): Lent sums no other. */
   machines: ContributedMachine[]
-  projectId: string
+  /** The project to score; null for the whole Swarm, every project in [groups] at once (the right pane's Humans, Dee
+   *  2026-10-31). Each machine's lent time then counts once, never once per project. */
+  projectId: string | null
   /** The Monday 00:00 UTC the week starts (week.ts). */
   week: number
   now: number
@@ -41,16 +43,18 @@ export interface LeaderboardInput {
 }
 
 export function leaderboard({ state, groups, machines: visibleMachines, projectId, week, now, names }: LeaderboardInput): Leaderboard {
-  const project = projectOf(state, projectId)
+  const project = projectId === null ? null : projectOf(state, projectId)
   // The Lead conversation is where plans are approved: its answers count, though nothing there is a request that ships.
-  const visible = groups.filter(g => !isLeads(g) && !g.audience && (g.projectId ?? 'lead') === projectId)
-  const shared = visible.filter(g => g.id !== project.leadConversationId)
+  const visible = groups.filter(g => !isLeads(g) && !g.audience && (projectId === null || (g.projectId ?? 'lead') === projectId))
+  const leadConversations = new Set(project ? [project.leadConversationId] : projectsOf(state).map(p => p.leadConversationId))
+  const shared = visible.filter(g => !leadConversations.has(g.id))
   const requests = shared.filter(g => !g.reviewOf)
   // Shipped with a PR: what agents and models are credited for. A person's points also need them to have asked (review
   // of #2097: a group opened from a Buddy's proposal may name no requester).
   const shippedRequests = requests.filter(g => g.ledger?.shippedAt != null && (g.pullRequestUrls?.length ?? 0) > 0)
   const landed = shippedRequests.filter(g => g.requesterId)
-  const players = state.people.filter(p => canReadProject(state, { kind: 'person', userId: p.id, email: p.email }, project))
+  // Swarm-wide, every person of the Swarm plays: the right pane lists them all, scored by what the reader may read.
+  const players = project ? state.people.filter(p => canReadProject(state, { kind: 'person', userId: p.id, email: p.email }, project)) : state.people
   const inWeek = (at: number, start = week) => at >= start && at < start + WEEK_MS
   // Each person's records, gathered once: the board scores every player three times (Diego's issue file, 2026-10-27).
   const landedBy = byKey(landed, g => g.requesterId!)
@@ -98,7 +102,8 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
     people,
     waiting: waitingNow(state, shared),
     models: { thisWeek: modelShare(requests, week), lastWeek: modelShare(requests, week - WEEK_MS) },
-    agents: agentScores(state, projectId, shippedRequests.filter(g => inWeek(g.ledger!.shippedAt!))),
+    // A project's PM and Buddies; none Swarm-wide, where agents are listed by state, not scored (Dee, 2026-10-31).
+    agents: projectId === null ? [] : agentScores(state, projectId, shippedRequests.filter(g => inWeek(g.ledger!.shippedAt!))),
     byModel: modelScores(requests, shippedRequests.filter(g => inWeek(g.ledger!.shippedAt!)), inWeek),
     recentModels: recentModels(requests, now),
   }

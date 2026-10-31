@@ -503,3 +503,50 @@ describe('Models, last 7 days: each model\'s tasks over a rolling week, for the 
     expect(view.recentModels).toEqual([])
   })
 })
+
+describe('the Swarm-wide board: every project in the groups at once (Dee, 2026-10-31)', () => {
+  /** The fixture Swarm with a second project, Web, whose PM chat is `web-lead`; Dee alone reads it. */
+  function twoProjects(): SuperTabState {
+    const state = swarm()
+    state.projects!.push({ ...state.projects![0]!, id: 'web', name: 'Web', leadConversationId: 'web-lead', visibility: 'private',
+      members: [{ id: 'dee', generation: 'g' }] })
+    return state
+  }
+  const wide = (state: SuperTabState, groups: Conversation[], machines = state.machines ?? []) =>
+    leaderboard({ state, groups, machines, projectId: null, week: WEEK, now: NOW })
+
+  it('sums each person\'s requests across projects', () => {
+    const state = twoProjects()
+    const view = wide(state, [shipped('dee', WEEK, WEEK + HOUR), shipped('dee', WEEK, WEEK + 2 * HOUR, { projectId: 'web' })])
+    expect(view.projectId).toBeNull()
+    expect(person(view, 'dee')).toMatchObject({ points: 6, shipped: { count: 2 } })
+    expect(view.goal.thisWeek.shipped).toBe(2)
+    // The one project's board still counts its own alone.
+    expect(person(board(state, [shipped('dee', WEEK, WEEK + HOUR), shipped('dee', WEEK, WEEK + 2 * HOUR, { projectId: 'web' })]), 'dee').points).toBe(3)
+  })
+
+  it('counts a machine\'s lent hours once, not once per project', () => {
+    const state = twoProjects()
+    state.machines = [machine('scholes', [[WEEK, 25 * HOUR]])]
+    const view = wide(state, [group(), group({ projectId: 'web' })])
+    expect(person(view, 'scholes')).toMatchObject({ points: 2, lent: { machines: 1, agentMs: 25 * HOUR } })
+  })
+
+  it('lists every person of the Swarm, a private project\'s non-readers too', () => {
+    expect(wide(twoProjects(), []).people.map(p => p.personId).sort()).toEqual(['dee', 'ken', 'scholes', 'tony'])
+  })
+
+  it('counts answers in every PM chat, but no PM chat as a request, and never a private conversation', () => {
+    const state = twoProjects()
+    const pmChat = { ...shipped('dee', WEEK, WEEK + HOUR, { projectId: 'web' }), id: 'web-lead',
+      ledger: { askedAt: WEEK, shippedAt: WEEK + HOUR, unblocks: [{ personId: 'dee', at: WEEK + HOUR, waitedMs: 0 }] } }
+    const secret = shipped('dee', WEEK, WEEK + HOUR, { audience: { people: [{ id: 'dee', generation: 'g' }] } })
+    const view = wide(state, [pmChat, secret])
+    expect(person(view, 'dee')).toMatchObject({ points: 1, shipped: { count: 0 }, unblocked: { count: 1 } })
+    expect(view.goal.openRequests).toBe(0)
+  })
+
+  it('scores no agents: the roster lists them by state', () => {
+    expect(wide(twoProjects(), [shipped('dee', WEEK, WEEK + HOUR, { leadId: 'pm' })]).agents).toEqual([])
+  })
+})

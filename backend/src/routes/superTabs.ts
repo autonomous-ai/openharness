@@ -57,6 +57,7 @@ const cursor = z.string().min(1).max(512).regex(/^[A-Za-z0-9_-]+$/)
 const changesQuery = agentQuery.extend({ cursor })
 const costsQuery = z.object({ days: z.coerce.number().int().min(1).max(MAX_DAYS).default(DEFAULT_DAYS), asAgentId: id.optional() }).strict()
 const leaderboardQuery = z.object({ projectId: id, week: z.coerce.number().int().nonnegative().safe().optional() }).strict()
+const swarmLeaderboardQuery = leaderboardQuery.omit({ projectId: true })
 const dormantQuery = agentQuery.extend({ dormant: z.literal('1'), projectId: id.optional(), before: cursor.optional() })
 const groupParams = tabParams.extend({ conversationId: id })
 const hostChangesQuery = z.object({ cursor: cursor.optional(), full: z.literal('1').optional() }).strict()
@@ -128,6 +129,7 @@ const githubStartToken = z.object({ always: z.boolean().optional() }).strict()
 export const NOT_AVAILABLE_ROUTES: ReadonlySet<string> = new Set([
   'GET /api/super-tabs/:tabId/parts', 'GET /api/super-tabs/:tabId/changes', 'GET /api/super-tabs/:tabId/inbox', 'POST /api/super-tabs/:tabId/commands',
   'GET /api/super-tabs/:tabId/mentions', 'GET /api/super-tabs/:tabId/decisions', 'GET /api/super-tabs/:tabId/leaderboard',
+  'GET /api/super-tabs/:tabId/leaderboard/swarm',
   'GET /api/super-tabs/:tabId/sharing', 'POST /api/super-tabs/:tabId/sharing', 'GET /api/super-tabs/:tabId/routing-policy',
   'GET /api/super-tabs/:tabId/groups', 'GET /api/super-tabs/:tabId/groups/:conversationId',
   'POST /api/super-tabs/:tabId/join', 'POST /api/super-tabs/:tabId/join/preview', 'POST /api/super-tabs/:tabId/native',
@@ -464,6 +466,10 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof leaderboardQuery> }>('/api/super-tabs/:tabId/leaderboard',
     { preHandler: [validateParams(tabParams), validateQuery(leaderboardQuery)] },
     (req, reply) => respond(reply, () => reads.leaderboard(req.user!, req.params.tabId, req.query.projectId, req.query.week)))
+  // Every project the reader may read at once: the right pane's Humans, the same in every chat (Dee, 2026-10-31).
+  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof swarmLeaderboardQuery> }>('/api/super-tabs/:tabId/leaderboard/swarm',
+    { preHandler: [validateParams(tabParams), validateQuery(swarmLeaderboardQuery)] },
+    (req, reply) => respond(reply, () => reads.leaderboard(req.user!, req.params.tabId, null, req.query.week)))
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof dormantQuery> }>('/api/super-tabs/:tabId/groups',
     { preHandler: [validateParams(tabParams), validateQuery(dormantQuery)] },
     (req, reply) => respond(reply, () => reads.dormant(req.user!, req.params.tabId, { projectId: req.query.projectId, before: req.query.before }, req.query.asAgentId)))
