@@ -61,6 +61,7 @@ import 'project_sidebar.dart';
 import 'buddy_sessions.dart';
 import 'swarm_switcher.dart' show fallBackToPersonal;
 import 'project_options.dart';
+import 'project_status_card.dart';
 import 'pane_layout.dart';
 import '../widgets/dial_list_scroll.dart';
 
@@ -2231,8 +2232,6 @@ class _SuperTabViewState extends State<SuperTabView>
           // them sends no coordinatorName.
           if (project?.hasInstructions == true)
             item('Instructions', () => _groupAction('instructions', group)),
-          if (editable)
-            item('Update cadence', () => _groupAction('cadence', group)),
           if (editable && project?.ownerId == c.accountId)
             item('Delete Project', () => _groupAction('delete', group)),
         ] else if (_isBuddyChat(group)) ...[
@@ -3019,6 +3018,16 @@ class _SuperTabViewState extends State<SuperTabView>
             decisions: SuperTabDecisions.of(c),
             projectId: group.projectId,
           ),
+        // A project's chat opens with its status card: the coordinator's
+        // progress, replaced in place, and what waits on the reader there.
+        if (group != null && c.snapshot?.isProjectLead(group.id) == true)
+          for (final project in c.snapshot!.projects)
+            if (project.leadConversationId == group.id)
+              SuperTabProjectStatusCard(
+                key: ValueKey('super-project-status-card-${project.id}'),
+                controller: c,
+                projectId: project.id,
+              ),
         Expanded(
           child: c.loading
               ? const Center(child: CircularProgressIndicator())
