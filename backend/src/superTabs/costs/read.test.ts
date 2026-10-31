@@ -25,10 +25,12 @@ describe('the cost summary', () => {
     expect(summary.rows).toEqual([
       { engine: 'claude', model: 'opus', effort: 'high', kind: 'parser', attempts: 3, firstReviews: 2, firstReviewPassed: 1, firstReviewPassRate: 0.5,
         shipped: 2, outcomes: { done: 2, lost: 1 }, billing: { subscription: 2, api: 1 }, medianMinutesToShip: 30,
-        tokens: { input: 2.5e6, output: 0, cacheRead: 0, cacheWrite: 0 }, tokensKnown: 3, apiCost: 10, spend: 4, costKnown: 3, costPerShipped: 5, stepUps: 0 },
+        tokens: { input: 2.5e6, output: 0, cacheRead: 0, cacheWrite: 0 }, tokensKnown: 3, apiCost: 10, spend: 4, costKnown: 3, costPerShipped: 5, stepUps: 0,
+        reviewAttempts: 0, fullCostKnown: 1, fullCostPerShipped: 5 },
       { engine: 'claude', model: 'opus', effort: 'xhigh', kind: 'unspecified', attempts: 1, firstReviews: 0, firstReviewPassed: 0, firstReviewPassRate: null,
         shipped: 1, outcomes: { done: 1 }, billing: { subscription: 1 }, medianMinutesToShip: 30,
-        tokens: { input: 1e6, output: 0, cacheRead: 0, cacheWrite: 0 }, tokensKnown: 1, apiCost: 4, spend: 0, costKnown: 1, costPerShipped: 4, stepUps: 0 },
+        tokens: { input: 1e6, output: 0, cacheRead: 0, cacheWrite: 0 }, tokensKnown: 1, apiCost: 4, spend: 0, costKnown: 1, costPerShipped: 4, stepUps: 0,
+        reviewAttempts: 0, fullCostKnown: 1, fullCostPerShipped: 4 },
     ])
     expect(summary.totals).toMatchObject({ attempts: 4, shipped: 3, apiCost: 14, spend: 4, costPerShipped: 14 / 3 })
   })
@@ -78,5 +80,57 @@ describe('the cost summary', () => {
 
   it('shows which prices it used, with their sources and dates', () => {
     expect(summarizeCosts([row('a1')], []).prices).toEqual([{ model: 'claude-opus-5-5', source: 'https://platform.claude.com/docs/en/about-claude/pricing', checked: '2026-10-29' }])
+  })
+})
+
+describe('the full cost per shipped change (routing, Goals piece 3)', () => {
+  const reviewRun = (startedAt: number) => run({ engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', startedAt, endedAt: startedAt + 5 * MINUTE,
+    end: { 'gpt-6.1-sol': t(1e5, 0) } })
+  const reviewGroup = (id: string, of: string) => ({ ...group(id, []), reviewOf: of }) as Conversation
+
+  it('counts every attempt of the choice and every review of its work, so a choice that needs rework rounds costs more per shipped change', () => {
+    // Two builds that ship; g1's work took three review rounds (a first review failed twice), g2's one.
+    const rows = [
+      row('b1', { conversationId: 'g1' }), row('b2', { conversationId: 'g2' }),
+      row('r1', { conversationId: 'v1', kind: 'review', run: reviewRun(10 * MINUTE) }),
+      row('r2', { conversationId: 'v1', kind: 'review', run: reviewRun(40 * MINUTE) }),
+      row('r3', { conversationId: 'v1', kind: 'review', run: reviewRun(70 * MINUTE) }),
+      row('r4', { conversationId: 'v2', kind: 'review', run: reviewRun(10 * MINUTE) }),
+    ]
+    const summary = summarizeCosts(rows, [group('g1', [{ assignmentId: 'b1', firstReview: false }], 90 * MINUTE),
+      group('g2', [{ assignmentId: 'b2', firstReview: true }], 30 * MINUTE), reviewGroup('v1', 'g1'), reviewGroup('v2', 'g2')])
+    const build = summary.rows.find(r => r.kind === 'parser')!
+    const review = summary.rows.find(r => r.kind === 'review')!
+    const perReview = review.apiCost! / 4
+    expect(build).toMatchObject({ costPerShipped: 4, reviewAttempts: 4, fullCostKnown: 1 })
+    // Its own two attempts ($8) and the four reviews of its work, over two shipped changes.
+    expect(build.fullCostPerShipped).toBeCloseTo((8 + 4 * perReview) / 2, 10)
+    // A review's own row counts no reviews of reviews.
+    expect(review).toMatchObject({ reviewAttempts: 0 })
+  })
+
+  it('charges a review to the build attempt that ran when it started, also a failed attempt of another choice', () => {
+    // Sonnet's attempt was reviewed and lost; Opus took over and shipped. The first review is Sonnet's cost, not Opus's.
+    const rows = [
+      row('s1', { conversationId: 'g1', outcome: 'lost', run: run({ model: 'sonnet', effort: 'medium', startedAt: 0 }) }),
+      row('o1', { conversationId: 'g1', run: run({ startedAt: 30 * MINUTE }) }),
+      row('r1', { conversationId: 'v1', kind: 'review', run: reviewRun(20 * MINUTE) }),
+      row('r2', { conversationId: 'v1', kind: 'review', run: reviewRun(50 * MINUTE) }),
+    ]
+    const summary = summarizeCosts(rows, [group('g1', [], 60 * MINUTE), reviewGroup('v1', 'g1')])
+    expect(summary.rows.find(r => r.model === 'sonnet')).toMatchObject({ reviewAttempts: 1, shipped: 0, fullCostPerShipped: null })
+    expect(summary.rows.find(r => r.model === 'opus')).toMatchObject({ reviewAttempts: 1, shipped: 1 })
+  })
+
+  it('fills an unknown attempt cost with the mean of known ones on the same choice, and gives no figure when under half are known', () => {
+    const known = [row('a1', { conversationId: 'g1' }), row('a2', { conversationId: 'g2' }), row('a3', { conversationId: 'g3', run: run({ start: null }) })]
+    const half = summarizeCosts(known, [group('g1', [], 30 * MINUTE), group('g2', [], 30 * MINUTE), group('g3', [], 30 * MINUTE)])
+    // Two of three known at $4 each: the third counts $4 too; strict cost per shipped stays null, as before.
+    expect(half.rows[0]).toMatchObject({ costPerShipped: null, fullCostKnown: 2 / 3, fullCostPerShipped: 4 })
+    const few = summarizeCosts([row('b1'), row('b2', { run: run({ start: null }) }), row('b3', { run: run({ start: null }) })], [group('g1', [], 30 * MINUTE)])
+    expect(few.rows[0]).toMatchObject({ fullCostKnown: 1 / 3, fullCostPerShipped: null })
+    // Open attempts are still going: they are neither known nor unknown yet.
+    const open = summarizeCosts([row('c1'), row('c2', { outcome: null, run: run({ endedAt: undefined, end: undefined }) })], [group('g1', [], 30 * MINUTE)])
+    expect(open.rows[0]).toMatchObject({ fullCostKnown: 1, fullCostPerShipped: 4 })
   })
 })
