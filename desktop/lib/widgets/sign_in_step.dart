@@ -46,22 +46,44 @@ const signInStepBenefits = [
 /// The bottom bar's line while nothing is under way: which computer this is,
 /// and whether Harness is already set up on it (Scholes's end-to-end test of
 /// 1.3.44, finding 5: every relaunch showed a bare page that knew nothing of
-/// the computer). [mac] words it "This Mac", else "This computer".
+/// the computer). [mac] words it "This Mac", else "This computer". The name
+/// is always in brackets, "This Mac (Studio)", on a first run as after setup.
 String signInStepReadyLine({
+  String? computerName,
+  bool setUp = false,
+  bool mac = true,
+}) {
+  final (:lead, :name, :rest) = signInStepReadyParts(
+    computerName: computerName,
+    setUp: setUp,
+    mac: mac,
+  );
+  return '$lead${name ?? ''}$rest';
+}
+
+/// The ready line in three parts: a long [name] is what the bar cuts, never
+/// the rest of the sentence ("Sign in to continue." above all).
+typedef SignInReadyLine = ({String lead, String? name, String rest});
+
+/// [signInStepReadyLine] in its [SignInReadyLine] parts.
+SignInReadyLine signInStepReadyParts({
   String? computerName,
   bool setUp = false,
   bool mac = true,
 }) {
   final here = mac ? 'This Mac' : 'This computer';
   final name = computerName?.trim();
+  final tail = setUp
+      ? ' is set up. Sign in to continue.'
+      : '. Sign in to continue.';
   if (name == null || name.isEmpty) {
-    return setUp
-        ? '$here is set up. Sign in to continue.'
-        : 'Sign in to continue.';
+    return (
+      lead: setUp ? '$here$tail' : 'Sign in to continue.',
+      name: null,
+      rest: '',
+    );
   }
-  return setUp
-      ? '$here ($name) is set up. Sign in to continue.'
-      : '$here: $name. Sign in to continue.';
+  return (lead: '$here (', name: name, rest: ')$tail');
 }
 
 /// The page itself, apart from the app: what it says and its three controls.
@@ -80,7 +102,7 @@ class SignInStep extends StatelessWidget {
     this.signOutError,
     this.onRetrySignOut,
     this.recovery,
-    this.readyLine = 'Sign in to continue.',
+    this.readyLine = (lead: 'Sign in to continue.', name: null, rest: ''),
   });
 
   /// Continue with Google, Continue with Apple, or — with no provider — Email,
@@ -113,8 +135,8 @@ class SignInStep extends StatelessWidget {
   final Widget? recovery;
 
   /// The bottom bar's line while nothing is under way
-  /// ([signInStepReadyLine]).
-  final String readyLine;
+  /// ([signInStepReadyParts]).
+  final SignInReadyLine readyLine;
 
   @override
   Widget build(BuildContext context) {
@@ -132,13 +154,16 @@ class SignInStep extends StatelessWidget {
               Expanded(child: _stage(context, gutter)),
               _ReadyBar(
                 gutter: gutter,
-                line: signingOut
+                line: switch (signingOut
                     ? 'Signing out…'
                     : finishing
                     ? 'Signing in…'
                     : sessionExpired
                     ? 'Your session ended. Sign in again to continue.'
-                    : readyLine,
+                    : null) {
+                  final busy? => (lead: busy, name: null, rest: ''),
+                  null => readyLine,
+                },
               ),
             ],
           );
@@ -396,7 +421,7 @@ class _ReadyBar extends StatelessWidget {
   const _ReadyBar({required this.gutter, required this.line});
 
   final double gutter;
-  final String line;
+  final SignInReadyLine line;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -425,15 +450,10 @@ class _ReadyBar extends StatelessWidget {
               const SizedBox(width: 8),
               Flexible(
                 child: Semantics(
+                  key: const Key('sign-in-step-ready-line'),
                   liveRegion: true,
-                  child: Text(
-                    line,
-                    key: const Key('sign-in-step-ready-line'),
-                    overflow: TextOverflow.ellipsis,
-                    style: grid.AppType.label(
-                      color: grid.AppPalette.textPrimary,
-                    ),
-                  ),
+                  label: '${line.lead}${line.name ?? ''}${line.rest}',
+                  child: ExcludeSemantics(child: _parts(context)),
                 ),
               ),
             ],
@@ -447,6 +467,32 @@ class _ReadyBar extends StatelessWidget {
       ],
     ),
   );
+
+  /// The line as it reads, with only the computer's name giving way to a
+  /// narrow window: "This Mac (Studio-with-a-very-lo…) is set up. Sign in to
+  /// continue." The rest keeps its whole width while there is room for it.
+  Widget _parts(BuildContext context) {
+    final style = grid.AppType.label(color: grid.AppPalette.textPrimary);
+    Text part(String text, String key) => Text(
+      text,
+      key: Key('sign-in-step-ready-$key'),
+      maxLines: 1,
+      softWrap: false,
+      overflow: TextOverflow.ellipsis,
+      style: style,
+    );
+    final name = line.name;
+    if (name == null) {
+      return part('${line.lead}${line.rest}', 'text');
+    }
+    return Row(
+      children: [
+        part(line.lead, 'lead'),
+        Flexible(child: part(name, 'name')),
+        part(line.rest, 'rest'),
+      ],
+    );
+  }
 }
 
 /// The sign-in step bound to the app: shown by RootShell between setup and the
@@ -567,7 +613,7 @@ class _SignInStepScreenState extends State<SignInStepScreen> {
             finishing: app.signingIn && !app.canCancelLogin,
             error: app.loginBrowserError ?? _error,
             sessionExpired: app.sessionExpired,
-            readyLine: signInStepReadyLine(
+            readyLine: signInStepReadyParts(
               computerName: app.thisComputerName,
               setUp: app.harnessSetUpBefore,
               mac: RuntimePlatform.isMacOS,

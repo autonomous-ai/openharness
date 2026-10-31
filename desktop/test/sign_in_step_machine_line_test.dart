@@ -25,7 +25,17 @@ import 'support/capture.dart';
 final _line = find.byKey(const Key('sign-in-step-ready-line'));
 final _boundary = GlobalKey();
 
-String _lineText(WidgetTester tester) => tester.widget<Text>(_line).data!;
+String _lineText(WidgetTester tester) =>
+    tester.widget<Semantics>(_line).properties.label!;
+
+/// What the bar draws of its line, part by part: each part's text, and
+/// whether it was cut short.
+List<({String text, bool cut})> _drawn(WidgetTester tester) => [
+  for (final paragraph in tester.renderObjectList<RenderParagraph>(
+    find.descendant(of: _line, matching: find.byType(RichText)),
+  ))
+    (text: paragraph.text.toPlainText(), cut: paragraph.didExceedMaxLines),
+];
 
 Machine _machine(String id, String? name) => Machine(
   machineId: id,
@@ -55,8 +65,9 @@ void _otherMachine(AppNotifier app, String name) {
 
 Future<void> _mountPage(
   WidgetTester tester, {
-  required String readyLine,
+  required SignInReadyLine readyLine,
   Brightness brightness = Brightness.dark,
+  double width = 1280,
   bool finishing = false,
   bool sessionExpired = false,
   bool signingOut = false,
@@ -65,7 +76,7 @@ Future<void> _mountPage(
   grid.AppTheme.brightness.value = brightness;
   addTearDown(() => grid.AppTheme.brightness.value = previous);
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(1280, 800);
+  tester.view.physicalSize = Size(width, 800);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -113,10 +124,10 @@ void main() {
       );
     });
 
-    test('a first run: its name', () {
+    test('a first run: its name, in the same form as after setup', () {
       expect(
         signInStepReadyLine(computerName: 'Studio'),
-        'This Mac: Studio. Sign in to continue.',
+        'This Mac (Studio). Sign in to continue.',
       );
     });
 
@@ -136,21 +147,59 @@ void main() {
       );
       expect(
         signInStepReadyLine(computerName: 'box', mac: false),
-        'This computer: box. Sign in to continue.',
+        'This computer (box). Sign in to continue.',
       );
     });
   });
 
   group('the page', () {
     testWidgets('shows the line in its bottom bar', (tester) async {
-      const line = 'This Mac (Studio) is set up. Sign in to continue.';
-      await _mountPage(tester, readyLine: line);
-      expect(_lineText(tester), line);
+      await _mountPage(
+        tester,
+        readyLine: signInStepReadyParts(computerName: 'Studio', setUp: true),
+      );
+      expect(
+        _lineText(tester),
+        'This Mac (Studio) is set up. Sign in to continue.',
+      );
       expect(tester.takeException(), isNull);
     });
 
+    for (final setUp in [true, false]) {
+      testWidgets('a very long name is cut, never "Sign in to continue." '
+          '(${setUp ? 'set up' : 'first run'})', (tester) async {
+        final name = 'Studio-${'very-long-computer-name-' * 20}end';
+        await _mountPage(
+          tester,
+          width: 900,
+          readyLine: signInStepReadyParts(computerName: name, setUp: setUp),
+        );
+        expect(tester.takeException(), isNull);
+        // Read aloud whole.
+        expect(
+          _lineText(tester),
+          signInStepReadyLine(computerName: name, setUp: setUp),
+        );
+        // Drawn with the name cut and the sentence whole, inside the bar.
+        final drawn = _drawn(tester);
+        final whole = [
+          for (final part in drawn)
+            if (!part.cut) part.text,
+        ];
+        expect(whole, [
+          'This Mac (',
+          setUp
+              ? ') is set up. Sign in to continue.'
+              : '). Sign in to continue.',
+        ]);
+        expect(drawn.where((part) => part.cut).single.text, name);
+        final rest = find.byKey(const Key('sign-in-step-ready-rest'));
+        expect(tester.getRect(rest).right, lessThanOrEqualTo(900));
+      });
+    }
+
     testWidgets('what is under way still wins over it', (tester) async {
-      const line = 'This Mac: Studio. Sign in to continue.';
+      final line = signInStepReadyParts(computerName: 'Studio');
       await _mountPage(tester, readyLine: line, finishing: true);
       expect(_lineText(tester), 'Signing in…');
       await _mountPage(tester, readyLine: line, signingOut: true);
@@ -164,16 +213,19 @@ void main() {
 
     for (final brightness in Brightness.values) {
       for (final (name, line) in [
-        ('set-up', signInStepReadyLine(computerName: 'Studio', setUp: true)),
-        ('first-run', signInStepReadyLine(computerName: 'Studio')),
-        ('no-name', signInStepReadyLine()),
+        ('set-up', signInStepReadyParts(computerName: 'Studio', setUp: true)),
+        ('first-run', signInStepReadyParts(computerName: 'Studio')),
+        ('no-name', signInStepReadyParts()),
       ]) {
         testWidgets('draws the $name line in ${brightness.name}', (
           tester,
         ) async {
           await _mountPage(tester, readyLine: line, brightness: brightness);
           expect(tester.takeException(), isNull);
-          expect(_lineText(tester), line);
+          expect(
+            _lineText(tester),
+            '${line.lead}${line.name ?? ''}${line.rest}',
+          );
           await captureBoundary(
             tester,
             _boundary.currentContext!.findRenderObject()!
