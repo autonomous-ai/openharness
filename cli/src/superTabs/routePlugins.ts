@@ -3,6 +3,7 @@
  *  call (piece 3's builder, 10-31). A maker does its piece's outside read and returns a pure plug-in holding what it read;
  *  routeTask starts every maker together with the machine probes, so a maker's read costs no time of its own. */
 import { pluginSkipped, type Assessment, type Catalog, type RoutePlugin } from './route.js'
+import { MEASURED_MAKER } from './routeMeasured.js'
 import type { ScopedRequest } from './start.js'
 import { CHEAP_FIRST_MAKERS } from './routeCheapFirst.js'
 import { windowPullMaker } from './windowPull.js'
@@ -27,6 +28,8 @@ export interface PluginMaker { readonly name: string; make(input: PluginInput): 
 /** The makers, in the order their plug-ins run. One line per piece. */
 export const ROUTE_PLUGIN_MAKERS: readonly PluginMaker[] = [
   ...CHEAP_FIRST_MAKERS, // piece 4: never a grid model for a review or security work; a small, low-risk build tries one first
+  // Piece 3: measured cost per shipped change and first-review pass rate, per kind of work.
+  MEASURED_MAKER,
   windowPullMaker(),
 ]
 
