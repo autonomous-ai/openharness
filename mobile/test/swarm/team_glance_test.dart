@@ -147,14 +147,14 @@ void main() {
   });
 
   test('running counts the agents working, in words', () {
-    String running(
+    String? running(
       List<Map<String, dynamic>> agents, [
       List<Map<String, dynamic>> groups = const [],
     ]) =>
         swarmTeamGlance(swarm(agents: agents, groups: groups), now: now).running;
 
-    expect(running([]), 'No agents yet');
-    expect(running([agent('a1')]), 'No agents running', reason: 'idle');
+    expect(running([]), isNull, reason: 'no agents');
+    expect(running([agent('a1')]), isNull, reason: 'idle');
     expect(
       running([agent('a1')], [working('a1', 'working')]),
       '1 agent running',
@@ -178,7 +178,7 @@ void main() {
         ],
         [working('a1', 'working')],
       ),
-      'No agents running',
+      isNull,
       reason: 'who is down is not running, whatever work it holds',
     );
   });

@@ -1103,9 +1103,18 @@ void main() {
       final load = fake.routes['/api/super-tabs/$tab/parts']!;
       fake.routes['/api/super-tabs/$tab/parts'] = (_) =>
           throw SuperTabFailure('INTERNAL', 'Broken', statusCode: 500);
-      final host = await pump(tester, fake);
+      // Home's skeleton breathes while it shows: nothing settles under it.
+      Future<void> frames() async {
+        for (var i = 0; i < 10; i++) {
+          await tester.pump(const Duration(milliseconds: 100));
+        }
+      }
+
+      final host = await pump(tester, fake, settle: false);
+      await frames();
       expect(key('swarm-new-message'), findsOneWidget);
-      await open(tester);
+      await tester.tap(key('swarm-new-message'));
+      await frames();
 
       expect(key('swarm-new-message-loading'), findsNothing);
       expect(key('swarm-new-message-none'), findsNothing);

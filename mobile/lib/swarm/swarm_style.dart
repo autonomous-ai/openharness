@@ -134,6 +134,7 @@ class SwarmTabHeader extends StatelessWidget {
     this.onTitle,
     this.titleLabel,
     this.subtitle,
+    this.loading = false,
   });
 
   final String title;
@@ -143,18 +144,28 @@ class SwarmTabHeader extends StatelessWidget {
   final String? titleLabel;
   final String? subtitle;
 
+  /// The title is on its way: a bar as tall as its words in their place.
+  final bool loading;
+
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
-    final text = Text(
-      title,
-      key: const ValueKey('swarm-title'),
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
-      style: Tty.of(context)
-          .style(size: 20, weight: FontWeight.w600)
-          .copyWith(height: 1.2),
-    );
+    final style = Tty.of(
+      context,
+    ).style(size: 20, weight: FontWeight.w600).copyWith(height: 1.2);
+    final text = loading
+        ? SkeletonText(
+            key: const ValueKey('swarm-title-loading'),
+            style: style,
+            width: 120,
+          )
+        : Text(
+            title,
+            key: const ValueKey('swarm-title'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: style,
+          );
     final onTitle = this.onTitle;
     final head = _title(text, onTitle);
     return ConstrainedBox(
@@ -342,12 +353,14 @@ class SwarmGroup extends StatelessWidget {
 /// left, a bar for its title and a longer one for the line under it, each as
 /// tall as the line it stands for ([SkeletonText]), so nothing moves when the
 /// row arrives. It stands for a card's row (`SwarmRow`) with a line under its
-/// title — a need's, a project's on Home — or its title alone ([titleOnly]).
+/// title — a need's — or its title alone ([titleOnly]), or a project's on Home
+/// ([dot]).
 class SwarmSkeletonRow extends StatelessWidget {
   const SwarmSkeletonRow({
     super.key,
     this.round = false,
     this.titleOnly = false,
+    this.dot = false,
     this.width = .45,
   });
 
@@ -356,6 +369,10 @@ class SwarmSkeletonRow extends StatelessWidget {
 
   /// The row it stands for has no line under its title.
   final bool titleOnly;
+
+  /// A project's small dot on Home ([SwarmHomeProjectRow]) rather than a tile,
+  /// in the room that row keeps for it.
+  final bool dot;
 
   /// The title bar's share of the row's words.
   final double width;
@@ -374,13 +391,23 @@ class SwarmSkeletonRow extends StatelessWidget {
         ),
         child: Row(
           children: [
-            Skeleton(
-              width: 32,
-              height: 32,
-              radius: 8,
-              shape: round ? BoxShape.circle : BoxShape.rectangle,
-            ),
-            const SizedBox(width: 12),
+            if (dot) ...[
+              const SizedBox(
+                width: 16,
+                child: Center(
+                  child: Skeleton(width: 8, height: 8, shape: BoxShape.circle),
+                ),
+              ),
+              const SizedBox(width: AppSpace.s),
+            ] else ...[
+              Skeleton(
+                width: 32,
+                height: 32,
+                radius: 8,
+                shape: round ? BoxShape.circle : BoxShape.rectangle,
+              ),
+              const SizedBox(width: 12),
+            ],
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -413,6 +440,7 @@ class SwarmSkeletonRows extends StatelessWidget {
     this.rows = 2,
     this.round = false,
     this.titleOnly = false,
+    this.dot = false,
   }) : super(key: ValueKey(id));
 
   final String id;
@@ -424,6 +452,9 @@ class SwarmSkeletonRows extends StatelessWidget {
   /// Rows with no line under their titles ([SwarmSkeletonRow.titleOnly]).
   final bool titleOnly;
 
+  /// Projects' dots on Home ([SwarmSkeletonRow.dot]).
+  final bool dot;
+
   @override
   Widget build(BuildContext context) {
     final children = [
@@ -434,6 +465,7 @@ class SwarmSkeletonRows extends StatelessWidget {
             key: ValueKey('$id-$i'),
             round: round,
             titleOnly: titleOnly,
+            dot: dot,
             width: i.isEven ? .45 : .6,
           ),
         ),
@@ -450,16 +482,12 @@ class SwarmAvatar extends StatelessWidget {
     required this.id,
     required this.name,
     this.size = 32,
-    this.ring,
     this.picture,
     this.status,
   });
 
   final String id, name;
   final double size;
-
-  /// A ring of this colour around it, where avatars overlap.
-  final Color? ring;
 
   /// What they chose to wear; null wears the initial.
   final SuperTabAvatarPicture? picture;
@@ -494,19 +522,7 @@ class SwarmAvatar extends StatelessWidget {
       name: name,
       size: size,
       status: status,
-      face: ring == null
-          ? face
-          : DecoratedBox(
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: ring!,
-                  width: 2,
-                  strokeAlign: BorderSide.strokeAlignOutside,
-                ),
-              ),
-              child: face,
-            ),
+      face: face,
     );
   }
 }

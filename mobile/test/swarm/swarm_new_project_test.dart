@@ -764,6 +764,7 @@ void main() {
       WidgetTester tester,
       List<NewProjectSwarm> swarms, {
       ValueNotifier<String?>? account,
+      bool settle = true,
     }) async {
       tester.view.physicalSize = const Size(1170, 2532);
       tester.view.devicePixelRatio = 3;
@@ -789,7 +790,7 @@ void main() {
           ),
         ),
       );
-      await tester.pumpAndSettle();
+      if (settle) await tester.pumpAndSettle();
       return host;
     }
 
@@ -845,8 +846,10 @@ void main() {
     testWidgets('a Swarm whose first read failed offers it once its read '
         'recovers', (tester) async {
       final swarm = NewProjectSwarm()..unreadable = true;
-      final host = await pump(tester, [swarm]);
-      expect(key('swarm-projects-error-$tab'), findsOneWidget);
+      final host = await pump(tester, [swarm], settle: false);
+      // A skeleton breathes for as long as it shows: nothing settles under it.
+      await pumpFor(tester);
+      expect(key('swarm-projects-loading-$tab'), findsOneWidget);
       expect(key('swarm-new-project'), findsNothing);
 
       swarm.unreadable = false;

@@ -77,6 +77,58 @@ void main() {
     expect(await session.autonomousEnv(), 'prod');
   });
 
+  group('whose sign-in it is', () {
+    test('unknown until the account says', () async {
+      await session.saveLogin(token: 't');
+      expect(await session.accountId(), isNull);
+
+      await session.saveAccountId('person-a');
+      expect(await session.accountId(), 'person-a');
+    });
+
+    test('a renewal is the same sign-in: kept', () async {
+      await session.saveLogin(token: 't');
+      await session.saveAccountId('person-a');
+
+      await session.saveRefresh(token: 'renewed', autonomousEnv: 'prod');
+
+      expect(await session.accountId(), 'person-a');
+    });
+
+    test('a new sign-in may be anyone: forgotten', () async {
+      await session.saveLogin(token: 't');
+      await session.saveAccountId('person-a');
+
+      await session.saveLogin(token: 'someone-else');
+
+      expect(await session.accountId(), isNull);
+    });
+
+    test('forgotten before the new token is written, so a sign-in cut short '
+        'cannot pair them', () async {
+      await session.saveLogin(token: 't');
+      await session.saveAccountId('person-a');
+      final failing = _FailingOnAccess(storage);
+
+      await expectLater(
+        AuthSession(storage: failing).saveLogin(token: 'someone-else'),
+        throwsStateError,
+      );
+
+      expect(await session.accountId(), isNull);
+      expect(await session.accessToken(), 't');
+    });
+
+    test('a sign-out forgets it', () async {
+      await session.saveLogin(token: 't');
+      await session.saveAccountId('person-a');
+
+      await session.clear();
+
+      expect(await session.accountId(), isNull);
+    });
+  });
+
   test('clearing leaves nothing of the session behind', () async {
     await session.saveLogin(
       token: 't',
@@ -85,8 +137,24 @@ void main() {
       expiresIn: 60,
       issuer: SessionIssuer.emailCode,
     );
+    await session.saveAccountId('person-a');
     storage.values['unrelated'] = 'kept';
     await session.clear();
     expect(storage.values, {'unrelated': 'kept'});
   });
+}
+
+/// A store that dies on writing the access token: a sign-in cut short there.
+class _FailingOnAccess extends MemoryKeyValueStore {
+  _FailingOnAccess(this.real);
+  final MemoryKeyValueStore real;
+
+  @override
+  Future<void> delete(String key) => real.delete(key);
+
+  @override
+  Future<void> write(String key, String value) async {
+    if (key == 'auth_access_token') throw StateError('disk full');
+    await real.write(key, value);
+  }
 }

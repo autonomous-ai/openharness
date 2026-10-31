@@ -11,6 +11,11 @@ void main() {
   });
   tearDown(() => runtime.dispose());
 
+  test('the sample has no account on its way for Swarm to wait for', () {
+    expect(runtime.notifier.currentUser, isNull);
+    expect(runtime.notifier.accountReading, isFalse);
+  });
+
   test('sample folders and git metadata come from fixtures', () async {
     final home = await connection.request(
       'fs_list_dir',

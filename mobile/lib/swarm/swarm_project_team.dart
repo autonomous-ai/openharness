@@ -24,7 +24,7 @@ import 'team_glance.dart';
 /// "3 humans · 5 agents", the people and agents of a project in words; the
 /// agents left out when there are none, as the team's line then says so.
 String swarmProjectHeads({required int humans, required int agents}) => [
-  humans == 1 ? '1 human' : '$humans humans',
+  swarmHumans(humans),
   if (agents > 0) agents == 1 ? '1 agent' : '$agents agents',
 ].join(' · ');
 
