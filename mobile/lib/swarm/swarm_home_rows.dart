@@ -6,10 +6,10 @@ import 'package:harness_mobile/phone/fzf.dart' show fzfAge;
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
+import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
-import 'model.dart';
 import 'swarm_home_list.dart';
 import 'swarm_inbox.dart';
 import 'swarm_row.dart';
@@ -17,8 +17,8 @@ import 'swarm_style.dart';
 import 'swarm_unread.dart';
 import 'team_glance.dart';
 
-/// The rows of Swarm Home: a project with its people's faces, how many agents
-/// are running and when it last moved, its tile a dot and its name a
+/// The rows of Swarm Home: a project with how many people read it, how many
+/// agents are running and when it last moved, its tile a dot and its name a
 /// channel's, as C1 draws them (2026-10-30); the projects quiet for a day
 /// folded in one row.
 
@@ -75,87 +75,20 @@ class SwarmTeamDots extends StatelessWidget {
   }
 }
 
-/// A project's people and its team on Home: up to [shown] faces, each over the
-/// one before it, then how many agents are running ([SwarmTeamGlance.running]).
-class SwarmTeamFaces extends StatelessWidget {
-  const SwarmTeamFaces(
-    this.glance, {
-    super.key,
-    required this.people,
-    this.swarmName,
-  });
+/// A project's line on Home: "5 humans • 8 agents running", leaving out what
+/// is none, then its Swarm, the first to go when the row is short, where Home
+/// shows several. Empty with nothing to say.
+String swarmProjectLine({
+  required int humans,
+  required SwarmTeamGlance glance,
+  String? swarmName,
+}) => [
+  if (humans > 0) swarmHumans(humans),
+  ?glance.running,
+  ?swarmName,
+].join(_lineGap);
 
-  /// The most faces a row draws.
-  static const shown = 5;
-
-  /// As tall as the words beside it, so the row is as tall as its skeleton.
-  static const _size = 18.0;
-
-  /// From one face to the next: less than [_size], so they overlap, yet each
-  /// initial stays whole.
-  static const _step = 15.0;
-
-  final SwarmTeamGlance glance;
-
-  /// The project's people ([swarmProjectPeople]), in the order to draw them.
-  final List<SuperTabPerson> people;
-
-  /// Words after the count, the first to go when the row is short: the Swarm,
-  /// where Home shows several.
-  final String? swarmName;
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    final faces = people.take(shown).toList();
-    final words = [glance.running, ?swarmName].join(' · ');
-    return Semantics(
-      label: [for (final person in faces) person.username, words].join(', '),
-      excludeSemantics: true,
-      child: Row(
-        children: [
-          if (faces.isNotEmpty) ...[
-            SizedBox(
-              key: const ValueKey('swarm-team-faces'),
-              width: _size + _step * (faces.length - 1),
-              height: _size,
-              child: Stack(
-                children: [
-                  for (final (i, person) in faces.indexed)
-                    Positioned(
-                      left: _step * i,
-                      child: SwarmAvatar(
-                        key: ValueKey('swarm-team-face-${person.id}'),
-                        id: person.id,
-                        name: person.username,
-                        picture: person.avatar,
-                        size: _size,
-                        // The row's own colour, so each face cuts into the
-                        // one under it.
-                        ring: AppGlass.rowFill,
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            const SizedBox(width: AppSpace.s),
-          ],
-          Flexible(
-            child: Text(
-              words,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: AppType.caption(
-                color: AppPalette.textSecondary,
-                height: 1.35,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
+const _lineGap = ' • ';
 
 /// What a need asks, as its Home row's title: a decision's question, a tag's
 /// words, the question work waits on (or the work itself).
@@ -168,19 +101,20 @@ String swarmNeedAsk(SwarmNeed need) => switch (need) {
 
 /// One project on Home, as C1 draws it: a dot in the colour of how its team
 /// is ([swarmProjectColor]), its name as a channel's ("#openharness") — bold
-/// and bright with something new in it, quiet otherwise — its people's faces
-/// and how many agents are running ([SwarmTeamFaces]), and at its right how
-/// long ago it last moved, over the tags waiting in it ("@2", filled) or,
-/// unread, a dot. A tap opens it; a long press offers its pin
-/// ([onLongPress]).
+/// and bright with something new in it, quiet otherwise — how many people read
+/// it and how many agents are running ([swarmProjectLine]), and at its right
+/// how long ago it last moved, over the tags waiting in it ("@2", filled) or,
+/// unread, a dot; a skeleton in their place while what waits is on its way
+/// ([tagsLoading]). A tap opens it; a long press offers its pin ([onLongPress]).
 class SwarmHomeProjectRow extends StatelessWidget {
   const SwarmHomeProjectRow({
     super.key,
     required this.project,
     required this.glance,
-    required this.people,
+    required this.humans,
     required this.now,
     this.swarmName,
+    this.tagsLoading = false,
     required this.onTap,
     this.onLongPress,
   });
@@ -188,12 +122,15 @@ class SwarmHomeProjectRow extends StatelessWidget {
   final SwarmHomeProject project;
   final SwarmTeamGlance glance;
 
-  /// Its people ([swarmProjectPeople]).
-  final List<SuperTabPerson> people;
+  /// How many people read it ([swarmProjectPeople]).
+  final int humans;
   final DateTime now;
 
   /// Its Swarm, where Home shows several.
   final String? swarmName;
+
+  /// What waits in its Swarm is not read yet: its tags may still come.
+  final bool tagsLoading;
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
 
@@ -206,6 +143,11 @@ class SwarmHomeProjectRow extends StatelessWidget {
       final at? => fzfAge(at.toLocal(), now.toLocal()),
       null => '',
     };
+    final line = swarmProjectLine(
+      humans: humans,
+      glance: glance,
+      swarmName: swarmName,
+    );
     return _Tap(
       onTap: onTap,
       onLongPress: onLongPress,
@@ -253,12 +195,24 @@ class SwarmHomeProjectRow extends StatelessWidget {
                         ),
                       ),
                     ),
-                    const SizedBox(height: 3),
-                    SwarmTeamFaces(glance, people: people, swarmName: swarmName),
+                    if (line.isNotEmpty) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        line,
+                        key: const ValueKey('swarm-project-line'),
+                        semanticsLabel: line.replaceAll(_lineGap, ', '),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppType.caption(
+                          color: AppPalette.textSecondary,
+                          height: 1.35,
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
-              if (age.isNotEmpty || bright) ...[
+              if (age.isNotEmpty || bright || tagsLoading) ...[
                 const SizedBox(width: 12),
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.end,
@@ -275,6 +229,15 @@ class SwarmHomeProjectRow extends StatelessWidget {
                     if (news.tags > 0) ...[
                       const SizedBox(height: 4),
                       SwarmTags(news.tags, filled: true),
+                    ] else if (tagsLoading) ...[
+                      const SizedBox(height: 4),
+                      // As big as the filled tags it stands for.
+                      const Skeleton(
+                        key: ValueKey('swarm-project-tags-loading'),
+                        width: 36,
+                        height: 20,
+                        radius: 10,
+                      ),
                     ] else if (news.bold) ...[
                       const SizedBox(height: 8),
                       ExcludeSemantics(

@@ -146,6 +146,85 @@ void main() {
 
   Map<String, Object?> ok(Object? data) => {'success': true, 'data': data};
 
+  group('a Swarm read', () {
+    test('answers the value, signed with this sign-in, its query kept', () async {
+      backend.answer = (_, _) => (status: 200, body: ok({'tabs': <Object>[]}));
+
+      final value = await client(_Tokens(['t1'])).swarmRead(
+        '/api/super-tabs/t/changes?cursor=c1',
+      );
+
+      expect(value, {'tabs': <Object>[]});
+      final request = backend.requests.single;
+      expect(request.method, 'GET');
+      expect(request.path, '/api/super-tabs/t/changes');
+      expect(request.query, {'cursor': 'c1'});
+      expect(request.headers.value('authorization'), 'Bearer t1');
+    });
+
+    test('with no credentials never reaches the backend', () async {
+      final api = ApiClient(
+        config: const AppConfig(apiBaseUrl: 'https://api.invalid'),
+        session: AuthSession(storage: MemoryKeyValueStore()),
+        httpClientAdapter: backend,
+      );
+      await expectLater(api.swarmRead('/api/super-tabs/list'), throwsStateError);
+      expect(backend.requests, isEmpty);
+    });
+
+    Matcher failure(String code, int status, [String? message]) =>
+        isA<SuperTabFailure>()
+            .having((f) => f.code, 'code', code)
+            .having((f) => f.statusCode, 'statusCode', status)
+            .having(
+              (f) => f.message,
+              'message',
+              message ?? isNotEmpty,
+            );
+
+    test("a refusal carries the backend's code, status and words", () async {
+      backend.answer = (_, _) => (
+        status: 403,
+        body: {
+          'success': false,
+          'error': {'code': 'FORBIDDEN', 'message': 'Not a member.'},
+        },
+      );
+
+      await expectLater(
+        client(_Tokens(['t1'])).swarmRead('/api/super-tabs/t/parts'),
+        throwsA(failure('FORBIDDEN', 403, 'Not a member.')),
+      );
+    });
+
+    test('426 asks for an update, whatever the body says', () async {
+      backend.answer = (_, _) => (status: 426, body: {'success': false});
+
+      await expectLater(
+        client(_Tokens(['t1'])).swarmRead('/api/super-tabs/list'),
+        throwsA(failure('UPDATE_REQUIRED', 426)),
+      );
+    });
+
+    test('a 502 from a proxy, not JSON, keeps its status', () async {
+      backend.answer = (_, _) => (status: 502, body: '<html>Bad gateway</html>');
+
+      await expectLater(
+        client(_Tokens(['t1'])).swarmRead('/api/super-tabs/list'),
+        throwsA(failure('BACKEND_UNAVAILABLE', 502)),
+      );
+    });
+
+    test('a 200 that does not say success is no answer', () async {
+      backend.answer = (_, _) => (status: 200, body: {'data': 'stray'});
+
+      await expectLater(
+        client(_Tokens(['t1'])).swarmRead('/api/super-tabs/list'),
+        throwsA(failure('BACKEND_UNAVAILABLE', 200)),
+      );
+    });
+  });
+
   group('signing', () {
     test(
       'a real API call without credentials fails before transport',

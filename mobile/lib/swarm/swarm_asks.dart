@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:collection/collection.dart' show DeepCollectionEquality;
 import 'package:flutter/foundation.dart';
 
+import 'package:harness_mobile/logging/app_log.dart';
+
 import 'model.dart';
 import 'swarm_reader.dart';
 import 'swarm_request.dart';
@@ -321,10 +323,18 @@ class SwarmAsks extends ChangeNotifier {
         }
       }
       if (changed) notifyListeners();
-    } catch (_) {
+    } catch (failure) {
       if (_disposed || reader.generation != generation) return true;
       const failed = 'Could not load what is waiting for you. Try again.';
       final told = error == failed && _failed && _settled == generation;
+      // Once per failure, not once per poll.
+      if (!told) {
+        appLog.warn(
+          'swarm',
+          'What waits in ${reader.tabId} not read',
+          error: failure,
+        );
+      }
       error = failed;
       _failed = true;
       _settled = generation;

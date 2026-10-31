@@ -3,6 +3,8 @@ import 'dart:isolate';
 
 import 'package:flutter/foundation.dart';
 
+import 'package:harness_mobile/logging/app_log.dart';
+
 import 'model.dart';
 import 'parts.dart';
 import 'swarm_buddy.dart';
@@ -239,6 +241,10 @@ class SwarmReader extends ChangeNotifier {
       if (_disposed || accessRevoked) return;
       error = 'Could not reach this Swarm. Try again.';
       changed = true;
+    }
+    // Once per failure, not once per poll. Home shows its skeleton meanwhile.
+    if (error case final failed? when failed != failedBefore) {
+      appLog.warn('swarm', 'Swarm $tabId not read: $failed');
     }
     if (changed || error != failedBefore) notifyListeners();
   }

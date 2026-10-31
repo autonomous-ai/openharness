@@ -11,6 +11,7 @@ import 'package:harness_mobile/phone/phone_navigation.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart'
     show AppFont, AppPalette;
+import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_home_rows.dart';
 import 'package:harness_mobile/swarm/swarm_inbox.dart';
@@ -523,6 +524,7 @@ void main() {
       await pump(tester, fake);
 
       expect(key('swarm-projects-loading'), findsNothing);
+      expect(key('swarm-title-loading'), findsNothing, reason: 'none will come');
       final line = tester.widget<Text>(key('swarm-too-old'));
       expect(line.data, swarmServerTooOld);
       expect(line.style?.color, isNot(AppColors.danger));
@@ -559,8 +561,9 @@ void main() {
     Future<void> away(
       WidgetTester tester,
       Duration later,
-      void Function(Duration) wait,
-    ) async {
+      void Function(Duration) wait, {
+      bool settle = true,
+    }) async {
       for (final state in [
         AppLifecycleState.inactive,
         AppLifecycleState.hidden,
@@ -574,7 +577,8 @@ void main() {
       ]) {
         tester.binding.handleAppLifecycleStateChanged(state);
       }
-      await tester.pumpAndSettle();
+      // A skeleton breathes for as long as it shows: nothing settles under it.
+      settle ? await tester.pumpAndSettle() : await frames(tester);
     }
 
     /// Work its agent said Done at [at].
@@ -720,29 +724,93 @@ void main() {
       unawaited(host.session!.inbox.refresh());
       await frames(tester);
 
-      expect(inside('swarm-away-needs', find.text('–')), findsOneWidget);
+      expect(inside('swarm-away-needs', find.byType(SkeletonText)), findsOne);
       expect(inside('swarm-away-needs', find.text('0')), findsNothing);
 
       gate.complete();
-      await tester.pumpAndSettle();
+      await frames(tester);
 
-      expect(inside('swarm-away-needs', find.text('–')), findsOneWidget);
+      expect(inside('swarm-away-needs', find.byType(SkeletonText)), findsOne);
       expect(inside('swarm-away-needs', find.text('0')), findsNothing);
     });
 
-    testWidgets('the work done is a dash while a Swarm shown is not read', (
-      tester,
-    ) async {
+    testWidgets('the figures are skeletons while a Swarm shown is not read, '
+        'its rows on their way, and the failure says nothing', (tester) async {
       var now = _halfHourIn();
       final fake = backend()
         ..routes['/api/super-tabs/$tab/parts'] = (_) =>
             throw SuperTabFailure('INTERNAL', 'Broken', statusCode: 500);
-      await pump(tester, fake, now: () => now);
-      await away(tester, const Duration(hours: 1), (d) => now = now.add(d));
+      await pump(tester, fake, now: () => now, settle: false);
+      await away(
+        tester,
+        const Duration(hours: 1),
+        (d) => now = now.add(d),
+        settle: false,
+      );
 
-      expect(inside('swarm-away-done', find.text('–')), findsOneWidget);
-      expect(inside('swarm-away-needs', find.text('–')), findsOneWidget);
-      expect(find.text('Pull down to try again.'), findsOneWidget);
+      expect(inside('swarm-away-done', find.byType(SkeletonText)), findsOne);
+      expect(inside('swarm-away-needs', find.byType(SkeletonText)), findsOne);
+      expect(key('swarm-projects-loading-$tab'), findsOneWidget);
+      expect(key('swarm-projects-error-$tab'), findsNothing);
+      expect(find.text('Broken'), findsNothing);
+    });
+
+    testWidgets('back from away before the list answers: the card, its figures '
+        'skeletons, never a false none; the figures once it is read', (
+      tester,
+    ) async {
+      var now = _halfHourIn();
+      final fake = backend();
+      final gate = Completer<void>();
+      final listed = fake.routes['/api/super-tabs/list']!;
+      fake.routes['/api/super-tabs/list'] = (body) async {
+        await gate.future;
+        return listed(body);
+      };
+      await pump(tester, fake, now: () => now, settle: false);
+      await away(
+        tester,
+        const Duration(hours: 1),
+        (d) => now = now.add(d),
+        settle: false,
+      );
+
+      expect(key('swarm-projects-loading'), findsOneWidget);
+      expect(inside('swarm-away-done', find.byType(SkeletonText)), findsOne);
+      expect(inside('swarm-away-needs', find.byType(SkeletonText)), findsOne);
+      expect(inside('swarm-away', find.text('0')), findsNothing);
+
+      gate.complete();
+      await tester.pumpAndSettle();
+
+      expect(inside('swarm-away', find.byType(SkeletonText)), findsNothing);
+    });
+
+    testWidgets('a Swarm no read will bring says why, and leaves no skeleton '
+        'for ever', (tester) async {
+      var now = _halfHourIn();
+      final fake = backend()
+        ..routes['/api/super-tabs/$tab/parts'] = (_) => throw SuperTabFailure(
+          'UPDATE_REQUIRED',
+          'Update',
+          statusCode: 426,
+        );
+      await pump(tester, fake, now: () => now, settle: false);
+      await away(
+        tester,
+        const Duration(hours: 1),
+        (d) => now = now.add(d),
+        settle: false,
+      );
+
+      expect(key('swarm-projects-error-$tab'), findsOneWidget);
+      expect(
+        find.text('Update Harness to keep using this Swarm.'),
+        findsOneWidget,
+      );
+      expect(key('swarm-projects-loading-$tab'), findsNothing);
+      expect(inside('swarm-away-done', find.text('0')), findsOneWidget);
+      expect(inside('swarm-away', find.byType(SkeletonText)), findsNothing);
     });
   });
 
@@ -768,7 +836,7 @@ void main() {
       expect(key('swarm-title-button'), findsOneWidget);
     });
 
-    testWidgets("a project's row draws who reads it and counts who is running: "
+    testWidgets("a project's row counts who reads it and who is running: "
         'a private one only its owner and members', (tester) async {
       final fake = backend();
       Map<String, dynamic> inProject(String id, String visibility) => {
@@ -809,23 +877,19 @@ void main() {
       };
       await pump(tester, fake);
 
-      List<String> faces(String row) => [
-        for (final avatar in tester.widgetList<SwarmAvatar>(
-          inside(row, find.byType(SwarmAvatar)),
-        ))
-          avatar.id,
-      ];
       const publicRow = 'swarm-project-$tab-$project';
       const privateRow = 'swarm-project-$tab-$web';
-      expect(faces(publicRow), [me, 'person-other', 'person-third']);
-      expect(faces(privateRow), [me, 'person-other']);
-      expect(inside(publicRow, find.text('1 agent running')), findsOneWidget);
-      expect(inside(privateRow, find.text('No agents yet')), findsOneWidget);
+      expect(
+        inside(publicRow, find.text('3 humans • 1 agent running')),
+        findsOneWidget,
+      );
+      expect(inside(privateRow, find.text('2 humans')), findsOneWidget);
+      expect(inside(publicRow, find.byType(SwarmAvatar)), findsNothing);
     });
 
     testWidgets('a project the Lead tagged the person in is bold and bright '
-        'with @N filled; the rest are quiet; each has its people, how many '
-        'agents are running and when it last moved', (tester) async {
+        'with @N filled; the rest are quiet; each has how many people read '
+        'it and when it last moved', (tester) async {
       final semantics = tester.ensureSemantics();
       await pump(tester, backend());
 
@@ -840,8 +904,7 @@ void main() {
       expect(weightOf(tester, webRow, 'Web'), isNot(AppFont.semibold));
       expect(inside(webRow, find.textContaining('@')), findsNothing);
       for (final row in [mobileRow, webRow]) {
-        expect(inside(row, find.text('No agents running')), findsOneWidget);
-        expect(inside(row, key('swarm-team-face-$me')), findsOneWidget);
+        expect(inside(row, find.text('1 human')), findsOneWidget);
         expect(inside(row, find.byType(SwarmTeamDots)), findsNothing);
       }
       expect(inside(mobileRow, find.text('30m')), findsOneWidget);
@@ -1360,7 +1423,7 @@ void main() {
       expect(inside(mobileRow, find.text('#Mobile')), findsOneWidget);
       expect(inside(backendRow, find.text('#Backend')), findsOneWidget);
       expect(
-        inside(backendRow, find.textContaining(' · Work Swarm')),
+        inside(backendRow, find.textContaining(' • Work Swarm')),
         findsOneWidget,
       );
 
@@ -2496,6 +2559,97 @@ void main() {
     double height(WidgetTester tester, String k) =>
         tester.getSize(key(k)).height;
 
+    testWidgets('before the list answers, the title and its tile are '
+        'skeletons; the Swarm then names them', (tester) async {
+      final fake = backend();
+      final listed = hold(fake, '/api/super-tabs/list');
+      await pump(tester, fake, settle: false);
+
+      expect(key('swarm-title-loading'), findsOneWidget);
+      expect(key('swarm-title'), findsNothing);
+      expect(
+        inside('swarm-title-button', find.byType(Skeleton)),
+        findsWidgets,
+      );
+      expect(find.text('Swarm'), findsNothing, reason: 'no word for a name');
+
+      listed.complete();
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-title-loading'), findsNothing);
+      expect(tester.widget<Text>(key('swarm-title')).data, 'Phone Swarm');
+      expect(
+        inside('swarm-title-button', find.byType(SwarmProjectTile)),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('a start screen has no Swarm coming: the title is no skeleton',
+        (tester) async {
+      final fake = backend();
+      final listed = hold(fake, '/api/super-tabs/list');
+      await pump(
+        tester,
+        fake,
+        computers: _Computers(const []),
+        settle: false,
+      );
+
+      expect(find.byType(SwarmStartView), findsOneWidget);
+      expect(key('swarm-title-loading'), findsNothing);
+      expect(tester.widget<Text>(key('swarm-title')).data, 'Swarm');
+
+      listed.complete();
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('the switcher opened before the list answers has a row on its '
+        'way, and the Swarm in its place after', (tester) async {
+      final fake = backend();
+      final listed = hold(fake, '/api/super-tabs/list');
+      await pump(tester, fake, settle: false);
+
+      await tester.tap(key('swarm-title-button'));
+      await frames(tester);
+      expect(key('swarm-switch-loading'), findsOneWidget);
+      expect(key('swarm-switch-join'), findsOneWidget);
+
+      listed.complete();
+      await frames(tester);
+      await frames(tester);
+      expect(key('swarm-switch-loading'), findsNothing);
+      expect(key('swarm-switch-$tab'), findsOneWidget);
+    });
+
+    testWidgets('a row has a skeleton where its tags go until what waits is '
+        'read, then its tags, or nothing', (tester) async {
+      final fake = backend();
+      final asked = hold(fake, '/api/super-tabs/$tab/mentions?state=waiting');
+      final host = await pump(tester, fake, settle: false);
+      await frames(tester);
+      const mobileRow = 'swarm-project-$tab-$project';
+      const webRow = 'swarm-project-$tab-$web';
+
+      expect(host.session!.inbox.asks(tab)!.loading, isTrue);
+      for (final row in [mobileRow, webRow]) {
+        expect(inside(row, key('swarm-project-tags-loading')), findsOneWidget);
+        expect(inside(row, find.byType(SwarmTags)), findsNothing);
+      }
+      final tall = tester.getSize(key(mobileRow)).height;
+
+      asked.complete();
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-project-tags-loading'), findsNothing);
+      expect(inside(mobileRow, find.byType(SwarmTags)), findsOneWidget);
+      expect(inside(webRow, find.byType(SwarmTags)), findsNothing);
+      expect(
+        tester.getSize(key(mobileRow)).height,
+        closeTo(tall, .01),
+        reason: 'the tags come where the skeleton was',
+      );
+    });
+
     testWidgets('before the list answers, the projects are skeleton rows, '
         'and nothing says it is reading', (tester) async {
       final fake = backend();
@@ -2524,6 +2678,17 @@ void main() {
         final listed = hold(fake, '/api/super-tabs/list');
         await pump(tester, fake, settle: false);
         final row = height(tester, 'swarm-projects-loading-0');
+        final loading = find.byKey(
+          const ValueKey('swarm-projects-loading-0'),
+        );
+        final dot = tester.getCenter(
+          find.descendant(of: loading, matching: find.byType(Skeleton)).first,
+        );
+        final title = tester.getTopLeft(
+          find
+              .descendant(of: loading, matching: find.byType(SkeletonText))
+              .first,
+        );
 
         listed.complete();
         await tester.pumpAndSettle();
@@ -2532,6 +2697,17 @@ void main() {
           height(tester, 'swarm-project-$tab-$web'),
           closeTo(row, .01),
           reason: 'its title and its team, as the skeleton draws them',
+        );
+        const webRow = 'swarm-project-$tab-$web';
+        expect(
+          tester.getCenter(inside(webRow, key('swarm-project-dot'))).dx,
+          closeTo(dot.dx, .01),
+          reason: 'the dot stays where its skeleton was',
+        );
+        expect(
+          tester.getTopLeft(inside(webRow, find.text('#Web'))).dx,
+          closeTo(title.dx, .01),
+          reason: 'the title stays where its bar was',
         );
       });
     }
@@ -2573,16 +2749,25 @@ void main() {
       expect(key('swarm-project-$tab-$project'), findsOneWidget);
     });
 
-    testWidgets('a Swarm that could not be read says so, with no skeleton '
-        'left', (tester) async {
-      final fake = backend()
-        ..routes['/api/super-tabs/$tab/parts'] = (_) =>
-            throw SuperTabFailure('INTERNAL', 'Broken', statusCode: 500);
-      await pump(tester, fake);
+    testWidgets('a Swarm that could not be read stays on its way, saying '
+        'nothing, until a read works', (tester) async {
+      final fake = backend();
+      final parts = fake.routes['/api/super-tabs/$tab/parts']!;
+      fake.routes['/api/super-tabs/$tab/parts'] = (_) =>
+          throw SuperTabFailure('INTERNAL', 'Broken', statusCode: 500);
+      final host = await pump(tester, fake, settle: false);
+
+      expect(host.session!.inbox.reader(tab)!.error, 'Broken');
+      expect(key('swarm-projects-loading-$tab'), findsOneWidget);
+      expect(key('swarm-projects-error-$tab'), findsNothing);
+      expect(find.text('Broken'), findsNothing);
+
+      fake.routes['/api/super-tabs/$tab/parts'] = parts;
+      await host.session!.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
 
       expect(key('swarm-projects-loading-$tab'), findsNothing);
-      expect(key('swarm-projects-error-$tab'), findsOneWidget);
-      expect(find.text('Pull down to try again.'), findsOneWidget);
+      expect(key('swarm-project-$tab-$project'), findsOneWidget);
     });
   });
 

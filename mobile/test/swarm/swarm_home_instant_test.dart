@@ -136,10 +136,10 @@ void main() {
       expect(
         find.descendant(
           of: key('swarm-project-$tab-$project'),
-          matching: find.text('No agents running'),
+          matching: find.text('1 human'),
         ),
         findsOneWidget,
-        reason: 'its team, Nova waiting on the person',
+        reason: 'its people; Nova waits on the person, so none is running',
       );
       expect(
         [for (final need in host.session!.inbox.needs) need.conversationId],

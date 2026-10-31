@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
@@ -342,6 +343,49 @@ class ApiClient {
     final data = unwrapApiResponse(res) as Map<String, dynamic>;
     return (data['transcript'] as String? ?? '').trim();
   }
+  // -- Swarm reads (the viewer's own session signs them) --
+
+  /// One read of the Swarm ([path], `/api/super-tabs…`), straight from the
+  /// backend with this viewer's own sign-in, as the web build reads it
+  /// (docs/specs/2026-10-30-web-swarm-direct.md). Answers the backend's value,
+  /// read as `backend()` in cli/src/superTabs/wire.ts reads it, so it is the
+  /// value a machine would have forwarded. A refusal throws a [SuperTabFailure]
+  /// carrying the backend's code and status; no answer at all throws what the
+  /// transport threw.
+  Future<Object?> swarmRead(String path) async {
+    final response = await _dio.get<dynamic>(path);
+    final status = response.statusCode ?? 0;
+    var body = response.data;
+    if (body is String) {
+      try {
+        body = jsonDecode(body);
+      } on FormatException {
+        // A proxy's page, not the backend's answer: refused below by its status.
+      }
+    }
+    if (status == 426) {
+      throw const SuperTabFailure(
+        'UPDATE_REQUIRED',
+        'Update Harness to keep using this Swarm.',
+        statusCode: 426,
+      );
+    }
+    final envelope = body is Map ? body : const <String, Object?>{};
+    if (status < 200 || status >= 300 || envelope['success'] != true) {
+      final error = envelope['error'];
+      final code = error is Map ? error['code'] : envelope['code'];
+      final message = error is Map ? error['message'] : envelope['message'];
+      throw SuperTabFailure(
+        code is String && code.isNotEmpty ? code : 'BACKEND_UNAVAILABLE',
+        message is String && message.isNotEmpty
+            ? message
+            : 'Could not reach this Swarm.',
+        statusCode: status,
+      );
+    }
+    return envelope['data'];
+  }
+
   // -- Swarm chat files (backend only: the viewer's own SSO session signs it) --
 
   /// Sends one file for a message in [conversationId] of Swarm [tabId] and
@@ -357,7 +401,7 @@ class ApiClient {
   /// attachment. A larger file still is refused before anything is sent.
   ///
   /// Straight to the backend with the token this viewer holds, unlike every
-  /// other Swarm call, which one of the account's machines forwards
+  /// other Swarm command, which one of the account's machines forwards
   /// (`AppNotifier.swarmRequest`): the backend takes a chat file only from the
   /// client itself, and a machine forwards only JSON. [onProgress] is told the
   /// part sent, from 0 to 1. A refusal throws a [SuperTabFailure] carrying the
