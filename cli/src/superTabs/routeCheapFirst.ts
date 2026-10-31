@@ -27,10 +27,15 @@ export const MAX_OWNED = 3
 const CHEAP_STRENGTH = 2
 /** Kinds of work a grid model never takes, as the routing agent names them (route.ts Assessment.kind). */
 const SECURITY_KINDS = new Set(['security', 'auth', 'privacy', 'secrets', 'crypto', 'permissions'])
+/** The only kinds of work a grid model may take, as the routing agent names them. Anything else, and a task with no kind, gets
+ *  no grid model: a security task routed as low risk with no kind must never reach one (Ken's rule; Lead, 10-31: fail closed).
+ *  Adding a kind here is the one place to widen it. */
+export const GRID_KINDS: readonly string[] = ['docs', 'tests', 'fixtures', 'copy', 'refactor']
 
 export const GRID_FIRST = 'A small, low-risk build: a cheap model on the Swarm\'s grid tries it first. If its review fails or the attempt is lost, the next route steps up to a strong model.'
 export const NEVER_REVIEWS = 'A review never runs on a model on the Swarm\'s grid: reviews need a strong model.'
 export const NEVER_SECURITY = 'Security-sensitive work (a security kind or high risk) never runs on a model on the Swarm\'s grid.'
+export const GRID_KINDS_ONLY = `A model on the Swarm's grid takes only work whose kind is ${GRID_KINDS.slice(0, -1).join(', ')} or ${GRID_KINDS.at(-1)}; this task names no such kind.`
 export const FIRST_ATTEMPT_ONLY = 'A model on the Swarm\'s grid takes only a task\'s first attempt, so this one steps up.'
 export const EARLIER_UNREADABLE = 'Its earlier attempts could not be read, so it is not taken for a first attempt.'
 const NAMED = 'A person named this model, so it is offered.'
@@ -65,18 +70,19 @@ export function cheapTaskOf(group: Json, state: Json, history: { decisions: unkn
   return { review: isReview(group), owned: Array.isArray(owns) ? owns.filter(o => typeof o === 'string').length : 0, earlier }
 }
 
-/** Whether the task is one a grid model never takes: a review (a task linked to the work it reviews, or kind `review`), or
- *  security work (a security kind, or high risk). */
+/** Why the task is one a grid model never takes: a review (a task linked to the work it reviews, or kind `review`), security
+ *  work (a security kind, or high risk), or work whose kind is not on [GRID_KINDS], a missing kind included. */
 function forbidden(review: boolean, a: Pick<Assessment, 'kind' | 'risk'>): string | null {
   if (review || a.kind === 'review') return NEVER_REVIEWS
   if (a.risk === 'high' || (a.kind && SECURITY_KINDS.has(a.kind))) return NEVER_SECURITY
+  if (!a.kind || !GRID_KINDS.includes(a.kind)) return GRID_KINDS_ONLY
   return null
 }
 
 /** The guard's name, which starts its reasons ("Grid limits: …"). */
 export const GRID_LIMITS = 'Grid limits'
 /** Ken's rule, "never route reviews to cheap or local models", and the same for security work: a grid candidate is left out of
- *  either, even one a person names. The route itself has no such filter (project instructions, #2414), so this plug-in is the
+ *  either, and of any work whose kind is not on [GRID_KINDS], even one a person names. The route itself has no such filter (project instructions, #2414), so this plug-in is the
  *  only place it lives. It is made from nothing but the task's own row, so it is ready at once and never depends on a read
  *  that could be late (Lead, 10-31). */
 export function gridLimits(review: boolean): RoutePlugin {

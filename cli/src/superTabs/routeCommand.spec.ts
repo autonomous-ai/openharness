@@ -1572,7 +1572,8 @@ describe('local models on the Swarm\'s grid', () => {
         { grid: GRID, model: 'deepseek/deepseek-v4.1', kind: 'api' }, { grid: GRID, model: 'starting', starting: true }, { grid: 7, model: 'odd' }] } },
       { machineId: 'old', observation: { receivedAt: 'never', localModels: [{ grid: GRID, model: 'unnamed-host' }] } }] })
     const s = scoped({ tab: t })
-    const result = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'low', local: true } }, s, where as never, opener(), () => 'op')
+    // A grid model takes only work of a listed kind (routeCheapFirst.ts GRID_KINDS).
+    const result = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'low', local: true, kind: 'docs' } }, s, where as never, opener(), () => 'op')
     const excluded = recorded(s).command.decision.excluded as Array<{ title: string; reason: string }>
     expect(excluded.filter(e => /offline/.test(e.reason))).toEqual([
       { title: 'Kimi K3', reason: 'Its host 2x 4090 Rig is offline, so an agent on it would never start.' },
@@ -1592,7 +1593,8 @@ describe('local models on the Swarm\'s grid', () => {
     const t = tab(); Object.assign(t.state, { localModels: { grid: GRID, enabled: true },
       machines: [{ machineId: 'm1', observation: { receivedAt: Date.now(), localModels: [{ grid: GRID, model: 'qwen3', name: 'Qwen 3' }] } }] })
     const s = scoped({ tab: t })
-    const result = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'low', local: true } }, s, where as never, opener(), () => 'op')
+    // A grid model takes only work of a listed kind (routeCheapFirst.ts GRID_KINDS).
+    const result = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'low', local: true, kind: 'docs' } }, s, where as never, opener(), () => 'op')
     expect(result).toMatchObject({ ok: true, pick: { kind: 'new', gridModel: 'qwen3', gridName: GRID } })
     const hint = JSON.parse(/start OPERATION_ID (\{.*\}), then/.exec(result.next as string)![1]!)
     expect(hint).toMatchObject({ engine: 'claude', gridModel: 'qwen3', gridName: GRID })
@@ -1683,7 +1685,8 @@ describe('routing by facts', () => {
     const t = tab(); Object.assign(t.state, { localModels: { grid: GRID, enabled: true },
       machines: [{ machineId: 'rig', name: 'Rig', observation: { receivedAt: Date.now(), localModels: [], refusedModels: [{ grid: GRID, model: 'llama3.2:3b', why }] } }] })
     const s = scoped({ tab: t })
-    const result = await routeTask({ ...input, assessment: { ...input.assessment, local: true } }, s, where as never, opener(), () => 'op')
+    // A grid model takes only work of a listed kind (routeCheapFirst.ts GRID_KINDS).
+    const result = await routeTask({ ...input, assessment: { ...input.assessment, local: true, kind: 'tests' } }, s, where as never, opener(), () => 'op')
     expect(result).toMatchObject({ ok: true, pick: { gridModel: 'llama3.2:3b', notes: [why] } })
     expect(shown(s).every(r => r.gridModel === 'llama3.2:3b' && r.label.includes(why))).toBe(true)
   })
@@ -1720,7 +1723,7 @@ describe('cheap first, through the route', () => {
     Object.assign(t.state.conversations[1]!, { task: { goal: 'Fix the typo.', owns: ['docs/guide.md'] } }, group)
     return t
   }
-  const small = { ...input, assessment: { difficulty: 'low', risk: 'low', size: 'small', why: 'A typo in one doc.' } }
+  const small = { ...input, assessment: { difficulty: 'low', risk: 'low', size: 'small', why: 'A typo in one doc.', kind: 'docs' } }
   /** The table with the catalog's grid ratings: Kimi K3 at 2. */
   const rated = { ...policy, localModels: { quality: 1, enabled: true, models: [{ model: 'kimi k3', quality: 2 }] } } as typeof policy
   const route = (t: ReturnType<typeof tab>, task = small, history?: Record<string, unknown>) => {

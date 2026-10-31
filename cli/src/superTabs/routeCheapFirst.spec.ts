@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { choose, decide, recordOf, type Assessment, type Catalog, type Probe } from './route.js'
 import { makePlugins, MAKER_TIMEOUT_MS } from './routePlugins.js'
-import { CHEAP_FIRST, CHEAP_FIRST_MAKER, CHEAP_FIRST_MAKERS, cheapFirst, cheapTaskOf, EARLIER_UNREADABLE, GRID_LIMITS, GRID_LIMITS_MAKER, gridLimits, HISTORY_WAIT_MS, FIRST_ATTEMPT_ONLY, GRID_FIRST, MAX_OWNED, NEVER_REVIEWS, NEVER_SECURITY, type CheapTask } from './routeCheapFirst.js'
+import { CHEAP_FIRST, CHEAP_FIRST_MAKER, CHEAP_FIRST_MAKERS, cheapFirst, cheapTaskOf, EARLIER_UNREADABLE, GRID_KINDS, GRID_KINDS_ONLY, GRID_LIMITS, GRID_LIMITS_MAKER, gridLimits, HISTORY_WAIT_MS, FIRST_ATTEMPT_ONLY, GRID_FIRST, MAX_OWNED, NEVER_REVIEWS, NEVER_SECURITY, type CheapTask } from './routeCheapFirst.js'
 
 const NOW = 1_000_000_000, H = 3_600_000, D = 86_400_000
 /** Today's catalog (backend superTabs/catalog.ts): Opus and Codex at 3, Kimi K3 and DeepSeek v4.1 at 2 on the grid. */
@@ -10,7 +10,7 @@ const catalog: Catalog = { grid: { strength: 1, models: [{ model: 'kimi k3', str
   { engine: 'claude', model: 'opus', effort: 'high', strength: 3, cost: 3, offered: true },
   { engine: 'codex', model: 'default', effort: 'default', strength: 3, cost: 2, offered: true },
 ] }
-const a = (patch: Partial<Assessment> = {}): Assessment => ({ difficulty: 'low', risk: 'low', size: 'small', why: 'Fix a typo in the docs.', needs: { tools: [], devices: [] }, ...patch })
+const a = (patch: Partial<Assessment> = {}): Assessment => ({ difficulty: 'low', risk: 'low', size: 'small', why: 'Fix a typo in the docs.', kind: 'docs', needs: { tools: [], devices: [] }, ...patch })
 const quota = { known: true, leftPercent: 80, resetsAt: null, windows: [{ name: '5-hour', leftPercent: 80, resetsAt: NOW + 3 * H }, { name: 'weekly', leftPercent: 90, resetsAt: NOW + 5 * D }] }
 const opus: Probe = { kind: 'new', machineId: 'm1', machineName: 'remote-1', engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 3,
   quota: { ...quota, account: 'acct' }, activity: 'new agent', known: true, refusals: [], notes: [] }
@@ -74,6 +74,19 @@ describe('cheap first: a small, low-risk build goes to a cheap grid model first'
       expect(new Set(reasons(r))).toEqual(new Set([`${GRID_LIMITS}: ${NEVER_SECURITY}`]))
       expect(route(first, { ...assessment, model: 'deepseek' })).toMatchObject({ error: 'NO_CANDIDATE' })
     }
+  })
+
+  it('fails closed on the kind: a task with no kind, or one not on the list, gets no grid model, even a named one', () => {
+    for (const kind of [undefined, 'ui', 'parser', 'Docs']) {
+      const r = ok(route(first, { kind }))
+      expect(r.shown.some(s => s.gridModel)).toBe(false)
+      expect(new Set(reasons(r))).toEqual(new Set([`${GRID_LIMITS}: ${GRID_KINDS_ONLY}`]))
+      expect(route(first, { kind, model: 'kimi' })).toMatchObject({ error: 'NO_CANDIDATE' })
+      expect(route(first, { kind, local: true })).toMatchObject({ error: 'NO_CANDIDATE' })
+    }
+    expect(GRID_KINDS_ONLY).toBe('A model on the Swarm\'s grid takes only work whose kind is docs, tests, fixtures, copy or refactor; this task names no such kind.')
+    // Every kind on the list may try the grid first.
+    for (const kind of GRID_KINDS) expect(picks(route(first, { kind }))[0]).toBe('DeepSeek v4.1')
   })
 
   it('steps up: a task with an earlier attempt routes without grid models, and says why', () => {
