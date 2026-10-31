@@ -312,29 +312,58 @@ describe('while a Swarm is deleted', () => {
     expect(await db.superTabMessage.count({ where: { tabId: tab, text: 'after the delete' } })).toBe(0)
   })
 
-  it('is left alone by the background jobs: no group sleeps, no summary is backfilled, no pull request is read', async () => {
-    const w = world(), f = await swarm(w)
+  /** A Swarm with an archived group whose reports are all summarized (so it may sleep), a finished start past its keeping,
+   *  a decision still waiting in that finished group, and a group finished weeks ago with a merged pull request; deleted or
+   *  not. Each background job changes the live one, so a check on the deleted one can fail (re-check 2 of #2457). */
+  async function quietSwarm(w: ReturnType<typeof world>, name: string, deleted: boolean) {
+    const f = await swarm(w, name)
     const group = String((await f.execute({ type: 'conversation.create', title: 'Old work', brief: 'Done long ago.',
       checks: [{ description: 'Done', independent: false }] })).result.conversationId)
     await f.execute({ type: 'conversation.archive', conversationId: group, archived: true })
-    // Finished with a merged pull request, quiet for weeks: the archive pass would read it.
+    const progress = await db.swarmProgress.findUniqueOrThrow({ where: { id: `${f.tab}:lead` } })
+    await db.swarmProgress.update({ where: { id: progress.id }, data: { data: { ...(progress.data as object), summarizedFloor: 1e9 } } })
     const prGroup = String((await f.execute({ type: 'conversation.create', title: 'Merged work', brief: 'Merged.',
       checks: [{ description: 'Done', independent: false }] })).result.conversationId)
     await db.superTabThreadBackfill.deleteMany({ where: { id: f.tab } })
-    await f.execute({ type: 'swarm.delete', name: 'Lampos' })
-    // Written as the record of work finished weeks ago would be (no command writes a deleted Swarm).
+    if (deleted) await f.execute({ type: 'swarm.delete', name })
+    // Written as the records of work finished weeks ago would be.
+    const old = new Date(w.clock.now - 30 * 24 * 60 * 60 * 1000)
     const row = await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key: prGroup } } })
-    await db.swarmGroup.update({ where: { id: row.id }, data: { workFinished: true, lastActivityAt: new Date(w.clock.now - 30 * 24 * 60 * 60 * 1000),
+    await db.swarmGroup.update({ where: { id: row.id }, data: { workFinished: true, lastActivityAt: old,
       data: { ...(row.data as object), assignment: { id: 'a1', agentId: 'gone', status: 'done', assignedAt: new Date(0).toISOString() },
-        pullRequestUrls: ['https://github.com/example/app/pull/1'] } } })
+        pullRequestUrls: [`https://github.com/example/${name}/pull/1`] } } })
+    await db.swarmStart.create({ data: { id: `${f.tab}:start-old`, tabId: f.tab, key: 'start-old', version: 1, changedAt: old, ordinal: 0,
+      machineId: f.machineId, conversationId: 'lead', finishedAt: old,
+      data: { id: 'start-old', creationId: 'c', actorKey: `person:${owner.sub}`, contributorId: owner.sub, membershipGeneration: 'g', machineOwnerId: host.sub,
+        hostGrant: null, error: 'It failed long ago.', request: { conversationId: 'lead', machineId: f.machineId, engine: 'codex', name: 'Builder', cwd: '/repo',
+          worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } } } })
+    await db.superTabDecision.create({ data: { id: `${f.tab}:decision`, tabId: f.tab, batchId: 'b', projectId: 'lead', conversationId: group,
+      personId: owner.sub, askerAgentId: f.lead, question: 'Ship it?', options: ['Yes', 'No'], recommended: 0, unblocks: 'Shipping', createdAt: old } })
+    return { ...f, group }
+  }
 
-    await sweepSwarms(db, w.clock.now + 30 * 24 * 60 * 60 * 1000)
-    expect((await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key: group } } })).dormant).toBe(false)
-    await backfillThreads(db, w.clock.now)
-    expect(await db.superTabThreadBackfill.count({ where: { id: f.tab } })).toBe(0)
+  it('is left alone by the background jobs, which change a live Swarm set up alike', async () => {
+    const w = world(), live = await quietSwarm(w, 'Live', false), gone = await quietSwarm(w, 'Gone', true)
+    const later = w.clock.now + 30 * 24 * 60 * 60 * 1000
+    const state = async (f: typeof live) => ({
+      asleep: (await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key: f.group } } })).dormant,
+      startKept: !(await db.swarmStart.findUniqueOrThrow({ where: { id: `${f.tab}:start-old` } })).deleted,
+      decisionWaits: !(await db.superTabDecision.findUniqueOrThrow({ where: { id: `${f.tab}:decision` } })).answeredAt,
+      backfilled: !!await db.superTabThreadBackfill.count({ where: { id: f.tab } }),
+    })
+    expect(await state(live)).toEqual({ asleep: false, startKept: true, decisionWaits: true, backfilled: false })
+    expect(await state(gone)).toEqual({ asleep: false, startKept: true, decisionWaits: true, backfilled: false })
+
+    // The archive pass first: the sleep sweep's write would make the merged group look recently active.
     const read: string[] = []
     await archiveFinishedGroups(db, w.store, { state: async url => { read.push(url); return 'merged' }, done: async () => {} }, w.clock.now)
-    expect(read).toEqual([])
+    await sweepSwarms(db, later)
+    await w.store.withdrawEndedDecisions()
+    await backfillThreads(db, w.clock.now)
+
+    expect(await state(live)).toEqual({ asleep: true, startKept: false, decisionWaits: false, backfilled: true })
+    expect(await state(gone)).toEqual({ asleep: false, startKept: true, decisionWaits: true, backfilled: false })
+    expect(read).toEqual(['https://github.com/example/Live/pull/1'])
   })
 })
 
@@ -381,8 +410,13 @@ describe('the purge, everywhere', () => {
     expect(keptBefore.length).toBe(targets.length + 1)
   })
 
-  it('reads the due Swarms and an owner\'s deleted list by their indexes', async () => {
+  it('reads the due Swarms, an owner\'s deleted list and a Workspace\'s deleted Swarms by their indexes', async () => {
     const w = world(), f = await swarm(w)
+    // Someone in this Swarm alone, so removing them from the Workspace touches no other test's Swarms.
+    const leaver = user(6, 'leaver')
+    await db.user.upsert({ where: { id: leaver.sub }, create: { id: leaver.sub, externalId: `fixture-${leaver.sub}`, email: leaver.email, autonomousEnv: 'prod' }, update: {} })
+    const invitation = await f.execute({ type: 'invite.create', email: leaver.email, role: 'viewer', conversationId: 'lead' })
+    await f.execute({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, leaver)
     await f.execute({ type: 'swarm.delete', name: 'Lampos' })
     const plans = async (read: () => Promise<unknown>) => {
       await db.$runCommandRaw({ profile: 2 })
@@ -395,6 +429,11 @@ describe('the purge, everywhere', () => {
     }
     expect(await plans(() => w.store.deletedList(owner))).toEqual(['IXSCAN { autonomousEnv: 1, ownerId: 1, _id: 1 }'])
     expect(await plans(() => purgeDeletedSwarms(db, null, w.clock.now))).toEqual(['IXSCAN { purgeAt: 1 }'])
+    // A Workspace removal reads the person's Swarms by the member index and the Workspace's deleted ones by its own.
+    const workspaceId = (await db.superTab.findUniqueOrThrow({ where: { id: f.tab }, select: { workspaceId: true } })).workspaceId!
+    const removal = await plans(async () => expect(await w.store.workspaces.remove(owner, workspaceId, leaver.sub)).toEqual({ userId: leaver.sub, pending: 0 }))
+    expect(removal).toEqual(expect.arrayContaining(['IXSCAN { autonomousEnv: 1, memberIds: 1, _id: 1 }', 'IXSCAN { autonomousEnv: 1, workspaceId: 1 }']))
+    expect(removal.filter(plan => !plan.startsWith('IXSCAN'))).toEqual([])
   })
 
   it('never lets Swarms it cannot finish hold back one newly due', async () => {

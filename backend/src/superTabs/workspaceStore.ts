@@ -3,6 +3,7 @@ import type { AuthUser } from '../lib/ssoAuth.js'
 import { fail, stableId, type SuperTabState } from './model.js'
 import { mayAssignRole, mayManageMember, WORKSPACE_LABEL, workspaceCan, type WorkspaceAction, type WorkspaceRole } from './workspaces.js'
 import { memberSwarms } from './swarmRows.js'
+import { readBy } from './parts/indexed.js'
 import { logger } from '../utils/logger.js'
 
 type Transaction = Prisma.TransactionClient
@@ -298,11 +299,12 @@ export class SwarmWorkspaces {
     // Every Swarm of theirs in the Workspace: no page limit, as before; a person is in few Swarms.
     const rows: Array<{ id: string }> = await memberSwarms(this.db, removal.autonomousEnv, removal.userId, { workspaceId: removal.workspaceId })
     // And the deleted ones they are in (deletion.ts): those list nobody, yet a restore would bring the person back with them.
-    for (const row of await this.db.superTab.findMany({ where: { autonomousEnv: removal.autonomousEnv, workspaceId: removal.workspaceId },
-      select: { id: true, deletedAt: true }, take: 1000 })) {
-      if (!row.deletedAt) continue
-      const member = await this.db.swarmMember.findUnique({ where: { id: `${row.id}:${removal.userId}` }, select: { deleted: true } })
-      if (member && !member.deleted) rows.push({ id: row.id })
+    // Only the deleted ones, by the Workspace index (re-check 2 of #2457: not every Swarm of the Workspace).
+    for (const row of await readBy(this.db, 'SuperTab', 'workspace', [{ $match: { autonomousEnv: removal.autonomousEnv, workspaceId: removal.workspaceId,
+      deletedAt: { $ne: null } } }, { $project: { _id: 1 } }])) {
+      const id = row._id as string
+      const member = await this.db.swarmMember.findUnique({ where: { id: `${id}:${removal.userId}` }, select: { deleted: true } })
+      if (member && !member.deleted) rows.push({ id })
     }
     let pending = 0
     for (const row of rows) {
