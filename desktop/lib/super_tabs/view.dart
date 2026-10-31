@@ -3656,7 +3656,11 @@ class _SuperTabViewState extends State<SuperTabView>
         if (c.offersChatSessions)
           Container(
             alignment: Alignment.centerLeft,
-            padding: const EdgeInsets.fromLTRB(28, 0, 24, 10),
+            padding: const EdgeInsets.only(
+              left: grid.AppDesktop.panelPadding,
+              right: grid.AppDesktop.panelPadding,
+              bottom: grid.AppDesktop.controlGap,
+            ),
             child: Visibility(
               visible:
                   _chatSessions.contains(chatId) &&
