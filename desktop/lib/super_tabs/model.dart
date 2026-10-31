@@ -440,6 +440,7 @@ class SuperTabSnapshot {
       }),
       localModels = SuperTabLocalModels.read(row['localModels']),
       teamAccounts = row['teamAccounts'] != false,
+      threadSessions = row['threadSessions'] == true,
       mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0,
       mentionsDigest = row['mentionsDigest'] as String?,
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
@@ -521,6 +522,11 @@ class SuperTabSnapshot {
   /// Whether this Swarm's server uses Harness Team accounts: false only where
   /// it says it does not try them yet (backend read/contract.ts `teamAccounts`).
   final bool teamAccounts;
+
+  /// Whether this Swarm's server takes a thread reply's New session: true only
+  /// where it says so (backend read/contract.ts `threadSessions`); an older
+  /// server's schema refuses the field.
+  final bool threadSessions;
   final int mentionsWaiting;
 
   /// Which tags wait, as a digest that moves when they change though the
