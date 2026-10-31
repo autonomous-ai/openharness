@@ -104,10 +104,15 @@ describe('harnessd\'s master and services lean', () => {
     // the hooks it installed run the notify.mjs beside it, not one beside the lean bundle.
     expect(coreCommand(d)).toMatch(new RegExp(` ${escape(join(d.dataDir, 'lean'))}/[0-9a-f]{16}/${escape(LEAN_CORE_ENTRY)} __run$`))
     expect(claudeHookCommand(d)).toContain(join(dirname(bundle), 'notify.mjs'))
-    for (const [name, pid] of servicePids(d)) expect(commandOf(pid), name).toBe(`harnessd-${name}`)
+    const processes = servicePids(d)
+    // The master logs immediately after spawn, before the child sets its title. Wait for that process
+    // state so Linux does not read Node's initial command line during startup (issue #1668).
+    await until('every service process to publish its harnessd title', () =>
+      [...processes].every(([name, pid]) => commandOf(pid) === `harnessd-${name}`) || null, 10_000, 50)
+    for (const [name, pid] of processes) expect(commandOf(pid), name).toBe(`harnessd-${name}`)
     // Lean: under the cost of parsing the whole CLI, which every one of them paid before (at idle,
     // 115 to 160 MiB each), and a long way under it at that (55 to 80).
-    for (const [name, pid] of [['master', master], ...servicePids(d)] as Array<[string, number]>) {
+    for (const [name, pid] of [['master', master], ...processes] as Array<[string, number]>) {
       expect(rssMiB(pid), `${name} resident MiB`).toBeLessThan(100)
     }
     // The core in it, beside its own processes, and nothing it starts runs from its folder: the panes' CLI is cli.js.
