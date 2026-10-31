@@ -3,8 +3,8 @@ import { Redis } from 'ioredis'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { redisStamps, STAMP_TTL_MS, type StampScope } from './cache.js'
 
-// A real Redis: REDIS_TEST_URL, e.g. redis://127.0.0.1:6379/15 (CI has none, so this file is skipped there). Only keys of
-// this run are touched, and they are removed afterwards.
+// A real Redis: REDIS_TEST_URL, e.g. redis://127.0.0.1:6379/15 (CI's Redis service; skipped without one, which CI's
+// redis-tests-ran step refuses). Only keys of this run are touched, and they are removed afterwards.
 const url = process.env.REDIS_TEST_URL
 // A real client: the shared setup's never connects (noRedis.test-support.ts).
 vi.unmock('ioredis')
@@ -72,6 +72,17 @@ describe.skipIf(!url)('redisStamps', () => {
       seen.push((await stamps.read([id])).get(id)!.main)
     }
     for (let i = 1; i < seen.length; i++) expect(seen[i]).toBeGreaterThan(seen[i - 1]!)
+  })
+
+  it('moves a stamp ahead of the clock by exactly one, never back to the clock', async () => {
+    const stamps = redisStamps(redis, bus), id = tab()
+    used.push(id)
+    await stamps.bump(id, ['main', 'machine'])
+    // As a burst or a faster clock could leave it: 10 s above Redis's clock, in microseconds.
+    const ahead = (Date.now() + 10_000) * 1000
+    await redis.hset(`swarm:stamp:${id}`, 'main', ahead, 'machine', ahead)
+    await stamps.bump(id, ['main'])
+    expect((await stamps.read([id])).get(id)).toEqual({ main: ahead + 1, machine: ahead })
   })
 
   it('moves only the scopes named', async () => {

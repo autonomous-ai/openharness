@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { UpBusMsg } from './tunnel.js'
 
-// A real Redis: REDIS_TEST_URL, e.g. redis://127.0.0.1:6379/15 (CI has none, so this file is skipped there). The bus
+// A real Redis: REDIS_TEST_URL, e.g. redis://127.0.0.1:6379/15 (CI's Redis service; skipped without one, which CI's
+// redis-tests-ran step refuses). The bus
 // connects to it as REDIS_URL. One process stands for several: a process's channel is just `termpod:`/`uppod:` + its id,
 // so subscribing to another id here is what that other process would do.
 const url = process.env.REDIS_TEST_URL

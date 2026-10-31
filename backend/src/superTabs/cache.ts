@@ -180,12 +180,13 @@ export const STAMP_TTL_MS = 30 * 86_400_000
 const stampKey = (tabId: string) => `swarm:stamp:${tabId}`
 /**
  * Moves each named stamp to Redis's clock in microseconds, or one past its value if that is higher, so a stamp only grows
- * and never comes back for other data: a process serves what it holds at an unchanged stamp (SwarmCache), and a delivery
- * poll skips its revocation check while the main stamp holds (store.ts deliveries). No two bumps run in one microsecond
- * (Redis runs one script at a time, each longer than that), so every stamp is its bump's time and none runs ahead of the
- * clock. Redis losing the key (a restart, the expiry) or coming back with an older value (a snapshot, a lagging replica)
- * therefore starts again above every stamp handed out. In milliseconds, a burst of bumps ran ahead of the clock and a loss
- * within that millisecond handed a stamp out again (review of #2456). A first bump starts the stamps it does not name one
+ * and no bump hands out a stamp already handed out: a process serves what it holds at an unchanged stamp (SwarmCache), and a
+ * delivery poll skips its revocation check while the main stamp holds (store.ts deliveries). No two bumps run in one
+ * microsecond (Redis runs one script at a time, each longer than that), so every stamp is its bump's time and none runs
+ * ahead of the clock. When Redis loses the key (a restart, the expiry), the next bump starts above every stamp handed out.
+ * When it comes back with an older value (a snapshot, a lagging replica), reads see that older stamp again until the next
+ * bump of each scope moves it above them all; held entries live at most CACHE_MAX_AGE_MS meanwhile. In milliseconds, a
+ * burst of bumps ran ahead of the clock and a loss within that millisecond handed a stamp out again (review of #2456). A first bump starts the stamps it does not name one
  * below the clock. Stamps are compared only for equality: the jump from older millisecond stamps is one more change.
  */
 const BUMP = `local t = redis.call('time')

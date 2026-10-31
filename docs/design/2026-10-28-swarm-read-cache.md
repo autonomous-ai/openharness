@@ -15,9 +15,10 @@ bumps), `backend/src/superTabs/cachedReads.ts` (reads built from what the cache 
     version and never read `changedAt`.
   - Touches change no data and move nothing.
   - Each move sets the stamp to Redis's clock in microseconds, or one past its value if that is higher
-    (`cache.ts BUMP`). A stamp is therefore its bump's time and never runs ahead of the clock, so Redis losing the
-    key or coming back with an older value (a restart, a snapshot, a lagging replica) never hands out a stamp a
-    process may still hold. Millisecond stamps could (review of #2456).
+    (`cache.ts BUMP`). A stamp is therefore its bump's time and never runs ahead of the clock, so no bump hands out
+    a stamp already handed out, even after Redis lost the key or came back with an older value (a restart, a
+    snapshot, a lagging replica). After an older value, reads see it again until the next bump of each scope; held
+    entries live at most 60 s meanwhile. Millisecond stamps could repeat on a bump (review of #2456).
 - **Bump after commit.** Every part write records its Swarm in the transaction (`parts/write.ts guardedWrite`,
   `parts/load.ts insertParts`). `swarmTransaction` bumps those Swarms after the commit, before the caller answers. Any
   read after the answer, on any process, therefore sees the change. This covers the store's commands, sweeps,
