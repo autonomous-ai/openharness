@@ -14,6 +14,7 @@ import '../widgets/new_harness_paste.dart';
 import 'buddy_sessions.dart';
 import 'composer_files.dart';
 import 'composer_newline.dart';
+import 'composer_toggle.dart';
 import 'controller.dart';
 import 'jump_to_latest.dart';
 import 'model.dart';
@@ -158,8 +159,9 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     advance(0);
   }
 
-  /// Where "Also send" also puts the reply, as the chat is named.
-  String get _alsoSendLabel {
+  /// Where "Also send" also puts the reply, as the chat is named: its hover
+  /// says so, the chip itself stays short enough for the send row.
+  String get _alsoSendHint {
     final group = c.selected;
     if (group != null && c.snapshot?.isProjectLead(group.id) == true) {
       return 'Also send to the project chat';
@@ -405,7 +407,26 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
                 grid.AppDesktop.groupGap,
                 grid.AppDesktop.groupGap,
               ),
-              child: _composerBox(),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _composerBox(),
+                  if (_startsSession)
+                    Padding(
+                      padding: const EdgeInsets.only(
+                        top: grid.AppDesktop.controlGap,
+                      ),
+                      child: Text(
+                        'Your reply starts a new Buddy session',
+                        key: const ValueKey('super-thread-session-note'),
+                        style: DesktopChrome.metadata(
+                          color: DesktopChrome.muted,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
           ],
         ),
@@ -513,14 +534,16 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
                   Expanded(
                     child: Wrap(
                       crossAxisAlignment: WrapCrossAlignment.center,
-                      spacing: grid.AppDesktop.controlGap,
+                      spacing: 4,
+                      runSpacing: 4,
                       children: [
                         if (_offersSession) _sessionChoice(writable),
                         if (_offersAlsoSend)
-                          _choice(
+                          SuperTabComposerToggle(
                             key: const ValueKey('super-thread-also-send'),
-                            value: _alsoSend,
-                            label: _alsoSendLabel,
+                            on: _alsoSend,
+                            label: 'Also send',
+                            hint: _alsoSendHint,
                             onChanged: writable
                                 ? (on) => setState(() => _alsoSend = on)
                                 : null,
@@ -557,75 +580,28 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     );
   }
 
-  /// New session, left of Also send: checked and locked once the thread's
-  /// session ended, unavailable (and saying why) at the limit.
+  /// New session, left of Also send: on and locked once the thread's session
+  /// ended; greyed while it can't start, its hover saying why.
   Widget _sessionChoice(bool writable) {
     final locked = _sessionLocked;
     // What the server would refuse is said before sending: a block (paused,
     // no Buddy, an older host) before the limit.
     final blocked = c.threadSessionBlocked;
     final full = !locked && blocked == null && c.buddySessionsFull;
-    final choice = _choice(
+    return SuperTabComposerToggle(
       key: const ValueKey('super-thread-new-session'),
-      value: locked || (_newSession && !full && blocked == null),
-      label: blocked != null
-          ? 'New session · $blocked'
-          : full
-          ? 'New session · ${SuperTabController.maxBuddySessions} running, end one first'
-          : 'New session',
-      onChanged: writable && !locked && !full && blocked == null
-          ? (on) => setState(() => _newSession = on)
-          : null,
-    );
-    return Tooltip(
-      message:
+      on: locked || (_newSession && !full && blocked == null),
+      label: 'New session',
+      hint:
           blocked ??
           (locked
               ? 'This thread\'s session ended. Your reply starts a new one.'
               : full
-              ? 'End a session to start another'
-              : 'Answer this thread in its own session, while your Buddy keeps '
-                    'answering the chat'),
-      child: choice,
+              ? '${SuperTabController.maxBuddySessions} sessions running. End one to start another.'
+              : 'Starts a separate Buddy session for this thread'),
+      onChanged: writable && !locked && !full && blocked == null
+          ? (on) => setState(() => _newSession = on)
+          : null,
     );
   }
-
-  /// A quiet checkbox and its label, both pressable, read as one control.
-  Widget _choice({
-    required Key key,
-    required bool value,
-    required String label,
-    required ValueChanged<bool>? onChanged,
-  }) => MergeSemantics(
-    child: Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Checkbox(
-          key: key,
-          visualDensity: VisualDensity.compact,
-          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          value: value,
-          onChanged: onChanged == null ? null : (on) => onChanged(on ?? false),
-        ),
-        Flexible(
-          child: GestureDetector(
-            onTap: onChanged == null ? null : () => onChanged(!value),
-            child: MouseRegion(
-              cursor: onChanged == null
-                  ? MouseCursor.defer
-                  : SystemMouseCursors.click,
-              child: Text(
-                label,
-                style: DesktopChrome.control(
-                  color: onChanged == null && !value
-                      ? DesktopChrome.muted
-                      : null,
-                ),
-              ),
-            ),
-          ),
-        ),
-      ],
-    ),
-  );
 }

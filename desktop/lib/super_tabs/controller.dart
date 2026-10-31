@@ -69,7 +69,7 @@ const superTabSessionsUnavailable =
 
 /// What a message refused for its form says, in place of the schema's own
 /// words ('command: Unrecognized key: ...'), which name fields, not causes.
-const superTabRefusedAsSent = "The server couldn't take this message yet.";
+const superTabRefusedAsSent = "The server couldn't take this message.";
 
 /// The schema's own words, as a refusal saved before this version kept them.
 final _schemaWords = RegExp(r'Unrecognized key|^command(\.\w+)*: ');
@@ -3687,9 +3687,8 @@ class SuperTabController extends ChangeNotifier {
 
   /// What a person reads for [failure] of [command]: the server's own words,
   /// except where a message was refused for its form (`VALIDATION_ERROR`, the
-  /// schema naming fields): a thread reply with New session, by a server that
-  /// does not take it yet, says so; any other says it plainly. Text length is
-  /// held to the limit before sending, so a form refusal is a newer app's field.
+  /// schema naming fields): a reply whose New session the server does not know
+  /// says so; any other says it plainly.
   static String _refusalText(
     SuperTabFailure failure,
     Map<String, dynamic> command,
@@ -3698,7 +3697,11 @@ class SuperTabController extends ChangeNotifier {
         failure.code != 'VALIDATION_ERROR') {
       return failure.message;
     }
-    return command['newSession'] == true
+    // Only the field itself unknown means the server can't start sessions;
+    // a reply refused for anything else (too many files) keeps New session.
+    return command['newSession'] == true &&
+            failure.message.contains('Unrecognized key') &&
+            failure.message.contains('newSession')
         ? superTabSessionsUnavailable
         : superTabRefusedAsSent;
   }

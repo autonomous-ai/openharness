@@ -137,6 +137,7 @@ class DesktopPill extends StatelessWidget {
     this.foregroundColor,
     this.surfaceColor,
     this.compact = false,
+    this.dense = false,
     this.quiet = false,
     this.capsule = true,
     this.textSize = 13,
@@ -160,6 +161,10 @@ class DesktopPill extends StatelessWidget {
   /// An opaque base for pills that float directly above workspace content.
   final Color? surfaceColor;
   final bool compact;
+
+  /// A compact pill with the quiet pill's side padding, for choices that share
+  /// a narrow row with other controls (a reply box's send row).
+  final bool dense;
   final bool quiet, capsule;
   final double textSize;
   final bool truncateFromStart;
@@ -191,7 +196,7 @@ class DesktopPill extends StatelessWidget {
                   : 34,
             ),
             padding: EdgeInsets.symmetric(
-              horizontal: quiet
+              horizontal: quiet || dense
                   ? 6
                   : compact
                   ? 9
