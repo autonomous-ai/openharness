@@ -41,6 +41,8 @@ export const NAMED_INDEX = {
     cleanup: { autonomousEnv: 1, cleanupMachineIds: 1, updatedAt: 1 },
     /** Swarms by id. */
     id: { _id: 1 },
+    /** Deleted Swarms by purge time (deletion.ts): the purge sweep. */
+    purge: { purgeAt: 1 },
   },
   /** Each part kind's changes since a cursor; machines also by when they were last read. */
   SwarmHead: { changes: { tabId: 1, changedAt: 1 } },

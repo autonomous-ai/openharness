@@ -1044,9 +1044,15 @@ model SuperTab {
   legacyState    Json?
   /// The Workspace (SwarmWorkspace) it belongs to, also on its head part. Null only on a Swarm from before Workspaces, until migrated.
   workspaceId          String?
+  /// When its owner deleted it (superTabs/deletion.ts): from then every read and write answers as for a Swarm that does not
+  /// exist, and its owner can restore it until `purgeAt`, when the sweep removes its records and files. Absent on a live Swarm.
+  deletedAt      DateTime?
+  purgeAt        DateTime?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
+  /// Deleted Swarms whose grace is over, oldest first: the purge sweep's read (superTabs/deletion.ts).
+  @@index([purgeAt], map: "swarm_deleted_purge")
   @@index([autonomousEnv, workspaceId])
   /// An owner's Swarms in id order: the grid poll names it (superTabs/parts/indexed.ts NAMED_INDEX.SuperTab.owner).
   @@index([autonomousEnv, ownerId, id])

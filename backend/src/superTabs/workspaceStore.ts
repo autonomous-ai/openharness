@@ -108,8 +108,9 @@ export async function listWorkspaces(db: PrismaClient, user: AuthUser): Promise<
   if (!memberships.length) return []
   // Filtered here, not in the query: Prisma's `null` on Mongo misses a field that was never written.
   const workspaces = (await db.swarmWorkspace.findMany({ where: { id: { in: memberships.map(m => m.workspaceId) }, autonomousEnv: user.autonomousEnv } })).filter(o => !o.deletedAt)
-  const rows = workspaces.length ? await db.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, workspaceId: { in: workspaces.map(o => o.id) } },
-    select: { id: true, workspaceId: true, memberIds: true, format: true } }) : []
+  // A deleted Swarm (deletion.ts) is listed to nobody, its owner and the Workspace's admins included.
+  const rows = (workspaces.length ? await db.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, workspaceId: { in: workspaces.map(o => o.id) } },
+    select: { id: true, workspaceId: true, memberIds: true, format: true, deletedAt: true } }) : []).filter(row => !row.deletedAt)
   const split = rows.filter(r => r.format === 2).map(r => `${r.id}:head`)
   const heads = split.length ? await db.swarmHead.findMany({ where: { id: { in: split } }, select: { tabId: true, data: true } }) : []
   const headOf = new Map(heads.map(h => [h.tabId, h.data as { name?: string; workspaceVisibility?: 'invite-only' | 'workspace' }]))
@@ -234,7 +235,8 @@ export class SwarmWorkspaces {
 
   /** Someone who owns one of the Workspace's Swarms stays at least a member, and cannot be removed until it moves. */
   private async ownsWorkspaceSwarm(tx: Transaction, workspaceId: string, userId: string): Promise<boolean> {
-    return !!await tx.superTab.findFirst({ where: { workspaceId, ownerId: userId }, select: { id: true } })
+    // A deleted one does not count (deletion.ts): restoring it needs its owner in the Workspace again.
+    return (await tx.superTab.findMany({ where: { workspaceId, ownerId: userId }, select: { deletedAt: true }, take: 1000 })).some(row => !row.deletedAt)
   }
 
   async setRole(user: AuthUser, workspaceId: string, userId: string, role: WorkspaceRole) {
