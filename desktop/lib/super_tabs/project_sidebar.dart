@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import '../core/machine_resources.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/widgets/app_icon_button.dart';
 import '../shared/theme/appearance_prefs_store.dart';
 import '../state/app_state.dart';
 import '../state/harness_activity.dart';
@@ -14,6 +15,7 @@ import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/harness_activity_mark.dart';
+import 'activity.dart';
 import 'attention.dart';
 import 'controller.dart';
 import 'identity.dart';
@@ -61,6 +63,7 @@ class ProjectSidebar extends StatelessWidget {
     this.onNotifications,
     this.notificationsSelected = false,
     this.attention,
+    this.activity,
     this.onThreads,
     this.threadsSelected = false,
     this.onOpenAgent,
@@ -82,9 +85,14 @@ class ProjectSidebar extends StatelessWidget {
   final VoidCallback? onYourDevices;
   final bool devicesSelected;
 
-  /// The reader's tags from every project's Lead; its count is what waits.
+  /// Opens the Activity view (Slack's Activity): decisions asked of the
+  /// reader, tags of them, replies to them and reactions to their messages.
   final VoidCallback? onNotifications;
   final bool notificationsSelected;
+
+  /// What the Activity row counts and whether it is bold; without it the
+  /// row counts the tags and decisions waiting, as Notifications did.
+  final SuperTabActivity? activity;
 
   /// What needs the reader, as Slack shows it: each row's red number counts
   /// only tags of them (decisions asked of them among them), and Threads is
@@ -225,7 +233,7 @@ class ProjectSidebar extends StatelessWidget {
     // has its own; collapsed, it is bold for anything it hides.
     final unread =
         reading == null || controller.expandedProjects.contains(project?.id)
-        ? controller.unread(group)
+        ? controller.unreadShown(group)
         : reading.unread.isNotEmpty;
     // A collapsed project counts the tags in the conversations it hides, as
     // Slack's collapsed section does; open, each row has its own.
@@ -309,12 +317,15 @@ class ProjectSidebar extends StatelessWidget {
     // As Slack draws it (Dee, 10-31): a read row in the muted text colour, an
     // unread one at full strength and bold, no dot; the open row keeps its
     // highlight.
+    // A muted chat stays listed, greyed, never bold (Slack); the open one
+    // keeps its highlight.
+    final muted = controller.notifyOf(group.id) == SuperTabNotify.muted;
     final style = DesktopChrome.control(
       medium: highlighted,
-      color: highlighted || unread
+      color: highlighted || (unread && !muted)
           ? DesktopChrome.foreground
           : DesktopChrome.muted,
-    ).copyWith(fontWeight: unread ? grid.AppFont.semibold : null);
+    ).copyWith(fontWeight: unread && !muted ? grid.AppFont.semibold : null);
     return Padding(
       padding: const EdgeInsets.only(bottom: 2),
       // Hover lights the whole row, chevron included, in the selected
@@ -432,6 +443,20 @@ class ProjectSidebar extends StatelessWidget {
                                             key: ValueKey(
                                               'super-mentions-${group.id}',
                                             ),
+                                          ),
+                                        ),
+                                      ],
+                                      if (muted) ...[
+                                        const SizedBox(width: 8),
+                                        Tooltip(
+                                          message: 'Muted',
+                                          child: Icon(
+                                            AppIcons.bellOff,
+                                            key: ValueKey(
+                                              'super-muted-${group.id}',
+                                            ),
+                                            size: 14,
+                                            color: DesktopChrome.muted,
                                           ),
                                         ),
                                       ],
@@ -646,7 +671,9 @@ class ProjectSidebar extends StatelessWidget {
     final listed = [
       for (final project in projects)
         if (reading.of(project) case final read
-            when read.buddyChat != null || controller.canWrite)
+            when (read.buddyChat != null || controller.canWrite) &&
+                (!controller.unreadOnly ||
+                    (read.buddyChat != null && _keptByFilter(read.buddyChat!))))
           read,
     ];
     return [for (final read in listed) _buddy(read, named: listed.length > 1)];
@@ -686,7 +713,7 @@ class ProjectSidebar extends StatelessWidget {
       },
       selected:
           chat != null && !_paneCovered && controller.selectedId == chat.id,
-      unread: chat != null && controller.unread(chat),
+      unread: chat != null && controller.unreadShown(chat),
       badge: chat == null ? 0 : attention?.mentionsIn(chat.id) ?? 0,
       onTap: chat != null
           ? () => onSelect(chat.id)
@@ -706,6 +733,10 @@ class ProjectSidebar extends StatelessWidget {
     const key = SuperTabController.kSwarmBuddyKey;
     final chat = controller.buddyChat(key);
     if (chat == null && !controller.canWrite) return null;
+    // The unread filter keeps it only with something unread, or open.
+    if (controller.unreadOnly && (chat == null || !_keptByFilter(chat))) {
+      return null;
+    }
     final agent = controller.buddy(key);
     final busy = controller.saving || controller.hasPendingAction;
     return _drawRow(
@@ -718,7 +749,8 @@ class ProjectSidebar extends StatelessWidget {
           !notificationsSelected &&
           controller.selectedId == chat.id,
       waiting: false,
-      unread: chat != null && controller.unread(chat),
+      // Muted, it is greyed and never bold, as every chat (_drawRow).
+      unread: chat != null && controller.unreadShown(chat),
       trailing: agent == null ? null : _buddyMark(agent),
       onTap: chat == null ? () => _openBuddyChat(key) : null,
       tappable: chat != null || !busy,
@@ -751,24 +783,12 @@ class ProjectSidebar extends StatelessWidget {
 
   /// A project's open conversations, newest first: the most recently created
   /// has the highest number, and one without a number predates numbering.
-  List<SuperTabConversation> _newestFirst(_ProjectReading reading) {
-    final project = reading.project;
-    final groups = reading.conversations
-        .where(
-          (g) =>
-              g.id != project.leadConversationId &&
-              !g.isBuddyChat &&
-              !controller.hiddenByBuddies(g) &&
-              !g.closed,
-        )
-        .toList();
-    // A stable sort keeps the backend's order among unnumbered ones.
-    mergeSort(
-      groups,
-      compare: (a, b) => (b.number ?? 0).compareTo(a.number ?? 0),
-    );
-    return groups;
-  }
+  List<SuperTabConversation> _newestFirst(_ProjectReading reading) =>
+      superTabOpenWorkgroups(
+        controller,
+        reading.project,
+        reading.conversations,
+      );
 
   /// The "… N more" row under a project's newest conversations.
   Widget _moreRow(SuperTabProject project, int hidden, VoidCallback onTap) =>
@@ -815,7 +835,7 @@ class ProjectSidebar extends StatelessWidget {
 
   List<Widget> _workgroups(_ProjectReading reading) {
     final project = reading.project;
-    final groups = _newestFirst(reading);
+    final groups = _newestFirst(reading).where(_keptByFilter).toList();
     return groups.isEmpty
         ? [
             Padding(
@@ -856,13 +876,30 @@ class ProjectSidebar extends StatelessWidget {
           ];
   }
 
+  /// Whether the unread filter keeps [read]'s project: its chat or an open
+  /// workgroup is unread or tags the reader, or the open chat is in it.
+  bool _hasUnread(_ProjectReading read) =>
+      (!_paneCovered && read.sidebar.selectedProjectId == read.project.id) ||
+      read.unread.isNotEmpty ||
+      read.mentions > 0 ||
+      (read.lead != null && controller.unreadShown(read.lead!));
+
+  /// Whether the unread filter keeps [group]'s row.
+  bool _keptByFilter(SuperTabConversation group) =>
+      !controller.unreadOnly ||
+      (!_paneCovered && controller.selectedId == group.id) ||
+      controller.unreadShown(group) ||
+      (attention?.mentionsIn(group.id) ?? 0) > 0;
+
   /// Every project with its workgroups, by name from A to Z.
   List<(String, Widget)> _channels(
     SuperTabSnapshot? snapshot,
     _SidebarReading reading,
   ) => [
     for (final project in snapshot?.projects ?? const <SuperTabProject>[])
-      if (reading.of(project) case final read when read.lead != null)
+      if (reading.of(project) case final read
+          when read.lead != null &&
+              (!controller.unreadOnly || _hasUnread(read)))
         (
           project.name,
           Column(
@@ -880,12 +917,12 @@ class ProjectSidebar extends StatelessWidget {
   ]..sort((a, b) => a.$1.toLowerCase().compareTo(b.$1.toLowerCase()));
 
   @override
-  Widget build(BuildContext context) => switch (attention) {
-    final attention? => ListenableBuilder(
-      listenable: attention,
+  Widget build(BuildContext context) => switch ([?attention, ?activity]) {
+    final List<Listenable> sources when sources.isNotEmpty => ListenableBuilder(
+      listenable: Listenable.merge(sources),
       builder: (context, _) => _build(context),
     ),
-    null => _build(context),
+    _ => _build(context),
   };
 
   Widget _build(BuildContext context) {
@@ -941,6 +978,20 @@ class ProjectSidebar extends StatelessWidget {
               onTap: () =>
                   showSwarmLocalModels(context, controller, app: app, now: now),
             ),
+          // Slack's Activity, where Notifications was (Lead, 10-31): one row.
+          if (onNotifications != null)
+            _navigationRow(
+              key: 'super-activity',
+              label: 'Activity',
+              icon: AppIcons.bell,
+              onTap: onNotifications,
+              selected: notificationsSelected,
+              unread: activity?.unread ?? false,
+              badge:
+                  activity?.count ??
+                  (snapshot?.mentionsWaiting ?? 0) +
+                      (snapshot?.decisionsWaiting ?? 0),
+            ),
           if (onThreads != null)
             _navigationRow(
               key: 'super-threads',
@@ -951,17 +1002,6 @@ class ProjectSidebar extends StatelessWidget {
               unread: attention?.threadsUnread ?? false,
               badge: attention?.threadMentions ?? 0,
             ),
-          if (onNotifications != null)
-            _navigationRow(
-              key: 'super-notifications',
-              label: 'Notifications',
-              icon: AppIcons.bell,
-              onTap: onNotifications,
-              selected: notificationsSelected,
-              badge:
-                  (snapshot?.mentionsWaiting ?? 0) +
-                  (snapshot?.decisionsWaiting ?? 0),
-            ),
           if (onNewProject != null ||
               onYourDevices != null ||
               onNotifications != null ||
@@ -971,6 +1011,18 @@ class ProjectSidebar extends StatelessWidget {
             const SizedBox(height: 20),
           SuperTabSectionHeading(
             'Projects',
+            // Slack's unread filter: only chats with something unread.
+            actions: [
+              AppIconButton(
+                key: const ValueKey('super-unread-only'),
+                icon: AppIcons.listFilter,
+                selected: controller.unreadOnly,
+                tooltip: controller.unreadOnly
+                    ? 'Show all chats'
+                    : 'Show unread chats only',
+                onPressed: controller.toggleUnreadOnly,
+              ),
+            ],
             onAdd: controller.canWrite ? onNewProject : null,
             addTooltip: 'New project',
             endInset: 0,
@@ -1189,8 +1241,57 @@ class _ProjectReading {
     for (final g in conversations) {
       if (g.closed || g.isBuddyChat || g.audience != null) continue;
       if (sidebar.needsHuman(g) > 0) waiting.add(g.id);
-      if (sidebar.controller.unread(g)) unread.add(g.id);
+      if (sidebar.controller.unreadShown(g)) unread.add(g.id);
     }
     return (waiting: waiting, unread: unread);
   }();
+}
+
+/// A project's open workgroups as the sidebar lists them, newest first: the
+/// most recently created has the highest number, and one without a number
+/// predates numbering.
+List<SuperTabConversation> superTabOpenWorkgroups(
+  SuperTabController controller,
+  SuperTabProject project, [
+  List<SuperTabConversation>? conversations,
+]) {
+  final groups = (conversations ?? controller.projectConversations(project.id))
+      .where(
+        (g) =>
+            g.id != project.leadConversationId &&
+            !g.isBuddyChat &&
+            !controller.hiddenByBuddies(g) &&
+            !g.closed,
+      )
+      .toList();
+  // A stable sort keeps the backend's order among unnumbered ones.
+  mergeSort(
+    groups,
+    compare: (a, b) => (b.number ?? 0).compareTo(a.number ?? 0),
+  );
+  return groups;
+}
+
+/// The chats in the order the sidebar lists them, for Option+Shift+Down and
+/// Up (Slack's next unread): the reader's one Buddy chat (`# buddy`, first
+/// under Projects), each project from A to Z, its chat then its open
+/// workgroups newest first, then the reader's project Buddy chats.
+List<String> superTabSidebarOrder(SuperTabController controller) {
+  final snapshot = controller.snapshot;
+  if (snapshot == null) return const [];
+  final projects = [...snapshot.projects]
+    ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+  return [
+    if (controller.oneBuddy)
+      if (controller.buddyChat(SuperTabController.kSwarmBuddyKey)
+          case final chat?)
+        chat.id,
+    for (final project in projects) ...[
+      if (snapshot.conversation(project.leadConversationId) != null)
+        project.leadConversationId,
+      for (final group in superTabOpenWorkgroups(controller, project)) group.id,
+    ],
+    for (final project in projects)
+      if (controller.buddyChat(project.id) case final chat?) chat.id,
+  ];
 }

@@ -146,6 +146,8 @@ class SuperTabAttention extends ChangeNotifier {
   /// which message asked). Nothing counts once access is gone.
   int mentionsIn(String conversationId) {
     if (controller.accessRevoked) return 0;
+    // A muted chat never counts (Slack); its tags stay listed in Activity.
+    if (controller.notifyOf(conversationId) == SuperTabNotify.muted) return 0;
     final tags = mentions.waiting
         .where(
           (m) =>
@@ -160,7 +162,7 @@ class SuperTabAttention extends ChangeNotifier {
         .length;
     if (asked == 0) return tags;
     final group = controller.snapshot?.conversation(conversationId);
-    return tags + (group != null && controller.unread(group) ? asked : 0);
+    return tags + (group != null && controller.unreadShown(group) ? asked : 0);
   }
 
   /// A tag from a server that does not say where it is: it counts until

@@ -28,6 +28,8 @@ import { logger } from '../utils/logger.js'
 import { SwarmReads } from '../superTabs/read/service.js'
 import { inboxWait, readInbox } from '../superTabs/read/inbox.js'
 import { readFollowedThreads, threadsWait } from '../superTabs/read/followedThreads.js'
+import { activityWait } from '../superTabs/activity.js'
+import { NOTIFY_LEVELS } from '../superTabs/chatSettings.js'
 import { HostReads } from '../superTabs/read/host.js'
 import { UPDATE_REQUIRED } from '../superTabs/read/contract.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
@@ -74,6 +76,8 @@ const messageParams = tabParams.extend({ conversationId: id })
 // A person's own read mark (superTabs/readMarks.ts): no asAgentId, since agents keep none.
 const readMarkBody = z.object({ sequence: z.number().int().nonnegative().safe() }).strict()
 const followBody = z.object({ follow: z.boolean().nullable() }).strict()
+const notifyBody = z.object({ notify: z.enum(NOTIFY_LEVELS) }).strict()
+const activityReadBody = z.object({ through: z.string().datetime() }).strict()
 const threadParams = messageParams.extend({ threadId: id })
 const noQuery = z.object({}).strict()
 // The reader's own catch-up (superTabs/catchUp.ts): no asAgentId, since agents read every message as it comes.
@@ -475,6 +479,16 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
       if (wait) return sendError(reply.header('Retry-After', String(wait)), 'Too many thread reads. Try again in a moment.', 'RATE_LIMITED', 429)
       return respond(reply, () => readFollowedThreads(store, req.user!, req.params.tabId))
     })
+  // A person's Activity (superTabs/activity.ts): replies to their messages and reactions to them, read when its digest moves.
+  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof noQuery> }>('/api/super-tabs/:tabId/activity',
+    { preHandler: [validateParams(tabParams), validateQuery(noQuery)] }, async (req, reply) => {
+      const wait = await activityWait(req.user!, req.params.tabId)
+      if (wait) return sendError(reply.header('Retry-After', String(wait)), 'Too many Activity reads. Try again in a moment.', 'RATE_LIMITED', 429)
+      return respond(reply, () => reads.activity(req.user!, req.params.tabId))
+    })
+  app.post<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof noQuery>; Body: z.infer<typeof activityReadBody> }>('/api/super-tabs/:tabId/activity/read',
+    { preHandler: [validateParams(tabParams), validateQuery(noQuery), validateBody(activityReadBody)] },
+    (req, reply) => respond(reply, () => reads.markActivityRead(req.user!, req.params.tabId, req.body.through)))
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof leaderboardQuery> }>('/api/super-tabs/:tabId/leaderboard',
     { preHandler: [validateParams(tabParams), validateQuery(leaderboardQuery)] },
     (req, reply) => respond(reply, () => reads.leaderboard(req.user!, req.params.tabId, req.query.projectId, req.query.week)))
@@ -593,6 +607,10 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.post<{ Params: z.infer<typeof threadParams>; Querystring: z.infer<typeof noQuery>; Body: z.infer<typeof followBody> }>('/api/super-tabs/:tabId/conversations/:conversationId/threads/:threadId/follow',
     { preHandler: [validateParams(threadParams), validateQuery(noQuery), validateBody(followBody)] },
     (req, reply) => respond(reply, () => reads.followThread(req.user!, req.params.tabId, req.params.conversationId, req.params.threadId, req.body.follow)))
+  // A person's own notification setting for a chat (superTabs/chatSettings.ts): all, mentions or muted.
+  app.post<{ Params: z.infer<typeof messageParams>; Querystring: z.infer<typeof noQuery>; Body: z.infer<typeof notifyBody> }>('/api/super-tabs/:tabId/conversations/:conversationId/notifications',
+    { preHandler: [validateParams(messageParams), validateQuery(noQuery), validateBody(notifyBody)] },
+    (req, reply) => respond(reply, () => reads.setChatNotify(req.user!, req.params.tabId, req.params.conversationId, req.body.notify)))
   app.get<{ Params: z.infer<typeof messageParams>; Querystring: z.infer<typeof catchUpQuery> }>('/api/super-tabs/:tabId/conversations/:conversationId/catch-up',
     { preHandler: [validateParams(messageParams), validateQuery(catchUpQuery)] },
     (req, reply) => respond(reply, () => store.catchUp(req.user!, req.params.tabId, req.params.conversationId, req.query.after)))

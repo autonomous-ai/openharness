@@ -521,6 +521,13 @@ class SuperTabSnapshot {
       mentionsDigest = row['mentionsDigest'] as String?,
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
       decisionsDigest = row['decisionsDigest'] as String?,
+      activityDigest = row['activityDigest'] as String?,
+      chatSettings = Map.unmodifiable({
+        if (row['chatSettings'] case final Map settings)
+          for (final MapEntry(:key, :value) in settings.entries)
+            if (key is String && value is String)
+              key: SuperTabNotify.parse(value),
+      }),
       readMarks = Map.unmodifiable({
         if (row['readMarks'] case final Map marks)
           for (final MapEntry(:key, :value) in marks.entries)
@@ -623,6 +630,14 @@ class SuperTabSnapshot {
   /// Which decisions wait, as a digest that moves when they change though the
   /// count may not; null from a backend before it (superTabs/decisions.ts).
   final String? decisionsDigest;
+
+  /// Which of the reader's Activity rows are unread (replies to them, reactions to their messages), as a digest
+  /// that moves when one comes or is read; null from a backend before Activity (superTabs/activity.ts).
+  final String? activityDigest;
+
+  /// The reader's own notification setting by conversation (backend chatSettings.ts); a chat not listed is at
+  /// [SuperTabNotify.mentions]. Never another person's.
+  final Map<String, SuperTabNotify> chatSettings;
 
   /// The reader's own read marks kept on the server (backend readMarks.ts): the newest message sequence read, by
   /// conversation, on any of their devices. Never another person's.
@@ -1203,4 +1218,18 @@ String? superTabRepositoryUrl(String? remote) {
     return null;
   }
   return address;
+}
+
+/// A person's notification setting for one chat, as Slack's channel settings: every new message, only tags of
+/// them (the default, what Desktop did before), or muted: greyed, never bold, never counting.
+enum SuperTabNotify {
+  all,
+  mentions,
+  muted;
+
+  static SuperTabNotify parse(String? value) => switch (value) {
+    'all' => all,
+    'muted' => muted,
+    _ => mentions,
+  };
 }
