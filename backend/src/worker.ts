@@ -109,6 +109,9 @@ async function start(): Promise<void> {
   // groups they changed.
   const swarms = new SuperTabStore(prisma, Date.now, null, { deliveriesWaiting: announceSwarmDeliveries, hostsChanged: announceSwarmHostChanges,
     swarmChanged: announceSwarmChanges })
+  // Decisions still waiting in work that was over before #2454 closed them where work ends: they counted toward the open
+  // limit and came back on a reopen (store.ts withdrawEndedDecisions). Remove in the release after the one that runs it.
+  logger.info('[swarm-decisions] closed waiting decisions of finished work', { closed: await swarms.withdrawEndedDecisions() })
   stopSweeps = startSwarmSweeps(prisma, undefined, () => swarms.workspaces.finishRemovals())
   // The dead old state of migrated Swarms goes by itself, a few at a time (superTabs/migration/dropLegacyJob.ts).
   stopLegacyDrop = startLegacyDrop(prisma)

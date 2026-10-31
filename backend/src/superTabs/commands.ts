@@ -453,6 +453,8 @@ const FINDINGS_CHARS = 500
 /** The source of the Lead's notice about a pair (LOOP_NOTICE_AT), which pairLoop passes over: counted as a break, it would
  *  start the count again and repeat the notice every LOOP_NOTICE_AT messages (final review of phase 1). */
 export const PAIR_LOOP_SOURCE = 'pair-loop'
+/** The source of a Buddy's line that it cannot start in its person's older project chat (buddyDownLine). */
+export const BUDDY_DOWN_SOURCE = 'buddy-cannot-start'
 const isPairLoopNotice = (source: unknown) => (source as { kind?: unknown } | null)?.kind === PAIR_LOOP_SOURCE
 /** How many of the newest [recent] messages in a row went between agents [a] and [b], each from one of them to the other,
  *  inside the last LOOP_WINDOW_MS; a person's message, another notice or a message to anyone else ends the run. */
@@ -997,20 +999,26 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   /**
    * The person's one Buddy answers in their older project chat [chat] (spec: Older apps): a Buddy of that project alone, on the
    * one Buddy's machine, engine and name, in that project's folder and never widened (buddyNarrow). This message waits for it;
-   * one already starting takes it too. Nothing while they have no one Buddy, or its host can't run one, as before.
+   * one already starting takes it too. Nothing while they have no one Buddy, as before. When it cannot start, why, in plain
+   * words, for the line that tells its person (buddyDownLine).
    */
-  const startOldChatBuddy = (chat: Conversation) => {
+  const startOldChatBuddy = (chat: Conversation): string | undefined => {
     if (command.type !== 'message.send' || actor.kind !== 'person') return
     const owner = requireChatOwner(state, chat, actor.userId)
     const pending = state.starts?.find(s => s.request.conversationId === chat.id && !s.request.buddySession && !s.harnessId && !s.error)
     if (pending) {
       if ((pending.request.buddyWaiting?.length ?? 0) < MAX_SESSION_WAITING) pending.request.buddyWaiting = [...pending.request.buddyWaiting ?? [], operationId]
+      delete chat.buddyDownTold
       return
     }
     const main = state.agents.find(a => isSwarmBuddy(a) && !a.buddySession && a.buddyOf!.personId === owner.id && a.buddyOf!.generation === owner.generation)
-    if (!main || downSince(state, main, context.now) || main.configuration.engine !== 'claude' || state.paused) return
-    const pool = machineContribution(state, main.machineId)
-    if (!pool?.observation?.capabilities?.includes(SWARM_BUDDY_CAPABILITY)) return
+    if (!main) return
+    const pool = machineContribution(state, main.machineId), machine = pool?.name ?? 'my machine'
+    if (state.paused) return 'the Swarm is paused'
+    if (downSince(state, main, context.now)) return `${machine} is offline`
+    if (main.configuration.engine !== 'claude') return 'I run on Codex, which answers only in # buddy'
+    if (!pool) return 'my machine is no longer in the Swarm'
+    if (!pool.observation?.capabilities?.includes(SWARM_BUDDY_CAPABILITY)) return `${machine} needs a newer Harness to run me here`
     const project = groupProject(state, chat)
     const contributor = person(state, main.contributorId)
     const request: AgentStartRequest = { conversationId: chat.id, machineId: main.machineId, engine: main.configuration.engine,
@@ -1022,16 +1030,32 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     // before any Buddy answered there (security review 2 of #2435: its slots are counted, touches.ts).
     let admitted: ReturnType<typeof admitMachineStart>
     try { admitted = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines) } catch (error) {
-      if (error instanceof SuperTabError && error.status < 500) return
-      throw error
+      if (!(error instanceof SuperTabError && error.status < 500)) throw error
+      return error.code === 'MACHINE_PAUSED' ? `${machine} is paused` : error.code === 'MACHINE_OFFLINE' ? `${machine} is offline`
+        : error.code === 'MACHINE_FULL' ? `${machine} already runs as many agents as it takes`
+        : error.code === 'MACHINE_REMOVED' ? `${machine} is being removed from the Swarm` : `${machine} cannot take me right now`
     }
-    if (!admitted) return
+    if (!admitted) return 'my machine is no longer in the Swarm'
     state.starts ??= []
-    if (state.starts.filter(s => !s.harnessId && !s.error).length >= 32) return
+    if (state.starts.filter(s => !s.harnessId && !s.error).length >= 32) return 'too many agents are starting in this Swarm'
     state.starts.push({ poolGeneration: admitted.generation, id: operationId, creationId: `super-${operationId}`, actorKey: actorKey(actor),
       contributorId: contributor.id, membershipGeneration: contributor.generation, machineOwnerId: main.machineOwnerId,
       hostGrant: main.hostGrant ?? null, request, harnessId: null, dispatched: false, error: null, requestedAt: context.now })
     result.startId = operationId
+    delete chat.buddyDownTold
+  }
+
+  /** The line its person reads in their older project chat [chat] when their one Buddy cannot start there [why]: from that
+   *  Buddy, once per outage (Conversation.buddyDownTold, cleared once one can start), not once per message. */
+  const buddyDownLine = (chat: Conversation, why: string) => {
+    if (chat.buddyDownTold) return
+    const owner = chatOwner(chat)
+    const main = owner && state.agents.find(a => isSwarmBuddy(a) && !a.buddySession && a.buddyOf!.personId === owner.id && a.buddyOf!.generation === owner.generation)
+    if (!main) return
+    chat.buddyDownTold = true
+    effects.messages.push({ id: stableId(operationId, BUDDY_DOWN_SOURCE), conversationId: chat.id, replyTo: null, recipients: [],
+      author: { kind: 'agent', id: main.id, name: main.name, displayName: agentDisplayName(state.agents, main.id), membershipGeneration: main.membershipGeneration },
+      text: `I can't start in this chat right now: ${why}. Your message is kept.`, source: { kind: BUDDY_DOWN_SOURCE } })
   }
 
   /** Ends every project session of [project] in a one Buddy chat whose person no longer reads it, and fails those starting. */
@@ -2434,7 +2458,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (command.newSession && !session) fail('BUDDY_SESSION_CHAT', 'Start a session from a thread of your own Buddy chat.', 400)
       // An older project chat with no Buddy in it: the person's one Buddy answers there through a session of that project, so
       // the phone and older apps keep a working Buddy (spec: Older apps). Started on this message, which waits for it.
-      if (actor.kind === 'person' && isBuddyChat(group) && !isSwarmBuddyChat(group) && !session?.inSession && !mainBuddyOf(state, group)) startOldChatBuddy(group)
+      const buddyDown = actor.kind === 'person' && isBuddyChat(group) && !isSwarmBuddyChat(group) && !session?.inSession && !mainBuddyOf(state, group)
+        ? startOldChatBuddy(group) : undefined
       // A Buddy chat has no Lead: its owner talks to its Buddy.
       const automatic = actor.kind === 'person' ? (isBuddyChat(group) ? (session?.inSession ? session.to : mainBuddyOf(state, group)?.id ?? null)
         : replyAgent && group.agentIds.includes(replyAgent) ? replyAgent : group.leadId) : agentRecipient
@@ -2457,6 +2482,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       // The transcript still accepts a human message while the lead is unavailable. The UI can say why no delivery was created.
       message(group.id, text, recipients, command.replyTo, command.agentOnly ? AGENT_ONLY : undefined, attachments, mentions, command.mentionsIfNoWorker)
+      // After the person's message: nobody answers it, so its person is told why (Dee, review of #2447).
+      if (buddyDown) buddyDownLine(group, buddyDown)
       // The message that makes it LOOP_NOTICE_AT in a row between two agents tells their Lead, once; delivery is never held.
       const speaker = actor.kind === 'agent' ? agent(state, actor.agentId) : null
       const partner = speaker && recipients.length === 1 && recipients[0] !== speaker.id ? agent(state, recipients[0]!) : null

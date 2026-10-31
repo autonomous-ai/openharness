@@ -429,6 +429,51 @@ describe('security re-check 2 of #2435', () => {
   })
 })
 
+// Review of #2447: a phone's message in an older Buddy chat that no Buddy can answer was kept, and its person heard nothing.
+describe('a phone\'s message no Buddy can answer', () => {
+  const line = (why: string) => `I can't start in this chat right now: ${why}. Your message is kept.`
+  const rows = async (f: Swarm, chat: string) => (await f.store.messages(peer, f.tab, chat, {})).messages
+
+  it('tells its person why, in plain words, once per outage and not once per message, from their Buddy, to them alone', async () => {
+    const cases: Array<[string, string, (f: Swarm) => Promise<unknown>]> = [
+      ['at its limit', 'Peer Mac already runs as many agents as it takes', async () => undefined],
+      ['paused by its owner', 'Peer Mac is paused', f => f.execute({ type: 'machine.pause', machineId: 'peer-mac', paused: true }, peer)],
+      ['in a paused Swarm', 'the Swarm is paused', f => f.execute({ type: 'tab.pause', paused: true })],
+      ['offline', 'Peer Mac is offline', async f => { f.clock.now += 60 * 60_000 }],
+    ]
+    for (const [label, why, outage] of cases) {
+      const f = await swarm({ maxAgents: label === 'at its limit' ? 1 : 8 })
+      const { main } = await buddy(f)
+      const old = String((await f.execute({ type: 'buddy.chat', projectId: f.web.projectId }, peer)).result.conversationId)
+      await outage(f)
+      for (const n of [1, 2, 3]) expect((await send(f, old, `From the phone ${n}`)).result.startId, label).toBeUndefined()
+      const seen = await rows(f, old)
+      expect(seen.map(m => m.text), label).toEqual(['From the phone 1', line(why), 'From the phone 2', 'From the phone 3'])
+      expect(seen[1]!.author, label).toMatchObject({ kind: 'agent', id: main })
+      // Their own chat: the Swarm's owner reads none of it.
+      await expect(f.store.messages(owner, f.tab, old, {}), label).rejects.toThrow(UNAVAILABLE)
+    }
+  })
+
+  it('tells again in the next outage, once a Buddy could start in between', async () => {
+    const f = await swarm()
+    await buddy(f)
+    const old = String((await f.execute({ type: 'buddy.chat', projectId: f.web.projectId }, peer)).result.conversationId)
+    const pause = (paused: boolean) => f.execute({ type: 'machine.pause', machineId: 'peer-mac', paused }, peer)
+    await pause(true)
+    await send(f, old, 'First outage')
+    await pause(false)
+    const started = String((await send(f, old, 'Back')).result.startId)
+    expect(started).not.toBe('undefined')
+    await f.host({ type: 'agent.startFailed', startId: started, error: 'The session could not open.' })
+    await pause(true)
+    await send(f, old, 'Second outage')
+    await send(f, old, 'Still out')
+    expect((await rows(f, old)).map(m => m.text)).toEqual(['First outage', line('Peer Mac is paused'), 'Back',
+      expect.stringMatching(/^Could not start peer's Buddy/), 'Second outage', line('Peer Mac is paused'), 'Still out'])
+  })
+})
+
 describe('older apps', () => {
   it('keeps an old project chat readable, and a message there reaches a session of that project', async () => {
     const f = await swarm()
