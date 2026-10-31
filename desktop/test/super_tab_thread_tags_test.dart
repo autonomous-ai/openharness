@@ -1,17 +1,41 @@
+import 'dart:io';
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
 
+import 'box_render_preview_test.dart' show loadPreviewFonts;
 import 'super_tab_mentions_test.dart' show tagRuns;
 import 'support/super_tab_fixture.dart';
 
 /// @ in a thread reply works as in the main chat (Dee, 10-31): the same
 /// picker of people and agents, the same Backspace rule, and the reply
 /// carries its tags, so the tagged person or agent is told.
+/// Set to a folder to write the PR's screenshots there.
+final shots = Platform.environment['SUPER_TAB_THREAD_TAG_SHOTS'];
+final _picture = GlobalKey();
+
+Future<void> shot(WidgetTester tester, String name) async {
+  await tester.runAsync(() async {
+    final boundary =
+        _picture.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+    final image = await boundary.toImage();
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+    await Directory(shots!).create(recursive: true);
+    await File('$shots/$name.png').writeAsBytes(bytes!.buffer.asUint8List());
+    image.dispose();
+  });
+}
+
 void main() {
+  setUpAll(() async {
+    if (shots != null) await loadPreviewFonts();
+  });
   final composer = find.byKey(const ValueKey('super-thread-composer'));
   final picker = find.byKey(const ValueKey('super-thread-completions'));
   final mainPicker = find.byKey(const ValueKey('super-composer-completions'));
@@ -23,11 +47,17 @@ void main() {
     String description,
     Future<void> Function(WidgetTester tester) body, {
     TestVariant<Object?> variant = const DefaultTestVariant(),
-  }) => testWidgets(description, (tester) async {
-    await body(tester);
-    await tester.pumpWidget(const SizedBox());
-    await shown.flush();
-  }, variant: variant);
+    bool skip = false,
+  }) => testWidgets(
+    description,
+    (tester) async {
+      await body(tester);
+      await tester.pumpWidget(const SizedBox());
+      await shown.flush();
+    },
+    variant: variant,
+    skip: skip,
+  );
 
   /// The owner, ken and dee in a Swarm whose chats hold the agent Kestrel;
   /// the lead chat has a thread at message-1, and a second at message-3.
@@ -75,14 +105,20 @@ void main() {
     WidgetTester tester,
     ConversationServer server, {
     String root = 'message-1',
+    Brightness brightness = Brightness.dark,
   }) async {
     await tester.binding.setSurfaceSize(const Size(1400, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
+    final before = grid.AppTheme.brightness.value;
+    grid.AppTheme.brightness.value = brightness;
+    addTearDown(() => grid.AppTheme.brightness.value = before);
     final c = shown = server.controller();
     await c.refresh();
     await tester.pumpWidget(
       MaterialApp(
-        theme: grid.buildAppTheme(brightness: Brightness.dark),
+        theme: grid.buildAppTheme(brightness: brightness),
+        builder: (context, child) =>
+            RepaintBoundary(key: _picture, child: child),
         home: Scaffold(
           body: SuperTabView(
             controller: c,
@@ -440,4 +476,21 @@ void main() {
       },
     );
   });
+
+  for (final brightness in Brightness.values) {
+    testTags('screenshots for review, ${brightness.name}', (tester) async {
+      final server = swarm();
+      final c = await show(tester, server, brightness: brightness);
+      await type(tester, 'Please check @');
+      await shot(tester, 'thread-picker-${brightness.name}');
+      await type(tester, 'Please check @ke');
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      await c.loadThread();
+      await tester.pumpAndSettle();
+      await shot(tester, 'thread-sent-${brightness.name}');
+    }, skip: shots == null);
+  }
 }
