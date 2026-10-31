@@ -79,14 +79,17 @@ const reviewed = (r: MeasuredRow) => r.firstReviews >= MIN_FIRST_REVIEWS
 
 /** The plug-in over [measured]: pure, so the route ranks every candidate with the same numbers. */
 export function measuredPlugin(measured: Measured): RoutePlugin {
-  /** Per kind: its rows, the measured costs' scale on the catalog's (dollars per cost point, so the mean place is kept). */
-  const byKind = new Map<string, { rows: MeasuredRow[]; scale: number | null; costedCount: number }>()
+  /** Per kind: its rows, and the measured costs' scale on the catalog's: dollars per cost point, so the measured choices keep
+   *  their mean place against unmeasured ones. Null when fewer than two choices have a cost to compare. */
+  const byKind = new Map<string, { rows: MeasuredRow[]; scale: number | null }>()
   const scaleOf = (rows: MeasuredRow[], catalog: Catalog) => {
     // A row the catalog does not rate (a grid or unrated model) counts at cost 1, as its candidate does (route.ts localProbes).
+    // A run whose model or effort was never known is no choice anyone can pick.
     const scaled = rows.filter(r => costed(r) && r.model !== 'unknown' && r.effort !== 'unknown')
     const points = scaled.reduce((sum, r) => sum + (catalogRow(catalog, r.engine, r.model, r.effort)?.cost ?? 1), 0)
     const dollars = scaled.reduce((sum, r) => sum + r.fullCostPerShipped!, 0)
-    return points > 0 && dollars > 0 ? dollars / points : null
+    // All free (own hardware): nothing to tell them apart by.
+    return scaled.length >= 2 && dollars > 0 ? dollars / points : null
   }
   return {
     name: MEASURED,
@@ -96,7 +99,7 @@ export function measuredPlugin(measured: Measured): RoutePlugin {
       let ofKind = byKind.get(kind)
       if (!ofKind) {
         const rows = measured.rows.filter(r => r.kind === kind)
-        ofKind = { rows, scale: scaleOf(rows, catalog), costedCount: rows.filter(costed).length }
+        ofKind = { rows, scale: scaleOf(rows, catalog) }
         byKind.set(kind, ofKind)
       }
       const name = ranAs(candidate)
@@ -115,7 +118,7 @@ export function measuredPlugin(measured: Measured): RoutePlugin {
       if (!costed(mine)) cost = `too few shipped changes with known costs to compare cost (${mine.shipped} shipped)`
       else {
         const full = `$${mine.fullCostPerShipped!.toFixed(2)} per shipped change over ${mine.shipped} (failed attempts and every review round included)`
-        if (ofKind.costedCount < 2 || ofKind.scale === null) cost = `${full}; the only measured choice for ${kind} work, so its place is unchanged`
+        if (ofKind.scale === null) cost = `${full}; no other choice for ${kind} work has a cost to compare, so its place is unchanged`
         else {
           const points = mine.fullCostPerShipped! / ofKind.scale
           shift = points - candidate.cost

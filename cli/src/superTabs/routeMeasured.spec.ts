@@ -74,7 +74,26 @@ describe('routing by measured cost and results (Goals piece 3)', () => {
     // One measured choice has nothing to compare with: its numbers are shown, its place is today's.
     const alone = route([measured[1]!])
     expect(order(alone)).toEqual(['codex gpt-6.1-sol', 'claude opus'])
-    expect(mine(alone.shown[0]!)[0]).toMatch(/\$9\.00 per shipped change over 10 .*; the only measured choice for build work, so its place is unchanged$/)
+    expect(mine(alone.shown[0]!)[0]).toMatch(/\$9\.00 per shipped change over 10 .*; no other choice for build work has a cost to compare, so its place is unchanged$/)
+    // Nor do choices that cost nothing (own hardware), or a run whose model was never known.
+    for (const others of [[row({ fullCostPerShipped: 0 }), row({ engine: 'codex', model: 'gpt-6.1-sol', fullCostPerShipped: 0 })],
+      [row({ model: 'unknown', effort: 'unknown' }), measured[1]!]]) {
+      expect(order(route(others))).toEqual(['codex gpt-6.1-sol', 'claude opus'])
+    }
+  })
+
+  it('a clearly lower pass rate counts with too few shipped changes to compare cost, also against another engine\'s choice', () => {
+    const choice = route([row({ firstReviews: 12, firstReviewPassed: 11, shipped: 1, engine: 'opencode', model: 'big' }),
+      row({ engine: 'codex', model: 'gpt-6.1-sol', firstReviews: 12, firstReviewPassed: 2, shipped: 2 })])
+    expect(order(choice)).toEqual(['claude opus', 'codex gpt-6.1-sol'])
+    expect(mine(choice.shown[1]!)).toEqual([`${MEASURED}: build work, last 7 days: 2 of 12 first reviews passed, clearly fewer than opencode big high's 11 of 12, so it ranks after its strength's other choices, too few shipped changes with known costs to compare cost (2 shipped)`])
+    expect(mine(choice.shown[0]!)).toEqual([])
+  })
+
+  it('a Claude model it has no family for is matched by its own name', () => {
+    const odd = probe({ model: 'claude-experimental', effort: 'default', cost: 1, quality: 3 })
+    const choice = route([...measured, row({ model: 'claude-experimental', effort: 'default', fullCostPerShipped: 60 })], [odd, codex])
+    expect(order(choice)).toEqual(['codex gpt-6.1-sol', 'claude claude-experimental'])
   })
 
   it('a task with no kind, or a kind nothing was measured for, ranks as today', () => {
