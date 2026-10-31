@@ -388,10 +388,10 @@ void pro_app_supertab(const pod_swarm_t *sw)
     leave();
 }
 
-void pro_app_supertab_recap(const char *tab, const char *lead, const char *text, uint32_t at, bool none)
+void pro_app_supertab_recap(const char *tab, const char *lead, const char *chat_id, const char *text, uint32_t at, bool none)
 {
     pro_app_lock();
-    settle(pod_ui_supertab_recap(&s_pod, tab, lead, text, at, none));
+    settle(pod_ui_supertab_recap(&s_pod, tab, lead, chat_id, text, at, none));
     leave();
 }
 
@@ -399,6 +399,23 @@ void pro_app_supertab_focus(const char *tab, const char *lead)
 {
     pro_app_lock();
     settle(pod_ui_supertab_focus(&s_pod, tab, lead, ms()));
+    leave();
+}
+
+void pro_app_supertab_notice(const char *tab, const char *lead, const char *chat, const char *chat_id, const char *text)
+{
+    if (chat && !strcmp(chat, "buddy")) return;   // the Buddy's quiet notice is a dot on its button, not a row or a toast
+    pro_app_lock();
+    if (pod_ui_swarm_notice(&s_pod, tab, lead, chat_id, text, !pro_app_asleep(), ms())) alert_locked();
+    settle((pod_out_t){0});
+    leave();
+}
+
+void pro_app_supertab_notice_read(const char *tab, const char *lead, const char *chat_id)
+{
+    pro_app_lock();
+    pod_ui_swarm_notice_read(&s_pod, tab, lead, chat_id);
+    settle((pod_out_t){0});
     leave();
 }
 

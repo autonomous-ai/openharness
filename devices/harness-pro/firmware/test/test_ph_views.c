@@ -14,7 +14,7 @@
 static void asked_recap(pod_model_t *m, const char *tab, const char *lead, const char *text, uint32_t at, bool none)
 {
     pod_model_supertab_loading(m, tab, lead);
-    pod_model_supertab_recap(m, tab, lead, text, at, none);
+    pod_model_supertab_recap(m, tab, lead, "", text, at, none);
 }
 
 static int checks;
@@ -1608,10 +1608,87 @@ int main(void) {
         N.stack[1].scroll = 9999;   // past the end: the view clamps
         fresh(); ph_view_lead(&F, &N, &M, 1000);
         CHECK(text_prefix("forty") || text_run("Lead"));
+        {   // lead_view_group_shows_chat_name / lead_view_lead_chat_unchanged / lead_view_chat_name_capped: the chat the desktop has open is named under the project (PM and group chats only)
+            pod_lead_t *cl = &M.swarms[0].leads[2];
+            asked_recap(&M, "sw1", "l2", "Deployed.", 1792560000u, false);
+            cl->chat = POD_CHAT_NONE; cl->chat_name[0] = 0;
+            fresh(); ph_view_lead(&F, &N, &M, 1000);
+            static ht_run_t base[HT_RUNS]; const int nbase = S.count; memcpy(base, S.runs, sizeof(ht_run_t) * (size_t)nbase);
+            cl->chat = POD_CHAT_LEAD; snprintf(cl->chat_name, sizeof cl->chat_name, "ignored");   // lead_view_lead_chat_unchanged: even with a name, a Lead chat draws today's view
+            fresh(); ph_view_lead(&F, &N, &M, 1000);
+            CHECK(S.count == nbase && !memcmp(base, S.runs, sizeof(ht_run_t) * (size_t)nbase) && !text_run("ignored"));
+            cl->chat = POD_CHAT_BUDDY;
+            fresh(); ph_view_lead(&F, &N, &M, 1000);
+            CHECK(S.count == nbase && !text_run("ignored"));
+            cl->chat = POD_CHAT_GROUP; snprintf(cl->chat_name, sizeof cl->chat_name, "review-cable-fit");   // lead_view_group_shows_chat_name
+            fresh(); ph_view_lead(&F, &N, &M, 1000);
+            const ht_run_t *cn = text_run("review-cable-fit");
+            CHECK(cn && cn->fg == ht_rgb(PH_ROOM_MUTED) && centred_run(cn) && cn->y + ph_sb_22.height * 15 / 32 >= 118 && cn->y + ph_sb_22.height * 15 / 32 <= 122 && S.count == nbase + 1);
+            cl->chat = POD_CHAT_PM; snprintf(cl->chat_name, sizeof cl->chat_name, "PM");
+            fresh(); ph_view_lead(&F, &N, &M, 1000);
+            CHECK(text_run("PM") && text_run("PM")->fg == ht_rgb(PH_ROOM_MUTED));
+            cl->chat = POD_CHAT_GROUP; cl->chat_name[0] = 0;   // no name: nothing extra
+            fresh(); ph_view_lead(&F, &N, &M, 1000);
+            CHECK(S.count == nbase);
+            memset(cl->chat_name, 'W', 48); cl->chat_name[48] = 0;   // lead_view_chat_name_capped
+            fresh(); ph_view_lead(&F, &N, &M, 1000);
+            const ht_run_t *cap = text_prefix("WWW");
+            CHECK(cap && cap->w <= 640 + 2 && strstr(cap->text, "\xe2\x80\xa6") && strlen(cap->text) < 48);
+            cl->chat = POD_CHAT_NONE; cl->chat_name[0] = 0;
+        }
         // The model does not hold the Lead (a dropped link): nothing is drawn, nothing breaks
         pod_model_link(&M, false);
         fresh(); ph_view_lead(&F, &N, &M, 1000);
         CHECK(S.count == 0 && pod_nav_lead(&N, &M, NULL) == NULL && ph_lead_next_ms(&N, &M, 1000) > 0 && ph_lead_max_row(&N, &M) == 0);
+    }
+    {   // A Swarm chat's notice (mockup pro-swarm-parity 1D / 1E): "<project> · <Swarm>", the Lead's pet, no ask marks; the toast keeps its running timer
+        static pod_model_t M;
+        static pod_nav_t N;
+        static pod_swarm_t S1;
+        static const char ids[1][ID_MAX] = {"sw1"};
+        pod_model_reset(&M);
+        pod_model_link(&M, true);
+        pod_model_supertab_ids(&M, ids, 1);
+        memset(&S1, 0, sizeof S1);
+        snprintf(S1.id, ID_MAX, "sw1"); snprintf(S1.name, sizeof S1.name, "openharness");
+        S1.count = 1; S1.lead_n = 1;
+        snprintf(S1.leads[0].id, ID_MAX, "l1"); snprintf(S1.leads[0].project, sizeof S1.leads[0].project, "harness"); snprintf(S1.leads[0].engine, sizeof S1.leads[0].engine, "claude");
+        pod_model_supertab(&M, &S1, 1000);
+        pod_model_swarm_notice(&M, "sw1", "l1", "c1", "Cable fit now counts JSON tokens for the Pro. More.", 2000);
+        pod_model_clock(&M, 2000);
+        const pod_unread_t *u = pod_model_unread_find(&M, "l1");
+        CHECK(u && !strcmp(u->tab, "sw1"));
+
+        // inbox_swarm_row_name_line
+        pod_nav_init(&N);
+        N.depth = 2; N.stack[0].view = POD_V_TABS; N.stack[1].view = POD_V_INBOX;
+        fresh();
+        ph_view_inbox(&F, &N, &M, 2000);
+        const ht_run_t *nm = text_run("harness"), *tag = text_run("\xc2\xb7 openharness"), *msg = text_prefix("Cable fit now counts");
+        CHECK(nm && tag && msg && nm->fg == ht_rgb(PH_LETTER_WHO) && tag->fg == ht_rgb(0x6B4FA3) && tag->pro_font == &ph_sb_22 && tag->y == nm->y && tag->x > nm->x + ht_pro_width(&ph_sb_22, "harness") - 2);
+        CHECK(text_run("now") && !text_run("asks") && !text_run("needs you") && !text_run("stuck"));
+        { int edge = 0, badge = 0; for (int i = 0; i < S.count; i++) { edge += S.runs[i].pro_kind == K_RECT_AA && S.runs[i].w == 470 && S.runs[i].x == 190 && S.runs[i].fg != ht_rgb(PH_LETTER); badge += S.runs[i].pro_kind == K_RECT_AA && S.runs[i].fg == ht_rgb(0x3B2E55); } CHECK(!edge && !badge); }
+        CHECK(hits_of(POD_A_OPEN_NOTIF) == 1 && !strcmp(nth_hit(POD_A_OPEN_NOTIF, 0)->id, "l1"));
+        pod_model_supertab_ids(&M, ids, 0);   // the Swarm is gone from the model: the row keeps its project and draws no tag
+        fresh();
+        ph_view_inbox(&F, &N, &M, 2000);
+        CHECK(text_run("harness") && !text_prefix("\xc2\xb7"));
+        pod_model_supertab_ids(&M, ids, 1);
+        pod_model_supertab(&M, &S1, 3000);
+
+        // toast_swarm_name_line
+        const uint32_t t0 = 5000;
+        fresh();
+        ph_toast(&F, &M, u, t0, t0 + 1000);
+        nm = text_run("harness"); tag = text_run("\xc2\xb7 openharness");
+        CHECK(nm && tag && nm->fg == ht_rgb(PH_TOAST_NAME) && tag->fg == ht_rgb(0x8EA3BD) && tag->pro_font == &ph_sb_22 && tag->x == nm->x + ht_pro_width(&ph_sb_26, "harness") + 7);
+        CHECK(text_prefix("Cable fit now counts") && S.runs[0].fg == ht_rgb(PH_TOAST_EDGE));   // the plain card, not the question's edge
+        { int bars = 0, full = 0; for (int i = 0; i < S.count; i++) if (S.runs[i].pro_kind == K_RECT && S.runs[i].pro_height == 7) { bars++; full += S.runs[i].w == 588 && S.runs[i].fg == ht_rgb(PH_TOAST_BAR); } CHECK(bars == 2 && full == 0); }   // a track and a shrunk fill
+        CHECK(hits_of(POD_A_BANNER) == 1 && !strcmp(nth_hit(POD_A_BANNER, 0)->id, "l1"));
+        pod_model_supertab_ids(&M, ids, 0);
+        fresh();
+        ph_toast(&F, &M, u, t0, t0 + 1000);
+        CHECK(text_run("harness") && !text_prefix("\xc2\xb7"));
     }
     printf("test_ph_views: %d checks ok\n", checks);
     return 0;

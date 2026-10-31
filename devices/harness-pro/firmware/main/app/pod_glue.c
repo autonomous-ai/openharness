@@ -38,6 +38,7 @@ void pod_ui_render(pod_ui_t *u, ht_scene_t *scene, uint32_t now_ms)
     if (u->ban_on && !u->ban_stay && (int32_t)(now_ms - u->ban_until) >= 0) u->ban_on = false;
     if (u->ban_on && u->ban_stay && top(u) && top(u)->view == POD_V_INBOX) u->ban_on = false;
     if (u->ban_on && !(ban = pod_model_unread_find(&u->model, u->ban_agent))) u->ban_on = false;
+    if (ban && strcmp(ban->tab, u->ban_tab)) { ban = NULL; u->ban_on = false; }   // the entry was replaced by another kind
     u->frame.banner = ban && u->model.linked && !pod_ui_talking(u) && toast_fits(u);   // the toast, only over a room
     pod_render(&u->frame, &u->nav, &u->model, now_ms);
     if (u->frame.banner) {   // over everything, with the hit on top
@@ -75,7 +76,7 @@ pod_out_t pod_ui_link(pod_ui_t *u, bool up)
     if (!up) pod_ui_sweep_abort(u);
     if (!up || !u->model.linked) {   // the daemon forgets the open recap and any focus with its link: nothing queued or open carries over
         u->sup_qn = 0;
-        u->sup_tab[0] = u->sup_lead[0] = 0;
+        u->sup_tab[0] = u->sup_lead[0] = u->sup_chat[0] = 0;
         u->lead_wait = false;
     }
     if (up && !u->model.linked) {   // a real down -> up transition: the start runs again on this link on swarms this link brings
@@ -201,9 +202,9 @@ pod_out_t pod_ui_supertab(pod_ui_t *u, const pod_swarm_t *s, uint32_t now_ms)
     return synced(u);
 }
 
-pod_out_t pod_ui_supertab_recap(pod_ui_t *u, const char *tab, const char *lead, const char *text, uint32_t at, bool none)
+pod_out_t pod_ui_supertab_recap(pod_ui_t *u, const char *tab, const char *lead, const char *chat_id, const char *text, uint32_t at, bool none)
 {
-    pod_model_supertab_recap(&u->model, tab, lead, text, at, none);
+    pod_model_supertab_recap(&u->model, tab, lead, chat_id, text, at, none);
     return synced(u);
 }
 
@@ -238,6 +239,9 @@ static int iabs(int v) { return v < 0 ? -v : v; }
 static bool toast_fits(const pod_ui_t *u)
 {
     const pod_frame_t *f = top(u);
+    if (u->ban_tab[0])   // a Swarm chat's notice: also over another Lead's view, never over the Lead it is from
+        return u->ban_on && !u->ota && f && (f->view == POD_V_AGENT || f->view == POD_V_RECAP ||
+               (f->view == POD_V_LEAD && (strcmp(f->swarm, u->ban_tab) || strcmp(f->lead_id, u->ban_agent))));
     return u->ban_on && !u->ota && f && (f->view == POD_V_AGENT || f->view == POD_V_RECAP) && strcmp(f->agent, u->ban_agent);
 }
 
@@ -316,10 +320,19 @@ void pod_ui_scroll_sink(pod_ui_t *u, ht_scroll_emit_t emit, void *ctx, bool reve
     u->scroll_reversed = reversed;
 }
 
-// A tap on the toast: open Notices, which lists the entry.
+static void swarm_entry_open(pod_ui_t *u, const pod_unread_t *e);
+
+// A tap on the toast: open Notices, which lists the entry. A Swarm chat's notice opens its Lead instead.
 static pod_out_t banner_open(pod_ui_t *u, uint32_t now_ms)
 {
+    const pod_unread_t *e = pod_model_unread_find(&u->model, u->ban_agent);
     u->ban_on = false;
+    if (e && e->tab[0]) {
+        pod_out_t none;
+        memset(&none, 0, sizeof none);
+        swarm_entry_open(u, e);
+        return none;
+    }
     return pod_nav_act(&u->nav, &u->model, POD_A_INBOX, 0, now_ms);   // the toast opens Notices, which lists the entry
 }
 
@@ -359,6 +372,21 @@ static bool sup_push(pod_ui_t *u, const char *t, const char *tab, const char *le
     pod_copy_str(o->tab, sizeof o->tab, tab);
     pod_copy_str(o->lead, sizeof o->lead, lead);
     return true;
+}
+
+// A tap on a Swarm chat's notice (its toast or its Notices row): read the entry and open that Lead's view, the desktop told to select it. Not Notices.
+static void swarm_entry_open(pod_ui_t *u, const pod_unread_t *e)
+{
+    char tab[ID_MAX], lead[ID_MAX], chat[ID_MAX];
+    pod_copy_str(tab, sizeof tab, e->tab);   // the read drops the entry
+    pod_copy_str(lead, sizeof lead, e->agent);
+    pod_copy_str(chat, sizeof chat, e->chat_id);
+    pod_model_swarm_notice_read(&u->model, tab, lead, chat);
+    if (pod_nav_follow_lead(&u->nav, &u->model, tab, lead)) {
+        sup_push(u, "supertab.select", tab, lead);
+        u->scroll_px = 0;
+    }
+    u->dirty = true;
 }
 
 // A Notices row whose harness is a Swarm's local Lead: read the entry and open that Lead's view the way supertab.focus does (over Home, on the Swarm's card), the
@@ -599,6 +627,7 @@ pod_out_t pod_ui_touch(pod_ui_t *u, bool down, int x, int y, uint32_t now_ms, bo
         }
     }
     if (arg == -1 && u->hit.id[0]) { *changed = true; return none; }   // what it named is gone: redraw, open nothing
+    if (u->hit.action == POD_A_OPEN_NOTIF && arg >= 0 && arg < u->model.unread_count && u->model.unread[arg].tab[0]) { swarm_entry_open(u, &u->model.unread[arg]); *changed = true; return none; }
     if (u->hit.action == POD_A_OPEN_NOTIF && arg >= 0 && arg < u->model.unread_count && notice_lead(u, u->model.unread[arg].agent)) { *changed = true; return none; }
     if (u->hit.action == POD_A_TALK && u->nav.depth) {   // an agent of an offline machine cannot be talked to: say why
         const pod_agent_t *ag = pod_model_find(&u->model, top(u)->agent);
@@ -913,6 +942,7 @@ bool pod_ui_notify_text(pod_ui_t *u, const char *agent_id, pod_tier_t tier, cons
         const bool room = t && (t->view == POD_V_AGENT || t->view == POD_V_RECAP);
         if (room && strcmp(t->agent, a->id)) {
             pod_copy_str(u->ban_agent, sizeof u->ban_agent, a->id);
+            u->ban_tab[0] = 0;
             u->ban_until = now_ms + POD_TOAST_MS;
             u->ban_on = true;
             u->ban_stay = question && pod_model_attention(&u->model, a) != POD_ATTN_NONE;   // a Super Tab's question waits for you
@@ -921,7 +951,37 @@ bool pod_ui_notify_text(pod_ui_t *u, const char *agent_id, pod_tier_t tier, cons
     return tier == POD_TIER_ALERT;
 }
 
-void pod_ui_notif_begin(pod_ui_t *u) { pod_model_unread_clear(&u->model); }
+bool pod_ui_swarm_notice(pod_ui_t *u, const char *tab, const char *lead, const char *chat_id, const char *text, bool awake, uint32_t now_ms)
+{
+    pod_model_clock(&u->model, now_ms);
+    const pod_swarm_t *sw = pod_model_swarm(&u->model, tab);
+    if (!sw || pod_model_lead_index(sw, lead) < 0) return false;
+    const pod_frame_t *t = top(u);
+    pod_model_swarm_notice(&u->model, sw->id, lead, chat_id, text, now_ms);   // filed first, so a seen one also replaces this Lead's older row
+    const pod_lead_t *face = awake && t && t->view == POD_V_LEAD && !strcmp(t->swarm, sw->id) && !strcmp(t->lead_id, lead) ? &sw->leads[pod_model_lead_index(sw, lead)] : NULL;
+    if (face && !strcmp(face->chat_id, chat_id ? chat_id : "")) {   // the face shows that very chat: seen at once
+        pod_ui_swarm_notice_read(u, sw->id, lead, chat_id);
+        return false;
+    }
+    u->dirty = true;
+    if (!pod_ui_talking(u) && !u->ota && t && (t->view == POD_V_AGENT || t->view == POD_V_RECAP || t->view == POD_V_LEAD)) {
+        pod_copy_str(u->ban_agent, sizeof u->ban_agent, lead);
+        pod_copy_str(u->ban_tab, sizeof u->ban_tab, sw->id);
+        u->ban_until = now_ms + POD_TOAST_MS;
+        u->ban_on = true;
+        u->ban_stay = false;
+    }
+    return true;
+}
+
+void pod_ui_swarm_notice_read(pod_ui_t *u, const char *tab, const char *lead, const char *chat_id)
+{
+    if (!pod_model_swarm_notice_read(&u->model, tab, lead, chat_id)) return;
+    if (u->ban_on && !strcmp(u->ban_tab, tab) && !strcmp(u->ban_agent, lead)) u->ban_on = false;
+    u->dirty = true;
+}
+
+void pod_ui_notif_begin(pod_ui_t *u) { pod_model_unread_clear_agents(&u->model); }   // notif.replace lists only the harness entries: a Swarm notice stays
 
 void pod_ui_notif_row(pod_ui_t *u, const char *agent_id, const char *name, const char *token, const char *summary, uint32_t now_ms)
 {
@@ -942,21 +1002,47 @@ int pod_ui_take_reads(pod_ui_t *u, pod_read_out_t out[], int max) { return pod_m
 
 // ---- the Swarm cards: following the desktop, and what the daemon is told ---------------------------------------------
 
-// supertab.focus (the model's focus_pending): open that Lead's recap the way a host focus opens an agent. Dropped, not kept, while recording or updating or when the
-// person is driving (a touch within the quiet window, a finger down); a Lead the Swarm list does not hold yet waits POD_FOLLOW_PENDING_MS for it.
+// The Lead a focus names: itself, or for an empty one (the desktop opened the Swarm with no project) the Lead last on screen in that Swarm while it is still
+// there, else the Swarm's first. NULL when the Swarm or the Lead is not in the model (yet).
+static const char *focus_lead_of(const pod_ui_t *u)
+{
+    const pod_model_t *m = &u->model;
+    const pod_swarm_t *sw = pod_model_swarm(m, m->focus_tab);
+    if (m->focus_lead[0]) return pod_model_lead_index(sw, m->focus_lead) < 0 ? NULL : m->focus_lead;
+    if (!sw || sw->lead_n == 0) return NULL;
+    for (int i = 0; i < SWARMS_CARD_MAX; i++)
+        if (!strcmp(u->lead_seen[i].swarm, sw->id) && pod_model_lead_index(sw, u->lead_seen[i].lead) >= 0) return u->lead_seen[i].lead;
+    return sw->leads[0].id;
+}
+
+// Remember the Lead on screen in its Swarm: that Swarm's slot, else the first free one, else (all used) the oldest, slots being taken in turn.
+static void lead_seen_note(pod_ui_t *u, const char *swarm, const char *lead)
+{
+    int k = -1;
+    for (int i = 0; i < SWARMS_CARD_MAX && k < 0; i++) if (!strcmp(u->lead_seen[i].swarm, swarm)) k = i;
+    for (int i = 0; i < SWARMS_CARD_MAX && k < 0; i++) if (!u->lead_seen[i].swarm[0]) k = i;
+    if (k < 0) { k = u->lead_seen_next; u->lead_seen_next = (uint8_t)((k + 1) % SWARMS_CARD_MAX); }
+    pod_copy_str(u->lead_seen[k].swarm, ID_MAX, swarm);
+    pod_copy_str(u->lead_seen[k].lead, ID_MAX, lead);
+}
+
+// supertab.focus (the model's focus_pending): open that Lead's recap the way a host focus opens an agent; an empty Lead opens the Swarm on the Lead last shown
+// there, else its first. Dropped, not kept, while recording or updating or when the person is driving (a touch within the quiet window, a finger down); a Lead
+// (or Swarm) the Swarm list does not hold yet waits POD_FOLLOW_PENDING_MS for it.
 static void apply_lead_focus(pod_ui_t *u)
 {
     pod_model_t *m = &u->model;
     if (!m->focus_pending) return;
     const uint32_t now_ms = m->clock_ms;
     if (!u->lead_wait) { u->lead_wait = true; u->lead_wait_ms = now_ms; }
-    if (pod_model_lead_index(pod_model_swarm(m, m->focus_tab), m->focus_lead) < 0) {
+    const char *want = focus_lead_of(u);
+    if (!want) {
         if ((int32_t)(now_ms - u->lead_wait_ms) > (int32_t)POD_FOLLOW_PENDING_MS) { m->focus_pending = false; u->lead_wait = false; }
         return;
     }
     char tab[ID_MAX], lead[ID_MAX];
     memcpy(tab, m->focus_tab, ID_MAX);
-    memcpy(lead, m->focus_lead, ID_MAX);
+    memcpy(lead, want, ID_MAX);
     m->focus_pending = false;
     u->lead_wait = false;
     if (pod_ui_talking(u) || u->ota || u->down) return;
@@ -979,6 +1065,7 @@ static void sup_sync(pod_ui_t *u)
     const pod_swarm_t *sw = NULL;
     const pod_lead_t *l = on ? pod_nav_lead(&u->nav, m, &sw) : NULL;
     if (on && !l) return;   // its Lead is not in the model (yet): neither open nor closed, wait for it
+    if (l) lead_seen_note(u, sw->id, l->id);
     const char *lead = l ? l->id : "";
     if (!strcmp(u->sup_lead, lead) && (!l || !strcmp(u->sup_tab, sw->id))) {   // already what the daemon was told: a frame that may have been lost is re-sent
         if (!l) {   // nothing open: a close the link dropped goes again
@@ -986,6 +1073,14 @@ static void sup_sync(pod_ui_t *u)
             return;
         }
         const uint32_t now_ms = m->clock_ms;
+        if (l->recap == POD_RECAP_LOADING && strcmp(u->sup_chat, l->chat_id) && u->sup_qn + 2 <= POD_SUPERTAB_OUT_MAX) {   // the chat switched: ask for its message at once
+            u->sup_tries = 0;
+            sup_push(u, "supertab.open", sw->id, lead);
+            sup_push(u, "supertab.recap.get", sw->id, lead);
+            pod_copy_str(u->sup_chat, sizeof u->sup_chat, l->chat_id);
+            u->sup_at = now_ms;
+            return;
+        }
         if ((uint32_t)(now_ms - u->sup_at) < POD_SUPERTAB_RETRY_MS || u->sup_qn + 2 > POD_SUPERTAB_OUT_MAX) return;
         if (l->recap == POD_RECAP_LOADING) {   // no reply yet: ask again, a few times; then the "…" stays and nothing more is sent
             if (u->sup_tries >= POD_SUPERTAB_RETRIES) return;
@@ -1003,7 +1098,7 @@ static void sup_sync(pod_ui_t *u)
     if (!l) {   // closed: the frame still names the Swarm it was open in
         if (!sup_push(u, "supertab.open", u->sup_tab, "")) return;   // no room: still open as far as the daemon knows, the next sync closes it
         if (u->sup_lead[0]) pod_model_supertab_close(m, u->sup_tab, u->sup_lead);   // only the open Lead is pushed to: a closed one's text would go stale
-        u->sup_tab[0] = u->sup_lead[0] = 0;
+        u->sup_tab[0] = u->sup_lead[0] = u->sup_chat[0] = 0;
         return;
     }
     const char *tab = sw->id;
@@ -1017,6 +1112,7 @@ static void sup_sync(pod_ui_t *u)
     }
     pod_copy_str(u->sup_tab, sizeof u->sup_tab, tab);
     pod_copy_str(u->sup_lead, sizeof u->sup_lead, lead);
+    pod_copy_str(u->sup_chat, sizeof u->sup_chat, l->chat_id);
     u->sup_close[0] = 0;   // the open replaces any close still owed
     u->sup_at = m->clock_ms;
     u->sup_tries = 0;

@@ -30,6 +30,7 @@ Full key list, in the order the Pro sends it:
 | `player` | `"library-v1"` | capability |
 | `superTab` | `"wait-v1"` | capability: Super Tab waits on `question` (below) |
 | `swarmCard` | `"v1"` | capability: the Swarm cards and the Lead view (frames below) |
+| `swarmChat` | `"v1"` | capability: the chat the desktop has open on each Lead's face, and its notices (the round dial's, spec 2026-10-30-harness-pro-swarm-parity) |
 | `ota` | `"v1"` | capability: the Pro takes firmware offers |
 | `mac` | `aa:bb:...` | existing |
 | `settings` | object | existing: brightness, character, face, voiceLang, muted, quiet, straightTitle, focusFace, scrollReversed, round |
@@ -202,7 +203,7 @@ Daemon to Pro:
   "leads":[{"id":"<leadAgentId>","projectId":"<projectId>","project":"mobile","engine":"claude","owner":"","local":"<harnessId or empty>",
             "state":"ask|stuck|work|done","order":1,"since":134}]} one per Swarm, replacing it; `leads` in card order
 {"t":"supertab.recap","tab":"<superTabId>","lead":"<leadAgentId>","text":"...","at":1792560000,"none":false}   a Lead's last message (answers recap.get, and is pushed while that Lead is open)
-{"t":"supertab.focus","tab":"<superTabId>","lead":"<leadAgentId>"}   the desktop opened this Swarm project
+{"t":"supertab.focus","tab":"<superTabId>","lead":"<leadAgentId or empty>"}   the desktop opened this Swarm project (empty: the Swarm, no project)
 ```
 
 - `tab` links a Swarm to the desk tab of the same Swarm (empty: the desktop has none open); a linked desk tab shows the Swarm's card, an unlinked Swarm is one more Home page after the tabs.
@@ -233,3 +234,21 @@ Pro to daemon:
 - After a link drop nothing is sent until the Swarm list is back; then an open view sends `supertab.open` and `supertab.recap.get` again.
 - A Lead that leaves the list while its view is open moves the view to the Lead that took its place (the next, else the last); with none left, or the Swarm gone, the view goes Home.
 - Frames are sent without waiting: a busy link loses one.
+
+### The face chat and its notices (`swarmChat: "v1"`)
+
+With `swarmChat`, the daemon sends the round dial's frames (`docs/device-voice-swarm-chat.md`, spec `2026-10-28-round-dial-swarm-chat-design.md`):
+
+```
+"leads":[{..., "chat":"lead|pm|group", "chatId":"<conversationId>", "chatName":"PM"}]   the chat the desktop has open in that project, else the Lead's
+{"t":"supertab.recap", ..., "chatId":"<conversationId>"}                           the last message of that chat
+{"t":"supertab.notice","tab":"<superTabId>","lead":"<leadAgentId>","chat":"lead|pm","chatId":"<conversationId>","id":"<messageId>","text":"...","at":1792560000}
+{"t":"supertab.notice.read","tab":"<superTabId>","lead":"<leadAgentId>","chatId":"<conversationId>"}
+```
+
+- A `pm` or `group` chat is named under the project on the Lead view; `lead` (or none) draws the view as before.
+- A recap whose `chatId` is not the Lead's current chat is dropped. When a Lead's chat changes, an open Lead shows "..." until the new chat's message arrives.
+- `supertab.notice` files one Notices row per Lead (its project, tagged "· <Swarm name>") and toasts, unless that Lead's view is on screen. A tap on either opens the
+  Lead and sends `supertab.select`. `supertab.notice.read` removes the row whose `chatId` matches.
+- `state` is `work` only for a working group and otherwise `done`; `ask` and `stuck` are not sent to a `swarmChat` device.
+- `supertab.focus` with an empty `lead` (the desktop opened the Swarm with no project, e.g. its Chat with PM) opens the Lead last shown in that Swarm, else its first.

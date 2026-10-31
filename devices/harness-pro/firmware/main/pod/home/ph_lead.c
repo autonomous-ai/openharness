@@ -1,5 +1,5 @@
 // The Lead view (Swarm cards; the owner's mockup swarm-card.html B1-B3), built from ph_recap.c: a tap on a Lead's pet on the Swarm card opens the Lead's last
-// message in the Swarm chat. On the navy ground: the Swarm's name (small, purple) and the project (the title) centred at the top, then the message in the
+// message in the Swarm chat. On the navy ground: the Swarm's name (small, purple) and the project (the title) centred at the top, a PM or group chat the desktop has open named in a small muted line under the project (the bubble stays where it is), then the message in the
 // paper bubble (x 60, 600 wide, top 150, only as tall as its text: 28 px above and below, 34 at the sides, rows 46 px apart), a tail under its bottom left and
 // the "who" row: the Lead's pet (150 px box at x 16, the scene of its state: WORK, ASK, REST) with "Lead" (bold) and its status line in the status colour
 // ("working . m:ss" green, "needs you" orange, "stuck" red, "done" grey), a remote Lead adding its owner in a smaller muted line.
@@ -23,7 +23,7 @@ enum { BG = PH_ROOM_BG, BX = 60, BW = 600, BY = 150, RAD = 34, PAD_X = 34, PAD_Y
        EDGE = 8, EDGE_W = 120,   // the inner edge: a rounded block of this width in the edge colour, the bubble drawn 8 px in over it
        TAIL_CX = BX + 48 + 18, TAIL_HALF = 24, TAIL_DROP = 23,
        ROW_GAP = 18, PET_X = 16, PET_SIDE = 150, PET_UP = 10, NAME_X = 160, NAME_MAX_X = 660, HEAD_W = 640,
-       SW_CY = 42, PROJ_CY = 84, NOMSG_CY = 330,
+       SW_CY = 42, PROJ_CY = 84, CHAT_CY = 120, NOMSG_CY = 330,
        EDGE_ASK = 0xFF9A52, EDGE_STUCK = 0xE5484D, SWARM_INK = 0xB79CFF };   // the mockup's #ff9a52 and a red; the Swarm name's purple
 static const ht_pro_font_t *const FONT = &ph_rg_36;
 
@@ -141,6 +141,10 @@ void ph_view_lead(pod_out_frame_t *f, const pod_nav_t *nav, pod_model_t *m, uint
     centred(s, SW_CY, &ph_sb_22, SWARM_INK, line);
     fit_line(line, sizeof line, l->project, &ph_sb_34, HEAD_W);
     centred(s, PROJ_CY, &ph_sb_34, PH_ROOM_INK, line);
+    if ((l->chat == POD_CHAT_PM || l->chat == POD_CHAT_GROUP) && l->chat_name[0]) {   // the chat the desktop has open (a PM or a group; the Lead's own chat adds nothing)
+        fit_line(line, sizeof line, l->chat_name, &ph_sb_22, HEAD_W);
+        centred(s, CHAT_CY, &ph_sb_22, PH_ROOM_MUTED, line);
+    }
 
     // The bubble: the text (loaded), "..." (loading) or nothing (no message yet, or not asked yet: the same "..." as loading)
     const bool empty = l->recap == POD_RECAP_EMPTY, loaded = l->recap == POD_RECAP_LOADED;
