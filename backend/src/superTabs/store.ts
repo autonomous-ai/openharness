@@ -1743,24 +1743,28 @@ export class SuperTabStore {
     // The pending row is written before any link is signed, in the transaction that counts the sender's last hour. Each request
     // first writes the sender's allowance row there, so two at once conflict and one retries after the other commits: parallel
     // requests stop at the limits. The row is made outside it once, since a duplicate key is not retried and a conflict is.
-    const row = await transaction(this.db, async tx => {
+    const { key, allowance } = await transaction(this.db, async tx => {
       const { actor } = await this.poster(tx, user, tabId, conversationId, asAgentId)
-      const key = actorKey(actor), allowance = `${tabId}:${key}`, now = new Date(this.now())
-      return { key, allowance, now }
-    }).then(async ({ key, allowance, now }) => {
-      await this.db.superTabUploadAllowance.create({ data: { id: allowance, at: now } }).catch(error => { if (errorCode(error) !== 'P2002') throw error })
-      return transaction(this.db, async tx => {
-        await this.poster(tx, user, tabId, conversationId, asAgentId)
-        await tx.superTabUploadAllowance.update({ where: { id: allowance }, data: { at: new Date(this.now()) } })
-        const recent = await tx.superTabAttachment.findMany({ where: { tabId, actorKey: key, createdAt: { gte: new Date(this.now() - 3_600_000) } }, select: { size: true } })
-        if (recent.length >= HOURLY_UPLOADS) fail('RATE_LIMITED', `You attached ${HOURLY_UPLOADS} files in the last hour. Wait before attaching more.`, 429)
-        if (recent.reduce((sum, r) => sum + r.size, 0) + file.size > HOURLY_UPLOAD_BYTES) {
-          fail('RATE_LIMITED', 'You attached 4 GB of files in the last hour. Wait before attaching more.', 429)
-        }
-        return tx.superTabAttachment.create({ data: { id: randomBytes(12).toString('hex'), tabId, conversationId, actorKey: key,
-          name: name.data, mime: mime.data, size: file.size, objectKey, purpose: PENDING_UPLOAD_PURPOSE } })
-      })
+      const key = actorKey(actor)
+      return { key, allowance: `${tabId}:${key}` }
     })
+    const counted = () => transaction(this.db, async tx => {
+      await this.poster(tx, user, tabId, conversationId, asAgentId)
+      await tx.superTabUploadAllowance.update({ where: { id: allowance }, data: { at: new Date(this.now()) } })
+      const recent = await tx.superTabAttachment.findMany({ where: { tabId, actorKey: key, createdAt: { gte: new Date(this.now() - 3_600_000) } }, select: { size: true } })
+      if (recent.length >= HOURLY_UPLOADS) fail('RATE_LIMITED', `You attached ${HOURLY_UPLOADS} files in the last hour. Wait before attaching more.`, 429)
+      if (recent.reduce((sum, r) => sum + r.size, 0) + file.size > HOURLY_UPLOAD_BYTES) {
+        fail('RATE_LIMITED', 'You attached 4 GB of files in the last hour. Wait before attaching more.', 429)
+      }
+      return tx.superTabAttachment.create({ data: { id: randomBytes(12).toString('hex'), tabId, conversationId, actorKey: key,
+        name: name.data, mime: mime.data, size: file.size, objectKey, purpose: PENDING_UPLOAD_PURPOSE } })
+    })
+    // The sweep may remove the allowance row (an hour unused) between its create and the update: made again, a few times.
+    let row: Awaited<ReturnType<typeof counted>> | undefined
+    for (let attempt = 1; !row; attempt++) {
+      await this.db.superTabUploadAllowance.create({ data: { id: allowance, at: new Date(this.now()) } }).catch(error => { if (errorCode(error) !== 'P2002') throw error })
+      try { row = await counted() } catch (error) { if (errorCode(error) !== 'P2025' || attempt === 3) throw error }
+    }
     const expiresAt = this.now() + UPLOAD_LINK_MS
     let link: { url: string; headers: Record<string, string> }
     try { link = await direct.uploadLink(objectKey, { name: name.data }, file.size, expiresAt) } catch (error) {
@@ -1807,8 +1811,11 @@ export class SuperTabStore {
       unavailable()
     }
     const mime = typeFromHead(row.mime, head!)
-    await this.db.superTabAttachment.updateMany({ where: { id: row.id, tabId, purpose: PENDING_UPLOAD_PURPOSE }, data: { purpose: { unset: true }, mime } })
-    return sendable(mime)
+    const finished = await this.db.superTabAttachment.updateMany({ where: { id: row.id, tabId, purpose: PENDING_UPLOAD_PURPOSE }, data: { purpose: { unset: true }, mime } })
+    if (finished.count === 1) return sendable(mime)
+    // Another finish of the same upload won: the same answer. The sweep claimed it first: its file is going, so it is refused.
+    const now = await this.db.superTabAttachment.findFirst({ where: { id: row.id, tabId } })
+    return now && !now.purpose && !now.usedBy ? sendable(now.mime) : unavailable()
   }
 
   /** A picture for a person's or an agent's avatar (profile.ts): png, jpg or webp by its real bytes, at most 1 MB. Any

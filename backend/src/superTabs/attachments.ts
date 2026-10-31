@@ -18,6 +18,9 @@ export const UPLOAD_LINK_MS = 10 * 60_000
 /** The `purpose` of an upload whose link was handed out and whose bytes the server has not yet checked. Servers before this
  *  one refuse a row with any purpose as a message's file, so a rollout never sends a file that has not arrived. */
 export const PENDING_UPLOAD_PURPOSE = 'pending-upload'
+/** An unfinished upload the sweep has claimed (lib/pendingUploadSweep.ts): its stored file is being removed, so it can no
+ *  longer be finished or sent. */
+export const REMOVING_UPLOAD_PURPOSE = 'removing-upload'
 export const TOO_LARGE_MESSAGE = 'Files can be up to 256 MB.'
 /** Uploads a sender may start in a Swarm in an hour, and their bytes: bucket space for files that may never be sent. */
 export const HOURLY_UPLOADS = 200

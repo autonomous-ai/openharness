@@ -1,5 +1,5 @@
 import type { PrismaClient } from '@prisma/client'
-import { attachmentsFromEnv, directUploads, errorCode, PENDING_UPLOAD_LIFE_MS, PENDING_UPLOAD_PURPOSE, type DirectUploads } from '../superTabs/attachments.js'
+import { attachmentsFromEnv, directUploads, errorCode, PENDING_UPLOAD_LIFE_MS, PENDING_UPLOAD_PURPOSE, REMOVING_UPLOAD_PURPOSE, type DirectUploads } from '../superTabs/attachments.js'
 import { logger } from '../utils/logger.js'
 
 /**
@@ -7,25 +7,34 @@ import { logger } from '../utils/logger.js'
  * after the link expired, the stored object first, then the row. Finished but unsent uploads are not touched here; they are
  * unsent files like any other (#2268). Each sender's allowance row goes an hour after its last link request.
  *
- * The filter has no Swarm, so no index serves it: a small scan of the attachments collection every 10 minutes. If uploads
- * grow tenfold, the first warning is this query in the worker's query stats; the fix is an index on (purpose, createdAt).
+ * Its reads go by the (purpose, createdAt) index (schema.prisma), so a pass reads only the uploads it removes, however many
+ * attachments there are (workerIndexPlans.test.ts).
  */
 export const PENDING_UPLOAD_SWEEP = { chunk: 100, everyMs: 10 * 60_000 } as const
 
-export async function sweepPendingUploads(db: PrismaClient, bucket: DirectUploads, now: number, chunk: number = PENDING_UPLOAD_SWEEP.chunk) {
+export async function sweepPendingUploads(db: PrismaClient, bucket: DirectUploads, now: number, chunk: number = PENDING_UPLOAD_SWEEP.chunk,
+  picked: () => Promise<void> = async () => {}) {
+  // Both by the (purpose, createdAt) index: rows claimed by an earlier pass whose file delete failed, then the newly due.
+  const claimed = await db.superTabAttachment.findMany({ where: { purpose: REMOVING_UPLOAD_PURPOSE }, select: { id: true, objectKey: true }, take: chunk })
   const due = await db.superTabAttachment.findMany({ where: { purpose: PENDING_UPLOAD_PURPOSE, createdAt: { lt: new Date(now - PENDING_UPLOAD_LIFE_MS) } },
     select: { id: true, objectKey: true }, take: chunk })
+  await picked()
   let removed = 0, failed = 0
+  const mine = [...claimed]
   for (const row of due) {
+    // Claimed first, with one conditional write: a finish that wins it keeps its row and bytes, and this pass skips the row;
+    // one that loses is refused (store.ts completeUpload). Only a row this write changed has its file removed.
+    const claim = await db.superTabAttachment.updateMany({ where: { id: row.id, purpose: PENDING_UPLOAD_PURPOSE }, data: { purpose: REMOVING_UPLOAD_PURPOSE } })
+    if (claim.count === 1) mine.push(row)
+  }
+  for (const row of mine) {
     try { await bucket.delete(row.objectKey) } catch (error) {
-      // The row stays for the next pass. Only its id and the error's code: the key, and the error's text, carry the file's link.
+      // The row stays claimed for the next pass. Only its id and the error's code: the key, and the error's text, carry the file's link.
       logger.warn('[pending-upload-sweep] could not remove a stored file', { id: row.id, code: errorCode(error) })
       failed++
       continue
     }
-    // Still pending: a finish that won the race keeps its row (and its object was never the one deleted, since a link writes once
-    // and a finished upload is no longer pending when this pass finds it).
-    removed += (await db.superTabAttachment.deleteMany({ where: { id: row.id, purpose: PENDING_UPLOAD_PURPOSE } })).count
+    removed += (await db.superTabAttachment.deleteMany({ where: { id: row.id, purpose: REMOVING_UPLOAD_PURPOSE } })).count
   }
   await db.superTabUploadAllowance.deleteMany({ where: { at: { lt: new Date(now - 3_600_000) } } })
   return { removed, failed }

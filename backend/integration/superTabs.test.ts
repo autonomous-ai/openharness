@@ -2706,6 +2706,45 @@ describe('Super Tab chat attachments', () => {
     expect(await sweepPendingUploads(db, files, Date.now())).toEqual({ removed: 1, failed: 0 })
   })
 
+  it('never leaves a finished upload without its file when a finish races the sweep: the finish wins or is refused', async () => {
+    const { tab } = await fixture()
+    const aged = new Date(Date.now() - 71 * 60_000)
+    const stored = async () => {
+      const link = (await linkFor(tab, { size: 5 })).upload
+      expect(await files.receive(link.url, link.headers, Buffer.from('bytes'))).toBe(200)
+      await db.superTabAttachment.updateMany({ where: { id: link.id }, data: { createdAt: aged } })
+      return { link, key: (await db.superTabAttachment.findFirst({ where: { id: link.id } }))!.objectKey }
+    }
+    // The finish lands after the sweep picked the row, before it claims it: the finish wins, and the sweep leaves it alone.
+    const first = await stored()
+    let finished: Awaited<ReturnType<typeof complete>> | null = null
+    expect(await sweepPendingUploads(db, files, Date.now(), 100, async () => { finished = await complete(tab, first.link.id) })).toEqual({ removed: 0, failed: 0 })
+    expect(finished!.status).toBe(200)
+    expect(files.objects.has(first.key)).toBe(true)
+    expect(await send(tab, [first.link.id])).toBeTruthy()
+    // The sweep claims the row while a finish is checking the bytes: the finish is refused, and nothing sendable is left.
+    const second = await stored()
+    const head = vi.spyOn(files, 'head').mockImplementationOnce(async (key, bytes) => {
+      const read = files.objects.get(key)!.bytes.subarray(0, bytes)
+      await sweepPendingUploads(db, files, Date.now())
+      return read
+    })
+    expect(await complete(tab, second.link.id)).toMatchObject({ status: 400, code: 'ATTACHMENT_UNAVAILABLE' })
+    head.mockRestore()
+    expect(files.objects.has(second.key)).toBe(false)
+    expect(await db.superTabAttachment.findFirst({ where: { id: second.link.id } })).toBeNull()
+    await expect(send(tab, [second.link.id])).rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' })
+  })
+
+  it('asks for a link even when the sweep removes the sender\'s allowance row between its create and its use', async () => {
+    const { tab } = await fixture()
+    await db.superTabUploadAllowance.deleteMany({})
+    // As if the sweep removed it right after it was made.
+    const made = vi.spyOn(db.superTabUploadAllowance, 'create').mockResolvedValueOnce({ id: 'gone', at: new Date() } as never)
+    expect((await linkFor(tab, { size: 11 })).status).toBe(200)
+    made.mockRestore()
+  })
+
   it('answers a signing or bucket failure as unavailable, never with the object\'s key', async () => {
     const { tab } = await fixture()
     const error = vi.spyOn(logger, 'error')
