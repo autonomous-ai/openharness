@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { SWARM_TOOLS_SKILL } from './swarmTools.js'
+import { CHEAP_FIRST_HELP, ROUTE_KIND_HELP } from '../superTabs/routeCheapFirst.js'
 
 describe('SWARM_TOOLS_SKILL', () => {
   it('describes the commands and no workflow', () => {
@@ -19,6 +20,11 @@ describe('SWARM_TOOLS_SKILL', () => {
   })
   // Final review: what the skill says the server does must be what it does.
   const lineOf = (needle: string) => SWARM_TOOLS_SKILL.split('\n').find(line => line.includes(needle)) ?? ''
+  it('says which kinds of work may go to the grid, from the same text as the route\'s help', () => {
+    expect(SWARM_TOOLS_SKILL).toContain(`"kind":"${ROUTE_KIND_HELP}"`)
+    expect(SWARM_TOOLS_SKILL).toContain(CHEAP_FIRST_HELP)
+    expect(SWARM_TOOLS_SKILL).not.toContain('leaves out only')
+  })
   it('has the reviewing agent named with --to, since a review status tells only the group\'s coordinator', () => {
     expect(SWARM_TOOLS_SKILL).not.toContain('so it is told when that work is ready for review')
     expect(lineOf('`reviewOf` naming')).toMatch(/--to/)

@@ -1363,13 +1363,18 @@ describe('the route is advice', () => {
     // review, goals piece 4), which the costs report counts.
     f.state.projects![0]!.instructionsRevision = 5
     expect(route({ stepUp: { attempt: 3, reason: 'Mine.' } }).record).not.toHaveProperty('stepUp')
-    f.state.conversations.find(c => c.id === 'lead')!.stepUp = { attempt: 2, floor: 3, reason: `Its first review failed on ${'m'.repeat(300)}.`, at: 1, carry: '' }
+    const lead = () => f.state.conversations.find(c => c.id === 'lead')!
+    lead().stepUp = { attempt: 2, floor: 3, reason: `Its first review failed on ${'m'.repeat(300)}.`, at: 1, carry: '' }
     const sent = route({ instructionsRevision: 1, stepUp: { attempt: 3, reason: 'Mine.' } })
     expect(sent.record.instructionsRevision).toBe(5)
     expect(sent.record.stepUp).toEqual({ attempt: 2, reason: `Its first review failed on ${'m'.repeat(300)}.`.slice(0, 200) })
+    // Only the first route after it carries it: the costs report counts one step up per task, however often it is routed.
+    expect(lead().stepUp).toMatchObject({ attempt: 2, recorded: true })
+    expect(route().record).not.toHaveProperty('stepUp')
     // A step up from before project instructions, past the third attempt, is kept at the record's last attempt.
-    f.state.conversations.find(c => c.id === 'lead')!.stepUp = { attempt: 4, floor: 3, reason: 'Old.', at: 1, carry: '' }
+    lead().stepUp = { attempt: 4, floor: 3, reason: 'Old.', at: 1, carry: '' }
     expect(route().record.stepUp).toEqual({ attempt: 3, reason: 'Old.' })
+    expect(route().record).not.toHaveProperty('stepUp')
   })
 
   it('starts with no role default', () => {

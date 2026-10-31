@@ -35,7 +35,14 @@ export const GRID_KINDS: readonly string[] = ['docs', 'tests', 'fixtures', 'copy
 export const GRID_FIRST = 'A small, low-risk build: a cheap model on the Swarm\'s grid tries it first. If its review fails or the attempt is lost, the next route steps up to a strong model.'
 export const NEVER_REVIEWS = 'A review never runs on a model on the Swarm\'s grid: reviews need a strong model.'
 export const NEVER_SECURITY = 'Security-sensitive work (a security kind or high risk) never runs on a model on the Swarm\'s grid.'
-export const GRID_KINDS_ONLY = `A model on the Swarm's grid takes only work whose kind is ${GRID_KINDS.slice(0, -1).join(', ')} or ${GRID_KINDS.at(-1)}; this task names no such kind.`
+/** The kinds as people read them: "docs, tests, fixtures, copy or refactor". */
+const KINDS_TEXT = `${GRID_KINDS.slice(0, -1).join(', ')} or ${GRID_KINDS.at(-1)}`
+export const GRID_KINDS_ONLY = `A model on the Swarm's grid takes only work whose kind is ${KINDS_TEXT}; this task names no such kind.`
+/** What the route's help tells every routing agent (service.ts HELP.route), from the same constants the plug-ins apply, so a
+ *  Lead knows which kind to give for the cheap choice (review of #2422: help that called kind optional got it rarely). */
+export const ROUTE_KIND_HELP = `one word for the kind of work; a model on the Swarm's grid is offered only for kind ${KINDS_TEXT}`
+export const CHEAP_FIRST_HELP = `Cheap first: small, low-risk work (risk and difficulty low, 1 to ${MAX_OWNED} owned paths) of kind ${KINDS_TEXT} ranks a model on the Swarm's grid first. `
+  + 'A model on the grid is never offered, even when named, for a review, security work (a security kind or high risk), work of any other kind or with no kind, or a task\'s second attempt.'
 export const FIRST_ATTEMPT_ONLY = 'A model on the Swarm\'s grid takes only a task\'s first attempt, so this one steps up.'
 export const EARLIER_UNREADABLE = 'Its earlier attempts could not be read, so it is not taken for a first attempt.'
 const NAMED = 'A person named this model, so it is offered.'

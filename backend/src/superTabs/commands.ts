@@ -2348,7 +2348,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const made = { ...sent, why: sent.why.replace(OLD_SAME_ENGINE, '') || sent.why }
       const jobKind = jobKindOf(routedGroup, decision.assessment.kind)
       const instructionsRevision = groupProject(state, routedGroup).instructionsRevision ?? 0
-      const stepUp = routedGroup.stepUp ? { stepUp: { attempt: Math.min(3, routedGroup.stepUp.attempt), reason: routedGroup.stepUp.reason.slice(0, 200) } } : {}
+      // Only the first route after a step up carries it, so the costs report counts one step up per task, not one per route
+      // (review of #2422); a later failure is a new step up, carried again.
+      const step = routedGroup.stepUp && !routedGroup.stepUp.recorded ? routedGroup.stepUp : null
+      if (step) step.recorded = true
+      const stepUp = step ? { stepUp: { attempt: Math.min(3, step.attempt), reason: step.reason.slice(0, 200) } } : {}
       effects.routeDecisions.push({ op: 'create', id: operationId, conversationId: command.conversationId, record: { ...made, ...stepUp, jobKind, instructionsRevision } })
       result.routeDecisionId = operationId
       // The row quotes the Lead's reason for the task; the verdict's own text stays in the decision record.

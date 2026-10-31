@@ -314,7 +314,9 @@ export interface Conversation {
 }
 /** A step up: the attempt it opened (2 or 3), the least quality from then on, why, when, and what the failed attempt left for
  *  the next one's brief; the failed start that caused it, if one did. */
-export interface StepUp { attempt: number; floor: number; reason: string; at: number; carry: string; startId?: string }
+export interface StepUp { attempt: number; floor: number; reason: string; at: number; carry: string; startId?: string
+  /** A route record carries it already (commands.ts route.record): later routes of the task do not, so it counts once. */
+  recorded?: true }
 /** Absent while its task is working (its agent reported in the last 30 minutes; its last progress is its assignment's
  *  `progressAt`) or there is none. `waiting`: on a person (`personId`), a review, its stated
  *  blocker, the new revision of the build it reviews, or its agent's start. `quiet`: its agent has reported nothing for 30 minutes
