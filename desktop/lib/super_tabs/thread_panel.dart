@@ -65,7 +65,10 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
   // the thread's replies are known), and the latest replies and rows (replies
   // and those on their way): what came since is the control's count.
   bool _away = false, _atEnd = false, _baselined = false;
-  int _repliesAtEnd = 0, _replies = 0, _rows = 0, _rowsMeasured = 0;
+  int _repliesAtEnd = 0, _replies = 0;
+  // The newest row (reply or one on its way), as built and as last measured:
+  // earlier replies arriving above do not change it.
+  String? _newest, _newestMeasured;
 
   SuperTabController get c => widget.controller;
 
@@ -85,7 +88,7 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
       _atEnd = false;
       _baselined = false;
       _repliesAtEnd = 0;
-      _rowsMeasured = 0;
+      _newestMeasured = null;
       _scroll.followEnd();
       // Each thread keeps its own draft.
       _composer.text = c.threadDraft(widget.root);
@@ -113,10 +116,10 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     final position = _scroll.position;
     // Near the end (not quite at it, where the scroll follows by itself), a
     // new row still brings the reader down to it.
-    if (_rows > _rowsMeasured && _atEnd && position.extentAfter >= 40) {
+    if (_newest != _newestMeasured && _atEnd && position.extentAfter >= 40) {
       _scroll.followEnd();
     }
-    _rowsMeasured = _rows;
+    _newestMeasured = _newest;
     final away = position.extentAfter >= 40;
     final atEnd = !away;
     // What the thread held when it opened is not new; nor is what the reader
@@ -252,7 +255,7 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     final count =
         c.thread(c.selectedId, widget.root)?.replies ?? replies.length;
     _replies = count > replies.length ? count : replies.length;
-    _rows = replies.length + pending.length;
+    _newest = '${replies.lastOrNull?.id}/${pending.length}';
     if (!_baselined &&
         (c.thread(c.selectedId, widget.root) != null || replies.isNotEmpty)) {
       _baselined = true;
@@ -351,9 +354,11 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
                                 key: const ValueKey('super-thread-earlier'),
                                 onPressed: c.readingEarlierReplies
                                     ? null
-                                    : () => unawaited(
-                                        c.loadThread(earlier: true),
-                                      ),
+                                    : () {
+                                        // They read on from where they are.
+                                        _scroll.holdPlace();
+                                        unawaited(c.loadThread(earlier: true));
+                                      },
                                 child: Text(
                                   c.readingEarlierReplies
                                       ? 'Loading earlier replies…'

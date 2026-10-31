@@ -219,6 +219,110 @@ void main() {
     await c.flush();
   });
 
+  final macOS = TargetPlatformVariant.only(TargetPlatform.macOS);
+
+  /// Flings the thread back up and lets it coast for a moment, still moving.
+  Future<void> flingUp(WidgetTester tester) async {
+    await tester.fling(
+      inPanel(find.byType(ListView)),
+      const Offset(0, 600),
+      4000,
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 80));
+    expect(
+      threadScroll(tester).activity,
+      isA<BallisticScrollActivity>(),
+      reason: 'the fling should still be moving',
+    );
+  }
+
+  testWidgets('Jump to latest clicked while a fling still coasts ends at the '
+      'newest reply', (tester) async {
+    final c = await show(tester, threadOf(60));
+    c.openThread('message-1');
+    await tester.pumpAndSettle();
+
+    await flingUp(tester);
+    expect(inPanel(find.byKey(jump)), findsOneWidget);
+    await tester.tap(inPanel(find.byKey(jump)));
+    await tester.pumpAndSettle();
+
+    expectAtNewest(tester, 'Reply 60:');
+  }, variant: macOS);
+
+  testWidgets('another thread opened while a fling still coasts opens at its '
+      'newest reply', (tester) async {
+    final s = threadOf(60);
+    s.append('A second topic.');
+    final second = s.messages.last['id'] as String;
+    for (var i = 1; i <= 30; i++) {
+      reply(
+        s,
+        'Other $i: a long enough answer to fill the pane.',
+        root: second,
+      );
+    }
+    final c = await show(tester, s);
+    c.openThread('message-1');
+    await tester.pumpAndSettle();
+
+    await flingUp(tester);
+    c.openThread(second);
+    await tester.pumpAndSettle();
+
+    expectAtNewest(tester, 'Other 30:');
+  }, variant: macOS);
+
+  testWidgets('Show earlier replies in a thread that fits the pane keeps the '
+      'reader where they were', (tester) async {
+    final s = server()..messagePage = 2;
+    s.append('Should we do thread replies?');
+    for (var i = 1; i <= 16; i++) {
+      reply(s, i <= 6 ? 'Early $i.' : 'Reply $i.');
+    }
+    final c = s.controller();
+    await c.refresh();
+    addTearDown(c.dispose);
+    c.openThread('message-1');
+    await c.loadThread();
+    await tester.binding.setSurfaceSize(const Size(500, 575));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: grid.buildAppTheme(brightness: Brightness.dark),
+        home: Scaffold(
+          // Redrawn as the controller changes, as the chat view does.
+          body: ListenableBuilder(
+            listenable: c,
+            builder: (_, _) => SuperTabThreadPanel(
+              controller: c,
+              root: 'message-1',
+              // The earliest replies, read only on request, are tall.
+              row: (SuperTabMessage m, bool grouped) => SizedBox(
+                height: m.text.startsWith('Early') ? 120 : 30,
+                child: Text(m.text, maxLines: 1),
+              ),
+              outgoing: (_) => const SizedBox.shrink(),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    // It fits: the root, the earlier-replies button and the newest replies.
+    expect(threadScroll(tester).maxScrollExtent, 0);
+    expect(find.text('Should we do thread replies?'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('super-thread-earlier')));
+    await tester.pumpAndSettle();
+
+    // Read back, it no longer fits, and the reader is still at the top.
+    expect(threadScroll(tester).maxScrollExtent, greaterThan(0));
+    expect(threadScroll(tester).pixels, 0);
+    expect(find.text('Should we do thread replies?'), findsOneWidget);
+  });
+
   testWidgets('rows that grow after the thread opened (a picture, a code '
       'block) keep it at the newest reply', (tester) async {
     final s = threadOf(12);

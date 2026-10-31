@@ -20,6 +20,14 @@ class SuperTabThreadScroll extends ScrollController {
     }
   }
 
+  /// Keeps the view where it is as rows arrive, even at the end: the reader
+  /// asked for earlier replies and reads on from where they are.
+  void holdPlace() {
+    for (final position in positions) {
+      if (position is _EndPosition) position._following = false;
+    }
+  }
+
   @override
   ScrollPosition createScrollPosition(
     ScrollPhysics physics,
@@ -45,6 +53,8 @@ class _EndPosition extends ScrollPositionWithSingleContext {
   bool _following = true;
 
   void _followEnd() {
+    // A fling still coasting would move the view off the end again.
+    goIdle();
     _following = true;
     // The next layout (a new thread's rows) settles it at the real end.
     notifyListeners();
