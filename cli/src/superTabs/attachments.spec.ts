@@ -291,7 +291,7 @@ describe('Super Tab attachment downloads', () => {
       const big = signed({ size: 16 * chunk.byteLength, expiresAt: 5 * 60_000 })
       const listed = await attachedFiles({ attachments: [big] }, { base, signedBase, fetch: slow, now: () => clock, relink, idleMs: 60_000 })
       expect(listed.complete).toBe(true)
-      expect(clock).toBeGreaterThan(big.expiresAt as number)
+      expect(clock).toBeGreaterThan(5 * 60_000)
       expect([slow.mock.calls.length, relink.mock.calls.length]).toEqual([1, 0])
     })
 
