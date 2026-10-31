@@ -59,6 +59,21 @@ describe('slimForRelay', () => {
       .toBe('a'.repeat(199))
   })
 
+  it('keeps the end of a long path, where its file name is', () => {
+    const path = `/Users/dev/${'deep/'.repeat(60)}src/handler.ts`
+    const input = (slimForRelay(event('tool_start', { id: 'u1', tool: 'Edit', input: { file_path: path, notebook_path: path, path, old_string: path } }))
+      .payload as { input: Record<string, string> }).input
+    for (const key of ['file_path', 'notebook_path', 'path']) expect(input[key], key).toBe(path.slice(-200))
+    expect(input.old_string).toBe(path.slice(0, 200))
+  })
+
+  it('passes on a frame whose type is a name every object has', () => {
+    for (const type of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+      const frame = { type, payload: { agentId: 'a1' } }
+      expect(slimForRelay(frame)).toBe(frame)
+    }
+  })
+
   it('keeps a tool input that is not an object as it is, bounded', () => {
     expect((slimForRelay(event('tool_start', { id: 'u1', tool: 'Raw', input: 'z'.repeat(500) })).payload as { input: unknown }).input).toBe('z'.repeat(200))
     expect(slimForRelay(event('tool_start', { id: 'u1', tool: 'None' })).payload).toEqual({ id: 'u1', tool: 'None', ...ids })

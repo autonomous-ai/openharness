@@ -2686,8 +2686,9 @@ describe('BackendSocket outbound queue', () => {
     socket.registerLocalClient('local:window', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
     const ended = { type: 'tool_end', agentId: 'a1', dbSessionId: 's1', payload: { id: 'u1', tool: 'Bash', output: 'the whole output',
       isError: false, summary: 'ok', agentId: 'a1', sessionId: 's1' } }
+    const whole = structuredClone(ended)
     socket.send(ended)
-    expect(frames.filter((frame) => frame.type === 'tool_end')).toEqual([ended])
+    expect(frames.filter((frame) => frame.type === 'tool_end')).toEqual([whole])
     expect(broadcast).toHaveBeenCalledExactlyOnceWith({ ...ended, payload: { id: 'u1', tool: 'Bash', isError: false, agentId: 'a1', sessionId: 's1' } }, undefined)
     await socket.unregisterLocalClient('local:window')
     await socket.stop()

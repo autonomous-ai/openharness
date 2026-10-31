@@ -18,12 +18,17 @@ LINE = re.compile(r'^\[(\S+ \S+)\] DEBUG ws\s+(\S)\s+([a-z_]+)\s?(.*)$')
 AGENT_ID = re.compile(r'^\{agent: \{id: ([^,}]+)')
 
 
+ACTIVITY = re.compile(r'(?:(?<=\{)|(?<=, ))activity: ')
+
+
 def without_activity(text):
-    """The logged agent with its `activity: …` entry removed (a value is `null` or one `{…}`, possibly nested)."""
-    at = text.find('activity: ')
-    if at < 0:
+    """The logged agent with its `activity: …` entry removed (a value is `null` or one `{…}`, possibly nested). Only an
+    entry's own key matches: a title like "Reactivity: tests" does not."""
+    found = ACTIVITY.search(text)
+    if not found:
         return text
-    end = at + len('activity: ')
+    at = found.start()
+    end = found.end()
     if text.startswith('{', end):
         depth = 0
         while end < len(text):

@@ -47,23 +47,35 @@ function cut(text: string, max: number): string {
   return text.slice(0, end)
 }
 
+/** The last `max` UTF-16 units of `text`, never starting inside a character. */
+function tail(text: string, max: number): string {
+  if (text.length <= max) return text
+  const start = text.length - max
+  return text.slice(/[\uDC00-\uDFFF]/.test(text[start]!) ? start + 1 : start)
+}
+
+/** A path keeps its end: the file name is what the terminal app shows ("Editing handler.ts"), and a deep
+ *  worktree or node_modules path is longer than 200 characters. */
+const PATH_KEY = /path$/i
+
 /** A tool input within its bounds: strings cut, lists and objects to their first 50 entries, and nothing nested past
  *  four levels (`input` itself is the first). */
-function bounded(value: unknown, depth = 1): unknown {
-  if (typeof value === 'string') return cut(value, INPUT_STRING)
+function bounded(value: unknown, depth = 1, key = ''): unknown {
+  if (typeof value === 'string') return PATH_KEY.test(key) ? tail(value, INPUT_STRING) : cut(value, INPUT_STRING)
   if (value === null || typeof value !== 'object') return value
   if (depth > INPUT_DEPTH) return undefined
   if (Array.isArray(value)) return value.slice(0, INPUT_ITEMS).map((item) => bounded(item, depth + 1)).filter((item) => item !== undefined)
   const kept: Record<string, unknown> = {}
   for (const [key, item] of Object.entries(value).slice(0, INPUT_ITEMS)) {
-    const inner = bounded(item, depth + 1)
+    const inner = bounded(item, depth + 1, key)
     if (inner !== undefined) kept[key] = inner
   }
   return kept
 }
 
 export function slimForRelay(frame: Frame): Frame {
-  const keep = typeof frame.type === 'string' ? KEEP[frame.type] : undefined
+  // Own keys only: a frame typed `constructor` must not read Object.prototype's (a throw here reaches the event funnel).
+  const keep = typeof frame.type === 'string' && Object.hasOwn(KEEP, frame.type) ? KEEP[frame.type] : undefined
   const payload = frame.payload
   if (!keep || !payload || typeof payload !== 'object' || Array.isArray(payload)) return frame
   const given = payload as Record<string, unknown>

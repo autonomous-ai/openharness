@@ -173,7 +173,9 @@ direct ones plus about 40 through `announceSession`.
 ## Goals
 
 - About half the frames on the measured account, with every app showing what it shows today.
-- No tool output, thinking text or image crosses the relay, and no sub-agent text in the clear.
+- No live event carries tool output, thinking text or an image across the relay, and no sub-agent text crosses in the
+  clear. (A history read, `session_get`, still returns whole events, sealed, to an app that asks; no app in this
+  repository asks.)
 
 ## Non-goals
 
@@ -198,14 +200,16 @@ counting `↓` frames by type), written into this document beside the "before" t
 Counted with `python3 -I scripts/desktop-frame-count.py <Desktop log>` (received `↓` frames by type, the
 `swarm_changed` gap, and each `agent_synced` against the previous one for its agent).
 
-| Log | Window | Frames | `swarm_changed` | `agent_activity` | `turn_heartbeat` | `agent_synced` (identical / activity only) |
+| Log | Window | Frames | `swarm_changed` | `agent_activity` | `turn_heartbeat` | `agent_synced` (identical / activity only, as logged) |
 |---|---|---|---|---|---|---|
 | Before: Ken's Desktop, 2026-10-30 (the table above) | about 22 h open | 170,666 | 54,282 | 32,819 | 28,411 | 17,099 (4,239 / 181) |
 | Before: the build Mac's Desktop, 2026-10-30 | 03:05-17:02 | 161,203 | 40,344 (median gap 1 s) | 22,670 | 18,980 | 59,467 (35,601 / 147) |
 | After | pending: a comparable day after the release | | | | | |
 
 The build Mac's Desktop had far more identical `agent_synced` (60% of them, against 25% on Ken's): worth weighing if
-change 3 is taken up again.
+change 3 is taken up again. "Identical" is as the log shows them: Desktop logs a frame's first 1,200 characters, each
+value's first 120 and a list as its length, so fields further in (`dsh`, `verdict`, `permissionMode`) are not compared
+and both counts are upper bounds.
 
 ## Design
 

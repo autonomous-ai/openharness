@@ -49,8 +49,8 @@ before and after.
 - A Swarm whose only changes are machine readings for an hour: apps still see machine cards update at least every
   30 s. (Task 1 test.)
 - A main change 5 s after a machine push: it goes at once and also carries any machine part held since. (Task 1 test.)
-- An agent waiting on a question for 10 minutes: one `agent_activity` when it starts waiting, none after, and one
-  again when it resumes working. (Task 2 test.)
+- An agent waiting on a question for 10 minutes: one `agent_activity` when it starts waiting, none after, and
+  `turn_heartbeat` again when it resumes working. (Task 2 test.)
 - The same agent synced 100 times with only `activity` moving: one frame to the apps, every one to the dial. (Task 3
   test.)
 - A `Write` tool whose input is 2 MB: the remote frame is under 2 KB, the window here gets all 2 MB. (Task 4 test.)
