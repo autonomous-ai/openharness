@@ -923,6 +923,50 @@ export function subscribeDeskChanged(userId: string, cb: (msg: DeskChangedMsg) =
   return addSub(deskChannel(userId), cb as Cb)
 }
 
+// ── a terminal app open on the account (docs/plans/2026-10-31-live-events-relay-design.md, change 5) ─────────────────
+// Few people run `harness tui` (or Harness OS, which runs it), and only it reads some transcript events in full: a daemon
+// holds those back from the relay while none of its account's is open (one Desktop's day, 2026-10-30: about 12,700 of
+// its 170,666 frames). A daemon with one attached sends app_presence `open` at once and a `ping` at most once a minute
+// (cli gateway/upstream.ts APP_PRESENCE_UP_MS); the key outlives two and a half pings, and the daemons are told at once on
+// an open and at most once a minute after, each word good for three minutes: closing one needs no message.
+const tuiOpenKey = (userId: string): string => `tui_open:${userId}`
+const tuiSaidKey = (userId: string): string => `tui_open_said:${userId}`
+const tuiChannel = (userId: string): string => `tui:${userId}`
+/** How long a daemon takes one word that a terminal app is open (cli gateway.ts `__tui_open`). */
+export const TUI_OPEN_FOR_MS = 180_000
+const TUI_OPEN_KEY_SEC = 150
+const TUI_SAID_SEC = 60
+
+/** A terminal app of [userId]'s is open (its daemon's `open`) or still is (`ping`). Never throws. Without Redis its keys
+ *  cannot be kept, but the daemons are told anyway (final review: in single-pod mode `safePublish` still reaches this
+ *  pod's daemons, and holding a terminal app's events back is what must not happen silently). */
+export async function noteTuiPresence(userId: string, kind: 'open' | 'ping'): Promise<void> {
+  let tell = kind === 'open'
+  try {
+    await pub.set(tuiOpenKey(userId), '1', 'EX', TUI_OPEN_KEY_SEC)
+    if (!tell) tell = await pub.set(tuiSaidKey(userId), '1', 'EX', TUI_SAID_SEC, 'NX') === 'OK'
+  } catch (err) {
+    tell = true
+    logger.warn('[bus] terminal app presence not kept', { userId, error: err instanceof Error ? err.message : String(err) })
+  }
+  if (tell) await safePublish(tuiChannel(userId), '1')
+}
+
+/** Whether a terminal app of [userId]'s is open now; null when Redis cannot say, and then the daemon is told nothing and
+ *  relays every event, which costs frames, never a terminal app its events. */
+export async function tuiOpenNow(userId: string): Promise<boolean | null> {
+  try {
+    return await pub.exists(tuiOpenKey(userId)) > 0
+  } catch (err) {
+    logger.warn('[bus] terminal app presence unreadable', { userId, error: err instanceof Error ? err.message : String(err) })
+    return null
+  }
+}
+
+export function subscribeTuiOpen(userId: string, cb: () => void): Promise<() => void> {
+  return addSub(tuiChannel(userId), (() => cb()) as Cb)
+}
+
 // Per-USER zoo invalidation: the account's daemons or eggs changed (routes/zoo.ts). The same path as
 // the desk and a separate channel, so a desk change never re-fetches the zoo and the other way round.
 export interface ZooChangedMsg { revision: number }
