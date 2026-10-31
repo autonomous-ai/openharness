@@ -1,7 +1,8 @@
 // cli/src/superTabs/routeCheapFirst.spec.ts
 import { describe, expect, it, vi } from 'vitest'
 import { choose, decide, recordOf, type Assessment, type Catalog, type Probe } from './route.js'
-import { CHEAP_FIRST, CHEAP_FIRST_MAKER, cheapFirst, cheapTaskOf, EARLIER_UNREADABLE, HISTORY_WAIT_MS, FIRST_ATTEMPT_ONLY, GRID_FIRST, MAX_OWNED, NEVER_REVIEWS, NEVER_SECURITY, type CheapTask } from './routeCheapFirst.js'
+import { makePlugins, MAKER_TIMEOUT_MS } from './routePlugins.js'
+import { CHEAP_FIRST, CHEAP_FIRST_MAKER, CHEAP_FIRST_MAKERS, cheapFirst, cheapTaskOf, EARLIER_UNREADABLE, GRID_LIMITS, GRID_LIMITS_MAKER, gridLimits, HISTORY_WAIT_MS, FIRST_ATTEMPT_ONLY, GRID_FIRST, MAX_OWNED, NEVER_REVIEWS, NEVER_SECURITY, type CheapTask } from './routeCheapFirst.js'
 
 const NOW = 1_000_000_000, H = 3_600_000, D = 86_400_000
 /** Today's catalog (backend superTabs/catalog.ts): Opus and Codex at 3, Kimi K3 and DeepSeek v4.1 at 2 on the grid. */
@@ -20,7 +21,7 @@ const grid = (model: string, label: string, quality = 2): Probe => ({ ...opus, m
 const kimi = grid('moonshotai/kimi-k3', 'Kimi K3'), deepseek = grid('deepseek/deepseek-v4.1', 'DeepSeek v4.1'), qwen = grid('qwen3:4b', 'Qwen 3', 1)
 const first: CheapTask = { review: false, owned: 1, earlier: null }
 const route = (task: CheapTask, assessment: Partial<Assessment> = {}, probes: Probe[] = [opus, codex, kimi, deepseek, qwen]) =>
-  choose(probes, catalog, a(assessment), NOW, [], [], [], [cheapFirst(task)])
+  choose(probes, catalog, a(assessment), NOW, [], [], [], [gridLimits(task.review), cheapFirst(task)])
 const ok = (r: ReturnType<typeof choose>) => { if ('error' in r) throw new Error(JSON.stringify(r)); return r }
 const picks = (r: ReturnType<typeof choose>) => ok(r).shown.map(s => s.gridLabel ?? `${s.engine} ${s.model}`)
 const reasons = (r: ReturnType<typeof choose>) => r.excluded.map(e => e.reason)
@@ -60,8 +61,8 @@ describe('cheap first: a small, low-risk build goes to a cheap grid model first'
       const kind = task.review ? {} : { kind: 'review' }
       const r = ok(route(task, kind))
       expect(picks(r)).toEqual(['codex default', 'claude opus'])
-      expect(reasons(r)).toEqual([`${CHEAP_FIRST}: ${NEVER_REVIEWS}`, `${CHEAP_FIRST}: ${NEVER_REVIEWS}`, `${CHEAP_FIRST}: ${NEVER_REVIEWS}`])
-      expect(route(task, { ...kind, model: 'kimi k3' })).toEqual({ error: 'NO_CANDIDATE', excluded: [{ title: expect.stringContaining('Kimi K3'), reason: `${CHEAP_FIRST}: ${NEVER_REVIEWS}`, machine: 'remote-1' }] })
+      expect(reasons(r)).toEqual([`${GRID_LIMITS}: ${NEVER_REVIEWS}`, `${GRID_LIMITS}: ${NEVER_REVIEWS}`, `${GRID_LIMITS}: ${NEVER_REVIEWS}`])
+      expect(route(task, { ...kind, model: 'kimi k3' })).toEqual({ error: 'NO_CANDIDATE', excluded: [{ title: expect.stringContaining('Kimi K3'), reason: `${GRID_LIMITS}: ${NEVER_REVIEWS}`, machine: 'remote-1' }] })
       expect(route(task, { ...kind, local: true })).toMatchObject({ error: 'NO_CANDIDATE' })
     }
   })
@@ -70,7 +71,7 @@ describe('cheap first: a small, low-risk build goes to a cheap grid model first'
     for (const assessment of [{ kind: 'security' }, { kind: 'auth' }, { kind: 'privacy' }, { kind: 'secrets' }, { risk: 'high' as const }]) {
       const r = ok(route(first, assessment))
       expect(r.shown.some(s => s.gridModel)).toBe(false)
-      expect(new Set(reasons(r))).toEqual(new Set([`${CHEAP_FIRST}: ${NEVER_SECURITY}`]))
+      expect(new Set(reasons(r))).toEqual(new Set([`${GRID_LIMITS}: ${NEVER_SECURITY}`]))
       expect(route(first, { ...assessment, model: 'deepseek' })).toMatchObject({ error: 'NO_CANDIDATE' })
     }
   })
@@ -91,6 +92,7 @@ describe('cheap first: a small, low-risk build goes to a cheap grid model first'
   it('adds no candidate: it only ranks and leaves out the grid models the route itself found served and rated', () => {
     // Grid candidates come only from routeCommand.ts localProbes: models a fresh reading says are served, rated from the catalog.
     expect(cheapFirst(first).candidates).toBeUndefined()
+    expect(gridLimits(true).candidates).toBeUndefined()
     expect(ok(route(first)).shown).toHaveLength(5)
   })
 
@@ -189,8 +191,47 @@ describe('the maker', () => {
       // Nothing owned is no small task: today's order, the grid below the strong models.
       expect(r.shown.map(s => s.gridModel ?? s.model)).toEqual(['opus', 'moonshotai/kimi-k3'])
     }
-    // A review the tab lists is still read as one.
-    const review = ok(choose([opus, kimi], catalog, a(), NOW, [], [], [], [(await make(Promise.resolve(empty), read([{ id: 'g1', reviewOf: 'g0' }])))!]))
-    expect(review.excluded.map(e => e.reason)).toEqual([`${CHEAP_FIRST}: ${NEVER_REVIEWS}`])
+    // A review the tab lists is read as one: the ranking leaves it to the guard.
+    const listed = read([{ id: 'g1', reviewOf: 'g0' }])
+    const guard = await GRID_LIMITS_MAKER.make({ conversationId: 'g1', assessment: a(), read: listed, catalog, history: Promise.resolve(empty), request: async () => ({}) })
+    const review = ok(choose([opus, kimi], catalog, a(), NOW, [], [], [], [guard!, (await make(Promise.resolve(empty), listed))!]))
+    expect(review.excluded.map(e => e.reason)).toEqual([`${GRID_LIMITS}: ${NEVER_REVIEWS}`])
+  })
+
+  it('a review or security route has no grid choice when the history is unreadable, slow, or the ranking is dropped', async () => {
+    const review = read([{ id: 'g1', reviewOf: 'g0', task: { owns: ['docs/a.md'] } }])
+    const gridIn = (plugins: Parameters<typeof choose>[7], assessment: Partial<Assessment> = {}) =>
+      ok(choose([opus, kimi], catalog, a(assessment), NOW, [], [], [], plugins)).shown.some(s => s.gridModel)
+    const input = (history: Promise<Record<string, unknown> | null>, tab = review) => ({ conversationId: 'g1', assessment: a(), read: tab, catalog, history, request: async () => ({}) })
+    // The guard reads nothing: it is made before a history that never answers has done anything.
+    let made = false
+    void GRID_LIMITS_MAKER.make(input(new Promise(() => {}))).then(() => { made = true })
+    await Promise.resolve(); await Promise.resolve()
+    expect(made).toBe(true)
+    vi.useFakeTimers()
+    try {
+      const hangs = () => new Promise<null>(() => {})
+      for (const [history, tab, assessment] of [[hangs, review, {}], [() => Promise.reject(new Error('down')), review, {}],
+        [hangs, read(), { kind: 'security' }], [() => Promise.resolve(null), read(), { risk: 'high' as const }]] as const) {
+        const making = makePlugins(CHEAP_FIRST_MAKERS, input(history() as Promise<null>, tab))
+        await vi.advanceTimersByTimeAsync(MAKER_TIMEOUT_MS)
+        const { plugins, warnings } = await making
+        expect(warnings).toEqual([])
+        expect(plugins.map(p => p.name)).toEqual([GRID_LIMITS, CHEAP_FIRST])
+        expect(gridIn(plugins, assessment)).toBe(false)
+        // With the ranking dropped, as the hook drops a late maker, the guard alone still leaves the grid out.
+        expect(gridIn([plugins[0]!], assessment)).toBe(false)
+      }
+      // A ranking whose maker never answers is dropped after the hook's limit; the guard's plug-in is there all the same.
+      const hung = { name: CHEAP_FIRST, make: () => new Promise<never>(() => {}) }
+      const making = makePlugins([GRID_LIMITS_MAKER, hung], input(Promise.resolve(null)))
+      await vi.advanceTimersByTimeAsync(MAKER_TIMEOUT_MS)
+      const dropped = await making
+      expect(dropped.plugins.map(p => p.name)).toEqual([GRID_LIMITS])
+      expect(dropped.warnings).toHaveLength(1)
+      expect(gridIn(dropped.plugins)).toBe(false)
+    } finally { vi.useRealTimers() }
+    // A build with no such kind is not the guard's to touch.
+    expect(gridIn([gridLimits(false)])).toBe(true)
   })
 })

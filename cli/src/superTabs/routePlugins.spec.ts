@@ -13,7 +13,7 @@ afterEach(() => { vi.useRealTimers() })
 
 describe('makePlugins', () => {
   it('lists each piece\'s maker in order, and an empty list makes no plug-ins and no warnings', async () => {
-    expect(ROUTE_PLUGIN_MAKERS.map(m => m.name)).toEqual(['Cheap first'])
+    expect(ROUTE_PLUGIN_MAKERS.map(m => m.name)).toEqual(['Grid limits', 'Cheap first'])
     expect(await makePlugins([], input)).toEqual({ plugins: [], warnings: [] })
   })
   it('gives each maker the task, the backend read, the shared history and the request, and keeps the makers\' order whatever order they finish in', async () => {

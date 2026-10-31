@@ -7,13 +7,15 @@
  *  review failed. So the step-up is read from what the route already sees: a grid model takes only a task's first attempt
  *  (Lead, 2026-10-31), and any earlier assignment, start or routed pick for the task means the next route leaves the grid out.
  *  That works with today's backend; a step-up the backend records on the task (`stepUp`) is read too, for its reason. */
-import type { Probe, RoutePlugin } from './route.js'
+import type { Assessment, RoutePlugin } from './route.js'
 import type { PluginMaker } from './routePlugins.js'
 
 type Json = Record<string, unknown>
 const object = (v: unknown): Json => v && typeof v === 'object' && !Array.isArray(v) ? v as Json : {}
 const list = (v: unknown) => Array.isArray(v) ? v.map(object) : []
 const text = (v: unknown) => typeof v === 'string' && v.trim() ? v.trim() : null
+/** A review task: one linked to the work it reviews. */
+const isReview = (group: Json) => typeof group.reviewOf === 'string' && !!group.reviewOf
 
 /** The plug-in's name, which starts each of its reasons on a candidate ("Cheap first: …"). */
 export const CHEAP_FIRST = 'Cheap first'
@@ -60,19 +62,42 @@ export function cheapTaskOf(group: Json, state: Json, history: { decisions: unkn
   const stepped = text(object(group.stepUp).reason)
   const earlier = stepped ?? (onGrid ? `Its earlier attempt ran on ${onGrid} on the Swarm's grid.` : any ? 'It had an earlier attempt.'
     : !history || !history.decisions || !history.attempts ? EARLIER_UNREADABLE : null)
-  return { review: typeof group.reviewOf === 'string' && !!group.reviewOf, owned: Array.isArray(owns) ? owns.filter(o => typeof o === 'string').length : 0, earlier }
+  return { review: isReview(group), owned: Array.isArray(owns) ? owns.filter(o => typeof o === 'string').length : 0, earlier }
 }
 
-/** The plug-in for one task. A grid candidate is left out of a review or security work, even one a person names; left out of
- *  any attempt after the first unless a person named it; and ranked first for a small, low-risk build it is strong enough for:
- *  above the catalog's strongest, so it is tried before Opus and Astra while keeping the order among grid models. */
+/** Whether the task is one a grid model never takes: a review (a task linked to the work it reviews, or kind `review`), or
+ *  security work (a security kind, or high risk). */
+function forbidden(review: boolean, a: Pick<Assessment, 'kind' | 'risk'>): string | null {
+  if (review || a.kind === 'review') return NEVER_REVIEWS
+  if (a.risk === 'high' || (a.kind && SECURITY_KINDS.has(a.kind))) return NEVER_SECURITY
+  return null
+}
+
+/** The guard's name, which starts its reasons ("Grid limits: …"). */
+export const GRID_LIMITS = 'Grid limits'
+/** Ken's rule, "never route reviews to cheap or local models", and the same for security work: a grid candidate is left out of
+ *  either, even one a person names. The route itself has no such filter (project instructions, #2414), so this plug-in is the
+ *  only place it lives. It is made from nothing but the task's own row, so it is ready at once and never depends on a read
+ *  that could be late (Lead, 10-31). */
+export function gridLimits(review: boolean): RoutePlugin {
+  return {
+    name: GRID_LIMITS,
+    adjust(candidate, { assessment }) {
+      const why = candidate.gridModel ? forbidden(review, assessment) : null
+      return why ? { refuse: true, reason: why } : null
+    },
+  }
+}
+
+/** The ranking for one task, beside [gridLimits]: a grid candidate is left out of any attempt after the first unless a person
+ *  named it, and ranked first for a small, low-risk build it is strong enough for: above the catalog's strongest, so it is
+ *  tried before Opus and Astra while keeping the order among grid models. A review or security task is the guard's, so this
+ *  says nothing of it. */
 export function cheapFirst(task: CheapTask): RoutePlugin {
   return {
     name: CHEAP_FIRST,
-    adjust(candidate: Readonly<Probe>, { assessment: a, catalog }) {
-      if (!candidate.gridModel) return null
-      if (task.review || a.kind === 'review') return { refuse: true, reason: NEVER_REVIEWS }
-      if (a.risk === 'high' || (a.kind && SECURITY_KINDS.has(a.kind))) return { refuse: true, reason: NEVER_SECURITY }
+    adjust(candidate, { assessment: a, catalog }) {
+      if (!candidate.gridModel || forbidden(task.review, a)) return null
       if (task.earlier) {
         const why = `${FIRST_ATTEMPT_ONLY} ${task.earlier}`
         return a.model || a.local ? { reason: `${why} ${NAMED}` } : { refuse: true, reason: why }
@@ -85,18 +110,29 @@ export function cheapFirst(task: CheapTask): RoutePlugin {
   }
 }
 
-/** How long the maker waits for the route's history read: well under the makers' limit (routePlugins.ts MAKER_TIMEOUT_MS),
- *  because a maker that is late is left out of the route, and the route itself has no rule against a grid review: this
- *  plug-in is the only place that rule lives. A history later than this counts as unreadable, so the grid is left out. */
+/** The task's row in the tab the route read, or only its id when the tab does not list it. */
+const groupIn = (read: Record<string, unknown>, conversationId: string) => {
+  const state = object(object(read.tab).state)
+  return { state, group: list(state.conversations).find(c => c.id === conversationId) ?? { id: conversationId } }
+}
+
+/** Makes [gridLimits] from the tab the route already read: no read of its own and nothing to wait for. */
+export const GRID_LIMITS_MAKER: PluginMaker = {
+  name: GRID_LIMITS,
+  make: async ({ conversationId, read }) => gridLimits(isReview(groupIn(read, conversationId).group)),
+}
+
+/** How long the cheap-first maker waits for the route's history read: under the makers' limit (routePlugins.ts
+ *  MAKER_TIMEOUT_MS), so the first-attempt check is made rather than dropped. A history later than this counts as
+ *  unreadable, so the grid is left out of the attempt. */
 export const HISTORY_WAIT_MS = 2000
 
-/** Makes the plug-in from the route's own reads: the task from the tab it read, and the shared history read. It reads
- *  nothing of its own and never fails: what it cannot read makes it leave the grid out, never skip the rule. */
+/** Makes [cheapFirst] from the route's own reads: the task from the tab it read, and the shared history read. It reads
+ *  nothing of its own and never fails: what it cannot read makes it leave the grid out of the attempt. */
 export const CHEAP_FIRST_MAKER: PluginMaker = {
   name: CHEAP_FIRST,
   async make({ conversationId, read, history }) {
-    const state = object(object(read.tab).state)
-    const group = list(state.conversations).find(c => c.id === conversationId) ?? { id: conversationId }
+    const { state, group } = groupIn(read, conversationId)
     let timer: NodeJS.Timeout | undefined
     const late = new Promise<null>(resolve => { timer = setTimeout(resolve, HISTORY_WAIT_MS, null) })
     const past = object(await Promise.race([history.catch(() => null), late]).finally(() => clearTimeout(timer)))
@@ -105,3 +141,6 @@ export const CHEAP_FIRST_MAKER: PluginMaker = {
       : { decisions: Array.isArray(value.decisions) ? value.decisions : null, attempts: Array.isArray(value.attempts) ? value.attempts : null }))
   },
 }
+
+/** Piece 4's makers, in order: the guard first, ready at once, then the ranking. */
+export const CHEAP_FIRST_MAKERS: readonly PluginMaker[] = [GRID_LIMITS_MAKER, CHEAP_FIRST_MAKER]

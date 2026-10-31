@@ -8,7 +8,7 @@ import type { describeScmProject } from '../scm/scmProjects.js'
 import { admission, quotaOf, RELAYED_QUOTA, USED_UP_WINDOW } from './capacity.js'
 import { OTHER_REPOSITORY, type Catalog, type Probe, type RoutePlugin } from './route.js'
 import { MAKER_TIMEOUT_MS, type PluginInput, type PluginMaker } from './routePlugins.js'
-import { EARLIER_UNREADABLE, FIRST_ATTEMPT_ONLY, GRID_FIRST, NEVER_REVIEWS } from './routeCheapFirst.js'
+import { EARLIER_UNREADABLE, FIRST_ATTEMPT_ONLY, GRID_FIRST, GRID_LIMITS, NEVER_REVIEWS } from './routeCheapFirst.js'
 
 // Sonnet rated 3, as an owner who wants Sonnet Builders rates it (a build needs 3: route.ts buildRefusals), so the member these
 // specs probe can build; the specs of the floor itself use a table of their own ([floorPolicy]).
@@ -1763,7 +1763,7 @@ describe('cheap first, through the route', () => {
     const candidates = recorded(s).command.decision.candidates as Array<{ gridModel?: string; quality: number }>
     expect(candidates.some(c => c.gridModel)).toBe(false)
     expect(candidates[0]!.quality).toBe(3)
-    expect(excluded).toContainEqual(expect.objectContaining({ reason: `Cheap first: ${NEVER_REVIEWS}` }))
+    expect(excluded).toContainEqual(expect.objectContaining({ reason: `${GRID_LIMITS}: ${NEVER_REVIEWS}` }))
     // Even when a person names the grid model for it.
     const named = await routeTask({ ...small, conversationId: 'r1', assessment: { ...small.assessment, model: 'kimi' } }, scoped({ tab: built, policy: rated }), where as never, opener(), () => 'op')
     expect(named).toMatchObject({ error: 'NO_CANDIDATE' })

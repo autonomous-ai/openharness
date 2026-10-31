@@ -4,7 +4,7 @@
  *  routeTask starts every maker together with the machine probes, so a maker's read costs no time of its own. */
 import { pluginSkipped, type Assessment, type Catalog, type RoutePlugin } from './route.js'
 import type { ScopedRequest } from './start.js'
-import { CHEAP_FIRST_MAKER } from './routeCheapFirst.js'
+import { CHEAP_FIRST_MAKERS } from './routeCheapFirst.js'
 
 type Json = Record<string, unknown>
 
@@ -25,7 +25,7 @@ export interface PluginMaker { readonly name: string; make(input: PluginInput): 
 
 /** The makers, in the order their plug-ins run. One line per piece. */
 export const ROUTE_PLUGIN_MAKERS: readonly PluginMaker[] = [
-  CHEAP_FIRST_MAKER, // piece 4: a small, low-risk build tries a grid model first; never a review or security work
+  ...CHEAP_FIRST_MAKERS, // piece 4: never a grid model for a review or security work; a small, low-risk build tries one first
 ]
 
 /** As long as the route's other context reads wait (wire.ts within): a maker's read is context too, never worth holding the
