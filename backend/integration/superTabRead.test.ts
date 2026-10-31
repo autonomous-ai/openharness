@@ -4,6 +4,7 @@ import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { storeOldLeads } from '../src/superTabs/leads.test-support.js'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import Fastify, { type FastifyInstance } from 'fastify'
@@ -95,6 +96,8 @@ async function scene<T = void>(extra: (s: ReturnType<typeof swarm>, ids: { web: 
     finished.assignment = { ...state.conversations.find(c => c.id === web)!.assignment!, id: 'old-work', status: 'done' }
   })
   const more = extra(s, { web, done, lead, secret })
+  // Stored before its removal: the Swarm-wide Leads conversation, with the Lead in it; no read sends it now (model.ts leadsRemoved).
+  s.edit(state => { storeOldLeads(state, [lead]) })
   const tabId = `tab-${randomUUID()}`
   const state = { ...structuredClone(s.state), id: tabId } as SuperTabState
   await writeLegacySwarm(db, { state, revision: R, messages: [{ id: `${tabId}-m1`, conversationId: done, sequence: 5, text: 'Done',
@@ -130,7 +133,7 @@ describe('first load (design 4.3)', () => {
       head: { key: 'head', version: R, changedAt: MIGRATED, data: { id: s.tabId, name: 'Pilot' } } })
     expect(JSON.parse(Buffer.from(body.data.cursor, 'base64url').toString())).toEqual({ v: 2, t: NOW - 30_000, e: 1 })
     expect(keys(body.data.members)).toEqual([owner.sub, peer.sub, outsider.sub])
-    expect(keys(body.data.groups)).toEqual(['lead', s.web, s.buddyId, s.leads])
+    expect(keys(body.data.groups)).toEqual(['lead', s.web, s.buddyId])
     expect(body.data.derived).toMatchObject({ agents: { [s.lead]: { downSince: null }, [s.worker]: { workDecision: null } }, mentionsWaiting: 0 })
   })
 
@@ -424,7 +427,7 @@ describe('host form (design 4.10)', () => {
     expect([...rows.keys()].sort()).toEqual([s.lead, s.worker, s.more.idle, s.more.loner].sort())
     // A Lead's readers watch it, view only (Ken, 2026-10-28), as a Builder's do; marked, its host lets nobody else.
     const readers = [{ email: peer.email, userId: peer.sub }, { email: outsider.email, userId: outsider.sub }]
-    expect(rows.get(s.lead)).toMatchObject({ lead: true, active: true, leadsConversationId: s.leads, lastChangedAt: MIGRATED, observers: readers,
+    expect(rows.get(s.lead)).toMatchObject({ lead: true, active: true, leadsConversationId: null, lastChangedAt: MIGRATED, observers: readers,
       confidential: true, membersWatch: true })
     expect(rows.get(s.worker)).toMatchObject({ observers: readers, confidential: false, membersWatch: false })
     // Its only group is finished and dormant, yet not archived: the host must not hand it to automatic cleanup.

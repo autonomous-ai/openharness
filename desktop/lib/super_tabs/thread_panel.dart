@@ -18,7 +18,6 @@ import 'composer_toggle.dart';
 import 'controller.dart';
 import 'jump_to_latest.dart';
 import 'model.dart';
-import 'project_sidebar.dart' show kProductManagersChannel;
 
 /// One thread beside the chat (Dee, 2026-10-29): its root, a "N replies"
 /// divider, the replies, and a composer whose reply goes to the root.
@@ -167,12 +166,8 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
   List<String> get _alsoSendLabels {
     final group = c.selected, snapshot = c.snapshot;
     String? channel;
-    if (group != null && snapshot != null) {
-      if (snapshot.isProjectLead(group.id)) {
-        channel = snapshot.projectFor(group.id)?.name;
-      } else if (group.id == snapshot.leadsConversationId) {
-        channel = kProductManagersChannel;
-      }
+    if (group != null && snapshot != null && snapshot.isProjectLead(group.id)) {
+      channel = snapshot.projectFor(group.id)?.name;
     }
     return channel == null
         ? const ['Also post to the main chat', 'Also to chat']

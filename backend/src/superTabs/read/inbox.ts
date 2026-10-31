@@ -104,14 +104,15 @@ async function readable(db: PrismaClient, tabId: string, rows: Row[]): Promise<R
   return shown.filter(m => !copies.has(m.id))
 }
 
-/** Whether the messages read lets `actor` read `group`: the same check. Only its "unavailable" answer means this chat is not
- *  theirs; any other refusal (no longer a member) refuses the whole read, as it refuses every chat's page. */
+/** Whether the messages read lets `actor` read `group`: the same check. Only its "unavailable" or "removed" answer (an older
+ *  Swarm's stored Leads conversation, model.ts leadsRemoved) means this chat is not theirs; any other refusal (no longer a
+ *  member) refuses the whole read, as it refuses every chat's page. */
 function readsChat(state: SuperTabState, actor: Actor, group: Conversation): boolean {
   try {
     readConversation(state, actor, group.id)
     return true
   } catch (error) {
-    if (error instanceof SuperTabError && error.code === 'NOT_FOUND') return false
+    if (error instanceof SuperTabError && (error.code === 'NOT_FOUND' || error.code === 'LEADS_CONVERSATION_REMOVED')) return false
     throw error
   }
 }

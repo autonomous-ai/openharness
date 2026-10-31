@@ -40,7 +40,7 @@ function setup(messageFields: Record<string, unknown> = {}, claimFields: Record<
   const dir = mkdtempSync(join(tmpdir(), 'super-tab-host-')); roots.push(dir)
   const listeners = new Set<(e: TurnDelivery) => void>()
   const notices = new Set<(notice: BackendNotice) => void>()
-  const row: { tabId: string; agent: { id: string; harnessId: string; machineId: string }; lead?: boolean; leadsConversationId: string } =
+  const row: { tabId: string; agent: { id: string; harnessId: string; machineId: string }; lead?: boolean; leadsConversationId?: string } =
     { tabId: 'tab', agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }, leadsConversationId: 'leads' }
   /** The conversation the delivery comes from. */
   let from = 'lead'
@@ -289,9 +289,9 @@ describe('Super Tab native delivery handoff', () => {
     expect(t.saved().entries.delivery.stage).toBe('uncertain')
     expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
   })
-  // Leads see each other's work and talk (spec 2026-10-23): the Leads conversation reaches Leads alone. The server
-  // delivers it only to them; this host also never types it into an agent that leads nothing.
-  it('never types a Leads conversation message into an agent that leads nothing, and says so once', async () => {
+  // Dee, 10-31: the Leads conversation is removed. The server takes no post there; a delivery still queued for it, from
+  // before, is typed into nobody, a Lead included, and said once.
+  it('never types a Leads conversation message into an agent, a Lead included, and says so once', async () => {
     const t = setup(), host = t.open()
     t.from('leads')
     for (let i = 0; i < 3; i++) await host.tick()
@@ -299,22 +299,17 @@ describe('Super Tab native delivery handoff', () => {
     expect(t.call).not.toHaveBeenCalledWith('POST', expect.stringContaining('/deliveries/delivery'), expect.anything())
     expect(t.log.mock.calls.filter(([line]) => String(line).includes('not in a conversation'))).toHaveLength(1)
     t.row.lead = true
-    await host.tick()
-    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    for (let i = 0; i < 3; i++) await host.tick()
+    expect(t.core.turns.deliver).not.toHaveBeenCalled()
+    expect(t.log.mock.calls.filter(([line]) => String(line).includes('not in a conversation'))).toHaveLength(1)
   })
-  // The review of #1657: a Leads message held for a busy Lead must not be typed once that agent no longer leads.
-  it('rechecks a held Leads conversation message after its agent stops being a Lead', async () => {
+  // A newer server names no Leads conversation in the roster: every other conversation is delivered as before.
+  it('delivers as before when the roster names no Leads conversation', async () => {
     const t = setup(), host = t.open()
-    t.row.lead = true
+    delete (t.row as { leadsConversationId?: string }).leadsConversationId
     t.from('leads')
     await host.tick()
     expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
-    t.event('rejected', 'team_waiting_busy')
-    expect(t.saved().entries.delivery.stage).toBe('prepared')
-    t.row.lead = false
-    for (let i = 0; i < 3; i++) await host.tick()
-    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
-    expect(t.saved().entries.delivery.stage).toBe('prepared')
   })
   // The design of #1726 (section 5.3): the roster names the Leads conversation, so no delivery costs a read of the Swarm.
   it('reads no Swarm to judge a delivery, for an agent that leads nothing or a Lead', async () => {
@@ -326,7 +321,6 @@ describe('Super Tab native delivery handoff', () => {
     expect(vi.mocked(t.call).mock.calls.some(([, path]) => path.includes('asAgentId='))).toBe(false)
     const lead = setup()
     lead.row.lead = true
-    lead.from('leads')
     await lead.open().tick()
     expect(lead.core.turns.deliver).toHaveBeenCalledTimes(1)
     expect(vi.mocked(lead.call).mock.calls.some(([, path]) => path.includes('asAgentId='))).toBe(false)

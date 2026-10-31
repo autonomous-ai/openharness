@@ -87,7 +87,8 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
       coordinatorName: coordinatorNameOf(home) } : null,
     ...(custom ? { role: chosen && { ...chosen, projectId: custom.id } } : {}),
     lead: !!ledProject(state, target.id),
-    leadsConversationId: state.leadsConversationId ?? null,
+    // Removed (model.ts leadsRemoved); an older CLI still reads the field, so it stays, always empty.
+    leadsConversationId: null,
     stopRequested: target.workDecision === 'stop' && !state.conversations.some(c => activeWork(c) && c.assignment?.agentId === target.id),
     observers: lookups.people.filter(p => p.id !== user.sub && canWatchAgent(state, { kind: 'person', userId: p.id, email: p.email }, target, closed))
       .map(p => ({ email: p.email, userId: p.id })),
