@@ -824,7 +824,10 @@ class _SuperTabViewState extends State<SuperTabView>
           ),
       ],
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+        padding: const EdgeInsets.symmetric(
+          horizontal: grid.AppDesktop.badgeInset,
+          vertical: grid.AppDesktop.listRowGap,
+        ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -3409,43 +3412,35 @@ class _SuperTabViewState extends State<SuperTabView>
             );
           },
         ),
-        // An older Buddy chat in a project is kept to read: one muted bar in
-        // place of the box, so nothing looks typeable (Lead's design review,
-        // 10-31), and the way to the one Buddy.
-        if (group != null && c.isEarlierBuddyChat(group))
+        // A chat kept to read gets one muted bar in place of the box, so
+        // nothing looks typeable: a closed group, or an older Buddy chat in a
+        // project, which also leads to the one Buddy (Lead's design review,
+        // 10-31).
+        if (group != null && (c.isEarlierBuddyChat(group) || group.archived))
           Padding(
-            key: const ValueKey('super-earlier-buddy-chat'),
+            key: c.isEarlierBuddyChat(group)
+                ? const ValueKey('super-earlier-buddy-chat')
+                : null,
             padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
             child: Row(
               children: [
                 Expanded(
                   child: Text(
-                    'This is an earlier chat, kept to read.',
+                    c.isEarlierBuddyChat(group)
+                        ? 'This is an earlier chat, kept to read.'
+                        : 'This group is closed. You can read it but not write.',
                     style: DesktopChrome.metadata(),
                   ),
                 ),
-                TextButton(
-                  key: const ValueKey('super-open-swarm-buddy'),
-                  onPressed: () => unawaited(
-                    c.openBuddyChat(SuperTabController.kSwarmBuddyKey),
-                  ),
-                  child: const Text('Open # buddy'),
-                ),
-              ],
-            ),
-          )
-        else if (group != null && group.archived)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'This group is closed. You can read it but not write.',
-                    style: DesktopChrome.metadata(),
-                  ),
-                ),
-                if (c.canWrite)
+                if (c.isEarlierBuddyChat(group))
+                  TextButton(
+                    key: const ValueKey('super-open-swarm-buddy'),
+                    onPressed: () => unawaited(
+                      c.openBuddyChat(SuperTabController.kSwarmBuddyKey),
+                    ),
+                    child: const Text('Open # buddy'),
+                  )
+                else if (c.canWrite)
                   TextButton(
                     key: const ValueKey('super-group-reopen'),
                     onPressed: c.saving
