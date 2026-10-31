@@ -127,7 +127,14 @@ class SuperTabAgent {
   SuperTabAgent.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
       hasProjectId = row['projectId'] != null,
-      projectId = row['projectId'] as String? ?? 'lead',
+      // A person's one Buddy reads every project they read: it belongs to none,
+      // as the Product Managers' conversation does (spec
+      // 2026-10-31-one-buddy-per-swarm).
+      projectId =
+          row['projectId'] as String? ??
+          (row['buddyScope'] == 'swarm' ? '' : 'lead'),
+      buddyScope = row['buddyScope'] as String?,
+      buddyNarrow = row['buddyNarrow'] == true,
       name = _text(row, 'name'),
       displayName = row['displayName'] as String?,
       machineId = _text(row, 'machineId'),
@@ -198,6 +205,14 @@ class SuperTabAgent {
 
   /// A person's main Buddy: a Buddy that is no thread's session.
   bool get isMainBuddy => isBuddy && buddySession == null;
+
+  /// `swarm` on a person's one Buddy and its plain sessions, which read every
+  /// project they read (backend Agent.buddyScope); null on every other agent.
+  final String? buddyScope;
+
+  /// A Buddy of one project that never reads beyond its folder: a project
+  /// session, or the one Buddy's session in an older project chat.
+  final bool buddyNarrow;
   final Map<String, dynamic> configuration;
   String get engine => configuration['engine'] as String? ?? '';
 }
@@ -205,9 +220,13 @@ class SuperTabAgent {
 /// What makes an agent a thread session: its thread's root and the sequence
 /// of the message that started it (backend model.ts `Agent.buddySession`).
 class SuperTabBuddySessionOf {
-  const SuperTabBuddySessionOf(this.thread, this.from);
+  const SuperTabBuddySessionOf(this.thread, this.from, [this.projectId]);
   final String thread;
   final int from;
+
+  /// The project a session of a person's one Buddy chat works in; null for a
+  /// plain session and every older project chat's.
+  final String? projectId;
 
   static SuperTabBuddySessionOf? fromJson(Object? value) {
     if (value is! Map) return null;
@@ -215,7 +234,12 @@ class SuperTabBuddySessionOf {
     final thread = json['thread'];
     if (thread is! String || thread.isEmpty) return null;
     final from = json['from'];
-    return SuperTabBuddySessionOf(thread, from is num ? from.toInt() : 0);
+    final project = json['projectId'];
+    return SuperTabBuddySessionOf(
+      thread,
+      from is num ? from.toInt() : 0,
+      project is String && project.isNotEmpty ? project : null,
+    );
   }
 }
 
@@ -247,8 +271,12 @@ class SuperTabTask {
 class SuperTabConversation {
   SuperTabConversation.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
-      // A group from before projects belongs to the first.
-      projectId = row['projectId'] as String? ?? 'lead',
+      // A group from before projects belongs to the first; a person's one
+      // Buddy chat for the Swarm belongs to none (spec
+      // 2026-10-31-one-buddy-per-swarm).
+      projectId =
+          row['projectId'] as String? ??
+          (row['kind'] == 'swarm-buddy' ? '' : 'lead'),
       kind = row['kind'] as String?,
       buddyOwnerId = row['buddyOwnerId'] as String?,
       buddyName = row['buddyName'] as String?,
@@ -265,7 +293,9 @@ class SuperTabConversation {
       archived = row['archived'] == true,
       dormant = row['dormant'] == true,
       // A Buddy chat names no audience: its person alone reads it.
-      audience = row['kind'] == 'buddy' && row['buddyOwnerId'] is String
+      audience =
+          (row['kind'] == 'buddy' || row['kind'] == 'swarm-buddy') &&
+              row['buddyOwnerId'] is String
           ? List.unmodifiable([row['buddyOwnerId'] as String])
           : row['audience'] is Map
           ? List.unmodifiable([
@@ -305,7 +335,11 @@ class SuperTabConversation {
   /// What the backend calls it apart from a workgroup: `buddy` for a person's
   /// chat with their Buddy. A `leads` one is never kept ([SuperTabSnapshot]).
   final String? kind;
-  bool get isBuddyChat => kind == 'buddy';
+  bool get isBuddyChat => kind == 'buddy' || kind == 'swarm-buddy';
+
+  /// A person's one Buddy chat for the whole Swarm (spec
+  /// 2026-10-31-one-buddy-per-swarm): in no project, keyed by the empty id.
+  bool get isSwarmBuddyChat => kind == 'swarm-buddy';
 
   /// The person a Buddy chat belongs to; only they read it.
   final String? buddyOwnerId;
@@ -444,6 +478,7 @@ class SuperTabSnapshot {
       teamAccounts = row['teamAccounts'] != false,
       threadSessions = row['threadSessions'] == true,
       sessionsFromChat = row['sessionsFromChat'] == true,
+      swarmBuddy = row['swarmBuddy'] == true,
       mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0,
       mentionsDigest = row['mentionsDigest'] as String?,
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
@@ -531,6 +566,12 @@ class SuperTabSnapshot {
   /// Buddy chat, which then roots its own thread (read/contract.ts
   /// `sessionsFromChat`); false from an older one.
   final bool sessionsFromChat;
+
+  /// Whether this Swarm's server gives each person one Buddy for the whole
+  /// Swarm (read/contract.ts `swarmBuddy`): the sidebar's # buddy row and New
+  /// session in a project. False from an older one, whose Buddies are per
+  /// project.
+  final bool swarmBuddy;
   final int mentionsWaiting;
 
   /// Which tags wait, as a digest that moves when they change though the

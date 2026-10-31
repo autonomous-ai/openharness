@@ -582,6 +582,8 @@ class SuperTabBuddyBar extends StatelessWidget {
     final where = [
       '${buddyEngineName(agent.engine)} on $machine',
       if (project != null) '#${project.name}',
+      // The one Buddy for the whole Swarm (spec 2026-10-31-one-buddy-per-swarm).
+      if (chat.isSwarmBuddyChat) 'reads all your projects',
       agent.machineOwnerId == c.accountId
           ? 'only you can read this chat'
           : '${buddyPersonName(c, agent.machineOwnerId)} can see its terminal',

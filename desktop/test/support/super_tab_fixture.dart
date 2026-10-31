@@ -89,6 +89,7 @@ class SwarmPartsBackend {
           'teamAccounts',
           'threadSessions',
           'sessionsFromChat',
+          'swarmBuddy',
         }.contains(entry.key))
           entry.key: entry.value,
     };
@@ -170,6 +171,8 @@ class SwarmPartsBackend {
     // A server that takes a thread reply's New session (backend read/views.ts).
     if (state['threadSessions'] == true) 'threadSessions': true,
     if (state['sessionsFromChat'] == true) 'sessionsFromChat': true,
+    // A server with one Buddy per person for the whole Swarm.
+    if (state['swarmBuddy'] == true) 'swarmBuddy': true,
     // The reader's own read marks alone, as backend readMarks.ts sends them.
     if ((state['readMarks'] as Map?)?[reader ?? 'owner'] case final Map marks)
       'readMarks': Map<String, dynamic>.from(marks),
@@ -1051,7 +1054,10 @@ class ConversationServer {
         // its chat, fixed per person and project. The fixture's host starts it
         // at once.
         final person = reader ?? 'owner';
-        final projectId = command['projectId'] as String;
+        // With no project, the reader's one Buddy for the Swarm (backend
+        // buddy.create since 10-31): its chat is in no project.
+        final swarm = command['projectId'] == null;
+        final projectId = command['projectId'] as String? ?? '';
         // As the backend: no Codex Buddy for now (security review 1 of #2087).
         if (command['engine'] == 'codex') {
           throw SuperTabFailure(
@@ -1063,7 +1069,7 @@ class ConversationServer {
         bool mine(Object? a) =>
             a is Map &&
             (a['buddyOf'] as Map?)?['personId'] == person &&
-            a['projectId'] == projectId;
+            (swarm ? a['buddyScope'] == 'swarm' : a['projectId'] == projectId);
         // As the backend: one Buddy per person and project. A running one
         // refuses another; a down one is replaced.
         if ((state['agents'] as List).any(
@@ -1077,7 +1083,9 @@ class ConversationServer {
         }
         revision++;
         final agentId = 'buddy-$revision';
-        final chatId = 'buddy-$person-$projectId';
+        final chatId = swarm
+            ? 'swarm-buddy-$person'
+            : 'buddy-$person-$projectId';
         final machine = (state['machines'] as List? ?? const [])
             .cast<Map>()
             .where((m) => m['machineId'] == command['machineId'])
@@ -1097,7 +1105,8 @@ class ConversationServer {
           'machineOwnerId': machine?['contributorId'] ?? person,
           'request': {
             'conversationId': chatId,
-            'projectId': projectId,
+            if (!swarm) 'projectId': projectId,
+            if (swarm) 'buddyScope': 'swarm',
             'machineId': command['machineId'],
             'engine': command['engine'],
             'buddyOf': {'personId': person, 'generation': 'fixture'},
@@ -1108,7 +1117,8 @@ class ConversationServer {
         (state['agents'] as List).add({
           'id': agentId,
           'name': 'Buddy',
-          'projectId': projectId,
+          if (!swarm) 'projectId': projectId,
+          if (swarm) 'buddyScope': 'swarm',
           'buddyOf': {'personId': person, 'generation': 'fixture'},
           'machineId': command['machineId'],
           'harnessId': 'h-$agentId',
@@ -1126,8 +1136,8 @@ class ConversationServer {
           final name = (owner?['email'] as String? ?? person).split('@').first;
           conversations.add({
             ...conversationFixture(chatId, "$name's Buddy"),
-            'kind': 'buddy',
-            'projectId': projectId,
+            'kind': swarm ? 'swarm-buddy' : 'buddy',
+            'projectId': swarm ? null : projectId,
             'buddyOwnerId': person,
             'agentIds': [agentId],
           });
@@ -1139,8 +1149,11 @@ class ConversationServer {
         // As the backend's: the reader's own Buddy chat in the project, opened
         // before any Buddy, the same chat a Buddy added later joins.
         final person = reader ?? 'owner';
-        final projectId = command['projectId'] as String;
-        final chatId = 'buddy-$person-$projectId';
+        final swarm = command['projectId'] == null;
+        final projectId = command['projectId'] as String?;
+        final chatId = swarm
+            ? 'swarm-buddy-$person'
+            : 'buddy-$person-$projectId';
         final conversations = (state['conversations'] as List)
             .cast<Map<String, dynamic>>();
         if (!conversations.any((g) => g['id'] == chatId)) {
@@ -1152,7 +1165,7 @@ class ConversationServer {
           final name = (owner?['email'] as String? ?? person).split('@').first;
           conversations.add({
             ...conversationFixture(chatId, "$name's Buddy"),
-            'kind': 'buddy',
+            'kind': swarm ? 'swarm-buddy' : 'buddy',
             'projectId': projectId,
             'buddyOwnerId': person,
             'agentIds': <String>[],
@@ -1168,7 +1181,7 @@ class ConversationServer {
             .where(
               (g) =>
                   g['id'] == command['conversationId'] &&
-                  g['kind'] == 'buddy' &&
+                  (g['kind'] == 'buddy' || g['kind'] == 'swarm-buddy') &&
                   g['buddyOwnerId'] == person,
             )
             .firstOrNull;
@@ -1206,7 +1219,9 @@ class ConversationServer {
           (a) =>
               a is Map &&
               (a['buddyOf'] as Map?)?['personId'] == person &&
-              a['projectId'] == command['projectId'],
+              (command['projectId'] == null
+                  ? a['buddyScope'] == 'swarm'
+                  : a['projectId'] == command['projectId']),
         );
       } else if (command['type'] == 'conversation.create') {
         revision++;

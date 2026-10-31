@@ -2470,6 +2470,22 @@ class SuperTabController extends ChangeNotifier {
     );
   }
 
+  /// The key the reader's one Buddy for the whole Swarm goes by in [buddyChat],
+  /// [buddy], [buddyStart], [addBuddy] and [removeBuddy]: its chat and agent
+  /// belong to no project, as the Product Managers' conversation does (spec
+  /// 2026-10-31-one-buddy-per-swarm).
+  static const kSwarmBuddyKey = '';
+
+  /// Whether this Swarm gives each person one Buddy for the whole Swarm: the
+  /// sidebar's # buddy row in place of a Buddies section.
+  bool get oneBuddy => snapshot?.swarmBuddy == true;
+
+  /// Whether [group] is the reader's older Buddy chat in a project, where the
+  /// Swarm gives one Buddy for the whole Swarm: its history reads here, and
+  /// its person talks to their Buddy in # buddy (spec: history).
+  bool isEarlierBuddyChat(SuperTabConversation? group) =>
+      oneBuddy && group != null && group.isBuddyChat && !group.isSwarmBuddyChat;
+
   /// The signed-in person's chat with their Buddy in [projectId], where the
   /// PM's private lines to them land too: Buddies replaced Chat with PM in
   /// every Swarm (Ken, 10-29). It is there before any Buddy is
@@ -2497,7 +2513,10 @@ class SuperTabController extends ChangeNotifier {
       if (request['buddySession'] != null) return false;
       return superTabMap(request['buddyOf'])['personId'] == accountId &&
           (request['projectId'] == projectId ||
-              (chat != null && request['conversationId'] == chat));
+              (chat != null && request['conversationId'] == chat) ||
+              // The one Buddy's start, before its chat is read here.
+              (projectId == kSwarmBuddyKey &&
+                  request['buddyScope'] == 'swarm'));
     }).firstOrNull;
   }
 
@@ -2513,7 +2532,7 @@ class SuperTabController extends ChangeNotifier {
   }) async {
     final result = await command({
       'type': 'buddy.create',
-      'projectId': projectId,
+      if (projectId != kSwarmBuddyKey) 'projectId': projectId,
       'machineId': machineId,
       'engine': engine,
       'setup': ?setup,
@@ -2526,7 +2545,11 @@ class SuperTabController extends ChangeNotifier {
 
   /// Removes the reader's Buddy in [projectId]; its chat stays.
   Future<bool> removeBuddy(String projectId) async =>
-      await command({'type': 'buddy.remove', 'projectId': projectId}) != null;
+      await command({
+        'type': 'buddy.remove',
+        if (projectId != kSwarmBuddyKey) 'projectId': projectId,
+      }) !=
+      null;
 
   /// Names the reader's Buddy in [projectId] from its chat, or clears the
   /// name for the default when [name] is empty. Everyone in the Swarm sees it.
@@ -2753,9 +2776,11 @@ class SuperTabController extends ChangeNotifier {
   Future<bool> openBuddyChat(String projectId) async {
     if (buddyChat(projectId) case final chat?) return select(chat.id);
     final me = snapshot?.people.where((p) => p.id == accountId).firstOrNull;
+    // The empty id is the reader's one Buddy chat for the Swarm (spec
+    // 2026-10-31-one-buddy-per-swarm), which names no project.
     final result = await command({
       'type': 'buddy.chat',
-      'projectId': projectId,
+      if (projectId != kSwarmBuddyKey) 'projectId': projectId,
     }, operationId: _buddyChatOperation(projectId, me?.generation));
     final id = result?['conversationId'];
     return id is String && await select(id);
@@ -3884,6 +3909,7 @@ class SuperTabController extends ChangeNotifier {
     List<String> recipients = const [],
     VoidCallback? onSending,
     bool newSession = false,
+    String? sessionProjectId,
   }) async {
     final text = draft(selectedId).trim();
     final files = attachments(selectedId).files;
@@ -3957,6 +3983,12 @@ class SuperTabController extends ChangeNotifier {
       if (tagged.isNotEmpty) 'mentions': tagged,
       if (ids.isNotEmpty) 'attachmentIds': ids,
       if (newSession) 'newSession': true,
+      // A New session in one project of the reader's one Buddy chat (spec
+      // 2026-10-31-one-buddy-per-swarm).
+      if (newSession &&
+          sessionProjectId != null &&
+          selected?.isSwarmBuddyChat == true)
+        'sessionProjectId': sessionProjectId,
     });
     // On its way: the message shows in the chat, and the draft is free for
     // the next one. Both are in the save made before the request.
