@@ -15,10 +15,11 @@ const value = (file: string, name: string) => {
 describe('every client\'s attachment limit', () => {
   it.each([
     ['cli/src/superTabs/attachments.ts', 'MAX_ATTACHMENT_BYTES', MAX_ATTACHMENT_BYTES],
-    ['cli/src/superTabs/attachments.ts', 'MAX_FORM_ATTACHMENT_BYTES', MAX_FORM_ATTACHMENT_BYTES],
+    ['cli/src/lib/superTabAttachmentProxy.ts', 'MAX_FORM_ATTACHMENT_BYTES', MAX_FORM_ATTACHMENT_BYTES],
     ['desktop/lib/super_tabs/attachment_upload.dart', 'kSuperTabAttachmentMaxBytes', MAX_ATTACHMENT_BYTES],
     ['desktop/lib/super_tabs/attachment_upload.dart', 'kSuperTabFormAttachmentMaxBytes', MAX_FORM_ATTACHMENT_BYTES],
     ['mobile/lib/swarm/swarm_outgoing_files.dart', 'swarmAttachmentMaxBytes', MAX_ATTACHMENT_BYTES],
+    ['mobile/lib/swarm/swarm_outgoing_files.dart', 'swarmFormAttachmentMaxBytes', MAX_FORM_ATTACHMENT_BYTES],
   ])('%s %s is the server\'s', (file, name, want) => {
     expect(value(file, name)).toBe(want)
   })
