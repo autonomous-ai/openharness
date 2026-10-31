@@ -10,7 +10,7 @@
  * Everything it needs is read before the route ([placedHeavyWork], the CI reading); the plug-in itself is pure. */
 import type { Adjustment, HeavyWork, Needs, Probe, RoutePlugin } from './route.js'
 import type { PluginMaker } from './routePlugins.js'
-import { object } from './wire.js'
+import { object, within } from './wire.js'
 
 type Json = Record<string, unknown>
 const GB = 1e9
@@ -81,11 +81,11 @@ export function ciHold(needs: Pick<Needs, 'ci'>, load: CiLoad | null): string | 
   const over = busy + needs.ci.jobs > CI_LIMIT.jobs || mac + needs.ci.macos > CI_LIMIT.macos
   if (!over) return null
   const starts = `${needs.ci.jobs} more${needs.ci.macos ? ` (${needs.ci.macos} on macOS)` : ''}`
-  return `CI is at the account's limit: ${busy} of ${CI_LIMIT.jobs} jobs running or queued, ${mac} of ${CI_LIMIT.macos} on macOS, and this task `
-    + `starts ${starts}. Route it again in ${CI_RETRY_MINUTES} minutes.`
+  return `${CI_HOLD_OPENING}: ${busy} running or queued against the account's limit of ${CI_LIMIT.jobs}, ${mac} on macOS against ${CI_LIMIT.macos}, `
+    + `and this task starts ${starts}. Route it again in ${CI_RETRY_MINUTES} minutes.`
 }
 /** Said when a task starts CI and the load could not be read. */
-export const CI_UNCHECKED = `The running CI jobs could not be read, so the account's limit of ${CI_LIMIT.jobs} jobs (${CI_LIMIT.macos} on macOS) was not checked.`
+export const CI_UNCHECKED = `This repository's running CI jobs could not be read, so the account's limit of ${CI_LIMIT.jobs} jobs (${CI_LIMIT.macos} on macOS) was not checked.`
 
 /** A need in whole gigabytes, as the needs are set. */
 const gb = (n: number) => `${Math.round(n / GB)} GB`
@@ -129,17 +129,34 @@ function fitOf(candidate: Pick<Probe, 'load'>, needs: Needs, held: Placed | unde
   return busy ? { cost: BUSY_CPU_COST, reason: `Its CPU is busy; it has what ${need.words} needs.` } : null
 }
 
-/** Piece 5's maker (routePlugins.ts): the heavy work placed on each machine, read off the route's own Super Tab read. Nothing
- *  to say for a task with no heavy work and no CI. The CI load is not read yet: a task that starts CI is told so. */
+/** How long the maker waits for the server's CI read: under the makers' own limit (routePlugins.ts MAKER_TIMEOUT_MS), so a
+ *  slow GitHub leaves the CI unchecked, said on the candidates, rather than the whole plug-in skipped. */
+export const CI_READ_MS = 2000
+/** The opening of a hold's reason ([ciHold]): the route answers a task held by it as waiting, with when to route it again. */
+/** It names this repository's jobs: the limit is the account's, but the server reads one repository (Lead, 10-31). */
+export const CI_HOLD_OPENING = "This repository's CI jobs are at the account's limit"
+const count = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) >= 0
+/** The counts in the server's CI read (backend github/ciLoad.ts), or null for any other answer: not installed, not approved,
+ *  unknown, an older server without the read, or a failed request. */
+export function ciLoadOf(answer: unknown): CiLoad | null {
+  const value = object(object(answer).value), load = object(value.load)
+  if (object(answer).ok !== true || value.state !== 'read' || ![load.running, load.queued, load.macosRunning, load.macosQueued].every(count)) return null
+  return { running: load.running as number, queued: load.queued as number, macosRunning: load.macosRunning as number, macosQueued: load.macosQueued as number }
+}
+
+/** Piece 5's maker (routePlugins.ts): the heavy work placed on each machine, read off the route's own Super Tab read, and for
+ *  a task that starts CI the project's running jobs, read by the server. Nothing to say for a task with neither. */
 export const MACHINE_FIT_MAKER: PluginMaker = {
   name: 'Machine fit',
-  async make({ read, assessment }) {
+  async make({ read, assessment, request, conversationId }) {
     if (!heavyNeed(assessment.needs) && !assessment.needs.ci) return null
     const state = object(object(read.tab).state)
-    const machines = Array.isArray(state.machines) ? state.machines.map(object) : []
-    const macOf = new Map(machines.filter(m => typeof m.hostMachineId === 'string').map(m => [String(m.machineId), String(m.hostMachineId)]))
+    const list = (v: unknown) => Array.isArray(v) ? v.map(object) : []
+    const macOf = new Map(list(state.machines).filter(m => typeof m.hostMachineId === 'string').map(m => [String(m.machineId), String(m.hostMachineId)]))
     const hostOf = (id: string) => macOf.get(id) ?? id
-    const starts = Array.isArray(state.starts) ? state.starts.map(object) : []
-    return machineFit({ placed: placedHeavyWork(starts, Date.now(), hostOf), hostOf, ci: null })
+    // The group's own project, which the server checks this agent may read; the Lead's project when the group names none.
+    const projectId = String(list(state.conversations).find(c => c.id === conversationId)?.projectId ?? 'lead')
+    const ci = assessment.needs.ci ? ciLoadOf(await within(request({ action: 'ciLoad', projectId }), CI_READ_MS)) : null
+    return machineFit({ placed: placedHeavyWork(list(state.starts), Date.now(), hostOf), hostOf, ci })
   },
 }

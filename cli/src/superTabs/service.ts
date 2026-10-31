@@ -615,6 +615,11 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           const attempts = Array.isArray(tried) ? tried.slice(0, 50).map(object).map(a => ({ id: a.id, agentId: a.agentId, status: a.status, result: typeof a.result === 'string' ? a.result.slice(0, 500) : null, createdAt: a.createdAt ?? null })) : null
           return { ok: true, value: { ...(decisions ? { decisions } : { decisionsUnreadable: true }), ...(attempts ? { attempts } : { attemptsUnreadable: true }) } }
         }
+        // The jobs running and waiting on a project's GitHub Actions, counts only, for the route's machine-fit plug-in
+        // (machineFit.ts; backend github/ciLoad.ts). The server reads it through its GitHub App, never this machine's login.
+        if (payload.action === 'ciLoad' && identifier(payload.projectId)) {
+          return { ok: true, value: await backend(core, 'GET', `${path}/projects/${encodeURIComponent(String(payload.projectId))}/ci-load?${identity}`) }
+        }
         // What routed attempts cost and how they went over a period (backend superTabs/costs/read.ts).
         if (payload.action === 'costs' && Number.isInteger(payload.days) && Number(payload.days) >= 1 && Number(payload.days) <= 90) {
           return { ok: true, value: await backend(core, 'GET', `${path}/costs?days=${payload.days}&${identity}`) }

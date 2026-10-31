@@ -247,6 +247,14 @@ describe('instructions', () => {
 })
 
 describe('costs', () => {
+  it('reads a project\'s CI load as that agent, and nothing for a malformed project id', async () => {
+    const load = { state: 'read', load: { running: 3, queued: 0, macosRunning: 1, macosQueued: 0 } }
+    const s = swarm((_method, path) => path.startsWith(`/api/super-tabs/${T}/projects/lead/ci-load?`) ? ok(load) : undefined)
+    expect(await s.ask({ action: 'ciLoad', tabId: T, agentId: FIXTURE.leadId, projectId: 'lead' }, owner)).toEqual({ ok: true, value: load })
+    expect(s.call).toHaveBeenCalledWith('GET', `/api/super-tabs/${T}/projects/lead/ci-load?asAgentId=${FIXTURE.leadId}`, undefined)
+    expect(await s.ask({ action: 'ciLoad', tabId: T, agentId: FIXTURE.leadId, projectId: '../x' }, owner)).not.toHaveProperty('ok', true)
+    expect(s.call.mock.calls.filter(c => String(c[1]).includes('ci-load'))).toHaveLength(1)
+  })
   it('reads the cost summary of the period as that agent, and lists it in help', async () => {
     const summary = { days: 30, rows: [], totals: { attempts: 0 }, prices: [] }
     const s = swarm((_method, path) => path.startsWith(`/api/super-tabs/${T}/costs?`) ? ok(summary) : undefined)
