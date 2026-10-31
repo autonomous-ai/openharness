@@ -8,7 +8,7 @@ import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../..
 import { agentOnly, author, fail, groupWithoutMachines, isLeads, seenMachineIds, stableId, SuperTabError, visibleState, type Actor, type AgentStart, type SuperTabState } from '../model.js'
 import { mentionsDigest, swarmsWithTags, waitingMentions, waitingTagConversations } from '../mentions.js'
 import { decisionsWaiting } from '../decisions.js'
-import { readMarks, readThreadMarks, writeReadMark, writeThreadMark } from '../readMarks.js'
+import { readMarks, readThreadMarks, writeReadMark, writeThreadFollow, writeThreadMark } from '../readMarks.js'
 import { deliveredCopies } from '../pageReads.js'
 import { readBy } from '../parts/indexed.js'
 import type { SuperTabStore } from '../store.js'
@@ -224,6 +224,21 @@ export class SwarmReads {
    *  id, a root the person may read (not an agent-only notice, not a delivered copy) that roots its own thread. Every miss,
    *  an unreadable conversation or project included, is the same refusal. Only a person reading as themselves has marks. */
   async markThreadRead(user: AuthUser, tabId: string, conversationId: string, threadId: string, sequence: number): Promise<{ sequence: number }> {
+    const newest = await this.readableThread(user, tabId, conversationId, threadId)
+    return { sequence: await writeThreadMark(this.db, { tabId, personId: user.sub, conversationId, threadId, sequence: Math.min(sequence, newest),
+      now: this.now() }) }
+  }
+
+  /** Stores the person's Follow (true), Unfollow (false) or neither (null) of thread `threadId` (readMarks.ts writeThreadFollow),
+   *  checked as markThreadRead checks a thread mark: every miss is the same refusal, and only a person reading as themselves
+   *  follows. */
+  async followThread(user: AuthUser, tabId: string, conversationId: string, threadId: string, follow: boolean | null): Promise<{ follow: boolean | null }> {
+    await this.readableThread(user, tabId, conversationId, threadId)
+    return { follow: await writeThreadFollow(this.db, { tabId, personId: user.sub, conversationId, threadId, follow, now: this.now() }) }
+  }
+
+  /** The newest message sequence of a conversation whose thread `threadId` the person reads (markThreadRead's checks). */
+  private async readableThread(user: AuthUser, tabId: string, conversationId: string, threadId: string): Promise<number> {
     if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const unavailable = () => fail('NOT_FOUND', 'This conversation is unavailable.', 404)
     const { state } = await this.store.readLoad(user, tabId, { groupIds: [conversationId] })
@@ -239,8 +254,7 @@ export class SwarmReads {
       { $project: { source: 1, recipientIds: 1, thread: 1 } }])
     const root = found && { id: found._id as string, source: found.source ?? null, recipientIds: (found.recipientIds as string[] | undefined) ?? [], thread: found.thread }
     if (!root || root.thread !== root.id || agentOnly(root.source, root.recipientIds) || (await deliveredCopies(this.db, tabId, [root])).size) unavailable()
-    return { sequence: await writeThreadMark(this.db, { tabId, personId: user.sub, conversationId, threadId, sequence: Math.min(sequence, newest),
-      now: this.now() }) }
+    return newest
   }
 
   /** A person's own thread marks (an agent has none), every one or those moved since `since`. */

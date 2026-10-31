@@ -3346,7 +3346,12 @@ describe('Lead mentions', () => {
     expect(rest).toEqual([])
     expect(mention).toEqual({ id: expect.any(String), projectId: 'lead', projectName: 'Pilot', conversationId: group, conversationTitle: 'Copy review',
       // The picked tag the text did not say opens it, as the server stores it (mentions.ts withTags).
-      messageId, leadId: lead, leadName: expect.any(String), text: `@peer ${text}`.slice(0, 200), createdAt: expect.any(String), resolvedAt: null, resolvedBy: null })
+      messageId, leadId: lead, leadName: expect.any(String), text: `@peer ${text}`.slice(0, 200), createdAt: expect.any(String), resolvedAt: null, resolvedBy: null,
+      threadId: null, messageSequence: expect.any(Number) })
+    // Where the tagged message is in its chat, as its page numbers it: Desktop clears the red number once read past it.
+    const page = await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/conversations/${group}/messages`, headers: { authorization: `Bearer ${peer.sub}` } })
+    const shown = (page.json().data.messages as Array<{ id: string; sequence: number }>).find(m => m.id === messageId)
+    expect(mention!.messageSequence).toBe(shown!.sequence)
     expect(mention!.leadName).toBe((await waiting(tab, owner)).agents.find(a => a.id === lead)!.displayName)
     expect(await list(tab, owner, 'waiting')).toEqual([])
     expect(await list(tab, peer, 'earlier')).toEqual([])
@@ -3420,6 +3425,18 @@ describe('Lead mentions', () => {
     expect(await list(tab, peer, 'waiting')).toEqual([])
     expect(await list(tab, peer, 'earlier')).toEqual([expect.objectContaining({ resolvedBy: 'reply', resolvedAt: expect.any(String) })])
     expect((await waiting(tab, peer)).mentionsWaiting).toBe(0)
+  })
+
+  it('names the thread of a tag in a thread reply, never of one also sent to the chat or under a root the person cannot read', async () => {
+    const { tab, lead, group, messageId } = await tagged()
+    const send = async (text: string, extra: Record<string, unknown> = {}) => (await run(tab, { type: 'message.send', conversationId: group, text,
+      replyTo: messageId, recipientIds: [], mentions: [peer.sub], ...extra } as Command)).result.messageId as string
+    const inThread = await send('In the thread.'), alsoSent = await send('Also in the chat.', { alsoSend: true })
+    const threadOf = async () => Object.fromEntries((await list(tab, peer, 'waiting')).map(m => [m.messageId, m.threadId]))
+    expect(await threadOf()).toEqual({ [messageId]: null, [inThread]: messageId, [alsoSent]: null })
+    // A root nobody reads (an agent-only notice): its id never leaves, and the tag counts as the chat's.
+    await db.superTabMessage.update({ where: { id: messageId }, data: { source: { kind: 'note', recipientsOnly: true }, recipientIds: [lead] } })
+    expect((await threadOf())[inThread]).toBeNull()
   })
 
   it('resolves on the person’s reply inside a thread', async () => {
