@@ -201,23 +201,40 @@ class _StatusText extends StatefulWidget {
 
 class _StatusTextState extends State<_StatusText> {
   static final _link = RegExp(r'https?://[^\s<>()\[\]]+');
-  final _taps = <TapGestureRecognizer>[];
+
+  /// The text cut into plain pieces and links, with one tap per link: made
+  /// again only when the text changes, so a rebuild (a theme flip, a Swarm
+  /// read) never drops a tap under the pointer.
+  var _pieces = <(String, TapGestureRecognizer?)>[];
+
+  @override
+  void initState() {
+    super.initState();
+    _cut();
+  }
+
+  @override
+  void didUpdateWidget(_StatusText old) {
+    super.didUpdateWidget(old);
+    if (old.text != widget.text) _cut();
+  }
 
   @override
   void dispose() {
-    for (final tap in _taps) {
-      tap.dispose();
-    }
+    _release();
     super.dispose();
   }
 
-  List<InlineSpan> _spans() {
-    for (final tap in _taps) {
-      tap.dispose();
+  void _release() {
+    for (final (_, tap) in _pieces) {
+      tap?.dispose();
     }
-    _taps.clear();
+  }
+
+  void _cut() {
+    _release();
     final text = widget.text.trimRight();
-    final spans = <InlineSpan>[];
+    final pieces = <(String, TapGestureRecognizer?)>[];
     var at = 0;
     for (final match in _link.allMatches(text)) {
       // A sentence's closing punctuation is not part of its link.
@@ -227,37 +244,45 @@ class _StatusTextState extends State<_StatusText> {
       }
       final uri = SuperTabMessageText.webLink(url);
       if (uri == null) continue;
-      if (match.start > at) {
-        spans.add(TextSpan(text: text.substring(at, match.start)));
-      }
-      final tap = TapGestureRecognizer()..onTap = () => openInBrowser(uri);
-      _taps.add(tap);
-      spans.add(
-        TextSpan(
-          text: url,
-          style: TextStyle(
-            color: DesktopChrome.accent,
-            decoration: TextDecoration.underline,
-            decorationColor: DesktopChrome.accent,
-          ),
-          recognizer: tap,
-          mouseCursor: SystemMouseCursors.click,
-        ),
-      );
+      if (match.start > at) pieces.add((text.substring(at, match.start), null));
+      pieces.add((
+        url,
+        TapGestureRecognizer()..onTap = () => openInBrowser(uri),
+      ));
       at = match.start + url.length;
     }
-    if (at < text.length) spans.add(TextSpan(text: text.substring(at)));
-    return spans;
+    if (at < text.length) pieces.add((text.substring(at), null));
+    _pieces = pieces;
   }
 
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(top: grid.AppDesktop.listRowGap),
-    child: Text.rich(
-      key: const ValueKey('super-project-status-text'),
-      TextSpan(style: DesktopChrome.text(), children: _spans()),
-    ),
-  );
+  Widget build(BuildContext context) {
+    final link = TextStyle(
+      color: DesktopChrome.accent,
+      decoration: TextDecoration.underline,
+      decorationColor: DesktopChrome.accent,
+    );
+    return Padding(
+      padding: const EdgeInsets.only(top: grid.AppDesktop.listRowGap),
+      child: Text.rich(
+        key: const ValueKey('super-project-status-text'),
+        TextSpan(
+          style: DesktopChrome.text(),
+          children: [
+            for (final (text, tap) in _pieces)
+              tap == null
+                  ? TextSpan(text: text)
+                  : TextSpan(
+                      text: text,
+                      style: link,
+                      recognizer: tap,
+                      mouseCursor: SystemMouseCursors.click,
+                    ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 /// One decision waiting on the reader: who it waits on, the question, and
@@ -309,14 +334,6 @@ class _NeedsYouRow extends StatelessWidget {
         OutlinedButton(
           key: ValueKey('super-project-status-answer-${decision.id}'),
           onPressed: onAnswer,
-          style: OutlinedButton.styleFrom(
-            minimumSize: const Size(0, 28),
-            padding: const EdgeInsets.symmetric(
-              horizontal: grid.AppDesktop.controlGap + 4,
-            ),
-            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            textStyle: DesktopChrome.control(),
-          ),
           child: const Text('Answer'),
         ),
       ],

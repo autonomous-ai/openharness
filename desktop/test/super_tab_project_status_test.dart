@@ -231,6 +231,30 @@ void main() {
     );
 
     testWidgets(
+      'a Swarm read that leaves the text keeps the same link tap, so a click in progress is not lost',
+      (tester) async {
+        final server = swarm();
+        final c = await showView(tester, server);
+        GestureRecognizer? tap() {
+          GestureRecognizer? found;
+          tester.widget<Text>(statusText()).textSpan!.visitChildren((span) {
+            if (span is TextSpan && span.recognizer != null) {
+              found = span.recognizer;
+            }
+            return true;
+          });
+          return found;
+        }
+
+        final before = tap();
+        expect(before, isNotNull);
+        await change(tester, server, c, () => server.ask(['Ship how?']));
+        expect(needs('decision-1'), findsOneWidget);
+        expect(identical(tap(), before), isTrue);
+      },
+    );
+
+    testWidgets(
       'Needs you lists only the reader\'s open decisions in this project, and Answer opens it where Notifications answers it',
       (tester) async {
         final server = swarm()
@@ -428,6 +452,32 @@ void main() {
       expect(find.textContaining('Ship how?'), findsNothing);
       expect(find.textContaining('Memory engine'), findsNothing);
     });
+
+    testWidgets(
+      'the card on its own forgets the project once access is lost, never showing what it read before',
+      (tester) async {
+        final server = swarm()..ask(['Ship how?']);
+        final c = server.controller(account: 'peer');
+        addTearDown(c.dispose);
+        await c.refresh();
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SuperTabProjectStatusCard(controller: c, projectId: 'lead'),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(card('lead'), findsOneWidget);
+        expect(needs('decision-1'), findsOneWidget);
+
+        c.revokeAccess('You no longer have access to this Swarm.');
+        await tester.pump();
+        expect(card('lead'), findsNothing);
+        expect(find.textContaining('Memory engine'), findsNothing);
+        expect(find.textContaining('Ship how?'), findsNothing);
+      },
+    );
 
     testWidgets(
       'losing the project drops its card, and a changed audience drops Needs you rows before the new list arrives',
