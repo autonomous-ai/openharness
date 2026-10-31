@@ -323,6 +323,9 @@ export interface Conversation {
   buddyName?: string
   /** A Buddy chat's live and starting thread sessions (buddySessions.ts); absent while it has none. */
   buddySessions?: BuddySessionEntry[]
+  /** An older project Buddy chat whose person was told their one Buddy cannot start there now (commands.ts buddyDownLine):
+   *  told once per outage, so absent again once one can start. */
+  buddyDownTold?: true
   /** The person who asked for this work: whoever opened it, or the person its Lead named (leaderboard/record.ts). */
   requesterId?: string
   /** What the leaderboard counts here (leaderboard/record.ts); bookkeeping readers never get whole. */
@@ -394,6 +397,9 @@ export interface SuperTabState {
   /** Owner-only sharing configuration; visibleState always removes it. */
   sharing?: import('./sharing.js').SwarmSharing
   paused: boolean
+  /** Its owner deleted it (deletion.ts): nobody reads or writes it, its row lists no member, and its owner may restore it until
+   *  `purgeAt` (ISO times). Absent on a live Swarm. */
+  deletion?: { at: string; by: string; purgeAt: string }
   /** Idle workers stop and finished groups archive by themselves (tidy.ts); false once the owner turns it off. */
   tidy?: false
   /** Buddies (buddies.ts) are on in every Swarm; readers are always told so (visibleState), as apps from before 10-29 hide
@@ -511,6 +517,8 @@ export const NOTICE_READERS = {
   // A project PM's private line in a person's one Buddy chat, marked with its project (commands.ts person.tell): its person
   // reads it, as they read the line in their older project chat.
   'pm-line': 'people',
+  // Their one Buddy cannot start in a person's older project chat, told to them there once per outage (commands.ts buddyDownLine).
+  'buddy-cannot-start': 'people',
   'auto-archive': 'people', native: 'people',
   // The nightly routing reflection, for the project's people; never a Buddy's (buddies.ts routingRow).
   'routing-reflection': 'people',

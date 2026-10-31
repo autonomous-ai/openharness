@@ -695,6 +695,63 @@ void main() {
       },
     );
 
+    testWidgets(
+      'closing a tab while [term] shows its pane leaves one recently closed '
+      'entry, the tab\'s',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(1280, 800));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        final f = SuperTabLaunchFixture();
+        final p = _desk(f);
+        late SuperTabController c;
+        c = await _personal(f);
+        await PersonalProjects.of(f.app).sync(c);
+        final before = f.app.closedHistory.length;
+        final api = c.snapshot!.projects
+            .firstWhere((p) => p.name == 'api')
+            .leadConversationId;
+        c
+          ..select(api)
+          ..selectGroupTerminals(api);
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: ListenableBuilder(
+                listenable: f.app,
+                builder: (_, _) => SuperTabWorkspace(
+                  app: f.app,
+                  canvas: const Text('Native terminals'),
+                  onAddAgent: (_) {},
+                ),
+              ),
+            ),
+          ),
+        );
+        for (var i = 0; i < 20; i++) {
+          await tester.pump(const Duration(milliseconds: 20));
+        }
+        final swarm = f.app.swarms.firstWhere((s) => s.superTabId == tabId);
+        expect(swarm.panes, [p.api, p.api2]);
+
+        // Tab `one` holds the api pane [term] is showing.
+        await f.app.closeSwarm('one');
+        for (var i = 0; i < 20; i++) {
+          await tester.pump(const Duration(milliseconds: 20));
+        }
+        expect(swarm.panes, [p.api2]);
+        final added = f.app.closedHistory.take(
+          f.app.closedHistory.length - before,
+        );
+        expect(added, hasLength(1));
+        expect(added.single, isA<ClosedSwarm>());
+        expect((added.single as ClosedSwarm).id, 'one');
+        await tester.pumpWidget(const SizedBox());
+        await c.flush();
+        f.app.superTabs.dispose();
+        await tester.pump();
+      },
+    );
+
     testWidgets('a project of one tab\'s panes keeps that tab\'s sizes', (
       tester,
     ) async {

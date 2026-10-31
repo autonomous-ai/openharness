@@ -73,8 +73,12 @@ export function visibilityChanged(before: SuperTabState, after: SuperTabState): 
 
 /** The Swarm's index row (SuperTab): what hosts, invitations and member lists are looked up by (design section 2.3). */
 export function indexesOf(state: SuperTabState) {
+  // A deleted Swarm (deletion.ts) lists nobody and is invited to by nobody, so it leaves every person's lists in this write; its
+  // machines stay indexed until their hosts have closed its sessions and cleaned up.
+  const deletion = state.deletion
   return {
-    memberIds: state.people.map(p => p.id), invitedEmails: state.invitations.map(i => i.email),
+    memberIds: deletion ? [] : state.people.map(p => p.id), invitedEmails: deletion ? [] : state.invitations.map(i => i.email),
+    deletedAt: deletion ? new Date(deletion.at) : null, purgeAt: deletion ? new Date(deletion.purgeAt) : null,
     machineIds: [...new Set([...state.agents.map(a => a.machineId), ...(state.machines ?? []).map(m => m.machineId),
       ...(state.closingSessions ?? []).map(c => c.machineId), ...(state.machineCleanups ?? []).map(c => c.machineId)])],
     cleanupMachineIds: [...new Set([...(state.machines ?? []).flatMap(m => m.removal ? [m.machineId] : []),

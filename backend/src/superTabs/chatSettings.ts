@@ -77,9 +77,10 @@ export async function sweepChatSettings(db: PrismaClient, now: number): Promise<
     Array<{ _id: string }>
   let lost = 0
   for (const { _id: tabId } of tabs) {
-    const [row] = await readBy(db, 'SuperTab', 'id', [{ $match: { _id: tabId } }, { $project: { memberIds: 1 } }])
+    const [row] = await readBy(db, 'SuperTab', 'id', [{ $match: { _id: tabId } }, { $project: { memberIds: 1, deletedAt: 1 } }])
     if (!row) lost += await deleteWhere(db, { tabId })
-    else if (Array.isArray(row.memberIds)) lost += await deleteWhere(db, { tabId, personId: { $nin: row.memberIds as string[] } })
+    // A deleted Swarm lists nobody while it can be restored (deletion.ts): its settings come back with it; its purge removes them.
+    else if (Array.isArray(row.memberIds) && !row.deletedAt) lost += await deleteWhere(db, { tabId, personId: { $nin: row.memberIds as string[] } })
   }
   return { expired, lost }
 }

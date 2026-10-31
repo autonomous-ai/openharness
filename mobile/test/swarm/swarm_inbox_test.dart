@@ -154,6 +154,36 @@ void main() {
     expect(i.needs, isEmpty);
   });
 
+  test('a Swarm its owner deleted leaves the switcher on the next read, and '
+      'a row marked deleted is never listed', () async {
+    final fake = backend({
+      'a': [groupData('g1', status: 'needs_human')],
+      'b': [],
+      'c': [],
+    });
+    final i = inbox(fake);
+    await i.refresh();
+    expect([for (final s in i.swarms) s.id], ['a', 'b', 'c']);
+
+    // Deleted: the server lists it to nobody, and its reads answer as for a
+    // Swarm that does not exist.
+    fake.routes['/api/super-tabs/list'] = (_) => {
+      'tabs': [
+        listing('b', 'Swarm b'),
+        {...listing('c', 'Swarm c'), 'deletedAt': 100},
+      ],
+      'next': null,
+    };
+    fake.routes.remove('/api/super-tabs/a/parts');
+    fake.routes.remove('/api/super-tabs/a/changes');
+    await i.refresh();
+
+    expect([for (final s in i.swarms) s.id], ['b']);
+    expect(i.reader('a'), isNull);
+    expect(i.reader('c'), isNull);
+    expect(i.needs, isEmpty);
+  });
+
   test(
     'a Swarm the person left takes its chat off a screen still holding it',
     () async {

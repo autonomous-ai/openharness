@@ -1039,6 +1039,35 @@ again when the error changes, and otherwise at most every 5 minutes, and it says
 This comes from 2026-10-30. A backend release made every claim of a person's message to their own Buddy end busy for
 two hours. Nothing was lost, but nobody could tell.
 
+## Deleting a Swarm
+
+A Swarm's owner can delete it from the Swarm dropdown on its name: **Delete "name"…**, then type its name. Personal
+cannot be deleted, and only the owner sees the item.
+
+- Everyone loses it at once: it leaves every member's and invitee's list in the same write, and every open app is told.
+  From then on, every read and write answers exactly as for a Swarm that does not exist, its owner's included.
+- Its agents stop, its Product Managers too, and its machines are released: each machine's host closes the sessions and
+  deletes the Swarm's folders there, as when a machine is removed. A start already launching makes the delete wait a moment.
+- For 7 days its owner can restore it from the same dropdown (**Restore "name"**, with the days left). People, projects,
+  chats and files come back; agents and machines do not, and are added again.
+- After the 7 days the worker removes its records and stored files, and only its own (`backend/src/superTabs/purge.ts`).
+  Chat file links keep working until then.
+
+Design (`backend/src/superTabs/deletion.ts`):
+
+- Growth: the purge removes everything of a deleted Swarm 7 days after the delete; nothing is kept after it.
+- Concurrency: delete and restore are ordinary Swarm commands, one write at the head level; the purge runs only an hour
+  after the restore window closed, and deletes the row only if it is still that deletion.
+- Read cost: lists read the same indexes as before (a deleted Swarm lists no member); one extra field on the row reads.
+- Scale: the purge reads due Swarms by their own index, 20 a pass; deleting a Swarm with 10x the messages is one
+  indexed delete per collection.
+- Compatibility: older apps see the Swarm leave their list and its reads refused, as when access is lost.
+- Migration + rollback: two optional row fields, no migration. A rollback serves a deleted Swarm again to its members.
+- Audience: the server checks the owner on every delete and restore; anyone else is told what a missing Swarm tells.
+- Identity: the signed-in person's own; a Harness Team account sign-in never deletes.
+- Failure: a refused delete says why; a file the purge cannot remove keeps its Swarm for the next pass.
+- Platforms: Desktop deletes and restores; the phone and the web drop a deleted Swarm from their lists.
+
 ## Switching Swarms off on a computer
 
 Swarms are on by default. To run a computer's daemon without them, set

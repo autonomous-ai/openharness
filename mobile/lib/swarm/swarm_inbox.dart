@@ -456,6 +456,9 @@ class SwarmInbox extends ChangeNotifier {
         if (row['id'] is! String || row['name'] is! String) {
           throw const FormatException('Invalid tab');
         }
+        // A deleted Swarm is never the person's to show, whatever lists it
+        // (backend superTabs/deletion.ts): one marked so is left out.
+        if (row['deletedAt'] != null) continue;
         final id = row['id'] as String;
         listed[id] = (id: id, name: row['name'] as String);
         changedAt[id] = (row['lastChangedAt'] as num?)?.toInt() ?? 0;

@@ -33,6 +33,7 @@ import { machineBillingWorkerService } from './services/MachineBillingWorkerServ
 import { productUsagePeopleRollupService } from './services/ProductUsagePeopleRollupService.js'
 import { startReceiptSweep } from './lib/productUsageReceiptSweep.js'
 import { startPendingUploadSweep } from './lib/pendingUploadSweep.js'
+import { startSwarmPurge } from './superTabs/purge.js'
 import { startRoutingReflection } from './lib/routingReflection.js'
 import { logger } from './utils/logger.js'
 
@@ -73,6 +74,7 @@ async function start(): Promise<void> {
   let stopThreadBackfill = (): void => {}
   let stopReceiptSweep = (): void => {}
   let stopPendingUploads = (): void => {}
+  let stopSwarmPurge = (): void => {}
   let stopReflection = (): void => {}
   const shutdown = (signal: string): void => {
     logger.info(`Received ${signal}, stopping backend worker...`)
@@ -87,6 +89,7 @@ async function start(): Promise<void> {
     stopCompaction()
     stopReceiptSweep()
     stopPendingUploads()
+    stopSwarmPurge()
     stopReflection()
     stopThreadBackfill()
     // The last partial minute, before the database closes.
@@ -103,12 +106,17 @@ async function start(): Promise<void> {
   stopReceiptSweep = startReceiptSweep(prisma)
   // Uploads begun on a link and never finished go an hour after the link expired, with what they stored (lib/pendingUploadSweep.ts).
   stopPendingUploads = startPendingUploadSweep(prisma, env)
+  // Deleted Swarms past their 7 days go with their records and stored files (superTabs/purge.ts).
+  stopSwarmPurge = startSwarmPurge(prisma, env)
   // The worker's sweeps and archive write Swarms: they bump the stamps the API processes read by. It reads too little to keep a cache.
   configureSwarmStamps(redisSwarmStamps(), { reads: false })
   // Archive notes and Workspace removals write messages too: their recipients' hosts hear of them at once, and of the
   // groups they changed.
   const swarms = new SuperTabStore(prisma, Date.now, null, { deliveriesWaiting: announceSwarmDeliveries, hostsChanged: announceSwarmHostChanges,
     swarmChanged: announceSwarmChanges })
+  // Decisions still waiting in work that was over before #2454 closed them where work ends: they counted toward the open
+  // limit and came back on a reopen (store.ts withdrawEndedDecisions). Remove in the release after the one that runs it.
+  logger.info('[swarm-decisions] closed waiting decisions of finished work', { closed: await swarms.withdrawEndedDecisions() })
   stopSweeps = startSwarmSweeps(prisma, undefined, () => swarms.workspaces.finishRemovals())
   // The dead old state of migrated Swarms goes by itself, a few at a time (superTabs/migration/dropLegacyJob.ts).
   stopLegacyDrop = startLegacyDrop(prisma)

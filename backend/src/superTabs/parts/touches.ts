@@ -50,6 +50,11 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
   for (const buddy of buddiesHearing(effects.state, effects.messages)) { agent(buddy.id); member(buddy.buddyOf!.personId) }
 
   switch (command.type) {
+    // Every person's write relies on the Swarm not being deleted (deletion.ts): the delete moves each person's part, so one
+    // landing at the same moment retries against it and is refused (security review 2 of #2457).
+    case 'swarm.delete':
+      for (const person of before.people) member(person.id)
+      break
     case 'tab.rename': case 'tab.project': case 'tab.pause':
       if (actor.kind === 'agent') group('lead')
       break

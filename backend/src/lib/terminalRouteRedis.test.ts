@@ -1,11 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { UpBusMsg } from './tunnel.js'
 
-// A real Redis: REDIS_TEST_URL, e.g. redis://127.0.0.1:6379/15 (CI has none, so this file is skipped there). The bus
+// A real Redis: REDIS_TEST_URL, e.g. redis://127.0.0.1:6379/15 (CI's Redis service; skipped without one, which CI's
+// redis-tests-ran step refuses). The bus
 // connects to it as REDIS_URL. One process stands for several: a process's channel is just `termpod:`/`uppod:` + its id,
 // so subscribing to another id here is what that other process would do.
 const url = process.env.REDIS_TEST_URL
 vi.hoisted(() => { if (process.env.REDIS_TEST_URL) process.env.REDIS_URL = process.env.REDIS_TEST_URL })
+// A real client: the shared setup's never connects (noRedis.test-support.ts).
+vi.unmock('ioredis')
 vi.mock('../utils/logger.js', () => ({ logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() } }))
 
 describe.skipIf(!url)('terminal routes over a real Redis', () => {

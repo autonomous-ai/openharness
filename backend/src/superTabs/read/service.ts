@@ -374,8 +374,9 @@ export class SwarmReads {
    *  first, as a safety net for one the job did not see (design 6.1), and answers 503 while that cannot be done. */
   private async read<T>(user: AuthUser, tabId: string, body: (tx: PrismaClient, view: CacheView) => Promise<T>): Promise<T> {
     // The row's format only: a migrated row still holds its old state, as large as the Swarm, until the owner drops it.
-    const row = await this.db.superTab.findFirst({ where: { id: tabId, autonomousEnv: user.autonomousEnv }, select: { format: true } })
-    if (!row) fail('NOT_FOUND', 'This Super Tab is unavailable.', 404)
+    const row = await this.db.superTab.findFirst({ where: { id: tabId, autonomousEnv: user.autonomousEnv }, select: { format: true, deletedAt: true } })
+    // A deleted Swarm reads as one that does not exist (deletion.ts).
+    if (!row || row.deletedAt) fail('NOT_FOUND', 'This Super Tab is unavailable.', 404)
     if (row.format !== 2 && !(await migrateSwarm(this.db, tabId)).ok) fail(SWARM_MIGRATING.code, SWARM_MIGRATING.message, SWARM_MIGRATING.status)
     return body(this.db, await this.store.view([tabId]))
   }

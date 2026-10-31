@@ -353,6 +353,8 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     const page = (title: string, text: string, status = 200) => reply.status(status).type('text/html; charset=utf-8').send(githubPage(title, text))
     const request = approvalSecret && req.query.state ? readState(approvalSecret, req.query.state, Date.now()) : null
     if (!request) return page('This link has expired', 'Go back to Harness and choose Continue in GitHub again.', 400)
+    // A Swarm deleted since the link was made allows nothing, and says so as an expired link does (superTabs/deletion.ts).
+    if (!await store.isLive(request.tabId)) return page('This link has expired', 'Go back to Harness and choose Continue in GitHub again.', 400)
     const named = githubRepository(`https://github.com/${request.repository}`)
     // Cancel on GitHub's sign-in sends the person back with `error` and no code: they were told Harness was installed
     // (local Team account run, 2026-10-28).
@@ -405,6 +407,8 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.post<{ Body: z.infer<typeof create> }>('/api/super-tabs', { preHandler: validateBody(create) },
     (req, reply) => respond(reply, () => store.create(req.user!, req.body.operationId, req.body.name, req.body.projectVisibility, req.body.workspaceId)))
   // Workspaces (docs/plans/2026-10-27-swarm-workspaces.md): the person's Workspaces and the Swarms they may see in each.
+  // The owner's deleted Swarms they can still restore (superTabs/deletion.ts); restoring is the swarm.restore command.
+  app.get('/api/super-tabs/deleted', (req, reply) => respond(reply, () => store.deletedList(req.user!)))
   app.get('/api/super-tabs/workspaces', (req, reply) => respond(reply, () => store.workspaceList(req.user!)))
   app.post<{ Body: z.infer<typeof workspaceCreate> }>('/api/super-tabs/workspaces', { preHandler: validateBody(workspaceCreate) },
     (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.create(req.user!, req.body.operationId, req.body.name) }))

@@ -10,6 +10,7 @@ import { machineAlive } from '../lib/prisma.js'
 import { isTeamSession, teamMachine, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
+import { DELETED_SWARM_COMMANDS, DELETION_COMMANDS, notThere } from './deletion.js'
 import { applyCommand, authorizeCommandAccess, IGNORED_NOTE, LOOP_NOTICE_AT, mayResumeStart, operationSchema, PAIR_CHAIN_LIMIT, postable, ruleProject, type Command, type CommandContext } from './commands.js'
 import { redactCredentials } from './credentials.js'
 import type { AvatarUpload } from './profile.js'
@@ -44,7 +45,7 @@ import { clock, insertParts, loadActive, loadLightGroups, loadMachineParts, load
 import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
 import { memberSwarms } from './swarmRows.js'
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
-import { loadDeliveryParts } from './parts/light.js'
+import { loadDeliveryParts, ms } from './parts/light.js'
 import { guardedWrite, partId } from './parts/write.js'
 import { retryable } from './retry.js'
 import { touchesFor } from './parts/touches.js'
@@ -69,7 +70,7 @@ import { APPROVE, approvedLine, localDate, MAX_PROPOSALS, proposalQuestion, prop
 import { readEvidence, recordEvidence } from './evidence/store.js'
 import { closeAssignment, closeUnassignedStart, LIST_SIZE, newestConversations, newestDecisions, readDecision, recentDecisions, recordAttempts, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { dropHeldTags, listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByReply, resolveWhenWorked, writeMentions } from './mentions.js'
-import { answerable, askDecisions, MAX_OPEN_DECISIONS, REFLECTION_DECISION, reflectionDecisions, expireReflections, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingFor, waitingInProject, withdrawIn, workEnded, workOver, writeDecisions } from './decisions.js'
+import { answerable, askDecisions, MAX_OPEN_DECISIONS, REFLECTION_DECISION, reflectionDecisions, expireReflections, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingConversations, waitingFor, waitingInProject, withdrawIn, workEnded, workOver, writeDecisions } from './decisions.js'
 import { CATCH_UP_SCAN, catchUpSummary, type CatchUp } from './catchUp.js'
 import { recordMessageRead, type MessageReadKey } from './messageReadStats.js'
 import { DEFAULT_ROUTING_POLICY, type RoutingPolicy } from './routingPolicy.js'
@@ -91,7 +92,7 @@ const PROPOSED = 'This file already went with a proposal. Ask your owner to send
 const hash = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 /** The fields of a Swarm's row the store reads. A migrated row still keeps its whole old state (`legacyState`, about 1 MB
  *  for a busy Swarm) until the maintenance script removes it, and every command and read loads this row. */
-const SWARM_ROW = { id: true, ownerId: true, revision: true, format: true } satisfies Prisma.SuperTabSelect
+const SWARM_ROW = { id: true, ownerId: true, revision: true, format: true, deletedAt: true } satisfies Prisma.SuperTabSelect
 export type SwarmRow = Prisma.SuperTabGetPayload<{ select: typeof SWARM_ROW }>
 /** A Swarm whose state still waits for its split into parts (design section 6.1) is not served until it is split. */
 function requireParts(row: SwarmRow): SwarmRow {
@@ -663,8 +664,8 @@ export class SuperTabStore {
     const elsewhere = await tx.swarmMachine.findMany({ where: { machineId: { in: ids }, deleted: false, contributed: true, tabId: { not: state.id } },
       select: { tabId: true, machineId: true } })
     if (!elsewhere.length) return []
-    const rows = await tx.superTab.findMany({ where: { id: { in: [...new Set(elsewhere.map(e => e.tabId))] } }, select: { id: true, workspaceId: true } })
-    const other = new Set(rows.filter(r => r.workspaceId && r.workspaceId !== state.workspaceId).map(r => r.id))
+    const rows = await tx.superTab.findMany({ where: { id: { in: [...new Set(elsewhere.map(e => e.tabId))] } }, select: { id: true, workspaceId: true, deletedAt: true } })
+    const other = new Set(rows.filter(r => !r.deletedAt && r.workspaceId && r.workspaceId !== state.workspaceId).map(r => r.id))
     return [...new Set(elsewhere.filter(e => other.has(e.tabId)).map(e => e.machineId))]
   }
 
@@ -699,14 +700,16 @@ export class SuperTabStore {
   }
 
   /** Shared with the read API (superTabs/read, design section 7.2). */
-  async row(tx: Transaction, user: AuthUser, tabId: string) {
-    return requireParts(await tx.superTab.findFirst({ where: { id: tabId, autonomousEnv: user.autonomousEnv }, select: SWARM_ROW }) ??
-      fail('NOT_FOUND', 'This Super Tab is unavailable.', 404))
+  /** A deleted Swarm answers as one that does not exist (deletion.ts), unless `deleted` lets the few commands through that
+   *  still apply to one: its machines' hosts confirming their closes and cleanups, and its owner restoring it. */
+  async row(tx: Transaction, user: AuthUser, tabId: string, deleted = false) {
+    const row = await tx.superTab.findFirst({ where: { id: tabId, autonomousEnv: user.autonomousEnv }, select: SWARM_ROW })
+    return requireParts(row && (deleted || !row.deletedAt) ? row : fail('NOT_FOUND', 'This Super Tab is unavailable.', 404))
   }
 
   /** The Swarm a caller may address, loaded from its parts. */
-  async load(tx: Transaction, user: AuthUser, tabId: string, named: Named = {}): Promise<Loaded> {
-    return loadRow(tx, await this.row(tx, user, tabId), named)
+  async load(tx: Transaction, user: AuthUser, tabId: string, named: Named = {}, deleted = false): Promise<Loaded> {
+    return loadRow(tx, await this.row(tx, user, tabId, deleted), named)
   }
 
   /** One read's view of these Swarms' stamps (cache.ts), or none: reads then go to Mongo. */
@@ -946,6 +949,28 @@ export class SuperTabStore {
     }), next: rows.length > 100 ? rows[99]!.id : null }
   }
 
+  /** Whether Swarm [tabId] exists and is not deleted (deletion.ts): for a link made before, outside any person's read. */
+  async isLive(tabId: string): Promise<boolean> {
+    const [row] = await readBy(this.db, 'SuperTab', 'id', [{ $match: { _id: tabId } }, { $project: { deletedAt: 1 } }])
+    return !!row && !row.deletedAt
+  }
+
+  /** The owner's deleted Swarms they can still restore, newest first (deletion.ts): names only, from their heads. By the owner
+   *  index, at most 100. */
+  async deletedList(user: AuthUser) {
+    this.personOnly(user)
+    const now = this.now()
+    const rows = (await readBy(this.db, 'SuperTab', 'owner', [{ $match: { autonomousEnv: user.autonomousEnv, ownerId: user.sub, format: 2, deletedAt: { $ne: null } } },
+      { $sort: { _id: 1 } }, { $limit: 100 }, { $project: { deletedAt: 1, purgeAt: 1 } }]))
+      .map(row => ({ id: row._id as string, deletedAt: ms(row.deletedAt), purgeAt: ms(row.purgeAt) })).filter(row => row.purgeAt > now)
+    const heads = await this.heads(rows.map(row => ({ id: row.id, format: 2 })))
+    return { tabs: rows.flatMap(row => {
+      const head = heads.get(row.id)
+      // Only one still deleted in its head, and only its owner's: a restore that has not reached the row yet is not offered.
+      return head?.deletion && head.ownerId === user.sub ? [{ id: row.id, name: head.name, deletedAt: row.deletedAt, purgeAt: row.purgeAt }] : []
+    }).sort((a, b) => b.deletedAt - a.deletedAt || (a.id < b.id ? -1 : 1)) }
+  }
+
   async workspaceList(user: AuthUser) {
     this.personOnly(user)
     return { workspaces: await listWorkspaces(this.db, user) }
@@ -994,7 +1019,8 @@ export class SuperTabStore {
     const heads = await this.heads(rows)
     return rows.flatMap(row => {
       const state = heads.get(row.id)
-      if (!state) return []
+      // A deleted one invites nobody (deletion.ts), whatever its row still names.
+      if (!state || state.deletion) return []
       return state.invitations.filter(i => i.email === email && i.expiresAt > this.now())
         .map(i => ({ tabId: row.id, name: state.name, inviteId: i.id, role: i.role, expiresAt: i.expiresAt }))
     })
@@ -1160,7 +1186,7 @@ export class SuperTabStore {
         // Only one never launched: a repeated dispatch of a launched start is admitted again too, and its agent may be starting.
         const start = await transaction(this.db, async tx => {
           const row = await tx.superTab.findFirst({ where: { id: tabId, autonomousEnv: user.autonomousEnv }, select: SWARM_ROW })
-          return row?.format === 2 ? (await loadRow(tx, row, { startIds: [command.startId] })).state.starts?.find(s => s.id === command.startId) : undefined
+          return row?.format === 2 && !row.deletedAt ? (await loadRow(tx, row, { startIds: [command.startId] })).state.starts?.find(s => s.id === command.startId) : undefined
         })
         if (start && !start.dispatched && !start.harnessId && !start.error) {
           await this.executeOnce(user, tabId, { operationId: `team-refused-${command.startId}`,
@@ -1181,7 +1207,9 @@ export class SuperTabStore {
       ended = []
       started = []
       const stamp = clock.next()
-      const first = await this.load(tx, user, tabId, namedFor(command))
+      // A Workspace removal leaves a deleted Swarm too, so its restore cannot bring the person back (security review 2 of #2457).
+      const leavingDeleted = workspaceLeave && command.type === 'member.remove' && command.userId === user.sub && !asAgentId
+      const first = await this.load(tx, user, tabId, namedFor(command), DELETED_SWARM_COMMANDS.has(command.type) || leavingDeleted)
       const loaded = await this.ensure(tx, first, await this.moreNamed(tx, tabId, first.state, command, asAgentId ? null : user.sub, asAgentId))
       const original = loaded.state
       const team = await this.teamHost(tx, user)
@@ -1217,6 +1245,8 @@ export class SuperTabStore {
         : hostMachineId && 'startId' in command
           ? await this.poolHostActor(tx, user, original, hostMachineId, command.startId)
           : await this.actor(tx, user, original, asAgentId, workspaceLeave && command.type === 'member.remove' && command.userId === user.sub && !asAgentId)
+            // A made-up or stopped agent, or anyone refused here, is told what a missing Swarm tells (deletion.ts).
+            .catch(error => DELETION_COMMANDS.has(command.type) ? notThere() : Promise.reject(error))
       // A Mac and its Harness Team account leave under one removal, and each host confirms its cleanup as the same person
       // with the same operation (cli/src/superTabs/machines.ts runCleanup): each machine's confirmation is its own receipt.
       const receiptId = command.type === 'machine.cleaned' ? stableId(tabId, actorKey(actor), operationId, command.machineId)
@@ -1255,7 +1285,12 @@ export class SuperTabStore {
         return replyOf(prior)
       }
       if (command.type !== 'invite.accept' && command.type !== 'agent.sessionClosed' && command.type !== 'machine.cleaned') author(original, actor)
-      const context: CommandContext = { operationId, now: this.now() }
+      const context: CommandContext = { operationId, now: this.now(), ...(leavingDeleted ? { workspaceLeave: true as const } : {}) }
+      if (command.type === 'swarm.restore' && original.deletion && original.workspaceId) {
+        const lost: string[] = []
+        for (const person of original.people) if (!await hasWorkspaceAccess(tx, original, person.id)) lost.push(person.id)
+        if (lost.length) context.workspaceLost = lost
+      }
       if (command.type === 'agent.screen' || command.type === 'agent.input') context.confidentialSession = await this.confidential(tx, command.agentId)
       if (REGISTERS.has(command.type)) context.registrations = await otherRegistrations(tx, original, registeredBy(original, command))
       if ('startId' in command && ['agent.startDispatch', 'agent.started', 'agent.startFailed', 'agent.startSettled', 'route.modelResult'].includes(command.type)) {
@@ -1561,7 +1596,7 @@ export class SuperTabStore {
         if (start?.routeDecisionId) await closeUnassignedStart(tx, tabId, start.routeDecisionId, start.id, 'failed', context.now)
       }
       // Starts a removed machine failed, whether its owner removed it or left the Swarm with it, release their route holds.
-      if (command.type === 'machine.remove' || command.type === 'member.remove') {
+      if (command.type === 'machine.remove' || command.type === 'member.remove' || command.type === 'swarm.delete') {
         for (const start of original.starts ?? []) {
           if (!start.routeDecisionId || start.harnessId || start.error) continue
           if (effects.state.starts?.find(s => s.id === start.id)?.error) {
@@ -1580,7 +1615,8 @@ export class SuperTabStore {
       if (effects.notes) await writeNotes(tx, tabId, effects.notes, context.now)
       if (command.type === 'project.delete') await deleteInstructions(tx, tabId, command.projectId)
       if (effects.terminal) await this.writeTerminal(tx, tabId, effects.terminal, context.now)
-      if (this.hooks.accessChanged && watchersLost.length) {
+      // A deleted Swarm's observer sockets, on any instance, check again and close (deletion.ts).
+      if (this.hooks.accessChanged && (watchersLost.length || command.type === 'swarm.delete')) {
         const told = this.hooks.accessChanged
         afterCommit(tx, () => told(tabId))
       }
@@ -2151,7 +2187,7 @@ export class SuperTabStore {
       for (const row of rows) {
         if (!states.has(row.tabId)) {
           const tab = await tx.superTab.findFirst({ where: { id: row.tabId, autonomousEnv: user.autonomousEnv }, select: SWARM_ROW })
-          states.set(row.tabId, tab?.format === 2 ? (await loadRow(tx, tab)).state : null)
+          states.set(row.tabId, tab?.format === 2 && !tab.deletedAt ? (await loadRow(tx, tab)).state : null)
         }
         const refusal = now - row.createdAt.getTime() > TERMINAL_PICKUP_MS
           ? 'The agent’s machine did not pick up the request within 10 seconds. It may be offline or asleep.'
@@ -2651,7 +2687,8 @@ export class SuperTabStore {
   async hostGrids(user: AuthUser) {
     this.personOnly(user)
     // By the owner index (parts/indexed.ts): Prisma's $expr filter is bounded by the environment alone, every Swarm of it.
-    const rows = (await readBy(this.db, 'SuperTab', 'owner', [{ $match: { autonomousEnv: user.autonomousEnv, ownerId: user.sub, format: 2 } },
+    // Not a deleted one (deletion.ts): its grid goes with it. A raw `deletedAt: null` matches a row that never had the field.
+    const rows = (await readBy(this.db, 'SuperTab', 'owner', [{ $match: { autonomousEnv: user.autonomousEnv, ownerId: user.sub, format: 2, deletedAt: null } },
       { $sort: { _id: 1 } }, { $limit: 100 }, { $project: { _id: 1 } }])).map(row => ({ id: row._id as string }))
     return transaction(this.db, async tx => {
       const heads = await tx.swarmHead.findMany({ where: { tabId: { in: rows.map(row => row.id) }, key: 'head' }, select: { tabId: true, data: true } })
@@ -2726,8 +2763,8 @@ export class SuperTabStore {
     if (!record || stamps?.get(tabId)?.main !== record.stamp || now >= record.deadline || now - record.at >= RECORD_TTL_MS || record.removals) return null
     // The checks a full report makes with the Swarm, from what the last one saw of it; a refusal is the full report's to say.
     if ((record.team && !isTeamSession(user)) || !host.owned || !machineBillingAllowsDataPlane(host.owned)) return null
-    const row = await this.db.superTab.findFirst({ where: { id: tabId, autonomousEnv: user.autonomousEnv }, select: { format: true } })
-    if (row?.format !== 2) return null
+    const row = await this.db.superTab.findFirst({ where: { id: tabId, autonomousEnv: user.autonomousEnv }, select: { format: true, deletedAt: true } })
+    if (row?.format !== 2 || row.deletedAt) return null
     const part = loaded !== undefined ? loaded : (await loadMachineParts(this.db, [partId(tabId, machineId)])).get(partId(tabId, machineId))
     const pool = part && !part.deleted ? part.data.contribution : null
     if (!part || !pool || pool.contributorId !== user.sub || pool.generation !== observation.generation || pool.removal) return null
@@ -3227,7 +3264,7 @@ export class SuperTabStore {
     const id = reflectionMessageId(tabId, projectId, on)
     if (await this.db.superTabMessage.findUnique({ where: { id }, select: { id: true } })) return 'already'
     const read = await this.db.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
-    if (!read) return 'skipped'
+    if (!read || read.deletedAt) return 'skipped'
     const now = this.now(), since = now - 7 * DAY_MS
     const { rows, truncated } = await costRows(this.db, tabId, since)
     const failed = await failedStarts(this.db, tabId, since)
@@ -3246,7 +3283,7 @@ export class SuperTabStore {
     return transaction(this.db, async tx => {
       if (await tx.superTabMessage.findUnique({ where: { id }, select: { id: true } })) return 'already'
       const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
-      if (!row) return 'skipped'
+      if (!row || row.deletedAt) return 'skipped'
       const loaded = await loadRow(tx, requireParts(row), { groupIds: [at.chat.id] })
       const state = cloneData(loaded.state)
       const place = reflectionPlace(state, projectId)
@@ -3289,15 +3326,39 @@ export class SuperTabStore {
     })
   }
 
+  /** Closes as withdrawn the decisions still waiting in work that was over before #2454 closed them where the work ends
+   *  (Dee, 10-31): hidden from every list, they still counted toward the asker's open limit (MAX_OPEN_DECISIONS) and came
+   *  back when the task reopened. Run once at worker startup; remove it in the release after the one that ran it. Reads the
+   *  waiting decisions, then each Swarm's conversations they are in, and closes those whose work is over (decisions.ts
+   *  workOver: never open work, a project chat or a Buddy chat), asked by the time of that read. One Swarm's failure skips
+   *  that Swarm with a warning. The number closed. */
+  async withdrawEndedDecisions(): Promise<number> {
+    let closed = 0
+    for (const [tabId, conversationIds] of await waitingConversations(this.db)) {
+      try {
+        closed += await transaction(this.db, async tx => {
+          const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
+          if (row?.format !== 2 || row.deletedAt) return 0
+          const { state } = await loadRow(tx, row, { groupIds: conversationIds }), now = this.now()
+          const over = conversationIds.filter(id => { const group = state.conversations.find(c => c.id === id); return !!group && workOver(state, group) })
+          return over.length ? withdrawIn(tx, tabId, over, now, now) : 0
+        })
+      } catch (error) {
+        logger.warn('[swarm-decisions] Swarm skipped', { tabId, error: error instanceof Error ? error.message : String(error) })
+      }
+    }
+    return closed
+  }
+
   /** Archives a finished group whose pull requests `checked` were all read merged or closed (archive.ts), only if it still
-   *  qualifies inside this write: no message since, no decision waiting and no pull request linked since the read. Its
-   *  waiting deliveries end, as a person's archive ends them. With `reviewOf`, the group the pass read as the one it
-   *  reviews, a review nobody is reviewing closes the same way once those of the work it reviews are too (tidy.ts
-   *  reviewClosable). True when it archived. */
+   *  qualifies inside this write: no message and no pull request linked since the read. A decision still waiting there
+   *  closes as withdrawn (decisions.ts withdrawIn), and its waiting deliveries end, as a person's archive ends them. With
+   *  `reviewOf`, the group the pass read as the one it reviews, a review nobody is reviewing closes the same way once those
+   *  of the work it reviews are too (tidy.ts reviewClosable). True when it archived. */
   async archiveFinished(tabId: string, groupId: string, checked: Readonly<Record<string, 'merged' | 'closed'>>, reviewOf?: string): Promise<boolean> {
     return transaction(this.db, async tx => {
       const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
-      if (!row) return false
+      if (!row || row.deletedAt) return false
       const loaded = await loadRow(tx, requireParts(row), { groupIds: reviewOf ? [groupId, reviewOf] : [groupId] }), state = cloneData(loaded.state)
       const group = state.conversations.find(c => c.id === groupId)
       const now = this.now()
@@ -3336,7 +3397,7 @@ export class SuperTabStore {
     return transaction(this.db, async tx => {
       const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
       // A Swarm deleted since: nobody can read its deliveries.
-      const state = row ? (await loadRow(tx, requireParts(row), { groupIds: [...new Set(rows.map(r => r.conversationId))] })).state : null
+      const state = row && !row.deletedAt ? (await loadRow(tx, requireParts(row), { groupIds: [...new Set(rows.map(r => r.conversationId))] })).state : null
       let settled = 0
       for (const delivery of rows) {
         const reachable = !!state && this.deliveryAllowed(state, delivery)
