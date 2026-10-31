@@ -28,6 +28,7 @@ void main() {
     MemoryStore store, {
     bool sides = true,
     double scale = 1,
+    double rightDefault = SuperTabPaneLayout.rightWidth,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -41,6 +42,7 @@ void main() {
           body: SuperTabPaneLayout(
             storage: store,
             onLeave: () {},
+            rightDefault: rightDefault,
             left: sides ? const ColoredBox(color: Colors.black) : null,
             right: sides ? const ColoredBox(color: Colors.black) : null,
             center: const TextField(key: ValueKey('draft')),
@@ -170,5 +172,68 @@ void main() {
     expect(tester.getSize(right).width, 560);
     expect(tester.getSize(center).width, greaterThanOrEqualTo(720));
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a thread opens at its own default width, the roster keeps '
+      'its own, and a width set by the divider wins for both', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = MemoryStore();
+    const thread = SuperTabPaneLayout.threadWidth;
+    await mount(tester, store, rightDefault: thread);
+    expect(tester.getSize(right).width, 340);
+    await mount(tester, store);
+    expect(tester.getSize(right).width, 280);
+    await mount(tester, store, rightDefault: thread);
+    expect(tester.getSize(right).width, 340);
+    // Moving the left divider leaves the right pane's default alone.
+    await tester.drag(leftHandle, const Offset(40, 0));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(right).width, 340);
+    expect(
+      jsonDecode(store.values[SuperTabPaneLayout.storageKey]!),
+      isNot(contains('right')),
+    );
+
+    await tester.drag(rightHandle, const Offset(40, 0));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(right).width, closeTo(300, 1));
+    await mount(tester, store);
+    expect(tester.getSize(right).width, closeTo(300, 1));
+    await tester.pumpWidget(const SizedBox());
+    await mount(tester, store, rightDefault: thread);
+    expect(tester.getSize(right).width, closeTo(300, 1));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a thread narrower than its default only where the window '
+      'leaves the chat no more than its minimum, never below 280', (
+    tester,
+  ) async {
+    final store = MemoryStore();
+    const thread = SuperTabPaneLayout.threadWidth;
+    await tester.binding.setSurfaceSize(const Size(1080, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await mount(tester, store, rightDefault: thread);
+    expect(tester.getSize(right).width, 340);
+    expect(tester.getSize(center).width, greaterThan(360));
+
+    await tester.binding.setSurfaceSize(const Size(960, 800));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(center).width, closeTo(360, 1));
+    expect(tester.getSize(right).width, closeTo(300, 1));
+
+    await tester.binding.setSurfaceSize(const Size(900, 800));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(right).width, closeTo(280, 1));
+    expect(tester.takeException(), isNull);
+  });
+
+  test('a thread drawer is as wide as a thread, within its share of the '
+      'window', () {
+    const thread = SuperTabPaneLayout.threadWidth;
+    expect(SuperTabPaneLayout.drawerWidth(1000), 280);
+    expect(SuperTabPaneLayout.drawerWidth(1000, max: thread), 340);
+    expect(SuperTabPaneLayout.drawerWidth(400, max: thread), 280);
   });
 }

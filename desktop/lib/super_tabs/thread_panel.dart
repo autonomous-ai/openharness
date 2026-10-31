@@ -18,6 +18,7 @@ import 'composer_toggle.dart';
 import 'controller.dart';
 import 'jump_to_latest.dart';
 import 'model.dart';
+import 'project_sidebar.dart' show kProductManagersChannel;
 
 /// One thread beside the chat (Dee, 2026-10-29): its root, a "N replies"
 /// divider, the replies, and a composer whose reply goes to the root.
@@ -159,17 +160,27 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     advance(0);
   }
 
-  /// Where "Also send" also puts the reply, as the chat is named: its hover
-  /// says so, the chip itself stays short enough for the send row.
-  String get _alsoSendHint {
-    final group = c.selected;
-    if (group != null && c.snapshot?.isProjectLead(group.id) == true) {
-      return 'Also send to the project chat';
+  /// Where "Also send" also puts the reply, full wording first (Scholes,
+  /// 10-31): the project chat as its sidebar row names it, else the main
+  /// chat. A narrower send row takes the short one, never shorter: it still
+  /// says what the option does and where.
+  List<String> get _alsoSendLabels {
+    final group = c.selected, snapshot = c.snapshot;
+    String? channel;
+    if (group != null && snapshot != null) {
+      if (snapshot.isProjectLead(group.id)) {
+        channel = snapshot.projectFor(group.id)?.name;
+      } else if (group.id == snapshot.leadsConversationId) {
+        channel = kProductManagersChannel;
+      }
     }
-    return group?.number != null
-        ? 'Also send to the workgroup'
-        : 'Also send to the chat';
+    return channel == null
+        ? const ['Also post to the main chat', 'Also to chat']
+        : ['Also post to #$channel', 'Also to #$channel'];
   }
+
+  /// One line, always the full wording.
+  String get _alsoSendHint => '${_alsoSendLabels.first} as well as this thread';
 
   bool get _writable =>
       c.canWrite && c.selected?.archived == false && !c.hasPendingAction;
@@ -539,26 +550,7 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
               const SizedBox(height: grid.AppDesktop.controlGap),
               Row(
                 children: [
-                  Expanded(
-                    child: Wrap(
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      spacing: 4,
-                      runSpacing: 4,
-                      children: [
-                        if (_offersSession) _sessionChoice(writable),
-                        if (_offersAlsoSend)
-                          SuperTabComposerToggle(
-                            key: const ValueKey('super-thread-also-send'),
-                            on: _alsoSend,
-                            label: 'Also send',
-                            hint: _alsoSendHint,
-                            onChanged: writable
-                                ? (on) => setState(() => _alsoSend = on)
-                                : null,
-                          ),
-                      ],
-                    ),
-                  ),
+                  Expanded(child: _choices(writable)),
                   NewHarnessAttachButton(
                     attachments: files,
                     enabled: writable && !busy,
@@ -588,6 +580,57 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     );
   }
 
+  /// The send row's options, left of attach and send, on one line at any
+  /// width (Scholes, 10-31): Also send names where it posts in full where
+  /// that fits beside New session, else its short wording; where even that
+  /// has no room (a window too narrow for the thread's default width), the
+  /// labels end in "…", their circles still showing.
+  Widget _choices(bool writable) => LayoutBuilder(
+    builder: (context, constraints) {
+      double width(String label) =>
+          SuperTabComposerToggle.widthOf(context, label);
+      final session = _offersSession ? _sessionLabel : null;
+      final alsos = _offersAlsoSend ? _alsoSendLabels : null;
+      final room =
+          constraints.maxWidth -
+          (session == null
+              ? 0
+              : width(session) + (alsos == null ? 0 : _choiceGap));
+      final also = alsos?.firstWhere(
+        (label) => width(label) <= room,
+        orElse: () => alsos.last,
+      );
+      // Fixed while both fit, Also send taking what is left; sharing the row
+      // otherwise.
+      final fits = room >= (also == null ? 0 : width(also));
+      return Row(
+        children: [
+          if (session != null)
+            fits && also != null
+                ? _sessionChoice(writable)
+                : Flexible(child: _sessionChoice(writable)),
+          if (session != null && also != null)
+            const SizedBox(width: _choiceGap),
+          if (also != null)
+            Flexible(
+              child: SuperTabComposerToggle(
+                key: const ValueKey('super-thread-also-send'),
+                on: _alsoSend,
+                label: also,
+                hint: _alsoSendHint,
+                onChanged: writable
+                    ? (on) => setState(() => _alsoSend = on)
+                    : null,
+              ),
+            ),
+        ],
+      );
+    },
+  );
+
+  static const _choiceGap = 4.0;
+  static const _sessionLabel = 'New session';
+
   /// New session, left of Also send: on and locked once the thread's session
   /// ended; greyed while it can't start, its hover saying why.
   Widget _sessionChoice(bool writable) {
@@ -599,7 +642,7 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     return SuperTabComposerToggle(
       key: const ValueKey('super-thread-new-session'),
       on: locked || (_newSession && !full && blocked == null),
-      label: 'New session',
+      label: _sessionLabel,
       hint:
           blocked ??
           (locked
