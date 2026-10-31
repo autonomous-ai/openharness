@@ -7,11 +7,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { sweepOne, sweepWorktrees, WorktreeKept } from './worktreeSweep.js'
 
 const exec = promisify(execFile)
-/** A folder the sweep's own check reads as writable whatever its mode. */
-const writable = vi.hoisted(() => ({ folder: null as string | null }))
+/** Folders the sweep's own check reads as writable whatever their mode. */
+const writable = vi.hoisted(() => ({ folders: new Set<string>() }))
 vi.mock('node:fs/promises', async importOriginal => {
   const fs = await importOriginal<typeof import('node:fs/promises')>()
-  return { ...fs, access: (file: string, mode?: number) => file === writable.folder ? Promise.resolve() : fs.access(file, mode) }
+  return { ...fs, access: (file: string, mode?: number) => writable.folders.has(file) ? Promise.resolve() : fs.access(file, mode) }
 })
 // Real Git, several worktrees a test: slower than the default 5s under a full, parallel run.
 describe('sweeping unused worktrees', { timeout: 30_000 }, () => {
@@ -179,13 +179,74 @@ describe('sweeping unused worktrees', { timeout: 30_000 }, () => {
     await mkdir(folder)
     await writeFile(join(folder, 'held'), 'held')
     await chmod(folder, 0o555)
-    writable.folder = folder
+    writable.folders.add(folder)
     try {
       await expect(sweepOne(path, later(), 0)).rejects.toEqual(new WorktreeKept('WORKTREE_NOT_REMOVED'))
       expect(await git(path, 'rev-parse', '--abbrev-ref', 'HEAD'), 'git still works in what is left').toBe('harness/half-removed')
       expect(await git(path, 'rev-parse', '--git-dir')).toContain('/.git/worktrees/')
       expect(await branches()).toContain('harness/half-removed')
-    } finally { writable.folder = null; await chmod(folder, 0o755) }
+    } finally { writable.folders.clear(); await chmod(folder, 0o755) }
+  })
+
+  // Security review 1 of #2417: git empties the folder in directory order, so its .git file often went before git reached
+  // what it could not delete (8 of 30 trials), and the record alone written back left nothing pointing to it.
+  it.runIf(permissions)('puts the .git file and the record back whichever folder git stops at', async () => {
+    const held: string[] = []
+    // Beside .git at the top, where the order of a folder's entries decides which goes first (on this Mac's APFS, stop-long
+    // came before .git; on ext4 the order is the filesystem's own); ignored, so nothing reads as work.
+    await writeFile(join(repo, '.git', 'info', 'exclude'), '/stop-*/\n')
+    try {
+      for (const name of ['stop-a', 'stop-g', 'stop-m', 'stop-s', 'stop-z', 'stop-0', 'stop-9', 'stop-_', 'stop-~', 'stop-long']) {
+        const path = await add(`stops-${held.length}`, `harness/stops-${held.length}`)
+        const folder = join(path, name)
+        await mkdir(folder, { recursive: true })
+        await writeFile(join(folder, 'held'), 'held')
+        await chmod(folder, 0o555)
+        held.push(folder); writable.folders.add(folder)
+        await expect(sweepOne(path, later(), 0)).rejects.toEqual(new WorktreeKept('WORKTREE_NOT_REMOVED'))
+        expect(await git(path, 'rev-parse', '--abbrev-ref', 'HEAD'), `git still works when it stopped at ${name}`).toBe(`harness/stops-${held.length - 1}`)
+      }
+    } finally { writable.folders.clear(); for (const folder of held) await chmod(folder, 0o755) }
+  })
+
+  // The same review: a locked file passes a check of folder permissions, and git stops at it.
+  it.runIf(process.platform === 'darwin' && process.getuid?.() !== 0)('keeps a worktree, still one, when git stops at a locked file', async () => {
+    const path = await add('locked', 'harness/locked')
+    await mkdir(join(path, 'src'))
+    await writeFile(join(path, 'src', 'kept'), 'locked')
+    await git(path, 'add', '.')
+    await git(path, 'commit', '--quiet', '-m', 'locked file')
+    await exec('chflags', ['uchg', join(path, 'src', 'kept')])
+    try {
+      await expect(sweepOne(path, later(), 0)).rejects.toEqual(new WorktreeKept('WORKTREE_NOT_REMOVED'))
+      expect(await git(path, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('harness/locked')
+      expect(await branches()).toContain('harness/locked')
+    } finally { await exec('chflags', ['nouchg', join(path, 'src', 'kept')]) }
+  })
+
+  // Security review 2 of #2417: the record also holds the refs only this worktree has.
+  it.runIf(permissions)('writes back the refs only the worktree held with its record', async () => {
+    const path = await add('own-refs', 'harness/own-refs')
+    await git(path, 'update-ref', 'refs/worktree/mark', 'HEAD')
+    await git(path, 'update-ref', 'refs/bisect/bad', 'HEAD')
+    const before = await git(path, 'for-each-ref', '--format=%(refname) %(objectname)', 'refs/worktree', 'refs/bisect')
+    await withHarnessFolder(path, '/*\n')
+    const folder = join(path, '.harness', 'late')
+    await mkdir(folder)
+    await writeFile(join(folder, 'held'), 'held')
+    await chmod(folder, 0o555)
+    writable.folders.add(folder)
+    try {
+      await expect(sweepOne(path, later(), 0)).rejects.toEqual(new WorktreeKept('WORKTREE_NOT_REMOVED'))
+      expect(await git(path, 'for-each-ref', '--format=%(refname) %(objectname)', 'refs/worktree', 'refs/bisect')).toBe(before)
+    } finally { writable.folders.clear(); await chmod(folder, 0o755) }
+  })
+
+  it('leaves a worktree alone that came into use while it was being checked', async () => {
+    const path = await add('opened', 'harness/opened')
+    expect(await sweepOne(path, later(), 0, () => false)).toBe(false)
+    expect(await git(path, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('harness/opened')
+    expect(await exists(join(path, 'file'))).toBe(true)
   })
 
   it('ignores a missing worktrees folder and checkouts that are not worktrees', async () => {

@@ -1901,8 +1901,9 @@ describe('removed machine cleanup', () => {
     await Promise.all([host.removeStoppedWorktree('tab', 'h-recorded'), host.removeStoppedWorktree('tab', 'h-recorded')])
     expect(existsSync(m.recorded)).toBe(false)
     expect(startIds(m)).toEqual(['kept'])
-    // Only the first looked for sessions in the folder; the second came once it was gone.
-    expect(folderAtCheck).toEqual([true])
+    // Only the first looked for sessions in the folder, before its checks and again just before git removed it; the second
+    // came once it was gone.
+    expect(folderAtCheck).toEqual([true, true])
     expect(m.log).not.toHaveBeenCalled()
   })
 

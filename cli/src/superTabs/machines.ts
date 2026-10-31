@@ -911,14 +911,16 @@ export class ContributedMachines {
       this.log('Kept a Swarm worktree: WORKTREE_UNPROVEN')
       return
     }
-    if (this.core.agents.live().some(a => !!a.cwd && within(record.path, a.cwd))) return
     // Review of #2266: like the weekly sweep (services/workspaces.ts), a paused session of another agent can be resumed
-    // there, so its folder stays. This agent's own paused session is not kept: it was stopped or removed.
-    if (this.core.agents.all().some(a => a.agentId !== harnessId && !!a.cwd && within(record.path, a.cwd))) return
+    // there, so its folder stays. This agent's own paused session is not kept: it was stopped or removed. Asked again just
+    // before git removes it (lib/worktreeSweep.ts sweepOne).
+    const unused = () => !this.core.agents.live().some(a => !!a.cwd && within(record.path, a.cwd))
+      && !this.core.agents.all().some(a => a.agentId !== harnessId && !!a.cwd && within(record.path, a.cwd))
+    if (!unused()) return
     // File times are wall-clock, so the sweep's idle check reads the real clock; no idle wait is asked.
     // A failed git read (a locked worktree, a handle still open on Windows) keeps the folder; the log names no path. A folder git
     // could not empty keeps its record and this one, and says which kind it was (lib/worktreeSweep.ts WorktreeKept).
-    if (!await sweepOne(record.path, Date.now(), 0).catch(error => {
+    if (!await sweepOne(record.path, Date.now(), 0, unused).catch(error => {
       this.log(`Kept a Swarm worktree: ${error instanceof WorktreeKept ? error.code : 'WORKTREE_CHECK_FAILED'}`); return false
     })) return
     writeWorktrees(file, readWorktrees(file).filter(w => !mine(w)))
