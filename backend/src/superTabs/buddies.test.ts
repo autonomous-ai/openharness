@@ -334,6 +334,16 @@ describe('adding a Buddy', () => {
     expect(group(f, f.chat)).toMatchObject({ kind: 'buddy', agentIds: [] })
   })
 
+  it('removes the person\'s older Buddy even when its chat has gone quiet and is not loaded for the add', () => {
+    const f = setup()
+    machine(f, 'peer-mac', 'peer')
+    // A quiet chat is read on demand, never in every command's state (store.ts): only its agent is there.
+    f.state.conversations = f.state.conversations.filter(c => c.id !== f.chat)
+    const added = addBuddy(f, peer, undefined)
+    expect(added.cancelledAgents).toEqual(['buddy'])
+    expect(f.state.agents.filter(a => a.buddyOf?.personId === 'peer').map(a => a.buddyScope)).toEqual([])
+  })
+
   it('needs a host that runs a Swarm-wide Buddy, and says to update one that does not', () => {
     const f = fresh()
     f.state.machines!.find(m => m.machineId === 'peer-mac')!.observation!.capabilities = ['buddySessions']

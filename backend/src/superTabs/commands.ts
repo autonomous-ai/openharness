@@ -1916,8 +1916,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       if (existing) removeAgent(existing)
       // The person's Buddies of their older project chats go in the same write, so they have exactly one (spec: history).
-      for (const old of state.agents.filter(a => a.buddyOf?.personId === me.id && !isSwarmBuddy(a) && !a.buddySession
-        && state.conversations.some(c => isBuddyChat(c) && !isSwarmBuddyChat(c) && c.agentIds.includes(a.id)))) removeAgent(old)
+      // Found by the agent, never by its chat, which may be quiet and not loaded here: every main Buddy of theirs that is not the
+      // one Buddy is an older chat's.
+      for (const old of state.agents.filter(a => a.buddyOf?.personId === me.id && !isSwarmBuddy(a) && !a.buddySession)) removeAgent(old)
       for (const start of state.starts ?? []) {
         if (start.request.buddyOf?.personId === me.id && start.request.conversationId !== chatId && !start.harnessId && !start.error) start.error = 'Your Buddy is now one for the whole Swarm.'
       }
