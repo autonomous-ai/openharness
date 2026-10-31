@@ -213,8 +213,7 @@ Future<void> showText(
   ),
 );
 
-Finder notificationsEntry() =>
-    find.byKey(const ValueKey('super-activity'));
+Finder notificationsEntry() => find.byKey(const ValueKey('super-activity'));
 
 void main() {
   setUpAll(() async {
@@ -597,15 +596,14 @@ void main() {
       await tester.pumpAndSettle();
       final waiting = find.byKey(const ValueKey('super-mention-mention-2'));
       final earlier = find.byKey(const ValueKey('super-mention-mention-1'));
-      expect(find.text('Waiting'), findsOneWidget);
-      expect(find.text('Earlier'), findsOneWidget);
+      // Activity is one list, newest first (Slack); the waiting tag is newer.
       expect(
         tester.getTopLeft(waiting).dy,
         lessThan(tester.getTopLeft(earlier).dy),
       );
       for (final text in [
         'web-project · Lead',
-        'Wren',
+        'Wren tagged you',
         'Ship it?',
         '3 min ago',
       ]) {
@@ -676,7 +674,7 @@ void main() {
       );
       // The name they go by now, though they were tagged under another.
       expect(
-        find.descendant(of: row, matching: find.text('deedee')),
+        find.descendant(of: row, matching: find.text('deedee tagged you')),
         findsOneWidget,
       );
     });
@@ -693,7 +691,6 @@ void main() {
       await tester.tap(find.text('Mark done'));
       await tester.pumpAndSettle();
       expect(find.text('Mark done'), findsNothing);
-      expect(find.text('Nothing waiting for you.'), findsOneWidget);
       expect(
         find.byKey(const ValueKey('super-mention-mention-1')),
         findsOneWidget,
@@ -768,7 +765,7 @@ void main() {
         find.text('This message is too far back to open.'),
         findsOneWidget,
       );
-      expect(find.text('Waiting'), findsOneWidget);
+      expect(find.byKey(const ValueKey('super-activity-list')), findsOneWidget);
       expect(c.selectedId, isNot('group'));
     });
 
@@ -951,7 +948,7 @@ void main() {
         find.byKey(const ValueKey('super-message-message-100')).hitTestable(),
         findsOneWidget,
       );
-      expect(find.text('Waiting'), findsNothing);
+      expect(find.byKey(const ValueKey('super-activity-list')), findsNothing);
     });
   });
 

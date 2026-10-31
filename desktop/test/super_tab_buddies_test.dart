@@ -10,6 +10,7 @@ import 'package:harness/widgets/harness_activity_mark.dart';
 import 'package:harness/super_tabs/buddies.dart' show kBuddyEngineRefusals;
 import 'package:harness/super_tabs/buddy_machines.dart' show kBuddyNoMachine;
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/decisions_view.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/buddy_fixture.dart';
@@ -1497,7 +1498,13 @@ void main() {
           await tester.tap(find.byKey(const ValueKey('super-activity')));
           await tester.pumpAndSettle();
 
-          expect(find.text('Decisions'), findsOneWidget);
+          expect(
+            find.descendant(
+              of: find.byType(SuperTabDecisionList),
+              matching: find.text('Decisions'),
+            ),
+            findsOneWidget,
+          );
           expect(find.text('Ship it?'), findsOneWidget);
           await close(tester, c);
         },
