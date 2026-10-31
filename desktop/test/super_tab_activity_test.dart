@@ -12,11 +12,13 @@ import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/parts.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
+import 'package:harness/super_tabs/view.dart';
 import 'package:harness/super_tabs/workgroup_name.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 
 import 'super_tab_attention_test.dart'
     show close, conversation, fromLead, inRow, openHere, projectServer, rowText;
+import 'support/buddy_fixture.dart';
 import 'support/super_tab_fixture.dart';
 
 Map<String, dynamic> reply(
@@ -645,6 +647,82 @@ void main() {
       expect(opened, [('lead', 'm-r1')]);
       await close(tester, c);
       expect(server.activityReadPosts, isNotEmpty);
+    });
+  });
+
+  group('the one # buddy row (#2447) follows the same rules', () {
+    Future<SuperTabController> show(
+      WidgetTester tester,
+      ConversationServer server,
+    ) async {
+      await tester.binding.setSurfaceSize(const Size(1280, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final c = server.controller(account: 'peer');
+      await c.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: Scaffold(
+            body: SuperTabView(
+              controller: c,
+              onInvite: () {},
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              machineName: (_) => 'Kens-MacBook',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      return c;
+    }
+
+    final buddyRow = find.byKey(const ValueKey('super-swarm-buddy'));
+    Text buddyName(WidgetTester tester) => tester.widget<Text>(
+      find.descendant(of: buddyRow, matching: find.text('buddy')),
+    );
+
+    testWidgets('muted: greyed with its mark, never bold; first in the next '
+        'unread order', (tester) async {
+      final server = oneBuddySwarm();
+      giveSwarmBuddy(server);
+      server.append('A word from Wren', conversationId: 'swarm-buddy-peer');
+      final c = await show(tester, server);
+      expect(superTabSidebarOrder(c).first, 'swarm-buddy-peer');
+      expect(buddyName(tester).style?.fontWeight, grid.AppFont.semibold);
+      await c.setNotify('swarm-buddy-peer', SuperTabNotify.muted);
+      await tester.pumpAndSettle();
+      expect(buddyName(tester).style?.color, DesktopChrome.muted);
+      expect(buddyName(tester).style?.fontWeight, isNot(grid.AppFont.semibold));
+      expect(
+        find.byKey(const ValueKey('super-muted-swarm-buddy-peer')),
+        findsOneWidget,
+      );
+      expect(
+        c.unreadShown(c.snapshot!.conversation('swarm-buddy-peer')!),
+        isFalse,
+      );
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      c.dispose();
+    });
+
+    testWidgets('the unread filter keeps it only while it has something '
+        'unread', (tester) async {
+      final server = oneBuddySwarm();
+      giveSwarmBuddy(server);
+      final c = await show(tester, server);
+      expect(buddyRow, findsOneWidget);
+      c.toggleUnreadOnly();
+      await tester.pumpAndSettle();
+      expect(buddyRow, findsNothing);
+      server.append('A word from Wren', conversationId: 'swarm-buddy-peer');
+      await c.refresh();
+      await tester.pumpAndSettle();
+      expect(buddyRow, findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      c.dispose();
     });
   });
 }

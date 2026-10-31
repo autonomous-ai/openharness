@@ -733,6 +733,10 @@ class ProjectSidebar extends StatelessWidget {
     const key = SuperTabController.kSwarmBuddyKey;
     final chat = controller.buddyChat(key);
     if (chat == null && !controller.canWrite) return null;
+    // The unread filter keeps it only with something unread, or open.
+    if (controller.unreadOnly && (chat == null || !_keptByFilter(chat))) {
+      return null;
+    }
     final agent = controller.buddy(key);
     final busy = controller.saving || controller.hasPendingAction;
     return _drawRow(
@@ -745,7 +749,8 @@ class ProjectSidebar extends StatelessWidget {
           !notificationsSelected &&
           controller.selectedId == chat.id,
       waiting: false,
-      unread: chat != null && controller.unread(chat),
+      // Muted, it is greyed and never bold, as every chat (_drawRow).
+      unread: chat != null && controller.unreadShown(chat),
       trailing: agent == null ? null : _buddyMark(agent),
       onTap: chat == null ? () => _openBuddyChat(key) : null,
       tappable: chat != null || !busy,
@@ -1268,14 +1273,19 @@ List<SuperTabConversation> superTabOpenWorkgroups(
 }
 
 /// The chats in the order the sidebar lists them, for Option+Shift+Down and
-/// Up (Slack's next unread): each project from A to Z, its chat then its open
-/// workgroups newest first, then the reader's Buddy chats in project order.
+/// Up (Slack's next unread): the reader's one Buddy chat (`# buddy`, first
+/// under Projects), each project from A to Z, its chat then its open
+/// workgroups newest first, then the reader's project Buddy chats.
 List<String> superTabSidebarOrder(SuperTabController controller) {
   final snapshot = controller.snapshot;
   if (snapshot == null) return const [];
   final projects = [...snapshot.projects]
     ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
   return [
+    if (controller.oneBuddy)
+      if (controller.buddyChat(SuperTabController.kSwarmBuddyKey)
+          case final chat?)
+        chat.id,
     for (final project in projects) ...[
       if (snapshot.conversation(project.leadConversationId) != null)
         project.leadConversationId,

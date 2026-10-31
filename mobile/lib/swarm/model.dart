@@ -128,6 +128,8 @@ class SuperTabAgent {
     : id = _text(row, 'id'),
       hasProjectId = row['projectId'] != null,
       projectId = row['projectId'] as String? ?? 'lead',
+      buddyScope = row['buddyScope'] as String?,
+      buddyNarrow = row['buddyNarrow'] == true,
       name = _text(row, 'name'),
       displayName = row['displayName'] as String?,
       machineId = _text(row, 'machineId'),
@@ -157,6 +159,13 @@ class SuperTabAgent {
       },
       confidential = row['confidential'] == true,
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
+
+  /// `swarm` for a person's one Buddy for the whole Swarm, as the desktop's model reads it; null otherwise.
+  final String? buddyScope;
+
+  /// Whether that Buddy reads only a narrowed set of projects (desktop model); not drawn on the phone yet.
+  final bool buddyNarrow;
+
   final String id, projectId, name, machineId, harnessId, contributorId;
 
   /// Set by its contributor or its project's Lead; null draws its pattern.
@@ -514,6 +523,7 @@ class SuperTabSnapshot {
       localModels = SuperTabLocalModels.read(row['localModels']),
       threadSessions = row['threadSessions'] == true,
       sessionsFromChat = row['sessionsFromChat'] == true,
+      swarmBuddy = row['swarmBuddy'] == true,
       mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0,
       mentionsDigest = row['mentionsDigest'] as String?,
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
@@ -600,6 +610,10 @@ class SuperTabSnapshot {
   /// Whether that server also takes New session on a top-level message in a
   /// Buddy chat (read/contract.ts `sessionsFromChat`); false from an older one.
   final bool sessionsFromChat;
+
+  /// One Buddy per person for the whole Swarm (backend one-Buddy stack), as the desktop's model reads it; the phone
+  /// does not draw it yet.
+  final bool swarmBuddy;
 
   /// The reader's tags still waiting for them, Swarm-wide; 0 from a backend
   /// before tags (spec 2026-10-24-lead-mentions.md).

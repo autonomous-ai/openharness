@@ -2695,7 +2695,10 @@ class SuperTabController extends ChangeNotifier {
   /// lines among them, for the Swarm badge.
   int get buddyUnread => [
     for (final project in snapshot?.projects ?? const <SuperTabProject>[])
-      if (buddyChat(project.id) case final chat?) unreadCount(chat),
+      // A muted chat never counts (Slack).
+      if (buddyChat(project.id) case final chat?
+          when notifyOf(chat.id) != SuperTabNotify.muted)
+        unreadCount(chat),
   ].fold(0, (a, b) => a + b);
 
   /// Reads each Buddy chat whose count is still open ([_countOpen]), page by
