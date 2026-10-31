@@ -253,6 +253,9 @@ abstract final class AppPalette {
   static Color get dangerFill =>
       AppTheme.pick(const Color(0xFFB3261E), const Color(0xFFC92E26));
 
+  /// Text and marks on [dangerFill], such as a sidebar's red count.
+  static const Color onDangerFill = Colors.white;
+
   /// The accent as a *mark on a surface* — a selected row's icon, an accent
   /// rail — rather than a fill behind white text.
   ///
