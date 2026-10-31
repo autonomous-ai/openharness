@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { tokensByModelSchema } from './costs/tokens.js'
 import {
   activeWork, actorKey, agent, appendPullRequestUrls, author, conversation, crossProjectActive, fail, isLeads, person, stableId, numberConversations, nextConversationNumber, renderWorkTask,
-  finishWorker, seenMachineIds, swarmGridName, visibleState, AGENT_ONLY, STATUS_LABELS, forRecipients,
+  finishWorker, seenMachineIds, SuperTabError, swarmGridName, visibleState, AGENT_ONLY, STATUS_LABELS, forRecipients,
   type Actor, type AgentConfiguration, type AgentStart, type AgentStartRequest, type BuddySessionEntry, type WorkTask, type Agent, type Author, type Check, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
 import { jobKindOf } from './evidence/jobKind.js'
@@ -1017,9 +1017,16 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       name: main.displayName ?? main.name, cwd: projectFolder(pool, project), worktree: true, requirements: BUDDY_REQUIREMENTS,
       buddyOf: { personId: owner.id, generation: owner.generation }, buddyNarrow: true, buddyWaiting: [operationId] }
     if (pool.buddyOnly) pool.maxAgents = machineSlots(state, pool) + 1
-    const admitted = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)!
+    // A machine that cannot take it now (full, offline, paused) starts nothing: the phone's message is still kept, as it was
+    // before any Buddy answered there (security review 2 of #2435: its slots are counted, touches.ts).
+    let admitted: ReturnType<typeof admitMachineStart>
+    try { admitted = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines) } catch (error) {
+      if (error instanceof SuperTabError && error.status < 500) return
+      throw error
+    }
+    if (!admitted) return
     state.starts ??= []
-    if (state.starts.filter(s => !s.harnessId && !s.error).length >= 32) fail('STARTS_PENDING', 'Reconcile pending agent starts before adding more.')
+    if (state.starts.filter(s => !s.harnessId && !s.error).length >= 32) return
     state.starts.push({ poolGeneration: admitted.generation, id: operationId, creationId: `super-${operationId}`, actorKey: actorKey(actor),
       contributorId: contributor.id, membershipGeneration: contributor.generation, machineOwnerId: main.machineOwnerId,
       hostGrant: main.hostGrant ?? null, request, harnessId: null, dispatched: false, error: null, requestedAt: context.now })

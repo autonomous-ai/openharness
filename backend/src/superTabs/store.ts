@@ -2304,7 +2304,7 @@ export class SuperTabStore {
     const shownTo = (m: SuperTabMessage, d: PageDelivery) => !buddyNews(m, d) || (actor.kind === 'agent' && actor.agentId === d.agentId)
     // A session's own thread read carries the main-chat excerpt it started from (buddySessions.ts sessionContext).
     // A project session of a person's one Buddy chat reads no excerpt: the main chat may hold any project's material (spec: Guard).
-    const context = own && !own.projectId && !forward && cursor.before === undefined && !cursor.messageId ? await this.sessionExcerpt(tx, tabId, conversationId, own.from, rowRead) : undefined
+    const context = own && !own.projectId && !forward && cursor.before === undefined && !cursor.messageId ? await this.sessionExcerpt(tx, tabId, conversationId, own.from, m => rowRead(m) && sessionReadsRow(undefined, group, state)(m)) : undefined
     return { messages: shown.map(m => ({ ...m, mentions: m.mentions ?? [], reactions: reactions.get(m.id) ?? [],
       deliveries: deliveries.filter(d => d.messageId === m.id && shownTo(m, d)).sort(receiptOrder(m)) })), next, threads, ...(context ? { context } : {}),
       // A poll for new messages learns here that a reaction changed on a message it already shows (reactions.ts).
@@ -2314,9 +2314,9 @@ export class SuperTabStore {
   /** The main-chat excerpt a Buddy thread session starts from: main-stream rows at or before `from` it may read (never a session
    *  thread's, never a reply only in its thread), by the conversation's sequence index, at most 50 rows read for 10 kept. */
   private async sessionExcerpt(tx: Transaction, tabId: string, conversationId: string, from: number,
-    rowRead: (m: Pick<SuperTabMessage, 'source' | 'recipientIds'>) => boolean) {
+    rowRead: (m: Pick<SuperTabMessage, 'id' | 'source' | 'recipientIds' | 'thread' | 'buddySession' | 'buddyProject'>) => boolean) {
     const rows = await tx.superTabMessage.findMany({ where: { tabId, conversationId, sequence: { lte: from } }, orderBy: [{ sequence: 'desc' }, { id: 'desc' }],
-      take: 50, select: { id: true, sequence: true, text: true, author: true, createdAt: true, thread: true, alsoInChat: true, buddySession: true, source: true, recipientIds: true } })
+      take: 50, select: { id: true, sequence: true, text: true, author: true, createdAt: true, thread: true, alsoInChat: true, buddySession: true, source: true, recipientIds: true, buddyProject: true } })
     const main = rows.filter(r => !r.buddySession && (!r.thread || r.thread === r.id || r.alsoInChat) && rowRead(r))
     return sessionContext(main.map(r => ({ ...r, author: r.author as unknown as ContextRow["author"] })))
   }
@@ -2328,8 +2328,10 @@ export class SuperTabStore {
     this.personOnly(user)
     const { state } = await this.readLoad(user, tabId, { groupIds: [conversationId] })
     const actor = await this.actor(this.db, user, state)
-    readConversation(state, actor, conversationId)
+    const group = readConversation(state, actor, conversationId)
     const buddy = isBuddyReader(state, actor)
+    // In the one Buddy chat, a project its person lost counts nothing toward what they missed (security review 2 of #2435).
+    const lost = sessionReadsRow(undefined, group, state)
     const [rows, decisions] = await Promise.all([
       this.db.superTabMessage.findMany({ where: { tabId, conversationId, sequence: { gt: after } }, orderBy: [{ sequence: 'asc' }, { id: 'asc' }],
         take: CATCH_UP_SCAN + 1 }),
@@ -2338,7 +2340,7 @@ export class SuperTabStore {
     const scanned = rows.slice(0, CATCH_UP_SCAN), reads = readsRow(actor, buddy)
     // A task chat's copy of a Lead's notice stored before it was marked is read by no one, as on the page (pageReads.ts).
     const copies = await deliveredCopies(this.db, tabId, scanned)
-    const shown = scanned.filter(m => !copies.has(m.id) && reads(m))
+    const shown = scanned.filter(m => !copies.has(m.id) && reads(m) && lost(m))
     recordMessageRead({ reader: readerKind(actor, buddy), cursor: 'catchUp', session: sessionKind(user) }, 1, rows.length, shown.length)
     return catchUpSummary(buddy ? shown.map(rowForBuddy) : shown, user.sub, { after, more: rows.length > CATCH_UP_SCAN, decisions })
   }

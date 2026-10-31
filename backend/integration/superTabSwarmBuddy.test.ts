@@ -48,7 +48,7 @@ afterAll(async () => {
  * A Swarm with three projects: `lead` (public), `web` (public) and `secret` (private: owner and peer), each with its PM on the
  * owner's Mac; peer a member with their own Mac, whose host says it runs a Swarm Buddy and its sessions (or not: `capable`).
  */
-async function swarm({ capable = true } = {}) {
+async function swarm({ capable = true, maxAgents = 8 } = {}) {
   const clock = { now: Date.now() }, running: string[] = []
   const store = new SuperTabStore(db, () => clock.now, { store: new MemoryAttachmentStore(), prefix: 'super-tabs', publicBase: 'https://cdn.example.test' })
   const tab = (await store.create(owner, randomUUID(), 'One Buddy', 'public')).id
@@ -66,7 +66,7 @@ async function swarm({ capable = true } = {}) {
     pms[key] = String((await execute({ type: 'agent.add', conversationId, machineId: 'owner-mac', harnessId: randomUUID(), name: `PM ${key}`,
       configuration: config, lead: true })).result.agentId)
   }
-  await execute({ type: 'machine.contribute', machineId: 'peer-mac', name: 'Peer Mac', cwd: '/swarm', scope: 'swarm', engines: ['claude'], maxAgents: 8 }, peer)
+  await execute({ type: 'machine.contribute', machineId: 'peer-mac', name: 'Peer Mac', cwd: '/swarm', scope: 'swarm', engines: ['claude'], maxAgents }, peer)
   const generation = (await poolRows(store, peer, 'peer-mac')).find(p => p.tabId === tab)!.machine.generation
   const report = () => store.observeMachine(peer, tab, 'peer-mac', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
     diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
@@ -83,7 +83,7 @@ async function swarm({ capable = true } = {}) {
     await report()
     return agentId
   }
-  return { store, tab, execute, host, launch, report, clock, pms, web, secret }
+  return { store, tab, execute, host, launch, report, clock, pms, web, secret, generation, running }
 }
 type Swarm = Awaited<ReturnType<typeof swarm>>
 
@@ -358,6 +358,54 @@ describe('security reviews of #2435', () => {
     const rows = await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: chat, thread } })
     expect(rows.length).toBeGreaterThanOrEqual(2)
     expect(rows.every(r => r.buddyProject === f.secret.projectId)).toBe(true)
+  })
+})
+
+describe('security re-check 2 of #2435', () => {
+  it('reads the machine again for a phone\'s Buddy start: a host that stops offering it while it starts gets no start', async () => {
+    // The machine's own report, from its host, changes while the phone's message starts its Buddy: it no longer says it runs
+    // the one Buddy. Only the machine's part ties the two writes (touches.ts: every start a post makes reads its machine).
+    const f = await swarm()
+    await buddy(f)
+    const old = String((await f.execute({ type: 'buddy.chat', projectId: f.web.projectId }, peer)).result.conversationId)
+    let raced = false
+    const racing = new SuperTabStore(beforeFirstWrite(db, async () => {
+      if (raced) return
+      raced = true
+      await f.store.observeMachine(peer, f.tab, 'peer-mac', { generation: f.generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
+        diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
+      quotas: [], tools: {}, runningHarnessIds: [...f.running], stoppedHarnessIds: [], capabilities: [] })
+    }), () => f.clock.now, { store: new MemoryAttachmentStore(), prefix: 'super-tabs', publicBase: 'https://cdn.example.test' })
+    const sent = await racing.execute(peer, f.tab, { operationId: randomUUID(), command: { type: 'message.send', conversationId: old, text: 'From the phone',
+      replyTo: null, recipientIds: [] } })
+    expect(raced).toBe(true)
+    expect(sent.result.startId).toBeUndefined()
+    expect(((await f.store.read(peer, f.tab)).state.starts ?? []).filter(s => s.request.conversationId === old)).toEqual([])
+    // The phone's message is kept, though no Buddy could start for it.
+    expect(await texts(f, old, peer)).toContain('From the phone')
+  })
+
+  it('puts a project session\'s terminal lines in its own thread, with its project, hidden once that project is lost', async () => {
+    const f = await swarm()
+    const { chat, main } = await buddy(f)
+    const { thread, agentId } = await projectSession(f, chat, f.secret.projectId, 'Secret work')
+    await f.execute({ type: 'agent.input', agentId, text: 'TYPED SENTINEL' }, peer)
+    const row = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, conversationId: chat, text: { contains: 'TYPED SENTINEL' } } })
+    expect(row).toMatchObject({ thread, buddySession: true, buddyProject: f.secret.projectId })
+    expect(JSON.stringify(await f.store.messages(peer, f.tab, chat, {}, main))).not.toContain('TYPED SENTINEL')
+    await f.execute({ type: 'project.sharing', projectId: f.secret.projectId, visibility: 'private', memberIds: [owner.sub] })
+    expect(JSON.stringify(await f.store.messages(peer, f.tab, chat, { thread }))).not.toContain('TYPED SENTINEL')
+  })
+
+  it('counts nothing of a lost project in what the person missed in # buddy', async () => {
+    const f = await swarm()
+    const { chat } = await buddy(f)
+    await send(f, chat, 'Mine')
+    await f.execute({ type: 'person.tell', personId: peer.sub, text: 'SECRET PM LINE' }, owner, f.pms.secret)
+    // The PM's line is the one row by someone else: it is what they missed.
+    expect(await f.store.catchUp(peer, f.tab, chat, 0)).toMatchObject({ unread: 1 })
+    await f.execute({ type: 'project.sharing', projectId: f.secret.projectId, visibility: 'private', memberIds: [owner.sub] })
+    expect(await f.store.catchUp(peer, f.tab, chat, 0)).toMatchObject({ unread: 0 })
   })
 })
 
