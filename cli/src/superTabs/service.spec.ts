@@ -12,6 +12,7 @@ import { object } from './wire.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
+import { CHEAP_FIRST_HELP, GRID_KINDS, MAX_OWNED, ROUTE_KIND_HELP } from './routeCheapFirst.js'
 
 const list = (value: unknown) => Array.isArray(value) ? value.map(object) : []
 import { hostJournalFile, SuperTabHostError, type SuperTabHost, type SuperTabHostOptions } from './host.js'
@@ -829,9 +830,17 @@ it('says a server from before rules does not support them, and passes a malforme
 })
 
 // Project instructions, phase 4: the route ranks by facts and notes the rest; no build, review or grid rule is the help's.
-it('tells every agent the route leaves out only what cannot run, and how it ranks the rest', async () => {
+it('tells every agent what the route leaves out, how it ranks the rest, and which kinds of work may go to the grid', async () => {
   const help = (await setup().ask({ action: 'help' }, owner)).help as { commands: Array<{ type: string }>; command: string; route: string }
-  expect(help.route).toContain('The route leaves out only what cannot run')
+  expect(help.route).toContain('The route leaves out what cannot run, and says why')
+  // Besides what cannot run, the grid rules leave models out (routeCheapFirst.ts), so "only" is no longer said.
+  expect(help.route).not.toContain('leaves out only')
+  // Kind decides whether a grid model is offered (routeCheapFirst.ts): the help names the list from the same constant.
+  expect(help.route).toContain(`"kind":"${ROUTE_KIND_HELP}"`)
+  expect(help.route).toContain(CHEAP_FIRST_HELP)
+  for (const kind of GRID_KINDS) expect(ROUTE_KIND_HELP).toContain(kind)
+  expect(CHEAP_FIRST_HELP).toContain(`1 to ${MAX_OWNED} owned paths`)
+  expect(CHEAP_FIRST_HELP).toMatch(/never offered, even when named, for a review, security work .* or a task's second attempt/)
   expect(help.route).toContain('It ranks the rest by strength, then price and quota fit, then an idle agent before a new one')
   expect(help.route).toContain('Your project\'s instructions say how to choose')
   expect(`${help.route} ${help.command}`).not.toMatch(/noGridFirst|policy rates 3|low-risk work of kind docs|NO_CANDIDATE/)
