@@ -29,7 +29,7 @@ release, which will say exactly how much is terminal relay.
 ## Goals
 
 - A terminal frame whose viewer is on the pod that received it never goes through Redis.
-- If measured worth it (Phase 2), a terminal frame whose viewer is on another pod reaches only that pod.
+- A frame whose viewer is on another pod reaches only that pod (Phase 2), behind a kill switch.
 - A JSON terminal frame is not parsed and re-stringified on its way to the viewer.
 - Ordering, delivery guarantees ("must" sends, kill-water) and E2EE are unchanged: the backend still forwards opaque
   sealed bytes.
@@ -49,7 +49,7 @@ release, which will say exactly how much is terminal relay.
 
 *(Author's calls after the builder check: the phases, the sticky route, and every per-connection adapter frame.)*
 
-### Phase 1 — local first, encode once, count the receivers (ships now)
+### Phase 1 — local first, encode once, count the receivers
 
 - **Which frames:** every `adapter-ws` up frame for one connection: a binary terminal hop (its `connId`) and any JSON up
   frame with a `targetConnId` (`terminal_*`, `p2p_*`, and the general per-connection publish at `adapterWs.ts:565`, such
@@ -66,7 +66,7 @@ release, which will say exactly how much is terminal relay.
   counts, per channel kind (`termup`, `up` targeted, `up` broadcast): frames delivered locally, frames published, and the
   receivers they reached in total. That says how many pods each published frame wakes for nothing.
 
-### Phase 2 — publish only to the owning pod (only if Phase 1's log shows > 1.5 receivers per published frame)
+### Phase 2 — publish only to the owning process (built with Phase 1; Ken, 2026-10-31)
 
 - On attach a pod records `conn:{connId} → PROCESS_ID` in Redis (`SET … PX 60 000`, renewed with the client heartbeat,
   deleted on detach) and each process subscribes to its own `pod:{PROCESS_ID}` channel(s).
@@ -74,19 +74,38 @@ release, which will say exactly how much is terminal relay.
   including "no owner known" (old pod, expired record, failed lookup), which stays on today's channels for that
   connection. Each `pod:` channel rides the same subscriber connection as the channel it replaces (`terminalSub` for hops,
   `sub` for JSON), so a connection's frames never cross subscriber connections.
-- The receiver delivers as in Phase 1 without parsing a JSON frame's text.
+- The receiver delivers as in Phase 1 without parsing a JSON frame's text, **after checking that the `connId` is one of
+  its clients of the frame's `machineId`** (the message carries both): a daemon's frame never reaches another machine's
+  connection, as `deliverTerminalUpLocal` checks today.
+- **Kill switch:** `TERMINAL_POD_ROUTES=off` stops writing records and routing to `pod:` (on by default). With it off,
+  Phase 1 still runs; records already written expire within 60 s.
+- **First frames wait for the lookup, in order:** while a connection's first owner lookup is in flight, its later frames
+  queue behind it; a lookup that fails or times out (250 ms) decides "today's channels" for that connection.
+
+### Risks (and what covers each)
+
+| Risk | Cover |
+|---|---|
+| A frame lost or reordered when the path changes | The route never changes after the first frame (sticky, including "today's channels"); each `pod:` channel rides the same subscriber connection as the channel it replaces; a 1,000-frame order test with a real Redis |
+| A viewer on an old pod during the rolling deploy | No record from old pods → today's channels; new pods keep today's subscriptions |
+| A pod that crashed leaves records for 60 s | Frames to its `pod:` channel reach nobody, as frames to its dead sockets do today; its viewers reconnect elsewhere with a new `connId`, which gets a new record |
+| A daemon targeting another machine's connection | The receiver checks `connId` against its clients of the frame's `machineId` |
+| More Redis writes: a record per attach, renewed per heartbeat (Desktop re-attaches on every agent switch) | One `SET` per attach and per 25 s per connection, in the heartbeat's existing pipeline; one `GET` per connection, once |
+| A bug that only shows across real pods | A real-Redis test (two subscriber connections standing for two processes, `REDIS_TEST_URL`), the kill switch, and the `terminal relay` log after release |
+| Little gain if most machines have viewers on one pod | `terminal relay` counts receivers per publish before and after; the kill switch turns Phase 2 off if it does not pay |
+
 
 ## Left to the builder
 
 - Module layout (a small `terminalRoute.ts` beside `hub.ts` is one option), log and key names.
-- Phase 2's exact channel names (two channels, one per subscriber connection, as decided).
+- Phase 2's exact channel and key names (two channels, one per subscriber connection, as decided).
 
 ## Tests
 
 - **Phase 1:** a local viewer gets a binary hop, a JSON terminal frame and an `e2e_welcome` with no Redis publish, in the
   order sent, byte-identical to today; a remote viewer gets them through today's channels; a local connection that
   detaches mid-stream drops the rest; the `terminal relay` log counts local, published and receivers per kind.
-- **Phase 2 (if built):** a remote viewer's frames go to `pod:{owner}` only and a third pod with another client of the
+- **Phase 2:** a remote viewer's frames go to `pod:{owner}` only and a third pod with another client of the
   machine receives nothing; an unknown owner stays on today's channels for the connection's life; 1,000 frames for one
   connection arrive once and in order, with the record appearing midway; re-attach on another pod routes the new
   `connId` to its pod.
@@ -97,7 +116,8 @@ release, which will say exactly how much is terminal relay.
 After each release, from #2393's kinds and Phase 1's log: the **total** relay busy time per pod-minute across
 `adapter-ws *`, `bus terminal *`, `bus main up` and (Phase 2) `bus pod *`; Redis publishes per minute; receivers per
 published frame. **Done when** Phase 1 shows the local share delivered without Redis and total relay time falls, with no
-rise in terminal stall reports (`TERMINAL_RENDER_STALLED`); Phase 2 then goes or not on the receiver count.
+rise in terminal stall reports (`TERMINAL_RENDER_STALLED`); with Phase 2, receivers per published frame fall to about 1.
+If they were already about 1, Phase 2 is switched off (`TERMINAL_POD_ROUTES=off`) and removed in a later change.
 
 ## Design (AGENTS.md rules)
 
@@ -109,7 +129,8 @@ rise in terminal stall reports (`TERMINAL_RENDER_STALLED`); Phase 2 then goes or
   no longer grows with pods. Redis publish rate is the first thing to watch.
 - **Compatibility:** old pods write no record, so frames for their viewers fall back to today's channels; new pods keep
   subscribing to those channels.
-- **Migration + rollback:** nothing stored beyond expiring keys; roll back by deploying the previous release.
+- **Migration + rollback:** nothing stored beyond expiring keys; `TERMINAL_POD_ROUTES=off` turns Phase 2 off without a
+  deploy; roll back by deploying the previous release.
 - **Audience:** unchanged; a frame reaches only the connection it names, as today.
 - **Identity:** N/A because nothing here acts as or reads the machine owner's login.
 - **Failure:** Redis unreachable → local viewers still get frames; remote ones fail as today. A missing record falls
