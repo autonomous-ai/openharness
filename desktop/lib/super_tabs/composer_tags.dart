@@ -199,7 +199,9 @@ class SuperTabCompletionList extends StatelessWidget {
       child: ListView(
         key: listKey,
         shrinkWrap: true,
-        padding: const EdgeInsets.symmetric(vertical: 4),
+        padding: const EdgeInsets.symmetric(
+          vertical: grid.AppDesktop.controlGap / 2,
+        ),
         children: [
           for (var i = 0; i < choices.length; i++)
             ListTile(
@@ -208,7 +210,9 @@ class SuperTabCompletionList extends StatelessWidget {
               selected: i == index.clamp(0, choices.length - 1),
               selectedTileColor: grid.AppSurface.selectedFill,
               selectedColor: DesktopChrome.foreground,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: grid.AppDesktop.groupGap,
+              ),
               leading: choices[i].leading,
               trailing: choices[i].kind == null
                   ? null
