@@ -15,7 +15,9 @@ export const WINDOW_PULL = 'Window pull'
 /** How close a weekly reset must be for the pull to judge it. Earlier in the week, this week's pace says little about what
  *  the rest of it will use: a quiet first day would pull every task onto one account. */
 export const RESETS_SOON_MS = 48 * 3_600_000
-/** Both engines' weekly windows are seven days long (cli superTabs/capacity.ts names a window of a day or more "weekly"). */
+/** Both engines' weekly windows are seven days long (cli superTabs/capacity.ts names a window of a day or more "weekly"). The
+ *  machines' reports carry no window length (backend superTabs/machines.ts takes name, used and reset only), so a window of
+ *  another length is read as seven days. */
 export const WEEK_MS = 7 * 86_400_000
 /** Less than this many percent of a week left unused is a rounding error, not quota worth moving work for. */
 export const MIN_UNUSED_PERCENT = 1
@@ -53,11 +55,13 @@ const round = (n: number) => Math.round(n * 100) / 100
 const inTime = (ms: number) => ms < 3_600_000 ? `${Math.max(1, Math.round(ms / 60_000))}m` : `${Math.round(ms / 3_600_000)}h`
 
 /** The pull's word on one candidate: its price less up to half ([MAX_DISCOUNT]), by the part of the task its account's weekly
- *  window would otherwise leave unused. None on a candidate whose quota would run out partway (a 5-hour window too short):
- *  moving work there trades wasted weekly quota for a stalled task. The reason names the window, never the account or the
- *  machine a reading was relayed from, since every reader of the route log sees it. */
+ *  window would otherwise leave unused. Only on a candidate whose quota is known to carry the task (fit `fits`; a Codex
+ *  reading of its weekly window alone is complete, route.ts sizeUp): one that would run out partway trades wasted weekly
+ *  quota for a stalled task, and one whose 5-hour window could not be read (`unknown`) would, since price ranks before fit,
+ *  beat an account known to fit on half a reading (review of f97c022). The reason names the window, never the account or
+ *  the machine a reading was relayed from, since every reader of the route log sees it. */
 export function windowPullAdjust(p: Readonly<Probe & { fit: Fit }>, now: number, held: readonly Commitment[]): Adjustment | null {
-  if (p.fit.status === 'short' || p.fit.spend.weekly <= 0 || p.fit.effectiveCost <= 0) return null
+  if (p.fit.status !== 'fits' || p.fit.spend.weekly <= 0 || p.fit.effectiveCost <= 0) return null
   const left = weeklyUnused(p, now, held)
   if (!left) return null
   const discount = p.fit.effectiveCost * MAX_DISCOUNT * Math.min(1, left.unused / p.fit.spend.weekly)

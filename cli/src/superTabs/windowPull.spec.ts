@@ -96,6 +96,21 @@ describe('the window pull leaves alone', () => {
     expect(choice.shown.every(s => !noteOf(s))).toBe(true)
     expect(choice.shown[0]!.machineId).toBe('alpha')
   })
+  it('a candidate whose fit is not known to cover the task: a 5-hour window that could not be read (review of f97c022)', () => {
+    // Opus with only its weekly window read: the fit is unknown, and half off would put it above a Codex that fits.
+    const unread = { ...opusMember('zulu', windows(null, [60, 12 * H], 'acct-soon')), kind: 'new' as const, agentId: undefined, name: undefined }
+    const choice = route([codex('alpha', FRESH), unread], [pull])
+    expect(choice.shown.find(s => s.machineId === 'zulu')!.fit.status).toBe('unknown')
+    expect(choice.shown[0]!.machineId).toBe('alpha')
+    expect(choice.shown.every(s => !noteOf(s))).toBe(true)
+    none(unread, { status: 'unknown' })
+  })
+  it('but pulls a Codex account that reports its weekly window alone, a complete reading that fits', () => {
+    const weeklyOnly = codex('zulu', windows(null, [60, 12 * H], 'acct-soon'))
+    const choice = route([codex('alpha', FRESH), weeklyOnly], [pull])
+    expect(choice.shown[0]).toMatchObject({ machineId: 'zulu', fit: { status: 'fits' } })
+    expect(noteOf(choice.shown[0]!)).toBeDefined()
+  })
   it('a reading that says nothing of a weekly window about to reset', () => {
     none(codex('zulu', { known: false, leftPercent: null, resetsAt: null, account: 'acct-soon' }))
     none(codex('zulu', { known: true, leftPercent: null, resetsAt: null, metered: true }))
