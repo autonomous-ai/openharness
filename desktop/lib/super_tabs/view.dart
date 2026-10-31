@@ -792,18 +792,25 @@ class _SuperTabViewState extends State<SuperTabView>
         PopupMenuItem(
           key: const ValueKey('super-chat-session-any'),
           value: '',
-          child: Text(
-            "Any project · reads all, can't send to a PM",
-            style: DesktopChrome.control(),
+          child: Tooltip(
+            message: 'Reads every project you read. Sends no work to a PM.',
+            child: Text(
+              'All projects · ask anything',
+              style: DesktopChrome.control(),
+            ),
           ),
         ),
         for (final project in projects)
           PopupMenuItem(
             key: ValueKey('super-chat-session-in-${project.id}'),
             value: project.id,
-            child: Text(
-              '${project.name} · can send to its PM',
-              style: DesktopChrome.control(),
+            child: Tooltip(
+              message:
+                  'Reads only ${project.name}, and can hand work to its PM.',
+              child: Text(
+                '${project.name} · ask and hand off work',
+                style: DesktopChrome.control(),
+              ),
             ),
           ),
       ],
@@ -813,7 +820,7 @@ class _SuperTabViewState extends State<SuperTabView>
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              chosen?.name ?? 'Any project',
+              chosen?.name ?? 'All projects',
               style: DesktopChrome.metadata(),
             ),
             Icon(AppIcons.chevronDown, size: 12, color: DesktopChrome.muted),
@@ -1997,8 +2004,6 @@ class _SuperTabViewState extends State<SuperTabView>
     if (snapshot.isProjectLead(group.id)) {
       return 'Message #${snapshot.projectFor(group.id)!.name}';
     }
-    // Nothing is sent from an older Buddy chat: its box says so.
-    if (c.isEarlierBuddyChat(group)) return 'Read only';
     if (_buddyName(group) case final buddy?) return 'Message $buddy';
     return 'Message ${group.title}';
   }
@@ -3054,23 +3059,9 @@ class _SuperTabViewState extends State<SuperTabView>
               ],
             ),
           ),
-        if (group != null && c.isEarlierBuddyChat(group))
-          Padding(
-            key: const ValueKey('super-earlier-buddy-chat'),
-            padding: const EdgeInsets.fromLTRB(
-              grid.AppDesktop.panelPadding,
-              grid.AppDesktop.controlGap,
-              grid.AppDesktop.panelPadding,
-              grid.AppDesktop.menuInset,
-            ),
-            child: Text(
-              'Your earlier Buddy chat in '
-              '${c.snapshot?.projects.where((p) => p.id == group.projectId).firstOrNull?.name ?? 'this project'}. '
-              'Read only: talk to your Buddy in # buddy.',
-              style: DesktopChrome.metadata(),
-            ),
-          )
-        else if (group != null && _isBuddyChat(group))
+        if (group != null &&
+            _isBuddyChat(group) &&
+            !c.isEarlierBuddyChat(group))
           SuperTabBuddyBar(controller: c, chat: group, app: widget.app),
         // The reader's own Buddy chat shows what the PM asked them.
         if (group != null && _isBuddyChat(group))
@@ -3402,7 +3393,32 @@ class _SuperTabViewState extends State<SuperTabView>
             );
           },
         ),
-        if (group != null && group.archived)
+        // An older Buddy chat in a project is kept to read: one muted bar in
+        // place of the box, so nothing looks typeable (Lead's design review,
+        // 10-31), and the way to the one Buddy.
+        if (group != null && c.isEarlierBuddyChat(group))
+          Padding(
+            key: const ValueKey('super-earlier-buddy-chat'),
+            padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'This is an earlier chat, kept to read.',
+                    style: DesktopChrome.metadata(),
+                  ),
+                ),
+                TextButton(
+                  key: const ValueKey('super-open-swarm-buddy'),
+                  onPressed: () => unawaited(
+                    c.openBuddyChat(SuperTabController.kSwarmBuddyKey),
+                  ),
+                  child: const Text('Open # buddy'),
+                ),
+              ],
+            ),
+          )
+        else if (group != null && group.archived)
           Padding(
             padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
             child: Row(
