@@ -9,6 +9,8 @@ import { listNamedIndexes, readBy } from './parts/indexed.js'
 import { autonomousEnvironments } from '../lib/autonomousEnvironment.js'
 import { expireEvidence } from './evidence/store.js'
 import { sweepThreadMarks } from './readMarks.js'
+import { sweepActivity } from './activity.js'
+import { sweepChatSettings } from './chatSettings.js'
 
 /** Parts whose key is never used twice (conversations, starts, projects' progress) lose their tombstone at `purgeAt`.
  *  A person, agent or machine can come back under the same key, so its tombstone is kept for good, compacted to its
@@ -154,10 +156,29 @@ export async function threadMarks(db: PrismaClient, now: number) {
   }
 }
 
+/** The Activity and chat setting sweeps (activity.ts, chatSettings.ts), each failure said and kept to itself, as thread marks. */
+export async function activityRows(db: PrismaClient, now: number) {
+  try {
+    return { expired: await sweepActivity(db, now) }
+  } catch (error) {
+    logger.warn('[swarm-sweeps] activity failed', { error: error instanceof Error ? error.message : String(error) })
+    return { failed: true as const }
+  }
+}
+export async function chatSettings(db: PrismaClient, now: number) {
+  try {
+    return await sweepChatSettings(db, now)
+  } catch (error) {
+    logger.warn('[swarm-sweeps] chat settings failed', { error: error instanceof Error ? error.message : String(error) })
+    return { failed: true as const }
+  }
+}
+
 /** One pass of every sweep (spec, Archive). Each part it changes is a guarded write, so a command in between wins. */
 export async function sweepSwarms(db: PrismaClient, now = Date.now()) {
   return { slept: await sleepQuietGroups(db, now), startsExpired: await expireStarts(db, now), invitationsExpired: await expireInvitations(db, now),
-    tombstonesCompacted: await compactTombstones(db, now), evidenceExpired: await expireEvidence(db, now), threadMarks: await threadMarks(db, now) }
+    tombstonesCompacted: await compactTombstones(db, now), evidenceExpired: await expireEvidence(db, now), threadMarks: await threadMarks(db, now),
+    activity: await activityRows(db, now), chatSettings: await chatSettings(db, now) }
 }
 
 /** Runs the sweeps every hour in the singleton worker. `finishWorkspaceRemovals` finishes Workspace removals whose Swarm removals

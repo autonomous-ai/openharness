@@ -1,3 +1,4 @@
+import { writeReactionActivity, writeReplyActivity } from './activity.js'
 import { expireRemovals, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, slotCounter, machineTeamWork, preparableStart, readingOnly, recordAgentPresence, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, teamWorkRefusal, type MachineObservation } from './machines.js'
 import { readingClearsSuspensions, suspendedEngines } from './engineHealth.js'
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
@@ -1580,8 +1581,9 @@ export class SuperTabStore {
       const leadAt = (state: SuperTabState) => state.conversations.find(c => c.id === ledId)?.leadAction?.at
       if (ledId && leadAt(effects.state) !== undefined && leadAt(effects.state) !== leadAt(original)) await dropHeldTags(tx, tabId, ledId, context.now)
       await writeMentions(tx, tabId, effects.state, effects.messages, context.now)
+      await writeReplyActivity(tx, tabId, effects.messages, context.now)
       if (command.type === 'mention.done') await markDone(tx, tabId, command.mentionId, context.mention!.personId, context.now)
-      if (command.type === 'message.react') await this.writeReaction(tx, tabId, actor, command)
+      if (command.type === 'message.react') await this.writeReaction(tx, tabId, actor, command, context.now)
       if (context.avatarUpload) {
         // Conflicts with a concurrent use of the same picture: only one command can take it.
         const taken = await tx.superTabAttachment.updateMany({ where: { tabId, id: context.avatarUpload.id, purpose: AVATAR_PURPOSE, ...unused },
@@ -1841,10 +1843,13 @@ export class SuperTabStore {
   }
 
   /** Writes or removes the actor's reaction row. The same reaction twice keeps one row: its id is derived. */
-  private async writeReaction(tx: Transaction, tabId: string, actor: Actor, command: ReactCommand) {
+  private async writeReaction(tx: Transaction, tabId: string, actor: Actor, command: ReactCommand, now: number) {
     const id = reactionId(tabId, actor, command)
-    if (!command.on) return void await tx.superTabReaction.deleteMany({ where: { id } })
     const actorId = actor.kind === 'person' ? actor.userId : actor.agentId
+    // The message author's Activity row goes and comes with the reaction (activity.ts).
+    await writeReactionActivity(tx, { tabId, reactionId: id, conversationId: command.conversationId, messageId: command.messageId,
+      actor: { kind: actor.kind, id: actorId }, emoji: command.emoji, on: command.on, now })
+    if (!command.on) return void await tx.superTabReaction.deleteMany({ where: { id } })
     await tx.superTabReaction.upsert({ where: { id }, update: {}, create: { id, tabId, conversationId: command.conversationId,
       messageId: command.messageId, actorKind: actor.kind, actorId, emoji: command.emoji } })
   }

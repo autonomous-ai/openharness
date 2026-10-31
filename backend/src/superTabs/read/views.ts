@@ -48,6 +48,8 @@ export interface ReadExtras {
   decisionsWaiting?: number
   /** Which ones they are, as a digest (decisions.ts). */
   decisionsDigest?: string
+  /** Which of their Activity rows are unread, as a digest (activity.ts). */
+  activityDigest?: string
 }
 
 const HEAD_FIELDS = ['version', 'id', 'name', 'project', 'projects', 'leadsConversationId', 'ownerId', 'environment',
@@ -147,6 +149,7 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
     ...(actor.kind === 'person' && extras.mentionsDigest !== undefined ? { mentionsDigest: extras.mentionsDigest } : {}),
     ...(actor.kind === 'person' && extras.decisionsWaiting !== undefined ? { decisionsWaiting: extras.decisionsWaiting } : {}),
     ...(actor.kind === 'person' && extras.decisionsDigest !== undefined ? { decisionsDigest: extras.decisionsDigest } : {}),
+    ...(actor.kind === 'person' && extras.activityDigest !== undefined ? { activityDigest: extras.activityDigest } : {}),
     ...(teamAccountSwarm(state) ? {} : { teamAccounts: false as const }),
     threadSessions: true as const,
     sessionsFromChat: true as const,

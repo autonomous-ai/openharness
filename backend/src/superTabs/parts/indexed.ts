@@ -80,6 +80,10 @@ export const NAMED_INDEX = {
   },
   /** A page's thread summaries, by root id (pageReads.ts pageThreads). */
   SuperTabThread: { id: { _id: 1 } },
+  /** `age`: Activity rows past their expiry (activity.ts sweepActivity). */
+  SuperTabActivity: { age: { createdAt: 1 } },
+  /** `age`: chat settings back at the default, untouched for a week (chatSettings.ts sweepChatSettings). */
+  SuperTabChatSetting: { age: { updatedAt: 1 } },
 } as const
 export type NamedCollection = keyof typeof NAMED_INDEX
 export type NamedIndex<C extends NamedCollection> = keyof typeof NAMED_INDEX[C] & string
