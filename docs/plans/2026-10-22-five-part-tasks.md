@@ -2,6 +2,9 @@
 
 > **For agentic workers:** Use superpowers:executing-plans to implement this plan task by task. Track the steps below.
 
+> Replaced by [2026-10-30-project-instructions-design.md](2026-10-30-project-instructions-design.md): the instruction document and agents' direct messages
+> replace what this describes. Replaced in part: the optional structured task field and its rendering stay; the required five sections go. Kept as history; do not build from it.
+
 **Goal:** Every delegated task states its goal, changes, constraints, owned code and observable acceptance checks.
 
 **Architecture:** Add an optional structured task to conversations and keep the existing brief as a rendered compatibility view. Validate complete tasks in the agent CLI command path, retry an explicit old-backend schema refusal once with the rendered brief, and display the structured fields in assignment deliveries and Desktop work details.

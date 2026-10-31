@@ -17,16 +17,6 @@ class LeadSwarmStart {
   final List<HarnessAttachment> files;
 }
 
-class HarnessLaunchRole {
-  const HarnessLaunchRole({
-    required this.id,
-    required this.name,
-    required this.kind,
-  });
-  final String id, name, kind;
-  String get swarmRole => kind == 'reviewer' ? 'review' : 'dev';
-}
-
 /// An optional destination around the existing New Harness launch. Preparing
 /// may add instructions; completion registers the confirmed native session.
 /// Neither callback starts an agent. Retry keeps the same native receipt.
@@ -48,22 +38,22 @@ class HarnessLaunchIntegration {
     this.forcedPermissionMode,
     this.swarmRole,
     this.swarmSkillMode,
-    this.roles,
-    this.roleId,
+    this.roleSuggestions,
+    this.roleName,
     this.startInSwarm,
   });
   final String creationId, actionLabel;
   String? swarmRole;
   String? swarmSkillMode;
-  final List<HarnessLaunchRole>? roles;
-  String? roleId;
 
-  void chooseRole(String id) {
-    final selected = roles?.where((role) => role.id == id).firstOrNull;
-    if (selected == null) return;
-    roleId = selected.id;
-    swarmRole = selected.swarmRole;
-  }
+  /// An agent joining a project that has instructions names its role in free
+  /// text; these are the document's role headings, offered as suggestions.
+  /// Null hides the field: the coordinator's own start, a new project, or a
+  /// Swarm from before instructions. Empty (the read failed) keeps it free.
+  final List<String>? roleSuggestions;
+
+  /// The role typed; empty or null sends none and the server names the agent.
+  String? roleName;
 
   // Restores the person's original request from a destination launch journal.
   final String? initialTask;

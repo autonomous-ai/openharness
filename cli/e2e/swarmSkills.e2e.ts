@@ -34,8 +34,10 @@ it('attaches and restores only the selected Swarm skill for both engines, withou
     const registry = JSON.parse(readFileSync(join(d.dataDir, 'registry.json'), 'utf8')) as Array<Record<string, any>>
     const saved = registry.find(row => row.agentId === created.agent.id)!
     expect(saved.permissionMode).toBe('full')
-    expect(saved.swarmSkill).toMatchObject({ role, key: expect.any(String) })
-    originals.push({ id: created.agent.id, engine, role, pointer: saved.swarmSkill.key })
+    // Saved as the kind it is (project instructions, phase 4); the wire and the file keep their older names.
+    const kind = role === 'lead' ? 'coordinator' : 'agent'
+    expect(saved.swarmSkill).toMatchObject({ role: kind, key: expect.any(String) })
+    originals.push({ id: created.agent.id, engine, role: kind, pointer: saved.swarmSkill.key })
     await until('engine to bind its conversation', async () => {
       const listed = await c.request('agents_list', {})
       return listed.agents?.some((row: Record<string, any>) => row.id === created.agent.id && row.sessionId) || null

@@ -9,8 +9,9 @@ import type { Prisma } from '@prisma/client'
 import { z } from 'zod'
 import { agentDisplayName } from './agentNames.js'
 import { AGENT_ONLY, fail, isLeads, person, stableId, type Actor, type Author, type Conversation, type SuperTabState } from './model.js'
-import { agentProjectId, canReadGroup, groupProject, isClosedPmChat, ledProject, projectOf, readsRecordsIn } from './projects.js'
+import { agentProjectId, canReadGroup, groupProject, isClosedPmChat, ledProject, projectAgent, projectOf, readsRecordsIn } from './projects.js'
 import { LEDGER_WEEKS } from './leaderboard/record.js'
+import { coordinatorNameOf } from './instructions.js'
 import { WEEK_MS } from './leaderboard/week.js'
 import { groupsBy } from './parts/indexed.js'
 
@@ -63,13 +64,13 @@ export function askDecisions(state: SuperTabState, group: Conversation, personId
     conversationId: group.id, projectId, personId, askerAgentId: from.askerAgentId, assignmentId: from.assignmentId, ...from.kind ? { kind: from.kind } : {} }))
 }
 
-/** Only the project's Lead asks with `decision.ask`, in its own project's conversations (a worker asks through needs_human). */
+/** Any agent of the project asks with `decision.ask`, in its own project's conversations (project instructions, phase 4); a
+ *  worker may also ask through needs_human. */
 export function checkAsker(state: SuperTabState, actor: Actor, group: Conversation): string {
-  const led = actor.kind === 'agent' ? ledProject(state, actor.agentId) : undefined
-  if (!led || isLeads(group) || groupProject(state, group).id !== led.id) {
-    fail('DECISION_FORBIDDEN', 'Only a project’s Lead asks for decisions in its own project’s conversations.', 403)
+  if (isLeads(group) || !projectAgent(state, actor, groupProject(state, group).id)) {
+    fail('FORBIDDEN', 'An agent asks for decisions in its own project’s conversations.', 403)
   }
-  return (actor as Extract<Actor, { kind: 'agent' }>).agentId
+  return actor.agentId
 }
 
 /** The conversation a decision was asked in, while the person asked is still in the Swarm and still reads it, or read it
@@ -85,12 +86,13 @@ export function answerable(state: SuperTabState, actor: Actor, decision: Decisio
 /** What tells the asking agent and the Lead, whichever of them is still in the conversation. A notice only they read, with
  *  none of the answer in it: the decisions read, which checks who reads it, has the answer (review of #1753). */
 export const ANSWERED_NOTICE = 'A decision asked in this conversation was answered. Read the answer with: harness super-tab decisions --answered'
-/** The same notice for a decision the person left to the PM, with none of the answer either. */
-export const DELEGATED_NOTICE = 'A decision asked in this conversation was left to the Product Manager, who took its recommended option. '
+/** The same notice for a decision the person left to the PM, with none of the answer either; [name] is what its project calls
+ *  its coordinator (instructions.ts coordinatorNameOf). */
+export const delegatedNotice = (name: string) => `A decision asked in this conversation was left to the ${name}, who took its recommended option. `
   + 'Read it with: harness super-tab decisions --answered'
 /** The notices for a decision asked in a closed Chat with PM, told in the project chat instead: never "in this conversation". */
 export const CLOSED_CHAT_ANSWERED_NOTICE = 'A decision you asked in a closed Chat with PM was answered. Read the answer with: harness super-tab decisions --answered'
-export const CLOSED_CHAT_DELEGATED_NOTICE = 'A decision you asked in a closed Chat with PM was left to the Product Manager, who took its recommended option. '
+export const closedChatDelegatedNotice = (name: string) => `A decision you asked in a closed Chat with PM was left to the ${name}, who took its recommended option. `
   + 'Read it with: harness super-tab decisions --answered'
 
 /** How an answer reads in the decisions list: a delegated one never as the person's own choice. */
@@ -114,7 +116,8 @@ export function answerDecision(state: SuperTabState, actor: Actor, decision: Dec
   const lead = state.conversations.find(c => c.id === project.leadConversationId)?.leadId
   const closed = isClosedPmChat(group)
   const noticeIn = closed ? state.conversations.find(c => c.id === project.leadConversationId)! : group
-  const notice = given.delegate ? closed ? CLOSED_CHAT_DELEGATED_NOTICE : DELEGATED_NOTICE : closed ? CLOSED_CHAT_ANSWERED_NOTICE : ANSWERED_NOTICE
+  const notice = given.delegate ? (closed ? closedChatDelegatedNotice : delegatedNotice)(coordinatorNameOf(project))
+    : closed ? CLOSED_CHAT_ANSWERED_NOTICE : ANSWERED_NOTICE
   const recipients = [...new Set([asked.askerAgentId, ...lead ? [lead] : []])].filter(id => noticeIn.agentIds.includes(id))
   const answer: DecisionAnswer = { id: asked.id, choice, note: given.note, ...given.delegate ? { delegated: true as const } : {} }
   // A routing reflection's never reaches the Buddy chat: the person's Buddy reads it (review of #2276).
@@ -196,7 +199,7 @@ export async function fullFor(tx: Tx, tabId: string, ask: { personId: string; as
  *  night, and answered ones go after the ledger's weeks (store.ts postReflection). */
 export async function reflectionDecisions(tx: Tx, tabId: string, projectId: string) {
   return tx.superTabDecision.findMany({ where: { tabId, projectId, kind: REFLECTION_DECISION },
-    select: { id: true, question: true, choice: true, answeredAt: true, createdAt: true, delegated: true }, orderBy: { createdAt: 'desc' }, take: 500 })
+    select: { id: true, question: true, unblocks: true, choice: true, answeredAt: true, createdAt: true, delegated: true }, orderBy: { createdAt: 'desc' }, take: 500 })
 }
 
 /** Days a routing reflection's proposal stays open unanswered: its week's numbers are stale by then (review of #2276). */

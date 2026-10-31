@@ -108,17 +108,6 @@ def _accounts(machines: List[dict], reserve: int, now: int) -> List[dict]:
     return list(by_reading.values())
 
 
-def _allowed(state: dict) -> Optional[set]:
-    """The machines the owner's hard `machines` rules leave; None when there is no such rule."""
-    allowed = None
-    for r in state.get('rules') or []:
-        rule = r.get('rule') or {}
-        if rule.get('kind') == 'machines':
-            ids = set(rule.get('machineIds') or [])
-            allowed = ids if allowed is None else allowed & ids
-    return allowed
-
-
 def _add_back(accounts: List[dict], tasks: List[dict], actual: Dict[str, list], models: List[dict]) -> None:
     """The snapshot is taken after the night's work spent its quota. Adding back what the actual picks are expected to have
     spent gives every plan the same budget the night started with (an estimate: the spend comes from the size table)."""
@@ -154,14 +143,15 @@ def _actual_model(configuration: dict, grid: Dict[str, str], model_ids: set) -> 
 
 
 def convert(status: dict, route_log: List[dict], config: dict) -> dict:
+    """Since the project instructions (phase 4) a snapshot's tasks have floor 1, no `independent_of`, reserve 0 and no
+    machines rule: the route ranks by facts and the instructions say how to choose. The solver keeps those fields for
+    bench instances."""
     state = status['value']['state']
     policy = config['policy']
-    # A model on the grid is reachable from every machine; work runs only on the machines the owner's rules leave.
+    # A model on the grid is reachable from every machine.
     models, grid = _models(policy, state['machines'])
     now = snapshot_ms(state['machines'])
-    allowed = _allowed(state)
-    machines = [m for m in state['machines'] if allowed is None or m['machineId'] in allowed]
-    kept = {m['machineId'] for m in machines}
+    machines = state['machines']
     ids = {m['id'] for m in models}
     exclude = config.get('exclude', {})
     groups = [c for c in state['conversations'] if (c.get('assignment') or {}).get('configuration')]
@@ -183,20 +173,14 @@ def convert(status: dict, route_log: List[dict], config: dict) -> dict:
         if given:
             estimates.append({'group': g['id'], 'title': g['title'], 'note': given.get('note', '')})
         minutes, spend = SIZES[request.get('size', 'medium')]
-        floor = min(3, policy['floor'][request['difficulty']] + (1 if request['risk'] == 'high' else 0))
         deps = config.get('deps', {}).get(g['id'], [])
-        # A review is done by another model family than the work it reviews (the Lead asks for it on every review).
-        review = g['title'].startswith('Review:')
-        tasks.append({'id': g['id'], 'title': g['title'], 'minutes': minutes, 'floor': floor, 'kind': request.get('kind') or 'default',
-                      'difficulty': request['difficulty'], 'spend': dict(spend), 'deps': deps,
-                      'independent_of': deps if review else []})
+        tasks.append({'id': g['id'], 'title': g['title'], 'minutes': minutes, 'floor': 1, 'kind': request.get('kind') or 'default',
+                      'difficulty': request['difficulty'], 'spend': dict(spend), 'deps': deps, 'independent_of': []})
         assignment = g['assignment']
         picked = _actual_model(assignment['configuration'], grid, ids)
         if picked is not None:
-            if assignment['execution']['machineId'] not in kept:
-                raise ConvertError(f'{g["id"]} ran on a machine the owner\'s rules leave out')
             actual[g['id']] = [assignment['execution']['machineId'], picked]
-    accounts = _accounts(machines, policy['quotaReserve'], now)
+    accounts = _accounts(machines, 0, now)
     if config.get('budget', 'start') == 'start':
         _add_back(accounts, tasks, actual, models)
     task_ids = {t['id'] for t in tasks}

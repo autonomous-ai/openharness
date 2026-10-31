@@ -28,7 +28,7 @@ function harnessIn(frames: PaneFrame[], pane: string, machineId: string): boolea
 
 const ELSEWHERE = 'From a harness, Swarm commands go to this computer\'s own Harness only: leave out --machine and --port, or give this computer\'s own.'
 
-const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status [--archived [PAGE]] | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | decisions [--answered] | costs [--days N] | post GROUP TEXT|- OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | react GROUP MESSAGE_ID EMOJI OPERATION_ID [--off] | command OPERATION_ID JSON | propose OPERATION_ID JSON [--attach PATH]... | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | plan [JSON] | remove-machine MACHINE_ID [--yes] | set-agents MACHINE_ID COUNT | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help'
+const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status [--archived [PAGE]] | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | decisions [--answered] | costs [--days N] | post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | react GROUP MESSAGE_ID EMOJI OPERATION_ID [--off] | command OPERATION_ID JSON | propose OPERATION_ID JSON [--attach PATH]... | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | plan [JSON] | remove-machine MACHINE_ID [--yes] | set-agents MACHINE_ID COUNT | instructions [PROJECT] | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help'
 /** A Buddy's guard refuses a post or a proposal read from stdin (#2358): there its words would skip the secret check. A Buddy
  *  that followed the stdin form here was refused and tried again (#2360 took it out of a Buddy's help), so a Buddy's usage
  *  line and JSON hints never offer it. */
@@ -186,6 +186,9 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
     Object.assign(payload, { archived: true, ...(second ? { before: second } : {}) })
   }
   else if (action === 'decisions' && (positional.length === 1 || (positional.length === 2 && first === '--answered'))) payload.state = first ? 'answered' : 'open'
+  else if (action === 'instructions' && (positional.length === 1 || positional.length === 2 && identifier(first))) {
+    if (first) payload.projectId = first
+  }
   else if (action === 'costs' && (positional.length === 1 || (positional.length === 3 && first === '--days' && /^[1-9][0-9]?$/.test(second ?? '') && Number(second) <= 90))) {
     payload.days = positional.length === 3 ? Number(second) : 7
   }
@@ -194,10 +197,12 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
   }
   else if (action === 'post' && identifier(first) && typeof second === 'string' && identifier(third)) {
     let replyTo: string | null = null
-    const attach: string[] = [], mentions: string[] = []
+    const attach: string[] = [], mentions: string[] = [], to: string[] = []
     for (let i = 4; i < positional.length; i += 2) {
       const [flag, value] = [positional[i], positional[i + 1]]
       if (flag === '--reply-to' && identifier(value) && replyTo === null) replyTo = value
+      // The agents it reaches, any agent of this project; with none, an agent's post reaches the PM (project instructions).
+      else if (flag === '--to' && identifier(value) && (to.includes(value) || to.length < 16)) { if (!to.includes(value)) to.push(value) }
       else if (flag === '--attach' && value && attach.length < 10) attach.push(resolve(value))
       // A person's id or email, as written; the service maps it to the person (spec 2026-10-24-lead-mentions).
       else if (flag === '--mention' && value?.trim()) mentions.push(value.trim())
@@ -208,7 +213,7 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
     // A screenshot or a log may go without words.
     if (!text.trim() && !attach.length) throw usageError()
     Object.assign(payload, { action: 'command', operationId: third, ...(attach.length ? { attach } : {}),
-      command: { type: 'message.send', conversationId: first, text, replyTo, recipientIds: [], ...(mentions.length ? { mentions } : {}) } })
+      command: { type: 'message.send', conversationId: first, text, replyTo, recipientIds: to, ...(mentions.length ? { mentions } : {}) } })
   } else if (action === 'react' && identifier(first) && identifier(second) && identifier(third) && identifier(positional[4])
     && (positional.length === 5 || positional.length === 6 && positional[5] === '--off')) {
     // An acknowledgement without a post, as Slack bots do (swarm skills): the backend checks the emoji and who may react.
@@ -336,7 +341,8 @@ export async function superTabCommand(argv: readonly string[], deps: {
           : 'Set a machine\'s agents from your own terminal or from Desktop, not from an agent.')
       }
     }
-    // Help names the caller when it can, so a Lead also reads its own options; outside a harness it is the plain help.
+    // Help names the caller when it can, as every request from a harness does; every agent reads the same help (project
+    // instructions, phase 4), and outside a harness it is that help too.
     const help = request.payload.action === 'help'
     // A harness's pane speaks as its own agent alone: with --agent too, its harness goes with the request, and the daemon
     // refuses an agent that is not that harness's (security review of #2087: a Buddy named its Builder). A person's terminal
@@ -373,6 +379,22 @@ export async function superTabCommand(argv: readonly string[], deps: {
       if (request.payload.action === 'screen' && value.ok === true && typeof value.text === 'string') print(value.text)
       else print(JSON.stringify(answer.error ? answer : value))
       return value.ok === true ? 0 : 1
+    } else if (request.payload.action === 'instructions') {
+      // Printed as text for the agent to work by; every failure, as JSON.
+      const answer = await scoped({ ...request.payload })
+      const value = object(answer.value)
+      if (answer.ok === true && typeof value.text === 'string') {
+        // Each note with its id, which note.remove takes, and who asked by name where the status read has it (final review).
+        const notes = Array.isArray(value.notes) ? value.notes.map(object) : []
+        const coordinator = typeof value.coordinatorName === 'string' && value.coordinatorName ? value.coordinatorName : 'The coordinator'
+        const when = (at: unknown) => typeof at === 'number' && Number.isFinite(at) ? new Date(at).toISOString() : String(at)
+        print([`Instructions of project ${value.projectId}, revision ${value.revision}${value.template ? ' (the built-in template)' : ''}`, '', value.text,
+          ...(notes.length ? ['', `${coordinator}'s notes:`, ...notes.map(n => `- ${n.text} (note ${n.id}, asked by ${n.askedByName ?? n.askedBy}, ${when(n.at)}`
+            + `${n.expiresAt ? `, until ${when(n.expiresAt)}` : ''})`)] : [])].join('\n'))
+        return 0
+      }
+      print(JSON.stringify(answer))
+      return 1
     } else if (request.payload.action === 'route') {
       result = await routeTask({ tabId: String(request.payload.tabId), conversationId: String(request.payload.conversationId),
         assessment: request.payload.assessment }, scoped, request.where, deps.open)

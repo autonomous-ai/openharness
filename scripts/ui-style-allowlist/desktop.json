@@ -59,17 +59,11 @@
   "desktop/lib/super_tabs/recording_notice.dart": {
     "edge-insets": 3
   },
-  "desktop/lib/super_tabs/roles_editor.dart": {
-    "edge-insets": 1
-  },
   "desktop/lib/super_tabs/roster.dart": {
     "edge-insets": 2,
     "border-radius": 1
   },
   "desktop/lib/super_tabs/route_row.dart": {
-    "edge-insets": 6
-  },
-  "desktop/lib/super_tabs/routing_policy_form.dart": {
     "edge-insets": 3
   },
   "desktop/lib/super_tabs/saved_session.dart": {

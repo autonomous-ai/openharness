@@ -2989,6 +2989,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
                     targets[i].$1,
                     targets[i].$2.id,
                   ),
+                  coordinatorName: superTabLeadCoordinatorName(
+                    app,
+                    targets[i].$1,
+                    targets[i].$2.id,
+                  ),
                   machineName: showMachines
                       ? app.stateOf(targets[i].$1)?.machine.displayName ??
                             targets[i].$1

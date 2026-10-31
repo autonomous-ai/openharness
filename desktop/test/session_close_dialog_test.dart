@@ -22,16 +22,15 @@ void main() {
           home: Scaffold(
             body: Builder(
               builder: (context) => TextButton(
-                onPressed: () async => choice = await showSessionCloseDialog(
-                  context,
-                  [
-                    const SessionCloseItem(
-                      name: 'Quinn',
-                      activity: 'working',
-                      protectionReason: 'Quinn is the Product Manager of project Pilot. Delete the project first.',
-                    ),
-                  ],
-                ),
+                onPressed: () async =>
+                    choice = await showSessionCloseDialog(context, [
+                      const SessionCloseItem(
+                        name: 'Quinn',
+                        activity: 'working',
+                        protectionReason: 'Quinn is the Captain of project Pilot. Delete the project first.',
+                        coordinatorName: 'Captain',
+                      ),
+                    ]),
                 child: const Text('Open'),
               ),
             ),
@@ -40,8 +39,9 @@ void main() {
       );
       await tester.tap(find.text('Open'));
       await tester.pumpAndSettle();
+      expect(find.textContaining('Captain of project Pilot'), findsOneWidget);
       expect(
-        find.textContaining('Product Manager of project Pilot'),
+        find.textContaining('The Captain will keep running.'),
         findsOneWidget,
       );
       expect(

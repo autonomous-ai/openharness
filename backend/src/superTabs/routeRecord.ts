@@ -42,8 +42,7 @@ export const routeRecordSchema = z.object({
     size: z.enum(['small', 'medium', 'large']).optional(),
     /** The job's kind the Lead gave (`ui`, `docs`; `review` for a review), what attempts are compared by (costs/read.ts). */
     kind: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/).optional(),
-    /** A person asked for a local model, or named one (cli superTabs/route.ts Assessment): what lets a grid model, or a model
-     *  rated below 3, build (rules.ts buildRefusal). */
+    /** A person asked for a local model, or named one (cli superTabs/route.ts Assessment), kept with the decision. */
     local: z.literal(true).optional(), model: z.string().trim().min(1).max(200).optional() }).strict(),
   candidates: z.array(routeCandidateSchema).min(1).max(12),
   excluded: z.array(z.object({ title: z.string().trim().min(1).max(160), reason: z.string().trim().min(1).max(500) }).strict()).max(200),
@@ -59,12 +58,16 @@ export const routeRecordSchema = z.object({
   why: z.string().trim().min(1).max(300),
   /** How much context Jev was given and which sources could not be read, so pick quality can later be compared with completeness. */
   context: z.object({ chars: z.number().int().min(0).max(30_000), missing: z.array(z.string().min(1).max(40)).max(10) }).strict().optional(),
-  /** The step up this attempt is (stepUp.ts), written by the server from its group, never taken from the route. */
+  /** The step up this attempt was (the server's step up, gone since project instructions phase 4), on records from before project instructions. Never written since, never taken
+   *  from the route. */
   stepUp: z.object({ attempt: z.number().int().min(2).max(3), reason: z.string().min(1).max(200) }).strict().optional(),
   /** Why a review ran on its Builder's own engine, on records from before 2026-10-30, when another engine had to review when it could. Never written since, never taken from the route. */
   sameEngine: z.string().min(1).max(300).optional(),
   /** The job's kind from the fixed list (evidence/jobKind.ts), written by the server from its group, never taken from the route. */
   jobKind: z.enum(JOB_KINDS).optional(),
+  /** The project instructions' revision the route relied on (`project.instructionsRevision ?? 0` when it was recorded), written
+   *  by the server, never taken from the route. Absent from records before project instructions. */
+  instructionsRevision: z.number().int().nonnegative().optional(),
 }).strict().refine(d => d.candidates.some(c => c.id === d.pick), 'The pick must be one of the candidates.')
   .refine(d => new Set(d.candidates.map(c => c.id)).size === d.candidates.length, 'Candidate ids must be unique.')
 

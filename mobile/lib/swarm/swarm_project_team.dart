@@ -11,6 +11,7 @@ import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import 'model.dart';
+import 'swarm_instructions_page.dart';
 import 'swarm_leaderboard.dart';
 import 'swarm_project_tasks.dart';
 import 'swarm_reader.dart';
@@ -138,7 +139,7 @@ SwarmTeamAgent _member(
     SwarmAgentState.limited => (SwarmMemberState.waiting, glance.label),
     SwarmAgentState.working when work == 'review' => (
       SwarmMemberState.waiting,
-      'Waiting for review',
+      'Waiting on others',
     ),
     SwarmAgentState.working => (SwarmMemberState.working, glance.label),
     SwarmAgentState.idle when agent.workDecision == 'awaiting' => (
@@ -446,6 +447,31 @@ class _SwarmProjectTeamState extends State<SwarmProjectTeam> {
                       ),
                   ],
                 ),
+              // An older backend names no coordinator: it has no document.
+              if (project.hasInstructions) ...[
+                SwarmCaption(
+                  'Instructions',
+                  key: const ValueKey('swarm-team-instructions-caption'),
+                ),
+                SwarmGroup(
+                  children: [
+                    SwarmRow(
+                      key: const ValueKey('swarm-team-instructions'),
+                      title: 'Instructions',
+                      detail: SwarmRow.line(
+                        project.instructionsRevision == 0
+                            ? 'Built-in template'
+                            : 'Revision ${project.instructionsRevision}',
+                      ),
+                      onTap: () => openSwarmInstructions(
+                        context,
+                        reader: reader,
+                        projectId: project.id,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ],
           ),
         );

@@ -80,6 +80,7 @@ const messageQuery = agentQuery.extend({ after: z.coerce.number().int().nonnegat
   .refine(q => (q.afterId === undefined || q.after !== undefined) && (q.beforeId === undefined || q.before !== undefined), 'Send afterId with after, beforeId with before.')
 const decisionParams = tabParams.extend({ decisionId: id })
 const roleParams = tabParams.extend({ projectId: id, roleId: id })
+const revisionParams = tabParams.extend({ projectId: id, revision: z.coerce.number().int().positive().safe() })
 const terminalParams = tabParams.extend({ requestId: id })
 const hostParams = z.object({ machineId: id })
 const hostStartParams = hostParams.extend({ tabId: id, startId: id })
@@ -568,6 +569,16 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof roleParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/projects/:projectId/roles/:roleId',
     { preHandler: [validateParams(roleParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => store.roleText(req.user!, req.params.tabId, req.params.projectId, req.params.roleId, req.query.asAgentId)))
+  // A project's instructions, its kept revisions and one of them (superTabs/instructions.ts): read when the revision moves.
+  app.get<{ Params: z.infer<typeof projectParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/projects/:projectId/instructions',
+    { preHandler: [validateParams(projectParams), validateQuery(agentQuery)] },
+    (req, reply) => respond(reply, () => store.instructions(req.user!, req.params.tabId, req.params.projectId, req.query.asAgentId)))
+  app.get<{ Params: z.infer<typeof projectParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/projects/:projectId/instructions/revisions',
+    { preHandler: [validateParams(projectParams), validateQuery(agentQuery)] },
+    (req, reply) => respond(reply, () => store.instructionRevisions(req.user!, req.params.tabId, req.params.projectId, req.query.asAgentId)))
+  app.get<{ Params: z.infer<typeof revisionParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/projects/:projectId/instructions/revisions/:revision',
+    { preHandler: [validateParams(revisionParams), validateQuery(agentQuery)] },
+    (req, reply) => respond(reply, () => store.instructionRevision(req.user!, req.params.tabId, req.params.projectId, req.params.revision, req.query.asAgentId)))
   app.get<{ Params: z.infer<typeof decisionParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/route-decisions/:decisionId',
     { preHandler: [validateParams(decisionParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => store.routeDecision(req.user!, req.params.tabId, req.params.decisionId, req.query.asAgentId)))

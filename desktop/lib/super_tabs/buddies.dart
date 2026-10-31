@@ -202,7 +202,9 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
               Text(
                 'A private agent to think things through with. It runs on '
                 'your own machine, reads #$projectName and your chat with '
-                'it, and posts to the PM only when you ask.',
+                'it, and posts to the '
+                '${c.snapshot?.coordinatorNameOf(_project ?? '') ?? kDefaultCoordinatorName} '
+                'only when you ask.',
                 style: DesktopChrome.text(),
               ),
               const SizedBox(height: 16),

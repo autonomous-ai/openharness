@@ -19,7 +19,7 @@ export const MAX_DAYS = 90
 export const DEFAULT_DAYS = 7
 
 /** One attempt as the summary reads it. `fresh`: its agent was started for it (costs/attempts.ts attemptTokens). `stepUp`: the
- *  step up from a cheaper model it was (stepUp.ts), as its decision keeps it. */
+ *  step up from a cheaper model it was, as its decision keeps it (decisions from before project instructions). */
 export interface CostRow { conversationId: string; assignmentId: string; outcome: string | null; kind: string | null; fresh: boolean; run: RouteRun
   stepUp?: { attempt: number; reason: string } }
 
@@ -78,7 +78,7 @@ export interface CostSummaryRow {
   apiCost: number | null; spend: number | null; costKnown: number
   /** apiCost over shipped, only when every ended attempt's cost is known: a partial sum would read cheaper than it was. */
   costPerShipped: number | null
-  /** Attempts that were a step up from a cheaper model (stepUp.ts). */
+  /** Attempts that were a step up from a cheaper model (decisions from before project instructions). */
   stepUps: number
 }
 

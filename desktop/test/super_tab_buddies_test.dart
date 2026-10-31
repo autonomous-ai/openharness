@@ -612,6 +612,12 @@ void main() {
             find.descendant(of: machine, matching: find.text('Kens-MacBook')),
             findsOneWidget,
           );
+          expect(
+            find.textContaining(
+              'posts to the Product Manager only when you ask.',
+            ),
+            findsOneWidget,
+          );
 
           await tester.tap(submit);
           await tester.pumpAndSettle();
@@ -889,6 +895,29 @@ void main() {
         },
       );
 
+      testWidgets(
+        "the coordinator's lines carry the badge of the role it goes by",
+        (tester) async {
+          final server = buddySwarm();
+          giveBuddy(server);
+          (server.state['agents'] as List).first['roleName'] = 'Coordinator';
+          server.state['projects'] = [
+            {
+              ...projectFixture('lead', 'openharness', 'lead'),
+              'coordinatorName': 'Coordinator',
+            },
+          ];
+          pmReply(server, 'buddy-peer-lead', 'Your fix is merged.');
+          final c = await show(tester, server);
+          await tester.tap(buddyEntry);
+          await tester.pumpAndSettle();
+
+          expect(find.text('Lead (Coordinator) → you'), findsOneWidget);
+          expect(find.textContaining('(PM)'), findsNothing);
+          await close(tester, c);
+        },
+      );
+
       testWidgets('its header names the Buddy and where it runs', (
         tester,
       ) async {
@@ -1059,17 +1088,35 @@ void main() {
       });
 
       testWidgets(
-        'an empty Buddy chat says who reads it and how to reach the PM',
+        'an empty Buddy chat says who reads it and how to reach the coordinator',
         (tester) async {
           final server = buddySwarm();
           giveBuddy(server);
-          final c = await show(tester, server);
+          var c = await show(tester, server);
           await tester.tap(buddyEntry);
           await tester.pumpAndSettle();
 
           expect(
             find.text(
-              "Only you and Wren read this chat. Say what you want to build; say 'send to the PM' when it's ready.",
+              "Only you and Wren read this chat. Say what you want to build; say 'send to the Product Manager' when it's ready.",
+            ),
+            findsOneWidget,
+          );
+          await close(tester, c);
+
+          // Called what its project calls it.
+          server.state['projects'] = [
+            {
+              ...projectFixture('lead', 'openharness', 'lead'),
+              'coordinatorName': 'Coordinator',
+            },
+          ];
+          c = await show(tester, server);
+          await tester.tap(buddyEntry);
+          await tester.pumpAndSettle();
+          expect(
+            find.text(
+              "Only you and Wren read this chat. Say what you want to build; say 'send to the Coordinator' when it's ready.",
             ),
             findsOneWidget,
           );

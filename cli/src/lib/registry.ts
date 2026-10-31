@@ -658,14 +658,18 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   // Taken out of the spread and put back only when it is a real moment: the spread would otherwise
   // carry a hand-edited string or a negative number straight into the frame's `toISOString()`.
   // `forkedFrom` is out too, so an invalid one is dropped rather than spread back in as-is.
-  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, ...rest } = row
+  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, swarmSkill: rawSwarmSkill, ...rest } = row
   const lastOpenedAt = normalizedOpenedAt(rawOpenedAt)
   // Out of the spread for the same reason: a half-formed record is dropped, never relaunched with.
   const scmLaunch = parseScmLaunchRecord(rawScmLaunch)
+  // Read as load() reads it: a stopped harness an older CLI saved names its Swarm role in the wire's values (lead, dev,
+  // review), and is kept as this release keeps it (project instructions, phase 4).
+  const swarmSkill = parseSwarmSkill(rawSwarmSkill)
   return {
     ...rest,
     ...(externalResume ? { externalResume } : {}),
     ...(scmLaunch ? { scmLaunch } : {}),
+    ...(swarmSkill ? { swarmSkill } : {}),
     ...(normalizedClosePlan(rawClosePlan) ? { closePlan: normalizedClosePlan(rawClosePlan)! } : {}),
     schemaVersion: 2,
     active,

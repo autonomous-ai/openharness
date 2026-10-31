@@ -54,46 +54,36 @@ void main() {
       );
       expect(
         prompt,
-        contains(
-          lead
-              ? 'On Claude Code or Codex, use swarm-lead.'
-              : 'On Claude Code or Codex, use swarm-dev.',
-        ),
+        contains('harness super-tab --tab ${'a' * 160} instructions'),
       );
-      if (lead) {
-        expect(prompt, contains('Discuss first; build when authorized.'));
-        expect(prompt, contains('Swarm agent groups'));
-        expect(prompt, contains('do only answers, lookups and work under 15 minutes yourself'));
-        expect(prompt, contains('your subagents only read/look up'));
-        expect(
-          prompt,
-          contains(
-            'Coordinate: assign multi-part or 15+ minute work to Swarm agent groups;',
-          ),
-        );
+      for (final gone in [
+        'swarm-lead',
+        'swarm-dev',
+        'swarm-review',
+        'Discuss first',
+        'Coordinate:',
+        'Route only',
+        'Do not review yet',
+        'assign work',
+        'decide reuse',
+        'Each task needs',
+      ]) {
+        expect(prompt, isNot(contains(gone)), reason: gone);
       }
     }
   });
 
-  test(
-    'lead bootstrap retains report reading and Builder release guidance',
-    () {
-      final prompt = superTabLaunchPrompt(
-        tabId: 'a' * 160,
-        conversationId: 'b' * 160,
-        lead: true,
-      );
-      expect(prompt, contains('read new reports'));
-      expect(prompt, contains('No per-turn summarizer'));
-      expect(
-        prompt,
-        contains('When a Builder finishes, decide reuse, keep or stop'),
-      );
-      expect(prompt, contains('prefer stop unless more work is coming soon'));
-      expect(prompt, contains('On scheduled requests use project.report'));
-      expect(prompt, contains('text:null when nothing changed'));
-    },
-  );
+  test('lead bootstrap keeps report reading and the reply rules', () {
+    final prompt = superTabLaunchPrompt(
+      tabId: 'a' * 160,
+      conversationId: 'b' * 160,
+      lead: true,
+    );
+    expect(prompt, contains('read new reports'));
+    expect(prompt, contains('No per-turn summarizer'));
+    expect(prompt, contains('On scheduled requests use project.report'));
+    expect(prompt, contains('text:null when nothing changed'));
+  });
 
   for (final engine in ['codex', 'claude']) {
     for (final newProject in [false, true]) {

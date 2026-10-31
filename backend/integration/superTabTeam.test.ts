@@ -12,7 +12,8 @@ import { SwarmReads } from '../src/superTabs/read/service.js'
 import type { Command } from '../src/superTabs/commands.js'
 import type { ContributedMachine } from '../src/superTabs/machines.js'
 import * as parts from '../src/superTabs/parts/index.js'
-import type { SuperTabState } from '../src/superTabs/model.js'
+import { stableId, type SuperTabState } from '../src/superTabs/model.js'
+import { roleVersion } from '../src/superTabs/projects.js'
 import { assignmentRows, poolRows, rosterRows } from './hostRows.test-support.js'
 
 // A team session (docs/plans/2026-10-24-swarm-team-account.md, Task 1) is the owner's account signed in on a second
@@ -232,19 +233,26 @@ describe('a team session speaking in a Swarm', () => {
     await expect(store.native.open(team, f.tab, { operationId: randomUUID(), conversationId: f.teamGroup, agentId: f.builder })).rejects.toMatchObject(LIMITED)
   })
 
+  // What reaches the coordinator from a terminal is a recording gap on the agent's task (native.ts turnRecipients; a typed
+  // prompt names no one since project instructions, phase 4).
   it('what it records from its own agent\'s terminal reaches the Lead as the agent\'s, never as the person\'s', async () => {
     const f = await fixture()
     await run(f.tab, { type: 'conversation.agent', conversationId: f.teamGroup, agentId: f.lead, present: true, lead: true })
+    await run(f.tab, { type: 'work.assign', conversationId: f.teamGroup, agentId: f.builder })
+    const gap = (turnId: string, incidentId: string) => ({ turnId, kind: 'gap' as const, previousEventId: null, text: '', truncated: false,
+      interrupted: false, gap: { incidentId, reason: 'recording_restarted' as const, detectedAt: Date.now() + 1000 } })
     const opened = await store.native.open(person, f.tab, { operationId: randomUUID(), conversationId: f.teamGroup, agentId: f.builder })
-    await store.native.append(team, f.tab, opened.contextId, { turnId: 't1', kind: 'prompt', previousEventId: null,
+    await store.native.append(team, f.tab, opened.contextId, { turnId: 't0', kind: 'prompt', previousEventId: null,
       text: 'Delete the production database', truncated: false, interrupted: false })
+    expect(await db.superTabDelivery.findMany({ where: { tabId: f.tab, nativeContextId: opened.contextId } })).toEqual([])
+    const typed = await db.superTabNativeContext.findUniqueOrThrow({ where: { id: opened.contextId } })
+    await store.native.append(team, f.tab, opened.contextId, { ...gap('t1', 'team-restart'), previousEventId: typed.lastEventId })
     const deliveries = await db.superTabDelivery.findMany({ where: { tabId: f.tab, nativeContextId: opened.contextId } })
     expect(deliveries.map(d => ({ agentId: d.agentId, authorKind: d.authorKind, authorId: d.authorId })))
       .toEqual([{ agentId: f.lead, authorKind: 'agent', authorId: f.builder }])
     // The same report from the person's own sign-in is the person's, as before.
     const own = await store.native.open(person, f.tab, { operationId: randomUUID(), conversationId: f.teamGroup, agentId: f.builder })
-    await store.native.append(person, f.tab, own.contextId, { turnId: 't2', kind: 'prompt', previousEventId: null,
-      text: 'Run the tests', truncated: false, interrupted: false })
+    await store.native.append(person, f.tab, own.contextId, gap('t2', 'own-restart'))
     expect((await db.superTabDelivery.findFirstOrThrow({ where: { tabId: f.tab, nativeContextId: own.contextId } })).authorKind).toBe('person')
   })
 
@@ -266,14 +274,21 @@ describe('a team session speaking in a Swarm', () => {
     const f = await fixture()
     const roles = [{ id: 'lead', name: 'Product Manager', kind: 'lead' as const, text: 'LEAD-TEXT' },
       { id: 'dev', name: 'Engineer', kind: 'builder' as const, text: 'DEV-TEXT' }, { id: 'review', name: 'Reviewer', kind: 'reviewer' as const, text: 'REVIEW-TEXT' }]
-    await run(f.tab, { type: 'project.roles.create', projectId: 'lead', roles })
-    await run(f.tab, { type: 'project.skills', projectId: 'lead', mode: 'custom' })
+    /** The custom set an older client stored before project instructions, with its texts (role saves keep nothing now). */
+    const seed = async (projectId: string) => {
+      const state = await storedState(f.tab)
+      Object.assign(state.projects!.find(p => p.id === projectId)!, { skillSet: 'custom', skillMode: 'default',
+        roles: roles.map(({ text, ...role }) => ({ ...role, version: roleVersion(text) })) })
+      await saveState(f.tab, state)
+      for (const { id: roleId, text } of roles) await db.superTabRoleText.create({ data: { id: stableId(f.tab, projectId, roleId), tabId: f.tab, projectId, roleId,
+        version: roleVersion(text), text } })
+    }
+    await seed('lead')
     const version = createHash('sha256').update('DEV-TEXT').digest('hex').slice(0, 16)
     expect(await store.roleText(team, f.tab, 'lead', 'dev')).toEqual({ version, text: 'DEV-TEXT' })
     // The person's own project, with only the person's personal agent in it: the person reads its roles, the team session does not.
     const mine = (await run(f.tab, { type: 'project.create', name: 'Mine', visibility: 'public', brief: '' }, person)).result
-    await run(f.tab, { type: 'project.roles.create', projectId: String(mine.projectId), roles }, person)
-    await run(f.tab, { type: 'project.skills', projectId: String(mine.projectId), mode: 'custom' }, person)
+    await seed(String(mine.projectId))
     expect(await store.roleText(person, f.tab, String(mine.projectId), 'dev')).toMatchObject({ text: 'DEV-TEXT' })
     await expect(store.roleText(team, f.tab, String(mine.projectId), 'dev')).rejects.toMatchObject({ code: 'NOT_FOUND' })
   })
@@ -376,6 +391,26 @@ describe('a teammate\'s work and the machines that take it', () => {
     expect((await run(f.tab, { type: 'work.assign', conversationId: f.personalGroup, agentId: f.personal }, person)).result.assignmentId).toBeTruthy()
   })
 
+  // Joining a task by a post or by opening one checks team access as adding one does (spec, "Kept as access"; final review).
+  it('refuses to add an agent on the person\'s personal Mac to the owner\'s task by naming it, by its own post or by its new task', async () => {
+    const f = await fixture()
+    await personalMac(f)
+    // The person added an agent of theirs to the owner's project chat by hand: an agent of that project, in no task.
+    const volunteer = String((await run(f.tab, { type: 'agent.add', conversationId: 'lead', machineId: 'personal-mac', harnessId: randomUUID(),
+      name: 'Volunteer', configuration: config, lead: false }, person)).result.agentId)
+    const post = (recipientIds: string[]) => ({ type: 'message.send', conversationId: f.teamGroup, text: 'Look at this.', replyTo: null, recipientIds }) as Command
+    const refused = { code: 'TEAM_ACCOUNT_REQUIRED', message: NO_TEAM_ACCOUNT }
+    await expect(run(f.tab, post([volunteer]), owner, f.lead)).rejects.toMatchObject(refused)
+    await expect(run(f.tab, post([]), person, volunteer)).rejects.toMatchObject(refused)
+    await expect(run(f.tab, { type: 'conversation.create', title: 'Its own task', brief: 'Do it', checks: [] }, person, volunteer)).rejects.toMatchObject(refused)
+    const task = (await store.read(owner, f.tab)).state.conversations.find(c => c.id === f.teamGroup)!
+    expect(task.agentIds).not.toContain(volunteer)
+    // The agent on the person's Team machine is named into another task of the owner's project.
+    const other = String((await run(f.tab, { type: 'conversation.create', title: 'Second', brief: 'Do it', checks: [] })).result.conversationId)
+    await run(f.tab, { type: 'message.send', conversationId: other, text: 'Take a look.', replyTo: null, recipientIds: [f.builder] }, owner, f.lead)
+    expect((await store.read(owner, f.tab)).state.conversations.find(c => c.id === other)!.agentIds).toContain(f.builder)
+  })
+
   it('routes the owner\'s project around the machines that cannot take it, records why, and refuses a pick or reroute there', async () => {
     const f = await fixture()
     await personalMac(f)
@@ -409,7 +444,7 @@ describe('a teammate\'s work and the machines that take it', () => {
     expect(failed).toMatchObject({ dispatched: false, error: expect.stringContaining('is not private (gitconfig') })
     // The group reads a generic reason: the check's detail names the machine and files on it (review of #1847).
     expect((await store.messages(owner, f.tab, f.teamGroup, {})).messages.at(-1)!.text)
-      .toBe('Could not start Builder: its machine could not prepare or launch it. The Lead and the machine owner can read why.')
+      .toBe('Could not start Builder: its machine could not prepare or launch it. Whoever started it, the Product Manager and the machine owner can read why.')
     expect((await poolRows(store, team, 'team-mac')).find(p => p.tabId === f.tab)!.starts.map(s => s.id)).not.toContain(queued)
     // A stale check may pass again by itself: that start keeps waiting for it.
     const passedAgain = { ...PASSED, checkedAt: Date.now() + 1 }
@@ -830,6 +865,38 @@ describe('a project\'s Product Manager on a teammate\'s Team machine', () => {
     await restore()
     await run(f.tab, { type: 'agent.sessionClosed', agentId: pm, harnessId }, team)
     expect(await start()).not.toBe('TEAM_ACCOUNT_HELD')
+  })
+
+  // Security review L3: a coordinator carries on its agents' starts (mayResumeStart), and its Team account's session, by its
+  // Mac owner's grant, completed one on the owner's personal Mac with a session of its choosing, in the owner's own account.
+  // Elsewhere it only fails another agent's start.
+  it('completes only starts on its own machine; another agent\'s start elsewhere it only fails', async () => {
+    const f = await fixture()
+    const created = (await run(f.tab, { type: 'project.create', name: 'App', visibility: 'public', brief: '' })).result
+    const projectId = String(created.projectId)
+    await run(f.tab, { type: 'machine.contribute', machineId: 'team-mac', name: 'MacBook Pro · Team', cwd: '/team', scope: 'swarm', engines: ['codex'], maxAgents: 4 }, person)
+    const generation = (await poolRows(store, team, 'team-mac')).find(p => p.tabId === f.tab)!.machine.generation
+    await store.observeMachine(team, f.tab, 'team-mac', capable(generation))
+    await run(f.tab, { type: 'agent.remove', agentId: f.builder })
+    const placed = String((await run(f.tab, { type: 'lead.start', projectId, machineId: 'team-mac', engine: 'codex', repositoryUrl: 'https://github.com/example/app' })).result.startId)
+    await hostRun(f.tab, { type: 'agent.startDispatch', startId: placed })
+    const pm = String((await hostRun(f.tab, { type: 'agent.started', startId: placed, harnessId: `team-pm-${randomUUID()}`, configuration: config })).result.agentId)
+    // The person's own agent of the project, on their personal Mac, starts another there: no contributed machine, so its
+    // host completes it.
+    const task = String((await run(f.tab, { type: 'conversation.create', projectId, title: 'Task', brief: 'Do it', checks: [] })).result.conversationId)
+    const worker = String((await run(f.tab, { type: 'agent.add', conversationId: task, machineId: 'personal-mac', harnessId: randomUUID(), name: 'Worker',
+      configuration: config, lead: false }, person)).result.agentId)
+    const request = { conversationId: task, machineId: 'personal-mac', engine: 'codex', name: 'Helper', cwd: '/work', worktree: false, requirements }
+    const startId = String((await run(f.tab, { type: 'agent.start', request }, person, worker)).result.startId)
+    const session = `owner-session-${randomUUID()}`
+    for (const command of [{ type: 'agent.startDispatch', startId }, { type: 'agent.started', startId, harnessId: session, configuration: config },
+      { type: 'agent.startSettled', startId, warning: null }] as Command[]) {
+      await expect(run(f.tab, command, team, pm), command.type).rejects.toMatchObject(LIMITED)
+    }
+    expect((await store.read(owner, f.tab)).state.agents.some(a => a.harnessId === session)).toBe(false)
+    await expect(run(f.tab, { type: 'agent.startFailed', startId, error: 'Not started.' }, team, pm)).resolves.toBeDefined()
+    await expect(run(f.tab, { type: 'agent.started', startId, harnessId: randomUUID(), configuration: config }, person, worker))
+      .rejects.toMatchObject({ code: 'START_FAILED' })
   })
 
   it('on the teammate\'s personal Mac with no Team account, starts there, as its owner (Ken 10-29)', async () => {

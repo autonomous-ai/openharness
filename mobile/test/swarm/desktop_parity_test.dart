@@ -15,11 +15,12 @@ const _copies = {
   'lib/swarm/parts.dart': 'lib/super_tabs/parts.dart',
   'lib/swarm/profile_model.dart': 'lib/super_tabs/profile_model.dart',
   // Live cards (Slack parity, #2212): which messages are cards, and the
-  // review verdict a card shows. The phone reads no GitHub yet (Lead, 10-29:
+  // linked tasks a card shows. The phone reads no GitHub yet (Lead, 10-29:
   // that request is a security change of its own), so Desktop's PR facts
   // reader has no copy here.
   'lib/swarm/live_card_model.dart': 'lib/super_tabs/live_card_model.dart',
-  'lib/swarm/review_verdict.dart': 'lib/super_tabs/review_verdict.dart',
+  'lib/swarm/linked_tasks.dart': 'lib/super_tabs/linked_tasks.dart',
+  'lib/swarm/instructions_model.dart': 'lib/super_tabs/instructions_model.dart',
 };
 
 /// The phone's model is ahead of main's desktop copy, so it is no exact copy
