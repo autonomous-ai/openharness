@@ -2470,7 +2470,7 @@ describe('Super Tab chat attachments', () => {
   })
   afterAll(async () => { await upload?.close() })
   type Part = [string, string] | [string, Uint8Array, string, string]
-  type Uploaded = { id: string; name: string; mime: string; size: number; url: string }
+  type Uploaded = { id: string; name: string; mime: string; size: number; url: string; expiresAt?: number }
   const post = async (tab: string, parts: Part[], user = owner, asAgentId?: string, server = upload) => {
     const form = new FormData()
     for (const part of parts) {
@@ -2487,7 +2487,14 @@ describe('Super Tab chat attachments', () => {
     post(tab, [['conversationId', conversationId], ['file', bytes, name, mime]], user, asAgentId)
   const send = (tab: string, attachmentIds: string[], user = owner, asAgentId?: string, text = '', operationId = randomUUID()) =>
     attaching.execute(user, tab, { operationId, command: { type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [], attachmentIds } }, asAgentId)
-  const objectKey = (url: string) => url.slice('https://cdn.example.test/'.length)
+  // Every file a read hands out is a signed link of this read (fileLinks.ts), on the bucket's own host: never the stored address.
+  const objectKey = (url: string) => {
+    expect(url.startsWith('https://storage.memory.test/')).toBe(true)
+    return decodeURIComponent(new URL(url).pathname.slice(1))
+  }
+  const signed = (path: string) => new RegExp(`^https://storage\\.memory\\.test/${path}\\?expires=\\d+&signature=[0-9a-f]{64}$`)
+  /** A file as two reads hand it: the same object, each with a link of its own read. */
+  const sameFile = (file: Uploaded) => ({ ...file, url: expect.stringMatching(signed(objectKey(file.url).replaceAll('.', '\\.'))), expiresAt: expect.any(Number) })
 
   it('keeps a credential out of a file\'s name, which the chat shows like the message', async () => {
     const { tab } = await fixture()
@@ -2506,7 +2513,7 @@ describe('Super Tab chat attachments', () => {
     const { status, attachment } = await file(tab, 'Screen Shot 1.png', bytes)
     expect(status).toBe(200)
     expect(attachment).toMatchObject({ name: 'Screen Shot 1.png', mime: 'image/png', size: bytes.byteLength })
-    expect(attachment.url).toMatch(new RegExp(`^https://cdn\\.example\\.test/super-tabs/${tab}/[0-9a-f]{32}/Screen_Shot_1\\.png$`))
+    expect(attachment.url).toMatch(signed(`super-tabs/${tab}/[0-9a-f]{32}/Screen_Shot_1\\.png`))
     expect(files.objects.get(objectKey(attachment.url))!.bytes.equals(Buffer.from(bytes))).toBe(true)
     expect(files.objects.get(objectKey(attachment.url))).toMatchObject({ contentType: 'image/png', contentDisposition: "inline; filename*=UTF-8''Screen%20Shot%201.png" })
     const html = await file(tab, 'page.html', new Uint8Array([60]), 'text/html')
@@ -2552,10 +2559,10 @@ describe('Super Tab chat attachments', () => {
     const { tab, lead } = await fixture()
     const { attachment } = await file(tab, 'log.txt', new Uint8Array(10), 'text/plain')
     const sent = await send(tab, [attachment.id])
-    const row = (await store.messages(owner, tab, 'lead', {})).messages.find(m => m.id === sent.result.messageId)!
-    expect(row).toMatchObject({ text: '', attachments: [attachment] })
-    const delivery = (await store.deliveries(host, tab, lead)).find(d => d.messageId === sent.result.messageId)!
-    expect((await store.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: randomUUID() })).message!.attachments).toEqual([attachment])
+    const row = (await attaching.messages(owner, tab, 'lead', {})).messages.find(m => m.id === sent.result.messageId)!
+    expect(row).toMatchObject({ text: '', attachments: [sameFile(attachment)] })
+    const delivery = (await attaching.deliveries(host, tab, lead)).find(d => d.messageId === sent.result.messageId)!
+    expect((await attaching.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: randomUUID() })).message!.attachments).toEqual([sameFile(attachment)])
     await expect(send(tab, [attachment.id])).rejects.toMatchObject({ code: 'ATTACHMENT_USED' })
     await expect(send(tab, [])).rejects.toMatchObject({ code: 'TEXT_REQUIRED' })
   })
@@ -2611,13 +2618,13 @@ describe('Super Tab chat attachments', () => {
     const done = await complete(tab, link.id)
     expect(done.status).toBe(200)
     expect(done.attachment).toMatchObject({ id: link.id, name: 'AC4 - 26 Oct v2.step', mime: 'application/octet-stream', size })
-    expect(done.attachment.url).toMatch(new RegExp(`^https://cdn\\.example\\.test/super-tabs/${tab}/[0-9a-f]{32}/AC4_-_26_Oct_v2\\.step$`))
+    expect(done.attachment.url).toMatch(signed(`super-tabs/${tab}/[0-9a-f]{32}/AC4_-_26_Oct_v2\\.step`))
     expect(files.objects.get(objectKey(done.attachment.url))).toMatchObject({ contentType: 'application/octet-stream', contentDisposition: "attachment; filename*=UTF-8''AC4%20-%2026%20Oct%20v2.step" })
     // A lost answer is answered again the same way.
     expect(await complete(tab, link.id)).toEqual(done)
     const sent = await send(tab, [link.id])
-    const delivery = (await store.deliveries(host, tab, lead)).find(d => d.messageId === sent.result.messageId)!
-    expect((await store.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: randomUUID() })).message!.attachments).toEqual([done.attachment])
+    const delivery = (await attaching.deliveries(host, tab, lead)).find(d => d.messageId === sent.result.messageId)!
+    expect((await attaching.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: randomUUID() })).message!.attachments).toEqual([sameFile(done.attachment)])
     files.objects.delete(objectKey(done.attachment.url))
   })
 
@@ -2780,6 +2787,98 @@ describe('Super Tab chat attachments', () => {
     stat.mockRestore()
     expect(JSON.stringify(error.mock.calls)).not.toMatch(/secret-key|super-tabs\//)
     error.mockRestore()
+  })
+
+  // Chat file links stop working when access ends (security review of Delete Swarm, 10-31; fileLinks.ts).
+  const fresh = async (tab: string, messageId: string, attachmentId: string, user = owner, conversationId = 'lead', asAgentId?: string) => {
+    const response = await upload.inject({ url: `/api/super-tabs/${tab}/conversations/${conversationId}/messages/${messageId}/attachments/${attachmentId}${asAgentId ? `?asAgentId=${asAgentId}` : ''}`,
+      headers: { authorization: `Bearer ${user.sub}` } })
+    return { status: response.statusCode, body: response.body, attachment: response.json().data?.attachment as Uploaded | undefined }
+  }
+  const sentFile = async (tab: string, body = 'hello') => {
+    const { attachment } = await file(tab, 'notes.txt', Buffer.from(body), 'text/plain')
+    const messageId = String((await send(tab, [attachment.id])).result.messageId)
+    return { attachment, messageId }
+  }
+  const read = async (tab: string, messageId: string, user = owner, asAgentId?: string) =>
+    (await attaching.messages(user, tab, 'lead', { messageId }, asAgentId)).messages[0]!.attachments as unknown as Uploaded[]
+
+  it('hands each reader a short-lived signed link, never the stored address, which stays on the row for older servers', async () => {
+    const { tab, lead } = await fixture()
+    const { attachment, messageId } = await sentFile(tab)
+    const [link] = await read(tab, messageId)
+    expect(link!.url).toMatch(signed(`super-tabs/${tab}/[0-9a-f]{32}/notes\\.txt`))
+    expect(link!.expiresAt! - Date.now()).toBeGreaterThan(4 * 60_000)
+    expect(link!.expiresAt! - Date.now()).toBeLessThanOrEqual(10 * 60_000)
+    expect(files.open(link!.url)?.toString()).toBe('hello')
+    expect(files.open(link!.url, link!.expiresAt!)).toBeNull()
+    // An agent reads the same way, and the stored row still names the file by its old address.
+    expect((await read(tab, messageId, host, lead))[0]!.url).toMatch(signed(`super-tabs/${tab}/[0-9a-f]{32}/notes\\.txt`))
+    const stored = (await db.superTabMessage.findFirst({ where: { id: messageId } }))!.attachments as unknown as Uploaded[]
+    expect(stored[0]!.url).toMatch(new RegExp(`^https://cdn\\.example\\.test/super-tabs/${tab}/`))
+    expect(JSON.stringify(await attaching.messages(owner, tab, 'lead', {}))).not.toContain('cdn.example.test')
+    // A fresh link opens the same file, for the same time.
+    const again = await fresh(tab, messageId, attachment.id)
+    expect(again.status).toBe(200)
+    expect(again.attachment).toEqual(sameFile(attachment))
+    expect(files.open(again.attachment!.url)?.toString()).toBe('hello')
+  })
+
+  it('gives a removed member no new link, and a link they kept stops opening within its lifetime', async () => {
+    const { tab } = await fixture()
+    await invite(tab)
+    const { attachment, messageId } = await sentFile(tab)
+    const [kept] = await read(tab, messageId, peer)
+    expect(files.open(kept!.url)?.toString()).toBe('hello')
+    expect((await fresh(tab, messageId, attachment.id, peer)).status).toBe(200)
+    await attaching.execute(owner, tab, { operationId: randomUUID(), command: { type: 'member.remove', userId: peer.sub } })
+    const refused = await fresh(tab, messageId, attachment.id, peer)
+    expect(refused.status).toBe(404)
+    expect(refused.body).not.toContain('notes')
+    await expect(attaching.messages(peer, tab, 'lead', { messageId })).rejects.toBeTruthy()
+    expect(files.open(kept!.url, kept!.expiresAt!)).toBeNull()
+    // Members who still read the chat still open it.
+    expect(files.open((await fresh(tab, messageId, attachment.id)).attachment!.url)?.toString()).toBe('hello')
+  })
+
+  it('gives no link once the Swarm is deleted, though its files wait for the purge', async () => {
+    const { tab } = await fixture()
+    const { attachment, messageId } = await sentFile(tab)
+    const [kept] = await read(tab, messageId)
+    await attaching.execute(owner, tab, { operationId: randomUUID(), command: { type: 'swarm.delete', name: 'Pilot' } })
+    expect(files.open(kept!.url)?.toString()).toBe('hello')
+    const refused = await fresh(tab, messageId, attachment.id)
+    expect(refused.status).toBe(404)
+    expect(refused.body).not.toContain('notes')
+    expect(files.open(kept!.url, kept!.expiresAt!)).toBeNull()
+  })
+
+  it('answers a file the message does not carry, a message elsewhere or not there, and a hidden row alike', async () => {
+    const { tab, lead } = await fixture()
+    await invite(tab)
+    const { attachment, messageId } = await sentFile(tab)
+    const other = await sentFile(tab, 'other')
+    const plain = String((await send(tab, [], owner, undefined, 'no file')).result.messageId)
+    // An agent-only note to the Lead: the person does not read it, so its file is not theirs to open either.
+    const { attachment: noted } = await file(tab, 'note.txt', Buffer.from('agent only'), 'text/plain', 'lead', host, lead)
+    const hidden = String((await attaching.execute(host, tab, { operationId: randomUUID(), command: { type: 'message.send', conversationId: 'lead',
+      text: 'for the lead', replyTo: null, recipientIds: [lead], attachmentIds: [noted.id], agentOnly: true } as Command }, lead)).result.messageId)
+    const answers = await Promise.all([
+      fresh(tab, messageId, other.attachment.id, peer),
+      fresh(tab, plain, attachment.id, peer),
+      fresh(tab, 'ffffffffffffffffffffffff', attachment.id, peer),
+      fresh(tab, hidden, noted.id, peer),
+    ])
+    expect(answers.map(a => [a.status, a.body])).toEqual(answers.map(() => [404, answers[0]!.body]))
+    expect(answers[0]!.body).toContain('FILE_UNAVAILABLE')
+    expect((await fresh(tab, messageId, attachment.id, peer, 'nope')).status).toBe(404)
+  })
+
+  it('reads every file with an empty link on a server with no bucket, never the stored address', async () => {
+    const { tab } = await fixture()
+    const { messageId } = await sentFile(tab)
+    const page = await new SuperTabStore(db).messages(owner, tab, 'lead', { messageId })
+    expect((page.messages[0]!.attachments as unknown as Uploaded[]).map(a => [a.name, a.url, a.expiresAt])).toEqual([['notes.txt', '', undefined]])
   })
 
   it('refuses a viewer before storing anything', async () => {

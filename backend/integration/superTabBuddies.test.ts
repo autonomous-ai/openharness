@@ -412,11 +412,11 @@ describe('a Buddy through the store', () => {
     const sent = await propose([plan, shot, log])
     const id = String(sent.result.messageId)
     const read = (await f.store.messages(owner, f.tab, 'lead', {}, f.lead)).messages.find(m => m.id === id)
-    expect(read?.attachments?.map(a => [a.name, a.mime, a.url.startsWith('https://cdn.example.test/super-tabs/')])).toEqual([
+    expect(read?.attachments?.map(a => [a.name, a.mime, a.url.startsWith(`https://storage.memory.test/super-tabs/${f.tab}/`)])).toEqual([
       ['plan.md', 'text/markdown', true], ['shot.png', 'image/png', true], ['sync.log', 'text/plain', true]])
     expect((await f.store.messages(owner, f.tab, 'lead', {})).messages.find(m => m.id === id)?.attachments).toHaveLength(3)
     // Each opens from its link as the apps open it: the picture shown in place, the plan and the log as their own text.
-    const opened = (url: string) => f.files.objects.get(new URL(url).pathname.slice(1))!
+    const opened = (url: string) => { expect(f.files.open(url)).not.toBeNull(); return f.files.objects.get(decodeURIComponent(new URL(url).pathname.slice(1)))! }
     const [planFile, shotFile, logFile] = read!.attachments!.map(a => opened(a.url))
     expect(openPng(shotFile!.bytes)).toEqual({ width: 1, height: 1, pixel: [255, 0, 0, 255] })
     expect(shotFile).toMatchObject({ contentType: 'image/png', contentDisposition: "inline; filename*=UTF-8''shot.png" })

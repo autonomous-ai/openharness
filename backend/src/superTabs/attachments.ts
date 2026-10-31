@@ -3,8 +3,10 @@ import { Readable, Transform, Writable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { z } from 'zod'
 
-/** Metadata as a message stores and returns it. The bytes stay in the bucket. */
-export interface Attachment { id: string; name: string; mime: string; size: number; url: string }
+/** Metadata as a message stores it. The bytes stay in the bucket. A stored `url` is the file's old public address: it names the
+ *  object, and no reader is ever handed it. Each read swaps it for a short-lived signed link and says when that link stops
+ *  opening, `expiresAt` (epoch ms; fileLinks.ts); a read that could not sign one hands `url` empty. */
+export interface Attachment { id: string; name: string; mime: string; size: number; url: string; expiresAt?: number }
 
 /** One chat file, whichever way it comes. Every client checks the same number before it sends (attachments.limits.test.ts). */
 export const MAX_ATTACHMENT_BYTES = 256 * 1024 * 1024
@@ -71,18 +73,21 @@ export function linkHeaders(name: string, size: number, cacheControl: string): R
 /** A storage error's code or HTTP status, for a log line: its text can quote the object's key, which is the file's link. */
 export const errorCode = (error: unknown): string | number | null =>
   error && typeof error === 'object' && 'code' in error && (typeof error.code === 'string' || typeof error.code === 'number') ? error.code : null
-export const CHAT_CACHE_CONTROL = 'public, max-age=31536000, immutable'
+/** A chat file is read only through a signed link that lasts minutes (fileLinks.ts): no shared cache keeps a copy, and a
+ *  browser keeps one no longer than its link lasts. Files stored before this say `public, max-age=31536000, immutable`; the
+ *  release step that makes the bucket private rewrites theirs (docs/swarms.md, "Chat file links"). */
+export const CHAT_CACHE_CONTROL = 'private, max-age=600'
 
-/** The bucket behind the CDN. Tests and the local rig use the in-memory store below. */
+/** The bucket the chat files are in. Tests and the local rig use the in-memory store below. */
 export interface AttachmentStore {
   /** Streams `body` into the object and answers its size. Past `cap` bytes it throws AttachmentTooLarge and leaves no object. */
   put(objectKey: string, file: { name: string; mime: string }, body: Readable, cap: number): Promise<number>
-}
-/** Where avatars are kept, and the link a member read carries for one (avatarLinks.ts). */
-export interface AvatarStore extends AttachmentStore {
-  /** A link that opens [objectKey]: in a private bucket until [expiresAt] (epoch ms) and never after; on the CDN, for good. */
+  /** A link that opens [objectKey] until [expiresAt] (epoch ms) and never after, whether or not the bucket is public. Storage
+   *  checks it when a request starts, so a long download that started in time finishes. */
   signedUrl(objectKey: string, expiresAt: number): Promise<string>
 }
+/** Where avatars are kept, and the link a member read carries for one (avatarLinks.ts). */
+export interface AvatarStore extends AttachmentStore {}
 /** `avatars`: where avatars are kept and how they are linked (AvatarStore); without it, avatar uploads are refused and presets
  *  still work. `avatarPrefix`: the folder avatar keys start with, and the only one a link is signed for (avatarLinks.ts);
  *  `prefix` when unset. */
@@ -91,7 +96,7 @@ export interface Attachments { store: AttachmentStore; prefix: string; publicBas
 export const SHARED_AVATAR_PREFIX = 'avatars'
 export const trimPrefix = (prefix: string) => prefix.replace(/^\/+|\/+$/g, '')
 
-/** Anyone holding a link can open the file, so the key carries 128 random bits; the name segment is for people. */
+/** The key carries 128 random bits, so no one finds a file by guessing; the name segment is for people. */
 export function objectKeyFor(prefix: string, tabId: string, name: string): string {
   const safe = name.replaceAll(/[^A-Za-z0-9._-]+/g, '_').replace(/^[._]+/, '').slice(-120) || 'file'
   return [trimPrefix(prefix), tabId, randomBytes(16).toString('hex'), safe].filter(Boolean).join('/')
@@ -220,28 +225,46 @@ export class GcsAttachmentStore implements AttachmentStore, DirectUploads {
   async delete(objectKey: string) {
     await (await this.files()).file(objectKey).delete({ ignoreNotFound: true })
   }
-}
-
-/** Avatars in a bucket that grants nobody read access: each read hands out V4 signed links instead (avatarLinks.ts). */
-export class GcsAvatarStore extends GcsAttachmentStore implements AvatarStore {
-  constructor(name: string, account: ServiceAccount | null = null) { super(name, account, 'private, max-age=3600') }
+  /** A V4 signed GET, on Cloud Storage's own host. Signed with the service account key when one is set, else through the
+   *  cloud's signing API, a network call: fileLinks.ts and avatarLinks.ts reuse each link through its window. */
   async signedUrl(objectKey: string, expiresAt: number) {
     const [url] = await (await this.files()).file(objectKey).getSignedUrl({ version: 'v4', action: 'read', expires: expiresAt })
     return url
   }
 }
 
-/** Avatars in the attachments bucket, linked on its CDN as chat files are: permanent public links, so nothing is signed. */
-export class CdnAvatarStore implements AvatarStore {
-  constructor(readonly store: AttachmentStore, private readonly publicBase: string) {}
+/** Avatars in a bucket of their own, which grants nobody read access: each read hands out signed links (avatarLinks.ts). */
+export class GcsAvatarStore extends GcsAttachmentStore implements AvatarStore {
+  constructor(name: string, account: ServiceAccount | null = null) { super(name, account, 'private, max-age=3600') }
+}
+
+/** Avatars in the attachments bucket's avatar folder (prod, Ken 2026-10-28 option B1), linked as chat files are: by signed
+ *  links, so a removed member's copied link stops opening and nothing breaks once the bucket is no longer public. */
+export class SharedAvatarStore implements AvatarStore {
+  constructor(readonly store: AttachmentStore) {}
   put(objectKey: string, file: { name: string; mime: string }, body: Readable, cap: number) { return this.store.put(objectKey, file, body, cap) }
-  async signedUrl(objectKey: string) { return publicUrl(this.publicBase, objectKey) }
+  signedUrl(objectKey: string, expiresAt: number) { return this.store.signedUrl(objectKey, expiresAt) }
 }
 
 export class MemoryAttachmentStore implements AttachmentStore, DirectUploads {
   readonly objects = new Map<string, { bytes: Buffer; contentType: string; contentDisposition: string; cacheControl?: string }>()
   private readonly linkSecret = randomBytes(32)
-  constructor(private readonly now: () => number = Date.now) {}
+  private readonly readSecret = randomBytes(32)
+  /** [readBase]: where its signed read links point, as Cloud Storage's own host for a real bucket. */
+  constructor(private readonly now: () => number = Date.now, private readonly readBase = 'https://storage.memory.test') {}
+  private readSignature(objectKey: string, expiresAt: number) {
+    return createHmac('sha256', this.readSecret).update(`${objectKey}\n${expiresAt}`).digest('hex')
+  }
+  async signedUrl(objectKey: string, expiresAt: number) {
+    return `${this.readBase}/${objectKey}?expires=${expiresAt}&signature=${this.readSignature(objectKey, expiresAt)}`
+  }
+  /** What the bucket answers a GET of [url] at [at]: the bytes, or null once the link is over, was not signed here, or names
+   *  nothing. A link checks its own key only, as a real signed link does. */
+  open(url: string, at = this.now()): Buffer | null {
+    const link = new URL(url), objectKey = decodeURIComponent(link.pathname.slice(1)), expiresAt = Number(link.searchParams.get('expires'))
+    if (`${link.origin}` !== new URL(this.readBase).origin || !(expiresAt > at) || link.searchParams.get('signature') !== this.readSignature(objectKey, expiresAt)) return null
+    return this.objects.get(objectKey)?.bytes ?? null
+  }
   async put(objectKey: string, file: { name: string; mime: string }, body: Readable, cap: number) {
     const chunks: Buffer[] = []
     const size = await capped(body, cap, new Writable({ write(chunk: Buffer, _encoding, done) { chunks.push(chunk); done() } }))
@@ -283,26 +306,13 @@ export class MemoryAttachmentStore implements AttachmentStore, DirectUploads {
 
 /** Avatars for tests and the local rig: links carry their expiry and an HMAC of it, and `open` honours both as the bucket would. */
 export class MemoryAvatarStore extends MemoryAttachmentStore implements AvatarStore {
-  private readonly secret = randomBytes(32)
-  constructor(private readonly base: string) { super() }
-  private sign(objectKey: string, expiresAt: number) {
-    return createHmac('sha256', this.secret).update(`${objectKey}\n${expiresAt}`).digest('hex')
-  }
-  async signedUrl(objectKey: string, expiresAt: number) {
-    return `${this.base}/${objectKey}?expires=${expiresAt}&signature=${this.sign(objectKey, expiresAt)}`
-  }
-  /** What the bucket answers [url] at [now]: the bytes, or null once the link is over or was not signed here. */
-  open(url: string, now: number): Buffer | null {
-    const link = new URL(url), objectKey = decodeURIComponent(link.pathname.slice(1)), expiresAt = Number(link.searchParams.get('expires'))
-    if (!(expiresAt > now) || link.searchParams.get('signature') !== this.sign(objectKey, expiresAt)) return null
-    return this.objects.get(objectKey)?.bytes ?? null
-  }
+  constructor(base: string) { super(Date.now, base) }
 }
 
 export function attachmentsFromEnv(env: { NODE_ENV: string; SUPER_TAB_ATTACHMENTS_BUCKET: string; SUPER_TAB_ATTACHMENTS_CREDENTIALS: string;
   SUPER_TAB_ATTACHMENTS_PREFIX: string; SUPER_TAB_ATTACHMENTS_PUBLIC_BASE: string; SUPER_TAB_AVATARS_BUCKET: string }): Attachments | null {
-  // Every message carries these links and every agent's computer downloads from them: in production only over HTTPS.
-  // A local or test run may serve them from a plain loopback server.
+  // Stored messages name their files by an address on this base (fileLinks.ts reads the object's key from it): in production
+  // only HTTPS, as every link once handed out was. A local or test run may use a plain loopback address.
   if (env.NODE_ENV === 'production' && new URL(env.SUPER_TAB_ATTACHMENTS_PUBLIC_BASE).protocol !== 'https:') {
     throw new Error('SUPER_TAB_ATTACHMENTS_PUBLIC_BASE must be an https:// address in production.')
   }
@@ -314,11 +324,11 @@ export function attachmentsFromEnv(env: { NODE_ENV: string; SUPER_TAB_ATTACHMENT
   // A bucket of their own wins: nobody reads it without a signed link.
   if (env.SUPER_TAB_AVATARS_BUCKET) return { ...base, avatars: new GcsAvatarStore(env.SUPER_TAB_AVATARS_BUCKET, account), avatarPrefix: trimPrefix(base.prefix) }
   // Prod has only the attachments bucket (Ken, 2026-10-28, option B1): avatars live there in their own folder and are linked
-  // on its CDN like chat files, so anyone who once had a picture's link keeps it (docs/swarms.md). Chat files never go in
-  // the avatar folder, and avatar links are made for that folder alone.
+  // as chat files are, by signed links (docs/swarms.md). Chat files never go in the avatar folder, and avatar links are made
+  // for that folder alone.
   const chat = trimPrefix(base.prefix)
   if (chat === SHARED_AVATAR_PREFIX || chat.startsWith(`${SHARED_AVATAR_PREFIX}/`)) {
     throw new Error(`SUPER_TAB_ATTACHMENTS_PREFIX must not be ${SHARED_AVATAR_PREFIX}/ or inside it while avatars share the attachments bucket. Pick another prefix, or set SUPER_TAB_AVATARS_BUCKET.`)
   }
-  return { ...base, avatars: new CdnAvatarStore(base.store, base.publicBase), avatarPrefix: SHARED_AVATAR_PREFIX }
+  return { ...base, avatars: new SharedAvatarStore(base.store), avatarPrefix: SHARED_AVATAR_PREFIX }
 }
