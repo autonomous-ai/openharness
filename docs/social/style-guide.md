@@ -1,0 +1,41 @@
+# X post style guide (@dee_hw)
+
+Source: Dee's public profile page, read logged out on 2026-10-31. Only his
+5 newest posts are public without signing in; X, the Wayback Machine and the
+mirrors refused older history. Update the table when more posts are readable.
+
+## What performed (Oct 29-31, 2026)
+
+| Post | Likes | Replies | Views | Shape |
+|---|---|---|---|---|
+| "Lamp is shipping." (pinned) | 35 | 8 | 1.9k | 3-word hook, a concrete scene, an emotional closer, link, photo |
+| "There's a lot I love about Lamp..." | 21 | 4 | 2.6k | personal moment, "You don't have to ask. Lamp just does it.", link, video |
+| "Gift season: a new kind of burgundy 🍷" | 12 | 1 | 0.9k | one-line pun quoting a product post |
+| "Hardware is eating the world." | 7 | 1 | 0.6k | one-line take quoting a big account |
+| "Having a lot of fun designing this Spaceship Pod..." | 3 | 0 | 0.2k | posted hours before this read; too early to judge |
+
+## The pattern
+
+- **Hook:** first line is a short declarative sentence that stands alone
+  ("Lamp is shipping."). No question hooks, no "thread 🧵".
+- **Body:** one concrete, physical detail (packing boxes, a sip of water), told
+  in first person ("I", "we"). Short paragraphs with blank lines between them.
+- **Closer:** a human line ("9 months of raising a kid. Time to let them go.")
+  or a crisp benefit in 2-3 short sentences.
+- **Length:** either a one-liner (under 40 chars) or a full post (240-280).
+- **Tone:** warm, plain, a little proud; never salesy. No jargon.
+- **Emoji:** rare, at most one, only as part of a pun (🍷).
+- **Hashtags:** none. **Mentions:** none in his own posts.
+- **Link:** one, at the end.
+- **Visual:** always one: a real photo or a short video of the thing itself.
+  For software, a clean, real product screenshot (dark theme), cropped to the
+  part that tells the story.
+
+## Rules for daily drafts
+
+1. Under 280 characters as X counts them (a link counts as 23).
+2. One shipped, public fact a day; never repeat a topic in `log.md`.
+3. Hook line first; one concrete detail; human closer; one link.
+4. One visual from our own committed screenshots; no names, no private
+   chats, nothing unreleased-sensitive.
+5. Drafts only: Dee posts them himself.

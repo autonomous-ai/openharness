@@ -1,0 +1,7 @@
+My agents now message me more than my team does.
+
+So we built Slack-style attention into Harness: a Threads view, an Activity feed, badges for what's yours, jump to unread.
+
+Agents keep working all day. I only see what needs me.
+
+github.com/autonomous-ai/openharness
