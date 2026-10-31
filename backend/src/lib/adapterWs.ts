@@ -25,7 +25,7 @@ import { prisma } from './prisma.js'
 import {
   publishUp, claimMachineOwner, releaseMachineOwner, publishDeviceE2eePair,
   publishTerminalUp, subscribeTerminalDown,
-  setMachineAppState, clearMachineAppState,
+  setMachineAppState, clearMachineAppState, noteTuiPresence,
 } from './bus.js'
 import { trackSocketLiveness } from './hub.js'
 import { guardedSend, guardedSendJson } from './wsSend.js'
@@ -495,7 +495,11 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
         // TUI says where it runs (TUI_SURFACES); a name this backend does not know counts as nothing,
         // never as the desktop app.
         if (surface === undefined) touchUserPresence(kind as 'open' | 'ping')
-        else if (typeof surface === 'string' && TUI_SURFACES.has(surface)) touchTuiPresence(surface as ClientSurface, kind as 'open' | 'ping')
+        else if (typeof surface === 'string' && TUI_SURFACES.has(surface)) {
+          touchTuiPresence(surface as ClientSurface, kind as 'open' | 'ping')
+          // Its account's daemons relay the events only a terminal app reads while one is open (bus.ts noteTuiPresence).
+          void noteTuiPresence(userId, kind as 'open' | 'ping')
+        }
         return
       }
       // The machine appending to its account's device key log (lib/deviceKeyLog.ts): its own key, or a

@@ -39,6 +39,8 @@ vi.mock('ioredis', () => {
     on = vi.fn()
     eval = vi.fn(async () => 0)
     get = vi.fn(async (_key: string): Promise<string | null> => null)
+    set = vi.fn(async (..._args: unknown[]): Promise<string | null> => 'OK')
+    exists = vi.fn(async (_key: string): Promise<number> => 0)
     pipelines: FakePipeline[] = []
     pipeline() { const p = new FakePipeline(); this.pipelines.push(p); return p }
     multiCalls: Array<{ cmd: string; args: unknown[] }> = []
@@ -68,7 +70,7 @@ const bus = await import('./bus.js')
 type MockFn = ReturnType<typeof vi.fn>
 const pub = state.instances[0] as unknown as {
   publish: MockFn; subscribe: MockFn; opts: unknown
-  eval: MockFn; get: MockFn
+  eval: MockFn; get: MockFn; set: MockFn; exists: MockFn
   multiCalls: Array<{ cmd: string; args: unknown[] }>; multiResult: unknown
   pipelines: Array<{ calls: Array<{ cmd: string; args: unknown[] }> }>
 }
@@ -339,5 +341,38 @@ describe('Swarm stamps', () => {
     deliver('swarm-stamp', JSON.stringify({ tabId: 7 }))
     deliver('swarm-stamp', JSON.stringify({ tabId: 'tab-3', scopes: ['everything'] }))
     expect(heard).toEqual([['tab-2', ['machine']]])
+  })
+})
+
+// Change 5 of docs/plans/2026-10-31-live-events-relay-design.md: a terminal app open on the account, told to its daemons.
+describe('terminal app presence', () => {
+  beforeEach(() => { pub.publish.mockClear(); pub.set.mockReset(); pub.set.mockResolvedValue('OK'); pub.exists.mockReset() })
+
+  it('refreshes the account\'s key for 150 s on every open and ping, and tells the daemons at once on an open', async () => {
+    await bus.noteTuiPresence('kim', 'open')
+    expect(pub.set).toHaveBeenCalledWith('tui_open:kim', '1', 'EX', 150)
+    expect(pub.publish.mock.calls.map((c: unknown[]) => c[0])).toEqual(['tui:kim'])
+    expect(bus.TUI_OPEN_FOR_MS).toBe(180_000)
+  })
+
+  it('tells the daemons on a ping at most once a minute', async () => {
+    pub.set.mockImplementation(async (...args: unknown[]) => (args[0] === 'tui_open_said:kim' ? 'OK' : 'OK'))
+    await bus.noteTuiPresence('kim', 'ping')
+    expect(pub.set).toHaveBeenCalledWith('tui_open_said:kim', '1', 'EX', 60, 'NX')
+    expect(pub.publish).toHaveBeenCalledTimes(1)
+    pub.set.mockImplementation(async (...args: unknown[]) => (args[0] === 'tui_open_said:kim' ? null : 'OK'))
+    await bus.noteTuiPresence('kim', 'ping')
+    expect(pub.publish).toHaveBeenCalledTimes(1)
+  })
+
+  it('reads whether one is open now, and says no when Redis fails', async () => {
+    pub.exists.mockResolvedValueOnce(1)
+    await expect(bus.tuiOpenNow('kim')).resolves.toBe(true)
+    pub.exists.mockResolvedValueOnce(0)
+    await expect(bus.tuiOpenNow('kim')).resolves.toBe(false)
+    pub.exists.mockRejectedValueOnce(new Error('ECONNREFUSED'))
+    await expect(bus.tuiOpenNow('kim')).resolves.toBe(false)
+    pub.set.mockRejectedValueOnce(new Error('ECONNREFUSED'))
+    await expect(bus.noteTuiPresence('kim', 'open')).resolves.toBeUndefined()
   })
 })
