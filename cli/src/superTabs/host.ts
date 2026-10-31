@@ -1070,7 +1070,10 @@ export class SuperTabHost {
     for (const item of data) {
       const row = object(item), agent = object(row.agent), session = object(agent.buddySession), buddyOf = object(agent.buddyOf)
       if (!identifier(row.tabId) || !identifier(agent.id) || !identifier(agent.harnessId) || agent.machineId !== this.machineId) continue
-      if (row.closeSession === true || row.stopRequested === true || !identifier(session.thread)) continue
+      // The one Buddy's session in an older project chat (a phone's, backend startOldChatBuddy) ends idle as a thread session
+      // does (security review 2 of #2435): each old chat would otherwise keep one running until # buddy is removed.
+      const oldChat = !identifier(session.thread) && agent.buddyNarrow === true && identifier(agent.projectId)
+      if (row.closeSession === true || row.stopRequested === true || (!identifier(session.thread) && !oldChat)) continue
       if (!identifier(buddyOf.personId) || !identifier(buddyOf.generation)) continue
       const key = `${row.tabId}:${agent.id}`, now = this.now()
       present.add(key)
@@ -1108,8 +1111,9 @@ export class SuperTabHost {
       state.running = true
       const ending = reason, short = String(agent.harnessId).slice(0, 8)
       // One id per session and reason: a retry is the same request, and a changed reason never reuses an id for another.
+      // An older chat's Buddy is removed from that chat, as its person's Remove there does; its chat stays.
       void backend(this.core, 'POST', `/api/super-tabs/${row.tabId}/commands`, { operationId: `buddy-session-end-${agent.id}-${ending}`,
-        command: { type: 'buddy.sessionEnd', conversationId, thread: session.thread, reason: ending } })
+        command: oldChat ? { type: 'buddy.remove', projectId: agent.projectId } : { type: 'buddy.sessionEnd', conversationId, thread: session.thread, reason: ending } })
         .then(() => { state.ended = true; this.log(`Ended thread session ${short} in Swarm ${row.tabId}: ${ending}.`) })
         .catch(error => {
           state.retryAt = this.now() + Math.min(END_RETRY_MAX_MS, END_RETRY_MS * 2 ** state.failures++)

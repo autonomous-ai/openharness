@@ -60,6 +60,27 @@ describe('a person\'s one Buddy\'s folder', () => {
     expect(git(web, 'worktree', 'list').trim().split('\n')).toHaveLength(1)
   })
 
+  it('drops at the start a project the new list no longer names, before the Buddy\'s first turn', async () => {
+    const r = root(), web = checkout(r, 'web-src'), secret = checkout(r, 'secret-src'), home = join(r, 'home')
+    await prepareBuddyHome(home, [{ id: 'web', name: 'Web', cwd: web }, { id: 'secret', name: 'Secret', cwd: secret }])
+    await prepareBuddyHome(home, [{ id: 'web', name: 'Web', cwd: web }])
+    expect(existsSync(join(home, 'projects', 'Secret'))).toBe(false)
+    expect(existsSync(join(home, 'projects', 'Web', 'WHO'))).toBe(true)
+  })
+
+  it('never removes outside its projects folder, whatever its list says (security review 1 of #2436)', async () => {
+    const r = root(), web = checkout(r, 'web-src'), home = join(r, 'home')
+    await prepareBuddyHome(home, [{ id: 'web', name: 'Web', cwd: web }])
+    const outside = join(r, 'keep-me')
+    mkdirSync(outside)
+    writeFileSync(join(outside, 'file'), 'mine')
+    writeFileSync(join(home, '.buddy-projects.json'), JSON.stringify([{ id: 'web', name: 'Web', dir: 'Web' },
+      { id: 'evil', name: 'Evil', dir: '../../keep-me' }, { id: 'dot', name: 'Dot', dir: '..' }]))
+    await pruneBuddyHome(home, new Set(['web']))
+    await removeBuddyHome(home)
+    expect(readFileSync(join(outside, 'file'), 'utf8')).toBe('mine')
+  })
+
   it('names folders safely and apart, and reads only well-formed projects from a start', () => {
     expect(folderName('../etc', new Set())).toBe('etc')
     expect(folderName('.hidden', new Set())).toBe('hidden')

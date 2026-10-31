@@ -3236,6 +3236,33 @@ describe('ending a Buddy\'s thread sessions', () => {
     })
   }
 
+  // Security review 2 of #2435: the one Buddy's session in an older project chat (a phone's) ends idle too, removed from that chat.
+  it('ends the one Buddy\'s session in an older project chat idle for 30 minutes, removing it there', async () => {
+    const row = sessionRow()
+    const agent = row.agent as Record<string, unknown>
+    delete agent.buddySession
+    agent.buddyNarrow = true
+    const t = lifeFixture([row])
+    t.live(true)
+    await t.poll()
+    await awake(t, BUDDY_SESSION_IDLE_MS - 1)
+    expect(t.commands.filter(c => (c.command as Record<string, unknown>)?.type === 'buddy.remove')).toEqual([])
+    await t.poll(1)
+    await vi.waitFor(() => expect(t.commands.filter(c => (c.command as Record<string, unknown>)?.type === 'buddy.remove')).toHaveLength(1))
+    expect(t.commands.find(c => (c.command as Record<string, unknown>)?.type === 'buddy.remove')!.command).toEqual({ type: 'buddy.remove', projectId: 'proj' })
+    // The one Buddy itself, which no thread and no older chat holds, is never ended this way.
+    const main = sessionRow()
+    const mainAgent = main.agent as Record<string, unknown>
+    delete mainAgent.buddySession
+    mainAgent.buddyScope = 'swarm'
+    delete mainAgent.projectId
+    const u = lifeFixture([main])
+    u.live(true)
+    await u.poll()
+    await awake(u, BUDDY_SESSION_IDLE_MS + 60_000)
+    expect(u.commands.filter(c => ['buddy.remove', 'buddy.sessionEnd'].includes(String((c.command as Record<string, unknown>)?.type)))).toEqual([])
+  })
+
   it('never ends one still working: a screen that keeps changing keeps it, however long the question takes', async () => {
     let clock = 0
     progress = vi.spyOn(TerminalHost.prototype, 'progressOf').mockImplementation(() => ({ harness: clock }))

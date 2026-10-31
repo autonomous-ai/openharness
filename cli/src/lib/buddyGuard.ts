@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync,
+import { chmodSync, closeSync, existsSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync,
   writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
@@ -142,7 +142,26 @@ function configHosts(home: string): string[] {
  * needs their own account, never a Harness Team account, and Claude Code's sandbox to run its shell in: macOS, or Linux
  * with bubblewrap. Windows has none.
  */
+/** A Buddy of one project (a project session, or the one Buddy's session in an older project chat: backend
+ *  Agent.buddyNarrow) never reads beyond its folder, whose home may hold another project's clone. Its host marks its folder,
+ *  by the worktree name its start gives it, before it launches (superTabs/start.ts), so its launch sets up no wide guard at
+ *  all, not only no grant (security review 1 of #2436). */
+export const buddyNarrowFile = (dataDir: string, leaf: string): string =>
+  join(dataDir, 'buddy-narrow', createHash('sha256').update(leaf).digest('hex').slice(0, 32))
+export function markBuddyNarrow(leaf: string, dataDir: string = env.ADAPTER_DATA_DIR): void {
+  const file = buddyNarrowFile(dataDir, leaf)
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
+  writeFileSync(file, '', { mode: 0o600 })
+}
+/** Whether [root] is a folder its host marked as one project's Buddy's: by its name, or its name before a -2, -3 a taken one
+ *  got (lib/gitProject.ts). */
+const narrowFolder = (root: string, dataDir: string) => {
+  const name = basename(root)
+  return [name, name.replace(/-\d+$/, '')].some(leaf => existsSync(buddyNarrowFile(dataDir, leaf)))
+}
+
 export function buddyLaunchWide(root: string, facts: BuddyLaunchFacts = launchFacts()): BuddyWide | null {
+  if (narrowFolder(root, facts.dataDir)) return null
   if (facts.team || !(facts.platform === 'darwin' || (facts.platform === 'linux' && facts.hasBwrap)) || !facts.engineHomes) return null
   // Where Claude Code keeps every session's tool output on this machine.
   const tmpDirs = [...new Set([`/tmp/claude-${facts.uid}`, `/private/tmp/claude-${facts.uid}`, join(tmpdir(), `claude-${facts.uid}`)])]

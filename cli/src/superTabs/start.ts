@@ -11,6 +11,7 @@ import type { AgentEngine } from '../engines/types.js'
 import { isSwarmSkillMode, swarmSkillUse, wireRole, type SwarmSkillMode } from '../lib/swarmSkills.js'
 import { isTeamDaemon, pmEngineHome } from './teamDaemon.js'
 import { BUDDY_HOMES, buddyProjectsOf, prepareBuddyHome } from './buddyHome.js'
+import { markBuddyNarrow } from '../lib/buddyGuard.js'
 import { projectsRoot } from '../lib/projectFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 import { join as joinPath } from 'node:path'
@@ -374,6 +375,8 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       // backend's folder for it only admits the start.
       const homeFolder = swarmBuddy ? joinPath(projectsRoot(), 'worktrees', BUDDY_HOMES, worktreeFolderName(`super-tab/${startId}`)) : null
       const home = homeFolder ? await prepareBuddyHome(homeFolder, buddyProjectsOf(request)) : null
+      // A Buddy of one project launches with no wide guard: its folder is marked before its launch (lib/buddyGuard.ts).
+      if (buddy && request.buddyNarrow === true) markBuddyNarrow(worktreeFolderName(`super-tab/${startId}`))
       // A project's Product Manager (backend leadStart.ts): the Lead of its project's conversation once it runs.
       const lead = !buddy && !!request.leadFor && typeof request.leadFor === 'object'
       // A contributed machine's host cannot read the tab as a Lead does: it asked the backend whose work this is when it

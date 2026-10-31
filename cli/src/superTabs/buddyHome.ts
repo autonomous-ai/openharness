@@ -8,7 +8,7 @@
  */
 import { execFile } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 import { insideGitCheckout } from '../lib/gitProject.js'
 
@@ -45,10 +45,14 @@ export function folderName(name: string, taken: ReadonlySet<string>): string {
   return dir
 }
 
+/** A folder name this file could have made (folderName): never a path, `..` or a hidden name, so a changed list can never
+ *  point a removal outside `projects/` (security review 1 of #2436). */
+const SAFE_DIR = /^[\p{L}\p{N}_][\p{L}\p{N}._-]{0,79}$/u
 const listed = (home: string): Listed[] => {
   try {
     const rows = JSON.parse(readFileSync(join(home, MANIFEST), 'utf8')) as unknown
-    return Array.isArray(rows) ? rows.filter((r): r is Listed => !!r && typeof r.id === 'string' && typeof r.dir === 'string' && typeof r.name === 'string') : []
+    return Array.isArray(rows) ? rows.filter((r): r is Listed => !!r && typeof r.id === 'string' && ID.test(r.id) && typeof r.dir === 'string'
+      && SAFE_DIR.test(r.dir) && typeof r.name === 'string') : []
   } catch { return [] }
 }
 function writeListed(home: string, rows: Listed[]): void {
@@ -65,6 +69,9 @@ function writeListed(home: string, rows: Listed[]): void {
  */
 export async function prepareBuddyHome(home: string, projects: readonly BuddyProject[]): Promise<{ ready: string[]; missing: string[] }> {
   mkdirSync(join(home, 'projects'), { recursive: true, mode: 0o700 })
+  // A project its person no longer reads leaves before the Buddy's first turn, not only before a delivery (security review 1
+  // of #2436): a relaunch starts from the list the start names now.
+  await pruneBuddyHome(home, new Set(projects.map(p => p.id)))
   const rows = listed(home), ready: string[] = [], missing: string[] = []
   const taken = new Set(rows.map(r => r.dir))
   for (const project of projects) {
@@ -99,8 +106,10 @@ export async function removeBuddyHome(home: string): Promise<void> {
   rmSync(home, { recursive: true, force: true })
 }
 
-/** Removes one worktree, read-only files included, and its checkout's record of it. A folder git no longer knows is removed. */
+/** Removes one worktree, read-only files included, and its checkout's record of it. A folder git no longer knows is removed.
+ *  Only a folder directly in a Buddy folder's `projects/`, by a name this file makes. */
 async function removeWorktree(path: string): Promise<void> {
+  if (basename(dirname(path)) !== 'projects' || !SAFE_DIR.test(basename(path))) return
   if (!existsSync(path)) return
   await run('git', ['-C', path, 'worktree', 'remove', '--force', '--force', '--', path], { timeout: 60_000 }).catch(() => undefined)
   rmSync(path, { recursive: true, force: true })
