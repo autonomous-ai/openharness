@@ -2,8 +2,11 @@ import 'dart:async';
 
 import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/state/harness_attachments.dart';
+import 'package:harness/super_tabs/composer_toggle.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/message_row.dart' show SuperTabLink;
 import 'package:harness/super_tabs/view.dart';
@@ -41,9 +44,14 @@ void main() {
   /// The reader's own Buddy chat ('offline' in the fixture) with their Buddy
   /// running, a root, and a second thread to switch to, on a server that takes
   /// New session unless [sessions] is false (an older backend).
-  ConversationServer buddyChat({bool buddy = true, bool sessions = true}) {
+  ConversationServer buddyChat({
+    bool buddy = true,
+    bool sessions = true,
+    bool fromChat = true,
+  }) {
     final server = ConversationServer()..threads = true;
     if (sessions) server.state['threadSessions'] = true;
+    if (sessions && fromChat) server.state['sessionsFromChat'] = true;
     final chat = chatOf(server)
       ..['kind'] = 'buddy'
       ..['buddyOwnerId'] = 'owner'
@@ -170,8 +178,14 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  Checkbox box(WidgetTester tester, Finder finder) =>
-      tester.widget<Checkbox>(finder);
+  SuperTabComposerToggle box(WidgetTester tester, Finder finder) =>
+      tester.widget<SuperTabComposerToggle>(finder);
+
+  /// [finder] within the thread pane.
+  Finder inThread(Finder finder) => find.descendant(
+    of: find.byKey(const ValueKey('super-thread-panel')),
+    matching: finder,
+  );
 
   Map<String, dynamic> lastCommand(ConversationServer server) =>
       Map<String, dynamic>.from(server.posts.last['command'] as Map);
@@ -185,22 +199,19 @@ void main() {
 
     expect(newSession, findsOneWidget);
     expect(alsoSend, findsOneWidget);
-    expect(box(tester, newSession).value, isFalse);
+    expect(box(tester, newSession).on, isFalse);
     // Before Also send in reading order: left of it on one row, or above it
     // where a narrow pane wraps them.
     final a = tester.getRect(newSession), b = tester.getRect(alsoSend);
     expect(a.top < b.top || (a.top == b.top && a.left < b.left), isTrue);
     expect(
-      find.byTooltip(
-        'Answer this thread in its own session, while your Buddy keeps '
-        'answering the chat',
-      ),
+      find.byTooltip('Starts a separate Buddy session for this thread'),
       findsOneWidget,
     );
 
     await tester.tap(newSession);
     await tester.pump();
-    expect(box(tester, newSession).value, isTrue);
+    expect(box(tester, newSession).on, isTrue);
     // A session's thread stays in the thread.
     expect(alsoSend, findsNothing);
 
@@ -213,8 +224,117 @@ void main() {
     expect(sent['replyTo'], 'message-1');
     expect(sent['newSession'], isTrue);
     expect(sent.containsKey('alsoSend'), isFalse);
-    // The next reply starts as plain again.
-    expect(box(tester, newSession).value, isFalse);
+    // The thread's session is starting: no choice to make there now.
+    expect(tester.widget<Text>(state).data, 'Own session · Starting…');
+    expect(newSession, findsNothing);
+  });
+
+  testSessions('the choices are compact chips on the send row, not '
+      'checkboxes', (tester) async {
+    final server = buddyChat();
+    final c = await show(tester, server);
+    await openThread(tester, c, 'message-1');
+    final panel = find.byKey(const ValueKey('super-thread-panel'));
+    expect(
+      find.descendant(of: panel, matching: find.byType(Checkbox)),
+      findsNothing,
+    );
+    expect(box(tester, newSession).label, 'New session');
+    expect(box(tester, alsoSend).label, 'Also send');
+    expect(find.byTooltip('Also send to the chat'), findsOneWidget);
+    // Both sit on the send row, left of its buttons, and are compact: no
+    // taller than the send button. (One line at real fonts: the PR's
+    // screenshots; the test font is far wider.)
+    final row = tester.getRect(send);
+    final surface = tester.getRect(
+      find.byKey(const ValueKey('super-thread-composer-surface')),
+    );
+    for (final chip in [newSession, alsoSend]) {
+      final rect = tester.getRect(chip);
+      expect(rect.right, lessThan(row.left));
+      expect(rect.height, lessThanOrEqualTo(row.height));
+      expect(surface.contains(rect.center), isTrue);
+    }
+    // The muted line shows only while the reply starts a session; its place
+    // is kept, so it never pushes the box up under the cursor.
+    final note = find
+        .byKey(const ValueKey('super-thread-session-note'))
+        .hitTestable();
+    final boxAt = find.byKey(const ValueKey('super-thread-composer-surface'));
+    final restingBox = tester.getRect(boxAt);
+    expect(note, findsNothing);
+
+    await tester.tap(newSession);
+    await tester.pump();
+    expect(box(tester, newSession).on, isTrue);
+    expect(alsoSend, findsNothing);
+    expect(
+      tester.widget<Text>(note).data,
+      'Your reply starts a new Buddy session',
+    );
+    expect(tester.getRect(boxAt).bottom, restingBox.bottom);
+    // Its line sits under the box.
+    expect(
+      tester.getRect(note).top,
+      greaterThanOrEqualTo(
+        tester
+            .getRect(
+              find.byKey(const ValueKey('super-thread-composer-surface')),
+            )
+            .bottom,
+      ),
+    );
+
+    await tester.tap(newSession);
+    await tester.pump();
+    expect(box(tester, newSession).on, isFalse);
+    expect(alsoSend, findsOneWidget);
+    expect(note, findsNothing);
+    expect(tester.getRect(boxAt).bottom, restingBox.bottom);
+  });
+
+  testSessions('a reply takes at most 10 files, and the box says so', (
+    tester,
+  ) async {
+    final server = buddyChat();
+    final c = await show(tester, server);
+    await openThread(tester, c, 'message-1');
+    final files = c.threadAttachments('offline', 'message-1');
+    final problem = files.add([
+      for (var i = 0; i < 11; i++)
+        HarnessAttachment('f$i.txt', Uint8List.fromList([i + 1])),
+    ]);
+    await tester.pumpAndSettle();
+    expect(files.files, hasLength(10));
+    expect(problem, 'Attach at most 10 files.');
+  });
+
+  testSessions('a New session reply refused for another field keeps New '
+      'session offered and says so plainly', (tester) async {
+    final server = buddyChat();
+    final c = await show(tester, server);
+    await openThread(tester, c, 'message-1');
+    server
+      ..refuse = {
+        'code': 'VALIDATION_ERROR',
+        'message':
+            'command.attachmentIds: Too big: expected array to have <=10 items',
+      }
+      ..refuseStatus = 400;
+    await tester.tap(newSession);
+    await tester.enterText(composer, 'Continue the session');
+    await tester.pump();
+    await tester.tap(send);
+    await tester.pumpAndSettle();
+    expect(find.text(superTabSessionsUnavailable), findsNothing);
+    expect(find.textContaining('Too big'), findsNothing);
+    expect(find.text("The server couldn't take this message."), findsWidgets);
+    // Still offered: the server takes New session.
+    expect(c.offersThreadSessions('message-1'), isTrue);
+    expect(newSession, findsOneWidget);
+    // The reply stays Not sent with New session, for Retry.
+    final refused = c.outgoing('offline').single;
+    expect(refused.state, SuperTabOutgoingState.refused);
   });
 
   testSessions('a New session tick stays with its own thread', (tester) async {
@@ -223,9 +343,9 @@ void main() {
     await openThread(tester, c, 'message-1');
     await tester.tap(newSession);
     await tester.pump();
-    expect(box(tester, newSession).value, isTrue);
+    expect(box(tester, newSession).on, isTrue);
     await openThread(tester, c, 'message-2');
-    expect(box(tester, newSession).value, isFalse);
+    expect(box(tester, newSession).on, isFalse);
     expect(alsoSend, findsOneWidget);
   });
 
@@ -269,12 +389,15 @@ void main() {
     }
     final c = await show(tester, server);
     await openThread(tester, c, 'message-1');
-    expect(find.text('New session · 3 running, end one first'), findsOneWidget);
+    expect(inThread(find.text('New session')), findsOneWidget);
     expect(box(tester, newSession).onChanged, isNull);
-    expect(box(tester, newSession).value, isFalse);
-    expect(find.byTooltip('End a session to start another'), findsOneWidget);
+    expect(box(tester, newSession).on, isFalse);
+    expect(
+      inThread(find.byTooltip('3 sessions running. End one to start another.')),
+      findsOneWidget,
+    );
     // Tapping the words does nothing either; a reply goes plain.
-    await tester.tap(find.text('New session · 3 running, end one first'));
+    await tester.tap(newSession);
     await tester.enterText(composer, 'Plain');
     await tester.pump();
     await tester.tap(send);
@@ -362,7 +485,7 @@ void main() {
       tester.widget<Text>(ended).data,
       'Session ended: idle for 30 minutes',
     );
-    expect(box(tester, newSession).value, isTrue);
+    expect(box(tester, newSession).on, isTrue);
     expect(box(tester, newSession).onChanged, isNull);
     expect(alsoSend, findsNothing);
     await tester.enterText(composer, 'Go on');
@@ -462,14 +585,14 @@ void main() {
     await openThread(tester, c, 'message-2');
     expect(find.text('Ending…'), findsNothing);
     expect(newSession, findsOneWidget);
-    expect(box(tester, newSession).value, isFalse);
+    expect(box(tester, newSession).on, isFalse);
     hold.complete();
     server.holdCommands = null;
     await tester.pumpAndSettle();
     expect(find.text('Ending…'), findsNothing);
     expect(state, findsNothing);
     expect(newSession, findsOneWidget);
-    expect(box(tester, newSession).value, isFalse);
+    expect(box(tester, newSession).on, isFalse);
   });
 
   testSessions('a first read that failed and then recovered still offers New '
@@ -493,7 +616,7 @@ void main() {
     sessionReply(server, 'message-1', 'Reading the logs…');
     final c = await show(tester, server);
     await openThread(tester, c, 'message-1');
-    expect(box(tester, newSession).value, isTrue);
+    expect(box(tester, newSession).on, isTrue);
     expect(box(tester, newSession).onChanged, isNull);
     expect(alsoSend, findsNothing);
     expect(tester.widget<Text>(ended).data, 'Session ended');
@@ -522,9 +645,9 @@ void main() {
       tester.widget<Text>(ended).data,
       'Session ended: its Buddy was removed or replaced',
     );
-    expect(box(tester, newSession).value, isTrue);
+    expect(box(tester, newSession).on, isTrue);
     expect(box(tester, newSession).onChanged, isNull);
-    expect(find.text('New session · Start your Buddy first'), findsOneWidget);
+    expect(find.byTooltip('Start your Buddy first'), findsOneWidget);
     // A thread with no session past offers nothing without a Buddy.
     await openThread(tester, c, 'message-2');
     expect(newSession, findsNothing);
@@ -539,9 +662,10 @@ void main() {
       server.revision++;
       await c.refresh();
       await tester.pumpAndSettle();
-      expect(find.text('New session · $reason'), findsOneWidget);
+      expect(inThread(find.byTooltip(reason)), findsOneWidget);
+      expect(inThread(find.text('New session')), findsOneWidget);
       expect(box(tester, newSession).onChanged, isNull);
-      expect(box(tester, newSession).value, isFalse);
+      expect(box(tester, newSession).on, isFalse);
     }
 
     server.state['paused'] = true;
@@ -570,7 +694,7 @@ void main() {
     server.revision++;
     await c.refresh();
     await tester.pumpAndSettle();
-    expect(find.text('New session'), findsOneWidget);
+    expect(inThread(find.text('New session')), findsOneWidget);
     expect(box(tester, newSession).onChanged, isNotNull);
   });
 
@@ -788,10 +912,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('Unrecognized key'), findsNothing);
     expect(find.text('Not sent'), findsOneWidget);
-    expect(
-      find.text("The server couldn't take this message yet."),
-      findsOneWidget,
-    );
+    expect(find.text("The server couldn't take this message."), findsOneWidget);
   });
 
   testSessions('a refusal saved with the server\'s own words before this '
@@ -825,10 +946,191 @@ void main() {
     expect(c.outgoing('offline').single.text, 'Saved before');
     expect(find.text('Not sent'), findsOneWidget);
     expect(find.textContaining('Unrecognized key'), findsNothing);
+    expect(find.text("The server couldn't take this message."), findsOneWidget);
+  });
+
+  // ── The main Buddy chat (Scholes's part 3): a message there can start its
+  // own thread's session. ─────────────────────────────────────────────────
+
+  final chatSession = find.byKey(const ValueKey('super-chat-new-session'));
+  final chatComposer = find.byKey(const ValueKey('super-message-composer'));
+  final chatSend = find.byTooltip('Send message');
+  final panel = find.byKey(const ValueKey('super-thread-panel'));
+
+  testSessions('the main Buddy chat offers New session as a chip, and a send '
+      'with it opens its own thread with its session starting', (tester) async {
+    final server = buddyChat();
+    final c = await show(tester, server);
+    expect(chatSession, findsOneWidget);
+    expect(box(tester, chatSession).on, isFalse);
+    expect(box(tester, chatSession).label, 'New session');
     expect(
-      find.text("The server couldn't take this message yet."),
+      find.byTooltip('Starts a separate Buddy session for this message'),
       findsOneWidget,
     );
+    // Left of the attach and send buttons, on the composer's row.
+    expect(
+      tester.getRect(chatSession).right,
+      lessThan(tester.getRect(chatSend).left),
+    );
+    final chatNote = find
+        .byKey(const ValueKey('super-chat-session-note'))
+        .hitTestable();
+    final restingBottom = tester.getRect(chatComposer).bottom;
+    expect(chatNote, findsNothing);
+    await tester.tap(chatSession);
+    await tester.pump();
+    expect(box(tester, chatSession).on, isTrue);
+    expect(
+      tester.widget<Text>(chatNote).data,
+      'Your message starts its own thread and Buddy session',
+    );
+    // The line's place was kept: the box doesn't move.
+    expect(tester.getRect(chatComposer).bottom, restingBottom);
+    await tester.enterText(chatComposer, 'Measure prod CPU for the last day');
+    await tester.pump();
+    await tester.tap(chatSend);
+    await tester.pumpAndSettle();
+
+    final sent = lastCommand(server);
+    expect(sent['type'], 'message.send');
+    expect(sent['replyTo'], isNull);
+    expect(sent['newSession'], isTrue);
+    final root = server.messages.last['id'] as String;
+    // Its thread opens on the right, its session starting.
+    expect(panel, findsOneWidget);
+    expect(c.openedThread?.root, root);
+    expect(tester.widget<Text>(state).data, 'Own session · Starting…');
+    // The chip is off again, and the box empty.
+    expect(box(tester, chatSession).on, isFalse);
+    expect(chatNote, findsNothing);
+    expect(tester.widget<TextField>(chatComposer).controller!.text, isEmpty);
+    // In the chat the message stands on its own, not under the one before
+    // it, with its session's line: found again once the pane is closed.
+    final row = find.byKey(ValueKey('super-message-$root'));
+    expect(
+      find.descendant(of: row, matching: find.text('You')),
+      findsOneWidget,
+    );
+    c.closeThread();
+    await tester.pumpAndSettle();
+    expect(panel, findsNothing);
+    final mark = find.byKey(ValueKey('super-thread-session-mark-$root'));
+    expect(find.descendant(of: row, matching: mark), findsOneWidget);
+    await tester.tap(mark);
+    await tester.pumpAndSettle();
+    expect(c.openedThread?.root, root);
+    // Reached by keyboard too, and opened with Enter, as the reply count is.
+    c.closeThread();
+    await tester.pumpAndSettle();
+    final node = Focus.of(
+      tester.element(
+        find.descendant(of: mark, matching: find.byType(Text)).first,
+      ),
+    );
+    node.requestFocus();
+    await tester.pump();
+    expect(node.hasFocus, isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(c.openedThread?.root, root);
+  });
+
+  testSessions('a server that takes New session only on replies never offers '
+      'it in the main chat', (tester) async {
+    final server = buddyChat(fromChat: false);
+    final c = await show(tester, server);
+    expect(chatSession, findsNothing);
+    // A thread still offers it.
+    await openThread(tester, c, 'message-1');
+    expect(newSession, findsOneWidget);
+    // And none at all from a server before New session.
+    await tester.pumpWidget(const SizedBox());
+    await shown.flush();
+    await show(tester, buddyChat(sessions: false));
+    expect(chatSession, findsNothing);
+  });
+
+  testSessions('New session in the main chat is greyed while it can\'t start, '
+      'its hover saying why', (tester) async {
+    final server = buddyChat()..state['paused'] = true;
+    await show(tester, server);
+    expect(chatSession, findsOneWidget);
+    expect(box(tester, chatSession).onChanged, isNull);
+    expect(box(tester, chatSession).on, isFalse);
+    expect(find.byTooltip('New work is paused in this Swarm'), findsOneWidget);
+    // Elsewhere (a workgroup) it isn't there at all.
+    await tester.pumpWidget(const SizedBox());
+    await shown.flush();
+    await show(tester, ConversationServer()..threads = true, select: false);
+    expect(chatSession, findsNothing);
+  });
+
+  testSessions('a main-chat New session the server refuses as unknown keeps '
+      'the text in the box and says so plainly', (tester) async {
+    final server = buddyChat();
+    final c = await show(tester, server);
+    refuseAsOlderServer(server);
+    await tester.tap(chatSession);
+    await tester.enterText(chatComposer, 'Measure it now');
+    await tester.pump();
+    await tester.tap(chatSend);
+    await tester.pumpAndSettle();
+    expect(lastCommand(server)['newSession'], isTrue);
+    expect(
+      tester.widget<TextField>(chatComposer).controller!.text,
+      'Measure it now',
+    );
+    expect(find.text(unavailable), findsOneWidget);
+    expect(find.textContaining('Unrecognized key'), findsNothing);
+    expect(c.outgoing('offline'), isEmpty);
+    expect(panel, findsNothing);
+    expect(chatSession, findsNothing);
+    server.refuse = null;
+    await tester.tap(chatSend);
+    await tester.pumpAndSettle();
+    expect(lastCommand(server).containsKey('newSession'), isFalse);
+    expect(lastCommand(server)['text'], 'Measure it now');
+  });
+
+  testSessions('a main-chat New session answered after another chat opened '
+      'opens no thread there', (tester) async {
+    final server = buddyChat();
+    final c = await show(tester, server);
+    final hold = server.holdCommands = Completer<void>();
+    await tester.tap(chatSession);
+    await tester.enterText(chatComposer, 'Measure it now');
+    await tester.pump();
+    await tester.tap(chatSend);
+    await tester.pump();
+    await c.select('lead');
+    await tester.pumpAndSettle();
+    hold.complete();
+    server.holdCommands = null;
+    await tester.pumpAndSettle();
+    expect(c.selectedId, 'lead');
+    expect(c.openedThread, isNull);
+    expect(panel, findsNothing);
+  });
+
+  testSessions('access lost while a main-chat New session is on its way opens '
+      'nothing and keeps nothing', (tester) async {
+    final server = buddyChat();
+    final c = await show(tester, server);
+    final hold = server.holdCommands = Completer<void>();
+    await tester.tap(chatSession);
+    await tester.enterText(chatComposer, 'Private words');
+    await tester.pump();
+    await tester.tap(chatSend);
+    await tester.pump();
+    c.revokeAccess('You no longer have access to this Swarm.');
+    hold.complete();
+    server.holdCommands = null;
+    await tester.pumpAndSettle();
+    expect(c.openedThread, isNull);
+    expect(panel, findsNothing);
+    expect(chatSession, findsNothing);
+    expect(find.text('Private words'), findsNothing);
   });
 
   testSessions('Ending… cannot be pressed again while its end is on its way', (

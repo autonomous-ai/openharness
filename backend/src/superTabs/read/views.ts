@@ -150,5 +150,6 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
     ...(actor.kind === 'person' && extras.decisionsDigest !== undefined ? { decisionsDigest: extras.decisionsDigest } : {}),
     ...(teamAccountSwarm(state) ? {} : { teamAccounts: false as const }),
     threadSessions: true as const,
+    sessionsFromChat: true as const,
   }
 }

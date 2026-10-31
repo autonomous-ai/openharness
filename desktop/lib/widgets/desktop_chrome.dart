@@ -137,6 +137,7 @@ class DesktopPill extends StatelessWidget {
     this.foregroundColor,
     this.surfaceColor,
     this.compact = false,
+    this.choice = false,
     this.quiet = false,
     this.capsule = true,
     this.textSize = 13,
@@ -160,6 +161,11 @@ class DesktopPill extends StatelessWidget {
   /// An opaque base for pills that float directly above workspace content.
   final Color? surfaceColor;
   final bool compact;
+
+  /// An on/off choice that shares a narrow row with other controls (a reply
+  /// box's send row): the quiet pill's side padding, and only its outline
+  /// while off, in either appearance.
+  final bool choice;
   final bool quiet, capsule;
   final double textSize;
   final bool truncateFromStart;
@@ -191,7 +197,7 @@ class DesktopPill extends StatelessWidget {
                   : 34,
             ),
             padding: EdgeInsets.symmetric(
-              horizontal: quiet
+              horizontal: quiet || choice
                   ? 6
                   : compact
                   ? 9
@@ -211,9 +217,12 @@ class DesktopPill extends StatelessWidget {
               (states) => BorderSide(
                 // Reserve the same rim in every state; focus never moves text.
                 width: grid.AppDesktop.focusWidth,
-                color:
-                    states.contains(WidgetState.disabled) ||
-                        (quiet && !highContrast)
+                color: choice && states.contains(WidgetState.disabled)
+                    // A choice that can't be made now keeps its outline,
+                    // greyed, so it still reads as the same control.
+                    ? ink.withValues(alpha: highContrast ? .25 : .06)
+                    : states.contains(WidgetState.disabled) ||
+                          (quiet && !highContrast)
                     ? Colors.transparent
                     : states.contains(WidgetState.focused) || highlightFocus
                     ? (highContrast
@@ -233,7 +242,7 @@ class DesktopPill extends StatelessWidget {
                     : states.contains(WidgetState.focused) &&
                           !states.contains(WidgetState.disabled)
                     ? ink.withValues(alpha: .10)
-                    : quiet
+                    : quiet || choice
                     ? Colors.transparent
                     : ink.withValues(alpha: .055),
               ),

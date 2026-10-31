@@ -31,6 +31,7 @@ import 'pull_request_facts.dart';
 import 'pull_requests.dart';
 import 'composer_files.dart';
 import 'composer_newline.dart';
+import 'composer_toggle.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'folder_zip.dart';
@@ -132,6 +133,9 @@ class _SuperTabViewState extends State<SuperTabView>
   final _awayFromEnd = <String>{};
   final _unread = SuperTabUnreadLines();
   final _replies = <String, SuperTabMessage>{};
+
+  /// The Buddy chats whose next message starts its own thread's session.
+  final _chatSessions = <String>{};
   String? _selected;
   int _scrollRequest = 0;
   bool _jumpingToEnd = false;
@@ -693,8 +697,14 @@ class _SuperTabViewState extends State<SuperTabView>
     // From here a zip still running belongs to neither this message, which
     // took its files already, nor the next.
     final dropped = _droppedFolders.remove(id);
+    final newSession =
+        _chatSessions.contains(id) &&
+        c.offersChatSessions &&
+        c.threadSessionBlocked == null &&
+        !c.buddySessionsFull;
     final result = await c.send(
       replyTo: _replies[id]?.id,
+      newSession: newSession,
       // The reply goes with the message, which shows at the end at once.
       onSending: () {
         if (!mounted) return;
@@ -703,6 +713,21 @@ class _SuperTabViewState extends State<SuperTabView>
       },
     );
     if (!mounted) return;
+    if (newSession && result != null) _chatSessions.remove(id);
+    // Refused for New session, its text is back as the chat's draft: it shows
+    // in the box, ready to send without it, unless another chat is shown or
+    // something was typed meanwhile.
+    if (result == null &&
+        newSession &&
+        c.selectedId == id &&
+        _composer.text.isEmpty &&
+        c.draft(id).isNotEmpty) {
+      final restored = c.draft(id);
+      _composer.value = TextEditingValue(
+        text: restored,
+        selection: TextSelection.collapsed(offset: restored.length),
+      );
+    }
     setState(() {
       if (result == null && dropped != null) {
         // Not sent: its paths are still offered as zips, in a new record
@@ -714,6 +739,30 @@ class _SuperTabViewState extends State<SuperTabView>
         ]);
       }
     });
+  }
+
+  /// New session in the reader's own Buddy chat's composer: the message
+  /// starts its own thread's session. Greyed while it can't start, its hover
+  /// saying why, as in a thread's reply box.
+  Widget _chatSessionChoice(bool writable) {
+    final id = c.selectedId;
+    final blocked = c.threadSessionBlocked;
+    final full = blocked == null && c.buddySessionsFull;
+    return SuperTabComposerToggle(
+      key: const ValueKey('super-chat-new-session'),
+      on: _chatSessions.contains(id) && blocked == null && !full,
+      label: 'New session',
+      hint:
+          blocked ??
+          (full
+              ? '${SuperTabController.maxBuddySessions} sessions running. End one to start another.'
+              : 'Starts a separate Buddy session for this message'),
+      onChanged: writable && blocked == null && !full
+          ? (on) => setState(
+              () => on ? _chatSessions.add(id) : _chatSessions.remove(id),
+            )
+          : null,
+    );
   }
 
   /// [path] as it goes into a message: as it is, or in double quotes when it
@@ -2451,9 +2500,14 @@ class _SuperTabViewState extends State<SuperTabView>
         (fetched != null && _shown(fetched) ? fetched : null);
     final writable = c.canWrite && c.selected?.archived == false;
     final root = message.thread;
+    // A message that started a session has its line before any reply comes,
+    // so the session is found again after its pane closes.
     final thread = inThread || root != message.id
         ? null
-        : c.thread(message.conversationId, message.id);
+        : c.thread(message.conversationId, message.id) ??
+              (c.threadSession(message.id) != null
+                  ? SuperTabThread.empty(message.id)
+                  : null);
     final group = inThread
         ? null
         : c.snapshot?.conversation(message.conversationId);
@@ -2524,6 +2578,7 @@ class _SuperTabViewState extends State<SuperTabView>
         final session? => SuperTabThreadSessionMark(
           key: ValueKey('super-thread-session-mark-${thread!.id}'),
           activity: superTabSessionActivity(c, widget.app, session),
+          alone: thread.replies == 0,
         ),
         null => null,
       },
@@ -3545,6 +3600,13 @@ class _SuperTabViewState extends State<SuperTabView>
                                     ),
                                   ),
                                 ),
+                                if (c.offersChatSessions)
+                                  Padding(
+                                    padding: const EdgeInsets.only(
+                                      left: grid.AppDesktop.controlGap,
+                                    ),
+                                    child: _chatSessionChoice(writable),
+                                  ),
                                 fingerTarget(
                                   enabled: _phone,
                                   NewHarnessAttachButton(
@@ -3586,6 +3648,31 @@ class _SuperTabViewState extends State<SuperTabView>
                     ),
                   ),
                 ),
+              ),
+            ),
+          ),
+        // While New session can be chosen here, its line's place is kept, so
+        // the box never moves as the choice is toggled.
+        if (c.offersChatSessions)
+          Container(
+            alignment: Alignment.centerLeft,
+            padding: const EdgeInsets.only(
+              left: grid.AppDesktop.panelPadding,
+              right: grid.AppDesktop.panelPadding,
+              bottom: grid.AppDesktop.controlGap,
+            ),
+            child: Visibility(
+              visible:
+                  _chatSessions.contains(chatId) &&
+                  c.threadSessionBlocked == null &&
+                  !c.buddySessionsFull,
+              maintainSize: true,
+              maintainAnimation: true,
+              maintainState: true,
+              child: Text(
+                'Your message starts its own thread and Buddy session',
+                key: const ValueKey('super-chat-session-note'),
+                style: DesktopChrome.metadata(color: DesktopChrome.muted),
               ),
             ),
           ),
