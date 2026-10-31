@@ -56,8 +56,9 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
   /// How long an upload may go without a byte moving before the send gives up.
   final Duration uploadTimeout;
 
-  /// The files waiting to go with the next post. They stay in memory, and go
-  /// when the chat closes: only what the person typed is kept, and only while
+  /// The files waiting to go with the next post. They stay in memory — a
+  /// large one on disk, in the app's temporary folder — and go when the chat
+  /// closes: only what the person typed is kept, and only while
   /// the chat is open.
   @override
   final files = SwarmOutgoingFiles();

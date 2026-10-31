@@ -5,6 +5,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' show min;
 
 import 'package:dio/dio.dart' show CancelToken;
 import 'package:file_selector_platform_interface/file_selector_platform_interface.dart';
@@ -41,6 +42,35 @@ class _Picked extends XFile {
 
   @override
   Future<Uint8List> readAsBytes() async => bytes;
+
+  @override
+  Future<int> length() async => bytes.length;
+}
+
+/// A file of [size] bytes that is never read whole: reading it fails the test.
+class _Sized extends XFile {
+  _Sized(this.size, {this.fileName = 'cad.step'}) : super('/picked/$fileName');
+
+  final int size;
+  final String fileName;
+
+  @override
+  String get name => fileName;
+
+  @override
+  Future<int> length() async => size;
+
+  @override
+  Future<Uint8List> readAsBytes() =>
+      throw StateError('$fileName was read whole');
+
+  @override
+  Stream<Uint8List> openRead([int? start, int? end]) async* {
+    const chunk = 64 * 1024;
+    for (var at = start ?? 0; at < (end ?? size); at += chunk) {
+      yield Uint8List(min(chunk, (end ?? size) - at));
+    }
+  }
 }
 
 class _Picker extends FileSelectorPlatform {
@@ -234,21 +264,107 @@ void main() {
       await close(tester, controller);
     });
 
-    test('a file over 10 MB, or an eleventh file, is refused', () {
+    testWidgets('a picked file over 10 MB stays on disk, and goes up from '
+        'there', (tester) async {
+      const size = 12 * 1024 * 1024;
+      final original = FileSelectorPlatform.instance;
+      FileSelectorPlatform.instance = _Picker([_Sized(size)]);
+      addTearDown(() => FileSelectorPlatform.instance = original);
+      final server = ConversationServer();
+      final sent = <(bool, int)>[];
+      final controller = server.controller(
+        upload:
+            ({
+              required tabId,
+              required conversationId,
+              required name,
+              required mime,
+              required file,
+              required cancel,
+              required onProgress,
+            }) async {
+              var read = 0;
+              await for (final chunk in file.openRead(await file.length())) {
+                read += chunk.length;
+              }
+              sent.add((file.onDisk, read));
+              // The fixture keeps a stand-in: the file itself is not held.
+              return server.upload(
+                tabId: tabId,
+                conversationId: conversationId,
+                name: name,
+                mime: mime,
+                file: HarnessAttachment(name, Uint8List(1)),
+                cancel: cancel,
+                onProgress: onProgress,
+              );
+            },
+      );
+      await controller.refresh();
+      await mount(tester, controller);
+
+      await tester.tap(find.byKey(const ValueKey('new-harness-attach')));
+      await tester.pumpAndSettle();
+      expect(names(controller), ['cad.step']);
+      expect(controller.attachments('lead').files.single.onDisk, isTrue);
+      expect(controller.attachments('lead').files.single.size, size);
+
+      await tester.tap(send);
+      await tester.pumpAndSettle();
+
+      expect(sent, [(true, size)]);
+      final command = server.posts.single['command'] as Map;
+      expect(command['attachmentIds'], ['attachment-1']);
+      await close(tester, controller);
+    });
+
+    testWidgets('a picked file over 256 MB is refused without being read', (
+      tester,
+    ) async {
+      final original = FileSelectorPlatform.instance;
+      FileSelectorPlatform.instance = _Picker([
+        _Sized(kSuperTabAttachmentMaxBytes + 1, fileName: 'huge.step'),
+      ]);
+      addTearDown(() => FileSelectorPlatform.instance = original);
+      final (_, controller) = await open(tester);
+
+      await tester.tap(find.byKey(const ValueKey('new-harness-attach')));
+      await tester.pumpAndSettle();
+
+      expect(names(controller), isEmpty);
+      expect(find.text('huge.step is over 256 MB.'), findsOneWidget);
+      await close(tester, controller);
+    });
+
+    test('a file over 256 MB, or an eleventh file, is refused', () {
       final controller = ConversationServer().controller();
       addTearDown(controller.dispose);
       final files = controller.attachments('lead');
 
+      // Weighed, never read: the file is only its size.
       expect(
         files.add([
-          HarnessAttachment(
+          HarnessAttachment.onDisk(
             'big.bin',
-            Uint8List(kSuperTabAttachmentMaxBytes + 1),
+            _Sized(256 * 1024 * 1024 + 1),
+            256 * 1024 * 1024 + 1,
           ),
         ]),
-        'big.bin is over 10 MB.',
+        'big.bin is over 256 MB.',
       );
       expect(files.isEmpty, isTrue);
+      // 256 MB itself fits.
+      expect(
+        files.add([
+          HarnessAttachment.onDisk(
+            'cad.step',
+            _Sized(256 * 1024 * 1024),
+            256 * 1024 * 1024,
+          ),
+        ]),
+        isNull,
+      );
+      files.clear();
 
       String? problem;
       for (var i = 0; i <= kSuperTabAttachmentMaxFiles; i++) {
@@ -378,7 +494,7 @@ void main() {
               required conversationId,
               required name,
               required mime,
-              required bytes,
+              required file,
               required cancel,
               required onProgress,
             }) async {
@@ -389,7 +505,7 @@ void main() {
                 conversationId: conversationId,
                 name: name,
                 mime: mime,
-                bytes: bytes,
+                file: file,
                 cancel: cancel,
                 onProgress: onProgress,
               );
@@ -433,7 +549,7 @@ void main() {
                 required conversationId,
                 required name,
                 required mime,
-                required bytes,
+                required file,
                 required cancel,
                 required onProgress,
               }) {
@@ -479,7 +595,7 @@ void main() {
               required conversationId,
               required name,
               required mime,
-              required bytes,
+              required file,
               required cancel,
               required onProgress,
             }) {

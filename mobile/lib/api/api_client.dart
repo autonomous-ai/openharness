@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
@@ -5,7 +6,9 @@ import 'package:dio/dio.dart';
 import '../auth/auth_session.dart';
 import '../core/config.dart';
 import '../core/models.dart';
+import '../logging/app_log.dart';
 import '../logging/http_log.dart';
+import '../swarm/swarm_outgoing_files.dart';
 import '../swarm/swarm_request.dart' show SuperTabFailure;
 import '../viewer/device_ack.dart';
 import '../viewer/device_log.dart';
@@ -342,64 +345,177 @@ class ApiClient {
   // -- Swarm chat files (backend only: the viewer's own SSO session signs it) --
 
   /// Sends one file for a message in [conversationId] of Swarm [tabId] and
-  /// answers the backend's `{attachment: {...}}` — `POST
-  /// /api/super-tabs/:tabId/attachments`, the form Desktop sends.
+  /// answers the backend's `{attachment: {...}}`.
+  ///
+  /// A file of up to [swarmFormAttachmentMaxBytes] goes as the form Desktop
+  /// sends, `POST /api/super-tabs/:tabId/attachments`. A larger one, up to
+  /// [swarmAttachmentMaxBytes], goes in three steps, since a proxy in front of
+  /// the backend may refuse a body that large: the backend is asked for a link
+  /// (`POST …/attachments/uploads`), the file goes straight to storage by it,
+  /// read from disk as it goes ([_putToStorage]), and the backend is told it is
+  /// there (`POST …/attachments/uploads/:id/complete`), which answers the same
+  /// attachment. A larger file still is refused before anything is sent.
   ///
   /// Straight to the backend with the token this viewer holds, unlike every
   /// other Swarm call, which one of the account's machines forwards
   /// (`AppNotifier.swarmRequest`): the backend takes a chat file only from the
   /// client itself, and a machine forwards only JSON. [onProgress] is told the
   /// part sent, from 0 to 1. A refusal throws a [SuperTabFailure] carrying the
-  /// backend's code, worded as Desktop's `superTabUploadRefusal`.
+  /// backend's code, worded as Desktop's `superTabUploadRefusal`. [cancel]
+  /// stops whichever step is under way and takes no other; so does
+  /// [stillWanted] failing between steps.
   Future<Map<String, dynamic>> uploadSwarmAttachment({
     required String tabId,
     required String conversationId,
     required String name,
     required String mime,
-    required Uint8List bytes,
+    required SwarmOutgoingFile file,
     required CancelToken cancel,
     required void Function(double sent) onProgress,
+    bool Function()? stillWanted,
   }) async {
-    final body = multipartFileBody(
-      fields: {'conversationId': conversationId},
-      field: 'file',
-      filename: name,
-      fileContentType: mime,
-      file: bytes,
-      boundary: 'harness-${DateTime.now().microsecondsSinceEpoch}',
-    );
-    final res = await _dio.post(
-      '/api/super-tabs/${Uri.encodeComponent(tabId)}/attachments',
-      data: body.bytes,
-      cancelToken: cancel,
-      onSendProgress: (sent, total) {
-        if (total > 0) onProgress(sent / total);
+    if (file.size > swarmAttachmentMaxBytes) {
+      throw const SuperTabFailure(
+        'ATTACHMENT_TOO_LARGE',
+        _swarmAttachmentTooLarge,
+        statusCode: 413,
+      );
+    }
+    final tab = Uri.encodeComponent(tabId);
+    if (file.size <= swarmFormAttachmentMaxBytes) {
+      final body = multipartFileBody(
+        fields: {'conversationId': conversationId},
+        field: 'file',
+        filename: name,
+        fileContentType: mime,
+        file: await file.readAll(),
+        boundary: 'harness-${DateTime.now().microsecondsSinceEpoch}',
+      );
+      final res = await _dio.post(
+        '/api/super-tabs/$tab/attachments',
+        data: body.bytes,
+        cancelToken: cancel,
+        onSendProgress: (sent, total) {
+          if (total > 0) onProgress(sent / total);
+        },
+        options: Options(
+          contentType: body.contentType,
+          // Ten megabytes on a phone connection; the chat's own watchdog gives
+          // up on an upload that stops moving.
+          sendTimeout: const Duration(minutes: 5),
+          receiveTimeout: const Duration(minutes: 1),
+        ),
+      );
+      return _swarmFileAnswer(res);
+    }
+
+    void stillGoing() {
+      if (cancel.cancelError case final cancelled?) throw cancelled;
+      if (stillWanted != null && !stillWanted()) {
+        throw DioException.requestCancelled(
+          requestOptions: RequestOptions(),
+          reason: 'no longer wanted',
+        );
+      }
+    }
+
+    final asked = await _dio.post(
+      '/api/super-tabs/$tab/attachments/uploads',
+      data: {
+        'conversationId': conversationId,
+        'name': name,
+        'mime': mime,
+        'size': file.size,
       },
-      options: Options(
-        contentType: body.contentType,
-        // Ten megabytes on a phone connection; the chat's own watchdog gives
-        // up on an upload that stops moving.
-        sendTimeout: const Duration(minutes: 5),
+      cancelToken: cancel,
+      options: Options(receiveTimeout: const Duration(minutes: 1)),
+    );
+    final upload = _swarmUploadLink(_swarmFileAnswer(asked)['upload']);
+    stillGoing();
+    await _putToStorage(upload, file, name, cancel, onProgress);
+    stillGoing();
+    final done = await _dio.post(
+      '/api/super-tabs/$tab/attachments/uploads/'
+      '${Uri.encodeComponent(upload.id)}/complete',
+      data: const <String, Object?>{},
+      cancelToken: cancel,
+      options: Options(receiveTimeout: const Duration(minutes: 1)),
+    );
+    return _swarmFileAnswer(done);
+  }
+
+  /// A client for storage links alone: no token, and no log line, since the
+  /// link itself is the credential. Tests share the backend's transport.
+  late final Dio _storage = () {
+    final dio = Dio(
+      BaseOptions(
+        connectTimeout: const Duration(seconds: 15),
+        // No send timeout: in Dio it bounds the whole body, and a few hundred
+        // megabytes may take longer; the chat's watchdog gives up on one that
+        // stops moving.
         receiveTimeout: const Duration(minutes: 1),
+        validateStatus: (status) => status != null,
       ),
     );
-    final data = res.data;
-    if (res.statusCode == 200 && data is Map && data['success'] == true) {
-      return Map<String, dynamic>.from(data['data'] as Map);
-    }
-    final error = data is Map ? data['error'] : null;
-    final code = error is Map ? error['code'] as String? : null;
-    final message = error is Map ? error['message'] as String? : null;
-    throw SuperTabFailure(
-      code ?? 'UPLOAD_FAILED',
-      message ??
-          switch (code) {
-            'FORBIDDEN' => 'You can’t send files in this conversation.',
-            'ATTACHMENT_TOO_LARGE' => 'That file is over 10 MB.',
-            _ => 'Could not upload the file. Try again.',
-          },
-      statusCode: res.statusCode ?? 0,
+    final adapter = httpClientAdapter;
+    if (adapter != null) dio.httpClientAdapter = adapter;
+    return dio;
+  }();
+
+  /// Sends [file] to storage by [upload]'s link: exactly the headers the
+  /// backend signed, its length, and nothing of this viewer's. A refusal, or a
+  /// transfer that breaks, says which file did not go up — never the link.
+  Future<void> _putToStorage(
+    _SwarmUploadLink upload,
+    SwarmOutgoingFile file,
+    String name,
+    CancelToken cancel,
+    void Function(double sent) onProgress,
+  ) async {
+    // A token of its own, so that what the caller's token carries when it is
+    // cancelled is the backend's request, never the link.
+    final put = CancelToken();
+    final cancelled = cancel.whenCancel.then((_) => put.cancel('given up'));
+    unawaited(cancelled);
+    final failed = SuperTabFailure(
+      'UPLOAD_FAILED',
+      'Could not upload $name. Try again.',
     );
+    final int status;
+    try {
+      final res = await _storage.request<void>(
+        upload.url,
+        data: file.openRead(),
+        cancelToken: put,
+        onSendProgress: (sent, total) {
+          if (total > 0) onProgress(sent / total);
+        },
+        options: Options(
+          method: upload.method,
+          headers: {
+            ...upload.headers,
+            Headers.contentLengthHeader: '${file.size}',
+          },
+          responseType: ResponseType.plain,
+        ),
+      );
+      status = res.statusCode ?? 0;
+    } on DioException catch (error) {
+      if (error.type == DioExceptionType.cancel) {
+        // Dropped on its way back up: the caller only learns it stopped.
+        throw DioException.requestCancelled(
+          requestOptions: RequestOptions(),
+          reason: 'given up',
+        );
+      }
+      appLog.warn('api', 'chat file to storage → failed (${error.type.name})');
+      throw failed;
+    }
+    if (status < 200 || status >= 300) {
+      appLog.warn('api', 'chat file to storage → $status');
+      throw SuperTabFailure(failed.code, failed.message, statusCode: status);
+    }
+    appLog.debug('api', 'chat file to storage → $status');
   }
 
   // -- Swarm avatars (backend only: the computer a Swarm call goes through carries text) --
@@ -424,6 +540,76 @@ class ApiClient {
     final data = unwrapApiResponse(res) as Map<String, dynamic>;
     return (data['avatar'] as Map<String, dynamic>)['id'] as String;
   }
+}
+
+/// What the backend says of a file past [swarmAttachmentMaxBytes].
+const _swarmAttachmentTooLarge = 'Files can be up to $swarmAttachmentMaxLabel.';
+
+/// The backend's answer to a chat file call: its `data`, or a
+/// [SuperTabFailure] with its code and words, Desktop's when it gave none.
+Map<String, dynamic> _swarmFileAnswer(Response<dynamic> res) {
+  final data = res.data;
+  if (res.statusCode == 200 && data is Map && data['success'] == true) {
+    final answer = data['data'];
+    if (answer is Map) return Map<String, dynamic>.from(answer);
+  }
+  final error = data is Map ? data['error'] : null;
+  final code = error is Map ? error['code'] as String? : null;
+  final message = error is Map ? error['message'] as String? : null;
+  throw SuperTabFailure(
+    code ?? 'UPLOAD_FAILED',
+    message ??
+        switch (code) {
+          'FORBIDDEN' => 'You can’t send files in this conversation.',
+          'ATTACHMENT_TOO_LARGE' => _swarmAttachmentTooLarge,
+          'UPLOAD_INCOMPLETE' =>
+            'The file did not finish uploading. Try again.',
+          'ATTACHMENT_UNAVAILABLE' =>
+            'Attach this file again before sending it.',
+          _ => 'Could not upload the file. Try again.',
+        },
+    statusCode: res.statusCode ?? 0,
+  );
+}
+
+/// Where the backend says a large chat file goes, and how.
+typedef _SwarmUploadLink = ({
+  String id,
+  String url,
+  String method,
+  Map<String, String> headers,
+});
+
+/// [raw] as a link to send a file to: an id, an https link and its headers, or
+/// a failed upload — a file is never sent anywhere less.
+_SwarmUploadLink _swarmUploadLink(Object? raw) {
+  const failed = SuperTabFailure(
+    'UPLOAD_FAILED',
+    'Could not upload the file. Try again.',
+  );
+  if (raw is! Map) throw failed;
+  final id = raw['id'], url = raw['url'], method = raw['method'] ?? 'PUT';
+  final headers = raw['headers'] ?? const <String, Object?>{};
+  final uri = url is String ? Uri.tryParse(url) : null;
+  if (id is! String ||
+      id.isEmpty ||
+      uri == null ||
+      uri.scheme != 'https' ||
+      uri.host.isEmpty ||
+      method is! String ||
+      headers is! Map ||
+      headers.values.any((value) => value is! String)) {
+    throw failed;
+  }
+  return (
+    id: id,
+    url: url as String,
+    method: method.toUpperCase(),
+    headers: {
+      for (final MapEntry(:key, :value) in headers.entries)
+        '$key': value as String,
+    },
+  );
 }
 
 class ApiException implements Exception {

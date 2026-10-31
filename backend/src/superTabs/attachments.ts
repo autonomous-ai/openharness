@@ -6,8 +6,29 @@ import { z } from 'zod'
 /** Metadata as a message stores and returns it. The bytes stay in the bucket. */
 export interface Attachment { id: string; name: string; mime: string; size: number; url: string }
 
-export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
+/** One chat file, whichever way it comes. Every client checks the same number before it sends (attachments.limits.test.ts). */
+export const MAX_ATTACHMENT_BYTES = 256 * 1024 * 1024
+/** The most a file sent in a multipart form to this server may be. Production sits behind Cloudflare, whose plans below
+ *  Business refuse a request body over 100 MB, and an ingress whose body limit the repo does not set; 10 MB is what that
+ *  path has carried since #1490. A bigger file goes straight to the bucket on an upload link (uploadLink below). */
+export const MAX_FORM_ATTACHMENT_BYTES = 10 * 1024 * 1024
 export const MAX_ATTACHMENTS = 10
+/** How long an upload link may be started: storage checks it when a request begins, so a long transfer that started in time finishes. */
+export const UPLOAD_LINK_MS = 10 * 60_000
+/** The `purpose` of an upload whose link was handed out and whose bytes the server has not yet checked. Servers before this
+ *  one refuse a row with any purpose as a message's file, so a rollout never sends a file that has not arrived. */
+export const PENDING_UPLOAD_PURPOSE = 'pending-upload'
+/** An unfinished upload the sweep has claimed (lib/pendingUploadSweep.ts): its stored file is being removed, so it can no
+ *  longer be finished or sent. */
+export const REMOVING_UPLOAD_PURPOSE = 'removing-upload'
+export const TOO_LARGE_MESSAGE = 'Files can be up to 256 MB.'
+/** Uploads a sender may start in a Swarm in an hour, and their bytes: bucket space for files that may never be sent. */
+export const HOURLY_UPLOADS = 200
+export const HOURLY_UPLOAD_BYTES = 4 * 1024 * 1024 * 1024
+/** A link's upload never finished is removed, with what it stored, this long after the link was made: an hour after it expired. */
+export const PENDING_UPLOAD_LIFE_MS = UPLOAD_LINK_MS + 3_600_000
+/** The form route's own refusal, seen only by a client from before upload links. */
+export const FORM_TOO_LARGE_MESSAGE = 'Update Harness to send files over 10 MB. Files can be up to 256 MB.'
 /** An avatar is a small picture: Desktop resizes it before upload, and the backend still holds it to this. */
 export const MAX_AVATAR_BYTES = 1024 * 1024
 export const AVATAR_TYPES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg', 'image/webp'])
@@ -19,8 +40,38 @@ export const attachmentName = z.string().trim().min(1).max(255).refine(value => 
 export const attachmentMime = z.string().trim().toLowerCase().max(200).regex(/^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/)
 
 export class AttachmentTooLarge extends Error {
-  constructor(cap = MAX_ATTACHMENT_BYTES) { super(`A file can be at most ${cap / 1024 / 1024} MB.`) }
+  constructor(cap = MAX_ATTACHMENT_BYTES) {
+    super(cap === MAX_ATTACHMENT_BYTES ? TOO_LARGE_MESSAGE : cap === MAX_FORM_ATTACHMENT_BYTES ? FORM_TOO_LARGE_MESSAGE : `A file can be at most ${cap / 1024 / 1024} MB.`)
+  }
 }
+
+/** A link that writes one object once, straight to storage, and the headers its request must carry unchanged. */
+export interface UploadLink { url: string; headers: Record<string, string> }
+
+/** A bucket the client can write to directly. Each link names one object, which must not exist yet, of exactly `size` bytes,
+ *  served as a download; storage itself refuses any other size, a second write, a changed header, or a start after `expiresAt`. */
+export interface DirectUploads {
+  uploadLink(objectKey: string, file: { name: string }, size: number, expiresAt: number): Promise<UploadLink>
+  /** The stored object's size, or null while nothing is there. */
+  stored(objectKey: string): Promise<{ size: number } | null>
+  /** Its first `bytes` bytes. */
+  head(objectKey: string, bytes: number): Promise<Buffer>
+  /** Removes it; an object already gone counts as removed. */
+  delete(objectKey: string): Promise<void>
+}
+export const directUploads = (store: AttachmentStore): DirectUploads | null =>
+  'uploadLink' in store && typeof (store as Partial<DirectUploads>).uploadLink === 'function' ? store as AttachmentStore & DirectUploads : null
+
+/** The headers an upload link signs. The bytes are not seen before they are served, so they are always a download, whatever
+ *  type is declared; the message keeps the declared type (an image's checked from its first bytes) for clients to show. */
+export function linkHeaders(name: string, size: number, cacheControl: string): Record<string, string> {
+  return { 'content-type': 'application/octet-stream', 'content-disposition': served(name, 'application/octet-stream').contentDisposition,
+    'cache-control': cacheControl, 'x-goog-content-length-range': `${size},${size}`, 'x-goog-if-generation-match': '0' }
+}
+/** A storage error's code or HTTP status, for a log line: its text can quote the object's key, which is the file's link. */
+export const errorCode = (error: unknown): string | number | null =>
+  error && typeof error === 'object' && 'code' in error && (typeof error.code === 'string' || typeof error.code === 'number') ? error.code : null
+export const CHAT_CACHE_CONTROL = 'public, max-age=31536000, immutable'
 
 /** The bucket behind the CDN. Tests and the local rig use the in-memory store below. */
 export interface AttachmentStore {
@@ -99,6 +150,9 @@ export async function checkedType(mime: string, body: Readable): Promise<{ mime:
   return { mime: peeked.type ?? 'application/octet-stream', body: peeked.body }
 }
 
+/** The type a checked upload keeps: a declared raster image only when its first bytes agree, as checkedType decides for a form. */
+export const typeFromHead = (mime: string, head: Buffer) => INLINE.has(mime) ? imageTypeOf(head) ?? 'application/octet-stream' : mime
+
 /** Counts what passes and fails the stream past `cap`, so a writer never commits more. */
 async function capped(body: Readable, cap: number, sink: Writable): Promise<number> {
   let size = 0
@@ -128,10 +182,10 @@ export function serviceAccountFrom(raw: string): ServiceAccount | null {
     credentials: { client_email: key.client_email as string, private_key: key.private_key as string } }
 }
 
-export class GcsAttachmentStore implements AttachmentStore {
+export class GcsAttachmentStore implements AttachmentStore, DirectUploads {
   private bucket: Promise<import('@google-cloud/storage').Bucket> | null = null
   constructor(private readonly name: string, private readonly account: ServiceAccount | null = null,
-    private readonly cacheControl = 'public, max-age=31536000, immutable') {}
+    private readonly cacheControl = CHAT_CACHE_CONTROL) {}
   // Loaded on first use, so a backend without a bucket never loads the client.
   protected files() {
     this.bucket ??= import('@google-cloud/storage').then(({ Storage }) => new Storage(this.account ?? undefined).bucket(this.name))
@@ -143,6 +197,28 @@ export class GcsAttachmentStore implements AttachmentStore {
     const sink = (await this.files()).file(objectKey).createWriteStream({ resumable: false, contentType,
       metadata: { contentDisposition, cacheControl: this.cacheControl } })
     return capped(body, cap, sink)
+  }
+  /** A V4 signed PUT: the signature covers every header below, so storage refuses a request that drops or changes one. */
+  async uploadLink(objectKey: string, file: { name: string }, size: number, expiresAt: number): Promise<UploadLink> {
+    const { 'content-type': contentType, ...extensionHeaders } = linkHeaders(file.name, size, this.cacheControl)
+    const [url] = await (await this.files()).file(objectKey).getSignedUrl({ version: 'v4', action: 'write', expires: expiresAt, contentType, extensionHeaders })
+    return { url, headers: { 'content-type': contentType!, ...extensionHeaders } }
+  }
+  async stored(objectKey: string) {
+    try {
+      const [metadata] = await (await this.files()).file(objectKey).getMetadata()
+      return { size: Number(metadata.size) }
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 404) return null
+      throw error
+    }
+  }
+  async head(objectKey: string, bytes: number) {
+    const [content] = await (await this.files()).file(objectKey).download({ start: 0, end: bytes - 1 })
+    return content
+  }
+  async delete(objectKey: string) {
+    await (await this.files()).file(objectKey).delete({ ignoreNotFound: true })
   }
 }
 
@@ -162,14 +238,47 @@ export class CdnAvatarStore implements AvatarStore {
   async signedUrl(objectKey: string) { return publicUrl(this.publicBase, objectKey) }
 }
 
-export class MemoryAttachmentStore implements AttachmentStore {
-  readonly objects = new Map<string, { bytes: Buffer; contentType: string; contentDisposition: string }>()
+export class MemoryAttachmentStore implements AttachmentStore, DirectUploads {
+  readonly objects = new Map<string, { bytes: Buffer; contentType: string; contentDisposition: string; cacheControl?: string }>()
+  private readonly linkSecret = randomBytes(32)
+  constructor(private readonly now: () => number = Date.now) {}
   async put(objectKey: string, file: { name: string; mime: string }, body: Readable, cap: number) {
     const chunks: Buffer[] = []
     const size = await capped(body, cap, new Writable({ write(chunk: Buffer, _encoding, done) { chunks.push(chunk); done() } }))
     this.objects.set(objectKey, { bytes: Buffer.concat(chunks), ...served(file.name, file.mime) })
     return size
   }
+  private linkSignature(objectKey: string, expiresAt: number, headers: Record<string, string>) {
+    return createHmac('sha256', this.linkSecret).update(JSON.stringify([objectKey, expiresAt, Object.entries(headers).sort()])).digest('hex')
+  }
+  async uploadLink(objectKey: string, file: { name: string }, size: number, expiresAt: number): Promise<UploadLink> {
+    const headers = linkHeaders(file.name, size, CHAT_CACHE_CONTROL)
+    const url = `https://storage.memory.test/${encodeURIComponent(objectKey)}?expires=${expiresAt}&signature=${this.linkSignature(objectKey, expiresAt, headers)}`
+    return { url, headers }
+  }
+  /** What the bucket answers a PUT to `url`, with storage's rules: the status, and the object written only on 200. */
+  async receive(url: string, headers: Record<string, string>, body: Readable | Buffer): Promise<number> {
+    const link = new URL(url), objectKey = decodeURIComponent(link.pathname.slice(1)), expiresAt = Number(link.searchParams.get('expires'))
+    const lower = Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]))
+    const signed = Object.fromEntries(['content-type', 'content-disposition', 'cache-control', 'x-goog-content-length-range', 'x-goog-if-generation-match']
+      .flatMap(k => lower[k] === undefined ? [] : [[k, lower[k]!]]))
+    const drain = async () => { if (!Buffer.isBuffer(body)) body.resume() }
+    if (!(expiresAt > this.now()) || link.searchParams.get('signature') !== this.linkSignature(objectKey, expiresAt, signed) || lower.authorization) { await drain(); return 403 }
+    if (signed['x-goog-if-generation-match'] === '0' && this.objects.has(objectKey)) { await drain(); return 412 }
+    const [min, max] = (signed['x-goog-content-length-range'] ?? '').split(',').map(Number)
+    const chunks: Buffer[] = []
+    let size = 0
+    try {
+      size = await capped(Buffer.isBuffer(body) ? Readable.from([body]) : body, max ?? Infinity, new Writable({ write(chunk: Buffer, _encoding, done) { chunks.push(chunk); done() } }))
+    } catch (error) { if (error instanceof AttachmentTooLarge) return 400; throw error }
+    if (min !== undefined && size < min) return 400
+    this.objects.set(objectKey, { bytes: Buffer.concat(chunks), contentType: signed['content-type']!, contentDisposition: signed['content-disposition']!,
+      cacheControl: signed['cache-control'] })
+    return 200
+  }
+  async stored(objectKey: string) { const object = this.objects.get(objectKey); return object ? { size: object.bytes.byteLength } : null }
+  async head(objectKey: string, bytes: number) { return (this.objects.get(objectKey)?.bytes ?? Buffer.alloc(0)).subarray(0, bytes) }
+  async delete(objectKey: string) { this.objects.delete(objectKey) }
 }
 
 /** Avatars for tests and the local rig: links carry their expiry and an HMAC of it, and `open` honours both as the bucket would. */

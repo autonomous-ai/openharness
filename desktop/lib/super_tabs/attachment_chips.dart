@@ -31,8 +31,15 @@ class SuperTabAttachments extends StatelessWidget {
     final chips = <SuperTabAttachment>[];
     for (final file in attachments) {
       // A browser's fetch follows a redirect off the attachments host, so
-      // there a picture stays a chip that opens in a new tab.
-      final url = file.isImage && !kIsWeb ? attachmentLink(file.url) : null;
+      // there a picture stays a chip that opens in a new tab. A picture over
+      // the form's limit is a chip too: every reader would fetch and decode
+      // it whole to draw it in place.
+      final url =
+          file.isImage &&
+              file.size <= kSuperTabFormAttachmentMaxBytes &&
+              !kIsWeb
+          ? attachmentLink(file.url)
+          : null;
       url == null ? chips.add(file) : pictures.add((file, url));
     }
     return Column(

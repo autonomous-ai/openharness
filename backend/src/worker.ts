@@ -32,6 +32,7 @@ import { env } from './config/env.js'
 import { machineBillingWorkerService } from './services/MachineBillingWorkerService.js'
 import { productUsagePeopleRollupService } from './services/ProductUsagePeopleRollupService.js'
 import { startReceiptSweep } from './lib/productUsageReceiptSweep.js'
+import { startPendingUploadSweep } from './lib/pendingUploadSweep.js'
 import { startRoutingReflection } from './lib/routingReflection.js'
 import { logger } from './utils/logger.js'
 
@@ -71,6 +72,7 @@ async function start(): Promise<void> {
   let stopCompaction = (): void => {}
   let stopThreadBackfill = (): void => {}
   let stopReceiptSweep = (): void => {}
+  let stopPendingUploads = (): void => {}
   let stopReflection = (): void => {}
   const shutdown = (signal: string): void => {
     logger.info(`Received ${signal}, stopping backend worker...`)
@@ -84,6 +86,7 @@ async function start(): Promise<void> {
     stopDeliveries()
     stopCompaction()
     stopReceiptSweep()
+    stopPendingUploads()
     stopReflection()
     stopThreadBackfill()
     // The last partial minute, before the database closes.
@@ -98,6 +101,8 @@ async function start(): Promise<void> {
   productUsagePeopleRollupService.start()
   // Usage receipts from when they lived 36 days, a few at a time until none are left (lib/productUsageReceiptSweep.ts).
   stopReceiptSweep = startReceiptSweep(prisma)
+  // Uploads begun on a link and never finished go an hour after the link expired, with what they stored (lib/pendingUploadSweep.ts).
+  stopPendingUploads = startPendingUploadSweep(prisma, env)
   // The worker's sweeps and archive write Swarms: they bump the stamps the API processes read by. It reads too little to keep a cache.
   configureSwarmStamps(redisSwarmStamps(), { reads: false })
   // Archive notes and Workspace removals write messages too: their recipients' hosts hear of them at once, and of the

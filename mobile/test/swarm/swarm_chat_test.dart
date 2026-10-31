@@ -15,6 +15,7 @@ import 'package:harness_mobile/swarm/swarm_file_picker.dart';
 import 'package:harness_mobile/swarm/swarm_message_row.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
+import 'package:harness_mobile/swarm/swarm_outgoing_files.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../theme/sheet_shape.dart';
@@ -2399,7 +2400,7 @@ void main() {
         required String conversationId,
         required String name,
         required String mime,
-        required Uint8List bytes,
+        required SwarmOutgoingFile file,
         required CancelToken cancel,
         required void Function(double sent) onProgress,
       }) {
@@ -3348,7 +3349,7 @@ void main() {
       required String conversationId,
       required String name,
       required String mime,
-      required Uint8List bytes,
+      required SwarmOutgoingFile file,
       required dynamic cancel,
       required void Function(double sent) onProgress,
     }) {
@@ -3547,17 +3548,32 @@ void main() {
       expect(fake.commands, isEmpty);
     });
 
-    testWidgets('a file over 10 MB is named under the files', (tester) async {
+    testWidgets('a file over 256 MB is named under the files', (tester) async {
       pickSwarmFiles = () async => [
-        picked('big.zip', 10 * 1024 * 1024 + 1),
+        // Said to be past the limit, holding nothing: refused by its size.
+        XFile.fromData(
+          Uint8List(0),
+          path: '/picker-copies/big.zip',
+          length: 256 * 1024 * 1024 + 1,
+        ),
         picked('ok.txt', 3),
       ];
       await pump(tester, backend([message('m1', 1)]));
 
       await attach(tester, 'swarm-attach-files');
 
-      expect(find.text('big.zip is over 10 MB.'), findsOneWidget);
+      expect(find.text('big.zip is over 256 MB.'), findsOneWidget);
       expect(key('swarm-outgoing-ok.txt'), findsOneWidget);
+    });
+
+    testWidgets('a file just over 10 MB is attached', (tester) async {
+      pickSwarmFiles = () async => [picked('scan.pdf', 10 * 1024 * 1024 + 1)];
+      await pump(tester, backend([message('m1', 1)]));
+
+      await attach(tester, 'swarm-attach-files');
+
+      expect(find.textContaining('is over'), findsNothing);
+      expect(key('swarm-outgoing-scan.pdf'), findsOneWidget);
     });
 
     testWidgets('camera access turned off offers Settings', (tester) async {

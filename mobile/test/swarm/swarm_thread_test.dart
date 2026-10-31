@@ -620,7 +620,7 @@ void main() {
         'the files, and sends nothing', () async {
       const refused = SuperTabFailure(
         'ATTACHMENT_TOO_LARGE',
-        'That file is over 10 MB.',
+        'Files can be up to 256 MB.',
         statusCode: 413,
       );
       final uploads = FakeUploads()..refuse['b.jpg'] = refused;
@@ -634,7 +634,7 @@ void main() {
       expect(await t.send(), isFalse);
 
       expect(t.error, r.chat.error);
-      expect(t.error, 'That file is over 10 MB.');
+      expect(t.error, 'Files can be up to 256 MB.');
       expect(t.draft, 'look');
       expect(names(t.files.files), ['a.jpg', 'b.jpg']);
       expect(r.swarm.commands, isEmpty);

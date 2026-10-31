@@ -45,14 +45,14 @@ void main() {
     return XFile(file.path, name: name);
   }
 
-  /// A copy past the limit, made without writing ten megabytes.
-  XFile bigCopy(String name) {
+  /// A copy of [size] bytes, past the limit by default, made without writing them: a sparse file.
+  XFile bigCopy(String name, [int size = 256 * 1024 * 1024 + 1]) {
     final file = File('${folder.path}/$name')..createSync();
     file.openSync(mode: FileMode.write)
       ..setPositionSync(0)
-      ..truncateSync(swarmAttachmentMaxBytes + 1)
+      ..truncateSync(size)
       ..closeSync();
-    return XFile(file.path, name: name);
+    return _Counted(file.path, name: name);
   }
 
   List<String> names() => [for (final f in files.files) f.name];
@@ -69,7 +69,7 @@ void main() {
       expect(outcome, isA<SwarmPicked>());
       expect((outcome as SwarmPicked).note, isNull);
       expect(names(), ['photo.jpg', 'photo-2.jpg']);
-      expect([for (final f in files.files) f.bytes.length], [3, 4]);
+      expect([for (final f in files.files) f.bytes!.length], [3, 4]);
     });
 
     test('keeps a photo’s own kind in its name', () async {
@@ -135,13 +135,13 @@ void main() {
       expect((outcome as SwarmPickDenied).source, SwarmPickSource.library);
     });
 
-    test('a photo over 10 MB is named and left out', () async {
+    test('a photo over 256 MB is named and left out', () async {
       final big = bigCopy('big.jpg');
       pickSwarmPhotos = (limit) async => [big, copy('ok.jpg', 2)];
 
       final outcome = await addSwarmPicked(files, SwarmPickSource.library);
 
-      expect((outcome as SwarmPicked).note, 'photo.jpg is over 10 MB.');
+      expect((outcome as SwarmPicked).note, 'photo.jpg is over 256 MB.');
       expect(names(), ['photo-2.jpg']);
       expect(File(big.path).existsSync(), isFalse);
     });
@@ -203,15 +203,58 @@ void main() {
       );
     });
 
-    test('a file over 10 MB is refused before it is read', () async {
+    test('a file over 256 MB is refused before it is read', () async {
       final big = bigCopy('big.zip');
       pickSwarmFiles = () async => [big, copy('ok.txt', 2)];
 
       final outcome = await addSwarmPicked(files, SwarmPickSource.files);
 
-      expect((outcome as SwarmPicked).note, 'big.zip is over 10 MB.');
+      expect((outcome as SwarmPicked).note, 'big.zip is over 256 MB.');
       expect(names(), ['ok.txt']);
+      expect((big as _Counted).reads, 0);
       expect(File(big.path).existsSync(), isFalse);
+    });
+
+    test('a file over 10 MB is taken but never read into memory: it goes up from the picker\'s '
+        'copy, which stays for it', () async {
+      final big = bigCopy('AC4.step', 10 * 1024 * 1024 + 1);
+      pickSwarmFiles = () async => [big];
+
+      final outcome = await addSwarmPicked(files, SwarmPickSource.files);
+
+      expect((outcome as SwarmPicked).note, isNull);
+      expect(names(), ['AC4.step']);
+      expect((big as _Counted).reads, 0);
+      expect(files.files.single.bytes, isNull);
+      final kept = Directory('${folder.path}/harness-swarm-outgoing');
+      expect(kept.listSync(), hasLength(1), reason: 'moved where it is kept');
+      expect(File(big.path).existsSync(), isFalse);
+    });
+
+    test('clearing the kept copies deletes them, and nothing else of the '
+        'temporary folder', () async {
+      pickSwarmFiles = () async => [bigCopy('AC4.step', 10 * 1024 * 1024 + 1)];
+      await addSwarmPicked(files, SwarmPickSource.files);
+      final other = File('${folder.path}/not-ours.tmp')..createSync();
+
+      await clearSwarmPickerCopies();
+
+      expect(
+        Directory('${folder.path}/harness-swarm-outgoing').existsSync(),
+        isFalse,
+      );
+      expect(other.existsSync(), isTrue);
+    });
+
+    test('a file of 10 MB is read into memory, and its copy deleted', () async {
+      final edge = bigCopy('edge.bin', 10 * 1024 * 1024);
+      pickSwarmFiles = () async => [edge];
+
+      await addSwarmPicked(files, SwarmPickSource.files);
+
+      expect(names(), ['edge.bin']);
+      expect(files.files.single.bytes, hasLength(10 * 1024 * 1024));
+      expect(File(edge.path).existsSync(), isFalse);
     });
 
     test('files past the tenth are left out and counted', () async {
@@ -361,7 +404,7 @@ void main() {
 
 /// A picker's file that counts how often its bytes are read.
 class _Counted extends XFile {
-  _Counted(super.path);
+  _Counted(super.path, {super.name});
 
   int reads = 0;
 
