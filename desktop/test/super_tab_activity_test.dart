@@ -12,6 +12,7 @@ import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/parts.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
+import 'package:harness/super_tabs/workgroup_name.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 
 import 'super_tab_attention_test.dart'
@@ -208,7 +209,10 @@ void main() {
         final c = await open(server);
         server.holdNotify = Completer();
         final kept = c.setNotify('offline', SuperTabNotify.muted);
+        expect(c.notifyOf('offline'), SuperTabNotify.muted);
         c.revokeAccess('Removed from this Swarm.');
+        // At once, not when the answer comes.
+        expect(c.notifyOf('offline'), SuperTabNotify.mentions);
         server.holdNotify!.complete();
         await kept;
         expect(c.notifyOf('offline'), SuperTabNotify.mentions);
@@ -412,8 +416,9 @@ void main() {
         expect(activity.error, isNotNull);
         expect(activity.items, isEmpty);
         server.activityStatus = 0;
-        server.state['activityDigest'] = 'd2';
-        server.revision++;
+        // The next change of the Swarm reads it again, though its digest
+        // did not move.
+        fromLead(server, 'Something else changed');
         await c.refresh();
         await settle();
         expect(activity.error, isNull);
@@ -543,16 +548,15 @@ void main() {
           inRow('super-group-offline', find.byType(SuperTabCountBadge)),
           findsNothing,
         );
-        final name = tester.widget<Text>(
-          find
-              .descendant(
-                of: find.byKey(const ValueKey('super-group-offline')),
-                matching: find.byType(Text),
-              )
-              .first,
+        // The workgroup's name, drawn in the row's style.
+        final name = tester.widget<SuperTabWorkgroupName>(
+          find.descendant(
+            of: find.byKey(const ValueKey('super-group-offline')),
+            matching: find.byType(SuperTabWorkgroupName),
+          ),
         );
-        expect(name.style?.color, DesktopChrome.muted);
-        expect(name.style?.fontWeight, isNot(grid.AppFont.semibold));
+        expect(name.style.color, DesktopChrome.muted);
+        expect(name.style.fontWeight, isNot(grid.AppFont.semibold));
         await close(tester, c);
       });
     }
