@@ -705,7 +705,7 @@ class _SuperTabViewState extends State<SuperTabView>
     final result = await c.send(
       replyTo: _replies[id]?.id,
       newSession: newSession,
-      sessionProjectId: newSession ? _chatSessionProjects[id] : null,
+      sessionProjectId: newSession ? _chosenSessionProject(id) : null,
       // The reply goes with the message, which shows at the end at once.
       onSending: () {
         if (!mounted) return;
@@ -767,6 +767,15 @@ class _SuperTabViewState extends State<SuperTabView>
             )
           : null,
     );
+  }
+
+  /// The project chosen for chat [id]'s New session while the reader still
+  /// reads it: one they lost is no longer chosen (security review 1 of #2437).
+  String? _chosenSessionProject(String? id) {
+    final chosen = _chatSessionProjects[id];
+    return c.snapshot?.projects.any((p) => p.id == chosen) == true
+        ? chosen
+        : null;
   }
 
   /// Where a New session in the reader's one Buddy chat works: every project
@@ -2283,7 +2292,10 @@ class _SuperTabViewState extends State<SuperTabView>
           if (group.isSwarmBuddyChat)
             for (final project
                 in c.snapshot?.projects ?? const <SuperTabProject>[])
-              if (c.buddyChat(project.id) case final earlier?)
+              // One with nothing in it has no history to keep (security
+              // review 1 of #2437).
+              if (c.buddyChat(project.id) case final earlier?
+                  when earlier.lastMessageSequence > 0)
                 item(
                   'Earlier chat in ${project.name}',
                   () => unawaited(c.select(earlier.id)),
@@ -2617,7 +2629,11 @@ class _SuperTabViewState extends State<SuperTabView>
               final person? => person.username,
               null => 'Someone',
             },
-      onReact: c.canWrite && c.selected?.archived == false
+      // An older Buddy chat is kept to read: no reaction there (security review 1 of #2437).
+      onReact:
+          c.canWrite &&
+              c.selected?.archived == false &&
+              !c.isEarlierBuddyChat(c.selected)
           ? (emoji) => unawaited(_react(message, emoji))
           : null,
       receipts: [

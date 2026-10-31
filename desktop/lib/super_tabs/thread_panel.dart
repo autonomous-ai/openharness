@@ -179,8 +179,12 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
   /// One line, always the full wording.
   String get _alsoSendHint => '${_alsoSendLabels.first} as well as this thread';
 
+  // An older Buddy chat is kept to read: no thread reply there either (security review 1 of #2437).
   bool get _writable =>
-      c.canWrite && c.selected?.archived == false && !c.hasPendingAction;
+      c.canWrite &&
+      c.selected?.archived == false &&
+      !c.hasPendingAction &&
+      !c.isEarlierBuddyChat(c.selected);
 
   /// The thread's last session ended: a reply here must start a new one.
   bool get _sessionLocked =>
@@ -595,7 +599,10 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
                     key: const ValueKey('super-thread-composer'),
                     controller: _composer,
                     focusNode: _focus,
-                    enabled: c.canWrite && c.selected?.archived == false,
+                    enabled:
+                        c.canWrite &&
+                        c.selected?.archived == false &&
+                        !c.isEarlierBuddyChat(c.selected),
                     minLines: 1,
                     maxLines: 6,
                     maxLength: kComposerMaxLength,
@@ -605,7 +612,9 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
                     decoration: InputDecoration(
                       isCollapsed: true,
                       constraints: const BoxConstraints(),
-                      hintText: 'Reply',
+                      hintText: c.isEarlierBuddyChat(c.selected)
+                          ? 'This is an earlier chat, kept to read.'
+                          : 'Reply',
                       hintStyle: DesktopChrome.text(color: DesktopChrome.muted),
                       contentPadding: EdgeInsets.zero,
                       border: InputBorder.none,

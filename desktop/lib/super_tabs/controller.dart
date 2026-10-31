@@ -1485,6 +1485,8 @@ class SuperTabController extends ChangeNotifier {
       if (alsoSend && !newSession) 'alsoSend': true,
       if (newSession) 'newSession': true,
       if (ids.isNotEmpty) 'attachmentIds': ids,
+      // As the chat's own send: the server refuses it in an earlier chat.
+      if (oneBuddy) 'oneBuddy': true,
     });
     if (_pending case final pending? when !identical(pending, before)) {
       _sendingMentions[pending['operationId'] as String] = picked;
@@ -3953,6 +3955,7 @@ class SuperTabController extends ChangeNotifier {
           'replyTo': replyTo,
           'recipientIds': addressed,
           if (tagged.isNotEmpty) 'mentions': tagged,
+          if (oneBuddy) 'oneBuddy': true,
         },
         result: result,
       ));
@@ -3983,6 +3986,10 @@ class SuperTabController extends ChangeNotifier {
       if (tagged.isNotEmpty) 'mentions': tagged,
       if (ids.isNotEmpty) 'attachmentIds': ids,
       if (newSession) 'newSession': true,
+      // An app that knows one Buddy per Swarm says so: the server then
+      // refuses its write into an older Buddy chat (security review 1 of
+      // #2435). Older apps and phones say nothing and still write there.
+      if (oneBuddy) 'oneBuddy': true,
       // A New session in one project of the reader's one Buddy chat (spec
       // 2026-10-31-one-buddy-per-swarm).
       if (newSession &&

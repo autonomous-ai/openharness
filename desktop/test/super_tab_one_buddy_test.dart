@@ -54,6 +54,24 @@ void main() {
   }
 
   final buddyRow = find.byKey(const ValueKey('super-swarm-buddy'));
+
+  /// A line in the reader's older Buddy chat in the lead project, so it has
+  /// history to keep.
+  void oldLine(ConversationServer server) {
+    server.append('An older word', conversationId: 'buddy-peer-lead');
+    final chat = (server.state['conversations'] as List).cast<Map>().firstWhere(
+      (g) => g['id'] == 'buddy-peer-lead',
+    );
+    chat['lastMessageSequence'] = 1;
+  }
+
+  Future<void> openMenu(WidgetTester tester) async {
+    await tester.tap(buddyRow);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Buddy options'));
+    await tester.pumpAndSettle();
+  }
+
   final headings = find.byType(SuperTabSectionHeading);
   List<String> titles(WidgetTester tester) => [
     for (final h in tester.widgetList<SuperTabSectionHeading>(headings))
@@ -187,6 +205,7 @@ void main() {
       final server = oneBuddySwarm();
       giveSwarmBuddy(server);
       giveBuddy(server, id: 'old', name: 'Old');
+      oldLine(server);
       final c = await show(tester, server);
       await tester.tap(buddyRow);
       await tester.pumpAndSettle();
@@ -223,6 +242,7 @@ void main() {
         final server = oneBuddySwarm();
         giveSwarmBuddy(server);
         giveBuddy(server, id: 'old', name: 'Old');
+        oldLine(server);
         final c = await show(tester, server);
         // The person lost the project: the server no longer lists it to them.
         server.state['projects'] = <dynamic>[];
@@ -235,6 +255,125 @@ void main() {
         await close(tester, c);
       },
     );
+  });
+
+  group('security review 1 of #2437', () {
+    testWidgets('lists no earlier chat with nothing in it', (tester) async {
+      final server = oneBuddySwarm();
+      giveSwarmBuddy(server);
+      giveBuddy(server, id: 'old', name: 'Old');
+      final c = await show(tester, server);
+      await openMenu(tester);
+      expect(find.textContaining('Earlier chat in'), findsNothing);
+      await close(tester, c);
+    });
+
+    testWidgets(
+      'takes no reply in a thread of an earlier chat, and says it is kept to read',
+      (tester) async {
+        final server = oneBuddySwarm();
+        giveSwarmBuddy(server);
+        giveBuddy(server, id: 'old', name: 'Old');
+        oldLine(server);
+        final c = await show(tester, server);
+        await c.select('buddy-peer-lead');
+        await tester.pumpAndSettle();
+        final root = c.messages('buddy-peer-lead').last;
+        c.openThread(root.id);
+        await tester.pumpAndSettle();
+        final field = tester.widget<TextField>(
+          find.byKey(const ValueKey('super-thread-composer')),
+        );
+        expect(field.enabled, isFalse);
+        expect(
+          field.decoration?.hintText,
+          'This is an earlier chat, kept to read.',
+        );
+        await close(tester, c);
+      },
+    );
+
+    testWidgets(
+      'says it knows one Buddy on each post, so the server refuses one into an earlier chat',
+      (tester) async {
+        final server = oneBuddySwarm();
+        giveSwarmBuddy(server);
+        final c = await show(tester, server);
+        await tester.tap(buddyRow);
+        await tester.pumpAndSettle();
+        await tester.enterText(
+          find.byKey(const ValueKey('super-message-composer')),
+          'Hello',
+        );
+        await tester.pump();
+        await tester.tap(find.byTooltip('Send message'));
+        await tester.pumpAndSettle();
+        expect(commands(server, 'message.send').last['oneBuddy'], isTrue);
+        await close(tester, c);
+      },
+    );
+
+    testWidgets(
+      'shows every project\'s decisions asked of the reader above # buddy',
+      (tester) async {
+        final server = oneBuddySwarm();
+        giveSwarmBuddy(server);
+        server.decisions.add({
+          'id': 'd1',
+          'projectId': 'lead',
+          'projectName': 'Pilot',
+          'conversationId': 'lead',
+          'conversationTitle': 'Lead',
+          'askerName': 'Lead',
+          'question': 'Ship the Buddy?',
+          'options': ['Yes', 'No'],
+          'recommended': 0,
+          'unblocks': 'The release',
+          'createdAt': '2026-10-28T09:00:00Z',
+        });
+        server.state['decisionsWaiting'] = 1;
+        final c = await show(tester, server);
+        await tester.tap(buddyRow);
+        await tester.pumpAndSettle();
+        expect(find.text('Ship the Buddy?'), findsOneWidget);
+        await close(tester, c);
+      },
+    );
+
+    testWidgets('never sends a project the reader lost for New session', (
+      tester,
+    ) async {
+      final server = oneBuddySwarm();
+      giveSwarmBuddy(server);
+      final c = await show(tester, server);
+      await tester.tap(buddyRow);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('super-chat-new-session')));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('super-chat-session-project')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('super-chat-session-in-lead')).last,
+      );
+      await tester.pumpAndSettle();
+      // The reader loses the project before sending: the server lists another in its place.
+      server.state['projects'] = [projectFixture('other', 'Other', 'lead')];
+      await c.refresh();
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('super-message-composer')),
+        'Hand this off',
+      );
+      await tester.pump();
+      await tester.tap(find.byTooltip('Send message'));
+      await tester.pumpAndSettle();
+      final sent = commands(server, 'message.send').last;
+      expect(sent['newSession'], isTrue);
+      expect(sent.containsKey('sessionProjectId'), isFalse);
+      await close(tester, c);
+    });
   });
 
   group('New session', () {
