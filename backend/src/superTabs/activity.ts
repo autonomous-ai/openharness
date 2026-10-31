@@ -128,7 +128,11 @@ export async function listActivity(db: PrismaClient, tabId: string, state: Super
   if (!kept.length) return { items: [], more }
   const found = (await readBy(db, 'SuperTabMessage', 'id', [{ $match: { _id: { $in: [...new Set(kept.map(r => r.messageId))] }, tabId } },
     { $project: { ...FIELDS, conversationId: 1 } }])).map(messageRow)
-  const messages = new Map((await readable(db, tabId, found)).map(m => [m.id, m]))
+  // As a page filters rows (read/inbox.ts readable), Buddy-session rows included: against the state with the quiet chats read
+  // by id above, since a chat the state does not hold reads nothing.
+  const held = new Set(state.conversations.map(c => c.id))
+  const withQuiet: SuperTabState = { ...state, conversations: [...state.conversations, ...[...groups.values()].filter(g => !held.has(g.id))] }
+  const messages = new Map((await readable(db, tabId, found, withQuiet)).map(m => [m.id, m]))
   const items = kept.flatMap(r => {
     const message = messages.get(r.messageId)
     // The message must still be in the chat the row names, and be one the person reads; a reaction's must still be theirs.

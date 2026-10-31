@@ -14,7 +14,7 @@ import { errorHandler } from '../src/middlewares/errorHandler.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { HostReads } from '../src/superTabs/read/host.js'
-import { buddyChatId } from '../src/superTabs/buddies.js'
+import { buddyChatId, openSwarmBuddyChat } from '../src/superTabs/buddies.js'
 import { ACTIVITY_EXPIRY_MS, ACTIVITY_READS, resetActivityReads, sweepActivity } from '../src/superTabs/activity.js'
 import { CHAT_SETTING_DEFAULT_KEEP_MS, sweepChatSettings } from '../src/superTabs/chatSettings.js'
 import type { Command, SuperTabState } from '../src/superTabs/model.js'
@@ -82,12 +82,14 @@ async function scene() {
     buddyId = buddyChatId(chat.projectId ?? 'lead', { id: peer.sub, generation })
     Object.assign(chat, { id: buddyId, kind: 'buddy', leadId: null, agentIds: [], audience: { people: [{ id: peer.sub, generation }] } })
   })
+  let swarmBuddy = ''
+  s.edit(state => { swarmBuddy = openSwarmBuddyChat(state, state.people.find(p => p.id === peer.sub)!).id })
   const tabId = `tab-${randomUUID()}`
   const state = { ...structuredClone(s.state), id: tabId } as SuperTabState
   await writeLegacySwarm(db, { state, revision: 3 })
   const report = await migrateSwarm(db, tabId, { now: () => MIGRATED })
   if (!report.ok) throw new Error(report.error)
-  return { tabId, web, worker, secret, secretGroup, buddyId, open, openChat }
+  return { tabId, web, worker, secret, secretGroup, buddyId, open, openChat, swarmBuddy }
 }
 
 const run = async (tabId: string, command: Command, as: AuthUser = owner, asAgentId?: string) =>
@@ -207,6 +209,28 @@ describe('Activity: only what the person can read now', () => {
     const answer = await activity(s.tabId, owner)
     expect(answer.body.data.items).toEqual([])
     expect(JSON.stringify(answer.body)).not.toContain('Buddy')
+  })
+})
+
+describe('Activity in a person\'s one Buddy chat', () => {
+  it('drops a reply in a project session\'s thread once the person no longer reads that project (review of the main merge)', async () => {
+    const s = await scene()
+    const root = await send(s.tabId, s.swarmBuddy, 'Peer asks their Buddy about Open', peer)
+    // A reply in the Open project's session thread, marked with its project as a session writes it (buddySessions.ts).
+    const reply = `m-${randomUUID()}`
+    const sequence = (await db.superTabMessage.findUniqueOrThrow({ where: { id: root } })).sequence + 1
+    await db.superTabMessage.create({ data: { id: reply, tabId: s.tabId, conversationId: s.swarmBuddy, sequence, text: 'Open session answers',
+      author: { kind: 'agent', id: 'buddy-session', name: 'Buddy', membershipGeneration: 'fixture' } as never, thread: root, recipientIds: [],
+      mentions: [], buddySession: true, buddyProject: s.open, createdAt: new Date() } })
+    await db.superTabActivity.create({ data: { id: `fixture-${randomUUID()}`, tabId: s.tabId, personId: peer.sub, kind: 'reply',
+      conversationId: s.swarmBuddy, messageId: reply, threadId: root, actorKind: 'agent', actorId: 'buddy-session', emoji: null,
+      createdAt: new Date(), readAt: null } })
+    expect((await items(s.tabId, peer)).map(i => i.text)).toEqual(['Open session answers'])
+    // The owner makes Open private to themselves: peer no longer reads it, and its session's reply leaves their Activity.
+    await run(s.tabId, { type: 'project.sharing', projectId: s.open, visibility: 'private', memberIds: [] })
+    const answer = await activity(s.tabId, peer)
+    expect(answer.body.data).toEqual({ items: [], more: false })
+    expect(JSON.stringify(answer.body)).not.toContain('Open session answers')
   })
 })
 
