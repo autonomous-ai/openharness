@@ -3,7 +3,7 @@
 Status: design, 2026-10-31. Requested by Ken.
 
 > **Status after the builder check (2026-10-31):** changes 2 (heartbeats) and 4 (slim transcript events) stand and
-> are planned. Changes 1 (`swarm_changed`) and 3 (`agent_synced`) are **on hold** for the reasons in "On hold" below;
+> are built on branch `fewer-relay-frames` (2026-10-31; not released). Changes 1 (`swarm_changed`) and 3 (`agent_synced`) are **on hold** for the reasons in "On hold" below;
 > change 1 needs its own design with a client change, which Ken has not yet decided on.
 
 ## Why
@@ -90,7 +90,9 @@ In `createHeartbeats` (`cli/src/core/turns/heartbeats.ts`), each beat sends one 
 - working: `turn_heartbeat` carrying `activity` (every client keeps working from it; the phone needs this one);
 - not working (`idle` or `unknown`, the only other states, `cli/src/lib/turnActivity.ts`, while the turn is still
   open or the device still needs the beat): `agent_activity`, only when the activity differs from the last one sent
-  for that session (by `state`, `epoch` and `revision`; `validForMs` ignored). The last sent is forgotten with the
+  for that session, a working one included (by `state` and `epoch`; `validForMs` ignored). Not by `revision`: every
+  probe of an idle open turn sets it again (`TurnActivity.check`), so it moves each beat with nothing new; and that
+  move is what keeps a stale probe from overwriting a newer state, so it stays. The last sent is forgotten with the
   heartbeat (`stopHeartbeat`).
 
 Effect: about 30,000 fewer frames a day on the measured account.
@@ -109,7 +111,8 @@ Effect: about 4,400 fewer frames a day, among the largest frames there are.
 ### 4. Transcript events: a slim frame for apps away from the computer (CLI)
 
 On the remote path only (`cli/src/backendSocket.ts` `toRemoteApps`, before the frame crosses to the gateway's
-process), a pure `slimForRelay(frame)` (in `cli/src/gateway/`) keeps:
+process), a pure `slimForRelay(frame)` (in `cli/src/lib/slimForRelay.ts`: the core's process may not import
+`gateway/`, `cli/src/architecture.spec.ts`) keeps:
 
 | Event | Payload kept |
 |---|---|
@@ -118,7 +121,7 @@ process), a pure `slimForRelay(frame)` (in `cli/src/gateway/`) keeps:
 | `text_delta` | `content` |
 | `thinking_delta` | nothing |
 | `thinking_title` | `title`, `thinkingId` |
-| `tool_start` | `id`, `tool`, `parentToolUseId`, `input` with every string value cut to 200 characters, arrays to 50 items, depth to 4 |
+| `tool_start` | `id`, `tool`, `parentToolUseId`, `input` with every string value cut to 200 characters, arrays and objects to 50 entries, depth to 4 |
 | `tool_end` | `id`, `tool`, `parentToolUseId`, `isError` |
 | `subagent_finished` | `id`, `status` |
 | `done` | `result` cut to 500 characters |

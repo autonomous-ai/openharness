@@ -15,7 +15,15 @@ before and after.
 
 ## Status and handoff (2026-10-31)
 
-- Spec and plan written; nothing implemented. Branch `fewer-relay-frames`.
+- Spec and plan written. Tasks 0, 2, 4 and 5 built on branch `fewer-relay-frames` (2026-10-31), not pushed;
+  tasks 1 and 3 still on hold. Built differently from the steps below, each for the reason given:
+  - Task 0: the build Mac's Desktop log of 2026-10-30 is not Ken's (161,203 frames, 03:05-17:02); both are in the
+    spec's Results.
+  - Task 2: an unchanged activity is compared by `state` and `epoch`, not `revision` (spec, change 2).
+  - Task 4: `slimForRelay` is `cli/src/lib/slimForRelay.ts`, not `src/gateway/` (the core may not import it); a tool
+    input's objects are bounded to 50 keys as its lists are; the terminal app's mock sends only fields the slim
+    frame keeps, so it needs no change, and `tui/tests/e2e.sh` could not be run on a current build (no Rust here).
+  - Task 5: `docs/swarms.md` is unchanged: its 30 s rule is task 1's, on hold.
 - **Run tasks 0, 2, 4 and 5.** Tasks 1 and 3 are **on hold** (spec, "On hold"): task 1 would make Desktop and the web
   show machines late or offline, and needs its own design with a client change, not yet decided by Ken; task 3 saves
   little that is safe to drop. Skip them; do not delete them, they are the starting point if Ken decides.
