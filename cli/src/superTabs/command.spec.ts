@@ -887,3 +887,15 @@ describe('stdin for -', () => {
     expect(request).toHaveBeenLastCalledWith('super_tabs', expect.objectContaining({ operationId: 'op-3', command: { type: 'work.status' } }), 30_000)
   })
 })
+
+// Spec 2026-10-31-one-buddy-per-swarm: a person's one Buddy reads one of its projects by name, alone or with its archive.
+it('parses status --project NAME, alone or with --archived, and refuses it without a name', () => {
+  expect(parseSuperTabArgs([...prefix, 'status', '--project', 'Web App'], where).payload).toMatchObject({ action: 'status', project: 'Web App' })
+  expect(parseSuperTabArgs([...prefix, 'status', '--project', 'web', '--archived'], where).payload).toMatchObject({ action: 'status', project: 'web', archived: true })
+  expect(parseSuperTabArgs([...prefix, 'status', '--archived', 'eyJsYSI6MX0', '--project', 'web'], where).payload)
+    .toMatchObject({ action: 'status', project: 'web', archived: true, before: 'eyJsYSI6MX0' })
+  expect(parseSuperTabArgs([...prefix, 'status'], where).payload).not.toHaveProperty('project')
+  for (const argv of [['status', '--project'], ['status', '--project', 'a\nb'], ['messages', 'lead', '--project', 'web']]) {
+    expect(() => parseSuperTabArgs([...prefix, ...argv], where)).toThrow('harness super-tab')
+  }
+})
