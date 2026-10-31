@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
 import 'attention.dart';
+import 'composer_tags.dart';
 import '../shared/theme/app_icons.dart';
 import 'controller.dart';
 import 'identity.dart';
@@ -30,9 +31,13 @@ class SuperTabThreadsView extends StatefulWidget {
     required this.attention,
     required this.onOpen,
     this.now = DateTime.now,
+    this.machineName,
   });
 
   final SuperTabAttention attention;
+
+  /// Names an agent's machine in the @ list, as the thread pane does.
+  final String Function(String machineId)? machineName;
 
   /// Opens [rootId]'s thread in its chat [conversationId].
   final void Function(String conversationId, String rootId) onOpen;
@@ -145,6 +150,7 @@ class _SuperTabThreadsViewState extends State<SuperTabThreadsView> {
                 thread: thread,
                 onOpen: widget.onOpen,
                 now: widget.now,
+                machineName: widget.machineName,
               ),
           ],
           if (rest.isNotEmpty) ...[
@@ -164,6 +170,7 @@ class _SuperTabThreadsViewState extends State<SuperTabThreadsView> {
                 thread: thread,
                 onOpen: widget.onOpen,
                 now: widget.now,
+                machineName: widget.machineName,
               ),
           ],
           if (a.more)
@@ -195,10 +202,12 @@ class _ThreadCard extends StatefulWidget {
     required this.thread,
     required this.onOpen,
     required this.now,
+    this.machineName,
   });
 
   final SuperTabAttention attention;
   final SuperTabFollowedThread thread;
+  final String Function(String machineId)? machineName;
   final void Function(String conversationId, String rootId) onOpen;
   final DateTime Function() now;
 
@@ -217,6 +226,15 @@ class _ThreadCardState extends State<_ThreadCard> {
   final _focus = FocusNode(debugLabel: 'Threads reply');
   bool _hovered = false, _focused = false;
 
+  // `@` in the reply box, as in the thread pane's (composer_tags.dart): the
+  // choice selected, and the text before the caret where it was dismissed.
+  final _tagIndex = ValueNotifier(0);
+  final _tagDismissed = ValueNotifier<String?>(null);
+  final _tagRows = List.generate(superTabCompletionLimit, (_) => GlobalKey());
+  late final _tagBackspace = SuperTabTagBackspace(
+    () => _c.threadMentions(_thread.conversationId, _thread.rootId).values,
+  );
+
   SuperTabController get _c => widget.attention.controller;
   SuperTabFollowedThread get _thread => widget.thread;
   SuperTabSnapshot? get _snapshot => _c.snapshot;
@@ -225,7 +243,52 @@ class _ThreadCardState extends State<_ThreadCard> {
   void dispose() {
     _text.dispose();
     _focus.dispose();
+    _tagIndex.dispose();
+    _tagDismissed.dispose();
     super.dispose();
+  }
+
+  /// The `@` tag typed at the caret.
+  ({int start, int end, String query})? get _tagAt => superTabTagAtCaret(
+    _text.value,
+    dismissed: _tagDismissed.value,
+    tags: _c.threadMentions(_thread.conversationId, _thread.rootId).values,
+  );
+
+  /// Who `@` offers in this reply: whom the thread's own chat offers.
+  List<SuperTabComposerChoice> get _tagChoices {
+    final group = _snapshot?.conversation(_thread.conversationId);
+    if (!_writable || group == null) return const [];
+    final at = _tagAt;
+    if (at == null) return const [];
+    return superTabTagChoices(
+      _c,
+      group,
+      at.query,
+      machineName: widget.machineName ?? (_) => '',
+      choose: _chooseTag,
+    );
+  }
+
+  void _chooseTag(String id, String name) {
+    final at = _tagAt;
+    if (at == null) return;
+    final token = '@$name';
+    final value = superTabInsertTag(_text.value, at, token);
+    _c.setThreadDraft(_thread.rootId, value.text);
+    _c.threadMention(id, token, to: _target);
+    _text.value = value;
+    _tagIndex.value = 0;
+    _focus.requestFocus();
+    setState(() {});
+  }
+
+  void _moveTag(int index) {
+    _tagIndex.value = index;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final row = _tagRows[index].currentContext;
+      if (mounted && row != null) Scrollable.ensureVisible(row, alignment: .5);
+    });
   }
 
   /// Where the thread is, named as the sidebar names it.
@@ -334,6 +397,8 @@ class _ThreadCardState extends State<_ThreadCard> {
 
   void _edited(String text) {
     _c.setThreadDraft(_thread.rootId, text);
+    _tagIndex.value = 0;
+    _tagDismissed.value = null;
     setState(() {});
   }
 
@@ -506,31 +571,85 @@ class _ThreadCardState extends State<_ThreadCard> {
                     left: _indent,
                     top: grid.AppDesktop.controlGap,
                   ),
-                  child: ListenableBuilder(
-                    listenable: _c,
-                    builder: (context, _) => SuperTabReplyBox(
-                      controller: _c,
-                      text: _text,
-                      focus: _focus,
-                      files: _c.threadAttachments(
-                        _thread.conversationId,
-                        _thread.rootId,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // The @ list above the box, as in the thread pane.
+                      ListenableBuilder(
+                        listenable: Listenable.merge([
+                          _text,
+                          _tagIndex,
+                          _tagDismissed,
+                        ]),
+                        builder: (context, _) {
+                          final choices = _tagChoices;
+                          if (choices.isEmpty) return const SizedBox.shrink();
+                          return Padding(
+                            padding: const EdgeInsets.only(
+                              bottom: grid.AppDesktop.controlGap,
+                            ),
+                            child: SuperTabCompletionList(
+                              listKey: ValueKey(
+                                'super-thread-completions-${_thread.key}',
+                              ),
+                              choices: choices,
+                              index: _tagIndex.value,
+                              rowKeys: _tagRows,
+                            ),
+                          );
+                        },
                       ),
-                      enabled: _c.canWrite,
-                      writable: _writable,
-                      busy: _busy,
-                      error: _c.threadComposerError(
-                        _thread.conversationId,
-                        _thread.rootId,
+                      ListenableBuilder(
+                        listenable: _c,
+                        builder: (context, _) => SuperTabReplyBox(
+                          controller: _c,
+                          text: _text,
+                          focus: _focus,
+                          files: _c.threadAttachments(
+                            _thread.conversationId,
+                            _thread.rootId,
+                          ),
+                          enabled: _c.canWrite,
+                          writable: _writable,
+                          busy: _busy,
+                          error: _c.threadComposerError(
+                            _thread.conversationId,
+                            _thread.rootId,
+                          ),
+                          onEdited: _edited,
+                          onSend: () => unawaited(_send()),
+                          surfaceKey: ValueKey(
+                            'super-thread-reply-surface-${_thread.key}',
+                          ),
+                          fieldKey: ValueKey(
+                            'super-thread-reply-${_thread.key}',
+                          ),
+                          sendKey: ValueKey('super-thread-send-${_thread.key}'),
+                          // `@`: the open list takes its keys first.
+                          onKey: (event) {
+                            final composing = _text.value.composing;
+                            return _focus.hasFocus &&
+                                    !(composing.isValid &&
+                                        !composing.isCollapsed)
+                                ? superTabCompletionKey(
+                                    event,
+                                    choices: () => _tagChoices,
+                                    index: _tagIndex.value,
+                                    move: _moveTag,
+                                    dismiss: () => _tagDismissed.value = _text
+                                        .text
+                                        .substring(
+                                          0,
+                                          _text.selection.baseOffset,
+                                        ),
+                                  )
+                                : null;
+                          },
+                          inputFormatters: [_tagBackspace],
+                        ),
                       ),
-                      onEdited: _edited,
-                      onSend: () => unawaited(_send()),
-                      surfaceKey: ValueKey(
-                        'super-thread-reply-surface-${_thread.key}',
-                      ),
-                      fieldKey: ValueKey('super-thread-reply-${_thread.key}'),
-                      sendKey: ValueKey('super-thread-send-${_thread.key}'),
-                    ),
+                    ],
                   ),
                 ),
             ],

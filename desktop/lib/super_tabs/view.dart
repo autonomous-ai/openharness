@@ -3727,6 +3727,7 @@ class _SuperTabViewState extends State<SuperTabView>
                             ? SuperTabThreadsView(
                                 attention: SuperTabAttention.of(c),
                                 onOpen: _openThreadFromList,
+                                machineName: widget.machineName,
                               )
                             : const SizedBox.shrink(),
                       ],

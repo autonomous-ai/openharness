@@ -1355,10 +1355,14 @@ class SuperTabController extends ChangeNotifier {
   Map<String, String> threadMentions(String conversationId, String root) =>
       Map.unmodifiable(_threadMentions[(conversationId, root)] ?? const {});
 
-  /// [id] picked as [token] in the open thread's reply box, while its draft
-  /// says it.
-  void threadMention(String id, String token) {
-    final open = openedThread;
+  /// [id] picked as [token] in the open thread's reply box, or [to]'s (the
+  /// Threads view), while its draft says it.
+  void threadMention(
+    String id,
+    String token, {
+    ({String conversationId, String root})? to,
+  }) {
+    final open = to ?? openedThread;
     if (open == null || accessRevoked) return;
     if (!containsMention(threadDraft(open.root), token)) return;
     (_threadMentions[(open.conversationId, open.root)] ??= {})[id] = token;
@@ -1479,7 +1483,9 @@ class SuperTabController extends ChangeNotifier {
     // The tags as picked when sent: the box may take new ones meanwhile.
     final picked = Map<String, String>.of(_threadMentions[thread] ?? const {});
     final (:tagged, :addressed) = _tagsSaid(picked, text);
-    final failure = addressed.any((id) => !selected!.agentIds.contains(id))
+    // The thread's own chat: a reply from the Threads view goes to a chat
+    // that may not be the one selected, or none may be.
+    final failure = addressed.any((id) => !group.agentIds.contains(id))
         ? 'A mentioned agent is no longer in this conversation. Remove its mention or choose another agent.'
         // Only its own session hears a session's thread (backend
         // routeBuddySession): another agent's tag there would be refused.

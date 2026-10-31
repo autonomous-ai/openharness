@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -930,5 +931,118 @@ void main() {
     await tester.tap(find.text('Open thread to reply'));
     expect(opened, 'buddy-owner-lead/message-1');
     await close(tester, c);
+  });
+
+  group('tags from the Threads view (merge check of 67c32a3)', () {
+    /// Kestrel is an agent of "offline", not of "lead"; "offline" has a
+    /// thread at message-1 with a new reply.
+    ConversationServer tagged() {
+      final server = projectServer();
+      server.state['agents'] = [
+        {
+          'id': 'kestrel',
+          'name': 'Builder',
+          'displayName': 'Kestrel',
+          'machineId': 'host',
+          'harnessId': 'session',
+          'contributorId': 'owner',
+          'configuration': {'engine': 'codex'},
+        },
+      ];
+      conversation(server, 'offline')['agentIds'] = ['kestrel'];
+      fromLead(server, 'Root', conversationId: 'offline');
+      fromLead(server, 'Reply', conversationId: 'offline');
+      server.messages.last['thread'] = 'message-1';
+      conversation(server, 'offline')['lastMainSequence'] = 1;
+      server.followedThreads = {
+        'unread': [
+          unreadThread('message-1', 2, conversationId: 'offline', text: 'Root'),
+        ],
+        'read': [],
+        'more': false,
+      };
+      return server;
+    }
+
+    test('a reply tagging an agent of the thread\'s own chat goes, whichever '
+        'chat is selected', () async {
+      final server = tagged();
+      final c = await open(server);
+      c.select('lead');
+      const to = (conversationId: 'offline', root: 'message-1');
+      c.setThreadDraft('message-1', '@Kestrel please look');
+      c.threadMention('kestrel', '@Kestrel', to: to);
+      expect(c.threadMentions('offline', 'message-1'), {'kestrel': '@Kestrel'});
+      await c.sendThreadReply(to: to);
+      expect(c.operationError, isNull);
+      final sent = server.posts.last['command'] as Map;
+      expect(sent['conversationId'], 'offline');
+      expect(sent['replyTo'], 'message-1');
+      expect(sent['recipientIds'], ['kestrel']);
+    });
+
+    testWidgets('the Threads view\'s box offers @ as the thread pane does: '
+        'whom the thread\'s chat offers, Backspace takes a tag whole, and the '
+        'reply carries it', (tester) async {
+      final server = tagged();
+      final c = await openHere(server);
+      c.select('lead');
+      final attention = SuperTabAttention.of(c);
+      await attention.load();
+      await tester.binding.setSurfaceSize(const Size(700, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: Scaffold(
+            body: SuperTabThreadsView(
+              attention: attention,
+              onOpen: (_, _) {},
+              machineName: (_) => 'Studio',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final field = find.byKey(
+        const ValueKey('super-thread-reply-offline/message-1'),
+      );
+      final picker = find.byKey(
+        const ValueKey('super-thread-completions-offline/message-1'),
+      );
+      await tester.tap(field);
+      await tester.enterText(field, '@Kes');
+      await tester.pumpAndSettle();
+      expect(picker, findsOneWidget);
+      expect(
+        find.descendant(of: picker, matching: find.textContaining('Kestrel')),
+        findsWidgets,
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(picker, findsNothing);
+      expect(tester.widget<TextField>(field).controller!.text, '@Kestrel ');
+      expect(c.threadMentions('offline', 'message-1'), {'kestrel': '@Kestrel'});
+      // Backspace into the tag takes it whole.
+      await tester.sendKeyEvent(LogicalKeyboardKey.backspace);
+      await tester.sendKeyEvent(LogicalKeyboardKey.backspace);
+      await tester.pumpAndSettle();
+      expect(tester.widget<TextField>(field).controller!.text, '');
+      // Picked again and sent: the reply carries the tag.
+      await tester.enterText(field, '@Kes');
+      await tester.pumpAndSettle();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      await tester.enterText(field, '@Kestrel please look');
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('super-thread-send-offline/message-1')),
+      );
+      await tester.pumpAndSettle();
+      final sent = server.posts.last['command'] as Map;
+      expect(sent['conversationId'], 'offline');
+      expect(sent['recipientIds'], ['kestrel']);
+      await close(tester, c);
+    });
   });
 }
