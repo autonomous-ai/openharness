@@ -129,6 +129,11 @@ final class HarnessNativeKeymap {
   static let contexts: Set<String> = ["workspace", "terminal", "picker", "project", "swarmChat"]
   private var roots: [String: HarnessKeyNode] = [:]
   private(set) var bindings: [String: [HarnessNativeBinding]] = [:]
+  /// The only first strokes handed to Flutter, when Dart names them: before a
+  /// workspace (signed out) just Close Tab's, so Settings hears ⌘W while ⌘,
+  /// ⌘H and ⌘M keep their menu rows. Nil hands over every binding's first
+  /// stroke, as the workspace wants.
+  private(set) var inputStrokes: Set<HarnessKeyStroke>?
 
   init?(_ payload: [String: Any]) {
     guard payload["version"] as? Int == 1,
@@ -159,6 +164,12 @@ final class HarnessNativeKeymap {
       }
       roots[context] = root
       bindings[context] = parsed
+    }
+    if let raw = payload["input"] {
+      guard let keys = raw as? [String], keys.count <= 16 else { return nil }
+      let strokes = keys.compactMap(HarnessKeyStroke.init)
+      guard strokes.count == keys.count else { return nil }
+      inputStrokes = Set(strokes)
     }
   }
 
@@ -231,7 +242,8 @@ final class HarnessKeymapMenu: NSMenu {
   func update(_ map: HarnessNativeKeymap, window: NSWindow) {
     keymap = map
     ownerWindow = window
-    inputStrokes = Set(map.bindings.values.flatMap { $0.compactMap { $0.keys.first } })
+    inputStrokes = map.inputStrokes
+      ?? Set(map.bindings.values.flatMap { $0.compactMap { $0.keys.first } })
   }
 
   func defersToInput(_ event: NSEvent) -> Bool {
