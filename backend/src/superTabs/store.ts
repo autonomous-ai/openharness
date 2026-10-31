@@ -949,6 +949,12 @@ export class SuperTabStore {
     }), next: rows.length > 100 ? rows[99]!.id : null }
   }
 
+  /** Whether Swarm [tabId] exists and is not deleted (deletion.ts): for a link made before, outside any person's read. */
+  async isLive(tabId: string): Promise<boolean> {
+    const [row] = await readBy(this.db, 'SuperTab', 'id', [{ $match: { _id: tabId } }, { $project: { deletedAt: 1 } }])
+    return !!row && !row.deletedAt
+  }
+
   /** The owner's deleted Swarms they can still restore, newest first (deletion.ts): names only, from their heads. By the owner
    *  index, at most 100. */
   async deletedList(user: AuthUser) {
@@ -1013,7 +1019,8 @@ export class SuperTabStore {
     const heads = await this.heads(rows)
     return rows.flatMap(row => {
       const state = heads.get(row.id)
-      if (!state) return []
+      // A deleted one invites nobody (deletion.ts), whatever its row still names.
+      if (!state || state.deletion) return []
       return state.invitations.filter(i => i.email === email && i.expiresAt > this.now())
         .map(i => ({ tabId: row.id, name: state.name, inviteId: i.id, role: i.role, expiresAt: i.expiresAt }))
     })
@@ -1200,7 +1207,9 @@ export class SuperTabStore {
       ended = []
       started = []
       const stamp = clock.next()
-      const first = await this.load(tx, user, tabId, namedFor(command), DELETED_SWARM_COMMANDS.has(command.type))
+      // A Workspace removal leaves a deleted Swarm too, so its restore cannot bring the person back (security review 2 of #2457).
+      const leavingDeleted = workspaceLeave && command.type === 'member.remove' && command.userId === user.sub && !asAgentId
+      const first = await this.load(tx, user, tabId, namedFor(command), DELETED_SWARM_COMMANDS.has(command.type) || leavingDeleted)
       const loaded = await this.ensure(tx, first, await this.moreNamed(tx, tabId, first.state, command, asAgentId ? null : user.sub, asAgentId))
       const original = loaded.state
       const team = await this.teamHost(tx, user)
@@ -1276,7 +1285,12 @@ export class SuperTabStore {
         return replyOf(prior)
       }
       if (command.type !== 'invite.accept' && command.type !== 'agent.sessionClosed' && command.type !== 'machine.cleaned') author(original, actor)
-      const context: CommandContext = { operationId, now: this.now() }
+      const context: CommandContext = { operationId, now: this.now(), ...(leavingDeleted ? { workspaceLeave: true as const } : {}) }
+      if (command.type === 'swarm.restore' && original.deletion && original.workspaceId) {
+        const lost: string[] = []
+        for (const person of original.people) if (!await hasWorkspaceAccess(tx, original, person.id)) lost.push(person.id)
+        if (lost.length) context.workspaceLost = lost
+      }
       if (command.type === 'agent.screen' || command.type === 'agent.input') context.confidentialSession = await this.confidential(tx, command.agentId)
       if (REGISTERS.has(command.type)) context.registrations = await otherRegistrations(tx, original, registeredBy(original, command))
       if ('startId' in command && ['agent.startDispatch', 'agent.started', 'agent.startFailed', 'agent.startSettled', 'route.modelResult'].includes(command.type)) {
@@ -3324,7 +3338,7 @@ export class SuperTabStore {
       try {
         closed += await transaction(this.db, async tx => {
           const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
-          if (row?.format !== 2) return 0
+          if (row?.format !== 2 || row.deletedAt) return 0
           const { state } = await loadRow(tx, row, { groupIds: conversationIds }), now = this.now()
           const over = conversationIds.filter(id => { const group = state.conversations.find(c => c.id === id); return !!group && workOver(state, group) })
           return over.length ? withdrawIn(tx, tabId, over, now, now) : 0

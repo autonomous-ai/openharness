@@ -331,6 +331,25 @@ void main() {
     expect(find.text('Delete “Alpha”…'), findsOneWidget);
     await _releaseAll(tester, app);
 
+    // The owner's Personal Swarm, shown in the tab: never offered.
+    late AppNotifier mine;
+    await tester.runAsync(() async {
+      late _Backend backend;
+      (mine, backend) = await _swarms();
+      backend.add('personal', 'Personal');
+      await mine.superTabs.refreshTabs();
+      final tab = mine.swarms.firstWhere((s) => s.superTabId == 'alpha');
+      mine.showSuperTabIn(tab.id, 'personal', 'Personal');
+      await (await mine.superTabs.open('personal')).refresh();
+    });
+    await _pump(tester, mine);
+    expect(mine.activeSwarm.superTabId, 'personal');
+    expect(PersonalSwarm.of(mine).id, 'personal');
+    await _openMenu(tester);
+    expect(find.byKey(const ValueKey('swarm-switch-personal')), findsOneWidget);
+    expect(find.byKey(_deleteItem), findsNothing);
+    await _releaseAll(tester, mine);
+
     late AppNotifier member;
     await tester.runAsync(
       () async => (member, _) = await _swarms(account: 'member'),

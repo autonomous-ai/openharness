@@ -1,4 +1,6 @@
+import type { Prisma, PrismaClient } from '@prisma/client'
 import { fail, stableId, type SuperTabState } from './model.js'
+import { readBy } from './parts/indexed.js'
 
 // Deleting a Swarm (Dee, 10-31: "owners can delete a Swarm, like deleting a Slack workspace").
 //
@@ -32,3 +34,17 @@ export const DELETION_COMMANDS: ReadonlySet<string> = new Set(['swarm.delete', '
 /** Commands a deleted Swarm still takes: its machines' hosts confirming the closes and cleanups its deletion asked for, and
  *  its owner restoring it. Everything else answers as for a Swarm that does not exist. */
 export const DELETED_SWARM_COMMANDS: ReadonlySet<string> = new Set(['agent.sessionClosed', 'machine.cleaned', 'swarm.restore'])
+
+/** For one pass of a background job: whether each Swarm it meets is deleted, read once per Swarm by its id. A deleted Swarm
+ *  waits for its restore or its purge untouched: no group sleeps, no start expires, no pull request is read for it. */
+export function deletedSwarms(db: PrismaClient | Prisma.TransactionClient): (tabId: string) => Promise<boolean> {
+  const known = new Map<string, Promise<boolean>>()
+  return tabId => {
+    let deleted = known.get(tabId)
+    if (!deleted) {
+      deleted = readBy(db, 'SuperTab', 'id', [{ $match: { _id: tabId } }, { $project: { deletedAt: 1 } }]).then(([row]) => !!row?.deletedAt)
+      known.set(tabId, deleted)
+    }
+    return deleted
+  }
+}

@@ -353,6 +353,8 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     const page = (title: string, text: string, status = 200) => reply.status(status).type('text/html; charset=utf-8').send(githubPage(title, text))
     const request = approvalSecret && req.query.state ? readState(approvalSecret, req.query.state, Date.now()) : null
     if (!request) return page('This link has expired', 'Go back to Harness and choose Continue in GitHub again.', 400)
+    // A Swarm deleted since the link was made allows nothing, and says so as an expired link does (superTabs/deletion.ts).
+    if (!await store.isLive(request.tabId)) return page('This link has expired', 'Go back to Harness and choose Continue in GitHub again.', 400)
     const named = githubRepository(`https://github.com/${request.repository}`)
     // Cancel on GitHub's sign-in sends the person back with `error` and no code: they were told Harness was installed
     // (local Team account run, 2026-10-28).

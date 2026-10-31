@@ -2,6 +2,7 @@ import type { Prisma, PrismaClient } from '@prisma/client'
 import type { AgentStart, Conversation } from './model.js'
 import { clock, guardedWrite, PartConflict, type HeadData, type ProgressData } from './parts/index.js'
 import { DORMANT_AFTER_MS, RETENTION_MS } from './parts/types.js'
+import { deletedSwarms } from './deletion.js'
 import { logger } from '../utils/logger.js'
 import { ensureIndex } from '../lib/db/indexes.js'
 import { swarmTransaction } from './cache.js'
@@ -85,11 +86,14 @@ async function sleepQuietGroups(db: PrismaClient, now: number): Promise<number> 
     if (!progress.has(id)) progress.set(id, ((await db.swarmProgress.findUnique({ where: { id } }))?.data as unknown as ProgressData | undefined) ?? null)
     return progress.get(id)!
   }
+  // A deleted Swarm's groups stay as they are for its restore (deletion.ts).
+  const isDeleted = deletedSwarms(db)
   let slept = 0, after: { at: Date; id: string } | null = null
   for (;;) {
     const cursor: Prisma.SwarmGroupWhereInput = after ? { AND: [{ OR: [{ lastActivityAt: { gt: after.at } }, { lastActivityAt: after.at, id: { gt: after.id } }] }] } : {}
     const rows: Array<{ id: string; tabId: string; key: string; version: number; lastActivityAt: Date; data: Prisma.JsonValue }> = await db.swarmGroup.findMany({ where: { ...base, ...cursor }, orderBy: [{ lastActivityAt: 'asc' }, { id: 'asc' }], take: BATCH })
     for (const row of rows) {
+      if (await isDeleted(row.tabId)) continue
       const group = row.data as unknown as Conversation
       const quiet = row.lastActivityAt.getTime() < now - DORMANT_AFTER_MS && ['done', 'cancelled'].includes(group.assignment?.status ?? '')
       if (!group.archived && !quiet) continue
@@ -111,7 +115,9 @@ async function expireStarts(db: PrismaClient, now: number): Promise<number> {
     { $match: { deleted: false, finishedAt: { $lt: { $date: new Date(now - RETENTION_MS).toISOString() } } } }, { $limit: BATCH },
     { $project: { tabId: 1, key: 1, version: 1, data: 1 } }])
   let expired = 0
+  const isDeleted = deletedSwarms(db)
   for (const row of rows) {
+    if (await isDeleted(row.tabId as string)) continue
     if (await guarded(db, { tabId: row.tabId as string, op: 'remove', kind: 'start', key: row.key as string, seen: Number(row.version), data: row.data as unknown as AgentStart })) expired++
   }
   return expired
@@ -129,6 +135,9 @@ async function expireInvitations(db: PrismaClient, now: number): Promise<number>
     const head = await db.swarmHead.findUnique({ where: { id: `${tabId as string}:head` } })
     if (!head || head.deleted) continue
     const data = head.data as unknown as HeadData
+    // A deleted Swarm is invited to by nobody (deletion.ts): writing its invitations back would list it again. A delete that
+    // lands after this read moves the head, so the guarded write below conflicts and is skipped.
+    if (data.deletion) continue
     const kept = data.invitations.filter(i => i.expiresAt > now)
     if (kept.length === data.invitations.length) continue
     try {

@@ -296,7 +296,14 @@ export class SwarmWorkspaces {
    *  many Swarms could not be left now. */
   private async finish(removal: SwarmWorkspaceRemoval): Promise<number> {
     // Every Swarm of theirs in the Workspace: no page limit, as before; a person is in few Swarms.
-    const rows = await memberSwarms(this.db, removal.autonomousEnv, removal.userId, { workspaceId: removal.workspaceId })
+    const rows: Array<{ id: string }> = await memberSwarms(this.db, removal.autonomousEnv, removal.userId, { workspaceId: removal.workspaceId })
+    // And the deleted ones they are in (deletion.ts): those list nobody, yet a restore would bring the person back with them.
+    for (const row of await this.db.superTab.findMany({ where: { autonomousEnv: removal.autonomousEnv, workspaceId: removal.workspaceId },
+      select: { id: true, deletedAt: true }, take: 1000 })) {
+      if (!row.deletedAt) continue
+      const member = await this.db.swarmMember.findUnique({ where: { id: `${row.id}:${removal.userId}` }, select: { deleted: true } })
+      if (member && !member.deleted) rows.push({ id: row.id })
+    }
     let pending = 0
     for (const row of rows) {
       try { await this.deps.leave(personOf(removal, removal.autonomousEnv), row.id, stableId('workspace-removal', removal.id)) } catch (error) {

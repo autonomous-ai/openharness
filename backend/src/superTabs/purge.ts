@@ -11,6 +11,8 @@ import { ms } from './parts/light.js'
 /** Past its purge time by this much before it goes: an owner's restore can no longer be in flight on a slower clock. */
 export const PURGE_MARGIN_MS = 60 * 60 * 1000
 export const PURGE_SWEEP = { everyMs: 60 * 60 * 1000, swarms: 20, files: 200 } as const
+/** How long a Swarm the purge could not finish waits before it is tried again, so it never holds back the others. */
+export const PURGE_RETRY_MS = 6 * 60 * 60 * 1000
 
 /** The records of one Swarm, each by its Swarm id (every one has an index led by it, schema.prisma). Attachments are
  *  removed apart, with their files. */
@@ -55,40 +57,55 @@ async function purgeAttachments(db: PrismaClient, tabId: string, files: PurgeFil
           return false
         }
       } else if (files && !own) logger.warn('[swarm-purge] an attachment outside its Swarm\'s folder was left in storage', { tabId, id: row.id })
-      await db.superTabAttachment.delete({ where: { id: row.id } })
+      // By id without reading it back: a record missing a field never stalls the purge.
+      await db.superTabAttachment.deleteMany({ where: { id: row.id } })
     }
     if (rows.length < page) return true
   }
 }
 
-/** Purges one deleted Swarm past its grace; false when it is not due or not deleted, or files remain for the next pass. */
-export async function purgeSwarm(db: PrismaClient, tabId: string, files: PurgeFiles | null, now: number, page: number = PURGE_SWEEP.files): Promise<boolean> {
+/** Purges one deleted Swarm past its grace: `skipped` when it is not due or not deleted, `waiting` when files remain for a
+ *  later pass. */
+export async function purgeSwarm(db: PrismaClient, tabId: string, files: PurgeFiles | null, now: number,
+  page: number = PURGE_SWEEP.files): Promise<'purged' | 'skipped' | 'waiting'> {
   const row = await db.superTab.findUnique({ where: { id: tabId }, select: { deletedAt: true, purgeAt: true } })
   // Restored, or not yet due: nothing of it goes.
-  if (!row?.deletedAt || !row.purgeAt || row.purgeAt.getTime() + PURGE_MARGIN_MS > now) return false
-  if (!await purgeAttachments(db, tabId, files, page)) return false
+  if (!row?.deletedAt || !row.purgeAt || row.purgeAt.getTime() + PURGE_MARGIN_MS > now) return 'skipped'
+  if (!await purgeAttachments(db, tabId, files, page)) return 'waiting'
   for (const model of PURGED_BY_TAB_ID) {
     await (db[model] as unknown as { deleteMany(args: { where: { tabId: string } }): Promise<unknown> }).deleteMany({ where: { tabId } })
   }
+  // Its thread backfill marker, kept by its own id (threadBackfill.ts).
+  await db.superTabThreadBackfill.deleteMany({ where: { id: tabId } })
   // Harness shares made for this Swarm (its members' read-only views of agents' terminals).
   await db.harnessShare.deleteMany({ where: { superTabId: tabId } })
   // Last, and only while it is still the deletion this pass read: a later pass finds nothing left of it.
   await db.superTab.deleteMany({ where: { id: tabId, purgeAt: row.purgeAt } })
-  return true
+  return 'purged'
 }
 
-/** One pass: deleted Swarms past their grace, by the purge index, oldest first. */
+/** One pass: deleted Swarms past their grace, by the purge index; never tried first, then those whose retry is due, oldest
+ *  first. One the pass cannot finish is tried again PURGE_RETRY_MS later, so a few that keep failing never hold back the rest
+ *  (security review 2 of #2457). */
 export async function purgeDeletedSwarms(db: PrismaClient, files: PurgeFiles | null, now: number, limit: number = PURGE_SWEEP.swarms) {
-  const due = await readBy(db, 'SuperTab', 'purge', [{ $match: { purgeAt: { $lte: { $date: new Date(now - PURGE_MARGIN_MS).toISOString() } } } },
-    { $sort: { purgeAt: 1 } }, { $limit: limit }, { $project: { purgeAt: 1 } }])
+  const at = (time: number) => ({ $date: new Date(time).toISOString() })
+  const due = await readBy(db, 'SuperTab', 'purge', [{ $match: { purgeAt: { $lte: at(now - PURGE_MARGIN_MS) },
+    $or: [{ purgeRetryAt: null }, { purgeRetryAt: { $lte: at(now) } }] } },
+    { $sort: { purgeRetryAt: 1, purgeAt: 1 } }, { $limit: limit }, { $project: { purgeAt: 1 } }])
   let purged = 0, waiting = 0
+  const later = async (tabId: string) => {
+    await db.superTab.updateMany({ where: { id: tabId }, data: { purgeRetryAt: new Date(now + PURGE_RETRY_MS) } }).catch(() => undefined)
+  }
   for (const row of due) {
+    const tabId = row._id as string
     try {
-      if (await purgeSwarm(db, row._id as string, files, now)) purged++
-      else waiting++
+      const done = await purgeSwarm(db, tabId, files, now)
+      if (done === 'purged') purged++
+      if (done === 'waiting') { waiting++; await later(tabId) }
     } catch (error) {
       waiting++
-      logger.warn('[swarm-purge] a deleted Swarm could not be purged yet', { tabId: row._id, purgeAt: ms(row.purgeAt), code: errorCode(error) })
+      await later(tabId)
+      logger.warn('[swarm-purge] a deleted Swarm could not be purged yet', { tabId, purgeAt: ms(row.purgeAt), code: errorCode(error) })
     }
   }
   return { purged, waiting }

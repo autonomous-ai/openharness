@@ -352,6 +352,11 @@ export interface CommandContext {
   confidentialSession?: boolean
   /** For a command that registers a session or can make one confidential: the other Swarms' registrations (confidential.ts). */
   registrations?: import('./projects.js').OtherRegistrations
+  /** A Workspace removal taking the person out of this Swarm (workspaceStore.ts): it reaches a deleted Swarm too, so a restore
+   *  never brings them back (security review 2 of #2457). Set by the store alone. */
+  workspaceLeave?: true
+  /** For a restore: the people no longer in the Swarm's Workspace, read by the store. They do not come back with it. */
+  workspaceLost?: string[]
   /** The machines of this Swarm's pending cleanups whose machine account is deleted, read by the store: no host will ever
    *  confirm those cleanups (Ken's remote-deepseek and WIN-DELL, 2026-10-28), so they go. */
   deletedMachineIds?: string[]
@@ -682,11 +687,18 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
 
   // A deleted Swarm (deletion.ts) takes only its hosts' confirmations and its owner's restore; anything else, from anyone,
   // answers as for a Swarm that does not exist. The store refuses before this; this holds for every other caller.
-  if (state.deletion && !DELETED_SWARM_COMMANDS.has(command.type)) notThere()
+  if (state.deletion && !DELETED_SWARM_COMMANDS.has(command.type) && !(context.workspaceLeave && command.type === 'member.remove')) notThere()
   if (command.type === 'swarm.restore') {
     // Only its owner, only while deleted and before its purge; anyone else learns nothing, not even that it was deleted.
     if (!state.deletion || actor.kind !== 'person' || actor.userId !== state.ownerId || Date.parse(state.deletion.purgeAt) <= context.now) notThere()
     delete state.deletion
+    // Whoever left the Workspace meanwhile stays out: the Workspace removal could not take them out of a deleted Swarm's list.
+    const lost = new Set((context.workspaceLost ?? []).filter(id => id !== state.ownerId))
+    if (lost.size) {
+      const emails = new Set(state.people.filter(p => lost.has(p.id)).map(p => p.email))
+      state.people = state.people.filter(p => !lost.has(p.id))
+      state.invitations = state.invitations.filter(i => !emails.has(i.email))
+    }
     result.restored = true
     return effects
   }
@@ -712,7 +724,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   // Anyone else, or a second confirmation, is told the same thing and writes nothing; the store answers an exact retry.
   if (command.type === 'agent.sessionClosed') {
     const request = state.closingSessions?.find(c => c.agentId === command.agentId && c.harnessId === command.harnessId
-      && actor.kind === 'person' && c.machineOwnerId === actor.userId) ?? fail('NOT_FOUND', 'This machine has no session waiting to close.', 404)
+      && actor.kind === 'person' && c.machineOwnerId === actor.userId) ?? (state.deletion ? notThere() : fail('NOT_FOUND', 'This machine has no session waiting to close.', 404))
     dropClosing(state, c => c !== request)
     releaseHarness(state, request.machineId, request.harnessId)
     return effects
@@ -723,7 +735,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       && actor.kind === 'person' && ownerId === actor.userId
     const pool = state.machines?.find(m => m.removal && owns(m.machineId, m.removal.id, m.contributorId))
     const cleanup = state.machineCleanups?.find(c => owns(c.machineId, c.removalId, c.machineOwnerId))
-    if (!pool && !cleanup) fail('NOT_FOUND', 'This machine has no cleanup waiting.', 404)
+    // Of a deleted Swarm, only a host with a cleanup waiting learns it exists (deletion.ts).
+    if (!pool && !cleanup) state.deletion ? notThere() : fail('NOT_FOUND', 'This machine has no cleanup waiting.', 404)
     // One that already left the list said why then.
     if (pool) effects.messages.push(...removalEnded(state, pool, 'confirmed'))
     state.machines = state.machines?.filter(m => m !== pool)

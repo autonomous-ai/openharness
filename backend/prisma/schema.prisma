@@ -1048,6 +1048,8 @@ model SuperTab {
   /// exist, and its owner can restore it until `purgeAt`, when the sweep removes its records and files. Absent on a live Swarm.
   deletedAt      DateTime?
   purgeAt        DateTime?
+  /// When the purge may try a deleted Swarm again after a pass could not finish it: newly due ones go first (purge.ts).
+  purgeRetryAt   DateTime?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
