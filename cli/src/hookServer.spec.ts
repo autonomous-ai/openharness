@@ -509,13 +509,16 @@ describe('Super Tab attachment pass-through', () => {
         expect((await fetch(url, { method: 'POST', headers: h, body: JSON.stringify(ask) })).status).toBe(403)
       }
     }
-    for (const url of [`${base}/api/super-tabs/../attachments/uploads`, `${link}/../x/complete`, `${link}/u1`, `${link}/u1/complete/x`]) {
+    // Only the two upload paths: no other path, encoded or not, reaches the backend with this account's token.
+    for (const url of [`${base}/api/super-tabs/../attachments/uploads`, `${link}/../x/complete`, `${link}/u1`, `${link}/u1/complete/x`,
+      `${link}/u1%2F..%2F..%2Fcommands/complete`, `${base}/api/super-tabs/tab-1%2Fcommands%3F/attachments/uploads`, `${link}/%2e%2e/complete`,
+      `${base}/api/super-tabs/tab-1/commands`, `${base}/api/super-tabs/tab-1/attachments/uploads/u1/complete/../../../commands`]) {
       expect((await fetch(url, { method: 'POST', headers, body: '{}' })).status).toBe(404)
     }
     expect((await fetch(link, { method: 'POST', headers, body: 'not json' })).status).toBe(400)
     expect((await fetch(link, { method: 'POST', headers, body: '[1]' })).status).toBe(400)
     expect(forward).not.toHaveBeenCalled()
-    const asked = await fetch(`${link}?asAgentId=agent-1&other=x`, { method: 'POST', headers, body: JSON.stringify(ask) })
+    const asked = await fetch(`${link}?asAgentId=agent-1&other=x`, { method: 'POST', headers, body: JSON.stringify({ ...ask, command: { type: 'member.remove' } }) })
     expect(asked.status).toBe(200)
     expect(await asked.json()).toEqual({ success: true, data: { path: '/api/super-tabs/tab-1/attachments/uploads?asAgentId=agent-1', body: ask } })
     // Completion's body is {}, and an empty one is read as that.

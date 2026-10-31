@@ -1135,7 +1135,9 @@ export function startHookServer(
         if (!body || typeof body !== 'object' || Array.isArray(body)) { json(400, { error: 'BAD_REQUEST' }); return }
         const asAgentId = new URLSearchParams((req.url ?? '').split('?')[1] ?? '').get('asAgentId')
         const agent = asAgentId && /^[A-Za-z0-9_-]{1,160}$/.test(asAgentId) ? `?asAgentId=${asAgentId}` : ''
-        await proxied(() => handlers.onSuperTabAttachmentUpload!(`${url}${agent}`, direct[1] ? {} : body as Record<string, unknown>)); return
+        // Only the fields a link's request has: nothing else the page sends reaches the backend with this account's token.
+        const { conversationId, name, mime, size } = body as Record<string, unknown>
+        await proxied(() => handlers.onSuperTabAttachmentUpload!(`${url}${agent}`, direct[1] ? {} : { conversationId, name, mime, size })); return
       }
       const signInAnswer = req.method === 'POST' ? /^\/api\/auth\/qr\/(lookup|approve|deny)$/.exec(url) : null
       if (signInAnswer) {
