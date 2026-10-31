@@ -6,6 +6,7 @@ import { Prisma, type PrismaClient } from '@prisma/client'
 import { ensureIndex } from '../lib/db/indexes.js'
 import { fail, stableId } from './model.js'
 import { readBy } from './parts/indexed.js'
+import { ms } from './parts/light.js'
 
 /** A mark untouched this long is removed by a TTL index; the conversation then reads as the device last saw it. */
 export const READ_MARK_EXPIRY_MS = 180 * 24 * 60 * 60_000
@@ -67,6 +68,42 @@ export async function writeThreadMark(db: PrismaClient, mark: ThreadMarkWrite): 
     new Date(mark.now), { tabId, personId, conversationId, threadId })
   if (stored.created) await capThreadMarks(db, tabId, personId)
   return stored.sequence
+}
+
+export interface ThreadFollowWrite { tabId: string; personId: string; conversationId: string; threadId: string; follow: boolean | null; now: number }
+
+/** Stores the person's Follow (true), Unfollow (false) or neither (null) of one thread on its mark row, and answers it. The
+ *  row keeps its sequence: one written here first starts at 0, which reads as no mark (every client keeps the higher of a
+ *  mark and the one it holds). A Follow moves the row as a read does, so it counts toward THREAD_MARK_CAP and the 180-day
+ *  expiry from now, and goes with the person when they leave the Swarm (sweepThreadMarks). Two first writes racing to create
+ *  the row: the loser's create fails on the id and its update runs again on the winner's row. */
+export async function writeThreadFollow(db: PrismaClient, write: ThreadFollowWrite): Promise<boolean | null> {
+  const { tabId, personId, conversationId, threadId, follow } = write
+  const id = stableId(tabId, conversationId, threadId, personId), updatedAt = new Date(write.now)
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if ((await db.superTabThreadMark.updateMany({ where: { id }, data: { follow, updatedAt } })).count) return follow
+    try {
+      await db.superTabThreadMark.create({ data: { id, tabId, personId, conversationId, threadId, sequence: 0, follow, updatedAt } })
+    } catch (error) {
+      if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') throw error
+      continue
+    }
+    await capThreadMarks(db, tabId, personId)
+    return follow
+  }
+  return fail('READ_MARK_BUSY', 'This thread is being changed on another device. Try again.', 503)
+}
+
+/** One of the person's thread mark rows: its mark, its Follow choice (null when none) and when it last moved. */
+export interface ThreadMarkRow { conversationId: string; threadId: string; sequence: number; follow: boolean | null; updatedAt: number }
+
+/** Every one of the person's thread mark rows in this tab (at most THREAD_MARK_CAP), most recently moved first, by one raw read
+ *  of the (tabId, personId, updatedAt) index, as readThreadMarks. The caller keeps those of conversations the reader may read. */
+export async function readThreadMarkRows(db: Prisma.TransactionClient, tabId: string, personId: string): Promise<ThreadMarkRow[]> {
+  const rows = await readBy(db, 'SuperTabThreadMark', 'person', [{ $match: { tabId, personId } }, { $sort: { updatedAt: -1 } },
+    { $project: { _id: 0, conversationId: 1, threadId: 1, sequence: 1, follow: 1, updatedAt: 1 } }])
+  return rows.map(row => ({ conversationId: row.conversationId as string, threadId: row.threadId as string, sequence: Number(row.sequence),
+    follow: typeof row.follow === 'boolean' ? row.follow : null, updatedAt: ms(row.updatedAt) }))
 }
 
 /** Removes the person's least recently moved thread marks in the Swarm past THREAD_MARK_CAP, by the (tabId, personId,

@@ -7,13 +7,16 @@
  * A thread is unread as Desktop marks it (desktop super_tabs/controller.dart threadUnread): the person started it, replied in
  * it or was tagged in it; its newest reply is someone else's; and it has replies by others after both the person's read mark
  * on the chat and their own newest reply there. A chat they never marked read counts as read, as Desktop opens it at its end.
- * A thread the person read on any device (their thread mark, readMarks.ts) counts only replies past that mark too.
+ * A thread the person read on any device (their thread mark, readMarks.ts) counts only replies past that mark too, and only that
+ * mark when it is behind the chat's: reading the chat's main stream never reads a reply only in a thread (behindMarks). Their own
+ * choice on that row overrides being in it: a thread they unfollowed is never listed, one they follow is as if they were in it.
  *
  * Cost: every message read is bounded by an index range and a limit: the newest UNREAD_SCAN rows past the mark in at most
- * THREAD_CHATS chats; the roots of the newest CANDIDATE_THREADS threads; MEMBER_SCAN rows before the mark of a thread whose
- * newer rows do not show the person in it; one row (LATEST_SCAN for an older chat) at each of LATEST_CHATS chats' newest main
- * message. Text is cut to PREVIEW_CHARS by the database. `more` says a cap was reached. The route allows a person
- * INBOX_READS per INBOX_WINDOW_MS in each Swarm, counted by every pod together.
+ * THREAD_CHATS chats; the newest UNREAD_SCAN rows past their own mark in at most BEHIND_THREADS threads; the roots of the
+ * newest CANDIDATE_THREADS threads; MEMBER_SCAN rows before the mark of a thread whose newer rows do not show the person in it;
+ * one row (LATEST_SCAN for an older chat) at each of LATEST_CHATS chats' newest main message. Text is cut to PREVIEW_CHARS by
+ * the database. `more` says a cap was reached. The route allows a person INBOX_READS per INBOX_WINDOW_MS in each Swarm,
+ * counted by every pod together.
  */
 import type { Prisma, PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../../lib/ssoAuth.js'
@@ -23,7 +26,7 @@ import { agentOnly, author, fail, SuperTabError, type Actor, type Author, type C
 import { readConversation } from '../projects.js'
 import { deliveredCopies, type ThreadReply } from '../pageReads.js'
 import { threadSummaries } from '../threads.js'
-import { readMarks, readThreadMarks } from '../readMarks.js'
+import { readMarks, readThreadMarkRows, type ThreadMarkRow } from '../readMarks.js'
 import { readBy } from '../parts/indexed.js'
 import { ms } from '../parts/light.js'
 import type { SuperTabStore } from '../store.js'
@@ -64,29 +67,29 @@ export interface InboxThread {
 export interface InboxLatest { conversationId: string; message: InboxMessage }
 export interface Inbox { threads: InboxThread[]; latest: InboxLatest[]; more: boolean }
 
-interface Row { id: string; conversationId: string; sequence: number; author: Author; text: string; createdAt: Date; attachments: number; thread: string | null
+export interface Row { id: string; conversationId: string; sequence: number; author: Author; text: string; createdAt: Date; attachments: number; thread: string | null
   alsoInChat: boolean; mentions: string[]; source: unknown; recipientIds: string[] }
 
 /** A preview's fields, its text cut by the database so a long message never leaves it whole. */
-const FIELDS = { sequence: 1, author: 1, text: { $substrCP: [{ $ifNull: ['$text', ''] }, 0, PREVIEW_CHARS] }, createdAt: 1, attachments: { $size: { $ifNull: ['$attachments', []] } },
+export const FIELDS = { sequence: 1, author: 1, text: { $substrCP: [{ $ifNull: ['$text', ''] }, 0, PREVIEW_CHARS] }, createdAt: 1, attachments: { $size: { $ifNull: ['$attachments', []] } },
   thread: 1, alsoInChat: 1, mentions: 1, source: 1, recipientIds: 1 }
 /** A scan for unread replies: what a reply is counted, named and placed by, never its text. */
-const SCAN_FIELDS = { sequence: 1, author: 1, createdAt: 1, thread: 1, mentions: 1, source: 1, recipientIds: 1 }
-const row = (raw: Record<string, unknown>): Row => ({ id: raw._id as string, conversationId: raw.conversationId as string, sequence: raw.sequence as number, author: raw.author as Author,
+export const SCAN_FIELDS = { sequence: 1, author: 1, createdAt: 1, thread: 1, mentions: 1, source: 1, recipientIds: 1 }
+export const row = (raw: Record<string, unknown>): Row => ({ id: raw._id as string, conversationId: raw.conversationId as string, sequence: raw.sequence as number, author: raw.author as Author,
   text: (raw.text ?? '') as string, createdAt: new Date(ms(raw.createdAt)), attachments: typeof raw.attachments === 'number' ? raw.attachments : 0,
   thread: (raw.thread ?? null) as string | null, alsoInChat: raw.alsoInChat === true, mentions: (raw.mentions ?? []) as string[], source: raw.source ?? null,
   recipientIds: (raw.recipientIds ?? []) as string[] })
-const preview = (m: Row): InboxMessage => ({ id: m.id, sequence: m.sequence, author: m.author, text: m.text,
+export const preview = (m: Row): InboxMessage => ({ id: m.id, sequence: m.sequence, author: m.author, text: m.text,
   createdAt: m.createdAt.toISOString(), attachments: m.attachments })
 /** A thread reply: in a thread whose root is another row. */
-const isReply = (m: Row) => !!m.thread && m.thread !== m.id
+export const isReply = (m: Row) => !!m.thread && m.thread !== m.id
 /** A row of the chat's main stream (parts/commit.ts numberMessages): a top-level message, or a reply also sent to the chat. */
 const isMain = (m: Row) => !isReply(m) || m.alsoInChat
-const threadKey = (conversationId: string, root: string) => `${conversationId}\u0000${root}`
-const newestFirst = (a: { at: number; id: string }, b: { at: number; id: string }) => b.at - a.at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+export const threadKey = (conversationId: string, root: string) => `${conversationId}\u0000${root}`
+export const newestFirst = (a: { at: number; id: string }, b: { at: number; id: string }) => b.at - a.at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
 const activity = (g: Conversation) => Date.parse(g.lastActivityAt ?? '') || 0
 /** `rows` by `key`, each list in the rows' order. */
-function groupBy(rows: Row[], key: (m: Row) => string): Map<string, Row[]> {
+export function groupBy(rows: Row[], key: (m: Row) => string): Map<string, Row[]> {
   const groups = new Map<string, Row[]>()
   for (const m of rows) {
     const group = groups.get(key(m))
@@ -98,7 +101,7 @@ function groupBy(rows: Row[], key: (m: Row) => string): Map<string, Row[]> {
 
 /** The rows of `rows` a person reads, as a page filters them for a person (store.ts messages, readsRow): no agent-only notice,
  *  and no task chat copy of a Lead's notice that reached the Lead (pageReads.ts deliveredCopies). */
-async function readable(db: PrismaClient, tabId: string, rows: Row[]): Promise<Row[]> {
+export async function readable(db: PrismaClient, tabId: string, rows: Row[]): Promise<Row[]> {
   const shown = rows.filter(m => !agentOnly(m.source, m.recipientIds))
   const copies = shown.length ? await deliveredCopies(db, tabId, shown) : new Set<string>()
   return shown.filter(m => !copies.has(m.id))
@@ -123,7 +126,7 @@ export const CHATS_PER_READ = 100
 /** Runs each range's own pipeline inside one aggregate per CHATS_PER_READ ranges ($unionWith), so the reads stay few whatever
  *  the chat count, and each range's rows are still bounded by its own index range and limit: one $in over every chat could not
  *  bound each by its own read mark, and would walk a busy chat's history for a chat never opened. */
-async function perRange(db: PrismaClient, pipelines: Prisma.InputJsonValue[][]): Promise<Row[]> {
+export async function perRange(db: PrismaClient, pipelines: Prisma.InputJsonValue[][]): Promise<Row[]> {
   const rows: Row[] = []
   for (let i = 0; i < pipelines.length; i += CHATS_PER_READ) {
     const [first, ...rest] = pipelines.slice(i, i + CHATS_PER_READ)
@@ -162,31 +165,57 @@ async function latestIn(db: PrismaClient, tabId: string, chats: Conversation[]):
 
 interface Candidate { conversationId: string; root: string; mark: number; replies: Row[]; unread: number; member: boolean; at: number; id: string }
 
-/** The threads of `chats` the person has unread replies in (see the file's comment), from each chat's newest UNREAD_SCAN rows
- *  past their mark. */
-async function threadsIn(db: PrismaClient, tabId: string, state: SuperTabState, chats: Conversation[], personId: string, marks: Map<string, number>,
-  threadMarks: Map<string, Map<string, number>>): Promise<{ threads: InboxThread[]; more: boolean }> {
-  if (!chats.length) return { threads: [], more: false }
+/** Threads read behind their chat's mark whose rows past their own mark are read, most recently moved mark first. */
+export const BEHIND_THREADS = 50
+
+/** The thread marks behind their chat's mark, in a chat with rows past them, most recently moved first: a thread opened, then
+ *  the chat read further on. Reading the chat's main stream never reads a reply only in the thread, so those count from the
+ *  thread's own mark (as Slack). A row a Follow alone wrote (sequence 0) is no mark; an unfollowed thread is never listed. */
+function behindMarks(chats: Conversation[], marks: Map<string, number>, threadRows: ThreadMarkRow[]): ThreadMarkRow[] {
+  const groups = new Map(chats.map(g => [g.id, g]))
+  return threadRows.filter(r => {
+    const group = groups.get(r.conversationId)
+    return group && r.sequence > 0 && r.follow !== false && r.sequence < (marks.get(r.conversationId) ?? 0) && group.lastMessageSequence > r.sequence
+  })
+}
+
+/** The threads the person has unread replies in (see the file's comment): from each of `chats`' newest UNREAD_SCAN rows past
+ *  their mark, and from each thread whose own mark is behind its chat's (behindMarks: at most BEHIND_THREADS, of `readable`
+ *  chats) its newest UNREAD_SCAN rows past that mark, by the thread index. */
+async function threadsIn(db: PrismaClient, tabId: string, state: SuperTabState, chats: Conversation[], readableChats: Conversation[], personId: string,
+  marks: Map<string, number>, threadRows: ThreadMarkRow[]): Promise<{ threads: InboxThread[]; more: boolean }> {
+  const behind = behindMarks(readableChats, marks, threadRows)
+  if (!chats.length && !behind.length) return { threads: [], more: false }
+  const held = new Map(threadRows.map(r => [threadKey(r.conversationId, r.threadId), r]))
   const own = (a: Pick<Author, 'kind' | 'id'>) => a.kind === 'person' && a.id === personId
   const inIt = (m: Row) => own(m.author) || m.mentions.includes(personId)
-  const scanned = await perRange(db, chats.map(g => newestIn(tabId, g.id, { $gt: marks.get(g.id)! }, UNREAD_SCAN + 1, SCAN_FIELDS)))
+  const lagging = behind.slice(0, BEHIND_THREADS)
+  const [scanned, past] = await Promise.all([perRange(db, chats.map(g => newestIn(tabId, g.id, { $gt: marks.get(g.id)! }, UNREAD_SCAN + 1, SCAN_FIELDS))),
+    perRange(db, lagging.map(r => [{ $match: { tabId, conversationId: r.conversationId, thread: r.threadId, sequence: { $gt: r.sequence } } },
+      { $sort: { sequence: -1 } }, { $limit: UNREAD_SCAN + 1 }, { $project: { ...SCAN_FIELDS, conversationId: 1 } }]))])
   const byChat = groupBy(scanned, m => m.conversationId)
-  // A chat whose newest UNREAD_SCAN rows do not reach its mark: older unread replies are not counted.
-  let more = [...byChat.values()].some(rows => rows.length > UNREAD_SCAN)
-  const replies = await readable(db, tabId, [...byChat.values()].flatMap(rows => rows.slice(0, UNREAD_SCAN)).filter(isReply))
-  // Newest first within each thread, as the scan reads them.
-  const byThread = groupBy(replies, m => threadKey(m.conversationId, m.thread!))
+  const pastByThread = groupBy(past, m => threadKey(m.conversationId, m.thread!))
+  // A chat or thread whose newest UNREAD_SCAN rows do not reach its mark: older unread replies are not counted.
+  let more = behind.length > BEHIND_THREADS || [...byChat.values(), ...pastByThread.values()].some(rows => rows.length > UNREAD_SCAN)
+  // Each row once, though both scans read it.
+  const rowsOf = [...byChat.values(), ...pastByThread.values()].flatMap(rows => rows.slice(0, UNREAD_SCAN)).filter(isReply)
+  const replies = await readable(db, tabId, [...new Map(rowsOf.map(m => [m.id, m])).values()])
+  // Newest first within each thread.
+  const byThread = groupBy(replies.sort((a, b) => b.sequence - a.sequence), m => threadKey(m.conversationId, m.thread!))
+  const behindKeys = new Set(lagging.map(r => threadKey(r.conversationId, r.threadId)))
   const candidates: Candidate[] = []
-  for (const rows of byThread.values()) {
+  for (const [key, rows] of byThread) {
     const newest = rows[0]!
-    // The person answered last: nothing in it waits for them.
-    if (own(newest.author)) continue
+    const mark = held.get(key)
+    // The person answered last: nothing in it waits for them. Nor in a thread they unfollowed, wherever they are in it.
+    if (own(newest.author) || mark?.follow === false) continue
     // Read through the later of their own newest reply and their mark of this thread from any device.
-    const seen = Math.max(rows.find(m => own(m.author))?.sequence ?? 0, threadMarks.get(newest.conversationId)?.get(newest.thread!) ?? 0)
+    const seen = Math.max(rows.find(m => own(m.author))?.sequence ?? 0, mark?.sequence ?? 0)
     const unread = rows.filter(m => !own(m.author) && m.sequence > seen).length
     if (!unread) continue
-    candidates.push({ conversationId: newest.conversationId, root: newest.thread!, mark: marks.get(newest.conversationId)!, replies: rows, unread,
-      member: rows.some(inIt), at: newest.createdAt.getTime(), id: newest.id })
+    // A thread read behind its chat's mark: what is before its own mark was looked at for the person, not the chat's.
+    candidates.push({ conversationId: newest.conversationId, root: newest.thread!, mark: behindKeys.has(key) ? mark!.sequence : marks.get(newest.conversationId)!,
+      replies: rows, unread, member: mark?.follow === true || rows.some(inIt), at: newest.createdAt.getTime(), id: newest.id })
   }
   candidates.sort(newestFirst)
   if (candidates.length > CANDIDATE_THREADS) more = true
@@ -208,7 +237,7 @@ async function threadsIn(db: PrismaClient, tabId: string, state: SuperTabState, 
     const members = new Set((await readable(db, tabId, named)).map(m => threadKey(m.conversationId, m.thread!)))
     for (const c of unknown) if (members.has(threadKey(c.conversationId, c.root))) c.member = true
   }
-  const groups = new Map(chats.map(g => [g.id, g]))
+  const groups = new Map(readableChats.map(g => [g.id, g]))
   const threads = withRoot.filter(c => c.member).flatMap(c => {
     const root = roots.get(threadKey(c.conversationId, c.root))!, group = groups.get(c.conversationId)!
     // Named as a page's thread summary names them: only authors who can still read the chat (threads.ts).
@@ -222,8 +251,20 @@ async function threadsIn(db: PrismaClient, tabId: string, state: SuperTabState, 
   return { threads, more }
 }
 
-/** The inbox of the signed-in person: never an agent's (they have no read marks) or a Team session's (marks are the person's). */
-export async function readInbox(store: SuperTabStore, user: AuthUser, tabId: string): Promise<Inbox> {
+/** What one inbox read found besides the inbox, for the followed threads read (followedThreads.ts) to go on from. */
+export interface InboxRead {
+  inbox: Inbox
+  state: SuperTabState
+  /** The chats the person reads now, active and unarchived, most recently active first. */
+  chats: Conversation[]
+  marks: Map<string, number>
+  /** Every thread mark row of the person, most recently moved first (readMarks.ts readThreadMarkRows). */
+  threadRows: ThreadMarkRow[]
+}
+
+/** The inbox of the signed-in person: never an agent's (they have no read marks) or a Team session's (marks are the person's).
+ *  Without `latest`, the chats' latest messages are not read and `latest` is empty. */
+export async function inboxRead(store: SuperTabStore, user: AuthUser, tabId: string, options: { latest: boolean }): Promise<InboxRead> {
   if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
   const db = store.db
   const { state } = await store.readLoad(user, tabId)
@@ -235,15 +276,19 @@ export async function readInbox(store: SuperTabStore, user: AuthUser, tabId: str
   const marks = await readMarks(db, tabId, user.sub)
   // A chat never marked read counts as read: its threads wait for the person's first visit.
   const unread = chats.filter(g => { const mark = marks.get(g.id) ?? 0; return mark > 0 && g.lastMessageSequence > mark })
-  const shown = chats.slice(0, LATEST_CHATS)
-  // The person's thread marks: one indexed read (readMarks.ts), beside the latest messages'.
+  const shown = options.latest ? chats.slice(0, LATEST_CHATS) : []
+  // The person's thread marks and follows: one indexed read (readMarks.ts), beside the latest messages'.
+  const threadRows = readThreadMarkRows(db, tabId, user.sub)
   const [latest, threaded] = await Promise.all([latestIn(db, tabId, shown),
-    readThreadMarks(db, tabId, user.sub).then(threadMarks => threadsIn(db, tabId, state, unread.slice(0, THREAD_CHATS), user.sub, marks, threadMarks))])
+    threadRows.then(rows => threadsIn(db, tabId, state, unread.slice(0, THREAD_CHATS), chats, user.sub, marks, rows))])
   const threads = threaded.threads.sort((a, b) => newestFirst({ at: Date.parse(a.lastReplyAt), id: a.rootId }, { at: Date.parse(b.lastReplyAt), id: b.rootId }))
-  const more = chats.length > LATEST_CHATS || latest.more || unread.length > THREAD_CHATS || threaded.more || threads.length > MAX_THREADS
-  return { threads: threads.slice(0, MAX_THREADS), more,
+  const more = (options.latest && chats.length > LATEST_CHATS) || latest.more || unread.length > THREAD_CHATS || threaded.more || threads.length > MAX_THREADS
+  const inbox = { threads: threads.slice(0, MAX_THREADS), more,
     latest: shown.flatMap(g => { const m = latest.latest.get(g.id); return m ? [{ conversationId: g.id, message: preview(m) }] : [] }) }
+  return { inbox, state, chats, marks, threadRows: await threadRows }
 }
+
+export const readInbox = async (store: SuperTabStore, user: AuthUser, tabId: string): Promise<Inbox> => (await inboxRead(store, user, tabId, { latest: true })).inbox
 
 const inboxReads = createRateLimiter('swarm-inbox', INBOX_WINDOW_MS, INBOX_READS)
 
