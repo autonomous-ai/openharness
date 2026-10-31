@@ -10,6 +10,7 @@ import 'package:harness/widgets/harness_activity_mark.dart';
 import 'package:harness/super_tabs/buddies.dart' show kBuddyEngineRefusals;
 import 'package:harness/super_tabs/buddy_machines.dart' show kBuddyNoMachine;
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/decisions_view.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/buddy_fixture.dart';
@@ -1494,10 +1495,16 @@ void main() {
           final server = buddySwarm();
           server.ask(['Ship it?']);
           final c = await show(tester, server);
-          await tester.tap(find.byKey(const ValueKey('super-notifications')));
+          await tester.tap(find.byKey(const ValueKey('super-activity')));
           await tester.pumpAndSettle();
 
-          expect(find.text('Decisions'), findsOneWidget);
+          expect(
+            find.descendant(
+              of: find.byType(SuperTabDecisionList),
+              matching: find.text('Decisions'),
+            ),
+            findsOneWidget,
+          );
           expect(find.text('Ship it?'), findsOneWidget);
           await close(tester, c);
         },
@@ -1520,7 +1527,7 @@ void main() {
         'a tag from the old Chat with PM is placed in the project chat and opens it',
         (tester) async {
           final (_, c) = await withHistory(tester);
-          await tester.tap(find.byKey(const ValueKey('super-notifications')));
+          await tester.tap(find.byKey(const ValueKey('super-activity')));
           await tester.pumpAndSettle();
 
           expect(find.textContaining('Chat with PM'), findsNothing);

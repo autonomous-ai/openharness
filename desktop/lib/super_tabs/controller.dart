@@ -187,8 +187,12 @@ class SuperTabController extends ChangeNotifier {
       _decisionsAside.addAll(
         (initial['decisionsAside'] as List? ?? const []).whereType<String>(),
       );
+      _statusFolded.addAll(
+        (initial['statusFolded'] as List? ?? const []).whereType<String>(),
+      );
       devicesSelected = initial['devicesSelected'] == true;
       projectsGroupOpen = initial['projectsGroupOpen'] as bool? ?? true;
+      unreadOnly = initial['unreadOnly'] == true;
       machinesGroupOpen = initial['machinesGroupOpen'] as bool? ?? true;
       buddiesGroupOpen = initial['buddiesGroupOpen'] as bool? ?? true;
       modelsGroupOpen = initial['modelsGroupOpen'] as bool? ?? true;
@@ -850,6 +854,26 @@ class SuperTabController extends ChangeNotifier {
     if (_decisionsAside.length != before) _saveSoon();
   }
 
+  /// The projects whose status card the reader folded to its heading line:
+  /// saved on this computer for this reader. Only the newest
+  /// [statusFoldedKept] are kept, so the set cannot grow without end.
+  final _statusFolded = <String>{};
+  static const statusFoldedKept = 200;
+  bool statusFolded(String projectId) => _statusFolded.contains(projectId);
+
+  void setStatusFolded(String projectId, {required bool folded}) {
+    // Folded again moves it to the newest end.
+    _statusFolded.remove(projectId);
+    if (folded) {
+      _statusFolded.add(projectId);
+      while (_statusFolded.length > statusFoldedKept) {
+        _statusFolded.remove(_statusFolded.first);
+      }
+    }
+    _saveSoon();
+    _changed();
+  }
+
   void toggleProjectsGroup() {
     projectsGroupOpen = !projectsGroupOpen;
     _saveSoon();
@@ -913,6 +937,8 @@ class SuperTabController extends ChangeNotifier {
     final files = HarnessAttachments(
       limitBytes: kSuperTabAttachmentMaxBytes,
       limitFiles: kSuperTabAttachmentMaxFiles,
+      // A heavier file stays on disk until it goes, straight to storage.
+      readUpTo: kSuperTabFormAttachmentMaxBytes,
     );
     files.addListener(() {
       // Changing the files answers a refused upload.
@@ -1516,6 +1542,8 @@ class SuperTabController extends ChangeNotifier {
       if (alsoSend && !newSession) 'alsoSend': true,
       if (newSession) 'newSession': true,
       if (ids.isNotEmpty) 'attachmentIds': ids,
+      // As the chat's own send: the server refuses it in an earlier chat.
+      if (oneBuddy) 'oneBuddy': true,
     });
     if (_pending case final pending? when !identical(pending, before)) {
       _sendingMentions[pending['operationId'] as String] = picked;
@@ -2180,6 +2208,7 @@ class SuperTabController extends ChangeNotifier {
     }
     accessRevoked = true;
     devicesSelected = false;
+    _forgetAttention();
     error = message;
     snapshot = null;
     _parts = null;
@@ -2200,6 +2229,9 @@ class SuperTabController extends ChangeNotifier {
     }
     _queuedSends.clear();
     _poll?.cancel();
+    // A file on its way stops: a large one would go on to storage for an
+    // account that no longer reads this Swarm.
+    cancelUpload();
     _changed();
   }
 
@@ -2210,8 +2242,10 @@ class SuperTabController extends ChangeNotifier {
     'expandedProjects': expandedProjects.toList(),
     'expandedMachines': expandedMachines.toList(),
     'decisionsAside': _decisionsAside.toList(),
+    'statusFolded': _statusFolded.toList(),
     'devicesSelected': devicesSelected,
     'projectsGroupOpen': projectsGroupOpen,
+    'unreadOnly': unreadOnly,
     'machinesGroupOpen': machinesGroupOpen,
     'buddiesGroupOpen': buddiesGroupOpen,
     'modelsGroupOpen': modelsGroupOpen,
@@ -2513,6 +2547,22 @@ class SuperTabController extends ChangeNotifier {
     );
   }
 
+  /// The key the reader's one Buddy for the whole Swarm goes by in [buddyChat],
+  /// [buddy], [buddyStart], [addBuddy] and [removeBuddy]: its chat and agent
+  /// belong to no project, as the Product Managers' conversation does (spec
+  /// 2026-10-31-one-buddy-per-swarm).
+  static const kSwarmBuddyKey = '';
+
+  /// Whether this Swarm gives each person one Buddy for the whole Swarm: the
+  /// sidebar's # buddy row in place of a Buddies section.
+  bool get oneBuddy => snapshot?.swarmBuddy == true;
+
+  /// Whether [group] is the reader's older Buddy chat in a project, where the
+  /// Swarm gives one Buddy for the whole Swarm: its history reads here, and
+  /// its person talks to their Buddy in # buddy (spec: history).
+  bool isEarlierBuddyChat(SuperTabConversation? group) =>
+      oneBuddy && group != null && group.isBuddyChat && !group.isSwarmBuddyChat;
+
   /// The signed-in person's chat with their Buddy in [projectId], where the
   /// PM's private lines to them land too: Buddies replaced Chat with PM in
   /// every Swarm (Ken, 10-29). It is there before any Buddy is
@@ -2540,7 +2590,10 @@ class SuperTabController extends ChangeNotifier {
       if (request['buddySession'] != null) return false;
       return superTabMap(request['buddyOf'])['personId'] == accountId &&
           (request['projectId'] == projectId ||
-              (chat != null && request['conversationId'] == chat));
+              (chat != null && request['conversationId'] == chat) ||
+              // The one Buddy's start, before its chat is read here.
+              (projectId == kSwarmBuddyKey &&
+                  request['buddyScope'] == 'swarm'));
     }).firstOrNull;
   }
 
@@ -2556,7 +2609,7 @@ class SuperTabController extends ChangeNotifier {
   }) async {
     final result = await command({
       'type': 'buddy.create',
-      'projectId': projectId,
+      if (projectId != kSwarmBuddyKey) 'projectId': projectId,
       'machineId': machineId,
       'engine': engine,
       'setup': ?setup,
@@ -2569,7 +2622,11 @@ class SuperTabController extends ChangeNotifier {
 
   /// Removes the reader's Buddy in [projectId]; its chat stays.
   Future<bool> removeBuddy(String projectId) async =>
-      await command({'type': 'buddy.remove', 'projectId': projectId}) != null;
+      await command({
+        'type': 'buddy.remove',
+        if (projectId != kSwarmBuddyKey) 'projectId': projectId,
+      }) !=
+      null;
 
   /// Names the reader's Buddy in [projectId] from its chat, or clears the
   /// name for the default when [name] is empty. Everyone in the Swarm sees it.
@@ -2638,7 +2695,10 @@ class SuperTabController extends ChangeNotifier {
   /// lines among them, for the Swarm badge.
   int get buddyUnread => [
     for (final project in snapshot?.projects ?? const <SuperTabProject>[])
-      if (buddyChat(project.id) case final chat?) unreadCount(chat),
+      // A muted chat never counts (Slack).
+      if (buddyChat(project.id) case final chat?
+          when notifyOf(chat.id) != SuperTabNotify.muted)
+        unreadCount(chat),
   ].fold(0, (a, b) => a + b);
 
   /// Reads each Buddy chat whose count is still open ([_countOpen]), page by
@@ -2796,9 +2856,11 @@ class SuperTabController extends ChangeNotifier {
   Future<bool> openBuddyChat(String projectId) async {
     if (buddyChat(projectId) case final chat?) return select(chat.id);
     final me = snapshot?.people.where((p) => p.id == accountId).firstOrNull;
+    // The empty id is the reader's one Buddy chat for the Swarm (spec
+    // 2026-10-31-one-buddy-per-swarm), which names no project.
     final result = await command({
       'type': 'buddy.chat',
-      'projectId': projectId,
+      if (projectId != kSwarmBuddyKey) 'projectId': projectId,
     }, operationId: _buddyChatOperation(projectId, me?.generation));
     final id = result?['conversationId'];
     return id is String && await select(id);
@@ -2849,6 +2911,137 @@ class SuperTabController extends ChangeNotifier {
     return true;
   }
 
+  /// The reader's notification setting for [id] (backend chatSettings.ts):
+  /// the one being sent, else the server's, else Mentions only.
+  SuperTabNotify notifyOf(String id) =>
+      _notifySending[id] ??
+      _notifyKept[id]?.$1 ??
+      snapshot?.chatSettings[id] ??
+      SuperTabNotify.mentions;
+
+  /// Settings sent and not yet seen back in a read, newest choice per chat.
+  final _notifySending = <String, SuperTabNotify>{};
+  int _notifyAsked = 0;
+
+  /// Whether [group] shows as unread in the sidebar: unread, and not muted.
+  /// A muted chat stays listed, greyed, and never counts (Slack).
+  bool unreadShown(SuperTabConversation group) =>
+      notifyOf(group.id) != SuperTabNotify.muted && unread(group);
+
+  /// Keeps [level] for [id] on every device of the reader. Shown at once;
+  /// false, and the old setting back, when the server did not keep it. A
+  /// later choice for the same chat wins over an earlier one still on its way.
+  Future<bool> setNotify(String id, SuperTabNotify level) async {
+    if (_disposed || accessRevoked || snapshot?.conversation(id) == null) {
+      return false;
+    }
+    final asked = ++_notifyAsked;
+    final epoch = visibilityEpoch;
+    _notifySending[id] = level;
+    _changed();
+    var kept = false;
+    try {
+      final answer = await request(
+        'POST',
+        '$_path/conversations/${Uri.encodeComponent(id)}/notifications',
+        body: {'notify': level.name},
+      );
+      return kept = SuperTabNotify.parse(answer['notify'] as String?) == level;
+    } catch (_) {
+      return false;
+    } finally {
+      // Only the newest choice for this chat settles it; a read since
+      // carries the server's, which [notifyOf] reads once this is gone.
+      if (!_disposed && asked == _notifyAsked) {
+        _notifySending.remove(id);
+        if (kept && !accessRevoked && visibilityEpoch == epoch) {
+          _notifyKept[id] = (level, _readSerial);
+        }
+        _changed();
+      }
+    }
+  }
+
+  /// Settings the server answered for, until a read carries them: without
+  /// it a chat would flick back to the last read's setting meanwhile.
+  /// With the number of the newest read started when the answer came: a
+  /// read started after it carries the setting, and replaces it.
+  final _notifyKept = <String, (SuperTabNotify, int)>{};
+
+  /// Reads started, in order ([_read]).
+  int _readSerial = 0;
+
+  /// The one Mark all read that waits for its Undo, if any.
+  SuperTabMarkAll? _markAll;
+
+  /// How long Mark all read waits before the marks go to the server: read
+  /// marks never move back there, so Undo works by not sending them yet.
+  static const markAllHold = Duration(seconds: 6);
+
+  /// Marks every chat of this Swarm the sidebar shows unread as read (Slack's
+  /// Shift+Esc): at once on this device, on the server once [markAllHold]
+  /// passes without [SuperTabMarkAll.undo]. Null when nothing is unread. A
+  /// second one sends the first's marks before it starts.
+  SuperTabMarkAll? markAllRead() {
+    final snapshot = this.snapshot;
+    if (_disposed || accessRevoked || snapshot == null) return null;
+    _markAll?._commit();
+    final before = <String, int?>{}, through = <String, int>{};
+    for (final group in snapshot.conversations) {
+      if (group.dormant || !unreadShown(group)) continue;
+      final top = max(
+        group.lastMainSequence ?? group.lastMessageSequence,
+        _loadedMessageSequence(group.id),
+      );
+      before[group.id] = _readAt[group.id];
+      through[group.id] = top;
+      _readAt[group.id] = max(_readAt[group.id] ?? 0, top);
+    }
+    if (through.isEmpty) return null;
+    final epoch = visibilityEpoch;
+    late final SuperTabMarkAll held;
+    held = _markAll = SuperTabMarkAll._(
+      count: through.length,
+      commit: () {
+        if (_markAll == held) _markAll = null;
+        if (_disposed || accessRevoked || visibilityEpoch != epoch) return;
+        for (final MapEntry(key: id, value: top) in through.entries) {
+          if (snapshot.conversation(id) == null) continue;
+          _serverMarks.mark(id, top, kept: this.snapshot?.readMarks[id] ?? 0);
+        }
+      },
+      undo: () {
+        if (_markAll == held) _markAll = null;
+        if (_disposed) return;
+        for (final MapEntry(key: id, value: was) in before.entries) {
+          // Only what this Mark all read moved: a chat read since keeps it.
+          if (_readAt[id] != through[id]) continue;
+          if (was == null) {
+            _readAt.remove(id);
+          } else {
+            _readAt[id] = was;
+          }
+        }
+        _saveSoon();
+        _changed();
+      },
+      hold: markAllHold,
+    );
+    _saveSoon();
+    _changed();
+    return held;
+  }
+
+  /// The sidebar lists only chats with something unread (and the open one):
+  /// Slack's unread filter, kept on this computer.
+  bool unreadOnly = false;
+
+  void toggleUnreadOnly() {
+    unreadOnly = !unreadOnly;
+    _saveSoon();
+    _changed();
+  }
+
   /// A visible transcript passes the boundary it displayed. The loaded messages
   /// are authoritative: snapshots can arrive either before or after their tail.
   void markRead(String id, {int? through}) {
@@ -2877,6 +3070,7 @@ class SuperTabController extends ChangeNotifier {
     // An adapting read that changes nothing redraws nothing: on a phone each
     // redraw of the whole tab is a long frame, every poll.
     final quiet = _policy.adapts && snapshot != null;
+    final serial = ++_readSerial;
     final before = _shown;
     var stateChanged = false;
     loading = snapshot == null;
@@ -2946,6 +3140,7 @@ class SuperTabController extends ChangeNotifier {
           throw const FormatException('A different Swarm was returned.');
         }
         snapshot = next;
+        _notifyKept.removeWhere((_, kept) => kept.$2 < serial);
         final allowed = next.conversations.map((c) => c.id).toSet();
         // What this device keeps of a group goes with the group itself (a
         // tombstone), not when a read leaves it out: a closed group is out of
@@ -3372,6 +3567,7 @@ class SuperTabController extends ChangeNotifier {
         const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) {
       accessRevoked = true;
       devicesSelected = false;
+      _forgetAttention();
       snapshot = null;
       _parts = null;
       _messages.clear();
@@ -3381,6 +3577,7 @@ class SuperTabController extends ChangeNotifier {
       _quoting.clear();
       _forgetThreads();
       _poll?.cancel();
+      cancelUpload();
     }
   }
 
@@ -3927,6 +4124,7 @@ class SuperTabController extends ChangeNotifier {
     List<String> recipients = const [],
     VoidCallback? onSending,
     bool newSession = false,
+    String? sessionProjectId,
   }) async {
     final text = draft(selectedId).trim();
     final files = attachments(selectedId).files;
@@ -3970,6 +4168,7 @@ class SuperTabController extends ChangeNotifier {
           'replyTo': replyTo,
           'recipientIds': addressed,
           if (tagged.isNotEmpty) 'mentions': tagged,
+          if (oneBuddy) 'oneBuddy': true,
         },
         result: result,
       ));
@@ -4000,6 +4199,16 @@ class SuperTabController extends ChangeNotifier {
       if (tagged.isNotEmpty) 'mentions': tagged,
       if (ids.isNotEmpty) 'attachmentIds': ids,
       if (newSession) 'newSession': true,
+      // An app that knows one Buddy per Swarm says so: the server then
+      // refuses its write into an older Buddy chat (security review 1 of
+      // #2435). Older apps and phones say nothing and still write there.
+      if (oneBuddy) 'oneBuddy': true,
+      // A New session in one project of the reader's one Buddy chat (spec
+      // 2026-10-31-one-buddy-per-swarm).
+      if (newSession &&
+          sessionProjectId != null &&
+          selected?.isSwarmBuddyChat == true)
+        'sessionProjectId': sessionProjectId,
     });
     // On its way: the message shows in the chat, and the draft is free for
     // the next one. Both are in the save made before the request.
@@ -4185,7 +4394,7 @@ class SuperTabController extends ChangeNotifier {
           conversationId: conversationId,
           name: file.name,
           mime: mimeForName(file.name),
-          bytes: file.bytes,
+          file: file,
           cancel: token,
           onProgress: (sent) {
             watch();
@@ -4219,8 +4428,20 @@ class SuperTabController extends ChangeNotifier {
   }
 
   Future<void> flush() async {
+    // Closing or changing account is no Undo: held marks go now.
+    _markAll?._commit();
     _draftSave?.cancel();
     await _persist();
+  }
+
+  /// Access went: a held Mark all read sends nothing, and settings on their
+  /// way or answered belong to the access that is gone.
+  void _forgetAttention() {
+    _markAll?._cancel();
+    _markAll = null;
+    _notifySending.clear();
+    _notifyKept.clear();
+    _notifyAsked++;
   }
 
   /// Runs [then] when this controller is disposed: a helper that keeps a
@@ -4230,11 +4451,15 @@ class SuperTabController extends ChangeNotifier {
 
   @override
   void dispose() {
+    // Closing the Swarm is no Undo: the held marks go before anything stops.
+    _markAll?._commit();
     _disposed = true;
     for (final then in _onDispose) {
       then();
     }
     _onDispose.clear();
+    // Closing the tab or signing out stops a file on its way.
+    cancelUpload();
     for (final queued in _queuedSends) {
       queued.result.complete(null);
     }
@@ -4253,5 +4478,47 @@ class SuperTabController extends ChangeNotifier {
     }
     // The owner awaits flush when changing account or closing the tab.
     super.dispose();
+  }
+}
+
+/// One Mark all read waiting for its Undo ([SuperTabController.markAllRead]).
+class SuperTabMarkAll {
+  SuperTabMarkAll._({
+    required this.count,
+    required void Function() commit,
+    required void Function() undo,
+    required Duration hold,
+  }) : _onCommit = commit,
+       _onUndo = undo {
+    _timer = Timer(hold, _commit);
+  }
+
+  /// How many chats it marked read.
+  final int count;
+  final void Function() _onCommit, _onUndo;
+  late final Timer _timer;
+  bool _done = false;
+
+  /// Whether its marks went to the server, or it was undone or dropped.
+  bool get done => _done;
+
+  /// Puts every chat it marked back as it was, if the marks are not sent yet.
+  void undo() {
+    if (_done) return;
+    _done = true;
+    _timer.cancel();
+    _onUndo();
+  }
+
+  void _commit() {
+    if (_done) return;
+    _done = true;
+    _timer.cancel();
+    _onCommit();
+  }
+
+  void _cancel() {
+    _done = true;
+    _timer.cancel();
   }
 }

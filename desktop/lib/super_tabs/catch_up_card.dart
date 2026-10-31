@@ -5,22 +5,32 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
 import '../widgets/desktop_chrome.dart';
 import 'catch_up.dart';
+import 'message_row.dart' show SuperTabLink;
 
 /// "While you were away", under the New messages line: what needs the reader,
 /// what is blocked and what landed, each item opening its message
 /// ([onOpen]), and Close ([onClose]). Each list has its words as well as its
 /// mark, so colour is never the only signal.
+///
+/// A count with a list of its own elsewhere opens it: the decisions waiting
+/// ([onOpenDecisions]) and the tags beyond Needs you's ([onOpenMentions]).
+/// Blocked's and Landed's counts have no such list and stay words, as does a
+/// count whose callback is null.
 class SuperTabCatchUpCard extends StatelessWidget {
   const SuperTabCatchUpCard({
     super.key,
     required this.summary,
     required this.onOpen,
     required this.onClose,
+    this.onOpenDecisions,
+    this.onOpenMentions,
   });
 
   final SuperTabCatchUp summary;
   final ValueChanged<String> onOpen;
   final VoidCallback onClose;
+  final VoidCallback? onOpenDecisions;
+  final VoidCallback? onOpenMentions;
 
   @override
   Widget build(BuildContext context) {
@@ -59,6 +69,8 @@ class SuperTabCatchUpCard extends StatelessWidget {
                   AppIcons.hand,
                   DesktopChrome.accent,
                   summary.needsYou,
+                  onMore: onOpenMentions,
+                  moreKey: const ValueKey('super-catch-up-mentions'),
                 ),
                 _section(
                   'Blocked',
@@ -77,6 +89,8 @@ class SuperTabCatchUpCard extends StatelessWidget {
                     decisions == 1
                         ? '1 decision waits for you'
                         : '$decisions decisions wait for you',
+                    onTap: onOpenDecisions,
+                    linkKey: const ValueKey('super-catch-up-decisions'),
                   ),
                 // Never a partial summary read as the whole absence.
                 if (summary.more)
@@ -92,10 +106,16 @@ class SuperTabCatchUpCard extends StatelessWidget {
     );
   }
 
-  Widget _note(String text) => Padding(
+  Widget _note(String text, {VoidCallback? onTap, Key? linkKey}) => Padding(
     padding: const EdgeInsets.only(top: grid.AppDesktop.controlGap),
-    child: Text(text, style: DesktopChrome.metadata()),
+    child: _count(text, onTap: onTap, linkKey: linkKey),
   );
+
+  /// [text] as a link to what it counts, or as words with nowhere to go.
+  Widget _count(String text, {VoidCallback? onTap, Key? linkKey}) =>
+      onTap == null
+      ? Text(text, style: DesktopChrome.metadata())
+      : _SuperTabCatchUpLink(key: linkKey, text: text, onTap: onTap);
 
   Widget _header() => Row(
     children: [
@@ -133,8 +153,10 @@ class SuperTabCatchUpCard extends StatelessWidget {
     String heading,
     IconData icon,
     Color color,
-    SuperTabCatchUpList list,
-  ) {
+    SuperTabCatchUpList list, {
+    VoidCallback? onMore,
+    Key? moreKey,
+  }) {
     if (list.items.isEmpty) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.only(top: grid.AppDesktop.controlGap),
@@ -155,7 +177,7 @@ class SuperTabCatchUpCard extends StatelessWidget {
               onOpen: () => onOpen(item.messageId),
             ),
           if (list.more > 0)
-            Text('${list.more} more', style: DesktopChrome.metadata()),
+            _count('${list.more} more', onTap: onMore, linkKey: moreKey),
         ],
       ),
     );
@@ -212,4 +234,45 @@ class _SuperTabCatchUpRow extends StatelessWidget {
       ),
     ),
   );
+}
+
+/// A count that opens what it counts: accent words, a hand cursor and an
+/// underline under the pointer, reached by Tab and pressed with Enter or
+/// Space, the focus rim drawn as on the chat's other links ([SuperTabLink]).
+class _SuperTabCatchUpLink extends StatefulWidget {
+  const _SuperTabCatchUpLink({
+    super.key,
+    required this.text,
+    required this.onTap,
+  });
+
+  final String text;
+  final VoidCallback onTap;
+
+  @override
+  State<_SuperTabCatchUpLink> createState() => _SuperTabCatchUpLinkState();
+}
+
+class _SuperTabCatchUpLinkState extends State<_SuperTabCatchUpLink> {
+  var _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    return SuperTabLink(
+      onTap: widget.onTap,
+      label: widget.text,
+      child: MouseRegion(
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() => _hovered = false),
+        child: Text(
+          widget.text,
+          style: DesktopChrome.metadata(color: DesktopChrome.accent).copyWith(
+            decoration: _hovered ? TextDecoration.underline : null,
+            decorationColor: DesktopChrome.accent,
+          ),
+        ),
+      ),
+    );
+  }
 }

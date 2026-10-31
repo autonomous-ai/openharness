@@ -3,7 +3,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:dio/dio.dart' show RequestOptions, Response;
+import 'package:dio/dio.dart' show CancelToken, RequestOptions, Response;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/super_tabs/attachment_upload.dart';
@@ -113,43 +113,49 @@ void main() {
       expect(c.composerError('lead'), 'Choose an agent in this conversation.');
     });
 
-    test('a send forbidden in one conversation is not said in another',
-        () async {
-      server
-        ..refuse = {'code': 'FORBIDDEN', 'message': 'You can’t write here.'}
-        ..refuseStatus = 403;
-      c.setDraft('lead', 'Hello');
-      expect(await c.send(), isNull);
-      expect(c.composerError('lead'), 'You can’t write here.');
+    test(
+      'a send forbidden in one conversation is not said in another',
+      () async {
+        server
+          ..refuse = {'code': 'FORBIDDEN', 'message': 'You can’t write here.'}
+          ..refuseStatus = 403;
+        c.setDraft('lead', 'Hello');
+        expect(await c.send(), isNull);
+        expect(c.composerError('lead'), 'You can’t write here.');
 
-      server.refuse = null;
-      await c.select('offline');
-      expect(c.composerError('offline'), isNull);
-    });
+        server.refuse = null;
+        await c.select('offline');
+        expect(c.composerError('offline'), isNull);
+      },
+    );
 
-    test('a mention that is gone says so only in its own conversation',
-        () async {
-      c.setDraft('lead', 'Hello');
-      await c.send(recipients: ['no-longer-present']);
-      expect(c.composerError('lead'), contains('mentioned agent'));
+    test(
+      'a mention that is gone says so only in its own conversation',
+      () async {
+        c.setDraft('lead', 'Hello');
+        await c.send(recipients: ['no-longer-present']);
+        expect(c.composerError('lead'), contains('mentioned agent'));
 
-      await c.select('offline');
-      expect(c.composerError('offline'), isNull);
-    });
+        await c.select('offline');
+        expect(c.composerError('offline'), isNull);
+      },
+    );
 
-    test('a send still unconfirmed blocks every composer, so each says why',
-        () async {
-      server.loseReply = true;
-      c.setDraft('lead', 'Hello');
-      expect(await c.send(), isNull);
-      expect(c.hasPendingAction, isTrue);
+    test(
+      'a send still unconfirmed blocks every composer, so each says why',
+      () async {
+        server.loseReply = true;
+        c.setDraft('lead', 'Hello');
+        expect(await c.send(), isNull);
+        expect(c.hasPendingAction, isTrue);
 
-      await c.select('offline');
-      expect(
-        c.composerError('offline'),
-        'The action is not confirmed. Retry to check it.',
-      );
-    });
+        await c.select('offline');
+        expect(
+          c.composerError('offline'),
+          'The action is not confirmed. Retry to check it.',
+        );
+      },
+    );
 
     test('a refusal outside any conversation still shows where the person '
         'is', () async {
@@ -171,7 +177,7 @@ void main() {
           required conversationId,
           required name,
           required mime,
-          required bytes,
+          required file,
           required cancel,
           required onProgress,
         }) => gate.future,
@@ -191,6 +197,71 @@ void main() {
       expect(c.composerError('offline'), isNull);
       await c.select('lead');
       expect(c.composerError('lead'), 'No files here.');
+    });
+
+    test('losing access while a file goes up stops it, and what it brings '
+        'later is dropped', () async {
+      final gate = Completer<Map<String, dynamic>>();
+      CancelToken? token;
+      c.dispose();
+      c = server.controller(
+        upload:
+            ({
+              required tabId,
+              required conversationId,
+              required name,
+              required mime,
+              required file,
+              required cancel,
+              required onProgress,
+            }) {
+              token = cancel;
+              return gate.future;
+            },
+      );
+      await c.refresh();
+      c.attachments('lead').add([HarnessAttachment('a.png', _png)]);
+      final sending = c.send();
+      await Future<void>.delayed(Duration.zero);
+      expect(c.uploading, isTrue);
+
+      c.revokeAccess('You were signed out.');
+
+      expect(token!.isCancelled, isTrue);
+      expect(c.uploading, isFalse);
+      gate.complete({
+        'attachment': {'id': 'late'},
+      });
+      expect(await sending, isNull);
+      expect(server.posts, isEmpty);
+    });
+
+    test('closing the Swarm while a file goes up stops it', () async {
+      CancelToken? token;
+      final closing = server.controller(
+        upload:
+            ({
+              required tabId,
+              required conversationId,
+              required name,
+              required mime,
+              required file,
+              required cancel,
+              required onProgress,
+            }) {
+              token = cancel;
+              return Completer<Map<String, dynamic>>().future;
+            },
+      );
+      await closing.refresh();
+      closing.attachments('lead').add([HarnessAttachment('a.png', _png)]);
+      unawaited(closing.send());
+      await Future<void>.delayed(Duration.zero);
+      expect(closing.uploading, isTrue);
+
+      closing.dispose();
+
+      expect(token!.isCancelled, isTrue);
     });
   });
 
@@ -236,7 +307,7 @@ void main() {
       expect(
         superTabUploadRefusal(answer(413, {'error': 'ATTACHMENT_TOO_LARGE'}))
             .message,
-        'That file is over 10 MB.',
+        'Files can be up to 256 MB.',
       );
     });
   });

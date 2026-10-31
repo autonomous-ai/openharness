@@ -220,7 +220,8 @@ class _SwarmNewMessageSheetState extends State<SwarmNewMessageSheet>
   final _text = TextEditingController();
   final _focus = FocusNode(debugLabel: 'New message');
 
-  /// The files going with the message, in memory only, until it goes.
+  /// The files going with the message, until it goes: in memory, or a large
+  /// one on disk in the app's temporary folder.
   @override
   final files = SwarmOutgoingFiles();
 

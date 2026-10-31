@@ -95,6 +95,13 @@ export interface Agent {
   /** A Buddy (buddies.ts): the person it brainstorms with, at the membership they added it in. Its role stays a builder's
    *  for older readers; this is what makes it a Buddy, and what refuses it every command but its own chat and proposals. */
   buddyOf?: { personId: string; generation: string }
+  /** A Buddy that reads every project its person reads (buddies.ts; Dee, 10-31): the main Buddy of a Swarm Buddy chat, or a
+   *  plain session there. It has no project and writes nowhere but its own chat. A project session has its project instead. */
+  buddyScope?: 'swarm'
+  /** A Buddy that reads one project and writes into it (Dee, 10-31): a project session, or the one Buddy's session in an older
+   *  project chat. Its host never widens its reads beyond its folder (cli buddyGuard wide mode), which could hold another
+   *  project's clone. */
+  buddyNarrow?: true
   /** A Buddy's thread session (buddySessions.ts): it hears and answers only the thread rooted at `thread`, and reads the main
    *  chat only up to `from`, the sequence before the message that started it. The main Buddy has none. */
   buddySession?: BuddySession
@@ -102,8 +109,9 @@ export interface Agent {
    *  ordinary machine (projects.ts teamSessionAccess, security re-review of #2089). */
   teamAccount?: true
 }
-/** A thread session's thread root and the main chat's last sequence it may read (buddySessions.ts). */
-export interface BuddySession { thread: string; from: number }
+/** A thread session's thread root and the main chat's last sequence it may read (buddySessions.ts). A project session also
+ *  names its project (buddies.ts; Dee, 10-31): it reads that project alone, and is the only Buddy that writes into it. */
+export interface BuddySession { thread: string; from: number; projectId?: string }
 /** A Buddy chat's live or starting thread session, at most MAX_BUDDY_SESSIONS (buddySessions.ts). `agentId` once it runs;
  *  `waiting`, the person's messages sent while it started, delivered to it when it joins. */
 export interface BuddySessionEntry { thread: string; startId: string; agentId?: string; at: number; waiting?: string[] }
@@ -134,6 +142,15 @@ export interface AgentStartRequest {
   requirements: { memoryBytes: number; diskBytes: number; maxCpuPercent: number; tools: string[]; devices: string[]; quotaRequired: boolean }
   /** A Buddy's start (buddies.ts): written by buddy.create alone, never taken from an agent.start. */
   buddyOf?: { personId: string; generation: string }
+  /** A Swarm-wide Buddy's start (Agent.buddyScope), written by buddy.create or message.send alone. */
+  buddyScope?: 'swarm'
+  /** A one-project Buddy's start (Agent.buddyNarrow), written by message.send alone. */
+  buddyNarrow?: true
+  /** The person's messages in an older project chat its start waits on, delivered when it joins (ids only). */
+  buddyWaiting?: string[]
+  /** The projects a Swarm-wide Buddy's folder holds, one read-only worktree each, made from that project's own checkout on its
+   *  machine (spec: Folder). Ids, names and folders only. */
+  buddyProjects?: Array<{ id: string; name: string; cwd: string }>
   /** A Buddy thread session's start (buddySessions.ts): written by message.send with newSession alone. Ids only, never text:
    *  starts are listed to the Lead. */
   buddySession?: BuddySession
@@ -256,9 +273,11 @@ export function renderWorkTask(task: WorkTask): string {
 
 export interface Conversation {
   id: string
-  /** The removed Swarm-wide Leads conversation, still stored in an older Swarm (leadsRemoved), or a person's Buddy chat
-   *  (buddies.ts); absent on every other conversation. */
-  kind?: 'leads' | 'buddy'
+  /** The removed Swarm-wide Leads conversation, still stored in an older Swarm (leadsRemoved), a person's Buddy chat in a
+   *  project (buddies.ts), or their one Buddy chat for the whole Swarm, with no project (`swarm-buddy`, buddies.ts
+   *  openSwarmBuddyChat; Dee, 10-31): a kind of its own, so an older release parks it unread (parkLaterConversations) instead
+   *  of reading it as a project's. Absent on every other conversation. */
+  kind?: 'leads' | 'buddy' | 'swarm-buddy'
   projectId?: string
   /** Stable, tab-local workgroup reference. Lead has no number. */
   number?: number
@@ -455,6 +474,9 @@ export interface MessageDraft {
   alsoInChat?: true
   /** A reply in a Buddy thread session's thread (buddySessions.ts): the main Buddy never reads it. */
   buddySession?: true
+  /** The project a row of a person's one Buddy chat belongs to (buddySessions.ts lostProjectRow), on the row itself so hiding it
+   *  has no limit (security review 2 of #2435). */
+  buddyProject?: string
 }
 /** A notice for one agent alone (a skill update): delivered to it like any message, never shown to people or other agents. */
 export const AGENT_ONLY = { kind: 'agent-only' }
@@ -486,6 +508,9 @@ export const NOTICE_READERS = {
   'note-removed': 'recipients',
   'project-report': 'people', route: 'people', 'route-override': 'people', 'buddy-proposal': 'people', 'buddy-session-ended': 'people',
   'decision-delegated': 'people', 'machine-removed': 'people', 'machine-left': 'people', ship: 'people',
+  // A project PM's private line in a person's one Buddy chat, marked with its project (commands.ts person.tell): its person
+  // reads it, as they read the line in their older project chat.
+  'pm-line': 'people',
   'auto-archive': 'people', native: 'people',
   // The nightly routing reflection, for the project's people; never a Buddy's (buddies.ts routingRow).
   'routing-reflection': 'people',
@@ -532,6 +557,12 @@ export const agentForBuddy = <T extends Pick<Agent, 'id' | 'machineId' | 'harnes
   return { ...rest, machineOwnerId: '', contributorId: '', membershipGeneration: '', hostGrant: null } as T
 }
 /** A group as a Buddy reads it: its task names no machine, terminal or machine owner. */
+/** A conversation as a Buddy reads it: no machine (below), and no list of its chat's sessions, which names other threads, other
+ *  projects' among them, and starts still pending (security review 2 of #2435). */
+export const groupForBuddy = <T extends Pick<Conversation, 'assignment' | 'lostAttempt' | 'buddySessions'>>(group: T): T => {
+  const { buddySessions: _sessions, ...rest } = groupWithoutMachines(group)
+  return rest as T
+}
 export const groupWithoutMachines = <T extends Pick<Conversation, 'assignment' | 'lostAttempt'>>(group: T): T => {
   const assignment = group.assignment && { ...group.assignment,
     ...(group.assignment.execution ? { execution: { ...group.assignment.execution, machineId: '', harnessId: '', machineOwnerId: '' } } : {}),
@@ -611,7 +642,7 @@ export function conversation(state: SuperTabState, id: string): Conversation {
 
 export const isLeads = (group: Conversation): boolean => group.kind === 'leads'
 
-const KNOWN_KINDS: Record<NonNullable<Conversation['kind']>, true> = { leads: true, buddy: true }
+const KNOWN_KINDS: Record<NonNullable<Conversation['kind']>, true> = { leads: true, buddy: true, 'swarm-buddy': true }
 /** Conversation kinds this release knows; one of another kind is kept aside unchanged (parkLaterConversations, parts/shape.ts). */
 export const knownKind = (group: Pick<Conversation, 'kind'>): boolean => group.kind == null || Object.hasOwn(KNOWN_KINDS, group.kind)
 /** During a rolling deploy the previous release reads what the next one wrote. A conversation kind it does not know
@@ -744,6 +775,15 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   if (visible.projects) {
     visible.projects = visible.projects.filter(p => canReadProject(state, actor, p))
     visible.conversations = visible.conversations.filter(c => canReadGroup(state, actor, c))
+    // The status card is read exactly by those who read the project chat (projects.ts SwarmProject.status); without the chat
+    // loaded, by nobody.
+    visible.projects = visible.projects.map(p => {
+      if (p.status === undefined) return p
+      const chat = state.conversations.find(c => c.id === p.leadConversationId)
+      if (chat && canReadGroup(state, actor, chat)) return p
+      const { status: _status, ...rest } = p
+      return rest
+    })
     visible.agents = visible.agents.filter(a => canReadAgent(state, actor, a))
     visible.starts = visible.starts?.filter(s => visible.conversations.some(c => c.id === s.request.conversationId))
     if (!visible.projects.some(p => p.id === 'lead')) {
@@ -787,7 +827,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     visible.machines = []
     visible.starts = []
     visible.agents = visible.agents.map(a => agentForBuddy(a, actor.agentId))
-    visible.conversations = visible.conversations.map(groupWithoutMachines)
+    visible.conversations = visible.conversations.map(groupForBuddy)
     // A project's repository names the machine and folder it was made from; the address is all a Buddy needs (security
     // review 2 of #2115).
     for (const project of visible.projects ?? []) if (project.repository) project.repository = { repositoryUrl: project.repository.repositoryUrl } as typeof project.repository

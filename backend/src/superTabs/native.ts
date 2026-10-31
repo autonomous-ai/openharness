@@ -5,9 +5,8 @@ import type { AuthUser } from '../lib/ssoAuth.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
 import { activeWork, agent, appendPullRequestUrls, author, conversation, fail, stableId, SuperTabError,
   type Actor, type Agent, type Author, type Conversation, type SuperTabState } from './model.js'
-import { accessInputs, canReadGroup, groupProject, readConversation, watchersLost } from './projects.js'
+import { accessInputs, canReadGroup, readConversation, watchersLost } from './projects.js'
 import { mayDrive } from './terminal.js'
-import { noteProjectReports } from './projectUpdates.js'
 import { cloneData } from './cloneData.js'
 import { numberMessages, type Touch } from './parts/commit.js'
 import { redactCredentials } from './credentials.js'
@@ -120,7 +119,8 @@ export class SuperTabNativeStore {
       const operator = author(state, { kind: 'person', userId: user.sub, email: user.email }, true)
       const target = agent(state, request.agentId)
       const group = readConversation(state, { kind: 'person', userId: user.sub, email: user.email }, request.conversationId)
-      groupProject(state, group) // A terminal opens only in a project's conversation, never in the Leads conversation.
+      // A terminal opens in a project's conversation or a person's own Buddy chat; readConversation refuses the removed Leads
+      // conversation (model.ts leadsRemoved).
       if (group.archived || !group.agentIds.includes(target.id)) fail('AGENT_UNAVAILABLE', 'Choose an agent in this conversation.')
       await this.deps.agentGrant(tx, state, target)
       const grant = await this.deps.contribution(tx, state, { kind: 'person', userId: user.sub, email: user.email }, target)
@@ -234,8 +234,8 @@ export class SuperTabNativeStore {
       // A required recovery reaches the coordinator; a typed prompt, its answer or any other gap names no one (phase 1).
       const recipients = turnRecipients(group, target, !!recovery?.source.required)
       const draft = { id: eventId, conversationId: group.id, author: observedBy, text, replyTo: null, recipients }
+      // A terminal turn is an ordinary message: it never wakes the coordinator (projectUpdates.ts noteWorkChanges).
       const now = Date.now(), sequences = numberMessages(state, [draft], now), sequence = sequences.get(eventId)!
-      noteProjectReports(state, [draft], sequences, now)
       // The turn touches its agent (spec ruling 2). The person who opened the terminal is guarded by this context's row,
       // which the turn writes: removing that person, or taking away their access, revokes the context (rule b,
       // revokeNativeContexts). Touching the person instead would make one person's terminals in different groups conflict.

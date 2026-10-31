@@ -1,10 +1,15 @@
 import 'dart:async';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/super_tabs/activity.dart';
+import 'package:harness/super_tabs/activity_view.dart';
 import 'package:harness/super_tabs/catch_up.dart';
+import 'package:harness/super_tabs/catch_up_card.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/view.dart';
@@ -14,6 +19,8 @@ import 'support/super_tab_fixture.dart';
 const _card = ValueKey('super-catch-up');
 const _close = ValueKey('super-catch-up-close');
 const _line = ValueKey('super-new-messages-line');
+const _decisions = ValueKey('super-catch-up-decisions');
+const _mentions = ValueKey('super-catch-up-mentions');
 
 /// [count] messages in the Lead conversation from the Lead agent.
 ConversationServer _server(int count) {
@@ -59,6 +66,15 @@ Map<String, dynamic> _summary({
   'landed': _list(landed),
   'blocked': _list(blocked),
   'needsYou': _list(needsYou, total: needsYouTotal > 0 ? needsYouTotal : null),
+};
+
+/// Every list with more than it shows, and two decisions: Needs you 3 more,
+/// Blocked 2 more, Landed 4 more.
+Map<String, dynamic> _counted() => {
+  ..._summary(decisions: 2),
+  'needsYou': _list([_item(25, 'Question 3')], total: 4),
+  'blocked': _list([_item(26, 'Stuck: no simulator', by: 'Iris')], total: 3),
+  'landed': _list([_item(27, 'Avatars')], total: 5),
 };
 
 void main() {
@@ -292,5 +308,167 @@ void main() {
     await show(tester, server);
     expect(find.byKey(_card), findsNothing);
     expect(find.byKey(_line), findsOneWidget);
+  });
+
+  group('the counts open what they count', () {
+    Future<SuperTabController> showCounted(WidgetTester tester) async {
+      tester.view.physicalSize = const Size(1200, 860);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final server = _server(40)..markReadElsewhere('lead', 10);
+      server.catchUps['lead'] = _counted();
+      return show(tester, server);
+    }
+
+    Finder activityView() => find.byType(SuperTabActivityView);
+
+    testWidgets('the decisions line opens Activity on Decisions', (
+      tester,
+    ) async {
+      final c = await showCounted(tester);
+      expect(
+        find.descendant(
+          of: find.byKey(_decisions),
+          matching: find.text('2 decisions wait for you'),
+        ),
+        findsOneWidget,
+      );
+      expect(activityView(), findsNothing);
+      await tester.tap(find.byKey(_decisions));
+      await tester.pumpAndSettle();
+      expect(activityView(), findsOneWidget);
+      expect(SuperTabActivity.of(c).filter, SuperTabActivityFilter.decisions);
+    });
+
+    testWidgets("Needs you's more opens Activity on Mentions", (tester) async {
+      final c = await showCounted(tester);
+      expect(
+        find.descendant(
+          of: find.byKey(_mentions),
+          matching: find.text('3 more'),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(_mentions));
+      await tester.pumpAndSettle();
+      expect(activityView(), findsOneWidget);
+      expect(SuperTabActivity.of(c).filter, SuperTabActivityFilter.mentions);
+    });
+
+    for (final (key, filter, press, name) in [
+      (
+        _decisions,
+        SuperTabActivityFilter.decisions,
+        LogicalKeyboardKey.enter,
+        'Enter',
+      ),
+      (
+        _mentions,
+        SuperTabActivityFilter.mentions,
+        LogicalKeyboardKey.space,
+        'Space',
+      ),
+    ]) {
+      testWidgets('$name on the focused ${filter.name} link opens '
+          'it, the focus drawn', (tester) async {
+        final c = await showCounted(tester);
+        expect(find.byKey(key), findsOneWidget);
+        // The link takes keyboard focus as the app's other controls do.
+        final node = Focus.of(
+          tester.element(
+            find.descendant(of: find.byKey(key), matching: find.byType(Text)),
+          ),
+        );
+        node.requestFocus();
+        await tester.pumpAndSettle();
+        expect(node.hasPrimaryFocus, isTrue);
+        final rim = tester.widget<DecoratedBox>(
+          find
+              .descendant(
+                of: find.byKey(key),
+                matching: find.byType(DecoratedBox),
+              )
+              .first,
+        );
+        expect(
+          (rim.decoration as BoxDecoration).border!.top.color,
+          grid.AppDesktop.focus,
+        );
+        await tester.sendKeyEvent(press);
+        await tester.pumpAndSettle();
+        expect(activityView(), findsOneWidget);
+        expect(SuperTabActivity.of(c).filter, filter);
+      });
+    }
+
+    testWidgets('a hand over the link, which underlines it in the accent', (
+      tester,
+    ) async {
+      await showCounted(tester);
+      final text = find.descendant(
+        of: find.byKey(_decisions),
+        matching: find.text('2 decisions wait for you'),
+      );
+      TextStyle style() => tester.widget<Text>(text).style!;
+      expect(style().decoration, isNot(TextDecoration.underline));
+      expect(style().color, grid.AppPalette.accentOnSurface);
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: Offset.zero);
+      addTearDown(mouse.removePointer);
+      await mouse.moveTo(tester.getCenter(text));
+      await tester.pumpAndSettle();
+      expect(
+        RendererBinding.instance.mouseTracker.debugDeviceActiveCursor(1),
+        SystemMouseCursors.click,
+      );
+      expect(style().decoration, TextDecoration.underline);
+    });
+
+    testWidgets("Blocked's and Landed's more are words, not links", (
+      tester,
+    ) async {
+      await showCounted(tester);
+      for (final more in ['2 more', '4 more']) {
+        expect(inCard(more), findsOneWidget);
+        expect(
+          find.ancestor(of: inCard(more), matching: find.byType(SuperTabLink)),
+          findsNothing,
+        );
+        expect(
+          find.ancestor(of: inCard(more), matching: find.byType(InkWell)),
+          findsNothing,
+        );
+      }
+      // Only the two that have somewhere to go.
+      expect(
+        find.descendant(
+          of: find.byKey(_card),
+          matching: find.byType(SuperTabLink),
+        ),
+        findsNWidgets(2),
+      );
+    });
+  });
+
+  testWidgets('with nowhere to open, the counts are plain words', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: grid.buildAppTheme(brightness: Brightness.dark),
+        home: Scaffold(
+          body: SuperTabCatchUpCard(
+            summary: SuperTabCatchUp.fromJson(_counted()),
+            onOpen: (_) {},
+            onClose: () {},
+          ),
+        ),
+      ),
+    );
+    expect(inCard('2 decisions wait for you'), findsOneWidget);
+    expect(inCard('3 more'), findsOneWidget);
+    expect(find.byKey(_decisions), findsNothing);
+    expect(find.byKey(_mentions), findsNothing);
+    expect(find.byType(SuperTabLink), findsNothing);
   });
 }

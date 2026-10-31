@@ -128,6 +128,8 @@ class SuperTabAgent {
     : id = _text(row, 'id'),
       hasProjectId = row['projectId'] != null,
       projectId = row['projectId'] as String? ?? 'lead',
+      buddyScope = row['buddyScope'] as String?,
+      buddyNarrow = row['buddyNarrow'] == true,
       name = _text(row, 'name'),
       displayName = row['displayName'] as String?,
       machineId = _text(row, 'machineId'),
@@ -157,6 +159,13 @@ class SuperTabAgent {
       },
       confidential = row['confidential'] == true,
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
+
+  /// `swarm` for a person's one Buddy for the whole Swarm, as the desktop's model reads it; null otherwise.
+  final String? buddyScope;
+
+  /// Whether that Buddy reads only a narrowed set of projects (desktop model); not drawn on the phone yet.
+  final bool buddyNarrow;
+
   final String id, projectId, name, machineId, harnessId, contributorId;
 
   /// Set by its contributor or its project's Lead; null draws its pattern.
@@ -414,6 +423,7 @@ class SuperTabProject {
               superTabMap(member)['generation'] as String?,
       },
       updateMinutes = (row['updateMinutes'] as num?)?.toInt() ?? 5,
+      status = SuperTabProjectStatus.read(row['status']),
       repository = row['repository'] is Map
           ? Map.unmodifiable(superTabMap(row['repository']))
           : null;
@@ -441,7 +451,36 @@ class SuperTabProject {
       _memberGenerations.containsKey(person.id) &&
       _memberGenerations[person.id] == person.generation;
   final int updateMinutes;
+
+  /// The project's status card text, read as the desktop's model reads it;
+  /// the phone shows no card yet.
+  final SuperTabProjectStatus? status;
   final Map<String, dynamic>? repository;
+}
+
+/// A project's status card text, as the desktop's model reads it
+/// (`../desktop/lib/super_tabs/model.dart`).
+class SuperTabProjectStatus {
+  const SuperTabProjectStatus({required this.text, this.at, this.by});
+
+  static const maxText = 2000;
+
+  static SuperTabProjectStatus? read(Object? value) {
+    if (value is! Map) return null;
+    final text = value['text'];
+    if (text is! String || text.trim().isEmpty) return null;
+    final at = value['at'];
+    final by = value['by'];
+    return SuperTabProjectStatus(
+      text: text.length > maxText ? text.substring(0, maxText) : text,
+      at: at is String ? DateTime.tryParse(at) : null,
+      by: by is String ? by : null,
+    );
+  }
+
+  final String text;
+  final DateTime? at;
+  final String? by;
 }
 
 class SuperTabSnapshot {
@@ -484,10 +523,17 @@ class SuperTabSnapshot {
       localModels = SuperTabLocalModels.read(row['localModels']),
       threadSessions = row['threadSessions'] == true,
       sessionsFromChat = row['sessionsFromChat'] == true,
+      swarmBuddy = row['swarmBuddy'] == true,
       mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0,
       mentionsDigest = row['mentionsDigest'] as String?,
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
       decisionsDigest = row['decisionsDigest'] as String?,
+      activityDigest = row['activityDigest'] as String?,
+      chatSettings = Map.unmodifiable({
+        if (row['chatSettings'] case final Map settings)
+          for (final MapEntry(:key, :value) in settings.entries)
+            if (key is String && value is String) key: value,
+      }),
       teamAccounts = row['teamAccounts'] != false,
       readMarks = Map.unmodifiable({
         if (row['readMarks'] case final Map marks)
@@ -565,6 +611,10 @@ class SuperTabSnapshot {
   /// Buddy chat (read/contract.ts `sessionsFromChat`); false from an older one.
   final bool sessionsFromChat;
 
+  /// One Buddy per person for the whole Swarm (backend one-Buddy stack), as the desktop's model reads it; the phone
+  /// does not draw it yet.
+  final bool swarmBuddy;
+
   /// The reader's tags still waiting for them, Swarm-wide; 0 from a backend
   /// before tags (spec 2026-10-24-lead-mentions.md).
   final int mentionsWaiting;
@@ -580,6 +630,14 @@ class SuperTabSnapshot {
   /// Which decisions wait, as a digest that moves when they change though the
   /// count may not; null from a backend before it (superTabs/decisions.ts).
   final String? decisionsDigest;
+
+  /// Which of the reader's Activity rows are unread, as a digest (backend superTabs/activity.ts); null from a backend
+  /// before it. Read as the desktop's model reads it; the phone shows no Activity yet.
+  final String? activityDigest;
+
+  /// The reader's own notification setting by conversation, `all`, `mentions` or `muted` (backend chatSettings.ts).
+  /// Read as the desktop's model reads it; the phone does not apply it yet.
+  final Map<String, String> chatSettings;
 
   /// False only where the server does not try Harness Team accounts yet
   /// (backend read/contract.ts `teamAccounts`), as on the desktop.

@@ -74,6 +74,18 @@ void Function(String tabId, SuperTabMention mention)? superTabMentionNotice(
         mention: (tabId: tabId, mentionId: mention.id),
       );
 
+/// What tells the person about a new message in a chat they set to All new
+/// messages: the operating system, on Desktop only, as tags are. The chat's
+/// newest message is not read for it; the notice names the chat.
+void Function(String tabId, SuperTabConversation group, int sequence)?
+superTabChatNotice(SystemNotifications system, {bool web = kIsWeb}) => web
+    ? null
+    : (tabId, group, sequence) => system.postNotice(
+        id: 'harness-chat:$tabId:${group.id}:$sequence',
+        title: group.title,
+        body: 'New messages',
+      );
+
 /// The reader's tags in one Swarm: Waiting and Earlier, read from the backend
 /// when the count or the digest of which tags wait moves (or, from a backend
 /// without the digest, whenever the Swarm changes while a tag waits). One per

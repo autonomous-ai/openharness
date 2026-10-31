@@ -1102,6 +1102,9 @@ model SuperTabMessage {
   alsoInChat      Boolean?
   /// A reply in a Buddy thread session's thread (superTabs/buddySessions.ts): the main Buddy never reads it.
   buddySession    Boolean?
+  /// The project a row of a person's one Buddy chat belongs to (superTabs/buddySessions.ts lostProjectRow): a project
+  /// session's thread and a PM's private line. Hidden once its person no longer reads that project.
+  buddyProject    String?
   createdAt       DateTime @default(now())
 
   /// Pages read by (sequence, id): older rows of one command share a sequence.
@@ -1152,6 +1155,47 @@ model SuperTabReaction {
 /// How far one person has read one conversation (superTabs/readMarks.ts): the newest message sequence they have seen there.
 /// Kept out of the tab state so a read never wakes other readers, and read only by that person's own clients. The id is
 /// derived from all three, so one row per person and conversation; it only ever moves forward.
+/// A person's Activity row (superTabs/activity.ts): a reply to their message or a reaction to it, for them alone.
+model SuperTabActivity {
+  id             String    @id @map("_id")
+  tabId          String
+  /// Whom the row is for: the author of the message replied or reacted to.
+  personId       String
+  /// reply | reaction
+  kind           String
+  conversationId String
+  /// The reply, or the message reacted to.
+  messageId      String
+  /// The reply's thread root, or the reacted message's thread.
+  threadId       String?
+  /// person | agent
+  actorKind      String
+  actorId        String
+  emoji          String?
+  createdAt      DateTime
+  /// When the person saw it, on any device; unset while unread.
+  readAt         DateTime?
+
+  /// A person's rows, newest first: the list and the digest.
+  @@index([tabId, personId, createdAt])
+  /// The sweep's rows past their expiry (activity.ts sweepActivity); no TTL option, which the app user cannot set (#2238).
+  @@index([createdAt])
+}
+/// A person's notification setting for one chat (superTabs/chatSettings.ts): all | mentions | muted. Their own, never shown to others.
+model SuperTabChatSetting {
+  id             String   @id @map("_id")
+  tabId          String
+  personId       String
+  conversationId String
+  /// all | mentions | muted; mentions is the default, kept a week so other devices learn of the change.
+  notify         String
+  updatedAt      DateTime
+
+  /// A person's settings: every one (a first load) or those moved since a change read's cursor; the cap's count.
+  @@index([tabId, personId, updatedAt])
+  /// The sweep's default rows untouched for a week (chatSettings.ts sweepChatSettings).
+  @@index([updatedAt])
+}
 model SuperTabReadMark {
   id             String   @id @map("_id")
   tabId          String
@@ -1246,11 +1290,15 @@ model SuperTabDecision {
   /// "routing-reflection" for a proposal of the nightly routing reflection (costs/reflection.ts): never a Buddy's to read,
   /// and an approved one is kept past the ledger's weeks. Absent on every other decision.
   kind           String?
+  /// Closed unanswered because the work it was asked about is over: its task done or cancelled, or its group archived
+  /// (decisions.ts withdrawIn; Dee, 10-31). Set with answeredAt and no choice, so it waits no more, is in no list and goes
+  /// with the answered ones after the ledger's weeks. Absent on every other decision.
+  withdrawn      Boolean?
 
   @@index([tabId, personId, createdAt])
   @@index([tabId, askerAgentId, createdAt])
   @@index([tabId, projectId, createdAt])
-  /// Whether a decision waits in a conversation (decisions.ts waitingIn).
+  /// The decisions waiting in a conversation whose work ended (decisions.ts withdrawIn).
   @@index([tabId, conversationId])
 }
 
@@ -1273,6 +1321,16 @@ model SuperTabAttachment {
   createdAt      DateTime @default(now())
 
   @@index([tabId, actorKey, createdAt])
+  /// Unfinished uploads by age, for the pending-upload sweep (lib/pendingUploadSweep.ts).
+  @@index([purpose, createdAt])
+}
+
+/// One per sender per Swarm while it asks for upload links (superTabs/store.ts uploadLink): each link request writes it in the
+/// transaction that counts the sender's last hour and adds the pending upload, so two requests at once conflict and one retries,
+/// and the hourly limits hold. The pending-upload sweep (lib/pendingUploadSweep.ts) removes it an hour after its last use.
+model SuperTabUploadAllowance {
+  id String   @id @map("_id")
+  at DateTime
 }
 
 model SuperTabOperation {

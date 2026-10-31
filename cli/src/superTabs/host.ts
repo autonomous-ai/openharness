@@ -4,11 +4,12 @@ import { SwarmGrids } from './swarmGrids.js'
 import { retainContributions } from './retention.js'
 import { configurationObservation } from './configuration.js'
 import { NativeRecorder, nativeJournalFile } from './native.js'
-import { attachedFiles, attachmentsOf } from './attachments.js'
+import { attachedFiles, attachmentsOf, formatSize, type FilesInFlight } from './attachments.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
 import { readdir, readFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, normalize, relative, sep } from 'node:path'
+import { BUDDY_HOME_MANIFEST, BUDDY_HOMES, pruneBuddyHome, removeBuddyHome } from './buddyHome.js'
 import type { BackendNotice, CoreApi, TurnDelivery } from '../core/api.js'
 import { shellQuote } from '../orchestrator/prompts.js'
 import { agentCommandPrefix, fullCommandPrefix } from './shortCommand.js'
@@ -140,6 +141,8 @@ export interface SuperTabHostOptions {
   log?: (message: string) => void
   observers?: typeof publishObservers
   attachedFiles?: typeof attachedFiles
+  /** How long a pass waits on the downloads it starts (DOWNLOAD_WAIT_MS), for a spec. */
+  downloadWaitMs?: number
   prepareContribution?: typeof prepareContribution
   /** This Mac's Harness Team account preparing its workspace through the relay (contribution.ts), for a spec. */
   prepareTeam?: (core: CoreApi, input: { tabId: string; machineId: string }) => Promise<Record<string, unknown>>
@@ -262,6 +265,23 @@ const JOIN_FINAL = new Set(['MACHINES_FULL', 'OWNER_REQUIRED'])
 /** A delivery poll or claim the backend refused is asked again after 1 s, doubling to 30 s: every host retried each second, which
  *  added to an overloaded backend (production at 5 pods, 2026-10-27). */
 const DELIVERY_RETRY_MS = 1_000
+/** How long a pass waits on the downloads it starts, all of them together and once a pass (group 1604): a chat file may be 256
+ *  MB, minutes to download, and this one loop hands every agent on the host its deliveries. Most files are in by then and go
+ *  in the same pass; a larger one downloads on in the background while its delivery is withheld (FilesDownloading), and no
+ *  later pass waits on it at all: once in, it starts a pass of its own. */
+const DOWNLOAD_WAIT_MS = 2_000
+/** A delivery whose files are still downloading. Tried again like any withheld one (at most DELIVERY_RETRY_MAX_MS apart), and
+ *  each try claims it again with the same claim id: that writes the delivery, so the backend never takes the claim for one
+ *  nobody holds (backend deliverySettle.ts CLAIM_QUIET_MS, 10 minutes). Said once, not as a failure. */
+class FilesDownloading extends Error {}
+/** A delivery's files on their way. [stop] ends them when the delivery leaves (attachments.ts stops a file once no delivery
+ *  wants it, and removes its part); [result] is set once they are in; [said]: a pass stopped waiting on it. */
+interface Download {
+  pending: Promise<{ done: Awaited<ReturnType<typeof attachedFiles>> } | { error: unknown }>
+  stop: AbortController
+  result?: { done: Awaited<ReturnType<typeof attachedFiles>> } | { error: unknown }
+  said: boolean
+}
 const DELIVERY_RETRY_MAX_MS = 30_000
 /** Prod 10-30: a claim refused every 30 s said the backend's bare words 223 times in 2 hours. The same failure of a delivery is
  *  named at most this often. */
@@ -350,6 +370,14 @@ export class SuperTabHost {
   /** Each delivery's downloaded files, so input held by a busy terminal is not downloaded again on every retry. Only a
    * complete download is kept: a failed one is tried again before the next delivery of the same message. */
   private readonly files = new Map<string, { text: string; paths: string[] }>()
+  /** Each delivery's download still running or not yet taken by a pass, off the poll loop. It goes once a pass takes it, when
+   *  the delivery leaves the journal, and when the host stops. */
+  private readonly downloads = new Map<string, Download>()
+  /** The files those downloads are fetching, so two deliveries of one file download it once at a time (attachments.ts). */
+  private readonly inFlight: FilesInFlight = new Map()
+  private readonly downloadWaitMs: number
+  /** This pass's one wait on the downloads it starts (DOWNLOAD_WAIT_MS), shared by all of them; null until one starts. */
+  private passWait: Promise<null> | null = null
   /** Each delivery's quote of the message it replies to ('' when none is shown), read once like its files. A failed read is
    * not kept, so the next try reads again. */
   private readonly quotes = new Map<string, string>()
@@ -444,6 +472,7 @@ export class SuperTabHost {
     this.file = hostJournalFile(core.dataDir, machineId)
     this.observers = options.observers ?? publishObservers
     this.attachedFiles = options.attachedFiles ?? attachedFiles
+    this.downloadWaitMs = options.downloadWaitMs ?? DOWNLOAD_WAIT_MS
     this.prepareContribution = options.prepareContribution ?? prepareContribution
     this.machineDeps = options.machines ?? {}
     this.prepareTeam = options.prepareTeam ?? ((core, input) => prepareTeamContribution(core, input))
@@ -520,6 +549,8 @@ export class SuperTabHost {
     // A running Buddy loses its wide grant at once (final review of #2310): the account it held for is none until a start.
     try { writeBuddyAccount(null) } catch { /* the next start writes none again until it knows */ }
     this.stopped = true
+    for (const deliveryId of [...this.downloads.keys()]) this.dropDownload(deliveryId)
+    this.inFlight.clear()
     if (this.timer) clearInterval(this.timer)
     this.timer = null
     this.stopHearing()
@@ -834,6 +865,7 @@ export class SuperTabHost {
     return retry
   }
   private async poll(): Promise<void> {
+    this.passWait = null
     // Each second, unless the server pushes Swarm changes: then when told, and in full each minute (hostFeed.ts due).
     const data = (await this.sources.feed.due()).roster
     if (this.stopped) return
@@ -943,12 +975,19 @@ export class SuperTabHost {
         const read = { readAt: this.now(), ids: deliveries.map(item => object(item).id).filter(identifier), busy: true }
         this.lists.set(listKey, read)
         this.deliveryRetries.delete(listKey)
+        // One waiting for its files holds the agent's later deliveries: they reach it after it, in order.
+        let held = false
         for (const item of deliveries) {
           const delivery = object(item)
           if (!identifier(delivery.id)) continue
           seen.add(delivery.id)
+          if (held) continue
           const claimKey = `claim:${delivery.id}`
-          if (this.backedOff(claimKey)) continue
+          if (this.backedOff(claimKey)) {
+            const download = this.downloads.get(delivery.id)
+            if (download?.said && !download.result) held = true
+            continue
+          }
           // Checked before anything is typed: a new delivery, or one held while its agent may since have stopped leading. A
           // claimed one with no journal is never typed, only reported as uncertain; a delivered one only acknowledged.
           const entry = this.journal.entries[delivery.id]
@@ -959,6 +998,12 @@ export class SuperTabHost {
             this.deliveryRetries.delete(claimKey)
             if (failed && failed.failures > 0) this.log(`Delivery ${delivery.id} went through after ${failed.failures + 1} tries, ${Math.round((this.now() - failed.since) / 60_000)} min.`)
           } catch (error) {
+            // Its files still downloading: tried again, quietly, and the agent's later deliveries wait behind it, in order.
+            if (error instanceof FilesDownloading) {
+              this.retryLater(claimKey, listKey)
+              claimError = error
+              throw error
+            }
             // Answered (or resolved by a person) between the roster read and this call: nothing is owed, and the
             // agent's other deliveries go on.
             if (!(error instanceof SuperTabHostError) || error.code !== 'DELIVERY_RESOLVED') {
@@ -1014,6 +1059,7 @@ export class SuperTabHost {
       else if (key.startsWith('claim:') && listsRead.has(agentKey) && !listed.has(key.slice('claim:'.length))) this.deliveryRetries.delete(key)
     }
     for (const deliveryId of this.files.keys()) if (!this.journal.entries[deliveryId]) this.files.delete(deliveryId)
+    for (const deliveryId of [...this.downloads.keys()]) if (!this.journal.entries[deliveryId]) this.dropDownload(deliveryId)
     for (const deliveryId of this.quotes.keys()) if (!this.journal.entries[deliveryId]) this.quotes.delete(deliveryId)
     for (const entry of Object.values(this.journal.entries)) {
       const id = typedId(entry)
@@ -1069,7 +1115,10 @@ export class SuperTabHost {
     for (const item of data) {
       const row = object(item), agent = object(row.agent), session = object(agent.buddySession), buddyOf = object(agent.buddyOf)
       if (!identifier(row.tabId) || !identifier(agent.id) || !identifier(agent.harnessId) || agent.machineId !== this.machineId) continue
-      if (row.closeSession === true || row.stopRequested === true || !identifier(session.thread)) continue
+      // The one Buddy's session in an older project chat (a phone's, backend startOldChatBuddy) ends idle as a thread session
+      // does (security review 2 of #2435): each old chat would otherwise keep one running until # buddy is removed.
+      const oldChat = !identifier(session.thread) && agent.buddyNarrow === true && identifier(agent.projectId)
+      if (row.closeSession === true || row.stopRequested === true || (!identifier(session.thread) && !oldChat)) continue
       if (!identifier(buddyOf.personId) || !identifier(buddyOf.generation)) continue
       const key = `${row.tabId}:${agent.id}`, now = this.now()
       present.add(key)
@@ -1099,13 +1148,17 @@ export class SuperTabHost {
       }
       if (state.ending !== reason) { state.ending = reason; state.failures = 0; state.retryAt = 0 }
       if (state.running || now < state.retryAt) continue
-      const projectId = identifier(agent.projectId) ? agent.projectId : 'lead'
+      // A session of a person's one Buddy chat (Dee, 10-31): a plain one, or one in a project, is in that chat, whose id is
+      // the backend's stableId('buddy', 'swarm', person, generation); an older project chat's session is in that chat.
+      const swarm = agent.buddyScope === 'swarm' || identifier(session.projectId)
+      const projectId = swarm ? 'swarm' : identifier(agent.projectId) ? agent.projectId : 'lead'
       const conversationId = buddyChatIdOf(projectId, buddyOf.personId, buddyOf.generation)
       state.running = true
       const ending = reason, short = String(agent.harnessId).slice(0, 8)
       // One id per session and reason: a retry is the same request, and a changed reason never reuses an id for another.
+      // An older chat's Buddy is removed from that chat, as its person's Remove there does; its chat stays.
       void backend(this.core, 'POST', `/api/super-tabs/${row.tabId}/commands`, { operationId: `buddy-session-end-${agent.id}-${ending}`,
-        command: { type: 'buddy.sessionEnd', conversationId, thread: session.thread, reason: ending } })
+        command: oldChat ? { type: 'buddy.remove', projectId: agent.projectId } : { type: 'buddy.sessionEnd', conversationId, thread: session.thread, reason: ending } })
         .then(() => { state.ended = true; this.log(`Ended thread session ${short} in Swarm ${row.tabId}: ${ending}.`) })
         .catch(error => {
           state.retryAt = this.now() + Math.min(END_RETRY_MAX_MS, END_RETRY_MS * 2 ** state.failures++)
@@ -1200,6 +1253,12 @@ export class SuperTabHost {
       void this.contributed().removeStoppedWorktree(tabId, agent.harnessId)
         // A fixed code: the error's own text can carry the folder's path.
         .catch(() => this.log('Kept the worktree of an ended session: WORKTREE_REMOVAL_FAILED'))
+      // A person's one Buddy's folder is no worktree: its project worktrees and the folder go with it, only a folder this host
+      // made in the worktrees folder (start.ts, buddyHome.ts).
+      const home = state.scrub?.cwd
+      if (home && buddyWorktree(home, this.worktrees) && basename(dirname(home)) === BUDDY_HOMES && existsSync(join(home, BUDDY_HOME_MANIFEST))) {
+        void removeBuddyHome(home).catch(() => this.log('Kept the folder of an ended Buddy: BUDDY_FOLDER_REMOVAL_FAILED'))
+      }
     })().catch(error => {
       state.retryAt = this.now() + Math.min(END_RETRY_MAX_MS, END_RETRY_MS * 2 ** state.failures++)
       this.log(error instanceof Error ? error.message : String(error))
@@ -1480,6 +1539,7 @@ export class SuperTabHost {
     if (!entry) return
     const id = typedId(entry)
     delete this.journal.entries[deliveryId]
+    this.dropDownload(deliveryId)
     this.lateAcks.delete(deliveryId)
     this.withheld.clear(deliveryId)
     this.authorized.delete(id)
@@ -1558,7 +1618,7 @@ export class SuperTabHost {
     // Downloaded before the lease: a large file must not use up the 2.5 s the core gives a write.
     let files = this.files.get(deliveryId)
     if (files === undefined) {
-      const downloaded = await this.attachedFiles(message)
+      const downloaded = await this.downloaded(deliveryId, message, `list:${target.tabId}:${target.agent.id}`)
       files = { text: downloaded.text, paths: downloaded.paths }
       if (downloaded.complete) this.files.set(deliveryId, files)
     }
@@ -1579,7 +1639,7 @@ export class SuperTabHost {
     const signedIn = own?.onTheirMachine ? (await this.core.account.identity().catch(() => null))?.accountId : undefined
     // For this launch of the Buddy (its folder's launch id, lib/swarmSkills.ts): a relaunch makes a grant from before none.
     const launch = own?.onTheirMachine && buddySession?.cwd ? buddyLaunchOf(buddySession.cwd) : null
-    const wide = !!own?.onTheirMachine && !!signedIn && !!launch && signedIn === String(object(message.author).id)
+    const wide = !!own?.onTheirMachine && !own.narrow && !!signedIn && !!launch && signedIn === String(object(message.author).id)
     const sent = key && own ? { key, session: entry.harnessId, files: files.paths, links: own.onTheirMachine ? links : [] } : null
     const elsewhere = own && !own.onTheirMachine ? links : []
     // Judged by the Buddy's own guard, before the lease as the downloads are: only on its person's own machine. A guard that
@@ -1592,6 +1652,9 @@ export class SuperTabHost {
         : { wide: false, approve: [], refused: [], forgot: false }
       approving = { judged, approvals: buddyApprovalsOf(`${String(author.id)}:${String(author.membershipGeneration)}`) }
     }
+    // A person's one Buddy reads only the projects its person reads now: a project they lost leaves its folder before this
+    // turn (buddyHome.ts; spec 2026-10-31-one-buddy-per-swarm, Access). A read that fails withholds the delivery, tried again.
+    if (this.isBuddy(entry)) await this.pruneBuddyFolder(entry)
     this.prefix ??= this.agentCommand(this.core, this.machineId).catch(() => fullCommandPrefix(this.core.daemon, this.machineId))
     const command = await this.prefix
     let quote = this.quotes.get(deliveryId)
@@ -1627,6 +1690,61 @@ export class SuperTabHost {
     this.core.turns.deliver(entry.harnessId, this.prompt(entry, message, attached, command, quote ?? '', result.buddyNews === true), id)
   }
 
+  /** Takes out of a person's one Buddy's folder each project worktree whose project its person no longer reads, as the Swarm
+   *  says to the Buddy now. Nothing for any other Buddy: its folder is one project's worktree. */
+  private async pruneBuddyFolder(entry: Entry): Promise<void> {
+    const cwd = this.core.agents.byAgent(entry.harnessId)?.cwd
+    if (!cwd || !existsSync(join(cwd, BUDDY_HOME_MANIFEST))) return
+    const { state } = await this.sources.reads.read(entry.tabId, entry.agentId)
+    const agent = (Array.isArray(state.agents) ? state.agents.map(object) : []).find(a => a.id === entry.agentId)
+    if (agent?.buddyScope !== 'swarm') return
+    const readable = new Set((Array.isArray(state.projects) ? state.projects.map(object) : []).flatMap(p => identifier(p.id) ? [p.id] : []))
+    const gone = await pruneBuddyHome(cwd, readable)
+    if (gone.length) this.log(`Took ${gone.length} project folder(s) out of Buddy ${entry.harnessId.slice(0, 8)}'s folder: its person no longer reads them.`)
+  }
+
+  /** A delivery's files, downloaded off the poll loop. A pass waits only on the downloads it starts, all together for at most
+   *  downloadWaitMs (passWait); one still running is FilesDownloading, checked without a wait, and starts a pass of its own once
+   *  in. A download whose tries all failed answers its "Could not download" lines, delivered as before. */
+  private async downloaded(deliveryId: string, message: Json, listKey: string): Promise<Awaited<ReturnType<typeof attachedFiles>>> {
+    let download = this.downloads.get(deliveryId)
+    if (!download) {
+      const stop = new AbortController()
+      const pending = this.attachedFiles(message, { inFlight: this.inFlight, signal: stop.signal })
+        .then(done => ({ done }), (error: unknown) => ({ error }))
+      const started: Download = download = { pending, stop, said: false }
+      this.downloads.set(deliveryId, started)
+      void pending.then(result => {
+        started.result = result
+        if (!started.said || this.downloads.get(deliveryId) !== started || this.stopped) return
+        // Delivered at once, not after its back-off.
+        this.deliveryRetries.delete(`claim:${deliveryId}`)
+        this.pushes.add(listKey)
+        void this.tick()
+      })
+      // Never cleared: the pass's later downloads wait on the same timer.
+      this.passWait ??= new Promise<null>(resolve => { setTimeout(() => resolve(null), this.downloadWaitMs).unref?.() })
+      await Promise.race([pending, this.passWait])
+    }
+    if (!download.result) {
+      const bytes = attachmentsOf(message).reduce((sum, file) => sum + file.size, 0)
+      if (!download.said) this.log(`Delivery ${deliveryId}: its files (${formatSize(bytes)}) are downloading; it goes in once they are.`)
+      download.said = true
+      throw new FilesDownloading(`Its files are still downloading (${formatSize(bytes)}).`)
+    }
+    this.downloads.delete(deliveryId)
+    if ('error' in download.result) throw download.result.error
+    return download.result.done
+  }
+
+  /** A delivery's download it no longer waits for: stopped, unless another delivery shares its file (attachments.ts). */
+  private dropDownload(deliveryId: string): void {
+    const download = this.downloads.get(deliveryId)
+    if (!download) return
+    this.downloads.delete(deliveryId)
+    download.stop.abort()
+  }
+
   /** Whether a Buddy's delivery is its own person's message in their own Buddy chat, the one source of files and links its
    *  guard lets it read (lib/buddyGuard.ts). Which agent the session is comes from this host: the id the backend gave the
    *  agent this machine's session joined as. The Swarm as the Buddy reads it now decides the rest, never the delivery alone;
@@ -1637,7 +1755,7 @@ export class SuperTabHost {
    *  person's Buddy, and an earlier membership.
    *  `onTheirMachine`: the Buddy runs on its person's own machine, whose Claude sign-in the Artifact tool reads as; on
    *  anybody else's it would read their artifacts, so a link is listed only there. */
-  private async fromOwnPerson(entry: Entry, message: Json, buddyNews: boolean): Promise<{ onTheirMachine: boolean } | null> {
+  private async fromOwnPerson(entry: Entry, message: Json, buddyNews: boolean): Promise<{ onTheirMachine: boolean; narrow: boolean } | null> {
     const author = object(message.author)
     if (buddyNews || author.kind !== 'person' || !identifier(author.id)) return null
     // A Buddy moved to another of this machine's sessions keeps its first session's id: it lists nothing until started again.
@@ -1646,17 +1764,22 @@ export class SuperTabHost {
     const agent = (Array.isArray(state.agents) ? state.agents.map(object) : []).find(a => a.id === entry.agentId)
     const chat = (Array.isArray(state.conversations) ? state.conversations.map(object) : []).find(c => c.id === message.conversationId)
     const owner = object(agent?.buddyOf)
-    const own = !!agent && !!chat && owner.personId === author.id
+    // Its own chat: a project's Buddy chat of its own project, or its person's one Buddy chat (Dee, 10-31), where a Swarm-wide
+    // Buddy or a project session of it runs.
+    const ownChat = !!agent && !!chat && (chat.kind === 'buddy' ? chat.projectId === agent.projectId
+      : chat.kind === 'swarm-buddy' && chat.projectId === undefined && (agent.buddyScope === 'swarm' || identifier(object(agent.buddySession).projectId)))
+    const own = !!agent && !!chat && ownChat && owner.personId === author.id
       && typeof owner.generation === 'string' && owner.generation === author.membershipGeneration
-      && chat.kind === 'buddy' && chat.buddyOwnerId === author.id && chat.archived !== true
-      && Array.isArray(chat.agentIds) && chat.agentIds.includes(entry.agentId) && chat.projectId === agent.projectId
+      && chat.buddyOwnerId === author.id && chat.archived !== true
+      && Array.isArray(chat.agentIds) && chat.agentIds.includes(entry.agentId)
     // A thread session's person speaks to it only in its own thread: a message anywhere else grants it nothing, however it
     // came (security review 1 of #2345).
     // A session whose thread cannot be read fails closed: it is still a session, so nothing from anywhere grants it (re-check 2).
     const isSession = agent?.buddySession !== undefined && agent?.buddySession !== null
     const session = object(agent?.buddySession)
     const inThread = !isSession || (identifier(session.thread) && (message.id === session.thread || message.thread === session.thread))
-    return own && inThread ? { onTheirMachine: agent!.machineOwnerId === author.id } : null
+    // A Buddy of one project never reads beyond its folder: the person's home may hold another project's clone (Dee, 10-31).
+    return own && inThread ? { onTheirMachine: agent!.machineOwnerId === author.id, narrow: agent!.buddyNarrow === true } : null
   }
 
   /** The message a reply answers, quoted into the delivery: agents skipped the command that reads it, and a Lead took Ken's

@@ -94,12 +94,22 @@ export function mayDrive(state: SuperTabState, actor: Actor, target: Agent, else
 /** The group a terminal row belongs in: the agent's active work, else its newest open project group as a member (never the
  *  Swarm-wide Leads conversation), else its project's Lead chat. */
 export function currentGroup(state: SuperTabState, target: Agent): Conversation {
+  // A Buddy's rows are its person's alone, in its own chat: it has no PM, and a Swarm-wide one no project (Dee, 10-31).
+  const own = isBuddy(target) ? state.conversations.find(c => isBuddyChat(c) && c.agentIds.includes(target.id)) : undefined
+  if (own) return own
   return state.conversations.find(c => activeWork(c) && c.assignment!.agentId === target.id)
     ?? state.conversations.findLast(c => !c.archived && !isLeads(c) && !c.audience && c.agentIds.includes(target.id) && c.leadId !== target.id)
     ?? conversation(state, projectOf(state, agentProjectId(state, target)).leadConversationId)
 }
 
 const nameOf = (target: Agent) => target.displayName ?? target.name
+
+/** Where a thread session's rows go: its own thread, marked as its session's and with its project, so its main Buddy never
+ *  reads them and they hide once its person loses that project (buddySessions.ts; security review 2 of #2435). */
+const inSessionThread = (target: Agent): Partial<MessageDraft> => target.buddySession
+  ? { replyTo: target.buddySession.thread, thread: target.buddySession.thread, buddySession: true,
+    ...(target.buddySession.projectId ? { buddyProject: target.buddySession.projectId } : {}) }
+  : {}
 
 export function terminalRequest(state: SuperTabState, actor: Actor, sender: Author, id: string, now: number,
   command: { type: 'agent.screen' | 'agent.input'; agentId: string; scrollback?: number; text?: string; keys?: string[] }, elsewhere = false) {
@@ -116,7 +126,8 @@ export function terminalRequest(state: SuperTabState, actor: Actor, sender: Auth
   const shown = [text, ...command.keys ?? []].filter(Boolean).join(' + ')
   const who = sender.displayName ?? (sender.kind === 'person' ? sender.name.split('@')[0]! : sender.name)
   const message: MessageDraft = { id, conversationId: currentGroup(state, target).id, author: sender, replyTo: null, recipients: [],
-    text: `${who} typed ${shown} in ${nameOf(target)}'s terminal`, source: { kind: 'terminal-input', agentId: target.id, requestId: id } }
+    text: `${who} typed ${shown} in ${nameOf(target)}'s terminal`, source: { kind: 'terminal-input', agentId: target.id, requestId: id },
+    ...inSessionThread(target) }
   return { effect, message, removed: typed.removed }
 }
 
@@ -160,12 +171,14 @@ export function terminalAlert(state: SuperTabState, actor: Actor, sender: Author
   if (command.alert === 'model') text = `${nameOf(target)} can't get answers from its model: its requests keep failing.`
   // A Buddy's alert is its owner's alone, in their chat: the PM neither reads that chat nor runs the Buddy (buddies.ts).
   const chat = isBuddy(target) ? state.conversations.find(c => isBuddyChat(c) && c.agentIds.includes(target.id)) : undefined
-  if (chat) return [{ id, conversationId: chat.id, author: sender, replyTo: null, recipients: [], text, source }]
+  if (chat) return [{ id, conversationId: chat.id, author: sender, replyTo: null, recipients: [], text, source, ...inSessionThread(target) }]
   return toLead(state, target, { id, conversationId: group.id, author: sender, replyTo: null, recipients: [], text, source })
 }
 
 /** The project Lead of an agent, unless the agent is that Lead. */
 export function leadOf(state: SuperTabState, target: Agent): Agent | undefined {
+  // A Buddy answers to its person alone, never to a PM; a Swarm-wide one has no project (Dee, 10-31).
+  if (target.buddyOf) return undefined
   const lead = conversation(state, projectOf(state, agentProjectId(state, target)).leadConversationId).leadId
   return lead && lead !== target.id ? state.agents.find(a => a.id === lead) : undefined
 }

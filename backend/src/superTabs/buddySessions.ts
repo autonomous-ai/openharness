@@ -3,7 +3,8 @@
  *  question there never holds a quick one in the main chat. A session hears and answers only its thread, reads the main chat
  *  only up to where it started (a short excerpt), and ends when its person ends it, when it has been idle for 30 minutes
  *  (its host says so), or with its main Buddy. The main Buddy reads none of its thread. */
-import { isBuddy, isBuddyChat } from './buddies.js'
+import { isBuddy, isBuddyChat, isSwarmBuddyChat } from './buddies.js'
+import { canReadProject, projectsOf } from './projects.js'
 import { fail, stableId, type Agent, type AgentStart, type Author, type BuddySessionEntry, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 
 /** At most this many live or starting sessions per Buddy chat, the main Buddy not counted. */
@@ -19,7 +20,7 @@ export const CONTEXT_CHARS = 500
 export const CONTEXT_BYTES = 6 * 1024
 /** The quiet line a session's end leaves in its thread. */
 export const SESSION_ENDED_KIND = 'buddy-session-ended'
-export type SessionEndReason = 'ended' | 'idle' | 'stopped' | 'failed' | 'removed' | 'maintenance'
+export type SessionEndReason = 'ended' | 'idle' | 'stopped' | 'failed' | 'removed' | 'maintenance' | 'access'
 
 export const isThreadSession = (agent: Pick<Agent, 'buddySession'> | undefined): boolean => !!agent?.buddySession
 /** The chat's main Buddy: the Buddy in it that is not a thread session. */
@@ -73,6 +74,7 @@ export function endedText(reason: SessionEndReason, detail?: string): string {
     case 'failed': return `Session ended: it couldn't start${detail ? `: ${detail.slice(0, 300)}` : '.'}`
     case 'removed': return 'Session ended: its Buddy was removed or replaced.'
     case 'maintenance': return 'Session ended: Harness was updated. Start a new session to continue.'
+    case 'access': return 'Session ended: you no longer read its project.'
   }
 }
 
@@ -90,8 +92,16 @@ export function endSessionEntry(state: SuperTabState, chat: Conversation, entry:
   const author: Author | undefined = agent ? { kind: 'agent', id: agent.id, name: agent.name, displayName: agent.displayName ?? agent.name,
     membershipGeneration: agent.membershipGeneration } : person ? { kind: 'person', id: person.id, name: person.email, membershipGeneration: person.generation } : undefined
   if (!author) return []
+  const project = entryProject(state, entry)
   return [{ id: stableId(SESSION_ENDED_KIND, chat.id, entry.startId), conversationId: chat.id, author, text: endedText(reason, detail),
-    replyTo: entry.thread, recipients: [], thread: entry.thread, buddySession: true, source: { kind: SESSION_ENDED_KIND, reason, thread: entry.thread } }]
+    replyTo: entry.thread, recipients: [], thread: entry.thread, buddySession: true, ...(project ? { buddyProject: project } : {}),
+    source: { kind: SESSION_ENDED_KIND, reason, thread: entry.thread } }]
+}
+
+/** The project [entry]'s session works in: its agent's, or its start's while it starts; none for a plain session. */
+export function entryProject(state: SuperTabState, entry: Pick<BuddySessionEntry, 'agentId' | 'startId'>): string | undefined {
+  return (entry.agentId ? state.agents.find(a => a.id === entry.agentId)?.buddySession?.projectId : undefined)
+    ?? state.starts?.find(s => s.id === entry.startId)?.request.buddySession?.projectId
 }
 
 /** A thread session's start that failed outside a command (liveness.ts timeouts): ended through its own path, never as its
@@ -102,19 +112,56 @@ export function failedSessionStart(state: SuperTabState, start: AgentStart): Mes
   return chat && entry ? endSessionEntry(state, chat, entry, 'failed', start.error ?? undefined) : []
 }
 
-/** A message row as the session read check needs it. */
-export interface SessionRow { id: string; thread?: string | null; buddySession?: boolean | null }
+/** A message row as the session read check needs it: its author and source too, for a person's one Buddy chat. */
+export interface SessionRow { id: string; thread?: string | null; buddySession?: boolean | null; author?: unknown; source?: unknown; buddyProject?: string | null }
 
 /**
  * Whether a Buddy [reader] reads [row] of its own Buddy chat (spec: Security, "No session reads another's thread"). A thread
  * session reads its own thread alone (its root and replies); the main Buddy reads every row but a session thread's replies.
  * Anyone else, and any other conversation, reads as before. The one predicate every agent read of a Buddy chat applies.
+ *
+ * In a person's one Buddy chat (Dee, 10-31; spec: Guard and Access), with [state]: a project session reads in its thread only
+ * its person's own words, its own and the line that ends it, never a main-Buddy row it was started from; and nobody, the person
+ * included, reads a row of a project they no longer read (its PM's lines, its sessions' threads).
  */
-export function sessionReadsRow(reader: Pick<Agent, 'buddyOf' | 'buddySession'> | undefined, group: Pick<Conversation, 'kind'>): (row: SessionRow) => boolean {
-  if (!reader?.buddyOf || !isBuddyChat(group)) return () => true
+export function sessionReadsRow(reader: Pick<Agent, 'id' | 'buddyOf' | 'buddySession'> | undefined, group: Pick<Conversation, 'kind' | 'audience'>,
+  state?: SuperTabState): (row: SessionRow) => boolean {
+  const lost = state && isSwarmBuddyChat(group) ? lostProjectRow(state, group) : () => false
+  if (!reader?.buddyOf || !isBuddyChat(group)) return row => !lost(row)
   const own = reader.buddySession
-  if (own) return row => row.id === own.thread || row.thread === own.thread
-  return row => !row.buddySession
+  if (own?.projectId) {
+    const owner = chatOwner(group as Conversation)
+    return row => (row.id === own.thread || row.thread === own.thread) && !lost(row) && (ownWords(row, owner?.id, reader.id)
+      || (row.source as { kind?: unknown } | null | undefined)?.kind === SESSION_ENDED_KIND)
+  }
+  if (own) return row => (row.id === own.thread || row.thread === own.thread) && !lost(row)
+  return row => !row.buddySession && !lost(row)
+}
+
+/** Whether [row] was written by the chat's person [personId] or by the session [selfId] itself. */
+function ownWords(row: SessionRow, personId: string | undefined, selfId: string): boolean {
+  const author = row.author as { kind?: unknown; id?: unknown } | null | undefined
+  return !!author && ((author.kind === 'person' && author.id === personId) || (author.kind === 'agent' && author.id === selfId))
+}
+
+/** In a person's one Buddy chat, the rows of a project its person no longer reads, or that is gone: each row of a project
+ *  session's thread and each PM's private line carries its project (MessageDraft.buddyProject), and an older PM line its
+ *  source's. On the row itself, so hiding has no limit (security review 2 of #2435). */
+export function lostProjectRow(state: SuperTabState, group: Pick<Conversation, 'audience'>): (row: SessionRow) => boolean {
+  const owner = group.audience?.people[0]
+  const member = owner && state.people.find(p => p.id === owner.id && p.generation === owner.generation)
+  const reads = new Map<string, boolean>()
+  const readable = (projectId: string) => {
+    if (!reads.has(projectId)) {
+      const project = projectsOf(state).find(p => p.id === projectId)
+      reads.set(projectId, !!member && !!project && canReadProject(state, { kind: 'person', userId: member.id, email: member.email }, project))
+    }
+    return reads.get(projectId)!
+  }
+  return row => {
+    const marked = row.buddyProject ?? (row.source as { projectId?: unknown } | null | undefined)?.projectId
+    return typeof marked === 'string' && !readable(marked)
+  }
 }
 
 /** A main-chat row as the excerpt reads it. */

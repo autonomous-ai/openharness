@@ -1,14 +1,18 @@
 import type { Prisma } from '@prisma/client'
 import { fail, stableId, type Agent, type SuperTabState } from './model.js'
 import { agentProjectId, projectOf } from './projects.js'
+import { isSwarmBuddy } from './buddies.js'
 
 const scopeId = (state: SuperTabState, projectId: string) => stableId(state.id, projectId)
+/** The scope of a Swarm-wide Buddy's session: no project's id. */
+const SWARM_BUDDY_SCOPE = 'swarm-buddy'
 
 /** The record every Swarm registering one native session writes. */
 export const sessionRecordId = (state: SuperTabState, target: Agent) => stableId('swarm-session', state.environment, target.machineOwnerId, target.id)
 
 export async function bindSession(tx: Prisma.TransactionClient, state: SuperTabState, target: Agent, now = Date.now()) {
-  const project = projectOf(state, agentProjectId(state, target))
+  // A Swarm-wide Buddy is in no project (Dee, 10-31): its session is bound to the Swarm's Buddy scope, which no project shares.
+  const project = isSwarmBuddy(target) ? { id: SWARM_BUDDY_SCOPE, visibility: 'public' as const } : projectOf(state, agentProjectId(state, target))
   const scope = scopeId(state, project.id)
   const id = sessionRecordId(state, target)
   const prior = await tx.superTabSessionScope.findUnique({ where: { id } })

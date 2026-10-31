@@ -20,7 +20,7 @@ export interface SessionToEnd { tabId: string; conversationId: string; thread: s
 /** Every live or starting session in every Swarm, read from the Buddy chats' records alone. */
 export async function liveBuddySessions(db: PrismaClient): Promise<SessionToEnd[]> {
   const rows = await db.swarmGroup.aggregateRaw({ pipeline: [
-    { $match: { deleted: false, 'data.kind': 'buddy', 'data.buddySessions.0': { $exists: true } } },
+    { $match: { deleted: false, 'data.kind': { $in: ['buddy', 'swarm-buddy'] }, 'data.buddySessions.0': { $exists: true } } },
     { $project: { tabId: 1, key: 1, sessions: '$data.buddySessions', people: '$data.audience.people' } }] }) as unknown as
     Array<{ tabId: string; key: string; sessions: Array<{ thread: string }>; people?: Array<{ id: string }> }>
   return rows.flatMap(row => row.people?.[0] ? row.sessions.map(s => ({ tabId: row.tabId, conversationId: row.key, thread: s.thread, personId: row.people![0]!.id })) : [])

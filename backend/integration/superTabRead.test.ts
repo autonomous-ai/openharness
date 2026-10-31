@@ -812,13 +812,13 @@ describe('decisions asked of one person (v2)', () => {
     expect((await decisions(s.tabId, peer, 'answered')).map(d => d.id)).toEqual([mine])
   })
 
-  it('takes an answer in a conversation that went quiet and was archived, counts it on a fresh first load, and tells both agents', async () => {
+  it('takes an answer in a conversation that went quiet with its task still waiting, counts it on a fresh first load, and tells both agents', async () => {
     const s = await scene()
     clock = Date.now()
     const assignmentId = (await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.groups.find((g: { key: string }) => g.key === s.web).data.assignment.id
     await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', result: 'Ship to everyone?',
       ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'Turning it on' } }, owner, s.worker)
-    await writeGroup(s.tabId, s.web, Date.now(), group => { group.assignment = { ...group.assignment!, status: 'done' }; group.archived = true; group.dormant = true })
+    await writeGroup(s.tabId, s.web, Date.now(), group => { group.dormant = true })
     const first = (await get(`/api/super-tabs/${s.tabId}/parts`, peer)).body.data
     expect(first.groups.map((g: { key: string }) => g.key)).not.toContain(s.web)
     expect(first.derived.decisionsWaiting).toBe(1)
@@ -830,6 +830,90 @@ describe('decisions asked of one person (v2)', () => {
     expect((await get(`/api/super-tabs/${s.tabId}/parts`, peer)).body.data.derived.decisionsWaiting).toBe(0)
   })
 
+  // Dee, 10-31: "4 decisions wait for you", two asked in tasks already done and merged.
+  it('stops waiting once its task is cancelled: closed as withdrawn, listed nowhere, answered by nobody; the project chat\'s still waits', async () => {
+    const s = await scene()
+    clock = Date.now()
+    const ask = async (conversationId: string, text: string) => ((await post(s.tabId, { type: 'decision.ask', conversationId, personId: peer.sub,
+      questions: [question(text)] }, owner, s.lead)).body.data.result.decisionIds as string[])[0]!
+    const waiting = async () => (await get(`/api/super-tabs/${s.tabId}/parts`, peer)).body.data.derived.decisionsWaiting
+    const inWork = await ask(s.web, 'Ship how?')
+    const inChat = await ask('lead', 'Name it?')
+    expect(await waiting()).toBe(2)
+    const assignmentId = (await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.groups.find((g: { key: string }) => g.key === s.web).data.assignment.id
+    const cancelled = await post(s.tabId, { type: 'work.cancel', conversationId: s.web, assignmentId, reason: 'Not needed' })
+    expect(cancelled.status, JSON.stringify(cancelled.body)).toBe(200)
+    expect(await waiting()).toBe(1)
+    expect((await decisions(s.tabId, peer)).map(d => d.id)).toEqual([inChat])
+    expect(await decisions(s.tabId, peer, 'answered')).toEqual([])
+    expect(await decisions(s.tabId, peer, 'settled')).toEqual([])
+    expect((await decisions(s.tabId, owner, 'open', s.lead)).map(d => d.id)).toEqual([inChat])
+    expect(await decisions(s.tabId, owner, 'answered', s.lead)).toEqual([])
+    expect(await db.superTabDecision.findUnique({ where: { id: inWork } })).toMatchObject({ withdrawn: true, choice: null, answeredAt: expect.any(Date) })
+    expect(await db.superTabDecision.findUnique({ where: { id: inChat } })).toMatchObject({ answeredAt: null })
+    expect((await post(s.tabId, { type: 'decision.answer', decisionId: inWork, choice: 0 }, peer)).body.error?.code).toBe('DECISION_ANSWERED')
+    // The catch-up card of that conversation counts none.
+    expect((await get(`/api/super-tabs/${s.tabId}/conversations/${s.web}/catch-up?after=0`, peer)).body.data.decisions).toBe(0)
+  })
+
+  it('stops waiting once its group is archived by hand, and only there', async () => {
+    const s = await scene()
+    clock = Date.now()
+    const other = String((await post(s.tabId, { type: 'conversation.create', title: 'Search', brief: 'Find things.', checks: [] })).body.data.result.conversationId)
+    const ask = async (conversationId: string, text: string) => ((await post(s.tabId, { type: 'decision.ask', conversationId, personId: peer.sub,
+      questions: [question(text)] }, owner, s.lead)).body.data.result.decisionIds as string[])[0]!
+    const archivedOne = await ask(other, 'Index what?')
+    const kept = await ask(s.web, 'Ship how?')
+    const archived = await post(s.tabId, { type: 'conversation.archive', conversationId: other, archived: true })
+    expect(archived.status, JSON.stringify(archived.body)).toBe(200)
+    expect((await decisions(s.tabId, peer)).map(d => d.id)).toEqual([kept])
+    expect(await db.superTabDecision.findUnique({ where: { id: archivedOne } })).toMatchObject({ withdrawn: true })
+    // Taken out of the archive, it stays closed.
+    await post(s.tabId, { type: 'conversation.archive', conversationId: other, archived: false })
+    expect((await decisions(s.tabId, peer)).map(d => d.id)).toEqual([kept])
+  })
+
+  it('keeps a withdrawn decision closed when its task is reopened, and asks the same question again as a new one', async () => {
+    const s = await scene()
+    clock = Date.now()
+    const ask = async () => ((await post(s.tabId, { type: 'decision.ask', conversationId: s.web, personId: peer.sub,
+      questions: [question('Ship how?')] }, owner, s.lead)).body.data.result.decisionIds as string[])[0]!
+    const first = await ask()
+    const assignmentId = (await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.groups.find((g: { key: string }) => g.key === s.web).data.assignment.id
+    expect((await post(s.tabId, { type: 'work.cancel', conversationId: s.web, assignmentId, reason: 'Not needed' })).status).toBe(200)
+    const reopened = await post(s.tabId, { type: 'work.assign', conversationId: s.web, agentId: s.worker })
+    expect(reopened.status, JSON.stringify(reopened.body)).toBe(200)
+    // Open work again, but the old decision does not come back.
+    expect(await decisions(s.tabId, peer)).toEqual([])
+    expect((await get(`/api/super-tabs/${s.tabId}/parts`, peer)).body.data.derived.decisionsWaiting).toBe(0)
+    const again = await ask()
+    expect(again).not.toBe(first)
+    expect((await decisions(s.tabId, peer)).map(d => d.id)).toEqual([again])
+    expect(await db.superTabDecision.findUnique({ where: { id: first } })).toMatchObject({ withdrawn: true, choice: null })
+    expect((await post(s.tabId, { type: 'decision.answer', decisionId: again, choice: 1 }, peer)).status).toBe(200)
+  })
+
+  it('stops counting one in work that ended before decisions closed (no command closed it): not counted, listed, in catch-up or answerable', async () => {
+    const s = await scene()
+    clock = Date.now()
+    const ask = async (conversationId: string, text: string) => ((await post(s.tabId, { type: 'decision.ask', conversationId, personId: peer.sub,
+      questions: [question(text)] }, owner, s.lead)).body.data.result.decisionIds as string[])[0]!
+    const stale = await ask(s.web, 'Ship how?')
+    const inChat = await ask('lead', 'Name it?')
+    // As stored by an older server: done, archived and quiet, its decision still open.
+    await writeGroup(s.tabId, s.web, Date.now(), group => { group.assignment = { ...group.assignment!, status: 'done' }; group.archived = true; group.dormant = true })
+    // A project chat holding a finished assignment is no work group: its decisions still wait.
+    await writeGroup(s.tabId, 'lead', Date.now(), group => { group.assignment = { ...(group.assignment ?? { id: 'x', agentId: s.lead, configuration: {} as never,
+      execution: { machineId: 'host', harnessId: 'h', machineOwnerId: owner.sub }, result: null }), status: 'cancelled' } })
+    const first = (await get(`/api/super-tabs/${s.tabId}/parts`, peer)).body.data
+    expect(first.groups.map((g: { key: string }) => g.key)).not.toContain(s.web)
+    expect(first.derived.decisionsWaiting).toBe(1)
+    expect((await decisions(s.tabId, peer)).map(d => d.id)).toEqual([inChat])
+    expect((await get(`/api/super-tabs/${s.tabId}/conversations/${s.web}/catch-up?after=0`, peer)).body.data.decisions).toBe(0)
+    expect((await post(s.tabId, { type: 'decision.answer', decisionId: stale, choice: 0 }, peer)).body.error?.code).toBe('DECISION_ANSWERED')
+    expect(await db.superTabDecision.findUnique({ where: { id: stale } })).toMatchObject({ answeredAt: null })
+  })
+
   it('reads only the conversations its decisions are in: a quiet one the reader still reads, not one they left, and no other quiet history', async () => {
     const s = await scene()
     clock = Date.now()
@@ -837,8 +921,8 @@ describe('decisions asked of one person (v2)', () => {
       questions: [question(text)] }, owner, s.lead)).body.data.result.decisionIds as string[]
     const [kept] = await ask(s.web, 'Ship how?')
     await askedBefore(s.tabId, s.privateId, s.lead, ['Keep it?'])
-    // Both go quiet; the peer then leaves the private one.
-    await writeGroup(s.tabId, s.web, Date.now(), group => { group.archived = true; group.dormant = true })
+    // Both go quiet, the work still open; the peer then leaves the private one.
+    await writeGroup(s.tabId, s.web, Date.now(), group => { group.dormant = true })
     await writeGroup(s.tabId, s.privateId, Date.now(), group => { group.dormant = true; group.audience = { people: [] } })
     const read: string[] = []
     const counted = new SuperTabStore(db.$extends({ query: { swarmGroup: { async findMany({ args, query }) {
@@ -908,9 +992,9 @@ describe('decisions asked of one person (v2)', () => {
   it('counts every open decision the reader can open, past 200, reading only which ones and where', async () => {
     const s = await scene()
     clock = Date.now()
-    // 150 in finished work gone quiet, which the peer still reads; then 100 newer in a conversation they have left, quiet too:
+    // 150 in open work gone quiet, which the peer still reads; then 100 newer in a conversation they have left, quiet too:
     // both are read for their access fields alone, and the left one is filtered on those.
-    await writeGroup(s.tabId, s.web, Date.now(), group => { group.archived = true; group.dormant = true })
+    await writeGroup(s.tabId, s.web, Date.now(), group => { group.dormant = true })
     await writeGroup(s.tabId, s.privateId, Date.now(), group => { group.audience = { people: [] }; group.dormant = true })
     const asked = (conversationId: string, n: number, from: number) => Array.from({ length: n }, (_, i) => ({ id: `${conversationId}-${i}`,
       tabId: s.tabId, batchId: `${conversationId}-batch`, projectId: 'lead', conversationId, assignmentId: null, personId: peer.sub,
@@ -938,8 +1022,10 @@ describe('decisions asked of one person (v2)', () => {
     expect(reads[0]).not.toHaveProperty('take')
     expect(whole).toEqual([])
     expect(quiet.map(row => row.key).sort()).toEqual([s.web, s.privateId].sort())
-    for (const row of quiet) expect(['id', 'kind', 'projectId', 'audience']).toEqual(expect.arrayContaining(Object.keys(row.data)))
-    expect(quiet.find(row => row.key === s.privateId)!.data).toEqual({ id: s.privateId, projectId: 'lead', audience: { people: [] } })
+    // And whether its work is over (decisions.ts workOver): its archived mark and its task's status alone.
+    for (const row of quiet) expect(['id', 'kind', 'projectId', 'audience', 'archived', 'assignment']).toEqual(expect.arrayContaining(Object.keys(row.data)))
+    expect(quiet.find(row => row.key === s.web)!.data.assignment).toEqual({ status: 'working' })
+    expect(quiet.find(row => row.key === s.privateId)!.data).toEqual({ id: s.privateId, projectId: 'lead', audience: { people: [] }, archived: false })
   })
 
   it('keeps one answer when two arrive at once, returns the same receipt for a retried answer, and refuses a person removed from the Swarm', async () => {
@@ -1059,7 +1145,12 @@ describe('decisions asked of one person (v2)', () => {
   it('counts an open decision in a quiet conversation on a change read, which loads only some conversations', async () => {
     const s = await scene()
     clock = Date.now()
-    expect((await post(s.tabId, { type: 'decision.ask', conversationId: s.done, personId: peer.sub, questions: [question('Reopen it?')] }, owner, s.lead)).status).toBe(200)
+    expect((await post(s.tabId, { type: 'decision.ask', conversationId: s.web, personId: peer.sub, questions: [question('Ship how?')] }, owner, s.lead)).status).toBe(200)
+    await writeGroup(s.tabId, s.web, Date.now(), group => { group.dormant = true })
+    // Finished work takes no new decision: it would wait for nobody (Dee, 10-31).
+    const late = await post(s.tabId, { type: 'decision.ask', conversationId: s.done, personId: peer.sub, questions: [question('Reopen it?')] }, owner, s.lead)
+    expect(late.status).toBe(400)
+    expect(late.body.error?.code).toBe('WORK_FINISHED')
     const first = (await get(`/api/super-tabs/${s.tabId}/parts`, peer)).body.data
     clock = Date.now()
     expect((await get(`/api/super-tabs/${s.tabId}/changes?cursor=${first.cursor}`, peer)).body.data.derived.decisionsWaiting).toBe(1)

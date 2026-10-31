@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:harness_mobile/swarm/swarm_home_cache.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
+import 'package:harness_mobile/swarm/swarm_outgoing_files.dart';
 
 /// Swarm answers as the backend sends them (docs/design/2026-10-26-swarm-state-parts.md, section 4), built by hand so a
 /// test reads like the wire. Nothing here reaches a machine or the backend.
@@ -277,14 +278,15 @@ class FakeUpload {
   FakeUpload(
     this.name,
     this.mime,
-    this.bytes,
+    this.file,
     this.conversationId,
     this.tabId,
     this.cancel,
     this.onProgress,
   );
   final String name, mime, conversationId, tabId;
-  final Uint8List bytes;
+  final SwarmOutgoingFile file;
+  Uint8List? get bytes => file.bytes;
   final CancelToken cancel;
   final void Function(double sent) onProgress;
   final answer = Completer<Map<String, dynamic>>();
@@ -308,14 +310,14 @@ class FakeUploads {
         required conversationId,
         required name,
         required mime,
-        required bytes,
+        required file,
         required cancel,
         required onProgress,
       }) {
         final u = FakeUpload(
           name,
           mime,
-          bytes,
+          file,
           conversationId,
           tabId,
           cancel,
