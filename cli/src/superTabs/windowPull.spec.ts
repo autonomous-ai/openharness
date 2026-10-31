@@ -139,6 +139,20 @@ describe('the window pull\'s reason', () => {
     expect(reason).toContain('resets in 40m')
     expect(reason).not.toMatch(/acct|7f3a9c|Ken|MacBook/)
   })
+  it('built from another group\'s pick, names nothing of it: only numbers and the kind of candidate', async () => {
+    // Another group's pick, not started yet, on the same account, carrying all a history row can: its group, title, person, path.
+    const theirs = { id: 'd-secret', conversationId: 'payroll-group', title: 'Rotate the payroll keys for Dee', account: 'acct-dee@example.com',
+      spend: { weekly: 20 }, size: 'large', outcome: null, final: null, createdAt: new Date(NOW - M).toISOString(),
+      via: 'order', assignmentId: 'as-9', cwd: '/Users/dee/payroll', person: 'Dee' }
+    const made = await makePlugins([windowPullMaker(() => NOW)], { conversationId: 'g2', assessment: a(), read: {}, catalog: policy,
+      history: Promise.resolve({ ok: true, value: { decisions: [theirs] } }), request: async () => ({ ok: true }) })
+    const soon = codex('zulu', windows([80, 3 * H], [60, 12 * H], 'acct-dee@example.com'))
+    const choice = route([codex('alpha', FRESH), soon], made.plugins)
+    const reason = noteOf(choice.shown.find(s => s.machineId === 'zulu')!)!
+    // Their pick is counted: about 57% less its 20% (a minute of a 3-hour task over) is about 37%.
+    expect(reason).toBe('Window pull: its account\'s weekly window resets in 12h, and at this week\'s pace about 37% of it would go unused; this task spends it first')
+    for (const leak of ['payroll', 'Payroll', 'Dee', 'dee', 'acct', 'example.com', 'd-secret', 'as-9', '/Users', 'Rotate']) expect(reason).not.toContain(leak)
+  })
 })
 
 describe('picks not started yet, from the route history', () => {
