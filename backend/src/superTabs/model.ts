@@ -305,8 +305,9 @@ export interface Conversation {
   ledger?: import('./leaderboard/record.js').GroupLedger
   /** Whether its task is moving, waiting on purpose or stuck, as the time checks last found it (liveness.ts recordTaskStates). */
   liveness?: TaskLiveness
-  /** Its last step up from a cheaper model, on a task from before project instructions; never written since (phase 4: a
-   *  failed first review or start is a notice to the coordinator). The leaderboard still reads it on such a task. */
+  /** Its last step up from a cheaper model: written when a grid attempt's first review fails (commands.ts reviewFailed, goals
+   *  piece 4; before project instructions also by the server's step up). Nothing is cancelled: the route reads it to leave the
+   *  grid out of the next attempt, route records carry it for the costs report, and the leaderboard reads it. */
   stepUp?: StepUp
   /** The last route, start or assignment on its task by an agent of its project, or its coordinator's post there (commands.ts). */
   leadAction?: { kind: 'assign' | 'route' | 'start' | 'post'; at: number }
