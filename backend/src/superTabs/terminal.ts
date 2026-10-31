@@ -94,6 +94,9 @@ export function mayDrive(state: SuperTabState, actor: Actor, target: Agent, else
 /** The group a terminal row belongs in: the agent's active work, else its newest open project group as a member (never the
  *  Swarm-wide Leads conversation), else its project's Lead chat. */
 export function currentGroup(state: SuperTabState, target: Agent): Conversation {
+  // A Buddy's rows are its person's alone, in its own chat: it has no PM, and a Swarm-wide one no project (Dee, 10-31).
+  const own = isBuddy(target) ? state.conversations.find(c => isBuddyChat(c) && c.agentIds.includes(target.id)) : undefined
+  if (own) return own
   return state.conversations.find(c => activeWork(c) && c.assignment!.agentId === target.id)
     ?? state.conversations.findLast(c => !c.archived && !isLeads(c) && !c.audience && c.agentIds.includes(target.id) && c.leadId !== target.id)
     ?? conversation(state, projectOf(state, agentProjectId(state, target)).leadConversationId)
@@ -166,6 +169,8 @@ export function terminalAlert(state: SuperTabState, actor: Actor, sender: Author
 
 /** The project Lead of an agent, unless the agent is that Lead. */
 export function leadOf(state: SuperTabState, target: Agent): Agent | undefined {
+  // A Buddy answers to its person alone, never to a PM; a Swarm-wide one has no project (Dee, 10-31).
+  if (target.buddyOf) return undefined
   const lead = conversation(state, projectOf(state, agentProjectId(state, target)).leadConversationId).leadId
   return lead && lead !== target.id ? state.agents.find(a => a.id === lead) : undefined
 }

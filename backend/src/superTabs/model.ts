@@ -95,6 +95,13 @@ export interface Agent {
   /** A Buddy (buddies.ts): the person it brainstorms with, at the membership they added it in. Its role stays a builder's
    *  for older readers; this is what makes it a Buddy, and what refuses it every command but its own chat and proposals. */
   buddyOf?: { personId: string; generation: string }
+  /** A Buddy that reads every project its person reads (buddies.ts; Dee, 10-31): the main Buddy of a Swarm Buddy chat, or a
+   *  plain session there. It has no project and writes nowhere but its own chat. A project session has its project instead. */
+  buddyScope?: 'swarm'
+  /** A Buddy that reads one project and writes into it (Dee, 10-31): a project session, or the one Buddy's session in an older
+   *  project chat. Its host never widens its reads beyond its folder (cli buddyGuard wide mode), which could hold another
+   *  project's clone. */
+  buddyNarrow?: true
   /** A Buddy's thread session (buddySessions.ts): it hears and answers only the thread rooted at `thread`, and reads the main
    *  chat only up to `from`, the sequence before the message that started it. The main Buddy has none. */
   buddySession?: BuddySession
@@ -102,8 +109,9 @@ export interface Agent {
    *  ordinary machine (projects.ts teamSessionAccess, security re-review of #2089). */
   teamAccount?: true
 }
-/** A thread session's thread root and the main chat's last sequence it may read (buddySessions.ts). */
-export interface BuddySession { thread: string; from: number }
+/** A thread session's thread root and the main chat's last sequence it may read (buddySessions.ts). A project session also
+ *  names its project (buddies.ts; Dee, 10-31): it reads that project alone, and is the only Buddy that writes into it. */
+export interface BuddySession { thread: string; from: number; projectId?: string }
 /** A Buddy chat's live or starting thread session, at most MAX_BUDDY_SESSIONS (buddySessions.ts). `agentId` once it runs;
  *  `waiting`, the person's messages sent while it started, delivered to it when it joins. */
 export interface BuddySessionEntry { thread: string; startId: string; agentId?: string; at: number; waiting?: string[] }
@@ -134,6 +142,15 @@ export interface AgentStartRequest {
   requirements: { memoryBytes: number; diskBytes: number; maxCpuPercent: number; tools: string[]; devices: string[]; quotaRequired: boolean }
   /** A Buddy's start (buddies.ts): written by buddy.create alone, never taken from an agent.start. */
   buddyOf?: { personId: string; generation: string }
+  /** A Swarm-wide Buddy's start (Agent.buddyScope), written by buddy.create or message.send alone. */
+  buddyScope?: 'swarm'
+  /** A one-project Buddy's start (Agent.buddyNarrow), written by message.send alone. */
+  buddyNarrow?: true
+  /** The person's messages in an older project chat its start waits on, delivered when it joins (ids only). */
+  buddyWaiting?: string[]
+  /** The projects a Swarm-wide Buddy's folder holds, one read-only worktree each, made from that project's own checkout on its
+   *  machine (spec: Folder). Ids, names and folders only. */
+  buddyProjects?: Array<{ id: string; name: string; cwd: string }>
   /** A Buddy thread session's start (buddySessions.ts): written by message.send with newSession alone. Ids only, never text:
    *  starts are listed to the Lead. */
   buddySession?: BuddySession
@@ -256,8 +273,10 @@ export function renderWorkTask(task: WorkTask): string {
 
 export interface Conversation {
   id: string
-  /** The Swarm-wide Leads conversation (syncLeads), or a person's Buddy chat (buddies.ts); absent on every other conversation. */
-  kind?: 'leads' | 'buddy'
+  /** The Swarm-wide Leads conversation (syncLeads), a person's Buddy chat in a project (buddies.ts), or their one Buddy chat for
+   *  the whole Swarm, with no project (`swarm-buddy`, buddies.ts openSwarmBuddyChat; Dee, 10-31): a kind of its own, so an older
+   *  release parks it unread (parkLaterConversations) instead of reading it as a project's. Absent on every other conversation. */
+  kind?: 'leads' | 'buddy' | 'swarm-buddy'
   projectId?: string
   /** Stable, tab-local workgroup reference. Lead has no number. */
   number?: number
@@ -303,6 +322,9 @@ export interface Conversation {
   buddyName?: string
   /** A Buddy chat's live and starting thread sessions (buddySessions.ts); absent while it has none. */
   buddySessions?: BuddySessionEntry[]
+  /** A Swarm Buddy chat's project threads, newest last, kept after their sessions end: a thread whose project its person no
+   *  longer reads is hidden from them and their Buddy (buddies.ts hiddenProjectRow). At most MAX_PROJECT_THREADS. */
+  projectThreads?: Array<{ thread: string; projectId: string }>
   /** The person who asked for this work: whoever opened it, or the person its Lead named (leaderboard/record.ts). */
   requesterId?: string
   /** What the leaderboard counts here (leaderboard/record.ts); bookkeeping readers never get whole. */
@@ -610,7 +632,7 @@ export function conversation(state: SuperTabState, id: string): Conversation {
 
 export const isLeads = (group: Conversation): boolean => group.kind === 'leads'
 
-const KNOWN_KINDS: Record<NonNullable<Conversation['kind']>, true> = { leads: true, buddy: true }
+const KNOWN_KINDS: Record<NonNullable<Conversation['kind']>, true> = { leads: true, buddy: true, 'swarm-buddy': true }
 /** Conversation kinds this release knows; one of another kind is kept aside unchanged (parkLaterConversations, parts/shape.ts). */
 export const knownKind = (group: Pick<Conversation, 'kind'>): boolean => group.kind == null || Object.hasOwn(KNOWN_KINDS, group.kind)
 /** During a rolling deploy the previous release reads what the next one wrote. A conversation kind it does not know

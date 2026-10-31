@@ -2,7 +2,7 @@
  *  proposal, tag them, or say work they requested shipped, and a notice when work they requested is assigned. Only while
  *  the Buddy reads that conversation as its person would (projects.ts canReadGroup), checked again when its machine picks
  *  the delivery up (store.ts deliveryAllowed). Nothing else of the project chat, and nothing private, reaches a Buddy. */
-import { isBuddy, routingRow } from './buddies.js'
+import { isBuddy, isBuddyChat, isSwarmBuddy, routingRow } from './buddies.js'
 import { agentOnly, isLeads, stableId, AGENT_ONLY, type Agent, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { agentProjectId, canReadGroup, groupProject } from './projects.js'
 import { SHIP_KIND } from './ship.js'
@@ -14,8 +14,10 @@ const PROPOSAL_KIND = 'buddy-proposal'
  *  nothing once its person left, rejoined or stopped reading the project. */
 function listeningBuddy(state: SuperTabState, personId: string, group: Conversation): Agent | undefined {
   const project = groupProject(state, group)
-  // The main Buddy alone: a thread session hears only its own thread (buddySessions.ts).
-  const buddy = state.agents.find(a => isBuddy(a) && !a.buddySession && a.buddyOf!.personId === personId && agentProjectId(state, a) === project.id)
+  // The main Buddy alone: a thread session hears only its own thread (buddySessions.ts). Their one Buddy for the Swarm first
+  // (Dee, 10-31), else their older Buddy of that project.
+  const mains = state.agents.filter(a => isBuddy(a) && !a.buddySession && a.buddyOf!.personId === personId)
+  const buddy = mains.find(a => isSwarmBuddy(a)) ?? mains.find(a => agentProjectId(state, a) === project.id)
   return buddy && canReadGroup(state, { kind: 'agent', agentId: buddy.id, machineOwnerId: buddy.machineOwnerId }, group) ? buddy : undefined
 }
 
@@ -33,7 +35,7 @@ function newsFor(message: MessageDraft, threadSource: Record<string, unknown> | 
  *  never a routing row, as a Buddy reads none (buddies.ts). */
 export function buddiesTold(state: SuperTabState, message: MessageDraft, threadSource: Record<string, unknown> | null): string[] {
   const group = state.conversations.find(c => c.id === message.conversationId)
-  if (!group || isLeads(group) || agentOnly(message.source, message.recipients) || routingRow(message.source) || groupProject(state, group).leadConversationId !== group.id) return []
+  if (!group || isLeads(group) || isBuddyChat(group) || agentOnly(message.source, message.recipients) || routingRow(message.source) || groupProject(state, group).leadConversationId !== group.id) return []
   return newsFor(message, threadSource).flatMap(id => listeningBuddy(state, id, group)?.id ?? [])
 }
 

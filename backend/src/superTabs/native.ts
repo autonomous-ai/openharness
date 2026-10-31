@@ -5,7 +5,7 @@ import type { AuthUser } from '../lib/ssoAuth.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
 import { activeWork, agent, appendPullRequestUrls, author, conversation, fail, isLeads, stableId, SuperTabError,
   type Actor, type Agent, type Author, type Conversation, type SuperTabState } from './model.js'
-import { accessInputs, canReadGroup, groupProject, readConversation, watchersLost } from './projects.js'
+import { accessInputs, canReadGroup, readConversation, watchersLost } from './projects.js'
 import { mayDrive } from './terminal.js'
 import { noteProjectReports } from './projectUpdates.js'
 import { cloneData } from './cloneData.js'
@@ -120,7 +120,8 @@ export class SuperTabNativeStore {
       const operator = author(state, { kind: 'person', userId: user.sub, email: user.email }, true)
       const target = agent(state, request.agentId)
       const group = readConversation(state, { kind: 'person', userId: user.sub, email: user.email }, request.conversationId)
-      groupProject(state, group) // A terminal opens only in a project's conversation, never in the Leads conversation.
+      // A terminal opens only in a project's conversation or a person's own Buddy chat, never in the Leads conversation.
+      if (isLeads(group)) fail('LEADS_CONVERSATION', 'The Leads conversation is only for messages between Leads and people.')
       if (group.archived || !group.agentIds.includes(target.id)) fail('AGENT_UNAVAILABLE', 'Choose an agent in this conversation.')
       await this.deps.agentGrant(tx, state, target)
       const grant = await this.deps.contribution(tx, state, { kind: 'person', userId: user.sub, email: user.email }, target)

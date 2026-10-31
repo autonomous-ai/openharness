@@ -6,7 +6,20 @@ import { agentDisplayName, isRoleName } from './agentNames.js'
 import { fail, nextConversationNumber, person, stableId, type Actor, type Agent, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
 
 export const isBuddy = (target: Pick<Agent, 'buddyOf'>): boolean => !!target.buddyOf
-export const isBuddyChat = (group: Pick<Conversation, 'kind'>): boolean => group.kind === 'buddy'
+/** A person's Buddy chat: in a project, or their one chat for the whole Swarm. */
+export const isBuddyChat = (group: Pick<Conversation, 'kind'>): boolean => group.kind === 'buddy' || group.kind === 'swarm-buddy'
+/** A person's one Buddy chat for the whole Swarm (Dee, 10-31): outside every project, as the Leads conversation is. */
+export const isSwarmBuddyChat = (group: Pick<Conversation, 'kind'>): boolean => group.kind === 'swarm-buddy'
+/** A Buddy that reads every project its person reads and writes nowhere but its own chat: a Swarm chat's main Buddy or plain
+ *  session. A project session, and every Buddy of a project's chat, reads its one project instead. */
+export const isSwarmBuddy = (target: Pick<Agent, 'buddyOf' | 'buddyScope'> | undefined): boolean => !!target?.buddyOf && target.buddyScope === 'swarm'
+/** The project a project session works in (spec: The model); undefined for a Swarm-wide Buddy and for a Buddy of a project's
+ *  chat, whose project is its chat's. */
+export const sessionProjectId = (target: Pick<Agent, 'buddySession'> | undefined): string | undefined => target?.buddySession?.projectId
+/** A project PM's private line to one person in their one Buddy chat (commands.ts person.tell): its source names the project. */
+export const PM_LINE_KIND = 'pm-line'
+/** At most this many project threads a Swarm Buddy chat remembers (Conversation.projectThreads). */
+export const MAX_PROJECT_THREADS = 500
 
 /** Whether a Buddy reads [group] of its own project, as its person would (Ken, 10-29): the project chat, its own chat, and
  *  the project's workgroups. Never a private conversation, its own person's with others included, nor another Buddy chat.
@@ -52,6 +65,32 @@ export function openBuddyChat(state: SuperTabState, projectId: string, owner: Pe
   }
   chat.archived = false
   return chat
+}
+
+/** A person's one Buddy chat in the Swarm, the same each time they open it; a new membership opens a new one. */
+export const swarmBuddyChatId = (owner: Pick<Person, 'id' | 'generation'>): string => stableId('buddy', 'swarm', owner.id, owner.generation)
+
+/** [owner]'s one Buddy chat in the Swarm (Dee, 10-31), opened if they have none yet and again if archived: at Swarm level, with
+ *  no project, read only by them and their Buddy (projects.ts readsRecordsIn). A quiet one is loaded by its id first
+ *  (store.ts commandGroups). */
+export function openSwarmBuddyChat(state: SuperTabState, owner: Person): Conversation {
+  const id = swarmBuddyChatId(owner)
+  let chat = state.conversations.find(c => c.id === id)
+  if (!chat) {
+    const number = nextConversationNumber(state)
+    state.groupCounter = number
+    chat = { id, kind: 'swarm-buddy', number, title: defaultBuddyName(owner), leadId: null, agentIds: [], archived: false, brief: '',
+      checks: [], assignment: null, lastMessageSequence: 0, audience: { people: [{ id: owner.id, generation: owner.generation }] } }
+    state.conversations.push(chat)
+  }
+  chat.archived = false
+  return chat
+}
+
+/** Remembers that [thread] of Swarm Buddy chat [chat] works in [projectId], so it hides once its person loses that project. */
+export function noteProjectThread(chat: Conversation, thread: string, projectId: string): void {
+  const kept = (chat.projectThreads ?? []).filter(t => t.thread !== thread)
+  chat.projectThreads = [...kept, { thread, projectId }].slice(-MAX_PROJECT_THREADS)
 }
 
 /** What a Buddy is called until its owner names it: "ken's Buddy". */

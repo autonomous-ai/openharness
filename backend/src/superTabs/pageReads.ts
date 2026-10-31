@@ -151,13 +151,14 @@ export async function messagesPast(tx: Transaction, at: { tabId: string; convers
  * which is sent as $expr and left to the planner (roadmap Phase 3; plan test in integration/superTabNamedReads.test.ts).
  */
 export async function messagesById(tx: Transaction, tabId: string, conversationId: string, ids: string[]):
-  Promise<Array<Pick<SuperTabMessage, 'id' | 'source' | 'recipientIds' | 'thread' | 'buddySession'>>> {
+  Promise<Array<Pick<SuperTabMessage, 'id' | 'source' | 'recipientIds' | 'thread' | 'buddySession' | 'author'>>> {
   if (!ids.length) return []
+  // Its author too: a project session of a person's one Buddy chat reads only its person's words and its own (buddySessions.ts).
   const rows = await readBy(tx, 'SuperTabMessage', 'id', [{ $match: { _id: { $in: ids }, tabId, conversationId } },
-    { $project: { source: 1, recipientIds: 1, thread: 1, buddySession: 1 } }])
+    { $project: { source: 1, recipientIds: 1, thread: 1, buddySession: 1, author: 1 } }])
   return rows.map(row => {
-    const { id, source, recipientIds, thread, buddySession } = prismaRow<SuperTabMessage>('SuperTabMessage', row)
-    return { id, source, recipientIds, thread: thread ?? null, buddySession: buddySession ?? null }
+    const { id, source, recipientIds, thread, buddySession, author } = prismaRow<SuperTabMessage>('SuperTabMessage', row)
+    return { id, source, recipientIds, thread: thread ?? null, buddySession: buddySession ?? null, author }
   })
 }
 

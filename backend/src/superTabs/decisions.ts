@@ -3,7 +3,7 @@
  *  with one tap, and the answer reaches the asking agent and the Lead in the conversation it came from. Decisions live in
  *  SuperTabDecision, never in the tab state, as mentions do. A decision is not a private channel: the PM's private lines go
  *  to the person's Buddy chat (buddies.ts). Called inside SuperTabStore's transactions. */
-import { isBuddy, openBuddyChat } from './buddies.js'
+import { isBuddy, openBuddyChat, openSwarmBuddyChat } from './buddies.js'
 import { createHash } from 'node:crypto'
 import type { Prisma } from '@prisma/client'
 import { z } from 'zod'
@@ -131,11 +131,13 @@ export function answerDecision(state: SuperTabState, actor: Actor, decision: Dec
 function delegatedLine(state: SuperTabState, projectId: string, leadId: string, asked: DecisionTarget, choice: number) {
   const lead = state.agents.find(a => a.id === leadId)
   if (!lead) return null
-  const chat = openBuddyChat(state, projectId, person(state, asked.personId))
+  const to = person(state, asked.personId)
   const author: Author = { kind: 'agent', id: lead.id, name: lead.name, displayName: agentDisplayName(state.agents, lead.id), membershipGeneration: lead.membershipGeneration }
   const question = asked.question.replace(/\s+/g, ' ')
-  return { conversationId: chat.id, author, text: `${answerText(asked.options[choice]!, true)} — ${question}`,
-    source: { kind: 'decision-delegated', decisionId: asked.id } }
+  const text = `${answerText(asked.options[choice]!, true)} — ${question}`
+  // In their one Buddy chat, marked with its project (Dee, 10-31), and in their older chat there for older apps.
+  return [{ conversationId: openSwarmBuddyChat(state, to).id, author, text, source: { kind: 'decision-delegated', decisionId: asked.id, projectId } },
+    { conversationId: openBuddyChat(state, projectId, to).id, author, text, source: { kind: 'decision-delegated', decisionId: asked.id } }]
 }
 
 /** Mongo omits unset fields, so `answeredAt: null` alone would miss a row written without it. */

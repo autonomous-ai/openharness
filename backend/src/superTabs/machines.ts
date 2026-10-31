@@ -4,7 +4,8 @@ import { MAX_HARNESSES, tokensByModelSchema } from './costs/tokens.js'
 import { activeWork, fail, person, stableId, type Actor, type Agent, type AgentStart, type AgentStartRequest, type MessageDraft, type SuperTabState } from './model.js'
 import { WORKSPACE_LABEL } from './workspaces.js'
 import { startFinished } from './parts/write.js'
-import { agentProjectId, canReadProject, groupProject, ledProject, projectsOf, teamAccountPool, type SwarmProject } from './projects.js'
+import { agentProjectId, canReadProject, groupProject, ledProject, projectOf, projectsOf, teamAccountPool, type SwarmProject } from './projects.js'
+import { isSwarmBuddyChat } from './buddies.js'
 export { teamAccountPool } from './projects.js'
 import { conversation } from './model.js'
 
@@ -410,6 +411,24 @@ export function projectFolder(pool: ContributedMachine, project: SwarmProject): 
     : pool.cwd
 }
 
+/** What a host reports (`capabilities`) when it runs a Swarm-wide Buddy in its folder of project worktrees (Dee, 10-31). */
+export const SWARM_BUDDY_CAPABILITY = 'swarmBuddy'
+/** At most this many projects' worktrees in a Swarm-wide Buddy's folder (spec: Staying within one context). */
+export const MAX_BUDDY_PROJECTS = 50
+
+/** A Swarm-wide Buddy's own folder on [pool] (spec: Folder): its host makes it, with one read-only worktree per project in it. It
+ *  is no project's checkout, so nothing of one project is ever another's. */
+export function buddyHomeFolder(pool: ContributedMachine, owner: { id: string }): string {
+  return `${pool.cwd.replace(/\/+$/, '')}/.buddy-${owner.id}`
+}
+
+/** The projects [owner] reads, as a Swarm-wide Buddy's folder on [pool] holds them: each project's own folder there, the oldest
+ *  first, at most MAX_BUDDY_PROJECTS. Ids, names and folders only (starts are listed to the PM). */
+export function buddyProjectsOn(state: SuperTabState, pool: ContributedMachine, owner: { id: string; email: string }): Array<{ id: string; name: string; cwd: string }> {
+  return projectsOf(state).filter(p => canReadProject(state, { kind: 'person', userId: owner.id, email: owner.email }, p))
+    .slice(0, MAX_BUDDY_PROJECTS).map(p => ({ id: p.id, name: p.name, cwd: projectFolder(pool, p) }))
+}
+
 /**
  * A start on a Mac for another person's project, moved to the Mac's Harness Team account: its machine, and its folder in
  * place of the Mac's own for that project. Every other start is returned as it is, so the Mac's owner's own projects
@@ -668,17 +687,21 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   if (pool.removal) fail('MACHINE_REMOVED', 'This machine is being removed from the Swarm.')
   if (start && start.poolGeneration !== pool.generation) fail('CONTRIBUTION_REVOKED', 'This machine contribution changed. Reconcile the original start.', 403)
   if (pool.paused) fail('MACHINE_PAUSED', 'New work is paused on this machine.')
-  const project = forProject ?? groupProject(state, conversation(state, request.conversationId))
-  if (!pool.scope && project.id !== 'lead') fail('PROJECT_CONTRIBUTION', 'Ask its owner to add this machine to the swarm again to support other projects.')
+  // A person's one Buddy chat has no project (Dee, 10-31): its project session works in the one it names, and its main Buddy
+  // and plain sessions in none, in their own folder (buddyHomeFolder).
+  const group = conversation(state, request.conversationId)
+  const project = forProject ?? (!isSwarmBuddyChat(group) ? groupProject(state, group)
+    : request.buddySession?.projectId ? projectOf(state, request.buddySession.projectId) : undefined)
+  if (project && !pool.scope && project.id !== 'lead') fail('PROJECT_CONTRIBUTION', 'Ask its owner to add this machine to the swarm again to support other projects.')
   const held = teamAccountPool(pool) ? productManagerOn(state, pool.machineId) : null
-  if (held && held !== project.id) {
+  if (held && held !== project?.id) {
     fail('TEAM_ACCOUNT_HELD', `The Harness Team account on ${pool.name} runs another project's Product Manager, so it takes only that project's work for now.`, 403)
   }
   // Before the request's own fields: a machine that takes none of this project's work says so first. A Buddy is its owner's
   // own agent on their own machine (commands.ts buddy.create), as a Lead is: teammates' work rules do not apply to it. Nor to
   // a Product Manager outside a Team account: any machine of the Swarm takes it (leadStart.ts, Ken 10-29).
-  if (!request.buddyOf && !(request.leadFor && !teamAccountPool(pool))) requireTeamWork(state, pool.machineId, pool.contributorId, project, now, teamMachines, otherWorkspaceMachines)
-  const cwd = projectFolder(pool, project)
+  if (!request.buddyOf && !(request.leadFor && !teamAccountPool(pool))) requireTeamWork(state, pool.machineId, pool.contributorId, project!, now, teamMachines, otherWorkspaceMachines)
+  const cwd = project ? projectFolder(pool, project) : buddyHomeFolder(pool, { id: request.buddyOf!.personId })
   // Every refused field is named, with what the machine does accept. Values the caller sent are not echoed: an account
   // setting can be a path or a name of the caller's own.
   const refused: string[] = []

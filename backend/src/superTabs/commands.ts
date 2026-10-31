@@ -1,4 +1,4 @@
-import { admitMachineStart, BUDDY_WINDOWS_REFUSAL, cleanupOverdue, dropIdleBuddyMachines, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, machineSlots, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
+import { admitMachineStart, BUDDY_WINDOWS_REFUSAL, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, machineSlots, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
 import { assignAgentDisplayNames } from './agentNames.js'
 import { keepUsernames, setUsername, swarmUsernames } from './usernames.js'
 import { z } from 'zod'
@@ -35,7 +35,7 @@ import { bindPullRequestCards, bindTaskCard, pullRequestCard, recordCardMerged }
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
 import { BUILT_IN_ROLE_DEFAULTS, agentProjectId, audienceOf, canReadProject, deleteProject, isConfidential, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject } from './projects.js'
 import { BUDDY_SESSION_CAPABILITY, chatOwner, endSessionEntry, liveSessions, mainBuddyOf, MAX_BUDDY_SESSIONS, MAX_SESSION_WAITING, requireChatOwner, SESSION_ENDED_KIND, sessionAgentsOf, sessionOf, setSessions, type SessionEndReason } from './buddySessions.js'
-import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, openBuddyChat, PROPOSAL_ASK_MS, proposalText, renameBuddy, requireBuddyCommand } from './buddies.js'
+import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, isSwarmBuddy, isSwarmBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, noteProjectThread, openBuddyChat, openSwarmBuddyChat, PM_LINE_KIND, PROPOSAL_ASK_MS, proposalText, renameBuddy, requireBuddyCommand, swarmBuddyChatId } from './buddies.js'
 import { BUDDY_OWN_MACHINE_REFUSAL, CODEX_BUDDY_REFUSAL } from './buddyContract.js'
 import { launchRefusedLine, leadJoined, leadStartFailed, leadStarting, placeLead } from './leadStart.js'
 import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, FIRST_SUMMARY, instructionsHash, instructionsTextSchema, legacyRoleName, liveNotes, MAX_NOTES, noteTextSchema, roleNameSchema, summarySchema, type PmNote } from './instructions.js'
@@ -188,9 +188,11 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('buddy.propose'), conversationId: id, ownerMessageId: id, goal: z.string().trim().min(1).max(2000),
     scope: z.string().trim().min(1).max(4000), priority: z.enum(['low', 'normal', 'high']),
     attachmentIds: z.array(id).max(MAX_PROPOSAL_ATTACHMENTS, `Attach at most ${MAX_PROPOSAL_ATTACHMENTS} files to a proposal.`).optional() }).strict(),
-  z.object({ type: z.literal('buddy.remove'), projectId: id }).strict(),
-  // A person's own Buddy chat in a project, opened before any Buddy is (buddies.ts openBuddyChat).
-  z.object({ type: z.literal('buddy.chat'), projectId: id }).strict(),
+  // Without `projectId`, the person's one Buddy (Dee, 10-31); an older app names a project, and removes that same one Buddy.
+  z.object({ type: z.literal('buddy.remove'), projectId: id.optional() }).strict(),
+  // A person's one Buddy chat in the Swarm, opened before any Buddy is (buddies.ts openSwarmBuddyChat); with `projectId`, their
+  // older chat in that project, which older apps still show (buddies.ts openBuddyChat).
+  z.object({ type: z.literal('buddy.chat'), projectId: id.optional() }).strict(),
   // A person names their own Buddy from its chat, or clears the name with null (buddies.ts renameBuddy).
   z.object({ type: z.literal('buddy.rename'), conversationId: id, name: z.string().max(200).nullable() }).strict(),
   // A person ends a thread session of their own Buddy chat (buddySessions.ts): `ended` from their app, `idle` and `stopped` from
@@ -201,7 +203,9 @@ export const commandSchema = z.discriminatedUnion('type', [
   // A person's own Buddy in a project, on a machine of the Swarm (buddies.ts).
   // `setup`: one of the person's own machines outside the Swarm, prepared by the app as Add machine prepares one (its folder and
   // engines): it is recorded Buddy-only (machines.ts ContributedMachine.buddyOnly). Ignored for a machine already listed.
-  z.object({ type: z.literal('buddy.create'), projectId: id, machineId: id, engine: swarmEngine, model: z.string().trim().min(1).max(200).optional(),
+  // Without `projectId`, the person's one Buddy for the Swarm (Dee, 10-31); an older app's Start names a project, and adds that
+  // same one Buddy.
+  z.object({ type: z.literal('buddy.create'), projectId: id.optional(), machineId: id, engine: swarmEngine, model: z.string().trim().min(1).max(200).optional(),
     setup: z.object({ name: title, cwd: path, engines: z.array(swarmEngine).min(1).max(2) }).strict().optional() }).strict(),
   z.object({ type: z.literal('agent.startDispatch'), startId: id }).strict(),
   z.object({ type: z.literal('agent.started'), startId: id, harnessId: id, configuration,
@@ -234,7 +238,10 @@ export const commandSchema = z.discriminatedUnion('type', [
     alsoSend: z.literal(true).optional(), attachmentIds: z.array(id).max(MAX_ATTACHMENTS).optional(), mentions: z.array(id).max(MAX_MENTIONS).optional(),
     mentionsIfNoWorker: z.literal(true).optional(), agentOnly: z.literal(true).optional(),
     // A person's thread reply in their own Buddy chat that starts the thread's own Buddy session (buddySessions.ts).
-    newSession: z.literal(true).optional() }).strict(),
+    newSession: z.literal(true).optional(),
+    // A New session in one project (spec: The model): it reads that project alone, and is the only Buddy that writes into it.
+    // Only with newSession, in a Swarm Buddy chat.
+    sessionProjectId: id.optional() }).strict(),
   z.object({ type: z.literal('mention.done'), mentionId: id }).strict(),
   z.object({ type: z.literal('message.react'), conversationId: id, messageId: id, emoji: reactionSchema, on: z.boolean() }).strict(),
   z.object({ type: z.literal('decision.ask'), conversationId: id, personId: id, questions: z.array(decisionQuestion).min(1).max(MAX_QUESTIONS) }).strict(),
@@ -483,7 +490,7 @@ export function mayResumeStart(state: SuperTabState, actor: Actor, start: AgentS
   if (start.actorKey === actorKey(actor)) return true
   if (actor.kind === 'person' || !start.actorKey.startsWith('agent:')) return false
   const group = state.conversations.find(c => c.id === start.request.conversationId)
-  return !!group && !isLeads(group) && ledProject(state, actor.agentId)?.id === groupProject(state, group).id
+  return !!group && !isLeads(group) && !isSwarmBuddyChat(group) && ledProject(state, actor.agentId)?.id === groupProject(state, group).id
 }
 
 /** The repo path an owns entry names, or null for anything else (a phrase, a glob), which is never compared. */
@@ -520,6 +527,9 @@ function dropClosing(state: SuperTabState, keep: (request: NonNullable<SuperTabS
 
 /** Also checked before returning an idempotent receipt: a retry does not retain
  * access after the person has been removed from a private project. */
+/** What may name a person's one Buddy chat: posts, reactions, proposals, naming the Buddy and ending a session. */
+const SWARM_BUDDY_CHAT_COMMANDS: ReadonlySet<string> = new Set(['message.send', 'message.react', 'buddy.propose', 'buddy.rename', 'buddy.sessionEnd'])
+
 export function authorizeCommandAccess(state: SuperTabState, actor: Actor, command: Command, context: Partial<CommandContext> = {}) {
   if (command.type === 'invite.accept' || command.type === 'agent.sessionClosed' || command.type === 'machine.cleaned') return
   // Marking one's own tag done changes only one's own list, so a viewer may do it too.
@@ -534,6 +544,8 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   if ('conversationId' in command && command.type !== 'invite.create') {
     const group = readConversation(state, actor, command.conversationId)
     if (isLeads(group) && command.type !== 'message.send') groupProject(state, group)
+    // A person's one Buddy chat is for talking with their Buddy: no task, member or archive there (Dee, 10-31).
+    if (isSwarmBuddyChat(group) && !SWARM_BUDDY_CHAT_COMMANDS.has(command.type)) fail('BUDDY_CHAT_ONLY', 'Your Buddy chat is for talking with your Buddy.', 403)
   }
   if ('projectId' in command && command.projectId) readProject(state, actor, command.projectId)
   if ('agentId' in command) readAgent(state, actor, command.agentId)
@@ -884,6 +896,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
    */
   const routeBuddySession = (chat: Conversation): { inSession: boolean; to: string | null } => {
     if (command.type !== 'message.send') return { inSession: false, to: null }
+    // A project is named only when starting a session in the one Buddy chat.
+    if (command.sessionProjectId && (!command.newSession || !isSwarmBuddyChat(chat))) {
+      fail('BUDDY_SESSION_CHAT', 'Name a project only to start a New session in your Buddy chat.', 400)
+    }
     // A person's own top-level New session message roots its own thread (the message is that thread's root, its id the
     // thread's): its session starts there, and the main Buddy never hears it.
     const roots = actor.kind === 'person' && !!command.newSession && !command.replyTo
@@ -919,12 +935,21 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       if (liveSessions(state, chat).length >= MAX_BUDDY_SESSIONS) fail('BUDDY_SESSIONS_FULL', `${MAX_BUDDY_SESSIONS} sessions are running. End one to start another.`)
       const contributor = person(state, main.contributorId)
+      // In the one Buddy chat a session works in one project its person reads, or, with none named, as the main Buddy does
+      // (spec: The model). A project's own chat has its project.
+      const swarm = isSwarmBuddyChat(chat)
+      const project = swarm ? command.sessionProjectId ? readProject(state, actor, command.sessionProjectId) : undefined : groupProject(state, chat)
+      const me = person(state, owner.id)
+      const folder = project ? { cwd: projectFolder(pool, project), worktree: true, ...(swarm ? { buddyNarrow: true as const } : {}) }
+        : { cwd: buddyHomeFolder(pool, me), worktree: false, buddyScope: 'swarm' as const, buddyProjects: buddyProjectsOn(state, pool, me) }
       const request: AgentStartRequest = { conversationId: chat.id, machineId: main.machineId, engine: main.configuration.engine,
         ...(main.configuration.model ? { model: main.configuration.model } : {}), ...(main.configuration.effort ? { effort: main.configuration.effort } : {}),
-        name: main.displayName ?? main.name, cwd: projectFolder(pool, groupProject(state, chat)), worktree: true, requirements: BUDDY_REQUIREMENTS,
+        name: main.displayName ?? main.name, ...folder, requirements: BUDDY_REQUIREMENTS,
         buddyOf: { personId: owner.id, generation: owner.generation },
         // The main chat's sequence before this message: the session's excerpt reads up to it (buddySessions.ts sessionContext).
-        buddySession: { thread, from: chat.messageSeq ?? chat.lastMessageSequence } }
+        // A project session of the one chat names its project: it reads that project alone and no excerpt.
+        buddySession: { thread, from: chat.messageSeq ?? chat.lastMessageSequence, ...(swarm && project ? { projectId: project.id } : {}) } }
+      if (swarm && project) noteProjectThread(chat, thread, project.id)
       // A slot for it on a Buddy-only machine, as for its main Buddy (buddy.create).
       if (pool.buddyOnly) pool.maxAgents = machineSlots(state, pool) + 1
       const admitted = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)!
@@ -960,6 +985,52 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     if (start) start.error = 'Its session ended before it started.'
   }
 
+  /**
+   * The person's one Buddy answers in their older project chat [chat] (spec: Older apps): a Buddy of that project alone, on the
+   * one Buddy's machine, engine and name, in that project's folder and never widened (buddyNarrow). This message waits for it;
+   * one already starting takes it too. Nothing while they have no one Buddy, or its host can't run one, as before.
+   */
+  const startOldChatBuddy = (chat: Conversation) => {
+    if (command.type !== 'message.send' || actor.kind !== 'person') return
+    const owner = requireChatOwner(state, chat, actor.userId)
+    const pending = state.starts?.find(s => s.request.conversationId === chat.id && !s.request.buddySession && !s.harnessId && !s.error)
+    if (pending) {
+      if ((pending.request.buddyWaiting?.length ?? 0) < MAX_SESSION_WAITING) pending.request.buddyWaiting = [...pending.request.buddyWaiting ?? [], operationId]
+      return
+    }
+    const main = state.agents.find(a => isSwarmBuddy(a) && !a.buddySession && a.buddyOf!.personId === owner.id && a.buddyOf!.generation === owner.generation)
+    if (!main || downSince(state, main, context.now) || main.configuration.engine !== 'claude' || state.paused) return
+    const pool = machineContribution(state, main.machineId)
+    if (!pool?.observation?.capabilities?.includes(SWARM_BUDDY_CAPABILITY)) return
+    const project = groupProject(state, chat)
+    const contributor = person(state, main.contributorId)
+    const request: AgentStartRequest = { conversationId: chat.id, machineId: main.machineId, engine: main.configuration.engine,
+      ...(main.configuration.model ? { model: main.configuration.model } : {}), ...(main.configuration.effort ? { effort: main.configuration.effort } : {}),
+      name: main.displayName ?? main.name, cwd: projectFolder(pool, project), worktree: true, requirements: BUDDY_REQUIREMENTS,
+      buddyOf: { personId: owner.id, generation: owner.generation }, buddyNarrow: true, buddyWaiting: [operationId] }
+    if (pool.buddyOnly) pool.maxAgents = machineSlots(state, pool) + 1
+    const admitted = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)!
+    state.starts ??= []
+    if (state.starts.filter(s => !s.harnessId && !s.error).length >= 32) fail('STARTS_PENDING', 'Reconcile pending agent starts before adding more.')
+    state.starts.push({ poolGeneration: admitted.generation, id: operationId, creationId: `super-${operationId}`, actorKey: actorKey(actor),
+      contributorId: contributor.id, membershipGeneration: contributor.generation, machineOwnerId: main.machineOwnerId,
+      hostGrant: main.hostGrant ?? null, request, harnessId: null, dispatched: false, error: null, requestedAt: context.now })
+    result.startId = operationId
+  }
+
+  /** Ends every project session of [project] in a one Buddy chat whose person no longer reads it, and fails those starting. */
+  const endLostProjectSessions = (project: SwarmProject) => {
+    for (const chat of state.conversations.filter(isSwarmBuddyChat)) {
+      const owner = chatOwner(chat), member = owner && state.people.find(p => p.id === owner.id && p.generation === owner.generation)
+      if (member && canReadProject(state, { kind: 'person', userId: member.id, email: member.email }, project)) continue
+      for (const entry of liveSessions(state, chat)) {
+        const agentProject = entry.agentId ? state.agents.find(a => a.id === entry.agentId)?.buddySession?.projectId : undefined
+        const startProject = state.starts?.find(s => s.id === entry.startId)?.request.buddySession?.projectId
+        if ((agentProject ?? startProject) === project.id) endBuddySession(chat, entry, 'access')
+      }
+    }
+  }
+
   /** Deleting its project is the only removal that takes a Lead. `close: false` when its host already closed the session. */
   const removeAgent = (target: Agent, { lead = false, close = true } = {}) => {
     // A Buddy chat's record of its sessions (buddySessions.ts): a session leaves it, and a main Buddy takes its sessions with it.
@@ -973,6 +1044,15 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         }
         for (const other of sessionAgentsOf(state, chat)) removeAgent(other)
         delete chat.buddySessions
+      }
+    }
+    // The one Buddy takes its sessions in the person's older project chats with it (startOldChatBuddy).
+    if (isSwarmBuddy(target) && !target.buddySession) {
+      for (const other of state.agents.filter(a => a.buddyNarrow && !a.buddySession && a.buddyOf?.personId === target.buddyOf!.personId)) removeAgent(other)
+      for (const start of state.starts ?? []) {
+        if (start.request.buddyNarrow && !start.request.buddySession && start.request.buddyOf?.personId === target.buddyOf!.personId && !start.harnessId && !start.error) {
+          start.error = 'Its Buddy was removed before it started.'
+        }
       }
     }
     if (!lead) protectLead(state, target.id)
@@ -1206,6 +1286,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // hosts close their sessions.
       const project = manageProject(state, actor, command.projectId)
       for (const target of state.agents.filter(a => agentProjectId(state, a) === project.id)) removeAgent(target, { lead: true })
+      // Its sessions still starting in people's one Buddy chats go with it (their chats belong to no project).
+      for (const start of state.starts ?? []) {
+        if (start.request.buddySession?.projectId === project.id && !start.harnessId && !start.error) start.error = 'Its project was deleted.'
+      }
       deleteProject(state, actor, command.projectId)
       break
     }
@@ -1213,6 +1297,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const project = manageProject(state, actor, command.projectId)
       project.members = projectMembers(state, command.memberIds)
       project.visibility = command.visibility
+      // Whoever no longer reads it loses it from their Buddy in this same write (spec: Access): its sessions in their one Buddy
+      // chat end, and its threads and PM lines there hide (buddies.ts hiddenProjectRow).
+      endLostProjectSessions(project)
       break
     }
     case 'project.cadence': {
@@ -1536,7 +1623,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       effects.decisionAnswer = answer
       recordDecision(conversation(state, context.decision!.conversationId), context.decision!, context.now, answer.delegated === true)
       if (recipients.length) message(noticeIn, notice, recipients, null, source)
-      if (line) effects.messages.push({ id: stableId(operationId, 'delegated'), replyTo: null, recipients: [], ...line })
+      for (const [at, each] of (line ?? []).entries()) effects.messages.push({ id: stableId(operationId, at ? `delegated-${at}` : 'delegated'), replyTo: null, recipients: [], ...each })
       result.decisionId = answer.id
       break
     }
@@ -1728,6 +1815,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     case 'buddy.propose': {
       const self = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId && isBuddy(a)) : undefined
       if (!self) fail('BUDDY_ONLY', 'Only a Buddy sends a proposal, for its owner.', 403)
+      // A Swarm-wide Buddy reads every project its person reads, so it writes into none (spec: Guard): a project session does.
+      if (isSwarmBuddy(self)) fail('BUDDY_PROPOSE_SESSION', 'Start a New session in that project to send it to its PM.', 403)
       const owner = state.people.find(p => p.id === self.buddyOf!.personId && p.generation === self.buddyOf!.generation)
         ?? fail('BUDDY_OWNER_GONE', 'Your owner left this Swarm.', 403)
       const chat = conversation(state, command.conversationId)
@@ -1758,11 +1847,14 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     }
     case 'buddy.remove': {
       if (actor.kind !== 'person') fail('BUDDY_PERSON', 'A person removes their own Buddy.', 403)
-      const project = readProject(state, actor, command.projectId), me = person(state, actor.userId)
-      const chatId = buddyChatId(project.id, me)
-      const target = state.agents.find(a => a.buddyOf?.personId === me.id && !a.buddySession && agentProjectId(state, a) === project.id)
+      const me = person(state, actor.userId)
+      // Without a project, the person's one Buddy; with one (an older app), the Buddy of their older chat there, never the one
+      // Buddy (spec: Older apps).
+      const project = command.projectId ? readProject(state, actor, command.projectId) : undefined
+      const chatId = project ? buddyChatId(project.id, me) : swarmBuddyChatId(me)
+      const target = state.agents.find(a => a.buddyOf?.personId === me.id && !a.buddySession && state.conversations.some(c => c.id === chatId && c.agentIds.includes(a.id)))
       const starting = state.starts?.filter(s => s.request.conversationId === chatId && !s.harnessId && !s.error) ?? []
-      if (!target && !starting.length) fail('NOT_FOUND', 'You have no Buddy in this project.', 404)
+      if (!target && !starting.length) fail('NOT_FOUND', project ? 'You have no Buddy in this project.' : 'You have no Buddy.', 404)
       for (const start of starting) start.error = 'Removed by its owner before it started.'
       // Its session closes; its chat stays, and adding a Buddy again reopens it.
       if (target) removeAgent(target)
@@ -1770,7 +1862,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     }
     case 'buddy.chat': {
       if (actor.kind !== 'person') fail('BUDDY_PERSON', 'A person opens their own Buddy chat.', 403)
-      result.conversationId = openBuddyChat(state, readProject(state, actor, command.projectId).id, person(state, actor.userId)).id
+      // With no project, the person's one Buddy chat (Dee, 10-31); with one, their older chat there, which older apps show.
+      result.conversationId = command.projectId ? openBuddyChat(state, readProject(state, actor, command.projectId).id, person(state, actor.userId)).id
+        : openSwarmBuddyChat(state, person(state, actor.userId)).id
       break
     }
     case 'buddy.rename':
@@ -1793,8 +1887,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const project = projectOf(state, projectId)
       const to = state.people.find(p => p.id === command.personId) ?? fail('INVALID_PERSON', 'Tell a person in this Swarm.', 400)
       if (!canReadProject(state, { kind: 'person', userId: to.id, email: to.email }, project)) fail('INVALID_PERSON', `${to.email} cannot read this project.`, 400)
-      // To nobody: the person reads it; their Buddy, if they have one, is not asked to answer for them.
-      message(openBuddyChat(state, project.id, to).id, command.text)
+      // To nobody: the person reads it; their Buddy, if they have one, is not asked to answer for them. In their one Buddy chat,
+      // marked with its project so it hides once they lose it (buddies.ts hiddenProjectRow), and in their older chat there,
+      // which older apps and the phone still show (spec: Older apps).
+      message(openSwarmBuddyChat(state, to).id, command.text, [], null, { kind: PM_LINE_KIND, projectId: project.id })
+      effects.messages.push({ id: stableId(operationId, 'project-chat'), conversationId: openBuddyChat(state, project.id, to).id, author: sender,
+        text: command.text, replyTo: null, recipients: [] })
       break
     }
     case 'buddy.create': {
@@ -1805,16 +1903,24 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // Codex to always allow. Refused here, so every machine refuses whatever its CLI, until a Buddy has a Codex home of
       // its own (security review 1 of #2087). Desktop names this reason beside a disabled Codex.
       if (command.engine === 'codex') fail('BUDDY_ENGINE', CODEX_BUDDY_REFUSAL, 403)
-      const project = readProject(state, actor, command.projectId), me = person(state, actor.userId)
-      const chatId = buddyChatId(project.id, me)
+      // One Buddy per person per Swarm (Dee, 10-31). An older app's Start names a project it reads: it adds that same one Buddy.
+      if (command.projectId) readProject(state, actor, command.projectId)
+      const me = person(state, actor.userId)
+      const chatId = swarmBuddyChatId(me)
       // A down Buddy is replaced (Desktop's Start again, review of #1992): its session closes in this same command, so a
       // start refused below leaves it as it was. A running or starting one is kept.
-      const existing = state.agents.find(a => a.buddyOf?.personId === me.id && !a.buddySession && agentProjectId(state, a) === project.id)
+      const existing = state.agents.find(a => isSwarmBuddy(a) && a.buddyOf!.personId === me.id && !a.buddySession)
       if ((existing && !downSince(state, existing, context.now))
         || state.starts?.some(s => s.request.conversationId === chatId && !s.request.buddySession && !s.harnessId && !s.error)) {
-        fail('BUDDY_EXISTS', 'You already have a Buddy in this project. Remove it to add another.')
+        fail('BUDDY_EXISTS', 'You already have a Buddy. Remove it to add another.')
       }
       if (existing) removeAgent(existing)
+      // The person's Buddies of their older project chats go in the same write, so they have exactly one (spec: history).
+      for (const old of state.agents.filter(a => a.buddyOf?.personId === me.id && !isSwarmBuddy(a) && !a.buddySession
+        && state.conversations.some(c => isBuddyChat(c) && !isSwarmBuddyChat(c) && c.agentIds.includes(a.id)))) removeAgent(old)
+      for (const start of state.starts ?? []) {
+        if (start.request.buddyOf?.personId === me.id && start.request.conversationId !== chatId && !start.harnessId && !start.error) start.error = 'Your Buddy is now one for the whole Swarm.'
+      }
       const grant = context.contribution ?? fail('HOST_REQUIRED', 'Choose a machine shared with the contributor.', 403)
       // Like a Lead, a Buddy runs only on its owner's own machine, in their own account, for Claude and Codex alike: never a
       // machine shared with them, and never a Harness Team account (Ken's ruling, 10-28). The grant is the store's reading of
@@ -1830,15 +1936,21 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // refused every agent's Swarm command while one ran there. None is added on Windows until a real caller check exists
       // (Lead's ruling, 10-29); the machine's own refusal stays as the backstop, and its launch is checked again (machines.ts).
       if (pool.observation?.resources.os === 'Windows') fail('BUDDY_WINDOWS', BUDDY_WINDOWS_REFUSAL, 403)
-      // A slot for each of its person's Buddies there, one per project: it takes nothing else.
+      // A host that runs a Swarm Buddy makes its folder of project worktrees (spec: Folder). One not yet reporting (a machine
+      // just added for Buddies) is let through: an older host would start it in an empty folder that reads nothing.
+      if (pool.observation && !pool.observation.capabilities?.includes(SWARM_BUDDY_CAPABILITY)) {
+        fail('BUDDY_UPDATE_HOST', `Update Harness on ${pool.name ?? 'your computer'} to start your Buddy.`)
+      }
+      // A slot for its person's Buddy there and its sessions: it takes nothing else.
       if (pool.buddyOnly) pool.maxAgents = machineSlots(state, pool) + 1
       const contributor = person(state, grant.contributorId)
-      const chat = openBuddyChat(state, project.id, me)
+      const chat = openSwarmBuddyChat(state, me)
       const named = chosenBuddyName(state, chat, me, context.buddyNames)
       // Never moved to the Mac's Team account, as a teammate's project otherwise is (machines.ts teamStartRequest).
       const request: AgentStartRequest = { conversationId: chatId, machineId: pool.machineId, engine: command.engine,
-        ...(command.model ? { model: command.model } : {}), name: named.name, cwd: projectFolder(pool, project), worktree: true,
-        requirements: BUDDY_REQUIREMENTS, buddyOf: { personId: me.id, generation: me.generation } }
+        ...(command.model ? { model: command.model } : {}), name: named.name, cwd: buddyHomeFolder(pool, me), worktree: false,
+        requirements: BUDDY_REQUIREMENTS, buddyOf: { personId: me.id, generation: me.generation }, buddyScope: 'swarm',
+        buddyProjects: buddyProjectsOn(state, pool, me) }
       const admitted = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)!
       state.starts ??= []
       if (state.starts.filter(s => !s.harnessId && !s.error).length >= 32) fail('STARTS_PENDING', 'Reconcile pending agent starts before adding more.')
@@ -1920,7 +2032,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         // a worker for an hour (2026-10-27).
         const group = conversation(state, start.request.conversationId)
         // The failure that suspends its engine there says so once, and tags the machine's owner (engineHealth.ts).
-        const failed = `${failureNotice(start.request.name, command.error, askedModel(start), coordinatorNameOf(groupProject(state, group)))}${suspended ? `\n\n${suspended}` : ''}`
+        const failed = `${failureNotice(start.request.name, command.error, askedModel(start), isSwarmBuddyChat(group) ? undefined : coordinatorNameOf(groupProject(state, group)))}${suspended ? `\n\n${suspended}` : ''}`
         const told = failureRecipients(start, group)
         message(group.id, failed, told, null, SYSTEM_ROW, undefined, suspended && start.machineOwnerId ? [start.machineOwnerId] : undefined)
         // A task with no lead, or one its lead left: its coordinator hears it in its own chat (final review).
@@ -1939,7 +2051,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (state.agents.some(a => a.id === agentId)) fail('ALREADY_SHARED', 'This native harness is already in the tab.')
       reserveHarnessSlot(state, start.request.machineId, command.harnessId, operationId)
       state.agents.push({ id: agentId, machineId: start.request.machineId, harnessId: command.harnessId,
-        ...(state.projects ? { projectId: groupProject(state, group).id } : {}),
+        // A Swarm Buddy chat has no project: its main Buddy and plain sessions read every project their person reads, and a
+        // project session its own (Dee, 10-31).
+        ...(isSwarmBuddyChat(group) ? start.request.buddySession?.projectId ? { projectId: start.request.buddySession.projectId } : {}
+          : state.projects ? { projectId: groupProject(state, group).id } : {}),
+        ...(start.request.buddyScope ? { buddyScope: start.request.buddyScope } : {}),
+        ...(start.request.buddyNarrow ? { buddyNarrow: true as const } : {}),
         machineOwnerId: start.machineOwnerId, contributorId: start.contributorId, membershipGeneration: start.membershipGeneration,
         hostGrant: start.hostGrant, name: start.request.name, configuration: command.configuration, configurationVersion: operationId,
         ...(start.request.role ? { role: start.request.role } : {}), ...(start.request.roleId ? { roleId: start.request.roleId } : {}),
@@ -1966,6 +2083,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         effects.lateDeliveries = (entry.waiting ?? []).map(messageId => ({ messageId, conversationId: group.id, agentId,
           author: { kind: 'person' as const, id: owner.id, generation: owner.generation } }))
         delete entry.waiting
+      }
+      // The one Buddy's session in an older project chat hears the person's messages sent while it started (spec: Older apps).
+      if (start.request.buddyWaiting?.length && !start.request.buddySession) {
+        const owner = chatOwner(group)
+        if (owner) effects.lateDeliveries = start.request.buddyWaiting.map(messageId => ({ messageId, conversationId: group.id, agentId,
+          author: { kind: 'person' as const, id: owner.id, generation: owner.generation } }))
       }
       if (start.request.leadFor) {
         // Taking over from a Lead that left, as agent.add does.
@@ -2027,6 +2150,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     }
     case 'agent.release': {
       const target = agent(state, command.agentId)
+      // A Buddy is its owner's to stop (buddies.ts), and a Swarm-wide one has no project to look up.
+      if (isBuddy(target)) fail('BUDDY_NOT_RELEASED', 'A Buddy is stopped by its owner, or by turning Buddies off, never released.')
       const project = projectOf(state, agentProjectId(state, target))
       const isOwner = actor.kind === 'person' && [state.ownerId, target.contributorId].includes(actor.userId)
       if (!projectAgent(state, actor, project.id) && !isOwner) fail('FORBIDDEN', 'Only an agent of this project, the contributor or tab owner can release a worker.', 403)
@@ -2260,6 +2385,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // main Buddy hears the rest. Decided here from the thread, so every client, an old one or the phone, is routed alike.
       const session = isBuddyChat(group) ? routeBuddySession(group) : undefined
       if (command.newSession && !session) fail('BUDDY_SESSION_CHAT', 'Start a session from a thread of your own Buddy chat.', 400)
+      // An older project chat with no Buddy in it: the person's one Buddy answers there through a session of that project, so
+      // the phone and older apps keep a working Buddy (spec: Older apps). Started on this message, which waits for it.
+      if (actor.kind === 'person' && isBuddyChat(group) && !isSwarmBuddyChat(group) && !session?.inSession && !mainBuddyOf(state, group)) startOldChatBuddy(group)
       // A Buddy chat has no Lead: its owner talks to its Buddy.
       const automatic = actor.kind === 'person' ? (isBuddyChat(group) ? (session?.inSession ? session.to : mainBuddyOf(state, group)?.id ?? null)
         : replyAgent && group.agentIds.includes(replyAgent) ? replyAgent : group.leadId) : agentRecipient
