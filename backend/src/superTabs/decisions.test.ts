@@ -312,6 +312,9 @@ describe('a decision whose work is over', () => {
     expect(ask().decisions).toHaveLength(1)
     s.run({ type: 'work.cancel', conversationId: s.group, assignmentId: s.assignmentId, reason: 'Not needed' })
     expect(ask).toThrow(expect.objectContaining({ code: 'WORK_FINISHED' }))
+    // Anyone who may not ask there is refused as before, never told the work is finished.
+    expect(() => s.run({ type: 'decision.ask', conversationId: s.group, personId: 'peer', questions: [question('Reopen it?')] }, owner))
+      .toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
     // The project chat always takes one.
     expect(s.run({ type: 'decision.ask', conversationId: 'lead', personId: 'peer', questions: [question('Reopen it?')] }, asAgent(s.lead)).decisions).toHaveLength(1)
   })
@@ -324,5 +327,8 @@ describe('a decision whose work is over', () => {
     expect(answer({ ...decision, answeredAt: 5, withdrawn: true })).toThrow(expect.objectContaining({ code: 'DECISION_ANSWERED', message: expect.stringContaining('no longer waits') }))
     s.run({ type: 'work.cancel', conversationId: s.group, assignmentId: s.assignmentId, reason: 'Not needed' })
     expect(answer(decision)).toThrow(expect.objectContaining({ code: 'DECISION_ANSWERED', message: expect.stringContaining('no longer waits') }))
+    // Anyone but the person asked is told it does not exist, as before: never that its work is finished.
+    expect(() => s.run({ type: 'decision.answer', decisionId: decision.id, choice: 0 }, owner, { decision }))
+      .toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
   })
 })
