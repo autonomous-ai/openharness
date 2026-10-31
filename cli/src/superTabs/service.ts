@@ -93,7 +93,7 @@ const HELP = {
     model: 'opus', effort: 'high', routeDecisionId: 'DECISION' },
   command: `command OPERATION_ID JSON: ${COMMAND_ABOUT} The JSON is one argument: when it holds quotes, put - in its place and send it on stdin (command OPERATION_ID - <<'JSON' … JSON). ${COMMAND_RULES}`,
   commands: [
-    { type: 'project.report', projectId: 'PROJECT', through: { GROUP: 214031 }, text: 'What changed, what is blocked, and what comes next. Use null when nothing merits repeating.' },
+    { type: 'project.report', projectId: 'PROJECT', through: { GROUP: 214031 }, text: 'The whole status card, one short line per active task; it replaces the last one and posts nothing. Use null when the card is still right.' },
     { type: 'project.repository', projectId: 'PROJECT', repositoryUrl: 'https://github.com/OWNER/REPOSITORY' },
     // The morning digest, at a person's local time; time null turns it off.
     { type: 'project.digest', projectId: 'PROJECT', time: '08:00', timeZone: 'Asia/Ho_Chi_Minh' },

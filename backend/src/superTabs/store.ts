@@ -34,9 +34,9 @@ import { deleteInstructions, instructionsId, readNotes, revisionId, writeInstruc
 import { coordinatorNameOf, FIRST_INSTRUCTIONS, FIRST_SUMMARY, liveNotes, MAX_REVISIONS } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
-import { answersRequest, dirtyGroups, noteProjectReports, projectUpdateRequest, UNANSWERED_REQUEST_MS } from './projectUpdates.js'
+import { answersRequest, dirtyGroups, noteWorkChanges, projectUpdateRequest, UNANSWERED_REQUEST_MS } from './projectUpdates.js'
 import { cloneData } from './cloneData.js'
-import { digestDue, digestMessageId, digestRequest, digestSince } from './digest.js'
+import { digestDue, digestMessageId, digestOf, digestRequest, digestSince } from './digest.js'
 import { judgedMachines, loseTasks, nextLossAt, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { archivable, archiveLine, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests } from './tidy.js'
 import { clock, insertParts, loadActive, loadLightGroups, loadMachineParts, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
@@ -1451,9 +1451,10 @@ export class SuperTabStore {
         await tx.superTabDelivery.updateMany({ where: { tabId, conversationId: { in: removedGroups.map(c => c.id) },
           status: { in: ['queued', 'claimed', 'uncertain'] } }, data: { status: 'cancelled', holdReason: null, holdSince: null } })
       }
-      // Each conversation numbers its own messages; a shown one is its latest and counts toward its project's reports.
+      // Each conversation numbers its own messages. Only a change of a work group's state wakes its coordinator, read through
+      // its latest message; an ordinary message never does (Dee, 2026-10-31).
       const sequences = numberMessages(effects.state, effects.messages, context.now)
-      noteProjectReports(effects.state, shown, sequences, context.now)
+      noteWorkChanges(original, effects.state, context.now)
       if (command.type === 'work.assign' || command.type === 'work.status' || command.type === 'message.send') {
         const group = conversation(effects.state, command.conversationId)
         const assignment = group.assignment
@@ -2971,7 +2972,7 @@ export class SuperTabStore {
       const state = cloneData(loaded.state)
       if (sentAlready) {
         const project = projectOf(state, led!.id)
-        project.digest = { ...project.digest!, lastOn: due! }
+        project.digest = { ...digestOf(project)!, lastOn: due! }
       }
       author(state, await this.actor(tx, user, state, agentId), true)
       const target = agent(state, agentId)
@@ -3002,7 +3003,8 @@ export class SuperTabStore {
       const digest = digestRequest(state, target, this.now(), asked)
       if (digest) {
         const project = projectOf(state, digest.source!.projectId as string)
-        project.digest = { ...project.digest!, lastOn: digest.source!.on as string, lastAt: this.now() }
+        // A default digest is stored with its first send (digest.ts digestOf).
+        project.digest = { ...digestOf(project)!, lastOn: digest.source!.on as string, lastAt: this.now() }
         written.push(digest)
       }
       // The poll also frees agents whose task the checks just lost, and any an older server left marked running (each poll; a

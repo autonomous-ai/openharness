@@ -187,6 +187,9 @@ class SuperTabController extends ChangeNotifier {
       _decisionsAside.addAll(
         (initial['decisionsAside'] as List? ?? const []).whereType<String>(),
       );
+      _statusFolded.addAll(
+        (initial['statusFolded'] as List? ?? const []).whereType<String>(),
+      );
       devicesSelected = initial['devicesSelected'] == true;
       projectsGroupOpen = initial['projectsGroupOpen'] as bool? ?? true;
       machinesGroupOpen = initial['machinesGroupOpen'] as bool? ?? true;
@@ -848,6 +851,26 @@ class SuperTabController extends ChangeNotifier {
     final before = _decisionsAside.length;
     _decisionsAside.removeWhere(gone);
     if (_decisionsAside.length != before) _saveSoon();
+  }
+
+  /// The projects whose status card the reader folded to its heading line:
+  /// saved on this computer for this reader. Only the newest
+  /// [statusFoldedKept] are kept, so the set cannot grow without end.
+  final _statusFolded = <String>{};
+  static const statusFoldedKept = 200;
+  bool statusFolded(String projectId) => _statusFolded.contains(projectId);
+
+  void setStatusFolded(String projectId, {required bool folded}) {
+    // Folded again moves it to the newest end.
+    _statusFolded.remove(projectId);
+    if (folded) {
+      _statusFolded.add(projectId);
+      while (_statusFolded.length > statusFoldedKept) {
+        _statusFolded.remove(_statusFolded.first);
+      }
+    }
+    _saveSoon();
+    _changed();
   }
 
   void toggleProjectsGroup() {
@@ -2215,6 +2238,7 @@ class SuperTabController extends ChangeNotifier {
     'expandedProjects': expandedProjects.toList(),
     'expandedMachines': expandedMachines.toList(),
     'decisionsAside': _decisionsAside.toList(),
+    'statusFolded': _statusFolded.toList(),
     'devicesSelected': devicesSelected,
     'projectsGroupOpen': projectsGroupOpen,
     'machinesGroupOpen': machinesGroupOpen,

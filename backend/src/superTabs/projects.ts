@@ -38,8 +38,14 @@ export interface SwarmProject {
   visibility: ProjectVisibility
   members: Array<{ id: string; generation: string }>
   updateMinutes: 1 | 5 | 15 | 30
-  /** The morning digest (digest.ts): its local time ("08:00") and zone, and the local date and time of the last one sent. */
+  /** The morning digest (digest.ts): its local time ("08:00") and zone, and the local date and time of the last one sent.
+   *  On by default: a project without one gets the default on its coordinator's next poll, unless a person turned it off. */
   digest?: { time: string; timeZone: string; lastOn?: string; lastAt?: number }
+  /** A person turned the digest off (project.digest with time null), so the default is not filled in again. */
+  digestOff?: true
+  /** The status card at the top of the project chat (Dee, 2026-10-31): the coordinator's last project.report text, which
+   *  replaces the one before and posts nothing. Read exactly by those who read the project chat (model.ts visibleState). */
+  status?: ProjectStatus | null
   /** Report watermark per conversation (projectUpdates.ts); kept in its own part (store by parts). */
   progress?: import('./parts/types.js').ProgressData
   repository?: { machineId: string; cwd: string; repositoryUrl: string | null }
@@ -63,6 +69,10 @@ export interface SwarmProject {
   /** What its coordinator is called; reads give "Product Manager" when absent (instructions.ts coordinatorNameOf). */
   coordinatorName?: string
 }
+
+/** A project's status card: its text, when (ISO time) and by which agent it was written. */
+export interface ProjectStatus { text: string; at: string; by: string }
+export const PROJECT_STATUS_MAX = 2_000
 
 export const skillModeOf = (project: SwarmProject): SkillMode => project.skillMode ?? 'orchestration'
 /** Custom only while the stored mode is still Default: a release from before custom sets switches a project by skillMode

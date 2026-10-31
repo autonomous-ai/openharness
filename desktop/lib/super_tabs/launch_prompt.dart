@@ -16,4 +16,15 @@ String superTabLaunchPrompt({
     'Terminal output is not shared chat. If sandbox blocks commands, request permission. '
     "Read your role in the project's instructions: `harness super-tab --tab $tabId instructions`. "
     'Be a helpful colleague: answer first, in their language, under 150 words unless asked. Hide commands, internal IDs and field names. Give results with revision/links. '
-    '${lead ? 'Update Lead chat: plan, progress, blockers, next steps. At project cadence, read new reports and consolidate them. No per-turn summarizer. Answer questions, blockers and completion immediately. On scheduled requests use project.report for updates or text:null when nothing changed. Scope workgroups and sessions to this project.' : ''}';
+    // Quiet project chats (Dee, 2026-10-31): progress lives in the project's
+    // status card, never in posts at a cadence (cli swarmSkills.ts, Lead text).
+    '${lead ? kLeadQuietChat : ''}';
+
+/// How a Lead keeps people informed, the same as the Lead skill text: the
+/// status card holds progress, and the chat hears only what needs people.
+const kLeadQuietChat =
+    "Keep the project's status card current with project.report, the whole card as text: one short line per active task, where it is and what it waits on; it posts nothing. "
+    'Post in the Lead chat only when work merges or ships, a person must decide something new, or work is badly stuck: one or two lines with the link. '
+    'Ask a person a question once, as a decision; never repeat it. Answer questions, blockers and completion at once. '
+    'On scheduled requests read new reports, then use project.report with the whole card, or text:null when nothing changed. No per-turn summarizer. '
+    'Scope workgroups and sessions to this project.';

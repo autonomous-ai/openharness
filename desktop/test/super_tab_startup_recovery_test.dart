@@ -81,7 +81,12 @@ void main() {
     );
     expect(prompt, contains('read new reports'));
     expect(prompt, contains('No per-turn summarizer'));
-    expect(prompt, contains('On scheduled requests use project.report'));
+    expect(
+      prompt,
+      contains(
+        'On scheduled requests read new reports, then use project.report with the whole card',
+      ),
+    );
     expect(prompt, contains('text:null when nothing changed'));
   });
 
