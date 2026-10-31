@@ -7,7 +7,7 @@
  * folder before the Buddy's next turn (pruneBuddyHome).
  */
 import { execFile } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 import { insideGitCheckout } from '../lib/gitProject.js'
@@ -76,11 +76,16 @@ export async function prepareBuddyHome(home: string, projects: readonly BuddyPro
   const taken = new Set(rows.map(r => r.dir))
   for (const project of projects) {
     const known = rows.find(r => r.id === project.id)
-    if (known && existsSync(join(home, 'projects', known.dir))) { ready.push(project.name); continue }
+    // Kept only while it is still the folder made here: a link in its place is taken out and the worktree made again.
+    const kept = known && lstatSync(join(home, 'projects', known.dir), { throwIfNoEntry: false })
+    if (kept && kept.isDirectory()) { ready.push(project.name); continue }
+    if (kept) await removeWorktree(join(home, 'projects', known!.dir))
     if (!(await insideGitCheckout(project.cwd).catch(() => false))) { missing.push(project.name); continue }
     const dir = known?.dir ?? folderName(project.name, taken)
     taken.add(dir)
     try {
+      // A folder of this name removed before (a link taken out, a folder deleted) may still be listed by its checkout.
+      await run('git', ['-C', project.cwd, 'worktree', 'prune'], { timeout: 60_000 }).catch(() => undefined)
       await run('git', ['-C', project.cwd, 'worktree', 'add', '--detach', '--', join(home, 'projects', dir), 'HEAD'], { timeout: 120_000 })
       if (!known) rows.push({ id: project.id, name: project.name, dir })
       ready.push(project.name)
@@ -110,7 +115,11 @@ export async function removeBuddyHome(home: string): Promise<void> {
  *  Only a folder directly in a Buddy folder's `projects/`, by a name this file makes. */
 async function removeWorktree(path: string): Promise<void> {
   if (basename(dirname(path)) !== 'projects' || !SAFE_DIR.test(basename(path))) return
-  if (!existsSync(path)) return
+  // A link is never followed: a project folder that became a link to another worktree loses the link alone, and git is never
+  // asked to remove what it points at (security re-check 2 of #2436).
+  const entry = lstatSync(path, { throwIfNoEntry: false })
+  if (!entry) return
+  if (!entry.isDirectory()) { rmSync(path, { force: true }); return }
   await run('git', ['-C', path, 'worktree', 'remove', '--force', '--force', '--', path], { timeout: 60_000 }).catch(() => undefined)
   rmSync(path, { recursive: true, force: true })
 }

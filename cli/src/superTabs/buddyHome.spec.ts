@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -79,6 +79,28 @@ describe('a person\'s one Buddy\'s folder', () => {
     await pruneBuddyHome(home, new Set(['web']))
     await removeBuddyHome(home)
     expect(readFileSync(join(outside, 'file'), 'utf8')).toBe('mine')
+  })
+
+  it('never follows a link in its projects folder: another worktree a project folder links to is left whole (security re-check 2 of #2436)', async () => {
+    const r = root(), web = checkout(r, 'web-src'), other = checkout(r, 'other-src'), home = join(r, 'home')
+    await prepareBuddyHome(home, [{ id: 'web', name: 'Web', cwd: web }])
+    // Another worktree, someone else's, and the Web folder replaced by a link to it.
+    const theirs = join(r, 'their-worktree')
+    git(other, 'worktree', 'add', '--detach', '--', theirs, 'HEAD')
+    rmSync(join(home, 'projects', 'Web'), { recursive: true, force: true })
+    symlinkSync(theirs, join(home, 'projects', 'Web'))
+    await pruneBuddyHome(home, new Set())
+    expect(readFileSync(join(theirs, 'WHO'), 'utf8')).toBe('other-src\n')
+    expect(git(other, 'worktree', 'list')).toContain(theirs)
+    expect(existsSync(join(home, 'projects', 'Web'))).toBe(false)
+    // Made again, a link in a project's place is replaced by its own worktree, never kept.
+    const again = join(r, 'home2')
+    await prepareBuddyHome(again, [{ id: 'web', name: 'Web', cwd: web }])
+    rmSync(join(again, 'projects', 'Web'), { recursive: true, force: true })
+    symlinkSync(theirs, join(again, 'projects', 'Web'))
+    await prepareBuddyHome(again, [{ id: 'web', name: 'Web', cwd: web }])
+    expect(readFileSync(join(again, 'projects', 'Web', 'WHO'), 'utf8')).toBe('web-src\n')
+    expect(readFileSync(join(theirs, 'WHO'), 'utf8')).toBe('other-src\n')
   })
 
   it('names folders safely and apart, and reads only well-formed projects from a start', () => {
