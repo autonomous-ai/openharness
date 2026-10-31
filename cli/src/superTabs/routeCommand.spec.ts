@@ -8,6 +8,8 @@ import type { describeScmProject } from '../scm/scmProjects.js'
 import { admission, quotaOf, RELAYED_QUOTA, USED_UP_WINDOW } from './capacity.js'
 import { OTHER_REPOSITORY, type Catalog, type Probe, type RoutePlugin } from './route.js'
 import { MAKER_TIMEOUT_MS, type PluginInput, type PluginMaker } from './routePlugins.js'
+import { placedHeavyWork } from './machineFit.js'
+import { inspectCapacity } from './start.js'
 import { EARLIER_UNREADABLE, FIRST_ATTEMPT_ONLY, GRID_FIRST, GRID_LIMITS, NEVER_REVIEWS } from './routeCheapFirst.js'
 
 // Sonnet rated 3, as an owner who wants Sonnet Builders rates it (a build needs 3: route.ts buildRefusals), so the member these
@@ -189,6 +191,39 @@ describe('routeTask', () => {
     } finally { vi.useRealTimers() }
   })
   // A member at work is not offered; one whose task was lost is, with a note ('a member whose last task was lost').
+  it('judges heavy work by a machine reached directly, its members too, by the disk its capacity read measured', async () => {
+    const heavy = (needs: Record<string, unknown>) => ({ ...input, assessment: { ...input.assessment, needs: { heavy: ['build'], ...needs } } })
+    const reading = (resources: Record<string, unknown>) => opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], capacity: { resources, tools: { git: true }, devices: {} } }))
+    const disky = { memoryTotalBytes: 16e9, memoryUsedBytes: 2e9, cpuPercent: 10, projectDiskFreeBytes: 20e9 }
+    const short = 'Machine fit: Short of free disk for a heavy build: it needs 8 GB memory and 30 GB disk free, so equally strong candidates that have it rank first.'
+    const answer = await routeTask(heavy({}), scoped(), where as never, reading(disky))
+    const shown = [answer.pick, ...answer.alternatives as unknown[]] as Array<{ kind: string; notes?: string[] }>
+    expect(new Set(shown.map(c => c.kind))).toEqual(new Set(['member', 'new']))
+    for (const c of shown) expect(c.notes).toContain(short)
+    const folder = { describe: async () => null, isDirectory: async () => true }
+    expect(await routeTask(heavy({ cwd: '/repo' }), scoped(), where as never, reading(disky), () => 'op', folder)).toMatchObject({ ok: true, pick: { notes: expect.arrayContaining([short]) } })
+    // A read that measured no disk says so; its new agents' starts could not verify the disk either.
+    const blind = await routeTask(heavy({}), scoped(), where as never, reading({ memoryTotalBytes: 16e9, memoryUsedBytes: 2e9, cpuPercent: 10 }))
+    expect(blind).toMatchObject({ pick: { kind: 'member', notes: expect.arrayContaining(['Machine fit: Free disk unknown here; a heavy build: it needs 8 GB memory and 30 GB disk free.']) } })
+  })
+  // Lead, 10-31: a routed heavy start is never refused on the machine the route offered.
+  it('ranks a machine between half the need and the need later, and the start there is admitted and counts as heavy', async () => {
+    const between = { memoryTotalBytes: 16e9, memoryUsedBytes: 10e9, cpuPercent: 10, projectDiskFreeBytes: 100e9 }
+    const roomy = { memoryTotalBytes: 32e9, memoryUsedBytes: 2e9, cpuPercent: 10, projectDiskFreeBytes: 100e9 }
+    const machines = (id: string) => daemon(id, { capacity: { resources: id === 'm1' ? between : roomy, tools: { git: true }, devices: {} } })
+    const heavy = { ...input, assessment: { ...input.assessment, needs: { heavy: ['build'] } } }
+    const noMembers = tab(); noMembers.state.agents = agents.filter(a => a.id === 'a2') as never
+    const answer = await routeTask(heavy, scoped({ tab: noMembers }), where as never, opener(machines))
+    expect(answer).toMatchObject({ ok: true, pick: { machineId: 'm2' } })
+    const later = (answer.alternatives as Array<{ machineId: string; engine: string; notes?: string[] }>).find(c => c.machineId === 'm1')!
+    expect(later.notes).toContain('Machine fit: Short of free memory for a heavy build: it needs 8 GB memory and 30 GB disk free, so equally strong candidates that have it rank first.')
+    // The start the route suggests, on that machine: its own check admits it, and later routes count it as heavy work there.
+    const hint = JSON.parse(String(answer.next).replace(/^Start with: start OPERATION_ID /, '').replace(/, then assign[\s\S]*$/, ''))
+    const request = { ...hint, machineId: 'm1', engine: later.engine }
+    expect(await inspectCapacity(machines('m1') as never, request)).toMatchObject({ allowed: true })
+    expect(request.heavy).toEqual(['build'])
+    expect(placedHeavyWork([{ request, requestedAt: Date.now() }], Date.now()).get('m1')).toMatchObject({ agents: 1, memoryBytes: 8e9 })
+  })
   it('does not offer a member whose task is working', async () => {
     const state = tab({ id: 'x', agentId: 'a1', status: 'working' })
     const s = scoped({ tab: state })
@@ -1014,6 +1049,32 @@ describe('routing contributed capacity', () => {
     expect(answer.next).toContain('/owner/project')
     const member = await runPool(healthy(), true)
     expect(member.answer.ok).toBe(true)
+  })
+  // Scholes's goals, piece 5 (machineFit.ts): heavy work is judged by the machine's reading, for its members as for new agents.
+  it('judges heavy work by the contributed machine\'s free memory, disk and CPU, for members too, and its start says it is heavy', async () => {
+    const pool = healthy(); Object.assign(pool.observation.resources, { memoryUsedBytes: 26e9, cpuPercent: 92 })
+    const { answer } = await runPool(pool, true, { heavy: ['build'] })
+    const short = 'Machine fit: Short of free memory for a heavy build: it needs 8 GB memory and 30 GB disk free, so equally strong candidates that have it rank first. Its CPU is busy.'
+    const shown = [answer.pick, ...answer.alternatives as unknown[]] as Array<{ kind: string; notes?: string[] }>
+    expect(new Set(shown.map(c => c.kind))).toEqual(new Set(['member', 'new']))
+    for (const c of shown) expect(c.notes).toContain(short)
+    expect((await runPool(healthy(), false, { heavy: ['build'] })).answer.next).toContain('"requirements":{"memoryBytes":4000000000,"diskBytes":15000000000')
+    expect((await runPool(healthy(), false, { heavy: ['build'] })).answer.next).toContain('"heavy":["build"]')
+    expect((await runPool(healthy(), false)).answer.next).not.toContain('heavy')
+    // A reading with no CPU says nothing of it, and a machine that has what it needs says nothing at all.
+    const roomy = await runPool(healthy(), true, { heavy: ['build'] })
+    expect((roomy.answer.pick as { notes?: string[] }).notes ?? []).not.toEqual(expect.arrayContaining([expect.stringContaining('Machine fit')]))
+  })
+  // Review of #2426 (privacy): every reader of the route log reads the reasons, also for a machine the route shows nothing else
+  // of. A paused machine offers no new agent, so its reading was never shown; its member's reason must not show it either.
+  it('never shows a paused machine\'s measured memory, disk or CPU in its member\'s reason, the answer or the record', async () => {
+    const pool = { ...healthy(), paused: true }; Object.assign(pool.observation.resources, { memoryUsedBytes: 26e9, cpuPercent: 92 })
+    const { answer, s } = await runPool(pool, true, { heavy: ['build'] })
+    expect(answer).toMatchObject({ ok: true, pick: { kind: 'member', notes: expect.arrayContaining([
+      'Machine fit: Short of free memory for a heavy build: it needs 8 GB memory and 30 GB disk free, so equally strong candidates that have it rank first. Its CPU is busy.']) } })
+    for (const text of [JSON.stringify(answer), JSON.stringify(recorded(s).command.decision)]) {
+      for (const measured of ['6.0 GB', '200.0 GB', '92%', '6 GB', '200 GB']) expect(text).not.toContain(measured)
+    }
   })
   it('reads an old OpenCode contribution as its installed Claude observation', async () => {
     const pool = healthy()

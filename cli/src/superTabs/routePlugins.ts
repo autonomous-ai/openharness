@@ -7,6 +7,7 @@ import { MEASURED_MAKER } from './routeMeasured.js'
 import type { ScopedRequest } from './start.js'
 import { CHEAP_FIRST_MAKERS } from './routeCheapFirst.js'
 import { windowPullMaker } from './windowPull.js'
+import { MACHINE_FIT_MAKER } from './machineFit.js'
 
 type Json = Record<string, unknown>
 
@@ -31,6 +32,8 @@ export const ROUTE_PLUGIN_MAKERS: readonly PluginMaker[] = [
   // Piece 3: measured cost per shipped change and first-review pass rate, per kind of work.
   MEASURED_MAKER,
   windowPullMaker(),
+  // Piece 5: machine fit for heavy work, and the CI jobs limit.
+  MACHINE_FIT_MAKER,
 ]
 
 /** As long as the route's other context reads wait (wire.ts within): a maker's read is context too, never worth holding the

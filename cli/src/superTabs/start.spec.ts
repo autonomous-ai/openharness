@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { BUDDY_SESSION_ENGINE, inspectCapacity, MODEL_REPORT_WAIT_MS, startAgent } from './start.js'
+import { BUDDY_SESSION_ENGINE, HEAVY_NOT_RECORDED, HEAVY_REFUSED, inspectCapacity, MODEL_REPORT_WAIT_MS, startAgent } from './start.js'
 import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
 import { SuperTabHostError } from './wire.js'
 const teamDaemon = vi.hoisted(() => ({ value: false, relayed: true, offered: null as null | { slugs: string[]; listed: string[] } }))
@@ -123,6 +123,57 @@ describe('Swarm permission mode', () => {
     expect(commands.find(c => c?.type === 'agent.started')).toMatchObject({ configuration: { engine: 'opencode' } })
     expect(commands.some(c => c?.type === 'agent.startFailed')).toBe(false)
     expect(f.request.mock.calls.some(c => c[0] === 'agent_create')).toBe(false)
+  })
+
+  // Scholes's goals, piece 5: a heavy start says so in its own field, which a server from before it refuses in its body check.
+  describe('a start that declares heavy work', () => {
+    const submitted = (f: ReturnType<typeof fixture>) => f.scoped.mock.calls.map(c => c[0].command as Record<string, any> | undefined)
+      .filter(c => c?.type === 'agent.start').map(c => c!.request as Record<string, unknown>)
+    const heavyStart = (f: ReturnType<typeof fixture>, answer: (request: Record<string, any>) => unknown) => {
+      const scoped = f.scoped.getMockImplementation()!
+      Object.assign(f.start, { poolGeneration: 'pool' })
+      f.scoped.mockImplementation(async payload => {
+        const command = payload.command as Record<string, any> | undefined
+        if (command?.type !== 'agent.start') return scoped(payload)
+        return (answer(command.request) ?? scoped(payload)) as Record<string, unknown>
+      })
+      return startAgent({ action: 'start', tabId: 'tab', operationId: 'op-heavy', request: { ...f.start.request, heavy: ['build'] } }, f.scoped, where, f.open, noPause)
+    }
+    it('sends the field to a server that takes it, once', async () => {
+      const f = fixture()
+      const result = await heavyStart(f, () => undefined)
+      expect(result).toMatchObject({ ok: true, queued: true, startId: 'start' })
+      expect(result).not.toHaveProperty('heavyWarning')
+      expect(submitted(f)).toEqual([expect.objectContaining({ heavy: ['build'], permissionMode: 'full' })])
+    })
+    it('sends the start once more without it when an older server refuses that field, and says routes will not count it', async () => {
+      const f = fixture()
+      const result = await heavyStart(f, request => request.heavy ? { error: 'VALIDATION_ERROR', detail: HEAVY_REFUSED } : undefined)
+      expect(result).toMatchObject({ ok: true, queued: true, startId: 'start', heavyWarning: HEAVY_NOT_RECORDED })
+      const sent = submitted(f)
+      expect(sent).toHaveLength(2)
+      expect(sent[1]).not.toHaveProperty('heavy')
+      expect(sent[1]).toEqual({ ...sent[0], heavy: undefined, permissionMode: 'full' } as never)
+      expect(new Set(f.scoped.mock.calls.filter(c => (c[0].command as { type?: string } | undefined)?.type === 'agent.start').map(c => c[0].operationId))).toEqual(new Set(['op-heavy']))
+    })
+    it('never sends it again on a timeout or any other refusal, which may have started an agent', async () => {
+      for (const answer of [{ error: 'VALIDATION_ERROR', detail: 'command.request.name: Too big' }, { error: 'VALIDATION_ERROR', detail: 'command.request: Unrecognized key: "other"' },
+        { error: 'MACHINE_OFFLINE', detail: 'Wait for a fresh reading from the contributed machine.' }, { error: 'BACKEND_TIMEOUT', detail: 'timeout' }]) {
+        const f = fixture()
+        await expect(heavyStart(f, () => answer)).rejects.toThrow()
+        expect(submitted(f)).toHaveLength(1)
+      }
+      const f = fixture()
+      await expect(heavyStart(f, () => { throw new Error('socket closed') })).rejects.toThrow('socket closed')
+      expect(submitted(f)).toHaveLength(1)
+      // A start that declares no heavy work is never sent again for that refusal either.
+      const plain = fixture(), scoped = plain.scoped.getMockImplementation()!
+      Object.assign(plain.start, { poolGeneration: 'pool' })
+      plain.scoped.mockImplementation(async payload => (payload.command as { type?: string } | undefined)?.type === 'agent.start'
+        ? { error: 'VALIDATION_ERROR', detail: HEAVY_REFUSED } : scoped(payload))
+      await expect(startAgent({ action: 'start', tabId: 'tab', operationId: 'op', request: plain.start.request }, plain.scoped, where, plain.open, noPause)).rejects.toThrow()
+      expect(submitted(plain)).toHaveLength(1)
+    })
   })
 
   it('recovers the same legacy start after its accepted reply is lost', async () => {

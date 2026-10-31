@@ -127,6 +127,10 @@ export interface AgentStartRequest {
   codexHome?: string
   gridModel?: string
   gridName?: string
+  /** The heavy work the task declared it runs on its machine (a heavy build, end-to-end tests): later routes count such a start
+   *  on its machine for a few minutes, before the machine's reading shows it (cli superTabs/machineFit.ts, Scholes's goals,
+   *  piece 5). Its requirements ask only the least the work runs with, so this says what it is. */
+  heavy?: Array<'build' | 'e2e'>
   requirements: { memoryBytes: number; diskBytes: number; maxCpuPercent: number; tools: string[]; devices: string[]; quotaRequired: boolean }
   /** A Buddy's start (buddies.ts): written by buddy.create alone, never taken from an agent.start. */
   buddyOf?: { personId: string; generation: string }

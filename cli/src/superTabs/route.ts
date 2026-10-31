@@ -16,7 +16,12 @@ export type Size = 'small' | 'medium' | 'large'
  * (docs/plans/2026-10-23-swarm-local-models.md). */
 /** `model`: a model a person named, in their words ("deepseek 4.1 flash"); only candidates running it are considered,
  * whatever their strength (owner, 2026-10-23: a Builder on a named API model was ranked below Opus and never offered). */
-export interface Assessment { difficulty: Level; risk: Level; size: Size; why: string; kind?: string; local?: boolean; model?: string; needs: { tools: string[]; devices: string[]; cwd?: string } }
+/** `needs.heavy`: the work runs a heavy build or end-to-end tests on its machine, so it needs more free memory and disk than a
+ * start (machineFit.ts). `needs.ci`: the CI jobs the work starts at once, and how many of them on macOS runners, held against
+ * the account's running-jobs limit. Both are left out when not given, so a request without them answers as before. */
+export type HeavyWork = 'build' | 'e2e'
+export interface Needs { tools: string[]; devices: string[]; cwd?: string; heavy?: HeavyWork[]; ci?: { jobs: number; macos: number } }
+export interface Assessment { difficulty: Level; risk: Level; size: Size; why: string; kind?: string; local?: boolean; model?: string; needs: Needs }
 /** A model of the reviewed catalog (backend superTabs/catalog.ts): how strong it is, what it costs, and whether it is offered
  * when nobody names it. */
 export interface CatalogModel { engine: 'claude' | 'codex'; model: string; effort: string; strength: number; cost: number; offered: boolean; note?: string }
@@ -39,8 +44,9 @@ export interface Quota { known: boolean; leftPercent: number | null; resetsAt: n
 export interface TaskFolder { cwd: string; kind: 'git' | 'none' | 'missing' | 'unknown'; name: string | null; root: string | null; remote: string | null }
 /** What a member's `agents_list` frame says it is working on; every field is null when the frame does not say. */
 export interface MemberFrame { title: string | null; project: string | null; cwd: string | null; root: string | null; remote: string | null; branch: string | null; updatedAt: number | null }
-/** What a machine offers a new agent. Each field is null when it could not be read. */
-export interface MachineLoad { agents: number | null; freeMemoryBytes: number | null; hasFolder: boolean | null }
+/** What a machine offers an agent. Each field is null when it could not be read; `freeDiskBytes` (the project's disk) and
+ * `cpuPercent` are absent where the probe did not read them. */
+export interface MachineLoad { agents: number | null; freeMemoryBytes: number | null; hasFolder: boolean | null; freeDiskBytes?: number | null; cpuPercent?: number | null }
 export interface Probe {
   kind: 'member' | 'new'; agentId?: string; name?: string; machineId: string; machineName: string
   /** `quality` is the catalog's strength, 1 for a model it does not rate (`unrated`). */
@@ -55,7 +61,7 @@ export interface Probe {
   /** Members: the frame (null when it could not be read), whether the member is in the task's repository, and its earlier work in this Super Tab. */
   frame?: MemberFrame | null; repo?: 'same' | 'different' | 'unknown'; earlier?: Array<{ group: string; outcome: string }>
   terminalUnverified?: boolean
-  /** New agents: what the machine has. */
+  /** What the machine has: for new agents, and for members where their machine's reading is known. */
   load?: MachineLoad
   /** A new agent on a model served on the Swarm's grid: free, reached through the grid relay, `model`/`effort` `default`.
    *  [gridKind]: a member's engine (`local`), a member's API (`api`), or a model shared with this machine's owner. */
@@ -170,6 +176,7 @@ function pluginAdjustments<T extends Probe & { fit: Fit }>(ranked: T[], plugins:
 export interface Verdict { pick: Shown; via: 'order' | 'only'; p: null; why: string }
 
 const LEVELS: Level[] = ['low', 'medium', 'high']
+const HEAVY_WORK: unknown[] = ['build', 'e2e'] satisfies HeavyWork[]
 /** Run time and spend per window by task size, for a catalog row of cost 2 (owner's table, 2026-10-21). */
 export const SIZES: Record<Size, { minutes: number; spend: Record<Window, number> }> = {
   small: { minutes: 20, spend: { '5-hour': 10, weekly: 1 } },
@@ -219,9 +226,18 @@ export function parseAssessment(value: unknown): Assessment | string {
   if (v.kind !== undefined && (typeof v.kind !== 'string' || !/^[a-z][a-z0-9-]{0,39}$/.test(v.kind))) return 'Set kind to one lowercase word, such as ui or docs.'
   if (v.local !== undefined && typeof v.local !== 'boolean') return 'Set local to true only when a person asked for a local model.'
   if (v.model !== undefined && (typeof v.model !== 'string' || !words(v.model).length || v.model.length > 200)) return 'Set model to the model a person named, in their words.'
+  const heavy = needs.heavy
+  if (heavy !== undefined && (!Array.isArray(heavy) || !heavy.every(h => HEAVY_WORK.includes(h)))) return 'Set needs.heavy to a list of build and e2e.'
+  const ci = needs.ci === undefined ? undefined : object(needs.ci)
+  const count = (n: unknown, max: number) => Number.isInteger(n) && (n as number) >= 0 && (n as number) <= max
+  if (ci && (!count(ci.jobs, 100) || (ci.jobs as number) < 1 || (ci.macos !== undefined && !count(ci.macos, ci.jobs as number)))) {
+    return 'Set needs.ci to the CI jobs the work starts, as {"jobs": 1 to 100, "macos": how many of them run on macOS}.'
+  }
   return { difficulty: v.difficulty as Level, risk: v.risk as Level, size: size as Size, why, ...(v.kind ? { kind: v.kind as string } : {}),
     ...(v.local === true ? { local: true } : {}), ...(typeof v.model === 'string' ? { model: v.model.trim() } : {}),
-    needs: { tools: list(needs.tools), devices: list(needs.devices), ...(cwd ? { cwd } : {}) } }
+    needs: { tools: list(needs.tools), devices: list(needs.devices), ...(cwd ? { cwd } : {}),
+      ...(Array.isArray(heavy) && heavy.length ? { heavy: [...new Set(heavy as HeavyWork[])] } : {}),
+      ...(ci ? { ci: { jobs: ci.jobs as number, macos: (ci.macos as number | undefined) ?? 0 } } : {}) } }
 }
 
 /** Claude sends ISO strings, Codex epoch seconds; anything above 1e10 is already milliseconds. */
