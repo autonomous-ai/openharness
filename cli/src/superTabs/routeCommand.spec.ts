@@ -144,6 +144,20 @@ describe('routeTask', () => {
     expect(await routeTask(input, s, where as never, opener(), () => 'op')).toMatchObject({ instructions: { revision: 1, notes: [] } })
     expect(leftOut([{ title: 't', reason: 'x'.repeat(301), machine: 'm' }], [])).toEqual([{ machine: 'm', reasons: [`${'x'.repeat(299)}…`] }])
   })
+  it('pulls the task onto the account whose weekly window resets soon with quota left, through its listed maker (piece 6)', async () => {
+    const reading = (account: string, weeklyUsed: number, weeklyResetsIn: number) => ({ providers: [{ provider: 'claude', outcome: 'answered', httpStatus: 200, account,
+      body: { five_hour: { utilization: 20, resets_at: new Date(Date.now() + 3 * 3_600_000).toISOString() },
+        seven_day: { utilization: weeklyUsed, resets_at: new Date(Date.now() + weeklyResetsIn).toISOString() } } }] })
+    // m1 (remote-1) has a fresh week; m2 (mac) resets in 12 hours with 60% left.
+    const machines = opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], usage: id === 'm2' ? reading('acct-soon', 40, 12 * 3_600_000) : reading('acct-fresh', 10, 5 * 86_400_000) }))
+    const plain = await routeTask(input, scoped(), where as never, machines, () => 'op', undefined, [])
+    expect(plain).toMatchObject({ ok: true, pick: { title: expect.stringContaining('remote-1') } })
+    const s = scoped()
+    const pulled = await routeTask(input, s, where as never, machines, () => 'op')
+    expect(pulled).toMatchObject({ ok: true, pick: { title: expect.stringContaining('mac') } })
+    expect(labels(s)[0]).toContain('Window pull: its account\'s weekly window resets in 12h')
+    expect(JSON.stringify(pulled)).not.toContain('acct-soon')
+  })
   it('answers exactly as before with no makers, and with makers that have nothing to say', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     try {

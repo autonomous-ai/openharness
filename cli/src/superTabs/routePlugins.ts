@@ -4,6 +4,7 @@
  *  routeTask starts every maker together with the machine probes, so a maker's read costs no time of its own. */
 import { pluginSkipped, type Assessment, type Catalog, type RoutePlugin } from './route.js'
 import type { ScopedRequest } from './start.js'
+import { windowPullMaker } from './windowPull.js'
 
 type Json = Record<string, unknown>
 
@@ -23,7 +24,9 @@ export interface PluginInput {
 export interface PluginMaker { readonly name: string; make(input: PluginInput): Promise<RoutePlugin | null> }
 
 /** The makers, in the order their plug-ins run. One line per piece. */
-export const ROUTE_PLUGIN_MAKERS: readonly PluginMaker[] = []
+export const ROUTE_PLUGIN_MAKERS: readonly PluginMaker[] = [
+  windowPullMaker(),
+]
 
 /** As long as the route's other context reads wait (wire.ts within): a maker's read is context too, never worth holding the
  *  route for. */
