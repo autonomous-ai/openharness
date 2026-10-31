@@ -291,9 +291,11 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
         0.0,
         constraints.maxWidth,
       );
+      // One gap between name, chip and model.
+      const gap = 6.0;
       final nameWidth = measure(name, nameStyle).clamp(
         0.0,
-        (constraints.maxWidth - badgeWidth - 6).clamp(0.0, double.infinity),
+        (constraints.maxWidth - badgeWidth - gap).clamp(0.0, double.infinity),
       );
       Widget tag(String text) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
@@ -320,7 +322,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
                 style: nameStyle,
               ),
             ),
-            const SizedBox(width: 6),
+            const SizedBox(width: gap),
           ],
           Semantics(
             label: role,
@@ -331,7 +333,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
           if (model != null)
             Flexible(
               child: Padding(
-                padding: const EdgeInsets.only(left: 6),
+                padding: const EdgeInsets.only(left: gap),
                 child: Text(
                   model,
                   key: modelKey,
