@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
+import { storeOldLeads } from './leads.test-support.js'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { checkMentions, MAX_MENTIONS, tagTokens } from './mentions.js'
 import { createSuperTab, type Actor } from './model.js'
@@ -68,10 +69,10 @@ describe('people tagging people', () => {
     expect(() => f.send(f.group, ['stranger'])).toThrow(expect.objectContaining({ code: 'INVALID_MENTION' }))
   })
 
-  it('refuses tags in the Leads conversation', () => {
+  it('refuses a post with tags in an older Swarm\'s removed Leads conversation, as every post there', () => {
     const f = fixture()
-    const leads = f.state.leadsConversationId!
-    expect(() => f.send(leads, ['peer'])).toThrow(expect.objectContaining({ code: 'INVALID_MENTION' }))
+    const leads = storeOldLeads(f.state)
+    expect(() => f.send(leads, ['peer'])).toThrow(expect.objectContaining({ code: 'LEADS_CONVERSATION_REMOVED' }))
   })
 
   // Who tags a person is workflow (project instructions, phase 4): any agent of the project, in its own project only.
@@ -82,7 +83,7 @@ describe('people tagging people', () => {
     expect(checkMentions(f.state, worker, group(f.group), ['peer', 'third', 'peer'])).toEqual(['peer', 'third'])
     expect(f.send(f.group, ['peer'], worker).mentions).toEqual(['peer'])
     expect(f.say(f.group, '@third please confirm', worker).mentions).toEqual(['third'])
-    expect(() => checkMentions(f.state, worker, group(f.state.leadsConversationId!), ['peer']))
+    expect(() => checkMentions(f.state, worker, group(storeOldLeads(f.state)), ['peer']))
       .toThrow(expect.objectContaining({ code: 'INVALID_MENTION' }))
   })
 
@@ -147,9 +148,8 @@ describe('tags in the text', () => {
     expect(worker.text).toBe('@peer please confirm')
   })
 
-  it('tags nobody from the text of a Leads conversation post or an agent-only notice', () => {
+  it('tags nobody from the text of an agent-only notice', () => {
     const f = fixture()
-    expect(f.say(f.state.leadsConversationId!, '@peer look').mentions ?? []).toEqual([])
     const notice = f.run({ type: 'message.send', conversationId: f.app.conversationId, text: '@peer is away', replyTo: null,
       recipientIds: [f.lead], agentOnly: true }, { kind: 'agent', agentId: f.lead, machineOwnerId: 'owner' }).messages.at(-1)!
     expect(notice.mentions ?? []).toEqual([])

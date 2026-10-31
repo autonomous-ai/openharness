@@ -29,7 +29,6 @@ SwarmHomeSwarm swarmHomeSwarm(
     'name': snapshot.name,
     'ownerId': snapshot.ownerId,
     'paused': snapshot.paused,
-    'leadsConversationId': ?snapshot.leadsConversationId,
     'projects': [for (final p in snapshot.projects) _project(p)],
     'people': [
       for (final p in snapshot.people)

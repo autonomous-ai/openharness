@@ -572,13 +572,8 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
       const SizedBox(height: DesktopChrome.groupGap),
       SuperTabSectionHeading(
         'Agents',
-        // An agent joins the Product Managers' conversation by leading a project,
-        // and a private conversation holds only the project's Lead.
-        onAdd:
-            c.canWrite &&
-                c.selected != null &&
-                c.selected!.id != c.snapshot?.leadsConversationId &&
-                audience == null
+        // A private conversation holds only the project's Lead.
+        onAdd: c.canWrite && c.selected != null && audience == null
             ? () => widget.onAddAgent(c.selected!)
             : null,
         addTooltip: 'Add agent',

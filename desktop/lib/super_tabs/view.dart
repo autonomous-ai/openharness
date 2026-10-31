@@ -1908,8 +1908,6 @@ class _SuperTabViewState extends State<SuperTabView>
               : 'Choose a project'
         : c.snapshot!.isProjectLead(group.id)
         ? '# ${c.snapshot!.projectFor(group.id)!.name}'
-        : group.id == c.snapshot!.leadsConversationId
-        ? '# $kProductManagersChannel'
         : _buddyName(group) == null
         ? null
         : c.buddy(group.projectId) == null && group.buddyName == null
@@ -1925,14 +1923,11 @@ class _SuperTabViewState extends State<SuperTabView>
   }
 
   /// The composer's hint, naming the open conversation as its sidebar row
-  /// does: "Message #openharness", "Message #product-managers", "Message Wren".
+  /// does: "Message #openharness", "Message Wren".
   String _messageHint(SuperTabConversation group) {
     final snapshot = c.snapshot!;
     if (snapshot.isProjectLead(group.id)) {
       return 'Message #${snapshot.projectFor(group.id)!.name}';
-    }
-    if (group.id == snapshot.leadsConversationId) {
-      return 'Message #$kProductManagersChannel';
     }
     if (_buddyName(group) case final buddy?) return 'Message $buddy';
     return 'Message ${group.title}';
@@ -2008,138 +2003,134 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
-  Widget _header(
-    SuperTabConversation? group,
-    bool narrow,
-    bool showRoster,
-  ) => Container(
-    constraints: const BoxConstraints(minHeight: 52),
-    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
-    decoration: BoxDecoration(
-      border: Border(bottom: BorderSide(color: DesktopChrome.rim)),
-    ),
-    child: Row(
-      children: [
-        if (narrow)
-          fingerTarget(
-            enabled: _phone,
-            AppIconButton(
-              icon: AppIcons.columns2,
-              tooltip: 'Conversations',
-              onPressed: () => setState(() => _sidebarOpen = !_sidebarOpen),
-            ),
-          ),
-        Expanded(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // A view saved on this device, until the first read
-                // replaces it ([SuperTabReading.drawsSaved]).
-                if (c.showingSaved)
-                  Row(
-                    children: [
-                      Flexible(child: _title(group)),
-                      const SizedBox(width: 8),
-                      // Where the copy is; how long it stays and where
-                      // it is cleared, a hover or a long press away.
-                      Flexible(
-                        child: Tooltip(
-                          message:
-                              'This browser keeps a copy of the Super '
-                              'Tabs you open until you sign out. '
-                              'Settings ▸ Account clears it now.',
-                          child: Text(
-                            'Saved in this browser · Updating…',
-                            key: const ValueKey('super-updating'),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: DesktopChrome.metadata(),
-                          ),
-                        ),
-                      ),
-                    ],
-                  )
-                else
-                  _title(group),
-                if (!_devicesVisible && !_notificationsVisible)
-                  ?_subtitle(group),
-              ],
-            ),
-          ),
+  Widget _header(SuperTabConversation? group, bool narrow, bool showRoster) =>
+      Container(
+        constraints: const BoxConstraints(minHeight: 52),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
+        decoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: DesktopChrome.rim)),
         ),
-        if (group != null && !_devicesVisible && !_notificationsVisible) ...[
-          fingerTarget(
-            enabled: _phone,
-            AppIconButton(
-              key: const ValueKey('super-chat'),
-              icon: AppIcons.messageSquare,
-              size: AppIcons.inlineSize,
-              tooltip: 'Chat',
-              selected: !_terminalsVisible && !_showPullRequests,
-              color: !_terminalsVisible && !_showPullRequests
-                  ? DesktopChrome.foreground
-                  : DesktopChrome.muted,
-              onPressed: () {
-                setState(() => _showPullRequests = false);
-                widget.onCloseTerminal?.call();
-                _readVisibleTailAfterFrame();
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (mounted) _focus.requestFocus();
-                });
-              },
+        child: Row(
+          children: [
+            if (narrow)
+              fingerTarget(
+                enabled: _phone,
+                AppIconButton(
+                  icon: AppIcons.columns2,
+                  tooltip: 'Conversations',
+                  onPressed: () => setState(() => _sidebarOpen = !_sidebarOpen),
+                ),
+              ),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // A view saved on this device, until the first read
+                    // replaces it ([SuperTabReading.drawsSaved]).
+                    if (c.showingSaved)
+                      Row(
+                        children: [
+                          Flexible(child: _title(group)),
+                          const SizedBox(width: 8),
+                          // Where the copy is; how long it stays and where
+                          // it is cleared, a hover or a long press away.
+                          Flexible(
+                            child: Tooltip(
+                              message:
+                                  'This browser keeps a copy of the Super '
+                                  'Tabs you open until you sign out. '
+                                  'Settings ▸ Account clears it now.',
+                              child: Text(
+                                'Saved in this browser · Updating…',
+                                key: const ValueKey('super-updating'),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: DesktopChrome.metadata(),
+                              ),
+                            ),
+                          ),
+                        ],
+                      )
+                    else
+                      _title(group),
+                    if (!_devicesVisible && !_notificationsVisible)
+                      ?_subtitle(group),
+                  ],
+                ),
+              ),
             ),
-          ),
-          if (!_menuNamesViews) ...[
-            const SizedBox(width: 4),
-            AppIconButton(
-              key: const ValueKey('super-terminals'),
-              icon: AppIcons.terminal,
-              size: AppIcons.inlineSize,
-              tooltip: 'Group terminals (${group.agentIds.length})',
-              selected: _terminalsVisible,
-              color: _terminalsVisible
-                  ? DesktopChrome.foreground
-                  : DesktopChrome.muted,
-              onPressed: _openTerminals(group),
-            ),
-            const SizedBox(width: 4),
-            AppIconButton(
-              key: const ValueKey('super-pull-requests'),
-              focusNode: _pullRequestsFocus,
-              icon: AppIcons.gitPullRequest,
-              size: AppIcons.inlineSize,
-              tooltip: 'Pull requests',
-              selected: !_terminalsVisible && _showPullRequests,
-              color: !_terminalsVisible && _showPullRequests
-                  ? DesktopChrome.foreground
-                  : DesktopChrome.muted,
-              onPressed: _openPullRequests,
-            ),
+            if (group != null &&
+                !_devicesVisible &&
+                !_notificationsVisible) ...[
+              fingerTarget(
+                enabled: _phone,
+                AppIconButton(
+                  key: const ValueKey('super-chat'),
+                  icon: AppIcons.messageSquare,
+                  size: AppIcons.inlineSize,
+                  tooltip: 'Chat',
+                  selected: !_terminalsVisible && !_showPullRequests,
+                  color: !_terminalsVisible && !_showPullRequests
+                      ? DesktopChrome.foreground
+                      : DesktopChrome.muted,
+                  onPressed: () {
+                    setState(() => _showPullRequests = false);
+                    widget.onCloseTerminal?.call();
+                    _readVisibleTailAfterFrame();
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted) _focus.requestFocus();
+                    });
+                  },
+                ),
+              ),
+              if (!_menuNamesViews) ...[
+                const SizedBox(width: 4),
+                AppIconButton(
+                  key: const ValueKey('super-terminals'),
+                  icon: AppIcons.terminal,
+                  size: AppIcons.inlineSize,
+                  tooltip: 'Group terminals (${group.agentIds.length})',
+                  selected: _terminalsVisible,
+                  color: _terminalsVisible
+                      ? DesktopChrome.foreground
+                      : DesktopChrome.muted,
+                  onPressed: _openTerminals(group),
+                ),
+                const SizedBox(width: 4),
+                AppIconButton(
+                  key: const ValueKey('super-pull-requests'),
+                  focusNode: _pullRequestsFocus,
+                  icon: AppIcons.gitPullRequest,
+                  size: AppIcons.inlineSize,
+                  tooltip: 'Pull requests',
+                  selected: !_terminalsVisible && _showPullRequests,
+                  color: !_terminalsVisible && _showPullRequests
+                      ? DesktopChrome.foreground
+                      : DesktopChrome.muted,
+                  onPressed: _openPullRequests,
+                ),
+              ],
+              fingerTarget(
+                enabled: _phone,
+                _options(group, views: _menuNamesViews),
+              ),
+            ],
+            if (!showRoster)
+              fingerTarget(
+                enabled: _phone,
+                AppIconButton(
+                  icon: AppIcons.users,
+                  tooltip: 'Members and machines',
+                  selected: _rosterOpen,
+                  onPressed: _toggleRoster,
+                ),
+              ),
           ],
-          // Not a workgroup: nothing to rename, archive or detail — but
-          // on a phone ⋮ still carries the views the bar leaves out.
-          if (_menuNamesViews || group.id != c.snapshot!.leadsConversationId)
-            fingerTarget(
-              enabled: _phone,
-              _options(group, views: _menuNamesViews),
-            ),
-        ],
-        if (!showRoster)
-          fingerTarget(
-            enabled: _phone,
-            AppIconButton(
-              icon: AppIcons.users,
-              tooltip: 'Members and machines',
-              selected: _rosterOpen,
-              onPressed: _toggleRoster,
-            ),
-          ),
-      ],
-    ),
-  );
+        ),
+      );
 
   /// The group's ⋮ menu. With [views] (a phone) it opens on the views the
   /// header has no room for — the group's terminals and its pull requests —
@@ -2147,7 +2138,6 @@ class _SuperTabViewState extends State<SuperTabView>
   Widget _options(SuperTabConversation group, {bool views = false}) {
     final project = c.snapshot?.projectFor(group.id);
     final isProject = c.snapshot?.isProjectLead(group.id) == true;
-    final isLeads = group.id == c.snapshot?.leadsConversationId;
     final editable = c.canWrite && !c.saving && !c.hasPendingAction;
     Widget item(String label, VoidCallback? action) => MenuItemButton(
       style: ButtonStyle(
@@ -2174,13 +2164,9 @@ class _SuperTabViewState extends State<SuperTabView>
             _openTerminals(group),
           ),
           item('Pull requests', _openPullRequests),
-          if (!isLeads) const Divider(height: 9),
+          const Divider(height: 9),
         ],
-        // The leads' conversation is no workgroup: nothing to rename, archive
-        // or detail.
-        if (isLeads)
-          ...const <Widget>[]
-        else if (isProject) ...[
+        if (isProject) ...[
           if (editable && project?.ownerId == c.accountId)
             item('Rename project', () => _groupAction('rename', group)),
           item('Project details', () => _groupAction('details', group)),

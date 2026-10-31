@@ -89,8 +89,8 @@ async function scene() {
   })
   const quietLead = bulk('ql', QUIET_LEAD, 'lead', true), quietOther = bulk('qo', QUIET_OTHER, other, true), open = bulk('op', OPEN, 'lead', false)
   await db.swarmGroup.createMany({ data: [...quietLead, ...quietOther, ...open] })
-  // Every project's Lead conversation and the Leads' one: a host's light load always reads them (parts/light.ts).
-  const leadConversations = [...state.projects!.map(p => p.leadConversationId), ...state.leadsConversationId ? [state.leadsConversationId] : []]
+  // Every project's Lead conversation: a host's light load always reads them (parts/light.ts).
+  const leadConversations = state.projects!.map(p => p.leadConversationId)
   const active = [...leadConversations, web, done, ...open.map(r => r.key)]
   return { tabId, machineId, lead, worker, reviewer, web, done, other, empty, quietLead, quietOther, leadConversations, active }
 }

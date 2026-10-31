@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { storeOldLeads } from '../leads.test-support.js'
 import { normalize } from './normalize.js'
 import { NOW, richSwarm } from '../read/fixture.test-support.js'
 import type { Conversation, SuperTabState } from '../model.js'
@@ -81,13 +82,14 @@ describe('migration normalize (design 6.1.2 step 2)', () => {
     expect(group(normalize(legacy, { now: NOW, lastActivity: new Map() }), s.done).dormant).toBe(true)
   })
 
-  it('parks conversations of an unknown kind and keeps the Leads conversation in step, as reading the row does', () => {
+  it('parks conversations of an unknown kind, and keeps a stored Leads conversation as it is without making one', () => {
     const legacy = structuredClone(richSwarm().state)
     legacy.conversations.push({ id: 'later', kind: 'future' as never, title: 'Later', leadId: null, agentIds: [], archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0 })
-    legacy.conversations = legacy.conversations.filter(c => c.kind !== 'leads')
-    const state = normalize(legacy, { now: NOW, lastActivity: new Map() })
-    expect(state.parkedConversations!.map(c => c.id)).toEqual(['later'])
-    expect(state.conversations.at(-1)!.kind).toBe('leads')
+    const fresh = normalize(legacy, { now: NOW, lastActivity: new Map() })
+    expect(fresh.parkedConversations!.map(c => c.id)).toEqual(['later'])
+    expect(fresh.conversations.some(c => c.kind === 'leads')).toBe(false)
+    storeOldLeads(legacy, ['someone'])
+    expect(normalize(legacy, { now: NOW, lastActivity: new Map() }).conversations.find(c => c.kind === 'leads')).toMatchObject({ id: 'old-leads', agentIds: ['someone'] })
   })
 
   it('does not change its input', () => {

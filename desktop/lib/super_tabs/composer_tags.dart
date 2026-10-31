@@ -52,9 +52,8 @@ String superTabAgentName(SuperTabController c, SuperTabAgent agent) =>
     c.snapshot?.agentName(agent.id, fallback: agent.name) ?? agent.name;
 
 /// Who `@` offers in [group]: the people who read it, then its agents,
-/// filtered by [query]. Never the reader; nobody is tagged in the Leads
-/// conversation, so it offers agents alone. Without [agents] (a thread its
-/// own Buddy session answers, where only that session hears a reply), people
+/// filtered by [query]. Never the reader. Without [agents] (a thread its own
+/// Buddy session answers, where only that session hears a reply), people
 /// alone. [choose] puts the picked one in the text.
 List<SuperTabComposerChoice> superTabTagChoices(
   SuperTabController c,
@@ -68,7 +67,6 @@ List<SuperTabComposerChoice> superTabTagChoices(
   if (snapshot == null) return const [];
   final project = snapshot.projectFor(group.id);
   bool reads(SuperTabPerson person) => switch (group) {
-    _ when group.kind == 'leads' => false,
     SuperTabConversation(:final audience?) => audience.contains(person.id),
     _ when group.buddyOwnerId != null => person.id == group.buddyOwnerId,
     _ =>
