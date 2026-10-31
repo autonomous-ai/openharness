@@ -8,7 +8,7 @@
  */
 import { execFile } from 'node:child_process'
 import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { basename, dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { insideGitCheckout } from '../lib/gitProject.js'
 
@@ -68,7 +68,9 @@ function writeListed(home: string, rows: Listed[]): void {
  * one that cannot be made is left out, never retried in a loop. The person's own checkouts are only read from.
  */
 export async function prepareBuddyHome(home: string, projects: readonly BuddyProject[]): Promise<{ ready: string[]; missing: string[] }> {
+  ownFolders(home, true)
   mkdirSync(join(home, 'projects'), { recursive: true, mode: 0o700 })
+  ownFolders(home)
   // A project its person no longer reads leaves before the Buddy's first turn, not only before a delivery (security review 1
   // of #2436): a relaunch starts from the list the start names now.
   await pruneBuddyHome(home, new Set(projects.map(p => p.id)))
@@ -79,7 +81,7 @@ export async function prepareBuddyHome(home: string, projects: readonly BuddyPro
     // Kept only while it is still the folder made here: a link in its place is taken out and the worktree made again.
     const kept = known && lstatSync(join(home, 'projects', known.dir), { throwIfNoEntry: false })
     if (kept && kept.isDirectory()) { ready.push(project.name); continue }
-    if (kept) await removeWorktree(join(home, 'projects', known!.dir))
+    if (kept) await removeWorktree(home, known!.dir)
     if (!(await insideGitCheckout(project.cwd).catch(() => false))) { missing.push(project.name); continue }
     const dir = known?.dir ?? folderName(project.name, taken)
     taken.add(dir)
@@ -100,21 +102,36 @@ export async function pruneBuddyHome(home: string, readable: ReadonlySet<string>
   const rows = listed(home)
   const gone = rows.filter(r => !readable.has(r.id))
   if (!gone.length) return []
-  for (const row of gone) await removeWorktree(join(home, 'projects', row.dir))
+  ownFolders(home)
+  for (const row of gone) await removeWorktree(home, row.dir)
   writeListed(home, rows.filter(r => readable.has(r.id)))
   return gone.map(r => r.name)
 }
 
 /** Takes every worktree out of [home] and removes it: its Buddy ended. */
 export async function removeBuddyHome(home: string): Promise<void> {
-  for (const row of listed(home)) await removeWorktree(join(home, 'projects', row.dir))
+  // Through a link nothing is removed but the link itself (rm never follows one inside the folder it removes).
+  const own = (() => { try { ownFolders(home); return true } catch { return false } })()
+  if (own) for (const row of listed(home)) await removeWorktree(home, row.dir)
   rmSync(home, { recursive: true, force: true })
+}
+
+/** Refuses a Buddy folder, or its `projects/`, that is not a folder of its own: a link there would lead the worktrees made
+ *  and removed in it somewhere else (security review 1 re-check of #2436). [mayBeMissing]: before the folder is made. */
+function ownFolders(home: string, mayBeMissing = false): void {
+  for (const path of [home, join(home, 'projects')]) {
+    const entry = lstatSync(path, { throwIfNoEntry: false })
+    if (!entry && mayBeMissing) return
+    if (!entry || entry.isSymbolicLink() || !entry.isDirectory()) throw new Error(`BUDDY_FOLDER_NOT_OWN: ${path} is not a folder of its own; it is left as it is.`)
+  }
 }
 
 /** Removes one worktree, read-only files included, and its checkout's record of it. A folder git no longer knows is removed.
  *  Only a folder directly in a Buddy folder's `projects/`, by a name this file makes. */
-async function removeWorktree(path: string): Promise<void> {
-  if (basename(dirname(path)) !== 'projects' || !SAFE_DIR.test(basename(path))) return
+async function removeWorktree(home: string, dir: string): Promise<void> {
+  if (!SAFE_DIR.test(dir)) return
+  ownFolders(home)
+  const path = join(home, 'projects', dir)
   // A link is never followed: a project folder that became a link to another worktree loses the link alone, and git is never
   // asked to remove what it points at (security re-check 2 of #2436).
   const entry = lstatSync(path, { throwIfNoEntry: false })

@@ -103,6 +103,34 @@ describe('a person\'s one Buddy\'s folder', () => {
     expect(readFileSync(join(theirs, 'WHO'), 'utf8')).toBe('other-src\n')
   })
 
+  it('refuses a Buddy folder whose projects folder, or which itself, is a link: nothing outside it is removed or made (security review 1 re-check of #2436)', async () => {
+    const r = root(), web = checkout(r, 'web-src'), other = checkout(r, 'other-src')
+    // Someone else's worktree, and a folder of its own beside it.
+    const theirs = join(r, 'their-worktree')
+    git(other, 'worktree', 'add', '--detach', '--', theirs, 'HEAD')
+    const elsewhere = join(r, 'elsewhere')
+    mkdirSync(join(elsewhere, 'Web'), { recursive: true })
+    symlinkSync(theirs, join(elsewhere, 'Web', 'x'))
+    // projects/ is a link to a folder holding a "Web" folder; and a Buddy folder that is itself a link.
+    const home = join(r, 'home')
+    await prepareBuddyHome(home, [{ id: 'web', name: 'Web', cwd: web }])
+    rmSync(join(home, 'projects'), { recursive: true, force: true })
+    git(web, 'worktree', 'prune')
+    symlinkSync(elsewhere, join(home, 'projects'))
+    await expect(pruneBuddyHome(home, new Set())).rejects.toThrow('BUDDY_FOLDER_NOT_OWN')
+    await expect(prepareBuddyHome(home, [{ id: 'web', name: 'Web', cwd: web }])).rejects.toThrow('BUDDY_FOLDER_NOT_OWN')
+    await removeBuddyHome(home)
+    const linked = join(r, 'linked-home')
+    symlinkSync(elsewhere, linked)
+    await expect(prepareBuddyHome(linked, [{ id: 'web', name: 'Web', cwd: web }])).rejects.toThrow('BUDDY_FOLDER_NOT_OWN')
+    await removeBuddyHome(linked)
+    expect(existsSync(join(elsewhere, 'Web'))).toBe(true)
+    expect(readFileSync(join(theirs, 'WHO'), 'utf8')).toBe('other-src\n')
+    expect(existsSync(home)).toBe(false)
+    expect(existsSync(linked)).toBe(false)
+    expect(existsSync(join(elsewhere, 'projects'))).toBe(false)
+  })
+
   it('names folders safely and apart, and reads only well-formed projects from a start', () => {
     expect(folderName('../etc', new Set())).toBe('etc')
     expect(folderName('.hidden', new Set())).toBe('hidden')
