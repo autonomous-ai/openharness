@@ -392,8 +392,11 @@ export function choose(probes: Probe[], catalog: Catalog, a: Assessment, now: nu
       : catalogRow(catalog, p.engine, p.model, p.effort)
     if (row && !row.offered && p.kind === 'new' && !(named && runsNamed(p, named))) return []
     const rated = row?.note && !p.notes.includes(row.note) ? { ...p, notes: [...p.notes, row.note] } : p
-    // A fact, not a filter: the route filters by facts only, and the coordinator knows whether the task needs a worktree.
-    return [p.kind === 'member' && p.repo === 'different' ? { ...rated, notes: [...rated.notes, OTHER_REPOSITORY] } : rated]
+    if (p.kind !== 'member' || p.repo !== 'different') return [rated]
+    // The task names a repository this member does not work in: it cannot run there, a fact, so it is left out with why.
+    if (a.needs.cwd) return [{ ...rated, refusals: [...rated.refusals, OTHER_REPOSITORY] }]
+    // No repository named: the coordinator knows whether the task needs a worktree, so it is ranked last with a note.
+    return [{ ...rated, notes: [...rated.notes, OTHER_REPOSITORY] }]
   })
   // A person asking for a local model considers local models alone, whatever their strength.
   let considered = a.local ? noted.filter(p => p.gridModel) : noted

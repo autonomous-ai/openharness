@@ -150,6 +150,18 @@ describe('choose', () => {
     const only = ok(choose([probe({ kind: 'member', agentId: 'a1', name: 'Ada', activity: 'idle', repo: 'different' })], policy, a(), NOW))
     expect(only.shown.map(s => [s.title, s.notes])).toEqual([['Ada · Claude sonnet medium · remote-1', [OTHER_REPOSITORY]]])
   })
+  it('leaves out a member in another repository when the task names a repository; with none named it is ranked last', () => {
+    const member = probe({ kind: 'member', agentId: 'a1', name: 'Ada', activity: 'idle', repo: 'different' })
+    const named = ok(choose([probe(), member], policy, a({ needs: { tools: [], devices: [], cwd: '/w/web' } }), NOW))
+    expect(named.shown.map(s => s.kind)).toEqual(['new'])
+    expect(named.excluded).toEqual([{ title: 'Ada · Claude sonnet medium · remote-1', reason: OTHER_REPOSITORY, machine: expect.any(String) }])
+    const sameRepo = ok(choose([probe(), { ...member, repo: 'same' }], policy, a({ needs: { tools: [], devices: [], cwd: '/w/web' } }), NOW))
+    expect(sameRepo.shown.map(s => s.kind)).toEqual(['member', 'new'])
+    const none = ok(choose([probe(), member], policy, a(), NOW))
+    expect(none.shown.map(s => s.kind)).toEqual(['new', 'member'])
+    expect(none.shown[1]!.notes).toContain(OTHER_REPOSITORY)
+    expect(none.excluded).toEqual([])
+  })
   it('shows those that fit before the unknown and the short, at equal strength and price', () => {
     const r = ok(choose([probe({ quality: 1 }), probe({ quality: 1, machineName: 'mac', quota: windows([90, null], [90, null]) })], policy, a({ difficulty: 'high' }), NOW))
     expect(r.shown.map(s => [s.machineName, s.fit.status])).toEqual([['mac', 'fits'], ['remote-1', 'unknown']])

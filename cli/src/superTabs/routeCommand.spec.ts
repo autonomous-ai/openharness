@@ -745,11 +745,10 @@ describe('what the route log says about each candidate', () => {
     const other = frame({ project: git({ name: 'web', remote: 'github.com/acme/web', root: '/w/web', cwd: '/w/web' }) })
     const s = scoped(world())
     await routeTask(withCwd, s, where as never, opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], frames: { h1: other } })), () => 'op', describeGit())
-    expect(memberLabel(s)).toContain('different repo')
-    // It would build in the other repository's worktree (Diego, 2026-10-30, #2377): shown last, with why, never left out.
-    expect(memberLabel(s)).toContain(OTHER_REPOSITORY)
-    expect(labels(s).at(-1)).toBe(memberLabel(s))
-    expect(JSON.stringify(recorded(s).command.decision.excluded)).not.toContain('Multiply')
+    // The task names a folder and the member works in another repository (Diego, 2026-10-30, #2377): it cannot run there, so
+    // it is left out with why.
+    expect(memberLabel(s)).toBeUndefined()
+    expect(recorded(s).command.decision.excluded).toContainEqual(expect.objectContaining({ title: expect.stringContaining('Multiply'), reason: OTHER_REPOSITORY }))
     const t = scoped(world())
     await routeTask(withCwd, t, where as never, opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [] })), () => 'op', describeGit())
     expect(memberLabel(t)).toContain('repo unknown · last active unknown')
