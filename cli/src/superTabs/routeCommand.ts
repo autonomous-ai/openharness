@@ -507,6 +507,13 @@ export function offlineModels(state: Json, now: number = Date.now()): Array<{ ti
   return out
 }
 
+/** What a machine reached directly has, from its capacity read: the task folder's disk only when a folder was named. */
+function loadOf(resources: Json, agents: number | null, cwd: string | undefined): NonNullable<Probe['load']> {
+  return { agents, freeMemoryBytes: finite(resources.memoryTotalBytes) && finite(resources.memoryUsedBytes) ? resources.memoryTotalBytes - resources.memoryUsedBytes : null,
+    hasFolder: cwd ? finite(resources.projectDiskFreeBytes) : null, freeDiskBytes: cwd && finite(resources.projectDiskFreeBytes) ? resources.projectDiskFreeBytes : null,
+    cpuPercent: finite(resources.cpuPercent) ? resources.cpuPercent : null }
+}
+
 async function probeMachine(machineId: string, { name: machineName, status, account, pool, folded, unready = READY, stalled: stuck = false }: { name: string; status: string; account: boolean; pool?: Json; folded?: boolean; unready?: Unready; stalled?: boolean },
   members: Json[], allModels: CatalogModel[], catalog: Catalog, a: Assessment, where: Where, open: typeof openDaemon): Promise<Probe[]> {
   const listedEngines = Array.isArray(pool?.engines) ? pool.engines.filter((engine): engine is string => typeof engine === 'string') : []
@@ -557,17 +564,20 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
       ...(needs.devices.length ? ['Required devices have not been reported.'] : []),
       ...unready.all]
     const pushNote = unready.push ? [unready.push] : []
+    // What the machine has, for new agents and members alike: heavy work runs on the machine whoever does it (machineFit.ts).
+    const load: Probe['load'] = { agents: Array.isArray(observed.runningHarnessIds) ? observed.runningHarnessIds.length : null,
+      freeMemoryBytes: finite(resources.memoryTotalBytes) && finite(resources.memoryUsedBytes) ? resources.memoryTotalBytes - resources.memoryUsedBytes : null,
+      hasFolder: finite(resources.projectDiskFreeBytes), freeDiskBytes: finite(resources.projectDiskFreeBytes) ? resources.projectDiskFreeBytes : null,
+      cpuPercent: finite(resources.cpuPercent) ? resources.cpuPercent : null }
     return [...members.map(m => {
       const engine = String(object(m.configuration).engine), allowance = quota(engine)
       const running = Array.isArray(observed.runningHarnessIds) ? observed.runningHarnessIds.includes(m.harnessId) : null
       return { ...memberProbe(m, fresh ? [...memberRefusals(running, needs.tools, needs.devices, tools, object(observed.devices), object(observed.toolProbeErrors)),
         ...teammates(m.contributorId)] : [OFFLINE],
-        allowance, null, fresh && running === null, [...pushNote, ...usedUp(allowance)]) }
+        allowance, null, fresh && running === null, [...pushNote, ...usedUp(allowance)]), ...(fresh ? { load } : {}) }
     }),
       ...models.map(m => ({ ...newProbe(m, [...newReasons, ...(unready.engines[m.engine] ? [unready.engines[m.engine]!] : [])], quota(m.engine), fresh && quota(m.engine).known,
-        { agents: Array.isArray(observed.runningHarnessIds) ? observed.runningHarnessIds.length : null,
-          freeMemoryBytes: finite(resources.memoryTotalBytes) && finite(resources.memoryUsedBytes) ? resources.memoryTotalBytes - resources.memoryUsedBytes : null,
-          hasFolder: finite(resources.projectDiskFreeBytes) }, [...pushNote, ...(stuck ? [STALLED] : []), ...usedUp(quota(m.engine))]) }))]
+        load, [...pushNote, ...(stuck ? [STALLED] : []), ...usedUp(quota(m.engine))]) }))]
   }
   // The account says this machine is off, so nothing there can run or be asked.
   if (account && status === 'offline') return [...members.map(m => memberProbe(m, [OFFLINE])), ...offline()]
@@ -595,15 +605,14 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
       const refusals = memberRefusals(live.has(String(m.harnessId)), needs.tools, needs.devices,
         object(capacity.tools), object(capacity.devices), object(capacity.toolProbeErrors))
       const frame = frames.find(f => f.id === m.harnessId)
-      probes.push(memberProbe(m, refusals, allowance, frame ? frameOf(frame) : null, false, usedUp(allowance)))
+      probes.push({ ...memberProbe(m, refusals, allowance, frame ? frameOf(frame) : null, false, usedUp(allowance)),
+        load: loadOf(object(capacity.resources), Array.isArray(listed.agents) ? frames.length : null, a.needs.cwd) })
     }
     for (const m of models) {
       const inspected = byEngine.get(m.engine)!
       const resources = object(inspected.capacity.resources)
       // The capacity probe already measured the task's folder (its disk), so the answer is reused, not asked again.
-      const load = { agents: Array.isArray(listed.agents) ? frames.length : null,
-        freeMemoryBytes: finite(resources.memoryTotalBytes) && finite(resources.memoryUsedBytes) ? resources.memoryTotalBytes - resources.memoryUsedBytes : null,
-        hasFolder: a.needs.cwd ? finite(resources.projectDiskFreeBytes) : null }
+      const load = loadOf(resources, Array.isArray(listed.agents) ? frames.length : null, a.needs.cwd)
       // A machine listed only because an agent runs there may never have cloned the project. When its capacity read succeeded but
       // could not measure the named folder's disk, a missing folder is the likely cause; a failed or unsupported read says nothing.
       const noFolder = !!a.needs.cwd && machineId !== where.machineId && object(inspected.capacity).ok === true && !finite(resources.projectDiskFreeBytes)

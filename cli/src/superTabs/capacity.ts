@@ -6,6 +6,8 @@ import { commandAvailableInInteractiveShell, type CommandAvailability } from '..
 import { launchModelEngines } from '../lib/launchModel.js'
 import { object } from './wire.js'
 import { readCapacityDisk } from './disk.js'
+import { floorOf, heavyNeed } from './machineFit.js'
+import type { Needs } from './route.js'
 
 type Json = Record<string, unknown>
 export interface Requirements {
@@ -15,9 +17,14 @@ export interface Requirements {
 /** What `start` asks of a machine when the Lead has no reason to ask for more: the help's template. CPU use is only a momentary
  *  reading: a busy machine would refuse every start (seen in the route e2e at 98.7%), so no cap; memory, disk and pressure gate it. */
 export const START_REQUIREMENTS: Requirements = { memoryBytes: 2147483648, diskBytes: 10737418240, maxCpuPercent: 100, tools: ['git'], devices: [], quotaRequired: false }
-/** The same plus what the task needs. The route admits a pick on exactly this, so the start it suggests is admitted too. */
-export const startRequirements = (needs: { tools: string[]; devices: string[] }): Requirements =>
-  ({ ...START_REQUIREMENTS, tools: [...new Set([...START_REQUIREMENTS.tools, ...needs.tools])], devices: needs.devices })
+/** The same plus what the task needs. The route admits a pick on exactly this, so the start it suggests is admitted too. Heavy
+ *  work asks for at least the least it can run with (machineFit.ts floorOf): the start's check then agrees with the route, and
+ *  the start's record says it was heavy, which later routes count until the machine's reading shows it. */
+export const startRequirements = (needs: Pick<Needs, 'tools' | 'devices' | 'heavy'>): Requirements => {
+  const need = heavyNeed(needs), floor = need ? floorOf(need) : null
+  return { ...START_REQUIREMENTS, tools: [...new Set([...START_REQUIREMENTS.tools, ...needs.tools])], devices: needs.devices,
+    ...(floor ? { memoryBytes: Math.max(START_REQUIREMENTS.memoryBytes, floor.memoryBytes), diskBytes: Math.max(START_REQUIREMENTS.diskBytes, floor.diskBytes) } : {}) }
+}
 
 /** A missing result is a completed check; an absent value or failed check is only unverified. */
 export function requiredToolReason(tool: string, reported: unknown, failure?: unknown): string | null {

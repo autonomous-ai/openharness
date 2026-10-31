@@ -174,6 +174,16 @@ describe('routeTask', () => {
     } finally { vi.useRealTimers() }
   })
   // A member at work is not offered; one whose task was lost is, with a note ('a member whose last task was lost').
+  it('judges heavy work by a machine reached directly, its members too; the task folder\'s disk only when a folder is named', async () => {
+    const heavy = (needs: Record<string, unknown>) => ({ ...input, assessment: { ...input.assessment, needs: { heavy: ['build'], ...needs } } })
+    const answer = await routeTask(heavy({}), scoped(), where as never, opener())
+    const short = 'Machine fit: Short for a heavy build: 7.0 GB memory free; it needs 8.0 GB memory and 30.0 GB disk, so equally strong candidates that have it rank first.'
+    expect(answer).toMatchObject({ ok: true, pick: { notes: expect.arrayContaining([short]) } })
+    expect([answer.pick, ...answer.alternatives as unknown[]].find(c => (c as { kind: string }).kind === 'member')).toMatchObject({ notes: expect.arrayContaining([short]) })
+    const folder = { describe: async () => null, isDirectory: async () => true }
+    const named = await routeTask(heavy({ cwd: '/repo' }), scoped(), where as never, opener(), () => 'op', folder)
+    expect(named).toMatchObject({ ok: true, pick: { notes: expect.arrayContaining([expect.stringContaining('7.0 GB memory free, 100.0 GB disk free;')]) } })
+  })
   it('does not offer a member whose task is working', async () => {
     const state = tab({ id: 'x', agentId: 'a1', status: 'working' })
     const s = scoped({ tab: state })
@@ -999,6 +1009,20 @@ describe('routing contributed capacity', () => {
     expect(answer.next).toContain('/owner/project')
     const member = await runPool(healthy(), true)
     expect(member.answer.ok).toBe(true)
+  })
+  // Scholes's goals, piece 5 (machineFit.ts): heavy work is judged by the machine's reading, for its members as for new agents.
+  it('judges heavy work by the contributed machine\'s free memory, disk and CPU, for members too, and its start asks for half the need', async () => {
+    const pool = healthy(); Object.assign(pool.observation.resources, { memoryUsedBytes: 26e9, cpuPercent: 92 })
+    const { answer } = await runPool(pool, true, { heavy: ['build'] })
+    const short = 'Machine fit: Short for a heavy build: 6.0 GB memory free, 200.0 GB disk free; it needs 8.0 GB memory and 30.0 GB disk, so equally strong candidates that have it rank first. CPU 92% busy.'
+    expect(answer).toMatchObject({ ok: true, pick: { notes: expect.arrayContaining([short]) } })
+    const shown = [answer.pick, ...answer.alternatives as unknown[]] as Array<{ kind: string; notes?: string[] }>
+    expect(new Set(shown.map(c => c.kind))).toEqual(new Set(['member', 'new']))
+    for (const c of shown) expect(c.notes).toContain(short)
+    expect((await runPool(pool, false, { heavy: ['build'] })).answer.next).toContain('"memoryBytes":4000000000,"diskBytes":15000000000')
+    // A reading with no CPU says nothing of it, and a machine that has what it needs says nothing at all.
+    const roomy = await runPool(healthy(), true, { heavy: ['build'] })
+    expect((roomy.answer.pick as { notes?: string[] }).notes ?? []).not.toEqual(expect.arrayContaining([expect.stringContaining('Machine fit')]))
   })
   it('reads an old OpenCode contribution as its installed Claude observation', async () => {
     const pool = healthy()

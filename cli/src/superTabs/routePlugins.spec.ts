@@ -12,8 +12,8 @@ const skipped = (name: string, why: string) => `The routing plug-in "${name}" wa
 afterEach(() => { vi.useRealTimers() })
 
 describe('makePlugins', () => {
-  it('has no makers yet, and an empty list makes no plug-ins and no warnings', async () => {
-    expect(ROUTE_PLUGIN_MAKERS).toEqual([])
+  it('lists each piece\'s maker once, and an empty list makes no plug-ins and no warnings', async () => {
+    expect(new Set(ROUTE_PLUGIN_MAKERS.map(m => m.name)).size).toBe(ROUTE_PLUGIN_MAKERS.length)
     expect(await makePlugins([], input)).toEqual({ plugins: [], warnings: [] })
   })
   it('gives each maker the task, the backend read, the shared history and the request, and keeps the makers\' order whatever order they finish in', async () => {
