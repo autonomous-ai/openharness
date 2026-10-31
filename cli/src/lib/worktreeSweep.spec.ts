@@ -1,12 +1,18 @@
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { sweepWorktrees } from './worktreeSweep.js'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { sweepOne, sweepWorktrees, WorktreeKept } from './worktreeSweep.js'
 
 const exec = promisify(execFile)
+/** A folder the sweep's own check reads as writable whatever its mode. */
+const writable = vi.hoisted(() => ({ folder: null as string | null }))
+vi.mock('node:fs/promises', async importOriginal => {
+  const fs = await importOriginal<typeof import('node:fs/promises')>()
+  return { ...fs, access: (file: string, mode?: number) => file === writable.folder ? Promise.resolve() : fs.access(file, mode) }
+})
 // Real Git, several worktrees a test: slower than the default 5s under a full, parallel run.
 describe('sweeping unused worktrees', { timeout: 30_000 }, () => {
   let root: string, repo: string, home: string
@@ -138,6 +144,48 @@ describe('sweeping unused worktrees', { timeout: 30_000 }, () => {
     await symlink(outside, join(path, '.harness'))
     expect(await sweepWorktrees({ root: join(root, 'harnesses'), inUse: [], now: later() })).toEqual([])
     expect(await readFile(join(outside, '.gitignore'), 'utf8')).toBe(OLDER)
+  })
+
+  // One Mac, 10-28: a stopped worker's worktree held a skill folder its agent had copied in read-only. git deleted a third of
+  // the folder, stopped there, and deleted the worktree's record anyway, so git and gh failed in what was left.
+  // Folder permissions do not stop root or Windows from deleting.
+  const permissions = process.platform !== 'win32' && process.getuid?.() !== 0
+  const withReadOnlyFolder = async (path: string) => {
+    await withHarnessFolder(path, '/*\n')
+    const folder = join(path, '.harness', 'tools', 'skills', 'copied')
+    await mkdir(folder, { recursive: true })
+    await writeFile(join(folder, 'SKILL.md'), 'copied in read-only')
+    await chmod(folder, 0o555)
+    return folder
+  }
+
+  it.runIf(permissions)('keeps, untouched and still a worktree, one holding a folder git could not empty', async () => {
+    const path = await add('read-only', 'harness/read-only')
+    const folder = await withReadOnlyFolder(path)
+    try {
+      expect(await sweepWorktrees({ root: join(root, 'harnesses'), inUse: [], now: later() })).toEqual([])
+      expect(await exists(join(path, 'file')), 'nothing in it was deleted').toBe(true)
+      expect(await git(path, 'status', '--porcelain')).toBe('')
+      expect(await git(path, 'rev-parse', '--git-dir')).toContain('/.git/worktrees/')
+      await expect(sweepOne(path, later(), 0)).rejects.toEqual(new WorktreeKept('WORKTREE_UNWRITABLE'))
+    } finally { await chmod(folder, 0o755) }
+  })
+
+  it.runIf(permissions)('puts the record back when git began removing the worktree and could not finish', async () => {
+    const path = await add('half-removed', 'harness/half-removed')
+    // A folder that turns read-only while the worktree is removed: the check above reads it as writable.
+    await withHarnessFolder(path, '/*\n')
+    const folder = join(path, '.harness', 'late')
+    await mkdir(folder)
+    await writeFile(join(folder, 'held'), 'held')
+    await chmod(folder, 0o555)
+    writable.folder = folder
+    try {
+      await expect(sweepOne(path, later(), 0)).rejects.toEqual(new WorktreeKept('WORKTREE_NOT_REMOVED'))
+      expect(await git(path, 'rev-parse', '--abbrev-ref', 'HEAD'), 'git still works in what is left').toBe('harness/half-removed')
+      expect(await git(path, 'rev-parse', '--git-dir')).toContain('/.git/worktrees/')
+      expect(await branches()).toContain('harness/half-removed')
+    } finally { writable.folder = null; await chmod(folder, 0o755) }
   })
 
   it('ignores a missing worktrees folder and checkouts that are not worktrees', async () => {

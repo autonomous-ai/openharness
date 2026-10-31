@@ -15,7 +15,7 @@ import { startAgent, type ScopedRequest } from './start.js'
 import { PrepareRetryError, prepareSwarmStart } from './projectFolder.js'
 import { readAuthSession } from '../lib/authSession.js'
 import { createSwarmCloneTrustRepair, swarmCloneRoots } from './cloneTrust.js'
-import { git, sweepOne } from '../lib/worktreeSweep.js'
+import { git, sweepOne, WorktreeKept } from '../lib/worktreeSweep.js'
 import { projectsRoot } from '../lib/projectFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 import { teamPrivacyObserver } from '../team/observer.js'
@@ -916,8 +916,11 @@ export class ContributedMachines {
     // there, so its folder stays. This agent's own paused session is not kept: it was stopped or removed.
     if (this.core.agents.all().some(a => a.agentId !== harnessId && !!a.cwd && within(record.path, a.cwd))) return
     // File times are wall-clock, so the sweep's idle check reads the real clock; no idle wait is asked.
-    // A failed git read (a locked worktree, a handle still open on Windows) keeps the folder; the log names no path.
-    if (!await sweepOne(record.path, Date.now(), 0).catch(() => { this.log('Kept a Swarm worktree: WORKTREE_CHECK_FAILED'); return false })) return
+    // A failed git read (a locked worktree, a handle still open on Windows) keeps the folder; the log names no path. A folder git
+    // could not empty keeps its record and this one, and says which kind it was (lib/worktreeSweep.ts WorktreeKept).
+    if (!await sweepOne(record.path, Date.now(), 0).catch(error => {
+      this.log(`Kept a Swarm worktree: ${error instanceof WorktreeKept ? error.code : 'WORKTREE_CHECK_FAILED'}`); return false
+    })) return
     writeWorktrees(file, readWorktrees(file).filter(w => !mine(w)))
   }
 

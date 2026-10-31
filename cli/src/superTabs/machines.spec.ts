@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -1842,6 +1842,29 @@ describe('removed machine cleanup', () => {
     expect(startIds(m)).toEqual(['recorded', 'kept'])
     expect(m.log.mock.calls).toEqual([['Kept a Swarm worktree: WORKTREE_UNPROVEN']])
     expect(m.log.mock.calls.flat().join('\n')).not.toContain(m.recorded)
+  })
+
+  // One Mac, 10-28: git removed a third of a stopped worker's worktree, stopped at a skill folder copied in read-only, and
+  // deleted the worktree's record anyway, so git and gh failed in the rest. Folder permissions do not stop root or Windows.
+  it.runIf(process.platform !== 'win32' && process.getuid?.() !== 0)('keeps a stopped worker\'s worktree that git could not empty, still a worktree, and says why', async () => {
+    const m = machine()
+    rmSync(join(m.recorded, 'unpushed.txt'))
+    mkdirSync(join(m.recorded, '.harness', 'skills', 'copied'), { recursive: true })
+    writeFileSync(join(m.recorded, '.harness', '.gitignore'), '/*\n')
+    writeFileSync(join(m.recorded, '.harness', 'skills', 'copied', 'SKILL.md'), 'copied in read-only')
+    chmodSync(join(m.recorded, '.harness', 'skills', 'copied'), 0o555)
+    try {
+      // A Buddy's or an agent's live session in it: nothing is read or touched.
+      m.setLive([session('a-buddy', join(m.recorded, '.harness'))])
+      await m.open().removeStoppedWorktree('tab', 'h-recorded')
+      expect(m.log).not.toHaveBeenCalled()
+      m.setLive([])
+      await m.open().removeStoppedWorktree('tab', 'h-recorded')
+      expect(m.log.mock.calls).toEqual([['Kept a Swarm worktree: WORKTREE_UNWRITABLE']])
+      expect(startIds(m)).toEqual(['recorded', 'kept'])
+      expect(git(m.recorded, 'status', '--porcelain')).toBe('')
+      expect(git(m.clone, 'worktree', 'list', '--porcelain')).toContain('/recorded\n')
+    } finally { chmodSync(join(m.recorded, '.harness', 'skills', 'copied'), 0o755) }
   })
 
   it('keeps the record when its folder cannot be read for any reason but being gone', async () => {
