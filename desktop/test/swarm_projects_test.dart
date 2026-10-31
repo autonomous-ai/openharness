@@ -227,32 +227,22 @@ void main() {
     await unmount(tester, c);
   });
 
-  testWidgets('compact project menu changes cadence for only that project', (
-    tester,
-  ) async {
-    final server = projectsServer(), c = server.controller();
-    await mount(tester, c);
-    await tester.tap(find.byTooltip('Project options'));
-    await tester.pumpAndSettle();
-    expect(find.byIcon(AppIcons.ellipsisVertical), findsOneWidget);
-    await tester.tap(find.text('Update cadence'));
-    await tester.pumpAndSettle();
-    expect(find.text('Every 5 minutes'), findsOneWidget);
-    await tester.tap(find.byType(DropdownButton<int>));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Every 15 minutes').last);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Save'));
-    await tester.pumpAndSettle();
-    expect(server.posts.single['command'], {
-      'type': 'project.cadence',
-      'projectId': 'lead',
-      'minutes': 15,
-    });
-    expect(c.snapshot!.projectFor('lead')!.updateMinutes, 15);
-    expect(c.snapshot!.projectFor('design-lead')!.updateMinutes, 5);
-    await unmount(tester, c);
-  });
+  testWidgets(
+    'the project menu has no update cadence: progress lives in the status card',
+    (tester) async {
+      final server = projectsServer(), c = server.controller();
+      await mount(tester, c);
+      await tester.tap(find.byTooltip('Project options'));
+      await tester.pumpAndSettle();
+      expect(find.byIcon(AppIcons.ellipsisVertical), findsOneWidget);
+      expect(find.text('Project details'), findsOneWidget);
+      expect(find.text('Update cadence'), findsNothing);
+      expect(find.textContaining('Every 5 minutes'), findsNothing);
+      expect(find.textContaining('task reports'), findsNothing);
+      expect(server.posts, isEmpty);
+      await unmount(tester, c);
+    },
+  );
 
   testWidgets(
     'public means swarm members and private is an explicit project choice',

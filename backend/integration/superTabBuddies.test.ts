@@ -351,7 +351,8 @@ describe('a Buddy through the store', () => {
     const f = await swarm()
     const { agentId } = await buddy(f)
     const group = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Old task', brief: '', checks: [] })).result.conversationId)
-    await f.execute({ type: 'message.send', conversationId: group, text: 'Done here.', replyTo: null, recipientIds: [] })
+    // A work change the PM has not reported yet (a plain message no longer is one: Dee, 2026-10-31).
+    await f.execute({ type: 'conversation.merged', conversationId: group, pullRequestUrl: 'https://github.com/example/app/pull/7' })
     await f.execute({ type: 'conversation.archive', conversationId: group, archived: true } as Command)
     const read = await new SwarmReads(f.store).firstLoad(peer, f.tab, agentId)
     expect(read.groups.find(g => g.key === group)?.data).toMatchObject({ archived: true })
