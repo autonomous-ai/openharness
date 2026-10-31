@@ -3,7 +3,7 @@ import { z, ZodError } from 'zod'
 import { prisma } from '../lib/prisma.js'
 import { env } from '../config/env.js'
 import multipart from '@fastify/multipart'
-import { attachmentsFromEnv, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES } from '../superTabs/attachments.js'
+import { attachmentsFromEnv, FORM_TOO_LARGE_MESSAGE, MAX_FORM_ATTACHMENT_BYTES, MAX_AVATAR_BYTES } from '../superTabs/attachments.js'
 import { validateBody, validateParams, validateQuery } from '../middlewares/validation.js'
 import { sendError, sendSuccess } from '../utils/response.js'
 import { operationSchema } from '../superTabs/commands.js'
@@ -40,6 +40,10 @@ import { WORKSPACE_ACCESS_REVOKED } from '../superTabs/workspaceStore.js'
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const tabParams = z.object({ tabId: id })
 const agentQuery = z.object({ asAgentId: id.optional() }).strict()
+const uploadParams = z.object({ tabId: id, uploadId: id })
+// The store checks the name, type and size; this only bounds what reaches it.
+const uploadLinkBody = z.object({ conversationId: id, name: z.string().max(1000), mime: z.string().max(1000), size: z.number().int() }).strict()
+const emptyBody = z.object({}).strict().optional()
 const create = z.object({ operationId: id, name: z.string().trim().min(1).max(160), projectVisibility: z.enum(['public', 'private']).optional(),
   workspaceId: id.optional() }).strict()
 const operation = operationSchema.extend({ asAgentId: id.optional() })
@@ -523,7 +527,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   // Super Tab route's body handling changes.
   await app.register(async scope => {
     // One byte over the limit, so the store sees an oversized file and refuses it rather than keeping a cut one.
-    await scope.register(multipart, { limits: { fileSize: MAX_ATTACHMENT_BYTES + 1, files: 1, fields: 1, parts: 2 } })
+    await scope.register(multipart, { limits: { fileSize: MAX_FORM_ATTACHMENT_BYTES + 1, files: 1, fields: 1, parts: 2 } })
     scope.post<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/attachments',
       { preHandler: [validateParams(tabParams), validateQuery(agentQuery)] }, (req, reply) => respond(reply, async () => {
         let conversationId: string | null = null, uploaded: unknown = null, stored: unknown = null
@@ -543,13 +547,22 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
         } catch (error) {
           // Only the form itself is the client's fault; the store's own failures keep their status.
           const code = error && typeof error === 'object' && 'code' in error ? error.code : null
-          if (code === 'FST_REQ_FILE_TOO_LARGE') fail('ATTACHMENT_TOO_LARGE', 'A file can be at most 10 MB.', 413)
+          if (code === 'FST_REQ_FILE_TOO_LARGE') fail('ATTACHMENT_TOO_LARGE', FORM_TOO_LARGE_MESSAGE, 413)
           if (error instanceof SuperTabError || (error === stored && !(code && String(code).startsWith('FST_')))) throw error
           fail('INVALID_ATTACHMENT', 'Send a multipart form with conversationId and one file.', 400)
         }
         return uploaded ?? fail('INVALID_ATTACHMENT', 'Attach one file.', 400)
       }))
   })
+  // A file over the form's 10 MB goes straight to the bucket on a link this server signs, then is checked here before any
+  // message can carry it (store.ts uploadLink, completeUpload). Neither request carries the file, so both stay small.
+  app.post<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof agentQuery>; Body: z.infer<typeof uploadLinkBody> }>('/api/super-tabs/:tabId/attachments/uploads',
+    { bodyLimit: 4096, preHandler: [validateParams(tabParams), validateQuery(agentQuery), validateBody(uploadLinkBody)] },
+    (req, reply) => respond(reply, () => store.uploadLink(req.user!, req.params.tabId, req.body.conversationId,
+      { name: req.body.name, mime: req.body.mime, size: req.body.size }, req.query.asAgentId)))
+  app.post<{ Params: z.infer<typeof uploadParams>; Querystring: z.infer<typeof agentQuery>; Body: z.infer<typeof emptyBody> }>('/api/super-tabs/:tabId/attachments/uploads/:uploadId/complete',
+    { bodyLimit: 1024, preHandler: [validateParams(uploadParams), validateQuery(agentQuery), validateBody(emptyBody)] },
+    (req, reply) => respond(reply, () => store.completeUpload(req.user!, req.params.tabId, req.params.uploadId, req.query.asAgentId)))
   // An avatar picture (superTabs/profile.ts) comes the same way, alone in its form; the command that sets it names whose it is.
   await app.register(async scope => {
     await scope.register(multipart, { limits: { fileSize: MAX_AVATAR_BYTES + 1, files: 1, fields: 0, parts: 1 } })

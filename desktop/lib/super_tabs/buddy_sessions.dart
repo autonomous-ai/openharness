@@ -127,8 +127,16 @@ class _SuperTabThreadSessionLineState extends State<SuperTabThreadSessionLine> {
       final machine = machineId == null
           ? null
           : c.sessionMachineName(machineId);
+      // A session of the one Buddy chat in one project names it (spec
+      // 2026-10-31-one-buddy-per-swarm): it reads that project alone, and is
+      // the only one that sends to its PM.
+      final projectId = c.sessionAgent(session)?.buddySession?.projectId;
+      final project = projectId == null
+          ? null
+          : c.snapshot?.projects.where((p) => p.id == projectId).firstOrNull;
       final words =
-          'Own session · ${superTabSessionWords(activity, machine: machine)}';
+          '${project == null ? 'Own session' : '${project.name} session'} · '
+          '${superTabSessionWords(activity, machine: machine)}';
       line = Row(
         children: [
           _mark(activity),

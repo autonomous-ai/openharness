@@ -36,10 +36,10 @@ import { homedir, userInfo } from 'node:os'
 import { delimiter, isAbsolute, join } from 'node:path'
 import { createOwnerSubscriptions } from '../lib/ownerSubscriptions.js'
 import { createPullRequestsStatusReader } from '../lib/pullRequestsStatus.js'
-import { buddyArchived, buddyStatus, isBuddyIn, type BuddyStatusDeps } from './buddyStatus.js'
+import { buddyArchived, buddyStatus, isBuddyIn, isSwarmBuddyIn, projectNamed, type BuddyStatusDeps } from './buddyStatus.js'
 import { startSubscriptionRelay } from '../lib/subscriptionRelay.js'
 
-const POST_ABOUT = 'reply in that conversation. Use a unique ID per message and reuse it after an interrupted request. Answer a message once, with --reply-to its ID. --attach sends a file (a screenshot, a log; up to 10 files of 10 MB each), and TEXT may then be empty. --to names the agents it reaches (any agent of this project, by id from status; up to 16): they join the conversation if they are not in it. With no --to, your post reaches the PM.'
+const POST_ABOUT = 'reply in that conversation. Use a unique ID per message and reuse it after an interrupted request. Answer a message once, with --reply-to its ID. --attach sends a file (a screenshot, a log; up to 10 files of 256 MB each), and TEXT may then be empty. --to names the agents it reaches (any agent of this project, by id from status; up to 16): they join the conversation if they are not in it. With no --to, your post reaches the PM.'
 const POST_HELP = `${POST_ABOUT} TEXT is one argument: when it holds quotes, or is only -, put - in its place and send the message on stdin (post GROUP - OPERATION_ID <<'MSG' … MSG); an empty stdin is refused and nothing is posted.`
 /** A Buddy's guard refuses TEXT - (#2358): on stdin its message would skip the secret check. A Buddy that followed the stdin
  *  hint was refused and tried again, so its help passes the message in quotes, as the guard's refusal says. */
@@ -79,7 +79,7 @@ const HELP = {
   release: 'agent.release records keep, or requests stop, for an agent whose work ended; assigning it new work reuses it. Wait for the execution host to confirm a stop. A person can withdraw a stuck stop; the session cannot receive new work in that Swarm. Its native capacity stays reserved until its host confirms stopping. Other Swarms wait up to two minutes for an in-flight close, then may reuse it.',
   resume: 'resume START_ID: finish a pending start without creating another agent.',
   // Buddies (backend superTabs/buddies.ts): a person adds and removes their own; the Buddy proposes only when they ask.
-  buddies: 'Buddies, in every Swarm: each person has a Buddy chat per project that only they and their Buddy read (buddy.chat with projectId opens it before any Buddy), may add their own Buddy there (buddy.create with projectId, machineId of a Swarm machine, engine claude or codex), remove it (buddy.remove with projectId), and name it (buddy.rename with conversationId of their Buddy chat and name, or null for the default name). It brainstorms with them in that chat, and the PM\'s private lines to them land there too. propose OPERATION_ID JSON [--attach PATH]...: a Buddy only, when its owner asks: {"conversationId":"its chat","ownerMessageId":"their message asking","goal":"...","scope":"...","priority":"low|normal|high","attachmentIds":["a file its owner sent in its chat"]}. --attach adds a file inside its own folder; up to 5 files in all, 10 MB each. The Swarm posts it in the project chat to the PM, marked as on the owner\'s behalf. A Buddy is never assigned work.',
+  buddies: 'Buddies, in every Swarm: each person has one Buddy chat for the whole Swarm that only they and their Buddy read (buddy.chat opens it before any Buddy; with projectId, their older chat in that project), may add their one Buddy (buddy.create with machineId of their own machine, engine claude), remove it (buddy.remove), and name it (buddy.rename with conversationId of their Buddy chat and name, or null for the default name). It reads every project they read and brainstorms with them in that chat, and the PM\'s private lines to them land there too, marked with their project. A New session in one project (message.send with newSession and sessionProjectId) is the only Buddy that sends into that project. propose OPERATION_ID JSON [--attach PATH]...: a project session only, when its owner asks in its thread: {"conversationId":"its chat","ownerMessageId":"their message asking","goal":"...","scope":"...","priority":"low|normal|high","attachmentIds":["a file its owner sent in its chat"]}. --attach adds a file inside its own folder; up to 5 files in all, 10 MB each. The Swarm posts it in the project chat to the PM, marked as on the owner\'s behalf. A Buddy is never assigned work.',
   // A person's own command, for the machines they added; an agent's terminal is refused (command.ts), so no agent raises its
   // own machine's room (Lead, 2026-10-28).
   setAgents: 'set-agents MACHINE_ID COUNT: for a machine\'s owner, from their own terminal, not an agent\'s: how many Swarm agents may run on that machine at once. Each agent still needs free memory when it starts. A machine may offer one agent for every 2 GB of its memory, and at least 4; a larger number is refused.',
@@ -555,17 +555,24 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           pullRequests ??= options.pullRequests ?? createPullRequestsStatusReader()
           const deps: BuddyStatusDeps = { pullRequests: pullRequests!,
             decisions: () => backend(core, 'GET', `${path}/decisions?state=open&${identity}`) }
+          const project = typeof payload.project === 'string' ? payload.project : undefined
           if (payload.archived === true) {
-            const projectId = String(list(read.state.agents).find(a => a.id === agentId)?.projectId ?? 'lead')
+            // A person's one Buddy names the project whose archive it reads (status --project NAME --archived).
+            const named = project ? projectNamed(read.state, project) : undefined
+            if (isSwarmBuddyIn(read.state, agentId) && !named) return { ok: true, value: { lastChangedAt: read.lastChangedAt, summary: { error: 'Name the project: status --project NAME --archived.' } } }
+            const projectId = String(named?.id ?? list(read.state.agents).find(a => a.id === agentId)?.projectId ?? 'lead')
             const before = typeof payload.before === 'string' && /^[A-Za-z0-9_-]{1,512}$/.test(payload.before) ? `&before=${payload.before}` : ''
             const page = await backend(core, 'GET', `${path}/groups?dormant=1&projectId=${encodeURIComponent(projectId)}${before}&${identity}`)
             return { ok: true, value: { lastChangedAt: read.lastChangedAt, summary: await buddyArchived(page, read.state, agentId, deps) } }
           }
           const key = `${payload.tabId}:${agentId}`
           const summary = await buddyStatus({ state: read.state, lastChangedAt: read.lastChangedAt, groupChangedAt: read.groupChangedAt, agentId,
-            since: buddySince.get(key) ?? null }, deps)
-          buddySince.delete(key)
-          buddySince.set(key, read.lastChangedAt)
+            since: buddySince.get(key) ?? null, ...(project ? { project } : {}) }, deps)
+          // One project's read leaves the index's "changed since" where it was.
+          if (!project) {
+            buddySince.delete(key)
+            buddySince.set(key, read.lastChangedAt)
+          }
           // One per Buddy on this machine; a machine runs a few at most, so a small cap only guards against a leak.
           for (const oldest of buddySince.keys()) { if (buddySince.size <= 64) break; buddySince.delete(oldest) }
           return { ok: true, value: { lastChangedAt: read.lastChangedAt, summary } }

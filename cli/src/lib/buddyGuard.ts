@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync,
+import { chmodSync, closeSync, existsSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync,
   writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
@@ -142,7 +142,26 @@ function configHosts(home: string): string[] {
  * needs their own account, never a Harness Team account, and Claude Code's sandbox to run its shell in: macOS, or Linux
  * with bubblewrap. Windows has none.
  */
+/** A Buddy of one project (a project session, or the one Buddy's session in an older project chat: backend
+ *  Agent.buddyNarrow) never reads beyond its folder, whose home may hold another project's clone. Its host marks its folder,
+ *  by the worktree name its start gives it, before it launches (superTabs/start.ts), so its launch sets up no wide guard at
+ *  all, not only no grant (security review 1 of #2436). */
+export const buddyNarrowFile = (dataDir: string, leaf: string): string =>
+  join(dataDir, 'buddy-narrow', createHash('sha256').update(leaf).digest('hex').slice(0, 32))
+export function markBuddyNarrow(leaf: string, dataDir: string = env.ADAPTER_DATA_DIR): void {
+  const file = buddyNarrowFile(dataDir, leaf)
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
+  writeFileSync(file, '', { mode: 0o600 })
+}
+/** Whether [root] is a folder its host marked as one project's Buddy's: by its name, or its name before a -2, -3 a taken one
+ *  got (lib/gitProject.ts). */
+const narrowFolder = (root: string, dataDir: string) => {
+  const name = basename(root)
+  return [name, name.replace(/-\d+$/, '')].some(leaf => existsSync(buddyNarrowFile(dataDir, leaf)))
+}
+
 export function buddyLaunchWide(root: string, facts: BuddyLaunchFacts = launchFacts()): BuddyWide | null {
+  if (narrowFolder(root, facts.dataDir)) return null
   if (facts.team || !(facts.platform === 'darwin' || (facts.platform === 'linux' && facts.hasBwrap)) || !facts.engineHomes) return null
   // Where Claude Code keeps every session's tool output on this machine.
   const tmpDirs = [...new Set([`/tmp/claude-${facts.uid}`, `/private/tmp/claude-${facts.uid}`, join(tmpdir(), `claude-${facts.uid}`)])]
@@ -563,13 +582,18 @@ function decoded(text) {
 }
 const SECRET = (kind) => 'This holds what looks like ' + kind + ', so nothing was sent, and nobody will be asked. Take it out and ' +
   'send again: never pass on secrets, tokens, keys or connection strings.'
-// A file to attach, in the folder (outward refused any other): its first 10 MB, the most a chat file holds, read as text.
-// One that is not there holds nothing, as sending it fails anyway; one there that cannot be read is refused.
+// A file to attach, in the folder (outward refused any other), read whole as text to be checked for secrets. A Buddy's files
+// stay at 10 MB, the form upload's size: a chat file may be 256 MB now, but one past 10 MB would go out with only its
+// start checked, so it is refused. One that is not there holds nothing, as sending it fails anyway; one there that cannot
+// be read is refused.
+const ATTACH_MAX_BYTES = 10 * 1024 * 1024
+const TOO_LARGE = 'A Buddy attaches files of up to 10 MB, so nothing was sent, and nobody will be asked. Attach a smaller file.'
 function fileText(path) {
   let fd
   try {
     fd = openSync(resolve(ROOT, path), constants.O_RDONLY)
-    const buffer = Buffer.alloc(10 * 1024 * 1024), read = readSync(fd, buffer, 0, buffer.length, 0)
+    const buffer = Buffer.alloc(ATTACH_MAX_BYTES + 1), read = readSync(fd, buffer, 0, buffer.length, 0)
+    if (read > ATTACH_MAX_BYTES) { reason = TOO_LARGE; return null }
     return buffer.subarray(0, read).toString('utf8')
   } catch (error) { return error?.code === 'ENOENT' ? '' : null } finally { if (fd !== undefined) closeSync(fd) }
 }
@@ -846,9 +870,9 @@ const MARK = /\.[0-9a-f]{64}\.owner$/
 /** A message holds at most ten files (superTabs/attachments.ts): ten messages' worth, and as many links. */
 const MAX_FILES = 100
 const MAX_LINKS = 50
-/** The backend's per-file limit (superTabs/attachments.ts MAX_ATTACHMENT_BYTES): no download is larger, so nothing larger
- *  is read whole to be listed. */
-const MAX_BYTES = 10 * 1024 * 1024
+/** The backend's per-file limit (superTabs/attachments.ts MAX_ATTACHMENT_BYTES, 256 MB): no download is larger, so nothing
+ *  larger is listed. A listed file is never read whole: its bytes are hashed 64 KiB at a time, here and in the guard. */
+const MAX_BYTES = 256 * 1024 * 1024
 
 /** A claude.ai Artifact link as the guard compares it (`artifactLink` in the guard above, the same rules), or null. */
 function artifactLink(text: string): string | null {

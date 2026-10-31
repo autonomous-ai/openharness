@@ -36,8 +36,9 @@ class SwarmPickFailed extends SwarmPickOutcome {
 }
 
 /// Photos are scaled to at most this many pixels on their long side and sent as JPEG at
-/// [_photoQuality]: a phone's own photo can be past the 10 MB a file may be, and a HEIC one is not
-/// a picture Desktop shows. A PNG or a GIF keeps its kind.
+/// [_photoQuality]: a phone's own photo can run to tens of megabytes, far more than a chat picture
+/// needs to carry over a phone connection, and a HEIC one is not a picture Desktop shows. A PNG or a
+/// GIF keeps its kind.
 const double _photoMaxSide = 4096;
 const int _photoQuality = 85;
 
@@ -80,14 +81,16 @@ Future<List<String>> Function() swarmPickerCopyFolders = () async => [
 ];
 
 /// Opens [source] and adds what the person picks to [files], by Desktop's limits: ten files a
-/// message, 10 MB each — reading no more files than there is room for, and naming any left out,
+/// message, 256 MB each — reading no more files than there is room for, and naming any left out,
 /// over the size or empty. Photos are named `photo.jpg`, `photo-2.jpg`… since a picker names them by
 /// no name a person would know; other files keep their own.
 ///
-/// Each picker hands over its own copy of the file in the app's private temporary folder; it is
-/// read into memory and deleted at once, kept or not, so no photo stays on the phone. A file
-/// outside those folders is read and left where it is. Nothing is
-/// added once [stillWanted] fails: the chat closed while its picker was up.
+/// Each picker hands over its own copy of the file in the app's private temporary folder. One of
+/// up to [swarmFormAttachmentMaxBytes] is read into memory and its copy deleted at once, kept or
+/// not, so no photo stays on the phone. A larger one is never read whole: it goes up from its copy,
+/// which is deleted once the file is let go ([SwarmOutgoingFile.onDisk]). A file outside those
+/// folders is read, or read from, and left where it is. Nothing is added once [stillWanted] fails:
+/// the chat closed while its picker was up.
 Future<SwarmPickOutcome> addSwarmPicked(
   SwarmOutgoingFiles files,
   SwarmPickSource source, {
@@ -146,19 +149,22 @@ Future<SwarmPickOutcome> addSwarmPicked(
     }
     final own = file.name.isEmpty ? 'file' : file.name;
     final name = photos ? swarmFreeName(_photoName(own), taken) : own;
+    var kept = false;
     try {
-      final bytes = await _read(file);
-      if (bytes == null) {
+      final outgoing = await _take(file, name, copies);
+      if (outgoing == null) {
         oversized.add(name);
-      } else if (bytes.isEmpty) {
+      } else if (outgoing.size == 0) {
         empty.add(name);
       } else {
-        read.add(SwarmOutgoingFile(name, bytes));
+        read.add(outgoing);
+        kept = outgoing.path != null;
       }
     } catch (_) {
       unreadable ??= name;
     } finally {
-      delete(file);
+      // A large file goes up from its copy, which goes once the file does.
+      if (!kept) delete(file);
     }
   }
   final notes = [
@@ -172,9 +178,15 @@ Future<SwarmPickOutcome> addSwarmPicked(
 
 bool _always() => true;
 
-/// [file]'s bytes, or null when it is past the limit, which is measured before it is read so a
-/// large file is never held whole.
-Future<Uint8List?> _read(XFile file) async {
+/// [file] to go up as [name], or null when it is past the limit, which is measured before it is
+/// read so a large file is never held whole: one past [swarmFormAttachmentMaxBytes] with a path on
+/// disk is read from there as it goes up, its copy (in one of the [copies] folders) deleted once
+/// it is let go; a smaller one is read into memory.
+Future<SwarmOutgoingFile?> _take(
+  XFile file,
+  String name,
+  List<String> copies,
+) async {
   int? size;
   try {
     size = await file.length();
@@ -182,8 +194,77 @@ Future<Uint8List?> _read(XFile file) async {
     // No size to read is no reason to refuse yet: the read says whether the file is there.
   }
   if (size != null && size > swarmAttachmentMaxBytes) return null;
+  if (size != null &&
+      size > swarmFormAttachmentMaxBytes &&
+      !kIsWeb &&
+      file.path.isNotEmpty) {
+    final path = _real(file.path);
+    if (File(path).existsSync()) {
+      final folder = copies
+          .where((folder) => p.isWithin(folder, path))
+          .firstOrNull;
+      return folder == null
+          // The person's own file, read where it is and never touched.
+          ? SwarmOutgoingFile.onDisk(name, path, size)
+          : SwarmOutgoingFile.onDisk(
+              name,
+              _keep(path, folder),
+              size,
+              temporary: true,
+            );
+    }
+  }
   final bytes = await file.readAsBytes();
-  return bytes.length > swarmAttachmentMaxBytes ? null : bytes;
+  return bytes.length > swarmAttachmentMaxBytes
+      ? null
+      : SwarmOutgoingFile(name, bytes);
+}
+
+/// The folder, in each of the app's temporary folders, a picker's copy of a large file is moved into
+/// while it waits to go up: this app's alone, so that clearing it ([clearSwarmPickerCopies]) touches
+/// nothing else there.
+const _keptFolder = 'harness-swarm-outgoing';
+
+/// Copies [_keep] could not move, kept where the picker put them.
+final _keptInPlace = <String>{};
+var _keptCount = 0;
+
+/// Moves the picker's copy at [path], in the app's temporary [folder], into [_keptFolder] there
+/// and answers where it now is; where it was when it cannot be moved.
+String _keep(String path, String folder) {
+  try {
+    final kept = Directory(p.join(folder, _keptFolder))
+      ..createSync(recursive: true);
+    final to = p.join(
+      kept.path,
+      '${DateTime.now().microsecondsSinceEpoch}-${_keptCount++}${p.extension(path)}',
+    );
+    File(path).renameSync(to);
+    return to;
+  } catch (_) {
+    _keptInPlace.add(path);
+    return path;
+  }
+}
+
+/// Deletes every picker's copy of a large file kept to go up ([_keep]) — on sign-out or a switch
+/// of account, when the files of the chats that held them go, and at launch, for any left by a
+/// run that ended first. Nothing else in the app's temporary folders is touched.
+Future<void> clearSwarmPickerCopies() async {
+  for (final folder in await _copyFolders()) {
+    try {
+      final kept = Directory(p.join(folder, _keptFolder));
+      if (kept.existsSync()) kept.deleteSync(recursive: true);
+    } catch (_) {
+      // Gone already, or not ours to delete: nothing kept is left to read.
+    }
+  }
+  for (final path in _keptInPlace) {
+    try {
+      File(path).deleteSync();
+    } catch (_) {}
+  }
+  _keptInPlace.clear();
 }
 
 /// [swarmPickerCopyFolders], each as its real path; none when they cannot be read, and then

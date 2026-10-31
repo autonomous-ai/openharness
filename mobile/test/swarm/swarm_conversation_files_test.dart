@@ -142,7 +142,7 @@ void main() {
     final r = rig();
     r.uploads.refuse['b.jpg'] = const SuperTabFailure(
       'ATTACHMENT_TOO_LARGE',
-      'That file is over 10 MB.',
+      'Files can be up to 256 MB.',
       statusCode: 413,
     );
     final c = await open(r.reader);
@@ -151,7 +151,7 @@ void main() {
 
     expect(await c.send(), isFalse);
 
-    expect(c.error, 'That file is over 10 MB.');
+    expect(c.error, 'Files can be up to 256 MB.');
     expect(c.draft, 'look');
     expect([for (final f in c.files.files) f.name], ['a.jpg', 'b.jpg']);
     expect(r.swarm.commands, isEmpty);
@@ -391,6 +391,73 @@ void main() {
     );
 
     expect(await sending, isFalse);
+  });
+
+  group('a file over 10 MB', () {
+    /// Said to be 50 MB, and three bytes: no test holds the rest.
+    SwarmOutgoingFile large(String name) => SwarmOutgoingFile.streamed(
+      name,
+      50 * 1024 * 1024,
+      () => Stream.value([1, 2, 3]),
+    );
+
+    test('goes up as its file, never read into memory first', () async {
+      final r = rig();
+      final c = await open(r.reader);
+      c.files.add([large('AC4.step')]);
+
+      expect(await c.send(), isTrue);
+
+      final sent = r.uploads.asked.single.file;
+      expect(sent.size, 50 * 1024 * 1024);
+      expect(sent.bytes, isNull);
+      expect(r.swarm.commands.single['attachmentIds'], ['id-AC4.step']);
+    });
+
+    test('leaving the chat while it goes up stops it, and an answer that '
+        'comes after lands nowhere', () async {
+      final r = rig();
+      r.uploads.answersAtOnce = false;
+      await r.reader.refresh();
+      final c = SwarmConversation(r.reader, 'g1');
+      await c.load();
+      c.draft = 'the model';
+      c.files.add([large('AC4.step')]);
+
+      final sending = c.send();
+      await settle();
+      final going = r.uploads.asked.single;
+      c.dispose();
+      going.answer.complete(FakeUploads.attachment('late'));
+
+      expect(going.cancel.isCancelled, isTrue);
+      expect(await sending, isFalse);
+      expect(r.swarm.commands, isEmpty);
+      expect(c.pending, isNull);
+      expect(c.files.files, isEmpty);
+    });
+
+    test('a failed upload says which file, leaves nothing going, and goes '
+        'again from the start', () async {
+      final r = rig();
+      r.uploads.refuse['AC4.step'] = const SuperTabFailure(
+        'UPLOAD_FAILED',
+        'Could not upload AC4.step. Try again.',
+        statusCode: 403,
+      );
+      final c = await open(r.reader);
+      c.files.add([large('AC4.step')]);
+
+      expect(await c.send(), isFalse);
+      expect(c.error, 'Could not upload AC4.step. Try again.');
+      expect(c.uploading, isFalse);
+      expect(c.isUploading(c.files.files.single), isFalse);
+
+      r.uploads.refuse.clear();
+      expect(await c.send(), isTrue);
+      expect(r.uploads.names, ['AC4.step', 'AC4.step']);
+      expect(r.swarm.commands.single['attachmentIds'], ['id-AC4.step']);
+    });
   });
 
   test('closing the chat lets its files go', () async {

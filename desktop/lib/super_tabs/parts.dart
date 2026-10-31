@@ -350,6 +350,8 @@ class SuperTabParts {
     if (_derived['threadSessions'] == true) state['threadSessions'] = true;
     // And one that also takes it on a top-level message in a Buddy chat.
     if (_derived['sessionsFromChat'] == true) state['sessionsFromChat'] = true;
+    // And one that gives each person one Buddy for the whole Swarm.
+    if (_derived['swarmBuddy'] == true) state['swarmBuddy'] = true;
     if (_readMarks.isNotEmpty) state['readMarks'] = Map.of(_readMarks);
     if (_threadMarks.isNotEmpty) {
       state['threadMarks'] = {

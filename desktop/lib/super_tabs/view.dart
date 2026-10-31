@@ -30,6 +30,7 @@ import 'live_card.dart';
 import 'personal_projects.dart';
 import 'pull_request_facts.dart';
 import 'pull_requests.dart';
+import 'attachment_upload.dart' show kSuperTabFolderZipMaxBytes;
 import 'composer_files.dart';
 import 'composer_newline.dart';
 import 'composer_tags.dart';
@@ -132,6 +133,11 @@ class _SuperTabViewState extends State<SuperTabView>
 
   /// The Buddy chats whose next message starts its own thread's session.
   final _chatSessions = <String>{};
+
+  /// The project a New session in the reader's one Buddy chat works in, by
+  /// chat; none is a session that reads every project and sends to no PM
+  /// (spec 2026-10-31-one-buddy-per-swarm).
+  final _chatSessionProjects = <String, String>{};
   String? _selected;
   int _scrollRequest = 0;
   bool _jumpingToEnd = false;
@@ -707,6 +713,7 @@ class _SuperTabViewState extends State<SuperTabView>
     final result = await c.send(
       replyTo: _replies[id]?.id,
       newSession: newSession,
+      sessionProjectId: newSession ? _chosenSessionProject(id) : null,
       // The reply goes with the message, which shows at the end at once.
       onSending: () {
         if (!mounted) return;
@@ -715,7 +722,10 @@ class _SuperTabViewState extends State<SuperTabView>
       },
     );
     if (!mounted) return;
-    if (newSession && result != null) _chatSessions.remove(id);
+    if (newSession && result != null) {
+      _chatSessions.remove(id);
+      _chatSessionProjects.remove(id);
+    }
     // Refused for New session, its text is back as the chat's draft: it shows
     // in the box, ready to send without it, unless another chat is shown or
     // something was typed meanwhile.
@@ -764,6 +774,79 @@ class _SuperTabViewState extends State<SuperTabView>
               () => on ? _chatSessions.add(id) : _chatSessions.remove(id),
             )
           : null,
+    );
+  }
+
+  /// The project chosen for chat [id]'s New session while the reader still
+  /// reads it: one they lost is no longer chosen (security review 1 of #2437).
+  String? _chosenSessionProject(String? id) {
+    final chosen = _chatSessionProjects[id];
+    return c.snapshot?.projects.any((p) => p.id == chosen) == true
+        ? chosen
+        : null;
+  }
+
+  /// Where a New session in the reader's one Buddy chat works: every project
+  /// they read, sending to no PM, or one project, whose PM it alone sends to.
+  /// A quiet menu beside New session, shown while it is on.
+  Widget _chatSessionProject(bool writable) {
+    final id = c.selectedId;
+    final projects = c.snapshot?.projects ?? const <SuperTabProject>[];
+    final chosen = projects
+        .where((p) => p.id == _chatSessionProjects[id])
+        .firstOrNull;
+    return PopupMenuButton<String>(
+      key: const ValueKey('super-chat-session-project'),
+      enabled: writable,
+      tooltip: 'Where this session works',
+      initialValue: chosen?.id ?? '',
+      onSelected: (projectId) => setState(
+        () => projectId.isEmpty
+            ? _chatSessionProjects.remove(id)
+            : _chatSessionProjects[id] = projectId,
+      ),
+      itemBuilder: (_) => [
+        PopupMenuItem(
+          key: const ValueKey('super-chat-session-any'),
+          value: '',
+          child: Tooltip(
+            message: 'Reads every project you read. Sends no work to a PM.',
+            child: Text(
+              'All projects · ask anything',
+              style: DesktopChrome.control(),
+            ),
+          ),
+        ),
+        for (final project in projects)
+          PopupMenuItem(
+            key: ValueKey('super-chat-session-in-${project.id}'),
+            value: project.id,
+            child: Tooltip(
+              message:
+                  'Reads only ${project.name}, and can hand work to its PM.',
+              child: Text(
+                '${project.name} · ask and hand off work',
+                style: DesktopChrome.control(),
+              ),
+            ),
+          ),
+      ],
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+          horizontal: grid.AppDesktop.badgeInset,
+          vertical: grid.AppDesktop.listRowGap,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              chosen?.name ?? 'All projects',
+              style: DesktopChrome.metadata(),
+            ),
+            Icon(AppIcons.chevronDown, size: 12, color: DesktopChrome.muted),
+          ],
+        ),
+      ),
     );
   }
 
@@ -829,9 +912,16 @@ class _SuperTabViewState extends State<SuperTabView>
     final oversized = <String>[], failed = <String>[];
     for (final folder in folders) {
       try {
-        final bytes = await zipFolder(folder, limitBytes: files.limitBytes);
-        bytes == null
-            ? oversized.add(folderName(folder))
+        final bytes = await zipFolder(
+          folder,
+          limitBytes: kSuperTabFolderZipMaxBytes,
+        );
+        bytes == null || bytes.length > kSuperTabFolderZipMaxBytes
+            ? oversized.add(
+                bytes == null
+                    ? folderName(folder)
+                    : '${folderName(folder)}.zip',
+              )
             : zipped[folder] = bytes;
       } on Exception {
         // Unreadable, or gone since the drop.
@@ -842,10 +932,13 @@ class _SuperTabViewState extends State<SuperTabView>
     setState(() => _zipping.remove(id));
     if (!identical(_droppedFolders[id], dropped)) return;
     // Numbered, so two folders of one name are both attached.
-    final problem = files.addPasted([
-      for (final MapEntry(key: folder, value: bytes) in zipped.entries)
-        HarnessAttachment('${folderName(folder)}.zip', bytes),
-    ], oversized: oversized);
+    final added = zipped.isEmpty
+        ? null
+        : files.addPasted([
+            for (final MapEntry(key: folder, value: bytes) in zipped.entries)
+              HarnessAttachment('${folderName(folder)}.zip', bytes),
+          ]);
+    final problem = added ?? _folderZipsTooLarge(oversized);
     // Only a folder whose zip was taken gives up its path.
     final attached = [
       for (final MapEntry(key: folder, value: bytes) in zipped.entries)
@@ -875,6 +968,16 @@ class _SuperTabViewState extends State<SuperTabView>
       problem ??
           (failed.isEmpty ? null : '${failed.join(', ')} could not be zipped.'),
     );
+  }
+
+  /// What to say of the folders whose zips are over
+  /// [kSuperTabFolderZipMaxBytes], or null for none.
+  static String? _folderZipsTooLarge(List<String> names) {
+    if (names.isEmpty) return null;
+    const limit = '${kSuperTabFolderZipMaxBytes ~/ (1024 * 1024)} MB';
+    return names.length == 1
+        ? '${names.single} is over $limit.'
+        : '${names.length} folders are over $limit.';
   }
 
   /// The box was edited: keep it as this chat's draft and drop the pick state.
@@ -1955,6 +2058,10 @@ class _SuperTabViewState extends State<SuperTabView>
               : 'Choose a project'
         : c.snapshot!.isProjectLead(group.id)
         ? '# ${c.snapshot!.projectFor(group.id)!.name}'
+        // An older Buddy chat in a project says which, as the menu that opens
+        // it does; the one Buddy chat is the sidebar's # buddy.
+        : c.isEarlierBuddyChat(group)
+        ? 'Earlier Buddy chat · ${c.snapshot!.projects.where((p) => p.id == group.projectId).firstOrNull?.name ?? 'a project'}'
         : _buddyName(group) == null
         ? null
         : c.buddy(group.projectId) == null && group.buddyName == null
@@ -2248,6 +2355,19 @@ class _SuperTabViewState extends State<SuperTabView>
               'Remove Buddy',
               () => unawaited(confirmRemoveBuddy(context, c, group.projectId)),
             ),
+          // The one Buddy's chat lists the person's older chats in projects
+          // they still read, each read only (spec: history).
+          if (group.isSwarmBuddyChat)
+            for (final project
+                in c.snapshot?.projects ?? const <SuperTabProject>[])
+              // One with nothing in it has no history to keep (security
+              // review 1 of #2437).
+              if (c.buddyChat(project.id) case final earlier?
+                  when earlier.lastMessageSequence > 0)
+                item(
+                  'Earlier chat in ${project.name}',
+                  () => unawaited(c.select(earlier.id)),
+                ),
         ] else ...[
           // A private conversation is chat only: it has no work.
           if (group.audience == null)
@@ -2478,7 +2598,10 @@ class _SuperTabViewState extends State<SuperTabView>
     final reply =
         byId[message.replyTo] ??
         (fetched != null && _shown(fetched) ? fetched : null);
-    final writable = c.canWrite && c.selected?.archived == false;
+    final writable =
+        c.canWrite &&
+        c.selected?.archived == false &&
+        !c.isEarlierBuddyChat(c.selected);
     final root = message.thread;
     // A message that started a session has its line before any reply comes,
     // so the session is found again after its pane closes.
@@ -2574,7 +2697,11 @@ class _SuperTabViewState extends State<SuperTabView>
               final person? => person.username,
               null => 'Someone',
             },
-      onReact: c.canWrite && c.selected?.archived == false
+      // An older Buddy chat is kept to read: no reaction there (security review 1 of #2437).
+      onReact:
+          c.canWrite &&
+              c.selected?.archived == false &&
+              !c.isEarlierBuddyChat(c.selected)
           ? (emoji) => unawaited(_react(message, emoji))
           : null,
       receipts: [
@@ -2855,7 +2982,13 @@ class _SuperTabViewState extends State<SuperTabView>
       );
     }
     final group = c.selected;
-    final writable = c.canWrite && group != null && !group.archived;
+    // An older Buddy chat in a project reads, but is no longer written to
+    // here, where one Buddy answers in # buddy.
+    final writable =
+        c.canWrite &&
+        group != null &&
+        !group.archived &&
+        !c.isEarlierBuddyChat(group);
     final busy = c.saving || c.uploading;
     final latestOwn = c
         .messages(c.selectedId)
@@ -3010,7 +3143,9 @@ class _SuperTabViewState extends State<SuperTabView>
               ],
             ),
           ),
-        if (group != null && _isBuddyChat(group))
+        if (group != null &&
+            _isBuddyChat(group) &&
+            !c.isEarlierBuddyChat(group))
           SuperTabBuddyBar(controller: c, chat: group, app: widget.app),
         // The reader's own Buddy chat shows what the PM asked them.
         if (group != null && _isBuddyChat(group))
@@ -3352,18 +3487,35 @@ class _SuperTabViewState extends State<SuperTabView>
             );
           },
         ),
-        if (group != null && group.archived)
+        // A chat kept to read gets one muted bar in place of the box, so
+        // nothing looks typeable: a closed group, or an older Buddy chat in a
+        // project, which also leads to the one Buddy (Lead's design review,
+        // 10-31).
+        if (group != null && (c.isEarlierBuddyChat(group) || group.archived))
           Padding(
+            key: c.isEarlierBuddyChat(group)
+                ? const ValueKey('super-earlier-buddy-chat')
+                : null,
             padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
             child: Row(
               children: [
                 Expanded(
                   child: Text(
-                    'This group is closed. You can read it but not write.',
+                    c.isEarlierBuddyChat(group)
+                        ? 'This is an earlier chat, kept to read.'
+                        : 'This group is closed. You can read it but not write.',
                     style: DesktopChrome.metadata(),
                   ),
                 ),
-                if (c.canWrite)
+                if (c.isEarlierBuddyChat(group))
+                  TextButton(
+                    key: const ValueKey('super-open-swarm-buddy'),
+                    onPressed: () => unawaited(
+                      c.openBuddyChat(SuperTabController.kSwarmBuddyKey),
+                    ),
+                    child: const Text('Open # buddy'),
+                  )
+                else if (c.canWrite)
                   TextButton(
                     key: const ValueKey('super-group-reopen'),
                     onPressed: c.saving
@@ -3523,6 +3675,15 @@ class _SuperTabViewState extends State<SuperTabView>
                                       left: grid.AppDesktop.controlGap,
                                     ),
                                     child: _chatSessionChoice(writable),
+                                  ),
+                                if (c.offersChatSessions &&
+                                    c.selected?.isSwarmBuddyChat == true &&
+                                    _chatSessions.contains(c.selectedId))
+                                  Padding(
+                                    padding: const EdgeInsets.only(
+                                      left: grid.AppDesktop.controlGap,
+                                    ),
+                                    child: _chatSessionProject(writable),
                                   ),
                                 fingerTarget(
                                   enabled: _phone,

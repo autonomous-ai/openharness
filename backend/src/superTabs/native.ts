@@ -5,7 +5,7 @@ import type { AuthUser } from '../lib/ssoAuth.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
 import { activeWork, agent, appendPullRequestUrls, author, conversation, fail, stableId, SuperTabError,
   type Actor, type Agent, type Author, type Conversation, type SuperTabState } from './model.js'
-import { accessInputs, canReadGroup, groupProject, readConversation, watchersLost } from './projects.js'
+import { accessInputs, canReadGroup, readConversation, watchersLost } from './projects.js'
 import { mayDrive } from './terminal.js'
 import { cloneData } from './cloneData.js'
 import { numberMessages, type Touch } from './parts/commit.js'
@@ -119,7 +119,8 @@ export class SuperTabNativeStore {
       const operator = author(state, { kind: 'person', userId: user.sub, email: user.email }, true)
       const target = agent(state, request.agentId)
       const group = readConversation(state, { kind: 'person', userId: user.sub, email: user.email }, request.conversationId)
-      groupProject(state, group) // A terminal opens only in a project's conversation, never in the Leads conversation.
+      // A terminal opens in a project's conversation or a person's own Buddy chat; readConversation refuses the removed Leads
+      // conversation (model.ts leadsRemoved).
       if (group.archived || !group.agentIds.includes(target.id)) fail('AGENT_UNAVAILABLE', 'Choose an agent in this conversation.')
       await this.deps.agentGrant(tx, state, target)
       const grant = await this.deps.contribution(tx, state, { kind: 'person', userId: user.sub, email: user.email }, target)

@@ -2650,7 +2650,7 @@ class _Pending extends StatelessWidget {
                 'id': '',
                 'name': file.name,
                 'mime': swarmMimeForName(file.name),
-                'size': file.bytes.length,
+                'size': file.size,
                 'url': '',
               }),
               link: null,

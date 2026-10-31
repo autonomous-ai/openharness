@@ -1,24 +1,134 @@
+import 'dart:io';
+import 'dart:typed_data';
+
 import 'package:flutter/foundation.dart';
 
 /// What the backend allows one message to carry (the desktop's
 /// `kSuperTabAttachmentMaxBytes` and `kSuperTabAttachmentMaxFiles`,
 /// backend `superTabs/attachments.ts`).
-const swarmAttachmentMaxBytes = 10 * 1024 * 1024;
+const swarmAttachmentMaxBytes = 256 * 1024 * 1024;
 const swarmAttachmentMaxFiles = 10;
 
-/// One file waiting to go with a message: its bytes in memory only, never
-/// written anywhere on the phone.
-@immutable
+/// The most one file may be to go up as a form, in one request to the
+/// backend (backend `MAX_FORM_ATTACHMENT_BYTES`). A larger one goes straight
+/// to storage by a link the backend signs, which no proxy in between caps
+/// ([ApiClient.uploadSwarmAttachment]).
+const swarmFormAttachmentMaxBytes = 10 * 1024 * 1024;
+
+/// What the person is told of a file past [swarmAttachmentMaxBytes].
+const swarmAttachmentMaxLabel =
+    '${swarmAttachmentMaxBytes ~/ (1024 * 1024)} MB';
+
+/// One file waiting to go with a message: its [bytes] in memory, never
+/// written anywhere on the phone — or, past [swarmFormAttachmentMaxBytes],
+/// left where the picker put it at [path] and read from there as it goes up,
+/// so a file of hundreds of megabytes is never held whole.
 class SwarmOutgoingFile {
-  const SwarmOutgoingFile(this.name, this.bytes);
+  SwarmOutgoingFile(this.name, Uint8List this.bytes)
+    : size = bytes.length,
+      path = null,
+      _open = null;
+
+  /// A file read from [path] as it goes up, [size] bytes long. [temporary]
+  /// is the picker's own copy in the app's temporary folder: it is deleted
+  /// after nothing holds this file any more — sent, taken off, or its chat
+  /// closed — once Dart collects it ([_copies]); one left by an app that was
+  /// killed first stays in the temporary folder for the system to clear. A
+  /// file anywhere else is never touched.
+  SwarmOutgoingFile.onDisk(
+    this.name,
+    String this.path,
+    this.size, {
+    bool temporary = false,
+  }) : bytes = null,
+       _open = null {
+    if (temporary) _copies.attach(this, path!);
+  }
+
+  /// A file of [size] bytes read by [open], for tests: no bytes held, none
+  /// on disk.
+  @visibleForTesting
+  SwarmOutgoingFile.streamed(
+    this.name,
+    this.size,
+    Stream<List<int>> Function() open,
+  ) : bytes = null,
+      path = null,
+      _open = open;
 
   final String name;
-  final Uint8List bytes;
+
+  /// How many bytes the file is.
+  final int size;
+
+  /// Its bytes, when they are held in memory.
+  final Uint8List? bytes;
+
+  /// Where it is read from, when it is not held in memory.
+  final String? path;
+
+  final Stream<List<int>> Function()? _open;
+
+  /// The same file under [name].
+  SwarmOutgoingFile named(String name) {
+    if (name == this.name) return this;
+    final held = bytes;
+    if (held != null) return SwarmOutgoingFile(name, held);
+    final at = path;
+    // The copy stays with the file that holds it ([_copies]); this one only
+    // points at it while both are around.
+    if (at != null) return _Renamed(name, this, at);
+    return SwarmOutgoingFile.streamed(name, size, _open!);
+  }
+
+  /// Its bytes, a part at a time.
+  Stream<List<int>> openRead() {
+    final held = bytes;
+    if (held != null) return Stream.value(held);
+    final at = path;
+    if (at != null) return File(at).openRead(0, size);
+    return _open!();
+  }
+
+  /// All its bytes at once: for a file small enough to go as a form.
+  Future<Uint8List> readAll() async {
+    final held = bytes;
+    if (held != null) return held;
+    final all = BytesBuilder(copy: false);
+    await for (final part in openRead()) {
+      all.add(part);
+    }
+    return all.takeBytes();
+  }
+
+  /// Deletes a picker's copy once the file that points at it is gone — never
+  /// earlier, so one going up, put back after a refusal, or held by two
+  /// boxes at once (New message and its chat) is always there to read. A
+  /// box deleting what it lets go would delete a file another still holds.
+  static final _copies = Finalizer<String>(_deleteCopy);
+}
+
+/// A file under a new name that reads [of]'s copy, and keeps [of] — and so
+/// the copy — while it is held.
+class _Renamed extends SwarmOutgoingFile {
+  _Renamed(String name, this.of, String path)
+    : super.onDisk(name, path, of.size);
+
+  final SwarmOutgoingFile of;
+}
+
+/// Deletes the picker's copy at [path]; one already gone is nothing to do.
+void _deleteCopy(String path) {
+  try {
+    File(path).deleteSync();
+  } catch (_) {
+    // Already gone: nothing of it is left to keep.
+  }
 }
 
 /// The files waiting to go with the next message in a chat — the desktop's
-/// `HarnessAttachments` with a Swarm chat's limits, wording and all. Held in
-/// memory until sent, or until the chat closes.
+/// `HarnessAttachments` with a Swarm chat's limits, wording and all. Held
+/// until sent, or until the chat closes.
 class SwarmOutgoingFiles extends ChangeNotifier {
   final _files = <SwarmOutgoingFile>[];
 
@@ -41,8 +151,8 @@ class SwarmOutgoingFiles extends ChangeNotifier {
     final tooLarge = [...oversized];
     var over = surplus;
     for (final file in files) {
-      if (file.bytes.isEmpty) continue;
-      if (file.bytes.length > swarmAttachmentMaxBytes) {
+      if (file.size == 0) continue;
+      if (file.size > swarmAttachmentMaxBytes) {
         tooLarge.add(file.name);
         continue;
       }
@@ -54,7 +164,7 @@ class SwarmOutgoingFiles extends ChangeNotifier {
       _files.add(file);
     }
     notifyListeners();
-    const limit = '${swarmAttachmentMaxBytes ~/ (1024 * 1024)} MB';
+    const limit = swarmAttachmentMaxLabel;
     // Both limits can leave files out at once; each says so.
     final notes = [
       if (over > 0) 'Attach at most $swarmAttachmentMaxFiles files.',
@@ -74,10 +184,7 @@ class SwarmOutgoingFiles extends ChangeNotifier {
   }) {
     final taken = {for (final file in _files) file.name};
     return add(
-      [
-        for (final file in files)
-          SwarmOutgoingFile(swarmFreeName(file.name, taken), file.bytes),
-      ],
+      [for (final file in files) file.named(swarmFreeName(file.name, taken))],
       oversized: oversized,
       surplus: surplus,
     );

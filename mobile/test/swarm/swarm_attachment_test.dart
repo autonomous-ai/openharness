@@ -23,12 +23,12 @@ void main() {
 
   final link = Uri.parse('https://cdn.example/swarm/a.png');
 
-  SuperTabAttachment attachment({String mime = 'image/png'}) =>
+  SuperTabAttachment attachment({String mime = 'image/png', int size = 2048}) =>
       SuperTabAttachment.fromJson({
         'id': 'file-1',
         'name': 'screen.png',
         'mime': mime,
-        'size': 2048,
+        'size': size,
         'url': link.toString(),
       });
 
@@ -224,6 +224,27 @@ void main() {
     expect(chip, findsOneWidget);
     expect(preview, findsNothing);
     expect(storage.asked, isEmpty);
+  });
+
+  testWidgets('a picture over 10 MB keeps the chip, and nothing is '
+      'fetched', (tester) async {
+    await pump(tester, file: attachment(size: 11 * 1024 * 1024));
+    await tester.pump();
+
+    expect(chip, findsOneWidget);
+    expect(preview, findsNothing);
+    expect(storage.asked, isEmpty);
+  });
+
+  testWidgets('a picture of 1 MB still shows in place', (tester) async {
+    storage.bytes = await png(tester, 40, 30);
+    await pump(tester, file: attachment(size: 1024 * 1024));
+    await until(tester, () => drawn(tester));
+
+    expect(preview, findsOneWidget);
+    expect(chip, findsNothing);
+    expect(storage.asked, isNotEmpty);
+    await closed(tester);
   });
 
   testWidgets("a picture not on Harness's file storage keeps the chip", (

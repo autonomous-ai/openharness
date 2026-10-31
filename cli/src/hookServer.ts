@@ -198,6 +198,9 @@ export interface HookServerHandlers {
   /** A Super Tab chat file from the native desktop, streamed on to the backend with this computer's account
    *  (lib/superTabAttachmentProxy.ts): the app's REST client holds no token of its own. Answers on `res` itself. */
   onSuperTabAttachment?: (req: http.IncomingMessage, res: http.ServerResponse, path: string) => Promise<void>
+  /** A chat file over 10 MB goes straight to storage (superTabs/attach.ts): its link asked for, and its upload said complete,
+   *  with this computer's account. Small JSON both ways; the bytes never pass through here. */
+  onSuperTabAttachmentUpload?: (path: string, body: Record<string, unknown>) => Promise<PairOutcome>
   onProductUsageReport?: (body: unknown) => Promise<PairOutcome>
   onProductUsageRead?: () => Promise<PairOutcome>
   onProductUsageWrite?: (body: unknown) => Promise<PairOutcome>
@@ -1120,6 +1123,21 @@ export function startHookServer(
         const asAgentId = new URLSearchParams((req.url ?? '').split('?')[1] ?? '').get('asAgentId')
         const agent = asAgentId && /^[A-Za-z0-9_-]{1,160}$/.test(asAgentId) ? `?asAgentId=${asAgentId}` : ''
         await handlers.onSuperTabAttachment(req, res, `${url}${agent}`); return
+      }
+      const direct = req.method === 'POST'
+        ? /^\/api\/super-tabs\/[A-Za-z0-9_-]{1,160}\/attachments\/uploads(\/[A-Za-z0-9_-]{1,160}\/complete)?$/.exec(url) : null
+      if (direct) {
+        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        if (!handlers.onSuperTabAttachmentUpload) { json(503, { error: 'UNAVAILABLE' }); return }
+        // A link's request names the file ({conversationId, name, mime, size}); a completion's is {}, and may be empty.
+        let body: unknown
+        try { const raw = await readBody(req, 8192); body = direct[1] && !raw.trim() ? {} : JSON.parse(raw) } catch { body = null }
+        if (!body || typeof body !== 'object' || Array.isArray(body)) { json(400, { error: 'BAD_REQUEST' }); return }
+        const asAgentId = new URLSearchParams((req.url ?? '').split('?')[1] ?? '').get('asAgentId')
+        const agent = asAgentId && /^[A-Za-z0-9_-]{1,160}$/.test(asAgentId) ? `?asAgentId=${asAgentId}` : ''
+        // Only the fields a link's request has: nothing else the page sends reaches the backend with this account's token.
+        const { conversationId, name, mime, size } = body as Record<string, unknown>
+        await proxied(() => handlers.onSuperTabAttachmentUpload!(`${url}${agent}`, direct[1] ? {} : { conversationId, name, mime, size })); return
       }
       const signInAnswer = req.method === 'POST' ? /^\/api\/auth\/qr\/(lookup|approve|deny)$/.exec(url) : null
       if (signInAnswer) {

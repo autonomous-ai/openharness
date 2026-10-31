@@ -1843,7 +1843,7 @@ class AppNotifier extends ChangeNotifier {
           required conversationId,
           required name,
           required mime,
-          required bytes,
+          required file,
           required cancel,
           required onProgress,
         }) => _teamComputer
@@ -1858,7 +1858,7 @@ class AppNotifier extends ChangeNotifier {
             conversationId: conversationId,
             name: name,
             mime: mime,
-            bytes: bytes,
+            file: file,
             cancel: cancel,
             onProgress: onProgress,
           ),
