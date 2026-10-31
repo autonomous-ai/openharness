@@ -333,7 +333,13 @@ class SuperTabController extends ChangeNotifier {
     return _uploadErrors[conversationId];
   }
 
-  /// Sets [operationError] for [command], remembering its conversation.
+  /// The thread the last failed reply was going to: the thread of the message
+  /// it answers, or that message itself, as the backend files a reply. Null
+  /// when the failure was not a reply.
+  String? _operationErrorRoot;
+
+  /// Sets [operationError] for [command], remembering its conversation and,
+  /// for a reply, its thread.
   void _failOperation(
     String message, {
     required Map<String, dynamic> command,
@@ -343,11 +349,28 @@ class SuperTabController extends ChangeNotifier {
     operationErrorCode = code;
     final id = command['conversationId'];
     _operationErrorFor = id is String ? id : null;
+    final replyTo = command['replyTo'];
+    _operationErrorRoot = id is String && replyTo is String
+        ? _threadOf(id, replyTo) ?? replyTo
+        : null;
   }
 
-  /// The same for the reply box of [root]'s thread in [conversationId].
-  String? threadComposerError(String conversationId, String root) =>
-      operationError ?? _uploadErrors[(conversationId, root)];
+  /// The same for the reply box of [root]'s thread in [conversationId]: the
+  /// last action's [operationError] when it was a reply in this thread, for
+  /// no conversation, or is still unconfirmed; else the thread's own upload
+  /// failure. A failure in another chat, or in this chat's main stream, is
+  /// not said here.
+  String? threadComposerError(String conversationId, String root) {
+    final failure = operationError;
+    if (failure != null &&
+        (_operationErrorFor == null ||
+            (_operationErrorFor == conversationId &&
+                _operationErrorRoot == root) ||
+            _pending != null)) {
+      return failure;
+    }
+    return _uploadErrors[(conversationId, root)];
+  }
 
   /// One line for the sender after a command succeeds, from the backend: that a
   /// credential was removed from what they sent and should be revoked.
