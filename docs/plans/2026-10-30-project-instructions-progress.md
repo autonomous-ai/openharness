@@ -21,10 +21,15 @@ Phases 3, 4 and 5 must ship together (see the plan); 1 and 2 could ship alone.
 
 ## How to continue
 
-1. Nothing is pushed. Open one PR from `swarm-direct-messages` only with the owner's go; never push to main, merge or release
-   without Ken.
-2. Release order: backend deploy → run the instructions migration in production (owner's go; a project still at revision 0 must
-   not take a first save from an old CLI's rule.set before it) → CLI release → Desktop and phone.
+1. The branch is rebased onto main c141ea3f4 as one commit (aa24d2dec); the 98-commit history is on the local branch
+   `swarm-direct-messages-history`. The remote branch still holds the pre-rebase phases 1-2, so publishing needs a force push:
+   only with the owner's go, as one PR; never push to main, merge or release without Ken.
+2. Release order: backend deploy → CLI release → Desktop and phone. No instructions migration (owner's decision, 10-30): every
+   project without a document reads the built-in template. Production dry run (read-only login): 45 projects, 42 exactly the
+   template, openharness one machine-rule line ("no WIN-DELL until it is fixed…": re-add by hand if still wanted), and the "PR
+   merge" and "PR triage" Swarms' PR triage projects with custom role sets: after release their coordinator or owner pastes the
+   former texts into the Instructions panel (export them first with the read-only dry run `--text TAB_ID`; tabs
+   f8f60884b8b8837b79eb2618 and fbe5c9f94fdf728f67cf085e).
 3. Release notes: an older CLI on another machine installs the built-in dev text for non-coordinator agents a new CLI starts; a CLI
    downgraded after this release relaunches Swarm sessions without their skill (registry rows are rewritten in the new role shape);
    after a backend rollback, routes from a new CLI can pick what the old backend's rules refuse.
@@ -174,3 +179,5 @@ Final: Ruling: security — an agent drives a terminal only as far as the person
 Final: Ruling (for Ken): migrated custom role texts become readable by every project reader and their Buddies; any agent can write into a member's Buddy chat with person.tell (the Buddy allowlist blocks exfiltration) — accepted as the spec's design.
 Security re-review open items fixed in 2fdb7785d (work.cancel in the project chat is coordinator-or-person; agent.add finds a rebound session by machine and current harness). Final validation: backend unit 1889 passed; tsc clean; full integration 881/882 — only the remaining original baseline failure (superTabLiveness lost-task assignment).
 Coordinator terminal power restored: df8c3976b (RED→GREEN; unit 1890 pass; tsc clean; 5 terminal integration files 399/400, baseline only).
+Rebase: squash of the 98-commit history onto main c141ea3f4 as aa24d2dec; 25 conflicts resolved (backend: #2382 auto-review machinery dropped, review plan kept in the brief; #2335 floor-only fixtures dropped; #2322 close kept, cancel by any project agent; #2345/#2348/#2411/#2333 and perf work kept. CLI: #2377 now a note, then left out when the task names a repository). Validation after rebase: backend tsc clean, unit 1971 pass, full integration 988/988 (all 25 old baseline entries pass; the lost-task test updated to decision 16); cli 13011 pass (registry lock x3, sessionRepair x2 known), test:core 100%; Desktop 2308 pass, phone 1571 pass (load failures pass alone).
+Decision (owner, 10-30): no instructions migration in production; see "How to continue" 2.
