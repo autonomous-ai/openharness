@@ -236,4 +236,23 @@ void main() {
     expect(SuperTabPaneLayout.drawerWidth(1000, max: thread), 340);
     expect(SuperTabPaneLayout.drawerWidth(400, max: thread), 280);
   });
+
+  testWidgets('a saved 280 from older builds, written with any divider move, '
+      'leaves a thread at its own default', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = MemoryStore()
+      ..values[SuperTabPaneLayout.storageKey] = '{"left":400,"right":280}';
+    await mount(tester, store, rightDefault: SuperTabPaneLayout.threadWidth);
+    expect(tester.getSize(left).width, 400);
+    expect(tester.getSize(right).width, 340);
+    await mount(tester, store);
+    expect(tester.getSize(right).width, 280);
+
+    final chosen = MemoryStore()
+      ..values[SuperTabPaneLayout.storageKey] = '{"left":400,"right":310}';
+    await tester.pumpWidget(const SizedBox());
+    await mount(tester, chosen, rightDefault: SuperTabPaneLayout.threadWidth);
+    expect(tester.getSize(right).width, 310);
+  });
 }

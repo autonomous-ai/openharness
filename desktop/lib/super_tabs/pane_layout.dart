@@ -88,8 +88,13 @@ class _SuperTabPaneLayoutState extends State<SuperTabPaneLayout> {
           : fallback;
       setState(() {
         _left = width('left', _left);
+        // Builds before 10-31 saved the right pane's default with any
+        // divider move: 280 is that default (and the minimum), so it reads as
+        // no choice and a thread still opens at its own width.
         final right = width('right', -1);
-        if (right > 0) _right = right;
+        if (right > 0 && right != SuperTabPaneLayout.rightWidth) {
+          _right = right;
+        }
       });
     } catch (_) {
       // A missing or old preference must not prevent opening the workspace.
