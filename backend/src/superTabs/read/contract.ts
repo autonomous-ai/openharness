@@ -94,6 +94,10 @@ export interface Derived {
    *  true and the Buddy's machine reports it can run sessions. Absent from an older backend, whose strict schema refuses
    *  the field. */
   threadSessions?: true
+  /** This server also takes `newSession` on a person's top-level message in their own Buddy chat: the message roots its
+   *  own thread, which gets the session (commands.ts routeBuddySession). Desktop offers New session in that chat's main
+   *  composer only where it is true. Absent from an older backend, which refuses it. */
+  sessionsFromChat?: true
 }
 export interface OtherProjectWorkView {
   conversationId: string; projectName: string; title: string; owns: string[]; status: WorkStatus; agentName: string; pr: string | null

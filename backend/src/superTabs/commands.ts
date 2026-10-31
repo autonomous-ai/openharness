@@ -878,7 +878,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
    */
   const routeBuddySession = (chat: Conversation): { inSession: boolean; to: string | null } => {
     if (command.type !== 'message.send') return { inSession: false, to: null }
-    const thread = command.replyTo && !context.reply?.agentOnly ? context.reply?.thread ?? null : null
+    // A person's own top-level New session message roots its own thread (the message is that thread's root, its id the
+    // thread's): its session starts there, and the main Buddy never hears it.
+    const roots = actor.kind === 'person' && !!command.newSession && !command.replyTo
+    const thread = roots ? operationId : command.replyTo && !context.reply?.agentOnly ? context.reply?.thread ?? null : null
     const self = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId) : undefined
     const entry = sessionOf(state, chat, thread)
     if (self?.buddySession) {
@@ -895,7 +898,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     if (actor.kind !== 'person') return { inSession: false, to: null }
     if (command.newSession) {
       const owner = requireChatOwner(state, chat, actor.userId)
-      if (!thread) fail('BUDDY_SESSION_CHAT', 'Start a session from a thread: reply to a message, then choose New session.', 400)
+      if (!thread) fail('BUDDY_SESSION_CHAT', 'Start a session from a message of your own, or a reply in a thread.', 400)
       if (entry) fail('BUDDY_SESSION_EXISTS', 'This thread already has its own session.')
       if (command.alsoSend) fail('BUDDY_SESSION_THREAD', 'A session\'s thread stays in the thread.', 400)
       if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')

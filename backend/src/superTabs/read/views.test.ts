@@ -89,7 +89,7 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
   it('says to every reader that this server takes New session in a thread reply', () => {
     const { s, parts } = scene()
     for (const actor of [owner, peer, agentActor(s.worker)]) {
-      expect(readerView(parts, actor, NOW, { teamMachines: [] }).derived.threadSessions).toBe(true)
+      expect(readerView(parts, actor, NOW, { teamMachines: [] }).derived).toMatchObject({ threadSessions: true, sessionsFromChat: true })
     }
   })
 
