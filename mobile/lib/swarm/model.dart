@@ -414,6 +414,7 @@ class SuperTabProject {
               superTabMap(member)['generation'] as String?,
       },
       updateMinutes = (row['updateMinutes'] as num?)?.toInt() ?? 5,
+      status = SuperTabProjectStatus.read(row['status']),
       repository = row['repository'] is Map
           ? Map.unmodifiable(superTabMap(row['repository']))
           : null;
@@ -441,7 +442,36 @@ class SuperTabProject {
       _memberGenerations.containsKey(person.id) &&
       _memberGenerations[person.id] == person.generation;
   final int updateMinutes;
+
+  /// The project's status card text, read as the desktop's model reads it;
+  /// the phone shows no card yet.
+  final SuperTabProjectStatus? status;
   final Map<String, dynamic>? repository;
+}
+
+/// A project's status card text, as the desktop's model reads it
+/// (`../desktop/lib/super_tabs/model.dart`).
+class SuperTabProjectStatus {
+  const SuperTabProjectStatus({required this.text, this.at, this.by});
+
+  static const maxText = 2000;
+
+  static SuperTabProjectStatus? read(Object? value) {
+    if (value is! Map) return null;
+    final text = value['text'];
+    if (text is! String || text.trim().isEmpty) return null;
+    final at = value['at'];
+    final by = value['by'];
+    return SuperTabProjectStatus(
+      text: text.length > maxText ? text.substring(0, maxText) : text,
+      at: at is String ? DateTime.tryParse(at) : null,
+      by: by is String ? by : null,
+    );
+  }
+
+  final String text;
+  final DateTime? at;
+  final String? by;
 }
 
 class SuperTabSnapshot {

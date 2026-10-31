@@ -83,8 +83,8 @@ describe('the notices the Swarm writes into a chat', () => {
     const unclassified = [...written].filter(([kind]) => !Object.hasOwn(NOTICE_READERS, kind)).map(([kind, files]) => `${kind} (${files.join(', ')})`)
     expect(unclassified, 'add each to NOTICE_READERS in model.ts: who reads it?').toEqual([])
     // A kind no longer written keeps its readers for the rows stored before: the server's idle stop (project instructions,
-    // phase 4) told only the Lead.
-    const retired = ['idle-stop']
+    // phase 4) told only the Lead; the coordinator's progress post, now the project's status card (Dee, 2026-10-31), people.
+    const retired = ['idle-stop', 'project-report']
     expect(Object.keys(NOTICE_READERS).filter(kind => !written.has(kind) && !retired.includes(kind))).toEqual([])
     expect(retired.filter(kind => written.has(kind))).toEqual([])
   })

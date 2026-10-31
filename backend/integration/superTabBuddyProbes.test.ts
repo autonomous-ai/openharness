@@ -101,7 +101,8 @@ describe('security review 1 of #2115: a Buddy\'s reads, probed by two people', (
   it('still hands a Buddy an archived task awaiting the PM\'s report, in the active set its summary shows', async () => {
     const f=await swarm(), {agentId}=await buddy(f)
     const group=String((await f.execute({type:'conversation.create',projectId:'lead',title:'Archived but unsummarized',brief:'',checks:[]})).result.conversationId)
-    await f.execute({type:'message.send',conversationId:group,text:'Completed task report',replyTo:null,recipientIds:[]})
+    // A work change the PM has not reported yet (a plain message no longer is one: Dee, 2026-10-31).
+    await f.execute({type:'conversation.merged',conversationId:group,pullRequestUrl:'https://github.com/example/app/pull/7'})
     await f.execute({type:'conversation.archive',conversationId:group,archived:true})
     const reads=new SwarmReads(f.store), active=await reads.firstLoad(peer,f.tab,agentId)
     const held=active.groups.find(g=>g.key===group)!
