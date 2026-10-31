@@ -4,7 +4,8 @@ Status: design, 2026-10-31. Requested by Ken.
 
 > **Status after the builder check (2026-10-31):** changes 2 (heartbeats) and 4 (slim transcript events) stand and
 > are built on branch `fewer-relay-frames` (2026-10-31; not released). Changes 1 (`swarm_changed`) and 3 (`agent_synced`) are **on hold** for the reasons in "On hold" below;
-> change 1 needs its own design with a client change, which Ken has not yet decided on.
+> change 1 needs its own design with a client change, which Ken has not yet decided on. Change 5 (TUI-only events not
+> sent while no terminal app is open) was added on 2026-10-31 at Ken's request and is not built yet.
 
 ## Why
 
@@ -64,8 +65,8 @@ Findings behind each change:
   `context_compact`, `subagent_finished.summary` or `user_message.images`.
 
 Not pursued: holding transcript events back while no remote app is attached. Desktop dials every machine of the
-account (`desktop/lib/state/app_state.dart` ~9899) and the terminal app watches them all, so on Ken's machines someone
-is attached about 22 hours a day; and those events are about 19% of frames. Sending events only for the agent a
+account (`desktop/lib/state/app_state.dart` ~9899), as the terminal app does when it runs, so on Ken's machines someone
+is attached about 22 hours a day (his Desktop); and those events are about 19% of frames. Sending events only for the agent a
 client is looking at would need every client changed, for at most that 19%.
 
 ## The changes
@@ -138,6 +139,59 @@ own words) included. The slim frame drops the summary, so only ids and a status 
 is left out (design call): `core.ts` is pinned by hash with the browser client and the paired device in other
 repositories (`core.test.ts` "interop keystone"), and any edit to it forces those to be re-derived.
 
+### 5. Events only the terminal app reads: not sent while no terminal app is open (backend and CLI)
+
+Ken, 2026-10-31: few people install the terminal app (`harness tui`), and the goal is fewer frames, not only smaller
+ones. Desktop, web and phone use five transcript events, and only for the preview, the working state and the end of a
+turn: `turn_started`, `turn_ended`, `user_message`, `text_delta` and `tool_start` (its tool name, "running Bash").
+The others are read in full only by the terminal app (its plan, sub-agents and what an agent did); Desktop and the
+phone take them only as "the model is working" or to clear a line:
+
+| Event | Per day (2026-10-30) | Readers besides the terminal app | While no terminal app is open |
+|---|---|---|---|
+| `tool_end` | 12,113 | Desktop's and the phone's previews clear their "running X" line (`session_preview.dart`); both also clear it on the next text, tool or turn end | not sent |
+| `subagent_finished` | 628 | the event type only | not sent |
+| `done`, `context_compact` | under 100 | the event type only | not sent |
+| `thinking_delta`, `thinking_title` | 1,866 | Desktop's and the web's "Starting up…" chip for a resting grid model ends on the first answer event (`_watchModelStart`, `_modelAnswerEvents`); a reasoning model's first output is its thinking | **kept** (design call: released apps cannot change, and the chip would stay through a model's thinking) |
+
+While no terminal app of the account is open, the daemon does not hand the first three rows to the relay: about
+12,700 fewer frames a day (7.5%) at the measured day's rate, counted from Ken's Desktop log, which also holds its own
+daemon's events (those still arrive there locally); the backend's saving is on the relayed share. Windows on the same
+computer, a terminal app on it included, still get every event (the local loop in `backendSocket.ts` `send`), and
+everything inside the daemon is unchanged. Minor effect: those events are sealed, and the phone counts sealed frames
+as a machine's proof of life (`lastHeardFromMachineAt`); `text_delta` and `tool_start`, also sealed, still go.
+
+**How a daemon knows a terminal app is open (design call: pushed only while one is, so no one else pays a frame).**
+
+- A daemon with a terminal app attached sends `app_presence` with a TUI surface (`tui`, `harness-os`,
+  `harness-os-pi`: backend `dailyTracking.ts` `TUI_SURFACES`): `open` at once when one attaches, then `ping` at most
+  once a minute while it stays (`cli/src/gateway/upstream.ts` `APP_PRESENCE_UP_MS = 60_000`, checked every
+  `APP_PING_MS = 15_000`). Harness OS counts (design call): it runs the same terminal app (`hn`), watching every
+  machine of the account, and would show stale tools and plans otherwise.
+- On each such `open` or `ping` the backend refreshes a Redis key `tui_open:{userId}` (`EX 150`, two and a half
+  pings), and publishes an account push `__tui_open` `{ forMs: 180000 }` at most once a minute per account (a second
+  key `tui_open_said:{userId}` `SET NX EX 60`), and always on an `open`. It goes through the account channel every
+  daemon of the account listens on (`backend/src/lib/adapterAccountPushes.ts`, beside `desk_changed`,
+  `machines_changed`). A team socket (`opts.team`) does not get it.
+- On every daemon socket's attach, the backend also says whether one is open now: `__tui_open` `{ forMs: 180000 }` if
+  `tui_open:{userId}` exists, else `{ forMs: 0 }`. A zero still says "this server tells you", which is what turns
+  the rule on.
+- The name starts with `__` so an older daemon drops it silently (`gateway.ts` `backendControl` ignores the backend's
+  `__` frames); a plain name would be refused as plaintext and logged on every push. The newer daemon reads it in
+  `backendControl` beside `__clients`.
+- The daemon's gateway keeps `tuiUntil` (`now + forMs` on each `__tui_open`, `null` before it hears one, and `null`
+  again when the link drops). The rule applies only once one was heard: with no word (an older backend, a team
+  account, the link down and not yet re-attached) every event is sent, as today. While `now < tuiUntil` every event
+  is sent; after, the first three rows of the table are not.
+- A terminal app closed is noticed within 180 s, with no message for it; one opened is noticed at once (its `open`).
+  A daemon attaching while one is open hears it at attach.
+- A frame sealed for a guest (a shared harness, `gateway.ts` `broadcast` `guestSessions`) is always sent whole: a
+  guest's terminal app is not the owner's.
+
+Where: the gate sits in the gateway's `broadcast` after `productUsage.observe` (which reads `text_delta` and turn
+events, all kept) and before sealing, so a dropped frame costs no seal and no backend work. `slimForRelay` (change 4)
+still applies to what is sent.
+
 ## On hold (builder check, 2026-10-31)
 
 **Change 1 would show machines late or offline.** Desktop and the web build judge a machine by how old its last
@@ -168,7 +222,8 @@ direct ones plus about 40 through `announceSession`.
 | 2. heartbeats | about -30,000 |
 | 3. `agent_synced` | on hold |
 | 4. transcript events | none fewer; smaller |
-| total now | about -30,000 of 170,666 (about 18%), plus smaller transcript frames |
+| 5. TUI-only events while no terminal app is open | about -12,700 |
+| total with 2, 4 and 5 | about -44,700 of 170,666 (about 26%), plus smaller transcript frames |
 
 ## Goals
 
@@ -214,7 +269,8 @@ and both counts are upper bounds.
 ## Design
 
 - **Growth**: one held change per Swarm per socket (backend); one small object per live session and per agent
-  (daemon); all dropped with their session, agent or socket.
+  (daemon); all dropped with their session, agent or socket. Change 5: two Redis keys per account with a terminal
+  app open (150 s and 60 s TTL); one timestamp in each daemon.
 - **Concurrency**: the held machine part is per socket and merged into the next send; the daemon's memories are
   per process and only decide whether to send.
 - **Read cost**: none added; each change removes work per frame.
@@ -232,6 +288,14 @@ and both counts are upper bounds.
 - **Platforms**: daemon and backend, the same everywhere.
 
 ## Tests
+
+- Change 5, backend: a TUI-surface `app_presence` `open` publishes `__tui_open` at once, a `ping` at most once a minute
+  per account, never for the desktop surface; `tui_open:{userId}` lives 150 s; an attaching daemon socket hears
+  `__tui_open` with 180,000 when the key exists and 0 when not; a team socket hears neither.
+- Change 5, CLI gateway: before any `__tui_open` every event is relayed; with `forMs: 0`, or 180 s after the last
+  `forMs: 180000`, `tool_end`, `subagent_finished`, `done` and `context_compact` are not enqueued while the others
+  (thinking included) are; a link drop resets to "no word"; a guest-sealed copy is always sent; local windows always
+  get every event; product usage still observes `text_delta` and turn events.
 
 - Backend: `swarmClientPushes` unit tests: machine-only changes within 30 s give one push; a `main` change goes at once
   and carries a held machine part; the repeat still goes.
