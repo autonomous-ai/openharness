@@ -32,11 +32,11 @@ import 'pull_request_facts.dart';
 import 'pull_requests.dart';
 import 'composer_files.dart';
 import 'composer_newline.dart';
+import 'composer_tags.dart';
 import 'composer_toggle.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'folder_zip.dart';
-import 'identity.dart';
 import 'instructions_panel.dart';
 import 'model.dart';
 import 'prompt_alerts.dart';
@@ -62,15 +62,7 @@ import 'project_options.dart';
 import 'pane_layout.dart';
 import '../widgets/dial_list_scroll.dart';
 
-/// A completion row: a workgroup, or someone to tag with their face and
-/// whether they are a person or an agent ([kind]).
-typedef _ComposerChoice = ({
-  String label,
-  String? detail,
-  VoidCallback choose,
-  Widget? leading,
-  String? kind,
-});
+typedef _ComposerChoice = SuperTabComposerChoice;
 
 /// The contents of one app tab. Its title stays in the app's existing tab bar.
 /// [terminal] is the existing native pane, with its own controls and input.
@@ -180,7 +172,7 @@ class _SuperTabViewState extends State<SuperTabView>
   // The composer's completions are drawn by builders of their own, so typing
   // and choosing among them never rebuild the transcript.
   final _mentionIndex = ValueNotifier(0);
-  late final _tagBackspace = _TagBackspace(
+  late final _tagBackspace = SuperTabTagBackspace(
     () => c.mentions(c.selectedId).values,
   );
   final _dismissedMention = ValueNotifier<String?>(null);
@@ -192,7 +184,10 @@ class _SuperTabViewState extends State<SuperTabView>
 
   /// The chats whose dropped folders are being zipped.
   final _zipping = <String>{};
-  final _completionKeys = List.generate(6, (_) => GlobalKey());
+  final _completionKeys = List.generate(
+    superTabCompletionLimit,
+    (_) => GlobalKey(),
+  );
   SuperTabController get c => widget.controller;
 
   /// The open project's week board, read once for the right pane's members
@@ -217,8 +212,7 @@ class _SuperTabViewState extends State<SuperTabView>
       widget.app?.devicesEnabled == true &&
       !c.accessRevoked;
 
-  String _agentName(SuperTabAgent agent) =>
-      c.snapshot?.agentName(agent.id, fallback: agent.name) ?? agent.name;
+  String _agentName(SuperTabAgent agent) => superTabAgentName(c, agent);
 
   String _authorName(SuperTabMessage message) =>
       c.snapshot?.authorName(message) ?? message.authorName;
@@ -1029,87 +1023,35 @@ class _SuperTabViewState extends State<SuperTabView>
     });
   }
 
-  ({int start, int end, String query})? get _mentionAtCursor {
-    final value = _composer.value;
-    if (!value.selection.isValid ||
-        !value.selection.isCollapsed ||
-        (value.composing.isValid && !value.composing.isCollapsed)) {
-      return null;
-    }
-    final end = value.selection.baseOffset;
-    final prefix = value.text.substring(0, end);
-    final match = RegExp(r'(?:^|\s)@([^@\n]*)$').firstMatch(prefix);
-    if (match == null || prefix == _dismissedMention.value) return null;
-    final start = prefix.lastIndexOf('@');
-    final query = match.group(1)!;
-    if (c.mentions(c.selectedId).values.contains('@${query.trimRight()}')) {
-      return null;
-    }
-    return (start: start, end: end, query: query.toLowerCase());
-  }
+  ({int start, int end, String query})? get _mentionAtCursor =>
+      superTabTagAtCaret(
+        _composer.value,
+        dismissed: _dismissedMention.value,
+        tags: c.mentions(c.selectedId).values,
+      );
 
-  /// Who `@` offers: the people who read this conversation, then its agents,
-  /// filtered by what follows the `@`. Never the reader.
+  /// Who `@` offers here ([superTabTagChoices]).
   List<_ComposerChoice> get _mentionChoices {
     final mention = _mentionAtCursor;
-    final snapshot = c.snapshot, group = c.selected;
-    if (mention == null || snapshot == null || group == null) return const [];
-    final project = snapshot.projectFor(group.id);
-    bool reads(SuperTabPerson person) => switch (group) {
-      SuperTabConversation(:final audience?) => audience.contains(person.id),
-      _ when group.buddyOwnerId != null => person.id == group.buddyOwnerId,
-      _ =>
-        project == null ||
-            !project.isPrivate ||
-            project.ownerId == person.id ||
-            project.memberIds.contains(person.id),
-    };
-    final people = snapshot.people.where(
-      (person) =>
-          person.id != c.accountId &&
-          reads(person) &&
-          person.username.contains(mention.query),
+    final group = c.selected;
+    if (mention == null || group == null) return const [];
+    return superTabTagChoices(
+      c,
+      group,
+      mention.query,
+      machineName: widget.machineName,
+      choose: _chooseMention,
     );
-    final agents = snapshot.agents.where(
-      (agent) =>
-          group.agentIds.contains(agent.id) &&
-          // A thread's own session answers only there: nobody tags it.
-          agent.buddySession == null &&
-          '${_agentName(agent)} ${agent.engine}'.toLowerCase().contains(
-            mention.query,
-          ),
-    );
-    return [
-      for (final person in people)
-        (
-          label: person.username,
-          detail: null,
-          choose: () => _chooseMention(person.id, person.username),
-          leading: SuperTabAvatar.person(person, size: SuperTabAvatar.rowSize),
-          kind: 'person',
-        ),
-      for (final agent in agents)
-        (
-          label: _agentName(agent),
-          detail: '${agent.engine}  ${widget.machineName(agent.machineId)}',
-          choose: () => _chooseMention(agent.id, _agentName(agent)),
-          leading: SuperTabAvatar.agent(agent, size: SuperTabAvatar.rowSize),
-          kind: 'agent',
-        ),
-    ].take(_completionKeys.length).toList();
   }
 
   void _chooseMention(String id, String name) {
     final at = _mentionAtCursor;
     if (at == null) return;
     final token = '@$name';
-    final text = _composer.text.replaceRange(at.start, at.end, '$token ');
-    c.setDraft(c.selectedId, text);
+    final value = superTabInsertTag(_composer.value, at, token);
+    c.setDraft(c.selectedId, value.text);
     c.mention(c.selectedId, id, token);
-    _composer.value = TextEditingValue(
-      text: text,
-      selection: TextSelection.collapsed(offset: at.start + token.length + 1),
-    );
+    _composer.value = value;
     _mentionIndex.value = 0;
     _focus.requestFocus();
   }
@@ -2635,6 +2577,7 @@ class _SuperTabViewState extends State<SuperTabView>
       outgoing: (sent) => _outgoingRow(sent, byId, grouped: false),
       sessionActivity: (session) =>
           superTabSessionActivity(c, widget.app, session),
+      machineName: widget.machineName,
     );
   }
 
@@ -3346,62 +3289,11 @@ class _SuperTabViewState extends State<SuperTabView>
             if (choices.isEmpty) return const SizedBox.shrink();
             return Padding(
               padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
-              child: Material(
-                color: DesktopChrome.surface,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(
-                    DesktopChrome.controlRadius,
-                  ),
-                  side: BorderSide(color: DesktopChrome.rim),
-                ),
-                clipBehavior: Clip.antiAlias,
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(
-                    maxHeight: MediaQuery.sizeOf(context).height * .3,
-                  ),
-                  child: ListView(
-                    key: const ValueKey('super-composer-completions'),
-                    shrinkWrap: true,
-                    padding: const EdgeInsets.symmetric(vertical: 4),
-                    children: [
-                      for (var i = 0; i < choices.length; i++)
-                        ListTile(
-                          key: _completionKeys[i],
-                          dense: true,
-                          selected:
-                              i ==
-                              _mentionIndex.value.clamp(0, choices.length - 1),
-                          selectedTileColor: grid.AppSurface.selectedFill,
-                          selectedColor: DesktopChrome.foreground,
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                          ),
-                          leading: choices[i].leading,
-                          trailing: choices[i].kind == null
-                              ? null
-                              : Text(
-                                  choices[i].kind!,
-                                  style: DesktopChrome.metadata(),
-                                ),
-                          title: Text(
-                            choices[i].label,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: DesktopChrome.control(),
-                          ),
-                          subtitle: choices[i].detail == null
-                              ? null
-                              : Text(
-                                  choices[i].detail!,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: DesktopChrome.metadata(),
-                                ),
-                          onTap: choices[i].choose,
-                        ),
-                    ],
-                  ),
-                ),
+              child: SuperTabCompletionList(
+                listKey: const ValueKey('super-composer-completions'),
+                choices: choices,
+                index: _mentionIndex.value,
+                rowKeys: _completionKeys,
               ),
             );
           },
@@ -3448,43 +3340,20 @@ class _SuperTabViewState extends State<SuperTabView>
             ),
             child: Focus(
               onKeyEvent: (node, event) {
-                final keys = HardwareKeyboard.instance;
                 final composing = _composer.value.composing;
-                final choices =
+                final picked =
                     _focus.hasFocus &&
-                        event is KeyDownEvent &&
-                        !keys.isControlPressed &&
-                        !keys.isMetaPressed &&
-                        !keys.isAltPressed &&
-                        !keys.isShiftPressed &&
                         !(composing.isValid && !composing.isCollapsed)
-                    ? _completionChoices
-                    : const <_ComposerChoice>[];
-                if (choices.isNotEmpty) {
-                  final key = event.logicalKey;
-                  if (key == LogicalKeyboardKey.arrowDown ||
-                      key == LogicalKeyboardKey.arrowUp) {
-                    _moveCompletion(
-                      (_mentionIndex.value +
-                              (key == LogicalKeyboardKey.arrowDown ? 1 : -1)) %
-                          choices.length,
-                    );
-                    return KeyEventResult.handled;
-                  }
-                  if (key == LogicalKeyboardKey.tab ||
-                      key == LogicalKeyboardKey.enter) {
-                    choices[_mentionIndex.value.clamp(0, choices.length - 1)]
-                        .choose();
-                    return KeyEventResult.handled;
-                  }
-                  if (key == LogicalKeyboardKey.escape) {
-                    _dismissedMention.value = _composer.text.substring(
-                      0,
-                      _composer.selection.baseOffset,
-                    );
-                    return KeyEventResult.handled;
-                  }
-                }
+                    ? superTabCompletionKey(
+                        event,
+                        choices: () => _completionChoices,
+                        index: _mentionIndex.value,
+                        move: _moveCompletion,
+                        dismiss: () => _dismissedMention.value = _composer.text
+                            .substring(0, _composer.selection.baseOffset),
+                      )
+                    : null;
+                if (picked != null) return picked;
                 if (event is KeyDownEvent &&
                     event.logicalKey == LogicalKeyboardKey.escape &&
                     _readAll()) {
@@ -3907,51 +3776,6 @@ class _SuperTabViewState extends State<SuperTabView>
       );
     },
   );
-}
-
-/// Backspace right after a tag takes the whole tag, as in Slack: deleting the
-/// character before the caret, where one of [tags] ends, removes that tag.
-/// The draft then no longer holds it, so its agent is no longer addressed.
-class _TagBackspace extends TextInputFormatter {
-  _TagBackspace(this.tags);
-
-  final Iterable<String> Function() tags;
-
-  @override
-  TextEditingValue formatEditUpdate(
-    TextEditingValue oldValue,
-    TextEditingValue newValue,
-  ) {
-    final caret = oldValue.selection;
-    if (!caret.isValid ||
-        !caret.isCollapsed ||
-        caret.baseOffset == 0 ||
-        (newValue.composing.isValid && !newValue.composing.isCollapsed)) {
-      return newValue;
-    }
-    final end = caret.baseOffset;
-    if (newValue.selection != TextSelection.collapsed(offset: end - 1) ||
-        newValue.text != oldValue.text.replaceRange(end - 1, end, '')) {
-      return newValue;
-    }
-    final before = oldValue.text.substring(0, end);
-    final after = oldValue.text.substring(end);
-    if (after.isNotEmpty && !after.startsWith(RegExp(r'[\s.,!?;:]'))) {
-      return newValue;
-    }
-    for (final tag in tags()) {
-      final start = end - tag.length;
-      if (!before.endsWith(tag) ||
-          (start > 0 && !before[start - 1].contains(RegExp(r'\s')))) {
-        continue;
-      }
-      return TextEditingValue(
-        text: oldValue.text.replaceRange(start, end, ''),
-        selection: TextSelection.collapsed(offset: start),
-      );
-    }
-    return newValue;
-  }
 }
 
 /// Records its row's context while built, so [_SuperTabViewState] can find

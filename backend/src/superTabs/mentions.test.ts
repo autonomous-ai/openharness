@@ -46,6 +46,18 @@ describe('people tagging people', () => {
     expect(f.send(f.group, ['owner'], peer).mentions).toEqual(['owner'])
   })
 
+  it('a thread reply carries its tags and agents as a chat message does (Desktop thread @, 10-31)', () => {
+    const f = fixture()
+    f.run({ type: 'conversation.agent', conversationId: f.group, agentId: f.worker, present: true, lead: false })
+    const root = f.say(f.group, 'Should we ship the copy?')
+    const reply = f.run({ type: 'message.send', conversationId: f.group, text: 'Please check @peer', replyTo: root.id,
+      recipientIds: [f.worker], mentions: ['peer'] }, owner,
+    { reply: { id: root.id, conversationId: f.group, author: root.author, createdAt: 1000, thread: root.thread ?? root.id } }).messages.at(-1)!
+    expect(reply.thread).toBe(root.thread ?? root.id)
+    expect(reply.mentions).toEqual(['peer'])
+    expect(reply.recipients).toEqual([f.worker])
+  })
+
   it('drops the author’s own tag', () => {
     const f = fixture()
     expect(f.send(f.group, ['owner', 'peer']).mentions).toEqual(['peer'])
