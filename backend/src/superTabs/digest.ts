@@ -2,6 +2,7 @@ import { activeWork, author, stableId, type Agent, type Conversation, type Messa
 import { agentDisplayName } from './agentNames.js'
 import { canReadGroup, ledProject, type SwarmProject } from './projects.js'
 import { reportGroups } from './projectUpdates.js'
+import { DEFAULT_TIME_ZONE } from './costs/reflection.js'
 
 // Night shift (v2 B): people wake to one message per project saying what the Swarm did overnight. At the project's local
 // digest time its Lead's poll wakes the Lead with the lists below, built from state; the Lead checks each pull request is
@@ -22,6 +23,19 @@ function localNow(timeZone: string, now: number): { date: string; time: string }
 /** Whether the zone is one this runtime knows. */
 export function knownTimeZone(timeZone: string): boolean {
   try { localNow(timeZone, 0); return true } catch { return false }
+}
+
+/** Every project's digest unless a person turns it off (Dee, 2026-10-31): 08:00 in the project owner's zone. No owner's
+ *  zone is known to the Swarm yet, so it is Vietnam's, where the team works; a person moves it with project.digest. */
+export const DEFAULT_DIGEST = { time: '08:00', timeZone: DEFAULT_TIME_ZONE } as const
+
+/** Gives a stored project without a digest the default, unless a person turned it off; whether it did. Set after today's
+ *  time, the first comes tomorrow (digestStartsAfter), so a release in the afternoon sends no digest at once. */
+export function defaultDigest(project: SwarmProject, now: number): boolean {
+  if (project.digest || project.digestOff) return false
+  const lastOn = digestStartsAfter(DEFAULT_DIGEST.time, DEFAULT_DIGEST.timeZone, now)
+  project.digest = { ...DEFAULT_DIGEST, ...lastOn ? { lastOn } : {} }
+  return true
 }
 
 /** The local date of a digest due at `now`, or null: none set, not yet its time today, or today's already sent. */
