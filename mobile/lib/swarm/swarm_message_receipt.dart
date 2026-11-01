@@ -357,10 +357,10 @@ class _ReceiptLink extends StatelessWidget {
                   ],
                   Text(
                     label,
-                    style: TextStyle(
+                    style: swarmChatText(
+                      15,
                       color: ink,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w500,
+                      weight: FontWeight.w500,
                       height: 1.25,
                     ),
                   ),
