@@ -472,6 +472,68 @@ void main() {
       expect(button(tester, 'swarm-mark-all-read').onPressed, isNull);
     });
 
+    testWidgets('after the 6 s the marks are sent and the Undo toast closes '
+        'with them', (tester) async {
+      final fake = backend();
+      await pump(tester, fake);
+      await tester.tap(key('swarm-mark-all-read'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(find.text('Undo'), findsOneWidget);
+
+      await tester.pump(const Duration(milliseconds: 5600));
+      await tester.pump(const Duration(seconds: 1));
+
+      expect(marksSent(fake), [('g1', 5), ('g2', 4)]);
+      expect(find.text('Undo'), findsNothing);
+      expect(find.text('Marked 2 chats read'), findsNothing);
+      // And it stays closed.
+      await tester.pump(const Duration(minutes: 1));
+      expect(find.text('Undo'), findsNothing);
+    });
+
+    testWidgets('with a screen reader on, a second Mark all read inside the '
+        '6 s keeps its own toast, and the first one is closed', (tester) async {
+      tester.platformDispatcher.accessibilityFeaturesTestValue =
+          const FakeAccessibilityFeatures(accessibleNavigation: true);
+      addTearDown(
+        tester.platformDispatcher.clearAccessibilityFeaturesTestValue,
+      );
+      final fake = backend();
+      final host = await pump(tester, fake);
+      await tester.tap(key('swarm-mark-all-read'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(find.text('Marked 2 chats read'), findsOneWidget);
+
+      // A new message in a chat that was read: something to mark again.
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+        cursor: 'c3',
+        groups: [
+          part(
+            'g-read',
+            9,
+            groupData('g-read', title: 'Done', lastMessageSequence: 8),
+          ),
+        ],
+      );
+      await host.session!.inbox.reader(tab)!.refresh();
+      await tester.pump();
+      await tester.tap(key('swarm-mark-all-read'));
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      expect(marksSent(fake), [('g1', 5), ('g2', 4)]);
+      expect(find.text('Marked 2 chats read'), findsNothing);
+      expect(find.text('Marked 1 chat read'), findsOneWidget);
+      expect(find.text('Undo'), findsOneWidget);
+
+      await tester.pump(const Duration(seconds: 7));
+      expect(marksSent(fake), [('g1', 5), ('g2', 4), ('g-read', 8)]);
+      expect(find.text('Undo'), findsNothing);
+    });
+
     testWidgets('the app going to the background sends the marks and '
         'closes the Undo toast at once', (tester) async {
       final fake = backend();

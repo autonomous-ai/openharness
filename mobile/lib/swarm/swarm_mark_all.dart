@@ -19,9 +19,7 @@ const swarmMarkAllHold = Duration(seconds: 6);
 class SwarmMarkAll {
   SwarmMarkAll._(this._parts, Duration hold, this._onDone)
     : count = _parts.fold(0, (n, part) => n + part.$2.length) {
-    _timer = Timer(hold, () {
-      if (_finish(early: false)) _send();
-    });
+    _timer = Timer(hold, commit);
   }
 
   /// Marks every chat shown unread in [marks] read, held for [hold]; null
@@ -51,36 +49,33 @@ class SwarmMarkAll {
   /// Whether its marks were sent, or it was undone.
   bool get done => _done;
 
-  /// Completes once it is sent or undone: true when the marks went before
-  /// the hold passed (the app left the screen or closed, the account
-  /// changed, a second Mark all read), when its Undo can do nothing more.
-  Future<bool> get sentEarly => _finished.future;
-  final _finished = Completer<bool>();
+  /// Completes once it is sent (true) or undone (false), in the same step:
+  /// whatever waits on it — its toast closing — happens before anything
+  /// that follows, such as a second Mark all read's toast.
+  Future<bool> get settled => _settled.future;
+  final _settled = Completer<bool>.sync();
 
   /// Puts every chat it marked back as it was, if the marks are not sent.
   void undo() {
-    if (!_finish(early: false)) return;
+    if (!_finish(sent: false)) return;
     for (final (marks, through) in _parts) {
       marks.dropHeld(through);
     }
   }
 
-  /// Sends the marks now: the Undo window is over.
+  /// Sends the marks now: the Undo window is over, or the app leaves.
   void commit() {
-    if (_finish(early: true)) _send();
-  }
-
-  void _send() {
+    if (!_finish(sent: true)) return;
     for (final (marks, through) in _parts) {
       marks.sendHeld(through);
     }
   }
 
-  bool _finish({required bool early}) {
+  bool _finish({required bool sent}) {
     if (_done) return false;
     _done = true;
     _timer.cancel();
-    _finished.complete(early);
+    _settled.complete(sent);
     _onDone?.call();
     return true;
   }

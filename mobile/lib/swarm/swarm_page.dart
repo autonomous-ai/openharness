@@ -411,6 +411,9 @@ class _SwarmPageState extends State<SwarmPage> {
         SnackBar(
           key: const ValueKey('swarm-mark-all-toast'),
           duration: session.markAllHold,
+          // With its Undo it would stay until dismissed; it goes with the
+          // marks ([SwarmMarkAllToast]), and after its time as a backstop.
+          persist: false,
           content: SwarmMarkAllToast(held),
           action: SnackBarAction(label: 'Undo', onPressed: held.undo),
         ),
@@ -786,11 +789,12 @@ class _Unavailable extends StatelessWidget {
   );
 }
 
-/// What Mark all read's toast says: how many chats it marked read. When the
-/// marks go before its Undo window ends (the app left the screen or closed,
-/// the account changed), it closes the toast at once: its Undo can do
-/// nothing more. Built only while its toast is the one shown, so it never
-/// closes another.
+/// What Mark all read's toast says: how many chats it marked read. Once the
+/// marks are sent — after the Undo window, or before it ends when the app
+/// left the screen or closed, the account changed or a second Mark all read
+/// began — it closes the toast in that same step: its Undo can do nothing
+/// more. Built only while its toast is the one shown, and closing before the
+/// next toast is shown, so it never closes another. Undo closes it itself.
 class SwarmMarkAllToast extends StatefulWidget {
   const SwarmMarkAllToast(this.held, {super.key});
 
@@ -805,8 +809,8 @@ class _SwarmMarkAllToastState extends State<SwarmMarkAllToast> {
   void initState() {
     super.initState();
     unawaited(
-      widget.held.sentEarly.then((early) {
-        if (early && mounted) {
+      widget.held.settled.then((sent) {
+        if (sent && mounted) {
           ScaffoldMessenger.maybeOf(context)?.hideCurrentSnackBar();
         }
       }),
