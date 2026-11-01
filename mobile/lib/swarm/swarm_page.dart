@@ -600,9 +600,10 @@ class _SwarmPageState extends State<SwarmPage> {
     ];
   }
 
-  /// + New project: its sheet over Home, for the Swarms [shown]; the project
-  /// it made opens, unless Home or the account changed meanwhile, or the
-  /// project is no longer Home's to list.
+  /// + New project: its sheet over Home, for every Swarm listed, opening on
+  /// the one [shown] if Home shows one and it is not paused (Dee, 11-01);
+  /// the project it made opens, unless Home or the account changed
+  /// meanwhile, or the project is no longer Home's to list.
   Future<void> _newProject(
     SwarmSession session,
     List<SwarmListing> shown,
@@ -610,7 +611,8 @@ class _SwarmPageState extends State<SwarmPage> {
     final made = await showSwarmNewProjectSheet(
       context,
       session: session,
-      swarmIds: [for (final swarm in shown) swarm.id],
+      swarmIds: [for (final swarm in session.inbox.swarms) swarm.id],
+      openedFrom: shown.length == 1 ? shown.single.id : null,
       now: widget.now,
     );
     if (made == null || !mounted || _session != session) return;
