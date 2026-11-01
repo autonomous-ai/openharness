@@ -485,8 +485,41 @@ Future<void> removeSwarmBuddy(SwarmReader reader, String projectId) async {
   await reader.refresh();
 }
 
+/// What the person's Buddy is called until they name it, as the backend
+/// names it (`defaultBuddyName`): "tony's Buddy".
+String swarmBuddyDefaultName(SwarmReader reader) {
+  final email = reader.snapshot?.people
+      .where((p) => p.id == reader.accountId)
+      .firstOrNull
+      ?.email;
+  return "${(email ?? '').split('@').first}'s Buddy";
+}
+
+/// The name the person chose for the Buddy of their chat [chatId]; null for
+/// the default.
+String? swarmBuddyChosenName(SwarmReader reader, String chatId) =>
+    reader.snapshot?.conversation(chatId)?.buddyName;
+
+/// Names the person's Buddy from its chat [chatId] (backend buddy.rename, the
+/// desktop's `renameBuddy`), or back to the default when [name] is empty:
+/// everyone in the Swarm sees it. By the chat, never the project, so it holds
+/// for one Buddy per Swarm too. Reads the Swarm again; a refusal throws.
+Future<void> renameSwarmBuddy(
+  SwarmReader reader,
+  String chatId,
+  String name,
+) async {
+  final trimmed = name.trim();
+  await _command(reader, {
+    'type': 'buddy.rename',
+    'conversationId': chatId,
+    'name': trimmed.isEmpty ? null : trimmed,
+  });
+  await reader.refresh();
+}
+
 /// What the person does to their Buddy in one project from its chat: start
-/// it, start it again, remove it. One at a time — a second tap while one is
+/// it, start it again, rename it, remove it. One at a time — a second tap while one is
 /// under way does nothing — and what went wrong with the last, as a sentence
 /// to show; it lasts until the next.
 class SwarmBuddyActions extends ChangeNotifier {
@@ -550,6 +583,38 @@ class SwarmBuddyActions extends ChangeNotifier {
     () => removeSwarmBuddy(reader, projectId),
     "Couldn't remove your Buddy. Try again.",
   );
+
+  /// Names the Buddy of chat [chatId] ([renameSwarmBuddy]): whether it was
+  /// renamed, and the refusal for the rename's own dialog to say, never kept
+  /// in [error]. While another action is under way it does nothing; a
+  /// refusal that comes once the Swarm was let go says nothing.
+  Future<({bool renamed, String? error})> rename(
+    String chatId,
+    String name,
+  ) async {
+    if (_busy || _disposed) return (renamed: false, error: null);
+    final generation = reader.generation;
+    _busy = true;
+    notifyListeners();
+    String? error;
+    try {
+      await renameSwarmBuddy(reader, chatId, name);
+    } on SuperTabFailure catch (failure) {
+      error = failure.message;
+    } catch (_) {
+      error = "Couldn't rename your Buddy. Try again.";
+    }
+    if (_disposed) return (renamed: false, error: null);
+    _busy = false;
+    notifyListeners();
+    // Access lost, or the Swarm read anew from nothing: the refusal is for a
+    // chat no longer shown.
+    if (error != null &&
+        (reader.accessRevoked || generation != reader.generation)) {
+      return (renamed: false, error: null);
+    }
+    return (renamed: error == null, error: error);
+  }
 
   Future<void> _run(Future<Object?> Function() act, String fallback) async {
     if (_busy || _disposed) return;

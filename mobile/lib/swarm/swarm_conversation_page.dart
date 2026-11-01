@@ -349,8 +349,10 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     );
     c.composer.addListener(_drafted);
     c.addListener(_chatMoved);
+    c.addListener(_guardVoice);
     if (widget.mention case final agentId?) c.mention(agentId);
     reader.addListener(_see);
+    reader.addListener(_guardVoice);
     session.inbox.addListener(_see);
     _see();
     _watch();
@@ -422,6 +424,17 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// A read came in: the line, if a failed read left it to place; the notice's
   /// message, once a read has brought what to look for it in; and what is
   /// offered of the line, since the list changed.
+  /// A take goes with the right to post here, as in a thread: the chat lost,
+  /// archived, or the person no longer a writer. Its words land nowhere
+  /// ([SwarmVoice.hide]). Nothing while the chat is still being read.
+  void _guardVoice() {
+    final c = _conversation;
+    if (c == null || c.reader.snapshot == null && !c.reader.accessRevoked) {
+      return;
+    }
+    if (c.state == SwarmChatState.lost || !c.canPost) _voice?.hide();
+  }
+
   void _chatMoved() {
     final c = _conversation;
     if (c == null || !_firstRead) return;
@@ -620,13 +633,18 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
 
   void _close() {
     final session = _session;
+    // Signed out, another account, or Swarm turned off: the take goes with
+    // the chat it was for.
+    _voice?.hide();
     session?.inbox
       ?..removeListener(_attach)
       ..removeListener(_see);
     if (_conversation case final c?) {
       c.composer.removeListener(_drafted);
       c.removeListener(_chatMoved);
+      c.removeListener(_guardVoice);
       c.reader.removeListener(_see);
+      c.reader.removeListener(_guardVoice);
       c.dispose();
     }
     if (_buddy != widget.buddy) _buddy?.dispose();
@@ -1197,9 +1215,12 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                 ? view.title
                 : null,
             project: view.project,
-            // The person's own Buddy chat: Remove Buddy.
+            // The person's own Buddy chat: Rename Buddy, Remove Buddy.
             action: switch (_buddy) {
-              final buddy? => SwarmBuddyMenuButton(actions: buddy),
+              final buddy? => SwarmBuddyMenuButton(
+                actions: buddy,
+                chatId: widget.conversationId,
+              ),
               null => null,
             },
           ),

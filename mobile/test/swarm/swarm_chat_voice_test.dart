@@ -10,6 +10,7 @@ import 'package:harness_mobile/phone/voice_recorder.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
+import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 
 import '../voice_fakes.dart';
@@ -75,12 +76,15 @@ void main() {
     fake.routes[commands] = (_) => {'result': <String, dynamic>{}};
   });
 
+  /// Who is signed in, in the last [pump].
+  late ValueNotifier<String?> account;
+
   /// Chat g1 on screen, its composer's mic heard through [recorder] and
   /// [stt] — or with no voice input at all.
-  Future<void> pump(WidgetTester tester, {bool voice = true}) async {
+  Future<SwarmHost> pump(WidgetTester tester, {bool voice = true}) async {
     final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
       ..value = {PhoneExperiment.swarm};
-    final account = ValueNotifier<String?>(me);
+    account = ValueNotifier<String?>(me);
     final host = SwarmHost(
       accountId: () => account.value,
       account: account,
@@ -104,6 +108,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    return host;
   }
 
   Finder key(String value) => find.byKey(ValueKey(value));
@@ -682,6 +687,101 @@ void main() {
 
     expect(key('swarm-mic'), findsNothing);
     expect(key('swarm-send'), findsOneWidget);
+  });
+
+  // The composer goes with the right to post, and its mic with it: a take
+  // must not go on recording, or land its words, once the person can no
+  // longer post here (as a thread's reply box already guards).
+  group('access lost mid-take', () {
+    const refused = SuperTabFailure('FORBIDDEN', 'Not yours.', statusCode: 403);
+
+    /// The Swarm read again: refused, or with the person a [role].
+    Future<void> reread(
+      WidgetTester tester,
+      SwarmHost host, {
+      bool lost = false,
+      String? role,
+    }) async {
+      if (lost) {
+        fake.routes['/api/super-tabs/$tab/changes'] = (_) => throw refused;
+        fake.routes['/api/super-tabs/$tab/parts'] = (_) => throw refused;
+      } else {
+        final parts = fake.routes['/api/super-tabs/$tab/parts']!;
+        fake.routes['/api/super-tabs/$tab/parts'] = (body) => {
+          ...(parts(body) as Map<String, dynamic>),
+          'members': [part(me, 2, person(me, role: role!))],
+        };
+        fake.routes['/api/super-tabs/$tab/changes'] = (_) => {'reload': true};
+      }
+      await host.session!.inbox.reader(tab)!.refresh();
+      await frames(tester);
+    }
+
+    testWidgets('signed out: the microphone closes, nothing is transcribed '
+        'or sent', (tester) async {
+      await pump(tester);
+      stt.replies.add('after sign out');
+      await tapMic(tester);
+      expect(recorder.recording, isTrue);
+
+      account.value = null;
+      await frames(tester);
+
+      expect(recorder.recording, isFalse);
+      expect(stt.calls, isEmpty);
+      expect(fake.commands, isEmpty);
+    });
+
+    testWidgets('made read-only: the take goes with the composer', (
+      tester,
+    ) async {
+      final host = await pump(tester);
+      await tapMic(tester);
+      expect(recorder.recording, isTrue);
+
+      await reread(tester, host, role: 'viewer');
+
+      expect(key('swarm-read-only'), findsOneWidget);
+      expect(key('swarm-mic'), findsNothing);
+      expect(recorder.recording, isFalse);
+      expect(stt.calls, isEmpty);
+      expect(fake.commands, isEmpty);
+    });
+
+    testWidgets('the Swarm lost: the microphone closes', (tester) async {
+      final host = await pump(tester);
+      await tapMic(tester);
+      expect(recorder.recording, isTrue);
+
+      await reread(tester, host, lost: true);
+
+      expect(recorder.recording, isFalse);
+      expect(stt.calls, isEmpty);
+    });
+
+    testWidgets('words transcribed after the person was made read-only land '
+        'nowhere: not sent, and not kept in the draft', (tester) async {
+      final host = await pump(tester);
+      stt.pending = Completer<String>();
+      await tapMic(tester);
+      recorder.meter.value = 0.8;
+      await tester.pump(const Duration(milliseconds: 500));
+      await tapMic(tester);
+      expect(stt.calls, hasLength(1), reason: 'the take is being transcribed');
+
+      await reread(tester, host, role: 'viewer');
+      stt.pending!.complete('too late');
+      await tester.pumpAndSettle();
+
+      expect(fake.commands, isEmpty);
+      expect(find.text('too late'), findsNothing);
+
+      // Nor kept in the draft for when the person may post again.
+      await reread(tester, host, role: 'owner');
+      await tester.pumpAndSettle();
+      expect(key('swarm-mic'), findsOneWidget);
+      expect(box(tester), isEmpty);
+    });
   });
 }
 
