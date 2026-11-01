@@ -18,6 +18,7 @@ import type { BackendNotice, CoreApi, TurnDelivery } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { attachedFiles as attachedFilesType } from './attachments.js'
 import { backend, BUDDY_SESSION_GONE_MS, BUDDY_SESSION_IDLE_MS, BUDDY_SESSION_SLEEP_GAP_MS, buddyChatIdOf, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
+import { SWITCH_HOLD_MS } from './leadSwitch.js'
 import { TerminalHost } from './terminal.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
 import { CONTINUE } from './limitResume.js'
@@ -3739,6 +3740,29 @@ describe('keeping a Swarm Lead alive', () => {
     t.live(false)
     await t.poll()
     expect(t.keepLeadAlive).toHaveBeenCalledTimes(calls + 3)
+  })
+
+  // Dee, 11-01: its owner switches a Product Manager's engine from its pane. The host holds off reopening the old session while
+  // the new one takes its place, and reopens the old one on its old engine when it is not reported in time; a restart keeps
+  // the hold, so a project never has two, and never none for long (superTabs/leadSwitch.ts).
+  it('holds a switching Lead\'s reopen until the switch\'s time limit, across a restart, then reopens it', async () => {
+    const t = lifeFixture([leadRow()])
+    const folder = join(t.dir, 'super-tabs', 'lead-switch')
+    mkdirSync(folder, { recursive: true, mode: 0o700 })
+    writeFileSync(join(folder, `${createHash('sha256').update('harness').digest('hex')}.json`),
+      JSON.stringify({ version: 1, agentId: 'harness', changeId: 'f'.repeat(32), targetEngine: 'codex', at: 0 }), { mode: 0o600 })
+    await t.poll()
+    await t.poll(60_000)
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+    // The host restarts mid-switch: the hold is on disk.
+    t.host.stop()
+    const again = t.open()
+    const poll = async (advance: number) => { t.wait(advance); await again.tick(); for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve)) }
+    await poll(0)
+    await poll(SWITCH_HOLD_MS - 60_000)
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+    await poll(1)
+    expect(t.keepLeadAlive).toHaveBeenCalledWith('harness')
   })
 
   it('waits a minute after a reopen it asked for before asking again', async () => {

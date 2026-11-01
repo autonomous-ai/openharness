@@ -37,6 +37,7 @@ const agentCommandOf = (entry: Entry, prefix: string, buddy = false) =>
 const readCommand = (entry: Entry, prefix: string, group: string, id: string, buddy = false) =>
   `${agentCommandOf(entry, prefix, buddy)} message ${shellQuote(group)} ${shellQuote(id)}`
 export { backend, identifier, object, SuperTabHostError } from './wire.js'
+import { leadSwitchHeld } from './leadSwitch.js'
 import { backend, ENDED_WORK, identifier, object, SuperTabHostError } from './wire.js'
 import { parseSwarmSkill, recordSwarmSkillNotice, refreshSwarmSkill, wireRole, type CustomSwarmRole, type SkillRefresh, type SwarmSkill, type SwarmSkillGrant,
   type SwarmSkillMode } from '../lib/swarmSkills.js'
@@ -1120,6 +1121,9 @@ export class SuperTabHost {
     this.keepAlives.set(harnessId, state)
     if (state.running) return
     if (this.core.agents.byAgent(harnessId)) { state.failures = 0; state.retryAt = 0; delete state.reason; return }
+    // Its owner is switching its engine from its pane: the new session takes its place (recordReplacements), unless it is
+    // not reported in time, when the hold ends and it is reopened here on its old engine (leadSwitch.ts).
+    if (leadSwitchHeld(this.core.dataDir, harnessId, this.now())) return
     if (this.now() < state.retryAt) return
     state.running = true
     const failed = (reason: string) => {
