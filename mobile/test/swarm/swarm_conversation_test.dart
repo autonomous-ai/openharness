@@ -42,6 +42,7 @@ void main() {
     List<String> agentIds = const ['agent-lead', 'agent-builder'],
     String role = 'owner',
     bool archived = false,
+    Map<String, int> readMarks = const {},
   }) {
     final swarm = FakeSwarm();
     Map<String, dynamic> g1(int seq) => {
@@ -54,7 +55,7 @@ void main() {
       'archived': archived,
     };
     swarm.routes['/api/super-tabs/$tab/parts'] = (_) => {
-      ...firstLoad(groups: [g1(sequence)]),
+      ...firstLoad(groups: [g1(sequence)], derived: {'readMarks': readMarks}),
       'members': [part(me, 1, person(me, role: role))],
     };
     swarm.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
@@ -1377,6 +1378,110 @@ void main() {
       expect(c.messages.last.id, 'm4');
       expect(bold(), isTrue);
       expect(m.sent, isEmpty, reason: 'covered: it marked nothing');
+    });
+
+    test('an open chat whose newest message is a reply only in a thread is '
+        'read through its newest message in the main stream, and a reply '
+        'only in a thread arriving later marks nothing', () async {
+      final r = rig(sequence: 3, readMarks: const {'g1': 1});
+      final m = marked(r);
+      r.swarm.routes[messages] = (_) => {
+        'messages': [
+          {...message('m3', 3, text: 'in the thread'), 'thread': 'm1'},
+          message('m2', 2),
+          {...message('m1', 1), 'thread': 'm1'},
+        ],
+        'next': null,
+      };
+
+      final c = await open(r.reader);
+      await settle();
+      expect(c.messages.last.threadReply, isTrue, reason: 'loaded, last');
+      expect(m.sent, [2], reason: 'the thread reply is not on screen');
+      expect(m.marks.readThrough('g1'), 2);
+
+      r.swarm.routes['$messages?after=3'] = (_) => {
+        'messages': [
+          {...message('m4', 4, text: 'in the thread'), 'thread': 'm1'},
+        ],
+        'next': null,
+      };
+      moveOn(r.swarm, 4);
+      await r.reader.refresh();
+      await settle();
+
+      expect(c.messages.last.id, 'm4');
+      expect(m.sent, [2]);
+      expect(m.marks.readThrough('g1'), 2);
+    });
+
+    test('a chat read before, opened again with no network, is read through '
+        'the newest main-stream message it kept', () async {
+      final r = rig(sequence: 3, readMarks: const {'g1': 1});
+      final m = marked(r);
+      r.swarm.routes[messages] = (_) => {
+        'messages': [
+          {...message('m3', 3, text: 'in the thread'), 'thread': 'm1'},
+          message('m2', 2),
+          {...message('m1', 1), 'thread': 'm1'},
+        ],
+        'next': null,
+      };
+      await r.reader.refresh();
+      var c = SwarmConversation(r.reader, 'g1', shown: false);
+      await c.load();
+      c.dispose();
+      await settle();
+      expect(m.sent, isEmpty);
+
+      // Offline: the kept page shows and is read; nothing reads on.
+      r.swarm.routes.remove(messages);
+      r.swarm.routes[read] = (_) => throw StateError('offline');
+      c = SwarmConversation(r.reader, 'g1');
+      addTearDown(c.dispose);
+      await settle();
+
+      expect(c.messages.last.id, 'm3');
+      expect(m.marks.readThrough('g1'), 2);
+    });
+
+    test('a chat opened at a reply only in a thread is read through the '
+        'main-stream message before it', () async {
+      final r = rig(sequence: 4);
+      final m = marked(r);
+      r.swarm.routes[messages] = (_) => {
+        'messages': [
+          message('m4', 4),
+          {...message('m3', 3, text: 'in the thread'), 'thread': 'm1'},
+          message('m2', 2),
+          {...message('m1', 1), 'thread': 'm1'},
+        ],
+        'next': null,
+      };
+      await r.reader.refresh();
+      final c = SwarmConversation(r.reader, 'g1', heldAt: 'm3');
+      addTearDown(c.dispose);
+      await c.load();
+      await settle();
+
+      expect(m.sent, [2]);
+    });
+
+    test('a mark the server holds ahead of what the chat shows is neither '
+        'sent back nor replaced', () async {
+      final r = rig(sequence: 3, readMarks: const {'g1': 5});
+      final m = marked(r);
+      r.swarm.routes[messages] = (_) => {
+        'messages': [message('m3', 3), message('m2', 2)],
+        'next': null,
+      };
+
+      await open(r.reader);
+      await settle();
+
+      expect(r.reader.snapshot!.readMarks['g1'], 5);
+      expect(m.sent, isEmpty);
+      expect(m.marks.readThrough('g1'), 5);
     });
 
     test('a Swarm without read marks marks nothing', () async {
