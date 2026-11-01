@@ -577,7 +577,13 @@ void main() {
         ),
         findsOneWidget,
       );
-      expect(key('swarm-buddy-menu'), findsNothing, reason: 'none to remove');
+      // Renamed before it runs, as on Desktop; nothing to remove yet.
+      await tester.tap(key('swarm-buddy-menu'));
+      await tester.pumpAndSettle();
+      expect(find.text('Rename Buddy'), findsOneWidget);
+      expect(find.text('Remove Buddy'), findsNothing, reason: 'none to remove');
+      await tester.tapAt(const Offset(10, 10));
+      await tester.pumpAndSettle();
 
       startsNext(fake, [
         buddyStartData('s1', chatId: chat, machineId: 'mac-1'),

@@ -534,7 +534,10 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (_tab == SwarmProjectTab.buddy && _buddy != null)
-            SwarmBuddyMenuButton(actions: _buddy!),
+            SwarmBuddyMenuButton(
+              actions: _buddy!,
+              chatId: swarmBuddyChat(_buddy!.reader, widget.projectId)?.id,
+            ),
           if (_homeC)
             _ProjectMenu(
               onLeaderboard: _openLeaderboardSheet,
