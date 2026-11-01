@@ -13,6 +13,7 @@ import 'package:harness_mobile/shared/theme/color_palette.dart';
 import 'package:harness_mobile/swarm/swarm_leaderboard.dart';
 import 'package:harness_mobile/swarm/swarm_leaderboard_reader.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
+import 'package:harness_mobile/terminal/terminal_font_store.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
@@ -30,8 +31,30 @@ void main() {
     final sf = ByteData.sublistView(
       await File('/System/Library/Fonts/SFNS.ttf').readAsBytes(),
     );
-    for (final family in ['.AppleSystemUIFont', 'Roboto']) {
+    // Every name the app's text asks for: the reading face and its
+    // fallbacks, and the terminal's, which the top bar's title is set in. A
+    // name left out draws as solid blocks.
+    for (final family in {
+      '.AppleSystemUIFont',
+      'Roboto',
+      AppFont.sans,
+      ...AppFont.sansFallback,
+    }) {
       await (FontLoader(family)..addFont(Future.value(sf))).load();
+    }
+    final mono = ByteData.sublistView(
+      await File('/System/Library/Fonts/SFNSMono.ttf').readAsBytes(),
+    );
+    final terminal = terminalFontStore.value;
+    for (final family in {
+      '.AppleSystemUIFontMonospaced',
+      'monospace',
+      AppFont.mono,
+      ...AppFont.monoFallback,
+      terminal.fontFamily,
+      ...terminal.fontFamilyFallback,
+    }) {
+      await (FontLoader(family)..addFont(Future.value(mono))).load();
     }
     final manifest =
         jsonDecode(await rootBundle.loadString('FontManifest.json')) as List;
