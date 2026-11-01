@@ -34,6 +34,7 @@ import { cursorFor, readCursor } from './cursor.js'
 import { changesFor } from './changes.js'
 import { envelope, groupView, readerView, seenIn, type ReaderView } from './views.js'
 import { decodeDormantPage, encodeDormantPage } from './dormantPage.js'
+import { seedThreadMarks } from './threadMarkSeeds.js'
 import { memberSwarms } from '../swarmRows.js'
 
 type LoadOptions = NonNullable<Parameters<typeof parts.loadActive>[2]>
@@ -199,28 +200,37 @@ export class SwarmReads {
   }
 
   async group(user: AuthUser, tabId: string, conversationId: string, asAgentId?: string): Promise<OneGroup> {
+    return { group: (await this.readGroup(user, tabId, conversationId, asAgentId)).group }
+  }
+
+  /** One conversation the reader can read, with the Swarm's state it was checked against. */
+  private async readGroup(user: AuthUser, tabId: string, conversationId: string, asAgentId?: string): Promise<OneGroup & { state: SuperTabState }> {
     const t0 = this.now()
     return this.read(user, tabId, async (tx, cached) => {
       const { view, parts: loaded, actor } = await this.load(tx, cached, user, tabId, asAgentId, t0, { groupIds: [conversationId] })
       const active = view.parts.groups.find(g => g.key === conversationId)
-      if (active) return { group: active }
+      if (active) return { group: active, state: view.state }
       // A dormant group is in no whole-Swarm view; it passes the same read check as on the dormant list.
       const dormant = loaded.groups.find(g => g.key === conversationId && g.dormant)
       if (dormant && canReadGroup(view.state, actor, dormant.data!)) {
         const data = isBuddyReader(view.state, actor) ? groupForBuddy(dormant.data!) : dormant.data!
-        return { group: envelope(dormant, groupView({ ...data, dormant: true }, seenIn(view.parts))) }
+        return { group: envelope(dormant, groupView({ ...data, dormant: true }, seenIn(view.parts))), state: view.state }
       }
       return fail('NOT_FOUND', 'This conversation is unavailable.', 404)
     })
   }
 
   /** Moves the person's read mark in a conversation they can read forward, never past its newest message (readMarks.ts). Only a
-   *  person reading as themselves has marks: an agent, or a Team session, is refused before anything is written. */
+   *  person reading as themselves has marks: an agent, or a Team session, is refused before anything is written. Reading the
+   *  chat never reads a reply only in a thread: first, each such thread of theirs between the old mark and the new one with no
+   *  mark of its own gets one at the old mark (threadMarkSeeds.ts), so the inbox and Threads still count it. */
   async markRead(user: AuthUser, tabId: string, conversationId: string, sequence: number): Promise<{ sequence: number }> {
     if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
-    const { group } = await this.group(user, tabId, conversationId)
-    const newest = group.data!.lastMessageSequence
-    return { sequence: await writeReadMark(this.db, { tabId, personId: user.sub, conversationId, sequence: Math.min(sequence, newest), now: this.now() }) }
+    const { group, state } = await this.readGroup(user, tabId, conversationId)
+    const next = Math.min(sequence, group.data!.lastMessageSequence), now = this.now()
+    const held = await this.db.superTabReadMark.findUnique({ where: { id: stableId(tabId, conversationId, user.sub) }, select: { sequence: true } })
+    await seedThreadMarks(this.db, { tabId, state, personId: user.sub, conversationId, old: held?.sequence ?? 0, next, now })
+    return { sequence: await writeReadMark(this.db, { tabId, personId: user.sub, conversationId, sequence: next, now }) }
   }
 
   /** Moves the person's mark of thread `threadId` in a conversation they can read forward, never past the conversation's
