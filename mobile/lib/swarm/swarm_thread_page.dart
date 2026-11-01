@@ -8,6 +8,7 @@ import 'package:harness_mobile/phone/tty_controls.dart';
 import 'package:harness_mobile/shared/theme/app_ink.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/shared/theme/swarm_tokens_set_b.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 
 import 'model.dart';
@@ -551,7 +552,7 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
     final talking = voice?.face != null;
     return Padding(
       key: const ValueKey('swarm-thread-box'),
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      padding: SwarmComposer.padding,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [

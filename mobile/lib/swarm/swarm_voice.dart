@@ -14,6 +14,7 @@ import 'package:harness_mobile/phone/voice_mic_face.dart';
 import 'package:harness_mobile/phone/voice_notice.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/shared/theme/swarm_tokens_set_b.dart';
 
 import 'swarm_dictation.dart';
 
@@ -628,7 +629,7 @@ class SwarmVoiceRow extends StatelessWidget {
                 height: 14,
                 decoration: BoxDecoration(
                   color: AppPalette.textPrimary,
-                  borderRadius: BorderRadius.circular(2),
+                  borderRadius: BorderRadius.circular(SwarmComposer.stopRadius),
                 ),
               ),
             ),

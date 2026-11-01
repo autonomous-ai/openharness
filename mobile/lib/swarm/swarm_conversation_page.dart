@@ -12,6 +12,7 @@ import 'package:harness_mobile/phone/tty_controls.dart';
 import 'package:harness_mobile/shared/theme/app_ink.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/shared/theme/swarm_tokens_set_b.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 
@@ -1895,7 +1896,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
         snapshot != null &&
         (c.mentionablePeople.isNotEmpty || c.mentionable.isNotEmpty);
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      padding: SwarmComposer.padding,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -3124,7 +3125,7 @@ class SwarmMessageField extends StatelessWidget {
             key: fieldKey,
             // The right 44 is always kept for the X, so the text does not
             // rewrap as it comes and goes.
-            padding: const EdgeInsets.fromLTRB(16, 12, 44, 2),
+            padding: SwarmComposer.fieldPadding,
             child: TextSelectionTheme(
               data: TextSelectionThemeData(
                 cursorColor: AppPalette.accentOnSurface,
@@ -3266,20 +3267,17 @@ class SwarmComposerCard extends StatelessWidget {
                 ? tty.text.withValues(alpha: 0.26)
                 : swarmChatHair(tty),
           ),
-          borderRadius: BorderRadius.circular(24),
+          borderRadius: BorderRadius.circular(SwarmComposer.cardRadius),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             if (chips case final chips?)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(10, 10, 10, 0),
-                child: chips,
-              ),
+              Padding(padding: SwarmComposer.chipsPadding, child: chips),
             if (fit) Flexible(child: field) else field,
             Padding(
-              padding: const EdgeInsets.fromLTRB(6, 0, 6, 4),
+              padding: SwarmComposer.toolbarPadding,
               child: SizedBox(height: 44, child: toolbar),
             ),
           ],
@@ -3391,12 +3389,12 @@ class _TagChip extends StatelessWidget {
           child: Center(
             child: Container(
               height: 36,
-              padding: const EdgeInsets.only(left: 10, right: 13),
+              padding: SwarmComposer.tagPadding,
               decoration: BoxDecoration(
                 color: open
                     ? AppPalette.accentOnSurface.withValues(alpha: 0.16)
                     : tty.text.withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(18),
+                borderRadius: BorderRadius.circular(SwarmComposer.tagRadius),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,

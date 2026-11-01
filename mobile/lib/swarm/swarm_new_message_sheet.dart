@@ -13,6 +13,7 @@ import 'package:harness_mobile/shared/theme/app_icon_size.dart';
 import 'package:harness_mobile/shared/theme/app_ink.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/shared/theme/swarm_tokens_set_b.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
@@ -723,7 +724,7 @@ class _SwarmNewMessageSheetState extends State<SwarmNewMessageSheet>
       ),
     );
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      padding: SwarmComposer.padding,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
