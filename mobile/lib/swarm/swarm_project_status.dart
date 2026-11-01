@@ -105,7 +105,7 @@ class SwarmProjectStatusCard extends StatelessWidget {
   final DateTime Function() now;
 
   /// How tall the open card grows before its text scrolls inside it.
-  static const maxBody = 160.0;
+  static const maxBody = 200.0;
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
@@ -157,35 +157,59 @@ class SwarmProjectStatusCard extends StatelessWidget {
                 children: [
                   _heading(status?.at, waiting.length, folded, chosen),
                   if (!folded)
-                    // A long report scrolls inside the card, so the chat
-                    // keeps its room.
+                    // A long report, or many decisions, scroll inside the
+                    // card, so the chat keeps its room; each keeps a share,
+                    // so a long report never hides what waits on the person.
                     ConstrainedBox(
                       constraints: const BoxConstraints(maxHeight: maxBody),
-                      child: SingleChildScrollView(
-                        key: ValueKey('swarm-project-status-body-$projectId'),
-                        padding: const EdgeInsets.only(right: AppSpace.m),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            if (status != null) _StatusText(status.text),
-                            if (status != null && waiting.isNotEmpty)
-                              const SizedBox(height: AppSpace.s),
-                            for (final need in waiting)
-                              SwarmNeedLine(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (status != null)
+                            Flexible(
+                              child: SingleChildScrollView(
                                 key: ValueKey(
-                                  'swarm-project-status-need-${need.key}',
+                                  'swarm-project-status-body-$projectId',
                                 ),
-                                session: session,
-                                need: need,
-                                chevron: LucideIcons.chevronRight300,
-                                onTap: () => openSwarmNeeds(
-                                  context,
-                                  focus: need.key,
-                                  swarmId: swarmId,
+                                padding: const EdgeInsets.only(
+                                  right: AppSpace.m,
+                                ),
+                                child: _StatusText(status.text),
+                              ),
+                            ),
+                          if (status != null && waiting.isNotEmpty)
+                            const SizedBox(height: AppSpace.s),
+                          if (waiting.isNotEmpty)
+                            Flexible(
+                              child: SingleChildScrollView(
+                                key: ValueKey(
+                                  'swarm-project-status-needs-$projectId',
+                                ),
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    for (final need in waiting)
+                                      SwarmNeedLine(
+                                        key: ValueKey(
+                                          'swarm-project-status-need-'
+                                          '${need.key}',
+                                        ),
+                                        session: session,
+                                        need: need,
+                                        chevron: LucideIcons.chevronRight300,
+                                        onTap: () => openSwarmNeeds(
+                                          context,
+                                          focus: need.key,
+                                          swarmId: swarmId,
+                                        ),
+                                      ),
+                                  ],
                                 ),
                               ),
-                          ],
-                        ),
+                            ),
+                        ],
                       ),
                     ),
                 ],

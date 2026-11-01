@@ -274,6 +274,20 @@ void main() {
     });
   });
 
+  testWidgets('a long report never hides what waits: the decision shows in '
+      'full inside the card', (tester) async {
+    final long = List.generate(30, (i) => 'Line $i of the report').join('\n');
+    await pump(
+      tester,
+      backend(status: {'text': long, 'at': today}, decisions: [decision('d1')]),
+    );
+    final row = tester.getRect(key('swarm-project-status-need-decision:d1'));
+    final box = tester.getRect(card);
+    expect(row.top, greaterThanOrEqualTo(box.top));
+    expect(row.bottom, lessThanOrEqualTo(box.bottom));
+    expect(row.height, greaterThanOrEqualTo(56));
+  });
+
   group('arrives late, fails, recovers', () {
     testWidgets('a report that arrives with a later read shows then, in place '
         'of none, and a newer one replaces it', (tester) async {
