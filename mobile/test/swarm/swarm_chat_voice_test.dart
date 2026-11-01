@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -20,10 +21,10 @@ import 'swarm_fixture.dart';
 /// Talking instead of typing in a Swarm chat (Tony, 10-28), where the phone
 /// has no speech recognizer of its own to use: the terminal's mic in the
 /// composer records, and what the backend hears lands in the message box as
-/// the take ends. While a take runs the toolbar is cancel, wave and stop:
-/// stop leaves the words in the box and sends nothing — sending is a tap on
-/// Send (Tony, 11-01) — and nothing but stop, cancel or its 5-minute limit
-/// ends a take (Tony, 10-29). A long press on the mic picks the language.
+/// the take ends. While a take runs the toolbar is cancel, wave, stop and
+/// Send: stop leaves the words in the box and sends nothing — sending is a
+/// tap on Send, the row's or the composer's (Tony, 11-01) — and nothing but
+/// stop, Send, cancel or its 5-minute limit ends a take (Tony, 10-29). A long press on the mic picks the language.
 /// With the phone's recognizer: `swarm_chat_dictation_test`.
 void main() {
   const messages = '/api/super-tabs/$tab/conversations/g1/messages';
@@ -739,8 +740,10 @@ void main() {
     expect(fake.commands, isEmpty);
   });
 
-  testWidgets('during a take the toolbar is cancel, wave and stop: no Send, '
-      '+, Tag, mic, X or @ picker; all come back after stop', (tester) async {
+  testWidgets('during a take the toolbar is cancel, wave, stop and the '
+      "row's Send: no +, Tag, mic, X or @ picker; all come back after stop", (
+    tester,
+  ) async {
     await pump(tester);
     await tester.enterText(find.byType(TextField), '@');
     await tester.pump();
@@ -763,13 +766,20 @@ void main() {
       'swarm-voice-cancel',
       'swarm-voice-wave',
       'swarm-voice-stop',
+      'swarm-voice-send',
     ]) {
       expect(key(shown), findsOneWidget, reason: '$shown during a take');
     }
+    // Right of stop, as the composer's Send is right of the mic.
+    expect(
+      tester.getCenter(key('swarm-voice-send')).dx,
+      greaterThan(tester.getCenter(key('swarm-voice-stop')).dx),
+    );
 
     await stop(tester);
     await tester.pumpAndSettle();
     expect(box(tester), '@ Nova');
+    expect(key('swarm-voice-send'), findsNothing);
     for (final back in [
       'swarm-send',
       'swarm-attach',
@@ -820,6 +830,11 @@ void main() {
     expect(key('swarm-voice-busy'), findsOneWidget);
     expect(key('swarm-voice-stop'), findsNothing);
     expect(key('swarm-send'), findsNothing);
+    expect(
+      tester.widget<SwarmRoundButton>(key('swarm-voice-send')).onTap,
+      isNull,
+      reason: 'after stop the words go to the box, not out',
+    );
 
     await cancel(tester);
     stt.pending!.complete('late words');
@@ -837,6 +852,205 @@ void main() {
 
     expect(key('swarm-mic'), findsNothing);
     expect(key('swarm-send'), findsOneWidget);
+  });
+
+  // Tony, 11-01: Send right of stop ends the take and posts it, last words
+  // and all. A recording's words reach the box only once transcribed, so the
+  // row's Send is live from the first moment of the take.
+  group("the voice row's Send", () {
+    Future<void> rowSend(WidgetTester tester) async {
+      await tester.tap(key('swarm-voice-send'));
+      await frames(tester);
+    }
+
+    SwarmRoundButton sendButton(WidgetTester tester) =>
+        tester.widget<SwarmRoundButton>(key('swarm-voice-send'));
+
+    testWidgets('live while recording with an empty box; one tap stops, '
+        'transcribes and posts the words once', (tester) async {
+      await pump(tester);
+      stt.pending = Completer<String>();
+
+      await tapMic(tester);
+      expect(box(tester), isEmpty);
+      expect(sendButton(tester).onTap, isNotNull, reason: 'empty box, live');
+
+      await rowSend(tester);
+      expect(recorder.recording, isFalse, reason: 'the take ended');
+      expect(stt.calls, hasLength(1));
+      expect(key('swarm-voice-sending'), findsOneWidget);
+      expect(fake.commands, isEmpty, reason: 'not before the words are back');
+
+      stt.pending!.complete('ship the fix today');
+      await tester.pumpAndSettle();
+      expect(fake.commands.single['text'], 'ship the fix today');
+      expect(box(tester), isEmpty);
+      expect(key('swarm-voice-wave'), findsNothing);
+      expect(key('swarm-mic'), findsOneWidget);
+      expect(key('swarm-voice-note'), findsNothing);
+    });
+
+    testWidgets('posts what was typed, then what was said', (tester) async {
+      await pump(tester);
+      await tester.enterText(find.byType(TextField), 'Nova:');
+      await tester.pump();
+      stt.replies.add('ship the fix');
+
+      await tapMic(tester);
+      await rowSend(tester);
+      await tester.pumpAndSettle();
+
+      expect(fake.commands.single['text'], 'Nova: ship the fix');
+      expect(box(tester), isEmpty);
+    });
+
+    testWidgets('while it sends the row takes no tap: a second Send, stop or '
+        'cancel changes nothing, and the post goes once', (tester) async {
+      await pump(tester);
+      stt.pending = Completer<String>();
+
+      await tapMic(tester);
+      await rowSend(tester);
+      expect(sendButton(tester).onTap, isNull);
+      expect(key('swarm-voice-stop'), findsNothing);
+      await rowSend(tester);
+      await cancel(tester);
+      expect(stt.calls, hasLength(1));
+      expect(key('swarm-voice-sending'), findsOneWidget, reason: 'not called off');
+
+      stt.pending!.complete('once');
+      await tester.pumpAndSettle();
+      expect(fake.commands, hasLength(1));
+      expect(fake.commands.single['text'], 'once');
+    });
+
+    testWidgets('a double tap posts once', (tester) async {
+      await pump(tester);
+      stt.pending = Completer<String>();
+
+      await tapMic(tester);
+      // Where Send is, whatever is there by then: the row's Send, or the
+      // composer's once the row has gone.
+      final at = tester.getCenter(key('swarm-voice-send'));
+      for (var i = 0; i < 2; i++) {
+        await tester.tapAt(at);
+        await tester.pump(const Duration(milliseconds: 40));
+      }
+      stt.pending!.complete('just once');
+      await tester.pump();
+      await tester.tapAt(at);
+      await tester.pumpAndSettle();
+
+      expect(fake.commands, hasLength(1));
+      expect(fake.commands.single['text'], 'just once');
+    });
+
+    testWidgets('nothing heard posts nothing, keeps what was typed, and says '
+        'one line', (tester) async {
+      await pump(tester);
+      await tester.enterText(find.byType(TextField), 'Draft');
+      await tester.pump();
+      stt.replies.add('');
+
+      await tapMic(tester);
+      await rowSend(tester);
+      await tester.pumpAndSettle();
+
+      expect(fake.commands, isEmpty);
+      expect(box(tester), 'Draft');
+      expect(key('swarm-voice-note'), findsOneWidget);
+      expect(find.text(SwarmVoice.nothingSent), findsOneWidget);
+      expect(find.text("Didn't catch that · tap the mic again"), findsNothing);
+      expect(key('swarm-mic'), findsOneWidget);
+    });
+
+    testWidgets('a transcription that fails posts nothing and says the same '
+        'line', (tester) async {
+      await pump(tester);
+      await tester.enterText(find.byType(TextField), 'Draft');
+      await tester.pump();
+      stt.fails = true;
+
+      await tapMic(tester);
+      await rowSend(tester);
+      await tester.pumpAndSettle();
+
+      expect(fake.commands, isEmpty);
+      expect(box(tester), 'Draft');
+      expect(find.text(SwarmVoice.nothingSent), findsOneWidget);
+    });
+
+    testWidgets('a silent take posts nothing and says the same line', (
+      tester,
+    ) async {
+      await pump(tester);
+      recorder.captured = (
+        wav: Uint8List.fromList([0, 0]),
+        length: const Duration(seconds: 2),
+        peak: 0,
+      );
+
+      await tapMic(tester);
+      await rowSend(tester);
+      await tester.pumpAndSettle();
+
+      expect(stt.calls, isEmpty, reason: 'silence is not uploaded');
+      expect(fake.commands, isEmpty);
+      expect(find.text(SwarmVoice.nothingSent), findsOneWidget);
+    });
+
+    testWidgets('off while the microphone opens', (tester) async {
+      await pump(tester);
+      recorder.pendingPermission = Completer<bool>();
+
+      await tapMic(tester);
+      expect(sendButton(tester).onTap, isNull);
+      recorder.pendingPermission!.complete(true);
+      await frames(tester);
+      expect(sendButton(tester).onTap, isNotNull);
+    });
+
+    testWidgets('a chat covered while its Send transcribes posts nothing, and '
+        'says nothing', (tester) async {
+      await pump(tester);
+      stt.pending = Completer<String>();
+      await tapMic(tester);
+      await rowSend(tester);
+
+      final navigator = tester.state<NavigatorState>(find.byType(Navigator));
+      unawaited(
+        navigator.push(
+          MaterialPageRoute<void>(builder: (_) => const SizedBox()),
+        ),
+      );
+      await tester.pumpAndSettle();
+      stt.pending!.complete('behind your back');
+      await tester.pumpAndSettle();
+      navigator.pop();
+      await tester.pumpAndSettle();
+
+      expect(fake.commands, isEmpty);
+      expect(box(tester), isEmpty);
+      expect(find.text(SwarmVoice.nothingSent), findsNothing);
+      expect(key('swarm-mic'), findsOneWidget);
+    });
+
+    testWidgets('signed out while its Send transcribes: nothing is posted', (
+      tester,
+    ) async {
+      await pump(tester);
+      stt.pending = Completer<String>();
+      await tapMic(tester);
+      await rowSend(tester);
+
+      account.value = null;
+      await frames(tester);
+      stt.pending!.complete('after sign out');
+      await tester.pumpAndSettle();
+
+      expect(fake.commands, isEmpty);
+      expect(find.text('after sign out'), findsNothing);
+    });
   });
 
   // The composer goes with the right to post, and its mic with it: a take

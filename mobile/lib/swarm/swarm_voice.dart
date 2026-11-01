@@ -8,21 +8,26 @@ import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/phone/tty.dart';
+import 'package:harness_mobile/phone/tty_controls.dart';
 import 'package:harness_mobile/phone/voice_input_controller.dart';
 import 'package:harness_mobile/phone/voice_language_store.dart';
 import 'package:harness_mobile/phone/voice_mic_face.dart';
 import 'package:harness_mobile/phone/voice_notice.dart';
+import 'package:harness_mobile/shared/theme/app_icon_size.dart';
+import 'package:harness_mobile/shared/theme/app_ink.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/swarm_tokens_set_b.dart';
 
+import 'swarm_conversation_page.dart' show SwarmRoundButton;
 import 'swarm_dictation.dart';
 
 /// Talking instead of typing in a chat, into the message box (Tony, 10-28:
 /// "like the Claude app"). Tap the mic to talk. While talking the composer
 /// shows [SwarmVoiceRow]: [stop] ends the take with its words left in the box,
-/// [cancel] throws away what the take added. Voice never sends by itself
-/// (Tony, 11-01): sending is a tap on Send. No pause ends a take (10-29:
+/// [cancel] throws away what the take added, and [send] ends it and posts
+/// the box. Voice never sends by itself (Tony, 11-01): sending is a tap on
+/// Send, the composer's or the row's. No pause ends a take (10-29:
 /// "until I tap") — save [idle] without a new word, which stops listening
 /// with the words left in the box. A long press on the mic picks the language
 /// ([voiceLanguageStore]).
@@ -51,6 +56,7 @@ class SwarmVoice extends ChangeNotifier {
     this.dictation,
     required this.draft,
     required this.write,
+    required this.post,
   });
 
   /// How long the recognizer listens without hearing a new word before it
@@ -65,6 +71,9 @@ class SwarmVoice extends ChangeNotifier {
   static const stoppedListening = 'Stopped listening';
   static const stoppedLinger = Duration(seconds: 3);
 
+  /// What the chat says as a [send] ends with nothing to post (Tony, 11-01).
+  static const nothingSent = "Couldn't hear anything, nothing sent";
+
   /// How long the recognizer has to say it has stopped, after [stop] asked it
   /// to, before its take is given up with what the box holds left there.
   static const _endWait = Duration(seconds: 2);
@@ -78,6 +87,10 @@ class SwarmVoice extends ChangeNotifier {
   /// The draft as it is now, and the draft written anew.
   final String Function() draft;
   final void Function(String text) write;
+
+  /// Posts the draft through the composer's own Send, once [send]'s take
+  /// has ended into it.
+  final VoidCallback post;
 
   /// The recognizer's take: asking for it, listening, or waiting for it to
   /// say it has stopped — as only [stop] asks.
@@ -103,6 +116,11 @@ class SwarmVoice extends ChangeNotifier {
   Timer? _liveEnd, _liveIdle, _liveNoticeTimer, _stoppedTimer;
   final ValueNotifier<double> _liveLevel = ValueNotifier(0);
   String? _liveNotice;
+
+  /// The row's Send under way ([send]): the take ends, then the draft is
+  /// posted once. Replaced by everything that ends a take otherwise, so a
+  /// take cancelled or gone meanwhile posts nothing.
+  Object? _sending;
 
   VoiceInputController? _voice;
   bool _disposed = false;
@@ -149,6 +167,24 @@ class SwarmVoice extends ChangeNotifier {
       },
     },
   };
+
+  /// The row's Send is under way: the take is ending, then the draft posts.
+  /// The row takes no tap meanwhile.
+  bool get sending => _sending != null;
+
+  /// The row's Send can be tapped: listening, and with the phone's
+  /// recognizer only once the box has words — the words a recording heard
+  /// reach it only as it ends.
+  bool get canSend {
+    if (_disposed || _sending != null) return false;
+    if (_live != _Live.off) {
+      return _live == _Live.listening && draft().trim().isNotEmpty;
+    }
+    final voice = _voice;
+    return voice != null &&
+        !voice.isSending &&
+        voice.status == VoiceInputStatus.listening;
+  }
 
   /// The microphone was refused: the mic is off.
   bool get off =>
@@ -218,11 +254,44 @@ class SwarmVoice extends ChangeNotifier {
     }
   }
 
+  /// Ends the take and posts the draft with its words, once ([post]): the
+  /// recognizer's last words, waited for no longer than it is at [stop]; or
+  /// the recording, once transcribed. A take that ends with nothing to post
+  /// posts nothing and says [nothingSent]; what was typed stays.
+  void send() {
+    if (!canSend) return;
+    final sending = _sending = Object();
+    if (_live == _Live.listening) {
+      _endLive();
+      return;
+    }
+    notifyListeners();
+    unawaited(_sendRecorded(_voice!, sending));
+  }
+
+  /// [send] on a recording: what was typed, then the words transcribed.
+  Future<void> _sendRecorded(VoiceInputController voice, Object sending) async {
+    var posted = false;
+    await voice.submit((words) async {
+      // Gone meanwhile: its words land nowhere.
+      if (_sending != sending) return true;
+      write(_joined(draft(), words));
+      posted = true;
+      post();
+      return true;
+    });
+    if (_disposed || _sending != sending) return;
+    _sending = null;
+    if (!posted) _setLiveNotice(nothingSent);
+    notifyListeners();
+  }
+
   /// Throws the take away: what it added leaves the box, the person's edits
   /// stay. A recorded take is dropped with its words, even while they are
   /// being transcribed ([VoiceInputController.clear]).
   void cancel() {
     if (_disposed) return;
+    _sending = null;
     if (_live != _Live.off) {
       if (_live != _Live.asking && draft() == _liveShown) write(_liveFrom);
       _offLive();
@@ -240,6 +309,7 @@ class SwarmVoice extends ChangeNotifier {
   /// ⚠️ `clear`, never `stopListening` or a [_finish]: those transcribe the
   /// take, and a take nobody can see must not leave the phone.
   void hide() {
+    _sending = null;
     _offLive();
     _release(false);
     final voice = _voice;
@@ -372,17 +442,22 @@ class SwarmVoice extends ChangeNotifier {
     unawaited(dictation.stop());
   }
 
-  /// The recognizer has stopped, as [stop] asked or because it cannot go on:
-  /// its words stay in the box and nothing is sent. No notice after a stop
-  /// with words in the box, however the recognizer's last session ended.
+  /// The recognizer has stopped, as [stop] or [send] asked or because it
+  /// cannot go on: its words stay in the box, and only [send]'s are posted.
+  /// No notice after a stop with words in the box, however the recognizer's
+  /// last session ended.
   void _liveEnded(int take, SwarmDictationEnd end) {
     if (take != _liveTake || _live == _Live.off) return;
     final stopped = _live == _Live.ending && draft().trim().isNotEmpty;
+    final send = _sending != null && _live == _Live.ending;
+    _sending = null;
     _liveTake++;
     _live = _Live.off;
     _stopLiveTimers();
     _liveLevel.value = 0;
+    if (send && stopped) post();
     _setLiveNotice(switch (end) {
+      _ when send && !stopped => nothingSent,
       _ when stopped => null,
       SwarmDictationEnd.failed => VoiceNotice.notTranscribed,
       _ when _liveHeard.isEmpty => VoiceNotice.nothingHeard,
@@ -395,6 +470,7 @@ class SwarmVoice extends ChangeNotifier {
   /// shown stay in the draft, and nothing is sent.
   void _offLive() {
     if (_live == _Live.off) return;
+    _sending = null;
     final listened = _live != _Live.asking;
     _liveTake++;
     _live = _Live.off;
@@ -574,31 +650,41 @@ class SwarmVoiceMic extends StatelessWidget {
 }
 
 /// The card's toolbar while a take is under way (Tony, 11-01): cancel, the
-/// wave, stop — no +, Tag, mic or Send, so nothing is sent from here.
+/// wave, stop and Send — no +, Tag or mic.
 ///
-/// - Opening ([VoiceMicFace.starting]): cancel and a flat wave.
-/// - Listening: cancel, the wave following [SwarmVoice.level], and stop.
-/// - Busy (the recognizer stopping, or the recording being transcribed):
-///   cancel and the terminal's busy face where stop was.
+/// - Opening ([VoiceMicFace.starting]): cancel, a flat wave and Send off.
+/// - Listening: cancel, the wave following [SwarmVoice.level], stop, and
+///   Send ([SwarmVoice.send]) — with the phone's recognizer only once the box
+///   has words; a recording's reach it only as it ends.
+/// - Busy after stop (the recognizer stopping, or the recording being
+///   transcribed): cancel, the terminal's busy face where stop was, Send off.
+/// - Sending ([SwarmVoice.sending]): Send's spinner, and nothing else takes
+///   a tap until the post has gone.
 ///
-/// Cancel and Stop are one word each: VoiceOver reads a label aloud, and a
-/// sentence read into an open microphone lands in the take.
+/// Every label is one word: VoiceOver reads a label aloud, and a sentence
+/// read into an open microphone lands in the take.
 class SwarmVoiceRow extends StatelessWidget {
-  const SwarmVoiceRow({super.key, required this.voice});
+  const SwarmVoiceRow({super.key, required this.voice, this.canPost = true});
 
   final SwarmVoice voice;
+
+  /// The composer could post now, words aside: New message has a chat
+  /// picked and no post on its way.
+  final bool canPost;
 
   @override
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
     final face = voice.face;
     final fill = tty.text.withValues(alpha: 0.08);
+    final sending = voice.sending;
+    final canSend = canPost && voice.canSend;
     return Row(
       children: [
         _VoiceButton(
           key: const ValueKey('swarm-voice-cancel'),
           label: 'Cancel',
-          onTap: voice.cancel,
+          onTap: sending ? null : voice.cancel,
           child: _VoiceRound(
             fill: fill,
             child: Icon(
@@ -618,6 +704,7 @@ class SwarmVoiceRow extends StatelessWidget {
         ),
         const SizedBox(width: AppSpace.xs),
         switch (face) {
+          _ when sending => const SizedBox(width: 44),
           VoiceMicFace.listening => _VoiceButton(
             key: const ValueKey('swarm-voice-stop'),
             label: 'Stop',
@@ -652,6 +739,32 @@ class SwarmVoiceRow extends StatelessWidget {
             ),
           ),
         },
+        SwarmRoundButton(
+          key: const ValueKey('swarm-voice-send'),
+          label: 'Send',
+          face: 36,
+          fill: canSend || sending ? AppPalette.accent : ttyRaised(tty),
+          onTap: canSend
+              ? () {
+                  HapticFeedback.lightImpact();
+                  voice.send();
+                }
+              : null,
+          child: sending
+              ? SizedBox.square(
+                  dimension: AppIconSize.besideText,
+                  child: CircularProgressIndicator(
+                    key: const ValueKey('swarm-voice-sending'),
+                    strokeWidth: 2,
+                    color: AppInk.onFill,
+                  ),
+                )
+              : Icon(
+                  LucideIcons.arrowUp,
+                  size: 20,
+                  color: canSend ? AppInk.onFill : AppPalette.textFaint,
+                ),
+        ),
       ],
     );
   }
@@ -679,7 +792,7 @@ class _VoiceRound extends StatelessWidget {
   );
 }
 
-/// One of [SwarmVoiceRow]'s buttons, with a light tap felt.
+/// One of [SwarmVoiceRow]'s round buttons, with a light tap felt.
 class _VoiceButton extends StatelessWidget {
   const _VoiceButton({
     super.key,
@@ -689,25 +802,28 @@ class _VoiceButton extends StatelessWidget {
   });
 
   final String label;
-  final VoidCallback onTap;
+
+  /// Null while the row's Send is under way: no tap.
+  final VoidCallback? onTap;
   final Widget child;
 
   @override
   Widget build(BuildContext context) {
+    final onTap = this.onTap;
     void tap() {
       HapticFeedback.lightImpact();
-      onTap();
+      onTap?.call();
     }
 
     return Semantics(
       button: true,
-      enabled: true,
+      enabled: onTap != null,
       label: label,
-      onTap: tap,
+      onTap: onTap == null ? null : tap,
       excludeSemantics: true,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: tap,
+        onTap: onTap == null ? null : tap,
         child: child,
       ),
     );
