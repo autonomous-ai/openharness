@@ -690,7 +690,7 @@ class SwarmVoiceRow extends StatelessWidget {
             child: Icon(
               LucideIcons.x,
               size: 20,
-              color: AppPalette.textSecondary,
+              color: sending ? AppPalette.textFaint : AppPalette.textSecondary,
             ),
           ),
         ),

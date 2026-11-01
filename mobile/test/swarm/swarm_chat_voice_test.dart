@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -916,7 +915,11 @@ void main() {
       await rowSend(tester);
       await cancel(tester);
       expect(stt.calls, hasLength(1));
-      expect(key('swarm-voice-sending'), findsOneWidget, reason: 'not called off');
+      expect(
+        key('swarm-voice-sending'),
+        findsOneWidget,
+        reason: 'not called off',
+      );
 
       stt.pending!.complete('once');
       await tester.pumpAndSettle();
