@@ -101,22 +101,20 @@ void openSwarmProject(
   unawaited(replace ? navigator.pushReplacement(route) : navigator.push(route));
 }
 
-/// A route to chat [conversationId] of Swarm [swarmId], at [messageId] with
-/// [decisionId] asked, or with [threadId]'s thread open over it at its root,
-/// as a notice, a link, Activity, Threads or a row opens it
-/// ([SwarmOpenedChat]).
+/// A route to chat [conversationId] of Swarm [swarmId], at [messageId], or
+/// with [threadId]'s thread open over it at its root, as a notice, a link,
+/// Activity, Threads or a row opens it ([SwarmOpenedChat]). A decision opens
+/// in Activity instead, where it is answered.
 Route<void> swarmChatRoute({
   required String swarmId,
   required String conversationId,
   String? messageId,
-  String? decisionId,
   String? threadId,
 }) => phoneRoute(
   (_) => SwarmOpenedChat(
     swarmId: swarmId,
     conversationId: conversationId,
     messageId: messageId,
-    decisionId: decisionId,
     threadId: threadId,
   ),
   listensForItself: true,
@@ -141,12 +139,11 @@ class SwarmOpenedChat extends StatefulWidget {
     required this.swarmId,
     required this.conversationId,
     this.messageId,
-    this.decisionId,
     this.threadId,
   });
 
   final String swarmId, conversationId;
-  final String? messageId, decisionId;
+  final String? messageId;
 
   /// The thread opened over the chat ([SwarmConversationPage.threadId]).
   final String? threadId;
@@ -264,7 +261,6 @@ class _SwarmOpenedChatState extends State<SwarmOpenedChat> {
       swarmId: widget.swarmId,
       projectId: projectId,
       messageId: widget.messageId,
-      decisionId: widget.decisionId,
       threadId: widget.threadId,
     ),
     null => SwarmConversationPage(
@@ -272,7 +268,6 @@ class _SwarmOpenedChatState extends State<SwarmOpenedChat> {
       swarmId: widget.swarmId,
       conversationId: widget.conversationId,
       messageId: widget.messageId,
-      decisionId: widget.decisionId,
       threadId: widget.threadId,
     ),
   };
@@ -297,7 +292,6 @@ class SwarmProjectPage extends StatefulWidget {
     this.tabs = SwarmProjectTab.current,
     this.mention,
     this.messageId,
-    this.decisionId,
     this.threadId,
   });
 
@@ -313,11 +307,10 @@ class SwarmProjectPage extends StatefulWidget {
   /// ([SwarmConversationPage.mention]).
   final String? mention;
 
-  /// Where its chat opens, as a notice or a link names it: at that message,
-  /// with that decision asked ([SwarmConversationPage.messageId] and
-  /// [SwarmConversationPage.decisionId]), or with that thread open over it
+  /// Where its chat opens, as a notice or a link names it: at that message
+  /// ([SwarmConversationPage.messageId]), or with that thread open over it
   /// ([SwarmConversationPage.threadId]). Only the first time the chat shows.
-  final String? messageId, decisionId, threadId;
+  final String? messageId, threadId;
 
   @override
   State<SwarmProjectPage> createState() => _SwarmProjectPageState();
@@ -334,9 +327,7 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
 
   /// Where the chat opens ([SwarmProjectPage.messageId]): forgotten once
   /// another tab is picked, so the chat shown again opens at its end.
-  late String? _messageId = widget.messageId,
-      _decisionId = widget.decisionId,
-      _threadId = widget.threadId;
+  late String? _messageId = widget.messageId, _threadId = widget.threadId;
 
   /// What the page shows of the inbox ([_inboxChanged]): its Swarm's
   /// reader, whether there are several Swarms, why the list was not read.
@@ -591,7 +582,6 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
       header: false,
       mention: widget.mention,
       messageId: _messageId,
-      decisionId: _decisionId,
       threadId: _threadId,
       homeC: _homeC,
     ),
@@ -657,7 +647,7 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
                           : swarmChatNews(reader, asks, chat),
                       onSelect: (tab) => setState(() {
                         _tab = tab;
-                        _messageId = _decisionId = _threadId = null;
+                        _messageId = _threadId = null;
                       }),
                     ),
                   ),

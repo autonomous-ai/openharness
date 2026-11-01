@@ -52,7 +52,10 @@ class SwarmDecisionNeed extends SwarmNeed {
   @override
   String get conversationId => decision.conversationId;
   @override
-  String get key => 'decision:${decision.id}';
+  String get key => keyOf(decision.id);
+
+  /// The key of decision [id]'s need: what Activity opens at for its notice.
+  static String keyOf(String id) => 'decision:$id';
 }
 
 /// A Lead's tag of the person.

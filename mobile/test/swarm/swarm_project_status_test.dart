@@ -15,6 +15,7 @@ import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 
 import '../voice_fakes.dart';
+import 'swarm_activity_fixture.dart' show activityMessage;
 import 'swarm_fixture.dart';
 
 /// The project status card at the top of a project's chat (Tony 11-01, task
@@ -154,8 +155,18 @@ void main() {
   final card = key('swarm-project-status-$project');
   final heading = key('swarm-project-status-heading-$project');
   final fold = key('swarm-project-status-fold-$project');
-  String headingText(WidgetTester tester) =>
-      tester.widget<Text>(heading).textSpan!.toPlainText();
+  final needsYou = key('swarm-project-status-needs-you-$project');
+
+  /// The heading as read: Status, when, and how many wait while folded.
+  String headingText(WidgetTester tester) => [
+    tester.widget<Text>(heading).textSpan!.toPlainText(),
+    if (tester.any(needsYou))
+      tester
+          .widget<Text>(
+            find.descendant(of: needsYou, matching: find.byType(Text)),
+          )
+          .data!,
+  ].join();
 
   group('states', () {
     testWidgets('empty: no report and nothing waiting draws no card', (
@@ -275,10 +286,16 @@ void main() {
     tester,
   ) async {
     final long = List.generate(30, (i) => 'Line $i of the report').join('\n');
-    await pump(
-      tester,
-      backend(status: {'text': long, 'at': today}, decisions: [decision('d1')]),
+    final fake = backend(
+      status: {'text': long, 'at': today},
+      decisions: [decision('d1')],
     );
+    // A message, so the chat has its list: decisions are not in it.
+    fake.routes['/api/super-tabs/$tab/conversations/'] = (_) => {
+      'messages': [activityMessage('m1', 1)],
+      'next': null,
+    };
+    await pump(tester, fake);
     final chat = key('swarm-messages');
     final composer = find.byType(EditableText);
     final openCard = tester.getSize(card).height;
@@ -733,6 +750,188 @@ void main() {
       await until(() => prefs.loaded);
       expect(prefs.folds, ['$tab/a', '$tab/d']);
       prefs.dispose();
+    });
+  });
+
+  group('Activity from the card', () {
+    /// River asks the same question in both projects: one decision in
+    /// Mobile's chat, one in Backend's.
+    List<Map<String, dynamic>> both() => [
+      decision('d1'),
+      decision('other', projectId: other, chat: otherChat),
+    ];
+
+    /// Activity shows [project]'s decision alone, under its name, counted
+    /// once.
+    void expectMobileOnly(WidgetTester tester) {
+      final page = tester.widget<SwarmActivityPage>(
+        find.byType(SwarmActivityPage),
+      );
+      expect((page.swarmId, page.projectId), (tab, project));
+      expect(find.text('#Mobile'), findsOneWidget);
+      expect(
+        key('swarm-activity-row-decision:d1').evaluate().length +
+            key('swarm-activity-open-decision:d1').evaluate().length,
+        1,
+      );
+      expect(key('swarm-activity-row-decision:other'), findsNothing);
+      expect(key('swarm-activity-open-decision:other'), findsNothing);
+      expect(find.textContaining('Backend'), findsNothing);
+      expect(
+        find.descendant(
+          of: key('swarm-activity-filter-needsYou'),
+          matching: find.text('1'),
+        ),
+        findsOneWidget,
+      );
+    }
+
+    testWidgets('the project chat with open decisions shows none among its '
+        'messages; the card holds them', (tester) async {
+      await pump(
+        tester,
+        backend(
+          status: {'text': 'Building', 'at': today},
+          decisions: [decision('d1')],
+        ),
+      );
+      expect(key('swarm-project-status-need-decision:d1'), findsOneWidget);
+      expect(key('swarm-ask-d1'), findsNothing);
+      expect(key('swarm-option-d1-0'), findsNothing);
+    });
+
+    testWidgets('folded, "N need you" is a tap target that opens Activity on '
+        'this project alone', (tester) async {
+      await pump(
+        tester,
+        backend(status: {'text': 'Building', 'at': today}, decisions: both()),
+      );
+      await tester.tap(fold);
+      await tester.pumpAndSettle();
+      expect(needsYou, findsOneWidget);
+      expect(tester.getSize(needsYou).height, greaterThanOrEqualTo(44));
+
+      await tester.tap(needsYou);
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<SwarmActivityPage>(find.byType(SwarmActivityPage)).focus,
+        isNull,
+      );
+      expectMobileOnly(tester);
+    });
+
+    testWidgets('a waiting line opens Activity at it, on this project alone', (
+      tester,
+    ) async {
+      await pump(tester, backend(decisions: both()));
+      await tester.tap(key('swarm-project-status-need-decision:d1'));
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-activity-open-decision:d1'), findsOneWidget);
+      expectMobileOnly(tester);
+    });
+
+    testWidgets("answering in Activity takes it off the card's count", (
+      tester,
+    ) async {
+      final fake = backend(
+        status: {'text': 'Building', 'at': today},
+        decisions: both(),
+      );
+      fake.routes['/api/super-tabs/$tab/commands'] = (_) => {
+        'result': <String, dynamic>{},
+      };
+      await pump(tester, fake);
+      final session = host(tester);
+      await tester.tap(fold);
+      await tester.pumpAndSettle();
+      expect(headingText(tester), endsWith(' · 1 needs you'));
+
+      await tester.tap(needsYou);
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-activity-row-decision:d1'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-option-d1-0'));
+      await tester.pump(const Duration(seconds: 10));
+      await tester.pumpAndSettle();
+      expect(fake.commands.single, {
+        'type': 'decision.answer',
+        'decisionId': 'd1',
+        'choice': 0,
+      });
+      // The server: d1 answered, one decision left in the Swarm.
+      fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
+        'decisions': [decision('other', projectId: other, chat: otherChat)],
+      };
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+        cursor: 'c3',
+        lastChangedAt: 103,
+        derived: {'decisionsWaiting': 1},
+      );
+      await session.inbox.reader(tab)!.refresh();
+      await session.inbox.refresh();
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const ValueKey('tty-back')).first);
+      await tester.pumpAndSettle();
+      expect(find.byType(SwarmActivityPage), findsNothing);
+      expect(card, findsOneWidget);
+      expect(needsYou, findsNothing);
+      expect(headingText(tester), isNot(contains('need')));
+    });
+
+    testWidgets('access lost while its Activity is open: the rows and the '
+        "project's name go, nothing stuck loading", (tester) async {
+      await pump(tester, backend(decisions: both()));
+      final session = host(tester);
+      await tester.tap(key('swarm-project-status-need-decision:d1'));
+      await tester.pumpAndSettle();
+      expect(find.text('Fold the card by default?'), findsWidgets);
+
+      session.inbox.reader(tab)!.revoke();
+      await tester.pumpAndSettle();
+      expect(find.text('#Mobile'), findsNothing);
+      expect(find.text('Fold the card by default?'), findsNothing);
+      expect(find.textContaining('River'), findsNothing);
+      expect(key('swarm-activity-loading'), findsNothing);
+    });
+
+    testWidgets('the project made private to others while its Activity is '
+        'open: its rows and name go', (tester) async {
+      final fake = backend(decisions: both());
+      await pump(tester, fake);
+      final session = host(tester);
+      await tester.tap(key('swarm-project-status-need-decision:d1'));
+      await tester.pumpAndSettle();
+      expect(find.text('#Mobile'), findsOneWidget);
+
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => {
+        ...changes(
+          cursor: 'c2',
+          lastChangedAt: 102,
+          derived: {'decisionsWaiting': 2},
+        ),
+        'head': part(
+          'head',
+          2,
+          headData(
+            projects: [
+              {
+                ...projectData(project, leadChat),
+                'ownerId': 'diego',
+                'visibility': 'private',
+              },
+              projectData(other, otherChat),
+            ],
+          ),
+        ),
+      };
+      await session.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
+      expect(find.text('#Mobile'), findsNothing);
+      expect(key('swarm-activity-open-decision:d1'), findsNothing);
+      expect(key('swarm-activity-row-decision:other'), findsNothing);
+      expect(find.text('Fold the card by default?'), findsNothing);
     });
   });
 }
