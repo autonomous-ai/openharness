@@ -178,7 +178,6 @@ void main() {
     String swarmId = tab,
     String conversation = 'g1',
     String? messageId,
-    String? decisionId,
     bool settle = true,
     bool homeC = false,
     bool systemMenu = false,
@@ -203,7 +202,6 @@ void main() {
           swarmId: swarmId,
           conversationId: conversation,
           messageId: messageId,
-          decisionId: decisionId,
           homeC: homeC,
         ),
       ),
@@ -221,7 +219,6 @@ void main() {
     String swarmId = tab,
     String conversation = 'g1',
     String? messageId,
-    String? decisionId,
     bool settle = true,
     bool homeC = false,
     SwarmUpload upload = refuseSwarmUpload,
@@ -247,7 +244,6 @@ void main() {
       conversation: conversation,
       settle: settle,
       messageId: messageId,
-      decisionId: decisionId,
       homeC: homeC,
       systemMenu: systemMenu,
     );
@@ -517,41 +513,33 @@ void main() {
     expect(marksSent().last, 40);
   });
 
-  testWidgets(
-    'following a quote after a decision notification changes the target',
-    (tester) async {
-      await pump(
-        tester,
-        backend(
-          [
-            message('m1', 1, text: 'Original plan'),
-            message('m2', 2, text: 'Follow up', replyTo: 'm1', minute: 1),
-          ],
-          decisions: [decision('d1')],
-        ),
-        decisionId: 'd1',
-      );
-      await tester.tap(key('swarm-quote-m2'));
-      await tester.pumpAndSettle();
-      expect(key('swarm-lit-m1'), findsOneWidget);
-    },
-  );
-
-  testWidgets('a notification brings its decision card into view', (
-    tester,
-  ) async {
+  testWidgets('a chat with open decisions shows none of them: they are '
+      'answered in Activity (Dee, 11-01)', (tester) async {
     await pump(
       tester,
       backend(
         [
-          for (var i = 1; i <= 40; i++)
-            message('m$i', i, text: 'Message $i\nMore text', minute: i),
+          message('m1', 1, text: 'The build is green'),
+          message('m2', 2, author: me, text: 'Flag it', minute: 2),
         ],
-        decisions: [decision('d1')],
+        decisions: [decision('d1', minute: 1), decision('d2', minute: 3)],
       ),
-      decisionId: 'd1',
     );
-    expect(inView(tester, find.text('Ship it behind a flag?')), isTrue);
+
+    expect(key('swarm-message-m1'), findsOneWidget);
+    expect(key('swarm-message-m2'), findsOneWidget);
+    expect(key('swarm-ask-d1'), findsNothing);
+    expect(key('swarm-ask-d2'), findsNothing);
+    expect(find.text('Ship it behind a flag?'), findsNothing);
+    expect(key('swarm-option-d1-0'), findsNothing);
+  });
+
+  testWidgets('a chat with no messages and an open decision says it has no '
+      'messages, with no decision under it', (tester) async {
+    await pump(tester, backend(const [], decisions: [decision('d1')]));
+
+    expect(key('swarm-chat-empty'), findsOneWidget);
+    expect(key('swarm-ask-d1'), findsNothing);
   });
 
   testWidgets('a reply quotes its original; tapping the quote brings the '
@@ -1482,8 +1470,13 @@ void main() {
     expect(today, lessThan(tester.getTopLeft(find.text('From today')).dy));
   });
 
-  testWidgets('a decision sits among the messages where it was asked: a card '
-      'with its question, the options side by side', (tester) async {
+  /// g1 as the person's own Buddy chat: the one chat that still holds the
+  /// decisions asked of them in its project, as Desktop shows them there.
+  const ownBuddy = {'kind': 'buddy', 'buddyOwnerId': me};
+
+  testWidgets('in the person\'s own Buddy chat, a decision sits among the '
+      'messages where it was asked: a card with its question, the options '
+      'side by side', (tester) async {
     await pump(
       tester,
       backend(
@@ -1491,6 +1484,7 @@ void main() {
           message('m1', 1, text: 'The build is green'),
           message('m2', 2, author: me, text: 'Flag it', minute: 2),
         ],
+        g1: ownBuddy,
         decisions: [decision('d1', minute: 1)],
       ),
     );
@@ -1521,8 +1515,10 @@ void main() {
     await tester.pumpAndSettle();
   });
 
-  testWidgets('an open decision from before the messages read so far waits at '
-      'the foot, not behind Earlier messages', (tester) async {
+  testWidgets('in the Buddy chat, an open decision from before the messages '
+      'read so far waits at the foot, not behind Earlier messages', (
+    tester,
+  ) async {
     await pump(
       tester,
       backend(
@@ -1531,6 +1527,7 @@ void main() {
             message('m$i', i, text: 'Line $i\nof the log', minute: i),
         ],
         next: {'sequence': 10, 'id': 'm10'},
+        g1: ownBuddy,
         decisions: [decision('d1')],
       ),
     );
@@ -1591,8 +1588,10 @@ void main() {
     expect(tester.getSize(field).height, greaterThan(oneLine * 2));
   });
 
-  testWidgets('a decision asked just after its asker\'s own message is drawn '
-      'as part of it, under one name and time', (tester) async {
+  testWidgets('in the Buddy chat, a decision asked just after its asker\'s '
+      'own message is drawn as part of it, under one name and time', (
+    tester,
+  ) async {
     await pump(
       tester,
       backend(
@@ -1604,11 +1603,19 @@ void main() {
             text: 'One question before the release:',
           ),
         ],
+        g1: ownBuddy,
         decisions: [decision('d1', minute: 1)],
       ),
     );
 
-    expect(find.text('River'), findsOneWidget);
+    // Under the message's own name and time: the card carries none.
+    expect(
+      find.descendant(
+        of: key('swarm-ask-d1'),
+        matching: find.textContaining('River'),
+      ),
+      findsNothing,
+    );
     expect(find.text(time(1)), findsNothing);
     expect(
       tester.getRect(key('swarm-ask-d1')).top,
