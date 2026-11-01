@@ -13,6 +13,7 @@ import 'package:harness_mobile/shared/theme/color_palette.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_you_page.dart';
+import 'package:harness_mobile/terminal/terminal_font_store.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
@@ -35,6 +36,21 @@ void main() {
       ...AppFont.sansFallback,
     }) {
       await (FontLoader(family)..addFont(Future.value(sf))).load();
+    }
+    // The tab's title is set in the terminal's face.
+    final mono = ByteData.sublistView(
+      await File('/System/Library/Fonts/SFNSMono.ttf').readAsBytes(),
+    );
+    final terminal = terminalFontStore.value;
+    for (final family in {
+      '.AppleSystemUIFontMonospaced',
+      'monospace',
+      AppFont.mono,
+      ...AppFont.monoFallback,
+      terminal.fontFamily,
+      ...terminal.fontFamilyFallback,
+    }) {
+      await (FontLoader(family)..addFont(Future.value(mono))).load();
     }
     final manifest =
         jsonDecode(await rootBundle.loadString('FontManifest.json')) as List;
@@ -148,5 +164,6 @@ void main() {
       await tester.pumpWidget(const SizedBox());
       host.dispose();
     }
-  });
+    debugDisableShadows = true;
+  }, skip: shots == null);
 }
