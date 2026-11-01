@@ -916,7 +916,7 @@ void main() {
       await tapMic(tester);
       recorder.meter.value = 0.8;
       await tester.pump(const Duration(milliseconds: 500));
-      await tapMic(tester);
+      await stop(tester);
       expect(stt.calls, hasLength(1), reason: 'the take is being transcribed');
 
       await reread(tester, host, role: 'viewer');

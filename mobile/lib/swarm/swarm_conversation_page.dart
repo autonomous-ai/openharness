@@ -419,9 +419,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     if (c.heldAt == _undecided) c.heldAt = widget.messageId ?? _held.value;
   }
 
-  /// A read came in: the line, if a failed read left it to place; the notice's
-  /// message, once a read has brought what to look for it in; and what is
-  /// offered of the line, since the list changed.
   /// A take goes with the right to post here, as in a thread: the chat lost,
   /// archived, or the person no longer a writer. Its words land nowhere
   /// ([SwarmVoice.hide]). Nothing while the chat is still being read.
@@ -433,6 +430,9 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     if (c.state == SwarmChatState.lost || !c.canPost) _voice?.hide();
   }
 
+  /// A read came in: the line, if a failed read left it to place; the notice's
+  /// message, once a read has brought what to look for it in; and what is
+  /// offered of the line, since the list changed.
   void _chatMoved() {
     final c = _conversation;
     if (c == null || !_firstRead) return;
