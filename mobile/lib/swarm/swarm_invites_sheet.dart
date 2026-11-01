@@ -146,7 +146,10 @@ class _SwarmInvitesSheetState extends State<SwarmInvitesSheet> {
   void _close() {
     if (_closing) return;
     _closing = true;
-    _email.clear();
+    // What was typed goes with it, without drawing again mid-frame.
+    _email
+      ..removeListener(_edited)
+      ..clear();
     final confirm = _confirm;
     _confirm = null;
     WidgetsBinding.instance.addPostFrameCallback((_) {
