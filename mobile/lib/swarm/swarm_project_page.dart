@@ -829,40 +829,37 @@ class _ProjectMenu extends StatelessWidget {
         !reader.accessRevoked &&
         reader.snapshot?.projectById(projectId) != null &&
         swarmCanWrite(reader);
-    return ListenableBuilder(
-      listenable: computers ?? Listenable.merge(const []),
-      builder: (context, _) {
-        final terminal = allowed()
-            ? swarmTerminalAction(
-                agent: () => swarmProjectPm(reader.snapshot, projectId),
-                allowed: allowed,
-                shell: shell,
-                computers: computers,
-              )
-            : null;
-        return MenuAnchor(
-          alignmentOffset: const Offset(0, AppSpace.xs),
-          menuChildren: [
-            if (terminal != null)
-              row(
-                'swarm-project-menu-terminal',
-                terminal.label,
-                terminal.enabled ? terminal.onTap : null,
-                value: terminal.value,
-              ),
-            row('swarm-project-menu-leaderboard', 'Leaderboard', onLeaderboard),
-            row('swarm-project-menu-team', 'Team', onTeam),
-            if (onNotifications case final onTap?)
-              row('swarm-project-menu-notifications', 'Notifications', onTap),
-          ],
-          builder: (context, menu, _) => SwarmIconButton(
-            key: const ValueKey('swarm-project-menu'),
-            icon: LucideIcons.ellipsisVertical300,
-            label: 'Menu',
-            onPressed: () => menu.isOpen ? menu.close() : menu.open(),
+    // Built again as the Swarm moves (the header's) and as the phone's
+    // computers do ([SwarmScope.computersOf] depends on its host).
+    final terminal = allowed()
+        ? swarmTerminalAction(
+            agent: () => swarmProjectPm(reader.snapshot, projectId),
+            allowed: allowed,
+            shell: shell,
+            computers: computers,
+          )
+        : null;
+    return MenuAnchor(
+      alignmentOffset: const Offset(0, AppSpace.xs),
+      menuChildren: [
+        if (terminal != null)
+          row(
+            'swarm-project-menu-terminal',
+            terminal.label,
+            terminal.enabled ? terminal.onTap : null,
+            value: terminal.value,
           ),
-        );
-      },
+        row('swarm-project-menu-leaderboard', 'Leaderboard', onLeaderboard),
+        row('swarm-project-menu-team', 'Team', onTeam),
+        if (onNotifications case final onTap?)
+          row('swarm-project-menu-notifications', 'Notifications', onTap),
+      ],
+      builder: (context, menu, _) => SwarmIconButton(
+        key: const ValueKey('swarm-project-menu'),
+        icon: LucideIcons.ellipsisVertical300,
+        label: 'Menu',
+        onPressed: () => menu.isOpen ? menu.close() : menu.open(),
+      ),
     );
   }
 }
