@@ -485,9 +485,6 @@ const authorForBuddy = <T extends Pick<Author, 'kind' | 'membershipGeneration'> 
   author?.kind === 'agent' && author.membershipGeneration ? { ...author, membershipGeneration: '' } : author
 const [UNPURGED_HEAD, UNPURGED_TAIL] = unpurgedNotice('\0').split('\0') as [string, string]
 
-/** Someone with no part in this Swarm: not in it, hosting none of its agents, contributing none of its machines and running
- *  none of its work. A refusal to them is answered as for a Swarm that does not exist (routes/superTabs.ts NOT_AVAILABLE):
- *  its words would say the Swarm is there. Anyone with a part keeps them. */
 /** A person's name and email for the work they are named for (projects.ts `workRequesterId`): their account's, else their
  *  Swarm row's email; an empty email when neither has one, which each caller treats as it treated the owner's. */
 async function requesterOf(tx: Transaction, state: SuperTabState, personId: string): Promise<{ name: string | null; email: string }> {
@@ -495,6 +492,9 @@ async function requesterOf(tx: Transaction, state: SuperTabState, personId: stri
   return { name: user?.name?.trim() || null, email: user?.email ?? state.people.find(p => p.id === personId)?.email ?? '' }
 }
 
+/** Someone with no part in this Swarm: not in it, hosting none of its agents, contributing none of its machines and running
+ *  none of its work. A refusal to them is answered as for a Swarm that does not exist (routes/superTabs.ts NOT_AVAILABLE):
+ *  its words would say the Swarm is there. Anyone with a part keeps them. */
 function stranger(state: SuperTabState, userId: string): boolean {
   return !state.people.some(p => p.id === userId) && !state.agents.some(a => a.machineOwnerId === userId)
     && !(state.machines ?? []).some(m => m.contributorId === userId)
