@@ -136,13 +136,46 @@ void main() {
     announcer.settle([decision(), mention()]);
     expect(notices.cancelled, isEmpty);
 
-    // Answered on the desktop: the lock screen must stop asking.
+    // Answered on the desktop: the lock screen stops asking once two reads
+    // of its Swarm in a row miss it.
     announcer.settle([mention()]);
+    announcer.swarmRead('tab-b', [mention()]);
+    expect(notices.cancelled, isEmpty, reason: 'one read may miss it');
+    announcer.swarmRead('tab-b', [mention()]);
     expect(notices.cancelled, [decision().key]);
 
     // Signed out: nothing of the account stays on the lock screen.
     announcer.clear();
     expect(notices.cancelled, [decision().key, mention().key]);
+  });
+
+  test('a need missed by one read and back at the next stays up', () {
+    final notices = _Recording();
+    final announcer = SwarmAnnouncer(notices, quiet: (_) => false);
+    announcer.announce(decision());
+    for (var i = 0; i < 6; i++) {
+      final needs = i.isOdd ? <SwarmNeed>[decision()] : <SwarmNeed>[];
+      announcer.settle(needs);
+      announcer.swarmRead('tab-b', needs);
+    }
+    expect(notices.cancelled, isEmpty);
+  });
+
+  test("another Swarm's reads take nothing down", () {
+    final notices = _Recording();
+    final announcer = SwarmAnnouncer(notices, quiet: (_) => false);
+    announcer.announce(decision());
+    announcer.swarmRead('tab-other', const []);
+    announcer.swarmRead('tab-other', const []);
+    expect(notices.cancelled, isEmpty);
+  });
+
+  test('a Swarm that can no longer be read takes its notices down at once', () {
+    final notices = _Recording();
+    final announcer = SwarmAnnouncer(notices, quiet: (_) => false);
+    announcer.announce(decision());
+    announcer.settle(const [], readable: {'tab-other'});
+    expect(notices.cancelled, [decision().key]);
   });
 
   test('a need never shown is never taken down', () {

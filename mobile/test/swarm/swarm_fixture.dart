@@ -7,6 +7,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:harness_mobile/swarm/swarm_home_cache.dart';
+import 'package:harness_mobile/swarm/swarm_outbox.dart' show superTabMessageId;
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_outgoing_files.dart';
 
@@ -15,6 +16,11 @@ import 'package:harness_mobile/swarm/swarm_outgoing_files.dart';
 
 const me = 'person-me';
 const tab = 'tab-1';
+
+/// The id the backend gives the message [me] sends in [tab] with receipt
+/// [operationId] (commands.ts `message.send`): never the receipt itself.
+String sentId(String operationId) =>
+    superTabMessageId(tabId: tab, accountId: me, operationId: operationId);
 const project = 'project-1';
 const leadChat = 'group-lead';
 

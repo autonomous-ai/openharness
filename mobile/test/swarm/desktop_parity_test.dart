@@ -71,6 +71,20 @@ void main() {
     },
   );
 
+  test('the phone names a sent message as the desktop does', () {
+    // The phone matches a post to its row by this id (swarm_outbox.dart); a
+    // drift shows a second copy that never leaves (Dee, 11-01).
+    final function = RegExp(
+      r'String superTabMessageId\(\{[\s\S]*?\.substring\(0, 24\);',
+    );
+    String of(String path) =>
+        function.firstMatch(File(path).readAsStringSync())!.group(0)!;
+    expect(
+      of('lib/swarm/swarm_outbox.dart'),
+      of('../desktop/lib/super_tabs/controller.dart'),
+    );
+  });
+
   for (final MapEntry(key: phone, value: desktop) in _copies.entries) {
     test("$phone matches the desktop's $desktop", () {
       final source = File('../desktop/$desktop');

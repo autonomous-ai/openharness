@@ -16,8 +16,11 @@ import 'swarm_choices.dart';
 import 'swarm_conversation.dart';
 import 'swarm_conversation_page.dart';
 import 'swarm_message_row.dart';
+import 'swarm_outbox.dart';
+import 'swarm_paste.dart';
 import 'swarm_session.dart';
 import 'swarm_thread.dart';
+import 'swarm_voice.dart';
 
 /// Draws one of a thread's messages as its chat draws them; a tap on it
 /// opens or closes its actions ([acting]).
@@ -30,7 +33,10 @@ typedef SwarmThreadRow = Widget Function(
 });
 
 /// Draws the person's reply on its way: "Sending…", then "Not sent · Retry"
-typedef SwarmThreadPending = Widget Function(SwarmThread thread, String text);
+typedef SwarmThreadPending = Widget Function(
+  SwarmThread thread,
+  SwarmPost post,
+);
 
 /// One thread of a chat, full screen as Slack Mobile opens one: its root at
 /// the top, "N replies", its replies, and a reply box at the foot with Also
@@ -79,6 +85,29 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
   /// The message whose actions are open (Copy), by a tap on it.
   String? _acting;
 
+  /// The row of [_acting], to bring its actions into view.
+  final _actingKey = GlobalKey();
+
+  /// Opens [id]'s actions, or closes them on a second tap. Opened under the
+  /// last reply of a thread read to its foot they would be drawn under the
+  /// box, so the row is scrolled just enough to show them (the chat, newest
+  /// at its foot, grows upward and never hides them).
+  void _toggleActions(String id) {
+    setState(() => _acting = _acting == id ? null : id);
+    if (_acting == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final row = _actingKey.currentContext;
+      if (!mounted || _acting != id || row == null) return;
+      unawaited(
+        Scrollable.ensureVisible(
+          row,
+          alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+          duration: const Duration(milliseconds: 150),
+        ),
+      );
+    });
+  }
+
   /// What the last pick left out, or why it could not pick, under the box.
   final _attachNote = ValueNotifier<String?>(null);
   bool _picking = false;
@@ -86,14 +115,31 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
   SwarmSession? _session;
   bool _watching = false;
 
+  /// Not covered by a screen pushed over this one.
+  bool _visible = true;
+
+  /// The reply box's mic, while the shell can hear one ([SwarmScope.voiceOf]):
+  /// the main chat's, a take sent as a reply.
+  SwarmVoice? _voice;
+
   @override
   void initState() {
     super.initState();
     _text.addListener(_typed);
     _thread.composer.addListener(_drafted);
     _thread.addListener(_seen);
+    _thread.addListener(_guardVoice);
     unawaited(_thread.load());
   }
+
+  /// A thread the person can no longer reply in hears nothing: a take under
+  /// way goes, nothing of it written or sent.
+  void _guardVoice() {
+    if (!_mayReply) _voice?.hide();
+  }
+
+  /// The person may still reply here.
+  bool get _mayReply => _thread.state != SwarmChatState.lost && _thread.canPost;
 
   /// While on screen, what the thread shows is read ([SwarmThread.markRead]).
   void _seen() {
@@ -105,7 +151,25 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
     super.didChangeDependencies();
     final session = SwarmScope.of(context);
     // Off while a screen pushed over this one covers it.
-    final watch = session != null && TickerMode.valuesOf(context).enabled;
+    _visible = TickerMode.valuesOf(context).enabled;
+    final watch = session != null && _visible;
+    if (_voice == null) {
+      if (SwarmScope.voiceOf(context) case final create?) {
+        _voice = SwarmVoice(
+          create: create,
+          dictation: SwarmScope.dictationOf(context),
+          draft: () => _thread.draft,
+          write: (text) {
+            if (_mayReply) _thread.draft = text;
+          },
+          send: _spoken,
+        );
+      }
+    }
+    // A covered thread hears nothing, nor one signed out of: its take goes
+    // with it. Another account loses the thread's read ([_guardVoice]).
+    if (!watch) _voice?.hide();
+    _guardVoice();
     if (session != _session || watch != _watching) {
       if (_watching) _session?.unwatch(widget.swarmId);
       _session = session;
@@ -120,6 +184,8 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
     if (_watching) _session?.unwatch(widget.swarmId);
     _thread.composer.removeListener(_drafted);
     _thread.removeListener(_seen);
+    _thread.removeListener(_guardVoice);
+    _voice?.dispose();
     _thread.dispose();
     _attachNote.dispose();
     _farBack.dispose();
@@ -145,6 +211,17 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
     );
   }
 
+  /// The second tap on the mic ended a take: what is in the box goes as a
+  /// reply, as Send would send it, to the chat too with Also send. Nothing
+  /// when the box is empty, the thread is covered or no longer the person's
+  /// to reply in, or a reply or files are already on their way.
+  void _spoken() {
+    final t = _thread;
+    if (!mounted || !_visible || !_mayReply) return;
+    if (t.draft.trim().isEmpty || !t.canSend) return;
+    unawaited(_send());
+  }
+
   /// The box's + ([attachSwarmFiles]), its files into the thread's.
   Future<void> _pickFiles() async {
     if (_picking) return;
@@ -162,6 +239,17 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
       _picking = false;
     }
   }
+
+  /// A picture pasted into the box ([pasteSwarmImage]), into the thread's
+  /// files, as the + puts a photo there.
+  Future<void> _pasteImage(SwarmPastedImage image) => pasteSwarmImage(
+    _thread.files,
+    image,
+    // Nothing goes into a thread the person can no longer reply in.
+    stillWanted: () =>
+        mounted && _thread.state != SwarmChatState.lost && _thread.canPost,
+    note: (note) => _attachNote.value = note,
+  );
 
   /// Whether the foot is more than a screen below ([_farBack]), on every
   /// scroll and whenever the thread's length changes.
@@ -248,7 +336,7 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
               ),
             ),
             ListenableBuilder(
-              listenable: Listenable.merge([_thread, _thread.composer]),
+              listenable: Listenable.merge([_thread, _thread.composer, _voice]),
               builder: (context, _) => _foot(tty),
             ),
           ],
@@ -331,14 +419,20 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
     }
     final replies = t.replies;
     final count = t.count;
-    final pending = t.pending;
-    Widget row(SuperTabMessage m, {required bool grouped}) => widget.row(
-      t,
-      m,
-      grouped: grouped,
-      acting: _acting == m.id,
-      onTap: () => setState(() => _acting = _acting == m.id ? null : m.id),
-    );
+    final pending = t.outgoing;
+    Widget row(SuperTabMessage m, {required bool grouped}) {
+      final built = widget.row(
+        t,
+        m,
+        grouped: grouped,
+        acting: _acting == m.id,
+        onTap: () => _toggleActions(m.id),
+      );
+      return _acting == m.id
+          ? KeyedSubtree(key: _actingKey, child: built)
+          : built;
+    }
+
     return ListView(
       key: const ValueKey('swarm-thread-messages'),
       controller: _scroll,
@@ -406,7 +500,7 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
                 replies[index - 1].authorId == reply.authorId &&
                 replies[index - 1].fromAgent == reply.fromAgent,
           ),
-        if (pending != null) widget.pending(t, pending),
+        for (final post in pending) widget.pending(t, post),
       ],
     );
   }
@@ -423,7 +517,7 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
         // The first read's failure is said in the body, with Try again.
         if (error != null &&
             error != t.readError &&
-            (t.rootMessage != null || t.pending != null))
+            (t.rootMessage != null || t.outgoing.isNotEmpty))
           Padding(
             padding: const EdgeInsets.fromLTRB(
               AppSpace.screenInset,
@@ -455,12 +549,11 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
   }
 
   /// The reply box: the files going with the reply, a field that grows with
-  /// what is typed, then Also send, the + and a round Send (the desktop's
-  /// thread composer).
+  /// what is typed, then Also send, the +, the mic and a round Send (the
+  /// desktop's thread composer, with the main chat's mic).
   Widget _box(SwarmThread t, Tty tty) {
+    // A reply on its way never holds the box: the next is typed meanwhile.
     final canSend = t.canSend;
-    // A reply not confirmed is sent again from where it shows.
-    final writable = !t.sending && t.pending == null;
     final canAttach = !t.uploading && t.files.room > 0;
     return Container(
       key: const ValueKey('swarm-thread-box'),
@@ -495,12 +588,47 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
                     ),
                   ),
           ),
+          if (_voice?.notice case final notice?)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpace.xs,
+                0,
+                AppSpace.xs,
+                AppSpace.s,
+              ),
+              child: Text(
+                notice,
+                key: const ValueKey('swarm-thread-voice-note'),
+                style: AppType.caption(color: tty.yellow),
+              ),
+            ),
+          // Quiet: nothing went wrong, the words stay in the box.
+          if (_voice?.stopped case final stopped?)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpace.xs,
+                0,
+                AppSpace.xs,
+                AppSpace.s,
+              ),
+              child: Text(
+                stopped,
+                key: const ValueKey('swarm-thread-voice-stopped'),
+                style: AppType.caption(color: AppPalette.textSecondary),
+              ),
+            ),
           SwarmOutgoingChips(box: t),
           SwarmMessageField(
             controller: _text,
             focus: _focus,
             hint: 'Reply',
             fieldKey: const ValueKey('swarm-thread-field'),
+            imagePaste: swarmSendsFiles
+                ? SwarmImagePaste(
+                    enabled: canAttach,
+                    onImage: (image) => unawaited(_pasteImage(image)),
+                  )
+                : null,
           ),
           Row(
             children: [
@@ -508,7 +636,7 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
                 child: _AlsoSend(
                   label: t.alsoSendLabel,
                   value: t.alsoSend,
-                  onChanged: writable ? (on) => t.alsoSend = on : null,
+                  onChanged: (on) => t.alsoSend = on,
                 ),
               ),
               if (swarmSendsFiles)
@@ -516,6 +644,8 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
                   key: const ValueKey('swarm-thread-attach'),
                   onTap: canAttach ? () => unawaited(_pickFiles()) : null,
                 ),
+              // The main chat's mic, beside Send as there.
+              if (_voice case final voice?) SwarmVoiceMic(voice: voice),
               SwarmRoundButton(
                 key: const ValueKey('swarm-thread-send'),
                 label: 'Send reply',
