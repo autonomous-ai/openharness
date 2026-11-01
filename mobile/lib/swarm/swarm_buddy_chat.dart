@@ -21,7 +21,8 @@ import 'swarm_reader.dart';
 import 'swarm_request.dart';
 import 'swarm_row.dart';
 import 'swarm_session.dart' show SwarmScope;
-import 'swarm_start.dart' show SwarmComputers, SwarmOwnComputer;
+import 'swarm_start.dart' show SwarmOwnComputer;
+import 'swarm_terminal_row.dart';
 import 'swarm_style.dart';
 
 /// Opens the person's Buddy chat in [projectId] over [context]'s page, on the
@@ -437,35 +438,10 @@ class _Field extends StatelessWidget {
   static const _labelWidth = AppSpace.xl * 3;
 }
 
-/// Why this phone cannot open the terminal of the person's Buddy [buddy]
-/// now, in the word its Open terminal row says; null when it can (Tony,
-/// 11-01). Team's rule: the Buddy's machine linked to this phone and not
-/// reported offline ([canOpen], `PhoneShellScope.canOpenMachine`).
-/// "Stopped" with no Buddy running or one being stopped; "Not linked" for a
-/// machine this phone does not have among the person's own [own] and cannot
-/// open (not linked here, or a Harness Team account's); "Offline" for one it
-/// has but that is reported offline, or a Buddy the Swarm says is down.
-String? swarmBuddyTerminalBlock(
-  SuperTabAgent? buddy, {
-  required bool Function(String machineId)? canOpen,
-  required List<SwarmOwnComputer> own,
-}) {
-  if (buddy == null ||
-      buddy.workDecision == 'stop' ||
-      buddy.harnessId.isEmpty ||
-      buddy.machineId.isEmpty) {
-    return 'Stopped';
-  }
-  final opens = canOpen?.call(buddy.machineId) == true;
-  if (!opens && !own.any((m) => m.id == buddy.machineId)) return 'Not linked';
-  if (!opens || buddy.downSince != null) return 'Offline';
-  return null;
-}
-
 /// At the end of the person's own Buddy chat's header, while they may
 /// write: ⋮, with Open terminal first (Tony, 11-01: the Buddy's terminal on
 /// this phone, as Team's agent rows open theirs; dimmed with why while it
-/// cannot be, [swarmBuddyTerminalBlock]), Rename Buddy, and Remove Buddy
+/// cannot be, [swarmTerminalAction]), Rename Buddy, and Remove Buddy
 /// while one runs, which asks first, then stops it; the chat stays (the
 /// desktop's Buddy options); and the chat's Notifications, as its menu on
 /// the desktop has. Nothing in anyone else's Buddy chat.
@@ -484,8 +460,9 @@ class SwarmBuddyMenuButton extends StatelessWidget {
 
   /// The sheet, with the chat's Notifications under the Buddy's own rows
   /// ([swarmNotifySection]). It goes once the chat is no longer the
-  /// person's own Buddy chat to read (access lost, or signed out), or the
-  /// Buddy it opened on is no longer theirs there (removed). Its Open
+  /// person's own Buddy chat to read (access lost, or signed out), they may
+  /// no longer write there (a viewer now), or the Buddy it opened on is no
+  /// longer theirs there (removed or being stopped). Its Open
   /// terminal row follows the Swarm and the phone's computers while open.
   Future<void> _open(BuildContext context, String chatId) async {
     final reader = actions.reader;
@@ -506,6 +483,7 @@ class SwarmBuddyMenuButton extends StatelessWidget {
       if (route == null ||
           (!reader.accessRevoked &&
               swarmIsOwnBuddyChat(reader, chatId) &&
+              swarmCanWrite(reader) &&
               now == buddyId)) {
         return;
       }
@@ -524,15 +502,16 @@ class SwarmBuddyMenuButton extends StatelessWidget {
         rebuildOn: Listenable.merge([reader, ?computers]),
         rows: () {
           final buddy = swarmBuddy(reader, actions.projectId);
-          final block = _terminalBlock(reader, computers, shell);
           return (
             actions: [
-              PhoneSheetAction(
-                icon: LucideIcons.squareTerminal,
-                label: 'Open terminal',
-                value: block,
-                enabled: block == null,
-                onTap: () => _openTerminal(chatId, buddy?.id, computers, shell),
+              swarmTerminalAction(
+                agent: () => swarmBuddy(reader, actions.projectId),
+                allowed: () =>
+                    !reader.accessRevoked &&
+                    swarmIsOwnBuddyChat(reader, chatId) &&
+                    swarmCanWrite(reader),
+                shell: shell,
+                computers: computers,
               ),
               PhoneSheetAction(
                 icon: LucideIcons.pencil,
@@ -554,39 +533,6 @@ class SwarmBuddyMenuButton extends StatelessWidget {
     } finally {
       reader.removeListener(moved);
     }
-  }
-
-  String? _terminalBlock(
-    SwarmReader reader,
-    SwarmComputers? computers,
-    PhoneShellScope? shell,
-  ) => swarmBuddyTerminalBlock(
-    swarmBuddy(reader, actions.projectId),
-    canOpen: shell?.canOpenMachine,
-    own: computers?.own ?? const [],
-  );
-
-  /// Opens the Buddy's terminal on this phone, checked again at the tap:
-  /// the chat still the person's own, the Buddy still the one the sheet
-  /// showed, and its machine still one the phone can open.
-  void _openTerminal(
-    String chatId,
-    String? buddyId,
-    SwarmComputers? computers,
-    PhoneShellScope? shell,
-  ) {
-    final reader = actions.reader;
-    final buddy = swarmBuddy(reader, actions.projectId);
-    if (shell == null ||
-        buddy == null ||
-        buddy.id != buddyId ||
-        reader.accessRevoked ||
-        !swarmIsOwnBuddyChat(reader, chatId) ||
-        !swarmCanWrite(reader) ||
-        _terminalBlock(reader, computers, shell) != null) {
-      return;
-    }
-    shell.onOpenAgent(buddy.machineId, buddy.harnessId);
   }
 
   Future<void> _rename(BuildContext context, String chatId) async {
