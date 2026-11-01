@@ -186,12 +186,13 @@ class SwarmOutgoingChips extends StatelessWidget {
   Widget build(BuildContext context) {
     final files = box.files.files;
     if (files.isEmpty) return const SizedBox.shrink();
+    // Inside the composer's card, which spaces it ([SwarmComposerCard]).
     return SizedBox(
-      height: _chipHeight + AppSpace.s,
+      height: _chipHeight,
       child: ListView.separated(
         key: const ValueKey('swarm-outgoing'),
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.only(bottom: AppSpace.s),
+        padding: EdgeInsets.zero,
         itemCount: files.length,
         separatorBuilder: (_, _) => const SizedBox(width: AppSpace.s),
         itemBuilder: (context, i) => _Chip(
