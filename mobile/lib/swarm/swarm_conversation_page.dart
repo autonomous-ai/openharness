@@ -25,6 +25,7 @@ import 'swarm_post_line.dart';
 import 'swarm_attach.dart';
 import 'swarm_buddy.dart';
 import 'swarm_buddy_chat.dart';
+import 'swarm_chat_menu.dart';
 import 'swarm_file_links.dart';
 import 'swarm_choices.dart';
 import 'swarm_conversation.dart';
@@ -1215,13 +1216,15 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                 ? view.title
                 : null,
             project: view.project,
-            // The person's own Buddy chat: Rename Buddy, Remove Buddy.
+            // The person's own Buddy chat: its Notifications, Rename Buddy,
+            // Remove Buddy. Any other chat: its Notifications (the desktop's
+            // chat menu).
             action: switch (_buddy) {
               final buddy? => SwarmBuddyMenuButton(
                 actions: buddy,
                 chatId: widget.conversationId,
               ),
-              null => null,
+              null => SwarmChatMenuButton(reader: c.reader, chatId: c.id),
             },
           ),
         ),
