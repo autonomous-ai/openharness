@@ -3,12 +3,17 @@ import 'dart:async';
 import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/phone/phone_shell_scope.dart';
+import 'package:harness_mobile/settings/experimental_features.dart';
+import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_conversation.dart';
 import 'package:harness_mobile/swarm/swarm_message_receipt.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
+import 'package:harness_mobile/swarm/swarm_session.dart';
 
+import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 
 /// "Couldn't confirm delivery" under the person's newest message, and its
@@ -579,6 +584,83 @@ void main() {
         reason: 'not read since it was kept',
       );
       expect(resolves(r.swarm), isEmpty);
+    });
+  });
+
+  group('in the chat', () {
+    testWidgets('Send again from the chat page goes, and the line goes with '
+        'what is read back', (tester) async {
+      var settled = false;
+      Map<String, dynamic> now() =>
+          own(status: settled ? 'superseded' : 'uncertain');
+      final fake = rig(
+        read: () => {
+          'messages': [now()],
+        },
+        command: (_) {
+          settled = true;
+          return {'result': {}};
+        },
+      ).swarm;
+      fake.routes[messages] = (_) => {
+        'messages': [now()],
+        'next': null,
+      };
+      fake.routes['/api/super-tabs/list'] = (_) => {
+        'tabs': [
+          {'id': tab, 'name': 'OpenHarness', 'ownerId': me},
+        ],
+        'next': null,
+      };
+      fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
+        'decisions': <Object>[],
+      };
+      fake.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
+        'mentions': <Object>[],
+      };
+      final host = SwarmHost(
+        accountId: () => me,
+        account: ValueNotifier<String?>(me),
+        request: fake.request,
+        notices: SilentSystemNotices(),
+        features: ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
+          ..value = {PhoneExperiment.swarm},
+        readMarks: MemoryKeyValueStore(),
+      )..foreground = false;
+      final opened = <(String, String)>[];
+      await tester.pumpWidget(
+        MaterialApp(
+          builder: (_, child) => PhoneShellScope(
+            onMachineLinked: (_) {},
+            onOpenAgent: (machineId, agentId) =>
+                opened.add((machineId, agentId)),
+            canOpenMachine: (machineId) => machineId == 'mac-1',
+            child: SwarmScope(notifier: host, child: child!),
+          ),
+          home: const SwarmConversationPage(swarmId: tab, conversationId: 'g1'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await host.session!.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
+      expect(find.text("Couldn't confirm delivery"), findsOneWidget);
+
+      await tester.tap(find.text('Open terminal'));
+      expect(opened, [('mac-1', 'harness-agent-lead')]);
+
+      await tester.tap(find.text('Send again'));
+      await tester.pumpAndSettle();
+      expect(resolves(fake).single['command'], {
+        'type': 'delivery.resolve',
+        'deliveryId': 'd1',
+        'resolution': 'resend',
+      });
+      expect(find.text("Couldn't confirm delivery"), findsNothing);
+      expect(find.byKey(const ValueKey('swarm-post-error')), findsNothing);
+
+      await tester.pumpWidget(const SizedBox());
+      host.dispose();
+      await tester.pump(const Duration(minutes: 1));
     });
   });
 }
