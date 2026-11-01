@@ -92,6 +92,31 @@ export function restartQuietTime(assignment: Assignment, now: number): void {
   assignment.leaseUntil = Math.max(assignment.leaseUntil ?? 0, now + QUIET_RUNNING_MS)
 }
 
+/** The build a linked task (reviewOf) reviews, while that build is active work of the same project and not archived. Only
+ *  a loaded build counts: an active one is always loaded, by a machine's report (parts/load.ts loadObserved reads running
+ *  groups) as by the Lead's poll. A cancelled, finished, lost, archived or asleep build reviews nothing. */
+function reviewedBuild(state: SuperTabState, group: Conversation): Conversation | undefined {
+  if (!group.reviewOf) return undefined
+  const build = state.conversations.find(c => c.id === group.reviewOf)
+  return build && !build.archived && activeWork(build) && (build.projectId ?? 'lead') === (group.projectId ?? 'lead') ? build : undefined
+}
+
+/** A linked task whose build is back with its Engineer waits for the new revision, so its quiet time does not count
+ *  (Diego, 2026-11-01: a Reviewer checks and posts in the build's group, which never renewed its own linked task, so after a
+ *  normal fix round of ~31 minutes it was lost, its Lead woken and its verdict refused). */
+export function waitingForRevision(state: SuperTabState, group: Conversation): boolean {
+  const build = reviewedBuild(state, group)
+  return !!build && !waitingForReview(build.assignment!)
+}
+
+/** When a linked task's wait for a revision last ended: its build's last progress, while that build waits for review again.
+ *  The Reviewer keeps its task QUIET_RUNNING_MS from then, as an Engineer whose review found problems does (restartQuietTime),
+ *  without the build's command writing the linked task's group. */
+function revisionReadyAt(state: SuperTabState, group: Conversation): number | undefined {
+  const build = reviewedBuild(state, group)
+  return build && waitingForReview(build.assignment!) ? build.assignment!.progressAt : undefined
+}
+
 /** The active assignments held by workers, not by a Lead, and not already being reconciled after their agent left. */
 function workerTasks(state: SuperTabState): Array<{ group: Conversation; assignment: Assignment; worker: Agent }> {
   return state.conversations.filter(activeWork).flatMap(group => {
@@ -141,11 +166,20 @@ function limitReason(worker: Agent, now: number): string | null {
     ? `it hit a usage limit until ${worker.limitedUntil.slice(11, 16)} UTC` : null
 }
 
+/** When a worker's task is lost to time: its lease's end, and for a linked task never before QUIET_RUNNING_MS after its
+ *  build last came back for review. */
+function taskLeaseEnd(state: SuperTabState, group: Conversation, assignment: Assignment, worker: Agent): number | undefined {
+  const end = leaseEnd(group, assignment, reportRenewedAt(state, worker))
+  const ready = revisionReadyAt(state, group)
+  return ready === undefined ? end : Math.max(end ?? 0, ready + QUIET_RUNNING_MS)
+}
+
 /** The earliest time a task held by a worker on [machineId] may be lost to its lease running out, as lostReason reads it now,
  *  or undefined when none can. Reports that keep its session running with progress no older can only move it later. */
 export function nextLossAt(state: SuperTabState, machineId: string): number | undefined {
-  const ends = workerTasks(state).filter(({ worker, assignment }) => worker.machineId === machineId && !waitingForReview(assignment))
-    .map(({ group, assignment, worker }) => leaseEnd(group, assignment, reportRenewedAt(state, worker)))
+  const ends = workerTasks(state)
+    .filter(({ group, worker, assignment }) => worker.machineId === machineId && !waitingForReview(assignment) && !waitingForRevision(state, group))
+    .map(({ group, assignment, worker }) => taskLeaseEnd(state, group, assignment, worker))
     .filter((end): end is number => end !== undefined)
   return ends.length ? Math.min(...ends) : undefined
 }
@@ -160,8 +194,8 @@ function lostReason(state: SuperTabState, group: Conversation, worker: Agent, as
   // Its host alerts only after ten minutes of retries without an answer (cli superTabs/terminal.ts MODEL_WAIT_MS), so a
   // short burst of failures that recovers never gets here.
   if (worker.alerting?.includes('model')) return 'its model keeps failing'
-  if (waitingForReview(assignment)) return null
-  const end = leaseEnd(group, assignment, reportRenewedAt(state, worker))
+  if (waitingForReview(assignment) || waitingForRevision(state, group)) return null
+  const end = taskLeaseEnd(state, group, assignment, worker)
   if (end !== undefined && now > end) {
     const progress = lastProgress(state, worker, assignment)
     return progress === undefined ? 'no progress seen' : `no progress for ${plural(Math.floor((now - progress) / 60_000), 'minute')}`
@@ -318,10 +352,10 @@ export function taskLiveness(state: SuperTabState, group: Conversation, now: num
     }
     if (assignment.status === 'review') return reviewWait(state, group, progress, now)
     if (assignment.status === 'blocked') return { state: 'waiting', why: 'blocked', since: progress }
-    // A review whose build is back with its Engineer waits for the new revision.
-    const build = group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : undefined
-    if (build && activeWork(build) && build.assignment!.status !== 'review') return { state: 'waiting', why: 'revision', since: progress }
-    return now - progress >= TASK_QUIET_MS ? { state: 'quiet', why: 'silent', since: progress } : null
+    // A review whose build is back with its Engineer waits for the new revision; once it is ready, its quiet time runs from then.
+    if (waitingForRevision(state, group)) return { state: 'waiting', why: 'revision', since: progress }
+    const since = Math.max(progress, revisionReadyAt(state, group) ?? 0)
+    return now - since >= TASK_QUIET_MS ? { state: 'quiet', why: 'silent', since } : null
   }
   // Only unfinished starts are loaded, with those that ended in this same write.
   const start = state.starts?.findLast(s => s.request.conversationId === group.id && !s.request.buddyOf)
