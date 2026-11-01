@@ -284,8 +284,10 @@ void main() {
     await settle();
     first.marks.markRead(work, 4);
     await settle();
+    // The project chat's mark is the first read's alone; the work's was read.
     expect(jsonDecode(first.store.values[key]!), {
       'marks': {work: 4, leadChat: 2},
+      'firstRead': {leadChat: 2},
     });
 
     // Started again later, after a message came.

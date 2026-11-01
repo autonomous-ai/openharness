@@ -146,7 +146,8 @@ void main() {
       });
     });
 
-    test('stops once the delivery is claimed, and the row takes the claim', () {
+    test('reads on while claimed, since it may come back unconfirmed; stops '
+        'once delivered', () {
       return withClock(moved, () async {
         final queued = own('m1', 1, at: now, deliveries: [delivery()]);
         var status = 'queued';
@@ -171,9 +172,78 @@ void main() {
         expect(reads(r.swarm), 2);
         expect(c.latestOwn!.receiptDelivery!.status, 'claimed');
 
+        status = 'delivered';
+        now = now.add(const Duration(seconds: 30));
+        await tick(r);
+        expect(reads(r.swarm), 3, reason: 'claimed: still asked');
+        expect(c.latestOwn!.receiptDelivery!.status, 'delivered');
+
         now = now.add(const Duration(minutes: 5));
         await tick(r);
-        expect(reads(r.swarm), 2, reason: 'claimed: nothing more to ask');
+        expect(reads(r.swarm), 3, reason: 'delivered: nothing more to ask');
+      });
+    });
+
+    test('a claim read past 10 minutes, as a busy terminal holds it for up '
+        'to an hour: one that turns unconfirmed then shows', () {
+      return withClock(moved, () async {
+        final sent = own('m1', 1, at: now, deliveries: [delivery()]);
+        var status = 'claimed';
+        final r = rig(
+          page: [sent],
+          answer: (_) => {
+            'messages': [
+              {
+                ...sent,
+                'deliveries': [delivery(status: status)],
+              },
+            ],
+          },
+        );
+        final c = await open(r.reader);
+        await tick(r);
+        expect(c.latestOwn!.receiptDelivery!.status, 'claimed');
+        // 25 minutes on screen, still held.
+        for (var i = 0; i < 50; i++) {
+          now = now.add(const Duration(seconds: 30));
+          await tick(r);
+        }
+        expect(reads(r.swarm), 51, reason: 'past 10 minutes: still asked');
+
+        status = 'uncertain';
+        now = now.add(const Duration(seconds: 30));
+        await tick(r);
+        expect(c.latestOwn!.receiptDelivery!.status, 'uncertain');
+        expect(c.receiptCurrent(c.latestOwn!), isTrue);
+      });
+    });
+
+    test('a claim is read for an hour on screen, then no more', () {
+      return withClock(moved, () async {
+        final sent = own('m1', 1, at: now, deliveries: [delivery()]);
+        final r = rig(
+          page: [sent],
+          answer: (_) => {
+            'messages': [
+              {
+                ...sent,
+                'deliveries': [delivery(status: 'claimed')],
+              },
+            ],
+          },
+        );
+        await open(r.reader);
+        await tick(r);
+        for (var i = 0; i < 119; i++) {
+          now = now.add(const Duration(seconds: 30));
+          await tick(r);
+        }
+        expect(reads(r.swarm), 120);
+        for (var i = 0; i < 10; i++) {
+          now = now.add(const Duration(seconds: 30));
+          await tick(r);
+        }
+        expect(reads(r.swarm), 120, reason: 'past the hour');
       });
     });
 
@@ -232,7 +302,7 @@ void main() {
       });
     });
 
-    test('asks only for the person\'s own newest, and only while queued', () {
+    test('asks only for the person\'s own newest, and only while open', () {
       return withClock(moved, () async {
         final r = rig(
           page: [

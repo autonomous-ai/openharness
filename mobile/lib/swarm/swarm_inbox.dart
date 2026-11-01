@@ -12,6 +12,7 @@ import 'swarm_home_keeper.dart';
 import 'swarm_read_marks.dart';
 import 'swarm_reader.dart';
 import 'swarm_request.dart';
+import 'swarm_threads.dart';
 import 'waiting_work.dart';
 
 /// One of the account's Swarms, as the list names it.
@@ -255,8 +256,17 @@ class SwarmInbox extends ChangeNotifier {
   /// phone notice tells.
   void Function(SwarmNeed need)? onArrived;
 
+  /// Swarm [swarmId] was read, and [needs] already hold what that read
+  /// found: what takes a notice down once its need stays gone.
+  void Function(String swarmId)? onSwarmRead;
+
+  /// Swarms read during a read of the list, told once [needs] are worked
+  /// out at its end.
+  final _readDuringList = <String>{};
+
   final _readers = <String, SwarmReader>{};
   final _asks = <String, SwarmAsks>{};
+  final _threads = <String, SwarmThreads>{};
 
   /// Each Swarm's waiting work as last seen: null until its first read, whose
   /// waiting work is not news.
@@ -282,6 +292,15 @@ class SwarmInbox extends ChangeNotifier {
 
   /// [id]'s decisions and tags, while it is listed.
   SwarmAsks? asks(String id) => _asks[id];
+
+  /// [id]'s followed threads, while it is listed: made when first asked for,
+  /// and read only while something shows it ([SwarmThreads]).
+  SwarmThreads? threads(String id) {
+    if (_disposed) return null;
+    final reader = _readers[id];
+    if (reader == null) return null;
+    return _threads[id] ??= SwarmThreads(reader, asks: _asks[id]);
+  }
 
   bool get shown => _shown;
 
@@ -399,6 +418,25 @@ class SwarmInbox extends ChangeNotifier {
       _polling = false;
     }
     _rebuild(told: _face != before);
+    final read = _readDuringList.toList();
+    _readDuringList.clear();
+    for (final id in read) {
+      if (_disposed) return;
+      if (_readers.containsKey(id)) onSwarmRead?.call(id);
+    }
+  }
+
+  /// [reader] answered a read: told after the reader's own notify, which
+  /// works out [needs] again, or at the end of the list read under way.
+  void _readerRead(String id, SwarmReader reader) {
+    scheduleMicrotask(() {
+      if (_disposed || !identical(_readers[id], reader)) return;
+      if (_polling) {
+        _readDuringList.add(id);
+      } else {
+        onSwarmRead?.call(id);
+      }
+    });
   }
 
   /// The next quick read while no computer can be asked ([_away]).
@@ -481,6 +519,7 @@ class SwarmInbox extends ChangeNotifier {
       request: request,
       upload: upload,
     )..addListener(_relay);
+    reader.reads.addListener(() => _readerRead(id, reader));
     reader.readMarks = SwarmReadMarks(reader, store: readMarks)
       ..addListener(_relay);
     _asks[id] = SwarmAsks(reader)
@@ -497,6 +536,7 @@ class SwarmInbox extends ChangeNotifier {
   /// still holds of it is taken back ([SwarmReader.revoke]) before it is
   /// dropped.
   void _drop(String id, {bool lost = true}) {
+    final threads = _threads.remove(id);
     _asks.remove(id)?.dispose();
     final reader = _readers.remove(id)?..removeListener(_relay);
     if (reader != null) {
@@ -505,6 +545,7 @@ class SwarmInbox extends ChangeNotifier {
       // the inbox closing keeps them, written now, for the next one.
       if (!lost) marks?.dispose();
       reader.revoke();
+      threads?.dispose();
       if (lost) marks?.dispose();
       reader.dispose();
     }

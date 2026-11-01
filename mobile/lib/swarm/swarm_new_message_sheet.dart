@@ -28,6 +28,7 @@ import 'swarm_conversation_page.dart'
         attachSwarmFiles;
 import 'swarm_inbox.dart';
 import 'swarm_outgoing_files.dart';
+import 'swarm_paste.dart';
 import 'swarm_reader.dart';
 import 'swarm_row.dart';
 import 'swarm_session.dart';
@@ -444,6 +445,17 @@ class _SwarmNewMessageSheetState extends State<SwarmNewMessageSheet>
     }
   }
 
+  /// A picture pasted into the box ([pasteSwarmImage]), into [files], as
+  /// the + puts a photo there.
+  Future<void> _pasteImage(SwarmPastedImage image) => pasteSwarmImage(
+    files,
+    image,
+    stillWanted: () => mounted && !_closing && !_locked,
+    note: (note) {
+      if (mounted && !_closing) setState(() => _note = note);
+    },
+  );
+
   /// Posts the text and the files to the chat picked, through that chat's
   /// own send; or, while its post is not confirmed, sends that one again.
   /// Taken, the person has read that chat through it, as posting in the chat
@@ -743,6 +755,12 @@ class _SwarmNewMessageSheetState extends State<SwarmNewMessageSheet>
                         ? 'Write a message…'
                         : 'Message ${picked.title}',
                     fieldKey: const ValueKey('swarm-new-message-field'),
+                    imagePaste: swarmSendsFiles
+                        ? SwarmImagePaste(
+                            enabled: !locked && files.room > 0,
+                            onImage: (image) => unawaited(_pasteImage(image)),
+                          )
+                        : null,
                   ),
                 ),
               ),

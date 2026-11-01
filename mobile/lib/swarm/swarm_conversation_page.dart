@@ -20,6 +20,7 @@ import 'identity.dart';
 import 'model.dart';
 import 'prompt_alerts.dart';
 import 'swarm_code_block.dart';
+import 'swarm_outbox.dart';
 import 'swarm_post_line.dart';
 import 'swarm_attach.dart';
 import 'swarm_buddy.dart';
@@ -36,6 +37,7 @@ import 'swarm_message_link.dart';
 import 'swarm_message_receipt.dart';
 import 'swarm_message_row.dart';
 import 'swarm_need_rows.dart';
+import 'swarm_paste.dart';
 import 'swarm_profile_sheet.dart';
 import 'swarm_project_page.dart';
 import 'swarm_reactions.dart';
@@ -109,12 +111,18 @@ class SwarmConversationPage extends StatefulWidget {
     this.header = true,
     this.buddy,
     this.messageId,
+    this.threadId,
     this.mention,
     this.homeC = false,
   });
 
   final String swarmId, conversationId;
   final String? messageId;
+
+  /// A thread to open over the chat as it opens, when [messageId] is its
+  /// root: as Threads opens one on the desktop (`_openThreadFromList`), the
+  /// chat behind it at the root.
+  final String? threadId;
 
   /// An agent to @mention in the draft as the chat opens: the PM, as its
   /// private line is answered in the project chat.
@@ -699,6 +707,16 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     }
   }
 
+  /// A picture pasted into the composer ([pasteSwarmImage]), into [c]'s
+  /// files, as the + puts a photo there.
+  Future<void> _pasteImage(SwarmConversation c, SwarmPastedImage image) =>
+      pasteSwarmImage(
+        c.files,
+        image,
+        stillWanted: () => mounted && _conversation == c,
+        note: (note) => _attachNote.value = note,
+      );
+
   /// How far up the chat the person reads back, past which a message that
   /// arrives waits below instead of pushing up what they read.
   static const _readingBack = 48.0;
@@ -781,6 +799,15 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     }
   }
 
+  /// Sends [post], not confirmed, again from where it shows; taken, the
+  /// keyboard goes down as after Send.
+  Future<void> _retry(SwarmConversation c, SwarmPost post) async {
+    final sent = await c.retry(post);
+    if (sent && mounted && _conversation == c && c.draft.isEmpty) {
+      _focus.unfocus();
+    }
+  }
+
   void _reply(SwarmConversation c, SuperTabMessage message) {
     c.replyingTo = message;
     setState(() => _acting = null);
@@ -811,7 +838,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                         acting: acting,
                         onTap: onTap,
                       ),
-              pending: (t, text) => _threadPending(c, t, text),
+              pending: (t, post) => _threadPending(c, t, post),
             ),
           ),
           listensForItself: true,
@@ -870,25 +897,25 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     );
   }
 
-  /// The person's reply on its way in thread [t].
-  Widget _threadPending(SwarmConversation c, SwarmThread t, String text) {
+  /// The person's reply [post] on its way in thread [t].
+  Widget _threadPending(SwarmConversation c, SwarmThread t, SwarmPost post) {
     final mine = t.messages.reversed
         .where((m) => !m.fromAgent && m.authorId == c.reader.accountId)
         .firstOrNull;
     return KeyedSubtree(
-      key: const ValueKey('swarm-thread-pending'),
+      key: ValueKey('swarm-thread-pending-${post.operationId}'),
       child: _Pending(
+        key: const ValueKey('swarm-thread-pending'),
         name: mine == null ? 'You' : _nameOf(c, mine),
         look:
             c.reader.snapshot?.personLook(c.reader.accountId) ??
             (picture: null, status: null),
-        text: text,
-        files: t.pendingFiles,
+        text: post.text,
+        files: post.files,
         mentions: _view.value?.mentions ?? SwarmMentions(const []),
-        // Taken by the backend and not read back yet: still on its way.
-        sending: t.sending || t.confirmed,
+        state: post.state,
         quote: null,
-        onSendAgain: () => unawaited(t.send()),
+        onSendAgain: () => unawaited(t.retry(post)),
       ),
     );
   }
@@ -897,10 +924,18 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// a tag opens through on the desktop.
   static const _findPages = 50;
 
+  /// The thread the chat opens with, until its first jump
+  /// ([SwarmConversationPage.threadId]).
+  late String? _threadAt = widget.threadId;
+
   /// Brings [messageId] into view and lights it — read in from earlier pages
   /// when it is further back — or says why it cannot.
   Future<void> _jumpTo(SwarmConversation c, String messageId) async {
     if (_finding) return;
+    // Only the jump the chat opened with opens [SwarmConversationPage.threadId]:
+    // a quote of the root tapped later brings the root into view.
+    final thread = _threadAt;
+    _threadAt = null;
     final landing = _land();
     setState(() {
       _finding = true;
@@ -915,6 +950,13 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     final target = found
         ? c.messages.where((m) => m.id == messageId).firstOrNull
         : null;
+    // Threads opens the thread itself, its root read back or not, while the
+    // chat is still one the reader may read.
+    if (thread == messageId &&
+        !c.reader.accessRevoked &&
+        c.reader.snapshot?.conversation(c.id) != null) {
+      _openThread(c, messageId);
+    }
     if (target != null && target.threadReply) {
       _openThread(c, target.thread!);
       if (!target.inMainStream) {
@@ -1391,7 +1433,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   ) {
     final state = c.state;
     if (state == SwarmChatState.lost) return _said(c.error ?? _notOpen);
-    if (c.stream.isEmpty && c.pending == null) {
+    if (c.stream.isEmpty && c.outgoing.isEmpty) {
       if (state != SwarmChatState.loaded) {
         // A first read that failed: said under the chat once it is known,
         // here until then.
@@ -1459,14 +1501,15 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     }
     final entries = _shown;
     final byId = _byId;
-    final pending = c.pending;
+    // Newest at the foot: the list runs bottom up.
+    final pending = c.outgoing.reversed.toList();
     // A page shorter than the screen never scrolls: look once it is drawn.
     if (c.hasOlder && !_loadingOlder && !_olderFailed) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _nearTop();
       });
     }
-    final lead = pending == null ? 0 : 1;
+    final lead = pending.length;
     final latestOwn = c.latestOwn;
 
     Widget entry(_Entry entry) {
@@ -1504,7 +1547,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
           final acting = _acting == m.id;
           final reactions = c.reactionsOf(m);
           final receipt =
-              m.id == latestOwn?.id && m.receiptDelivery?.status == 'queued';
+              m.id == latestOwn?.id &&
+              const {'queued', 'uncertain'}.contains(m.receiptDelivery?.status);
           // A card's facts are its group's: only a reader of the group has
           // them, and a change to them draws the row again.
           final group = c.conversation;
@@ -1671,7 +1715,12 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       // places.
       findChildIndexCallback: (key) {
         if (key is! ValueKey<String>) return null;
-        if (key.value == _pendingKey) return lead == 1 ? 0 : null;
+        if (key.value.startsWith(_pendingKey)) {
+          final at = pending.indexWhere(
+            (p) => '$_pendingKey-${p.operationId}' == key.value,
+          );
+          return at < 0 ? null : at;
+        }
         if (key.value == _olderKey) {
           return c.hasOlder ? lead + entries.length : null;
         }
@@ -1680,27 +1729,28 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       },
       itemBuilder: (context, index) {
         if (index < lead) {
-          final reply = pending!.replyTo == null ? null : byId[pending.replyTo];
+          final post = pending[index];
+          final reply = post.replyTo == null ? null : byId[post.replyTo];
           final mine = c.messages.reversed
               .where((m) => !m.fromAgent && m.authorId == c.reader.accountId)
               .firstOrNull;
           return _Pending(
-            key: const ValueKey(_pendingKey),
+            key: ValueKey('$_pendingKey-${post.operationId}'),
             name: mine == null ? 'You' : _nameOf(c, mine),
             look:
                 c.reader.snapshot?.personLook(c.reader.accountId) ??
                 (picture: null, status: null),
-            text: pending.text,
-            files: pending.files,
+            text: post.text,
+            files: post.files,
             mentions: view.mentions,
-            sending: c.sending,
-            quote: pending.replyTo == null
+            state: post.state,
+            quote: post.replyTo == null
                 ? null
                 : SwarmQuote(
                     author: reply == null ? null : _quoted(c, reply),
                     text: reply?.text,
                   ),
-            onSendAgain: () => unawaited(_post(c)),
+            onSendAgain: () => unawaited(_retry(c, post)),
           );
         }
         if (index - lead < entries.length) {
@@ -1788,8 +1838,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     final snapshot = c.reader.snapshot;
     final query = c.mentionQuery;
     final replying = c.replyingTo;
-    // One post at a time: one not confirmed is sent again from where it shows.
-    // Files alone are a post too.
+    // A post on its way never holds the next back; one not confirmed is sent
+    // again from where it shows. Files alone are a post too.
     final canSend = c.canSend;
     return Container(
       decoration: BoxDecoration(
@@ -1938,6 +1988,12 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                   controller: _text,
                   focus: _focus,
                   hint: hint,
+                  imagePaste: swarmSendsFiles
+                      ? SwarmImagePaste(
+                          enabled: !c.uploading && c.files.room > 0,
+                          onImage: (image) => unawaited(_pasteImage(c, image)),
+                        )
+                      : null,
                 ),
               ),
               if (_voice case final voice?)
@@ -2570,7 +2626,8 @@ class _JumpPill extends StatelessWidget {
 }
 
 /// The person's post on its way, with [SwarmPostLine] under it: "Sending…",
-/// then — its answer lost — "Not sent · Retry", until it is read back.
+/// then — its answer lost — "Not sent · Retry", until it is read back. One the
+/// backend took shows as sent, with no line, until the read that brings it.
 class _Pending extends StatelessWidget {
   const _Pending({
     super.key,
@@ -2578,7 +2635,7 @@ class _Pending extends StatelessWidget {
     required this.text,
     required this.files,
     required this.mentions,
-    required this.sending,
+    required this.state,
     required this.quote,
     required this.onSendAgain,
     required this.look,
@@ -2593,12 +2650,13 @@ class _Pending extends StatelessWidget {
   /// The person's own face.
   final SwarmLook look;
   final SwarmMentions mentions;
-  final bool sending;
+  final SwarmPostState state;
   final Widget? quote;
   final VoidCallback onSendAgain;
 
   @override
   Widget build(BuildContext context) {
+    final sending = state == SwarmPostState.sending;
     return Padding(
       key: const ValueKey('swarm-pending'),
       padding: SwarmMessageFrame.padding(),
@@ -2644,10 +2702,11 @@ class _Pending extends StatelessWidget {
               }),
               link: null,
             ),
-          Padding(
-            padding: const EdgeInsets.only(top: AppSpace.xs),
-            child: SwarmPostLine(sending: sending, onRetry: onSendAgain),
-          ),
+          if (state != SwarmPostState.confirmed)
+            Padding(
+              padding: const EdgeInsets.only(top: AppSpace.xs),
+              child: SwarmPostLine(sending: sending, onRetry: onSendAgain),
+            ),
         ],
       ),
     );
@@ -2965,11 +3024,16 @@ class SwarmMessageField extends StatelessWidget {
     required this.focus,
     required this.hint,
     this.fieldKey = const ValueKey('swarm-field'),
+    this.imagePaste,
   });
 
   final TextEditingController controller;
   final FocusNode focus;
   final String hint;
+
+  /// Where a picture pasted into the field goes ([swarmFieldMenu]); none
+  /// takes text alone.
+  final SwarmImagePaste? imagePaste;
 
   /// The pill's key: the chat's and a thread's box are told apart by it.
   final Key fieldKey;
@@ -3016,6 +3080,16 @@ class SwarmMessageField extends StatelessWidget {
             enableSuggestions: ComposingKeyboard.enableSuggestions,
             smartDashesType: SmartDashesType.disabled,
             smartQuotesType: SmartQuotesType.disabled,
+            contextMenuBuilder: (context, field) =>
+                swarmFieldMenu(context, field, imagePaste),
+            contentInsertionConfiguration: switch (imagePaste) {
+              final paste? => ContentInsertionConfiguration(
+                allowedMimeTypes: swarmInsertedImageTypes,
+                onContentInserted: (content) =>
+                    paste.onImage(SwarmPastedImage.inserted(content)),
+              ),
+              null => null,
+            },
             cursorColor: AppPalette.accentOnSurface,
             cursorWidth: 2,
             style: swarmChatText(16, height: 22 / 16),

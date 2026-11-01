@@ -24,6 +24,7 @@ import 'package:harness_mobile/swarm/swarm_session.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
+import 'swarm_paste_fakes.dart';
 
 /// New message on Swarm Home (Tony, 10-30: as Slack Mobile starts one): the
 /// header's compose is gone, a round + floats at Home's bottom right, and it
@@ -764,6 +765,33 @@ void main() {
       expect(sent[1]['command']['text'], 'Did this go?');
       expect(posted['$tab/$webLead'], hasLength(1));
       expectHomeCProject('Web');
+    });
+
+    testWidgets('Paste attaches the clipboard\'s picture, which goes with '
+        'the message to the chat picked', (tester) async {
+      FakeSwarmClipboard(image: pngBytes()).install(tester);
+      final uploads = FakeUploads();
+      final fake = backend();
+      await pump(tester, fake, upload: uploads.upload);
+      await open(tester);
+      await tester.tap(row(webLead));
+      await tester.pumpAndSettle();
+
+      await openFieldMenu(tester, key('swarm-new-message-field'));
+      await tester.tap(
+        find.widgetWithText(TextSelectionToolbarTextButton, 'Paste'),
+      );
+      await tester.pumpAndSettle();
+      expect(key('swarm-outgoing-pasted-image.png'), findsOneWidget);
+
+      await tester.tap(key('swarm-new-message-send'));
+      await tester.pumpAndSettle();
+
+      expect(uploads.names, ['pasted-image.png']);
+      expect(uploads.asked.single.conversationId, webLead);
+      expect(sends(fake).single['command']['attachmentIds'], [
+        'id-pasted-image.png',
+      ]);
     });
 
     testWidgets('+ attaches files, which go up to the chat picked and with '
