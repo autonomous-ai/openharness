@@ -12,7 +12,6 @@ import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'model.dart';
 import 'swarm_conversation.dart';
 import 'swarm_message_row.dart' show swarmChatText;
-import 'swarm_style.dart';
 import 'swarm_thread_line.dart' show swarmAgo;
 
 /// How long a queued delivery's claims fail before its sender is told, and how
@@ -217,16 +216,12 @@ class _SwarmMessageReceiptState extends State<SwarmMessageReceipt>
     final free = c.canPost && resolving == null && delivery.id != null;
     Widget action(String label, String resolution, VoidCallback onPressed) {
       final busy = resolving == (delivery.id, resolution);
-      final enabled = free || busy;
-      return Opacity(
-        opacity: enabled ? 1 : .45,
-        child: SwarmButton(
-          key: ValueKey('swarm-receipt-$resolution'),
-          label: label,
-          style: SwarmButtonStyle.link,
-          busy: busy,
-          onPressed: free ? onPressed : null,
-        ),
+      return _ReceiptLink(
+        key: ValueKey('swarm-receipt-$resolution'),
+        label: label,
+        busy: busy,
+        dimmed: !free && !busy,
+        onPressed: free ? onPressed : null,
       );
     }
 
@@ -306,10 +301,74 @@ class _SwarmMessageReceiptState extends State<SwarmMessageReceipt>
           // first is pulled back to line up with it.
           if (actions.isNotEmpty)
             Transform.translate(
-              offset: const Offset(-AppSpace.m, 0),
+              offset: const Offset(-AppSpace.s, 0),
               child: Wrap(children: actions),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// One answer on the line: words in the accent, 44 points tall to tap, with
+/// little room to the side so the three share one line at 390 points.
+class _ReceiptLink extends StatelessWidget {
+  const _ReceiptLink({
+    super.key,
+    required this.label,
+    required this.busy,
+    required this.dimmed,
+    required this.onPressed,
+  });
+
+  final String label;
+  final bool busy, dimmed;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final ink = AppPalette.swarmAccent;
+    return Semantics(
+      button: true,
+      enabled: onPressed != null,
+      label: label,
+      excludeSemantics: true,
+      child: Opacity(
+        opacity: dimmed ? .45 : 1,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(AppControl.radius),
+          onTap: onPressed,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 44),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: AppSpace.s),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (busy) ...[
+                    SizedBox.square(
+                      dimension: 14,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: ink,
+                      ),
+                    ),
+                    const SizedBox(width: AppSpace.xs),
+                  ],
+                  Text(
+                    label,
+                    style: TextStyle(
+                      color: ink,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w500,
+                      height: 1.25,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
