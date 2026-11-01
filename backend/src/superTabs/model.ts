@@ -217,6 +217,9 @@ export interface Assignment {
   /** When someone else's verdict found problems in a working hand-off of the older built-in skills, which then stops waiting
    *  for its review (liveness.ts waitingForReview). Its next status clears it. */
   reviewFoundAt?: number
+  /** On a linked task (reviewOf): when its own Reviewer's verdict in the build asked for changes. Its quiet time does not count
+   *  until the build's next Ready clears it (liveness.ts waitingForRevision). */
+  changesRequestedAt?: number
   /** A two-review task's hand-overs and reviewers' verdicts, from the automatic reviews (#2382) before project instructions;
    *  never written since (phase 4: the server opens and counts no review), kept on older rows. */
   handoffs?: number
