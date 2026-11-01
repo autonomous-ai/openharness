@@ -101,20 +101,37 @@ function reviewedBuild(state: SuperTabState, group: Conversation): Conversation 
   return build && !build.archived && activeWork(build) && (build.projectId ?? 'lead') === (group.projectId ?? 'lead') ? build : undefined
 }
 
-/** A linked task whose build is back with its Engineer waits for the new revision, so its quiet time does not count
- *  (Diego, 2026-11-01: a Reviewer checks and posts in the build's group, which never renewed its own linked task, so after a
- *  normal fix round of ~31 minutes it was lost, its Lead woken and its verdict refused). */
-export function waitingForRevision(state: SuperTabState, group: Conversation): boolean {
-  const build = reviewedBuild(state, group)
-  return !!build && !waitingForReview(build.assignment!)
+/** The active linked tasks (reviewOf [build]) its own [agentId] holds: the Reviewer's or Tester's task for that build. */
+function ownLinkedTasks(state: SuperTabState, build: Conversation, agentId: string): Conversation[] {
+  return state.conversations.filter(c => c.reviewOf === build.id && activeWork(c) && c.assignment!.agentId === agentId
+    && reviewedBuild(state, c) === build)
 }
 
-/** When a linked task's wait for a revision last ended: its build's last progress, while that build waits for review again.
- *  The Reviewer keeps its task QUIET_RUNNING_MS from then, as an Engineer whose review found problems does (restartQuietTime),
- *  without the build's command writing the linked task's group. */
-function revisionReadyAt(state: SuperTabState, group: Conversation): number | undefined {
-  const build = reviewedBuild(state, group)
-  return build && waitingForReview(build.assignment!) ? build.assignment!.progressAt : undefined
+/** A linked task waits for the new revision from its own Reviewer's verdict asking for changes until the build's next Ready,
+ *  while that build is still active, so its quiet time does not count then (Diego, 2026-11-01: a Reviewer waiting on a normal
+ *  fix round of ~31 minutes lost its task, its Lead was woken and its verdict refused). It follows the Reviewer, never the
+ *  Engineer: an Engineer's own posts or "working" heartbeats keep no idle Reviewer (review of #2487). */
+export function waitingForRevision(state: SuperTabState, group: Conversation): boolean {
+  return group.assignment?.changesRequestedAt !== undefined && !!reviewedBuild(state, group)
+}
+
+/** [agentId]'s verdict in [build] asked for changes (a failed check by someone other than its assignee): its own linked task
+ *  waits for the new revision (waitingForRevision). Written in that command's own write, with the linked task's group. */
+export function changesRequested(state: SuperTabState, build: Conversation, agentId: string, now: number): void {
+  for (const linked of ownLinkedTasks(state, build, agentId)) {
+    linked.assignment!.changesRequestedAt = now
+    recordTaskState(state, linked, now)
+  }
+}
+
+/** [build] is ready for review again: each linked task that waited for this revision counts its quiet time from now, so the end
+ *  of the wait does not lose it, as an Engineer whose review found problems does (restartQuietTime). */
+export function revisionReady(state: SuperTabState, build: Conversation, now: number): void {
+  for (const linked of state.conversations.filter(c => c.reviewOf === build.id && activeWork(c) && c.assignment!.changesRequestedAt !== undefined)) {
+    delete linked.assignment!.changesRequestedAt
+    restartQuietTime(linked.assignment!, now)
+    recordTaskState(state, linked, now)
+  }
 }
 
 /** The active assignments held by workers, not by a Lead, and not already being reconciled after their agent left. */
@@ -127,9 +144,11 @@ function workerTasks(state: SuperTabState): Array<{ group: Conversation; assignm
   })
 }
 
-/** The worker's own status, check or message in its task's group renews its lease. */
-export function renewOwnTask(group: Conversation, agentId: string, now: number): void {
+/** The worker's own status, check or message in its task's group renews its lease. A Reviewer or Tester checks and posts in
+ *  the build's group, so there it renews its own linked task (reviewOf), never another agent's. */
+export function renewOwnTask(state: SuperTabState, group: Conversation, agentId: string, now: number): void {
   if (activeWork(group) && group.assignment!.agentId === agentId) renewLease(group.assignment!, now)
+  for (const linked of ownLinkedTasks(state, group, agentId)) renewLease(linked.assignment!, now)
 }
 
 /** The last time its machine's reports renewed a worker's lease: a report listing it running with recent progress renews at
@@ -166,20 +185,12 @@ function limitReason(worker: Agent, now: number): string | null {
     ? `it hit a usage limit until ${worker.limitedUntil.slice(11, 16)} UTC` : null
 }
 
-/** When a worker's task is lost to time: its lease's end, and for a linked task never before QUIET_RUNNING_MS after its
- *  build last came back for review. */
-function taskLeaseEnd(state: SuperTabState, group: Conversation, assignment: Assignment, worker: Agent): number | undefined {
-  const end = leaseEnd(group, assignment, reportRenewedAt(state, worker))
-  const ready = revisionReadyAt(state, group)
-  return ready === undefined ? end : Math.max(end ?? 0, ready + QUIET_RUNNING_MS)
-}
-
 /** The earliest time a task held by a worker on [machineId] may be lost to its lease running out, as lostReason reads it now,
  *  or undefined when none can. Reports that keep its session running with progress no older can only move it later. */
 export function nextLossAt(state: SuperTabState, machineId: string): number | undefined {
   const ends = workerTasks(state)
     .filter(({ group, worker, assignment }) => worker.machineId === machineId && !waitingForReview(assignment) && !waitingForRevision(state, group))
-    .map(({ group, assignment, worker }) => taskLeaseEnd(state, group, assignment, worker))
+    .map(({ group, assignment, worker }) => leaseEnd(group, assignment, reportRenewedAt(state, worker)))
     .filter((end): end is number => end !== undefined)
   return ends.length ? Math.min(...ends) : undefined
 }
@@ -195,7 +206,7 @@ function lostReason(state: SuperTabState, group: Conversation, worker: Agent, as
   // short burst of failures that recovers never gets here.
   if (worker.alerting?.includes('model')) return 'its model keeps failing'
   if (waitingForReview(assignment) || waitingForRevision(state, group)) return null
-  const end = taskLeaseEnd(state, group, assignment, worker)
+  const end = leaseEnd(group, assignment, reportRenewedAt(state, worker))
   if (end !== undefined && now > end) {
     const progress = lastProgress(state, worker, assignment)
     return progress === undefined ? 'no progress seen' : `no progress for ${plural(Math.floor((now - progress) / 60_000), 'minute')}`
@@ -352,10 +363,10 @@ export function taskLiveness(state: SuperTabState, group: Conversation, now: num
     }
     if (assignment.status === 'review') return reviewWait(state, group, progress, now)
     if (assignment.status === 'blocked') return { state: 'waiting', why: 'blocked', since: progress }
-    // A review whose build is back with its Engineer waits for the new revision; once it is ready, its quiet time runs from then.
+    // A review whose verdict asked for changes waits for the new revision; once it is ready, its quiet time runs from then
+    // (revisionReady restarts its progress).
     if (waitingForRevision(state, group)) return { state: 'waiting', why: 'revision', since: progress }
-    const since = Math.max(progress, revisionReadyAt(state, group) ?? 0)
-    return now - since >= TASK_QUIET_MS ? { state: 'quiet', why: 'silent', since } : null
+    return now - progress >= TASK_QUIET_MS ? { state: 'quiet', why: 'silent', since: progress } : null
   }
   // Only unfinished starts are loaded, with those that ended in this same write.
   const start = state.starts?.findLast(s => s.request.conversationId === group.id && !s.request.buddyOf)
