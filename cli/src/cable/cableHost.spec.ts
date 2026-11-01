@@ -1219,3 +1219,132 @@ describe('announcing over the real lane', () => {
     expect(host.selectedMachine()).toBe('mine')
   })
 })
+
+/**
+ * A plug-in whose first lane open fails — Diego, 11-01: the sign-in refresh failed in a network blip, nothing tried
+ * again, and the wheel lost every other Mac until the dial was replugged.
+ */
+describe('a plug-in whose first lane open fails', () => {
+  const stops: Array<() => Promise<void> | void> = []
+  afterEach(async () => {
+    vi.useRealTimers()
+    for (const stop of stops.splice(0)) await stop()
+  })
+  /** A bare fleet whose online() throws `fails` times, as a token read lost to a blip does, then opens. */
+  const failing = (fails: number) => {
+    let left = fails
+    const fleet = fleetOf([REMOTE])
+    fleet.online = vi.fn(async () => { if (left-- > 0) throw new Error('UNAVAILABLE: the sign-in could not be refreshed') })
+    fleet.select = vi.fn(async () => {})
+    fleet.release = vi.fn()
+    return fleet
+  }
+  const turns = async () => { for (let turn = 0; turn < 20; turn++) await new Promise((resolve) => setImmediate(resolve)) }
+
+  it('opens the lane later, and then announces where the dial is', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const fleet = failing(2)
+    const log = vi.fn()
+    const host = new DaemonCableHost(wiring({ log }), fleet)
+    host.onDialAttached()
+    await turns()
+    expect(fleet.online).toHaveBeenCalledTimes(1)
+    expect(log).toHaveBeenCalledWith('cable: could not open the lane (UNAVAILABLE: the sign-in could not be refreshed)')
+    expect(fleet.select).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1_000)
+    await turns()
+    expect(fleet.online).toHaveBeenCalledTimes(2)   // failed again: the next try waits longer
+    await vi.advanceTimersByTimeAsync(1_999)
+    await turns()
+    expect(fleet.online).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(1)
+    await turns()
+    expect(fleet.online).toHaveBeenCalledTimes(3)
+    expect(fleet.select).toHaveBeenCalledWith('mine')
+    // Open now: nothing more is scheduled.
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(fleet.online).toHaveBeenCalledTimes(3)
+  })
+
+  it('stops trying once the dial is unplugged', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const fleet = failing(Infinity)
+    const host = new DaemonCableHost(wiring(), fleet)
+    host.onDialAttached()
+    await turns()
+    host.onDialGone()
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(fleet.online).toHaveBeenCalledTimes(1)
+  })
+
+  it('stops trying once this computer is signed out', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const fleet = failing(Infinity)
+    let signedIn = true
+    const host = new DaemonCableHost(wiring({ signedIn: () => signedIn }), fleet)
+    host.onDialAttached()
+    await turns()
+    signedIn = false
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(fleet.online).toHaveBeenCalledTimes(1)
+  })
+
+  it('announces nothing for an open that lands after the dial was unplugged', async () => {
+    let finish: () => void = () => {}
+    const fleet = failing(0)
+    fleet.online = vi.fn(() => new Promise<void>((resolve) => { finish = resolve }))
+    const host = new DaemonCableHost(wiring(), fleet)
+    host.onDialAttached()
+    await turns()
+    host.onDialGone()
+    finish()
+    await turns()
+    expect(fleet.select).not.toHaveBeenCalled()
+  })
+
+  it('keeps one retry for a replug while one is waiting, not two', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const fleet = failing(Infinity)
+    const host = new DaemonCableHost(wiring(), fleet)
+    host.onDialAttached()
+    await turns()
+    host.onDialAttached()   // the session re-reports the dial without an unplug in between
+    await turns()
+    expect(fleet.online).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(1_000)
+    await turns()
+    expect(fleet.online).toHaveBeenCalledTimes(3)
+  })
+
+  it('opens the real lane later when its first token read throws', async () => {
+    const wss = new WebSocketServer({ port: 0, host: '127.0.0.1', handleProtocols: (protocols) => [...protocols][0] ?? false })
+    await new Promise<void>((resolve) => wss.once('listening', () => resolve()))
+    const frames: Array<{ type?: string; payload?: { machineId?: string } }> = []
+    wss.on('connection', (ws) => { ws.on('message', (raw) => { frames.push(JSON.parse(raw.toString())) }) })
+    stops.push(() => new Promise<void>((resolve) => { for (const client of wss.clients) client.terminate(); wss.close(() => resolve()) }))
+    let fails = 1
+    const lines: string[] = []
+    const link = new DeviceLink({
+      auth: { accessToken: async () => { if (fails-- > 0) throw new Error('UNAVAILABLE'); return 'token' } },
+      backendWsBase: `ws://127.0.0.1:${(wss.address() as { port: number }).port}`,
+      computerId: 'this-computer', autonomousEnv: 'test',
+      seal: { hello: vi.fn(), welcome: vi.fn(), rekey: vi.fn(), seal: vi.fn(), open: vi.fn(), drop: vi.fn() } as never,
+      peer: () => null, localMachineId: () => 'mine', log: (line) => { lines.push(line) },
+    })
+    stops.push(() => link.stop())
+    const rows = [{ machineId: 'mine', name: 'MacbookPro.local', state: 'ready', authMode: 'remote', local: true }]
+    const fleet = new DeviceFleet({ list: { list: () => ({ machines: rows, source: 'backend' as const }), find: (id: string) => rows.find((r) => r.machineId === id) } as never,
+      link, hasPeerLink: () => false, log: (line) => { lines.push(line) } })
+    const host = new DaemonCableHost(wiring({ log: (line: string) => { lines.push(line) } }), fleet)
+    host.onDialAttached()
+    const deadline = Date.now() + 4_000
+    while (!frames.some((frame) => frame.type === 'machine_select')) {
+      if (Date.now() > deadline) throw new Error(`the lane never opened: ${lines.join(' | ')}`)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    expect(lines).toContain('cable: could not open the lane (UNAVAILABLE)')
+    expect(frames.filter((frame) => frame.type === 'machines_watch')).toHaveLength(1)
+    expect(frames.find((frame) => frame.type === 'machine_select')?.payload?.machineId).toBe('mine')
+    expect(link.status()).toBe('ready')
+  }, 10_000)
+})

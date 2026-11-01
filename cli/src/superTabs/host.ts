@@ -310,6 +310,28 @@ const ackRefused = (error: unknown) => error instanceof SuperTabHostError && [40
 /** The first wait after a session the backend ended could not be closed or acknowledged, doubling up to ten minutes. */
 const END_RETRY_MS = 5_000
 const END_RETRY_MAX_MS = 10 * 60_000
+/** A stop failure that says "not yet" rather than "no" (Diego, 11-01): every failure used to count toward the five tries,
+ *  so a few minutes of a busy Swarm, a timeout or a sign-in being renewed ended a stop for good, and the stopped worker ran
+ *  on, holding its slot and memory, until the daemon restarted. These back off as an ended session does (END_RETRY_MS
+ *  doubling to END_RETRY_MAX_MS) and are never given up: a sign-in (401), a timeout (408), throttling (429), a busy or
+ *  moving Swarm, a stop request read before it changed (the next read names the new one), work not yet finished. */
+const RELEASE_RETRY_STATUSES = [401, 408, 429]
+const RELEASE_RETRY_CODES = ['SWARM_BUSY', 'SWARM_MIGRATING', 'STALE_RELEASE', 'WORK_ACTIVE']
+/** The core's close refusals no retry for the same runtime changes; any other (unavailable, an expired lease, data not
+ *  deleted yet) is tried again. NOT_SWARM_STARTED and AGENT_CHANGED are refused for good where they are answered. */
+const RELEASE_FINAL_CLOSES = ['UNSUPPORTED', 'LEAD_PROTECTED', 'BUDDY_PROTECTED']
+/** A launch receipt that can never come to name this harness's start. */
+const RELEASE_FINAL_RECEIPTS = ['missing', 'failed', 'cancelled']
+/** A failure this host knows no retry changes: it counts toward the five tries. */
+class ReleaseFinal extends Error {}
+/** Whether a stop failure counts toward the five tries: this host's own final answers and the backend's 4xx refusals,
+ *  less the ones that say "not yet" above. A transport failure, a timeout or a server failure (5xx) says nothing final. */
+const releaseFinal = (error: unknown) => error instanceof ReleaseFinal || error instanceof SuperTabHostError
+  && error.status >= 400 && error.status < 500 && !RELEASE_RETRY_STATUSES.includes(error.status) && !RELEASE_RETRY_CODES.includes(error.code)
+const closeFailure = (result: { error?: string; detail?: string }, fallback: string) => {
+  const message = result.detail ?? result.error ?? fallback
+  return RELEASE_FINAL_CLOSES.includes(String(result.error)) ? new ReleaseFinal(message) : new Error(message)
+}
 /** How long after a pre-#1527 Swarm launch its engine may first bind a session and still be the Swarm's own. */
 const LEGACY_FIRST_BIND_MS = 120_000
 const typedId = (entry: Entry) => `team:service:superTabs:${entry.deliveryId}`
@@ -403,7 +425,8 @@ export class SuperTabHost {
   private stopsRunning: Promise<void> | null = null
   private readonly releases = new Set<string>()
   /** Eligibility and failures belong to this stop and native runtime; a new runtime or stop gets a fresh decision. */
-  private readonly releaseAttempts = new Map<string, { signature: string; failures: number; retryAt: number; closed?: true }>()
+  /** `failures` counts final answers toward the five tries; `waits` the transient ones behind the current backoff. */
+  private readonly releaseAttempts = new Map<string, { signature: string; failures: number; waits: number; retryAt: number; closed?: true }>()
   private nextStopsAt = 0
   private receiptsRunning: Promise<void> | null = null
   private nextReceiptsAt = 0
@@ -669,7 +692,7 @@ export class SuperTabHost {
     const signature = JSON.stringify([agent.releaseId, object(agent).startedSession, native
       ? [native.sessionId, native.registeredAt, native.startedBy, native.resumeOnly, native.processIdentity] : null])
     const previous = this.releaseAttempts.get(key)
-    const attempt = previous?.signature === signature ? previous : { signature, failures: 0, retryAt: 0, closed: undefined }
+    const attempt = previous?.signature === signature ? previous : { signature, failures: 0, waits: 0, retryAt: 0, closed: undefined }
     if (this.now() < attempt.retryAt) return
     this.releaseAttempts.set(key, attempt)
     this.releases.add(key)
@@ -704,7 +727,7 @@ export class SuperTabHost {
         if (!confirmed.closed) {
           // It closed once; a session there now was resumed or replaced after that close.
           if (['NOT_SWARM_STARTED', 'AGENT_CHANGED'].includes(String(confirmed.error))) refuse('AGENT_CHANGED')
-          throw new Error(confirmed.detail ?? confirmed.error ?? 'The stopped session could not be confirmed.')
+          throw closeFailure(confirmed, 'The stopped session could not be confirmed.')
         }
       } else {
         let identity = object(member.startedSession)
@@ -735,11 +758,14 @@ export class SuperTabHost {
             refuse(native.startedBy === 'agent' && identifier(identity.creationId) ? 'AGENT_CHANGED' : 'NOT_SWARM_STARTED')
             return
           }
-          const creation = await this.core.agents.creationStatus?.(identity.creationId)
+          if (!this.core.agents.creationStatus) throw new ReleaseFinal('This core cannot confirm the original Swarm launch.')
+          const creation = await this.core.agents.creationStatus(identity.creationId)
           if (creation?.state === 'created' && creation.agentId !== agent.harnessId) {
             refuse('NOT_SWARM_STARTED')
             return
           }
+          // A receipt still pending or unconfirmed, or unreadable now, may yet confirm it; a missing, failed or cancelled one never.
+          if (creation && RELEASE_FINAL_RECEIPTS.includes(creation.state)) throw new ReleaseFinal(`The original Swarm launch is ${creation.state}.`)
           if (creation?.state !== 'created') throw new Error('The original Swarm launch could not be confirmed. Stop will retry with backoff.')
           if (this.stopped) return
           // Start locally before asking: server clock skew cannot extend authority, and network delay consumes it.
@@ -748,7 +774,7 @@ export class SuperTabHost {
             operationId: `close-lease-${randomUUID()}`, asAgentId: agent.id,
             command: { type: 'agent.stopLease', agentId: agent.id, releaseId: agent.releaseId },
           })).result)
-          if (typeof leased.durationMs !== 'number' || !Number.isFinite(leased.durationMs) || leased.durationMs <= 0 || leased.durationMs > 120_000) throw new Error('The host could not reserve this native close. Remove a stuck contribution or update its backend.')
+          if (typeof leased.durationMs !== 'number' || !Number.isFinite(leased.durationMs) || leased.durationMs <= 0 || leased.durationMs > 120_000) throw new ReleaseFinal('The host could not reserve this native close. Remove a stuck contribution or update its backend.')
           // The idle check's stop trusted a report up to a minute old (machines.ts): an edit since, or a folder git cannot
           // read now, withdraws it instead (review of #1807). Read after the lease, whose answer can take minutes, so it
           // is the last thing before the close. A stop its Lead asked for closes as before.
@@ -764,7 +790,7 @@ export class SuperTabHost {
         }
         if (!result.closed) {
           if (['NOT_SWARM_STARTED', 'AGENT_CHANGED'].includes(String(result.error))) refuse(result.error)
-          throw new Error(result.detail ?? result.error ?? 'Could not stop this Swarm worker.')
+          throw closeFailure(result, 'Could not stop this Swarm worker.')
         }
         attempt.closed = true
       }
@@ -777,10 +803,14 @@ export class SuperTabHost {
       await this.contributed().removeStoppedWorktree(tabId, agent.harnessId)
         .catch(error => this.log(`Kept the worktree of a stopped worker: ${error instanceof Error ? error.message : String(error)}`))
     } catch (error) {
-      attempt.failures++
-      // Five attempts total; permanent ownership/identity refusals never acquire another lease for this runtime.
-      if (attempt.retryAt !== Infinity) attempt.retryAt = attempt.failures >= 5 ? Infinity
-        : this.now() + [5_000, 15_000, 60_000, 120_000][attempt.failures - 1]!
+      // Five final answers in all; permanent ownership/identity refusals never acquire another lease for this runtime. A
+      // transient failure waits 5 s doubling to 10 minutes, and is tried again for as long as the stop is asked.
+      if (attempt.retryAt !== Infinity && releaseFinal(error)) {
+        attempt.failures++
+        attempt.retryAt = attempt.failures >= 5 ? Infinity : this.now() + [5_000, 15_000, 60_000, 120_000][attempt.failures - 1]!
+      } else if (attempt.retryAt !== Infinity) {
+        attempt.retryAt = this.now() + Math.min(END_RETRY_MAX_MS, END_RETRY_MS * 2 ** attempt.waits++)
+      }
       this.log(error instanceof Error ? error.message : String(error))
     } finally { this.releases.delete(key) }
   }
