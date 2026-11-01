@@ -464,8 +464,10 @@ void main() {
       tester,
     ) async {
       await pump(tester);
-      await menu(tester);
-      await tester.tap(find.text('Archive'));
+      // Asked from a screen that stays (the page's own Scaffold), so only the
+      // lost access keeps the late refusal off it.
+      final screen = tester.element(find.byType(Scaffold).first);
+      unawaited(confirmSwarmArchiveChat(screen, reader(), chat));
       await tester.pumpAndSettle();
       final held = Completer<Object?>();
       answer = () => held.future;
@@ -476,7 +478,7 @@ void main() {
         const SuperTabFailure('FORBIDDEN', 'You cannot read this Swarm.'),
       );
       await settle(tester);
-      expect(key('swarm-chat-manage-failed'), findsNothing);
+      expect(find.text('You cannot read this Swarm.'), findsNothing);
       expect(tester.takeException(), isNull);
     });
 
