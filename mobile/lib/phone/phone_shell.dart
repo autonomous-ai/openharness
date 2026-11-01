@@ -8,10 +8,12 @@ import 'package:harness_mobile/state/app_state.dart';
 
 import '../notify/system_notices.dart';
 import '../p2p/phone_terminal_p2p.dart';
+import '../swarm/swarm_activity_page.dart' show swarmActivityRoute;
 import '../swarm/swarm_attachment_store.dart';
 import '../swarm/swarm_computers.dart';
 import '../swarm/swarm_dictation.dart';
 import '../swarm/swarm_home_root.dart';
+import '../swarm/swarm_inbox.dart' show SwarmDecisionNeed;
 import '../swarm/swarm_message_link.dart';
 import '../swarm/swarm_profile.dart';
 import '../swarm/swarm_project_page.dart' show swarmChatRoute;
@@ -399,6 +401,20 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
     if (navigator == null) return;
     navigator.popUntil((route) => route.isFirst);
     _home.showSwarm();
+    // A decision opens in Activity, where it is answered, as Desktop opens
+    // it in Notifications: no chat shows decisions. Activity says so when it
+    // is no longer open, whoever's it was.
+    if (target.decisionId case final decisionId?) {
+      unawaited(
+        navigator.push(
+          swarmActivityRoute(
+            focus: SwarmDecisionNeed.keyOf(decisionId),
+            swarmId: target.swarmId,
+          ),
+        ),
+      );
+      return;
+    }
     // A project's own chat opens as its project, on Swarm Home C's tabs.
     unawaited(
       navigator.push(
@@ -406,7 +422,6 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
           swarmId: target.swarmId,
           conversationId: target.conversationId,
           messageId: target.messageId,
-          decisionId: target.decisionId,
         ),
       ),
     );
