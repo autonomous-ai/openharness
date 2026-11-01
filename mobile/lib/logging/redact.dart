@@ -42,7 +42,10 @@ String summariseForLog(Object? value, {int maxLength = 1200}) {
   return text.length <= maxLength ? text : '${text.substring(0, maxLength)}…';
 }
 
-/// [value] rendered for a log, with any entry whose KEY looks secret replaced.
+/// [value] rendered for a log, with any entry whose KEY looks secret replaced,
+/// and any secret a value's TEXT carries blanked ([redactSecretsInText]): a
+/// field named for what it is, not for the secret in it — a Swarm's `joinUrl`
+/// with its `?token=` — is caught by its text.
 ///
 /// Recurses into maps and lists so a secret nested a level or two down is
 /// caught too.
@@ -68,7 +71,9 @@ String redactValue(Object? value) {
     // frames) and printing it whole turns one line into a page.
     return '[${value.length} item${value.length == 1 ? '' : 's'}]';
   }
-  final text = '$value';
+  // Blanked before it is clipped: a clip that cuts a `Bearer` token to fewer
+  // characters than its rule needs would keep that start on disk.
+  final text = redactSecretsInText('$value');
   return text.length <= _maxValue ? text : '${text.substring(0, _maxValue)}…';
 }
 
