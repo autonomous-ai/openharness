@@ -8,6 +8,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
+import 'package:harness_mobile/phone/phone_shell_scope.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/color_palette.dart';
@@ -19,8 +20,8 @@ import 'swarm_fixture.dart';
 
 /// Review screenshots of the delivery line in the real chat, 390 and 320 points
 /// wide in both phone themes, from made-up data, to the folder
-/// `SWARM_RECEIPT_SHOTS` names: claims failing, nothing picked up yet, and the
-/// computer offline.
+/// `SWARM_RECEIPT_SHOTS` names: claims failing, nothing picked up yet, the
+/// computer offline, and a delivery its computer could not confirm.
 final shots = Platform.environment['SWARM_RECEIPT_SHOTS'];
 
 void main() {
@@ -60,7 +61,7 @@ void main() {
       AppTheme.brightness.value = brightness;
       for (final width in [390.0, 320.0]) {
         await tester.binding.setSurfaceSize(Size(width, 560));
-        for (final state in ['failing', 'waiting', 'offline']) {
+        for (final state in ['failing', 'waiting', 'offline', 'uncertain']) {
           final now = clock.now();
           DateTime ago(Duration age) => now.subtract(age);
           final fake = FakeSwarm();
@@ -119,7 +120,7 @@ void main() {
                   {
                     'id': 'd1',
                     'agentId': 'agent-lead',
-                    'status': 'queued',
+                    'status': state == 'uncertain' ? 'uncertain' : 'queued',
                     if (state == 'failing')
                       'claimFailingSince': ago(const Duration(minutes: 2))
                           .toUtc()
@@ -163,8 +164,13 @@ void main() {
               child: MaterialApp(
                 debugShowCheckedModeBanner: false,
                 theme: buildAppTheme(brightness: brightness),
-                builder: (_, child) =>
-                    SwarmScope(notifier: host, child: child!),
+                // A shell that can open the Lead's computer: Open terminal.
+                builder: (_, child) => PhoneShellScope(
+                  onMachineLinked: (_) {},
+                  onOpenAgent: (_, _) {},
+                  canOpenMachine: (_) => true,
+                  child: SwarmScope(notifier: host, child: child!),
+                ),
                 home: const SwarmConversationPage(
                   swarmId: tab,
                   conversationId: 'g1',
@@ -176,11 +182,11 @@ void main() {
           await host.session!.inbox.reader(tab)!.refresh();
           await tester.pumpAndSettle();
           expect(
-            find.text(
-              state == 'offline'
-                  ? "River's computer is offline"
-                  : 'Not delivered yet',
-            ),
+            find.text(switch (state) {
+              'offline' => "River's computer is offline",
+              'uncertain' => "Couldn't confirm delivery",
+              _ => 'Not delivered yet',
+            }),
             findsOneWidget,
           );
           expect(tester.takeException(), isNull);

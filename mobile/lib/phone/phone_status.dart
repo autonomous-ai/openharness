@@ -46,6 +46,12 @@ bool phoneAccountSaysOnline(String? status) =>
       _ => false,
     };
 
+/// Whether this phone can open [machine]'s terminals now: one it has, linked,
+/// and not reported offline — the rule the terminal search draws "Offline" by
+/// (`phone_search_catalog.dart`). A machine not heard from yet counts.
+bool phoneMachineOpensTerminals(MachineState? machine) =>
+    machine != null && !machine.needsLink && machine.nodeOnline != false;
+
 /// Whether [machine] is away for real: offline by its socket's word, and the account's own record
 /// agrees.
 ///
