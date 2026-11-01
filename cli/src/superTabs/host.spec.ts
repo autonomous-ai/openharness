@@ -2369,11 +2369,12 @@ function failCommand(t: ReturnType<typeof releaseFixture>, command: string, repl
 const refusal = (status: number, code: string) => () => ({ status, body: { success: false, error: { code, message: 'Refused.' } } })
 const thrown = (message: string) => () => { throw new Error(message) }
 
-it('closes and removes a stopped worker once three and a half minutes of a busy Swarm are over', async () => {
+// Main's waits (5, 15, 60, 120 s) spend all five tries in the first four minutes of an outage.
+it('closes and removes a stopped worker once four minutes of a busy Swarm are over', async () => {
   const t = releaseFixture('swarm', { closed: true })
   const busy = failCommand(t, 'agent.stopLease', refusal(503, 'SWARM_BUSY'))
-  for (let s = 0; s < 210; s += 10) await t.poll(10_000)
-  expect(busy.calls).toBeGreaterThanOrEqual(4)
+  for (let s = 0; s < 240; s += 10) await t.poll(10_000)
+  expect(busy.calls).toBeGreaterThanOrEqual(5)
   expect(busy.calls).toBeLessThan(10)
   expect(t.close).not.toHaveBeenCalled()
   busy.failing = false
