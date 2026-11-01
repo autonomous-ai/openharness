@@ -4,6 +4,7 @@ import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import 'package:harness_mobile/phone/phone_shell_scope.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
@@ -25,13 +26,16 @@ const swarmQueuedNotice = Duration(minutes: 2);
 const _machineOfflineAfter = Duration(seconds: 35);
 
 /// The line under the person's newest message while its delivery is queued and
-/// not getting in: the desktop's `SuperTabMessageReceipt` for those two cases,
-/// its words and rule, in amber with nothing to do (#2336). A message that
-/// arrived carries none, as in Slack.
+/// not getting in, or when its computer could not confirm it: the desktop's
+/// `SuperTabMessageReceipt` for those cases, its words and rule. Queued is in
+/// amber with nothing to do (#2336); unconfirmed asks the person to check
+/// the terminal, then send again or say it arrived
+/// ([SwarmConversation.resolveDelivery]). A message that arrived carries
+/// none, as in Slack.
 ///
-/// Only a queued delivery: a claimed one is no longer read again
-/// ([SwarmConversation.receiptCurrent]), so nothing here could tell when it
-/// arrives.
+/// Said only from a read of the message while it is on screen
+/// ([SwarmConversation.receiptCurrent]): a row kept from before proves
+/// nothing about where its delivery is now.
 class SwarmMessageReceipt extends StatefulWidget {
   const SwarmMessageReceipt({
     super.key,
@@ -124,7 +128,7 @@ class _SwarmMessageReceiptState extends State<SwarmMessageReceipt>
     // Said only of a recipient of this chat, from what was just read: a row
     // kept from before, or the Swarm out of reach, says nothing of where it is.
     if (snapshot == null ||
-        delivery?.status != 'queued' ||
+        !const {'queued', 'uncertain'}.contains(delivery?.status) ||
         agent == null ||
         group == null ||
         !(group.agentIds.contains(agent.id) || group.leadId == agent.id) ||
@@ -134,6 +138,10 @@ class _SwarmMessageReceiptState extends State<SwarmMessageReceipt>
       return const SizedBox.shrink();
     }
     final name = snapshot.agentName(agent.id, fallback: 'Lead');
+    if (delivery!.status == 'uncertain') {
+      _wakeUpAt(null, now);
+      return _unconfirmed(context, c, message, delivery, agent, name);
+    }
     final machine = snapshot.pool(agent.machineId);
     final observation = machine?['observation'];
     final receivedAt = observation is Map ? observation['receivedAt'] : null;
@@ -144,7 +152,7 @@ class _SwarmMessageReceiptState extends State<SwarmMessageReceipt>
         machine != null &&
         (readingAt == null ||
             now.difference(readingAt) >= _machineOfflineAfter);
-    final failingSince = delivery!.claimFailingSince;
+    final failingSince = delivery.claimFailingSince;
     final failingAt = failingSince?.add(swarmClaimFailingNotice);
     final queuedAt = message.createdAt?.add(swarmQueuedNotice);
     final waiting = !offline && agent.downSince == null;
@@ -180,7 +188,76 @@ class _SwarmMessageReceiptState extends State<SwarmMessageReceipt>
           : "$host is online but hasn't picked this message up yet. "
                 'Harness keeps trying, and it goes in as soon as it can.';
     }
-    final color = AppPalette.warn;
+    return _line(
+      icon: offline ? LucideIcons.cloudOff : LucideIcons.clock,
+      color: AppPalette.warn,
+      title: title,
+      note: note,
+    );
+  }
+
+  /// The desktop's "Couldn't confirm delivery": its computer may have typed
+  /// it without confirming, so the person checks before it goes again. Open
+  /// terminal only where this phone can open that computer's terminals.
+  Widget _unconfirmed(
+    BuildContext context,
+    SwarmConversation c,
+    SuperTabMessage message,
+    SuperTabDelivery delivery,
+    SuperTabAgent agent,
+    String name,
+  ) {
+    final shell = PhoneShellScope.maybeOf(context);
+    final reachable =
+        shell != null &&
+        agent.harnessId.isNotEmpty &&
+        shell.canOpenMachine?.call(agent.machineId) == true;
+    final resolving = c.resolving;
+    final free = c.canPost && resolving == null && delivery.id != null;
+    Widget action(String label, String resolution, VoidCallback onPressed) {
+      final busy = resolving == (delivery.id, resolution);
+      return _ReceiptLink(
+        key: ValueKey('swarm-receipt-$resolution'),
+        label: label,
+        busy: busy,
+        dimmed: !free && !busy,
+        onPressed: free ? onPressed : null,
+      );
+    }
+
+    void resolve(String resolution) =>
+        unawaited(c.resolveDelivery(message, delivery, resolution));
+    return _line(
+      icon: LucideIcons.triangleAlert,
+      // As the desktop draws it: the theme's error ink, which reads on
+      // either surface.
+      color: Theme.of(context).colorScheme.error,
+      title: "Couldn't confirm delivery",
+      note:
+          "$name's computer may have typed this into the terminal without "
+          'confirming. Check the terminal before sending again, or it could '
+          'run twice.',
+      actions: [
+        if (reachable)
+          action('Open terminal', 'open', () {
+            // Checked again at the tap: the phone may have lost it since.
+            if (shell.canOpenMachine?.call(agent.machineId) == true) {
+              shell.onOpenAgent(agent.machineId, agent.harnessId);
+            }
+          }),
+        action('Send again', 'resend', () => resolve('resend')),
+        action('It arrived', 'received', () => resolve('received')),
+      ],
+    );
+  }
+
+  Widget _line({
+    required IconData icon,
+    required Color color,
+    required String title,
+    required String note,
+    List<Widget> actions = const [],
+  }) {
     return Padding(
       padding: const EdgeInsets.only(top: AppSpace.xs),
       child: Column(
@@ -190,11 +267,7 @@ class _SwarmMessageReceiptState extends State<SwarmMessageReceipt>
             liveRegion: true,
             child: Row(
               children: [
-                Icon(
-                  offline ? LucideIcons.cloudOff : LucideIcons.clock,
-                  size: 16,
-                  color: color,
-                ),
+                Icon(icon, size: 16, color: color),
                 const SizedBox(width: AppSpace.xs),
                 Flexible(
                   child: Text(title, style: swarmChatText(14, color: color)),
@@ -224,7 +297,78 @@ class _SwarmMessageReceiptState extends State<SwarmMessageReceipt>
               ),
             ),
           ),
+          // Each link's own padding sets it in from the note's edge: the
+          // first is pulled back to line up with it.
+          if (actions.isNotEmpty)
+            Transform.translate(
+              offset: const Offset(-AppSpace.s, 0),
+              child: Wrap(children: actions),
+            ),
         ],
+      ),
+    );
+  }
+}
+
+/// One answer on the line: words in the accent, 44 points tall to tap, with
+/// little room to the side so the three share one line at 390 points.
+class _ReceiptLink extends StatelessWidget {
+  const _ReceiptLink({
+    super.key,
+    required this.label,
+    required this.busy,
+    required this.dimmed,
+    required this.onPressed,
+  });
+
+  final String label;
+  final bool busy, dimmed;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final ink = AppPalette.swarmAccent;
+    return Semantics(
+      button: true,
+      enabled: onPressed != null,
+      label: label,
+      excludeSemantics: true,
+      child: Opacity(
+        opacity: dimmed ? .45 : 1,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(AppControl.radius),
+          onTap: onPressed,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 44),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: AppSpace.s),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (busy) ...[
+                    SizedBox.square(
+                      dimension: 14,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: ink,
+                      ),
+                    ),
+                    const SizedBox(width: AppSpace.xs),
+                  ],
+                  Text(
+                    label,
+                    style: swarmChatText(
+                      15,
+                      color: ink,
+                      weight: FontWeight.w500,
+                      height: 1.25,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
