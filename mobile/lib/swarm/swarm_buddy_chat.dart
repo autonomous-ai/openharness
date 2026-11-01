@@ -14,6 +14,7 @@ import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import 'model.dart';
 import 'swarm_buddy.dart';
+import 'swarm_chat_menu.dart' show swarmNotifySection;
 import 'swarm_conversation_page.dart';
 import 'swarm_reader.dart';
 import 'swarm_request.dart';
@@ -437,8 +438,9 @@ class _Field extends StatelessWidget {
 
 /// At the end of the person's own Buddy chat's header, while they may
 /// write: ⋮, with Rename Buddy, and Remove Buddy while one runs, which asks
-/// first, then stops it; the chat stays (the desktop's Buddy options).
-/// Nothing in anyone else's Buddy chat.
+/// first, then stops it; the chat stays (the desktop's Buddy options); and
+/// the chat's Notifications, as its menu on the desktop has. Nothing in
+/// anyone else's Buddy chat.
 class SwarmBuddyMenuButton extends StatelessWidget {
   const SwarmBuddyMenuButton({
     super.key,
@@ -452,24 +454,53 @@ class SwarmBuddyMenuButton extends StatelessWidget {
   /// rather than its project. Null while that chat is not known yet.
   final String? chatId;
 
-  Future<void> _open(BuildContext context, String chatId) => showPhoneSheet(
-    context,
-    title: swarmBuddyName(actions.reader, actions.projectId),
-    actions: [
-      PhoneSheetAction(
-        icon: LucideIcons.pencil,
-        label: 'Rename Buddy',
-        onTap: () => unawaited(_rename(context, chatId)),
-      ),
-      if (swarmBuddy(actions.reader, actions.projectId) != null)
-        PhoneSheetAction(
-          icon: LucideIcons.userMinus,
-          label: 'Remove Buddy',
-          destructive: true,
-          onTap: () => unawaited(_confirmRemove(context)),
+  /// The sheet, with the chat's Notifications under the Buddy's own rows
+  /// ([swarmNotifySection]). It goes once the chat is no longer the
+  /// person's own Buddy chat to read: access lost, or signed out.
+  Future<void> _open(BuildContext context, String chatId) async {
+    final reader = actions.reader;
+    Route<void>? sheet;
+    void moved() {
+      final route = sheet;
+      if (route == null ||
+          (!reader.accessRevoked && swarmIsOwnBuddyChat(reader, chatId))) {
+        return;
+      }
+      sheet = null;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (route.isActive) route.navigator?.removeRoute(route);
+      });
+    }
+
+    reader.addListener(moved);
+    try {
+      await showPhoneSheet(
+        context,
+        title: swarmBuddyName(reader, actions.projectId),
+        onShown: (route) => sheet = route,
+        rebuildOn: reader,
+        rows: () => (
+          actions: [
+            PhoneSheetAction(
+              icon: LucideIcons.pencil,
+              label: 'Rename Buddy',
+              onTap: () => unawaited(_rename(context, chatId)),
+            ),
+            if (swarmBuddy(reader, actions.projectId) != null)
+              PhoneSheetAction(
+                icon: LucideIcons.userMinus,
+                label: 'Remove Buddy',
+                destructive: true,
+                onTap: () => unawaited(_confirmRemove(context)),
+              ),
+          ],
+          sections: [swarmNotifySection(context, reader, chatId)],
         ),
-    ],
-  );
+      );
+    } finally {
+      reader.removeListener(moved);
+    }
+  }
 
   Future<void> _rename(BuildContext context, String chatId) async {
     if (!context.mounted) return;

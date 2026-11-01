@@ -3,9 +3,11 @@ import 'package:flutter/foundation.dart';
 import 'identity.dart';
 import 'model.dart';
 import 'swarm_buddy.dart';
+import 'swarm_chat_notify.dart';
 import 'swarm_inbox.dart';
 import 'swarm_reader.dart';
 import 'swarm_session.dart';
+import 'swarm_unread.dart';
 
 /// One project on Buddies (Tony's prototype C2): the person's own Buddy in
 /// [project] of Swarm [swarmId], by its [name] ("Buddy" while none runs) and
@@ -23,6 +25,7 @@ class SwarmBuddyRow {
     this.chat,
     this.last,
     this.unread = false,
+    this.muted = false,
   });
 
   final String swarmId;
@@ -31,7 +34,12 @@ class SwarmBuddyRow {
   final String? note;
   final SuperTabConversation? chat;
   final SuperTabMessage? last;
+
+  /// Its chat has something unread, and is not muted.
   final bool unread;
+
+  /// The person muted its chat ([SwarmNotify.muted]): greyed, never unread.
+  final bool muted;
 
   /// When the chat last moved: its last message, or the chat's own change
   /// until that is read.
@@ -199,7 +207,10 @@ class SwarmBuddyList extends ChangeNotifier {
             note: swarmBuddyNote(reader, project.id),
             chat: chat,
             last: peek?.messages.where((m) => m.inMainStream).lastOrNull,
-            unread: chat != null && (reader.readMarks?.unread(chat) ?? false),
+            // A muted chat never shows unread or counts (the desktop's
+            // `buddyUnread`).
+            unread: chat != null && swarmUnreadShown(reader, chat),
+            muted: chat != null && swarmMuted(reader, chat),
           ),
         );
       }

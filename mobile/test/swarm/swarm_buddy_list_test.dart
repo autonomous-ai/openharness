@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/swarm/swarm_buddy_list.dart';
+import 'package:harness_mobile/swarm/swarm_chat_notify.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 
@@ -130,6 +131,44 @@ void main() {
     final docs = row(list, buddiesDocs);
     expect(swarmBuddyLine(docs, reader), 'No Buddy yet');
     expect((docs.name, docs.note), ('Buddy', 'not started'));
+  });
+
+  test('a muted Buddy chat is never unread and never counts on the badge, '
+      'muted on the desktop or chosen on this phone', () async {
+    final fake = buddiesBackend();
+    final load = fake.routes['/api/super-tabs/$tab/parts']!;
+    fake.routes['/api/super-tabs/$tab/parts'] = (body) {
+      final answer = Map<String, dynamic>.of(
+        load(body) as Map<String, dynamic>,
+      );
+      answer['derived'] = {
+        ...answer['derived'] as Map<String, dynamic>,
+        'chatSettings': {buddiesMobileChat: 'muted'},
+      };
+      return answer;
+    };
+    final session = await start(fake);
+    final list = session.buddyList..watch();
+    await settle();
+
+    expect(row(list, project).unread, isFalse);
+    expect(row(list, project).muted, isTrue);
+    expect(row(list, buddiesWeb).muted, isFalse);
+    expect(list.badge, 0);
+
+    // Back to Mentions only from this phone: unread again at once.
+    fake.routes['/api/super-tabs/$tab/conversations/$buddiesMobileChat/'
+        'notifications'] = (_) =>
+        Completer<Object?>().future;
+    unawaited(
+      session.inbox
+          .reader(tab)!
+          .setNotify(buddiesMobileChat, SwarmNotify.mentions),
+    );
+    await settle();
+    expect(row(list, project).unread, isTrue);
+    expect(row(list, project).muted, isFalse);
+    expect(list.badge, 1);
   });
 
   test('a chat past its read mark is unread; the badge counts those', () async {
