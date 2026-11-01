@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:dio/dio.dart' show CancelToken;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -21,6 +22,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../theme/sheet_shape.dart';
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
+import 'swarm_paste_fakes.dart';
 
 /// A Swarm chat on the phone, as Tony's prototype has it: who wrote each
 /// message and in what role, follow-ups grouped, a reply's quote that brings
@@ -179,13 +181,24 @@ void main() {
     String? decisionId,
     bool settle = true,
     bool homeC = false,
+    bool systemMenu = false,
   }) async {
     await tester.pumpWidget(
       // The app's own theme, as the shell sets it: its field defaults are
       // what the composer has to hold back.
       MaterialApp(
         theme: grid.buildAppTheme(brightness: Brightness.dark),
-        builder: (context, child) => SwarmScope(notifier: host, child: child!),
+        builder: (context, child) {
+          final scoped = SwarmScope(notifier: host, child: child!);
+          // iOS's own edit menu, which the field shows on a phone that has it.
+          return systemMenu
+              ? MediaQuery(
+                  data: MediaQuery.of(context)
+                      .copyWith(supportsShowingSystemContextMenu: true),
+                  child: scoped,
+                )
+              : scoped;
+        },
         home: SwarmConversationPage(
           swarmId: swarmId,
           conversationId: conversation,
@@ -212,6 +225,7 @@ void main() {
     bool settle = true,
     bool homeC = false,
     SwarmUpload upload = refuseSwarmUpload,
+    bool systemMenu = false,
   }) async {
     features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
       ..value = {PhoneExperiment.swarm};
@@ -235,6 +249,7 @@ void main() {
       messageId: messageId,
       decisionId: decisionId,
       homeC: homeC,
+      systemMenu: systemMenu,
     );
     return host;
   }
@@ -2766,6 +2781,33 @@ void main() {
         );
       });
 
+      testWidgets('Paste in the reply box attaches the clipboard\'s picture '
+          'to the reply, never to the chat\'s own box', (tester) async {
+        FakeSwarmClipboard(image: pngBytes()).install(tester);
+        final fake = threaded();
+        await pump(tester, fake, upload: held);
+        await tester.tap(key('swarm-thread-line-m1'));
+        await tester.pumpAndSettle();
+
+        await openFieldMenu(tester, key('swarm-thread-field'));
+        await tester.tap(
+          find.widgetWithText(TextSelectionToolbarTextButton, 'Paste'),
+        );
+        await tester.pumpAndSettle();
+        expect(inBox(key('swarm-outgoing-pasted-image.png')), findsOneWidget);
+
+        await tester.tap(key('swarm-thread-send'));
+        await tester.pump();
+        expect(uploads.single.name, 'pasted-image.png');
+        uploads.single.answer.complete(attachment('f1'));
+        await tester.pumpAndSettle();
+
+        expect(fake.commands.single['replyTo'], 'm1');
+        expect(fake.commands.single['attachmentIds'], ['f1']);
+        await back(tester);
+        expect(key('swarm-outgoing-pasted-image.png'), findsNothing);
+      });
+
       testWidgets('a reply of files alone shows them while it is sent', (
         tester,
       ) async {
@@ -3900,6 +3942,299 @@ void main() {
 
       expect(key('swarm-read-only'), findsOneWidget);
       expect(key('swarm-attach'), findsNothing);
+    });
+
+    group('pasting a picture', () {
+      Finder field() => find.byType(TextField);
+      Finder menuItem(String label) =>
+          find.widgetWithText(TextSelectionToolbarTextButton, label);
+
+      testWidgets('long-press Paste attaches the clipboard\'s picture as a '
+          'chip, as a photo from the library', (tester) async {
+        FakeSwarmClipboard(image: pngBytes(2048)).install(tester);
+        await pump(tester, backend([message('m1', 1)]));
+
+        await openFieldMenu(tester, field());
+        await tester.tap(menuItem('Paste'));
+        await tester.pumpAndSettle();
+
+        expect(key('swarm-outgoing-pasted-image.png'), findsOneWidget);
+        expect(find.text('2 KB'), findsOneWidget);
+        expect(key('swarm-attach-note'), findsNothing);
+        expect(menuItem('Paste'), findsNothing, reason: 'the menu closed');
+      });
+
+      testWidgets('a Buddy chat\'s box takes a pasted picture too', (
+        tester,
+      ) async {
+        FakeSwarmClipboard(image: pngBytes()).install(tester);
+        await pump(
+          tester,
+          backend(
+            [message('m1', 1)],
+            g1: {'kind': 'buddy', 'buddyOwnerId': me},
+          ),
+        );
+
+        await openFieldMenu(tester, field());
+        await tester.tap(menuItem('Paste'));
+        await tester.pumpAndSettle();
+
+        expect(key('swarm-outgoing-pasted-image.png'), findsOneWidget);
+      });
+
+      testWidgets('several pastes are numbered beside the photos, never '
+          'swapped in', (tester) async {
+        FakeSwarmClipboard(image: pngBytes()).install(tester);
+        await pump(tester, backend([message('m1', 1)]));
+
+        for (var i = 0; i < 3; i++) {
+          await openFieldMenu(tester, field());
+          await tester.tap(menuItem('Paste'));
+          await tester.pumpAndSettle();
+        }
+
+        expect(key('swarm-outgoing-pasted-image.png'), findsOneWidget);
+        expect(key('swarm-outgoing-pasted-image-2.png'), findsOneWidget);
+        expect(key('swarm-outgoing-pasted-image-3.png'), findsOneWidget);
+      });
+
+      testWidgets('a picture over 256 MB says why and is not attached', (
+        tester,
+      ) async {
+        FakeSwarmClipboard(image: Uint8List(256 * 1024 * 1024 + 1))
+            .install(tester);
+        await pump(tester, backend([message('m1', 1)]));
+
+        await openFieldMenu(tester, field());
+        await tester.tap(menuItem('Paste'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('pasted-image.png is over 256 MB.'), findsOneWidget);
+        expect(key('swarm-outgoing-pasted-image.png'), findsNothing);
+      });
+
+      testWidgets('a picture the phone cannot read says so', (tester) async {
+        FakeSwarmClipboard(image: Uint8List(0)).install(tester);
+        await pump(tester, backend([message('m1', 1)]));
+
+        await openFieldMenu(tester, field());
+        await tester.tap(menuItem('Paste'));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.text("That picture isn't one this phone can read."),
+          findsOneWidget,
+        );
+        expect(key('swarm-outgoing-pasted-image.png'), findsNothing);
+      });
+
+      testWidgets('text on the clipboard pastes as before, and the picture '
+          'is never read', (tester) async {
+        final clipboard = FakeSwarmClipboard(text: 'Ship it')..install(tester);
+        await pump(tester, backend([message('m1', 1)]));
+
+        await openFieldMenu(tester, field());
+        expect(menuItem('Paste image'), findsNothing);
+        await tester.tap(menuItem('Paste'));
+        await tester.pumpAndSettle();
+
+        expect(tester.widget<TextField>(field()).controller!.text, 'Ship it');
+        expect(clipboard.reads, 0);
+        expect(find.byKey(const ValueKey('swarm-outgoing')), findsNothing);
+      });
+
+      testWidgets('text and a picture both there: Paste is the text, Paste '
+          'image beside it the picture', (tester) async {
+        final clipboard = FakeSwarmClipboard(image: pngBytes(), text: 'Hi')
+          ..install(tester);
+        await pump(tester, backend([message('m1', 1)]));
+
+        await openFieldMenu(tester, field());
+        await tester.tap(menuItem('Paste'));
+        await tester.pumpAndSettle();
+        expect(tester.widget<TextField>(field()).controller!.text, 'Hi');
+        expect(clipboard.reads, 0);
+
+        await openFieldMenu(tester, field());
+        await tester.tap(menuItem('Paste image'));
+        await tester.pumpAndSettle();
+        expect(key('swarm-outgoing-pasted-image.png'), findsOneWidget);
+        expect(tester.widget<TextField>(field()).controller!.text, 'Hi');
+      });
+
+      testWidgets('nothing but text is offered while no picture is there', (
+        tester,
+      ) async {
+        final clipboard = FakeSwarmClipboard()..install(tester);
+        await pump(tester, backend([message('m1', 1)]));
+        await tester.enterText(field(), 'draft');
+        await tester.pump();
+
+        await openFieldMenu(tester, field());
+
+        expect(menuItem('Paste'), findsNothing);
+        expect(menuItem('Paste image'), findsNothing);
+        expect(clipboard.reads, 0);
+      });
+
+      testWidgets('with ten files waiting, Paste offers no picture', (
+        tester,
+      ) async {
+        pickSwarmFiles = () async => [
+          for (var i = 0; i < 10; i++) picked('f$i.txt', 3),
+        ];
+        final clipboard = FakeSwarmClipboard(image: pngBytes())
+          ..install(tester);
+        await pump(tester, backend([message('m1', 1)]));
+        await attach(tester, 'swarm-attach-files');
+
+        await openFieldMenu(tester, field());
+
+        expect(menuItem('Paste'), findsNothing);
+        expect(clipboard.reads, 0);
+      });
+
+      testWidgets('a paste while the files go up waits for the next message: '
+          'the post carries only its own files', (tester) async {
+        pickSwarmFiles = () async => [picked('crash.log', 12)];
+        final clipboard = FakeSwarmClipboard(image: pngBytes())
+          ..hold = true
+          ..install(tester);
+        final fake = backend([message('m1', 1)]);
+        await pump(tester, fake, upload: held);
+        await attach(tester, 'swarm-attach-files');
+
+        // Paste tapped; the clipboard answers only once the upload is on.
+        await openFieldMenu(tester, field());
+        await tester.tap(menuItem('Paste'));
+        await tester.pump();
+        await tester.tap(key('swarm-send'));
+        await tester.pump();
+        expect(uploads.single.name, 'crash.log');
+
+        await openFieldMenu(tester, field());
+        expect(
+          menuItem('Paste'),
+          findsNothing,
+          reason: 'off while files go up, as the + is',
+        );
+        clipboard.release();
+        await tester.pump();
+        await tester.pump();
+        expect(key('swarm-outgoing-pasted-image.png'), findsOneWidget);
+
+        uploads.single.answer.complete(attachment('f1'));
+        await tester.pumpAndSettle();
+
+        expect(uploads, hasLength(1), reason: 'the picture did not go up');
+        expect(fake.commands.single['attachmentIds'], ['f1']);
+        expect(key('swarm-outgoing-crash.log'), findsNothing);
+        expect(key('swarm-outgoing-pasted-image.png'), findsOneWidget);
+      });
+
+      testWidgets('signed out while the clipboard is read, nothing is added '
+          'to any chat', (tester) async {
+        final clipboard = FakeSwarmClipboard(image: pngBytes())
+          ..hold = true
+          ..install(tester);
+        final host = await pump(tester, backend([message('m1', 1)]));
+
+        await openFieldMenu(tester, field());
+        await tester.tap(menuItem('Paste'));
+        await tester.pump();
+        account.value = null;
+        await frames(tester);
+        account.value = me;
+        await host.session!.inbox.refresh();
+        await tester.pumpAndSettle();
+        clipboard.release();
+        await tester.pumpAndSettle();
+
+        expect(tester.takeException(), isNull);
+        expect(key('swarm-outgoing-pasted-image.png'), findsNothing);
+        expect(key('swarm-attach-note'), findsNothing);
+      });
+
+      testWidgets('a picture the keyboard puts in is attached the same way', (
+        tester,
+      ) async {
+        FakeSwarmClipboard().install(tester);
+        await pump(tester, backend([message('m1', 1)]));
+        await tester.tap(field());
+        await tester.pump();
+
+        final editable = tester.state<EditableTextState>(
+          find.byType(EditableText),
+        );
+        expect(
+          editable.textInputConfiguration.allowedMimeTypes,
+          contains('image/gif'),
+        );
+        editable.insertContent(
+          KeyboardInsertedContent(
+            mimeType: 'image/gif',
+            uri: 'content://keyboard/1',
+            data: pngBytes(),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(key('swarm-outgoing-pasted-image.gif'), findsOneWidget);
+      });
+
+      testWidgets('on iOS the system menu carries Paste for the picture', (
+        tester,
+      ) async {
+        debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+        final shown = <List<Object?>>[];
+        FakeSwarmClipboard(image: pngBytes()).install(tester);
+        final messenger = tester.binding.defaultBinaryMessenger;
+        messenger.setMockMethodCallHandler(SystemChannels.platform, (
+          call,
+        ) async {
+          if (call.method == 'ContextMenu.showSystemContextMenu') {
+            shown.add(
+              ((call.arguments as Map)['items'] as List).cast<Object?>(),
+            );
+          }
+          return null;
+        });
+        try {
+          await pump(tester, backend([message('m1', 1)]), systemMenu: true);
+          await tester.tap(field());
+          await tester.pump();
+          tester
+              .state<EditableTextState>(find.byType(EditableText))
+              .showToolbar();
+          await tester.pumpAndSettle();
+
+          final menu = tester.widget<SystemContextMenu>(
+            find.byType(SystemContextMenu),
+          );
+          final paste = menu.items
+              .whereType<IOSSystemContextMenuItemCustom>()
+              .single;
+          expect(paste.title, 'Paste');
+          expect(shown, isNotEmpty);
+
+          await messenger.handlePlatformMessage(
+            'flutter/platform',
+            const JSONMethodCodec().encodeMethodCall(
+              MethodCall('ContextMenu.onPerformCustomAction', [
+                0,
+                paste.hashCode.toString(),
+              ]),
+            ),
+            (_) {},
+          );
+          await tester.pumpAndSettle();
+
+          expect(key('swarm-outgoing-pasted-image.png'), findsOneWidget);
+        } finally {
+          debugDefaultTargetPlatformOverride = null;
+        }
+      });
     });
   });
   group('the delivery line under the newest own message', () {

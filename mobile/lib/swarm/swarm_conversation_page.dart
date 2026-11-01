@@ -37,6 +37,7 @@ import 'swarm_message_link.dart';
 import 'swarm_message_receipt.dart';
 import 'swarm_message_row.dart';
 import 'swarm_need_rows.dart';
+import 'swarm_paste.dart';
 import 'swarm_profile_sheet.dart';
 import 'swarm_project_page.dart';
 import 'swarm_reactions.dart';
@@ -710,6 +711,16 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       _picking = false;
     }
   }
+
+  /// A picture pasted into the composer ([pasteSwarmImage]), into [c]'s
+  /// files, as the + puts a photo there.
+  Future<void> _pasteImage(SwarmConversation c, SwarmPastedImage image) =>
+      pasteSwarmImage(
+        c.files,
+        image,
+        stillWanted: () => mounted && _conversation == c,
+        note: (note) => _attachNote.value = note,
+      );
 
   /// How far up the chat the person reads back, past which a message that
   /// arrives waits below instead of pushing up what they read.
@@ -1975,6 +1986,12 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                   controller: _text,
                   focus: _focus,
                   hint: hint,
+                  imagePaste: swarmSendsFiles
+                      ? SwarmImagePaste(
+                          enabled: !c.uploading && c.files.room > 0,
+                          onImage: (image) => unawaited(_pasteImage(c, image)),
+                        )
+                      : null,
                 ),
               ),
               if (_voice case final voice?)
@@ -3004,11 +3021,16 @@ class SwarmMessageField extends StatelessWidget {
     required this.focus,
     required this.hint,
     this.fieldKey = const ValueKey('swarm-field'),
+    this.imagePaste,
   });
 
   final TextEditingController controller;
   final FocusNode focus;
   final String hint;
+
+  /// Where a picture pasted into the field goes ([swarmFieldMenu]); none
+  /// takes text alone.
+  final SwarmImagePaste? imagePaste;
 
   /// The pill's key: the chat's and a thread's box are told apart by it.
   final Key fieldKey;
@@ -3055,6 +3077,16 @@ class SwarmMessageField extends StatelessWidget {
             enableSuggestions: ComposingKeyboard.enableSuggestions,
             smartDashesType: SmartDashesType.disabled,
             smartQuotesType: SmartQuotesType.disabled,
+            contextMenuBuilder: (context, field) =>
+                swarmFieldMenu(context, field, imagePaste),
+            contentInsertionConfiguration: switch (imagePaste) {
+              final paste? => ContentInsertionConfiguration(
+                allowedMimeTypes: swarmInsertedImageTypes,
+                onContentInserted: (content) =>
+                    paste.onImage(SwarmPastedImage.inserted(content)),
+              ),
+              null => null,
+            },
             cursorColor: AppPalette.accentOnSurface,
             cursorWidth: 2,
             style: swarmChatText(16, height: 22 / 16),
