@@ -66,7 +66,9 @@ class SuperTabMention implements SwarmAskItem {
       leadName = row['leadName'] as String? ?? 'Lead',
       text = row['text'] as String? ?? '',
       createdAt = DateTime.tryParse(row['createdAt'] as String? ?? ''),
-      resolvedBy = row['resolvedBy'] as String?;
+      resolvedBy = row['resolvedBy'] as String?,
+      threadId = row['threadId'] as String?,
+      messageSequence = (row['messageSequence'] as num?)?.toInt();
   @override
   final String id, projectName, conversationId, conversationTitle;
   final String projectId, messageId, leadName, text;
@@ -75,6 +77,14 @@ class SuperTabMention implements SwarmAskItem {
 
   /// `reply` or `done` once it moved to Earlier; null while it waits.
   final String? resolvedBy;
+
+  /// The thread's root when the tag is in a reply only in its thread: it
+  /// counts on Threads (`SwarmThreads.threadMentions`). Null in the main
+  /// stream, and from a backend before it.
+  final String? threadId;
+
+  /// The tagging message's sequence; null from a backend before it.
+  final int? messageSequence;
 }
 
 /// The reader's open decisions and waiting tags in one Swarm, read from the
