@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'model.dart';
 import 'prompt_alerts.dart';
 import 'swarm_chat_cache.dart';
+import 'swarm_outbox.dart';
 import 'swarm_outgoing_files.dart';
 import 'swarm_reader.dart';
 import 'swarm_request.dart';
@@ -33,6 +34,7 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
     this.reader,
     this.id, {
     this.uploadTimeout = const Duration(minutes: 2),
+    this.sendTimeout = SwarmOutbox.defaultTimeout,
     this._shown = true,
     this._heldAt,
   }) {
@@ -55,6 +57,9 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
 
   /// How long an upload may go without a byte moving before the send gives up.
   final Duration uploadTimeout;
+
+  /// How long a post waits for its answer before it says Not sent.
+  final Duration sendTimeout;
 
   /// The files waiting to go with the next post. They stay in memory — a
   /// large one on disk, in the app's temporary folder — and go when the chat
@@ -155,15 +160,19 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
   /// Read through the newest message seen in the main stream, while it is
   /// [shown]: [heldAt] once it is read, else the last. A reply only in its
   /// thread is not on the chat's screen, so it never moves the mark (the
-  /// desktop's `_loadedMessageSequence`): a mark cannot move back.
+  /// desktop's `_loadedMessageSequence`): a mark cannot move back. A server
+  /// too old to say a chat's newest main-stream message counts any, as the
+  /// desktop does there.
   void _markRead() {
     if (!_shown) return;
     final held = _heldAt;
     final at = held == null
         ? messages.length - 1
         : messages.lastIndexWhere((m) => m.id == held);
+    final group = conversation;
+    final mainOnly = group == null || group.lastMainSequence != null;
     for (var i = at; i >= 0; i--) {
-      if (!messages[i].inMainStream) continue;
+      if (mainOnly && !messages[i].inMainStream) continue;
       reader.readMarks?.markRead(id, messages[i].sequence);
       return;
     }
@@ -173,7 +182,7 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
   String? error;
 
   /// A post is on its way.
-  bool sending = false;
+  bool get sending => _outbox.sending;
 
   /// Tells the composer what changed in it — the draft, the message it
   /// answers, a post leaving it — while this notifier itself tells the
@@ -219,18 +228,40 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
   /// names them: an agent's is a recipient, a person's a tag.
   final _mentions = <String, String>{};
 
-  /// The post on its way, then — while its answer never came — retried under
-  /// the same operation id, so the backend runs it once.
-  Map<String, dynamic>? _pending;
+  /// The person's posts on their way, each sent on its own and — while its
+  /// answer never came — retried under its own operation id, so the backend
+  /// runs it once.
+  late final SwarmOutbox _outbox = SwarmOutbox(
+    request: reader.request,
+    path: '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}/commands',
+    timeout: sendTimeout,
+    onChanged: () {
+      if (!_disposed) _tell();
+    },
+    onTaken: (post) {
+      if (_disposed) return;
+      _uploads.forget(post.files);
+      if (error != null && error == _postError && _outbox.unconfirmed == null) {
+        error = null;
+      }
+      unawaited(reader.refresh());
+      // Shown as sent until the read that brings it back.
+      unawaited(loadFromNow());
+    },
+    onRefused: (post) {
+      if (_disposed) return;
+      // A refusal of the files themselves sends them up once more; one of
+      // the post (a mention, a recipient) leaves them uploaded.
+      if (post.refusedBy?.code.contains('ATTACHMENT') ?? false) {
+        _uploads.forget(post.files);
+      }
+      _restore(post);
+      error = post.error;
+    },
+  );
 
-  /// What the draft was when [_pending] left it: a refusal puts it back.
-  ({
-    String draft,
-    Map<String, String> mentions,
-    SuperTabMessage? replyTo,
-    List<SwarmOutgoingFile> files,
-  })?
-  _sent;
+  /// The [error] a post's lost answer set: its later answer takes it back.
+  String? _postError;
 
   SuperTabMessage? _replyingTo;
 
@@ -254,28 +285,19 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
       ? SwarmChatState.locating
       : SwarmChatState.loading;
 
-  /// A post was sent and not confirmed: [send] retries it.
-  bool get unconfirmed => _pending != null && !sending;
+  /// A post was sent and not confirmed: [send] with nothing typed, or
+  /// [retry], sends it again.
+  bool get unconfirmed => _outbox.unconfirmed != null;
 
-  /// The post on its way or not confirmed, out of the draft: drawn at the
-  /// foot of the chat, "Sending…" and then [unconfirmed], until it is read
-  /// back.
-  ({String text, String? replyTo, List<SwarmOutgoingFile> files})? get pending {
-    final command = _pending?['command'] as Map?;
-    if (command == null) return null;
-    return (
-      text: command['text'] as String,
-      replyTo: command['replyTo'] as String?,
-      files: _sent?.files ?? const [],
-    );
-  }
+  /// The posts on their way, taken or not confirmed, oldest first: drawn at
+  /// the foot of the chat, each "Sending…", as sent, or "Not sent · Retry",
+  /// until a read brings it back.
+  List<SwarmPost> get outgoing => _outbox.posts;
 
-  /// The composer may post now: there is text or a file, and no post or
-  /// upload is under way.
+  /// The composer may post now: there is text or a file, and no upload is
+  /// under way. A post on its way never holds the next one back.
   bool get canSend =>
       canPost &&
-      _pending == null &&
-      !sending &&
       !uploading &&
       (_draft.trim().isNotEmpty || files.files.isNotEmpty);
 
@@ -466,7 +488,7 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
         messages.isNotEmpty ||
         _read ||
         _draft.isNotEmpty ||
-        _pending != null ||
+        !_outbox.isEmpty ||
         _replyingTo != null ||
         error != null;
     _refused = true;
@@ -479,8 +501,7 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
     }
     _threadFiles.clear();
     _mentions.clear();
-    _pending = null;
-    _sent = null;
+    _outbox.clear();
     _replyingTo = null;
     _reacting.clear();
     error = null;
@@ -504,6 +525,14 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
       reading = _reading = read;
     }
     return locating == null ? reading : Future.wait([locating, reading]);
+  }
+
+  /// What came after the newest shown, read from now on: a read under way
+  /// may have been asked before what calls this happened (a post taken), so
+  /// a new one follows it.
+  Future<void> loadFromNow() async {
+    if (_reading case final reading?) await reading;
+    return load();
   }
 
   /// The page before the oldest shown.
@@ -622,6 +651,8 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
           byId.values.toList()..sort(superTabMessageOrder),
         );
       }
+      // A post read back shows as its message, once, whatever its answer.
+      changed |= _outbox.settle(messages);
       if (older || !_read || latest) {
         final before = SuperTabPage.read(answer['next']);
         changed |=
@@ -663,83 +694,74 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
   }
 
   /// Posts the draft and its [files], to the agents mentioned in it and as a
-  /// reply to [replyingTo] — or, while a post is [unconfirmed], sends that one
-  /// again. The files go up first, one by one, the draft and the files staying
-  /// in the composer meanwhile; then the post leaves the draft at once, with
-  /// the files, and shows as [pending] until it is read back. True once the
-  /// backend took it.
+  /// reply to [replyingTo] — or, with nothing typed while a post is
+  /// [unconfirmed], sends that one again. The files go up first, one by one,
+  /// the draft and the files staying in the composer meanwhile; then the post
+  /// leaves the draft at once, with the files, and shows in [outgoing] until
+  /// it is read back. A post on its way never holds this one back. True once
+  /// the backend took it.
   Future<bool> send() async {
-    if (sending || uploading || _disposed || !canPost) return false;
-    var pending = _pending;
-    if (pending == null) {
-      final outgoing = files.files;
-      if ((_draft.trim().isEmpty && outgoing.isEmpty) || conversation == null) {
-        return false;
-      }
-      final ids = await _uploadAll(outgoing);
-      if (ids == null || _disposed) return false;
-      pending = _compose(ids);
-      if (pending == null) return false;
-      _sent = (
-        draft: _draft,
-        mentions: Map.of(_mentions),
-        replyTo: _replyingTo,
-        files: outgoing,
-      );
-      _draft = '';
-      _mentions.clear();
-      _replyingTo = null;
-      // Only what goes with this post: more may have been added meanwhile.
-      for (final file in outgoing) {
-        files.remove(file);
-      }
+    if (uploading || _disposed || !canPost) return false;
+    final outgoing = files.files;
+    if (_draft.trim().isEmpty && outgoing.isEmpty) {
+      final again = _outbox.unconfirmed;
+      return again != null && await retry(again);
     }
-    _pending = pending;
-    sending = true;
+    if (conversation == null) return false;
+    final ids = await _uploadAll(outgoing);
+    if (ids == null || _disposed) return false;
+    final body = _compose(ids);
+    if (body == null) return false;
+    final post = SwarmPost(
+      body: body,
+      messageId: superTabMessageId(
+        tabId: reader.tabId,
+        accountId: reader.accountId,
+        operationId: body['operationId'] as String,
+      ),
+      files: outgoing,
+      held: (draft: _draft, mentions: Map.of(_mentions), replyTo: _replyingTo),
+    );
+    _draft = '';
+    _mentions.clear();
+    _replyingTo = null;
+    // Only what goes with this post: more may have been added meanwhile.
+    for (final file in outgoing) {
+      files.remove(file);
+    }
     error = null;
-    _tell();
-    try {
-      await reader.request(
-        'POST',
-        '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}/commands',
-        body: pending,
-      );
-    } on SuperTabFailure catch (failure) {
-      // Closed meanwhile (access lost, New message gone): its draft and files
-      // went with it, and nobody waits on the answer.
-      if (_disposed) return false;
-      // A definitive refusal made no change: the text goes back to the draft
-      // to correct. A lost answer keeps its receipt, so a retry is the same
-      // post.
-      final status = failure.statusCode;
-      if (status >= 400 && status < 500 && status != 408 && status != 429) {
-        // A refusal of the files themselves sends them up once more; one of
-        // the post (a mention, a recipient) leaves them uploaded.
-        if (failure.code.contains('ATTACHMENT')) {
-          _uploads.forget(_sent?.files ?? const []);
-        }
-        _pending = null;
-        _restore();
-      }
-      error = failure.message;
+    return _answered(post, await _outbox.add(post));
+  }
+
+  /// Sends [post], not confirmed, again under its own operation id: the
+  /// backend posts it once however often it goes.
+  Future<bool> retry(SwarmPost post) async {
+    if (_disposed ||
+        !canPost ||
+        post.state != SwarmPostState.unconfirmed ||
+        !_outbox.posts.contains(post)) {
       return false;
-    } catch (_) {
-      error = 'Your message was not sent. Retry to check it.';
-      return false;
-    } finally {
-      sending = false;
-      if (!_disposed) _tell();
     }
-    if (_disposed) return true;
-    _uploads.forget(_sent?.files ?? const []);
-    unawaited(reader.refresh());
-    // Shown as on its way until the read that brings it back.
-    await load();
-    if (_disposed || !identical(_pending, pending)) return true;
-    _pending = null;
-    _sent = null;
+    error = null;
+    return _answered(post, await _outbox.deliver(post));
+  }
+
+  /// What [post]'s try came to, said: a refusal puts its text back in the
+  /// draft, a lost answer says Not sent.
+  bool _answered(SwarmPost post, SwarmPostOutcome outcome) {
+    if (_disposed) return outcome == SwarmPostOutcome.taken;
+    switch (outcome) {
+      case SwarmPostOutcome.taken:
+        return true;
+      case SwarmPostOutcome.gone:
+      // Put back and said by [SwarmOutbox.onRefused].
+      case SwarmPostOutcome.refused:
+        return false;
+      case SwarmPostOutcome.lost:
+        error = _postError = post.error;
+    }
     _tell();
-    return true;
+    return false;
   }
 
   /// Uploads each of [outgoing] that has not gone up yet and returns their
@@ -1045,18 +1067,24 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
   }
 
   /// A refused post's text back in the draft, before anything typed since.
-  void _restore() {
-    final sent = _sent;
-    _sent = null;
-    if (sent == null) return;
+  void _restore(SwarmPost post) {
+    final sent = post.held;
+    if (sent
+        is! ({
+          String draft,
+          Map<String, String> mentions,
+          SuperTabMessage? replyTo,
+        })) {
+      return;
+    }
     _draft = _draft.trim().isEmpty ? sent.draft : '${sent.draft}\n$_draft';
     _mentions.addAll(sent.mentions);
     _replyingTo ??= sent.replyTo;
-    if (sent.files.isNotEmpty) {
+    if (post.files.isNotEmpty) {
       final since = files.files;
       files
         ..clear()
-        ..add([...sent.files, ...since]);
+        ..add([...post.files, ...since]);
     }
   }
 
@@ -1094,6 +1122,7 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
   void dispose() {
     _disposed = true;
     _uploads.close();
+    _outbox.close();
     for (final box in _threadFiles.values) {
       box.clear();
     }

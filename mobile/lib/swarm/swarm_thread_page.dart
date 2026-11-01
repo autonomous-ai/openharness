@@ -16,6 +16,7 @@ import 'swarm_choices.dart';
 import 'swarm_conversation.dart';
 import 'swarm_conversation_page.dart';
 import 'swarm_message_row.dart';
+import 'swarm_outbox.dart';
 import 'swarm_paste.dart';
 import 'swarm_session.dart';
 import 'swarm_thread.dart';
@@ -32,7 +33,10 @@ typedef SwarmThreadRow = Widget Function(
 });
 
 /// Draws the person's reply on its way: "Sending…", then "Not sent · Retry"
-typedef SwarmThreadPending = Widget Function(SwarmThread thread, String text);
+typedef SwarmThreadPending = Widget Function(
+  SwarmThread thread,
+  SwarmPost post,
+);
 
 /// One thread of a chat, full screen as Slack Mobile opens one: its root at
 /// the top, "N replies", its replies, and a reply box at the foot with Also
@@ -415,7 +419,7 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
     }
     final replies = t.replies;
     final count = t.count;
-    final pending = t.pending;
+    final pending = t.outgoing;
     Widget row(SuperTabMessage m, {required bool grouped}) {
       final built = widget.row(
         t,
@@ -496,7 +500,7 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
                 replies[index - 1].authorId == reply.authorId &&
                 replies[index - 1].fromAgent == reply.fromAgent,
           ),
-        if (pending != null) widget.pending(t, pending),
+        for (final post in pending) widget.pending(t, post),
       ],
     );
   }
@@ -513,7 +517,7 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
         // The first read's failure is said in the body, with Try again.
         if (error != null &&
             error != t.readError &&
-            (t.rootMessage != null || t.pending != null))
+            (t.rootMessage != null || t.outgoing.isNotEmpty))
           Padding(
             padding: const EdgeInsets.fromLTRB(
               AppSpace.screenInset,
@@ -548,9 +552,8 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
   /// what is typed, then Also send, the +, the mic and a round Send (the
   /// desktop's thread composer, with the main chat's mic).
   Widget _box(SwarmThread t, Tty tty) {
+    // A reply on its way never holds the box: the next is typed meanwhile.
     final canSend = t.canSend;
-    // A reply not confirmed is sent again from where it shows.
-    final writable = !t.sending && t.pending == null;
     final canAttach = !t.uploading && t.files.room > 0;
     return Container(
       key: const ValueKey('swarm-thread-box'),
@@ -633,7 +636,7 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
                 child: _AlsoSend(
                   label: t.alsoSendLabel,
                   value: t.alsoSend,
-                  onChanged: writable ? (on) => t.alsoSend = on : null,
+                  onChanged: (on) => t.alsoSend = on,
                 ),
               ),
               if (swarmSendsFiles)

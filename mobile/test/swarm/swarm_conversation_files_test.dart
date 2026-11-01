@@ -123,7 +123,11 @@ void main() {
       'read back', () async {
     final r = rig();
     final taken = Completer<Object?>();
-    r.swarm.routes[commands] = (_) => taken.future;
+    String? receipt;
+    r.swarm.routes[commands] = (body) {
+      receipt = body!['operationId'] as String;
+      return taken.future;
+    };
     final c = await open(r.reader);
     c.files.add([file('a.jpg')]);
 
@@ -131,10 +135,24 @@ void main() {
     await settle();
 
     expect(c.files.files, isEmpty);
-    expect([for (final f in c.pending!.files) f.name], ['a.jpg']);
+    expect([for (final f in c.outgoing.single.files) f.name], ['a.jpg']);
+    r.swarm.routes[messages] = (_) => {
+      'messages': [
+        {
+          'id': sentId(receipt!),
+          'conversationId': 'g1',
+          'text': '',
+          'sequence': 1,
+          'author': {'kind': 'person', 'id': me, 'name': 'Me'},
+          'createdAt': '2026-10-27T01:00:00.000Z',
+        },
+      ],
+      'next': null,
+    };
     taken.complete({'result': <String, dynamic>{}});
     expect(await sending, isTrue);
-    expect(c.pending, isNull);
+    await settle();
+    expect(c.outgoing, isEmpty);
   });
 
   test('a failed upload keeps the draft and the files, sends nothing, and '
@@ -156,7 +174,7 @@ void main() {
     expect([for (final f in c.files.files) f.name], ['a.jpg', 'b.jpg']);
     expect(r.swarm.commands, isEmpty);
     expect(c.uploading, isFalse);
-    expect(c.pending, isNull);
+    expect(c.outgoing, isEmpty);
   });
 
   test('an upload that fails for any other reason says so plainly', () async {
@@ -384,7 +402,7 @@ void main() {
 
     final sending = c.send();
     await settle();
-    expect(c.pending, isNotNull, reason: 'the post is out');
+    expect(c.outgoing, isNotEmpty, reason: 'the post is out');
     c.dispose();
     answer.completeError(
       const SuperTabFailure('FORBIDDEN', 'No access.', statusCode: 403),
@@ -433,7 +451,7 @@ void main() {
       expect(going.cancel.isCancelled, isTrue);
       expect(await sending, isFalse);
       expect(r.swarm.commands, isEmpty);
-      expect(c.pending, isNull);
+      expect(c.outgoing, isEmpty);
       expect(c.files.files, isEmpty);
     });
 
