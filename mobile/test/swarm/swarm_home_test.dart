@@ -524,7 +524,11 @@ void main() {
       await pump(tester, fake);
 
       expect(key('swarm-projects-loading'), findsNothing);
-      expect(key('swarm-title-loading'), findsNothing, reason: 'none will come');
+      expect(
+        key('swarm-title-loading'),
+        findsNothing,
+        reason: 'none will come',
+      );
       final line = tester.widget<Text>(key('swarm-too-old'));
       expect(line.data, swarmServerTooOld);
       expect(line.style?.color, isNot(AppColors.danger));
@@ -538,12 +542,13 @@ void main() {
         )
         .first;
 
-    testWidgets('with nothing over it, Projects has the first room', (
+    testWidgets('under the Threads row, Projects has the usual room', (
       tester,
     ) async {
       await pump(tester, backend());
 
-      expect(first(tester, 'Projects'), isTrue);
+      expect(find.byKey(const ValueKey('swarm-threads-row')), findsOneWidget);
+      expect(first(tester, 'Projects'), isFalse);
     });
 
     testWidgets('over Pinned, Projects has the usual room', (tester) async {
@@ -551,7 +556,7 @@ void main() {
       host.session!.home.pin(tab, project, true);
       await tester.pumpAndSettle();
 
-      expect(first(tester, 'Pinned'), isTrue);
+      expect(first(tester, 'Pinned'), isFalse, reason: 'under Threads');
       expect(first(tester, 'Projects'), isFalse);
     });
   });
@@ -790,11 +795,8 @@ void main() {
         'for ever', (tester) async {
       var now = _halfHourIn();
       final fake = backend()
-        ..routes['/api/super-tabs/$tab/parts'] = (_) => throw SuperTabFailure(
-          'UPDATE_REQUIRED',
-          'Update',
-          statusCode: 426,
-        );
+        ..routes['/api/super-tabs/$tab/parts'] = (_) =>
+            throw SuperTabFailure('UPDATE_REQUIRED', 'Update', statusCode: 426);
       await pump(tester, fake, now: () => now, settle: false);
       await away(
         tester,
@@ -853,10 +855,7 @@ void main() {
       fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
         ...firstLoad(
           head: headData(
-            projects: [
-              inProject(project, 'public'),
-              inProject(web, 'private'),
-            ],
+            projects: [inProject(project, 'public'), inProject(web, 'private')],
           ),
           agents: [agent('agent-builder'), agent('agent-idle')],
           groups: [
@@ -2567,10 +2566,7 @@ void main() {
 
       expect(key('swarm-title-loading'), findsOneWidget);
       expect(key('swarm-title'), findsNothing);
-      expect(
-        inside('swarm-title-button', find.byType(Skeleton)),
-        findsWidgets,
-      );
+      expect(inside('swarm-title-button', find.byType(Skeleton)), findsWidgets);
       expect(find.text('Swarm'), findsNothing, reason: 'no word for a name');
 
       listed.complete();
@@ -2584,24 +2580,26 @@ void main() {
       );
     });
 
-    testWidgets('a start screen has no Swarm coming: the title is no skeleton',
-        (tester) async {
-      final fake = backend();
-      final listed = hold(fake, '/api/super-tabs/list');
-      await pump(
-        tester,
-        fake,
-        computers: _Computers(const []),
-        settle: false,
-      );
+    testWidgets(
+      'a start screen has no Swarm coming: the title is no skeleton',
+      (tester) async {
+        final fake = backend();
+        final listed = hold(fake, '/api/super-tabs/list');
+        await pump(
+          tester,
+          fake,
+          computers: _Computers(const []),
+          settle: false,
+        );
 
-      expect(find.byType(SwarmStartView), findsOneWidget);
-      expect(key('swarm-title-loading'), findsNothing);
-      expect(tester.widget<Text>(key('swarm-title')).data, 'Swarm');
+        expect(find.byType(SwarmStartView), findsOneWidget);
+        expect(key('swarm-title-loading'), findsNothing);
+        expect(tester.widget<Text>(key('swarm-title')).data, 'Swarm');
 
-      listed.complete();
-      await tester.pumpAndSettle();
-    });
+        listed.complete();
+        await tester.pumpAndSettle();
+      },
+    );
 
     testWidgets('the switcher opened before the list answers has a row on its '
         'way, and the Swarm in its place after', (tester) async {
@@ -2678,9 +2676,7 @@ void main() {
         final listed = hold(fake, '/api/super-tabs/list');
         await pump(tester, fake, settle: false);
         final row = height(tester, 'swarm-projects-loading-0');
-        final loading = find.byKey(
-          const ValueKey('swarm-projects-loading-0'),
-        );
+        final loading = find.byKey(const ValueKey('swarm-projects-loading-0'));
         final dot = tester.getCenter(
           find.descendant(of: loading, matching: find.byType(Skeleton)).first,
         );
