@@ -499,6 +499,45 @@ void main() {
       ]);
     });
 
+    testWidgets('⋮ holds the chat\'s Notifications too: Muted is kept, and '
+        'access lost while the sheet is open closes it', (tester) async {
+      final fake = backend(buddy: wren());
+      const notify = '/api/super-tabs/$tab/conversations/$chat/notifications';
+      fake.routes[notify] = (body) => {'notify': body!['notify']};
+      final host = await pump(tester, fake);
+
+      await tester.tap(key('swarm-buddy-menu'));
+      await tester.pumpAndSettle();
+      expect(find.text('Rename Buddy'), findsOneWidget);
+      expect(find.text('notifications'), findsOneWidget);
+      await tester.tap(find.text('Muted'));
+      await tester.pumpAndSettle();
+      expect(
+        [
+          for (final call in fake.calls)
+            if (call.path == notify) call.body,
+        ],
+        [
+          {'notify': 'muted'},
+        ],
+      );
+
+      await tester.tap(key('swarm-buddy-menu'));
+      await tester.pumpAndSettle();
+      expect(find.text('Muted'), findsOneWidget);
+      const refused = SuperTabFailure(
+        'FORBIDDEN',
+        'You cannot read this Swarm.',
+        statusCode: 403,
+      );
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => throw refused;
+      fake.routes['/api/super-tabs/$tab/parts'] = (_) => throw refused;
+      await readAgain(tester, host);
+
+      expect(find.text('Muted'), findsNothing);
+      expect(find.text('Rename Buddy'), findsNothing);
+    });
+
     testWidgets('⋮ Remove Buddy asks first; Cancel removes nothing, Remove '
         'stops it', (tester) async {
       final fake = backend(buddy: wren());
