@@ -155,15 +155,19 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
   /// Read through the newest message seen in the main stream, while it is
   /// [shown]: [heldAt] once it is read, else the last. A reply only in its
   /// thread is not on the chat's screen, so it never moves the mark (the
-  /// desktop's `_loadedMessageSequence`): a mark cannot move back.
+  /// desktop's `_loadedMessageSequence`): a mark cannot move back. A server
+  /// too old to say a chat's newest main-stream message counts any, as the
+  /// desktop does there.
   void _markRead() {
     if (!_shown) return;
     final held = _heldAt;
     final at = held == null
         ? messages.length - 1
         : messages.lastIndexWhere((m) => m.id == held);
+    final group = conversation;
+    final mainOnly = group == null || group.lastMainSequence != null;
     for (var i = at; i >= 0; i--) {
-      if (!messages[i].inMainStream) continue;
+      if (mainOnly && !messages[i].inMainStream) continue;
       reader.readMarks?.markRead(id, messages[i].sequence);
       return;
     }
