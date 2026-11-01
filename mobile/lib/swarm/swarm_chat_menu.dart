@@ -14,7 +14,7 @@ import 'swarm_reader.dart';
 
 /// The chat menu's Notifications rows (the desktop's chat menu, Slack's
 /// channel notifications): one per [SwarmNotify], the reader's own setting
-/// for chat [chatId] ticked, kept on every device of theirs. A tap sets it
+/// for chat [chatId] ticked (✓), kept on every device of theirs. A tap sets it
 /// ([swarmSetNotify]).
 PhoneSheetSection swarmNotifySection(
   BuildContext context,
@@ -35,7 +35,11 @@ PhoneSheetSection swarmNotifySection(
                   SwarmNotify.muted => LucideIcons.bellOff300,
                 },
           label: level.label,
-          onTap: () => unawaited(swarmSetNotify(context, reader, chatId, level)),
+          // The sheet draws no icons: the one set says so at its end.
+          value: level == now ? '✓' : null,
+          valueColor: AppPalette.textPrimary,
+          onTap: () =>
+              unawaited(swarmSetNotify(context, reader, chatId, level)),
         ),
     ],
   );

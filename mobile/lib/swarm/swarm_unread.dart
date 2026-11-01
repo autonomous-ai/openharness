@@ -77,8 +77,7 @@ const _unknown = 1 << 52;
 /// Whether [group] shows as unread: unread, and not muted. A muted chat stays
 /// listed and never counts (the desktop's `unreadShown`).
 bool swarmUnreadShown(SwarmReader reader, SuperTabConversation group) =>
-    !swarmMuted(reader, group) &&
-    (reader.readMarks?.unread(group) ?? false);
+    !swarmMuted(reader, group) && (reader.readMarks?.unread(group) ?? false);
 
 /// Each project's row with something new, by project id: bold while its
 /// project chat or any of its open work shows unread, as the desktop's

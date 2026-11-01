@@ -34,6 +34,7 @@ class SwarmBuddyRow {
   final String? note;
   final SuperTabConversation? chat;
   final SuperTabMessage? last;
+
   /// Its chat has something unread, and is not muted.
   final bool unread;
 
