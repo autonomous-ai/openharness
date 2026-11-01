@@ -251,9 +251,14 @@ class SwarmReadMarks extends ChangeNotifier {
       sequence,
       kept: reader.snapshot?.readMarks[conversationId] ?? 0,
     );
-    // Seen through the first read's mark: it is the person's own now.
+    // Seen through the first read's mark, or through the chat's newest
+    // message in its main stream when replies only in a thread came after
+    // it: the mark is the person's own now.
     final first = _firstRead[conversationId];
-    final seen = first != null && sequence >= first;
+    final main = reader.snapshot?.conversation(conversationId)?.mainSequence;
+    final seen =
+        first != null &&
+        (sequence >= first || (main != null && sequence >= main));
     if (seen) _firstRead.remove(conversationId);
     final moved = sequence > (_marks[conversationId] ?? 0);
     if (!moved && !seen) return;

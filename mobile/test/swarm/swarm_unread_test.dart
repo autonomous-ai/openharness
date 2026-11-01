@@ -317,6 +317,30 @@ void main() {
       expect(chat(r, 'g1'), (bold: false, tags: 0));
     });
 
+    test('reading a chat to its newest main-stream message is a read of its '
+        'tags, though replies only in a thread came after it', () async {
+      final r = await rig(tags: [mentionRow('t1', messageSequence: 3)]);
+      // Read once as it is now: the newest message is a reply only in its
+      // thread.
+      await moveOn(r, {
+        'g1': {
+          ...groupData('g1', title: 'Fix login', lastMessageSequence: 5),
+          'lastMainSequence': 3,
+        },
+      });
+      final fresh = SwarmReadMarks(r.reader, store: null);
+      addTearDown(fresh.dispose);
+      r.reader.readMarks = fresh;
+      await settle();
+      expect(chat(r, 'g1'), (bold: true, tags: 1));
+
+      // The chat read to its end: its newest main-stream message, offline.
+      fresh.markRead('g1', 3);
+      await settle();
+
+      expect(chat(r, 'g1'), (bold: false, tags: 0));
+    });
+
     test("the first read's marks are kept apart on the phone: read back, the "
         'tag still counts, and once read it stays read', () async {
       final store = MemoryKeyValueStore();
