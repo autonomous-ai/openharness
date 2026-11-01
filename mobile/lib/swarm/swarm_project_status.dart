@@ -13,6 +13,7 @@ import '../shared/theme/app_type.dart';
 import 'model.dart';
 import 'swarm_inbox.dart';
 import 'swarm_need_rows.dart';
+import 'swarm_activity_page.dart' show openSwarmActivity;
 import 'swarm_needs_page.dart';
 import 'swarm_reader.dart';
 import 'swarm_session.dart';
@@ -157,7 +158,7 @@ class SwarmProjectStatusCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  _heading(status?.at, waiting.length, folded, chosen),
+                  _heading(context, status?.at, waiting.length, folded, chosen),
                   if (!folded)
                     // A long report, or many decisions, scroll inside the
                     // card, so the chat keeps its room. Each part takes what
@@ -192,10 +193,11 @@ class SwarmProjectStatusCard extends StatelessWidget {
                                     session: session,
                                     need: need,
                                     chevron: LucideIcons.chevronRight300,
-                                    onTap: () => openSwarmNeeds(
+                                    onTap: () => openSwarmActivity(
                                       context,
                                       focus: need.key,
                                       swarmId: swarmId,
+                                      projectId: projectId,
                                     ),
                                   ),
                               ],
@@ -213,35 +215,44 @@ class SwarmProjectStatusCard extends StatelessWidget {
   );
 
   /// "Status · updated 09:52", with how many wait on the person while
-  /// folded, and the fold at its end. While the keyboard alone folds it,
-  /// there is no button, only its room: a tap then would save a fold, or an
-  /// unfold, the person never saw.
-  Widget _heading(DateTime? at, int waiting, bool folded, bool chosen) => Row(
+  /// folded, and the fold at its end. "N need you" opens Activity on this
+  /// project's rows, where they are answered: no chat shows decisions. While
+  /// the keyboard alone folds it, there is no button, only its room: a tap
+  /// then would save a fold, or an unfold, the person never saw.
+  Widget _heading(
+    BuildContext context,
+    DateTime? at,
+    int waiting,
+    bool folded,
+    bool chosen,
+  ) => Row(
     children: [
       Expanded(
-        child: Text.rich(
-          TextSpan(
-            children: [
-              TextSpan(
-                text: 'Status',
-                style: AppType.label(color: AppPalette.textPrimary),
+        child: Row(
+          children: [
+            Flexible(
+              child: Text.rich(
+                TextSpan(
+                  children: [
+                    TextSpan(
+                      text: 'Status',
+                      style: AppType.label(color: AppPalette.textPrimary),
+                    ),
+                    if (at != null)
+                      TextSpan(
+                        text: ' · updated ${swarmStatusUpdatedAt(at, now())}',
+                        style: AppType.caption(color: AppPalette.textSecondary),
+                      ),
+                  ],
+                ),
+                key: ValueKey('swarm-project-status-heading-$projectId'),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
-              if (at != null)
-                TextSpan(
-                  text: ' · updated ${swarmStatusUpdatedAt(at, now())}',
-                  style: AppType.caption(color: AppPalette.textSecondary),
-                ),
-              // Folded, the heading still says something waits.
-              if (folded && waiting > 0)
-                TextSpan(
-                  text: ' · $waiting ${waiting == 1 ? 'needs' : 'need'} you',
-                  style: AppType.caption(color: AppPalette.swarmAccent),
-                ),
-            ],
-          ),
-          key: ValueKey('swarm-project-status-heading-$projectId'),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
+            ),
+            // Folded, the heading still says something waits, and leads to it.
+            if (folded && waiting > 0) _needYou(context, waiting),
+          ],
         ),
       ),
       if (typing)
@@ -256,6 +267,34 @@ class SwarmProjectStatusCard extends StatelessWidget {
         ),
     ],
   );
+
+  /// " · 2 need you", a tap target as tall as the fold beside it: Activity,
+  /// on what waits on the person in this project.
+  Widget _needYou(BuildContext context, int waiting) {
+    final text = '$waiting ${waiting == 1 ? 'needs' : 'need'} you';
+    return Semantics(
+      button: true,
+      label: text,
+      excludeSemantics: true,
+      child: GestureDetector(
+        key: ValueKey('swarm-project-status-needs-you-$projectId'),
+        behavior: HitTestBehavior.opaque,
+        onTap: () =>
+            openSwarmActivity(context, swarmId: swarmId, projectId: projectId),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 44),
+          child: Align(
+            widthFactor: 1,
+            child: Text(
+              ' · $text',
+              maxLines: 1,
+              style: AppType.caption(color: AppPalette.swarmAccent),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// The report as the coordinator wrote it, line for line, with its web links

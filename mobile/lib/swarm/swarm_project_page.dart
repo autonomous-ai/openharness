@@ -101,20 +101,18 @@ void openSwarmProject(
   unawaited(replace ? navigator.pushReplacement(route) : navigator.push(route));
 }
 
-/// A route to chat [conversationId] of Swarm [swarmId], at [messageId] with
-/// [decisionId] asked, as a notice, a link, Activity or a row opens it
-/// ([SwarmOpenedChat]).
+/// A route to chat [conversationId] of Swarm [swarmId], at [messageId], as a
+/// notice, a link, Activity or a row opens it ([SwarmOpenedChat]). A decision
+/// opens in Activity instead, where it is answered.
 Route<void> swarmChatRoute({
   required String swarmId,
   required String conversationId,
   String? messageId,
-  String? decisionId,
 }) => phoneRoute(
   (_) => SwarmOpenedChat(
     swarmId: swarmId,
     conversationId: conversationId,
     messageId: messageId,
-    decisionId: decisionId,
   ),
   listensForItself: true,
 );
@@ -138,11 +136,10 @@ class SwarmOpenedChat extends StatefulWidget {
     required this.swarmId,
     required this.conversationId,
     this.messageId,
-    this.decisionId,
   });
 
   final String swarmId, conversationId;
-  final String? messageId, decisionId;
+  final String? messageId;
 
   @override
   State<SwarmOpenedChat> createState() => _SwarmOpenedChatState();
@@ -257,14 +254,12 @@ class _SwarmOpenedChatState extends State<SwarmOpenedChat> {
       swarmId: widget.swarmId,
       projectId: projectId,
       messageId: widget.messageId,
-      decisionId: widget.decisionId,
     ),
     null => SwarmConversationPage(
       key: const ValueKey('swarm-opened-chat'),
       swarmId: widget.swarmId,
       conversationId: widget.conversationId,
       messageId: widget.messageId,
-      decisionId: widget.decisionId,
     ),
   };
 }
@@ -288,7 +283,6 @@ class SwarmProjectPage extends StatefulWidget {
     this.tabs = SwarmProjectTab.current,
     this.mention,
     this.messageId,
-    this.decisionId,
   });
 
   final String swarmId, projectId;
@@ -303,10 +297,9 @@ class SwarmProjectPage extends StatefulWidget {
   /// ([SwarmConversationPage.mention]).
   final String? mention;
 
-  /// Where its chat opens, as a notice or a link names it: at that message,
-  /// with that decision asked ([SwarmConversationPage.messageId] and
-  /// [SwarmConversationPage.decisionId]). Only the first time the chat shows.
-  final String? messageId, decisionId;
+  /// Where its chat opens, as a notice or a link names it: at that message
+  /// ([SwarmConversationPage.messageId]). Only the first time the chat shows.
+  final String? messageId;
 
   @override
   State<SwarmProjectPage> createState() => _SwarmProjectPageState();
@@ -323,7 +316,7 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
 
   /// Where the chat opens ([SwarmProjectPage.messageId]): forgotten once
   /// another tab is picked, so the chat shown again opens at its end.
-  late String? _messageId = widget.messageId, _decisionId = widget.decisionId;
+  late String? _messageId = widget.messageId;
 
   /// What the page shows of the inbox ([_inboxChanged]): its Swarm's
   /// reader, whether there are several Swarms, why the list was not read.
@@ -575,7 +568,6 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
       header: false,
       mention: widget.mention,
       messageId: _messageId,
-      decisionId: _decisionId,
       homeC: _homeC,
     ),
     SwarmProjectTab.buddy => SwarmProjectBuddy(
@@ -640,7 +632,7 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
                           : swarmChatNews(reader, asks, chat),
                       onSelect: (tab) => setState(() {
                         _tab = tab;
-                        _messageId = _decisionId = null;
+                        _messageId = null;
                       }),
                     ),
                   ),
