@@ -16,6 +16,7 @@ import 'swarm_face.dart';
 import 'swarm_home_cache.dart';
 import 'swarm_home_prefs.dart';
 import 'swarm_inbox.dart';
+import 'swarm_mark_all.dart';
 import 'swarm_notices.dart';
 import 'swarm_profile.dart';
 import 'swarm_request.dart';
@@ -35,6 +36,7 @@ class SwarmSession extends ChangeNotifier {
     required SwarmNotices notices,
     Duration pollInterval = const Duration(seconds: 15),
     this.undoWindow = swarmUndoWindow,
+    this.markAllHold = swarmMarkAllHold,
     SwarmHomeCache? homeCache,
     LocalKeyValueStore? readMarks,
     SwarmTold? told,
@@ -83,6 +85,40 @@ class SwarmSession extends ChangeNotifier {
   /// How long a decision's answer is held before it is sent.
   final Duration undoWindow;
 
+  /// How long Mark all read waits for its Undo before the marks are sent.
+  final Duration markAllHold;
+
+  /// The one Mark all read waiting for its Undo, if any.
+  SwarmMarkAll? get markAll => _markAll;
+  SwarmMarkAll? _markAll;
+
+  /// Mark all read on Home (the desktop's Shift+Esc): every chat of Swarms
+  /// [swarmIds] shown unread reads as read on this phone at once, and on
+  /// the server once [markAllHold] passes without [SwarmMarkAll.undo]. Null
+  /// when nothing is unread. A second one sends the first's marks before
+  /// it starts; leaving the app or closing the session sends them at once.
+  SwarmMarkAll? markAllRead(Iterable<String> swarmIds) {
+    if (_disposed) return null;
+    _markAll?.commit();
+    late final SwarmMarkAll? held;
+    held = SwarmMarkAll.start(
+      [
+        for (final id in swarmIds)
+          if (inbox.reader(id) case final reader? when !reader.accessRevoked)
+            ?reader.readMarks,
+      ],
+      hold: markAllHold,
+      onDone: () {
+        if (_markAll != held) return;
+        _markAll = null;
+        if (!_disposed) notifyListeners();
+      },
+    );
+    _markAll = held;
+    if (held != null) notifyListeners();
+    return held;
+  }
+
   late final SwarmAnnouncer _announcer;
 
   /// What tells of new messages in chats set to All new messages.
@@ -97,8 +133,10 @@ class SwarmSession extends ChangeNotifier {
   bool _foreground = false, _disposed = false;
 
   /// Harness is in front: the Swarms are read every poll, and those a screen
-  /// watches every few seconds. Behind, nothing is.
+  /// watches every few seconds. Behind, nothing is. Going behind sends a
+  /// held Mark all read at once: the app may not come back to send it.
   set foreground(bool value) {
+    if (!value) _markAll?.commit();
     _foreground = value;
     inbox.shown = value;
     _show();
@@ -249,6 +287,8 @@ class SwarmSession extends ChangeNotifier {
 
   @override
   void dispose() {
+    // Closing the account or Swarm is no Undo: held marks go now.
+    _markAll?.commit();
     _disposed = true;
     for (final held in _held.values) {
       held.timer.cancel();
