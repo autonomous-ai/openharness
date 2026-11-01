@@ -1331,6 +1331,25 @@ describe('a sign-in refresh that fails while the lane dials', () => {
     expect(link.status()).toBe('ready')
   })
 
+  it('stops, as not authorized, when the token read says the session is over rather than unavailable', async () => {
+    const over = (code: string) => Object.assign(new Error('sign in again'), { code })
+    const auth = { accessToken: vi.fn(async () => 'token-1') }
+    const { link, server, lines } = await lane({ auth })
+    await link.online()
+    auth.accessToken.mockRejectedValue(over('INVALID_REFRESH'))
+    server.closeCurrent(1012)
+    await until('the failed reconnect', () => lines.some((line) => line.startsWith('device: reconnect failed')), 3_000)
+    expect(link.status()).toBe('error')
+    const reads = auth.accessToken.mock.calls.length
+    await new Promise((resolve) => setTimeout(resolve, 2_500))   // past the next try's backoff
+    expect(auth.accessToken.mock.calls.length).toBe(reads)
+    expect(server.sockets).toHaveLength(1)
+    // Signed out on a first dial reads the same: not authorized, not connecting.
+    const fresh = await lane({ auth: { accessToken: vi.fn(async () => { throw over('MISSING') }) } })
+    expect(await fresh.link.online().then(() => 'ok', (error: Error) => error.message)).toBe('sign in again')
+    expect(fresh.link.status()).toBe('error')
+  }, 12_000)
+
   it('does not keep dialling after the backend says not authorized during a reconnect', async () => {
     const { link, server } = await lane()
     // The backend reads selects and says nothing back, so the reconnect's attach is still waiting when the 4401 lands.
