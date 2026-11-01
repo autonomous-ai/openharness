@@ -256,7 +256,9 @@ class SwarmThreads extends ChangeNotifier {
       }
       return;
     }
-    if (reader.snapshot == null) return;
+    // The Home kept from before is no read ([SwarmReader.heldLoad]): nothing
+    // is asked on its word.
+    if (reader.snapshot == null || reader.heldLoad == 0) return;
     final generation = reader.generation;
     if (generation != _generation) {
       final moved = _generation != null;
@@ -311,7 +313,11 @@ class SwarmThreads extends ChangeNotifier {
   }
 
   Future<void> _read() async {
-    if (reader.accessRevoked || reader.snapshot == null) return;
+    if (reader.accessRevoked ||
+        reader.snapshot == null ||
+        reader.heldLoad == 0) {
+      return;
+    }
     final asked = ++_asked;
     final generation = reader.generation;
     _lastRead = _now();

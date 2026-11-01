@@ -28,6 +28,8 @@ import 'swarm_session.dart';
 import 'swarm_start.dart';
 import 'swarm_style.dart';
 import 'swarm_tabs.dart';
+import 'swarm_threads.dart';
+import 'swarm_threads_page.dart';
 import 'swarm_unread.dart';
 import 'team_glance.dart';
 
@@ -56,7 +58,7 @@ bool swarmHomeListed(SwarmInbox inbox, String swarmId, String projectId) {
 /// Swarm Home, direction C (Tony's prototype C1, 2026-10-30), the Home tab:
 /// its title the Swarm shown, with a switcher to every Swarm, All Swarms and
 /// Join or create ([showSwarmSwitcher]); While you were away, once the person
-/// has been gone a while ([SwarmAwayCard]); then the projects
+/// has been gone a while ([SwarmAwayCard]); then Threads; then the projects
 /// they pinned on this phone, then the others by their latest activity,
 /// those quiet for a day folded under "Other projects" ([swarmHomeLists]).
 /// Every Swarm's, or the one picked ([SwarmHomePrefs.swarmId]). A round +
@@ -65,9 +67,9 @@ bool swarmHomeListed(SwarmInbox inbox, String swarmId, String projectId) {
 /// tab's; who they are, their models and devices, and Settings, the You
 /// tab's.
 ///
-/// Threads, and While you were away's new threads, wait for a read of the
-/// threads with new replies across a Swarm, which the server does not have
-/// yet (Lead, 2026-10-30): the phone reads no chat by chat for them.
+/// Over the projects, the Threads row ([SwarmThreadsRow]): the threads the
+/// person follows in the Swarms shown, bold while one has new replies.
+/// While you were away's new threads still wait for their own count.
 ///
 /// Pushed over another page it has a back button instead of the switcher.
 /// Reads the account's [SwarmSession] from the shell; with none, its skeleton
@@ -88,6 +90,10 @@ class SwarmPage extends StatefulWidget {
 
 class _SwarmPageState extends State<SwarmPage> {
   SwarmSession? _session;
+
+  /// The Threads row's threads, over the Swarms Home shows, while it is in
+  /// sight: out of sight, it asks for none.
+  SwarmThreadsMerge? _threads;
 
   /// Kept out of sight under Harness ([OutOfSight]), as it was left: it is no
   /// Swarm screen meanwhile — a notice still tells what arrives — and draws
@@ -140,7 +146,14 @@ class _SwarmPageState extends State<SwarmPage> {
     _hidden = hidden;
     _tick?.cancel();
     _tick = null;
+    _threads?.dispose();
+    _threads = null;
     if (hidden || session == null) return;
+    _threads = swarmThreadsOf(
+      session,
+      shown: () => _shown(session),
+      changed: session.home,
+    );
     session.enter();
     unawaited(session.inbox.refresh());
     _tick = Timer.periodic(const Duration(minutes: 1), (_) {
@@ -152,6 +165,7 @@ class _SwarmPageState extends State<SwarmPage> {
   void dispose() {
     _lifecycle.dispose();
     _tick?.cancel();
+    _threads?.dispose();
     if (!_hidden) _session?.leave();
     super.dispose();
   }
@@ -389,9 +403,22 @@ class _SwarmPageState extends State<SwarmPage> {
         : null;
     final now = widget.now();
     final away = _awayCard(context, session, shown, picked, now);
+    final threads = _threads;
     return [
       ?away,
-      ..._projects(context, session, shown, now, first: away == null),
+      if (threads != null && shown.isNotEmpty)
+        Padding(
+          padding: EdgeInsets.only(top: away == null ? AppSpace.s : AppSpace.m),
+          child: SwarmGroup(
+            children: [
+              SwarmThreadsRow(
+                threads: threads,
+                onTap: () => openSwarmThreads(context, swarmId: picked),
+              ),
+            ],
+          ),
+        ),
+      ..._projects(context, session, shown, now, first: false),
     ];
   }
 
@@ -567,9 +594,7 @@ class _SwarmPageState extends State<SwarmPage> {
         const SizedBox(height: 8),
         SwarmGroup(
           key: ValueKey('swarm-projects-error-$id'),
-          children: [
-            SwarmRow(title: error, onTap: null),
-          ],
+          children: [SwarmRow(title: error, onTap: null)],
         ),
       ],
     ];
@@ -621,7 +646,6 @@ class _SwarmPageState extends State<SwarmPage> {
     SwarmCaption('Projects', first: first),
     SwarmSkeletonRows(id: 'swarm-projects-loading', dot: true),
   ];
-
 }
 
 /// A Swarm's tile on its way.
