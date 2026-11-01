@@ -46,6 +46,9 @@ Dee asked on 2026-10-31 for one draft a day at about 19:00 VN, as a reply in
 his thread in the project chat (his message asking for daily X posts).
 
 1. `TZ=Asia/Ho_Chi_Minh date`. If `log.md` already has today's VN date, stop.
+   A fresh agent is not in the project chat yet (10-31 and 11-01 both hit
+   this): ask the Lead in your task chat to add you to the project chat now,
+   so the post in step 7 isn't refused at the end.
 2. Pick one topic not in `log.md`, from PRs merged since the last row:
    `gh pr list -R autonomous-ai/openharness --state merged --search "merged:>=YYYY-MM-DD"`.
    Prefer a feature a user can see, with a screenshot committed in the PR.
