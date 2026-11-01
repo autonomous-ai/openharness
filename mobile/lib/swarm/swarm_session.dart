@@ -37,6 +37,7 @@ class SwarmSession extends ChangeNotifier {
     this.undoWindow = swarmUndoWindow,
     SwarmHomeCache? homeCache,
     LocalKeyValueStore? readMarks,
+    SwarmTold? told,
   }) : inbox = SwarmInbox(
          accountId: accountId,
          request: request,
@@ -49,6 +50,7 @@ class SwarmSession extends ChangeNotifier {
     _announcer = SwarmAnnouncer(
       notices,
       quiet: (_) => !swarmLocalNotices || _screens > 0,
+      told: told,
     );
     inbox
       ..onArrived = announce
@@ -282,6 +284,10 @@ class SwarmHost extends ChangeNotifier {
   SwarmSession? session;
   bool _foreground = true;
 
+  /// What the account was told on this phone, kept across its sessions: a
+  /// session made again (the account read again) tells none of it again.
+  final _told = SwarmTold();
+
   /// No session yet, only because the account is on its way: Swarm is on and
   /// someone is signed in, so Home shows its skeleton, not that Swarm is off.
   bool get accountComing =>
@@ -308,6 +314,13 @@ class SwarmHost extends ChangeNotifier {
     final wasOn = _on;
     _on = on;
     final id = on ? accountId() : null;
+    // Swarm off forgets what was told; a moment with no account does not, as
+    // the same account may be back at once. Another account starts over.
+    if (!on) {
+      _told.account = null;
+    } else if (id != null) {
+      _told.account = id;
+    }
     if (id == session?.accountId) {
       // Swarm off with no session to end: its switch is read before the first
       // frame, so this is known, and what an earlier run kept goes. A missing
@@ -332,6 +345,7 @@ class SwarmHost extends ChangeNotifier {
             notices: notices,
             homeCache: homeCache,
             readMarks: readMarks,
+            told: _told,
           )..foreground = _foreground);
     notifyListeners();
   }

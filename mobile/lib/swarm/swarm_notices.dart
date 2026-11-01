@@ -59,12 +59,16 @@ SwarmNoticeMessage swarmNotice(SwarmNeed need) {
 /// changes, and the first read sets it even at zero, over what an earlier run
 /// left there.
 class SwarmAnnouncer {
-  SwarmAnnouncer(this.notices, {required this.quiet});
+  SwarmAnnouncer(this.notices, {required this.quiet, SwarmTold? told})
+    : told = told ?? SwarmTold();
 
   final SwarmNotices notices;
 
   /// The person sees [need] where they are: no notice.
   final bool Function(SwarmNeed need) quiet;
+
+  /// What this phone has told the account already: never told again.
+  final SwarmTold told;
 
   /// Keys of the notices posted and not yet taken down.
   final _posted = <String>{};
@@ -72,8 +76,13 @@ class SwarmAnnouncer {
   /// The count on the app icon; null before the first read.
   int? _badge;
 
+  /// Posts [need]'s notice, once: a need that left a read and came back
+  /// (another way of reading answered without it, or the session was made
+  /// again) is not news (Dee's iPhone, 2026-11-01: one notice every 5
+  /// seconds).
   void announce(SwarmNeed need) {
     if (quiet(need)) return;
+    if (!told.add(need.key)) return;
     final notice = swarmNotice(need);
     _posted.add(notice.key);
     unawaited(notices.showSwarm(notice));
@@ -96,6 +105,44 @@ class SwarmAnnouncer {
   /// Takes every notice and the icon's count down: the account that saw them
   /// signed out, or Swarm was turned off.
   void clear() => settle(const []);
+}
+
+/// The notices this phone has posted for one account, by their keys
+/// ([SwarmNeed.key]: the decision's or tag's id, or the work's assignment and
+/// status): what [SwarmAnnouncer] never posts twice, however often its need
+/// leaves the reads and comes back. [SwarmHost] keeps one for the life of the
+/// app, so a session made again for the same account remembers too.
+///
+/// In memory only, ids only, at most [limit] keys, the oldest let go first.
+/// Another account starts it over ([account]).
+class SwarmTold {
+  SwarmTold({this.limit = 500});
+
+  final int limit;
+
+  /// Kept in the order told: a set literal is a [LinkedHashSet].
+  final _keys = <String>{};
+  String? _account;
+
+  /// Records [key]; false when it was told already.
+  bool add(String key) {
+    if (!_keys.add(key)) return false;
+    while (_keys.length > limit) {
+      _keys.remove(_keys.first);
+    }
+    return true;
+  }
+
+  /// Whose notices these are: another account, or none (Swarm turned off),
+  /// forgets every key.
+  set account(String? id) {
+    if (id == _account) return;
+    _account = id;
+    _keys.clear();
+  }
+
+  @visibleForTesting
+  int get length => _keys.length;
 }
 
 /// Takes the app icon's count off each time [app] finds nobody signed in
