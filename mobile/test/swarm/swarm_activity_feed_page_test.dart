@@ -21,10 +21,12 @@ void main() {
     WidgetTester tester,
     List<Map<String, dynamic>> rows, {
     Widget home = const SwarmActivityPage(),
+    List<Map<String, dynamic>> groups = const [],
   }) async {
     final fake = activityBackend(
       page: activityPage,
       activityDigest: () => 'digest-1',
+      groups: groups,
     );
     fake.routes[activityPath] = (_) => {'items': rows, 'more': false};
     // As the backend marks: the person's rows made at or before `through`.
@@ -108,6 +110,29 @@ void main() {
       find.byKey(const ValueKey('swarm-activity-reply-activity:$tab:r2')),
       findsOneWidget,
     );
+  });
+
+  testWidgets("a project's Activity (its status card) lists only the server "
+      "rows of that project's chats", (tester) async {
+    await pump(
+      tester,
+      [
+        activityRow('here', minute: 5, text: 'In Mobile'),
+        activityRow(
+          'there',
+          minute: 4,
+          conversationId: 'chat-other',
+          text: 'In another project',
+        ),
+      ],
+      groups: [
+        {...groupData('chat-other', title: 'Other'), 'projectId': 'project-2'},
+      ],
+      home: const SwarmActivityPage(swarmId: tab, projectId: project),
+    );
+    await filter(tester, 'threads');
+    expect(find.text('In Mobile'), findsOneWidget);
+    expect(find.text('In another project'), findsNothing);
   });
 
   testWidgets('a reaction names its emoji', (tester) async {

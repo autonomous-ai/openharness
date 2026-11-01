@@ -138,9 +138,8 @@ void main() {
                       as RenderRepaintBoundary)
                   .toImage(pixelRatio: 3);
           final png = await image.toByteData(format: ui.ImageByteFormat.png);
-          await File(
-            '$shots/activity-server-$name-${brightness.name}.png',
-          ).writeAsBytes(png!.buffer.asUint8List());
+          await File('$shots/activity-server-$name-${brightness.name}.png')
+              .writeAsBytes(png!.buffer.asUint8List());
           image.dispose();
         });
       }
