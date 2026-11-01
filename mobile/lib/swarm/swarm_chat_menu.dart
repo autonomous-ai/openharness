@@ -69,6 +69,50 @@ Future<void> swarmSetNotify(
   );
 }
 
+/// The sheet of chat [chatId]'s Notifications, titled with its name: from
+/// its ⋮, or the project page's for its project chat. It goes once the chat
+/// can no longer be read — access lost, signed out, or the chat gone.
+Future<void> showSwarmNotifySheet(
+  BuildContext context,
+  SwarmReader reader,
+  String chatId, {
+  void Function(Route<void> route)? onShown,
+}) async {
+  Route<void>? sheet;
+  void moved() {
+    final route = sheet;
+    if (route == null ||
+        (!reader.accessRevoked &&
+            reader.snapshot?.conversation(chatId) != null)) {
+      return;
+    }
+    sheet = null;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (route.isActive) route.navigator?.removeRoute(route);
+    });
+  }
+
+  reader.addListener(moved);
+  try {
+    await showPhoneSheet(
+      context,
+      title: reader.snapshot?.conversation(chatId)?.title ?? '',
+      onShown: (route) {
+        sheet = route;
+        onShown?.call(route);
+      },
+      // A setting changed on another device meanwhile ticks here too.
+      rebuildOn: reader,
+      rows: () => (
+        actions: const [],
+        sections: [swarmNotifySection(context, reader, chatId)],
+      ),
+    );
+  } finally {
+    reader.removeListener(moved);
+  }
+}
+
 /// At the end of a chat's header: ⋮, whose sheet holds the chat's
 /// Notifications ([swarmNotifySection]), as the desktop's chat menu does for
 /// every chat a person reads, a viewer's too. Nothing while the chat is not
@@ -133,22 +177,12 @@ class _SwarmChatMenuButtonState extends State<SwarmChatMenuButton> {
     });
   }
 
-  Future<void> _open() async {
-    final reader = widget.reader, id = widget.chatId;
-    final title = reader.snapshot?.conversation(id)?.title ?? '';
-    await showPhoneSheet(
-      context,
-      title: title,
-      onShown: (route) => _sheet = route,
-      // A setting changed on another device meanwhile ticks here too.
-      rebuildOn: reader,
-      rows: () => (
-        actions: const [],
-        sections: [swarmNotifySection(context, reader, id)],
-      ),
-    );
-    _sheet = null;
-  }
+  Future<void> _open() => showSwarmNotifySheet(
+    context,
+    widget.reader,
+    widget.chatId,
+    onShown: (route) => _sheet = route,
+  ).whenComplete(() => _sheet = null);
 
   @override
   Widget build(BuildContext context) {

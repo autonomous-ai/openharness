@@ -11,6 +11,8 @@ import 'package:harness_mobile/swarm/swarm_buddies_page.dart';
 import 'package:harness_mobile/swarm/swarm_buddy_list.dart';
 import 'package:harness_mobile/swarm/swarm_chat_notify.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
+import 'package:harness_mobile/swarm/swarm_project_page.dart';
+import 'package:harness_mobile/swarm/swarm_project_tabs.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 
@@ -24,6 +26,8 @@ void main() {
   const chat = 'g1';
   const notifications =
       '/api/super-tabs/$tab/conversations/$chat/notifications';
+  const leadNotifications =
+      '/api/super-tabs/$tab/conversations/$leadChat/notifications';
   const refused = SuperTabFailure(
     'FORBIDDEN',
     'You cannot read this Swarm.',
@@ -55,11 +59,22 @@ void main() {
       'messages': <Object>[],
       'next': null,
     };
+    fake.routes['/api/super-tabs/$tab/conversations/$leadChat/messages'] = (
+      _,
+    ) => {'messages': <Object>[], 'next': null};
     fake.routes[notifications] = (body) => {'notify': body!['notify']};
+    fake.routes[leadNotifications] = (body) => {'notify': body!['notify']};
     return fake;
   }
 
-  Future<SwarmHost> pump(WidgetTester tester, FakeSwarm fake) async {
+  Future<SwarmHost> pump(
+    WidgetTester tester,
+    FakeSwarm fake, {
+    Widget home = const SwarmConversationPage(
+      swarmId: tab,
+      conversationId: chat,
+    ),
+  }) async {
     final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
       ..value = {PhoneExperiment.swarm};
     final account = ValueNotifier<String?>(me);
@@ -76,7 +91,7 @@ void main() {
       MaterialApp(
         theme: grid.buildAppTheme(brightness: Brightness.dark),
         builder: (context, child) => SwarmScope(notifier: host, child: child!),
-        home: const SwarmConversationPage(swarmId: tab, conversationId: chat),
+        home: home,
       ),
     );
     await tester.pumpAndSettle();
@@ -107,9 +122,12 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  List<Map<String, dynamic>?> sent(FakeSwarm fake) => [
+  List<Map<String, dynamic>?> sent(
+    FakeSwarm fake, {
+    String path = notifications,
+  }) => [
     for (final call in fake.calls)
-      if (call.path == notifications) call.body,
+      if (call.path == path) call.body,
   ];
 
   testWidgets('⋮ holds Notifications, the setting ticked; Muted is kept on '
@@ -203,6 +221,74 @@ void main() {
 
     expect(key('swarm-notify-failed'), findsNothing);
     expect(key('swarm-chat-menu'), findsNothing);
+  });
+
+  group('the project chat, which opens inside its project page with the '
+      "project's header", () {
+    testWidgets("Swarm Home C: the project's ⋮ has Notifications for its "
+        'chat; Muted is kept, and access lost closes the sheet', (
+      tester,
+    ) async {
+      final fake = backend();
+      final host = await pump(
+        tester,
+        fake,
+        home: const SwarmProjectPage(
+          swarmId: tab,
+          projectId: project,
+          tabs: SwarmProjectTab.homeC,
+        ),
+      );
+
+      await tester.tap(key('swarm-project-menu'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-project-menu-notifications'));
+      await tester.pumpAndSettle();
+      expect(ticked(tester), 'Mentions only');
+      await tester.tap(find.text('Muted'));
+      await tester.pumpAndSettle();
+      expect(sent(fake, path: leadNotifications), [
+        {'notify': 'muted'},
+      ]);
+
+      await tester.tap(key('swarm-project-menu'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-project-menu-notifications'));
+      await tester.pumpAndSettle();
+      expect(ticked(tester), 'Muted');
+
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => throw refused;
+      fake.routes['/api/super-tabs/$tab/parts'] = (_) => throw refused;
+      unawaited(host.session!.inbox.reader(tab)!.refresh());
+      await tester.pumpAndSettle();
+      expect(find.text('Muted'), findsNothing);
+    });
+
+    testWidgets("with tabs: ⋮ for the project chat's Notifications while its "
+        'Chat tab is shown, and not on another tab', (tester) async {
+      final fake = backend();
+      await pump(
+        tester,
+        fake,
+        home: const SwarmProjectPage(
+          swarmId: tab,
+          projectId: project,
+          tabs: SwarmProjectTab.homeB,
+        ),
+      );
+
+      expect(key('swarm-chat-menu'), findsOneWidget);
+      await open(tester);
+      await tester.tap(find.text('All new messages'));
+      await tester.pumpAndSettle();
+      expect(sent(fake, path: leadNotifications), [
+        {'notify': 'all'},
+      ]);
+
+      await tester.tap(key('swarm-project-tab-tasks'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-chat-menu'), findsNothing);
+    });
   });
 
   testWidgets('a muted Buddy chat on Buddies: greyed with a crossed bell, '
