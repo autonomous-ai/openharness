@@ -150,9 +150,9 @@ class SwarmTabHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
-    final style = Tty.of(
-      context,
-    ).style(size: 20, weight: FontWeight.w600).copyWith(height: 1.2);
+    final style = Tty.of(context)
+        .style(size: 20, weight: FontWeight.w600)
+        .copyWith(height: 1.2);
     final text = loading
         ? SkeletonText(
             key: const ValueKey('swarm-title-loading'),
@@ -518,12 +518,7 @@ class SwarmAvatar extends StatelessWidget {
         ),
       ),
     );
-    return SwarmStatusFace(
-      name: name,
-      size: size,
-      status: status,
-      face: face,
-    );
+    return SwarmStatusFace(name: name, size: size, status: status, face: face);
   }
 }
 
@@ -755,29 +750,63 @@ class SwarmIconButton extends StatelessWidget {
     required this.label,
     required this.onPressed,
     this.size = 22,
+    this.selected,
   });
 
   final IconData icon;
   final String label;
-  final VoidCallback onPressed;
+
+  /// Null: greyed, and heard as not enabled.
+  final VoidCallback? onPressed;
   final double size;
+
+  /// A switch's state: on, it is tinted in the accent; null for a plain
+  /// button.
+  final bool? selected;
 
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
+    final onPressed = this.onPressed;
+    final on = selected ?? false;
+    final color = onPressed == null
+        ? AppPalette.textFaint
+        : on
+        ? AppPalette.swarmAccent
+        : AppPalette.textPrimary;
     return Semantics(
       button: true,
+      enabled: onPressed != null,
+      toggled: selected,
       label: label,
       excludeSemantics: true,
+      onTap: onPressed,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: () {
-          HapticFeedback.selectionClick();
-          onPressed();
-        },
+        onTap: onPressed == null
+            ? null
+            : () {
+                HapticFeedback.selectionClick();
+                onPressed();
+              },
         child: SizedBox.square(
           dimension: 44,
-          child: Icon(icon, size: size, color: AppPalette.textPrimary),
+          child: Center(
+            child: DecoratedBox(
+              decoration: ShapeDecoration(
+                color: on
+                    ? AppPalette.swarmAccent.withValues(alpha: .16)
+                    : Colors.transparent,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(AppControl.radius),
+                ),
+              ),
+              child: SizedBox.square(
+                dimension: 36,
+                child: Icon(icon, size: size, color: color),
+              ),
+            ),
+          ),
         ),
       ),
     );

@@ -162,6 +162,12 @@ class SwarmReadMarks extends ChangeNotifier {
   /// The phone's own thread marks, by chat then thread root.
   final _threads = <String, Map<String, int>>{};
 
+  /// Marks a Mark all read shows on this phone only, by chat, while its
+  /// Undo waits ([holdAllRead]): read marks never move back on the server,
+  /// so Undo works by not sending them yet. Never kept on the phone; access
+  /// lost drops them unsent.
+  final _held = <String, int>{};
+
   /// The marks were read back from the phone (or there is no store).
   bool _loaded = false;
 
@@ -182,7 +188,8 @@ class SwarmReadMarks extends ChangeNotifier {
   bool unread(SuperTabConversation group) {
     if (!_loaded || !_started) return false;
     final server = reader.snapshot?.readMarks[group.id] ?? 0;
-    return group.mainSequence > max(server, _marks[group.id] ?? 0);
+    return group.mainSequence >
+        max(server, max(_marks[group.id] ?? 0, _held[group.id] ?? 0));
   }
 
   /// How far the person has read [conversationId]: the higher of the
@@ -191,7 +198,7 @@ class SwarmReadMarks extends ChangeNotifier {
   int? readThrough(String conversationId) => _loaded && !reader.accessRevoked
       ? max(
           reader.snapshot?.readMarks[conversationId] ?? 0,
-          _marks[conversationId] ?? 0,
+          max(_marks[conversationId] ?? 0, _held[conversationId] ?? 0),
         )
       : null;
 
@@ -202,10 +209,10 @@ class SwarmReadMarks extends ChangeNotifier {
       _loaded && !reader.accessRevoked
       ? max(
           reader.snapshot?.readMarks[conversationId] ?? 0,
-          switch (_marks[conversationId]) {
+          max(switch (_marks[conversationId]) {
             final mark? when mark != _firstRead[conversationId] => mark,
             _ => 0,
-          },
+          }, _held[conversationId] ?? 0),
         )
       : null;
 
@@ -265,6 +272,63 @@ class SwarmReadMarks extends ChangeNotifier {
     if (moved) _marks[conversationId] = sequence;
     _saveSoon();
     notifyListeners();
+  }
+
+  /// Mark all read (the desktop's `SuperTabController.markAllRead`): every
+  /// chat of this Swarm shown unread — not dormant, not muted — reads as read
+  /// on this phone at once, through its newest message in its main stream,
+  /// and nothing is sent. Returns those marks by chat, for [sendHeld] once
+  /// the Undo window passes or [dropHeld] on Undo; empty with nothing unread,
+  /// before the marks are back, and once access is lost.
+  Map<String, int> holdAllRead() {
+    final snapshot = reader.snapshot;
+    if (_disposed || reader.accessRevoked || snapshot == null) return const {};
+    final through = <String, int>{};
+    for (final group in snapshot.conversations) {
+      if (group.dormant ||
+          snapshot.chatSettings[group.id] == 'muted' ||
+          !unread(group)) {
+        continue;
+      }
+      through[group.id] = _held[group.id] = group.mainSequence;
+    }
+    if (through.isNotEmpty) notifyListeners();
+    return through;
+  }
+
+  /// The Undo window of a Mark all read passed: each of [through] it still
+  /// holds goes to the server, and is kept on the phone, as a chat read is
+  /// ([markRead]). A chat the Swarm's read no longer has sends nothing.
+  void sendHeld(Map<String, int> through) => _sendHeld(through, tell: true);
+
+  void _sendHeld(Map<String, int> through, {required bool tell}) {
+    if (_disposed || reader.accessRevoked) return;
+    var moved = false;
+    for (final MapEntry(key: id, value: sequence) in through.entries) {
+      if (_held[id] != sequence) continue;
+      _held.remove(id);
+      if (reader.snapshot?.conversation(id) == null) continue;
+      _sender.mark(id, sequence, kept: reader.snapshot?.readMarks[id] ?? 0);
+      if (sequence > (_marks[id] ?? 0)) {
+        _marks[id] = sequence;
+        moved = true;
+      }
+    }
+    if (moved) _saveSoon();
+    if (tell) notifyListeners();
+  }
+
+  /// Undo of a Mark all read: each of [through] it still holds reads as it
+  /// did before; a chat read since keeps what it read. Nothing was sent.
+  void dropHeld(Map<String, int> through) {
+    if (_disposed) return;
+    var dropped = false;
+    for (final MapEntry(key: id, value: sequence) in through.entries) {
+      if (_held[id] != sequence) continue;
+      _held.remove(id);
+      dropped = true;
+    }
+    if (dropped) notifyListeners();
   }
 
   Future<void> _load() async {
@@ -355,7 +419,13 @@ class SwarmReadMarks extends ChangeNotifier {
   void _forget() {
     _save?.cancel();
     _save = null;
-    final had = _marks.isNotEmpty || _threads.isNotEmpty || _started;
+    final had =
+        _marks.isNotEmpty ||
+        _threads.isNotEmpty ||
+        _held.isNotEmpty ||
+        _started;
+    // A held Mark all read belongs to the access that is gone: never sent.
+    _held.clear();
     _marks.clear();
     _firstRead.clear();
     _threads.clear();
@@ -423,6 +493,8 @@ class SwarmReadMarks extends ChangeNotifier {
 
   @override
   void dispose() {
+    // Closing the Swarm or the app is no Undo: a held Mark all read goes now.
+    if (_held.isNotEmpty) _sendHeld({..._held}, tell: false);
     _disposed = true;
     // What waited to be written is written now.
     if (_save case final save?) {
