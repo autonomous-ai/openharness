@@ -188,6 +188,36 @@ void main() {
       expect(find.text('Reply 3.'), findsOneWidget);
     });
 
+    testWidgets('a quote of the root tapped after the thread is left brings '
+        'the root into view, no thread open again', (tester) async {
+      final fake = backend(replies(3), mark: 3);
+      fake.routes[messages] = (_) => {
+        'messages': [
+          {
+            ...said(9),
+            'id': 'm9',
+            'text': 'About the question.',
+            'thread': 'm9',
+            'replyTo': 'm1',
+          },
+          said(1),
+        ],
+        'next': null,
+        'threads': [lineOf(2, 3)],
+      };
+      await openAt(tester, fake, threadId: 'm1');
+      expect(find.byType(SwarmThreadPage), findsOneWidget);
+
+      Navigator.of(tester.element(find.byType(SwarmThreadPage))).pop();
+      await tester.pumpAndSettle();
+      expect(find.byType(SwarmThreadPage), findsNothing);
+
+      await tester.tap(find.byKey(const ValueKey('swarm-quote-m9')));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SwarmThreadPage), findsNothing);
+    });
+
     testWidgets('a link to a root lands on it in the chat, no thread open', (
       tester,
     ) async {

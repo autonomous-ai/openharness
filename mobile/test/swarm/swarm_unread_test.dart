@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/core/local_key_value_store.dart';
@@ -9,6 +10,7 @@ import 'package:harness_mobile/swarm/swarm_reader.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_unread.dart';
 
+import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 
 /// What a chat's or a project's row says is new (desktop design system,
@@ -281,6 +283,8 @@ void main() {
           mentionRow('t-new', messageSequence: 4),
         ],
       );
+      // The person read through t-read; the first read alone marks no tag.
+      r.reader.readMarks!.markRead('g1', 3);
       await moveOn(r, {
         'g1': groupData('g1', title: 'Fix login', lastMessageSequence: 4),
       });
@@ -295,6 +299,64 @@ void main() {
 
       expect(chat(r, 'g1'), (bold: false, tags: 0));
       expect(swarmProjectNews(r.reader, r.asks), isEmpty);
+    });
+
+    test('a tag already waiting when the Swarm is first read counts: that '
+        'first read marks no tag read', () async {
+      final r = await rig(tags: [mentionRow('t1', messageSequence: 3)]);
+
+      expect(chat(r, 'g1'), (bold: true, tags: 1));
+      expect(swarmProjectNews(r.reader, r.asks), {
+        project: (bold: true, tags: 1),
+      });
+
+      // The person reads the chat as far as the first read had marked it.
+      r.reader.readMarks!.markRead('g1', 3);
+      await settle();
+
+      expect(chat(r, 'g1'), (bold: false, tags: 0));
+    });
+
+    test("the first read's marks are kept apart on the phone: read back, the "
+        'tag still counts, and once read it stays read', () async {
+      final store = MemoryKeyValueStore();
+      final r = await rig(tags: [mentionRow('t1', messageSequence: 3)]);
+      final first = SwarmReadMarks(r.reader, store: store);
+      r.reader.readMarks = first;
+      await settle();
+      first.dispose();
+
+      final again = SwarmReadMarks(r.reader, store: store);
+      r.reader.readMarks = again;
+      await settle();
+      expect(chat(r, 'g1'), (bold: true, tags: 1));
+
+      again.markRead('g1', 3);
+      again.dispose();
+      final last = SwarmReadMarks(r.reader, store: store);
+      addTearDown(last.dispose);
+      r.reader.readMarks = last;
+      await settle();
+
+      expect(chat(r, 'g1'), (bold: false, tags: 0));
+    });
+
+    test('marks a phone kept before first reads were apart still count as '
+        'read', () async {
+      final store = MemoryKeyValueStore();
+      final r = await rig(tags: [mentionRow('t1', messageSequence: 3)]);
+      await store.write(
+        'swarm_read_marks.$me.$tab',
+        jsonEncode({
+          'marks': {'g1': 3},
+        }),
+      );
+      final kept = SwarmReadMarks(r.reader, store: store);
+      addTearDown(kept.dispose);
+      r.reader.readMarks = kept;
+      await settle();
+
+      expect(chat(r, 'g1'), (bold: false, tags: 0));
     });
 
     test('a tag in a reply only in its thread counts on Threads, not in its '

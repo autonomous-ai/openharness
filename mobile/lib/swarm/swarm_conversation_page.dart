@@ -914,10 +914,18 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// a tag opens through on the desktop.
   static const _findPages = 50;
 
+  /// The thread the chat opens with, until its first jump
+  /// ([SwarmConversationPage.threadId]).
+  late String? _threadAt = widget.threadId;
+
   /// Brings [messageId] into view and lights it — read in from earlier pages
   /// when it is further back — or says why it cannot.
   Future<void> _jumpTo(SwarmConversation c, String messageId) async {
     if (_finding) return;
+    // Only the jump the chat opened with opens [SwarmConversationPage.threadId]:
+    // a quote of the root tapped later brings the root into view.
+    final thread = _threadAt;
+    _threadAt = null;
     final landing = _land();
     setState(() {
       _decisionTarget = null;
@@ -935,7 +943,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
         : null;
     // Threads opens the thread itself, its root read back or not, while the
     // chat is still one the reader may read.
-    if (widget.threadId == messageId &&
+    if (thread == messageId &&
         !c.reader.accessRevoked &&
         c.reader.snapshot?.conversation(c.id) != null) {
       _openThread(c, messageId);

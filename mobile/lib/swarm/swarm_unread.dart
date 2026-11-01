@@ -58,7 +58,7 @@ int _countIn(
   if (reader.accessRevoked || snapshot == null) return 0;
   if (snapshot.chatSettings[group.id] == 'muted') return 0;
   var count = 0;
-  if (reader.readMarks?.readThrough(group.id) case final through?) {
+  if (reader.readMarks?.tagsReadThrough(group.id) case final through?) {
     for (final m in mentions) {
       if (m.threadId == null && (m.messageSequence ?? _unknown) > through) {
         count++;
