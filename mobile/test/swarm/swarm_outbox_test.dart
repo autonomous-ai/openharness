@@ -44,6 +44,7 @@ void main() {
       timeout: timeout,
       onChanged: () {},
       onTaken: taken.add,
+      onRefused: (_) {},
     );
     addTearDown(box.close);
     return (box: box, answers: answers, taken: taken);

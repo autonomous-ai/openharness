@@ -1657,6 +1657,27 @@ void main() {
       expect(r.c.error, isNull);
     });
 
+    test(
+      'a refusal that lands after Not sent still puts the text back',
+      () async {
+        final r = await chat(timeout: const Duration(milliseconds: 20));
+        final answers = held(r.swarm);
+        r.c.draft = 'Too long';
+
+        expect(await r.c.send(), isFalse);
+        expect(r.c.outgoing.single.state, SwarmPostState.unconfirmed);
+        expect(r.c.draft, isEmpty);
+
+        answers.values.single.completeError(
+          const SuperTabFailure('TOO_LONG', 'Too long.', statusCode: 400),
+        );
+        await settle();
+        expect(r.c.outgoing, isEmpty);
+        expect(r.c.draft, 'Too long');
+        expect(r.c.error, 'Too long.');
+      },
+    );
+
     test('a refused post goes back to the draft while another stays on its '
         'way', () async {
       final r = await chat();

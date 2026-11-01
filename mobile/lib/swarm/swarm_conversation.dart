@@ -244,6 +244,16 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
       // Shown as sent until the read that brings it back.
       unawaited(loadFromNow());
     },
+    onRefused: (post) {
+      if (_disposed) return;
+      // A refusal of the files themselves sends them up once more; one of
+      // the post (a mention, a recipient) leaves them uploaded.
+      if (post.refusedBy?.code.contains('ATTACHMENT') ?? false) {
+        _uploads.forget(post.files);
+      }
+      _restore(post);
+      error = post.error;
+    },
   );
 
   /// The [error] a post's lost answer set: its later answer takes it back.
@@ -740,15 +750,9 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
       case SwarmPostOutcome.taken:
         return true;
       case SwarmPostOutcome.gone:
-        return false;
+      // Put back and said by [SwarmOutbox.onRefused].
       case SwarmPostOutcome.refused:
-        // A refusal of the files themselves sends them up once more; one of
-        // the post (a mention, a recipient) leaves them uploaded.
-        if (post.refusedBy?.code.contains('ATTACHMENT') ?? false) {
-          _uploads.forget(post.files);
-        }
-        _restore(post);
-        error = post.error;
+        return false;
       case SwarmPostOutcome.lost:
         error = _postError = post.error;
     }

@@ -216,6 +216,16 @@ class SwarmThread extends ChangeNotifier implements SwarmFilesBox {
       // Shown as sent until a read brings it back: the chat's, or this one.
       unawaited(chat.loadFromNow());
     },
+    onRefused: (post) {
+      if (_disposed) return;
+      final failure = post.refusedBy!;
+      if (_refusedChat(failure)) return;
+      // A refusal of the files themselves sends them up once more; one of
+      // the reply leaves them uploaded.
+      if (failure.code.contains('ATTACHMENT')) _uploads.forget(post.files);
+      _restore(post);
+      error = post.error;
+    },
   );
 
   /// The [error] a reply's lost answer set: its later answer takes it back.
@@ -565,15 +575,9 @@ class SwarmThread extends ChangeNotifier implements SwarmFilesBox {
       case SwarmPostOutcome.taken:
         return true;
       case SwarmPostOutcome.gone:
-        return false;
+      // Put back and said by [SwarmOutbox.onRefused].
       case SwarmPostOutcome.refused:
-        final failure = post.refusedBy!;
-        if (_refusedChat(failure)) return false;
-        // A refusal of the files themselves sends them up once more; one of
-        // the reply leaves them uploaded.
-        if (failure.code.contains('ATTACHMENT')) _uploads.forget(post.files);
-        _restore(post);
-        error = post.error;
+        return false;
       case SwarmPostOutcome.lost:
         error = _postError = post.error;
     }

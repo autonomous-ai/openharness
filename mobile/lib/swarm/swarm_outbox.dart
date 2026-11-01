@@ -110,6 +110,7 @@ class SwarmOutbox {
     required this.path,
     required this.onChanged,
     required this.onTaken,
+    required this.onRefused,
     this.timeout = defaultTimeout,
   });
 
@@ -128,6 +129,10 @@ class SwarmOutbox {
 
   /// The backend took [post] (on any try, also after its timeout).
   final void Function(SwarmPost post) onTaken;
+
+  /// The backend refused [post] ([SwarmPost.refusedBy]), whenever its answer
+  /// came — also after it said Not sent: its text goes back to the box.
+  final void Function(SwarmPost post) onRefused;
   final Duration timeout;
 
   final _posts = <SwarmPost>[];
@@ -225,6 +230,7 @@ class SwarmOutbox {
             ..error = failure.message
             ..refusedBy = failure;
           _posts.remove(post);
+          onRefused(post);
           onChanged();
           end(SwarmPostOutcome.refused);
           return;

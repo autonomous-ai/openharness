@@ -1246,6 +1246,38 @@ void main() {
       expect(t.error, isNull);
     });
 
+    test(
+      'a refusal that lands after Not sent still puts the reply back',
+      () async {
+        final r = await rig();
+        final answers = held(r.swarm);
+        final chat = SwarmConversation(
+          r.reader,
+          'g1',
+          sendTimeout: const Duration(milliseconds: 20),
+        );
+        addTearDown(chat.dispose);
+        await chat.load();
+        r.swarm.routes[thread] = (_) => {
+          'messages': [message('m1', 1)],
+          'next': null,
+        };
+        final t = open(chat);
+        await t.load();
+        t.draft = 'Too long';
+
+        expect(await t.send(), isFalse);
+        expect(t.draft, isEmpty);
+        answers.values.single.completeError(
+          const SuperTabFailure('TOO_LONG', 'Too long.', statusCode: 400),
+        );
+        await settle();
+        expect(t.outgoing, isEmpty);
+        expect(t.draft, 'Too long');
+        expect(t.error, 'Too long.');
+      },
+    );
+
     test('a refused reply goes back to the box while another stays on its '
         'way', () async {
       final r = await rig();
