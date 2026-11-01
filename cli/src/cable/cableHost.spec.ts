@@ -1234,7 +1234,7 @@ describe('a plug-in whose first lane open fails', () => {
   const failing = (fails: number) => {
     let left = fails
     const fleet = fleetOf([REMOTE])
-    fleet.online = vi.fn(async () => { if (left-- > 0) throw new Error('UNAVAILABLE: the sign-in could not be refreshed') })
+    fleet.online = vi.fn(async () => { if (left-- > 0) throw Object.assign(new Error('UNAVAILABLE: the sign-in could not be refreshed'), { code: 'TOKEN_UNAVAILABLE' }) })
     fleet.select = vi.fn(async () => {})
     fleet.release = vi.fn()
     return fleet
@@ -1315,6 +1315,59 @@ describe('a plug-in whose first lane open fails', () => {
     await turns()
     expect(fleet.online).toHaveBeenCalledTimes(3)
   })
+
+  it('stops at once when the session is over, and says why', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const fleet = failing(0)
+    fleet.online = vi.fn(async () => { throw Object.assign(new Error('sign in again'), { code: 'SESSION_OVER' }) })
+    const log = vi.fn()
+    const host = new DaemonCableHost(wiring({ log }), fleet)
+    host.onDialAttached()
+    await turns()
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(fleet.online).toHaveBeenCalledTimes(1)
+    expect(log).toHaveBeenCalledWith('cable: could not open the lane (sign in again) — other machines are unavailable until the next sign-in')
+    expect(log).not.toHaveBeenCalledWith('cable: trying the cloud lane again')
+  })
+
+  it('leaves a socket that failed to the lane\'s own reconnect: one backoff, not two', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const fleet = failing(0)
+    fleet.online = vi.fn(async () => { throw Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:1'), { code: 'ECONNREFUSED' }) })
+    const log = vi.fn()
+    const host = new DaemonCableHost(wiring({ log }), fleet)
+    host.onDialAttached()
+    await turns()
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(fleet.online).toHaveBeenCalledTimes(1)
+    expect(log).toHaveBeenCalledWith('cable: could not open the lane (connect ECONNREFUSED 127.0.0.1:1)')
+  })
+
+  it('runs one backoff over the real lane when the backend is down at the first plug-in', async () => {
+    // A port nothing listens on: every dial is refused at once, as with the backend down.
+    const probe = new WebSocketServer({ port: 0, host: '127.0.0.1' })
+    await new Promise<void>((resolve) => probe.once('listening', () => resolve()))
+    const port = (probe.address() as { port: number }).port
+    await new Promise<void>((resolve) => probe.close(() => resolve()))
+    const lines: string[] = []
+    const link = new DeviceLink({
+      auth: { accessToken: async () => 'token' }, backendWsBase: `ws://127.0.0.1:${port}`,
+      computerId: 'this-computer', autonomousEnv: 'test',
+      seal: { hello: vi.fn(), welcome: vi.fn(), rekey: vi.fn(), seal: vi.fn(), open: vi.fn(), drop: vi.fn() } as never,
+      peer: () => null, localMachineId: () => 'mine', log: (line) => { lines.push(line) },
+    })
+    stops.push(() => link.stop())
+    const rows = [{ machineId: 'mine', name: 'MacbookPro.local', state: 'ready', authMode: 'remote', local: true }]
+    const fleet = new DeviceFleet({ list: { list: () => ({ machines: rows, source: 'backend' as const }), find: (id: string) => rows.find((r) => r.machineId === id) } as never,
+      link, hasPeerLink: () => false, log: (line) => { lines.push(line) } })
+    const host = new DaemonCableHost(wiring({ log: (line: string) => { lines.push(line) } }), fleet)
+    host.onDialAttached()
+    await new Promise((resolve) => setTimeout(resolve, 3_500))   // the first dial, then the lane's own at 1 s and 3 s
+    const dials = lines.filter((line) => line.startsWith('device: connecting'))
+    expect(dials.length).toBeGreaterThanOrEqual(2)   // the lane did try again by itself
+    expect(dials.length).toBeLessThanOrEqual(3)
+    expect(lines).not.toContain('cable: trying the cloud lane again')
+  }, 10_000)
 
   it('opens the real lane later when its first token read throws', async () => {
     const wss = new WebSocketServer({ port: 0, host: '127.0.0.1', handleProtocols: (protocols) => [...protocols][0] ?? false })

@@ -1350,6 +1350,24 @@ describe('a sign-in refresh that fails while the lane dials', () => {
     expect(fresh.link.status()).toBe('error')
   }, 12_000)
 
+  it('says why a dial failed, so the plug-in retries only what nothing else will', async () => {
+    const codeOf = (promise: Promise<void>) => promise.then(() => 'ok', (error: Error & { code?: unknown }) => error.code)
+    // A token that could not be read just now: no socket, so only the caller can try again.
+    const blip = await lane({ auth: flaky(1) })
+    expect(await codeOf(blip.link.online())).toBe('TOKEN_UNAVAILABLE')
+    // A session that is over: trying again cannot fix it.
+    const over = await lane({ auth: { accessToken: vi.fn(async () => { throw Object.assign(new Error('sign in again'), { code: 'SIGN_IN_AGAIN' }) }) } })
+    const failed = await over.link.online().then(() => null, (error: Error & { code?: unknown }) => error)
+    expect(failed?.code).toBe('SESSION_OVER')
+    expect(failed?.message).toBe('sign in again')
+    // A backend that is not there: the socket failed, and the lane's own reconnect has that one.
+    const down = await lane()
+    await down.server.close()
+    const refused = await codeOf(down.link.online())
+    expect(['TOKEN_UNAVAILABLE', 'SESSION_OVER']).not.toContain(refused)
+    await until('the lane\'s own reconnect', () => (down.link as unknown as { reconnectTimer: unknown }).reconnectTimer !== null, 2_000)
+  })
+
   it('does not keep dialling after the backend says not authorized during a reconnect', async () => {
     const { link, server } = await lane()
     // The backend reads selects and says nothing back, so the reconnect's attach is still waiting when the 4401 lands.
