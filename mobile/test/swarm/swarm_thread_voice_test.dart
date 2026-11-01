@@ -269,6 +269,36 @@ void main() {
     expect(fake.commands.single['alsoSend'], isTrue);
   });
 
+  // After #2471 a reply on its way no longer holds the box: a take that ends
+  // meanwhile goes as the next reply, as Send would, and the first keeps its
+  // own text.
+  testWidgets('a take ending while a reply is still on its way goes as the '
+      'next reply, in order', (tester) async {
+    await pump(tester);
+    final first = Completer<Object?>();
+    fake.routes[commands] = (_) =>
+        first.isCompleted ? {'result': <String, dynamic>{}} : first.future;
+    await tester.enterText(key('swarm-thread-field'), 'typed reply');
+    await tester.pump();
+    await tester.tap(key('swarm-thread-send'));
+    await frames(tester);
+    expect(fake.commands.single['text'], 'typed reply');
+    expect(box(tester), isEmpty);
+
+    stt.replies.add('spoken reply');
+    await tapMic(tester);
+    await tapMic(tester);
+    await frames(tester);
+    first.complete({'result': <String, dynamic>{}});
+    await tester.pumpAndSettle();
+
+    expect(
+      [for (final c in fake.commands) (c['text'], c['replyTo'])],
+      [('typed reply', 'm1'), ('spoken reply', 'm1')],
+    );
+    expect(box(tester), isEmpty);
+  });
+
   testWidgets('a take not heard says so in the thread, and sends nothing', (
     tester,
   ) async {
