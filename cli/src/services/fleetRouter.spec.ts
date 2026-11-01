@@ -592,6 +592,18 @@ describe('the lane, held while a dial is plugged in', () => {
     expect(await router.select('other')).toEqual({ ok: false, code: 'NEEDS_LINK', message: 'Link office-imac to this computer first' })
     expect(await router.select('third')).toEqual({ ok: false, code: 'UNREACHABLE', message: 'socket closed' })
   })
+
+  it('passes on why the lane would not open, so the dial knows whether to try again', async () => {
+    const fleet = fleetOf([REMOTE])
+    const router = new FleetRouter(localOf(), fleet)
+    fleet.online = vi.fn(async () => { throw Object.assign(new Error('the sign-in could not be refreshed'), { code: 'TOKEN_UNAVAILABLE' }) })
+    expect(await router.online()).toEqual({ ok: false, message: 'the sign-in could not be refreshed', code: 'TOKEN_UNAVAILABLE' })
+    fleet.online = vi.fn(async () => { throw Object.assign(new Error('sign in again'), { code: 'SESSION_OVER' }) })
+    expect(await router.online()).toEqual({ ok: false, message: 'sign in again', code: 'SESSION_OVER' })
+    // Only a word: anything else on the error stays behind.
+    fleet.online = vi.fn(async () => { throw Object.assign(new Error('odd'), { code: 42 }) })
+    expect(await router.online()).toEqual({ ok: false, message: 'odd' })
+  })
 })
 
 describe('an answer reviewed on a device', () => {

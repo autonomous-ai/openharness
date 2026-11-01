@@ -34,6 +34,7 @@ import type { LaneSeal } from '../core/api.js'
 import type { MachinePeer } from '../lib/e2ee/machinePeers.js'
 import { isWrapped } from '../lib/relayFrames.js'
 import { VERSION } from '../version.js'
+import { LANE_SESSION_OVER, LANE_TOKEN_UNAVAILABLE } from '../cable/machineFleet.js'
 
 /** One frame on the wire. The backend's own vocabulary, unchanged. */
 export interface DeviceFrame {
@@ -680,13 +681,17 @@ export class DeviceLink {
       token = await (options ? this.opts.auth.accessToken(options) : this.opts.auth.accessToken())
     } catch (err) {
       this.noSocket()
+      const message = err instanceof Error ? err.message : String(err)
       // As a 4401 after the one refresh (onClose): stop, and let the cabled machine carry on. Retrying a session that
       // is over would read for nothing every 30 s until someone signs in again.
       if (!this.ws && SESSION_OVER.has(String((err as { code?: unknown }).code))) {
         this.state = 'error'
         this.opts.log('device: not signed in — other machines are unavailable until the next sign-in')
+        throw Object.assign(new Error(message), { code: LANE_SESSION_OVER })
       }
-      throw err
+      // The caller retries this one (machineFleet.ts), unless the lane's own reconnect is already set: after a 401 the
+      // socket that failed scheduled it (onClose), and a second loop would dial twice per backoff.
+      throw Object.assign(new Error(message), this.reconnectTimer ? {} : { code: LANE_TOKEN_UNAVAILABLE })
     }
     if (!this.wanted && !this.heldOpen) {
       this.noSocket()
