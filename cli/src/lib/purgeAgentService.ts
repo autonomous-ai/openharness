@@ -16,7 +16,7 @@ import { sqliteReadAll } from './sqliteRead.js'
 import type { StoppedAgentStore } from './stoppedAgents.js'
 import type { SessionCheckpointStore } from './sessionCheckpoint.js'
 import type { StopAgentOptions } from './stopAgentService.js'
-import { unusedChat } from './closeAgentService.js'
+import { LEAD_PROTECTED_DETAIL, unusedChat } from './closeAgentService.js'
 import { inspectWorkspace, inspectWorktree, removeReviewedWorktree, type WorktreeReview } from './worktreeDeletion.js'
 
 const exec = promisify(execFile)
@@ -203,6 +203,10 @@ export interface PurgeDeps {
   inspect?: typeof inspectNativeHistory
   erase?: typeof eraseNativeHistory
   now?: () => number
+  /** Whether the agent may be the Product Manager of an active Swarm project (superTabs/leadSwitch.ts `mayBeLead`): never
+   *  deleted, live or stopped. Its host reopens a stopped one on its saved conversation, and deleting it left nothing to reopen,
+   *  in the moments after its engine's switch stopped it among others (security review 2 of #2493). */
+  leadProtected?(agentId: string): boolean
 }
 
 /**
@@ -318,6 +322,7 @@ export class PurgeAgentService {
     const worktreeData = request.choices?.worktreeData === true
     try {
       if (this.busy(request.agentId)) return { error: 'DELETE_IN_PROGRESS', detail: 'This harness is already being deleted.' }
+      if (request.mode !== 'inspect' && this.deps.leadProtected?.(request.agentId)) return { error: 'LEAD_PROTECTED', detail: LEAD_PROTECTED_DETAIL }
       const now = this.deps.now?.() ?? Date.now()
       for (const [id, review] of this.reviews) if (review.expires <= now) this.reviews.delete(id)
       const current = this.current(request, request.mode === 'inspect' ? !request.includeWorktree : sessionData)

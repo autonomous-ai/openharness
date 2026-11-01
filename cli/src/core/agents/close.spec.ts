@@ -54,10 +54,11 @@ describe('closing agents no window shows', () => {
   // Diego's Buddy, 10-30: the close service refuses a Buddy only if the guard the core is handed reaches it.
   it('hands the close service the Lead and Buddy guards it was given', () => {
     const leadProtected = (id: string) => id === 'lead', buddyProtected = (id: string) => id === 'buddy'
-    const leadSwitching = (id: string) => id === 'lead'
-    const { close } = setup({ leadProtected, leadSwitching, buddyProtected })
+    const leadSwitching = (id: string) => id === 'lead', leadSwitchEnded = vi.fn()
+    const { close } = setup({ leadProtected, leadSwitching, leadSwitchEnded, buddyProtected })
     expect([close.leadProtected?.('lead'), close.buddyProtected?.('buddy'), close.buddyProtected?.('lead')]).toEqual([true, true, false])
     expect(close.leadSwitching).toBe(leadSwitching)
+    expect(close.leadSwitchEnded).toBe(leadSwitchEnded)
   })
 
   it('reads from its pane whether it waits at a question its engine asks before any conversation', async () => {

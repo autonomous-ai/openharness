@@ -39,6 +39,8 @@ export interface ClosingDeps {
   leadProtected?: (agentId: string, changeId?: string) => boolean
   /** Whether another switch of a Lead's engine is running, as core/main.ts hands it in; absent, none is. */
   leadSwitching?: (agentId: string, changeId: string) => boolean
+  /** A Lead's switch's close ended, as core/main.ts hands it in; absent, nothing is told. */
+  leadSwitchEnded?: (agentId: string, changeId: string, stopped: boolean) => void
   /** Whether the agent may be a Swarm Buddy, which a close never stops, as core/main.ts hands it in; absent, none is. */
   buddyProtected?: (agentId: string) => boolean
 }
@@ -48,7 +50,7 @@ export const CLOSE_READ_RECONNECT_MS = 10_000
 
 export function createAgentClosing({
   readScreen, registry, cleanupTabs, watcher, captureTerminal, sessionTurnState, openQuestions, terminals, sessionCheckpoints,
-  stopAgent, announceSession, engineReady, stoppedAgents, nativeRecoveryReady = () => true, leadProtected, leadSwitching, buddyProtected,
+  stopAgent, announceSession, engineReady, stoppedAgents, nativeRecoveryReady = () => true, leadProtected, leadSwitching, leadSwitchEnded, buddyProtected,
 }: ClosingDeps) {
   const ready = (s: RegisteredSession): boolean =>
     !s.identityHold && !s.admissionHold && !s.interpretationHold && nativeRecoveryReady(s)
@@ -106,6 +108,7 @@ export function createAgentClosing({
     changed: announceSession,
     leadProtected,
     leadSwitching,
+    leadSwitchEnded,
     buddyProtected,
     // Not live, not being resumed, and kept as stopped with the conversation the close names: it was closed. A record
     // that cannot be read says nothing, and the close is answered as changed, as before.

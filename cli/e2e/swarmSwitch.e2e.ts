@@ -157,6 +157,16 @@ describe('the Swarm switch', () => {
     // A second switch while this one runs is refused.
     expect(await named(OTHER)).toMatchObject({ error: 'LEAD_SWITCHING' })
     expect(readdirSync(join(d.dataDir, 'super-tabs', 'lead-switch'))).toHaveLength(1)
+    // Security reviews 1 and 2 of #2493: nothing else gets through in the moments after, whoever asks. Stop Harness and the
+    // deletion of its saved conversation, which its host reopens, are refused with today's words. A script's close of it is
+    // answered as for any session closed already, and changes nothing: its saved conversation stays for its host to reopen.
+    expect(await client.request('agent_delete', { agentId: agent.id }, 60_000)).toMatchObject(refused)
+    const createdAt = Date.parse(agent.createdAt)
+    const review = await client.request('agent_purge', { agentId: agent.id, sessionId: agent.sessionId, createdAt, mode: 'inspect' }, 60_000)
+    expect(await client.request('agent_purge', { agentId: agent.id, sessionId: agent.sessionId, createdAt, mode: 'delete', reviewId: review.reviewId }, 60_000))
+      .toMatchObject(refused)
+    expect(await close(client, agent)).toMatchObject({ closed: true })
+    expect(await row(client, agent.id)).toMatchObject({ sessionId: agent.sessionId, status: expect.not.stringMatching(/^active$/) })
   }, 240_000)
 
   // Diego's Buddy, 10-30: closing the tab that showed it stopped it. A close (a window's, `harness close`, the cleanup) never

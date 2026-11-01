@@ -70,7 +70,8 @@ it.each(['now', 'idle', 'after_task'] as const)('refuses to close a Swarm Lead (
 it('hands a Lead guard the switch only a now close names, and stops the Lead its switch was let through for', async () => {
   const CHANGE = 'c'.repeat(32)
   const leadProtected = vi.fn((id: string, changeId?: string) => id === row.agentId && changeId !== CHANGE)
-  const svc = new CloseAgentService({ ...deps, leadProtected })
+  const leadSwitchEnded = vi.fn()
+  const svc = new CloseAgentService({ ...deps, leadProtected, leadSwitchEnded })
   for (const mode of ['idle', 'after_task'] as const) {
     expect(await svc.request({ ...request(mode), changeId: CHANGE })).toEqual({ error: 'LEAD_PROTECTED', detail: LEAD_PROTECTED_DETAIL })
   }
@@ -81,6 +82,29 @@ it('hands a Lead guard the switch only a now close names, and stops the Lead its
   expect(await svc.request({ ...request('now'), changeId: CHANGE })).toEqual({ closed: true })
   expect(leadProtected).toHaveBeenLastCalledWith(row.agentId, CHANGE)
   expect(deps.stop).toHaveBeenCalledTimes(1)
+  // The switch rides with that one stop, so the core's stop guard lets it, and only it, through (security review 1 of #2493).
+  expect(vi.mocked(deps.stop).mock.calls[0][1]).toMatchObject({ leadSwitch: CHANGE })
+  // Its end is told once, stopped; the refused closes before it told nothing (security review 2 of #2493).
+  expect(leadSwitchEnded.mock.calls).toEqual([[row.agentId, CHANGE, true]])
+  svc.dispose()
+})
+
+// Security review 2 of #2493: a switch's close that fails ends its pass too, so nothing stays open after it.
+it('tells a switch\'s end when its close fails or throws, unstopped, and no stop carries a switch but its own', async () => {
+  const CHANGE = 'e'.repeat(32)
+  const leadSwitchEnded = vi.fn()
+  vi.mocked(deps.checkpoint).mockRejectedValueOnce(new Error('disk full'))
+  const svc = new CloseAgentService({ ...deps, leadProtected: () => false, leadSwitchEnded })
+  expect(await svc.request({ ...request('now'), changeId: CHANGE })).toMatchObject({ error: expect.any(String) })
+  expect(leadSwitchEnded).toHaveBeenLastCalledWith(row.agentId, CHANGE, false)
+  vi.spyOn(svc as unknown as { execute: () => Promise<unknown> }, 'execute').mockRejectedValueOnce(new Error('gone'))
+  await expect(svc.request({ ...request('now'), changeId: CHANGE })).rejects.toThrow('gone')
+  expect(leadSwitchEnded).toHaveBeenLastCalledWith(row.agentId, CHANGE, false)
+  // A close that names no switch tells nothing and hands its stop none.
+  leadSwitchEnded.mockClear()
+  expect(await svc.request(request('now'))).toEqual({ closed: true })
+  expect(leadSwitchEnded).not.toHaveBeenCalled()
+  expect(vi.mocked(deps.stop).mock.calls.at(-1)![1]).not.toHaveProperty('leadSwitch')
   svc.dispose()
 })
 

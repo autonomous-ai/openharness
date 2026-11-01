@@ -125,6 +125,9 @@ export interface CloseAgentServiceDeps {
   leadProtected?(agentId: string, changeId?: string): boolean
   /** Whether another switch of this Lead's engine than [changeId] is running (superTabs/leadSwitch.ts `leadSwitching`). */
   leadSwitching?(agentId: string, changeId: string): boolean
+  /** The `now` close naming switch [changeId] ended, [stopped] or not (superTabs/leadSwitch.ts `leadSwitchEnded`): the pass its
+   *  stop was given is gone either way. */
+  leadSwitchEnded?(agentId: string, changeId: string, stopped: boolean): void
   /** Whether the agent may be a Swarm Buddy (superTabs/retention.ts `mayBeBuddy`): a close never stops it. Stop Harness does. */
   buddyProtected?(agentId: string): boolean
   /** Whether its pane shows a question the engine asks before any conversation: the folder's trust, or an MCP server the
@@ -211,7 +214,15 @@ export class CloseAgentService {
     })
     this.jobs.set(key, job)
     this.queues.set(request.agentId, job)
-    return buddy ? job.then(keptRunning) : job
+    // A switch's close ends its pass, stopped or not: nothing is left open after it (security review 2 of #2493).
+    const answered = !changeId ? job : job.then(result => {
+      this.deps.leadSwitchEnded?.(request.agentId, changeId, result.closed === true)
+      return result
+    }, (error: unknown) => {
+      this.deps.leadSwitchEnded?.(request.agentId, changeId, false)
+      throw error
+    })
+    return buddy ? answered.then(keptRunning) : answered
   }
 
   /**
@@ -332,6 +343,8 @@ export class CloseAgentService {
       if (request.mode === 'idle' && activity !== 'idle') return { error: 'SESSION_NOT_IDLE', activity }
       await this.deps.stop(s.agentId, {
         ...(withoutConversation ? { withoutConversation: () => { unkept = true } } : {}),
+        // The pass a Product Manager's switch earned rides with this one stop, and with no other (security review 1 of #2493).
+        ...(request.mode === 'now' && request.changeId ? { leadSwitch: request.changeId } : {}),
         current: () => {
           const latest = current()
           if (!latest) return false

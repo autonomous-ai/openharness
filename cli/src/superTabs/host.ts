@@ -37,7 +37,7 @@ const agentCommandOf = (entry: Entry, prefix: string, buddy = false) =>
 const readCommand = (entry: Entry, prefix: string, group: string, id: string, buddy = false) =>
   `${agentCommandOf(entry, prefix, buddy)} message ${shellQuote(group)} ${shellQuote(id)}`
 export { backend, identifier, object, SuperTabHostError } from './wire.js'
-import { leadSwitchHeld } from './leadSwitch.js'
+import { leadSwitchOf, SWITCH_ADOPT_MS, switchWithin, type LeadSwitch } from './leadSwitch.js'
 import { backend, ENDED_WORK, identifier, object, SuperTabHostError } from './wire.js'
 import { parseSwarmSkill, recordSwarmSkillNotice, refreshSwarmSkill, wireRole, type CustomSwarmRole, type SkillRefresh, type SwarmSkill, type SwarmSkillGrant,
   type SwarmSkillMode } from '../lib/swarmSkills.js'
@@ -296,6 +296,8 @@ const DELIVERY_FALLBACK_MS = 30_000
  *  this process started after the last one), every list is read each second again. */
 const PUSH_LEASE_MS = 10 * 60_000
 const LEAD_RETRY_MS = 5_000
+/** How long after a Product Manager's switch its host still closes a new session of it that starts late (leadSwitch.ts). */
+const LATE_REPLACEMENT_MS = 30 * 60_000
 const LEAD_RETRY_MAX_MS = 30 * 60_000
 const LEAD_REOPEN_WAIT_MS = 60_000
 /** Prod 10-30: acknowledgements failed through two hours of SWARM_BUSY, past the backend's 10-minute claim quiet time
@@ -1120,23 +1122,58 @@ export class SuperTabHost {
     const state = this.keepAlives.get(harnessId) ?? { running: false, failures: 0, retryAt: 0 }
     this.keepAlives.set(harnessId, state)
     if (state.running) return
-    if (this.core.agents.byAgent(harnessId)) { state.failures = 0; state.retryAt = 0; delete state.reason; return }
-    // Its owner is switching its engine from its pane: the new session takes its place (recordReplacements), unless it is
-    // not reported in time, when the hold ends and it is reopened here on its old engine (leadSwitch.ts).
-    if (leadSwitchHeld(this.core.dataDir, harnessId, this.now())) return
-    if (this.now() < state.retryAt) return
+    const now = this.now()
+    // Its owner switched its engine from its pane (leadSwitch.ts), stopping it once the stop went through.
+    const switched = leadSwitchOf(this.core.dataDir, harnessId)
+    if (this.core.agents.byAgent(harnessId)) {
+      state.failures = 0; state.retryAt = 0; delete state.reason
+      // Reopened here after its switch's hold: a new session of that switch that runs now is unlinked beside it, and is
+      // closed (security review 2 of #2493).
+      if (switched && !switchWithin(switched, now) && switchWithin(switched, now, LATE_REPLACEMENT_MS)) {
+        state.running = true
+        void this.switchReplacement(switched).then(id => id ? this.closeReplacement(id, switched) : undefined)
+          .catch(() => { /* Checked again on the next poll. */ }).finally(() => { state.running = false })
+      }
+      return
+    }
+    if (now < state.retryAt) return
     state.running = true
     const failed = (reason: string) => {
       state.retryAt = this.now() + Math.min(LEAD_RETRY_MAX_MS, LEAD_RETRY_MS * 2 ** state.failures++)
       if (reason !== state.reason) this.log(`Could not reopen the Product Manager ${harnessId.slice(0, 8)}: ${reason}. Trying again with backoff.`)
       state.reason = reason
     }
-    void reopen(harnessId).then(result => {
+    void (async () => {
+      if (switched) {
+        const replacement = await this.switchReplacement(switched)
+        // Its new session runs: the Swarm takes it in its place (recordReplacements), within its time.
+        if (replacement && switchWithin(switched, now, SWITCH_ADOPT_MS)) return
+        // Its new session has not started yet: waited for, within its time.
+        if (!replacement && switchWithin(switched, now)) return
+        // Not taken in: closed before the old one reopens, so the two never run side by side.
+        if (replacement) await this.closeReplacement(replacement, switched)
+      }
+      const result = await reopen(harnessId)
       if (!result.ok) return failed(result.detail ?? result.error)
       state.failures = 0
       state.retryAt = this.now() + LEAD_REOPEN_WAIT_MS
       delete state.reason
-    }, error => failed(error instanceof Error ? error.message : String(error))).finally(() => { state.running = false })
+    })().catch(error => failed(error instanceof Error ? error.message : String(error))).finally(() => { state.running = false })
+  }
+
+  /** The new session [switched] started, when it runs here: its native creation receipt is the switch's own change id. */
+  private async switchReplacement(switched: LeadSwitch): Promise<string | null> {
+    const receipt = await this.core.agents.creationStatus?.(switched.changeId)
+    if (receipt?.state !== 'created' || receipt.creationId !== switched.changeId || receipt.agentId === switched.agentId) return null
+    return this.core.agents.byAgent(receipt.agentId) ? receipt.agentId : null
+  }
+
+  /** Closes the new session [agentId] of a switch the Swarm did not take in, by its creation receipt (closeMember). */
+  private async closeReplacement(agentId: string, switched: LeadSwitch): Promise<void> {
+    const closed = await this.core.agents.closeMember?.(agentId, switched.changeId)
+    this.log(closed && 'closed' in closed && closed.closed
+      ? `Closed the new session ${agentId.slice(0, 8)} of a Product Manager's switch the Swarm did not take in.`
+      : `Could not close the new session ${agentId.slice(0, 8)} of a Product Manager's switch: ${closed?.error ?? 'unsupported'}.`)
   }
 
   /** A Buddy's thread sessions (spec 2026-10-30-buddy-thread-sessions) end on their own, so none is left running on its

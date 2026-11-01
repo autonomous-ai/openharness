@@ -2878,7 +2878,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     stopped: (agentId) => ports.agentCleanup?.closed(agentId),
     moveHeld: (agentId) => moveHeld.has(agentId),
     // The Lead of an active Swarm project is never stopped (owner, 2026-10-23); its host keeps the list (superTabs/retention.ts).
-    ...(swarm ? { leadProtected: (agentId: string) => swarm.mayBeLead(env.ADAPTER_DATA_DIR, agentId) } : {}),
+    ...(swarm ? { leadProtected: (agentId: string, leadSwitch?: string) => swarm.mayBeLead(env.ADAPTER_DATA_DIR, agentId, leadSwitch) } : {}),
   })
   const stopJobs = lifecycle.stopJobs
   launchCancelled = id => stopJobs.has(id)
@@ -2908,6 +2908,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     ...(swarm ? {
       leadProtected: (agentId: string, changeId?: string) => swarm.leadCloseProtected(env.ADAPTER_DATA_DIR, agentId, changeId),
       leadSwitching: (agentId: string, changeId: string) => swarm.leadSwitching(env.ADAPTER_DATA_DIR, agentId, changeId),
+      leadSwitchEnded: (agentId: string, changeId: string, stopped: boolean) => swarm.leadSwitchEnded(env.ADAPTER_DATA_DIR, agentId, changeId, stopped),
       buddyProtected: (agentId: string) => swarm.mayBeBuddy(env.ADAPTER_DATA_DIR, agentId),
     } : {}),
   })
