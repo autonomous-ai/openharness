@@ -1,5 +1,6 @@
 import 'model.dart';
 import 'swarm_asks.dart';
+import 'swarm_chat_notify.dart';
 import 'swarm_reader.dart';
 
 /// What a row says is new in a chat or a project (desktop design system,
@@ -19,7 +20,7 @@ SwarmRowNews swarmChatNews(
   SuperTabConversation group,
 ) {
   final tags = swarmChatCount(reader, asks, group);
-  return (bold: _unreadShown(reader, group) || tags > 0, tags: tags);
+  return (bold: swarmUnreadShown(reader, group) || tags > 0, tags: tags);
 }
 
 /// The `@` count of [group], as the desktop's red number counts
@@ -56,7 +57,7 @@ int _countIn(
 ) {
   final snapshot = reader.snapshot;
   if (reader.accessRevoked || snapshot == null) return 0;
-  if (snapshot.chatSettings[group.id] == 'muted') return 0;
+  if (swarmMuted(reader, group)) return 0;
   var count = 0;
   if (reader.readMarks?.tagsReadThrough(group.id) case final through?) {
     for (final m in mentions) {
@@ -65,7 +66,7 @@ int _countIn(
       }
     }
   }
-  if (asked > 0 && _unreadShown(reader, group)) count += asked;
+  if (asked > 0 && swarmUnreadShown(reader, group)) count += asked;
   return count;
 }
 
@@ -75,9 +76,8 @@ const _unknown = 1 << 52;
 
 /// Whether [group] shows as unread: unread, and not muted. A muted chat stays
 /// listed and never counts (the desktop's `unreadShown`).
-bool _unreadShown(SwarmReader reader, SuperTabConversation group) =>
-    reader.snapshot?.chatSettings[group.id] != 'muted' &&
-    (reader.readMarks?.unread(group) ?? false);
+bool swarmUnreadShown(SwarmReader reader, SuperTabConversation group) =>
+    !swarmMuted(reader, group) && (reader.readMarks?.unread(group) ?? false);
 
 /// Each project's row with something new, by project id: bold while its
 /// project chat or any of its open work shows unread, as the desktop's
@@ -109,7 +109,7 @@ Map<String, SwarmRowNews> swarmProjectNews(
       continue;
     }
     final projectId = group.projectId;
-    if (!unread.contains(projectId) && _unreadShown(reader, group)) {
+    if (!unread.contains(projectId) && swarmUnreadShown(reader, group)) {
       unread.add(projectId);
     }
     final count = _countIn(

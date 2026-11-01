@@ -16,6 +16,7 @@ import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 import 'model.dart';
 import 'swarm_buddy.dart';
 import 'swarm_buddy_chat.dart';
+import 'swarm_chat_menu.dart';
 import 'swarm_conversation_page.dart';
 import 'swarm_home_keeper.dart';
 import 'swarm_home_rows.dart';
@@ -101,22 +102,20 @@ void openSwarmProject(
   unawaited(replace ? navigator.pushReplacement(route) : navigator.push(route));
 }
 
-/// A route to chat [conversationId] of Swarm [swarmId], at [messageId] with
-/// [decisionId] asked, or with [threadId]'s thread open over it at its root,
-/// as a notice, a link, Activity, Threads or a row opens it
-/// ([SwarmOpenedChat]).
+/// A route to chat [conversationId] of Swarm [swarmId], at [messageId], or
+/// with [threadId]'s thread open over it at its root, as a notice, a link,
+/// Activity, Threads or a row opens it ([SwarmOpenedChat]). A decision opens
+/// in Activity instead, where it is answered.
 Route<void> swarmChatRoute({
   required String swarmId,
   required String conversationId,
   String? messageId,
-  String? decisionId,
   String? threadId,
 }) => phoneRoute(
   (_) => SwarmOpenedChat(
     swarmId: swarmId,
     conversationId: conversationId,
     messageId: messageId,
-    decisionId: decisionId,
     threadId: threadId,
   ),
   listensForItself: true,
@@ -141,12 +140,11 @@ class SwarmOpenedChat extends StatefulWidget {
     required this.swarmId,
     required this.conversationId,
     this.messageId,
-    this.decisionId,
     this.threadId,
   });
 
   final String swarmId, conversationId;
-  final String? messageId, decisionId;
+  final String? messageId;
 
   /// The thread opened over the chat ([SwarmConversationPage.threadId]).
   final String? threadId;
@@ -264,7 +262,6 @@ class _SwarmOpenedChatState extends State<SwarmOpenedChat> {
       swarmId: widget.swarmId,
       projectId: projectId,
       messageId: widget.messageId,
-      decisionId: widget.decisionId,
       threadId: widget.threadId,
     ),
     null => SwarmConversationPage(
@@ -272,7 +269,6 @@ class _SwarmOpenedChatState extends State<SwarmOpenedChat> {
       swarmId: widget.swarmId,
       conversationId: widget.conversationId,
       messageId: widget.messageId,
-      decisionId: widget.decisionId,
       threadId: widget.threadId,
     ),
   };
@@ -297,7 +293,6 @@ class SwarmProjectPage extends StatefulWidget {
     this.tabs = SwarmProjectTab.current,
     this.mention,
     this.messageId,
-    this.decisionId,
     this.threadId,
   });
 
@@ -313,11 +308,10 @@ class SwarmProjectPage extends StatefulWidget {
   /// ([SwarmConversationPage.mention]).
   final String? mention;
 
-  /// Where its chat opens, as a notice or a link names it: at that message,
-  /// with that decision asked ([SwarmConversationPage.messageId] and
-  /// [SwarmConversationPage.decisionId]), or with that thread open over it
+  /// Where its chat opens, as a notice or a link names it: at that message
+  /// ([SwarmConversationPage.messageId]), or with that thread open over it
   /// ([SwarmConversationPage.threadId]). Only the first time the chat shows.
-  final String? messageId, decisionId, threadId;
+  final String? messageId, threadId;
 
   @override
   State<SwarmProjectPage> createState() => _SwarmProjectPageState();
@@ -334,9 +328,7 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
 
   /// Where the chat opens ([SwarmProjectPage.messageId]): forgotten once
   /// another tab is picked, so the chat shown again opens at its end.
-  late String? _messageId = widget.messageId,
-      _decisionId = widget.decisionId,
-      _threadId = widget.threadId;
+  late String? _messageId = widget.messageId, _threadId = widget.threadId;
 
   /// What the page shows of the inbox ([_inboxChanged]): its Swarm's
   /// reader, whether there are several Swarms, why the list was not read.
@@ -538,10 +530,27 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
               actions: _buddy!,
               chatId: swarmBuddyChat(_buddy!.reader, widget.projectId)?.id,
             ),
+          // The project chat's Notifications (the desktop's chat menu): its
+          // header is the project's, so they are here.
+          if (_tab == SwarmProjectTab.chat && !_homeC)
+            SwarmChatMenuButton(
+              reader: reader,
+              chatId: project.leadConversationId,
+            ),
           if (_homeC)
             _ProjectMenu(
               onLeaderboard: _openLeaderboardSheet,
               onTeam: _openTeamSheet,
+              onNotifications:
+                  snapshot.conversation(project.leadConversationId) == null
+                  ? null
+                  : () => unawaited(
+                      showSwarmNotifySheet(
+                        context,
+                        reader,
+                        project.leadConversationId,
+                      ),
+                    ),
             )
           else
             SwarmIconButton(
@@ -591,7 +600,6 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
       header: false,
       mention: widget.mention,
       messageId: _messageId,
-      decisionId: _decisionId,
       threadId: _threadId,
       homeC: _homeC,
     ),
@@ -657,7 +665,7 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
                           : swarmChatNews(reader, asks, chat),
                       onSelect: (tab) => setState(() {
                         _tab = tab;
-                        _messageId = _decisionId = _threadId = null;
+                        _messageId = _threadId = null;
                       }),
                     ),
                   ),
@@ -748,12 +756,18 @@ class _Frame extends StatelessWidget {
 }
 
 /// ⋮ at the end of a Swarm Home C project's header: a small menu, on the
-/// design system's menu surface (the theme's), of its Leaderboard and its Team.
-/// It goes with the header: losing the project closes it.
+/// design system's menu surface (the theme's), of its Leaderboard, its Team
+/// and its project chat's Notifications ([showSwarmNotifySheet]), while that
+/// chat is read. It goes with the header: losing the project closes it.
 class _ProjectMenu extends StatelessWidget {
-  const _ProjectMenu({required this.onLeaderboard, required this.onTeam});
+  const _ProjectMenu({
+    required this.onLeaderboard,
+    required this.onTeam,
+    this.onNotifications,
+  });
 
   final VoidCallback onLeaderboard, onTeam;
+  final VoidCallback? onNotifications;
 
   @override
   Widget build(BuildContext context) {
@@ -775,6 +789,8 @@ class _ProjectMenu extends StatelessWidget {
       menuChildren: [
         row('swarm-project-menu-leaderboard', 'Leaderboard', onLeaderboard),
         row('swarm-project-menu-team', 'Team', onTeam),
+        if (onNotifications case final onTap?)
+          row('swarm-project-menu-notifications', 'Notifications', onTap),
       ],
       builder: (context, menu, _) => SwarmIconButton(
         key: const ValueKey('swarm-project-menu'),

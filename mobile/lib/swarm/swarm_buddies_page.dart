@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/phone/fzf.dart' show fzfAge;
 import 'package:harness_mobile/phone/out_of_sight.dart';
@@ -249,7 +250,8 @@ class _Note extends StatelessWidget {
 /// bold and bright while its Buddy chat has something unread, quiet
 /// otherwise — with how its Buddy stands after it and when the chat last
 /// moved at the end; under them the chat's last message ([line]), and a dot
-/// at its end while unread.
+/// at its end while unread. A muted chat is never unread, and has a crossed
+/// bell after its name, as the desktop's sidebar draws one.
 class SwarmBuddiesRow extends StatelessWidget {
   const SwarmBuddiesRow({
     super.key,
@@ -280,6 +282,7 @@ class SwarmBuddiesRow extends StatelessWidget {
         '${row.name} $state',
         if (line.isNotEmpty) line,
         if (unread) 'Unread messages',
+        if (row.muted) 'Muted',
       ].join(', '),
       excludeSemantics: true,
       child: Material(
@@ -327,6 +330,17 @@ class SwarmBuddiesRow extends StatelessWidget {
                                       ),
                                     ),
                                   ),
+                                  if (row.muted) ...[
+                                    const SizedBox(width: AppSpace.xs),
+                                    Icon(
+                                      LucideIcons.bellOff,
+                                      key: ValueKey(
+                                        'swarm-buddies-muted-${row.key}',
+                                      ),
+                                      size: 13,
+                                      color: AppPalette.textFaint,
+                                    ),
+                                  ],
                                   const SizedBox(width: AppSpace.s),
                                   Text(
                                     state,
