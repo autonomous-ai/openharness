@@ -35,7 +35,7 @@ import type { SelectionCommand, SelectionResult } from './windowSelection.js'
 import type { VisitCommand, VisitResult } from './windowVisit.js'
 import type { FormCommand, FormResult } from './windowForm.js'
 import type { PetStore } from './pets/store.js'
-import type { MachineFleet } from './machineFleet.js'
+import { LANE_SESSION_OVER, LANE_TOKEN_UNAVAILABLE, type MachineFleet } from './machineFleet.js'
 import type { ReviewedAnswer, AnswerReceipt } from './questionInbox.js'
 import { isTier, type Tier } from '../lib/notifyTier.js'
 
@@ -302,17 +302,24 @@ export class DaemonCableHost implements CableHost {
     void (async () => {
       // The socket first, and unconditionally: it is what makes the machine wheel's dots live, and it is
       // held for as long as the dial is plugged in whether or not anything is selected.
-      let online: { ok: true } | { ok: false; message: string }
+      let online: { ok: true } | { ok: false; message: string; code?: string }
       try {
         online = await this.viaFleet((r) => r.online())
       } catch (err) {
         online = { ok: false, message: (err as Error).message }
       }
       if (!online.ok) {
+        // A session that is over is not tried again: each try would be a refused refresh and two log lines every 30 s
+        // until someone signs in (security review 2 on #2483). The next sign-in and plug-in open it.
+        if (online.code === LANE_SESSION_OVER) {
+          this.wiring.log(`cable: could not open the lane (${online.message}) — other machines are unavailable until the next sign-in`)
+          return
+        }
         this.wiring.log(`cable: could not open the lane (${online.message})`)
-        // Tried again with a backoff while this dial stays plugged in: a token read that throws leaves the lane no
-        // socket, so nothing else would (deviceLink.ts readToken).
-        this.retryLane(plugIn)
+        // Only a token that could not be read is tried again from here: it left the lane no socket, so nothing else
+        // would (deviceLink.ts readToken). A socket that failed is the lane's own reconnect's, and trying it here too
+        // ran two backoffs against a backend that is down (security review 2 on #2483).
+        if (online.code === LANE_TOKEN_UNAVAILABLE) this.retryLane(plugIn)
         return
       }
       // Unplugged or replugged while it opened: the newer plug-in announces for itself, and an unplugged dial is

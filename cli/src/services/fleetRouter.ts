@@ -367,12 +367,14 @@ export class FleetRouter implements FleetRouting {
 
   /** Come online for a dial — see MachineFleet.online. A lane that will not open is an answer: the dial
    *  says so in its log and carries on with this computer. */
-  async online(): Promise<{ ok: true } | { ok: false; message: string }> {
+  async online(): Promise<{ ok: true } | { ok: false; message: string; code?: string }> {
     try {
       await this.fleet!.online()
       return { ok: true }
     } catch (err) {
-      return { ok: false, message: (err as Error).message }
+      // Why it failed, when the lane says (machineFleet.ts LANE_*): whether the dial tries again turns on it.
+      const code = (err as { code?: unknown }).code
+      return { ok: false, message: (err as Error).message, ...(typeof code === 'string' && code ? { code } : {}) }
     }
   }
 
