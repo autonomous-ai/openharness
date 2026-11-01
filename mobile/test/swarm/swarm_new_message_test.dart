@@ -823,6 +823,77 @@ void main() {
       expect(sheetOpen(), isFalse);
     });
 
+    testWidgets('its X clears the text only: hidden while empty, the files '
+        'stay with Send on for them, focus stays, and no Tag', (tester) async {
+      final fake = backend();
+      pickSwarmFiles = () async => [
+        XFile.fromData(
+          Uint8List.fromList([1, 2, 3]),
+          name: 'build.log',
+          path: '/copies/build.log',
+        ),
+      ];
+      await pump(tester, fake, upload: FakeUploads().upload);
+      await open(tester);
+      await tester.tap(row(webLead));
+      await tester.pump();
+      expect(key('swarm-tag'), findsNothing, reason: 'no @ picker here');
+      expect(key('swarm-new-message-clear'), findsNothing);
+      await tester.tap(key('swarm-new-message-attach'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-attach-files'));
+      await tester.pumpAndSettle();
+      await write(tester, 'The log');
+      expect(key('swarm-new-message-clear'), findsOneWidget);
+
+      await tester.tap(key('swarm-new-message-clear'));
+      await tester.pump();
+
+      expect(field(tester), '');
+      expect(key('swarm-new-message-clear'), findsNothing);
+      expect(key('swarm-outgoing-build.log'), findsOneWidget);
+      expect(
+        tester
+            .widget<TextField>(
+              inside(key('swarm-new-message-field'), find.byType(TextField)),
+            )
+            .focusNode!
+            .hasFocus,
+        isTrue,
+      );
+      expect(
+        tester.widget<SwarmRoundButton>(key('swarm-new-message-send')).onTap,
+        isNotNull,
+      );
+      expect(sends(fake), isEmpty);
+    });
+
+    testWidgets('while a message is on its way its X takes no touch, as the '
+        'field does', (tester) async {
+      final fake = backend();
+      final take = fake.routes['/api/super-tabs/$tab/commands']!;
+      final answer = Completer<void>();
+      fake.routes['/api/super-tabs/$tab/commands'] = (body) async {
+        await answer.future;
+        return take(body);
+      };
+      await pump(tester, fake);
+      await open(tester);
+      await tester.tap(row(webLead));
+      await write(tester, 'Ship it tonight');
+      await tester.tap(key('swarm-new-message-send'));
+      await tester.pump();
+      expect(key('swarm-new-message-sending'), findsOneWidget);
+
+      await tester.tap(key('swarm-new-message-clear'), warnIfMissed: false);
+      await tester.pump();
+
+      expect(field(tester), 'Ship it tonight');
+      answer.complete();
+      await tester.pumpAndSettle();
+      expect(sends(fake).single['command']['text'], 'Ship it tonight');
+    });
+
     /// The sheet open on the Lead's chat, its mic heard by [dictation].
     Future<FakeSwarm> talking(WidgetTester tester, _Dictation dictation) async {
       final fake = backend();

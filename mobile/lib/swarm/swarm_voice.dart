@@ -667,12 +667,12 @@ class _VoiceRound extends StatelessWidget {
   Widget build(BuildContext context) => SizedBox.square(
     dimension: 44,
     child: Center(
-      child: Container(
-        width: 36,
-        height: 36,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(color: fill, shape: BoxShape.circle),
-        child: child,
+      child: SizedBox.square(
+        dimension: 36,
+        child: DecoratedBox(
+          decoration: BoxDecoration(color: fill, shape: BoxShape.circle),
+          child: Center(child: child),
+        ),
       ),
     ),
   );
@@ -789,8 +789,7 @@ class _SwarmVoiceWaveState extends State<SwarmVoiceWave>
     final target = (widget.level?.value ?? 0).clamp(0.0, 1.0);
     _shown += (target - _shown) * 0.6;
     // A breath in silence: never a flat, frozen line while listening.
-    final breath =
-        0.06 + 0.05 * math.sin(elapsed.inMilliseconds / 180.0).abs();
+    final breath = 0.06 + 0.05 * math.sin(elapsed.inMilliseconds / 180.0).abs();
     _history.add(math.max(_shown, breath).clamp(0.0, 1.0));
     if (_history.length > SwarmVoiceWave._keep) _history.removeAt(0);
     _moved.value++;

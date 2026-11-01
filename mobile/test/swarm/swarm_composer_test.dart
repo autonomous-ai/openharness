@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
+import 'package:harness_mobile/phone/voice_input_controller.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 import 'package:harness_mobile/shared/theme/app_theme.dart' show AppPalette;
@@ -170,15 +173,24 @@ void main() {
 
   /// Chat g1 on screen; with [shell], under an outer Scaffold as the phone's
   /// shell puts every page (it takes the keyboard's inset out for its body).
+  late ValueNotifier<String?> account;
+
+  /// The microphone and the transcriber of the last [pump] with a voice.
+  late FakeVoiceRecorder recorder;
+  late FakeTranscriber stt;
+
   Future<SwarmHost> pump(
     WidgetTester tester,
     FakeSwarm fake, {
     bool shell = false,
+    bool voice = false,
     SwarmUpload upload = refuseSwarmUpload,
   }) async {
     final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
       ..value = {PhoneExperiment.swarm};
-    final account = ValueNotifier<String?>(me);
+    account = ValueNotifier<String?>(me);
+    recorder = FakeVoiceRecorder();
+    stt = FakeTranscriber();
     final host = SwarmHost(
       accountId: () => account.value,
       account: account,
@@ -187,6 +199,13 @@ void main() {
       notices: SilentSystemNotices(),
       features: features,
       readMarks: MemoryKeyValueStore(),
+      voice: voice
+          ? () => VoiceInputController(
+              transcriber: stt.call,
+              recorder: recorder,
+              language: ValueNotifier('en'),
+            )
+          : null,
     )..foreground = false;
     addTearDown(host.dispose);
     const page = SwarmConversationPage(swarmId: tab, conversationId: 'g1');
@@ -633,6 +652,134 @@ void main() {
         tester.getRect(key('swarm-thread-send')).right,
         lessThan(card.right),
       );
+    });
+  });
+
+  group('access lost on the chat', () {
+    const refused = SuperTabFailure('FORBIDDEN', 'Not yours.', statusCode: 403);
+
+    /// The Swarm read again: refused, or with the person a [role].
+    Future<void> reread(
+      WidgetTester tester,
+      SwarmHost host,
+      FakeSwarm fake, {
+      bool lost = false,
+      String? role,
+    }) async {
+      if (lost) {
+        fake.routes['/api/super-tabs/$tab/changes'] = (_) => throw refused;
+        fake.routes['/api/super-tabs/$tab/parts'] = (_) => throw refused;
+      } else {
+        final parts = fake.routes['/api/super-tabs/$tab/parts']!;
+        fake.routes['/api/super-tabs/$tab/parts'] = (body) => {
+          ...(parts(body) as Map<String, dynamic>),
+          'members': [part(me, 2, person(me, role: role!))],
+        };
+        // The changes say read it all again.
+        fake.routes['/api/super-tabs/$tab/changes'] = (_) => {'reload': true};
+      }
+      await host.session!.inbox.reader(tab)!.refresh();
+      for (var i = 0; i < 5; i++) {
+        await tester.pump();
+      }
+    }
+
+    testWidgets('signed out mid-take: the microphone closes, and nothing is '
+        'transcribed or kept', (tester) async {
+      await pump(tester, backend([message('m1', 1)]), voice: true);
+      stt.replies.add('after sign out');
+      await tester.tap(key('swarm-mic'));
+      await tester.pump();
+      await tester.pump();
+      expect(recorder.recording, isTrue);
+
+      account.value = null;
+      for (var i = 0; i < 5; i++) {
+        await tester.pump();
+      }
+
+      expect(recorder.recording, isFalse);
+      expect(stt.calls, isEmpty);
+      expect(find.text('after sign out'), findsNothing);
+    });
+
+    testWidgets('made read-only mid-take: the take goes with the composer', (
+      tester,
+    ) async {
+      final fake = backend([message('m1', 1)]);
+      final host = await pump(tester, fake, voice: true);
+      await tester.tap(key('swarm-mic'));
+      await tester.pump();
+      await tester.pump();
+      expect(recorder.recording, isTrue);
+
+      await reread(tester, host, fake, role: 'viewer');
+
+      expect(key('swarm-composer-card'), findsNothing);
+      expect(key('swarm-read-only'), findsOneWidget);
+      expect(recorder.recording, isFalse);
+      expect(stt.calls, isEmpty);
+    });
+
+    testWidgets('words transcribed after the Swarm was lost land nowhere', (
+      tester,
+    ) async {
+      final fake = backend([message('m1', 1)]);
+      final host = await pump(tester, fake, voice: true);
+      stt.pending = Completer<String>();
+      await tester.tap(key('swarm-mic'));
+      await tester.pump();
+      await tester.pump();
+      await tester.tap(key('swarm-voice-stop'));
+      await tester.pump();
+      expect(stt.calls, hasLength(1), reason: 'the take is being transcribed');
+
+      await reread(tester, host, fake, lost: true);
+      stt.pending!.complete('too late');
+      await tester.pumpAndSettle();
+
+      expect(find.text('too late'), findsNothing);
+      expect(fake.commands, isEmpty);
+    });
+
+    testWidgets('the Swarm lost with the picker Tag opened: no picker, no '
+        'chip, no name', (tester) async {
+      final fake = backend(
+        [message('m1', 1)],
+        members: [
+          person(me),
+          person('dee', role: 'collaborator'),
+        ],
+      );
+      final host = await pump(tester, fake);
+      await tester.tap(key('swarm-tag'));
+      await tester.pump();
+      expect(key('swarm-mention-picker'), findsOneWidget);
+
+      await reread(tester, host, fake, lost: true);
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-mention-picker'), findsNothing);
+      expect(key('swarm-tag'), findsNothing);
+      for (final name in ['dee', 'River', 'Nova']) {
+        expect(find.textContaining(name), findsNothing, reason: name);
+      }
+    });
+
+    testWidgets('signed out with the picker Tag opened: no picker, no chip', (
+      tester,
+    ) async {
+      await pump(tester, backend([message('m1', 1)]));
+      await tester.tap(key('swarm-tag'));
+      await tester.pump();
+      expect(key('swarm-mention-picker'), findsOneWidget);
+
+      account.value = null;
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-mention-picker'), findsNothing);
+      expect(key('swarm-tag'), findsNothing);
+      expect(find.textContaining('River'), findsNothing);
     });
   });
 }
