@@ -9,6 +9,7 @@ import 'package:harness_mobile/shared/theme/app_icon_size.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
 
+import 'swarm_chat_manage.dart';
 import 'swarm_chat_notify.dart';
 import 'swarm_reader.dart';
 
@@ -70,13 +71,16 @@ Future<void> swarmSetNotify(
 }
 
 /// The sheet of chat [chatId]'s Notifications, titled with its name: from
-/// its ⋮, or the project page's for its project chat. It goes once the chat
-/// can no longer be read — access lost, signed out, or the chat gone.
+/// its ⋮, or the project page's for its project chat. [actions], when
+/// given, go above them, worked out again as the chat changes. It goes once
+/// the chat can no longer be read — access lost, signed out, or the chat
+/// gone.
 Future<void> showSwarmNotifySheet(
   BuildContext context,
   SwarmReader reader,
   String chatId, {
   void Function(Route<void> route)? onShown,
+  List<PhoneSheetAction> Function()? actions,
 }) async {
   Route<void>? sheet;
   void moved() {
@@ -104,7 +108,7 @@ Future<void> showSwarmNotifySheet(
       // A setting changed on another device meanwhile ticks here too.
       rebuildOn: reader,
       rows: () => (
-        actions: const [],
+        actions: actions?.call() ?? const [],
         sections: [swarmNotifySection(context, reader, chatId)],
       ),
     );
@@ -113,9 +117,10 @@ Future<void> showSwarmNotifySheet(
   }
 }
 
-/// At the end of a chat's header: ⋮, whose sheet holds the chat's
-/// Notifications ([swarmNotifySection]), as the desktop's chat menu does for
-/// every chat a person reads, a viewer's too. Nothing while the chat is not
+/// At the end of a chat's header: ⋮, whose sheet holds Rename and Archive
+/// where the person may ([swarmChatManage]) and the chat's Notifications
+/// ([swarmNotifySection]), as the desktop's chat menu does for every chat a
+/// person reads, a viewer's too. Nothing while the chat is not
 /// known. The sheet goes once the chat can no longer be read — access lost,
 /// signed out, or the chat gone — or this header does.
 class SwarmChatMenuButton extends StatefulWidget {
@@ -182,6 +187,9 @@ class _SwarmChatMenuButtonState extends State<SwarmChatMenuButton> {
     widget.reader,
     widget.chatId,
     onShown: (route) => _sheet = route,
+    // Rename and Archive where the desktop's chat menu has them.
+    actions: () =>
+        swarmChatManageActions(context, widget.reader, widget.chatId),
   ).whenComplete(() => _sheet = null);
 
   @override

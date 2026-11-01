@@ -9,10 +9,10 @@ import 'package:harness_mobile/phone/composing_keyboard.dart';
 import 'package:harness_mobile/phone/phone_navigation.dart';
 import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/phone/tty_controls.dart';
-import 'package:harness_mobile/shared/theme/app_icon_size.dart';
 import 'package:harness_mobile/shared/theme/app_ink.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/shared/theme/swarm_tokens_set_b.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 
@@ -300,7 +300,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
           dictation: SwarmScope.dictationOf(context),
           draft: () => _conversation?.draft ?? '',
           write: (text) => _conversation?.draft = text,
-          send: _spoken,
         );
       }
     }
@@ -422,9 +421,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     if (c.heldAt == _undecided) c.heldAt = widget.messageId ?? _held.value;
   }
 
-  /// A read came in: the line, if a failed read left it to place; the notice's
-  /// message, once a read has brought what to look for it in; and what is
-  /// offered of the line, since the list changed.
   /// A take goes with the right to post here, as in a thread: the chat lost,
   /// archived, or the person no longer a writer. Its words land nowhere
   /// ([SwarmVoice.hide]). Nothing while the chat is still being read.
@@ -436,6 +432,9 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     if (c.state == SwarmChatState.lost || !c.canPost) _voice?.hide();
   }
 
+  /// A read came in: the line, if a failed read left it to place; the notice's
+  /// message, once a read has brought what to look for it in; and what is
+  /// offered of the line, since the list changed.
   void _chatMoved() {
     final c = _conversation;
     if (c == null || !_firstRead) return;
@@ -699,15 +698,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       text: draft,
       selection: TextSelection.collapsed(offset: draft.length),
     );
-  }
-
-  /// The second tap on the mic ended a take: what is in the box goes, as Send
-  /// would send it. Nothing when the box is empty, the chat is covered, or a
-  /// post is already on its way.
-  void _spoken() {
-    final c = _conversation;
-    if (c == null || !_visible || c.draft.trim().isEmpty || !c.canSend) return;
-    _send(c);
   }
 
   /// The composer's + ([attachSwarmFiles]), its files into [c]'s.
@@ -1229,111 +1219,147 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
           ),
         ),
       if (_buddy case final buddy?) SwarmBuddyBar(actions: buddy),
+      // The composer takes what it needs, up to all of the room under the
+      // header: on a short phone with the keyboard up its field gives up lines
+      // before anything overflows; the messages have the rest.
       Expanded(
-        child: Stack(
-          children: [
-            Positioned.fill(
-              child: ListenableBuilder(
-                listenable: Listenable.merge([c, _held]),
-                builder: (context, _) =>
-                    _messages(context, session, c, view, tty),
-              ),
-            ),
-            // At the top of the list, as Jump to latest is at its foot: the
-            // two can show at once.
-            Positioned(
-              left: 0,
-              right: 0,
-              top: 8,
-              child: ListenableBuilder(
-                listenable: Listenable.merge([c, _offersUnread]),
-                builder: (context, _) =>
-                    _offersUnread.value &&
-                        c.state != SwarmChatState.lost &&
-                        c.stream.isNotEmpty
-                    ? Center(
-                        child: SwarmJumpToUnreadPill(onTap: _jumpToFirstUnread),
-                      )
-                    : const SizedBox.shrink(),
-              ),
-            ),
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 8,
-              child: ListenableBuilder(
-                listenable: Listenable.merge([c, _held, _farBack]),
-                builder: (context, _) => switch (_waiting(c)) {
-                  0 when !_farBack.value || c.state == SwarmChatState.lost =>
-                    const SizedBox.shrink(),
-                  final count => Center(
-                    child: SwarmNewPill(count: count, onTap: _toFoot),
-                  ),
-                },
-              ),
-            ),
-          ],
-        ),
-      ),
-      ListenableBuilder(
-        listenable: c,
-        builder: (context, _) {
-          final note = _finding ? 'Finding the original message…' : _note;
-          return Column(
+        child: LayoutBuilder(
+          builder: (context, below) => Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              if (note != null)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(
-                    AppSpace.screenInset,
-                    AppSpace.s,
-                    AppSpace.screenInset,
-                    0,
-                  ),
-                  child: Text(
-                    note,
-                    key: const ValueKey('swarm-find-note'),
-                    style: swarmChatText(13.5, color: AppPalette.textSecondary),
-                  ),
+              Expanded(
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: ListenableBuilder(
+                        listenable: Listenable.merge([c, _held]),
+                        builder: (context, _) =>
+                            _messages(context, session, c, view, tty),
+                      ),
+                    ),
+                    // At the top of the list, as Jump to latest is at its foot: the
+                    // two can show at once.
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      top: 8,
+                      child: ListenableBuilder(
+                        listenable: Listenable.merge([c, _offersUnread]),
+                        builder: (context, _) =>
+                            _offersUnread.value &&
+                                c.state != SwarmChatState.lost &&
+                                c.stream.isNotEmpty
+                            ? Center(
+                                child: SwarmJumpToUnreadPill(
+                                  onTap: _jumpToFirstUnread,
+                                ),
+                              )
+                            : const SizedBox.shrink(),
+                      ),
+                    ),
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 8,
+                      child: ListenableBuilder(
+                        listenable: Listenable.merge([c, _held, _farBack]),
+                        builder: (context, _) => switch (_waiting(c)) {
+                          0
+                              when !_farBack.value ||
+                                  c.state == SwarmChatState.lost =>
+                            const SizedBox.shrink(),
+                          final count => Center(
+                            child: SwarmNewPill(count: count, onTap: _toFoot),
+                          ),
+                        },
+                      ),
+                    ),
+                  ],
                 ),
-              // Unless the body says it already: not open, or no conversation
-              // and nothing read.
-              if (c.error case final error?
-                  when c.state != SwarmChatState.lost &&
-                      (view.known || c.messages.isNotEmpty))
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(
-                    AppSpace.screenInset,
-                    AppSpace.s,
-                    AppSpace.screenInset,
-                    0,
-                  ),
-                  child: Text(
-                    error,
-                    key: const ValueKey('swarm-post-error'),
-                    style: swarmChatText(13.5, color: tty.red),
-                  ),
+              ),
+              ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: below.maxHeight),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    ListenableBuilder(
+                      listenable: c,
+                      builder: (context, _) {
+                        final note = _finding
+                            ? 'Finding the original message…'
+                            : _note;
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            if (note != null)
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  AppSpace.screenInset,
+                                  AppSpace.s,
+                                  AppSpace.screenInset,
+                                  0,
+                                ),
+                                child: Text(
+                                  note,
+                                  key: const ValueKey('swarm-find-note'),
+                                  style: swarmChatText(
+                                    13.5,
+                                    color: AppPalette.textSecondary,
+                                  ),
+                                ),
+                              ),
+                            // Unless the body says it already: not open, or no conversation
+                            // and nothing read.
+                            if (c.error case final error?
+                                when c.state != SwarmChatState.lost &&
+                                    (view.known || c.messages.isNotEmpty))
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  AppSpace.screenInset,
+                                  AppSpace.s,
+                                  AppSpace.screenInset,
+                                  0,
+                                ),
+                                child: Text(
+                                  error,
+                                  key: const ValueKey('swarm-post-error'),
+                                  style: swarmChatText(13.5, color: tty.red),
+                                ),
+                              ),
+                          ],
+                        );
+                      },
+                    ),
+                    if (view.canPost)
+                      Flexible(
+                        child: ListenableBuilder(
+                          listenable: Listenable.merge([c.composer, _voice]),
+                          builder: (context, _) =>
+                              _composer(c, tty, hint: view.hint),
+                        ),
+                      )
+                    else if (view.known)
+                      Padding(
+                        padding: const EdgeInsets.all(AppSpace.l),
+                        child: Text(
+                          view.archived
+                              ? 'This chat is archived.'
+                              : 'You can read this chat, not post in it.',
+                          key: const ValueKey('swarm-read-only'),
+                          style: swarmChatText(
+                            13.5,
+                            color: AppPalette.textSecondary,
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
+              ),
             ],
-          );
-        },
-      ),
-      if (view.canPost)
-        ListenableBuilder(
-          listenable: Listenable.merge([c.composer, _voice]),
-          builder: (context, _) => _composer(c, tty, hint: view.hint),
-        )
-      else if (view.known)
-        Padding(
-          padding: const EdgeInsets.all(AppSpace.l),
-          child: Text(
-            view.archived
-                ? 'This chat is archived.'
-                : 'You can read this chat, not post in it.',
-            key: const ValueKey('swarm-read-only'),
-            style: swarmChatText(13.5, color: AppPalette.textSecondary),
           ),
         ),
+      ),
     ],
   );
 
@@ -1854,30 +1880,31 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   }
 
   /// The @ picker while a name is typed, the reply bar while the draft
-  /// answers a message, what the last pick left out, the files going with the
-  /// post, what the mic could not hear, then +, a field that grows with what
-  /// is typed, the mic and a round Send. An @ is typed in the field: it has no
-  /// button of its own.
+  /// answers a message, what the last pick left out and what the mic could
+  /// not hear, then the card ([SwarmComposerCard]): the files going with the
+  /// post, a field that grows with what is typed and its X, and the toolbar —
+  /// +, @ Tag, the mic and a round Send. While a take is under way the toolbar
+  /// is the voice row ([SwarmVoiceRow]) and the picker and X are hidden. An @
+  /// is typed in the field or put there by Tag: both open the same picker.
   Widget _composer(SwarmConversation c, Tty tty, {required String hint}) {
     final snapshot = c.reader.snapshot;
     final query = c.mentionQuery;
     final replying = c.replyingTo;
+    final voice = _voice;
+    final talking = voice?.face != null;
     // A post on its way never holds the next back; one not confirmed is sent
     // again from where it shows. Files alone are a post too.
     final canSend = c.canSend;
-    return Container(
-      decoration: BoxDecoration(
-        color: Color.alphaBlend(tty.text.withValues(alpha: 0.02), tty.ground),
-        border: Border(top: BorderSide(color: swarmChatHair(tty))),
-      ),
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppSpace.m,
-        vertical: AppSpace.s,
-      ),
+    final taggable =
+        snapshot != null &&
+        (c.mentionablePeople.isNotEmpty || c.mentionable.isNotEmpty);
+    return Padding(
+      padding: SwarmComposer.padding,
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (query != null && snapshot != null)
+          if (query != null && snapshot != null && !talking)
             _MentionPicker(
               people: c.mentionablePeople,
               agents: c.mentionable,
@@ -1995,47 +2022,61 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                 style: AppType.caption(color: AppPalette.textSecondary),
               ),
             ),
-          SwarmOutgoingChips(box: c),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              if (swarmSendsFiles)
-                SwarmAttachButton(
-                  key: const ValueKey('swarm-attach'),
-                  onTap: c.uploading || c.files.room <= 0
-                      ? null
-                      : () => unawaited(_pickFiles(c)),
-                ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: SwarmMessageField(
-                  controller: _text,
-                  focus: _focus,
-                  hint: hint,
-                  imagePaste: swarmSendsFiles
-                      ? SwarmImagePaste(
-                          enabled: !c.uploading && c.files.room > 0,
-                          onImage: (image) => unawaited(_pasteImage(c, image)),
-                        )
-                      : null,
-                ),
+          Flexible(
+            child: SwarmComposerCard(
+              focus: _focus,
+              fit: true,
+              chips: c.files.files.isEmpty ? null : SwarmOutgoingChips(box: c),
+              field: SwarmMessageField(
+                controller: _text,
+                focus: _focus,
+                hint: hint,
+                clearable: !talking,
+                imagePaste: swarmSendsFiles
+                    ? SwarmImagePaste(
+                        enabled: !c.uploading && c.files.room > 0,
+                        onImage: (image) => unawaited(_pasteImage(c, image)),
+                      )
+                    : null,
               ),
-              if (_voice case final voice?)
-                SwarmVoiceMic(voice: voice)
-              else
-                const SizedBox(width: 6),
-              SwarmRoundButton(
-                key: const ValueKey('swarm-send'),
-                label: 'Send',
-                fill: canSend ? AppPalette.accent : ttyRaised(tty),
-                onTap: canSend ? () => _send(c) : null,
-                child: Icon(
-                  LucideIcons.arrowUp,
-                  size: 20,
-                  color: canSend ? AppInk.onFill : AppPalette.textFaint,
-                ),
-              ),
-            ],
+              toolbar: talking
+                  ? SwarmVoiceRow(voice: voice!)
+                  : Row(
+                      children: [
+                        if (swarmSendsFiles)
+                          SwarmAttachButton(
+                            key: const ValueKey('swarm-attach'),
+                            onTap: c.uploading || c.files.room <= 0
+                                ? null
+                                : () => unawaited(_pickFiles(c)),
+                          ),
+                        if (taggable)
+                          _TagChip(
+                            open: query != null,
+                            onTap: () {
+                              c.toggleMention();
+                              _focus.requestFocus();
+                            },
+                          ),
+                        const Spacer(),
+                        if (voice != null) SwarmVoiceMic(voice: voice),
+                        SwarmRoundButton(
+                          key: const ValueKey('swarm-send'),
+                          label: 'Send',
+                          face: 36,
+                          fill: canSend ? AppPalette.accent : ttyRaised(tty),
+                          onTap: canSend ? () => _send(c) : null,
+                          child: Icon(
+                            LucideIcons.arrowUp,
+                            size: 20,
+                            color: canSend
+                                ? AppInk.onFill
+                                : AppPalette.textFaint,
+                          ),
+                        ),
+                      ],
+                    ),
+            ),
           ),
         ],
       ),
@@ -3039,8 +3080,10 @@ class _AnswerIn extends StatelessWidget {
   );
 }
 
-/// The composer's field: one rounded line that grows with what is typed, up
-/// to five, in the app's own face. A thread's reply box has it too.
+/// The composer's field inside [SwarmComposerCard]: text that grows with
+/// what is typed, 1 to 5 lines and then scrolls, in the app's own face, with
+/// an X pinned at its top right that clears the text (Tony, 11-01). A thread's
+/// reply box and New message have it too.
 class SwarmMessageField extends StatelessWidget {
   const SwarmMessageField({
     super.key,
@@ -3048,6 +3091,8 @@ class SwarmMessageField extends StatelessWidget {
     required this.focus,
     required this.hint,
     this.fieldKey = const ValueKey('swarm-field'),
+    this.clearKey = const ValueKey('swarm-field-clear'),
+    this.clearable = true,
     this.imagePaste,
   });
 
@@ -3059,90 +3104,194 @@ class SwarmMessageField extends StatelessWidget {
   /// takes text alone.
   final SwarmImagePaste? imagePaste;
 
-  /// The pill's key: the chat's and a thread's box are told apart by it.
+  /// The field's key: the chat's, a thread's and New message's are told
+  /// apart by it.
   final Key fieldKey;
+
+  /// The X's key.
+  final Key clearKey;
+
+  /// Whether the X shows while there is text: not during a take.
+  final bool clearable;
 
   @override
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
-    return GestureDetector(
-      // A tap anywhere in the pill — not only on the text — takes the keyboard.
-      behavior: HitTestBehavior.opaque,
-      onTap: focus.requestFocus,
-      child: Container(
-        key: fieldKey,
-        constraints: const BoxConstraints(minHeight: 44),
-        alignment: Alignment.centerLeft,
-        // One line rests at the 44 of the buttons beside it.
-        padding: const EdgeInsets.symmetric(
-          horizontal: AppSpace.l,
-          vertical: AppSpace.s,
-        ),
-        decoration: BoxDecoration(
-          color: ttyRaised(tty),
-          border: Border.all(color: swarmChatHair(tty)),
-          // A text field's rounded rectangle.
-          borderRadius: BorderRadius.circular(AppControl.radius),
-        ),
-        child: TextSelectionTheme(
-          data: TextSelectionThemeData(
-            cursorColor: AppPalette.accentOnSurface,
-            selectionColor: AppPalette.accentOnSurface.withValues(alpha: 0.3),
-            selectionHandleColor: AppPalette.accentOnSurface,
-          ),
-          child: TextField(
-            controller: controller,
-            focusNode: focus,
-            minLines: 1,
-            maxLines: 5,
-            keyboardType: TextInputType.multiline,
-            textInputAction: TextInputAction.newline,
-            textCapitalization: TextCapitalization.sentences,
-            // The keyboard's own composing, left on: Vietnamese Telex on iOS
-            // rides on autocorrection. See `ComposingKeyboard`.
-            autocorrect: ComposingKeyboard.autocorrect,
-            enableSuggestions: ComposingKeyboard.enableSuggestions,
-            smartDashesType: SmartDashesType.disabled,
-            smartQuotesType: SmartQuotesType.disabled,
-            contextMenuBuilder: (context, field) =>
-                swarmFieldMenu(context, field, imagePaste),
-            contentInsertionConfiguration: switch (imagePaste) {
-              final paste? => ContentInsertionConfiguration(
-                allowedMimeTypes: swarmInsertedImageTypes,
-                onContentInserted: (content) =>
-                    paste.onImage(SwarmPastedImage.inserted(content)),
+    return Stack(
+      children: [
+        GestureDetector(
+          // A tap anywhere in the field's area — not only on the text — takes
+          // the keyboard.
+          behavior: HitTestBehavior.opaque,
+          onTap: focus.requestFocus,
+          child: Container(
+            key: fieldKey,
+            // The right 44 is always kept for the X, so the text does not
+            // rewrap as it comes and goes.
+            padding: SwarmComposer.fieldPadding,
+            child: TextSelectionTheme(
+              data: TextSelectionThemeData(
+                cursorColor: AppPalette.accentOnSurface,
+                selectionColor: AppPalette.accentOnSurface.withValues(
+                  alpha: 0.3,
+                ),
+                selectionHandleColor: AppPalette.accentOnSurface,
               ),
-              null => null,
-            },
-            cursorColor: AppPalette.accentOnSurface,
-            cursorWidth: 2,
-            style: swarmChatText(16, height: 22 / 16),
-            decoration: InputDecoration(
-              isCollapsed: true,
-              // No minimum of its own: the pill's 44 is the field's height.
-              constraints: const BoxConstraints(),
-              filled: false,
-              border: InputBorder.none,
-              enabledBorder: InputBorder.none,
-              focusedBorder: InputBorder.none,
-              disabledBorder: InputBorder.none,
-              contentPadding: EdgeInsets.zero,
-              hintText: hint,
-              hintStyle: swarmChatText(
-                16,
-                height: 22 / 16,
-                color: AppPalette.textFaint,
+              child: TextField(
+                controller: controller,
+                focusNode: focus,
+                minLines: 1,
+                maxLines: 5,
+                keyboardType: TextInputType.multiline,
+                textInputAction: TextInputAction.newline,
+                textCapitalization: TextCapitalization.sentences,
+                // The keyboard's own composing, left on: Vietnamese Telex on
+                // iOS rides on autocorrection. See `ComposingKeyboard`.
+                autocorrect: ComposingKeyboard.autocorrect,
+                enableSuggestions: ComposingKeyboard.enableSuggestions,
+                smartDashesType: SmartDashesType.disabled,
+                smartQuotesType: SmartQuotesType.disabled,
+                contextMenuBuilder: (context, field) =>
+                    swarmFieldMenu(context, field, imagePaste),
+                contentInsertionConfiguration: switch (imagePaste) {
+                  final paste? => ContentInsertionConfiguration(
+                    allowedMimeTypes: swarmInsertedImageTypes,
+                    onContentInserted: (content) =>
+                        paste.onImage(SwarmPastedImage.inserted(content)),
+                  ),
+                  null => null,
+                },
+                cursorColor: AppPalette.accentOnSurface,
+                cursorWidth: 2,
+                style: swarmChatText(16, height: 22 / 16),
+                decoration: InputDecoration(
+                  isCollapsed: true,
+                  constraints: const BoxConstraints(),
+                  filled: false,
+                  border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
+                  disabledBorder: InputBorder.none,
+                  contentPadding: EdgeInsets.zero,
+                  hintText: hint,
+                  hintStyle: swarmChatText(
+                    16,
+                    height: 22 / 16,
+                    color: AppPalette.textFaint,
+                  ),
+                ),
               ),
             ),
           ),
+        ),
+        if (clearable)
+          Positioned(
+            top: 1,
+            right: 0,
+            child: ValueListenableBuilder<TextEditingValue>(
+              valueListenable: controller,
+              builder: (context, value, _) => value.text.isEmpty
+                  ? const SizedBox.shrink()
+                  : Semantics(
+                      button: true,
+                      label: 'Clear text',
+                      excludeSemantics: true,
+                      onTap: controller.clear,
+                      child: GestureDetector(
+                        key: clearKey,
+                        behavior: HitTestBehavior.opaque,
+                        // Text only: files and the reply stay, and so do the
+                        // focus and the keyboard.
+                        onTap: controller.clear,
+                        child: SizedBox.square(
+                          dimension: 44,
+                          child: Center(
+                            child: Container(
+                              width: 24,
+                              height: 24,
+                              alignment: Alignment.center,
+                              decoration: BoxDecoration(
+                                color: tty.text.withValues(alpha: 0.11),
+                                shape: BoxShape.circle,
+                              ),
+                              child: Icon(
+                                LucideIcons.x,
+                                size: 14,
+                                color: AppPalette.textSecondary,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// The composer as one floating card (Tony, 11-01; Claude and Slack's
+/// layout): the files going, the field, then the toolbar. Used by the chat,
+/// New message and a thread's reply box. The border darkens while [focus]
+/// has the keyboard.
+class SwarmComposerCard extends StatelessWidget {
+  const SwarmComposerCard({
+    super.key,
+    this.chips,
+    required this.field,
+    required this.toolbar,
+    required this.focus,
+    this.fit = false,
+  });
+
+  /// The files going with the post; null while there are none.
+  final Widget? chips;
+
+  /// Under a height limit, the field gives up lines first (fewer than five,
+  /// then it scrolls): the chat's composer on a short phone with the keyboard
+  /// up. Only where the card's parent bounds its height.
+  final bool fit;
+  final Widget field;
+  final Widget toolbar;
+  final FocusNode focus;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return ListenableBuilder(
+      listenable: focus,
+      builder: (context, _) => Container(
+        key: const ValueKey('swarm-composer-card'),
+        decoration: BoxDecoration(
+          color: swarmChatCard(tty),
+          border: Border.all(
+            color: focus.hasFocus
+                ? tty.text.withValues(alpha: 0.26)
+                : swarmChatHair(tty),
+          ),
+          borderRadius: BorderRadius.circular(SwarmComposer.cardRadius),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (chips case final chips?)
+              Padding(padding: SwarmComposer.chipsPadding, child: chips),
+            if (fit) Flexible(child: field) else field,
+            Padding(
+              padding: SwarmComposer.toolbarPadding,
+              child: SizedBox(height: 44, child: toolbar),
+            ),
+          ],
         ),
       ),
     );
   }
 }
 
-/// A round 44pt button: @, Send, the reply bar's ✕, a thread's Send. [fill]
-/// draws it solid.
+/// A round button in a 44pt target: Send, the reply bar's ✕, +. [fill] draws
+/// it solid; with [face] the fill is a circle that wide, centred in the 44.
 class SwarmRoundButton extends StatelessWidget {
   const SwarmRoundButton({
     super.key,
@@ -3150,12 +3299,16 @@ class SwarmRoundButton extends StatelessWidget {
     required this.onTap,
     required this.child,
     this.fill,
+    this.face,
   });
 
   final String label;
   final VoidCallback? onTap;
   final Widget child;
   final Color? fill;
+
+  /// The visible circle's width; null fills the whole 44.
+  final double? face;
 
   @override
   Widget build(BuildContext context) => Semantics(
@@ -3166,13 +3319,27 @@ class SwarmRoundButton extends StatelessWidget {
     child: GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
-      child: Container(
-        width: 44,
-        height: 44,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(color: fill, shape: BoxShape.circle),
-        child: child,
-      ),
+      child: switch (face) {
+        null => Container(
+          width: 44,
+          height: 44,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(color: fill, shape: BoxShape.circle),
+          child: child,
+        ),
+        final face => SizedBox.square(
+          dimension: 44,
+          child: Center(
+            child: SizedBox.square(
+              dimension: face,
+              child: DecoratedBox(
+                decoration: BoxDecoration(color: fill, shape: BoxShape.circle),
+                child: Center(child: child),
+              ),
+            ),
+          ),
+        ),
+      },
     ),
   );
 }
@@ -3188,12 +3355,72 @@ class SwarmAttachButton extends StatelessWidget {
   Widget build(BuildContext context) => SwarmRoundButton(
     label: 'Attach files',
     onTap: onTap,
+    face: 36,
+    fill: Tty.of(context).text.withValues(alpha: 0.08),
     child: Icon(
       LucideIcons.plus,
-      size: AppIconSize.standalone,
+      size: 22,
       color: onTap == null ? AppPalette.textFaint : AppPalette.textSecondary,
     ),
   );
+}
+
+/// The chat composer's @ Tag chip ([SwarmConversation.toggleMention]): ends
+/// the draft in an @, which opens the picker, or closes it again while no
+/// name is typed. In the accent while the picker is open.
+class _TagChip extends StatelessWidget {
+  const _TagChip({required this.open, required this.onTap});
+
+  final bool open;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    final ink = open ? AppPalette.accentOnSurface : AppPalette.textSecondary;
+    return Semantics(
+      button: true,
+      label: 'Tag a member or agent',
+      excludeSemantics: true,
+      onTap: onTap,
+      child: GestureDetector(
+        key: const ValueKey('swarm-tag'),
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: SizedBox(
+          height: 44,
+          child: Center(
+            child: Container(
+              height: 36,
+              padding: SwarmComposer.tagPadding,
+              decoration: BoxDecoration(
+                color: open
+                    ? AppPalette.accentOnSurface.withValues(alpha: 0.16)
+                    : tty.text.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(SwarmComposer.tagRadius),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(LucideIcons.atSign, size: 17, color: ink),
+                  const SizedBox(width: 5),
+                  Text(
+                    'Tag',
+                    style: swarmChatText(
+                      14,
+                      color: ink,
+                      weight: FontWeight.w500,
+                      height: 1.2,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// A link in the accent: Earlier messages.

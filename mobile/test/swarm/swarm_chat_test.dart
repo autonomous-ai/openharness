@@ -663,17 +663,32 @@ void main() {
     expect(fake.commands.single['replyTo'], isNull);
   });
 
-  testWidgets('the composer has no @ button: an @ typed in the field opens '
-      'the picker', (tester) async {
+  testWidgets('the composer has an @ Tag chip (Tony, 11-01): it and an @ '
+      'typed in the field open the same picker', (tester) async {
     await pump(tester, backend([message('m1', 1)]));
 
     expect(key('swarm-attach'), findsOneWidget);
     expect(key('swarm-field'), findsOneWidget);
     expect(key('swarm-send'), findsOneWidget);
-    expect(key('swarm-mention'), findsNothing);
-    expect(find.byIcon(LucideIcons.atSign), findsNothing);
+    expect(key('swarm-tag'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: key('swarm-tag'),
+        matching: find.byIcon(LucideIcons.atSign),
+      ),
+      findsOneWidget,
+    );
 
     await tester.enterText(find.byType(TextField), '@');
+    await tester.pump();
+    expect(key('swarm-mention-picker'), findsOneWidget);
+    expect(key('swarm-pick-agent-lead'), findsOneWidget);
+    expect(key('swarm-pick-agent-builder'), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField), '');
+    await tester.pump();
+    expect(key('swarm-mention-picker'), findsNothing);
+    await tester.tap(key('swarm-tag'));
     await tester.pump();
     expect(key('swarm-mention-picker'), findsOneWidget);
     expect(key('swarm-pick-agent-lead'), findsOneWidget);
@@ -1547,8 +1562,8 @@ void main() {
     expect(marked, ['@Nova']);
   });
 
-  testWidgets('the field is one rounded line until more is typed; Send is a '
-      'round arrow that waits for text', (tester) async {
+  testWidgets('the field is one line in the card until more is typed; Send '
+      'is a round arrow that waits for text', (tester) async {
     final fake = backend([message('m1', 1)]);
     await pump(tester, fake);
 
@@ -1609,12 +1624,18 @@ void main() {
   });
 
   testWidgets(
-    'on an iPhone the field rests at the 44 of the buttons beside it',
+    'on an iPhone one line rests in an 86pt card: the field over a toolbar '
+    'of 44pt targets',
     (tester) async {
       await pump(tester, backend([message('m1', 1)]));
 
-      expect(tester.getSize(key('swarm-field')).height, 44);
+      expect(tester.getSize(key('swarm-composer-card')).height, 86);
+      expect(tester.getSize(key('swarm-field')).height, 36);
       expect(tester.getSize(key('swarm-send')).height, 44);
+      expect(
+        tester.getRect(key('swarm-send')).top,
+        greaterThanOrEqualTo(tester.getRect(key('swarm-field')).bottom),
+      );
     },
     variant: TargetPlatformVariant.only(TargetPlatform.iOS),
   );
