@@ -448,6 +448,7 @@ void main() {
         final fake = backend();
         final host = await pump(tester, fake);
         await openMenu(tester);
+        expect(row, findsOneWidget);
 
         await refreshWith(
           fake,
@@ -465,6 +466,7 @@ void main() {
       final account = ValueNotifier<String?>(me);
       await pump(tester, backend(), account: account);
       await openMenu(tester);
+      expect(row, findsOneWidget);
 
       account.value = null;
       await tester.pumpAndSettle();
