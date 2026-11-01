@@ -110,12 +110,18 @@ class SwarmConversationPage extends StatefulWidget {
     this.buddy,
     this.messageId,
     this.decisionId,
+    this.threadId,
     this.mention,
     this.homeC = false,
   });
 
   final String swarmId, conversationId;
   final String? messageId, decisionId;
+
+  /// A thread to open over the chat as it opens, when [messageId] is its
+  /// root: as Threads opens one on the desktop (`_openThreadFromList`), the
+  /// chat behind it at the root.
+  final String? threadId;
 
   /// An agent to @mention in the draft as the chat opens: the PM, as its
   /// private line is answered in the project chat.
@@ -929,10 +935,18 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// a tag opens through on the desktop.
   static const _findPages = 50;
 
+  /// The thread the chat opens with, until its first jump
+  /// ([SwarmConversationPage.threadId]).
+  late String? _threadAt = widget.threadId;
+
   /// Brings [messageId] into view and lights it — read in from earlier pages
   /// when it is further back — or says why it cannot.
   Future<void> _jumpTo(SwarmConversation c, String messageId) async {
     if (_finding) return;
+    // Only the jump the chat opened with opens [SwarmConversationPage.threadId]:
+    // a quote of the root tapped later brings the root into view.
+    final thread = _threadAt;
+    _threadAt = null;
     final landing = _land();
     setState(() {
       _decisionTarget = null;
@@ -948,6 +962,13 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     final target = found
         ? c.messages.where((m) => m.id == messageId).firstOrNull
         : null;
+    // Threads opens the thread itself, its root read back or not, while the
+    // chat is still one the reader may read.
+    if (thread == messageId &&
+        !c.reader.accessRevoked &&
+        c.reader.snapshot?.conversation(c.id) != null) {
+      _openThread(c, messageId);
+    }
     if (target != null && target.threadReply) {
       _openThread(c, target.thread!);
       if (!target.inMainStream) {
