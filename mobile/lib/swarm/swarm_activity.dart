@@ -78,6 +78,28 @@ class SwarmActivityNeed extends SwarmActivityItem {
   };
 }
 
+/// Whether [item] is of project [projectId], as [snapshot] — its Swarm's read
+/// — has it: what it names and where it was asked must both be that project,
+/// so a row whose chat moved, or that the read no longer has, shows in no
+/// project's Activity.
+bool swarmActivityItemIn(
+  SwarmActivityItem item,
+  SuperTabSnapshot snapshot,
+  String projectId,
+) {
+  final named = switch (item) {
+    SwarmActivityNeed(need: SwarmDecisionNeed(:final decision)) =>
+      decision.projectId,
+    SwarmActivityNeed(need: SwarmMentionNeed(:final mention)) =>
+      mention.projectId,
+    SwarmActivityNeed(need: SwarmWorkNeed(:final work)) => work.project.id,
+    SwarmActivityThread(:final project) => project.id,
+    SwarmActivityReaction(:final project) => project.id,
+  };
+  return named == projectId &&
+      snapshot.conversation(item.conversationId)?.projectId == projectId;
+}
+
 /// A thread in a project chat that the person wrote in or was tagged in.
 class SwarmActivityThread extends SwarmActivityItem {
   const SwarmActivityThread(
