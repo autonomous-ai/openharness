@@ -81,6 +81,18 @@ SwarmHomeLists swarmHomeLists(
   return (pinned: newest(pinned), recent: newest(recent), quiet: newest(quiet));
 }
 
+/// [lists] under Home's unread filter (`SwarmHomePrefs.unreadOnly`, the
+/// desktop's `_hasUnread`): only the projects with something new in them,
+/// bold or tags waiting, pinned ones too. None of them was folded.
+SwarmHomeLists swarmHomeUnreadOnly(SwarmHomeLists lists) {
+  bool news(SwarmHomeProject p) => p.news.bold || p.news.tags > 0;
+  return (
+    pinned: lists.pinned.where(news).toList(),
+    recent: lists.recent.where(news).toList(),
+    quiet: lists.quiet.where(news).toList(),
+  );
+}
+
 /// When each project of [snapshot] last moved: the newest change of its
 /// chats ([SuperTabConversation.changedAt]), its project chat and its work
 /// alike, closed work too. Not the person's Buddy chat ([buddies]) or a
