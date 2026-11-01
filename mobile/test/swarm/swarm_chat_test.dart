@@ -1037,7 +1037,11 @@ void main() {
       'sent once read back', (tester) async {
     final fake = backend([message('m1', 1)]);
     final taken = Completer<Object?>();
-    fake.routes[commands] = (_) => taken.future;
+    String? receipt;
+    fake.routes[commands] = (body) {
+      receipt = body!['operationId'] as String;
+      return taken.future;
+    };
     await pump(tester, fake);
 
     await tester.enterText(find.byType(TextField), 'On it');
@@ -1058,16 +1062,129 @@ void main() {
       greaterThan(tester.getBottomLeft(find.text('On it')).dy),
     );
 
+    final id = sentId(receipt!);
     fake.routes['$messages?after=1'] = (_) => {
-      'messages': [message('m2', 2, author: me, text: 'On it', minute: 5)],
+      'messages': [message(id, 2, author: me, text: 'On it', minute: 5)],
       'next': null,
     };
     taken.complete({'result': <String, dynamic>{}});
     await tester.pumpAndSettle();
 
     expect(key('swarm-pending'), findsNothing);
-    expect(key('swarm-message-m2'), findsOneWidget);
+    expect(key('swarm-message-$id'), findsOneWidget);
     expect(find.text('On it'), findsOneWidget);
+  });
+
+  bool sendable(WidgetTester tester) =>
+      tester.widget<SwarmRoundButton>(key('swarm-send')).onTap != null;
+
+  List<String> receipts(FakeSwarm fake) => [
+    for (final call in fake.calls)
+      if (call.method == 'POST' && call.path == commands)
+        call.body!['operationId'] as String,
+  ];
+
+  testWidgets('a post read back while its answer is still on its way shows '
+      'once, and Send is free for the next (Dee, 11-01)', (tester) async {
+    final fake = backend([message('m1', 1)]);
+    final taken = Completer<Object?>();
+    fake.routes[commands] = (_) => taken.future;
+    final host = await pump(tester, fake);
+
+    await tester.enterText(find.byType(TextField), 'On it');
+    await tester.pump();
+    await tester.tap(key('swarm-send'));
+    await tester.pump();
+    expect(find.text('Sending…'), findsOneWidget);
+
+    // The computer passing it on is slow to answer; the Swarm's next read
+    // already has it.
+    final id = sentId(receipts(fake).single);
+    fake.routes['$messages?after=1'] = (_) => {
+      'messages': [message(id, 2, author: me, text: 'On it', minute: 5)],
+      'next': null,
+    };
+    fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+      cursor: 'c3',
+      lastChangedAt: 200,
+      derived: {'decisionsWaiting': 0},
+      groups: [
+        part(
+          'g1',
+          9,
+          groupData(
+            'g1',
+            title: 'Fix login',
+            agentIds: ['agent-lead', 'agent-builder'],
+            status: 'working',
+            lastMessageSequence: 2,
+          ),
+        ),
+      ],
+    );
+    await host.session!.inbox.reader(tab)!.refresh();
+    for (var i = 0; i < 5; i++) {
+      await tester.pump();
+    }
+
+    expect(key('swarm-message-$id'), findsOneWidget);
+    expect(find.text('On it'), findsOneWidget, reason: 'no second copy');
+    expect(key('swarm-pending'), findsNothing);
+    await tester.enterText(find.byType(TextField), 'And another');
+    await tester.pump();
+    expect(sendable(tester), isTrue);
+
+    taken.complete({
+      'result': {'messageId': id},
+    });
+    await tester.pumpAndSettle();
+    expect(find.text('On it'), findsOneWidget);
+    expect(key('swarm-pending'), findsNothing);
+  });
+
+  testWidgets('a second post goes while the first is still on its way; one '
+      'with no answer in time says Not sent, and Retry sends it under the '
+      'same receipt, so the backend posts it once', (tester) async {
+    final fake = backend([message('m1', 1)]);
+    final answers = <String, Completer<Object?>>{};
+    fake.routes[commands] = (body) =>
+        (answers[body!['operationId'] as String] ??= Completer()).future;
+    await pump(tester, fake);
+
+    await tester.enterText(find.byType(TextField), 'One');
+    await tester.pump();
+    await tester.tap(key('swarm-send'));
+    await tester.pump();
+    await tester.enterText(find.byType(TextField), 'Two');
+    await tester.pump();
+
+    expect(sendable(tester), isTrue, reason: 'never waits on the first');
+    await tester.tap(key('swarm-send'));
+    await tester.pump();
+
+    expect(find.text('Sending…'), findsNWidgets(2));
+    final [one, two] = receipts(fake);
+    expect(one, isNot(two));
+
+    // Two is taken; One's answer never comes.
+    answers[two]!.complete({
+      'result': {'messageId': sentId(two)},
+    });
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 41));
+    await tester.pump();
+
+    expect(find.text('Not sent'), findsOneWidget);
+    expect(find.text('Sending…'), findsNothing);
+
+    await tester.tap(key('swarm-resend-post'));
+    await tester.pump();
+    answers[one]!.complete({'result': <String, dynamic>{}});
+    await tester.pumpAndSettle();
+
+    expect(receipts(fake), [one, two, one]);
+    expect(answers.keys, [one, two], reason: 'one post per receipt');
+    expect(find.text('Not sent'), findsNothing);
   });
 
   testWidgets('a post lost to an unknown failure says to Retry, the word '
@@ -1998,8 +2115,9 @@ void main() {
 
     /// River's question with two replies in its thread, Nova's only there
     /// and Nova's also sent to the chat; then a message of Nova's own. A
-    /// reply sent comes back in the page under its operation id, as the
-    /// backend writes it, and on the line; in both when also sent.
+    /// reply sent comes back in the page under the id the backend gives it
+    /// (a hash of its receipt, never the receipt), and on the line; in both
+    /// when also sent.
     FakeSwarm threaded({List<Map<String, dynamic>>? members}) {
       final page = [
         message('m1', 1, author: 'agent-lead', text: root, thread: 'm1'),
@@ -2041,7 +2159,7 @@ void main() {
         final command = body!['command'] as Map<String, dynamic>;
         page.add(
           message(
-            body['operationId'] as String,
+            sentId(body['operationId'] as String),
             5,
             author: me,
             text: command['text'] as String,
@@ -2337,7 +2455,89 @@ void main() {
           .lastWhere((call) => call.path == commands)
           .body!['operationId'];
       expect(find.text('Ship it as drawn.'), findsOneWidget);
-      expect(key('swarm-replied-in-thread-$sent'), findsOneWidget);
+      expect(key('swarm-replied-in-thread-${sentId(sent)}'), findsOneWidget);
+    });
+
+    bool sendable(WidgetTester tester, String button) =>
+        tester.widget<SwarmRoundButton>(key(button)).onTap != null;
+
+    testWidgets('a reply read back under the id the backend gives it shows '
+        'once, and Send works for the next reply (Dee, 11-01)', (tester) async {
+      final fake = threaded();
+      await pump(tester, fake);
+      await tester.tap(key('swarm-thread-line-m1'));
+      await tester.pumpAndSettle();
+
+      const first = 'why do we need the 13mm floor?';
+      await tester.enterText(key('swarm-thread-field'), first);
+      await tester.pump();
+      await tester.tap(key('swarm-thread-send'));
+      await tester.pumpAndSettle();
+
+      expect(inThread(first), findsOneWidget, reason: 'no second copy');
+      expect(key('swarm-thread-pending'), findsNothing);
+      expect(find.text('Sending…'), findsNothing);
+
+      await tester.enterText(key('swarm-thread-field'), 'and the 2mm lip?');
+      await tester.pump();
+      expect(sendable(tester, 'swarm-thread-send'), isTrue);
+      await tester.tap(key('swarm-thread-send'));
+      await tester.pumpAndSettle();
+
+      expect(fake.commands, hasLength(2));
+      expect(inThread('and the 2mm lip?'), findsOneWidget);
+      expect(key('swarm-thread-pending'), findsNothing);
+    });
+
+    testWidgets('a second reply goes while the first is still on its way, '
+        'each with its own Sending…, and each shows once when taken', (
+      tester,
+    ) async {
+      final fake = threaded();
+      final write = fake.routes[commands]!;
+      final answers = <Completer<void>>[];
+      fake.routes[commands] = (body) {
+        final answer = Completer<void>();
+        answers.add(answer);
+        return answer.future.then((_) => write(body));
+      };
+      await pump(tester, fake);
+      await tester.tap(key('swarm-thread-line-m1'));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(key('swarm-thread-field'), 'One');
+      await tester.pump();
+      await tester.tap(key('swarm-thread-send'));
+      await tester.pump();
+      await tester.enterText(key('swarm-thread-field'), 'Two');
+      await tester.pump();
+
+      expect(sendable(tester, 'swarm-thread-send'), isTrue);
+      await tester.tap(key('swarm-thread-send'));
+      await tester.pump();
+
+      expect(answers, hasLength(2));
+      expect(
+        find.descendant(
+          of: key('swarm-thread-messages'),
+          matching: find.text('Sending…'),
+        ),
+        findsNWidgets(2),
+      );
+      final receipts = {
+        for (final call in fake.calls)
+          if (call.path == commands) call.body!['operationId'],
+      };
+      expect(receipts, hasLength(2), reason: 'two posts, two receipts');
+
+      for (final answer in answers) {
+        answer.complete();
+      }
+      await tester.pumpAndSettle();
+
+      expect(inThread('One'), findsOneWidget);
+      expect(inThread('Two'), findsOneWidget);
+      expect(key('swarm-thread-pending'), findsNothing);
     });
 
     testWidgets('a notification of a reply only in its thread opens the '

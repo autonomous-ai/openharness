@@ -20,6 +20,7 @@ import 'identity.dart';
 import 'model.dart';
 import 'prompt_alerts.dart';
 import 'swarm_code_block.dart';
+import 'swarm_outbox.dart';
 import 'swarm_post_line.dart';
 import 'swarm_attach.dart';
 import 'swarm_buddy.dart';
@@ -803,6 +804,15 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     }
   }
 
+  /// Sends [post], not confirmed, again from where it shows; taken, the
+  /// keyboard goes down as after Send.
+  Future<void> _retry(SwarmConversation c, SwarmPost post) async {
+    final sent = await c.retry(post);
+    if (sent && mounted && _conversation == c && c.draft.isEmpty) {
+      _focus.unfocus();
+    }
+  }
+
   void _reply(SwarmConversation c, SuperTabMessage message) {
     c.replyingTo = message;
     setState(() => _acting = null);
@@ -833,7 +843,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                         acting: acting,
                         onTap: onTap,
                       ),
-              pending: (t, text) => _threadPending(c, t, text),
+              pending: (t, post) => _threadPending(c, t, post),
             ),
           ),
           listensForItself: true,
@@ -892,25 +902,25 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     );
   }
 
-  /// The person's reply on its way in thread [t].
-  Widget _threadPending(SwarmConversation c, SwarmThread t, String text) {
+  /// The person's reply [post] on its way in thread [t].
+  Widget _threadPending(SwarmConversation c, SwarmThread t, SwarmPost post) {
     final mine = t.messages.reversed
         .where((m) => !m.fromAgent && m.authorId == c.reader.accountId)
         .firstOrNull;
     return KeyedSubtree(
-      key: const ValueKey('swarm-thread-pending'),
+      key: ValueKey('swarm-thread-pending-${post.operationId}'),
       child: _Pending(
+        key: const ValueKey('swarm-thread-pending'),
         name: mine == null ? 'You' : _nameOf(c, mine),
         look:
             c.reader.snapshot?.personLook(c.reader.accountId) ??
             (picture: null, status: null),
-        text: text,
-        files: t.pendingFiles,
+        text: post.text,
+        files: post.files,
         mentions: _view.value?.mentions ?? SwarmMentions(const []),
-        // Taken by the backend and not read back yet: still on its way.
-        sending: t.sending || t.confirmed,
+        state: post.state,
         quote: null,
-        onSendAgain: () => unawaited(t.send()),
+        onSendAgain: () => unawaited(t.retry(post)),
       ),
     );
   }
@@ -1418,7 +1428,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   ) {
     final state = c.state;
     if (state == SwarmChatState.lost) return _said(c.error ?? _notOpen);
-    if (c.stream.isEmpty && c.pending == null) {
+    if (c.stream.isEmpty && c.outgoing.isEmpty) {
       if (state != SwarmChatState.loaded) {
         // A first read that failed: said under the chat once it is known,
         // here until then.
@@ -1486,14 +1496,15 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     }
     final entries = _shown;
     final byId = _byId;
-    final pending = c.pending;
+    // Newest at the foot: the list runs bottom up.
+    final pending = c.outgoing.reversed.toList();
     // A page shorter than the screen never scrolls: look once it is drawn.
     if (c.hasOlder && !_loadingOlder && !_olderFailed) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _nearTop();
       });
     }
-    final lead = pending == null ? 0 : 1;
+    final lead = pending.length;
     final latestOwn = c.latestOwn;
 
     Widget entry(_Entry entry) {
@@ -1702,7 +1713,12 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       // places.
       findChildIndexCallback: (key) {
         if (key is! ValueKey<String>) return null;
-        if (key.value == _pendingKey) return lead == 1 ? 0 : null;
+        if (key.value.startsWith(_pendingKey)) {
+          final at = pending.indexWhere(
+            (p) => '$_pendingKey-${p.operationId}' == key.value,
+          );
+          return at < 0 ? null : at;
+        }
         if (key.value == _olderKey) {
           return c.hasOlder ? lead + entries.length : null;
         }
@@ -1711,27 +1727,28 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       },
       itemBuilder: (context, index) {
         if (index < lead) {
-          final reply = pending!.replyTo == null ? null : byId[pending.replyTo];
+          final post = pending[index];
+          final reply = post.replyTo == null ? null : byId[post.replyTo];
           final mine = c.messages.reversed
               .where((m) => !m.fromAgent && m.authorId == c.reader.accountId)
               .firstOrNull;
           return _Pending(
-            key: const ValueKey(_pendingKey),
+            key: ValueKey('$_pendingKey-${post.operationId}'),
             name: mine == null ? 'You' : _nameOf(c, mine),
             look:
                 c.reader.snapshot?.personLook(c.reader.accountId) ??
                 (picture: null, status: null),
-            text: pending.text,
-            files: pending.files,
+            text: post.text,
+            files: post.files,
             mentions: view.mentions,
-            sending: c.sending,
-            quote: pending.replyTo == null
+            state: post.state,
+            quote: post.replyTo == null
                 ? null
                 : SwarmQuote(
                     author: reply == null ? null : _quoted(c, reply),
                     text: reply?.text,
                   ),
-            onSendAgain: () => unawaited(_post(c)),
+            onSendAgain: () => unawaited(_retry(c, post)),
           );
         }
         if (index - lead < entries.length) {
@@ -1819,8 +1836,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     final snapshot = c.reader.snapshot;
     final query = c.mentionQuery;
     final replying = c.replyingTo;
-    // One post at a time: one not confirmed is sent again from where it shows.
-    // Files alone are a post too.
+    // A post on its way never holds the next back; one not confirmed is sent
+    // again from where it shows. Files alone are a post too.
     final canSend = c.canSend;
     return Container(
       decoration: BoxDecoration(
@@ -2606,7 +2623,8 @@ class _JumpPill extends StatelessWidget {
 }
 
 /// The person's post on its way, with [SwarmPostLine] under it: "Sending…",
-/// then — its answer lost — "Not sent · Retry", until it is read back.
+/// then — its answer lost — "Not sent · Retry", until it is read back. One the
+/// backend took shows as sent, with no line, until the read that brings it.
 class _Pending extends StatelessWidget {
   const _Pending({
     super.key,
@@ -2614,7 +2632,7 @@ class _Pending extends StatelessWidget {
     required this.text,
     required this.files,
     required this.mentions,
-    required this.sending,
+    required this.state,
     required this.quote,
     required this.onSendAgain,
     required this.look,
@@ -2629,12 +2647,13 @@ class _Pending extends StatelessWidget {
   /// The person's own face.
   final SwarmLook look;
   final SwarmMentions mentions;
-  final bool sending;
+  final SwarmPostState state;
   final Widget? quote;
   final VoidCallback onSendAgain;
 
   @override
   Widget build(BuildContext context) {
+    final sending = state == SwarmPostState.sending;
     return Padding(
       key: const ValueKey('swarm-pending'),
       padding: SwarmMessageFrame.padding(),
@@ -2680,10 +2699,11 @@ class _Pending extends StatelessWidget {
               }),
               link: null,
             ),
-          Padding(
-            padding: const EdgeInsets.only(top: AppSpace.xs),
-            child: SwarmPostLine(sending: sending, onRetry: onSendAgain),
-          ),
+          if (state != SwarmPostState.confirmed)
+            Padding(
+              padding: const EdgeInsets.only(top: AppSpace.xs),
+              child: SwarmPostLine(sending: sending, onRetry: onSendAgain),
+            ),
         ],
       ),
     );
