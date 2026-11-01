@@ -1,0 +1,7 @@
+Our phone app caught up with Desktop today.
+
+23 changes in one day: a status card on every project, Threads, Activity, voice replies, paste a picture.
+
+Agents work all day. Now I see what they did, and what's waiting on me, from my pocket.
+
+github.com/autonomous-ai/openharness
