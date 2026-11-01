@@ -211,8 +211,11 @@ Harness-Agent: Atlas
 Harness-Machine: Studio Mac
 ```
 
-The co-author is the project's owner, under their Harness account name and email
-address. The `commit-msg` hook adds any missing trailers to a message written in an
+The co-author is the person the work is for, under their Harness account name and
+email address: the group's requester (the person whose ask it is) while they can still
+read the project, otherwise the project's owner (`workRequesterId` in
+`backend/src/superTabs/projects.ts`). Who asked never changes whether a token is
+given, for which repository, or with which permissions. The `commit-msg` hook adds any missing trailers to a message written in an
 editor. Trailers already in the message are not added again, so an amend keeps one
 of each. An empty message still aborts the commit.
 
@@ -227,9 +230,9 @@ The `prepare-commit-msg` hook runs even with `--no-verify`. Two things leave a c
 without trailers: plumbing such as `git commit-tree`, and a command that sets its own
 `-c core.hooksPath`.
 
-The agent is told to start each pull request body with `Requested by <owner's email>
-through Harness.` The token response also carries `pullRequestLine` with the owner's
-name. This line depends on the agent following its instructions. Harness does not
+The agent is told to start each pull request body with `Requested by <email> through
+Harness.`, naming the same person. The token response also carries `pullRequestLine`
+with their name. This line depends on the agent following its instructions. Harness does not
 assign the pull request, because it does not know the person's GitHub login.
 
 ## The token endpoint

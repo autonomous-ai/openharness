@@ -27,7 +27,7 @@ import { logger } from '../utils/logger.js'
 import { retryTransient } from './retry.js'
 import { recordReload } from './retryStats.js'
 import { buddyChatId, swarmBuddyChatId, type ChosenBuddyName } from './buddies.js'
-import { buddyPerson, canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, onTeamAccount, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility } from './projects.js'
+import { buddyPerson, canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, onTeamAccount, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, workRequesterId, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { SESSION_ENDED_KIND, sessionContext, sessionReadsRow, type ContextRow } from './buddySessions.js'
 import { isBuddy, isBuddyChat, isBuddyReader, refuseBuddyRouting, routingRow } from './buddies.js'
@@ -488,6 +488,13 @@ const [UNPURGED_HEAD, UNPURGED_TAIL] = unpurgedNotice('\0').split('\0') as [stri
 /** Someone with no part in this Swarm: not in it, hosting none of its agents, contributing none of its machines and running
  *  none of its work. A refusal to them is answered as for a Swarm that does not exist (routes/superTabs.ts NOT_AVAILABLE):
  *  its words would say the Swarm is there. Anyone with a part keeps them. */
+/** A person's name and email for the work they are named for (projects.ts `workRequesterId`): their account's, else their
+ *  Swarm row's email; an empty email when neither has one, which each caller treats as it treated the owner's. */
+async function requesterOf(tx: Transaction, state: SuperTabState, personId: string): Promise<{ name: string | null; email: string }> {
+  const user = await tx.user.findUnique({ where: { id: personId }, select: { name: true, email: true } })
+  return { name: user?.name?.trim() || null, email: user?.email ?? state.people.find(p => p.id === personId)?.email ?? '' }
+}
+
 function stranger(state: SuperTabState, userId: string): boolean {
   return !state.people.some(p => p.id === userId) && !state.agents.some(a => a.machineOwnerId === userId)
     && !(state.machines ?? []).some(m => m.contributorId === userId)
@@ -1739,8 +1746,7 @@ export class SuperTabStore {
         && c.assignment.execution.machineId === target.machineId && c.assignment.execution.machineOwnerId === target.machineOwnerId)
         ?? fail('NO_ASSIGNMENT', 'This agent has no task in progress. A GitHub token is only for an agent working on a task.')
       const project = groupProject(state, group)
-      const owner = await tx.user.findUnique({ where: { id: project.ownerId }, select: { name: true, email: true } })
-      const requester = owner ?? { name: null, email: state.people.find(p => p.id === project.ownerId)?.email ?? '' }
+      const requester = await requesterOf(tx, state, workRequesterId(state, project, group))
       if (!requester.email) fail('NOT_FOUND', 'This project\'s owner is unavailable.', 404)
       const contributed = state.machines?.find(m => m.machineId === target.machineId)?.name
       const machineName = contributed ?? await tx.machine.findFirst({ where: { machineId: target.machineId, userId: target.machineOwnerId },
@@ -1773,11 +1779,9 @@ export class SuperTabStore {
       }
       // A Swarm-wide Buddy's folder is made of checkouts already on its machine: there is no repository to fetch for it.
       const project = startProject(state, start.request) ?? fail('NOT_FOUND', 'This start has no project folder to prepare.', 404)
-      const owner = await tx.user.findUnique({ where: { id: project.ownerId }, select: { name: true, email: true } })
-      const email = owner?.email ?? state.people.find(p => p.id === project.ownerId)?.email ?? ''
+      const requester = await requesterOf(tx, state, workRequesterId(state, project, group))
       return { tabId, projectId: project.id, repositoryUrl: project.repository?.repositoryUrl ?? null, approvalRequired: teamAccountRequired(state),
-        startId, own: project.ownerId === start.machineOwnerId,
-        requester: { name: owner?.name?.trim() || null, email } }
+        startId, own: project.ownerId === start.machineOwnerId, requester }
     })
   }
 

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { agentOnly, createSuperTab, SuperTabError, visibleState, type Actor, type MessageDraft } from './model.js'
-import { canReadAgent, canWatchAgent, markConfidential, projectOf, projectsOf, readConversation, skillModeOf, skillSetOf, watchersLost } from './projects.js'
+import { canReadAgent, canWatchAgent, markConfidential, projectOf, projectsOf, readConversation, skillModeOf, skillSetOf, watchersLost, workRequesterId } from './projects.js'
 import { mayDrive } from './terminal.js'
 
 const owner: Actor = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
@@ -545,5 +545,36 @@ describe('whether a commit narrows who may watch a terminal', () => {
     f.run({ type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: ['peer'] })
     f.add('lead', 'second', false)
     expect(narrowed()).toBe(false)
+  })
+})
+
+// 11-01: agents on Tony's Mac opened Tony's pull requests as Ken's, the project's owner (#2486, #2488, #2491).
+describe('whom a group\'s work is for', () => {
+  it('is its requester while they can read its project, else the project\'s owner', () => {
+    const f = setup(), p = f.project('private')
+    f.run({ type: 'project.sharing', projectId: p.projectId, visibility: 'private', memberIds: ['peer'] })
+    const asked = String(f.run({ type: 'conversation.create', projectId: p.projectId, title: 'Asked', brief: '', checks: [], requesterId: 'peer' }).conversationId)
+    const plain = String(f.run({ type: 'conversation.create', projectId: p.projectId, title: 'Plain', brief: '', checks: [] }).conversationId)
+    const group = (id: string) => f.state.conversations.find(c => c.id === id)!
+    const project = () => projectOf(f.state, p.projectId)
+    expect(workRequesterId(f.state, project(), group(asked))).toBe('peer')
+    expect(workRequesterId(f.state, project(), group(plain))).toBe('owner')
+    expect(workRequesterId(f.state, project(), undefined)).toBe('owner')
+    // A group of another project never names its requester for this one.
+    expect(workRequesterId(f.state, projectOf(f.state, 'lead'), group(asked))).toBe('owner')
+    // No email on their row, or no longer in the Swarm: the owner.
+    const peer = f.state.people.find(p => p.id === 'peer')!
+    peer.email = ''
+    expect(workRequesterId(f.state, project(), group(asked))).toBe('owner')
+    peer.email = 'peer@example.com'
+    // Removed and invited again (a new generation): the old membership no longer reads the project.
+    peer.generation = 'second'
+    expect(workRequesterId(f.state, project(), group(asked))).toBe('owner')
+    peer.generation = 'first'
+    f.run({ type: 'project.sharing', projectId: p.projectId, visibility: 'private', memberIds: [] })
+    expect(workRequesterId(f.state, project(), group(asked))).toBe('owner')
+    f.run({ type: 'member.remove', userId: 'peer' })
+    f.run({ type: 'project.sharing', projectId: p.projectId, visibility: 'public', memberIds: [] })
+    expect(workRequesterId(f.state, project(), group(asked))).toBe('owner')
   })
 })

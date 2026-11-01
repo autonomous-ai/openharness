@@ -93,6 +93,11 @@ async function fresh(options: { github?: boolean; approveAll?: boolean; signIn?:
 }
 
 type Env = Awaited<ReturnType<typeof fresh>>
+/** [person] joins the owner's Swarm [tab] as a collaborator. */
+async function invited(env: Env, tab: string, person: AuthUser) {
+  const invitation = await env.run(tab, { type: 'invite.create', email: person.email, role: 'collaborator', conversationId: 'lead' } as Command)
+  await env.run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string } as Command, person)
+}
 /** The team account switched on for this test, in the Swarms of [owners] or everyone's. */
 function teamAccounts(owners = '') {
   vi.stubEnv('SWARM_TEAM_ACCOUNT_REQUIRED', '1')
@@ -100,12 +105,13 @@ function teamAccounts(owners = '') {
   onTestFinished(() => { vi.unstubAllEnvs() })
 }
 /** A tab whose project is on [repositoryUrl], with a Builder on the host's machine working on a task. */
-async function working(env: Env, repositoryUrl: string | null = 'https://github.com/example/app.git') {
+async function working(env: Env, repositoryUrl: string | null = 'https://github.com/example/app.git', requester?: AuthUser) {
   const tab = (await env.store.create(owner, randomUUID(), 'Pilot')).id
   await env.run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'gh-host', harnessId: randomUUID(), name: 'Lead',
     configuration: config, lead: true, project: { cwd: '/work/app', repositoryUrl } } as Command)
+  if (requester) await invited(env, tab, requester)
   const group = String((await env.run(tab, { type: 'conversation.create', title: 'Add search', brief: 'Add a search field',
-    checks: [{ description: 'Search works', independent: false }] } as Command)).result.conversationId)
+    checks: [{ description: 'Search works', independent: false }], ...(requester ? { requesterId: requester.sub } : {}) } as Command)).result.conversationId)
   const worker = String((await env.run(tab, { type: 'agent.add', conversationId: group, machineId: 'gh-host', harnessId: randomUUID(),
     name: 'Builder', configuration: config, lead: false } as Command)).result.agentId)
   const assignmentId = String((await env.run(tab, { type: 'work.assign', conversationId: group, agentId: worker } as Command)).result.assignmentId)
@@ -136,6 +142,22 @@ describe('the GitHub token endpoint', () => {
     // The tab tells a Lead's start that this server has the app.
     const read = await env.app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/parts`, headers: { authorization: `Bearer ${owner.sub}` } })
     expect(read.json().data.githubApp).toBe(true)
+  })
+
+  // 11-01: agents on Tony's Mac opened Tony's pull requests as Ken's, the project's owner (#2486, #2488, #2491).
+  it('says the work is for the group\'s requester while they can read its project, else its owner, with the same token', async () => {
+    const env = await fresh()
+    const { tab, worker } = await working(env, undefined, host)
+    const asked = (await ask(env, tab, worker)).json().data
+    expect(asked).toMatchObject({ token: 'ghs_fixture_1', repository: 'example/app', requestedBy: { name: 'host', email: host.email },
+      pullRequestLine: `Requested by host (${host.email}) through Harness.` })
+    expect(asked.trailers).toEqual([`Co-authored-by: host <${host.email}>`, `Harness-Agent: ${asked.agent}`, 'Harness-Machine: Fixture Mac'])
+    // Their access taken away: the owner, as before, and still the one token, minted once, as for the owner's own ask.
+    await env.run(tab, { type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [] } as Command)
+    expect((await ask(env, tab, worker)).json().data).toMatchObject({ token: 'ghs_fixture_1', requestedBy: { name: 'Olive Owner', email: owner.email },
+      pullRequestLine: `Requested by Olive Owner (${owner.email}) through Harness.` })
+    expect(env.github.calls.filter(c => c.path === '/app/installations/91/access_tokens').map(c => c.body)).toEqual([{ repositories: ['app'],
+      permissions: { contents: 'write', pull_requests: 'write', checks: 'read', actions: 'read', metadata: 'read' } }])
   })
 
   // A Harness Team account has no git identity of its own (PR #1934, 2026-10-28): its commits are the app's bot account's.
@@ -243,7 +265,8 @@ describe('a queued start\'s preparation token', () => {
     projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture CPU', os: 'macOS', gpuPercent: null }, quotas: [], tools: { git: true },
     runningHarnessIds: [], stoppedHarnessIds: [] }
   /** The owner's project on github.com, with a start queued on [machineId], a machine its owner [contributor] added to the Swarm. */
-  async function queued(env: Env, machineId = 'gh-pool', contributor = host, repositoryUrl: string | null = 'https://github.com/example/app.git') {
+  async function queued(env: Env, machineId = 'gh-pool', contributor = host, repositoryUrl: string | null = 'https://github.com/example/app.git',
+    requester?: AuthUser) {
     const tab = (await env.store.create(owner, randomUUID(), 'Pool')).id
     await env.run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'owner-mac', harnessId: randomUUID(), name: 'Lead',
       configuration: config, lead: true, project: { cwd: '/work/app', repositoryUrl } } as Command)
@@ -269,7 +292,11 @@ describe('a queued start\'s preparation token', () => {
       const pool = (await poolRows(env.store, team, machineId)).find(p => p.tabId === tab)!
       await env.store.observeMachine(team, tab, machineId, { generation: pool.machine.generation, ...observed, privacy: { mode: 'dedicated' } })
     }
-    const startId = String((await env.run(tab, { type: 'agent.start', request: { conversationId: 'lead', machineId, engine: 'codex', name: 'Builder',
+    if (requester && requester !== owner && requester !== contributor) await invited(env, tab, requester)
+    // A group asked for by [requester], its start's conversation; else the Lead's.
+    const conversationId = requester ? String((await env.run(tab, { type: 'conversation.create', title: 'Add search', brief: 'Add a search field',
+      checks: [], requesterId: requester.sub } as Command)).result.conversationId) : 'lead'
+    const startId = String((await env.run(tab, { type: 'agent.start', request: { conversationId, machineId, engine: 'codex', name: 'Builder',
       cwd: '/swarm-root/lead', permissionMode: 'full', worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } } as Command)).result.startId)
     return { tab, startId }
   }
@@ -452,6 +479,21 @@ describe('a queued start\'s preparation token', () => {
     const none = await env.app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/projects/lead/github/approve`,
       headers: { authorization: `Bearer ${owner.sub}` }, payload: { scope: 'swarm' } })
     expect(none.json().error).toMatchObject({ code: 'GITHUB_APPROVAL_NOT_CONFIGURED' })
+  })
+
+  it('says whom a start\'s work is for by its group\'s requester, with the same read-only token, and the gate as before', async () => {
+    const env = await fresh()
+    const { tab, startId } = await queued(env, 'gh-pool', host, undefined, host)
+    const response = await prepare(env, tab, startId)
+    expect(response.statusCode, response.body).toBe(200)
+    expect(response.json().data).toMatchObject({ github: true, token: 'ghs_fixture_1', repository: 'example/app', requestedBy: { name: null, email: host.email } })
+    expect(env.github.calls.filter(c => c.path === '/app/installations/91/access_tokens').map(c => c.body))
+      .toEqual([{ repositories: ['app'], permissions: { contents: 'read', metadata: 'read' } }])
+    // The machine owner's own project gives no token whoever asked for the group, as before.
+    const own = await fresh()
+    const mine = await queued(own, 'owner-pool', owner, undefined, host)
+    expect((await prepare(own, mine.tab, mine.startId, 'owner-pool', owner)).json().data).toEqual({ github: false })
+    expect(own.github.calls).toEqual([])
   })
 
   it('answers no token for the machine owner\'s own project, unless its host asks for one anyway', async () => {

@@ -146,6 +146,16 @@ export function canReadProject(state: SuperTabState, actor: Actor, project: Swar
     project.members.some(p => p.id === member.id && p.generation === member.generation))
 }
 
+/** Whom a group's work is for, as its pull requests and commits say (github/attribution.ts, the start's line in
+ *  cli/src/superTabs/start.ts): the person who asked for it (`requesterId`) while they can still read its project, else the
+ *  project's owner. Until 11-01 it was always the owner, and agents on Tony's Mac opened Tony's pull requests as Ken's (#2486,
+ *  #2488, #2491). It names a person only: whether the GitHub App's token is used, and for which repository, never depends on it. */
+export function workRequesterId(state: SuperTabState, project: SwarmProject, group: Conversation | undefined): string {
+  const id = group && (group.projectId ?? 'lead') === project.id ? group.requesterId : undefined
+  const member = id ? state.people.find(p => p.id === id) : undefined
+  return member?.email && canReadProject(state, { kind: 'person', userId: member.id, email: member.email }, project) ? member.id : project.ownerId
+}
+
 export function readProject(state: SuperTabState, actor: Actor, projectId: string): SwarmProject {
   author(state, actor)
   const project = projectOf(state, projectId)

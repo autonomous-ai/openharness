@@ -136,7 +136,7 @@ export async function inspectCapacity(target: Daemon, request: Json) {
  *   state this start cannot read, is orchestration; the host moves a running agent to its project's mode
  *   (superTabs/host.ts) if that guess is wrong.
  * - whether the agent does another person's project work (the project's owner is not the machine's owner) on a server
- *   with the Harness GitHub App, and whom that work is for. Then git and gh in the session use the app's token for its
+ *   with the Harness GitHub App, and whom that work is for: the group's requester, else the project's owner. Then git and gh in the session use the app's token for its
  *   task instead of the machine owner's GitHub login (lib/swarmGitHub.ts, docs/swarm-github-app.md). A person's own
  *   agents, a server without the app, and a state this start cannot read launch as before.
  */
@@ -149,9 +149,19 @@ export async function projectFacts(scoped: ScopedRequest, conversationId: unknow
   // A Swarm from before projects is one project, its owner's.
   const project = Array.isArray(state.projects) ? state.projects.map(object).find(p => p.id === (group?.projectId ?? 'lead')) : { ownerId: state.ownerId }
   const ownerId = project?.ownerId
-  const requester = (Array.isArray(state.people) ? state.people.map(object) : []).find(p => p.id === ownerId)?.email
+  const people = Array.isArray(state.people) ? state.people.map(object) : []
+  const email = (id: unknown) => { const found = identifier(id) ? people.find(p => p.id === id)?.email : undefined
+    return typeof found === 'string' && found ? found : null }
+  // Whom the work is for, by the backend's rule (backend/src/superTabs/projects.ts `workRequesterId`, which a pool start's host
+  // gets): the person whose ask the group is while they can still read its project, else the project's owner. Until 11-01 it
+  // was always the owner, and agents on Tony's Mac opened Tony's pull requests as Ken's (#2486, #2488, #2491). Only the line
+  // changes: the app is used, as before, when the owner is not the machine's owner.
+  const asked = people.find(p => identifier(group?.requesterId) && p.id === group?.requesterId)
+  const reads = !!asked && !!project && (project.visibility === 'public' || project.ownerId === asked.id
+    || (Array.isArray(project.members) && project.members.map(object).some(m => m.id === asked.id && m.generation === asked.generation)))
+  const requester = (reads ? email(asked.id) : null) ?? email(ownerId)
   const github = answer.githubApp === true && group && identifier(ownerId) && identifier(machineOwnerId) && ownerId !== machineOwnerId
-    && typeof requester === 'string' && requester ? { requester } : null
+    && email(ownerId) && requester ? { requester } : null
   return { mode, github }
 }
 
