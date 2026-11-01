@@ -7,9 +7,10 @@ import '../core/local_key_value_store.dart';
 import 'swarm_home_list.dart';
 
 /// What the person chose for Swarm Home on this phone (Tony, 2026-10-29):
-/// the projects pinned at its top ([pins]), and the one Swarm it shows
-/// ([swarmId]; none shows them all); and when they last left the app
-/// ([seenAt]), what While you were away counts from; and the projects whose
+/// the projects pinned at its top ([pins]), the one Swarm it shows
+/// ([swarmId]; none shows them all) and its unread filter ([unreadOnly]);
+/// and when they last left the app ([seenAt]), what While you were away
+/// counts from; and the projects whose
 /// status card is folded ([folded]), as the desktop keeps it on its computer.
 /// Neither the server nor the desktop has pins, so they stay on this phone,
 /// under the account ([store]): ids and a time only, nothing read of a Swarm,
@@ -47,6 +48,12 @@ class SwarmHomePrefs extends ChangeNotifier {
   String? get swarmId => _swarmId;
   String? _swarmId;
 
+  /// Home lists only the projects with something unread or a tag waiting
+  /// (the desktop's unread filter, `SuperTabController.unreadOnly`), kept on
+  /// this phone as the desktop keeps it on its computer.
+  bool get unreadOnly => _unreadOnly;
+  bool _unreadOnly = false;
+
   /// When the person last left the app ([seen]); null before, as on a new
   /// phone.
   DateTime? get seenAt => _seenAt;
@@ -60,7 +67,7 @@ class SwarmHomePrefs extends ChangeNotifier {
   /// unfolded meanwhile, which what is read does not bring back, and whether
   /// a Swarm was chosen to show, which stands over the one read.
   final _unpinned = <String>{}, _unfolded = <String>{};
-  bool _shownChosen = false;
+  bool _shownChosen = false, _unreadChosen = false;
 
   /// The account's Swarms, as [keepOnly] last heard them; null before. What
   /// is read back is held to them too.
@@ -119,6 +126,13 @@ class SwarmHomePrefs extends ChangeNotifier {
     }
     if (_swarmId == swarmId) return;
     _swarmId = swarmId;
+    _changed();
+  }
+
+  /// Turns the unread filter on or off ([unreadOnly]).
+  void toggleUnreadOnly() {
+    if (!_loaded) _unreadChosen = true;
+    _unreadOnly = !_unreadOnly;
     _changed();
   }
 
@@ -183,8 +197,8 @@ class SwarmHomePrefs extends ChangeNotifier {
     }
     if (_disposed) return;
     _loaded = true;
-    final (pins, folds, swarmId, seenAt) = text == null
-        ? (const <String>[], const <String>[], null, null)
+    final (pins, folds, swarmId, seenAt, unreadOnly) = text == null
+        ? (const <String>[], const <String>[], null, null, false)
         : _decode(text);
     // Chosen meanwhile: the pins pinned and cards folded join those read,
     // oldest first, those taken off or opened stay so, and a Swarm chosen
@@ -200,6 +214,7 @@ class SwarmHomePrefs extends ChangeNotifier {
     merge(_pins, pins, _unpinned);
     merge(_folds, folds, _unfolded);
     if (!_shownChosen) _swarmId = swarmId;
+    if (!_unreadChosen) _unreadOnly = unreadOnly;
     // Left meanwhile: the later time stands.
     if (seenAt != null && seenAt.isAfter(_seenAt ?? DateTime(0))) {
       _seenAt = seenAt;
@@ -213,15 +228,18 @@ class SwarmHomePrefs extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// What was kept: written before folds were, it has none.
-  static (List<String>, List<String>, String?, DateTime?) _decode(String text) {
+  /// What was kept: written before folds were, it has none; before the
+  /// unread filter, it is off.
+  static (List<String>, List<String>, String?, DateTime?, bool) _decode(
+    String text,
+  ) {
     List<String> keys(Object? list) => [
       for (final key in list is List ? list : const [])
         if (key is String && key.contains('/')) key,
     ];
     try {
       final json = jsonDecode(text);
-      if (json is! Map) return (const [], const [], null, null);
+      if (json is! Map) return (const [], const [], null, null, false);
       return (
         keys(json['pins']),
         keys(json['folded']),
@@ -230,9 +248,10 @@ class SwarmHomePrefs extends ChangeNotifier {
           final int ms when ms > 0 => DateTime.fromMillisecondsSinceEpoch(ms),
           _ => null,
         },
+        json['unread'] == true,
       );
     } on FormatException {
-      return (const [], const [], null, null);
+      return (const [], const [], null, null, false);
     }
   }
 
@@ -243,7 +262,8 @@ class SwarmHomePrefs extends ChangeNotifier {
       if (_pins.isEmpty &&
           _folds.isEmpty &&
           _swarmId == null &&
-          _seenAt == null) {
+          _seenAt == null &&
+          !_unreadOnly) {
         await store.delete(_key);
       } else {
         await store.write(
@@ -253,6 +273,7 @@ class SwarmHomePrefs extends ChangeNotifier {
             if (_folds.isNotEmpty) 'folded': [..._folds],
             'swarm': ?_swarmId,
             'seen': ?_seenAt?.millisecondsSinceEpoch,
+            if (_unreadOnly) 'unread': true,
           }),
         );
       }

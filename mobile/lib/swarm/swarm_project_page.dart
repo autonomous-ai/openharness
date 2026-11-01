@@ -16,6 +16,7 @@ import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 import 'model.dart';
 import 'swarm_buddy.dart';
 import 'swarm_buddy_chat.dart';
+import 'swarm_chat_menu.dart';
 import 'swarm_conversation_page.dart';
 import 'swarm_home_keeper.dart';
 import 'swarm_home_rows.dart';
@@ -529,10 +530,27 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
               actions: _buddy!,
               chatId: swarmBuddyChat(_buddy!.reader, widget.projectId)?.id,
             ),
+          // The project chat's Notifications (the desktop's chat menu): its
+          // header is the project's, so they are here.
+          if (_tab == SwarmProjectTab.chat && !_homeC)
+            SwarmChatMenuButton(
+              reader: reader,
+              chatId: project.leadConversationId,
+            ),
           if (_homeC)
             _ProjectMenu(
               onLeaderboard: _openLeaderboardSheet,
               onTeam: _openTeamSheet,
+              onNotifications:
+                  snapshot.conversation(project.leadConversationId) == null
+                  ? null
+                  : () => unawaited(
+                      showSwarmNotifySheet(
+                        context,
+                        reader,
+                        project.leadConversationId,
+                      ),
+                    ),
             )
           else
             SwarmIconButton(
@@ -738,12 +756,18 @@ class _Frame extends StatelessWidget {
 }
 
 /// ⋮ at the end of a Swarm Home C project's header: a small menu, on the
-/// design system's menu surface (the theme's), of its Leaderboard and its Team.
-/// It goes with the header: losing the project closes it.
+/// design system's menu surface (the theme's), of its Leaderboard, its Team
+/// and its project chat's Notifications ([showSwarmNotifySheet]), while that
+/// chat is read. It goes with the header: losing the project closes it.
 class _ProjectMenu extends StatelessWidget {
-  const _ProjectMenu({required this.onLeaderboard, required this.onTeam});
+  const _ProjectMenu({
+    required this.onLeaderboard,
+    required this.onTeam,
+    this.onNotifications,
+  });
 
   final VoidCallback onLeaderboard, onTeam;
+  final VoidCallback? onNotifications;
 
   @override
   Widget build(BuildContext context) {
@@ -765,6 +789,8 @@ class _ProjectMenu extends StatelessWidget {
       menuChildren: [
         row('swarm-project-menu-leaderboard', 'Leaderboard', onLeaderboard),
         row('swarm-project-menu-team', 'Team', onTeam),
+        if (onNotifications case final onTap?)
+          row('swarm-project-menu-notifications', 'Notifications', onTap),
       ],
       builder: (context, menu, _) => SwarmIconButton(
         key: const ValueKey('swarm-project-menu'),

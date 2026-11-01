@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/logging/app_log.dart';
 import 'package:harness_mobile/phone/out_of_sight.dart';
@@ -18,6 +19,7 @@ import 'swarm_home_rows.dart';
 import 'swarm_home_top.dart';
 import 'swarm_inbox.dart';
 import 'swarm_leaderboard.dart' show swarmProjectPeople;
+import 'swarm_mark_all.dart';
 import 'swarm_needs_page.dart';
 import 'swarm_new_message_sheet.dart';
 import 'swarm_new_project_sheet.dart';
@@ -342,6 +344,9 @@ class _SwarmPageState extends State<SwarmPage> {
         swarmStartView(context, session) == null;
     return SwarmTabHeader(
       title,
+      trailing: listing || session.inbox.swarms.isEmpty
+          ? null
+          : _attention(context, session, shown),
       loading: listing,
       leading: listing
           ? _loadingTile
@@ -353,6 +358,66 @@ class _SwarmPageState extends State<SwarmPage> {
           : 'Swarm: $title. Switch Swarm',
       onTitle: () => unawaited(showSwarmSwitcher(context, session)),
     );
+  }
+
+  /// The unread filter and Mark all read, at the end of the top bar (the
+  /// desktop's, on its Projects heading): the filter lit while on; Mark all
+  /// read greyed with nothing unread in the Swarms [shown].
+  Widget _attention(
+    BuildContext context,
+    SwarmSession session,
+    List<SwarmListing> shown,
+  ) {
+    final home = session.home;
+    final unread = swarmAnyUnread([
+      for (final swarm in shown) ?session.inbox.reader(swarm.id),
+    ]);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SwarmIconButton(
+          key: const ValueKey('swarm-unread-only'),
+          icon: LucideIcons.listFilter300,
+          label: home.unreadOnly
+              ? 'Show all projects'
+              : 'Show unread projects only',
+          selected: home.unreadOnly,
+          onPressed: home.toggleUnreadOnly,
+        ),
+        SwarmIconButton(
+          key: const ValueKey('swarm-mark-all-read'),
+          icon: LucideIcons.checkCheck300,
+          label: 'Mark all read',
+          onPressed: unread
+              ? () => _markAllRead(context, session, shown)
+              : null,
+        ),
+      ],
+    );
+  }
+
+  /// Mark all read over the Swarms [shown]: every chat read on this phone at
+  /// once, with an Undo while the marks wait to be sent.
+  void _markAllRead(
+    BuildContext context,
+    SwarmSession session,
+    List<SwarmListing> shown,
+  ) {
+    final held = session.markAllRead([for (final swarm in shown) swarm.id]);
+    if (held == null) return;
+    ScaffoldMessenger.maybeOf(context)
+      ?..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          key: const ValueKey('swarm-mark-all-toast'),
+          duration: session.markAllHold,
+          // With its Undo it would stay until dismissed; it goes with the
+          // marks ([SwarmMarkAllToast]), and after its time as a backstop.
+          persist: false,
+          content: SwarmMarkAllToast(held),
+          action: SnackBarAction(label: 'Undo', onPressed: held.undo),
+        ),
+      );
   }
 
   /// The Swarms Home shows: the one the switcher picked while it is listed
@@ -536,7 +601,16 @@ class _SwarmPageState extends State<SwarmPage> {
           reading.add(swarm.id);
       }
     }
-    final lists = swarmHomeLists(projects, pins: session.home.pins, now: now);
+    final all = swarmHomeLists(projects, pins: session.home.pins, now: now);
+    final unreadOnly = session.home.unreadOnly;
+    final lists = unreadOnly ? swarmHomeUnreadOnly(all) : all;
+    // The filter on with nothing to list: it says so, and offers them all.
+    final nothingUnread =
+        unreadOnly &&
+        projects.isNotEmpty &&
+        lists.pinned.isEmpty &&
+        lists.recent.isEmpty &&
+        lists.quiet.isEmpty;
     Widget row(SwarmHomeProject project) => SwarmHomeProjectRow(
       key: ValueKey('swarm-project-${project.swarmId}-${project.project.id}'),
       project: project,
@@ -565,11 +639,25 @@ class _SwarmPageState extends State<SwarmPage> {
       if (lists.recent.isNotEmpty ||
           quiet.isNotEmpty ||
           empty ||
+          nothingUnread ||
           create != null) ...[
         SwarmCaption('Projects', first: first && lists.pinned.isEmpty),
         SwarmGroup(
           children: [
             if (empty) const SwarmRow(title: 'No project yet', onTap: null),
+            if (nothingUnread) ...[
+              const SwarmRow(
+                key: ValueKey('swarm-unread-none'),
+                title: 'Nothing unread.',
+                onTap: null,
+              ),
+              SwarmRow(
+                key: const ValueKey('swarm-unread-show-all'),
+                title: 'Show all',
+                chevron: null,
+                onTap: session.home.toggleUnreadOnly,
+              ),
+            ],
             for (final p in lists.recent) row(p),
             if (quiet.isNotEmpty) ...[
               SwarmOtherProjectsRow(
@@ -699,4 +787,39 @@ class _Unavailable extends StatelessWidget {
       ),
     ],
   );
+}
+
+/// What Mark all read's toast says: how many chats it marked read. Once the
+/// marks are sent — after the Undo window, or before it ends when the app
+/// left the screen or closed, the account changed or a second Mark all read
+/// began — it closes the toast in that same step: its Undo can do nothing
+/// more. Built only while its toast is the one shown, and closing before the
+/// next toast is shown, so it never closes another. Undo closes it itself.
+class SwarmMarkAllToast extends StatefulWidget {
+  const SwarmMarkAllToast(this.held, {super.key});
+
+  final SwarmMarkAll held;
+
+  @override
+  State<SwarmMarkAllToast> createState() => _SwarmMarkAllToastState();
+}
+
+class _SwarmMarkAllToastState extends State<SwarmMarkAllToast> {
+  @override
+  void initState() {
+    super.initState();
+    unawaited(
+      widget.held.settled.then((sent) {
+        if (sent && mounted) {
+          ScaffoldMessenger.maybeOf(context)?.hideCurrentSnackBar();
+        }
+      }),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final count = widget.held.count;
+    return Text(count == 1 ? 'Marked 1 chat read' : 'Marked $count chats read');
+  }
 }
