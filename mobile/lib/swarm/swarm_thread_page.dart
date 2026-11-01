@@ -79,6 +79,29 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
   /// The message whose actions are open (Copy), by a tap on it.
   String? _acting;
 
+  /// The row of [_acting], to bring its actions into view.
+  final _actingKey = GlobalKey();
+
+  /// Opens [id]'s actions, or closes them on a second tap. Opened under the
+  /// last reply of a thread read to its foot they would be drawn under the
+  /// box, so the row is scrolled just enough to show them (the chat, newest
+  /// at its foot, grows upward and never hides them).
+  void _toggleActions(String id) {
+    setState(() => _acting = _acting == id ? null : id);
+    if (_acting == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final row = _actingKey.currentContext;
+      if (!mounted || _acting != id || row == null) return;
+      unawaited(
+        Scrollable.ensureVisible(
+          row,
+          alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+          duration: const Duration(milliseconds: 150),
+        ),
+      );
+    });
+  }
+
   /// What the last pick left out, or why it could not pick, under the box.
   final _attachNote = ValueNotifier<String?>(null);
   bool _picking = false;
@@ -332,13 +355,19 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
     final replies = t.replies;
     final count = t.count;
     final pending = t.pending;
-    Widget row(SuperTabMessage m, {required bool grouped}) => widget.row(
-      t,
-      m,
-      grouped: grouped,
-      acting: _acting == m.id,
-      onTap: () => setState(() => _acting = _acting == m.id ? null : m.id),
-    );
+    Widget row(SuperTabMessage m, {required bool grouped}) {
+      final built = widget.row(
+        t,
+        m,
+        grouped: grouped,
+        acting: _acting == m.id,
+        onTap: () => _toggleActions(m.id),
+      );
+      return _acting == m.id
+          ? KeyedSubtree(key: _actingKey, child: built)
+          : built;
+    }
+
     return ListView(
       key: const ValueKey('swarm-thread-messages'),
       controller: _scroll,
