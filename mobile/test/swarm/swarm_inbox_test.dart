@@ -1013,8 +1013,10 @@ void main() {
     await settle();
 
     expect(store.values[key], isNotNull, reason: 'kept, not forgotten');
+    // The first read's mark, kept apart as no read of a tag.
     expect(jsonDecode(store.values[key]!), {
       'marks': {'g1': 3},
+      'firstRead': {'g1': 3},
     });
     final next = SwarmInbox(
       accountId: me,
