@@ -651,6 +651,8 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
                     reader: reader,
                     swarmId: widget.swarmId,
                     projectId: project.id,
+                    // Read here, above the Scaffold that takes it away.
+                    typing: MediaQuery.viewInsetsOf(context).bottom > 0,
                   ),
               ],
             ),

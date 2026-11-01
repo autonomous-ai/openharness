@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../shared/theme/app_space.dart';
 import '../shared/theme/app_theme.dart';
 import '../shared/theme/app_type.dart';
+import 'model.dart';
 import 'swarm_inbox.dart';
 import 'swarm_need_rows.dart';
 import 'swarm_needs_page.dart';
@@ -35,6 +36,17 @@ List<SwarmDecisionNeed> swarmProjectNeedsYou(
           snapshot.conversation(need.conversationId)?.projectId == projectId)
         need,
   ];
+}
+
+/// Whether the person reads [project], as the server does (`canReadProject`):
+/// a private project is its owner's and its members'. The server sends no
+/// other; the card holds to this if it ever did.
+bool swarmReadsProject(SwarmReader reader, SuperTabProject project) {
+  if (!project.isPrivate || project.ownerId == reader.accountId) return true;
+  final me = reader.snapshot?.people
+      .where((p) => p.id == reader.accountId)
+      .firstOrNull;
+  return me != null && project.hasMember(me);
 }
 
 /// "16:52" today, "Oct 30, 16:52" before, in this phone's time: the
@@ -79,12 +91,17 @@ class SwarmProjectStatusCard extends StatelessWidget {
     required this.reader,
     required this.swarmId,
     required this.projectId,
+    this.typing = false,
     this.now = DateTime.now,
   });
 
   final SwarmSession session;
   final SwarmReader reader;
   final String swarmId, projectId;
+
+  /// The keyboard is up. Told by the page: inside its Scaffold the inset is
+  /// taken away, so the card cannot see it.
+  final bool typing;
   final DateTime Function() now;
 
   /// How tall the open card grows before its text scrolls inside it.
@@ -103,11 +120,12 @@ class SwarmProjectStatusCard extends StatelessWidget {
       AppTheme.watch(context);
       final snapshot = reader.accessRevoked ? null : reader.snapshot;
       final project = snapshot?.projectById(projectId);
-      if (project == null) return const SizedBox.shrink();
+      if (project == null || !swarmReadsProject(reader, project)) {
+        return const SizedBox.shrink();
+      }
       final status = project.status;
       final waiting = swarmProjectNeedsYou(session, reader, swarmId, projectId);
       if (status == null && waiting.isEmpty) return const SizedBox.shrink();
-      final typing = MediaQuery.viewInsetsOf(context).bottom > 0;
       final chosen = session.home.folded(swarmId, projectId);
       final folded = chosen || typing;
       return Padding(
