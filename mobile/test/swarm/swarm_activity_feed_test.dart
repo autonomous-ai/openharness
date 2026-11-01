@@ -66,6 +66,28 @@ void main() {
       if (call.method == 'POST' && call.path == '$activityPath/read') call.body,
   ];
 
+  /// The Swarm changes on its next read (one more decision waits), its
+  /// Activity digest as [digest] says: what the phone holds moves either way.
+  var round = 0;
+  Future<void> swarmMoves(
+    SwarmSession session,
+    FakeSwarm fake,
+    String Function() digest,
+  ) async {
+    round++;
+    fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+      cursor: 'c${round + 2}',
+      derived: {
+        'decisionsWaiting': 1 + round,
+        'mentionsWaiting': 1,
+        'activityDigest': digest(),
+      },
+      lastChangedAt: 1 + round,
+    );
+    await session.inbox.reader(tab)!.refresh();
+    await settle();
+  }
+
   int chatReads(FakeSwarm fake) =>
       fake.paths.where((p) => p.startsWith(activityChatPath)).length;
 
@@ -117,13 +139,11 @@ void main() {
       final listed = lists(fake);
       expect(listed, 1);
 
-      await session.inbox.reader(tab)!.refresh();
-      await settle();
+      await swarmMoves(session, fake, () => digest);
       expect(lists(fake), listed, reason: 'the same digest reads nothing');
 
       digest = 'digest-2';
-      await session.inbox.reader(tab)!.refresh();
-      await settle();
+      await swarmMoves(session, fake, () => digest);
       expect(lists(fake), listed + 1);
     });
   });
@@ -387,7 +407,10 @@ void main() {
         final fake = server(() => [activityRow('r1')]);
         fake.routes[activityPath] = (_) => answer.future;
         final session = await start(fake);
-        expect(lists(fake), 1);
+        final feed = SwarmActivityFeed(session.inbox.reader(tab)!);
+        addTearDown(feed.dispose);
+        await settle();
+        expect(lists(fake), 2);
 
         session.inbox.reader(tab)!.revoke();
         answer.complete({
@@ -395,10 +418,26 @@ void main() {
           'more': false,
         });
         await settle();
+        expect(feed.items, isEmpty);
+        expect(feed.fromServer, isFalse);
         expect(session.activity.items(SwarmActivityFilter.threads), isEmpty);
         expect(session.activity.badge, 0);
       },
     );
+
+    test('rows read before access was lost are cleared with it', () async {
+      final fake = server(() => [activityRow('r1')]);
+      final session = await start(fake);
+      final feed = SwarmActivityFeed(session.inbox.reader(tab)!);
+      addTearDown(feed.dispose);
+      await settle();
+      expect(feed.items, hasLength(1));
+
+      session.inbox.reader(tab)!.revoke();
+      await settle();
+      expect(feed.items, isEmpty, reason: 'nothing of it stays on the phone');
+      expect(feed.loaded, isFalse);
+    });
 
     test(
       'a list answered after sign-out changes nothing and throws nothing',
@@ -427,18 +466,12 @@ void main() {
 
     test('a list asked before the Swarm was read again from nothing is not '
         'shown over the new read', () async {
-      final first = Completer<Object?>();
+      final first = Completer<Object?>(), second = Completer<Object?>();
       var calls = 0;
       var digest = 'digest-1';
       final fake = server(() => const [], digest: () => digest);
-      fake.routes[activityPath] = (_) {
-        calls++;
-        if (calls == 1) return first.future;
-        return {
-          'items': [activityRow('fresh')],
-          'more': false,
-        };
-      };
+      fake.routes[activityPath] = (_) =>
+          ++calls == 1 ? first.future : second.future;
       final session = await start(fake);
       // The Swarm is read again from nothing (its access moved).
       fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
@@ -449,6 +482,17 @@ void main() {
 
       first.complete({
         'items': [activityRow('stale')],
+        'more': false,
+      });
+      await settle();
+      expect(
+        session.activity.items(SwarmActivityFilter.threads),
+        isEmpty,
+        reason: 'asked under what the phone held before',
+      );
+
+      second.complete({
+        'items': [activityRow('fresh')],
         'more': false,
       });
       await settle();
@@ -478,8 +522,7 @@ void main() {
       expect(activity.reading, isFalse, reason: 'no stuck loading');
       final asked = lists(fake);
       for (var i = 0; i < 3; i++) {
-        await session.inbox.reader(tab)!.refresh();
-        await settle();
+        await swarmMoves(session, fake, () => 'digest-1');
       }
       expect(lists(fake), asked, reason: 'bounded: the same digest waits');
 
