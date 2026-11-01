@@ -1,25 +1,31 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/phone/voice_input_controller.dart';
 import 'package:harness_mobile/phone/voice_language_store.dart';
 import 'package:harness_mobile/phone/voice_mic_face.dart';
 import 'package:harness_mobile/phone/voice_notice.dart';
-import 'package:harness_mobile/shared/theme/app_icon_size.dart';
+import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/shared/theme/swarm_tokens_set_b.dart';
 
 import 'swarm_dictation.dart';
 
 /// Talking instead of typing in a chat, into the message box (Tony, 10-28:
-/// "like the Claude app"). Tap to talk; tap again and what is in the box is
-/// sent ([send]) — what the person typed or changed meanwhile included. Only
-/// that tap ends a take (10-29: "until I tap"): no pause does — save [idle]
-/// without a new word, which stops listening with the words left in the box.
-/// A long press picks the language ([voiceLanguageStore]).
+/// "like the Claude app"). Tap the mic to talk. While talking the composer
+/// shows [SwarmVoiceRow]: [stop] ends the take with its words left in the box,
+/// [cancel] throws away what the take added. Voice never sends by itself
+/// (Tony, 11-01): sending is a tap on Send. No pause ends a take (10-29:
+/// "until I tap") — save [idle] without a new word, which stops listening
+/// with the words left in the box. A long press on the mic picks the language
+/// ([voiceLanguageStore]).
 ///
 /// Two ways to hear, the first wherever it can:
 ///
@@ -27,8 +33,9 @@ import 'swarm_dictation.dart';
 ///   dictation uses: the words show in the box as they are said. Asked for
 ///   once, with the microphone.
 /// - **The terminal's voice input** ([VoiceInputController]): the take is
-///   recorded and the backend transcribes it as it ends — at the tap, or at
-///   [VoiceInputController.maxTake] with its words left in the box, unsent.
+///   recorded and the backend transcribes it as it ends — at [stop], or at
+///   [VoiceInputController.maxTake] — its words left in the box, unsent.
+///   They reach the box only once transcribed, after the take: no live words.
 ///   Where there is no recognizer (Android, sample mode), speech recognition
 ///   was refused, or the recognizer has no such language.
 ///
@@ -44,7 +51,6 @@ class SwarmVoice extends ChangeNotifier {
     this.dictation,
     required this.draft,
     required this.write,
-    required this.send,
   });
 
   /// How long the recognizer listens without hearing a new word before it
@@ -59,8 +65,8 @@ class SwarmVoice extends ChangeNotifier {
   static const stoppedListening = 'Stopped listening';
   static const stoppedLinger = Duration(seconds: 3);
 
-  /// How long the recognizer has to say it has stopped, after a tap asked it
-  /// to, before its take is given up and what the box holds is sent.
+  /// How long the recognizer has to say it has stopped, after [stop] asked it
+  /// to, before its take is given up with what the box holds left there.
   static const _endWait = Duration(seconds: 2);
 
   /// Makes the voice input, which this owns and disposes.
@@ -73,11 +79,8 @@ class SwarmVoice extends ChangeNotifier {
   final String Function() draft;
   final void Function(String text) write;
 
-  /// Sends the draft: the second tap ended a take.
-  final void Function() send;
-
   /// The recognizer's take: asking for it, listening, or waiting for it to
-  /// say it has stopped — as only the second tap asks, to send the draft.
+  /// say it has stopped — as only [stop] asks.
   _Live _live = _Live.off;
 
   /// Bumped by everything that ends a recognizer's take, so what an earlier
@@ -155,9 +158,9 @@ class SwarmVoice extends ChangeNotifier {
   ValueListenable<double>? get level =>
       _live == _Live.off ? _voice?.level : _liveLevel;
 
-  /// Starts a take; ends it and sends the box, calls it off while the
-  /// microphone opens or its permission is asked, or does nothing while its
-  /// words are on their way.
+  /// Starts a take, or calls it off while the microphone opens or its
+  /// permission is asked. While listening it is [stop]; while the words are
+  /// on their way it does nothing.
   void tap() {
     if (_disposed) return;
     switch (_live) {
@@ -196,10 +199,37 @@ class SwarmVoice extends ChangeNotifier {
       case VoiceInputStatus.starting:
         unawaited(voice.stopListening());
       case VoiceInputStatus.listening:
-        _finish(voice, send: true);
+        _finish(voice);
       case VoiceInputStatus.transcribing:
         break;
     }
+  }
+
+  /// Ends the take with its words left in the box. Nothing is sent.
+  void stop() {
+    if (_disposed) return;
+    if (_live == _Live.listening) {
+      _endLive();
+      return;
+    }
+    final voice = _voice;
+    if (voice != null && voice.status == VoiceInputStatus.listening) {
+      _finish(voice);
+    }
+  }
+
+  /// Throws the take away: what it added leaves the box, the person's edits
+  /// stay. A recorded take is dropped with its words, even while they are
+  /// being transcribed ([VoiceInputController.clear]).
+  void cancel() {
+    if (_disposed) return;
+    if (_live != _Live.off) {
+      if (_live != _Live.asking && draft() == _liveShown) write(_liveFrom);
+      _offLive();
+      return;
+    }
+    final voice = _voice;
+    if (voice != null && !voice.isIdle) voice.clear();
   }
 
   /// Throws away the take under way — opening, recording or being
@@ -325,8 +355,8 @@ class SwarmVoice extends ChangeNotifier {
     return same;
   }
 
-  /// The second tap: asks the recognizer to stop — its last words, then its
-  /// end ([_liveEnded]), which sends the draft.
+  /// [stop]: asks the recognizer to stop — its last words, then its end
+  /// ([_liveEnded]), with the words left in the box.
   void _endLive() {
     final dictation = this.dictation;
     if (_live != _Live.listening || dictation == null) return;
@@ -342,25 +372,23 @@ class SwarmVoice extends ChangeNotifier {
     unawaited(dictation.stop());
   }
 
-  /// The recognizer has stopped: as the second tap asked — and then what the
-  /// box holds is sent, however its last session ended (Tony, 10-29) — or
-  /// because it cannot go on, its words left in the box. A notice only when
-  /// nothing goes.
+  /// The recognizer has stopped, as [stop] asked or because it cannot go on:
+  /// its words stay in the box and nothing is sent. No notice after a stop
+  /// with words in the box, however the recognizer's last session ended.
   void _liveEnded(int take, SwarmDictationEnd end) {
     if (take != _liveTake || _live == _Live.off) return;
-    final send = _live == _Live.ending && draft().trim().isNotEmpty;
+    final stopped = _live == _Live.ending && draft().trim().isNotEmpty;
     _liveTake++;
     _live = _Live.off;
     _stopLiveTimers();
     _liveLevel.value = 0;
     _setLiveNotice(switch (end) {
-      _ when send => null,
+      _ when stopped => null,
       SwarmDictationEnd.failed => VoiceNotice.notTranscribed,
       _ when _liveHeard.isEmpty => VoiceNotice.nothingHeard,
       _ => null,
     });
     notifyListeners();
-    if (send && !_disposed) this.send();
   }
 
   /// Calls off the recognizer's take, whatever it is doing: the words already
@@ -464,21 +492,14 @@ class SwarmVoice extends ChangeNotifier {
     held?.complete(go);
   }
 
-  /// Ends the take, its words into the draft, and with [send] sends the draft
-  /// once they are there. A take that fails keeps the draft as it was, sends
-  /// nothing and leaves its [notice].
-  void _finish(VoiceInputController voice, {bool send = false}) {
-    var heard = false;
+  /// Ends the take, its words into the draft. A take that fails keeps the
+  /// draft as it was and leaves its [notice]. Nothing is sent.
+  void _finish(VoiceInputController voice) {
     unawaited(
-      voice
-          .submit((words) async {
-            write(_joined(draft(), words));
-            heard = true;
-            return true;
-          })
-          .then((_) {
-            if (heard && send && !_disposed) this.send();
-          }),
+      voice.submit((words) async {
+        write(_joined(draft(), words));
+        return true;
+      }),
     );
   }
 
@@ -505,22 +526,18 @@ class SwarmVoice extends ChangeNotifier {
   }
 }
 
-/// The composer's mic, a 44pt round like its other buttons: a plain mic at
-/// rest, and the terminal's face ([VoiceMicCore]) while a take is under way —
-/// opening, listening with its bars moving to the voice, transcribing. A long
-/// press picks the language, from the terminal's list.
+/// The composer's mic: a 36pt circle in a 44pt target, like the card's other
+/// round buttons. A tap starts a take; a long press picks the language, from
+/// the terminal's list. While a take is under way the composer shows
+/// [SwarmVoiceRow] in its place, so the mic draws no live face of its own.
 class SwarmVoiceMic extends StatelessWidget {
   const SwarmVoiceMic({super.key, required this.voice});
 
   final SwarmVoice voice;
 
-  /// How wide the terminal's face is drawn here: inside the 44pt round, as
-  /// the filled Send beside it is.
-  static const double _face = 36;
-
   @override
   Widget build(BuildContext context) {
-    final face = voice.face;
+    final tty = Tty.of(context);
     final off = voice.off;
     void talk() {
       HapticFeedback.lightImpact();
@@ -535,15 +552,7 @@ class SwarmVoiceMic extends StatelessWidget {
       enabled: true,
       onTap: talk,
       onLongPress: chooseLanguage,
-      // One word while the mic is open: VoiceOver reads the label aloud, and
-      // a sentence read into an open microphone lands in the take.
-      label: switch (face) {
-        VoiceMicFace.starting => 'Cancel',
-        VoiceMicFace.listening => 'Done',
-        null when off => 'Voice input is off',
-        null => 'Talk',
-        _ => 'Working',
-      },
+      label: off ? 'Voice input is off' : 'Talk',
       onLongPressHint: 'Choose language',
       excludeSemantics: true,
       child: GestureDetector(
@@ -551,32 +560,326 @@ class SwarmVoiceMic extends StatelessWidget {
         behavior: HitTestBehavior.opaque,
         onTap: talk,
         onLongPress: chooseLanguage,
-        child: SizedBox.square(
-          dimension: 44,
-          child: Center(
-            child: face == null
-                ? Icon(
-                    off ? LucideIcons.micOff : LucideIcons.mic,
-                    size: AppIconSize.standalone,
-                    color: off
-                        ? AppPalette.textFaint
-                        : AppPalette.textSecondary,
-                  )
-                : SizedBox.square(
-                    dimension: _face,
-                    child: FittedBox(
-                      child: VoiceMicCore(
-                        face: face,
-                        dead: false,
-                        level: voice.level,
-                      ),
-                    ),
-                  ),
+        child: _VoiceRound(
+          fill: tty.text.withValues(alpha: 0.08),
+          child: Icon(
+            off ? LucideIcons.micOff : LucideIcons.mic,
+            size: 22,
+            color: off ? AppPalette.textFaint : AppPalette.textSecondary,
           ),
         ),
       ),
     );
   }
+}
+
+/// The card's toolbar while a take is under way (Tony, 11-01): cancel, the
+/// wave, stop — no +, Tag, mic or Send, so nothing is sent from here.
+///
+/// - Opening ([VoiceMicFace.starting]): cancel and a flat wave.
+/// - Listening: cancel, the wave following [SwarmVoice.level], and stop.
+/// - Busy (the recognizer stopping, or the recording being transcribed):
+///   cancel and the terminal's busy face where stop was.
+///
+/// Cancel and Stop are one word each: VoiceOver reads a label aloud, and a
+/// sentence read into an open microphone lands in the take.
+class SwarmVoiceRow extends StatelessWidget {
+  const SwarmVoiceRow({super.key, required this.voice});
+
+  final SwarmVoice voice;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    final face = voice.face;
+    final fill = tty.text.withValues(alpha: 0.08);
+    return Row(
+      children: [
+        _VoiceButton(
+          key: const ValueKey('swarm-voice-cancel'),
+          label: 'Cancel',
+          onTap: voice.cancel,
+          child: _VoiceRound(
+            fill: fill,
+            child: Icon(
+              LucideIcons.x,
+              size: 20,
+              color: AppPalette.textSecondary,
+            ),
+          ),
+        ),
+        const SizedBox(width: AppSpace.xs),
+        Expanded(
+          child: SwarmVoiceWave(
+            key: const ValueKey('swarm-voice-wave'),
+            level: face == VoiceMicFace.listening ? voice.level : null,
+            flat: face != VoiceMicFace.listening,
+          ),
+        ),
+        const SizedBox(width: AppSpace.xs),
+        switch (face) {
+          VoiceMicFace.listening => _VoiceButton(
+            key: const ValueKey('swarm-voice-stop'),
+            label: 'Stop',
+            onTap: voice.stop,
+            child: _VoiceRound(
+              fill: fill,
+              child: Container(
+                width: 14,
+                height: 14,
+                decoration: BoxDecoration(
+                  color: AppPalette.textPrimary,
+                  borderRadius: BorderRadius.circular(SwarmComposer.stopRadius),
+                ),
+              ),
+            ),
+          ),
+          VoiceMicFace.starting || null => const SizedBox(width: 44),
+          final face => Semantics(
+            key: const ValueKey('swarm-voice-busy'),
+            label: 'Working',
+            excludeSemantics: true,
+            child: SizedBox.square(
+              dimension: 44,
+              child: Center(
+                child: SizedBox.square(
+                  dimension: 36,
+                  child: FittedBox(
+                    child: VoiceMicCore(face: face, dead: false),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        },
+      ],
+    );
+  }
+}
+
+/// A 44pt target with [child] on a 36pt circle of [fill].
+class _VoiceRound extends StatelessWidget {
+  const _VoiceRound({required this.fill, required this.child});
+
+  final Color fill;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => SizedBox.square(
+    dimension: 44,
+    child: Center(
+      child: SizedBox.square(
+        dimension: 36,
+        child: DecoratedBox(
+          decoration: BoxDecoration(color: fill, shape: BoxShape.circle),
+          child: Center(child: child),
+        ),
+      ),
+    ),
+  );
+}
+
+/// One of [SwarmVoiceRow]'s buttons, with a light tap felt.
+class _VoiceButton extends StatelessWidget {
+  const _VoiceButton({
+    super.key,
+    required this.label,
+    required this.onTap,
+    required this.child,
+  });
+
+  final String label;
+  final VoidCallback onTap;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    void tap() {
+      HapticFeedback.lightImpact();
+      onTap();
+    }
+
+    return Semantics(
+      button: true,
+      enabled: true,
+      label: label,
+      onTap: tap,
+      excludeSemantics: true,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: tap,
+        child: child,
+      ),
+    );
+  }
+}
+
+/// The voice row's wave: a history of the microphone's [level] scrolling in
+/// from the right, one bar 2 wide every 2, 3 to 24 tall. A breath of motion
+/// even in silence, so a listening take never looks frozen; [flat] draws the
+/// bars at rest while the microphone opens or the words are on their way.
+///
+/// Painted, not built: the history moves in a [CustomPainter] behind a
+/// [RepaintBoundary], so the composer around it is not rebuilt at every
+/// frame. Under Reduce Motion nothing scrolls: the bars hold one shape that
+/// rises and falls with the level alone.
+class SwarmVoiceWave extends StatefulWidget {
+  const SwarmVoiceWave({super.key, required this.level, this.flat = false});
+
+  final ValueListenable<double>? level;
+  final bool flat;
+
+  static const double bar = 2;
+  static const double gap = 2;
+  static const double low = 3;
+  static const double high = 24;
+
+  /// How often a new bar comes in on the right.
+  static const Duration step = Duration(milliseconds: 70);
+
+  /// The most bars kept: enough for any phone's width.
+  static const int _keep = 160;
+
+  @override
+  State<SwarmVoiceWave> createState() => _SwarmVoiceWaveState();
+}
+
+class _SwarmVoiceWaveState extends State<SwarmVoiceWave>
+    with SingleTickerProviderStateMixin {
+  late final Ticker _ticker = createTicker(_tick);
+
+  /// Each bar's height, 0 to 1, oldest first.
+  final List<double> _history = [];
+
+  /// Bumped as the history moves: what repaints the painter.
+  final ValueNotifier<int> _moved = ValueNotifier(0);
+  Duration _last = Duration.zero;
+  double _shown = 0;
+  bool _motion = true;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _motion = !MediaQuery.disableAnimationsOf(context);
+    _sync();
+  }
+
+  @override
+  void didUpdateWidget(SwarmVoiceWave old) {
+    super.didUpdateWidget(old);
+    if (widget.flat && !old.flat) {
+      _history.clear();
+      _moved.value++;
+    }
+    _sync();
+  }
+
+  void _sync() {
+    final run = _motion && !widget.flat;
+    if (run && !_ticker.isActive) {
+      _last = Duration.zero;
+      unawaited(_ticker.start());
+    } else if (!run && _ticker.isActive) {
+      _ticker.stop();
+    }
+  }
+
+  void _tick(Duration elapsed) {
+    if (elapsed - _last < SwarmVoiceWave.step) return;
+    _last = elapsed;
+    final target = (widget.level?.value ?? 0).clamp(0.0, 1.0);
+    _shown += (target - _shown) * 0.6;
+    // A breath in silence: never a flat, frozen line while listening.
+    final breath = 0.06 + 0.05 * math.sin(elapsed.inMilliseconds / 180.0).abs();
+    _history.add(math.max(_shown, breath).clamp(0.0, 1.0));
+    if (_history.length > SwarmVoiceWave._keep) _history.removeAt(0);
+    _moved.value++;
+  }
+
+  @override
+  void dispose() {
+    _ticker.dispose();
+    _moved.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final level = widget.level;
+    return RepaintBoundary(
+      child: SizedBox(
+        height: 44,
+        child: CustomPaint(
+          painter: _WavePainter(
+            history: _history,
+            moved: _moved,
+            color: AppPalette.textPrimary,
+            flat: widget.flat,
+            still: !_motion && level != null ? level : null,
+          ),
+          size: Size.infinite,
+        ),
+      ),
+    );
+  }
+}
+
+class _WavePainter extends CustomPainter {
+  _WavePainter({
+    required this.history,
+    required this.moved,
+    required this.color,
+    required this.flat,
+    required this.still,
+  }) : super(repaint: still == null ? moved : Listenable.merge([moved, still]));
+
+  final List<double> history;
+  final Listenable moved;
+  final Color color;
+  final bool flat;
+
+  /// Under Reduce Motion: the level the one still shape follows.
+  final ValueListenable<double>? still;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const pitch = SwarmVoiceWave.bar + SwarmVoiceWave.gap;
+    final count = (size.width / pitch).floor();
+    if (count <= 0) return;
+    final paint = Paint()..color = color;
+    final mid = size.height / 2;
+    double heightOf(int i) {
+      if (flat) return 0;
+      if (still case final still?) {
+        // One shape, taller toward the middle, scaled by the level.
+        final shape = 0.35 + 0.65 * math.sin(math.pi * (i + 0.5) / count);
+        return (0.08 + 0.92 * still.value.clamp(0.0, 1.0)) * shape;
+      }
+      // Newest on the right.
+      final back = count - 1 - i;
+      final at = history.length - 1 - back;
+      return at < 0 ? 0 : history[at];
+    }
+
+    for (var i = 0; i < count; i++) {
+      final amount = heightOf(i);
+      final h =
+          SwarmVoiceWave.low +
+          (SwarmVoiceWave.high - SwarmVoiceWave.low) * amount;
+      final x = size.width - (count - i) * pitch + SwarmVoiceWave.gap;
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(x, mid - h / 2, SwarmVoiceWave.bar, h),
+          const Radius.circular(SwarmVoiceWave.bar / 2),
+        ),
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_WavePainter old) =>
+      old.flat != flat || old.color != color || old.still != still;
 }
 
 /// Where [SwarmVoice]'s take with the phone's recognizer is.

@@ -8,6 +8,7 @@ import 'package:harness_mobile/phone/tty_controls.dart';
 import 'package:harness_mobile/shared/theme/app_ink.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/shared/theme/swarm_tokens_set_b.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 
 import 'model.dart';
@@ -162,7 +163,6 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
           write: (text) {
             if (_mayReply) _thread.draft = text;
           },
-          send: _spoken,
         );
       }
     }
@@ -209,17 +209,6 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
       text: draft,
       selection: TextSelection.collapsed(offset: draft.length),
     );
-  }
-
-  /// The second tap on the mic ended a take: what is in the box goes as a
-  /// reply, as Send would send it, to the chat too with Also send. Nothing
-  /// when the box is empty, the thread is covered or no longer the person's
-  /// to reply in, or a reply or files are already on their way.
-  void _spoken() {
-    final t = _thread;
-    if (!mounted || !_visible || !_mayReply) return;
-    if (t.draft.trim().isEmpty || !t.canSend) return;
-    unawaited(_send());
   }
 
   /// The box's + ([attachSwarmFiles]), its files into the thread's.
@@ -548,25 +537,22 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
     );
   }
 
-  /// The reply box: the files going with the reply, a field that grows with
-  /// what is typed, then Also send, the +, the mic and a round Send (the
-  /// desktop's thread composer, with the main chat's mic).
+  /// The reply box: notes, then the card ([SwarmComposerCard]) — the files
+  /// going with the reply, a field that grows with what is typed and its X,
+  /// then +, Also send, the mic and a round Send (the desktop's thread
+  /// composer, with the main chat's mic). While a take is under way the
+  /// toolbar is the voice row ([SwarmVoiceRow]): Also send is hidden, and
+  /// keeps its tick for the Send after the take. No Tag: a thread has no @
+  /// picker.
   Widget _box(SwarmThread t, Tty tty) {
     // A reply on its way never holds the box: the next is typed meanwhile.
     final canSend = t.canSend;
     final canAttach = !t.uploading && t.files.room > 0;
-    return Container(
+    final voice = _voice;
+    final talking = voice?.face != null;
+    return Padding(
       key: const ValueKey('swarm-thread-box'),
-      decoration: BoxDecoration(
-        color: Color.alphaBlend(tty.text.withValues(alpha: 0.02), tty.ground),
-        border: Border(top: BorderSide(color: swarmChatHair(tty))),
-      ),
-      padding: const EdgeInsets.fromLTRB(
-        AppSpace.m,
-        AppSpace.s,
-        AppSpace.m,
-        AppSpace.xs,
-      ),
+      padding: SwarmComposer.padding,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -617,47 +603,57 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
                 style: AppType.caption(color: AppPalette.textSecondary),
               ),
             ),
-          SwarmOutgoingChips(box: t),
-          SwarmMessageField(
-            controller: _text,
+          SwarmComposerCard(
             focus: _focus,
-            hint: 'Reply',
-            fieldKey: const ValueKey('swarm-thread-field'),
-            imagePaste: swarmSendsFiles
-                ? SwarmImagePaste(
-                    enabled: canAttach,
-                    onImage: (image) => unawaited(_pasteImage(image)),
-                  )
-                : null,
-          ),
-          Row(
-            children: [
-              Expanded(
-                child: _AlsoSend(
-                  label: t.alsoSendLabel,
-                  value: t.alsoSend,
-                  onChanged: (on) => t.alsoSend = on,
-                ),
-              ),
-              if (swarmSendsFiles)
-                SwarmAttachButton(
-                  key: const ValueKey('swarm-thread-attach'),
-                  onTap: canAttach ? () => unawaited(_pickFiles()) : null,
-                ),
-              // The main chat's mic, beside Send as there.
-              if (_voice case final voice?) SwarmVoiceMic(voice: voice),
-              SwarmRoundButton(
-                key: const ValueKey('swarm-thread-send'),
-                label: 'Send reply',
-                fill: canSend ? AppPalette.accent : ttyRaised(tty),
-                onTap: canSend ? () => unawaited(_send()) : null,
-                child: Icon(
-                  LucideIcons.arrowUp,
-                  size: 20,
-                  color: canSend ? AppInk.onFill : AppPalette.textFaint,
-                ),
-              ),
-            ],
+            chips: t.files.files.isEmpty ? null : SwarmOutgoingChips(box: t),
+            field: SwarmMessageField(
+              controller: _text,
+              focus: _focus,
+              hint: 'Reply',
+              fieldKey: const ValueKey('swarm-thread-field'),
+              clearKey: const ValueKey('swarm-thread-clear'),
+              clearable: !talking,
+              imagePaste: swarmSendsFiles
+                  ? SwarmImagePaste(
+                      enabled: canAttach,
+                      onImage: (image) => unawaited(_pasteImage(image)),
+                    )
+                  : null,
+            ),
+            toolbar: talking
+                ? SwarmVoiceRow(voice: voice!)
+                : Row(
+                    children: [
+                      if (swarmSendsFiles)
+                        SwarmAttachButton(
+                          key: const ValueKey('swarm-thread-attach'),
+                          onTap: canAttach
+                              ? () => unawaited(_pickFiles())
+                              : null,
+                        ),
+                      Expanded(
+                        child: _AlsoSend(
+                          label: t.alsoSendLabel,
+                          value: t.alsoSend,
+                          onChanged: (on) => t.alsoSend = on,
+                        ),
+                      ),
+                      // The main chat's mic, beside Send as there.
+                      if (voice != null) SwarmVoiceMic(voice: voice),
+                      SwarmRoundButton(
+                        key: const ValueKey('swarm-thread-send'),
+                        label: 'Send reply',
+                        face: 36,
+                        fill: canSend ? AppPalette.accent : ttyRaised(tty),
+                        onTap: canSend ? () => unawaited(_send()) : null,
+                        child: Icon(
+                          LucideIcons.arrowUp,
+                          size: 20,
+                          color: canSend ? AppInk.onFill : AppPalette.textFaint,
+                        ),
+                      ),
+                    ],
+                  ),
           ),
         ],
       ),

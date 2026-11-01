@@ -354,6 +354,20 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
     mention(id);
   }
 
+  /// The Tag chip: ends the draft in an @, which opens the picker, or takes
+  /// back an @ with no name typed after it. A name being typed is left alone.
+  void toggleMention() {
+    switch (mentionQuery) {
+      case null:
+        final spaced = _draft.isEmpty || RegExp(r'\s$').hasMatch(_draft);
+        draft = '$_draft${spaced ? '' : ' '}@';
+      case '':
+        draft = _draft.substring(0, _draft.length - 1);
+      case _:
+        break;
+    }
+  }
+
   /// Adds [id]'s name to the draft: an agent's (the post goes to it) or a
   /// person's username (the post tags them), while the name stays in the
   /// text.
