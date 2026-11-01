@@ -435,27 +435,49 @@ class _Field extends StatelessWidget {
   static const _labelWidth = AppSpace.xl * 3;
 }
 
-/// At the end of the person's Buddy chat's header, while their Buddy runs
-/// and they may write: ⋮, whose one row, Remove Buddy, asks first, then
-/// stops it; the chat stays (the desktop's Buddy options). Nothing
-/// otherwise.
+/// At the end of the person's own Buddy chat's header, while they may
+/// write: ⋮, with Rename Buddy, and Remove Buddy while one runs, which asks
+/// first, then stops it; the chat stays (the desktop's Buddy options).
+/// Nothing in anyone else's Buddy chat.
 class SwarmBuddyMenuButton extends StatelessWidget {
-  const SwarmBuddyMenuButton({super.key, required this.actions});
+  const SwarmBuddyMenuButton({
+    super.key,
+    required this.actions,
+    required this.chatId,
+  });
 
   final SwarmBuddyActions actions;
 
-  Future<void> _open(BuildContext context) => showPhoneSheet(
+  /// The Buddy chat it is on: what Rename names the Buddy of, by its id
+  /// rather than its project. Null while that chat is not known yet.
+  final String? chatId;
+
+  Future<void> _open(BuildContext context, String chatId) => showPhoneSheet(
     context,
     title: swarmBuddyName(actions.reader, actions.projectId),
     actions: [
       PhoneSheetAction(
-        icon: LucideIcons.userMinus,
-        label: 'Remove Buddy',
-        destructive: true,
-        onTap: () => unawaited(_confirmRemove(context)),
+        icon: LucideIcons.pencil,
+        label: 'Rename Buddy',
+        onTap: () => unawaited(_rename(context, chatId)),
       ),
+      if (swarmBuddy(actions.reader, actions.projectId) != null)
+        PhoneSheetAction(
+          icon: LucideIcons.userMinus,
+          label: 'Remove Buddy',
+          destructive: true,
+          onTap: () => unawaited(_confirmRemove(context)),
+        ),
     ],
   );
+
+  Future<void> _rename(BuildContext context, String chatId) async {
+    if (!context.mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (_) => SwarmRenameBuddyDialog(actions: actions, chatId: chatId),
+    );
+  }
 
   Future<void> _confirmRemove(BuildContext context) async {
     if (!context.mounted) return;
@@ -497,7 +519,9 @@ class SwarmBuddyMenuButton extends StatelessWidget {
       listenable: Listenable.merge([actions.reader, actions]),
       builder: (context, _) {
         final reader = actions.reader;
-        if (swarmBuddy(reader, actions.projectId) == null ||
+        final chat = chatId;
+        if (chat == null ||
+            !swarmIsOwnBuddyChat(reader, chat) ||
             !swarmCanWrite(reader)) {
           return const SizedBox.shrink();
         }
@@ -515,7 +539,7 @@ class SwarmBuddyMenuButton extends StatelessWidget {
                 ? null
                 : () {
                     HapticFeedback.selectionClick();
-                    unawaited(_open(context));
+                    unawaited(_open(context, chat));
                   },
             child: SizedBox.square(
               dimension: minTouchTarget,
@@ -540,6 +564,158 @@ class SwarmBuddyMenuButton extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+/// Rename your Buddy (the desktop's, mockup confirmed by Diego, 10-29;
+/// without its explanatory lines, Tony's design language): the name everyone
+/// in the Swarm sees, empty for the default the field's hint shows. The
+/// backend checks it and its words show here. It closes once the chat is no
+/// longer the person's to rename in: access lost, signed out, or no longer
+/// allowed to write.
+class SwarmRenameBuddyDialog extends StatefulWidget {
+  const SwarmRenameBuddyDialog({
+    super.key,
+    required this.actions,
+    required this.chatId,
+  });
+
+  final SwarmBuddyActions actions;
+  final String chatId;
+
+  @override
+  State<SwarmRenameBuddyDialog> createState() => _SwarmRenameBuddyDialogState();
+}
+
+class _SwarmRenameBuddyDialogState extends State<SwarmRenameBuddyDialog> {
+  /// The backend's limit: a longer name is refused there anyway.
+  static const _maxLength = 32;
+
+  late final _name = TextEditingController(
+    text: swarmBuddyChosenName(widget.actions.reader, widget.chatId) ?? '',
+  );
+  late final Listenable _source = Listenable.merge([
+    widget.actions.reader,
+    widget.actions,
+  ]);
+  bool _saving = false, _closed = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _source.addListener(_changed);
+  }
+
+  @override
+  void dispose() {
+    _source.removeListener(_changed);
+    _name.dispose();
+    super.dispose();
+  }
+
+  bool get _allowed {
+    final reader = widget.actions.reader;
+    return !reader.accessRevoked &&
+        swarmCanWrite(reader) &&
+        swarmIsOwnBuddyChat(reader, widget.chatId);
+  }
+
+  void _changed() {
+    if (!mounted) return;
+    if (!_allowed) {
+      _close();
+    } else {
+      setState(() {});
+    }
+  }
+
+  void _close() {
+    if (_closed || !mounted) return;
+    _closed = true;
+    Navigator.of(context).pop();
+  }
+
+  Future<void> _save() async {
+    if (_saving || widget.actions.busy || !_allowed) return;
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    final answer = await widget.actions.rename(widget.chatId, _name.text);
+    if (!mounted || _closed) return;
+    if (answer.renamed) {
+      _close();
+      return;
+    }
+    setState(() {
+      _saving = false;
+      _error = answer.error;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    final busy = _saving || widget.actions.busy;
+    return AlertDialog(
+      title: Text(
+        'Rename your Buddy',
+        style: AppType.heading(color: AppPalette.textPrimary),
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            key: const ValueKey('swarm-buddy-name'),
+            controller: _name,
+            autofocus: true,
+            enabled: !busy,
+            maxLength: _maxLength,
+            textInputAction: TextInputAction.done,
+            style: AppType.body(color: AppPalette.textPrimary),
+            decoration: InputDecoration(
+              hintText: swarmBuddyDefaultName(widget.actions.reader),
+              hintStyle: TextStyle(color: AppPalette.textFaint),
+              counterText: '',
+              filled: true,
+              fillColor: AppPalette.swarmField,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(AppControl.radius),
+                borderSide: BorderSide.none,
+              ),
+            ),
+            onSubmitted: (_) => unawaited(_save()),
+          ),
+          if (_error case final error?)
+            Padding(
+              padding: const EdgeInsets.only(top: AppSpace.s),
+              child: Text(
+                error,
+                key: const ValueKey('swarm-buddy-name-error'),
+                style: AppType.caption(color: AppColors.danger),
+              ),
+            ),
+        ],
+      ),
+      actions: [
+        SwarmButton(
+          key: const ValueKey('swarm-buddy-name-cancel'),
+          label: 'Cancel',
+          style: SwarmButtonStyle.link,
+          onPressed: busy ? null : _close,
+        ),
+        SwarmButton(
+          key: const ValueKey('swarm-buddy-name-save'),
+          label: 'Save',
+          style: SwarmButtonStyle.fill,
+          busy: busy,
+          busyLabel: 'Saving…',
+          onPressed: busy ? null : () => unawaited(_save()),
+        ),
+      ],
     );
   }
 }

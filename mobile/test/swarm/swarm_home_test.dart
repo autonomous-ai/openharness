@@ -1941,6 +1941,32 @@ void main() {
       expect(key('swarm-title-button'), findsOneWidget, reason: 'back on Home');
     });
 
+    testWidgets('the Buddy tab\'s ⋮ renames the Buddy by its chat', (
+      tester,
+    ) async {
+      final fake = backend(buddy: true);
+      await pump(tester, fake);
+      await openProject(tester, project);
+      await openTab(tester, 'buddy');
+
+      await tester.tap(key('swarm-buddy-menu'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Rename Buddy'));
+      await tester.pumpAndSettle();
+      await tester.enterText(key('swarm-buddy-name'), 'Juniper');
+      await tester.tap(key('swarm-buddy-name-save'));
+      await tester.pumpAndSettle();
+
+      expect(fake.commands.where((c) => c['type'] == 'buddy.rename').toList(), [
+        {
+          'type': 'buddy.rename',
+          'conversationId': 'buddy-me',
+          'name': 'Juniper',
+        },
+      ]);
+      expect(find.text('Rename your Buddy'), findsNothing);
+    });
+
     testWidgets('a viewer with no Buddy chat in the project starts none from '
         'the Buddy tab', (tester) async {
       final fake = backend();

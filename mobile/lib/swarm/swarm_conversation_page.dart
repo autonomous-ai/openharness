@@ -1213,9 +1213,12 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                 ? view.title
                 : null,
             project: view.project,
-            // The person's own Buddy chat: Remove Buddy.
+            // The person's own Buddy chat: Rename Buddy, Remove Buddy.
             action: switch (_buddy) {
-              final buddy? => SwarmBuddyMenuButton(actions: buddy),
+              final buddy? => SwarmBuddyMenuButton(
+                actions: buddy,
+                chatId: widget.conversationId,
+              ),
               null => null,
             },
           ),
