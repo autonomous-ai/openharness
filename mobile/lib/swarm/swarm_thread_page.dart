@@ -16,6 +16,7 @@ import 'swarm_choices.dart';
 import 'swarm_conversation.dart';
 import 'swarm_conversation_page.dart';
 import 'swarm_message_row.dart';
+import 'swarm_paste.dart';
 import 'swarm_session.dart';
 import 'swarm_thread.dart';
 
@@ -162,6 +163,17 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
       _picking = false;
     }
   }
+
+  /// A picture pasted into the box ([pasteSwarmImage]), into the thread's
+  /// files, as the + puts a photo there.
+  Future<void> _pasteImage(SwarmPastedImage image) => pasteSwarmImage(
+    _thread.files,
+    image,
+    // Nothing goes into a thread the person can no longer reply in.
+    stillWanted: () =>
+        mounted && _thread.state != SwarmChatState.lost && _thread.canPost,
+    note: (note) => _attachNote.value = note,
+  );
 
   /// Whether the foot is more than a screen below ([_farBack]), on every
   /// scroll and whenever the thread's length changes.
@@ -501,6 +513,12 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
             focus: _focus,
             hint: 'Reply',
             fieldKey: const ValueKey('swarm-thread-field'),
+            imagePaste: swarmSendsFiles
+                ? SwarmImagePaste(
+                    enabled: canAttach,
+                    onImage: (image) => unawaited(_pasteImage(image)),
+                  )
+                : null,
           ),
           Row(
             children: [
