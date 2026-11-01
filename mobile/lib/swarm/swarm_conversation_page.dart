@@ -1520,7 +1520,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
           final acting = _acting == m.id;
           final reactions = c.reactionsOf(m);
           final receipt =
-              m.id == latestOwn?.id && m.receiptDelivery?.status == 'queued';
+              m.id == latestOwn?.id &&
+              const {'queued', 'uncertain'}.contains(m.receiptDelivery?.status);
           // A card's facts are its group's: only a reader of the group has
           // them, and a change to them draws the row again.
           final group = c.conversation;

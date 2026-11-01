@@ -146,7 +146,8 @@ void main() {
       });
     });
 
-    test('stops once the delivery is claimed, and the row takes the claim', () {
+    test('reads on while claimed, since it may come back unconfirmed; stops '
+        'once delivered', () {
       return withClock(moved, () async {
         final queued = own('m1', 1, at: now, deliveries: [delivery()]);
         var status = 'queued';
@@ -171,9 +172,15 @@ void main() {
         expect(reads(r.swarm), 2);
         expect(c.latestOwn!.receiptDelivery!.status, 'claimed');
 
+        status = 'delivered';
+        now = now.add(const Duration(seconds: 30));
+        await tick(r);
+        expect(reads(r.swarm), 3, reason: 'claimed: still asked');
+        expect(c.latestOwn!.receiptDelivery!.status, 'delivered');
+
         now = now.add(const Duration(minutes: 5));
         await tick(r);
-        expect(reads(r.swarm), 2, reason: 'claimed: nothing more to ask');
+        expect(reads(r.swarm), 3, reason: 'delivered: nothing more to ask');
       });
     });
 
@@ -232,7 +239,7 @@ void main() {
       });
     });
 
-    test('asks only for the person\'s own newest, and only while queued', () {
+    test('asks only for the person\'s own newest, and only while open', () {
       return withClock(moved, () async {
         final r = rig(
           page: [

@@ -585,6 +585,8 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
       onMachineLinked: _followLinkedMachine,
       onOpenAgent: _openAgentAtHome,
       onShowSwarm: _showSwarm,
+      canOpenMachine: (machineId) =>
+          widget.notifier.machineStates[machineId]?.needsLink == false,
       // Rebuilt when the root switches, so back from Harness can reach Swarm Home.
       child: ListenableBuilder(
         listenable: _home,

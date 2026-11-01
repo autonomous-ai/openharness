@@ -487,6 +487,8 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
     _sent = null;
     _replyingTo = null;
     _reacting.clear();
+    _resolving = null;
+    _resolveIds.clear();
     error = null;
     if (held) _tell();
   }
@@ -848,6 +850,103 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
     return refused == null;
   }
 
+  /// The delivery a person's answer is on its way for, and the answer
+  /// ([resolveDelivery]).
+  (String, String)? get resolving => _resolving;
+  (String, String)? _resolving;
+
+  /// The receipt of an answer whose reply never came, by delivery and
+  /// answer: the same answer again goes under it, so the backend runs it once
+  /// and a message is never sent twice for one tap.
+  final _resolveIds = <(String, String), String>{};
+
+  /// Settles [message]'s unconfirmed [delivery] as the person checked it
+  /// (the desktop's `_resolveDelivery`): `resend` sends it again, `received`
+  /// says it arrived. Then the message and what the backend wrote are read
+  /// again; a refusal says why in [error]. True once the backend took it.
+  Future<bool> resolveDelivery(
+    SuperTabMessage message,
+    SuperTabDelivery delivery,
+    String resolution,
+  ) async {
+    final deliveryId = delivery.id;
+    if (_disposed ||
+        !canPost ||
+        _resolving != null ||
+        deliveryId == null ||
+        delivery.status != 'uncertain' ||
+        !receiptCurrent(message)) {
+      return false;
+    }
+    final key = (deliveryId, resolution);
+    final operationId = _resolveIds.putIfAbsent(key, superTabOperationId);
+    final epoch = _epoch, generation = reader.generation;
+    bool stale() =>
+        _disposed || epoch != _epoch || generation != reader.generation;
+    _resolving = key;
+    error = null;
+    notifyListeners();
+    String? refused;
+    var settled = true;
+    try {
+      await reader.request(
+        'POST',
+        '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}/commands',
+        body: {
+          'operationId': operationId,
+          'command': {
+            'type': 'delivery.resolve',
+            'deliveryId': deliveryId,
+            'resolution': resolution,
+          },
+        },
+      );
+    } on SuperTabFailure catch (failure) {
+      refused = failure.message;
+      // A refusal did nothing; a reply lost on the way may have: the same
+      // answer again goes under the same receipt.
+      settled =
+          failure.statusCode >= 400 &&
+          failure.statusCode < 500 &&
+          !const {408, 429}.contains(failure.statusCode);
+    } catch (_) {
+      refused = 'The action is not confirmed. Retry to check it.';
+      settled = false;
+    }
+    // Lost access, signed out or the chat forgotten meanwhile: the answer is
+    // for a chat no longer shown, and says nothing in it.
+    if (_disposed) return false;
+    if (stale()) {
+      if (_resolving == key) {
+        _resolving = null;
+        notifyListeners();
+      }
+      return false;
+    }
+    if (settled) _resolveIds.remove(key);
+    _resolving = null;
+    error = refused;
+    notifyListeners();
+    // Sent again, arrived, or settled before the answer (delivered, or
+    // refused as no longer needing it): the line follows what is read now.
+    if (settled) {
+      for (var held = _readingReceipt; held != null; held = _readingReceipt) {
+        await held;
+      }
+      if (stale() || _receiptOf != message.id) return refused == null;
+      _receiptAsked = clock.now();
+      final reading = _readReceipt(message.id);
+      _readingReceipt = reading;
+      await Future.wait([
+        reading.whenComplete(() {
+          if (identical(_readingReceipt, reading)) _readingReceipt = null;
+        }),
+        if (refused == null) load(),
+      ]);
+    }
+    return refused == null;
+  }
+
   /// Keeps the thread lines a page named ([thread]): one a later page said
   /// is kept over an older one. True when a line drawn changed.
   bool _keepThreads(Object? rows) {
@@ -972,13 +1071,20 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
     _readingReceipt = null;
   }
 
+  /// The deliveries the newest own message is read again for: queued, taken
+  /// by its computer (it may come back unconfirmed), or unconfirmed until a
+  /// person settles it ([resolveDelivery]) or it arrives.
+  static const _openDeliveries = {'queued', 'claimed', 'uncertain'};
+
   /// Reads the person's newest message again, at the Swarm's own reads, while
-  /// it is on screen and its delivery is queued. No timer of its own: off
+  /// it is on screen and its delivery is open. No timer of its own: off
   /// screen nothing asks.
   void _checkReceipt() {
     if (!_shown || _readingReceipt != null || reader.error != null) return;
     final own = latestOwn;
-    if (own == null || own.receiptDelivery?.status != 'queued') return;
+    if (own == null || !_openDeliveries.contains(own.receiptDelivery?.status)) {
+      return;
+    }
     final now = clock.now();
     if (_receiptOf != own.id) {
       _dropReceipt();
