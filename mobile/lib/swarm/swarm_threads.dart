@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 
 import 'model.dart';
 import 'swarm_asks.dart';
+import 'swarm_chat_notify.dart';
 import 'swarm_inbox.dart' show SwarmListing;
 import 'swarm_reader.dart';
 import 'swarm_request.dart';
@@ -154,7 +155,7 @@ class SwarmThreads extends ChangeNotifier {
       if (root == null || snapshot.conversation(m.conversationId) == null) {
         continue;
       }
-      if (snapshot.chatSettings[m.conversationId] == 'muted') continue;
+      if (reader.notifyOf(m.conversationId) == SwarmNotify.muted) continue;
       final through = marks.threadThrough(m.conversationId, root);
       if (through == null) return 0;
       if ((m.messageSequence ?? _unknown) > through) count++;

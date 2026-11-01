@@ -3,7 +3,9 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../notify/system_notices.dart';
+import 'swarm_chat_notify.dart';
 import 'swarm_inbox.dart';
+import 'swarm_reader.dart';
 
 /// The notice that tells the person about [need]: who asks, and in which
 /// project.
@@ -66,8 +68,9 @@ class SwarmAnnouncer {
 
   final SwarmNotices notices;
 
-  /// The person sees [need] where they are: no notice.
-  final bool Function(SwarmNeed need) quiet;
+  /// The person sees [need] where they are: no notice. Null asks for a
+  /// chat's new messages ([announceChat]).
+  final bool Function(SwarmNeed? need) quiet;
 
   /// What this phone has told the account already: never told again.
   final SwarmTold told;
@@ -108,6 +111,11 @@ class SwarmAnnouncer {
         _takeDown(key);
       }
     }
+    if (readable != null) {
+      for (final MapEntry(:key, :value) in _chats.entries.toList()) {
+        if (!readable.contains(value.swarmId)) _takeDownChat(key);
+      }
+    }
     if (needs.length != _badge) {
       _badge = needs.length;
       unawaited(notices.setSwarmBadge(needs.length));
@@ -133,6 +141,59 @@ class SwarmAnnouncer {
     }
   }
 
+  /// The notices of chats set to All new messages ([SwarmChatNotices]):
+  /// each key's Swarm, chat and how far it went.
+  final _chats = <String, ({String swarmId, String chatId, int sequence})>{};
+
+  /// Posts or moves on chat [chatId]'s "New messages" notice: one per chat,
+  /// which a newer message replaces, as nothing waits to be answered. Names
+  /// the project only: a notice can be read on a locked phone, and the chat's
+  /// name is read in the app ([swarmNotice]).
+  void announceChat({
+    required String swarmId,
+    required String chatId,
+    required String project,
+    required int sequence,
+  }) {
+    if (quiet(null)) return;
+    final key = 'chat:$swarmId:$chatId';
+    _chats[key] = (swarmId: swarmId, chatId: chatId, sequence: sequence);
+    unawaited(
+      notices.showSwarm((
+        key: key,
+        title: 'New messages',
+        subtitle: project,
+        body: 'Open Harness to read them.',
+        target: (
+          swarmId: swarmId,
+          conversationId: chatId,
+          messageId: null,
+          decisionId: null,
+        ),
+      )),
+    );
+  }
+
+  /// Takes a chat's notice down once what it told is read, the chat is no
+  /// longer in Swarm [swarmId] as [reader] reads it, or that can no longer
+  /// be read at all.
+  void chatsRead(String swarmId, SwarmReader reader) {
+    for (final MapEntry(:key, :value) in _chats.entries.toList()) {
+      if (value.swarmId != swarmId) continue;
+      final read = reader.readMarks?.readThrough(value.chatId);
+      if (reader.accessRevoked ||
+          reader.snapshot?.conversation(value.chatId) == null ||
+          (read != null && read >= value.sequence)) {
+        _takeDownChat(key);
+      }
+    }
+  }
+
+  void _takeDownChat(String key) {
+    _chats.remove(key);
+    unawaited(notices.cancelSwarm(key));
+  }
+
   void _takeDown(String key) {
     _posted.remove(key);
     _missed.remove(key);
@@ -144,6 +205,9 @@ class SwarmAnnouncer {
   void clear() {
     for (final key in _posted.keys.toList()) {
       _takeDown(key);
+    }
+    for (final key in _chats.keys.toList()) {
+      _takeDownChat(key);
     }
     settle(const []);
   }
@@ -205,4 +269,57 @@ void swarmBadgeOffWhileSignedOut(
 
   app.addListener(check);
   check();
+}
+
+/// What tells of each new message in a chat set to All new messages
+/// ([SwarmNotify.all]), as the desktop's `SuperTabChatNotices`: after a read
+/// of its Swarm, a chat whose newest main-stream message moved past what the
+/// last read held, and past what the person has read. The first look at a
+/// chat is not news; nor is a read under another hold of the Swarm (a first
+/// load again, or access moved), which starts over telling nothing. Muted and
+/// Mentions only chats tell nothing here: their tags are told as needs.
+class SwarmChatNotices {
+  SwarmChatNotices(this.announcer);
+
+  final SwarmAnnouncer announcer;
+
+  /// How far each chat went at the last read, by Swarm; with the hold
+  /// ([SwarmReader.generation]) it was read under.
+  final _seen = <String, ({int generation, Map<String, int> tops})>{};
+
+  /// Swarm [swarmId] was read by [reader].
+  void read(String swarmId, SwarmReader reader) {
+    final snapshot = reader.snapshot;
+    if (reader.accessRevoked || snapshot == null) {
+      _seen.remove(swarmId);
+      announcer.chatsRead(swarmId, reader);
+      return;
+    }
+    final held = _seen[swarmId];
+    final first = held == null || held.generation != reader.generation;
+    final tops = <String, int>{};
+    for (final group in snapshot.conversations) {
+      final top = group.mainSequence;
+      tops[group.id] = top;
+      if (first) continue;
+      final before = held.tops[group.id];
+      if (before == null || top <= before) continue;
+      if (reader.notifyOf(group.id) != SwarmNotify.all) continue;
+      final read = reader.readMarks?.readThrough(group.id);
+      // Marks not back yet: nothing says it is unread.
+      if (read == null || top <= read) continue;
+      announcer.announceChat(
+        swarmId: swarmId,
+        chatId: group.id,
+        project: snapshot.projectById(group.projectId)?.name ?? '',
+        sequence: top,
+      );
+    }
+    _seen[swarmId] = (generation: reader.generation, tops: tops);
+    announcer.chatsRead(swarmId, reader);
+  }
+
+  /// Only [swarms] are read now: the rest are forgotten.
+  void keepOnly(Set<String> swarms) =>
+      _seen.removeWhere((id, _) => !swarms.contains(id));
 }

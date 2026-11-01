@@ -52,6 +52,7 @@ class SwarmSession extends ChangeNotifier {
       quiet: (_) => !swarmLocalNotices || _screens > 0,
       told: told,
     );
+    _chatNotices = SwarmChatNotices(_announcer);
     inbox
       ..onArrived = announce
       ..onSwarmRead = _swarmRead
@@ -83,6 +84,9 @@ class SwarmSession extends ChangeNotifier {
   final Duration undoWindow;
 
   late final SwarmAnnouncer _announcer;
+
+  /// What tells of new messages in chats set to All new messages.
+  late final SwarmChatNotices _chatNotices;
   int _screens = 0;
   final _watching = <String, int>{};
   final _held = <String, ({int choice, Timer timer})>{};
@@ -112,6 +116,7 @@ class SwarmSession extends ChangeNotifier {
   final _readsToCount = <String>{};
 
   void _swarmRead(String id) {
+    if (inbox.reader(id) case final reader?) _chatNotices.read(id, reader);
     _readsToCount.add(id);
     _countReads();
   }
@@ -209,7 +214,9 @@ class SwarmSession extends ChangeNotifier {
   void _needsChanged() {
     _show();
     if (inbox.loaded) {
-      home.keepOnly({for (final swarm in inbox.swarms) swarm.id});
+      final listed = {for (final swarm in inbox.swarms) swarm.id};
+      home.keepOnly(listed);
+      _chatNotices.keepOnly(listed);
     }
     // What was read of a Swarm off the list, or out of reach, leaves memory.
     peeks.keepOnly([for (final swarm in inbox.swarms) ?inbox.reader(swarm.id)]);
