@@ -18,6 +18,7 @@ import type { BackendNotice, CoreApi, TurnDelivery } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { attachedFiles as attachedFilesType } from './attachments.js'
 import { backend, BUDDY_SESSION_GONE_MS, BUDDY_SESSION_IDLE_MS, BUDDY_SESSION_SLEEP_GAP_MS, buddyChatIdOf, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
+import { SWITCH_ADOPT_MS, SWITCH_HOLD_MS } from './leadSwitch.js'
 import { TerminalHost } from './terminal.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
 import { CONTINUE } from './limitResume.js'
@@ -3739,6 +3740,91 @@ describe('keeping a Swarm Lead alive', () => {
     t.live(false)
     await t.poll()
     expect(t.keepLeadAlive).toHaveBeenCalledTimes(calls + 3)
+  })
+
+  // Dee, 11-01: its owner switches a Product Manager's engine from its pane. The host holds off reopening the old session while
+  // the new one takes its place, and reopens the old one on its old engine when none started in time; a restart keeps the
+  // hold, so a project never has two, and never none for long (superTabs/leadSwitch.ts).
+  const switched = (t: ReturnType<typeof lifeFixture>, at = 0) => {
+    const folder = join(t.dir, 'super-tabs', 'lead-switch')
+    mkdirSync(folder, { recursive: true, mode: 0o700 })
+    writeFileSync(join(folder, `${createHash('sha256').update('harness').digest('hex')}.json`),
+      JSON.stringify({ version: 1, agentId: 'harness', changeId: 'f'.repeat(32), targetEngine: 'codex', at }), { mode: 0o600 })
+  }
+  /** The switch's new session [id], running here when [runs] says so, by its creation receipt. */
+  const replacement = (t: ReturnType<typeof lifeFixture>, runs: () => boolean, old: () => boolean = () => false, id = 'new-session') => {
+    t.core.agents.byAgent = vi.fn((agentId: string) => (agentId === id ? runs() : agentId === 'harness' && old()) ? { agentId } : undefined) as never
+    t.core.agents.creationStatus = vi.fn(async (creationId: string) => ({ creationId, state: 'created' as const, agentId: id }))
+  }
+
+  it('holds a switching Lead\'s reopen until the switch\'s time limit, across a restart, then reopens it', async () => {
+    const t = lifeFixture([leadRow()])
+    switched(t)
+    await t.poll()
+    await t.poll(60_000)
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+    // The host restarts mid-switch: the hold is on disk.
+    t.host.stop()
+    const again = t.open()
+    const poll = async (advance: number) => { t.wait(advance); await again.tick(); for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve)) }
+    await poll(0)
+    await poll(SWITCH_HOLD_MS - 60_000)
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+    await poll(1)
+    expect(t.keepLeadAlive).toHaveBeenCalledWith('harness')
+    expect(t.closeMember).not.toHaveBeenCalled()
+  })
+
+  // Security review 2 of #2493: a new session the Swarm did not take in must not run unlinked beside the reopened one.
+  it('waits for the Swarm to take in a running new session, and closes it before reopening the old one when it did not', async () => {
+    const t = lifeFixture([leadRow()])
+    switched(t)
+    replacement(t, () => true)
+    await t.poll()
+    await t.poll(SWITCH_HOLD_MS + 1)
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+    await t.poll(SWITCH_ADOPT_MS - SWITCH_HOLD_MS - 1)
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+    await t.poll(1)
+    await vi.waitFor(() => expect(t.keepLeadAlive).toHaveBeenCalledWith('harness'))
+    expect(t.closeMember).toHaveBeenCalledWith('new-session', 'f'.repeat(32))
+    expect(t.closeMember.mock.invocationCallOrder[0]).toBeLessThan(t.keepLeadAlive.mock.invocationCallOrder[0])
+    expect(t.log).toHaveBeenCalledWith(expect.stringContaining('Closed the new session new-sess'))
+  })
+
+  it('closes a new session of the switch that starts after the old one was reopened, and says when it cannot', async () => {
+    const t = lifeFixture([leadRow()])
+    switched(t)
+    let late = false
+    replacement(t, () => late, () => true)
+    await t.poll()
+    await t.poll(SWITCH_HOLD_MS + 1)
+    expect(t.closeMember).not.toHaveBeenCalled()
+    late = true
+    t.closeMember.mockResolvedValueOnce({ error: 'AGENT_CHANGED' })
+    await t.poll(5_000)
+    await vi.waitFor(() => expect(t.closeMember).toHaveBeenCalledWith('new-session', 'f'.repeat(32)))
+    await vi.waitFor(() => expect(t.log).toHaveBeenCalledWith(expect.stringContaining('Could not close the new session new-sess')))
+    // Its own new session never counts, nor one from long ago.
+    t.closeMember.mockClear()
+    await t.poll(30 * 60_000)
+    expect(t.closeMember).not.toHaveBeenCalled()
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+  })
+
+  it('reads no new session from a creation that did not run here, or names the old session itself', async () => {
+    const t = lifeFixture([leadRow()])
+    switched(t)
+    t.core.agents.creationStatus = vi.fn(async (creationId: string) => ({ creationId, state: 'pending' as const }))
+    await t.poll()
+    await t.poll(SWITCH_HOLD_MS + 1)
+    await vi.waitFor(() => expect(t.keepLeadAlive).toHaveBeenCalledTimes(1))
+    const u = lifeFixture([leadRow()])
+    switched(u)
+    u.core.agents.creationStatus = vi.fn(async (creationId: string) => ({ creationId, state: 'created' as const, agentId: 'harness' }))
+    await u.poll(SWITCH_HOLD_MS + 1)
+    await vi.waitFor(() => expect(u.keepLeadAlive).toHaveBeenCalledTimes(1))
+    expect(u.closeMember).not.toHaveBeenCalled()
   })
 
   it('waits a minute after a reopen it asked for before asking again', async () => {
