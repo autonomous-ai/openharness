@@ -171,6 +171,8 @@ void main() {
       request: fake.request,
       notices: SilentSystemNotices(),
       features: features,
+      // The phone's read marks: a tag counts only once they are back.
+      readMarks: MemoryKeyValueStore(),
     )..foreground = false;
     addTearDown(host.dispose);
     await tester.pumpWidget(
