@@ -690,6 +690,101 @@ describe('work waiting for its review', () => {
   })
 })
 
+// Diego, 2026-11-01: a Reviewer checks and posts in the build's group, which never renewed its own review task, so after a
+// normal fix round of ~31 minutes that task was lost, its Lead woken and the Reviewer told to stop with its verdict refused.
+// Review of #2487: it follows the Reviewer, never the Engineer, so an idle Reviewer is still lost.
+describe('a review task while its build is back with the Engineer', () => {
+  /** Review task "Review: Ship the parser" (reviewOf the build) assigned to a Reviewer on the worker's machine, which is also
+   *  in the build's group, as a Reviewer is to check and post there. */
+  async function reviewing() {
+    const f = await swarm()
+    const review = String((await f.execute({ type: 'conversation.create', title: 'Review: Ship the parser', brief: 'Review it', reviewOf: f.group,
+      checks: [{ description: 'Verdict', independent: false }] })).result.conversationId)
+    const reviewer = await f.add(review, 'test-host', f.harness.other, 'Reviewer')
+    const part = await db.swarmAgent.findFirstOrThrow({ where: { tabId: f.tab, key: reviewer } })
+    await db.swarmAgent.update({ where: { id: part.id }, data: { data: { ...part.data as object, role: 'reviewer' } } })
+    await f.execute({ type: 'conversation.agent', conversationId: f.group, agentId: reviewer, present: true, lead: false })
+    const verdict = String((await f.execute({ type: 'work.assign', conversationId: review, agentId: reviewer })).result.assignmentId)
+    const waitFrom = f.clock.now
+    const asReviewer = (command: Command) => f.execute(command, host, reviewer)
+    const engineer = (status: 'working' | 'review', result: string) =>
+      f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status, result }, host, f.worker)
+    /** Both machines report and the Lead polls each minute: the Engineer's screen changes and it sends a "working" heartbeat
+     *  every 4 minutes; the Reviewer's screen stays still. */
+    const minutes = async (count: number, { heartbeats = true }: { heartbeats?: boolean } = {}) => {
+      for (let minute = 1; minute <= count; minute++) {
+        f.clock.now += MINUTE
+        if (heartbeats && minute % 4 === 0) await engineer('working', 'Working: awaiting review')
+        await f.observe('lead-host', [f.harness.lead])
+        await f.observe('test-host', [f.harness.worker, f.harness.other],
+          { harnessProgress: { [f.harness.worker]: f.clock.now - 10_000, [f.harness.other]: waitFrom } })
+        await f.leadInbox()
+      }
+    }
+    /** The Reviewer's machine reports at [at], its screen still since the wait began: a report loses its own agents' tasks
+     *  at once, while the Lead's poll may answer quietly within 30 seconds of its last full one. */
+    const reviewerReport = async (at: number) => {
+      f.clock.now = at
+      await f.observe('test-host', [f.harness.worker, f.harness.other], { harnessProgress: { [f.harness.worker]: at, [f.harness.other]: waitFrom } })
+    }
+    const task = async () => (await f.timed.read(owner, f.tab)).state.conversations.find(c => c.id === review)!.assignment!
+    const lost = async () => (await f.lostRows()).filter(m => (m.source as { assignmentId?: string }).assignmentId === verdict)
+    const buildCheck = async () => (await f.timed.read(owner, f.tab)).state.conversations.find(c => c.id === f.group)!.checks[0]!.id
+    const requestChanges = async () => asReviewer({ type: 'work.check', conversationId: f.group, assignmentId: f.assignmentId, checkId: await buildCheck(),
+      passed: false, evidence: 'Two findings' })
+    return { ...f, review, reviewer, verdict, waitFrom, minutes, task, lost, asReviewer, engineer, requestChanges, reviewerReport }
+  }
+
+  it('keeps it from its verdict asking for changes through a 35-minute fix round, and gives it 30 minutes from the next Ready', async () => {
+    const f = await reviewing()
+    await f.requestChanges()
+    expect(await f.task()).toMatchObject({ status: 'working', changesRequestedAt: f.waitFrom, leaseUntil: f.waitFrom + 5 * MINUTE })
+    await f.minutes(35)
+    expect(await f.task()).toMatchObject({ status: 'working' })
+    expect(await f.lost()).toEqual([])
+    await f.engineer('review', 'Ready for review: PR #7 at 5a0d3f2')
+    const ready = f.clock.now
+    expect((await f.task()).changesRequestedAt).toBeUndefined()
+    await f.minutes(30, { heartbeats: false })
+    expect(await f.task()).toMatchObject({ status: 'working' })
+    expect(await f.lost()).toEqual([])
+    await f.reviewerReport(ready + 30 * MINUTE + 1)
+    expect(await f.task()).toMatchObject({ status: 'lost', lost: { reason: 'no progress for 30 minutes' } })
+    expect(await f.lost()).not.toEqual([])
+  })
+
+  it('is lost after 30 minutes when its Reviewer sits idle, though the Engineer keeps sending "working" heartbeats', async () => {
+    const f = await reviewing()
+    await f.minutes(30)
+    expect(await f.task()).toMatchObject({ status: 'working' })
+    await f.reviewerReport(f.waitFrom + 30 * MINUTE + 1)
+    expect(await f.task()).toMatchObject({ status: 'lost', lost: { reason: 'no progress for 30 minutes' } })
+  })
+
+  it('is renewed by its own Reviewer\'s post in the build\'s group', async () => {
+    const f = await reviewing()
+    await f.minutes(28)
+    await f.asReviewer({ type: 'message.send', conversationId: f.group, text: 'Still reading the parser changes.', replyTo: null, recipientIds: [f.worker] })
+    const posted = f.clock.now
+    expect(await f.task()).toMatchObject({ leaseUntil: posted + 5 * MINUTE, progressAt: posted })
+    await f.minutes(5)
+    expect(await f.task()).toMatchObject({ status: 'working' })
+    await f.reviewerReport(posted + 5 * MINUTE + 1)
+    expect(await f.task()).toMatchObject({ status: 'lost', lost: { reason: 'no progress for 5 minutes' } })
+  })
+
+  it('still loses it to time once its build is cancelled after its verdict', async () => {
+    const f = await reviewing()
+    await f.requestChanges()
+    await f.minutes(10)
+    await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Not needed' })
+    await f.minutes(20, { heartbeats: false })
+    expect(await f.task()).toMatchObject({ status: 'working' })
+    await f.reviewerReport(f.waitFrom + 30 * MINUTE + 1)
+    expect(await f.task()).toMatchObject({ status: 'lost', lost: { reason: 'no progress for 30 minutes' } })
+  })
+})
+
 // Review of #2275: the review-capacity notice took the command's own message id, which the Ready for review row already had,
 // so the real write hit a duplicate key and rolled the whole status back: no Builder could hand over during a quota shortage.
 describe('a Ready for review while no new agent can start', () => {
