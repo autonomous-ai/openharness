@@ -146,6 +146,27 @@ export function canReadProject(state: SuperTabState, actor: Actor, project: Swar
     project.members.some(p => p.id === member.id && p.generation === member.generation))
 }
 
+/** Whom a group's work is for, as its pull requests say (`requestedByLine`): the person who asked for it (`requesterId`) while
+ *  they can still read its project, else the project's owner. Until 11-01 it was always the owner, and agents on Tony's Mac
+ *  opened Tony's pull requests as Ken's (#2486, #2488, #2491). It names a person only: the GitHub App's token, who gets one
+ *  and its commit trailers (store.ts githubAssignment, githubStart) never depend on it. */
+export function workRequesterId(state: SuperTabState, project: SwarmProject, group: Conversation | undefined): string {
+  const id = group && (group.projectId ?? 'lead') === project.id ? group.requesterId : undefined
+  const member = id ? state.people.find(p => p.id === id) : undefined
+  return member?.email && canReadProject(state, { kind: 'person', userId: member.id, email: member.email }, project) ? member.id : project.ownerId
+}
+
+/** The line a task's message ends with, telling its Engineer whom the task's pull requests are for. It comes with each
+ *  task, from that task's requester, so a reused Engineer never names the one before; the start prompt names nobody
+ *  (security review 2 of #2492). Given where the start prompt gave it before: another person's project work, where the
+ *  project's owner is not the machine's (cli/src/superTabs/start.ts `githubPromptLine`). A review opens no pull request.
+ *  The email is the Swarm row's, which the Swarm's members already see. */
+export function requestedByLine(state: SuperTabState, project: SwarmProject, group: Conversation, worker: Agent): string | null {
+  if (group.reviewOf || project.ownerId === worker.machineOwnerId) return null
+  const email = state.people.find(p => p.id === workRequesterId(state, project, group))?.email
+  return email ? `Start each pull request body with: Requested by ${email} through Harness.` : null
+}
+
 export function readProject(state: SuperTabState, actor: Actor, projectId: string): SwarmProject {
   author(state, actor)
   const project = projectOf(state, projectId)
