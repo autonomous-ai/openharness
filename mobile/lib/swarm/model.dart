@@ -452,8 +452,8 @@ class SuperTabProject {
       _memberGenerations[person.id] == person.generation;
   final int updateMinutes;
 
-  /// The project's status card text, read as the desktop's model reads it;
-  /// the phone shows no card yet.
+  /// The project's status card text, read as the desktop's model reads it
+  /// (`SwarmProjectStatusCard`).
   final SuperTabProjectStatus? status;
   final Map<String, dynamic>? repository;
 }
