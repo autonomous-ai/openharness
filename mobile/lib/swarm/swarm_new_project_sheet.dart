@@ -41,6 +41,27 @@ bool swarmMayCreateProject(SwarmInbox inbox, String swarmId) {
       swarmCanWrite(reader);
 }
 
+/// Whether Swarm [swarmId] is paused: it takes no new work, so a project
+/// made there could not start its Product Manager.
+bool swarmNewProjectPaused(SwarmInbox inbox, String swarmId) =>
+    inbox.reader(swarmId)?.snapshot?.paused ?? false;
+
+/// The Swarm New project opens on, of [writable] (those that take work
+/// first): the one Home showed ([openedFrom]) unless it is paused, else the
+/// first that is not (Dee, 11-01: it opened on an old paused Swarm, Create
+/// off). All paused: the one Home showed, else the first.
+String? swarmNewProjectSwarm(
+  List<String> writable, {
+  String? openedFrom,
+  required bool Function(String swarmId) paused,
+}) {
+  final from = writable.contains(openedFrom) ? openedFrom : null;
+  if (from != null && !paused(from)) return from;
+  return writable.where((id) => !paused(id)).firstOrNull ??
+      from ??
+      writable.firstOrNull;
+}
+
 /// The engines a Product Manager runs on, in the order one is chosen
 /// (Desktop's `kLeadEngines`).
 const swarmLeadEngines = ['claude', 'codex'];
@@ -933,8 +954,10 @@ class SwarmNewProjectRow extends StatelessWidget {
 /// A project New project made: the Swarm, and the project.
 typedef SwarmNewProject = ({String swarmId, String projectId});
 
-/// New project, from Swarm Home: which Swarm (only when Home shows several,
-/// and only those of [swarmIds] the person may write in), the brief, the
+/// New project, from Swarm Home: which Swarm (only when there are several,
+/// and only those of [swarmIds] the person may write in; it opens on
+/// [openedFrom], the Swarm Home shows, unless that one is paused
+/// ([swarmNewProjectSwarm]), and paused ones come last), the brief, the
 /// visibility, the repository and the machine its Product Manager runs on,
 /// then Create. Answers the project once it is made and its Product Manager
 /// asked to start; null when closed. The Swarm taken away, the person's
@@ -947,6 +970,7 @@ Future<SwarmNewProject?> showSwarmNewProjectSheet(
   BuildContext context, {
   required SwarmSession session,
   required List<String> swarmIds,
+  String? openedFrom,
   DateTime Function() now = DateTime.now,
 }) {
   // The sheet reads no status bar of its own (the route takes it away).
@@ -959,6 +983,7 @@ Future<SwarmNewProject?> showSwarmNewProjectSheet(
     builder: (_) => SwarmNewProjectSheet(
       session: session,
       swarmIds: swarmIds,
+      openedFrom: openedFrom,
       now: now,
       topInset: top,
     ),
@@ -971,12 +996,17 @@ class SwarmNewProjectSheet extends StatefulWidget {
     super.key,
     required this.session,
     required this.swarmIds,
+    this.openedFrom,
     this.now = DateTime.now,
     this.topInset = 0,
   });
 
   final SwarmSession session;
   final List<String> swarmIds;
+
+  /// The Swarm Home showed when it opened, if one: chosen first unless it is
+  /// paused.
+  final String? openedFrom;
   final DateTime Function() now;
 
   /// The phone's status bar: with the keyboard up the sheet reaches it.
@@ -1027,13 +1057,25 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
   /// rather than send through either.
   late final Map<String, SwarmReader?> _readers;
 
-  List<String> get _writable => [
-    for (final id in widget.swarmIds)
-      if (_readers[id] case final reader?
-          when identical(_inbox.reader(id), reader) &&
-              swarmMayCreateProject(_inbox, id))
-        id,
-  ];
+  /// The Swarms it offers: those that take work first, then the paused,
+  /// each in Home's order.
+  List<String> get _writable {
+    final writable = [
+      for (final id in widget.swarmIds)
+        if (_readers[id] case final reader?
+            when identical(_inbox.reader(id), reader) &&
+                swarmMayCreateProject(_inbox, id))
+          id,
+    ];
+    return [
+      for (final id in writable)
+        if (!_paused(id)) id,
+      for (final id in writable)
+        if (_paused(id)) id,
+    ];
+  }
+
+  bool _paused(String id) => swarmNewProjectPaused(_inbox, id);
 
   /// The steps the Swarm picked holds, if any.
   SwarmNewProjectSteps? get _steps => switch (_readers[_swarmId]) {
@@ -1053,7 +1095,11 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
               (id) => SwarmNewProjectSteps.heldBy(_readers[id]!)?.sent ?? false,
             )
             .firstOrNull ??
-        writable.firstOrNull;
+        swarmNewProjectSwarm(
+          writable,
+          openedFrom: widget.openedFrom,
+          paused: _paused,
+        );
     if (_steps case final steps?) _resume(steps);
     if (_swarmId case final id?) unawaited(_readModelList(id));
   }
@@ -1393,6 +1439,7 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
                 key: const ValueKey('swarm-new-project-swarm'),
                 label: 'Swarm',
                 value: swarmName,
+                detail: snapshot.paused ? 'Paused' : null,
                 onTap: sent || _busy
                     ? null
                     : () => setState(() => _picking = _Pick.swarm),
@@ -1442,6 +1489,9 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
               detail: repository == null
                   ? null
                   : swarmRepositoryKey(repository),
+              // A link is a choice in its list: said here while none is
+              // chosen, so it is found (Dee, 11-01; Lead: no line otherwise).
+              hint: repository == null ? 'Or enter a link' : null,
               onTap: startSent || _busy
                   ? null
                   : () => setState(() => _picking = _Pick.repository),
@@ -1682,6 +1732,8 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
                     key: ValueKey('swarm-new-project-pick-swarm-$id'),
                     leading: SwarmProjectTile(_swarmName(id)),
                     title: _swarmName(id),
+                    // Still choosable: it may resume before Create.
+                    detail: _paused(id) ? 'Paused' : null,
                     trailing: id == swarmId ? tick() : null,
                     onTap: () => setState(() {
                       _picking = null;
@@ -1926,11 +1978,15 @@ class _Field extends StatelessWidget {
     required this.label,
     required this.value,
     this.detail,
+    this.hint,
     required this.onTap,
   });
 
   final String label, value;
   final String? detail;
+
+  /// A faint line under it all: what else a tap offers.
+  final String? hint;
   final VoidCallback? onTap;
 
   @override
@@ -1940,7 +1996,7 @@ class _Field extends StatelessWidget {
     return Semantics(
       button: true,
       enabled: enabled,
-      label: '$label: $value',
+      label: ['$label: $value', ?detail, ?hint].join(', '),
       excludeSemantics: true,
       child: Material(
         color: Colors.transparent,
@@ -1986,6 +2042,19 @@ class _Field extends StatelessWidget {
                             textAlign: TextAlign.end,
                             style: AppType.caption(
                               color: AppPalette.textSecondary,
+                              height: 1.35,
+                            ),
+                          ),
+                        ],
+                        if (hint case final hint?) ...[
+                          const SizedBox(height: 3),
+                          Text(
+                            hint,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.end,
+                            style: AppType.caption(
+                              color: AppPalette.textFaint,
                               height: 1.35,
                             ),
                           ),

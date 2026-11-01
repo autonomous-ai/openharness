@@ -134,6 +134,9 @@ class NewProjectSwarm {
   /// Its reads fail, as a Swarm that does not answer.
   bool unreadable = false;
 
+  /// New work is paused in it.
+  bool paused = false;
+
   /// The person's access to it is taken away: every read is refused.
   bool revoked = false;
 
@@ -167,7 +170,10 @@ class NewProjectSwarm {
     return {
       ...firstLoad(
         tabId: id,
-        head: headData(id: id, name: name, projects: projects),
+        head: {
+          ...headData(id: id, name: name, projects: projects),
+          'paused': paused,
+        },
         machines: machines,
       ),
       'members': [part(me, 1, person(me, role: role))],
