@@ -108,6 +108,10 @@ class SwarmAsks extends ChangeNotifier {
   /// The [SwarmReader.generation] whose asks were read, or need none.
   int _settled = -1;
 
+  /// The read of the lists under way, if any: what waits here is known once
+  /// it ends.
+  Future<void>? get reading => _loading;
+
   /// Decisions being answered: their buttons wait for the backend.
   final Set<String> answering = {};
 

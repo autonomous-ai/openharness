@@ -51,8 +51,10 @@ SwarmNoticeMessage swarmNotice(SwarmNeed need) {
 
 /// Posts a notice for each need that arrives ([SwarmInbox.onArrived]) unless
 /// the person is already looking at it ([quiet]), and takes it down once the
-/// need is gone ([settle]): answered on the desktop, done, or no longer
-/// waiting.
+/// need is gone: answered on the desktop, done, or no longer waiting — missing
+/// from two reads of its Swarm in a row ([swarmRead]), as one read may miss
+/// it and the next have it again. One whose Swarm can no longer be read goes
+/// at once ([settle]).
 ///
 /// The app icon counts the needs, as the drawer's waiting badge does, on each
 /// read and whether or not a notice was posted; it is set only when the count
@@ -70,8 +72,12 @@ class SwarmAnnouncer {
   /// What this phone has told the account already: never told again.
   final SwarmTold told;
 
-  /// Keys of the notices posted and not yet taken down.
-  final _posted = <String>{};
+  /// The notices posted and not yet taken down: each key's Swarm.
+  final _posted = <String, String>{};
+
+  /// Posted notices whose need the last reads of its Swarm missed: how many
+  /// in a row.
+  final _missed = <String, int>{};
 
   /// The count on the app icon; null before the first read.
   int? _badge;
@@ -84,17 +90,23 @@ class SwarmAnnouncer {
     if (quiet(need)) return;
     if (!told.add(need.key)) return;
     final notice = swarmNotice(need);
-    _posted.add(notice.key);
+    _posted[notice.key] = need.swarmId;
+    _missed.remove(notice.key);
     unawaited(notices.showSwarm(notice));
   }
 
-  /// Takes down the notices of needs not in [needs], and counts [needs] on
-  /// the app icon.
-  void settle(List<SwarmNeed> needs) {
+  /// The needs as they are now ([needs]), counted on the app icon. A notice
+  /// whose need is back is no longer missed; one whose Swarm is not among
+  /// [readable] (off the account's list, or its access gone) is taken down at
+  /// once. [readable] null: the list is not read yet, and nothing goes.
+  void settle(List<SwarmNeed> needs, {Set<String>? readable}) {
     final open = {for (final need in needs) need.key};
-    for (final key in _posted.where((key) => !open.contains(key)).toList()) {
-      _posted.remove(key);
-      unawaited(notices.cancelSwarm(key));
+    for (final MapEntry(key: key, value: swarm) in _posted.entries.toList()) {
+      if (open.contains(key)) {
+        _missed.remove(key);
+      } else if (readable != null && !readable.contains(swarm)) {
+        _takeDown(key);
+      }
     }
     if (needs.length != _badge) {
       _badge = needs.length;
@@ -102,9 +114,39 @@ class SwarmAnnouncer {
     }
   }
 
+  /// Swarm [swarmId] was read, and [needs] are what waits now: a notice of
+  /// its whose need this read missed, as the one before did, is taken down.
+  void swarmRead(String swarmId, List<SwarmNeed> needs) {
+    final open = {for (final need in needs) need.key};
+    for (final MapEntry(key: key, value: swarm) in _posted.entries.toList()) {
+      if (swarm != swarmId) continue;
+      if (open.contains(key)) {
+        _missed.remove(key);
+        continue;
+      }
+      final missed = (_missed[key] ?? 0) + 1;
+      if (missed >= 2) {
+        _takeDown(key);
+      } else {
+        _missed[key] = missed;
+      }
+    }
+  }
+
+  void _takeDown(String key) {
+    _posted.remove(key);
+    _missed.remove(key);
+    unawaited(notices.cancelSwarm(key));
+  }
+
   /// Takes every notice and the icon's count down: the account that saw them
   /// signed out, or Swarm was turned off.
-  void clear() => settle(const []);
+  void clear() {
+    for (final key in _posted.keys.toList()) {
+      _takeDown(key);
+    }
+    settle(const []);
+  }
 }
 
 /// The notices this phone has posted for one account, by their keys

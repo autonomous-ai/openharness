@@ -54,6 +54,7 @@ class SwarmSession extends ChangeNotifier {
     );
     inbox
       ..onArrived = announce
+      ..onSwarmRead = _swarmRead
       ..addListener(_needsChanged);
   }
 
@@ -105,6 +106,38 @@ class SwarmSession extends ChangeNotifier {
 
   /// Posts [need]'s notice, unless a Swarm screen is up.
   void announce(SwarmNeed need) => _announcer.announce(need);
+
+  /// Swarms read whose decisions and tags are still being read: what the
+  /// read missed is counted once they are ([_countReads]).
+  final _readsToCount = <String>{};
+
+  void _swarmRead(String id) {
+    _readsToCount.add(id);
+    _countReads();
+  }
+
+  /// Tells the announcer of each Swarm read once what waits there is known:
+  /// a Swarm read again from nothing has no decisions or tags until they are
+  /// read again, which is not their being gone. While they cannot be read,
+  /// nothing counts as missed.
+  void _countReads() {
+    for (final id in _readsToCount.toList()) {
+      final asks = inbox.asks(id);
+      if (asks == null) {
+        _readsToCount.remove(id);
+        continue;
+      }
+      if (asks.loading) continue;
+      // The lists are read again after the Swarm: counted once they are.
+      if (asks.reading case final reading?) {
+        unawaited(reading.whenComplete(() => _disposed ? null : _countReads()));
+        continue;
+      }
+      _readsToCount.remove(id);
+      if (asks.error != null) continue;
+      _announcer.swarmRead(id, inbox.needs);
+    }
+  }
 
   /// A screen shows Swarm [swarmId] closely (a conversation): it is read
   /// every few seconds while Harness is in front, until no screen does.
@@ -180,7 +213,18 @@ class SwarmSession extends ChangeNotifier {
     }
     // What was read of a Swarm off the list, or out of reach, leaves memory.
     peeks.keepOnly([for (final swarm in inbox.swarms) ?inbox.reader(swarm.id)]);
-    _announcer.settle(inbox.needs);
+    _announcer.settle(
+      inbox.needs,
+      // A Swarm off the list, or out of reach, keeps no notice up.
+      readable: inbox.loaded
+          ? {
+              for (final swarm in inbox.swarms)
+                if (inbox.reader(swarm.id) case final reader?
+                    when !reader.accessRevoked)
+                  swarm.id,
+            }
+          : null,
+    );
     // Answered somewhere else meanwhile, or out of the list while the Swarm
     // is read again: nothing is sent, and a card that comes back says so.
     final open = {for (final need in inbox.needs) need.key};
@@ -193,6 +237,7 @@ class SwarmSession extends ChangeNotifier {
       _dropped.add(key);
     }
     if (gone.isNotEmpty) notifyListeners();
+    _countReads();
   }
 
   @override

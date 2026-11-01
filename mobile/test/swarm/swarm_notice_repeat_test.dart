@@ -46,12 +46,17 @@ void main() {
     return h;
   }
 
-  /// One poll of the inbox and the watched Swarm, as Harness in front does.
-  Future<void> poll(SwarmHost h) async {
+  /// One read of the Swarm: through the list (each test moves its last
+  /// change, so it is read), or, [watched], as an open chat reads it on its
+  /// own every 5 seconds.
+  Future<void> poll(SwarmHost h, {bool watched = false}) async {
     final inbox = h.session!.inbox;
-    await inbox.refresh();
-    await settle();
-    await inbox.reader('a')?.refresh();
+    final reader = inbox.reader('a');
+    if (watched && reader != null) {
+      await reader.refresh();
+    } else {
+      await inbox.refresh();
+    }
     await settle();
   }
 
@@ -133,10 +138,42 @@ void main() {
       backend
         ..hidden = i.isOdd
         ..version += 1;
-      await poll(h);
+      await poll(h, watched: i % 4 >= 2);
     }
     expect(told()..sort(), [...all]..sort());
+    expect(
+      notices.cancelled,
+      isEmpty,
+      reason: 'a need back at every other read stays on the lock screen',
+    );
   });
+
+  test(
+    'a need gone for two reads in a row has its notice taken down',
+    () async {
+      final h = host();
+      h.foreground = false;
+      await poll(h);
+      everything();
+      await poll(h);
+      expect(told()..sort(), [...all]..sort());
+
+      // Answered, tagged done, and the work moved on, all elsewhere.
+      backend
+        ..decisions = []
+        ..mentions = []
+        ..groups = [
+          groupData('g1', status: 'working'),
+          groupData('g2', status: 'working'),
+        ]
+        ..version += 1;
+      await poll(h);
+      expect(notices.cancelled, isEmpty, reason: 'one read may miss them');
+      backend.version++;
+      await poll(h);
+      expect(notices.cancelled..sort(), [...all]..sort());
+    },
+  );
 
   test('a session made again tells nothing again, even when its first read '
       'misses what waits', () async {
@@ -212,7 +249,9 @@ void main() {
     final h = host();
     h.foreground = false;
     await poll(h);
-    backend.decision('d1');
+    backend
+      ..decision('d1')
+      ..version += 1;
     await poll(h);
     expect(told(), ['decision:d1']);
 

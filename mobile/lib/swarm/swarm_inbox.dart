@@ -252,6 +252,14 @@ class SwarmInbox extends ChangeNotifier {
   /// phone notice tells.
   void Function(SwarmNeed need)? onArrived;
 
+  /// Swarm [swarmId] was read, and [needs] already hold what that read
+  /// found: what takes a notice down once its need stays gone.
+  void Function(String swarmId)? onSwarmRead;
+
+  /// Swarms read during a read of the list, told once [needs] are worked
+  /// out at its end.
+  final _readDuringList = <String>{};
+
   final _readers = <String, SwarmReader>{};
   final _asks = <String, SwarmAsks>{};
 
@@ -396,6 +404,25 @@ class SwarmInbox extends ChangeNotifier {
       _polling = false;
     }
     _rebuild(told: _face != before);
+    final read = _readDuringList.toList();
+    _readDuringList.clear();
+    for (final id in read) {
+      if (_disposed) return;
+      if (_readers.containsKey(id)) onSwarmRead?.call(id);
+    }
+  }
+
+  /// [reader] answered a read: told after the reader's own notify, which
+  /// works out [needs] again, or at the end of the list read under way.
+  void _readerRead(String id, SwarmReader reader) {
+    scheduleMicrotask(() {
+      if (_disposed || !identical(_readers[id], reader)) return;
+      if (_polling) {
+        _readDuringList.add(id);
+      } else {
+        onSwarmRead?.call(id);
+      }
+    });
   }
 
   /// The next quick read while no computer can be asked ([_away]).
@@ -478,6 +505,7 @@ class SwarmInbox extends ChangeNotifier {
       request: request,
       upload: upload,
     )..addListener(_relay);
+    reader.reads.addListener(() => _readerRead(id, reader));
     reader.readMarks = SwarmReadMarks(reader, store: readMarks)
       ..addListener(_relay);
     _asks[id] = SwarmAsks(reader)
