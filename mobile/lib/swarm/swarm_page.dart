@@ -411,11 +411,7 @@ class _SwarmPageState extends State<SwarmPage> {
         SnackBar(
           key: const ValueKey('swarm-mark-all-toast'),
           duration: session.markAllHold,
-          content: Text(
-            held.count == 1
-                ? 'Marked 1 chat read'
-                : 'Marked ${held.count} chats read',
-          ),
+          content: SwarmMarkAllToast(held),
           action: SnackBarAction(label: 'Undo', onPressed: held.undo),
         ),
       );
@@ -788,4 +784,38 @@ class _Unavailable extends StatelessWidget {
       ),
     ],
   );
+}
+
+/// What Mark all read's toast says: how many chats it marked read. When the
+/// marks go before its Undo window ends (the app left the screen or closed,
+/// the account changed), it closes the toast at once: its Undo can do
+/// nothing more. Built only while its toast is the one shown, so it never
+/// closes another.
+class SwarmMarkAllToast extends StatefulWidget {
+  const SwarmMarkAllToast(this.held, {super.key});
+
+  final SwarmMarkAll held;
+
+  @override
+  State<SwarmMarkAllToast> createState() => _SwarmMarkAllToastState();
+}
+
+class _SwarmMarkAllToastState extends State<SwarmMarkAllToast> {
+  @override
+  void initState() {
+    super.initState();
+    unawaited(
+      widget.held.sentEarly.then((early) {
+        if (early && mounted) {
+          ScaffoldMessenger.maybeOf(context)?.hideCurrentSnackBar();
+        }
+      }),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final count = widget.held.count;
+    return Text(count == 1 ? 'Marked 1 chat read' : 'Marked $count chats read');
+  }
 }

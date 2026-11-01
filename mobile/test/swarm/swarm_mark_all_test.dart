@@ -355,13 +355,17 @@ void main() {
   });
 
   group('Home', () {
-    Future<SwarmHost> pump(WidgetTester tester, FakeSwarm fake) async {
+    Future<SwarmHost> pump(
+      WidgetTester tester,
+      FakeSwarm fake, {
+      ValueNotifier<String?>? signedIn,
+    }) async {
       tester.view.physicalSize = const Size(1170, 2532);
       tester.view.devicePixelRatio = 3;
       addTearDown(tester.view.reset);
       final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
         ..value = {PhoneExperiment.swarm};
-      final account = ValueNotifier<String?>(me);
+      final account = signedIn ?? ValueNotifier<String?>(me);
       final host = SwarmHost(
         accountId: () => account.value,
         account: account,
@@ -466,6 +470,43 @@ void main() {
       await tester.pumpAndSettle();
       expect(marksSent(fake), [('g1', 5), ('g2', 4)]);
       expect(button(tester, 'swarm-mark-all-read').onPressed, isNull);
+    });
+
+    testWidgets('the app going to the background sends the marks and '
+        'closes the Undo toast at once', (tester) async {
+      final fake = backend();
+      final host = await pump(tester, fake);
+      host.foreground = true;
+      await tester.tap(key('swarm-mark-all-read'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(find.text('Undo'), findsOneWidget);
+
+      host.foreground = false;
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+
+      expect(marksSent(fake), [('g1', 5), ('g2', 4)]);
+      expect(find.text('Undo'), findsNothing);
+      expect(find.text('Marked 2 chats read'), findsNothing);
+    });
+
+    testWidgets('another account signing in sends the marks and closes the '
+        'Undo toast at once', (tester) async {
+      final fake = backend();
+      final account = ValueNotifier<String?>(me);
+      await pump(tester, fake, signedIn: account);
+      await tester.tap(key('swarm-mark-all-read'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(find.text('Undo'), findsOneWidget);
+
+      account.value = 'person-other';
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+
+      expect(marksSent(fake), [('g1', 5), ('g2', 4)]);
+      expect(find.text('Undo'), findsNothing);
     });
 
     testWidgets('access lost while Home is open: the held marks are never '
