@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/phone/voice_input_controller.dart';
-import 'package:harness_mobile/phone/voice_mic_face.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
@@ -17,10 +16,11 @@ import 'swarm_fixture.dart';
 
 /// Talking instead of typing in a thread (Dee, 11-01: "how do I voice in a
 /// thread?"): the main chat's mic, in the thread's reply box beside Send. Tap
-/// to talk, tap again and the box goes as a reply — to the chat too with Also
-/// send. A take goes, nothing of it written or sent, once the person can no
-/// longer reply there. The mic itself: `swarm_chat_voice_test` and
-/// `swarm_chat_dictation_test`.
+/// to talk; while talking the toolbar is cancel, the wave and stop. Voice never
+/// sends by itself (Tony, 11-01): stop leaves the words in the box, and Send
+/// posts them as a reply — to the chat too with Also send. A take goes,
+/// nothing of it written or sent, once the person can no longer reply there.
+/// The mic itself: `swarm_chat_voice_test` and `swarm_chat_dictation_test`.
 void main() {
   const messages = '/api/super-tabs/$tab/conversations/g1/messages';
   const commands = '/api/super-tabs/$tab/commands';
@@ -163,6 +163,18 @@ void main() {
     await frames(tester);
   }
 
+  /// The voice row's stop: the take ends, its words left in the box.
+  Future<void> stop(WidgetTester tester) async {
+    await tester.tap(inBox(key('swarm-voice-stop')));
+    await frames(tester);
+  }
+
+  /// The voice row's cancel: what the take added leaves the box.
+  Future<void> cancel(WidgetTester tester) async {
+    await tester.tap(inBox(key('swarm-voice-cancel')));
+    await frames(tester);
+  }
+
   String box(WidgetTester tester) => tester
       .widget<TextField>(
         find.descendant(
@@ -192,17 +204,21 @@ void main() {
     await frames(tester);
   }
 
-  testWidgets('the thread\'s reply box has the main chat\'s mic, just left of '
-      'Send', (tester) async {
+  testWidgets('the thread\'s reply box: +, Also send, then the main chat\'s '
+      'mic just left of Send, in one row', (tester) async {
     await pump(tester);
 
     expect(inBox(key('swarm-mic')), findsOneWidget);
     final mic = tester.getCenter(inBox(key('swarm-mic')));
     final send = tester.getCenter(key('swarm-thread-send'));
     final attach = tester.getCenter(key('swarm-thread-attach'));
-    expect(mic.dy, send.dy, reason: 'in Send\'s row');
+    final also = tester.getCenter(key('swarm-thread-also-send'));
+    for (final other in [send, attach, also]) {
+      expect(mic.dy, other.dy, reason: 'in one row');
+    }
+    expect(attach.dx, lessThan(also.dx), reason: '+ moved to the left');
+    expect(also.dx, lessThan(mic.dx));
     expect(mic.dx, lessThan(send.dx));
-    expect(mic.dx, greaterThan(attach.dx));
   });
 
   testWidgets('with no voice input the reply box has no mic', (tester) async {
@@ -212,22 +228,28 @@ void main() {
     expect(key('swarm-thread-send'), findsOneWidget);
   });
 
-  testWidgets('a second tap sends what was said as a reply in the thread, '
-      'not to the chat', (tester) async {
+  testWidgets('stop leaves what was said in the reply box and sends nothing; '
+      'Send then posts it as a reply in the thread, not to the chat', (
+    tester,
+  ) async {
     await pump(tester);
     stt.replies.add('ship the fix today');
 
     await tapMic(tester);
     expect(recorder.recording, isTrue);
-    expect(
-      tester.widget<VoiceMicCore>(find.byType(VoiceMicCore)).face,
-      VoiceMicFace.listening,
-    );
+    expect(inBox(key('swarm-voice-stop')), findsOneWidget);
 
-    await tapMic(tester);
+    await stop(tester);
     await tester.pumpAndSettle();
 
     expect(recorder.recording, isFalse);
+    expect(fake.commands, isEmpty, reason: 'voice never sends by itself');
+    expect(box(tester), 'ship the fix today');
+    expect(inBox(key('swarm-voice-stop')), findsNothing);
+
+    await tester.tap(key('swarm-thread-send'));
+    await tester.pumpAndSettle();
+
     expect(fake.commands.single, {
       'type': 'message.send',
       'conversationId': 'g1',
@@ -245,23 +267,40 @@ void main() {
     stt.replies.add('ship the fix');
 
     await tapMic(tester);
-    await tapMic(tester);
+    await stop(tester);
+    await tester.pumpAndSettle();
+    expect(box(tester), 'Nova: ship the fix');
+    expect(fake.commands, isEmpty);
+
+    await tester.tap(key('swarm-thread-send'));
     await tester.pumpAndSettle();
 
     expect(fake.commands.single['text'], 'Nova: ship the fix');
     expect(fake.commands.single['replyTo'], 'm1');
   });
 
-  testWidgets('with Also send ticked, a take goes to the chat too', (
-    tester,
-  ) async {
+  testWidgets('Also send ticked, a take, stop, then Send posts to the chat '
+      'too: the tick survives the take', (tester) async {
     await pump(tester);
     await tester.tap(key('swarm-thread-also-send'));
     await tester.pump();
     stt.replies.add('also for everyone');
 
     await tapMic(tester);
-    await tapMic(tester);
+    expect(key('swarm-thread-also-send'), findsNothing, reason: 'hidden');
+    await stop(tester);
+    await tester.pumpAndSettle();
+    expect(fake.commands, isEmpty);
+    expect(
+      tester
+          .widget<Semantics>(key('swarm-thread-also-send'))
+          .properties
+          .checked,
+      isTrue,
+      reason: 'still ticked after the take',
+    );
+
+    await tester.tap(key('swarm-thread-send'));
     await tester.pumpAndSettle();
 
     expect(fake.commands.single['text'], 'also for everyone');
@@ -269,11 +308,11 @@ void main() {
     expect(fake.commands.single['alsoSend'], isTrue);
   });
 
-  // After #2471 a reply on its way no longer holds the box: a take that ends
-  // meanwhile goes as the next reply, as Send would, and the first keeps its
-  // own text.
-  testWidgets('a take ending while a reply is still on its way goes as the '
-      'next reply, in order', (tester) async {
+  // After #2471 a reply on its way no longer holds the box: a take stopped
+  // meanwhile leaves its words for the next reply, which Send posts after the
+  // first, and the first keeps its own text.
+  testWidgets('a take stopped while a reply is still on its way: Send posts '
+      'it as the next reply, in order', (tester) async {
     await pump(tester);
     final first = Completer<Object?>();
     fake.routes[commands] = (_) =>
@@ -287,7 +326,11 @@ void main() {
 
     stt.replies.add('spoken reply');
     await tapMic(tester);
-    await tapMic(tester);
+    await stop(tester);
+    await frames(tester);
+    expect(box(tester), 'spoken reply');
+    expect(fake.commands, hasLength(1), reason: 'stop sends nothing');
+    await tester.tap(key('swarm-thread-send'));
     await frames(tester);
     first.complete({'result': <String, dynamic>{}});
     await tester.pumpAndSettle();
@@ -305,11 +348,94 @@ void main() {
     await pump(tester);
 
     await tapMic(tester);
-    await tapMic(tester);
+    await stop(tester);
     await tester.pumpAndSettle();
 
     expect(fake.commands, isEmpty);
     expect(inBox(key('swarm-thread-voice-note')), findsOneWidget);
+  });
+
+  testWidgets('during a take the toolbar is cancel, the wave and stop: no '
+      'Send, Also send, + or X, which come back after stop', (tester) async {
+    await pump(tester);
+    await tester.enterText(key('swarm-thread-field'), 'Nova:');
+    await tester.pump();
+    expect(inBox(key('swarm-thread-clear')), findsOneWidget);
+    stt.replies.add('ship it');
+
+    await tapMic(tester);
+
+    for (final gone in [
+      'swarm-thread-send',
+      'swarm-thread-also-send',
+      'swarm-thread-attach',
+      'swarm-thread-clear',
+      'swarm-mic',
+    ]) {
+      expect(inBox(key(gone)), findsNothing, reason: gone);
+    }
+    for (final shown in [
+      'swarm-voice-cancel',
+      'swarm-voice-wave',
+      'swarm-voice-stop',
+    ]) {
+      expect(inBox(key(shown)), findsOneWidget, reason: shown);
+    }
+
+    await stop(tester);
+    await tester.pumpAndSettle();
+
+    for (final back in [
+      'swarm-thread-send',
+      'swarm-thread-also-send',
+      'swarm-thread-attach',
+      'swarm-thread-clear',
+      'swarm-mic',
+    ]) {
+      expect(inBox(key(back)), findsOneWidget, reason: back);
+    }
+    expect(inBox(key('swarm-voice-stop')), findsNothing);
+    expect(fake.commands, isEmpty);
+  });
+
+  testWidgets('cancel throws the take away: nothing transcribed, the box as '
+      'it was before, nothing sent', (tester) async {
+    await pump(tester);
+    await tester.enterText(key('swarm-thread-field'), 'Nova:');
+    await tester.pump();
+    stt.replies.add('never said');
+
+    await tapMic(tester);
+    expect(recorder.recording, isTrue);
+    await cancel(tester);
+    await tester.pumpAndSettle();
+
+    expect(recorder.recording, isFalse);
+    expect(recorder.cancels, 1);
+    expect(stt.calls, isEmpty, reason: 'nothing leaves the phone');
+    expect(box(tester), 'Nova:');
+    expect(fake.commands, isEmpty);
+    expect(inBox(key('swarm-mic')), findsOneWidget);
+  });
+
+  testWidgets('cancel while the take is transcribed puts nothing in the box', (
+    tester,
+  ) async {
+    await pump(tester);
+    stt.pending = Completer<String>();
+    await tapMic(tester);
+    await stop(tester);
+    expect(stt.calls, hasLength(1), reason: 'the take is being transcribed');
+    expect(inBox(key('swarm-voice-stop')), findsNothing, reason: 'busy');
+    expect(inBox(key('swarm-voice-cancel')), findsOneWidget);
+
+    await cancel(tester);
+    stt.pending!.complete('too late');
+    await tester.pumpAndSettle();
+
+    expect(box(tester), isEmpty);
+    expect(fake.commands, isEmpty);
+    expect(inBox(key('swarm-mic')), findsOneWidget);
   });
 
   testWidgets('taken out of the chat mid-take: the microphone closes, and '
@@ -336,7 +462,7 @@ void main() {
     final host = await pump(tester);
     stt.pending = Completer<String>();
     await tapMic(tester);
-    await tapMic(tester);
+    await stop(tester);
     expect(stt.calls, hasLength(1), reason: 'the take is being transcribed');
 
     await reread(tester, host, listed: false);
@@ -437,8 +563,10 @@ void main() {
     late FakeDictation dictation;
     setUp(() => dictation = FakeDictation());
 
-    testWidgets('words show in the reply box as they are said; the second '
-        'tap sends them as a reply', (tester) async {
+    testWidgets('words show in the reply box as they are said; stop keeps '
+        'them and sends nothing, and Send posts them as a reply', (
+      tester,
+    ) async {
       await pump(tester, dictation: dictation);
 
       await tapMic(tester);
@@ -447,13 +575,39 @@ void main() {
       expect(box(tester), 'looks good to me');
       expect(fake.commands, isEmpty);
 
-      await tapMic(tester);
+      await stop(tester);
       await tester.pumpAndSettle();
 
       expect(dictation.stops, 1);
+      expect(box(tester), 'looks good to me');
+      expect(fake.commands, isEmpty, reason: 'voice never sends by itself');
+
+      await tester.tap(key('swarm-thread-send'));
+      await tester.pumpAndSettle();
+
       expect(fake.commands.single['text'], 'looks good to me');
       expect(fake.commands.single['replyTo'], 'm1');
       expect(box(tester), isEmpty);
+    });
+
+    testWidgets('cancel takes back what the take added and keeps what was '
+        'typed before it', (tester) async {
+      await pump(tester, dictation: dictation);
+      await tester.enterText(key('swarm-thread-field'), 'Nova:');
+      await tester.pump();
+
+      await tapMic(tester);
+      dictation.say('scrap that');
+      await frames(tester);
+      expect(box(tester), 'Nova: scrap that');
+
+      await cancel(tester);
+      await tester.pumpAndSettle();
+
+      expect(box(tester), 'Nova:');
+      expect(dictation.cancels, 1);
+      expect(dictation.listening, isFalse);
+      expect(fake.commands, isEmpty);
     });
 
     testWidgets('taken out of the chat while listening: the recognizer stops, '
