@@ -13,6 +13,7 @@ import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
 
 import 'identity.dart';
+import 'swarm_invites_sheet.dart';
 import 'model.dart';
 import 'swarm_leaderboard_reader.dart';
 import 'swarm_reader.dart';
@@ -389,6 +390,7 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
               ),
               title: 'Leaderboard',
               subtitle: project?.name,
+              trailing: _inviteButton(),
             ),
             Expanded(child: board),
           ],
@@ -409,11 +411,17 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
     return SwarmProjectSheetFrame(
       title: 'Leaderboard',
       closeKey: 'swarm-leaderboard-close',
-      trailing: _WeekButton(
-        label: swarmWeekName(reader?.week, current),
-        onTap: reader == null
-            ? null
-            : () => unawaited(_pickWeek(context, reader, current)),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ?_inviteButton(),
+          _WeekButton(
+            label: swarmWeekName(reader?.week, current),
+            onTap: reader == null
+                ? null
+                : () => unawaited(_pickWeek(context, reader, current)),
+          ),
+        ],
       ),
       child: RefreshIndicator(
         // The Swarm names its people, and the board scores them.
@@ -634,6 +642,14 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
         if (_week == shown) _week = null;
       }),
     );
+  }
+
+  /// Invite people beside the people, as on the desktop's Humans board: it
+  /// shows only to the Swarm's owner ([SwarmInviteButton]).
+  Widget? _inviteButton() {
+    final session = _session, swarm = _swarm;
+    if (session == null || swarm == null || _lost) return null;
+    return SwarmInviteButton(session: session, reader: swarm);
   }
 
   /// The four weeks the board keeps, this one first, in a sheet.
