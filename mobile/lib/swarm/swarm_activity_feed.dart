@@ -137,9 +137,8 @@ class SwarmActivityFeed extends ChangeNotifier {
       !entry.read || _newThisVisit.contains(entry.id);
 
   /// Replies not read on any device: what the Activity badge adds.
-  int get unreadReplies => items
-      .where((e) => e.kind == SwarmActivityKind.reply && !e.read)
-      .length;
+  int get unreadReplies =>
+      items.where((e) => e.kind == SwarmActivityKind.reply && !e.read).length;
 
   /// Activity is in sight: reads now; what is unread stays bold until
   /// [closed].
@@ -205,8 +204,11 @@ class SwarmActivityFeed extends ChangeNotifier {
         body: {'through': through.toUtc().toIso8601String()},
       );
     } catch (_) {
-      // Unread again at the next read, which this asks for.
-      if (!_disposed && reader.generation == generation) _digest = null;
+      // Unread again as the server still has it: read once more now.
+      if (!_disposed && reader.generation == generation) {
+        _digest = null;
+        unawaited(load());
+      }
     }
   }
 

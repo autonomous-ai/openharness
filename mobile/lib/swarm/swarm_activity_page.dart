@@ -197,7 +197,10 @@ class _SwarmActivityViewState extends State<SwarmActivityView> {
                   key: ValueKey('swarm-activity-filter-${filter.name}'),
                   filter: filter,
                   label: activity.label(filter),
-                  count: _items(activity, filter).where(activity.waiting).length,
+                  count: _items(
+                    activity,
+                    filter,
+                  ).where(activity.waiting).length,
                   selected: filter == _filter,
                   onTap: () => setState(() => _filter = filter),
                 ),
@@ -273,17 +276,15 @@ class _SwarmActivityViewState extends State<SwarmActivityView> {
     ];
   }
 
-  static String _nothing(
-    SwarmActivityFilter filter, {
-    required bool replies,
-  }) => switch (filter) {
-    SwarmActivityFilter.needsYou => 'Nothing needs you.',
-    SwarmActivityFilter.mentions => 'No one tagged you.',
-    SwarmActivityFilter.threads when replies =>
-      'No replies to your messages yet.',
-    SwarmActivityFilter.threads => 'No threads with you yet.',
-    SwarmActivityFilter.reactions => 'No reactions to you yet.',
-  };
+  static String _nothing(SwarmActivityFilter filter, {required bool replies}) =>
+      switch (filter) {
+        SwarmActivityFilter.needsYou => 'Nothing needs you.',
+        SwarmActivityFilter.mentions => 'No one tagged you.',
+        SwarmActivityFilter.threads when replies =>
+          'No replies to your messages yet.',
+        SwarmActivityFilter.threads => 'No threads with you yet.',
+        SwarmActivityFilter.reactions => 'No reactions to you yet.',
+      };
 
   Widget _row(
     BuildContext context,
