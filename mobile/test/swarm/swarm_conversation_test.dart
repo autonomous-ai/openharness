@@ -43,6 +43,7 @@ void main() {
     String role = 'owner',
     bool archived = false,
     Map<String, int> readMarks = const {},
+    int? mainSequence,
   }) {
     final swarm = FakeSwarm();
     Map<String, dynamic> g1(int seq) => {
@@ -53,6 +54,7 @@ void main() {
         lastMessageSequence: seq,
       ),
       'archived': archived,
+      'lastMainSequence': ?mainSequence,
     };
     swarm.routes['/api/super-tabs/$tab/parts'] = (_) => {
       ...firstLoad(groups: [g1(sequence)], derived: {'readMarks': readMarks}),
@@ -1221,21 +1223,21 @@ void main() {
       return (marks: marks, sent: sent);
     }
 
-    /// A change read in which g1 moved on to [sequence].
-    void moveOn(FakeSwarm swarm, int sequence) =>
+    /// A change read in which g1 moved on to [sequence], its main stream to
+    /// [main] where the server says it.
+    void moveOn(FakeSwarm swarm, int sequence, {int? main}) =>
         swarm.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
           cursor: 'c3',
           groups: [
-            part(
-              'g1',
-              9 + sequence,
-              groupData(
+            part('g1', 9 + sequence, {
+              ...groupData(
                 'g1',
                 title: 'Fix login',
                 agentIds: const ['agent-lead', 'agent-builder'],
                 lastMessageSequence: sequence,
               ),
-            ),
+              'lastMainSequence': ?main,
+            }),
           ],
         );
 
@@ -1383,7 +1385,7 @@ void main() {
     test('an open chat whose newest message is a reply only in a thread is '
         'read through its newest message in the main stream, and a reply '
         'only in a thread arriving later marks nothing', () async {
-      final r = rig(sequence: 3, readMarks: const {'g1': 1});
+      final r = rig(sequence: 3, readMarks: const {'g1': 1}, mainSequence: 2);
       final m = marked(r);
       r.swarm.routes[messages] = (_) => {
         'messages': [
@@ -1406,7 +1408,7 @@ void main() {
         ],
         'next': null,
       };
-      moveOn(r.swarm, 4);
+      moveOn(r.swarm, 4, main: 2);
       await r.reader.refresh();
       await settle();
 
@@ -1417,7 +1419,7 @@ void main() {
 
     test('a chat read before, opened again with no network, is read through '
         'the newest main-stream message it kept', () async {
-      final r = rig(sequence: 3, readMarks: const {'g1': 1});
+      final r = rig(sequence: 3, readMarks: const {'g1': 1}, mainSequence: 2);
       final m = marked(r);
       r.swarm.routes[messages] = (_) => {
         'messages': [
@@ -1447,7 +1449,7 @@ void main() {
 
     test('a chat opened at a reply only in a thread is read through the '
         'main-stream message before it', () async {
-      final r = rig(sequence: 4);
+      final r = rig(sequence: 4, mainSequence: 4);
       final m = marked(r);
       r.swarm.routes[messages] = (_) => {
         'messages': [
@@ -1465,6 +1467,49 @@ void main() {
       await settle();
 
       expect(m.sent, [2]);
+    });
+
+    test('a reply also sent to the chat is in the main stream, and moves '
+        'the mark when it is the newest', () async {
+      final r = rig(sequence: 3, readMarks: const {'g1': 1}, mainSequence: 3);
+      final m = marked(r);
+      r.swarm.routes[messages] = (_) => {
+        'messages': [
+          {
+            ...message('m3', 3, text: 'also in the chat'),
+            'thread': 'm1',
+            'alsoInChat': true,
+          },
+          message('m2', 2),
+          {...message('m1', 1), 'thread': 'm1'},
+        ],
+        'next': null,
+      };
+
+      await open(r.reader);
+      await settle();
+
+      expect(m.sent, [3]);
+    });
+
+    test('a server too old to say a chat\'s newest main-stream message is '
+        'read through its newest message, as on the desktop', () async {
+      final r = rig(sequence: 3, readMarks: const {'g1': 1});
+      final m = marked(r);
+      r.swarm.routes[messages] = (_) => {
+        'messages': [
+          {...message('m3', 3, text: 'in the thread'), 'thread': 'm1'},
+          message('m2', 2),
+          {...message('m1', 1), 'thread': 'm1'},
+        ],
+        'next': null,
+      };
+
+      await open(r.reader);
+      await settle();
+
+      expect(r.reader.snapshot!.conversation('g1')!.lastMainSequence, isNull);
+      expect(m.sent, [3]);
     });
 
     test('a mark the server holds ahead of what the chat shows is neither '
