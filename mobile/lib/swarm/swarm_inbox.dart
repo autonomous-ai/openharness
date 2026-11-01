@@ -12,6 +12,7 @@ import 'swarm_home_keeper.dart';
 import 'swarm_read_marks.dart';
 import 'swarm_reader.dart';
 import 'swarm_request.dart';
+import 'swarm_threads.dart';
 import 'waiting_work.dart';
 
 /// One of the account's Swarms, as the list names it.
@@ -254,6 +255,7 @@ class SwarmInbox extends ChangeNotifier {
 
   final _readers = <String, SwarmReader>{};
   final _asks = <String, SwarmAsks>{};
+  final _threads = <String, SwarmThreads>{};
 
   /// Each Swarm's waiting work as last seen: null until its first read, whose
   /// waiting work is not news.
@@ -279,6 +281,15 @@ class SwarmInbox extends ChangeNotifier {
 
   /// [id]'s decisions and tags, while it is listed.
   SwarmAsks? asks(String id) => _asks[id];
+
+  /// [id]'s followed threads, while it is listed: made when first asked for,
+  /// and read only while something shows it ([SwarmThreads]).
+  SwarmThreads? threads(String id) {
+    if (_disposed) return null;
+    final reader = _readers[id];
+    if (reader == null) return null;
+    return _threads[id] ??= SwarmThreads(reader, asks: _asks[id]);
+  }
 
   bool get shown => _shown;
 
@@ -494,6 +505,7 @@ class SwarmInbox extends ChangeNotifier {
   /// still holds of it is taken back ([SwarmReader.revoke]) before it is
   /// dropped.
   void _drop(String id, {bool lost = true}) {
+    final threads = _threads.remove(id);
     _asks.remove(id)?.dispose();
     final reader = _readers.remove(id)?..removeListener(_relay);
     if (reader != null) {
@@ -502,6 +514,7 @@ class SwarmInbox extends ChangeNotifier {
       // the inbox closing keeps them, written now, for the next one.
       if (!lost) marks?.dispose();
       reader.revoke();
+      threads?.dispose();
       if (lost) marks?.dispose();
       reader.dispose();
     }

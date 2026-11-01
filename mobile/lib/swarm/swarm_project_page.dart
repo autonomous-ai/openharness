@@ -23,6 +23,7 @@ import 'swarm_inbox.dart';
 import 'swarm_leaderboard.dart';
 import 'swarm_message_row.dart';
 import 'swarm_pm_chat.dart';
+import 'swarm_project_status.dart';
 import 'swarm_project_tabs.dart';
 import 'swarm_project_tasks.dart';
 import 'swarm_project_team.dart';
@@ -642,6 +643,16 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
                         _messageId = _decisionId = null;
                       }),
                     ),
+                  ),
+                // Over the chat, outside it: it never moves the composer.
+                if (_tab == SwarmProjectTab.chat)
+                  SwarmProjectStatusCard(
+                    session: session,
+                    reader: reader,
+                    swarmId: widget.swarmId,
+                    projectId: project.id,
+                    // Read here, above the Scaffold that takes it away.
+                    typing: MediaQuery.viewInsetsOf(context).bottom > 0,
                   ),
               ],
             ),
