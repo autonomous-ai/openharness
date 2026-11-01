@@ -1213,111 +1213,147 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
           ),
         ),
       if (_buddy case final buddy?) SwarmBuddyBar(actions: buddy),
+      // The composer takes what it needs, up to all of the room under the
+      // header: on a short phone with the keyboard up its field gives up lines
+      // before anything overflows; the messages have the rest.
       Expanded(
-        child: Stack(
-          children: [
-            Positioned.fill(
-              child: ListenableBuilder(
-                listenable: Listenable.merge([c, _held]),
-                builder: (context, _) =>
-                    _messages(context, session, c, view, tty),
-              ),
-            ),
-            // At the top of the list, as Jump to latest is at its foot: the
-            // two can show at once.
-            Positioned(
-              left: 0,
-              right: 0,
-              top: 8,
-              child: ListenableBuilder(
-                listenable: Listenable.merge([c, _offersUnread]),
-                builder: (context, _) =>
-                    _offersUnread.value &&
-                        c.state != SwarmChatState.lost &&
-                        c.stream.isNotEmpty
-                    ? Center(
-                        child: SwarmJumpToUnreadPill(onTap: _jumpToFirstUnread),
-                      )
-                    : const SizedBox.shrink(),
-              ),
-            ),
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 8,
-              child: ListenableBuilder(
-                listenable: Listenable.merge([c, _held, _farBack]),
-                builder: (context, _) => switch (_waiting(c)) {
-                  0 when !_farBack.value || c.state == SwarmChatState.lost =>
-                    const SizedBox.shrink(),
-                  final count => Center(
-                    child: SwarmNewPill(count: count, onTap: _toFoot),
-                  ),
-                },
-              ),
-            ),
-          ],
-        ),
-      ),
-      ListenableBuilder(
-        listenable: c,
-        builder: (context, _) {
-          final note = _finding ? 'Finding the original message…' : _note;
-          return Column(
+        child: LayoutBuilder(
+          builder: (context, below) => Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              if (note != null)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(
-                    AppSpace.screenInset,
-                    AppSpace.s,
-                    AppSpace.screenInset,
-                    0,
-                  ),
-                  child: Text(
-                    note,
-                    key: const ValueKey('swarm-find-note'),
-                    style: swarmChatText(13.5, color: AppPalette.textSecondary),
-                  ),
+              Expanded(
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: ListenableBuilder(
+                        listenable: Listenable.merge([c, _held]),
+                        builder: (context, _) =>
+                            _messages(context, session, c, view, tty),
+                      ),
+                    ),
+                    // At the top of the list, as Jump to latest is at its foot: the
+                    // two can show at once.
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      top: 8,
+                      child: ListenableBuilder(
+                        listenable: Listenable.merge([c, _offersUnread]),
+                        builder: (context, _) =>
+                            _offersUnread.value &&
+                                c.state != SwarmChatState.lost &&
+                                c.stream.isNotEmpty
+                            ? Center(
+                                child: SwarmJumpToUnreadPill(
+                                  onTap: _jumpToFirstUnread,
+                                ),
+                              )
+                            : const SizedBox.shrink(),
+                      ),
+                    ),
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 8,
+                      child: ListenableBuilder(
+                        listenable: Listenable.merge([c, _held, _farBack]),
+                        builder: (context, _) => switch (_waiting(c)) {
+                          0
+                              when !_farBack.value ||
+                                  c.state == SwarmChatState.lost =>
+                            const SizedBox.shrink(),
+                          final count => Center(
+                            child: SwarmNewPill(count: count, onTap: _toFoot),
+                          ),
+                        },
+                      ),
+                    ),
+                  ],
                 ),
-              // Unless the body says it already: not open, or no conversation
-              // and nothing read.
-              if (c.error case final error?
-                  when c.state != SwarmChatState.lost &&
-                      (view.known || c.messages.isNotEmpty))
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(
-                    AppSpace.screenInset,
-                    AppSpace.s,
-                    AppSpace.screenInset,
-                    0,
-                  ),
-                  child: Text(
-                    error,
-                    key: const ValueKey('swarm-post-error'),
-                    style: swarmChatText(13.5, color: tty.red),
-                  ),
+              ),
+              ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: below.maxHeight),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    ListenableBuilder(
+                      listenable: c,
+                      builder: (context, _) {
+                        final note = _finding
+                            ? 'Finding the original message…'
+                            : _note;
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            if (note != null)
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  AppSpace.screenInset,
+                                  AppSpace.s,
+                                  AppSpace.screenInset,
+                                  0,
+                                ),
+                                child: Text(
+                                  note,
+                                  key: const ValueKey('swarm-find-note'),
+                                  style: swarmChatText(
+                                    13.5,
+                                    color: AppPalette.textSecondary,
+                                  ),
+                                ),
+                              ),
+                            // Unless the body says it already: not open, or no conversation
+                            // and nothing read.
+                            if (c.error case final error?
+                                when c.state != SwarmChatState.lost &&
+                                    (view.known || c.messages.isNotEmpty))
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  AppSpace.screenInset,
+                                  AppSpace.s,
+                                  AppSpace.screenInset,
+                                  0,
+                                ),
+                                child: Text(
+                                  error,
+                                  key: const ValueKey('swarm-post-error'),
+                                  style: swarmChatText(13.5, color: tty.red),
+                                ),
+                              ),
+                          ],
+                        );
+                      },
+                    ),
+                    if (view.canPost)
+                      Flexible(
+                        child: ListenableBuilder(
+                          listenable: Listenable.merge([c.composer, _voice]),
+                          builder: (context, _) =>
+                              _composer(c, tty, hint: view.hint),
+                        ),
+                      )
+                    else if (view.known)
+                      Padding(
+                        padding: const EdgeInsets.all(AppSpace.l),
+                        child: Text(
+                          view.archived
+                              ? 'This chat is archived.'
+                              : 'You can read this chat, not post in it.',
+                          key: const ValueKey('swarm-read-only'),
+                          style: swarmChatText(
+                            13.5,
+                            color: AppPalette.textSecondary,
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
+              ),
             ],
-          );
-        },
-      ),
-      if (view.canPost)
-        ListenableBuilder(
-          listenable: Listenable.merge([c.composer, _voice]),
-          builder: (context, _) => _composer(c, tty, hint: view.hint),
-        )
-      else if (view.known)
-        Padding(
-          padding: const EdgeInsets.all(AppSpace.l),
-          child: Text(
-            view.archived
-                ? 'This chat is archived.'
-                : 'You can read this chat, not post in it.',
-            key: const ValueKey('swarm-read-only'),
-            style: swarmChatText(13.5, color: AppPalette.textSecondary),
           ),
         ),
+      ),
     ],
   );
 
@@ -1863,6 +1899,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           if (query != null && snapshot != null && !talking)
@@ -1983,56 +2020,61 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                 style: AppType.caption(color: AppPalette.textSecondary),
               ),
             ),
-          SwarmComposerCard(
-            focus: _focus,
-            chips: c.files.files.isEmpty ? null : SwarmOutgoingChips(box: c),
-            field: SwarmMessageField(
-              controller: _text,
+          Flexible(
+            child: SwarmComposerCard(
               focus: _focus,
-              hint: hint,
-              clearable: !talking,
-              imagePaste: swarmSendsFiles
-                  ? SwarmImagePaste(
-                      enabled: !c.uploading && c.files.room > 0,
-                      onImage: (image) => unawaited(_pasteImage(c, image)),
-                    )
-                  : null,
+              fit: true,
+              chips: c.files.files.isEmpty ? null : SwarmOutgoingChips(box: c),
+              field: SwarmMessageField(
+                controller: _text,
+                focus: _focus,
+                hint: hint,
+                clearable: !talking,
+                imagePaste: swarmSendsFiles
+                    ? SwarmImagePaste(
+                        enabled: !c.uploading && c.files.room > 0,
+                        onImage: (image) => unawaited(_pasteImage(c, image)),
+                      )
+                    : null,
+              ),
+              toolbar: talking
+                  ? SwarmVoiceRow(voice: voice!)
+                  : Row(
+                      children: [
+                        if (swarmSendsFiles)
+                          SwarmAttachButton(
+                            key: const ValueKey('swarm-attach'),
+                            onTap: c.uploading || c.files.room <= 0
+                                ? null
+                                : () => unawaited(_pickFiles(c)),
+                          ),
+                        if (taggable)
+                          _TagChip(
+                            open: query != null,
+                            onTap: () {
+                              c.toggleMention();
+                              _focus.requestFocus();
+                            },
+                          ),
+                        const Spacer(),
+                        if (voice != null) SwarmVoiceMic(voice: voice),
+                        SwarmRoundButton(
+                          key: const ValueKey('swarm-send'),
+                          label: 'Send',
+                          face: 36,
+                          fill: canSend ? AppPalette.accent : ttyRaised(tty),
+                          onTap: canSend ? () => _send(c) : null,
+                          child: Icon(
+                            LucideIcons.arrowUp,
+                            size: 20,
+                            color: canSend
+                                ? AppInk.onFill
+                                : AppPalette.textFaint,
+                          ),
+                        ),
+                      ],
+                    ),
             ),
-            toolbar: talking
-                ? SwarmVoiceRow(voice: voice!)
-                : Row(
-                    children: [
-                      if (swarmSendsFiles)
-                        SwarmAttachButton(
-                          key: const ValueKey('swarm-attach'),
-                          onTap: c.uploading || c.files.room <= 0
-                              ? null
-                              : () => unawaited(_pickFiles(c)),
-                        ),
-                      if (taggable)
-                        _TagChip(
-                          open: query != null,
-                          onTap: () {
-                            c.toggleMention();
-                            _focus.requestFocus();
-                          },
-                        ),
-                      const Spacer(),
-                      if (voice != null) SwarmVoiceMic(voice: voice),
-                      SwarmRoundButton(
-                        key: const ValueKey('swarm-send'),
-                        label: 'Send',
-                        face: 36,
-                        fill: canSend ? AppPalette.accent : ttyRaised(tty),
-                        onTap: canSend ? () => _send(c) : null,
-                        child: Icon(
-                          LucideIcons.arrowUp,
-                          size: 20,
-                          color: canSend ? AppInk.onFill : AppPalette.textFaint,
-                        ),
-                      ),
-                    ],
-                  ),
           ),
         ],
       ),
@@ -3081,7 +3123,6 @@ class SwarmMessageField extends StatelessWidget {
           onTap: focus.requestFocus,
           child: Container(
             key: fieldKey,
-            alignment: Alignment.centerLeft,
             // The right 44 is always kept for the X, so the text does not
             // rewrap as it comes and goes.
             padding: const EdgeInsets.fromLTRB(16, 12, 44, 2),
@@ -3198,10 +3239,16 @@ class SwarmComposerCard extends StatelessWidget {
     required this.field,
     required this.toolbar,
     required this.focus,
+    this.fit = false,
   });
 
   /// The files going with the post; null while there are none.
   final Widget? chips;
+
+  /// Under a height limit, the field gives up lines first (fewer than five,
+  /// then it scrolls): the chat's composer on a short phone with the keyboard
+  /// up. Only where the card's parent bounds its height.
+  final bool fit;
   final Widget field;
   final Widget toolbar;
   final FocusNode focus;
@@ -3231,7 +3278,7 @@ class SwarmComposerCard extends StatelessWidget {
                 padding: const EdgeInsets.fromLTRB(10, 10, 10, 0),
                 child: chips,
               ),
-            field,
+            if (fit) Flexible(child: field) else field,
             Padding(
               padding: const EdgeInsets.fromLTRB(6, 0, 6, 4),
               child: SizedBox(height: 44, child: toolbar),
