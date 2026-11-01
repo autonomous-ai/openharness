@@ -19,8 +19,9 @@ import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 
 /// Review screenshots of the project status card at the top of a project's
-/// chat (Tony 11-01, task 1): open, with the report and a decision waiting,
-/// then folded. On a 390-point phone in both phone themes, from made-up data
+/// chat (Tony 11-01, task 1): open, with the report and a decision waiting
+/// (none among the messages, Dee 11-01), then folded, then the Activity its
+/// "1 needs you" opens. On a 390-point phone in both phone themes, from made-up data
 /// only, to the folder `SWARM_PROJECT_STATUS_SHOTS` names.
 final shots = Platform.environment['SWARM_PROJECT_STATUS_SHOTS'];
 void main() {
@@ -193,12 +194,20 @@ void main() {
         find.byKey(const ValueKey('swarm-project-status-$project')),
         findsOneWidget,
       );
+      // The decision is on the card, never among the messages.
+      expect(find.byKey(const ValueKey('swarm-ask-d1')), findsNothing);
       await capture('open');
       await tester.tap(
         find.byKey(const ValueKey('swarm-project-status-fold-$project')),
       );
       await tester.pumpAndSettle();
       await capture('folded');
+      // "1 needs you" opens Activity on this project, where it is answered.
+      await tester.tap(
+        find.byKey(ValueKey('swarm-project-status-needs-you-$project')),
+      );
+      await tester.pumpAndSettle();
+      await capture('activity');
       await tester.pumpWidget(const SizedBox());
       host.dispose();
     }

@@ -97,8 +97,10 @@ Future<void> attachSwarmFiles(
 
 /// One conversation: its messages, newest at the foot, older ones on demand —
 /// each with who wrote it, their role and when, follow-ups grouped, a reply's
-/// quote leading to its original; the decisions asked of the person in it;
-/// and, for a writer, a composer that posts text, as a reply or with
+/// quote leading to its original; in the person's own Buddy chat, the
+/// decisions asked of them in its project, as Desktop shows them there (no
+/// other chat shows decisions: they are answered in Activity); and, for a
+/// writer, a composer that posts text, as a reply or with
 /// @mentions of the conversation's agents picked as they are typed, and with
 /// files from the photo library, the camera or Files ([swarmSendsFiles]). A
 /// post shows at once and says when it is not confirmed.
@@ -110,14 +112,13 @@ class SwarmConversationPage extends StatefulWidget {
     this.header = true,
     this.buddy,
     this.messageId,
-    this.decisionId,
     this.threadId,
     this.mention,
     this.homeC = false,
   });
 
   final String swarmId, conversationId;
-  final String? messageId, decisionId;
+  final String? messageId;
 
   /// A thread to open over the chat as it opens, when [messageId] is its
   /// root: as Threads opens one on the desktop (`_openThreadFromList`), the
@@ -175,7 +176,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// the one lit for a moment on arrival, the search through earlier pages,
   /// and what to say when it cannot be found.
   String? _target, _lit;
-  String? _decisionTarget;
   bool _noticeHandled = false;
   final _targetKey = GlobalKey();
   Timer? _litTimer;
@@ -350,8 +350,10 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     );
     c.composer.addListener(_drafted);
     c.addListener(_chatMoved);
+    c.addListener(_guardVoice);
     if (widget.mention case final agentId?) c.mention(agentId);
     reader.addListener(_see);
+    reader.addListener(_guardVoice);
     session.inbox.addListener(_see);
     _see();
     _watch();
@@ -423,6 +425,17 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// A read came in: the line, if a failed read left it to place; the notice's
   /// message, once a read has brought what to look for it in; and what is
   /// offered of the line, since the list changed.
+  /// A take goes with the right to post here, as in a thread: the chat lost,
+  /// archived, or the person no longer a writer. Its words land nowhere
+  /// ([SwarmVoice.hide]). Nothing while the chat is still being read.
+  void _guardVoice() {
+    final c = _conversation;
+    if (c == null || c.reader.snapshot == null && !c.reader.accessRevoked) {
+      return;
+    }
+    if (c.state == SwarmChatState.lost || !c.canPost) _voice?.hide();
+  }
+
   void _chatMoved() {
     final c = _conversation;
     if (c == null || !_firstRead) return;
@@ -601,17 +614,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     }
     final view = _view.value = _ChatView.of(session, c, _view.value);
     _seeBuddy(c, view.buddyProject);
-    final decisionId = widget.decisionId;
-    if (!_noticeHandled &&
-        decisionId != null &&
-        _view.value!.decisions.any((need) => need.decision.id == decisionId)) {
-      _noticeHandled = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted || _conversation != c) return;
-        setState(() => _decisionTarget = decisionId);
-        _reveal(c, decisionId, 0);
-      });
-    }
   }
 
   /// What the person does to their Buddy from its chat, while this is their
@@ -632,13 +634,18 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
 
   void _close() {
     final session = _session;
+    // Signed out, another account, or Swarm turned off: the take goes with
+    // the chat it was for.
+    _voice?.hide();
     session?.inbox
       ?..removeListener(_attach)
       ..removeListener(_see);
     if (_conversation case final c?) {
       c.composer.removeListener(_drafted);
       c.removeListener(_chatMoved);
+      c.removeListener(_guardVoice);
       c.reader.removeListener(_see);
+      c.reader.removeListener(_guardVoice);
       c.dispose();
     }
     if (_buddy != widget.buddy) _buddy?.dispose();
@@ -950,7 +957,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     _threadAt = null;
     final landing = _land();
     setState(() {
-      _decisionTarget = null;
       _finding = true;
       _note = null;
     });
@@ -1018,9 +1024,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     final jump = landing ?? _land();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      if (_target != messageId && _decisionTarget != messageId) {
-        return _landed(jump);
-      }
+      if (_target != messageId) return _landed(jump);
       if (_targetKey.currentContext case final row?) {
         unawaited(
           Scrollable.ensureVisible(
@@ -1033,9 +1037,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       }
       final shown = _shown;
       final index = shown.indexWhere(
-        (entry) => _decisionTarget == messageId
-            ? entry is _AskEntry && entry.need.decision.id == messageId
-            : entry is _MessageEntry && entry.message.id == messageId,
+        (entry) => entry is _MessageEntry && entry.message.id == messageId,
       );
       if (!_scroll.hasClients || index < 0 || attempt > 20) {
         return _landed(jump);
@@ -1711,19 +1713,15 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               role,
               coordinator,
               swarmLookKey(_agentLook(asker)),
-              _decisionTarget == need.decision.id,
             ),
-            () => KeyedSubtree(
-              key: _decisionTarget == need.decision.id ? _targetKey : null,
-              child: _Ask(
-                session: session,
-                need: need,
-                grouped: grouped,
-                askerId: asker?.id,
-                role: role,
-                pm: coordinator,
-                picture: asker?.avatar,
-              ),
+            () => _Ask(
+              session: session,
+              need: need,
+              grouped: grouped,
+              askerId: asker?.id,
+              role: role,
+              pm: coordinator,
+              picture: asker?.avatar,
             ),
           );
       }
@@ -2093,17 +2091,18 @@ class _ChatView {
         .where((p) => p.id == group?.projectId)
         .firstOrNull
         ?.name;
-    // A chat not open to the person shows none of its questions either, even
-    // while the decisions read has not caught up.
+    // Only the person's own Buddy chat holds decisions, its project's, as
+    // Desktop shows them above it; every other chat leaves them to Activity
+    // (Dee, 11-01: they blocked the project chat). A chat not open to the
+    // person shows none either, even while the decisions read has not caught
+    // up.
     final decisions = [
-      for (final need in session.inbox.needs)
-        if (group != null &&
-            need is SwarmDecisionNeed &&
-            need.swarmId == reader.tabId &&
-            (need.conversationId == c.id ||
-                (buddyProject != null &&
-                    need.decision.projectId == buddyProject)))
-          need,
+      if (group != null && buddyProject != null)
+        for (final need in session.inbox.needs)
+          if (need is SwarmDecisionNeed &&
+              need.swarmId == reader.tabId &&
+              need.decision.projectId == buddyProject)
+            need,
     ];
     return _ChatView(
       known: group != null,
