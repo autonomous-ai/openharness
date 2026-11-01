@@ -2147,6 +2147,80 @@ void main() {
       expect(key('swarm-reply-bar'), findsNothing);
     });
 
+    testWidgets('in a thread, a tap on a message offers Copy, as in the chat, '
+        'and Copy copies its text (Dee, 11-01)', (tester) async {
+      String? copied;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+            if (call.method == 'Clipboard.setData') {
+              copied = (call.arguments as Map)['text'] as String?;
+            }
+            return null;
+          });
+      addTearDown(
+        () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null),
+      );
+      await pump(tester, threaded());
+      await tester.tap(key('swarm-thread-line-m1'));
+      await tester.pumpAndSettle();
+
+      for (final (id, text) in [('m2', onlyThere), ('m1', root)]) {
+        await tester.tap(inThread(text));
+        await tester.pumpAndSettle();
+        final copy = find.descendant(
+          of: key('swarm-thread-message-$id'),
+          matching: find.text('Copy'),
+        );
+        expect(copy, findsOneWidget, reason: '$id offers Copy');
+        await tester.tap(copy);
+        await tester.pumpAndSettle();
+        expect(copied, text);
+      }
+    });
+
+    testWidgets('in a long thread read to its foot, a tap on the last reply '
+        'brings its Copy into view, above the box', (tester) async {
+      final page = [
+        message('m1', 1, author: 'agent-lead', text: root, thread: 'm1'),
+        for (var i = 2; i <= 21; i++)
+          message(
+            'r$i',
+            i,
+            text: 'Reply $i\nwith a second line',
+            thread: 'm1',
+            replyTo: 'm1',
+            minute: i,
+          ),
+      ];
+      final fake = backend(page, threads: [line('m1', 20, 21)]);
+      fake.routes['$messages?thread=m1'] = (_) => {
+        'messages': page.reversed.toList(),
+        'next': null,
+        'threads': [line('m1', 20, 21)],
+      };
+      await pump(tester, fake);
+      await tester.tap(key('swarm-thread-line-m1'));
+      await tester.pumpAndSettle();
+      for (var i = 0; i < 10; i++) {
+        await tester.drag(key('swarm-thread-messages'), const Offset(0, -2000));
+        await tester.pumpAndSettle();
+      }
+
+      await tester.tap(inThread('Reply 21\nwith a second line'));
+      await tester.pumpAndSettle();
+      final copy = find.descendant(
+        of: key('swarm-thread-message-r21'),
+        matching: find.text('Copy'),
+      );
+      expect(copy, findsOneWidget);
+      expect(
+        tester.getRect(copy).bottom,
+        lessThanOrEqualTo(tester.getRect(key('swarm-thread-messages')).bottom),
+        reason: 'Copy shows, not under the box',
+      );
+    });
+
     testWidgets('a message that is only a code block still opens its thread: '
         'a tap on the code shows Reply, Copy only copies', (tester) async {
       const code = '```\nflutter test\n```';
