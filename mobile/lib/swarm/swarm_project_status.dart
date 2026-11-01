@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -158,59 +160,48 @@ class SwarmProjectStatusCard extends StatelessWidget {
                   _heading(status?.at, waiting.length, folded, chosen),
                   if (!folded)
                     // A long report, or many decisions, scroll inside the
-                    // card, so the chat keeps its room; each keeps a share,
-                    // so a long report never hides what waits on the person.
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxHeight: maxBody),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          if (status != null)
-                            Flexible(
-                              child: SingleChildScrollView(
-                                key: ValueKey(
-                                  'swarm-project-status-body-$projectId',
-                                ),
-                                padding: const EdgeInsets.only(
-                                  right: AppSpace.m,
-                                ),
-                                child: _StatusText(status.text),
-                              ),
+                    // card, so the chat keeps its room. Each part takes what
+                    // it needs; only when both overflow do they share it
+                    // half and half, so a long report never hides what waits
+                    // on the person.
+                    _Shares(
+                      maxHeight: maxBody,
+                      gap: AppSpace.s,
+                      children: [
+                        if (status != null)
+                          SingleChildScrollView(
+                            key: ValueKey(
+                              'swarm-project-status-body-$projectId',
                             ),
-                          if (status != null && waiting.isNotEmpty)
-                            const SizedBox(height: AppSpace.s),
-                          if (waiting.isNotEmpty)
-                            Flexible(
-                              child: SingleChildScrollView(
-                                key: ValueKey(
-                                  'swarm-project-status-needs-$projectId',
-                                ),
-                                child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.stretch,
-                                  children: [
-                                    for (final need in waiting)
-                                      SwarmNeedLine(
-                                        key: ValueKey(
-                                          'swarm-project-status-need-'
-                                          '${need.key}',
-                                        ),
-                                        session: session,
-                                        need: need,
-                                        chevron: LucideIcons.chevronRight300,
-                                        onTap: () => openSwarmNeeds(
-                                          context,
-                                          focus: need.key,
-                                          swarmId: swarmId,
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                              ),
+                            padding: const EdgeInsets.only(right: AppSpace.m),
+                            child: _StatusText(status.text),
+                          ),
+                        if (waiting.isNotEmpty)
+                          SingleChildScrollView(
+                            key: ValueKey(
+                              'swarm-project-status-needs-$projectId',
                             ),
-                        ],
-                      ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                for (final need in waiting)
+                                  SwarmNeedLine(
+                                    key: ValueKey(
+                                      'swarm-project-status-need-${need.key}',
+                                    ),
+                                    session: session,
+                                    need: need,
+                                    chevron: LucideIcons.chevronRight300,
+                                    onTap: () => openSwarmNeeds(
+                                      context,
+                                      focus: need.key,
+                                      swarmId: swarmId,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                      ],
                     ),
                 ],
               ),
@@ -222,8 +213,9 @@ class SwarmProjectStatusCard extends StatelessWidget {
   );
 
   /// "Status · updated 09:52", with how many wait on the person while
-  /// folded, and the fold at its end. While the keyboard folds it, the
-  /// button still says what the person chose.
+  /// folded, and the fold at its end. While the keyboard alone folds it,
+  /// there is no button, only its room: a tap then would save a fold, or an
+  /// unfold, the person never saw.
   Widget _heading(DateTime? at, int waiting, bool folded, bool chosen) => Row(
     children: [
       Expanded(
@@ -252,13 +244,16 @@ class SwarmProjectStatusCard extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
         ),
       ),
-      SwarmIconButton(
-        key: ValueKey('swarm-project-status-fold-$projectId'),
-        label: chosen ? 'Show status' : 'Fold status',
-        icon: chosen ? LucideIcons.chevronDown300 : LucideIcons.chevronUp300,
-        size: 18,
-        onPressed: () => session.home.fold(swarmId, projectId, !chosen),
-      ),
+      if (typing)
+        const SizedBox.square(dimension: 44)
+      else
+        SwarmIconButton(
+          key: ValueKey('swarm-project-status-fold-$projectId'),
+          label: chosen ? 'Show status' : 'Fold status',
+          icon: chosen ? LucideIcons.chevronDown300 : LucideIcons.chevronUp300,
+          size: 18,
+          onPressed: () => session.home.fold(swarmId, projectId, !chosen),
+        ),
     ],
   );
 }
@@ -361,4 +356,102 @@ class _StatusTextState extends State<_StatusText> {
       ),
     );
   }
+}
+
+/// One or two scrolling parts, one over the other, no taller together than
+/// [maxHeight]: each as tall as it needs while they fit; when they do not,
+/// one that needs no more than half keeps all it needs and the other takes
+/// the rest; only when both need more than half does each take half.
+class _Shares extends MultiChildRenderObjectWidget {
+  const _Shares({
+    required this.maxHeight,
+    required this.gap,
+    required super.children,
+  });
+
+  final double maxHeight, gap;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) =>
+      _RenderShares(maxHeight, gap);
+
+  @override
+  void updateRenderObject(BuildContext context, _RenderShares render) => render
+    ..maxHeight = maxHeight
+    ..gap = gap;
+}
+
+class _ShareData extends ContainerBoxParentData<RenderBox> {}
+
+class _RenderShares extends RenderBox
+    with
+        ContainerRenderObjectMixin<RenderBox, _ShareData>,
+        RenderBoxContainerDefaultsMixin<RenderBox, _ShareData> {
+  _RenderShares(this._maxHeight, this._gap);
+
+  double _maxHeight, _gap;
+  set maxHeight(double value) {
+    if (value == _maxHeight) return;
+    _maxHeight = value;
+    markNeedsLayout();
+  }
+
+  set gap(double value) {
+    if (value == _gap) return;
+    _gap = value;
+    markNeedsLayout();
+  }
+
+  @override
+  void setupParentData(RenderBox child) {
+    if (child.parentData is! _ShareData) child.parentData = _ShareData();
+  }
+
+  /// The heights [needs] get within [room], as [_Shares] says.
+  static List<double> share(List<double> needs, double room) {
+    if (needs.fold(0.0, (a, b) => a + b) <= room) return needs;
+    if (needs.length == 1) return [room];
+    final half = room / 2;
+    final [a, b] = needs;
+    if (a <= half) return [a, room - a];
+    if (b <= half) return [room - b, b];
+    return [half, half];
+  }
+
+  @override
+  void performLayout() {
+    final width = constraints.maxWidth;
+    final kids = getChildrenAsList();
+    final gaps = kids.isEmpty ? 0.0 : _gap * (kids.length - 1);
+    final room = math.max(
+      0.0,
+      math.min(_maxHeight, constraints.maxHeight) - gaps,
+    );
+    BoxConstraints within(double height) =>
+        BoxConstraints(minWidth: width, maxWidth: width, maxHeight: height);
+    // What each needs, within all the room: a scroll view is as tall as its
+    // content, up to its bound.
+    final needs = [
+      for (final kid in kids)
+        (kid..layout(within(room), parentUsesSize: true)).size.height,
+    ];
+    final heights = share(needs, room);
+    var y = 0.0;
+    for (final (i, kid) in kids.indexed) {
+      if (heights[i] != needs[i]) {
+        kid.layout(within(heights[i]), parentUsesSize: true);
+      }
+      (kid.parentData! as _ShareData).offset = Offset(0, y);
+      y += kid.size.height + (i < kids.length - 1 ? _gap : 0);
+    }
+    size = constraints.constrain(Size(width, y));
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) =>
+      defaultPaint(context, offset);
+
+  @override
+  bool hitTestChildren(BoxHitTestResult result, {required Offset position}) =>
+      defaultHitTestChildren(result, position: position);
 }

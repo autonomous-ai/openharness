@@ -241,13 +241,10 @@ void main() {
     });
 
     testWidgets('long text scrolls inside the card, which never grows past '
-        'its limit, so the composer stays where it was', (tester) async {
+        'its limit', (tester) async {
       final fake = backend(status: {'text': 'Short', 'at': today});
       await pump(tester, fake);
-      final composer = find.byType(EditableText);
-      expect(composer, findsOneWidget);
       final shortCard = tester.getSize(card).height;
-      final composerAt = tester.getTopLeft(composer).dy;
 
       final long = List.generate(60, (i) => 'Line $i of the report').join('\n');
       fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
@@ -261,7 +258,6 @@ void main() {
         longCard,
         lessThanOrEqualTo(SwarmProjectStatusCard.maxBody + 44 + 8 + 2),
       );
-      expect(tester.getTopLeft(composer).dy, composerAt);
       final body = key('swarm-project-status-body-$project');
       final scrollable = find.descendant(
         of: body,
@@ -272,6 +268,61 @@ void main() {
         greaterThan(0),
       );
     });
+  });
+
+  testWidgets('the card takes its room from the chat alone: folding it gives '
+      'the chat exactly what the card gave up, and the composer stays put', (
+    tester,
+  ) async {
+    final long = List.generate(30, (i) => 'Line $i of the report').join('\n');
+    await pump(
+      tester,
+      backend(status: {'text': long, 'at': today}, decisions: [decision('d1')]),
+    );
+    final chat = key('swarm-messages');
+    final composer = find.byType(EditableText);
+    final openCard = tester.getSize(card).height;
+    final openChat = tester.getSize(chat).height;
+    final openComposer = tester.getTopLeft(composer).dy;
+
+    await tester.tap(fold);
+    await tester.pumpAndSettle();
+    final foldedCard = tester.getSize(card).height;
+    final foldedChat = tester.getSize(chat).height;
+
+    expect(openCard - foldedCard, greaterThan(100));
+    expect(foldedChat - openChat, moreOrLessEquals(openCard - foldedCard));
+    expect(tester.getTopLeft(composer).dy, openComposer);
+  });
+
+  testWidgets('on a 320-point phone a one-line report leaves its room to the '
+      'decisions: at least two of three show in full', (tester) async {
+    tester.view
+      ..physicalSize = const Size(320, 568) * 3
+      ..devicePixelRatio = 3;
+    addTearDown(tester.view.reset);
+    await pump(
+      tester,
+      backend(
+        status: {'text': 'Building the card', 'at': today},
+        decisions: [
+          for (final (i, at) in ['09:10', '09:20', '09:30'].indexed)
+            {
+              ...decision('d$i', question: 'Question $i?'),
+              'createdAt': '2026-11-01T$at:00.000Z',
+            },
+        ],
+      ),
+    );
+    final box = tester.getRect(card);
+    final shown = [
+      for (final i in [0, 1, 2])
+        if (tester.getRect(key('swarm-project-status-need-decision:d$i'))
+            case final row when row.top >= box.top && row.bottom <= box.bottom)
+          i,
+    ];
+    expect(shown.length, greaterThanOrEqualTo(2));
+    expect(find.text('Building the card'), findsOneWidget);
   });
 
   testWidgets('a long report never hides what waits: the decision shows in '
@@ -535,6 +586,32 @@ void main() {
       tester.view.resetViewInsets();
       await tester.pumpAndSettle();
       expect(find.text('Building'), findsOneWidget);
+    });
+
+    testWidgets('while the keyboard folds it there is no fold button, so no '
+        'tap saves a fold the person never saw', (tester) async {
+      final host = await pump(
+        tester,
+        backend(status: {'text': 'Building', 'at': today}),
+      );
+      tester.view.viewInsets = const FakeViewPadding(bottom: 900);
+      addTearDown(tester.view.resetViewInsets);
+      await tester.pumpAndSettle();
+      expect(fold, findsNothing);
+      final byKeyboard = tester.getSize(card).height;
+      expect(host.session!.home.folded(tab, project), isFalse);
+
+      // Folded by the person, then the keyboard: still no button.
+      tester.view.resetViewInsets();
+      await tester.pumpAndSettle();
+      await tester.tap(fold);
+      await tester.pumpAndSettle();
+      // Folded either way, the card is as tall: no jump as the button goes.
+      expect(tester.getSize(card).height, byKeyboard);
+      tester.view.viewInsets = const FakeViewPadding(bottom: 900);
+      await tester.pumpAndSettle();
+      expect(fold, findsNothing);
+      expect(host.session!.home.folded(tab, project), isTrue);
     });
   });
 
