@@ -357,8 +357,8 @@ void main() {
       () async {
         final fake = backend();
         fake.routes[commands] = (_) => throw const SuperTabFailure(
-          'VALIDATION_ERROR',
-          'Invalid input',
+          'UNKNOWN_COMMAND',
+          'Unknown command',
           statusCode: 400,
         );
         fake.routes[sharing] = (_) => throw const SuperTabFailure(
@@ -377,6 +377,19 @@ void main() {
         expect(controller.linkFailed, isFalse);
       },
     );
+
+    test('an address the server will not take is told in its words', () async {
+      final fake = backend();
+      fake.routes[commands] = (_) => throw const SuperTabFailure(
+        'VALIDATION_ERROR',
+        'Invalid email address',
+        statusCode: 400,
+      );
+      final (controller, _) = await invites(fake);
+      expect(await controller.invite('ana@acme', 'viewer'), isFalse);
+      expect(controller.error, 'Invalid email address');
+      expect(controller.unconfirmed, isFalse);
+    });
 
     test(
       'a revoke of an invitation already accepted or revoked sends nothing',

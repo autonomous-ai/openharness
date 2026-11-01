@@ -263,8 +263,9 @@ class SwarmInvites extends ChangeNotifier {
         'OWNER_REQUIRED' ||
         'FORBIDDEN' => 'Only the Swarm’s owner can manage invitations.',
         'ALREADY_MEMBER' => 'This person is already in this Swarm.',
-        // A server without these commands from here.
-        'VALIDATION_ERROR' || 'NOT_FOUND' || 'UNKNOWN_COMMAND' =>
+        // A server without these commands. Any other refusal, an address it
+        // will not take included, is the server's own words.
+        'UNKNOWN_COMMAND' =>
           type == 'invite.revoke'
               ? 'This Swarm’s server can’t revoke invitations from here.'
               : 'This Swarm’s server can’t send invitations from here.',
