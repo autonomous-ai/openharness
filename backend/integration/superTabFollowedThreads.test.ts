@@ -297,11 +297,14 @@ describe('a thread reply past the person\'s thread mark, though the chat\'s mark
     expect((await inbox(s.tabId, peer)).body.data.threads).toEqual([])
   })
 
-  it('keeps the chat\'s mark for a thread the person never opened, and a Follow alone is no mark', async () => {
-    expect((await inbox((await behindScene()).tabId, peer)).body.data.threads).toEqual([])
+  it('counts a thread the person never opened from the chat\'s mark before the read, and a Follow alone takes that mark (Diego, 11-01)', async () => {
+    // Both replies are only in the thread: reading the chat at the main message read neither (read/threadMarkSeeds.ts).
+    const never = await behindScene()
+    expect((await inbox(never.tabId, peer)).body.data.threads).toMatchObject([{ rootId: never.root, unreadReplies: 2 }])
     const followed = await behindScene({ followOnly: true })
-    expect((await inbox(followed.tabId, peer)).body.data.threads).toEqual([])
-    expect(roots((await threads(followed.tabId, peer)).body.data.read)).toEqual(['Peer root'])
+    expect((await inbox(followed.tabId, peer)).body.data.threads).toMatchObject([{ rootId: followed.root, unreadReplies: 2 }])
+    expect(roots((await threads(followed.tabId, peer)).body.data.unread)).toEqual(['Peer root'])
+    expect((await threads(followed.tabId, peer)).body.data.read).toEqual([])
   })
 })
 
@@ -411,8 +414,12 @@ describe('a person\'s followed threads (GET /threads)', () => {
     await markRead(s.tabId, s.web, await sequenceOf(many.at(-1)!), peer)
     await insert(s.tabId, s.web, many.map(thread => ({ text: 'Reply', author: agentAuthor(s.worker), thread })))
     await markRead(s.tabId, s.web, await newestIn(s.tabId, s.web), peer)
+    // Each read in its thread: reading the chat reads no reply only in a thread.
+    const top = await newestIn(s.tabId, s.web)
+    for (const root of many) await writeThreadMark(db, { tabId: s.tabId, personId: peer.sub, conversationId: s.web, threadId: root, sequence: top, now: Date.now() })
     for (const root of many) await follow(s.tabId, s.web, root, true, peer)
     const { body } = await threads(s.tabId, peer)
+    expect(body.data.unread).toEqual([])
     expect(body.data.read).toHaveLength(MAX_READ_THREADS)
     expect(body.data.more).toBe(true)
   })
