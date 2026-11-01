@@ -1034,6 +1034,12 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
   static const _receiptReadEvery = Duration(seconds: 30);
   static const _receiptReadFor = Duration(minutes: 10);
 
+  /// How long a claimed or unconfirmed delivery is read again: as long as the
+  /// backend lets it stand — a busy terminal holds a claim up to an hour, and
+  /// a person has an hour to check an unconfirmed one (`deliverySettle.ts`
+  /// `HOLD_LIMIT_MS`, `UNCERTAIN_LIMIT_MS`). Still only while on screen.
+  static const _heldReadFor = Duration(minutes: 60);
+
   String? _receiptOf;
   DateTime? _receiptSince, _receiptAsked;
 
@@ -1082,9 +1088,9 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
   void _checkReceipt() {
     if (!_shown || _readingReceipt != null || reader.error != null) return;
     final own = latestOwn;
-    if (own == null || !_openDeliveries.contains(own.receiptDelivery?.status)) {
-      return;
-    }
+    final status = own?.receiptDelivery?.status;
+    if (own == null || !_openDeliveries.contains(status)) return;
+    final readFor = status == 'queued' ? _receiptReadFor : _heldReadFor;
     final now = clock.now();
     if (_receiptOf != own.id) {
       _dropReceipt();
@@ -1095,7 +1101,7 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
     if (asked != null && now.difference(asked) < _receiptReadEvery) return;
     final tail = messages.last.sequence;
     final answered = tail > own.sequence && tail != _receiptTail;
-    if (!answered && now.difference(_receiptSince!) >= _receiptReadFor) return;
+    if (!answered && now.difference(_receiptSince!) >= readFor) return;
     _receiptAsked = now;
     _receiptTail = tail;
     late final Future<void> reading;

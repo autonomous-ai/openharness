@@ -25,6 +25,7 @@ import 'exit_app.dart';
 import 'new_device_banner.dart';
 import 'phone_navigation.dart';
 import 'phone_shell_scope.dart';
+import 'phone_status.dart';
 import 'settings_page.dart' show openPhoneSettings;
 import 'voice_input_controller.dart';
 import 'voice_input_scope.dart';
@@ -586,7 +587,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
       onOpenAgent: _openAgentAtHome,
       onShowSwarm: _showSwarm,
       canOpenMachine: (machineId) =>
-          widget.notifier.machineStates[machineId]?.needsLink == false,
+          phoneMachineOpensTerminals(widget.notifier.machineStates[machineId]),
       // Rebuilt when the root switches, so back from Harness can reach Swarm Home.
       child: ListenableBuilder(
         listenable: _home,
