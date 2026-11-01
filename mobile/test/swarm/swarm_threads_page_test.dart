@@ -170,6 +170,35 @@ void main() {
     await leave(tester);
   });
 
+  testWidgets('a tap on a thread with no new replies opens its thread over '
+      'the chat at its root, as the desktop does', (tester) async {
+    await pump(
+      tester,
+      backend(
+        threads: () => {
+          'unread': [],
+          'read': [row('m7', follow: true, text: 'Rate limits')],
+        },
+      ),
+    );
+
+    await tester.tap(find.text('Rate limits'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    expect(
+      find.byWidgetPredicate(
+        (w) =>
+            w is SwarmOpenedChat &&
+            w.conversationId == 'g1' &&
+            w.messageId == 'm7' &&
+            w.threadId == 'm7',
+      ),
+      findsOneWidget,
+    );
+    await leave(tester);
+  });
+
   testWidgets('Unfollow from ⋯ is kept on the server, and the thread leaves', (
     tester,
   ) async {

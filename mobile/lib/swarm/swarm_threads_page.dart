@@ -288,7 +288,8 @@ class _SwarmThreadsPageState extends State<SwarmThreadsPage> {
   }
 
   /// Opens [entry]'s chat at its newest new reply, which opens its thread,
-  /// else at its root.
+  /// else at its root with its thread open over it, as the desktop's Threads
+  /// opens one.
   void _open(
     BuildContext context,
     SwarmThreadsMerge threads,
@@ -301,6 +302,7 @@ class _SwarmThreadsPageState extends State<SwarmThreadsPage> {
           swarmId: entry.swarmId,
           conversationId: entry.thread.conversationId,
           messageId: reply?.id ?? entry.thread.rootId,
+          threadId: reply == null ? entry.thread.rootId : null,
         ),
       ),
     );
