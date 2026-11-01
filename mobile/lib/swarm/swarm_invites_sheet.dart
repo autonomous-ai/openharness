@@ -74,7 +74,7 @@ class _SwarmInviteButtonState extends State<SwarmInviteButton> {
     listenable: widget.reader,
     builder: (context, _) => swarmMayInvite(widget.reader)
         ? SwarmIconButton(
-            key: const ValueKey('swarm-team-invite'),
+            key: const ValueKey('swarm-invite-people'),
             icon: LucideIcons.userPlus300,
             label: 'Invite people',
             onPressed: () => unawaited(_show()),
@@ -83,7 +83,8 @@ class _SwarmInviteButtonState extends State<SwarmInviteButton> {
   );
 }
 
-/// The Swarm owner's Share Swarm on the phone, from the Team's Invite people:
+/// The Swarm owner's Share Swarm on the phone, from the leaderboard's Invite
+/// people:
 /// the desktop's (`desktop/lib/super_tabs/sharing.dart`) email, access and
 /// Invite; the invitations waiting, each with its access and when it expires,
 /// to share a note about or revoke, after a confirmation; and the Swarm's

@@ -12,7 +12,6 @@ import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import 'model.dart';
 import 'swarm_instructions_page.dart';
-import 'swarm_invites_sheet.dart';
 import 'swarm_leaderboard.dart';
 import 'swarm_project_tasks.dart';
 import 'swarm_reader.dart';
@@ -218,20 +217,6 @@ class SwarmProjectTeamSheet extends StatelessWidget {
     return SwarmProjectSheetFrame(
       title: 'Team',
       closeKey: 'swarm-team-close',
-      // Invite people, where the desktop has it: over the team, for the
-      // Swarm's owner alone ([SwarmInviteButton]).
-      trailing: session == null
-          ? null
-          : ListenableBuilder(
-              listenable: session.inbox,
-              builder: (context, _) => switch (session.inbox.reader(swarmId)) {
-                final reader? => SwarmInviteButton(
-                  session: session,
-                  reader: reader,
-                ),
-                null => const SizedBox.shrink(),
-              },
-            ),
       child: session == null
           ? const SizedBox.shrink()
           : ListenableBuilder(

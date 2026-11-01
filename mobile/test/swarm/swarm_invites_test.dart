@@ -6,7 +6,7 @@ import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/swarm_invites.dart';
 import 'package:harness_mobile/swarm/swarm_invites_sheet.dart';
-import 'package:harness_mobile/swarm/swarm_project_team.dart';
+import 'package:harness_mobile/swarm/swarm_leaderboard.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 
@@ -111,25 +111,25 @@ void main() {
       shared.add((text: text, origin: origin));
   setUp(shared.clear);
 
-  /// The project's Team sheet under the signed-in shell, its Invite people
-  /// sharing through [share].
+  /// The project's leaderboard under the signed-in shell, as a page or as
+  /// the sheet its menu opens ([asSheet]).
   Future<SwarmHost> pump(
     WidgetTester tester,
     FakeSwarm fake, {
     ValueNotifier<String?>? signedIn,
-    bool load = true,
+    bool asSheet = false,
   }) async {
     final shell = await host(fake, signedIn: signedIn);
+    final board = SwarmLeaderboardPage(
+      swarmId: tab,
+      projectId: project,
+      sheet: asSheet,
+      now: () => now,
+    );
     await tester.pumpWidget(
       MaterialApp(
         builder: (context, child) => SwarmScope(notifier: shell, child: child!),
-        home: Scaffold(
-          body: SwarmProjectTeamSheet(
-            swarmId: tab,
-            projectId: project,
-            onOpen: (_) {},
-          ),
-        ),
+        home: asSheet ? Scaffold(body: board) : board,
       ),
     );
     await tester.pumpAndSettle();
@@ -151,14 +151,24 @@ void main() {
       expect(swarmMayInvite(null), isFalse);
     });
 
-    testWidgets('the Team shows Invite people to the owner only', (
+    testWidgets('the leaderboard shows Invite people to the owner only', (
       tester,
     ) async {
       await pump(tester, backend(owner: 'diego'));
-      expect(key('swarm-team-invite'), findsNothing);
+      expect(key('swarm-invite-people'), findsNothing);
+      await pump(tester, backend(owner: 'diego'), asSheet: true);
+      expect(key('swarm-invite-people'), findsNothing);
 
       await pump(tester, backend());
-      expect(key('swarm-team-invite'), findsOneWidget);
+      expect(key('swarm-invite-people'), findsOneWidget);
+      await pump(tester, backend(), asSheet: true);
+      expect(key('swarm-invite-people'), findsOneWidget);
+
+      // It opens Share Swarm.
+      await tester.tap(key('swarm-invite-people'));
+      await tester.runAsync(settle);
+      await tester.pumpAndSettle();
+      expect(find.text('Share Swarm'), findsOneWidget);
     });
 
     testWidgets('a first read that fails and then recovers still offers it', (
@@ -175,26 +185,29 @@ void main() {
             )
           : answer(body);
       final shell = await pump(tester, fake);
-      expect(key('swarm-team-invite'), findsNothing);
+      expect(key('swarm-invite-people'), findsNothing);
 
       fail = false;
       await tester.runAsync(() => shell.session!.inbox.reader(tab)!.refresh());
       await tester.pumpAndSettle();
-      expect(key('swarm-team-invite'), findsOneWidget);
+      expect(key('swarm-invite-people'), findsOneWidget);
     });
 
-    testWidgets('ownership passed on while the Team is up takes it away', (
-      tester,
-    ) async {
-      final fake = backend();
-      final shell = await pump(tester, fake);
-      expect(key('swarm-team-invite'), findsOneWidget);
+    testWidgets(
+      'ownership passed on while the leaderboard is up takes it away',
+      (tester) async {
+        final fake = backend();
+        final shell = await pump(tester, fake);
+        expect(key('swarm-invite-people'), findsOneWidget);
 
-      nextHead(fake, head(ownerId: 'diego'));
-      await tester.runAsync(() => shell.session!.inbox.reader(tab)!.refresh());
-      await tester.pumpAndSettle();
-      expect(key('swarm-team-invite'), findsNothing);
-    });
+        nextHead(fake, head(ownerId: 'diego'));
+        await tester.runAsync(
+          () => shell.session!.inbox.reader(tab)!.refresh(),
+        );
+        await tester.pumpAndSettle();
+        expect(key('swarm-invite-people'), findsNothing);
+      },
+    );
   });
 
   group('what an invitation reads as', () {
@@ -656,21 +669,25 @@ void main() {
         await tester.tap(key('swarm-invite-send'));
         await tester.pump();
         expect(find.text('Sending…'), findsOneWidget);
-        shell.session!.inbox.reader(tab)!.revoke();
+        // Still readable, but no longer theirs to invite to.
+        nextHead(fake, head(ownerId: 'diego'));
+        await tester.runAsync(
+          () => shell.session!.inbox.reader(tab)!.refresh(),
+        );
         await tester.pumpAndSettle();
         expect(find.text('Share Swarm'), findsNothing);
         fake.calls.clear();
         answer.complete({'result': {}});
         await tester.runAsync(settle);
         await tester.pumpAndSettle();
-        // No read again for a Swarm no longer readable.
+        // The answer is not taken: nothing is read again for it.
         expect(fake.calls, isEmpty);
       },
     );
   });
 }
 
-/// A bottom sheet route as the Team opens Share Swarm in.
+/// A bottom sheet route as the leaderboard opens Share Swarm in.
 Route<void> swarmTestSheetRoute(BuildContext context, Widget sheet) =>
     ModalBottomSheetRoute<void>(
       isScrollControlled: true,

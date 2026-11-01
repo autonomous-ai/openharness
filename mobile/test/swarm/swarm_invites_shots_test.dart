@@ -10,7 +10,8 @@ import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/color_palette.dart';
-import 'package:harness_mobile/swarm/swarm_project_team.dart';
+import 'package:harness_mobile/swarm/swarm_leaderboard.dart';
+import 'package:harness_mobile/swarm/swarm_leaderboard_reader.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 
 import '../voice_fakes.dart';
@@ -73,8 +74,32 @@ void main() {
           ],
         },
       ),
+      'members': [
+        part(me, 1, person(me)),
+        part('diego', 1, person('diego', role: 'collaborator')),
+        part('ken', 1, person('ken', role: 'collaborator')),
+      ],
     };
     fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
+    final monday = swarmWeekOf(now);
+    fake.routes['/api/super-tabs/$tab/leaderboard?projectId=$project'] = (_) =>
+        leaderboardData(
+          week: monday,
+          people: [
+            {
+              ...scoreData('diego', points: 28, rank: 1, shipped: 8),
+              'displayName': 'Diego',
+            },
+            {
+              ...scoreData('ken', points: 21, rank: 2, shipped: 3),
+              'displayName': 'Ken',
+            },
+            {
+              ...scoreData(me, points: 6, rank: 3, unblocked: 2),
+              'displayName': 'Dee',
+            },
+          ],
+        );
     fake.routes['/api/super-tabs/$tab/sharing'] = (_) => {
       'revision': 1,
       'access': {'mode': 'link', 'role': 'viewer'},
@@ -111,16 +136,7 @@ void main() {
             theme: buildAppTheme(brightness: brightness),
             builder: (context, child) =>
                 SwarmScope(notifier: host, child: child!),
-            home: Scaffold(
-              body: Align(
-                alignment: Alignment.bottomCenter,
-                child: SwarmProjectTeamSheet(
-                  swarmId: tab,
-                  projectId: project,
-                  onOpen: (_) {},
-                ),
-              ),
-            ),
+            home: const SwarmLeaderboardPage(swarmId: tab, projectId: project),
           ),
         ),
       );
@@ -131,12 +147,11 @@ void main() {
                     as RenderRepaintBoundary)
                 .toImage(pixelRatio: 3);
         final png = await image.toByteData(format: ui.ImageByteFormat.png);
-        await File(
-          '$shots/phone-invites-$name-${brightness.name}.png',
-        ).writeAsBytes(png!.buffer.asUint8List());
+        await File('$shots/phone-invites-$name-${brightness.name}.png')
+            .writeAsBytes(png!.buffer.asUint8List());
       });
-      await shoot('team');
-      await tester.tap(find.byKey(const ValueKey('swarm-team-invite')));
+      await shoot('leaderboard');
+      await tester.tap(find.byKey(const ValueKey('swarm-invite-people')));
       await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 20)),
       );
