@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 
 import 'model.dart';
 import 'swarm_asks.dart';
+import 'swarm_inbox.dart' show SwarmListing;
 import 'swarm_reader.dart';
 import 'swarm_request.dart';
 
@@ -507,6 +508,193 @@ class SwarmThreads extends ChangeNotifier {
     reader.reads.removeListener(_changed);
     asks?.removeListener(_told);
     reader.readMarks?.removeListener(_told);
+    super.dispose();
+  }
+}
+
+/// One followed thread on the phone's Threads page, in the Swarm it is in.
+typedef SwarmThreadEntry = ({
+  String swarmId,
+  String swarmName,
+  SwarmFollowedThread thread,
+});
+
+/// The Threads row and page over the Swarms Home shows ([swarms]): each
+/// Swarm's [SwarmThreads] ([source]) in one list, new first, then the rest,
+/// each newest reply first; bold while any has new replies, its number the
+/// sum of theirs. [changed] tells when the Swarms shown, or their sources,
+/// may have changed (the inbox). A Swarm that leaves the list leaves the page
+/// at once, with everything read of it.
+class SwarmThreadsMerge extends ChangeNotifier {
+  SwarmThreadsMerge({
+    required this.source,
+    required this.swarms,
+    required this.changed,
+  }) {
+    changed.addListener(_sync);
+    _sync();
+  }
+
+  /// [swarmId]'s threads, while it is listed.
+  final SwarmThreads? Function(String swarmId) source;
+
+  /// The Swarms shown, in Home's order.
+  final List<SwarmListing> Function() swarms;
+  final Listenable changed;
+
+  /// Each Swarm shown with its threads, in Home's order.
+  final _sources = <String, (SwarmListing, SwarmThreads)>{};
+  bool _open = false, _disposed = false;
+
+  /// How many new threads show their replies when the page opens, as many
+  /// as the desktop's `kThreadsShowingReplies`.
+  static const showingReplies = 10;
+
+  /// More than one Swarm shown: each row names its Swarm.
+  bool get manySwarms => _sources.length > 1;
+
+  /// Every Swarm shown has answered since it was opened, or since who may
+  /// read what in it changed; one that failed says so instead ([error]).
+  bool get loaded =>
+      _sources.values.every((s) => s.$2.loaded || s.$2.error != null);
+
+  /// What the first Swarm that could not be read says; Retry reads those
+  /// again ([retry]).
+  String? get error =>
+      [for (final (_, threads) in _sources.values) ?threads.error].firstOrNull;
+
+  /// A followed thread has replies the person has not read: the row is bold.
+  bool get unread => _sources.values.any((s) => s.$2.threadsUnread);
+
+  /// The row's number: tags of the person in threads they have not read past.
+  int get mentions =>
+      _sources.values.fold(0, (n, s) => n + s.$2.threadMentions);
+
+  /// A Swarm's server stopped short of everything.
+  bool get more => _sources.values.any((s) => s.$2.more);
+
+  SwarmThreads? _of(SwarmThreadEntry entry) => _sources[entry.swarmId]?.$2;
+
+  List<SwarmThreadEntry> _entries(bool fresh) {
+    final entries = [
+      for (final (swarm, threads) in _sources.values)
+        for (final thread in threads.shown)
+          if (threads.isNew(thread) == fresh)
+            (swarmId: swarm.id, swarmName: swarm.name, thread: thread),
+    ];
+    // One Swarm keeps its own order; several are put together by time.
+    if (manySwarms) {
+      entries.sort(
+        (a, b) => (b.thread.lastReplyAt ?? DateTime(0)).compareTo(
+          a.thread.lastReplyAt ?? DateTime(0),
+        ),
+      );
+    }
+    return entries;
+  }
+
+  /// Threads with new replies this visit, newest reply first.
+  List<SwarmThreadEntry> get fresh => _entries(true);
+
+  /// The rest, newest reply first.
+  List<SwarmThreadEntry> get rest => _entries(false);
+
+  int newCount(SwarmThreadEntry entry) =>
+      _of(entry)?.newCount(entry.thread) ?? 0;
+
+  /// [entry]'s new replies, once read; null until then.
+  List<SuperTabMessage>? newReplies(SwarmThreadEntry entry) =>
+      _of(entry)?.newReplies[entry.thread.key];
+
+  /// Follow or Unfollow is offered: the server keeps it.
+  bool followOffered(SwarmThreadEntry entry) =>
+      _of(entry)?.followSupported ?? false;
+
+  /// Follow or Unfollow of [entry] is on its way.
+  bool following(SwarmThreadEntry entry) =>
+      _of(entry)?.following.contains(entry.thread.key) ?? false;
+
+  /// [entry]'s chat, while its Swarm lists it for the person.
+  SuperTabConversation? chat(SwarmThreadEntry entry) =>
+      _of(entry)?.reader.snapshot?.conversation(entry.thread.conversationId);
+
+  Future<bool> setFollow(SwarmThreadEntry entry, bool follow) =>
+      _of(entry)?.setFollow(entry.thread, follow) ?? Future.value(false);
+
+  /// Reads again each Swarm that could not be read.
+  void retry() {
+    for (final (_, threads) in _sources.values) {
+      if (threads.error != null) unawaited(threads.load());
+    }
+  }
+
+  /// The page opened: each Swarm shown reads now, and what is new stays new
+  /// until [closed].
+  void opened() {
+    if (_disposed || _open) return;
+    _open = true;
+    for (final (_, threads) in _sources.values) {
+      threads.opened();
+    }
+  }
+
+  void closed() {
+    if (_disposed || !_open) return;
+    _open = false;
+    for (final (_, threads) in _sources.values) {
+      threads.closed();
+    }
+  }
+
+  /// The page shows its first new threads: their replies are read, and each
+  /// is marked read once they are (the desktop's read on open).
+  void showReplies() {
+    if (_disposed) return;
+    for (final entry in fresh.take(showingReplies)) {
+      unawaited(_of(entry)?.showReplies(entry.thread));
+    }
+  }
+
+  void _sync() {
+    if (_disposed) return;
+    final wanted = <String, (SwarmListing, SwarmThreads)>{
+      for (final swarm in swarms())
+        if (source(swarm.id) case final threads?) swarm.id: (swarm, threads),
+    };
+    var moved = wanted.length != _sources.length;
+    for (final MapEntry(key: id, value: (_, threads)) in _sources.entries) {
+      if (identical(wanted[id]?.$2, threads)) continue;
+      moved = true;
+      _detach(threads);
+    }
+    for (final MapEntry(key: id, value: (_, threads)) in wanted.entries) {
+      if (identical(_sources[id]?.$2, threads)) continue;
+      moved = true;
+      threads.addListener(notifyListeners);
+      if (_open) threads.opened();
+    }
+    _sources
+      ..clear()
+      ..addAll(wanted);
+    if (moved) notifyListeners();
+  }
+
+  /// A Swarm dropped from the inbox has its threads disposed already: both
+  /// are no-ops then.
+  void _detach(SwarmThreads threads) {
+    threads.removeListener(notifyListeners);
+    if (_open) threads.closed();
+  }
+
+  @override
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    changed.removeListener(_sync);
+    for (final (_, threads) in _sources.values) {
+      _detach(threads);
+    }
+    _sources.clear();
     super.dispose();
   }
 }
