@@ -3,7 +3,7 @@ import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
 import { appendRouting, instructionsHash, legacyRoleName, MAX_INSTRUCTIONS_BYTES, roleNameOf, routingSummary, summarySchema } from './instructions.js'
 import type { SwarmProject } from './projects.js'
-import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
+import { INSTRUCTIONS_TEMPLATE, TEMPLATE_WORKFLOW } from './instructionsTemplate.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -30,6 +30,19 @@ function fixture() {
 }
 
 describe('the built-in template', () => {
+  // Ken, 2026-11-02: one pull request showed as three tasks (#1835, its review #1918, its test #1919), and the PM opened
+  // groups to hold, batch and triage work. Agents forgot which task they were on (agent context design, section 3).
+  it('the template workflow has one task per request, steps, and the context tools', () => {
+    expect(TEMPLATE_WORKFLOW).toContain('1. One request is one task.')
+    expect(TEMPLATE_WORKFLOW).toContain('The PM opens no task to hold, batch, triage or list work')
+    expect(TEMPLATE_WORKFLOW).toContain('adds a review step to its task')
+    expect(TEMPLATE_WORKFLOW).toContain('it adds no new step for a second round')
+    expect(TEMPLATE_WORKFLOW).toContain('run `mine`')
+    expect(TEMPLATE_WORKFLOW).toContain('read `task GROUP`')
+    expect(TEMPLATE_WORKFLOW).toContain('read the thread before acting on it')
+    expect(TEMPLATE_WORKFLOW).toContain('The PM reads `mine` for progress, not `status`.')
+    expect(TEMPLATE_WORKFLOW.split('\n').filter(l => /^\d+\. /.test(l))).toHaveLength(11)
+  })
   it('describes the spec\'s roles, workflow and routing in one short document', () => {
     for (const heading of ['## Roles', '## Workflow', '## Routing', '### PM', '### Engineer', '### Reviewer', '### Tester']) {
       expect(INSTRUCTIONS_TEMPLATE).toContain(heading)
