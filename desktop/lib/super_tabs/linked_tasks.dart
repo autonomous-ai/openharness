@@ -35,9 +35,13 @@ String? superTabLinkedLine(
 }
 
 /// Whether [conversation] is a step of a task (task steps design): shown on
-/// its task's row and inside its task, never as a task of its own.
+/// its task's row and inside its task, never as a task of its own. Every
+/// linked task is one, named or not (Ken, 2026-11-02; backend steps.ts).
 bool superTabIsStep(SuperTabConversation conversation) =>
-    conversation.step != null && conversation.reviewOf != null;
+    conversation.reviewOf != null;
+
+/// A step's name: the one it was opened with, else its title.
+String superTabStepName(SuperTabConversation step) => step.step ?? step.title;
 
 /// [groups] as the project's list shows them: without steps, which sit on
 /// their task's row (task steps design).
@@ -54,7 +58,9 @@ String _stepLabel(SuperTabSnapshot snapshot, SuperTabConversation step) {
   final name = agentId is String && snapshot.agent(agentId) != null
       ? snapshot.agentName(agentId)
       : null;
-  return name == null ? step.step! : '${step.step} ($name)';
+  return name == null
+      ? superTabStepName(step)
+      : '${superTabStepName(step)} ($name)';
 }
 
 /// A linked task's state: its work's status while it has no checks; else a

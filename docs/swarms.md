@@ -1137,8 +1137,11 @@ lease, attempts, costs and checks; readers show it inside its task.
   merge their messages into the task's chat with the step's name beside the
   author. The CLI sends `step` only to a backend whose first load says
   `steps: true`; elsewhere a step opens as a plain linked task.
-- **Older linked tasks** (no `step`) keep their own number, row, chat and
-  notices.
+- **Every linked task is a step**, named or not (Ken, 2026-11-02: a PM opened
+  "Test: PR #2514" the old way a minute after saving the steps workflow, and the
+  Tester's posts reached it). One opened without `step` is named by its title.
+  A row written before this keeps the archive mark it had until it is written
+  again.
 
 ## A message that is not getting in
 

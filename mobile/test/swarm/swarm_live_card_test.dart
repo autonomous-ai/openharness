@@ -149,7 +149,7 @@ void main() {
     },
   };
 
-  const linkedLine = '#13 Review: Fix login: passed';
+  const linkedLine = 'Review: Fix login (Ivy): passed';
 
   FakeSwarm backend({
     List<Map<String, dynamic>>? groups,

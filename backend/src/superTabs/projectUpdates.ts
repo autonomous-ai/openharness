@@ -62,8 +62,8 @@ export const UNANSWERED_REQUEST_MS = 2 * 60 * 60_000
  *  keeps its own number, which is the conversation whose messages the report asks the coordinator to read. */
 export function reportedAs(state: SuperTabState, group: Conversation): string {
   const name = (g: Conversation) => g.number !== undefined ? `#${g.number}` : JSON.stringify(g.title)
-  const task = group.step && group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : undefined
-  return task ? `${name(group)} (step ${group.step} of ${name(task)})` : name(group)
+  const task = group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : undefined
+  return task ? `${name(group)} (step ${group.step ?? group.title} of ${name(task)})` : name(group)
 }
 
 export function projectUpdateRequest(state: SuperTabState, target: Agent, now: number): MessageDraft | null {

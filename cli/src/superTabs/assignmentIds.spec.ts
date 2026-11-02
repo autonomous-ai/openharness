@@ -24,6 +24,15 @@ describe('assignment ids', () => {
       .toMatchObject({ assignmentId: '58c2d5f2bdc100771bc57de7' })
   })
 
+  // E2E 2026-11-02: a Reviewer holding a step could not record its verdict on the task's checks ("another agent's"), so the
+  // Engineer passed its own review check. The backend lets anyone in the task record one; only a status is the holder's.
+  it('fills "current" for another agent\'s check on the task, never its status', () => {
+    expect(withCurrentAssignment({ type: 'work.check', conversationId: 'g1', assignmentId: 'current', checkId: 'c', passed: true }, state, 'reviewer'))
+      .toMatchObject({ assignmentId: '58c2d5f2bdc100771bc57de7' })
+    const check = { type: 'work.check', conversationId: 'g1', assignmentId: 'stale', checkId: 'c', passed: true }
+    expect(staleAssignmentHint(check, state, 'reviewer')).toMatch(/is 58c2d5f2bdc100771bc57de7/)
+  })
+
   it('leaves an explicit id, another command, or a group with no task as sent', () => {
     const named = { type: 'work.status', conversationId: 'g1', assignmentId: '9887f5667a24ace0b589b7ff' }
     expect(wantsCurrent(named)).toBe(false)

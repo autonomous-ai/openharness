@@ -29,7 +29,7 @@ import 'swarm_chat_menu.dart';
 import 'swarm_file_links.dart';
 import 'swarm_choices.dart';
 import 'swarm_conversation.dart';
-import 'linked_tasks.dart' show superTabIsStep;
+import 'linked_tasks.dart' show superTabIsStep, superTabStepName;
 import 'task_steps.dart';
 import 'swarm_face.dart';
 import 'swarm_file_picker.dart';
@@ -1449,7 +1449,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     // A step's row in its task's chat names its step (task steps design).
     final group = c.reader.snapshot?.conversation(m.conversationId);
     final name = group != null && superTabIsStep(group)
-        ? '$named · ${group.step}'
+        ? '$named · ${superTabStepName(group)}'
         : named;
     if (!swarmIsPmLine(c.reader, m)) return name;
     // The coordinator's own badge, whatever its role is called.

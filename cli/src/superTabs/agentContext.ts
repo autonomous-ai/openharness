@@ -39,7 +39,10 @@ const isOpen = (group: Json): boolean => {
 const leadConversations = (state: Json): string[] =>
   Array.isArray(state.projects) ? list(state.projects).map(p => String(p.leadConversationId)) : ['lead']
 /** A step of a task (task steps design): a linked group with a name; an older linked group has none. */
-export const isStep = (group: Json): boolean => typeof group.step === 'string' && group.step !== '' && typeof group.reviewOf === 'string'
+export const isStep = (group: Json): boolean => typeof group.reviewOf === 'string'
+/** A step's name: the one it was opened with, else its title (a linked task opened without one is a step too, Ken
+ *  2026-11-02; backend steps.ts stepName). */
+export const stepName = (group: Json): string => text(group.step) ?? String(group.title ?? '')
 /** Work an agent may hold: a group of a project that is not its Lead conversation, a Buddy chat or any other kind. */
 const isWork = (state: Json, group: Json): boolean => !group.kind && !leadConversations(state).includes(String(group.id))
 /** A task: work that is not a step. */
@@ -63,7 +66,7 @@ function lineOf(state: Json, group: Json): TaskLine {
     status: text(assignment.status) ?? 'unassigned', agentName: agentName(state, assignment.agentId),
     updatedAt: null, result: text(assignment.result),
     pullRequestUrls: Array.isArray(group.pullRequestUrls) ? group.pullRequestUrls.filter((u): u is string => typeof u === 'string') : [],
-    step: text(group.step), taskId: text(group.reviewOf),
+    step: isStep(group) ? stepName(group) : null, taskId: text(group.reviewOf),
   }
 }
 
@@ -172,9 +175,21 @@ function attemptLine(state: Json, attempt: Json, current: boolean): string {
     + (result ? `: ${firstLine(result, RESULT_MAX)}` : '')
 }
 
+/** The agent ids [group] and [attempts] name that the Swarm read does not list: agents stopped since. */
+export function unknownAgents(group: Json, state: Json, attempts: Json[] | null): string[] {
+  const listed = new Set(list(state.agents).map(a => a.id))
+  const ids = [object(group.assignment).agentId, ...(attempts ?? []).map(a => a.agentId),
+    ...list(group.checks).map(c => typeof c.passedBy === 'string' && c.passedBy.startsWith('agent:') ? c.passedBy.slice(6) : null)]
+  return [...new Set(ids.filter((id): id is string => typeof id === 'string' && !listed.has(id)))]
+}
+
 /** One task: what it is, its checks, its attempts (the current one, then [attempts] as the backend's attempts read gives
  *  them, newest first; null when that read failed), its linked tasks and how to read its conversation. */
-export function taskText(asked: Json, state: Json, attempts: Json[] | null, groupChangedAt: ReadonlyMap<string, number>, now: number): string {
+export function taskText(asked: Json, read: Json, attempts: Json[] | null, groupChangedAt: ReadonlyMap<string, number>, now: number,
+  knownNames: ReadonlyMap<string, string> = new Map()): string {
+  // An agent stopped since is no longer in the Swarm read: [knownNames] names it (E2E 2026-11-02: a raw id was printed).
+  const listed = new Set(list(read.agents).map(a => a.id))
+  const state: Json = { ...read, agents: [...list(read.agents), ...[...knownNames].filter(([id]) => !listed.has(id)).map(([id, name]) => ({ id, name }))] }
   // A step is read as its task, with the step marked (task steps design); a step whose task is not in the read reads alone.
   const owning = isStep(asked) ? list(state.conversations).find(c => c.id === asked.reviewOf) : undefined
   const group = owning ?? asked
