@@ -176,10 +176,14 @@ void main() {
       final activity = await loaded(tester, full());
       await show(tester, activity);
       expect(find.text('Behind a flag'), findsNothing);
-      await tester.tap(find.text('W1 ships alone or waits?'));
+      await tester.tap(
+        find.byKey(const ValueKey('super-activity-row-decision:decision-1')),
+      );
       await tester.pumpAndSettle();
       expect(find.textContaining('Behind a flag'), findsOneWidget);
-      await tester.tap(find.text('W1 ships alone or waits?'));
+      await tester.tap(
+        find.byKey(const ValueKey('super-activity-row-decision:decision-1')),
+      );
       await tester.pumpAndSettle();
       expect(find.textContaining('Behind a flag'), findsNothing);
     },
@@ -201,29 +205,30 @@ void main() {
     });
   });
 
-  testWidgets('a tag already read past is plain, one not read is bold', (
+  testWidgets('a tag read past leaves the list, one not read is bold', (
     tester,
   ) async {
-    final server = swarm();
+    final server = swarm()..followedThreads = null;
     server.tag('message-1', messageSequence: 1);
     server.tag('message-2', messageSequence: 9);
+    server.state['readMarks'] = {
+      'owner': {'lead': 4},
+    };
     final activity = await loaded(tester, server);
-    activity.controller.markRead('lead');
     await show(tester, activity);
-    FontWeight? weight(int index) => tester
-        .widget<Text>(
-          find
-              .descendant(
-                of: find.byKey(
-                  ValueKey('super-activity-row-mention:mention-$index'),
-                ),
-                matching: find.textContaining('mentioned you'),
-              )
-              .first,
-        )
-        .style
-        ?.fontWeight;
-    expect(weight(2), isNot(equals(weight(1))));
+    final unread = find.byKey(
+      const ValueKey('super-activity-row-mention:mention-2'),
+    );
+    expect(
+      find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
+      findsNothing,
+    );
+    expect(unread, findsOneWidget);
+    final title = find.descendant(
+      of: unread,
+      matching: find.textContaining('mentioned you'),
+    );
+    expect(tester.widget<Text>(title).style?.fontWeight, FontWeight.w600);
   });
 
   for (final brightness in Brightness.values) {

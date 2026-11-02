@@ -113,7 +113,7 @@ class SuperTabActivity extends ChangeNotifier {
             conversationId: group.id,
           ),
       for (final m in [
-        ...mentions.waiting,
+        ..._tags,
       ]..sort((a, b) => (b.createdAt ?? epoch).compareTo(a.createdAt ?? epoch)))
         SuperTabNeed(
           kind: SuperTabNeedKind.mention,
@@ -127,6 +127,13 @@ class SuperTabActivity extends ChangeNotifier {
         ),
     ];
   }
+
+  /// The tags that need the reader: in a chat's own stream and not read past.
+  /// A tag the reader has read stops needing them (the number clears by
+  /// reading), and one in a reply that lives only in its thread belongs to
+  /// New replies, where the thread is.
+  Iterable<SuperTabMention> get _tags =>
+      mentions.waiting.where((m) => m.threadId == null && mentionUnread(m));
 
   /// A task whose agent waits on the reader (it needs a decision, or is
   /// stuck) and has not already asked it as a decision.
@@ -184,14 +191,17 @@ class SuperTabActivity extends ChangeNotifier {
     ]..sort((a, b) => b.shippedAt!.compareTo(a.shippedAt!));
   }
 
-  /// The Activity row's red number: what is the reader's own to answer, and
-  /// nothing else. The server counts tags and decisions before their lists
-  /// are read; waiting agents come from the Swarm itself.
+  /// The Activity row's red number: what needs the reader, and nothing else.
+  /// A tag counts until it is read, a decision or an agent waiting until it
+  /// is answered. Before the tags are read the server's count stands in.
   int get count {
     final snapshot = _snapshot;
     if (snapshot == null) return 0;
     final decided = {for (final d in decisions.open) d.conversationId};
-    return snapshot.mentionsWaiting +
+    final tags = mentions.waiting.isEmpty && snapshot.mentionsWaiting > 0
+        ? snapshot.mentionsWaiting
+        : _tags.length;
+    return tags +
         snapshot.decisionsWaiting +
         snapshot.conversations
             .where((g) => _waiting(snapshot, g, decided))
