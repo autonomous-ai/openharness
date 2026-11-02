@@ -76,13 +76,13 @@ export interface CiLoad { running: number; queued: number; macosRunning: number;
 /** The CI jobs a task is counted as starting: at most the account's limit, since it can never run more at once and GitHub queues
  *  the rest. Counting the full need held a task of 21 jobs "for 10 minutes" forever, even on an idle account (Diego, 11-02). */
 const counted = (ci: { jobs: number; macos: number }) => ({ jobs: Math.min(ci.jobs, CI_LIMIT.jobs), macos: Math.min(ci.macos, CI_LIMIT.macos) })
-/** Said when a task starts more CI jobs than the account runs at once, or null when it fits; the route offers it as if it
- *  started the limit. */
+/** Said when a task starts more CI jobs than the account runs at once, or null when it fits; the route counts it as
+ *  the limit, whether it then offers it or holds it. */
 export function CI_OVER_NOTE(needs: Pick<Needs, 'ci'>): string | null {
   if (!needs.ci) return null
   const { jobs, macos } = needs.ci, over: string[] = []
-  if (jobs > CI_LIMIT.jobs) over.push(`${jobs} CI jobs, more than the account's limit of ${CI_LIMIT.jobs} at once: it is offered as if it started ${CI_LIMIT.jobs}`)
-  if (macos > CI_LIMIT.macos) over.push(`${macos} CI jobs on macOS, more than the account's limit of ${CI_LIMIT.macos} at once: it is offered as if it started ${CI_LIMIT.macos}`)
+  if (jobs > CI_LIMIT.jobs) over.push(`${jobs} CI jobs, more than the account's limit of ${CI_LIMIT.jobs} at once: it is counted as ${CI_LIMIT.jobs}`)
+  if (macos > CI_LIMIT.macos) over.push(`${macos} CI jobs on macOS, more than the account's limit of ${CI_LIMIT.macos} at once: it is counted as ${CI_LIMIT.macos}`)
   return over.length ? `This task starts ${over.join('. It also starts ')}, and GitHub queues the rest.` : null
 }
 /** Why work that starts [needs.ci] must wait for CI, or null when it fits under the limit, or declares no CI, or the load is

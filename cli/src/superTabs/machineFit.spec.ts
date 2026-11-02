@@ -193,8 +193,8 @@ describe('the CI jobs limit', () => {
   it('says in the route answer when a need is above the limit, held or not, and nothing when it fits', () => {
     const idle = ok(route([on('a', { memory: 16, disk: 100 })], a({ ci: { jobs: 21, macos: 0 } }), machineFit({ ci: load(0) })))
     expect(idle.shown[0]!.notes).toEqual([`Machine fit: ${CI_OVER_NOTE({ ci: { jobs: 21, macos: 0 } })}`])
-    expect(CI_OVER_NOTE({ ci: { jobs: 21, macos: 0 } })).toBe("This task starts 21 CI jobs, more than the account's limit of 20 at once: it is offered as if it started 20, and GitHub queues the rest.")
-    expect(CI_OVER_NOTE({ ci: { jobs: 8, macos: 6 } })).toBe("This task starts 6 CI jobs on macOS, more than the account's limit of 5 at once: it is offered as if it started 5, and GitHub queues the rest.")
+    expect(CI_OVER_NOTE({ ci: { jobs: 21, macos: 0 } })).toBe("This task starts 21 CI jobs, more than the account's limit of 20 at once: it is counted as 20, and GitHub queues the rest.")
+    expect(CI_OVER_NOTE({ ci: { jobs: 8, macos: 6 } })).toBe("This task starts 6 CI jobs on macOS, more than the account's limit of 5 at once: it is counted as 5, and GitHub queues the rest.")
     expect(CI_OVER_NOTE({ ci: { jobs: 30, macos: 7 } })).toContain('30 CI jobs')
     expect(CI_OVER_NOTE({ ci: { jobs: 30, macos: 7 } })).toContain('7 CI jobs on macOS')
     expect(CI_OVER_NOTE({ ci: { jobs: 20, macos: 5 } })).toBeNull()
@@ -206,6 +206,10 @@ describe('the CI jobs limit', () => {
     // Held by the load, the hold's reason is the answer, and it too names the cap.
     const held = route([on('a', { memory: 16, disk: 100 })], a({ ci: { jobs: 21, macos: 0 } }), machineFit({ ci: load(3) }))
     expect(held).toMatchObject({ error: 'NO_CANDIDATE' })
+    const reason = 'error' in held ? held.excluded[0]!.reason : ''
+    expect(reason).toContain('this task starts 20 more')
+    expect(reason).toContain(CI_OVER_NOTE({ ci: { jobs: 21, macos: 0 } }))
+    expect(reason).toContain('it is counted as 20, and GitHub queues the rest.')
   })
   it('never holds work that declares no CI of its own, nor when the load is unknown', () => {
     expect(ciHold({}, load(40, 10, 5, 5))).toBeNull()
