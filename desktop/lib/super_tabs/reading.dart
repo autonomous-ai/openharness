@@ -13,6 +13,7 @@ class SuperTabReading {
     this.messagesWhenChanged = false,
     this.readsOnConnect = false,
     this.connectGrace = Duration.zero,
+    this.retriesFirstRead = false,
     this.messagesWithState = false,
     this.drawsSaved = false,
     this.confirmsSaved = false,
@@ -24,6 +25,9 @@ class SuperTabReading {
   static const desktop = SuperTabReading(
     awayPoll: Duration(seconds: 15),
     messagesWhenChanged: true,
+    readsOnConnect: true,
+    connectGrace: Duration(seconds: 10),
+    retriesFirstRead: true,
     messagesWithState: true,
     drawsSaved: true,
     confirmsSaved: true,
@@ -61,6 +65,23 @@ class SuperTabReading {
   /// How long a first read that found no connected machine keeps the loading
   /// state before it shows the error; a machine is usually still connecting.
   final Duration connectGrace;
+
+  /// True (Desktop) tries a first read that failed in passing again after
+  /// [firstReadRetryDelays], within [connectGrace]. Its reads go through this
+  /// computer's daemon, which may still be starting while the app opens: such a
+  /// read used to wait for the next poll, 15 s for a Swarm not on screen, with the
+  /// heading saying Reconnecting. The grace then covers any such failure, and no
+  /// longer "no machine connected", which here is a settled answer.
+  final bool retriesFirstRead;
+
+  /// The waits between tries of a first read ([retriesFirstRead]).
+  static const firstReadRetryDelays = <Duration>[
+    Duration(milliseconds: 500),
+    Duration(seconds: 1),
+    Duration(seconds: 2),
+    Duration(seconds: 2),
+    Duration(seconds: 2),
+  ];
 
   /// True starts the saved conversation's messages read beside the first
   /// state read, instead of after it.

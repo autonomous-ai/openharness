@@ -7611,9 +7611,15 @@ class AppNotifier extends ChangeNotifier {
       _deskEnsure(_authRevision);
       // A daemon whose backend was away answered the last read with an error.
       if (_desk.enabled) unawaited(agentMessages.refresh());
+      // The same for the Swarm's: a daemon just started has its backend a few seconds later
+      // (6 s on 10-30), and the Swarm on screen would otherwise wait for its next poll.
+      if (viewer == null) superTabs.serverAvailable();
     }
     notifyListeners();
   }
+
+  @visibleForTesting
+  void noteBackendOnlineForTest(bool online) => _noteBackendOnline(online);
 
   /// Supervision starts once the daemon is at least ANSWERING — ready or still connecting. It used to
   /// wait for ready, out of fear of a concurrent `harness start` from both places; the supervisor
@@ -9690,7 +9696,8 @@ class AppNotifier extends ChangeNotifier {
     // (`SuperTabReading.readsOnConnect`). The web reads the backend itself,
     // so a machine connecting there is no reason to read.
     if (viewer == null) {
-      final served = sharedTabsTarget != null;
+      final served =
+          sharedTabsTarget?.connectionStatus == ConnectionStatus.connected;
       if (served && !_superTabsServed) superTabs.serverAvailable();
       _superTabsServed = served;
     }

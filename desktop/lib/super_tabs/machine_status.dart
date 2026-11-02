@@ -278,14 +278,21 @@ class _DotPainter extends CustomPainter {
       old.quiet != quiet;
 }
 
-/// The pill beside the Machines heading while the Swarm cannot be read: "Reconnecting · 1m". A live
-/// Swarm shows no pill. Where the heading leaves too little room for the words (the minimum pane), it is
+/// The pill beside the Machines heading while the Swarm cannot be read: "Reconnecting · 1m", or
+/// "Connecting · 4s" when it has not been read yet since it opened. A live Swarm shows no pill. Where the heading leaves too little room for the words (the minimum pane), it is
 /// only its dot, which says the same on hover.
 class SuperTabMachinesPill extends StatelessWidget {
-  const SuperTabMachinesPill({super.key, required this.reconnectingFor});
+  const SuperTabMachinesPill({
+    super.key,
+    required this.reconnectingFor,
+    this.connecting = false,
+  });
 
   /// How long the Swarm has failed to be read.
   final Duration reconnectingFor;
+
+  /// Nothing has been read yet ([SuperTabController.stillConnecting]).
+  final bool connecting;
 
   /// Below this width the words would ellipsize to almost nothing.
   static const _minWordsWidth = 56.0;
@@ -293,7 +300,7 @@ class SuperTabMachinesPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final failingFor = superTabAgoShort(reconnectingFor);
-    final text = 'Reconnecting · $failingFor';
+    final text = '${connecting ? 'Connecting' : 'Reconnecting'} · $failingFor';
     final dot = DecoratedBox(
       decoration: BoxDecoration(
         shape: BoxShape.circle,
@@ -302,7 +309,8 @@ class SuperTabMachinesPill extends StatelessWidget {
       child: const SizedBox.square(dimension: 6),
     );
     return Semantics(
-      label: 'Machines: reconnecting, for $failingFor',
+      label:
+          'Machines: ${connecting ? 'connecting' : 'reconnecting'}, for $failingFor',
       excludeSemantics: true,
       child: LayoutBuilder(
         builder: (context, constraints) => constraints.maxWidth < _minWordsWidth
