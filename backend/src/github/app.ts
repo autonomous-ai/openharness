@@ -120,8 +120,8 @@ export class GitHubApp {
   private readonly now: () => number
   private readonly apiUrl: string
   private signed: { jwt: string; until: number } | null = null
-  /** The app's name, from its configuration or GitHub's answer (botLogin). */
-  private slug: string | null
+  /** The app's name, as GitHub answers it (botLogin). */
+  private slug: string | null = null
   private readonly installations = new Map<string, { id: number | null; until: number }>()
   private readonly branches = new Map<string, { value: DefaultBranch; until: number }>()
   /** A repository's name now, by the name asked for (lower case): null when it was not renamed. */
@@ -139,7 +139,6 @@ export class GitHubApp {
     this.fetch = options.fetch ?? fetch
     this.now = options.now ?? Date.now
     this.apiUrl = (options.apiUrl ?? 'https://api.github.com').replace(/\/$/, '')
-    this.slug = config.slug
   }
 
   /** Where an owner installs the app, when its URL name is configured. */
@@ -154,8 +153,9 @@ export class GitHubApp {
    */
   commitIdentity(): CommitIdentity { return COMMIT_IDENTITY }
 
-  /** The app's bot account's login, which GitHub's activity log names as the actor of every push with the app's token: from its
-   *  configured name, else GitHub's answer, remembered. Null while GitHub cannot say. Never read from a commit. */
+  /** The app's bot account's login, which GitHub's activity log names as the actor of every push with the app's token: GitHub's
+   *  own answer, remembered. Never a configured name, as a wrong one asks the log for a bot that never pushed, and its empty
+   *  answer reads as clean. Null while GitHub cannot say, which reads as unknown. Never read from a commit. */
   async botLogin(): Promise<string | null> {
     if (this.slug) return `${this.slug}[bot]`
     try {
