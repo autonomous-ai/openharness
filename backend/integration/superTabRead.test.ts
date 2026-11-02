@@ -676,8 +676,10 @@ describe('a real command through the store by parts (design 4.7)', () => {
     expect(written.version).toBeGreaterThan(R)
     clock = Date.now()
     const seen = (await get(`/api/super-tabs/${s.tabId}/changes?cursor=${cursor}`, peer)).body.data
+    // The task's line in its project chat takes the new name too (taskLine.ts): that chat is written in the same commit.
+    expect(reply.parts.filter(p => p.kind === 'group').map(p => [p.key, p.version]).sort()).toEqual([['lead', written.version], [s.web, written.version]].sort())
     expect(seen.groups.map((g: { key: string; version: number; data: { title: string } }) => [g.key, g.version, g.data.title]))
-      .toEqual([[s.web, written.version, 'Renamed for real']])
+      .toEqual([['lead', written.version, 'Lead'], [s.web, written.version, 'Renamed for real']])
     expect(seen.lastChangedAt).toBe(reply.lastChangedAt)
   })
 })
