@@ -84,9 +84,9 @@ How it works (`backend/src/superTabs/machines.ts`, `teamWorkCheck`):
 - **Routing.** The tab read gives each machine `teamWork`: `{ allowed: true }`, or `{ allowed: false, code, reason }`. The CLI's route leaves those machines out for a teammate's project and lists the reason in `excluded[]`. The backend does the same with any candidate an older CLI still sends, and refuses a pick there ("… Route again.").
 - **Migration.** Nothing is stopped. Agents already running on personal machines keep their current task, its reports, messages and their sessions. New starts, new assignments and new Reviewer groups for another person's project follow the rule. A personal machine contributed with scope "swarm" now serves only its owner's projects. So does a machine contributed before projects (no scope) by someone other than the Swarm's owner: the Swarm's first project is the owner's.
 - **Switch.** The backend shipped (1.3.28) before the CLI that makes team accounts. So the rule is held to every machine only with `SWARM_TEAM_ACCOUNT_REQUIRED=1` (`machines.ts` `teamAccountRequired`). Until then, a machine without a team account takes a teammate's work as it did before, and a machine with one already follows the rule. Turn it on with the CLI and Desktop release that makes team accounts.
-- **One person's Swarms first.** `SWARM_TEAM_ACCOUNT_OWNERS`, comma-separated emails, holds the switch to the Swarms
-  those people own (2026-10-27), so it can be tried on production without changing anyone else's: every other Swarm
-  behaves as with the switch off. Empty, the switch is every Swarm's.
+- **One person's Swarms first, then every Swarm.** From 2026-10-27 `SWARM_TEAM_ACCOUNT_OWNERS`, comma-separated emails,
+  held the switch to the Swarms those people own, so it could be tried on production without changing anyone else's.
+  Since 2026-11-02 every Swarm takes part and the variable is no longer read.
 - **GitHub App first.** A team account has no git login, so it can fetch and push only with the Harness GitHub App. Until the server has the app (`docs/swarm-github-app.md`), a team account joins no Swarm and takes no teammates' work, and starts on its Mac stay with the Mac (`teamAccountsIdle`). Configure the app before turning `SWARM_TEAM_ACCOUNT_REQUIRED` on, or teammates' work has nowhere to run.
 
 ## Task 4: Harness GitHub App (backend, CLI)

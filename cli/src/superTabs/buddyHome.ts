@@ -10,6 +10,8 @@ import { execFile } from 'node:child_process'
 import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
+import { launchEnvironment } from '../engines/kit/launchExecutable.js'
+import { folderTrust } from '../engines/launchPrep.js'
 import { insideGitCheckout } from '../lib/gitProject.js'
 
 const run = promisify(execFile)
@@ -106,6 +108,20 @@ export async function pruneBuddyHome(home: string, readable: ReadonlySet<string>
   for (const row of gone) await removeWorktree(home, row.dir)
   writeListed(home, rows.filter(r => readable.has(r.id)))
   return gone.map(r => r.name)
+}
+
+/**
+ * Answers Claude Code's question about [home], in the file it reads, as its launch would otherwise wait on it. That question
+ * is asked in a terminal no Swarm view shows, so the Buddy sat at it until its start timed out (MacBookPro2021, 2026-11-02).
+ * This is an exception to "never a folder with content" (engines/kit/folderTrust.ts): the folder is Harness's, made for the
+ * start its person pressed, and what the question guards against cannot happen in it. A Buddy launches with
+ * `--setting-sources local --strict-mcp-config`, so no project's files configure it, and the folder goes with the Buddy.
+ * A Buddy on another engine has none of this to rely on, so it still asks. A failure here only leaves the question.
+ */
+export async function trustBuddyHome(home: string, engine: unknown): Promise<void> {
+  if (engine !== 'claude') return
+  try { folderTrust('claude', undefined, await launchEnvironment() ?? undefined)?.record(home) }
+  catch (error) { console.warn(`[super-tabs] could not answer the folder question for a Buddy: ${(error as Error).message}`) }
 }
 
 /** Takes every worktree out of [home] and removes it: its Buddy ended. */

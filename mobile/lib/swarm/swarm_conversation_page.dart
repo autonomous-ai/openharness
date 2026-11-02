@@ -302,6 +302,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
           dictation: SwarmScope.dictationOf(context),
           draft: () => _conversation?.draft ?? '',
           write: (text) => _conversation?.draft = text,
+          post: _voiceSend,
         );
       }
     }
@@ -797,6 +798,13 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       _olderFailed =
           c.hasOlder && (c.error != null || c.messages.length == shown);
     });
+  }
+
+  /// The voice row's Send, once its take has ended into the draft: the
+  /// composer's own Send, in the chat shown now.
+  void _voiceSend() {
+    final c = _conversation;
+    if (mounted && c != null && c.canSend) _send(c);
   }
 
   /// Sends the draft, back at the foot of the chat where the post shows.
@@ -1938,7 +1946,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// not hear, then the card ([SwarmComposerCard]): the files going with the
   /// post, a field that grows with what is typed and its X, and the toolbar —
   /// +, @ Tag, the mic and a round Send. While a take is under way the toolbar
-  /// is the voice row ([SwarmVoiceRow]) and the picker and X are hidden. An @
+  /// is the voice row ([SwarmVoiceRow]), with its own Send, and the picker
+  /// and X are hidden. An @
   /// is typed in the field or put there by Tag: both open the same picker.
   Widget _composer(SwarmConversation c, Tty tty, {required String hint}) {
     final snapshot = c.reader.snapshot;
