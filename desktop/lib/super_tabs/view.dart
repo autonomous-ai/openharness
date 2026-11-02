@@ -2528,6 +2528,11 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
+  static const _menuStyle = MenuStyle(
+    minimumSize: WidgetStatePropertyAll(Size(220, 0)),
+    padding: WidgetStatePropertyAll(EdgeInsets.all(grid.AppDesktop.menuInset)),
+  );
+
   ButtonStyle _menuRowStyle({bool finger = false}) => ButtonStyle(
     minimumSize: WidgetStatePropertyAll(Size(208, finger ? kFingerTarget : 32)),
     side: WidgetStatePropertyAll(BorderSide.none),
@@ -2604,10 +2609,7 @@ class _SuperTabViewState extends State<SuperTabView>
     Widget item(String label, VoidCallback? action, {Widget? trailing}) =>
         _menuItem(label, action, finger: _phone, trailing: trailing);
     return MenuAnchor(
-      style: const MenuStyle(
-        minimumSize: WidgetStatePropertyAll(Size(220, 0)),
-        padding: WidgetStatePropertyAll(EdgeInsets.all(6)),
-      ),
+      style: _menuStyle,
       menuChildren: [
         item(
           'Status',
@@ -2691,10 +2693,7 @@ class _SuperTabViewState extends State<SuperTabView>
     Widget item(String label, VoidCallback? action) =>
         _menuItem(label, action, finger: views);
     return MenuAnchor(
-      style: const MenuStyle(
-        minimumSize: WidgetStatePropertyAll(Size(220, 0)),
-        padding: WidgetStatePropertyAll(EdgeInsets.all(6)),
-      ),
+      style: _menuStyle,
       menuChildren: [
         if (views) ...[
           item(
