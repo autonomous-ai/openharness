@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { bridgeKey, bridgePort, saveBridgePort } from '../lib/connectors/agents.js'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { request as httpRequest } from 'node:http'
 import { connect, createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -30,7 +31,15 @@ describe('the connectors service', () => {
     // Signed out of Harness whatever this computer is: nothing here reaches the backend.
     gateway.backend.signedIn = () => false
   })
-  afterEach(() => { gateway.backend.signedIn = signedIn; vi.mocked(serveBridgeSocket).mockClear(); rmSync(home, { recursive: true, force: true }) })
+  afterEach(() => {
+    gateway.backend.signedIn = signedIn
+    vi.mocked(serveBridgeSocket).mockClear()
+    rmSync(home, { recursive: true, force: true })
+    for (const made of shortHomes.splice(0)) rmSync(made, { recursive: true, force: true })
+  })
+  // A socket's path has a limit, and an agent's temporary folder can be past it on its own. These tests need the socket.
+  const shortHomes: string[] = []
+  const shortHome = () => { const made = mkdtempSync('/tmp/hc-'); shortHomes.push(made); return made }
 
   it('answers exactly the request it declares, and only for the owner', async () => {
     const requests = startConnectors(fakeCore(), { env })
@@ -262,6 +271,11 @@ describe('the connectors service', () => {
       return 0
     }
     const body = (port: number, path: string) => fetch(`http://127.0.0.1:${port}${path}`, { method: 'POST', body: '{}' }).then(reply => reply.text())
+    const rawStatus = (port: number, path: string) => new Promise<number>((resolve, reject) => {
+      const sent = httpRequest({ host: '127.0.0.1', port, path, method: 'POST' }, (reply) => { reply.resume(); resolve(reply.statusCode ?? 0) })
+      sent.once('error', reject)
+      sent.end('{}')
+    })
     const longVault = () => new Store(join(home, 'v'.repeat(120)), env)
 
     it('answers both keys on the port, leaves them unchanged, and makes no socket', async () => {
@@ -276,7 +290,7 @@ describe('the connectors service', () => {
       expect(existsSync(join(vault.root, 'bridge.sock'))).toBe(false)
       expect(vi.mocked(serveBridgeSocket)).not.toHaveBeenCalled()
       expect(await status(port, '/not-a-key/connections')).toBe(404)
-      expect(await status(port, '/harness-key-placeholder/connections')).not.toBe(404)
+      expect(await status(port, '/harness-key-placeholder/connections')).toBe(200)
       // The agents' key reaches a connection's MCP address, and the list stays Harness's alone.
       expect(await status(port, `/${agentKey}/connections`)).toBe(404)
       expect(await body(port, `/${agentKey}/linear/mcp`)).toContain('is not connected')
@@ -290,7 +304,8 @@ describe('the connectors service', () => {
       rmSync(join(vault.root, 'bridge.json'), { force: true })
       rmSync(join(vault.root, 'harness-key.json'), { force: true })
       expect(await status(port, '/x/connections')).toBe(404)
-      expect(await status(port, '//connections')).toBe(404)
+      // A raw request, as fetch would normalize this path: the first segment is empty, and an empty key never matches a missing one.
+      expect(await rawStatus(port, '/.//connections')).toBe(404)
       expect(await body(port, `/${agentKey}/linear/mcp`)).toContain('Unknown connection address')
     })
   })
@@ -298,9 +313,11 @@ describe('the connectors service', () => {
   // The store refuses a vault folder that has become a link: its keys cannot be read or replaced, and nobody gets in by that.
   it('starts anyway when its folder cannot be trusted, says so, and refuses everyone on the port', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const elsewhere = join(home, 'elsewhere'), root = join(home, 'link')
+    const short = shortHome()
+    const elsewhere = join(short, 'elsewhere'), root = join(short, 'link')
     mkdirSync(elsewhere, { mode: 0o700 })
-    writeFileSync(join(elsewhere, 'bridge.json'), JSON.stringify({ key: 'k'.repeat(40) }), { mode: 0o600 })
+    const behindLink = JSON.stringify({ key: 'k'.repeat(40) })
+    writeFileSync(join(elsewhere, 'bridge.json'), behindLink, { mode: 0o600 })
     symlinkSync(elsewhere, root)
     const server = createServer()
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
@@ -314,13 +331,14 @@ describe('the connectors service', () => {
       if (!answer) await new Promise(resolve => setTimeout(resolve, 25))
     }
     expect(answer).toContain('Unknown connection address')
+    expect(readFileSync(join(elsewhere, 'bridge.json'), 'utf8')).toBe(behindLink)
     warn.mockRestore()
   })
 
   describe('while another listener holds the bridge\'s socket', () => {
     it('says so once, keeps trying, and takes the socket when it is free', async () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-      const vault = new Store(join(home, 's'), env), path = join(vault.root, 'bridge.sock')
+      const vault = new Store(join(shortHome(), 's'), env), path = join(vault.root, 'bridge.sock')
       mkdirSync(vault.root, { recursive: true, mode: 0o700 })
       const holder = createServer()
       await new Promise<void>(resolve => holder.listen(path, resolve))
@@ -341,7 +359,7 @@ describe('the connectors service', () => {
     it('says what went wrong when the failure is not an Error', async () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       vi.mocked(serveBridgeSocket).mockRejectedValueOnce('a plain reason')
-      startConnectors(fakeCore(), { vault: new Store(join(home, 'p'), env), env, port: 0, offered: async () => ({}), retryMs: 10, vaultPort: null })
+      startConnectors(fakeCore(), { vault: new Store(join(shortHome(), 'p'), env), env, port: 0, offered: async () => ({}), retryMs: 10, vaultPort: null })
       await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringContaining('a plain reason')))
       warn.mockRestore()
     })
