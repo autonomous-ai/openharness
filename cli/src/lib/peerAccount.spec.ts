@@ -210,6 +210,12 @@ describe('who is at the other end of a loopback connection', () => {
       expect(script).toMatch(/CreationDate -gt \$row\.CreationTime/)
     })
 
+    // The Windows run on #2605: Windows gives a socket's time to the second and a process's finer, so a process that opened its
+    // listener within the second it started read as started after it. Here that would move the bridge off its own port.
+    it('allows two seconds for Windows\' whole-second listener time, as the peer check does', () => {
+      expect(windowsListenerQuery(51793).script).toMatch(/\$process\.CreationDate -gt \$row\.CreationTime\.AddSeconds\(2\)/)
+    })
+
     // Quinn 2's review of #2608: a listener of this account's on another address (::1, 127.0.0.2) answered yes, so the bridge
     // waited instead of moving off another account's 127.0.0.1. Only a listener that keeps 127.0.0.1's port from being bound counts.
     it('counts only the listeners that hold 127.0.0.1\'s port: on it, on any IPv4 address, or on any address dual-stack', () => {
