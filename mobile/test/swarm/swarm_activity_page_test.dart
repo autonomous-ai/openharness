@@ -9,6 +9,7 @@ import 'package:harness_mobile/swarm/swarm_activity_page.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
+import 'package:harness_mobile/swarm/swarm_thread_page.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_activity_fixture.dart';
@@ -255,11 +256,13 @@ void main() {
 
     await tester.tap(key('swarm-activity-reply-thread:$tab:root-1'));
     await tester.pumpAndSettle();
+    // The thread is open over its chat, which is at the root behind it.
+    expect(find.byType(SwarmThreadPage), findsOneWidget);
     final page = tester.widget<SwarmConversationPage>(
-      find.byType(SwarmConversationPage),
+      find.byType(SwarmConversationPage, skipOffstage: false),
     );
     expect((page.conversationId, page.messageId), (leadChat, 'root-1'));
-    expectHomeCProject('Mobile');
+    expect(page.threadId, 'root-1');
   });
 
   testWidgets("Reactions: who reacted how to the person's message", (
