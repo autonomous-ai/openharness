@@ -30,6 +30,13 @@ referenced by an open group or a record that needs it; tests for the read and th
 
 ## Review Focus
 
+- Versions never go back (postmortem 2026-10-27 D6, design ruling 6). Agent tombstones were kept for good so a key
+  added again continues above its old version: an agent's key is `stableId(machineId, harnessId)`, so a reopened session
+  comes back under it. Deleting the tombstone loses that version. What stores and orders by it is
+  `SuperTabConfiguration.revision` ("ordered by the agent part's version", store.ts); clients drop a removed part and
+  merge by version only while they hold it (cli partsStore.ts), and a cursor older than the 7 days reloads. So an agent
+  inserted with no row starts above its newest configuration revision (Task 2). Reviewers: check nothing else persists
+  an agent's version across its removal.
 - An agent added again while the sweep deletes its tombstone: the add must not reset its version or be lost. Pinned by the
   re-add test in Task 2 and the guarded delete in Task 3 (the same due match on the delete).
 - A tombstone named by a conversation's Lead or assignee but not in `agentIds`: kept. Pinned in Task 3.

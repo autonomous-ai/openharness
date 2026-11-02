@@ -100,6 +100,14 @@ async function keepFinishedAt(tx: Transaction, id: string, fields: Record<string
   return row?.finishedAt ? { ...fields, finishedAt: row.finishedAt } : fields
 }
 
+/** The newest configuration revision stored for an agent, 0 with none. Revisions are the agent part's versions, so an agent
+ *  whose tombstone was purged (agentTombstones.ts) starts above it when added again: its versions never go back (D6). */
+async function configurationRevision(tx: Transaction, tabId: string, agentId: string): Promise<number> {
+  const [row] = await tx.superTabConfiguration.aggregateRaw({ pipeline: [{ $match: { tabId, agentId } }, { $sort: { revision: -1 } }, { $limit: 1 },
+    { $project: { _id: 0, revision: 1 } }] }) as unknown as Array<{ revision: number }>
+  return row?.revision ?? 0
+}
+
 /**
  * Writes one part inside the command's transaction, guarded by the version it was read at (design section 3.2). The
  * guard checks the committed version at write time, so it holds whatever the transaction's read concern: a part another
@@ -123,7 +131,7 @@ export async function guardedWrite(tx: Transaction, tabId: string, write: PartWr
       if (!updated.count) throw new PartConflict(write.kind, write.key)
       return prior.version + 1
     }
-    const version = write.first ?? 1
+    const version = Math.max(write.first ?? 1, write.kind === 'agent' ? await configurationRevision(tx, tabId, write.key) + 1 : 0)
     await model.create({ data: { id, tabId, key: write.key, version, changedAt: new Date(stamp), deleted: false, ordinal: write.ordinal,
       data: json(write.data), ...fields } })
     return version
