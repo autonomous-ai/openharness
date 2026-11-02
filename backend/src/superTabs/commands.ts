@@ -3202,9 +3202,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   keepUsernames(original, state)
   // Every agent added to or removed from a chat leaves a row there naming who did it (Ken, #2207), for the chat's readers and
   // waking nobody. A start's own line names its starter (agent.started).
-  if (command.type !== 'agent.started') {
+  const membership = command.type === 'agent.started' ? [] : memberChanges(original, state)
+  if (membership.length) {
     const by = { id: actor.kind === 'agent' ? actor.agentId : actor.userId, name: actorName(state, actorKey(actor)) ?? who }
-    for (const { group, agent: member, added } of memberChanges(original, state)) {
+    for (const { group, agent: member, added } of membership) {
       effects.messages.push({ id: stableId(operationId, 'member', group.id, member.id), conversationId: group.id, author: sender,
         text: memberRowText(by, { id: member.id, name: member.displayName ?? member.name }, added), replyTo: null, recipients: [], source: SYSTEM_ROW })
     }
