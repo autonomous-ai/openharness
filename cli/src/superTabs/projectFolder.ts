@@ -72,11 +72,14 @@ async function revokeQuietly(token: string, revoke = revokeGitHubToken): Promise
 export async function prepareSwarmStart(core: CoreApi, row: Json, start: Json,
   deps: { backend: Backend; team: boolean; prepare?: typeof prepareProjectFolder; fetch?: typeof fetchDefaultBranch; revoke?: (token: string) => Promise<void> }):
   Promise<{ requester: string } | null> {
+  const request = object(start.request)
+  // A person's one Buddy has no project: its launch makes its folder from the checkouts already here and fetches nothing
+  // (buddyHome.ts). Asking for a token anyway was refused with a 404, which failed every such start (2026-11-02).
+  if (request.buddyScope === 'swarm') return null
   const github = await startGitHub(core, row, start, deps)
   const gitEnv = github ? swarmGitPrepareEnv(github.token) : undefined
   try {
     if (object(row.machine).scope === 'swarm') await prepareSwarmProject(core, row, start, deps.prepare, gitEnv)
-    const request = object(start.request)
     if (gitEnv && request.worktree === true && typeof request.cwd === 'string' && isAbsolute(request.cwd)) {
       await (deps.fetch ?? fetchDefaultBranch)(resolve(request.cwd), gitEnv)
     }

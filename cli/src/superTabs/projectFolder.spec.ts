@@ -147,6 +147,20 @@ describe('preparing another person\'s start with the Harness GitHub App', () => 
     expect(noApp.backend).not.toHaveBeenCalled()
   })
 
+  it('prepares nothing for a person\'s one Buddy, which has no project: no token, no clone, no fetch', async () => {
+    // 2026-11-02: the token call was refused with "This start has no project folder to prepare", which failed the start.
+    const app = hosted(new SuperTabHostError('NOT_FOUND', 'This start has no project folder to prepare.', 404))
+    Object.assign(app.start.request, { buddyScope: 'swarm', buddyOf: { personId: 'owner', generation: 'g' } })
+    expect(await app.ready()).toBeNull()
+    expect(app.backend).not.toHaveBeenCalled()
+    expect(app.prepare).not.toHaveBeenCalled()
+    expect(app.fetch).not.toHaveBeenCalled()
+    // Without the app it failed too, as a start of no project this machine was authorized for.
+    delete (app.row as { githubApp?: boolean }).githubApp
+    expect(await app.ready()).toBeNull()
+    expect(app.prepare).not.toHaveBeenCalled()
+  })
+
   it('in a team account, always asks for a token, and fails without one rather than using any other login', async () => {
     const team = hosted()
     expect(await team.ready(true)).toEqual({ requester: 'olive@example.com' })
