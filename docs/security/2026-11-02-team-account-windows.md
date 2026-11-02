@@ -69,9 +69,24 @@ make the daemon refuse the credential over TCP from another account. Windows can
 - CLI clients never put the credential on TCP (`localCredentialHeaders` gives nothing on Windows). Their fetch helper and their
   WebSockets go over the pipe (`lib/localTransport.ts` `daemonFetch`, `openLocalWs`), and with no pipe they say Harness is not
   running.
-- Still open: the connectors bridge's MCP clients can only dial its HTTP address, so whoever holds the bridge's port still hears
-  its key and the tool calls (as on macOS). The key opens nothing from another account now. Closing it needs a local transport for
-  MCP clients that proves the daemon, a separate task.
+- The connectors bridge (task #2162, from Reed's review of #2605, Medium at least). Until then, `portHolderIsThisAccount`
+  answered null on Windows, so the bridge never moved off a port another account held, and agents' entries and Harness's own
+  `bridgeRoute` named that port. The bridge's default port, 51793, is the same for every account, and the Team account's daemon
+  starts connectors at boot, so in practice the Team account read every tool call of the owner's agents and could return false
+  tool answers to agents running with the owner's rights. The key opened nothing from another account after W1, but the answers
+  were taken. Now:
+  - Windows is asked whose the listener is (`lib/peerAccount.ts` `windowsListenerQuery`: `Get-NetTCPConnection -State Listen`,
+    the process's owner SID against this account's, a process that started after its listener counted as not this account's),
+    so the bridge moves off another account's port, as on macOS and Linux.
+  - The bridge also listens on a pipe of a new name at each start, `\\.\pipe\harness-<id>`, whose every request proves a token
+    new at each start, and whose every answer proves it back (`lib/connectors/bridge.ts` `serveBridgePipe`). The pipe, the
+    serving process and the token are recorded in `bridge-pipe.json` in the vault's private folder.
+  - Agents' entries run the stdio shim with `--pipe <record>` (`mcpShimSource.ts`), and Harness's own `bridgeRoute` goes over the
+    same pipe. Both dial it only while the recorded process runs as this account (EPERM is no), and take no answer without the
+    proof. With no live pipe they say Harness or Connections is not running; nothing goes to the port. As on macOS, Harness's key
+    is replaced once and never crosses the port, and the agents' old key opens the port for a day, for agents still running on it.
+  - Left as for the daemon's pipe: a recorded pid this account's own process took since (by chance) is still dialled, and the
+    request reaches whatever made a pipe of the name; its answer is refused by the proof.
 - Still open: the OpenCode, Kilo, Pi and Amp plugins (`engines/kit/pluginFetch.ts`) have no socket on Windows and post to the
   port with the hook-only token and the session's details. The token opens nothing from another account now, but whoever holds
   the port hears both, and each new connection costs the daemon's one-second lookup. They need the pipe too, a separate task.
