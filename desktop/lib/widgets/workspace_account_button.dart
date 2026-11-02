@@ -86,12 +86,16 @@ class WorkspaceAvatarButton extends StatelessWidget {
     required this.initial,
     required this.tooltip,
     this.onPressed,
+    this.size = diameter,
   });
 
   /// One letter, or empty while the profile has not been read: a person mark.
   final String initial;
   final String tooltip;
   final VoidCallback? onPressed;
+
+  /// The circle as this row draws it ([diameter], unless the row says).
+  final double size;
 
   /// The circle. Its slot in the row is [widthOf].
   static const diameter = 24.0;
@@ -113,7 +117,7 @@ class WorkspaceAvatarButton extends StatelessWidget {
         child: Center(
           child: AccountAvatar(
             initial: initial,
-            diameter: diameter,
+            diameter: size,
             emphasized: emphasized,
             enabled: enabled,
             accent: accent,
