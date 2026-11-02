@@ -112,6 +112,7 @@ class ProjectSidebar extends StatelessWidget {
   @visibleForTesting
   /// Projects and workgroups share a text column. Only projects use its icon.
   static const _iconColumn = SuperTabSectionHeading.actionWidth;
+  static const _rowEnd = 10.0;
 
   Widget _navigationRow({
     required String key,
@@ -474,13 +475,19 @@ class ProjectSidebar extends StatelessWidget {
                         ),
                       ),
                       SizedBox(
-                        width: _iconColumn,
+                        // A project's row keeps no column for a mark it does
+                        // not have: its red number ends where Activity's does.
+                        width: project != null && trailing == null
+                            ? _rowEnd
+                            : _iconColumn,
                         // Unread is drawn as a bold name; a screen reader
                         // hears it said, as it heard the dot it replaces.
                         child: Semantics(
                           label: unread ? 'Unread messages' : null,
                           child: Center(
-                            child: waiting
+                            // What waits on the reader is Activity's to say; a
+                            // project's row says only what opening it shows.
+                            child: waiting && project == null
                                 ? Tooltip(
                                     message: 'Needs a human',
                                     child: Text(

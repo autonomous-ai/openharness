@@ -2237,6 +2237,8 @@ class _SuperTabViewState extends State<SuperTabView>
         ? 'Earlier Buddy chat · ${c.snapshot!.projects.where((p) => p.id == group.projectId).firstOrNull?.name ?? 'a project'}'
         : _buddyName(group) == null
         ? null
+        : group.isSwarmBuddyChat
+        ? 'Buddy'
         : c.buddy(group.projectId) == null && group.buddyName == null
         ? 'Your Buddy'
         : '${_buddyName(group)} · Your Buddy';
@@ -2244,7 +2246,7 @@ class _SuperTabViewState extends State<SuperTabView>
     if (group != null &&
         c.snapshot!.isProjectLead(group.id) &&
         !_devicesVisible &&
-        !_notificationsVisible) {
+        !_listViewHoldsThePane) {
       return _projectMenu(group, name, style);
     }
     return Text(
@@ -2432,6 +2434,9 @@ class _SuperTabViewState extends State<SuperTabView>
   Widget _header(SuperTabConversation? group, bool narrow) {
     final isProject =
         group != null && c.snapshot?.isProjectLead(group.id) == true;
+    // The one Buddy has one chat, as a project does; it has no pull requests.
+    final oneBuddy = group?.isSwarmBuddyChat == true;
+    final restsOnChat = isProject || oneBuddy;
     return Container(
       constraints: const BoxConstraints(minHeight: 52),
       // A phone's rows line up (Huy, 2026-11-02): the sidebar icon starts at
@@ -2497,7 +2502,7 @@ class _SuperTabViewState extends State<SuperTabView>
           if (group != null && !_devicesVisible && !_listViewHoldsThePane) ...[
             // A project's chat is where its header rests: the button back
             // to it shows only from another view (Quiet Swarm, screen 1).
-            if (!isProject || _terminalsVisible || _showPullRequests)
+            if (!restsOnChat || _terminalsVisible || _showPullRequests)
               fingerTarget(
                 enabled: _phone,
                 AppIconButton(
@@ -2537,7 +2542,7 @@ class _SuperTabViewState extends State<SuperTabView>
               ),
             ],
             if (!isProject) ...[
-              if (!_menuNamesViews) ...[
+              if (!_menuNamesViews && !oneBuddy) ...[
                 const SizedBox(width: 4),
                 AppIconButton(
                   key: const ValueKey('super-pull-requests'),
@@ -2560,16 +2565,20 @@ class _SuperTabViewState extends State<SuperTabView>
           ],
           // The right column opens only from here (Quiet Swarm, Dee,
           // 2026-11-02): closed at rest, at every width.
-          fingerTarget(
-            enabled: _phone,
-            AppIconButton(
-              key: const ValueKey('super-members-button'),
-              icon: AppIcons.users,
-              tooltip: 'Members',
-              selected: _rosterOpen,
-              onPressed: _toggleRoster,
+          if (group != null &&
+              !_listViewHoldsThePane &&
+              !oneBuddy &&
+              !_devicesVisible)
+            fingerTarget(
+              enabled: _phone,
+              AppIconButton(
+                key: const ValueKey('super-members-button'),
+                icon: AppIcons.users,
+                tooltip: 'Members',
+                selected: _rosterOpen,
+                onPressed: _toggleRoster,
+              ),
             ),
-          ),
         ],
       ),
     );
@@ -4366,12 +4375,15 @@ class _SuperTabViewState extends State<SuperTabView>
                   children: [
                     _header(c.selected, narrow),
                     if (_manageOpen)
-                      SuperTabManageTabs(
-                        selected: _devicesVisible
-                            ? SuperTabManageTab.devices
-                            : _manageTab,
-                        devices: _hasDevices,
-                        onChoose: _chooseManageTab,
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: SuperTabManageTabs(
+                          selected: _devicesVisible
+                              ? SuperTabManageTab.devices
+                              : _manageTab,
+                          devices: _hasDevices,
+                          onChoose: _chooseManageTab,
+                        ),
                       ),
                     Expanded(
                       child: SuperTabPages(

@@ -1343,6 +1343,77 @@ void main() {
       expectHomeCProject('Web');
     });
 
+    testWidgets('Home opens Older and reopens an archived chat', (
+      tester,
+    ) async {
+      final fake = backend();
+      var archived = true;
+      Map<String, dynamic> oldChat() => {
+        ...groupData('g-archived', title: 'Old chat', number: 23),
+        'archived': archived,
+        'dormant': archived,
+      };
+      fake.routes['/api/super-tabs/$tab/groups?dormant=1&projectId=$project'] =
+          (_) => {
+            'groups': [part('g-archived', 2, oldChat())],
+            'next': null,
+          };
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+        cursor: 'c3',
+        groups: archived ? [] : [part('g-archived', 3, oldChat())],
+      );
+      fake.routes['/api/super-tabs/$tab/commands'] = (body) {
+        final command = body?['command'] as Map<String, dynamic>;
+        if (command['type'] == 'conversation.archive') {
+          archived = command['archived'] as bool;
+        }
+        return {'result': <String, dynamic>{}};
+      };
+      final host = await pump(tester, fake);
+
+      await tester.tap(key('swarm-project-$tab-$project'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-project-menu'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-project-menu-work'));
+      await tester.pumpAndSettle();
+      expect(find.byType(SwarmProjectSheet), findsOneWidget);
+
+      await tester.ensureVisible(key('swarm-older'));
+      await tester.tap(key('swarm-older'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-conversation-g-archived'), findsOneWidget);
+
+      await tester.ensureVisible(key('swarm-conversation-g-archived'));
+      await tester.tap(key('swarm-conversation-g-archived'));
+      await tester.pumpAndSettle();
+      expect(
+        (tester.widget<SwarmConversationPage>(
+          find.byType(SwarmConversationPage),
+        )).conversationId,
+        'g-archived',
+      );
+
+      await tester.tap(key('swarm-chat-menu'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Reopen'));
+      await tester.pumpAndSettle();
+
+      expect(fake.commands.single, {
+        'type': 'conversation.archive',
+        'conversationId': 'g-archived',
+        'archived': false,
+      });
+      expect(
+        host.session!.inbox
+            .reader(tab)!
+            .snapshot!
+            .conversation('g-archived')!
+            .archived,
+        isFalse,
+      );
+    });
+
     testWidgets("a new message to a project's chat opens that project on "
         'Home C too', (tester) async {
       final fake = backend();
