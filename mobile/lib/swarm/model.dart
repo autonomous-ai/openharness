@@ -453,7 +453,8 @@ class SuperTabProject {
   final int updateMinutes;
 
   /// The project's status card text, read as the desktop's model reads it
-  /// (`SwarmProjectStatusCard`).
+  /// (`SuperTabProjectStatusCard`); the phone shows it in the project menu's
+  /// Status sheet.
   final SuperTabProjectStatus? status;
   final Map<String, dynamic>? repository;
 }
