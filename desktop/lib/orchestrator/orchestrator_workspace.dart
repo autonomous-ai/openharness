@@ -12,6 +12,7 @@ import '../state/terminal_pane.dart';
 import '../widgets/web_pane_panel.dart';
 import 'orchestrator_controller.dart';
 import 'orchestrator_launcher.dart';
+import '../widgets/laid_out_list.dart';
 
 class OrchestratorWorkspace extends StatefulWidget {
   const OrchestratorWorkspace({
@@ -452,7 +453,7 @@ class _OrchestratorWorkspaceState extends State<OrchestratorWorkspace> {
           ),
         Expanded(
           child: SelectionArea(
-            child: ListView.builder(
+            child: LaidOutListView.builder(
               key: const ValueKey('orchestrator-conversation'),
               controller: _messagesScroll,
               padding: const EdgeInsets.all(18),
