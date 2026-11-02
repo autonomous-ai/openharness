@@ -561,13 +561,16 @@ void main() {
       SuperTabChatNotices.of(c).onMessage = (g, s) => told.add((g.id, s));
       fromLead(server, 'Before', conversationId: 'offline');
       await c.refresh();
+      await settle();
       expect(told, isEmpty);
       await c.setNotify('offline', SuperTabNotify.all);
       fromLead(server, 'After', conversationId: 'offline');
       await c.refresh();
+      await settle();
       expect(told.map((t) => t.$1), ['offline']);
       fromLead(server, 'In the project chat');
       await c.refresh();
+      await settle();
       expect(told.map((t) => t.$1), ['offline']);
     });
 
@@ -588,6 +591,7 @@ void main() {
       c.away = true;
       fromLead(server, 'While on another Swarm');
       await c.refresh();
+      await settle();
       expect(told, hasLength(1));
     });
 
@@ -600,6 +604,7 @@ void main() {
       binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
       fromLead(server, 'While in another app');
       await c.refresh();
+      await settle();
       expect(told, hasLength(1));
     });
 
@@ -621,6 +626,33 @@ void main() {
       await settle();
       expect(told, isEmpty);
     });
+
+    test(
+      'a message whose author can\'t be read is told about, never lost',
+      () async {
+        final server = projectServer();
+        final c = SuperTabController(
+          tabId: 'tab',
+          accountId: 'owner',
+          save: server.save,
+          request: (method, path, {body}) async {
+            if (path.contains('offline/messages?after=')) {
+              throw StateError('Offline');
+            }
+            return server.request(method, path, body: body);
+          },
+        );
+        addTearDown(c.dispose);
+        await c.refresh();
+        final told = <int>[];
+        SuperTabChatNotices.of(c).onMessage = (_, s) => told.add(s);
+        await c.setNotify('offline', SuperTabNotify.all);
+        fromLead(server, 'From the Lead', conversationId: 'offline');
+        await c.refresh();
+        await settle();
+        expect(told, hasLength(1));
+      },
+    );
 
     test('a teammate\'s message still does', () async {
       final (c, server, told) = await chatSetToAll();

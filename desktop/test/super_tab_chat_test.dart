@@ -161,16 +161,27 @@ void main() {
       addTearDown(c.dispose);
       await c.refresh();
       final told = <int>[];
+      void fromTeammate(String text) {
+        server.append(text);
+        server.messages.last['author'] = {
+          'kind': 'agent',
+          'id': 'lead-agent',
+          'name': 'Lead',
+        };
+      }
+
       SuperTabChatNotices.of(c).onMessage = (_, s) => told.add(s);
       await c.setNotify(c.selectedId, SuperTabNotify.all);
       await showReadView(tester, c);
-      server.append('While reading it');
+      fromTeammate('While reading it');
       await tester.runAsync(c.refresh);
+      await tester.runAsync(pumpEventQueue);
       await tester.pump();
       expect(told, isEmpty);
       await showReadView(tester, c, terminals: true);
-      server.append('Behind the terminals');
+      fromTeammate('Behind the terminals');
       await tester.runAsync(c.refresh);
+      await tester.runAsync(pumpEventQueue);
       await tester.pump();
       expect(told, hasLength(1));
       await closeReadView(tester, c);
