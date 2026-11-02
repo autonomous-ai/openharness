@@ -309,6 +309,10 @@ export class DeviceLink {
     if (this.wanted !== machineId) throw new Error(SELECT_SUPERSEDED)
     await this.select(machineId)
     await this.establish(machineId)
+    // Again, because the handshake can take its whole 15 s with its select already settled, so a newer pick found nothing
+    // to replace: this attach resolved, and the dial was told it had landed on a machine the person had left (Diego's
+    // Buddy, 11-02). The session it made is kept: the carousel holds this machine's agents whichever is selected.
+    if (this.wanted !== machineId) throw new Error(SELECT_SUPERSEDED)
   }
 
   /**
