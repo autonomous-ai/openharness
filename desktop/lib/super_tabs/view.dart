@@ -69,6 +69,7 @@ import 'switch_pm.dart';
 import 'project_status_card.dart';
 import 'pane_layout.dart';
 import 'view_room.dart';
+import 'visible_tick.dart';
 import '../widgets/dial_list_scroll.dart';
 import '../widgets/laid_out_list.dart';
 
@@ -4165,7 +4166,7 @@ class _SuperTabViewState extends State<SuperTabView>
                   children: [
                     _header(c.selected, narrow, showRoster),
                     Expanded(
-                      child: IndexedStack(
+                      child: SuperTabPages(
                         index: _devicesVisible
                             ? 1
                             : _notificationsVisible
