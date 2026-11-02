@@ -21,7 +21,7 @@ import { logger } from '../../utils/logger.js'
 import { stableId, type Author, type SuperTabState } from '../model.js'
 import { seedThreadMark } from '../readMarks.js'
 import { readBy } from '../parts/indexed.js'
-import { BEHIND_THREADS, groupBy, isReply, MEMBER_SCAN, perRange, readable, row, SCAN_FIELDS, UNREAD_SCAN, type Row } from './inbox.js'
+import { BEHIND_THREADS, groupBy, isReply, MEMBER_SCAN, newestInThreads, readable, row, SCAN_FIELDS, UNREAD_SCAN, type Row } from './inbox.js'
 
 /** Rows of the range one chat read looks at, from the old mark upward. */
 export const SEED_SCAN = 5 * UNREAD_SCAN
@@ -71,9 +71,7 @@ export async function seedThreadMarks(db: PrismaClient, input: SeedInput): Promi
   // thread index range; only the rows that name them come back.
   const unknown = withRoot.filter(thread => !member.has(thread))
   if (unknown.length) {
-    const named = await perRange(db, unknown.map(thread => [{ $match: { tabId, conversationId, thread, sequence: { $lte: old } } },
-      { $sort: { sequence: -1 } }, { $limit: MEMBER_SCAN },
-      { $match: { $or: [{ 'author.kind': 'person', 'author.id': personId }, { mentions: personId }] } }, { $project: { ...SCAN_FIELDS, conversationId: 1 } }]))
+    const named = await newestInThreads(db, tabId, unknown.map(thread => ({ conversationId, thread, sequence: { $lte: old } })), MEMBER_SCAN, personId)
     for (const m of await readable(db, tabId, named, state)) member.add(m.thread!)
   }
   let marked = 0

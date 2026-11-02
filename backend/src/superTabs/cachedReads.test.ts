@@ -172,7 +172,7 @@ describe('the delta a refresh reads', () => {
     const aggregateRaw = vi.fn(async () => [])
     const tx = Object.fromEntries(['swarmHead', 'swarmMember', 'swarmAgent', 'swarmGroup', 'swarmMachine', 'swarmStart', 'swarmProgress'].map(m => [m, { aggregateRaw }]))
     const db = { $transaction: vi.fn(async (body: (tx: unknown) => Promise<unknown>) => body(tx)) }
-    expect(await readDelta(db as never)('t', 5, ['group', 'start'])).toEqual({ parts: [], head: null })
+    expect(await readDelta(db as never)('t', 5, ['group', 'start'])).toEqual({ parts: [], head: null, hostDigests: new Map() })
     expect(db.$transaction).toHaveBeenCalledTimes(1)
     expect(aggregateRaw).toHaveBeenCalledTimes(2)
   })

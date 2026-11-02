@@ -51,7 +51,8 @@ const REF_PAGES = 3
 const ACTIVITY_PAGES = 20
 /** How long before a pull request opened its commits may have been pushed, for the log's scan to stop. */
 const BEFORE_PULL_MS = 7 * 24 * 3_600_000
-const TEAM_ADDRESS = /\[bot\]@|^harnessteam@/i
+// Harness's own address (app.ts COMMIT_IDENTITY) too: a commit that keeps it after a person cherry-picks it. Only ever adds a mark.
+const TEAM_ADDRESS = /\[bot\]@|^harnessteam@|^noreply@autonomous\.ai$/i
 
 type Json = Record<string, unknown>
 const object = (value: unknown): Json => value && typeof value === 'object' ? value as Json : {}
