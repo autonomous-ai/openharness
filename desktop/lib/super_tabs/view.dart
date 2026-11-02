@@ -68,6 +68,7 @@ import 'project_options.dart';
 import 'switch_pm.dart';
 import 'project_status_card.dart';
 import 'pane_layout.dart';
+import 'view_room.dart';
 import '../widgets/dial_list_scroll.dart';
 import '../widgets/laid_out_list.dart';
 
@@ -2215,23 +2216,40 @@ class _SuperTabViewState extends State<SuperTabView>
   /// remounted field keeps focus but loses its text input connection.
   final _composerFieldKey = GlobalKey();
 
+  /// The height above the keyboard below which a phone's composer keeps one row.
+  static const _phoneComposerTwoRowsFrom = 280.0;
+
+  /// The lines a phone's field may grow to with [room] above the keyboard: 5,
+  /// less what the header and the actions need on a small phone, whose pane
+  /// overflowed otherwise (320x568 with a 216 px keyboard, review of #2583).
+  int _phoneComposerLines(double room) {
+    final line = MediaQuery.textScalerOf(context).scale(20);
+    return ((room - 275) / line).floor().clamp(1, 5);
+  }
+
   /// The composer's field and its controls: a row on a wide window. A phone
   /// gives the field the width and the controls a row below (Huy, 2026-11-02:
   /// the field had about 40% of the row): [options] and [attach] at the left,
   /// wrapping if they must, and [send] at the right.
   Widget _composerLayout({
+    required double room,
     required Widget field,
     required List<Widget> options,
     required Widget attach,
     required Widget send,
   }) {
-    if (_phone) {
+    // Too little height for a second row (a phone on its side with its keyboard
+    // up): the actions take the row's end again, where there is width for them.
+    if (_phone && room >= _phoneComposerTwoRowsFrom) {
       return Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsets.only(top: 4, right: 8, bottom: 4),
+            padding: const EdgeInsets.only(
+              right: grid.AppDesktop.controlGap,
+              bottom: grid.AppDesktop.controlGap,
+            ),
             child: field,
           ),
           Row(
@@ -3774,7 +3792,7 @@ class _SuperTabViewState extends State<SuperTabView>
             builder: (context, field) => Padding(
               // On a phone the box sits against the keyboard, with the width.
               padding: _phone
-                  ? const EdgeInsets.fromLTRB(12, 8, 12, 8)
+                  ? const EdgeInsets.all(grid.AppDesktop.controlGap)
                   : EdgeInsets.fromLTRB(
                       24,
                       12,
@@ -3874,103 +3892,109 @@ class _SuperTabViewState extends State<SuperTabView>
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           SuperTabComposerChips(controller: c, files: _files),
-                          _composerLayout(
-                            field: NewHarnessPasteTarget(
-                              key: _composerFieldKey,
-                              attachments: _files,
-                              enabled: writable && !busy,
-                              focusNode: _focus,
-                              child: TextField(
-                                key: const ValueKey('super-message-composer'),
-                                controller: _composer,
-                                focusNode: _focus,
-                                autofocus: !_terminalsVisible,
-                                enabled: writable,
-                                minLines: 1,
-                                // A phone's keyboard takes the height, so
-                                // its height says nothing about the room
-                                // a draft should have (Huy, 2026-11-02).
-                                maxLines: _phone
-                                    ? 5
-                                    : MediaQuery.sizeOf(context).height < 600
-                                    ? 3
-                                    : 8,
-                                maxLength: kComposerMaxLength,
-                                inputFormatters: [_tagBackspace],
-                                keyboardType: TextInputType.multiline,
-                                textAlignVertical: TextAlignVertical.center,
-                                style: DesktopChrome.text(),
-                                decoration: InputDecoration(
-                                  // The row centers the line. Inheriting a decorated
-                                  // field's minimum height leaves slack below its text.
-                                  isCollapsed: true,
-                                  constraints: const BoxConstraints(),
-                                  visualDensity: VisualDensity.standard,
-                                  hintStyle: DesktopChrome.text(
-                                    color: DesktopChrome.muted,
-                                  ),
-                                  contentPadding: EdgeInsets.zero,
-                                  hintMaxLines: _phone ? 1 : null,
-                                  hintText: _readsFirst && c.snapshot == null
-                                      ? null
-                                      : group == null
-                                      ? 'Loading conversation…'
-                                      : c.canWrite
-                                      ? _messageHint(group)
-                                      : 'Read-only conversation',
-                                  border: InputBorder.none,
-                                  enabledBorder: InputBorder.none,
-                                  focusedBorder: InputBorder.none,
-                                  disabledBorder: InputBorder.none,
-                                  filled: false,
-                                  counterText: '',
-                                ),
-                                onChanged: _composerEdited,
-                              ),
-                            ),
-                            options: [
-                              if (c.offersChatSessions)
-                                Padding(
-                                  padding: const EdgeInsets.only(
-                                    left: grid.AppDesktop.controlGap,
-                                  ),
-                                  child: _chatSessionChoice(writable),
-                                ),
-                              if (c.offersChatSessions &&
-                                  c.selected?.isSwarmBuddyChat == true &&
-                                  _chatSessions.contains(c.selectedId))
-                                Padding(
-                                  padding: const EdgeInsets.only(
-                                    left: grid.AppDesktop.controlGap,
-                                  ),
-                                  child: _chatSessionProject(writable),
-                                ),
-                            ],
-                            attach: fingerTarget(
-                              enabled: _phone,
-                              NewHarnessAttachButton(
+                          ViewRoom(
+                            builder: (context, room) => _composerLayout(
+                              room: room,
+                              field: NewHarnessPasteTarget(
+                                key: _composerFieldKey,
                                 attachments: _files,
                                 enabled: writable && !busy,
+                                focusNode: _focus,
+                                child: TextField(
+                                  key: const ValueKey('super-message-composer'),
+                                  controller: _composer,
+                                  focusNode: _focus,
+                                  autofocus: !_terminalsVisible,
+                                  enabled: writable,
+                                  minLines: 1,
+                                  // A phone's keyboard takes the height, so
+                                  // its height says nothing about the room
+                                  // a draft should have (Huy, 2026-11-02).
+                                  maxLines: _phone
+                                      ? _phoneComposerLines(room)
+                                      : MediaQuery.sizeOf(context).height < 600
+                                      ? 3
+                                      : 8,
+                                  maxLength: kComposerMaxLength,
+                                  inputFormatters: [_tagBackspace],
+                                  keyboardType: TextInputType.multiline,
+                                  textAlignVertical: TextAlignVertical.center,
+                                  style: DesktopChrome.text(),
+                                  decoration: InputDecoration(
+                                    // The row centers the line. Inheriting a decorated
+                                    // field's minimum height leaves slack below its text.
+                                    isCollapsed: true,
+                                    constraints: const BoxConstraints(),
+                                    visualDensity: VisualDensity.standard,
+                                    hintStyle: DesktopChrome.text(
+                                      color: DesktopChrome.muted,
+                                    ),
+                                    contentPadding: EdgeInsets.zero,
+                                    hintMaxLines: _phone ? 1 : null,
+                                    hintText: _readsFirst && c.snapshot == null
+                                        ? null
+                                        : group == null
+                                        ? 'Loading conversation…'
+                                        : c.canWrite
+                                        ? _messageHint(group)
+                                        : 'Read-only conversation',
+                                    border: InputBorder.none,
+                                    enabledBorder: InputBorder.none,
+                                    focusedBorder: InputBorder.none,
+                                    disabledBorder: InputBorder.none,
+                                    filled: false,
+                                    counterText: '',
+                                  ),
+                                  onChanged: _composerEdited,
+                                ),
                               ),
-                            ),
-                            send: ListenableBuilder(
-                              listenable: Listenable.merge([_composer, _files]),
-                              builder: (context, _) => fingerTarget(
+                              options: [
+                                if (c.offersChatSessions)
+                                  Padding(
+                                    padding: const EdgeInsets.only(
+                                      left: grid.AppDesktop.controlGap,
+                                    ),
+                                    child: _chatSessionChoice(writable),
+                                  ),
+                                if (c.offersChatSessions &&
+                                    c.selected?.isSwarmBuddyChat == true &&
+                                    _chatSessions.contains(c.selectedId))
+                                  Padding(
+                                    padding: const EdgeInsets.only(
+                                      left: grid.AppDesktop.controlGap,
+                                    ),
+                                    child: _chatSessionProject(writable),
+                                  ),
+                              ],
+                              attach: fingerTarget(
                                 enabled: _phone,
-                                AppIconButton(
-                                  icon: AppIcons.arrowUp,
-                                  tooltip: 'Send message',
-                                  color: DesktopChrome.accent,
-                                  onPressed:
-                                      writable &&
-                                          !c.uploading &&
-                                          ((!busy && !c.hasPendingAction) ||
-                                              (_files.isEmpty &&
-                                                  c.canQueueText)) &&
-                                          (_composer.text.trim().isNotEmpty ||
-                                              !_files.isEmpty)
-                                      ? () => unawaited(_send())
-                                      : null,
+                                NewHarnessAttachButton(
+                                  attachments: _files,
+                                  enabled: writable && !busy,
+                                ),
+                              ),
+                              send: ListenableBuilder(
+                                listenable: Listenable.merge([
+                                  _composer,
+                                  _files,
+                                ]),
+                                builder: (context, _) => fingerTarget(
+                                  enabled: _phone,
+                                  AppIconButton(
+                                    icon: AppIcons.arrowUp,
+                                    tooltip: 'Send message',
+                                    color: DesktopChrome.accent,
+                                    onPressed:
+                                        writable &&
+                                            !c.uploading &&
+                                            ((!busy && !c.hasPendingAction) ||
+                                                (_files.isEmpty &&
+                                                    c.canQueueText)) &&
+                                            (_composer.text.trim().isNotEmpty ||
+                                                !_files.isEmpty)
+                                        ? () => unawaited(_send())
+                                        : null,
+                                  ),
                                 ),
                               ),
                             ),

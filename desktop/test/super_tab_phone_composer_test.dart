@@ -3,9 +3,12 @@
 // send, its hint wrapped, and a line kept free under the box held it off the
 // keyboard. On a phone the field has the width and the actions a row below.
 
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/widgets/app_icon_button.dart';
+import 'package:harness/state/harness_attachments.dart';
 
 import 'support/super_tab_fixture.dart';
 import 'support/super_tab_phone.dart';
@@ -212,4 +215,96 @@ void main() {
     expect(tester.takeException(), isNull);
     await unmountPhoneSuperTab(tester, c);
   });
+
+  // Found in review at 696bfb0c4: a 5-line field on a small phone with the
+  // keyboard up overflowed the pane by 23 px.
+  for (final (height, keyboard) in [
+    (568.0, 216.0),
+    (568.0, 260.0),
+    (667.0, 260.0),
+  ]) {
+    testWidgets(
+      'a long draft with New session on fits a 320x$height phone with a ${keyboard}px keyboard',
+      (tester) async {
+        final (_, c) = await mountPhoneSuperTab(
+          tester,
+          Size(320, height),
+          server: _buddyChat(),
+          initial: 'offline',
+        );
+        tester.view.viewInsets = FakeViewPadding(bottom: keyboard);
+        addTearDown(tester.view.resetViewInsets);
+        await tester.pumpAndSettle();
+        await tester.enterText(_field, List.filled(12, 'line').join('\n'));
+        await tester.tap(_session);
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        expect(
+          tester.getRect(_send).bottom,
+          lessThanOrEqualTo(height - keyboard),
+        );
+        await unmountPhoneSuperTab(tester, c);
+      },
+    );
+  }
+
+  testWidgets('the keyboard closing gives the field its 5 lines back', (
+    tester,
+  ) async {
+    final (_, c) = await mountPhoneSuperTab(tester, const Size(320, 568));
+    tester.view.viewInsets = const FakeViewPadding(bottom: 216);
+    addTearDown(tester.view.resetViewInsets);
+    await tester.pumpAndSettle();
+    await tester.enterText(_field, List.filled(12, 'line').join('\n'));
+    await tester.pumpAndSettle();
+    final small = tester.getSize(_field).height;
+    tester.view.resetViewInsets();
+    await tester.pumpAndSettle();
+    expect(tester.getSize(_field).height, greaterThan(small));
+    expect(
+      tester.widget<TextField>(_field).controller!.text.split('\n'),
+      hasLength(12),
+    );
+    expect(tester.takeException(), isNull);
+    await unmountPhoneSuperTab(tester, c);
+  });
+
+  testWidgets('a phone on its side with its keyboard up keeps one row', (
+    tester,
+  ) async {
+    final (_, c) = await mountPhoneSuperTab(tester, const Size(667, 375));
+    expect(_actions, findsOneWidget);
+    tester.view.viewInsets = const FakeViewPadding(bottom: 190);
+    addTearDown(tester.view.resetViewInsets);
+    await tester.pumpAndSettle();
+    expect(_actions, findsNothing);
+    await tester.enterText(_field, 'a draft');
+    await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(_field).controller!.text, 'a draft');
+    expect(tester.testTextInput.isVisible, isTrue);
+    expect(tester.takeException(), isNull);
+    await unmountPhoneSuperTab(tester, c);
+  });
+
+  testWidgets(
+    'a short screen with a file, the note and a long draft does not overflow',
+    (tester) async {
+      final (_, c) = await mountPhoneSuperTab(
+        tester,
+        const Size(390, 320),
+        server: _buddyChat(),
+        initial: 'offline',
+      );
+      c.attachments('offline').add([
+        HarnessAttachment('notes.txt', Uint8List(4)),
+      ]);
+      await tester.tap(_session);
+      await tester.enterText(_field, List.filled(12, 'line').join('\n'));
+      await tester.pumpAndSettle();
+      expect(_note, findsOneWidget);
+      expect(find.text('notes.txt'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await unmountPhoneSuperTab(tester, c);
+    },
+  );
 }
