@@ -172,6 +172,13 @@ const kSwarmPushSafetyNet = Duration(seconds: 60);
 /// often; a change to one asks for a read at once (`SuperTabClient`).
 const kSwarmDiscoverySafetyNet = Duration(minutes: 2);
 
+/// The files waiting in a Swarm's boxes: by conversation, and by a thread's
+/// conversation and root.
+typedef SuperTabKeptFiles = ({
+  Map<String, List<HarnessAttachment>> chats,
+  Map<(String, String), List<HarnessAttachment>> threads,
+});
+
 class SuperTabController extends ChangeNotifier {
   SuperTabController({
     required this.tabId,
@@ -248,6 +255,32 @@ class SuperTabController extends ChangeNotifier {
       if (initial['threadSeen'] case final Map seen) {
         for (final MapEntry(:key, :value) in seen.entries) {
           if (key is String && value is num) _threadSeen[key] = value.toInt();
+        }
+      }
+      if (initial['openThread'] case {
+        'conversationId': final String conversation,
+        'root': final String root,
+      }) {
+        openedThread = (conversationId: conversation, root: root);
+        _reopenThread = true;
+        _threadUnshown = true;
+      }
+      if (initial['threadDrafts'] case final Map saved) {
+        for (final MapEntry(key: root, value: draft) in saved.entries) {
+          if (root is! String || draft is! Map) continue;
+          final conversation = draft['conversationId'], text = draft['text'];
+          if (conversation is! String || text is! String || text.isEmpty) {
+            continue;
+          }
+          _threadDrafts[root] = text;
+          _threadDraftConversations[root] = conversation;
+          if (draft['mentions'] case final Map mentions) {
+            final tags = {
+              for (final MapEntry(:key, :value) in mentions.entries)
+                if (key is String && value is String) key: value,
+            };
+            if (tags.isNotEmpty) _threadMentions[(conversation, root)] = tags;
+          }
         }
       }
       final refused = initial['refused'];
@@ -720,12 +753,32 @@ class SuperTabController extends ChangeNotifier {
   final _threadBefore = <String, Map<String, dynamic>>{};
   final _threadDrafts = <String, String>{};
 
+  /// Which conversation each draft in [_threadDrafts] is for, so what this
+  /// computer keeps of it goes when that conversation does.
+  final _threadDraftConversations = <String, String>{};
+
   /// The people and agents picked with `@` in each thread's reply box, by its
   /// conversation and root, as [_mentions] holds the chat's own.
   final _threadMentions = <(String, String), Map<String, String>>{};
 
   /// The thread open beside the chat.
   ({String conversationId, String root})? openedThread;
+
+  /// A thread restored open, whose replies its first read of the Swarm brings.
+  bool _reopenThread = false;
+
+  /// A thread restored open whose pane has not been on screen: the read mark
+  /// is the account's on every device, and this controller may be open with
+  /// nothing shown, so nothing counts as read until [threadPaneShown].
+  bool _threadUnshown = false;
+
+  /// The pane of the open thread is on screen.
+  void threadPaneShown() {
+    if (!_threadUnshown) return;
+    _threadUnshown = false;
+    if (openedThread case final open?) _seeThread(open.root);
+  }
+
   final _attachments = <String, HarnessAttachments>{};
 
   /// The files waiting to go with the next reply of each thread, by its
@@ -956,6 +1009,34 @@ class SuperTabController extends ChangeNotifier {
   /// stay in memory: only the text of a draft is saved.
   HarnessAttachments attachments(String id) =>
       _attachments.putIfAbsent(id, () => _newFiles(id, id));
+
+  /// The files waiting to go, for the next controller of this Swarm: bytes are
+  /// never saved, so the running app hands them on ([SuperTabClient.release]).
+  /// Nothing once access has gone.
+  SuperTabKeptFiles get keptFiles => (
+    chats: {
+      if (!accessRevoked)
+        for (final MapEntry(key: id, value: files) in _attachments.entries)
+          if (!files.isEmpty) id: files.files,
+    },
+    threads: {
+      if (!accessRevoked)
+        for (final MapEntry(key: thread, value: files)
+            in _threadAttachments.entries)
+          if (!files.isEmpty) thread: files.files,
+    },
+  );
+
+  /// Takes the files the last controller of this Swarm left ([keptFiles]). The
+  /// first read lets go of those for a conversation no longer read.
+  void adoptFiles(SuperTabKeptFiles kept) {
+    for (final MapEntry(key: id, value: files) in kept.chats.entries) {
+      attachments(id).add(files);
+    }
+    for (final MapEntry(key: thread, value: files) in kept.threads.entries) {
+      threadAttachments(thread.$1, thread.$2).add(files);
+    }
+  }
 
   /// The files waiting to go with the next reply of [root]'s thread in
   /// [conversationId]. Like [attachments], they stay in memory, and they are
@@ -1260,6 +1341,7 @@ class SuperTabController extends ChangeNotifier {
   }
 
   void _seeThread(String root) {
+    if (_threadUnshown) return;
     final open = openedThread;
     final last = max(
       (open == null ? null : _threads[open.conversationId]?[root])
@@ -1387,8 +1469,10 @@ class SuperTabController extends ChangeNotifier {
   void openThread(String root) {
     if (accessRevoked) return;
     openedThread = (conversationId: selectedId, root: root);
+    _threadUnshown = false;
     _pruneThreadFiles();
     _seeThread(root);
+    _saveSoon();
     _changed();
     unawaited(loadThread());
   }
@@ -1397,12 +1481,24 @@ class SuperTabController extends ChangeNotifier {
     if (openedThread == null) return;
     openedThread = null;
     _pruneThreadFiles();
+    _saveSoon();
     _changed();
   }
 
   String threadDraft(String root) => _threadDrafts[root] ?? '';
-  void setThreadDraft(String root, String text) {
-    _threadDrafts[root] = text;
+  void setThreadDraft(String root, String text, {String? conversationId}) {
+    // Removed first, so the newest is last and the cap in [_localState] keeps it.
+    _threadDrafts.remove(root);
+    if (text.isEmpty) {
+      _threadDraftConversations.remove(root);
+    } else {
+      _threadDrafts[root] = text;
+      _threadDraftConversations[root] =
+          conversationId ??
+          (openedThread?.root == root ? openedThread!.conversationId : null) ??
+          _threadDraftConversations[root] ??
+          selectedId;
+    }
     // A tag the text no longer says is no longer picked.
     for (final MapEntry(key: thread, value: tags) in _threadMentions.entries) {
       if (thread.$2 == root) {
@@ -1410,6 +1506,7 @@ class SuperTabController extends ChangeNotifier {
       }
     }
     _threadMentions.removeWhere((_, tags) => tags.isEmpty);
+    _saveSoon();
   }
 
   /// The tags picked in the reply box of [root]'s thread in [conversationId].
@@ -1585,6 +1682,7 @@ class SuperTabController extends ChangeNotifier {
       // Only a draft still holding what went: more may have been typed since.
       if (_threadDrafts[open.root]?.trim() == text) {
         _threadDrafts.remove(open.root);
+        _threadDraftConversations.remove(open.root);
         _threadMentions.remove(thread);
       }
       onSending?.call();
@@ -1630,6 +1728,7 @@ class SuperTabController extends ChangeNotifier {
       }
     } else {
       _threadDrafts[root] = text;
+      _threadDraftConversations[root] = conversationId;
       if (refused.mentions.isNotEmpty) {
         _threadMentions[(conversationId, root)] = refused.mentions;
       }
@@ -2342,6 +2441,21 @@ class SuperTabController extends ChangeNotifier {
     'threadSeen': Map<String, int>.fromEntries(
       _threadSeen.entries.skip(max(0, _threadSeen.length - 500)),
     ),
+    if (openedThread case final open?)
+      'openThread': {'conversationId': open.conversationId, 'root': open.root},
+    // ponytail: the newest 500, as threadSeen.
+    if (_threadDrafts.isNotEmpty)
+      'threadDrafts': {
+        for (final MapEntry(key: root, value: text)
+            in _threadDrafts.entries.skip(max(0, _threadDrafts.length - 500)))
+          if (_threadDraftConversations[root] case final conversation?)
+            root: {
+              'conversationId': conversation,
+              'text': text,
+              if (_threadMentions[(conversation, root)] case final tags?)
+                'mentions': Map<String, String>.of(tags),
+            },
+      },
     if (_pending != null) 'pending': _pending,
     if (_sendOrder.isNotEmpty) 'sendOrder': List<String>.of(_sendOrder),
     if (_refused.isNotEmpty || _queuedSends.isNotEmpty)
@@ -3257,6 +3371,7 @@ class SuperTabController extends ChangeNotifier {
               ..._mentions.keys,
               ..._readAt.keys,
               ..._refused.keys,
+              ..._threadDraftConversations.values,
             ].any(removed.contains) ||
             expandedProjects.any(
               (id) => !next.projects.any((project) => project.id == id),
@@ -3268,6 +3383,12 @@ class SuperTabController extends ChangeNotifier {
         _forgetThreads(allowed.contains);
         _rows.removeWhere((id, _) => !allowed.contains(id));
         _drafts.removeWhere((id, _) => removed.contains(id));
+        _threadDrafts.removeWhere(
+          (root, _) => removed.contains(_threadDraftConversations[root]),
+        );
+        _threadDraftConversations.removeWhere(
+          (_, conversation) => removed.contains(conversation),
+        );
         _attachments.removeWhere((id, files) {
           if (allowed.contains(id)) return false;
           files.dispose();
@@ -3289,6 +3410,11 @@ class SuperTabController extends ChangeNotifier {
         }
         selectedId = _shownFor(selectedId);
         if (localAccessChanged) _saveSoon();
+        if (_reopenThread) {
+          _reopenThread = false;
+          // Still open: a conversation this read leaves out closed it above.
+          unawaited(loadThread());
+        }
         // A new store holds no closed groups yet, nor one a saved view drew:
         // the open projects read theirs.
         if (read.full || stateReads == 1) {
