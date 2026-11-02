@@ -9,7 +9,7 @@
  */
 import { execFile } from 'node:child_process'
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { launchEnvironment } from '../engines/kit/launchExecutable.js'
 import { folderTrust } from '../engines/launchPrep.js'
@@ -173,7 +173,8 @@ async function refreshCopy(path: string, name: string, deadline: number, signal:
   const state = (next: CopyState['state'], revision: string | null = null): CopyState => ({ name, revision, state: next })
   const entry = lstatSync(path, { throwIfNoEntry: false })
   if (!entry || !entry.isDirectory()) return state('failed')
-  const git = async (args: string[], options: { timeout?: number; signal?: AbortSignal } = {}) => (await run('git', ['--no-optional-locks', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-C', path, ...args],
+  const words = (args: string[]) => ['--no-optional-locks', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-C', path, ...args]
+  const git = async (args: string[], options: { timeout?: number; signal?: AbortSignal } = {}) => (await run('git', words(args),
     { timeout: options.timeout ?? 60_000, maxBuffer: 64 * 1024 * 1024, env: gitEnv(process.env), ...(options.signal ? { signal: options.signal } : {}) })).stdout.trim()
   let at: string | null = null
   const here = async () => await git(['log', '-1', '--no-show-signature', '--format=%h %cs']).catch(() => null)
@@ -193,7 +194,10 @@ async function refreshCopy(path: string, name: string, deadline: number, signal:
     if (from !== to && !signal.aborted) {
       // Read first, so whatever the move does the files it wrote are locked again. Only those: a walk of the whole tree every
       // hour would cost a large project's every file, and git rewrites no others.
-      const changed = (await git(['diff', '--name-only', '--no-renames', '-z', from, to])).split('\0').filter(Boolean)
+      // As bytes, untrimmed: a name may start with a space or not be UTF-8, and one read otherwise was never found to lock
+      // (security review 2 of #2524).
+      const changed = fileNames((await run('git', words(['diff', '--name-only', '--no-renames', '-z', from, to]),
+        { timeout: 60_000, maxBuffer: 64 * 1024 * 1024, env: gitEnv(process.env), encoding: 'buffer' })).stdout)
       try { await git(['checkout', '--quiet', '--detach', '--no-recurse-submodules', to], { timeout: 120_000 }) }
       finally { lockFiles(path, changed) }
     }
@@ -201,14 +205,24 @@ async function refreshCopy(path: string, name: string, deadline: number, signal:
   } catch { return state('failed', at) }
 }
 
+/** The names in git's NUL-separated list, each its exact bytes. */
+function fileNames(list: Buffer): Buffer[] {
+  const names: Buffer[] = []
+  for (let from = 0, end; (end = list.indexOf(0, from)) >= 0; from = end + 1) if (end > from) names.push(list.subarray(from, end))
+  return names
+}
+
 /** The lock a launch applies (lib/swarmSkills.ts lockBuddyFolder) for the files a move wrote: git makes them writable. */
-function lockFiles(path: string, names: readonly string[]): void {
-  const real = realpathSync(path)
+function lockFiles(path: string, names: readonly Buffer[]): void {
+  const real = Buffer.from(realpathSync(path))
   for (const name of names) {
-    const file = join(path, name), entry = lstatSync(file, { throwIfNoEntry: false })
+    const slash = name.lastIndexOf(0x2f)
+    const folder = slash < 0 ? real : Buffer.concat([real, Buffer.from('/'), name.subarray(0, slash)])
+    const file = Buffer.concat([real, Buffer.from('/'), name])
+    const entry = lstatSync(file, { throwIfNoEntry: false })
     // Never through a link, the file's own or a folder's on its way: a commit replacing folder a with a link still lists a/b.txt,
     // and a chmod there changed a file outside (review of #2524).
-    if (entry?.isFile() && realpathSync(dirname(file)) === dirname(join(real, name))) chmodSync(file, entry.mode & 0o555)
+    if (entry?.isFile() && realpathSync(folder, { encoding: 'buffer' }).equals(folder)) chmodSync(file, entry.mode & 0o555)
   }
 }
 

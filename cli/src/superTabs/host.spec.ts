@@ -1719,6 +1719,19 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
       expect(refreshBuddyHome).toHaveBeenCalledTimes(1)
       expect(existsSync(join(folderOf(t), BUDDY_COPIES_FILE))).toBe(false)
     })
+    it('writes the copies file again at once after a project leaves, not an hour on (security review 2 of #2524)', async () => {
+      let now = 1_000_000
+      const { host, t, delivered } = buddyOn({}, { agents: [swarmBuddy], conversations: [swarmChat] }, {}, { now: () => now }), pass = deferred()
+      withHome(t)
+      vi.mocked(refreshBuddyHome).mockReturnValueOnce(pass.done).mockResolvedValue(undefined)
+      await host.tick()
+      expect(refreshBuddyHome).toHaveBeenCalledTimes(1)
+      // Lost during that pass's hold: the message tried again prunes it, within the hour.
+      writeFileSync(join(folderOf(t), BUDDY_HOME_MANIFEST), `${JSON.stringify([{ id: 'secret', name: 'Secret', dir: 'Secret' }])}\n`)
+      pass.open()
+      await vi.waitFor(async () => { now += 1_000; await host.tick(); expect(delivered).toHaveLength(1) })
+      expect(refreshBuddyHome).toHaveBeenCalledTimes(2)
+    })
     it('starts no pass when the access read is refused, and delivers nothing', async () => {
       // From an agent, with nothing attached: no earlier read refuses it first, so this one is what stops it.
       const { host, t, delivered, refuse } = buddyOn({ author: { kind: 'agent', id: 'lead-agent', name: 'PM', membershipGeneration: 'g' }, attachments: [], text: 'news' },

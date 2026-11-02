@@ -322,6 +322,32 @@ describe('a Buddy\'s copy of a project follows its default branch', { timeout: 3
     expect(head(copy(p.home))).toBe(head(p.teammate))
   })
 
+  it('locks a file a move wrote whatever its name: a leading space, a line break, a folder (security review 2 of #2524)', async () => {
+    const p = project(root()), names = [' leading.txt', 'trailing.txt ', 'line\nbreak.txt', 'plain.txt']
+    await prepareBuddyHome(p.home, p.web)
+    mkdirSync(join(p.teammate, ' folder'))
+    for (const name of [...names, ' folder/ inner.txt']) writeFileSync(join(p.teammate, name), 'x\n')
+    git(p.teammate, 'add', '-A')
+    git(p.teammate, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'names')
+    git(p.teammate, 'push', '-q', 'origin', 'main')
+    await refreshBuddyHome(p.home)
+    expect(head(copy(p.home))).toBe(head(p.teammate))
+    for (const name of [...names, ' folder/ inner.txt']) expect([name, statSync(join(copy(p.home), name)).mode & 0o222]).toEqual([name, 0])
+  })
+
+  // macOS refuses such a name; CI's Linux takes it.
+  it.skipIf(process.platform === 'darwin')('locks a file a move wrote whose name is not UTF-8 (security review 2 of #2524)', async () => {
+    const p = project(root()), name = Buffer.from([0x66, 0xff, 0x2e, 0x74])
+    await prepareBuddyHome(p.home, p.web)
+    writeFileSync(Buffer.concat([Buffer.from(`${p.teammate}/`), name]), 'x\n')
+    git(p.teammate, 'add', '-A')
+    git(p.teammate, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'bytes')
+    git(p.teammate, 'push', '-q', 'origin', 'main')
+    await refreshBuddyHome(p.home)
+    expect(head(copy(p.home))).toBe(head(p.teammate))
+    expect(statSync(Buffer.concat([Buffer.from(`${copy(p.home)}/`), name])).mode & 0o222).toBe(0)
+  })
+
   it('never locks a file outside through a folder a commit turned into a link (review of #2524)', async () => {
     const r = root(), p = project(r), outside = join(r, 'outside')
     mkdirSync(outside)

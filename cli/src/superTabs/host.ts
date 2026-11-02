@@ -1807,7 +1807,12 @@ export class SuperTabHost {
     if (mustWait) stopBuddyHomeRefresh(cwd)
     if (!pass) {
       const gone = await pruneBuddyHome(cwd, readable)
-      if (gone.length) this.log(`Took ${gone.length} project folder(s) out of Buddy ${entry.harnessId.slice(0, 8)}'s folder: its person no longer reads them.`)
+      if (gone.length) {
+        this.log(`Took ${gone.length} project folder(s) out of Buddy ${entry.harnessId.slice(0, 8)}'s folder: its person no longer reads them.`)
+        // Pruning took the copies file, which named the lost project. The next pass writes it, now, not an hour on: the Buddy's
+        // prompt tells it to read that file (security review 2 of #2524).
+        this.copiesTried.delete(cwd)
+      }
       // After the check above, whose failed read throws: new code of a project reaches only a person who still reads it.
       // Started once an hour here too: a pass that cannot write its file (a folder refused, a full disk) leaves it due, and its
       // message, tried again when the pass ends, would otherwise start another for ever and never go in.
