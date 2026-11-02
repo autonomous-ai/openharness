@@ -15,7 +15,7 @@ import { Readable } from 'node:stream'
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web'
 import { readDaemonRecord } from './daemonRecord.js'
 import { localCredentialHeaders } from './localCredential.js'
-import { localSocketName, unixSocketPath } from './localSocket.js'
+import { unixSocketPath } from './localSocket.js'
 
 const LOCAL_WS_PATH = '/api/local-ws'
 
@@ -32,8 +32,8 @@ export function localSocketRoute(dataDir: string, port: number, platform: NodeJS
   for (const name of names) {
     const configured = /^daemon-(\d+)\.json$/.exec(name)?.[1]
     if (!configured || readDaemonRecord(dataDir, Number(configured), platform)?.port !== port) continue
-    const socket = join(dataDir, localSocketName(Number(configured)))
-    if (existsSync(socket)) return socket
+    const socket = unixSocketPath(dataDir, Number(configured), platform)
+    if (socket && existsSync(socket)) return socket
   }
   return expected
 }

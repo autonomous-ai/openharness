@@ -126,8 +126,12 @@ describe('cloud agents and the bridge', () => {
     expect(answer.status).toBe(200)
   })
 
-  it('where no socket can be, the route is the port, as before', () => {
+  it('a long vault\'s route is its short socket, and only a home too long as well is the port', () => {
     const long = new Store(join(home, 'x'.repeat(120)), env)
+    expect(bridgeSocketPath(long)).toMatch(/\/\.harness\/s\/[0-9a-f]{16}\/bridge\.sock$/)
+    expect(bridgeRoute(long).base).toMatch(/^http:\/\/connections\.invalid\//)
+    vi.stubEnv('HOME', `/${'h'.repeat(120)}`)
+    closers.push(() => vi.unstubAllEnvs())
     expect(bridgeSocketPath(long)).toBeNull()
     expect(bridgeRoute(long).base).toMatch(/^http:\/\/127\.0\.0\.1:\d+\//)
   })

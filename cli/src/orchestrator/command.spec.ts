@@ -4,6 +4,10 @@ import { WebSocketServer } from 'ws'
 import * as authSession from '../lib/authSession.js'
 import { summarizeOrchestratorReply, parseOrchestratorArgs, localOrchestratorRequest, orchestratorCommand } from './command.js'
 
+// A folder too long for a socket now has one under the home folder: only a home too long as well is left on the port.
+beforeEach(() => { vi.stubEnv('HOME', `/${'h'.repeat(120)}`) })
+afterEach(() => { vi.unstubAllEnvs() })
+
 describe('orchestrator tool output', () => {
   it('keeps large projects readable without discarding worker results or mutating UI state', () => {
     const reply = { project: {

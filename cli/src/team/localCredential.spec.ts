@@ -10,7 +10,7 @@ import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, beforeEach, vi } from 'vitest'
 import { connectSocket } from '../agentClient/daemon.js'
 import { deviceRequest } from '../devices/client.js'
 import { createMessagesRpc } from '../messages/rpc.js'
@@ -18,6 +18,10 @@ import { daemonFetch, localSocketRoute, localWsTarget } from '../lib/localTransp
 import { localCredentialHeaders } from '../lib/localCredential.js'
 import { uploadAttachments } from '../superTabs/attach.js'
 import { WebSocket } from 'ws'
+
+// A folder too long for a socket now has one under the home folder: only a home too long as well is left on the port.
+beforeEach(() => { vi.stubEnv('HOME', `/${'h'.repeat(120)}`) })
+afterEach(() => { vi.unstubAllEnvs() })
 
 const NOTIFY = fileURLToPath(new URL('../../hook/notify.mjs', import.meta.url))
 /** Made up for this test: never a real credential. */

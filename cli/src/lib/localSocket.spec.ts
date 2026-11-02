@@ -1,13 +1,13 @@
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { createServer, request } from 'node:http'
 import { connect } from 'node:net'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { dirname, join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   askDataFolderServer, isLocalSocketName, isTrustedLocal, listenLocalSocket, localSocketListenPath, localSocketName, localSocketPath, ORPHAN_STILL_SERVING,
-  ORPHAN_WAIT_MS, refuseServedDataFolder, servedFolderDeps, unixSocketPath, type DataFolderServer, type LocalSocketServer, type ServedFolderDeps,
+  ORPHAN_WAIT_MS, refuseServedDataFolder, servedFolderDeps, socketPathIn, unixSocketPath, type DataFolderServer, type LocalSocketServer, type ServedFolderDeps,
 } from './localSocket.js'
 import { daemonPipe } from './windows/daemonPipe.js'
 import { writeDaemonRecord } from './daemonRecord.js'
@@ -59,11 +59,10 @@ describe('localSocketPath', () => {
     expect(localSocketPath('/Users/me/.harness/cli/data', 18473, 'darwin')).toBe('/Users/me/.harness/cli/data/daemon-18473.sock')
     expect(localSocketPath('/home/me/.harness/cli/data', 18474, 'linux')).toBe('/home/me/.harness/cli/data/daemon-18474.sock')
     expect(localSocketPath('C:\\Users\\me\\.harness', 18473, 'win32')).toBeNull()
-    expect(localSocketPath(`/tmp/${'x'.repeat(100)}`, 18473, 'darwin')).toBeNull()
     // 96 bytes fits (the staging name adds 4, still under macOS's 104 with the terminator); 97 does not.
     const dirFor = (total: number) => `/${'d'.repeat(total - '/daemon-18473.sock'.length - 1)}`
     expect(localSocketPath(dirFor(96), 18473, 'darwin')).toHaveLength(96)
-    expect(localSocketPath(dirFor(97), 18473, 'darwin')).toBeNull()
+    expect(localSocketPath(dirFor(97), 18473, 'darwin')).toMatch(/\/\.harness\/s\/[0-9a-f]{16}\/daemon-18473\.sock$/)
     expect(isLocalSocketName('daemon-18473.sock')).toBe(true)
     expect(isLocalSocketName('daemon.sock')).toBe(false)
     expect(isLocalSocketName('daemon-18473.sock.bak')).toBe(false)
@@ -390,5 +389,61 @@ describe('who serves a data folder, over the Windows pipe', () => {
       squatter.closeAllConnections()
       squatter.close()
     }
+  })
+})
+
+describe('a data folder too long to hold a socket', () => {
+  const long = `/data/${'x'.repeat(120)}`
+  const hash = (folder: string): string => createHash('sha256').update(folder).digest('hex').slice(0, 16)
+
+  it('keeps a short folder\'s socket where it is', () => {
+    expect(socketPathIn('/d', 'daemon-1.sock', '/h')).toBe('/d/daemon-1.sock')
+  })
+
+  it('gets one under the home folder, the same each time and another for another folder', () => {
+    const path = socketPathIn(long, 'daemon-1.sock', '/h')
+    expect(path).toBe(`/h/.harness/s/${hash(long)}/daemon-1.sock`)
+    expect(socketPathIn(long, 'daemon-1.sock', '/h')).toBe(path)
+    expect(socketPathIn(`${long}y`, 'daemon-1.sock', '/h')).not.toBe(path)
+  })
+
+  it('has none when the home folder is too long as well: the one case left on TCP', () => {
+    expect(socketPathIn(long, 'daemon-1.sock', `/${'h'.repeat(120)}`)).toBeNull()
+  })
+
+  it('pins the rule every client copies', () => {
+    expect(socketPathIn(long, 'bridge.sock', '/h')).toBe(`/h/.harness/s/${hash(long)}/bridge.sock`)
+    expect(hash('/x')).toBe('b3d1db318671a024')
+  })
+
+  describe('listening', () => {
+    let home: string, closers: Array<() => Promise<unknown>>
+    beforeEach(() => { home = mkdtempSync(join('/tmp', 'ls-')); closers = [] })
+    afterEach(async () => { for (const close of closers) await close() })
+
+    it('makes the short folder 0700 and the socket 0600', async () => {
+      const path = socketPathIn(long, 'daemon-1.sock', home)!
+      const listening = await listenLocalSocket(() => {}, path)
+      closers.push(listening.close)
+      expect(lstatSync(dirname(path)).mode & 0o777).toBe(0o700)
+      expect(lstatSync(join(home, '.harness', 's')).mode & 0o777).toBe(0o700)
+      expect(lstatSync(path).mode & 0o777).toBe(0o600)
+    })
+
+    it('tightens a looser short folder before it listens', async () => {
+      const path = socketPathIn(long, 'daemon-1.sock', home)!
+      mkdirSync(dirname(path), { recursive: true, mode: 0o777 })
+      chmodSync(dirname(path), 0o777)
+      const listening = await listenLocalSocket(() => {}, path)
+      closers.push(listening.close)
+      expect(lstatSync(dirname(path)).mode & 0o777).toBe(0o700)
+    })
+
+    it('refuses a short folder that is a link', async () => {
+      const path = socketPathIn(long, 'daemon-1.sock', home)!
+      mkdirSync(dirname(dirname(path)), { recursive: true, mode: 0o700 })
+      symlinkSync(mkdtempSync(join('/tmp', 'ls-other-')), dirname(path))
+      await expect(listenLocalSocket(() => {}, path)).rejects.toThrow(/not private/)
+    })
   })
 })

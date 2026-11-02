@@ -1,11 +1,14 @@
+import { mkdirSync as nodeMkdir } from 'node:fs'
 import { execFileSync, spawn, spawnSync } from 'child_process'
 import { createServer, type Server } from 'http'
 import { createWriteStream, mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, beforeEach, vi } from 'vitest'
 import { useBundledCli } from './__fixtures__/bundledCli.js'
+
+const mkdirSyncReturning = (path: string): string => { nodeMkdir(path, { recursive: true }); return path }
 
 const CLI_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const cli = useBundledCli()
@@ -85,7 +88,8 @@ function cliEnv(port: number): NodeJS.ProcessEnv {
   dirs.push(root)
   return {
     ...process.env,
-    HOME: root,
+    // Too long as well: a folder too long for a socket otherwise has one under the home folder.
+    HOME: join(mkdirSyncReturning(join(root, 'h'.repeat(100)))),
     HARNESS_AUTH_DIR: join(root, 'auth'),
     // Too long to hold a socket: the one case where the CLI asks this fake daemon's port.
     ADAPTER_DATA_DIR: join(root, 'd'.repeat(100)),

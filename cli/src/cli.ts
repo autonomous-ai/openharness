@@ -76,7 +76,7 @@ import { describeMasterStatus, readStatusFile } from './harnessd/master.js'
 import { namedNode } from './harnessd/processName.js'
 import { probeThisMaster, startMaster, startMasterInForeground } from './masterProcess.js'
 import { startServiceProcess } from './serviceProcess.js'
-import { askDataFolderServer, isLocalSocketName, localSocketPath, refuseServedDataFolder, servedFolderDeps } from './lib/localSocket.js'
+import { askDataFolderServer, isLocalSocketName, localSocketPath, refuseServedDataFolder, shortSocketFolder, servedFolderDeps } from './lib/localSocket.js'
 import { legacyDaemonStatus, localDaemonCall, localDaemonStatus } from './lib/daemonEndpoint.js'
 import { PipeUnproven } from './lib/windows/pipeClient.js'
 import { ptyManifestUrl, ptyPlatformKey, type PtyEntry } from './lib/windows/ptyPayload.js'
@@ -1780,6 +1780,8 @@ function clearAdapterState(): void {
         if (isLocalSocketName(name) || /^daemon-\d+\.json$/.test(name)) rmSync(join(dir, name), { force: true })
       }
     } catch { /* no such directory */ }
+    // A folder too long for a socket keeps its sockets here.
+    rmSync(shortSocketFolder(dir), { recursive: true, force: true })
   }
   if (dataDir === cliDir) rmStateFiles(dataDir)
   else rmSync(dataDir, { recursive: true, force: true })
