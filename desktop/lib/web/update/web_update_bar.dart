@@ -69,7 +69,7 @@ class _WebUpdateBar extends StatelessWidget {
             border: Border(bottom: BorderSide(color: grid.AppPalette.divider)),
           ),
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
             child: Row(
               children: [
                 Expanded(
