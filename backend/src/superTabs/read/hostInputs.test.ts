@@ -8,9 +8,9 @@ const group = (key: string, version: number, extra: Partial<Part> = {}): Part =>
 const delta = (parts: Part[], digests: Array<[string, string | null]> | null): SwarmDelta =>
   ({ parts, head: null, ...digests ? { hostDigests: new Map(digests) } : {} })
 const held = (): HostGroups => ({
-  b: { digest: 'BBB', dormant: true, version: 2 },
-  a: { digest: 'AAA', dormant: false, version: 3 },
-  c: { digest: null, dormant: false, version: 1 },
+  b: { digest: 'BBB', dormant: true },
+  a: { digest: 'AAA', dormant: false },
+  c: { digest: null, dormant: false },
 })
 
 describe('hostGroupsSignature', () => {
@@ -24,9 +24,9 @@ describe('hostGroupsSignature', () => {
 })
 
 describe('hostGroupsRule', () => {
-  it('replaces a row on a newer version, with its new digest', () => {
+  it('replaces a changed row with its new digest', () => {
     const next = hostGroupsRule.apply(held(), delta([group('a', 4)], [['a', 'AAB']])) as HostGroups
-    expect(next.a).toEqual({ digest: 'AAB', dormant: false, version: 4 })
+    expect(next.a).toEqual({ digest: 'AAB', dormant: false })
     expect(hostGroupsSignature(next).all).toBe('AAB0BBB10')
   })
 
@@ -47,7 +47,7 @@ describe('hostGroupsRule', () => {
     const gone = hostGroupsRule.apply(held(), delta([group('b', 3, { deleted: true })], [['b', 'BBB']])) as HostGroups
     expect(Object.keys(gone).sort()).toEqual(['a', 'c'])
     const back = hostGroupsRule.apply(gone, delta([group('b', 4)], [['b', 'BBC']])) as HostGroups
-    expect(back.b).toEqual({ digest: 'BBC', dormant: false, version: 4 })
+    expect(back.b).toEqual({ digest: 'BBC', dormant: false })
   })
 
   it('a new conversation is added', () => {
@@ -55,9 +55,9 @@ describe('hostGroupsRule', () => {
     expect(hostGroupsSignature(next).all).toBe('AAA0BBB10DDD0')
   })
 
-  it('an equal or older version, or a tombstone of a conversation not held, changes nothing', () => {
+  it('a change the entry already holds, or a tombstone of a conversation not held, changes nothing', () => {
     const before = held()
-    expect(hostGroupsRule.apply(before, delta([group('a', 3), group('b', 1), group('z', 9, { deleted: true })], [['a', 'XXX'], ['b', 'XXX'], ['z', 'XXX']]))).toBe(before)
+    expect(hostGroupsRule.apply(before, delta([group('a', 3), group('b', 2, { dormant: true }), group('z', 9, { deleted: true })], [['a', 'AAA'], ['b', 'BBB'], ['z', 'XXX']]))).toBe(before)
   })
 
   it('a row that gains its digest is no longer missing', () => {
