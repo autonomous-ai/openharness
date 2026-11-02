@@ -304,9 +304,10 @@ describe('a queued start\'s preparation token', () => {
       const pool = (await poolRows(env.store, team, machineId)).find(p => p.tabId === tab)!
       await env.store.observeMachine(team, tab, machineId, { generation: pool.machine.generation, ...observed, privacy: { mode: 'dedicated' } })
     }
-    // A group [requester] asked for, its start's conversation; else the Lead's. The contributor joined above.
-    const conversationId = requester ? String((await env.run(tab, { type: 'conversation.create', title: 'Add search', brief: 'Add a search field',
-      checks: [], requesterId: requester.sub } as Command)).result.conversationId) : 'lead'
+    // A group of the project, its start's conversation: no agent but the coordinator starts into the project chat (#2207).
+    // [requester] asked for it, where given. The contributor joined above.
+    const conversationId = String((await env.run(tab, { type: 'conversation.create', title: 'Add search', brief: 'Add a search field',
+      checks: [], ...(requester ? { requesterId: requester.sub } : {}) } as Command)).result.conversationId)
     const startId = String((await env.run(tab, { type: 'agent.start', request: { conversationId, machineId, engine: 'codex', name: 'Builder',
       cwd: '/swarm-root/lead', permissionMode: 'full', worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } } as Command)).result.startId)
     return { tab, startId }

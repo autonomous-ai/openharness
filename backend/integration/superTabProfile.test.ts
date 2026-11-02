@@ -413,7 +413,8 @@ describe('reactions', () => {
 
   it('shows an agent\'s 👀 and then ✅ on the message it took, to every reader of the conversation', async () => {
     const tab = await swarm()
-    const builder = await agentIn(tab, 'lead', 'Kai')
+    // Kai coordinates: the project chat holds only its coordinator among agents (#2207).
+    const builder = await agentIn(tab, 'lead', 'Kai', true)
     const messageId = await post(tab, 'Kai, please add avatars.')
     await agentReact(tab, 'lead', messageId, builder, 'eyes')
     expect(await countsOf(tab, messageId, peer)).toEqual([{ emoji: 'eyes', count: 1, by: [{ kind: 'agent', id: builder }] }])
@@ -439,14 +440,16 @@ describe('reactions', () => {
     const parts = await read(tab, peer)
     expect(parts.text).not.toContain(conversationId)
     // An agent outside the private project is not even told it exists, and another agent's private notice is not there for it to mark.
-    const builder = await agentIn(tab, 'lead', 'Kai')
+    // Both agents share a task, as the project chat holds only its coordinator among agents (#2207).
+    const group = (await run(tab, { type: 'conversation.create', title: 'Avatars', brief: 'Add avatars.', checks: [] })).result.conversationId as string
+    const builder = await agentIn(tab, group, 'Kai')
     await expect(agentReact(tab, conversationId, secret, builder, 'eyes')).rejects.toMatchObject({ code: 'NOT_FOUND', status: 404 })
-    const lead = await agentIn(tab, 'lead', 'River', true)
-    const notice = (await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Your skill changed.', replyTo: null, recipientIds: [lead],
+    const lead = await agentIn(tab, group, 'River', true)
+    const notice = (await run(tab, { type: 'message.send', conversationId: group, text: 'Your skill changed.', replyTo: null, recipientIds: [lead],
       agentOnly: true }, owner, lead)).result.messageId as string
-    await expect(agentReact(tab, 'lead', notice, builder, 'eyes')).rejects.toMatchObject({ code: 'NOT_FOUND' })
-    await agentReact(tab, 'lead', notice, lead, 'eyes')
-    expect((await page(tab, peer)).map(m => m.id)).not.toContain(notice)
+    await expect(agentReact(tab, group, notice, builder, 'eyes')).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await agentReact(tab, group, notice, lead, 'eyes')
+    expect(((await read(tab, peer, `conversations/${group}/messages`)).body.data.messages as Array<{ id: string }>).map(m => m.id)).not.toContain(notice)
   })
 })
 
