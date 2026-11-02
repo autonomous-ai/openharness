@@ -38,6 +38,15 @@ export function gatheredNotice(source: unknown, group?: Pick<Conversation, 'revi
     || (row?.kind === 'terminal-alert' && GATHERED_ALERTS.has(row.alert))
 }
 
+/** A gathered alert whose agent no longer has that alert: it ended before the digest went, so the digest leaves it out. An agent
+ *  that is gone is left to the release's own checks. */
+export function endedAlert(state: Pick<SuperTabState, 'agents'>, source: unknown): boolean {
+  const row = source as { kind?: unknown; agentId?: unknown; alert?: unknown } | null | undefined
+  if (row?.kind !== 'terminal-alert' || !GATHERED_ALERTS.has(row.alert)) return false
+  const target = state.agents.find(a => a.id === row.agentId)
+  return !!target && !(target.alerting ?? []).includes(row.alert as 'limit' | 'model')
+}
+
 /** A `work.status` row saying Done: the one notice that outlives its sender (store.ts releasableNotices). */
 export function doneRow(source: unknown): boolean {
   const row = source as { kind?: unknown; status?: unknown } | null | undefined
