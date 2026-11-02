@@ -32,6 +32,7 @@ import 'swarm_switcher.dart';
 import 'task_status.dart';
 import 'workgroup_name.dart';
 import 'project_github.dart';
+import '../widgets/laid_out_list.dart';
 
 /// The reader's one Buddy for the whole Swarm, listed first among the projects
 /// as a channel (Dee, 10-31).
@@ -931,7 +932,7 @@ class ProjectSidebar extends StatelessWidget {
     final reading = _SidebarReading(controller, needsHuman, attention);
     return Material(
       color: DesktopChrome.surface,
-      child: ListView(
+      child: LaidOutListView(
         padding: const EdgeInsets.all(8),
         children: [
           if ((app, onNewSwarm) case (final app?, final onNewSwarm?))

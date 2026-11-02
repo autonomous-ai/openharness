@@ -68,6 +68,7 @@ import 'project_options.dart';
 import 'project_status_card.dart';
 import 'pane_layout.dart';
 import '../widgets/dial_list_scroll.dart';
+import '../widgets/laid_out_list.dart';
 
 typedef _ComposerChoice = SuperTabComposerChoice;
 
@@ -1516,7 +1517,7 @@ class _SuperTabViewState extends State<SuperTabView>
                                       : 'No archived conversations.',
                                 ),
                               )
-                            : ListView(
+                            : LaidOutListView(
                                 children: [
                                   for (final group in groups)
                                     ListTile(
@@ -3437,7 +3438,7 @@ class _SuperTabViewState extends State<SuperTabView>
                                           ),
                                         ),
                                   ),
-                                  SliverList(
+                                  LaidOutSliverList(
                                     delegate: SliverChildBuilderDelegate(
                                       (context, index) =>
                                           row(split - 1 - index),
@@ -3455,7 +3456,7 @@ class _SuperTabViewState extends State<SuperTabView>
                                     padding: EdgeInsets.only(
                                       bottom: grid.AppDesktop.controlGap,
                                     ),
-                                    sliver: SliverList(
+                                    sliver: LaidOutSliverList(
                                       delegate: SliverChildBuilderDelegate(
                                         // Messages on their way end the list.
                                         (context, index) => row(split + index),

@@ -39,6 +39,7 @@ import 'desktop_chrome.dart';
 import '../models/coding_model.dart';
 import 'swarm_model_tile.dart';
 import 'key_hints.dart';
+import 'laid_out_list.dart';
 
 const resourcePickerCommands = {
   'picker.resource_toggle',
@@ -1395,7 +1396,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     List<String> errors = const [],
   }) {
     final error = Theme.of(context).colorScheme.error;
-    return ListView(
+    return LaidOutListView(
       key: const ValueKey('swarm-model-card'),
       controller: _scroll,
       padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
@@ -1845,7 +1846,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
       );
     }
 
-    final lines = ListView(
+    final lines = LaidOutListView(
       controller: _scroll,
       padding: EdgeInsets.symmetric(
         horizontal: cell.width * 2,
@@ -2314,7 +2315,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
   /// pair is a labelled row — [_kDetailLabelColumns] terminal columns of label.
   Widget _details(List<Object> lines, {bool controls = false}) {
     if (DesktopChrome.of(context)) {
-      return ListView(
+      return LaidOutListView(
         controller: _scroll,
         padding: const EdgeInsets.all(18),
         children: [
@@ -2352,7 +2353,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
       terminalThemeStore.value,
     );
     final muted = terminalContentStyle(color: theme.muted);
-    return ListView(
+    return LaidOutListView(
       controller: _scroll,
       padding: EdgeInsets.symmetric(
         horizontal: cell.width * 2,
@@ -2392,7 +2393,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
 
   Widget _typeHints() {
     if (DesktopChrome.of(context)) {
-      return ListView(
+      return LaidOutListView(
         controller: _scroll,
         padding: const EdgeInsets.all(18),
         children: [
@@ -2437,7 +2438,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
       grid.AppTheme.palette.value,
       terminalThemeStore.value,
     );
-    return ListView(
+    return LaidOutListView(
       controller: _scroll,
       padding: EdgeInsets.symmetric(
         horizontal: cell.width * 2,
