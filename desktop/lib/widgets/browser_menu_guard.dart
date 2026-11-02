@@ -32,6 +32,9 @@ class BrowserMenuGuard {
 
   static bool get _web => debugWeb ?? kIsWeb;
 
+  /// Whether this runs in a browser, where a right-click is not sure to reach the app.
+  static bool get inBrowser => _web;
+
   /// Whether the browser's menu is off now.
   static bool get isOff => _off;
 

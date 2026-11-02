@@ -128,8 +128,8 @@ describe('first load (design 4.3)', () => {
     const { status, body } = await get(`/api/super-tabs/${s.tabId}/parts`, peer)
     expect(status).toBe(200)
     expect(Object.keys(body.data).sort()).toEqual(['agents', 'cursor', 'derived', 'epoch', 'format', 'groups', 'head', 'lastChangedAt',
-      'machines', 'members', 'progress', 'serverTime', 'starts', 'tabId'].sort())
-    expect(body.data).toMatchObject({ format: 2, tabId: s.tabId, serverTime: NOW, epoch: 1, lastChangedAt: MIGRATED,
+      'machines', 'members', 'progress', 'serverTime', 'starts', 'steps', 'tabId'].sort())
+    expect(body.data).toMatchObject({ format: 2, tabId: s.tabId, serverTime: NOW, epoch: 1, lastChangedAt: MIGRATED, steps: true,
       head: { key: 'head', version: R, changedAt: MIGRATED, data: { id: s.tabId, name: 'Pilot' } } })
     expect(JSON.parse(Buffer.from(body.data.cursor, 'base64url').toString())).toEqual({ v: 2, t: NOW - 30_000, e: 1 })
     expect(keys(body.data.members)).toEqual([owner.sub, peer.sub, outsider.sub])

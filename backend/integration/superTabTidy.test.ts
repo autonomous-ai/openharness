@@ -292,19 +292,17 @@ describe('a review nobody reviews', () => {
     return { ...f, reviewed, builder, work, ready, reviews, review, closeLines, isArchived }
   }
 
-  it('closes 30 minutes after its last message once every pull request of the work it reviews is merged, with one line saying why', async () => {
+  // Task steps design (#2511): a review is a step of the work it reviews and archives with that task, never on its own clock,
+  // so a review nobody holds stays open while its task does, merged pull requests or not.
+  it('is not closed on its own clock once every pull request of the work it reviews is merged: it stays with its task', async () => {
     const f = await waiting()
     expect((f.review.data as { assignment: unknown }).assignment).toBeNull()
-    expect(f.review.workFinished).toBe(true)
-    f.clock.now += 29 * MINUTE
+    expect(f.review.workFinished).toBe(false)
+    f.clock.now += 40 * MINUTE
     await archiveFinishedGroups(db, f.timed, github({ [PR]: 'merged' }), f.clock.now)
     expect(await f.isArchived()).toBe(false)
-    f.clock.now += MINUTE
-    await archiveFinishedGroups(db, f.timed, github({ [PR]: 'merged' }), f.clock.now)
-    expect(await f.isArchived()).toBe(true)
-    expect(await f.closeLines()).toEqual([expect.objectContaining({ recipientIds: [], author: expect.objectContaining({ id: f.lead }),
-      text: 'Closed: #9 merged; no Swarm review is needed now.' })])
-    // The work it reviews is untouched: its Builder still waits, for the Lead to settle.
+    expect(await f.closeLines()).toEqual([])
+    // The work it reviews is untouched too: its Builder still waits, for the Lead to settle.
     expect((await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.reviewed } })).archived).toBe(false)
   })
 
@@ -341,23 +339,27 @@ describe('a review nobody reviews', () => {
     expect(await f.isArchived()).toBe(true)
   })
 
-  // Review of #2322: a Ready committed inside the close's write linked a new pull request to the work; the close then
-  // archived its review on the older ones, and the work was left with no review, silently (the 10-28 failure).
-  it('stays open when a Ready for review with a new pull request commits during its close, so the work keeps a review', async () => {
+  // Review of #2322 (a Ready committed inside a review's close left the work with no review): a review step no longer closes
+  // on its own clock, so a Ready with a new pull request after the older ones merged still finds the work's review open.
+  it('stays open when a Ready for review with a new pull request comes after the older ones merged, so the work keeps a review', async () => {
     const f = await waiting()
-    let during: (() => Promise<unknown>) | null = () => f.ready('Ready: yes, revision fff. https://github.com/example/parser/pull/11')
-    // Paused at the close's first write, which closes the decisions still waiting there.
-    const hooked = db.$extends({ query: { superTabDecision: { async updateMany({ args, query }) {
-      if (during && (args.where as { conversationId?: string } | undefined)?.conversationId === f.review.key) { const run = during; during = null; await run() }
-      return query(args)
-    } } } })
-    const closing = new SuperTabStore(hooked as unknown as PrismaClient, () => f.clock.now)
     f.clock.now += 40 * MINUTE
-    await archiveFinishedGroups(db, closing, github({ [PR]: 'merged' }), f.clock.now)
-    expect(during).toBeNull()
+    await archiveFinishedGroups(db, f.timed, github({ [PR]: 'merged' }), f.clock.now)
+    await f.ready('Ready: yes, revision fff. https://github.com/example/parser/pull/11')
+    f.clock.now += 40 * MINUTE
+    await archiveFinishedGroups(db, f.timed, github({ [PR]: 'merged', 'https://github.com/example/parser/pull/11': 'merged' }), f.clock.now)
     expect(await f.isArchived()).toBe(false)
     expect(await f.closeLines()).toEqual([])
     expect((await f.reviews()).filter(row => !row.archived)).toHaveLength(1)
+  })
+
+  it('archives with its task once the task ends and its pull requests are merged, the task\'s pass closing it in the same write', async () => {
+    const f = await waiting()
+    await f.execute({ type: 'work.cancel', conversationId: f.reviewed, assignmentId: f.work, reason: 'Landed outside the Swarm' }, host, f.lead)
+    f.clock.now += 40 * MINUTE
+    await archiveFinishedGroups(db, f.timed, github({ [PR]: 'merged' }), f.clock.now)
+    expect((await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.reviewed } })).archived).toBe(true)
+    expect(await f.isArchived()).toBe(true)
   })
 
   it('is cancelled by its coordinator with "current": it archives with the reason, and what waited there for the coordinator ends', async () => {

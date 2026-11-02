@@ -1,4 +1,5 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, statSync } from 'node:fs'
+import { execFileSync, spawn } from 'node:child_process'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync, readFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -264,5 +265,94 @@ describe('privacy observer', () => {
       check: () => ({ passed: true, checkedAt: 7 }), writeStatus: writeTeamStatus, now: () => 7 })
     o.observe()
     expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ version: 1, privacy: { passed: true, checkedAt: 7 } })
+  })
+})
+
+// Audit M5 (docs/security/2026-11-02-team-account-boundary.md): the Team account owns this folder, and the owner's daemon reads
+// this file about once a minute. A FIFO left there blocked that read for good, and stopped the owner's Swarm service at every restart.
+describe('reading a status file the Team account can replace', () => {
+  const folder = () => { const dir = mkdtempSync(join(tmpdir(), 'team-status-')); cleanup.push(dir); return dir }
+  const good = JSON.stringify({ version: 1, privacy: { passed: true, checkedAt: 3 } })
+
+  it('does not wait on a FIFO', async () => {
+    const fifo = join(folder(), 'status.json')
+    execFileSync('mkfifo', [fifo])
+    // A writer that holds the FIFO open for 3 seconds, and writes nothing: a blocking read comes back only when it ends, so
+    // this fails on the clock instead of hanging the test run. Opened with <>, never >: the shell may start after the code
+    // under test has replaced the FIFO with a file, and > would then empty that file (seen on CI's Linux, #2546).
+    const writer = spawn('sh', ['-c', 'exec 3<>"$0"; sleep 3', fifo], { stdio: 'ignore' })
+    try {
+      const started = Date.now()
+      expect(readTeamStatus(fifo)).toBeNull()
+      expect(Date.now() - started).toBeLessThan(1_000)
+    } finally { writer.kill('SIGKILL') }
+  })
+
+  // Not tried with a link to /dev/zero: without the fix that read runs until memory is gone, on a shared Mac (audit M5).
+  it('does not follow a link', () => {
+    const dir = folder()
+    const target = join(dir, 'other.json')
+    writeFileSync(target, good)
+    symlinkSync(target, join(dir, 'status.json'))
+    expect(readTeamStatus(join(dir, 'status.json'))).toBeNull()
+  })
+
+  it('refuses a folder and a file too big to be a status', () => {
+    const dir = folder()
+    expect(readTeamStatus(dir)).toBeNull()
+    const big = join(dir, 'status.json')
+    writeFileSync(big, `{"version":1,"privacy":{"passed":true,"checkedAt":3},"x":"${'y'.repeat(70 * 1024)}"}`)
+    expect(readTeamStatus(big)).toBeNull()
+  })
+
+  it('still reads the plain file the team daemon writes, and a status at the limit', () => {
+    const file = join(folder(), 'status.json')
+    writeFileSync(file, good)
+    expect(readTeamStatus(file)).toEqual({ version: 1, privacy: { passed: true, checkedAt: 3 } })
+    const prefix = '{"version":1,"privacy":{"passed":true,"checkedAt":3},"x":"', suffix = '"}'
+    writeFileSync(file, `${prefix}${'y'.repeat(64 * 1024 - prefix.length - suffix.length)}${suffix}`)
+    expect(statSync(file).size).toBe(64 * 1024)
+    expect(readTeamStatus(file)).toEqual({ version: 1, privacy: { passed: true, checkedAt: 3 } })
+  })
+
+  it('the team daemon\'s own write survives a FIFO in its place', () => {
+    const file = join(folder(), 'status.json')
+    execFileSync('mkfifo', [file])
+    const writer = spawn('sh', ['-c', 'exec 3<>"$0"; sleep 3', file], { stdio: 'ignore' })
+    try {
+      const started = Date.now()
+      writeTeamStatus(file, { signIn: { state: 'signed-in', at: 1 } })
+      expect(Date.now() - started).toBeLessThan(1_000)
+      expect(readTeamStatus(file)).toEqual({ version: 1, signIn: { state: 'signed-in', at: 1 } })
+    } finally { writer.kill('SIGKILL') }
+  })
+})
+
+// Audit L1: `harness team status` prints these in the owner's terminal, and the Team account writes them.
+describe('what a status says, as it reaches a terminal', () => {
+  const ESC = '\u001b'
+  it('removes escape codes and every other control character, and keeps the words', () => {
+    const detail = `bad${ESC}]0;title\u0007 news\r\n\u009b31mred\u007f`
+    const status = readTeamStatus('/x', () => JSON.stringify({ version: 1,
+      signIn: { state: 'failed', at: 2, detail },
+      privacy: { passed: false, item: 'ssh', detail, checkedAt: 2 } }))
+    for (const text of [status?.signIn?.detail, status?.privacy && !status.privacy.passed ? status.privacy.detail : '']) {
+      expect(text).toBe('bad]0;title news31mred')
+    }
+  })
+
+  it('removes the characters that reorder or hide text', () => {
+    const status = readTeamStatus('/x', () => JSON.stringify({ version: 1, signIn: { state: 'failed', at: 2, detail: 'a\u202eb\u2066c\u200bd\ufeffe' } }))
+    expect(status?.signIn?.detail).toBe('abcde')
+  })
+
+  it('counts its 300 characters after the removal, so padding cannot push words out', () => {
+    const status = readTeamStatus('/x', () => JSON.stringify({ version: 1, signIn: { state: 'failed', at: 2, detail: `${ESC.repeat(400)}${'w'.repeat(400)}` } }))
+    expect(status?.signIn?.detail).toBe('w'.repeat(300))
+  })
+
+  it('keeps accented and non-Latin words', () => {
+    const status = readTeamStatus('/x', () => JSON.stringify({ version: 1, signIn: { state: 'failed', at: 2, detail: 'Không đăng nhập được · 失敗' } }))
+    expect(status?.signIn?.detail).toBe('Không đăng nhập được · 失敗')
   })
 })

@@ -27,7 +27,6 @@ describe('the Windows layout', () => {
     expect(paths.data).toBe('C:\\Users\\harnessteam\\.harness\\cli\\data')
     expect(paths.log).toBe('C:\\Users\\harnessteam\\.harness\\cli\\data\\harness.log')
     expect(paths.runtime).toBe('C:\\Users\\harnessteam\\.harness\\runtime')
-    expect(paths.computerId).toBe('C:\\Users\\harnessteam\\.harness\\computer-id')
     expect(paths.npmPrefix).toBe('C:\\Users\\harnessteam\\.local')
     expect(paths.bin).toBe('C:\\Users\\harnessteam\\.local\\bin')
   })

@@ -278,6 +278,9 @@ const KEPT_MS = 24 * 60 * 60 * 1000
  * Harness's node: the tests run this exact text (lib/buddyGuard.spec.ts, and Claude Code itself in
  * lib/buddyGuard.claude.spec.ts).
  */
+/** The folder that holds the one Buddies' folders (superTabs/buddyHome.ts BUDDY_HOMES, which a spec keeps equal): this file's
+ *  guard is written from lib, which imports nothing of superTabs. */
+const ONE_BUDDY_HOMES = 'buddy-home'
 export const buddyGuardSource = (root: string, reads: BuddyReads, wide: BuddyWide | null = null): string => String.raw`#!/usr/bin/env node
 // A Buddy's guard, written by Harness (cli/src/lib/buddyGuard.ts). Do not edit: Harness writes it again at each launch.
 import { createHash } from 'node:crypto'
@@ -293,6 +296,8 @@ const KEPT_MS = ${KEPT_MS}
 // Wide mode (docs/specs/2026-10-30-buddy-read-access.md): null keeps every read in the folder. Set only for a Buddy on its
 // person's own machine, under their own account; it names their home and the places in it that stay closed.
 const WIDE = ${JSON.stringify(wide)}
+// A person's one Buddy or plain session: its folder holds every project's code, and a proposal goes to any one project's PM.
+const ONE_BUDDY = ${JSON.stringify(basename(dirname(root)) === ONE_BUDDY_HOMES)}
 const TOOLS = new Set(['TodoWrite', 'ToolSearch'])
 const READERS = new Set(['cat', 'ls', 'head', 'tail', 'wc', 'grep', 'pwd'])
 const WIDE_READERS = new Set(['cat', 'ls', 'head', 'tail', 'wc', 'grep', 'rg'])
@@ -597,7 +602,8 @@ function fileText(path) {
     return buffer.subarray(0, read).toString('utf8')
   } catch (error) { return error?.code === 'ENOENT' ? '' : null } finally { if (fd !== undefined) closeSync(fd) }
 }
-// In wide mode a proposal carries a summary, never what a command printed: no code block and at most 10 lines.
+// A wide Buddy's proposal, and a one Buddy's, carries a summary, never what a command printed or another project's code (security
+// review of #2530): no code block and at most 10 lines.
 function pastedOutput(json) {
   let proposal
   try { proposal = JSON.parse(json) } catch { return false }
@@ -632,7 +638,7 @@ function superTabAllowed(rest) {
   const content = rest[i] === 'post' ? [after[1]] : after[1] !== undefined ? decoded(after[1]) : []
   const kind = after.map(secretIn).find(Boolean) ?? leakIn([...content, ...attached])
   if (kind) { reason = SECRET(kind); return false }
-  if (WIDE && rest[i] === 'propose' && after[1] !== undefined && pastedOutput(after[1])) { reason = SUMMARIZE; return false }
+  if ((WIDE || ONE_BUDDY) && rest[i] === 'propose' && after[1] !== undefined && pastedOutput(after[1])) { reason = SUMMARIZE; return false }
   return true
 }
 
