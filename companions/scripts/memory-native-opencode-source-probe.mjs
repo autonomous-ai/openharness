@@ -77,7 +77,7 @@ try {
   }
   const plugin = join(directory, 'origin.mjs')
   await writeFile(plugin, `const hookToken = () => ''; export const Fixture = async ({client}) => {
-    ${opencodeMemoryPluginSource(1)}; return { 'chat.message': memoryMessage } }`, { mode: 0o600 })
+    ${opencodeMemoryPluginSource(1, null)}; return { 'chat.message': memoryMessage } }`, { mode: 0o600 })
   const config = { autoupdate: false, share: 'disabled', snapshot: false,
     plugin: markOrigins ? [pathToFileURL(plugin).href] : [], mcp: {}, instructions: [],
     compaction: { auto: true, prune: false },

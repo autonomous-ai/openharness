@@ -413,7 +413,7 @@ describe.skipIf(process.platform === 'win32')('the MCP clients\' way to the brid
     sync(vault, { ...env, CLAUDE_CONFIG_DIR: home })
     expect(claudeEntry('linear').url).toBeUndefined()
     const long = new Store(join(home, 'x'.repeat(120)), env)
-    expect(bridgeSocketPath(long)).toBeNull()
+    expect(bridgeSocketPath(long)).toMatch(/\/\.harness\/s\/[0-9a-f]{16}\/bridge\.sock$/)
     expect(bridgeSocketPath(vault, 'win32')).toBeNull()
   })
 })

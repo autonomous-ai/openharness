@@ -63,7 +63,7 @@ try {
   binding = new OpenCodeMemoryBinding({ current: owner })
   const plugin = join(fixture, 'plugin.mjs')
   await writeFile(plugin, `const hookToken = () => 'synthetic-hook-token';
-    export const Fixture = async ({client}) => { ${opencodeMemoryPluginSource(model.address().port)}; return { 'chat.message': memoryMessage, 'chat.params': memoryParams } }`, { mode: 0o600 })
+    export const Fixture = async ({client}) => { ${opencodeMemoryPluginSource(model.address().port, null)}; return { 'chat.message': memoryMessage, 'chat.params': memoryParams } }`, { mode: 0o600 })
   const selectedModel = 'memory-fixture/alias'
   const config = { autoupdate: false, share: 'disabled', snapshot: false, permission: { '*': 'deny' },
     plugin: [pathToFileURL(plugin).href], mcp: {}, instructions: [], enabled_providers: ['memory-fixture'],
