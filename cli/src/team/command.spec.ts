@@ -640,10 +640,10 @@ describe('internal verbs', () => {
       expect(await teamCommand(['__start', '/Users/harnessteam/.harness/team-handoff'], f.deps)).toBe(0)
       return f
     }
-    const SWITCHED = { refreshToken: 'htr_other_owner', signInEpoch: 'adopted-next@2' }
+    const SWITCHED = { refreshToken: 'htr_other_owner', signInEpoch: 'adopted:team:next@2' }
 
     it('an owner switch while it is out: the old answer writes nothing and claims nothing', async () => {
-      const f = await start('adopted-first@1', SWITCHED)
+      const f = await start('adopted:team:first@1', SWITCHED)
       expect(f.session()).toMatchObject(SWITCHED)
       expect(f.session()?.machineId).toBeUndefined()
       expect(f.out.join('\n')).not.toContain('runs as machine')
@@ -656,9 +656,14 @@ describe('internal verbs', () => {
     })
 
     it('the same sign-in, refreshed while it is out: the answer is kept', async () => {
-      const f = await start('adopted-first@1', { accessToken: 'hna_refreshed' })
-      expect(f.session()).toMatchObject({ machineId: 'm-team', accessToken: 'hna_refreshed', signInEpoch: 'adopted-first@1' })
+      const f = await start('adopted:team:first@1', { accessToken: 'hna_refreshed' })
+      expect(f.session()).toMatchObject({ machineId: 'm-team', accessToken: 'hna_refreshed', signInEpoch: 'adopted:team:first@1' })
       expect(f.out.join('\n')).toContain('runs as machine m-team')
+    })
+
+    it('a sign-in from before epochs, only given one meanwhile: the answer is kept', async () => {
+      const f = await start(undefined, { signInEpoch: 'adopted:abc@1' })
+      expect(f.session()).toMatchObject({ machineId: 'm-team', signInEpoch: 'adopted:abc@1' })
     })
   })
 
