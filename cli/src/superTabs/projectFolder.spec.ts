@@ -35,6 +35,16 @@ describe('per-project checkouts on a contributed swarm machine', () => {
     await f.run()
     expect(f.prepare).not.toHaveBeenCalled()
   })
+  it('finds a project session of a person\'s one Buddy chat by the project it names, as that chat is in no project\'s list', async () => {
+    const f = fixture()
+    Object.assign(f.start.request, { conversationId: 'swarm-buddy-chat', buddySession: { thread: 'root', projectId: 'project-a' } })
+    await f.run()
+    expect(f.prepare).toHaveBeenCalledOnce()
+    // Its project alone: a session naming a project this machine was not told of prepares nothing, whatever its chat.
+    Object.assign(f.start.request, { conversationId: 'work', buddySession: { thread: 'root', projectId: 'project-b' } })
+    await expect(f.run()).rejects.toThrow('no authorized project')
+    expect(f.prepare).toHaveBeenCalledOnce()
+  })
   it('does not widen a legacy contribution or substitute a different filesystem path', async () => {
     const f = fixture()
     f.row.machine.scope = ''
@@ -145,6 +155,20 @@ describe('preparing another person\'s start with the Harness GitHub App', () => 
     delete (noApp.row as { githubApp?: boolean }).githubApp
     expect(await noApp.ready()).toBeNull()
     expect(noApp.backend).not.toHaveBeenCalled()
+  })
+
+  it('prepares nothing for a person\'s one Buddy, which has no project: no token, no clone, no fetch', async () => {
+    // 2026-11-02: the token call was refused with "This start has no project folder to prepare", which failed the start.
+    const app = hosted(new SuperTabHostError('NOT_FOUND', 'This start has no project folder to prepare.', 404))
+    Object.assign(app.start.request, { buddyScope: 'swarm', buddyOf: { personId: 'owner', generation: 'g' } })
+    expect(await app.ready()).toBeNull()
+    expect(app.backend).not.toHaveBeenCalled()
+    expect(app.prepare).not.toHaveBeenCalled()
+    expect(app.fetch).not.toHaveBeenCalled()
+    // Without the app it failed too, as a start of no project this machine was authorized for.
+    delete (app.row as { githubApp?: boolean }).githubApp
+    expect(await app.ready()).toBeNull()
+    expect(app.prepare).not.toHaveBeenCalled()
   })
 
   it('in a team account, always asks for a token, and fails without one rather than using any other login', async () => {
