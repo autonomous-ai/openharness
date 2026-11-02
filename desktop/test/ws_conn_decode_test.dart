@@ -33,7 +33,12 @@ void main() {
         s.listen((raw) {
           final frame = jsonDecode(raw as String) as Map<String, dynamic>;
           if (frame['type'] == 'machine_select') {
-            s.add(jsonEncode({'type': 'connected', 'payload': {'machineId': 'm'}}));
+            s.add(
+              jsonEncode({
+                'type': 'connected',
+                'payload': {'machineId': 'm'},
+              }),
+            );
           }
         });
         if (!ready.isCompleted) ready.complete(s);
@@ -52,10 +57,12 @@ void main() {
       accessTokenProvider: (_, _) async => 'test-token',
       onAuthFailure: (_) {},
       onStatus: (status) {
-        if (status == ConnectionStatus.connected && !connected.isCompleted) connected.complete();
+        if (status == ConnectionStatus.connected && !connected.isCompleted)
+          connected.complete();
       },
       onEvent: (event) {
-        if (event['type'] == 'terminal_output') arrived.add((event['payload'] as Map)['seq'] as int);
+        if (event['type'] == 'terminal_output')
+          arrived.add((event['payload'] as Map)['seq'] as int);
       },
     );
     unawaited(conn.connect());
@@ -74,14 +81,17 @@ void main() {
     }
   }
 
-  test('a large frame goes to the isolate decoder, a small one does not', () async {
-    socket
-      ..add(_frame(1))
-      ..add(_frame(2, pad: WsConn.largeFrameChars));
-    await until(() => arrived.length == 2);
-    expect(arrived, [1, 2]);
-    expect(decoded, hasLength(1));
-  });
+  test(
+    'a large frame goes to the isolate decoder, a small one does not',
+    () async {
+      socket
+        ..add(_frame(1))
+        ..add(_frame(2, pad: WsConn.largeFrameChars));
+      await until(() => arrived.length == 2);
+      expect(arrived, [1, 2]);
+      expect(decoded, hasLength(1));
+    },
+  );
 
   test('a small frame after a large one still arrives second', () async {
     hold = Completer<void>();
@@ -97,13 +107,16 @@ void main() {
     expect(arrived, [1, 2, 3]);
   });
 
-  test('a large frame that does not parse is dropped, and the next arrives', () async {
-    socket
-      ..add('{${'x' * WsConn.largeFrameChars}')
-      ..add(_frame(2));
-    await until(() => arrived.isNotEmpty);
-    expect(arrived, [2]);
-  });
+  test(
+    'a large frame that does not parse is dropped, and the next arrives',
+    () async {
+      socket
+        ..add('{${'x' * WsConn.largeFrameChars}')
+        ..add(_frame(2));
+      await until(() => arrived.isNotEmpty);
+      expect(arrived, [2]);
+    },
+  );
 
   test('a frame still arrives when the isolate cannot start', () async {
     WsConn.decodeLargeFrame = (_) => throw StateError('no isolate');
@@ -112,8 +125,14 @@ void main() {
     expect(arrived, [1]);
   });
 
-  test('the real isolate decoder decodes, and says null for what will not parse', () async {
-    expect(await WsConn.decodeInIsolate(_frame(1)), isA<Map<String, dynamic>>());
-    expect(await WsConn.decodeInIsolate('{nope'), isNull);
-  });
+  test(
+    'the real isolate decoder decodes, and says null for what will not parse',
+    () async {
+      expect(
+        await WsConn.decodeInIsolate(_frame(1)),
+        isA<Map<String, dynamic>>(),
+      );
+      expect(await WsConn.decodeInIsolate('{nope'), isNull);
+    },
+  );
 }

@@ -5,7 +5,8 @@ import 'package:flutter/widgets.dart';
 /// A panel's timer that runs only while the panel is on screen: its subtree not muted (`Offstage`, a tab that isn't showing) and
 /// the app not hidden. Coming back redraws at once, so an age is never stale on screen (Quiet Swarm, Speed). On a phone or a Mac
 /// behind other windows that is nothing to redraw and nothing to read.
-mixin VisibleTick<T extends StatefulWidget> on State<T>, WidgetsBindingObserver {
+mixin VisibleTick<T extends StatefulWidget>
+    on State<T>, WidgetsBindingObserver {
   Duration? _every;
   Timer? _tick;
   bool _registered = false;

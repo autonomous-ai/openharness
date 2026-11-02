@@ -15,7 +15,8 @@ class _Panel extends StatefulWidget {
   State<_Panel> createState() => _PanelState();
 }
 
-class _PanelState extends State<_Panel> with WidgetsBindingObserver, VisibleTick<_Panel> {
+class _PanelState extends State<_Panel>
+    with WidgetsBindingObserver, VisibleTick<_Panel> {
   @override
   void initState() {
     super.initState();
@@ -46,23 +47,30 @@ void main() {
     expect(builds, isNotEmpty);
   });
 
-  testWidgets('does not tick or rebuild off screen, and redraws at once on coming back', (tester) async {
-    final builds = <int>[], changes = <bool>[], panel = _Panel(builds: builds, changes: changes);
-    await tester.pumpWidget(_frame(panel, on: false));
-    builds.clear();
-    await tester.pump(const Duration(seconds: 5));
-    await tester.pump(const Duration(seconds: 5));
-    expect(builds, isEmpty);
-    await tester.pumpWidget(_frame(panel, on: true));
-    expect(builds, isNotEmpty);
-    expect(changes.last, isTrue);
-    builds.clear();
-    await tester.pump(const Duration(seconds: 2));
-    expect(builds, isNotEmpty);
-  });
+  testWidgets(
+    'does not tick or rebuild off screen, and redraws at once on coming back',
+    (tester) async {
+      final builds = <int>[],
+          changes = <bool>[],
+          panel = _Panel(builds: builds, changes: changes);
+      await tester.pumpWidget(_frame(panel, on: false));
+      builds.clear();
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pump(const Duration(seconds: 5));
+      expect(builds, isEmpty);
+      await tester.pumpWidget(_frame(panel, on: true));
+      expect(builds, isNotEmpty);
+      expect(changes.last, isTrue);
+      builds.clear();
+      await tester.pump(const Duration(seconds: 2));
+      expect(builds, isNotEmpty);
+    },
+  );
 
   testWidgets('stops when its tab leaves the screen', (tester) async {
-    final builds = <int>[], changes = <bool>[], panel = _Panel(builds: builds, changes: changes);
+    final builds = <int>[],
+        changes = <bool>[],
+        panel = _Panel(builds: builds, changes: changes);
     await tester.pumpWidget(_frame(panel, on: true));
     await tester.pumpWidget(_frame(panel, on: false));
     expect(changes.last, isFalse);
@@ -71,8 +79,12 @@ void main() {
     expect(builds, isEmpty);
   });
 
-  testWidgets('stops while the app is hidden, and redraws when it returns', (tester) async {
-    final builds = <int>[], changes = <bool>[], panel = _Panel(builds: builds, changes: changes);
+  testWidgets('stops while the app is hidden, and redraws when it returns', (
+    tester,
+  ) async {
+    final builds = <int>[],
+        changes = <bool>[],
+        panel = _Panel(builds: builds, changes: changes);
     await tester.pumpWidget(_frame(panel, on: true));
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
@@ -89,11 +101,15 @@ void main() {
   });
 
   test('a project board reads nothing while its Swarm is away, and goes on when it returns', () async {
-    final server = ConversationServer()..leaderboard = {'people': const <Object>[]};
+    final server = ConversationServer()
+      ..leaderboard = {'people': const <Object>[]};
     final c = server.controller();
     addTearDown(c.dispose);
     await c.refresh();
-    final board = SuperTabProjectBoard(c, every: const Duration(milliseconds: 5));
+    final board = SuperTabProjectBoard(
+      c,
+      every: const Duration(milliseconds: 5),
+    );
     addTearDown(board.dispose);
     await Future<void>.delayed(const Duration(milliseconds: 30));
     expect(server.leaderboardReads, isNotEmpty);

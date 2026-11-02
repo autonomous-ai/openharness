@@ -367,6 +367,11 @@ class SuperTabClient {
   /// still protects its Product Managers, without reading anything more.
   final _closedSnapshots = <String, SuperTabSnapshot>{};
 
+  /// The files waiting to go in Swarms let go, for their next controllers: in
+  /// memory for this account, and for the newest [_keptFilesSwarms] alone.
+  final _keptFiles = <String, SuperTabKeptFiles>{};
+  static const _keptFilesSwarms = 8;
+
   /// How many times each Swarm was closed here: an open a close overtook
   /// stops before it makes a controller.
   final _closes = <String, int>{};
@@ -464,6 +469,7 @@ class SuperTabClient {
     _controllers.clear();
     _loaded.clear();
     _closedSnapshots.clear();
+    _keptFiles.clear();
     _closes.clear();
     if (account != null &&
         onTabs != null &&
@@ -683,6 +689,16 @@ class SuperTabClient {
     final loaded = _loaded.remove(id);
     // One that has read nothing yet keeps what the last close kept.
     if (loaded?.snapshot case final snapshot?) _closedSnapshots[id] = snapshot;
+    if (loaded != null) {
+      final kept = loaded.keptFiles;
+      _keptFiles.remove(id);
+      if (kept.chats.isNotEmpty || kept.threads.isNotEmpty) {
+        _keptFiles[id] = kept;
+        if (_keptFiles.length > _keptFilesSwarms) {
+          _keptFiles.remove(_keptFiles.keys.first);
+        }
+      }
+    }
     loaded?.dispose();
     if (loaded != null) unawaited(loaded.flush().catchError((Object _) {}));
     // Still reading its saved state: that open stops ([_open]).
@@ -728,6 +744,7 @@ class SuperTabClient {
           )
           ..away = _isAway(id)
           ..pushUntil = _pushUntil;
+    if (_keptFiles.remove(id) case final kept?) controller.adoptFiles(kept);
     var seenChange = (
       lastChangedAt: -1,
       mentionsWaiting: -1,
