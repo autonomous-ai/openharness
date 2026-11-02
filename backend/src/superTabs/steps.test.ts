@@ -5,9 +5,9 @@
  */
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
-import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
+import { agent, createSuperTab, type Actor, type AgentConfiguration } from './model.js'
 import { extracted } from './parts/write.js'
-import { stepSleeps } from './steps.js'
+import { stepEndedRows, stepSleeps } from './steps.js'
 import { reportedAs } from './projectUpdates.js'
 import { idleNotices } from './tidy.js'
 
@@ -352,5 +352,41 @@ describe('the PM is not told what a step\'s agent says to its task', () => {
     // The Engineer, idle with its task done, is still told: an idle Engineer is stopped.
     expect(notices).toContain(f.dev)
     expect(notices).not.toContain(rev)
+  })
+})
+
+// The archive pass writes these with no command behind it, so they must never stop it: a delivery to an agent that has left throws.
+describe("the row a step's ended work leaves", () => {
+  const state = { people: [{ id: 'owner', generation: 'g' }, { id: 'rejoined', generation: 'new' }], agents: [
+    { id: 'kept', name: 'Reviewer', contributorId: 'owner', membershipGeneration: 'g' },
+    // agent() throws for both of these, as writeMessages calls it for each recipient (review 2 of #2596).
+    { id: 'orphaned', name: 'Reviewer', contributorId: 'left', membershipGeneration: 'g' },
+    { id: 'stale', name: 'Reviewer', contributorId: 'rejoined', membershipGeneration: 'old' },
+  ] } as never
+  const step = (agentId: string) => ({ id: `step-${agentId}`, assignment: { agentId } }) as never
+  const lead = { kind: 'agent', id: 'lead', name: 'Lead', membershipGeneration: 'g' } as const
+
+  it("goes to the step's agent, in that step, as the author given", () => {
+    expect(stepEndedRows(state, [step('kept')], 'Fix was archived.', lead, s => `row-${s.id}`)).toEqual([expect.objectContaining({
+      id: 'row-step-kept', conversationId: 'step-kept', author: lead, text: 'Fix was archived.', recipients: ['kept'], source: { kind: 'system' } })])
+  })
+
+  it('goes to nobody when its agent has left the Swarm', () => {
+    expect(stepEndedRows(state, [step('gone')], 'Fix was archived.', lead, s => s.id)[0]!.recipients).toEqual([])
+  })
+
+  it('goes to nobody, and never throws at its delivery, when its agent\'s contributor is gone or has another generation', () => {
+    for (const id of ['orphaned', 'stale']) {
+      const [row] = stepEndedRows(state, [step(id)], 'Fix was archived.', lead, s => s.id)
+      expect(row!.recipients).toEqual([])
+      expect(() => { for (const recipient of row!.recipients) agent(state, recipient) }).not.toThrow()
+      expect(stepEndedRows(state, [step(id)], 'Fix was archived.', null, s => s.id)).toEqual([])
+    }
+    expect(() => agent(state, 'orphaned')).toThrow()
+  })
+
+  it('is written as the agent told when there is no Lead, and not at all when there is nobody to write it', () => {
+    expect(stepEndedRows(state, [step('kept')], 'Fix was archived.', null, s => s.id)[0]!.author).toMatchObject({ kind: 'agent', id: 'kept' })
+    expect(stepEndedRows(state, [step('gone')], 'Fix was archived.', null, s => s.id)).toEqual([])
   })
 })

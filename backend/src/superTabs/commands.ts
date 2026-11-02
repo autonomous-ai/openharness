@@ -11,7 +11,7 @@ import {
   type Actor, type AgentConfiguration, type AgentStart, type AgentStartRequest, type BuddySessionEntry, type WorkTask, type Agent, type Author, type Check, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
 import { jobKindOf } from './evidence/jobKind.js'
-import { endSteps, holdsStepOf, isStep, ownerOf, taskOwner } from './steps.js'
+import { endSteps, stepEndedRows, holdsStepOf, isStep, ownerOf, taskOwner } from './steps.js'
 import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSaveSchema } from './routingPolicy.js'
 import { askedInSchema, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema } from './rules.js'
@@ -904,10 +904,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
    *  [archive], its finished steps archive with it. */
   const endStepsOf = (task: Conversation, reason: string, archive: boolean) => {
     // A row of its own in each step, as the command's own row may be in the task: one id per row.
-    for (const step of endSteps(state, task, reason, archive)) {
-      effects.messages.push({ id: stableId(operationId, 'step-ended', step.id), conversationId: step.id, author: sender, text: reason,
-        replyTo: null, recipients: [step.assignment!.agentId], source: SYSTEM_ROW })
-    }
+    effects.messages.push(...stepEndedRows(state, endSteps(state, task, reason, archive), reason, sender, step => stableId(operationId, 'step-ended', step.id)))
   }
   /** Agent bookkeeping, a routing line or an agent joined or ready: no one's in the project chat, which carries only what
    *  people read or decide on (the Lead's ruling, 2026-10-29); a task's chat keeps it as its record. */

@@ -51,7 +51,7 @@ import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './part
 import { memberSwarms } from './swarmRows.js'
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { loadDeliveryParts, ms } from './parts/light.js'
-import { endSteps } from './steps.js'
+import { endSteps, stepEndedRows, stepsOf } from './steps.js'
 import { guardedWrite, partId } from './parts/write.js'
 import { retryable } from './retry.js'
 import { touchesFor } from './parts/touches.js'
@@ -3594,13 +3594,20 @@ export class SuperTabStore {
       group.archived = true
       // Its steps archive with it (task steps design): its work is done or cancelled and its pull requests settled, so a
       // step still open there has nothing left to check.
-      endSteps(state, group, `${group.title} was archived.`, true)
-      const line = finished ? archiveLine(state, group, now) : reviewCloseLine(state, group, checked, now), rows = line ? [line] : []
+      const reason = `${group.title} was archived.`, heldBefore = new Set(stepsOf(state, group.id).filter(step => step.archived).map(step => step.id))
+      const cancelled = endSteps(state, group, reason, true)
+      const line = finished ? archiveLine(state, group, now) : reviewCloseLine(state, group, checked, now)
+      // A step this pass cancelled hears why, as when a command ends it (commands.ts endStepsOf): its later verdict is refused.
+      const rows = [...line ? [line] : [], ...stepEndedRows(state, cancelled, reason, line?.author ?? null, step => stableId('auto-archive-step', step.id, String(now)))]
       const sequences = numberMessages(state, rows, now)
       if (!dirtyGroups(state, groupProject(state, group)).includes(group)) group.dormant = true
       // As a person's archive does (execute): a claim of a delivery here conflicts with this write.
-      await tx.superTabDelivery.updateMany({ where: { tabId, conversationId: groupId, status: { in: [...CANCELLABLE_DELIVERY] } },
-        data: { status: 'cancelled', holdReason: null, holdSince: null } })
+      // Its finished steps archive here too (execute does the same): a cancelled one stays open, to hear why. One plain match per
+      // conversation: an `in` on this hot collection is sent as $expr, which no index bounds (hotFilters).
+      for (const conversationId of [groupId, ...stepsOf(state, group.id).filter(step => step.archived && !heldBefore.has(step.id)).map(step => step.id)]) {
+        await tx.superTabDelivery.updateMany({ where: { tabId, conversationId, status: { in: [...CANCELLABLE_DELIVERY] } },
+          data: { status: 'cancelled', holdReason: null, holdSince: null } })
+      }
       // A review's close also writes the work it reviews (review of #2322): a Ready for review committed since the load linked
       // a new pull request and saw this review still open, so it opened none. The touch makes one of the two writes retry,
       // and the retry sees the other: this one declines (a pull request not read), or that one opens a new review.
