@@ -421,7 +421,7 @@ describe('a data folder too long to hold a socket', () => {
   describe('listening', () => {
     let home: string, closers: Array<() => Promise<unknown>>
     beforeEach(() => { home = mkdtempSync(join('/tmp', 'ls-')); closers = [] })
-    afterEach(async () => { for (const close of closers) await close() })
+    afterEach(async () => { for (const close of closers) await close(); rmSync(home, { recursive: true, force: true }) })
 
     it('makes the short folder 0700 and the socket 0600', async () => {
       const path = socketPathIn(long, 'daemon-1.sock', home)!
@@ -444,7 +444,9 @@ describe('a data folder too long to hold a socket', () => {
     it('refuses a short folder that is a link', async () => {
       const path = socketPathIn(long, 'daemon-1.sock', home)!
       mkdirSync(dirname(dirname(path)), { recursive: true, mode: 0o700 })
-      symlinkSync(mkdtempSync(join('/tmp', 'ls-other-')), dirname(path))
+      const elsewhere = mkdtempSync(join('/tmp', 'ls-other-'))
+      closers.push(async () => rmSync(elsewhere, { recursive: true, force: true }))
+      symlinkSync(elsewhere, dirname(path))
       await expect(listenLocalSocket(() => {}, path)).rejects.toThrow(/not private/)
     })
   })

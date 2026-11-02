@@ -2,7 +2,7 @@
 // Whoever holds the daemon's loopback port hears nothing from a Store package (audit H1), and each still works over the socket.
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -12,13 +12,22 @@ import { closeBridges as closeMemories, listAgents as memoriesAgents } from '../
 import { closeSessions, listHarnesses, listMachines } from '../agents/machine-monitor/lib/daemon.mjs'
 import { harnessExecute } from '../agents/autonomous-grid/lib/harness.mjs'
 
+const madeFolders = []
+/** Short enough to hold a socket, and removed with the rest when this file ends. */
+function tempFolder(prefix) {
+  const folder = mkdtempSync(join('/tmp', prefix))
+  madeFolders.push(folder)
+  return folder
+}
+after(() => { for (const folder of madeFolders) rmSync(folder, { recursive: true, force: true }) })
+
 const CREDENTIAL = `test-local-credential-${'a'.repeat(21)}`
 const closers = []
 after(async () => { closeBridges(); closeMemories(); closeSessions(); for (const close of closers) await close() })
 
 /** A data folder as the CLI leaves it, short enough to hold a socket, with a real credential a client could read. */
 function dataDir() {
-  const dir = join(mkdtempSync(join('/tmp', 'hold-')), 'd')
+  const dir = join(tempFolder('hold-'), 'd')
   mkdirSync(dir, { mode: 0o700 })
   writeFileSync(join(dir, 'hook-credential'), `${CREDENTIAL}\n`, { mode: 0o600 })
   chmodSync(join(dir, 'hook-credential'), 0o600)
@@ -116,7 +125,7 @@ for (const [name, run] of Object.entries(clients)) {
 
 for (const [name, run] of Object.entries(clients)) {
   test(`${name}: a data folder too long for a socket uses its short one, and a holder of the port hears nothing`, async () => {
-    const home = mkdtempSync(join('/tmp', 'hh-')), dir = join(mkdtempSync(join('/tmp', 'hl-')), 'd'.repeat(100))
+    const home = tempFolder('hh-'), dir = join(tempFolder('hl-'), 'd'.repeat(100))
     mkdirSync(dir, { mode: 0o700 })
     writeFileSync(join(dir, 'hook-credential'), `${CREDENTIAL}\n`, { mode: 0o600 })
     const hold = await holder()
@@ -132,7 +141,7 @@ for (const [name, run] of Object.entries(clients)) {
   })
 
   test(`${name}: a long folder with its short socket gone says the daemon is down, and the port is not tried`, async () => {
-    const home = mkdtempSync(join('/tmp', 'hh-')), dir = join(mkdtempSync(join('/tmp', 'hl-')), 'd'.repeat(100))
+    const home = tempFolder('hh-'), dir = join(tempFolder('hl-'), 'd'.repeat(100))
     mkdirSync(dir, { mode: 0o700 })
     writeFileSync(join(dir, 'hook-credential'), `${CREDENTIAL}\n`, { mode: 0o600 })
     const hold = await holder()

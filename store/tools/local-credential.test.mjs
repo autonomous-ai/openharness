@@ -1,11 +1,20 @@
 // node --test store/tools/local-credential.test.mjs
 import assert from 'node:assert/strict'
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:net'
-import { test } from 'node:test'
+import { after, test } from 'node:test'
 import { daemonBridge, localCredentialHeaders } from './local-credential.mjs'
+
+const madeFolders = []
+/** Short enough to hold a socket, and removed with the rest when this file ends. */
+function tempFolder(prefix) {
+  const folder = mkdtempSync(join('/tmp', prefix))
+  madeFolders.push(folder)
+  return folder
+}
+after(() => { for (const folder of madeFolders) rmSync(folder, { recursive: true, force: true }) })
 
 // A folder too long for a socket has one under the home folder: only a home too long as well is left on the port.
 process.env.HOME = `/${'h'.repeat(120)}`
@@ -41,7 +50,7 @@ test('on Windows the credential is read whatever mode the folder and file report
 })
 
 test('where a socket can be, a check opens it and shows nothing, and only if it is private', async (t) => {
-  const short = mkdtempSync(join('/tmp', 'tools-'))
+  const short = tempFolder('tools-')
   writeFileSync(join(short, 'hook-credential'), `${CREDENTIAL}\n`, { mode: 0o600 })
   chmodSync(short, 0o700)
   const env = { ADAPTER_DATA_DIR: short, HOME: '/h' }, path = join(short, 'daemon-18473.sock')

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
@@ -14,7 +14,7 @@ import { bridgeRoute, connectionsBridge } from './bridge.js'
 import { McpClient } from './mcp.js'
 
 const closers: Array<() => unknown> = []
-afterEach(async () => { vi.useRealTimers(); for (const close of closers.splice(0)) await close() })
+afterEach(async () => { vi.useRealTimers(); for (const close of closers.splice(0)) await close(); rmSync(home, { recursive: true, force: true }) })
 
 let vault: Store, env: NodeJS.ProcessEnv, home: string
 beforeEach(() => {
