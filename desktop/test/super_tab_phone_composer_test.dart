@@ -307,4 +307,25 @@ void main() {
       await unmountPhoneSuperTab(tester, c);
     },
   );
+
+  testWidgets(
+    'a narrow phone with under 280 px left keeps one row, squeezed but whole',
+    (tester) async {
+      final (_, c) = await mountPhoneSuperTab(
+        tester,
+        const Size(320, 568),
+        server: _buddyChat(),
+        initial: 'offline',
+      );
+      tester.view.viewInsets = const FakeViewPadding(bottom: 300);
+      addTearDown(tester.view.resetViewInsets);
+      await tester.pumpAndSettle();
+      await tester.enterText(_field, List.filled(12, 'line').join('\n'));
+      await tester.tap(_session);
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(tester.getRect(_send).right, lessThanOrEqualTo(320));
+      await unmountPhoneSuperTab(tester, c);
+    },
+  );
 }

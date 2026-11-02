@@ -2239,7 +2239,8 @@ class _SuperTabViewState extends State<SuperTabView>
     required Widget send,
   }) {
     // Too little height for a second row (a phone on its side with its keyboard
-    // up): the actions take the row's end again, where there is width for them.
+    // up): the actions take the row's end again. A narrow phone with so little
+    // height gets the squeezed row, which beats a composer that overflows.
     if (_phone && room >= _phoneComposerTwoRowsFrom) {
       return Column(
         mainAxisSize: MainAxisSize.min,
