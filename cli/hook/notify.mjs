@@ -277,16 +277,63 @@ function boundedPrompt(prompt) {
 const DELIVERY_ID = randomUUID()
 const FIRED_AT = Date.now() - Math.round(process.uptime() * 1000)
 
+/** Mirrors MAX_SOCKET_PATH_BYTES in src/lib/localSocket.ts. */
+const MAX_SOCKET_PATH_BYTES = 96
+
+/** A socket file only this account could have made: never send the credential to anything else. */
+function privateSocket(file) {
+  try {
+    const entry = lstatSync(file)
+    const uid = typeof process.getuid === 'function' ? process.getuid() : null
+    return entry.isSocket() && (entry.mode & 0o077) === 0 && (uid === null || entry.uid === uid)
+  } catch { return false }
+}
+
+/**
+ * The daemon's socket in this data folder. It is named for the daemon's configured port, and this hook's port may be
+ * the one the daemon was given instead when another account held that one, so the daemon's records say which
+ * (mirrors localSocketRoute in src/lib/localTransport.ts).
+ */
+function daemonSocket(port, dataDir) {
+  const named = join(dataDir, `daemon-${port}.sock`)
+  if (privateSocket(named)) return named
+  try {
+    for (const name of readdirSync(dataDir)) {
+      const configured = /^daemon-(\d+)\.json$/.exec(name)?.[1]
+      if (!configured) continue
+      const socket = join(dataDir, `daemon-${configured}.sock`)
+      if (JSON.parse(readPrivateStateFile(join(dataDir, name), 4096))?.port === port && privateSocket(socket)) return socket
+    }
+  } catch { /* An unreadable folder has no socket to offer. */ }
+  return null
+}
+
+/**
+ * How this hook reaches the daemon, and what it shows. Any account can bind the TCP port while the daemon restarts (audit
+ * H1, docs/security/2026-11-02-team-account-boundary.md), and whoever holds it would hear this request, the user's
+ * prompt in it included. So on macOS and Linux it goes over the 0600 socket; with none there the daemon is down, and
+ * this is the same as a failed post. A data folder too long to hold a socket is the one case with no way but TCP, and
+ * then the hook-only token goes, never the credential. Over the socket the credential still goes because a daemon from
+ * before the hook token (an update not yet handed over) checks it there. Windows is unchanged.
+ */
+function hookRoute(port) {
+  const dataDir = paths().dataDir
+  if (process.platform === 'win32') return { address: { host: '127.0.0.1', port }, token: readHookCredential() }
+  if (Buffer.byteLength(join(dataDir, `daemon-${port}.sock`)) > MAX_SOCKET_PATH_BYTES) return { address: { host: '127.0.0.1', port }, token: readHookCredential('hook-token') }
+  const socketPath = daemonSocket(port, dataDir)
+  return socketPath ? { address: { socketPath }, token: readHookCredential() } : null
+}
+
 function post(port, path, body, onResponse) {
   return new Promise((resolve) => {
     const payload = JSON.stringify(body)
-    const credential = readHookCredential()
+    const route = hookRoute(port)
+    const credential = route?.token
     if (!credential) { resolve(false); return }
     let connected = false
     const req = http.request(
       {
-        host: '127.0.0.1',
-        port,
+        ...route.address,
         path,
         method: 'POST',
         headers: {
@@ -397,14 +444,14 @@ function hardenPrivateStateFileIfPresent(file, maxBytes = Number.MAX_SAFE_INTEGE
   } finally { closeSync(fd) }
 }
 
-function readHookCredential() {
+function readHookCredential(name = 'hook-credential') {
   let fd = null
   try {
     const dataDir = paths().dataDir
-    if (process.platform === 'win32') return readWindowsHookCredential(dataDir, join(dataDir, 'hook-credential'))
+    if (process.platform === 'win32') return readWindowsHookCredential(dataDir, join(dataDir, name))
     secureStateDirectory(dataDir, false)
     const uid = typeof process.getuid === 'function' ? process.getuid() : null
-    const file = join(dataDir, 'hook-credential')
+    const file = join(dataDir, name)
     fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
     const stat = fstatSync(fd)
     if (!stat.isFile() || stat.size > 128 || (stat.mode & 0o777) !== 0o600) return ''

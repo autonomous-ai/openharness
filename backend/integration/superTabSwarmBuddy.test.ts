@@ -321,6 +321,50 @@ describe('a project session', () => {
     expect((await f.store.read(peer, f.tab, agentId)).state.conversations.map(c => c.id)).not.toContain(f.secret.conversationId)
   })
 
+  it('reopens with its history and its project, as a thread\'s reply box sends it, naming none; of another project it reads none of it', async () => {
+    const f = await swarm()
+    const { chat } = await buddy(f)
+    const { thread, agentId } = await projectSession(f, chat, f.web.projectId, 'Plan web sync')
+    await send(f, chat, 'EARLIER ANSWER: use a queue', { replyTo: thread }, peer, agentId)
+    await f.execute({ type: 'buddy.sessionEnd', conversationId: chat, thread, reason: 'idle' }, peer)
+    const reopen = async (text: string, projectId?: string) =>
+      f.launch(String((await send(f, chat, text, { replyTo: thread, newSession: true, ...(projectId ? { sessionProjectId: projectId } : {}) })).result.startId))
+    const again = await reopen('Carry on')
+    expect((await f.store.read(peer, f.tab)).state.agents.find(a => a.id === again)).toMatchObject({ projectId: f.web.projectId, buddySession: { projectId: f.web.projectId } })
+    expect(await texts(f, chat, peer, again, { thread })).toEqual(['Plan web sync', 'EARLIER ANSWER: use a queue', 'Session ended: idle for 30 minutes.', 'Carry on'])
+    await send(f, chat, 'SECOND ANSWER', { replyTo: thread }, peer, again)
+    await f.execute({ type: 'buddy.sessionEnd', conversationId: chat, thread, reason: 'ended' }, peer)
+    // Another project's session in that thread reads its person's words alone, and the next keeps that project.
+    const other = await reopen('Now the secret project', f.secret.projectId)
+    const read = JSON.stringify(await f.store.messages(peer, f.tab, chat, { thread }, other))
+    expect(read).not.toContain('EARLIER ANSWER')
+    expect(read).not.toContain('SECOND ANSWER')
+    expect(read).toContain('Plan web sync')
+    await f.execute({ type: 'buddy.sessionEnd', conversationId: chat, thread, reason: 'ended' }, peer)
+    const third = await reopen('Back again')
+    expect((await f.store.read(peer, f.tab)).state.agents.find(a => a.id === third)).toMatchObject({ projectId: f.secret.projectId })
+  })
+
+  it('reopens a plain session plain, and refuses to reopen in a project its person lost, as it refuses a made-up one', async () => {
+    const f = await swarm()
+    const { chat } = await buddy(f)
+    const plain = await projectSession(f, chat, undefined, 'Measure prod CPU')
+    await f.execute({ type: 'buddy.sessionEnd', conversationId: chat, thread: plain.thread, reason: 'ended' }, peer)
+    const started = await send(f, chat, 'Carry on', { replyTo: plain.thread, newSession: true })
+    const again = await f.launch(String(started.result.startId))
+    expect((await f.store.read(peer, f.tab)).state.agents.find(a => a.id === again)!.buddySession!.projectId).toBeUndefined()
+
+    const lost = await projectSession(f, chat, f.secret.projectId, 'SECRET SESSION SENTINEL')
+    await f.execute({ type: 'buddy.sessionEnd', conversationId: chat, thread: lost.thread, reason: 'ended' }, peer)
+    const madeUp = await send(f, chat, 'x', { replyTo: lost.thread, newSession: true, sessionProjectId: 'invented-project' }).catch((e: { code?: string }) => e.code)
+    await f.execute({ type: 'project.sharing', projectId: f.secret.projectId, visibility: 'private', memberIds: [owner.sub] })
+    const before = (await f.store.read(peer, f.tab)).state.agents.length
+    const refused = await send(f, chat, 'y', { replyTo: lost.thread, newSession: true }).catch((e: { code?: string; message?: string }) => e)
+    expect((refused as { code?: string }).code).toBe(madeUp)
+    expect(JSON.stringify((refused as { message?: string }).message)).not.toContain('Secret')
+    expect((await f.store.read(peer, f.tab)).state.agents.length).toBe(before)
+  })
+
   it('reads in its thread only its person\'s words and its own, never a main-Buddy root or excerpt', async () => {
     const f = await swarm()
     const { chat, main } = await buddy(f)

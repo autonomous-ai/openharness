@@ -105,7 +105,7 @@ describe('generated discovery scripts', () => {
     version.major = 2
     vi.stubEnv('OPENCODE_PLUGIN_DIR', pluginDir)
     vi.stubEnv('ADAPTER_DATA_DIR', data)
-    writeFileSync(join(data, 'hook-credential'), 'tok-123\n')
+    writeFileSync(join(data, 'hook-token'), 'tok-123\n')
     const { installOpencodePlugin } = await import('./hooks.js')
     await installOpencodePlugin(18473)
 

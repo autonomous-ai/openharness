@@ -14,7 +14,7 @@ Team agent the owner's full rights (H1, H2), and files and command lines the own
 
 | ID | Rating | Finding | Status |
 |---|---|---|---|
-| H1 | **High** | The owner's local credential goes to whoever holds the daemon's port | Proved with the real hook, fix requested |
+| H1 | **High** | The owner's local credential goes to whoever holds the daemon's port | Fixed for hooks, the CLI and Desktop (task #2016); what stays open is under its fix |
 | H2 | **High** | A Team agent's branch runs with the owner's rights when an owner's agent builds it | Proved with the real engines; fixed for assigned work (#2025), and what stays open is listed under H2 |
 | M1 | **Medium** | The owner's files in the shared `/tmp` are readable, and can be planted | Seen on the Mac Studio, fix requested |
 | M2 | **Medium** | Tokens on tmux's command line show in `ps` to every account | Seen on the Mac Studio, fix requested |
@@ -59,6 +59,12 @@ plain listener on the port. The listener ran as this user, in a fixture. Neither
 **Fix:** on macOS and Linux, send the credential only over the 0600 Unix socket, or only after the listener proves itself, as
 Windows' pipe does (`lib/windows/pipeAuth.ts`). That covers the CLI's and Desktop's clients: a token for hooks alone would leave
 them open. Same for the bridge's key.
+
+**Fixed (task #2016):** on macOS and Linux, hooks, the CLI and Desktop use only the socket while one can exist. Hooks have their own
+token that opens the hook routes alone. A credential or bridge key over TCP counts only from a process of this OS account
+(`lib/peerAccount.ts`). The bridge moves off a port another account holds and tells agents. The refusal is tested against a real other account (`nobody`) on CI's Linux; on macOS only
+with a stand-in for the lookup. No real Team account or reboot was tried. **Still open:** an MCP client sends its tool calls to
+whoever holds its bridge address, who can answer them falsely; an engine plugin's session-start and hook token reach whoever holds the daemon's port, who hears them but cannot use the token from another account; and Store agents, companions and old clients still send the credential over TCP, where it opens nothing for another account.
 
 ### H2. A Team agent's branch runs with the owner's rights (High)
 

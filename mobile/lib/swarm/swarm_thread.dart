@@ -524,6 +524,8 @@ class SwarmThread extends ChangeNotifier implements SwarmFilesBox {
           'recipientIds': const <String>[],
           if (_alsoSend) 'alsoSend': true,
           if (ids.isNotEmpty) 'attachmentIds': ids,
+          // As the desktop's: the server refuses it in an older Buddy chat.
+          if (reader.snapshot?.swarmBuddy == true) 'oneBuddy': true,
         },
       },
       messageId: superTabMessageId(
