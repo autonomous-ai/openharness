@@ -875,6 +875,17 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   const projectChatWork = (conversationId: string) => {
     if (projectsOf(state).some(p => p.leadConversationId === conversationId)) coordinatorOrPerson(state, actor, conversationId)
   }
+  /** The project chat holds only its coordinator among agents (Ken, #2207): a Reviewer added next to the PM opened a second
+   *  terminal there and posted announcements in the people's chat. Refused whoever adds one and by whichever command; an
+   *  agent stored there before stays until it is removed, and a new coordinator is still set (lead). [agentId] is null for an
+   *  agent not started yet. */
+  const projectChatJoin = (group: Conversation, agentId: string | null, name: string, post = false) => {
+    if (!projectsOf(state).some(p => p.leadConversationId === group.id)) return
+    if (agentId && (agentId === group.leadId || group.agentIds.includes(agentId))) return
+    fail('PROJECT_CHAT_COORDINATOR_ONLY', post
+      ? `The project chat holds only its coordinator among agents: a post here reaches the coordinator. Tell ${name} in its task.`
+      : `The project chat holds only its coordinator among agents, so ${name} cannot join it. Its work and announcements go in its task.`, 403)
+  }
   /** An agent starts or assigns only what the route chose; a person may still do either by hand. */
   /** A private conversation is chat only (design section 4.8). */
   const chatOnly = (conversationId: string) => {
@@ -1955,6 +1966,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // there. A new session may be on any machine of the person's, as their start may (agent.start).
       if (isBuddyChat(group)) fail('BUDDY_CHAT_FIXED', 'A Buddy chat stays its owner\'s and their Buddy\'s: nobody else is added to it.', 403)
       if (existing) joinable(group, existing)
+      // A session already in the Swarm joins the project chat as conversation.agent adds one: refused but for its coordinator. A
+      // new one shared there (Desktop's New agent in the project chat) joins the project alone, for its tasks (#2207).
+      const sharedHere = !command.lead && projectsOf(state).some(p => p.leadConversationId === group.id)
+      if (sharedHere && existing) projectChatJoin(group, existing.id, existing.displayName ?? existing.name)
       // An older Desktop adds a session in a custom role (roleId): kept, with a Reviewer role's kind, for older readers, and
       // read by no command. The role name it means is the agent's (instructions.ts legacyRoleName).
       const roleKind = command.roleId ? project.roles?.find(r => r.id === command.roleId)?.kind : undefined
@@ -1994,7 +2009,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (existing && (existing.hostGrant ?? null) !== (grant.hostGrant ?? null)) {
         fail('CONTRIBUTION_REVOKED', 'Reconcile and remove this old contribution before adding it under the new machine share.', 403)
       }
-      if (!group.agentIds.includes(agentId)) group.agentIds.push(agentId)
+      if (sharedHere && !existing) message(group.id, `${who} added ${command.name} to the project. The project chat holds only its coordinator among agents, so ${command.name} works in its tasks.`, [], null, SYSTEM_ROW)
+      else if (!group.agentIds.includes(agentId)) group.agentIds.push(agentId)
       if (command.lead) {
         keepLead(group, agentId)
         if (group.leadId && group.leadId !== agentId && activeWork(group)) fail('WORK_ACTIVE', 'Reconcile active work before replacing its lead.')
@@ -2016,6 +2032,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     case 'agent.start': {
       chatOnly(command.request.conversationId)
       projectChatWork(command.request.conversationId)
+      // A coordinator starts there through lead.start alone.
+      projectChatJoin(open(state, command.request.conversationId), null, command.request.name)
       const home = groupProject(state, open(state, command.request.conversationId))
       if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
       if (!['claude', 'codex'].includes(command.request.engine)) {
@@ -2586,6 +2604,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         group.agentIds = group.agentIds.filter(id => id !== command.agentId)
         if (group.leadId === command.agentId) group.leadId = null
       } else {
+        if (!command.lead) projectChatJoin(group, member.id, member.displayName ?? member.name)
         if (group.audience && ledProject(state, member.id)?.id !== groupProject(state, group).id) {
           fail('AUDIENCE_LEAD_ONLY', 'A private conversation holds only the Lead among agents.', 403)
         }
@@ -2744,6 +2763,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         // An agent of this project that another agent names from outside the group joins it, so it can read and answer there
         // (joinsProject). A person's message adds nobody: a person adds an agent to a task with conversation.agent.
         if (!group.agentIds.includes(id)) {
+          projectChatJoin(group, id, target.displayName ?? target.name, true)
           if (actor.kind !== 'agent' || !joinsProject(state, group, id)) fail('INVALID_RECIPIENT', 'Choose an agent in this conversation.', 400)
           teamJoin(groupProject(state, group), id, group)
           group.agentIds.push(id)
@@ -2913,6 +2933,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
       if (activeWork(group)) fail('WORK_ACTIVE', 'The current assignment must finish or be reconciled before reassignment.')
       const worker = agent(state, command.agentId)
+      projectChatJoin(group, worker.id, worker.displayName ?? worker.name)
       assignable(worker)
       sameProject(state, group, worker)
       const home = groupProject(state, group)

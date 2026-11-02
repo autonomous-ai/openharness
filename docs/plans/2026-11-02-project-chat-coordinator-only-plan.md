@@ -52,12 +52,15 @@ project chat's pane agents to its lead in one snapshot method both the pane sync
   `The project chat holds only its coordinator among agents: a post here reaches the coordinator. Tell NAME in its task.`
 
 - [ ] **Step 1: Write the failing tests** — `refuses any agent but the coordinator in the project chat, by every path`:
-  a Reviewer added by `conversation.agent` (coordinator and person), by `agent.add` of a person (lead false), by an
+  a Reviewer added by `conversation.agent` (coordinator and person), by `agent.add` of a session already in the Swarm, by an
   `agent.start` whose conversation is the project chat (coordinator and person), by `work.assign` there, and by a post's
   recipients (coordinator) each throw `PROJECT_CHAT_COORDINATOR_ONLY`, and the chat's members are unchanged;
   `conversation.agent` with `lead: true` still sets a coordinator, `conversation.agent` naming the current coordinator
-  passes, and an agent already stored there can still be named in a post. The existing tests that start or assign an
-  engineer in the project chat as its coordinator now expect the refusal.
+  passes, and an agent already stored there can still be named in a post. A new session a person shares there
+  (`agent.add`, lead false: Desktop's New agent in the project chat) joins the project but not the chat, and the chat
+  gets a row `"BY added NAME to the project. The project chat holds only its coordinator among agents, so NAME works in
+  its tasks."`. The existing tests that start or assign in the project chat move to a task; fixtures that held workers in
+  the project chat store them there directly, as older Swarms do.
 - [ ] **Step 2: Run** `cd backend && npx vitest run src/superTabs/commands.test.ts -t "project chat"` — FAIL (no such code).
 - [ ] **Step 3: Implement** `projectChatJoin(group: Conversation, agentId: string | null, name: string, why: 'post' | 'join')`
   in applyCommand: no-op unless `group` is a project's `leadConversationId`, the agent is its `leadId`, or already a

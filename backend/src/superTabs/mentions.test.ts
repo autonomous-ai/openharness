@@ -143,7 +143,8 @@ describe('tags in the text', () => {
     const f = fixture()
     const lead = { kind: 'agent' as const, agentId: f.lead, machineOwnerId: 'owner' }
     expect(f.say(f.app.conversationId, '@peer please confirm', lead).mentions).toEqual(['peer'])
-    const worker = f.say(f.app.conversationId, '@peer please confirm', { kind: 'agent', agentId: f.worker, machineOwnerId: 'owner' })
+    // A worker posts in a task: the project chat holds only its coordinator among agents (#2207).
+    const worker = f.say(f.group, '@peer please confirm', { kind: 'agent', agentId: f.worker, machineOwnerId: 'owner' })
     expect(worker.mentions).toEqual(['peer'])
     expect(worker.text).toBe('@peer please confirm')
   })
