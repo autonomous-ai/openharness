@@ -439,6 +439,13 @@ describe('what the elevated removal deletes of the Team account\'s', () => {
     expect(text.indexOf('foreach ($own in @(Team-Tasks))')).toBeGreaterThan(text.indexOf('# 4. The account.'))
   })
 
+  it('takes what a removal that stopped partway left renamed, by its own prefix alone', () => {
+    const text = script()
+    expect(text).toContain("-Filter '.harness-removing-*'")
+    expect(text).toContain('Remove-Renamed (Split-Path -Parent $TEAM_HOME)')
+    expect(text).toContain('Remove-Renamed $SHARED')
+  })
+
   it('matches a task by the Team account alone, in any form Windows names it', () => {
     expect(script()).toMatch(/\(\$user -split '\\\\'\)\[-1\] -eq \$TEAM -or \(\$teamSid -and \$user -eq \$teamSid\)/)
   })

@@ -11,6 +11,8 @@ import { WINDOWS_CLEAN_LINE, buildWindowsRemoveScript, buildWindowsSetupScript, 
  * real junctions and a real task. The Windows workflow runs it (.github/workflows/windows.yml). It removes only its own throwaway
  * folder and its own task; nothing here creates an account or changes an ACL.
  */
+const OWNER_HOME = 'C:\\Users\\someone', NODE_DIR = `${OWNER_HOME}\\.harness\\runtime\\node-v22.23.2-win32-x64`
+
 describe.runIf(process.platform === 'win32')('the Team account\'s removal on Windows', { timeout: 120_000 }, () => {
   let root: string, script: string
   const powershell = (body: string) => {
@@ -27,8 +29,10 @@ describe.runIf(process.platform === 'win32')('the Team account\'s removal on Win
 
   it('both scripts parse in Windows PowerShell 5.1', () => {
     const setup = join(root, 'setup.ps1'), remove = join(root, 'remove.ps1')
-    writeFileSync(setup, buildWindowsSetupScript({ user: 'harnessteam', home: 'C:\\Users\\harnessteam', owner: 'someone', ownerHome: 'C:\\Users\\someone', nodeRuntimeDir: 'C:\\n', nodeName: 'n', cliVersion: '1.0.0', cliDir: 'C:\\c', daemonEnv: {} } as never))
-    writeFileSync(remove, buildWindowsRemoveScript({ user: 'harnessteam', home: 'C:\\Users\\harnessteam', ownerHome: 'C:\\Users\\someone' } as never))
+    writeFileSync(setup, buildWindowsSetupScript({ user: 'harnessteam', realName: 'Harness Team', home: 'C:\\Users\\harnessteam', owner: 'someone', ownerHome: OWNER_HOME,
+      ownerSid: 'S-1-5-21-1111111111-2222222222-3333333333-1001', stageDir: `${OWNER_HOME}\\AppData\\Local\\Temp\\harness-team-x1`, nodeRuntimeDir: NODE_DIR, tmuxRuntimeDir: null,
+      cliDir: `${OWNER_HOME}\\.harness\\cli\\0.4.97`, ownerNode: `${NODE_DIR}\\node.exe`, ownerCli: `${OWNER_HOME}\\.harness\\cli\\0.4.97\\cli.js`, mintEnv: {}, signIn: 'missing' }))
+    writeFileSync(remove, buildWindowsRemoveScript({ user: 'harnessteam', home: 'C:\\Users\\harnessteam', ownerHome: OWNER_HOME }))
     for (const file of [setup, remove]) {
       const errors = powershell(`$errors = $null; [void][System.Management.Automation.Language.Parser]::ParseFile('${file}', [ref]$null, [ref]$errors); $errors.Count`)
       expect(errors.trim(), file).toBe('0')
@@ -60,6 +64,14 @@ describe.runIf(process.platform === 'win32')('the Team account\'s removal on Win
     mkdirSync(tree, { recursive: true }); writeFileSync(join(tree, 'status.json'), '{}')
     powershell(`Remove-Held '${tree}'`)
     expect(execFileSync('cmd.exe', ['/d', '/c', 'dir', '/a', '/b', parent], { encoding: 'utf8' }).trim()).toBe('')
+  })
+
+  it('takes a renamed folder a stopped removal left, and nothing else there', () => {
+    const parent = join(root, 'parent-2'), old = join(parent, '.harness-removing-abc'), other = join(parent, 'keep-me')
+    mkdirSync(old, { recursive: true }); mkdirSync(other); writeFileSync(join(old, 'status.json'), '{}')
+    powershell(`Remove-Renamed '${parent}'`)
+    expect(existsSync(old)).toBe(false)
+    expect(existsSync(other)).toBe(true)
   })
 
   it('reports what it cannot delete: a file held open without sharing', () => {
