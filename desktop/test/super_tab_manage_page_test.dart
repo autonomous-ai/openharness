@@ -8,6 +8,7 @@ import 'package:harness/super_tabs/view.dart';
 
 import 'support/humans_fixture.dart';
 import 'support/super_tab_fixture.dart';
+import 'support/super_tab_members.dart';
 import 'swarm_state_test.dart' show createApp;
 
 /// Manage (docs/plans/2026-11-02-quiet-swarm-design.md, screens 10, 10b, 10c).
@@ -178,7 +179,7 @@ void main() {
       List<String> opened,
       ValueNotifier<bool> terminals,
     ) async {
-      final server = humansSwarm();
+      final server = membersSwarm();
       final c = server.controller();
       await c.refresh();
       await tester.binding.setSurfaceSize(const Size(1300, 900));
@@ -234,10 +235,11 @@ void main() {
       final opened = <String>[];
       final terminals = ValueNotifier(false);
       final c = await inView(tester, opened, terminals);
+      await openSuperTabMembers(tester);
       final agent = c.snapshot!.agents.first;
-      await tester.longPress(find.byKey(ValueKey('super-member-${agent.id}')));
+      await tester.tap(find.byKey(ValueKey('super-member-${agent.id}')));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(FilledButton, 'Open terminal'));
+      await tester.tap(find.text('Open terminal'));
       await tester.pumpAndSettle();
       expect(opened, [agent.id]);
       expect(

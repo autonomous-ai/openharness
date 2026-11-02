@@ -181,6 +181,18 @@ describe('what may come back', () => {
     expect(state.conversations.find(c => c.id === 'g1')!.agentIds).toEqual([])
     expect(state.conversations.find(c => c.id === 'g2')!.agentIds).toEqual(['a1'])
   })
+
+  // #2207 (Ken): the project chat holds only its coordinator among agents, so a session that was a member there comes back to
+  // its tasks alone, unless it comes back as the project chat's coordinator.
+  it('comes back to the project chat only as its coordinator', () => {
+    const chat = removedGroup({ id: 'lead-p' })
+    const member = restoring({ conversations: [chat, removedGroup()], removedSessions: [record({ groupIds: ['lead-p', 'g1'] })] })
+    restoreSessions(member, 'mac', ['h1'], AT, new Set(['h1']), () => {})
+    expect(member.conversations.map(c => c.agentIds)).toEqual([[], ['a1']])
+    const coordinator = restoring({ conversations: [{ ...chat }], removedSessions: [record({ groupIds: ['lead-p'], leadOf: ['lead-p'] })] })
+    restoreSessions(coordinator, 'mac', ['h1'], AT, new Set(['h1']), () => {})
+    expect(coordinator.conversations[0]).toMatchObject({ leadId: 'a1', agentIds: ['a1'] })
+  })
 })
 
 describe('what a removal keeps', () => {

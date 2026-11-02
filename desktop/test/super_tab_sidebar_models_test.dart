@@ -237,47 +237,35 @@ void main() {
     },
   );
 
-  testWidgets('keeps the last 7 days whichever week the right pane shows', (
-    tester,
-  ) async {
-    final server = modelsSwarm();
-    // The right pane is beside the chat: pick its week, then open Manage.
-    final controller = await show(tester, server, openManage: false);
-    await tester.tap(find.byKey(const ValueKey('leaderboard-week')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Last week').last);
-    await tester.pumpAndSettle();
-    expect(server.leaderboardReads.last, contains('&week='));
-    await openModels(tester);
-    expect(find.textContaining('last week'), findsNothing);
-    expect(inRow('Opus 5.5', find.text('87%')), findsOneWidget);
-    await close(tester, controller);
-  });
-
-  testWidgets('shows the week\'s models from a server before the last 7 days', (
-    tester,
-  ) async {
-    final server = modelsSwarm();
-    server.leaderboard!.remove('recentModels');
-    final controller = await show(tester, server);
-    // 32 tasks: Opus at two efforts as one, 14; then 9, 6 and 3; Luna ran
-    // none of its own.
-    expect(names(tester), [
-      'Opus 5.5',
-      'GPT-6.1 Sol',
-      'Sonnet 5.5',
-      'Haiku 5.5',
-    ]);
-    expect(inRow('Opus 5.5', find.text('44%')), findsOneWidget);
-    expect(inRow('Haiku 5.5', find.text('9%')), findsOneWidget);
-    expect(
-      find.byTooltip(
-        'Opus 5.5: 14 of 32 tasks this week · 92% passed first review',
-      ),
-      findsOneWidget,
-    );
-    await close(tester, controller);
-  });
+  testWidgets(
+    'shows the week\'s models from a server before the last 7 days in Manage',
+    (tester) async {
+      final server = modelsSwarm();
+      server.leaderboard!.remove('recentModels');
+      final controller = await show(tester, server);
+      expect(
+        find.byKey(const ValueKey('super-manage-tab-models')),
+        findsOneWidget,
+      );
+      // 32 tasks: Opus at two efforts as one, 14; then 9, 6 and 3; Luna ran
+      // none of its own.
+      expect(names(tester), [
+        'Opus 5.5',
+        'GPT-6.1 Sol',
+        'Sonnet 5.5',
+        'Haiku 5.5',
+      ]);
+      expect(inRow('Opus 5.5', find.text('44%')), findsOneWidget);
+      expect(inRow('Haiku 5.5', find.text('9%')), findsOneWidget);
+      expect(
+        find.byTooltip(
+          'Opus 5.5: 14 of 32 tasks this week · 92% passed first review',
+        ),
+        findsOneWidget,
+      );
+      await close(tester, controller);
+    },
+  );
 
   testWidgets(
     'leaves records with no reported model out of the list and the shares',
@@ -318,7 +306,6 @@ void main() {
       recentModel('claude', null, attempts: 9),
     ];
     final controller = await show(tester, server);
-    expect(rows, findsNothing);
     expect(rows, findsNothing);
     expect(notReported, findsNothing);
     await close(tester, controller);

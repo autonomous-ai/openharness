@@ -7,6 +7,7 @@ import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/message_row.dart';
+import 'package:harness/super_tabs/roster.dart';
 import 'package:harness/super_tabs/task_line.dart';
 import 'package:harness/super_tabs/thread_panel.dart';
 
@@ -332,6 +333,21 @@ void main() {
     expect(find.byType(SuperTabTaskPanel), findsNothing);
     c.closeThread();
     await tester.pumpAndSettle();
+    expect(find.byType(SuperTabTaskPanel), findsNothing);
+  });
+
+  testWidgets('Members takes the task panel\'s place, as it takes a thread\'s', (
+    tester,
+  ) async {
+    final c = await showView(tester, serverWith([taskRow('working')]));
+    await c.loadMessages('lead');
+    await tester.pumpAndSettle();
+    await tester.tap(line);
+    await tester.pumpAndSettle();
+    expect(find.byType(SuperTabTaskPanel), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('super-members-button')));
+    await tester.pumpAndSettle();
+    expect(find.byType(SuperTabRoster), findsOneWidget);
     expect(find.byType(SuperTabTaskPanel), findsNothing);
   });
 

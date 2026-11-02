@@ -12,6 +12,7 @@ import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
+import 'support/super_tab_members.dart';
 
 void main() {
   test('work that waits on a person reads as people say it', () {
@@ -329,7 +330,7 @@ void main() {
     await closeReadView(tester, c);
   });
 
-  for (final drawer in ['Conversations', 'Members and machines']) {
+  for (final drawer in ['Conversations', 'Members']) {
     testWidgets('$drawer keeps covered messages unread until revealed', (
       tester,
     ) async {
@@ -453,8 +454,7 @@ void main() {
         find.descendant(of: reply, matching: find.text('Atlas')),
         findsOneWidget,
       );
-      await tester.tap(find.byTooltip('Members and machines'));
-      await tester.pumpAndSettle();
+      await openSuperTabMembers(tester);
       expect(find.text('hi'), findsNothing);
       expect(find.text('Atlas'), findsWidgets);
       expect(

@@ -1068,26 +1068,29 @@ describe('an agent whose task was lost', () => {
 })
 
 describe('a start that never runs', () => {
-  /** The Lead starts "Builder" on Worker Mac, and Worker Mac launches it. */
+  /** The Lead starts "Builder" on Worker Mac for a second task, and Worker Mac launches it. A task: no agent but its coordinator
+   *  starts into the project chat (#2207). */
   const launch = async (f: Awaited<ReturnType<typeof swarm>>) => {
+    const group = String((await f.execute({ type: 'conversation.create', title: 'Write the docs', brief: 'Document it',
+      checks: [{ description: 'Read', independent: false }] })).result.conversationId)
     const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Small task.' },
       candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'codex', model: 'fixture-model', effort: 'high',
         quality: 2, cost: 2, title: 'New agent', label: 'New agent' }],
       excluded: [], floor: 1, notes: false, pick: 'c0', via: 'only', p: null, belowFloor: false, why: 'Only candidate.' }
-    const routeDecisionId = String((await f.execute({ type: 'route.record', conversationId: 'lead', decision } as Command, host, f.lead)).result.routeDecisionId)
-    const request = { conversationId: 'lead', machineId: 'test-host', engine: 'codex', model: 'fixture-model', effort: 'high', name: 'Builder',
+    const routeDecisionId = String((await f.execute({ type: 'route.record', conversationId: group, decision } as Command, host, f.lead)).result.routeDecisionId)
+    const request = { conversationId: group, machineId: 'test-host', engine: 'codex', model: 'fixture-model', effort: 'high', name: 'Builder',
       cwd: '/repo', worktree: false, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     const startId = String((await f.execute({ type: 'agent.start', request, routeDecisionId } as Command, host, f.lead)).result.startId)
     // The start's own machine dispatches and confirms it.
     const onMachine = (command: Command) => f.timed.execute(host, f.tab, { operationId: randomUUID(), command }, undefined, 'test-host')
     await onMachine({ type: 'agent.startDispatch', startId })
-    return { startId, onMachine }
+    return { group, startId, onMachine }
   }
 
   it('fails 3 minutes after dispatch, naming its machine to its Lead only, and tells the Lead in its group', async () => {
     const f = await swarm()
     await f.beat(f.clock.now)
-    const { startId, onMachine } = await launch(f)
+    const { group, startId, onMachine } = await launch(f)
     const dispatched = f.clock.now
     f.clock.now = dispatched + 3 * MINUTE
     await f.leadInbox()
@@ -1096,7 +1099,7 @@ describe('a start that never runs', () => {
     f.clock.now = dispatched + 3 * MINUTE + 30_001
     const told = (await f.leadInbox()).find(m => (m.source as { kind?: string }).kind === 'start-timeout')!
     // Every group member reads the notice, so it names no machine (review of #1847); the start's Lead reads which one.
-    expect(told).toMatchObject({ conversationId: 'lead', text: 'Could not start Builder on fixture-model: its machine did not start it within 3 minutes.' })
+    expect(told).toMatchObject({ conversationId: group, text: 'Could not start Builder on fixture-model: its machine did not start it within 3 minutes.' })
     expect((await f.timed.start(host, f.tab, startId, f.lead)).error).toBe('Worker Mac did not start it within 3 minutes')
     await expect(onMachine({ type: 'agent.started', startId, harnessId: randomUUID(), configuration: config }))
       .rejects.toMatchObject({ code: 'START_FAILED' })
@@ -1105,7 +1108,7 @@ describe('a start that never runs', () => {
   it('waits while its own machine reports it preparing, shows the Lead it is preparing, and fails it after 15 minutes', async () => {
     const f = await swarm()
     await f.beat(f.clock.now)
-    const { startId } = await launch(f)
+    const { group, startId } = await launch(f)
     const dispatched = f.clock.now
     const ownerState = async () => (await f.timed.read(owner, f.tab)).state
     // Another machine cannot keep it waiting, and a machine keeps only its own launched starts in its report.
@@ -1127,7 +1130,7 @@ describe('a start that never runs', () => {
     await f.observe('test-host', [f.harness.worker], { preparingStartIds: [startId] })
     await f.observe('lead-host', [f.harness.lead])
     const told = (await f.leadInbox()).find(m => (m.source as { kind?: string }).kind === 'start-timeout')!
-    expect(told).toMatchObject({ conversationId: 'lead', text: 'Could not start Builder on fixture-model: its machine was still preparing it after 15 minutes.' })
+    expect(told).toMatchObject({ conversationId: group, text: 'Could not start Builder on fixture-model: its machine was still preparing it after 15 minutes.' })
     expect((await f.timed.start(host, f.tab, startId, f.lead)).error).toBe('Worker Mac was still preparing it after 15 minutes')
     expect((await ownerState()).starts!.find(s => s.id === startId)!.error).toBe('Its machine was still preparing it after 15 minutes.')
     expect((await ownerState()).starts!.find(s => s.id === startId)).not.toHaveProperty('preparing')
@@ -2365,6 +2368,20 @@ describe('a session reopened after its agent was removed', () => {
     expect((await machinePart(f, 'test-host')).removedSessions ?? []).toEqual([])
     await resume(f)
     expect((await state(f)).agents.filter(a => a.id === f.idle)).toHaveLength(1)
+  })
+
+  // Reviews of #2207 (Cleo, Orion, Luna, Echo): a report closed and reopened sessions with no row, so an agent could come back to
+  // read its chats unrecorded. Each chat it leaves or rejoins says so, written as the agent, waking nobody.
+  it('says in its group that it left when its session closed, and that it rejoined when the session reopened', async () => {
+    const f = await removed()
+    const said = async () => (await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: f.group }, orderBy: { sequence: 'asc' } }))
+      .filter(m => m.text.startsWith('"Idle one"')).map(m => [m.text, m.recipientIds])
+    expect(await said()).toEqual([['"Idle one" left: its session closed.', []]])
+    await resume(f)
+    expect(await said()).toEqual([['"Idle one" left: its session closed.', []], ['"Idle one" rejoined: its session reopened.', []]])
+    // A report that changes nothing says nothing again.
+    await resume(f)
+    expect(await said()).toHaveLength(2)
   })
 
   it('stays out while the report does not list it running', async () => {
