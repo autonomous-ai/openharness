@@ -1,6 +1,6 @@
 import { createServer, connect, type AddressInfo, type Socket } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
-import { lsofShowsPeer, peerIsThisAccount, portHolderIsThisAccount, procNetListener, procNetOwner } from './peerAccount.js'
+import { lsofShowsPeer, peerIsThisAccount, portHolderIsThisAccount, procNetListener, procNetOwner, windowsPeerQuery, type WindowsPeerRun } from './peerAccount.js'
 
 describe('who is at the other end of a loopback connection', () => {
   const opened: Array<() => unknown> = []
@@ -46,8 +46,48 @@ describe('who is at the other end of a loopback connection', () => {
     expect(peerIsThisAccount(socket)).toBe(peerIsThisAccount(socket))
   })
 
-  it('leaves Windows to its proven pipe', async () => {
-    expect(await peerIsThisAccount({} as unknown as Socket, 'win32')).toBe(true)
+  // Audit W1 (docs/security/2026-11-02-team-account-windows.md): Windows answered yes without asking, so the Team account,
+  // holding the port at boot, heard the credential and opened the daemon with it.
+  describe('on Windows, by asking Windows who owns the calling end', () => {
+    const socket = (over: Partial<Socket> = {}) =>
+      ({ remoteAddress: '127.0.0.1', remotePort: 50_001, localAddress: '127.0.0.1', localPort: 18473, ...over }) as Socket
+    const answering = (stdout: string, status: number | null = 0) => {
+      const asked: Array<Record<string, string>> = []
+      const run: WindowsPeerRun = async (_script, inputs) => { asked.push(inputs); return { status, stdout } }
+      return { run, asked }
+    }
+
+    it('says yes only when the lookup found the connection and its process is this account\'s', async () => {
+      const yes = answering('yes\r\n')
+      expect(await peerIsThisAccount(socket(), 'win32', yes.run)).toBe(true)
+      // The client's end, as Windows lists it: its own port local, the daemon's remote.
+      expect(yes.asked).toEqual([{ HARNESS_PEER_PORT: '50001', HARNESS_OWN_PORT: '18473' }])
+    })
+
+    it('says no for another account, any other answer, a failure, or a lookup that never answered', async () => {
+      for (const [stdout, status] of [['no', 0], ['', 0], ['yes yes', 0], ['yes', 1], ['yes', null]] as const) {
+        expect(await peerIsThisAccount(socket({ remotePort: 50_002 + (status ?? 9) }), 'win32', answering(stdout, status).run), `${stdout}/${status}`).toBe(false)
+      }
+      const thrown: WindowsPeerRun = async () => { throw new Error('powershell.exe is not there') }
+      expect(await peerIsThisAccount(socket({ remotePort: 50_020 }), 'win32', thrown)).toBe(false)
+    })
+
+    it('says no without asking for a caller off 127.0.0.1 at either end, or with no ports', async () => {
+      const yes = answering('yes')
+      for (const over of [{ remoteAddress: '127.0.0.2' }, { localAddress: '::1' }, { remotePort: undefined }, { localPort: undefined }] as Partial<Socket>[]) {
+        expect(await peerIsThisAccount(socket(over), 'win32', yes.run)).toBe(false)
+      }
+      expect(yes.asked).toEqual([])
+    })
+
+    it('asks Windows by the connection\'s ports, given as inputs, and compares the owner by SID', () => {
+      const query = windowsPeerQuery(50_001, 18473)
+      expect(query.inputs).toEqual({ HARNESS_PEER_PORT: '50001', HARNESS_OWN_PORT: '18473' })
+      expect(query.script).not.toMatch(/50001|18473/)
+      expect(query.script).toContain('Get-NetTCPConnection')
+      expect(query.script).toContain('GetOwnerSid')
+      expect(query.script).toContain('[Security.Principal.WindowsIdentity]::GetCurrent().User.Value')
+    })
   })
 
   it('reads the owner of the client end from /proc/net/tcp, not the server end', () => {
