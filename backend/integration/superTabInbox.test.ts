@@ -19,12 +19,16 @@ import { guardedWrite } from '../src/superTabs/parts/write.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import { buddyChatId } from '../src/superTabs/buddies.js'
-import { INBOX_READS, INBOX_WINDOW_MS, LATEST_CHATS, MAX_THREADS, PREVIEW_CHARS, resetInboxReads, THREAD_CHATS } from '../src/superTabs/read/inbox.js'
+import { INBOX_READS, INBOX_WINDOW_MS, LATEST_CHATS, MAX_THREADS, newestInThreads, perRange, PREVIEW_CHARS, resetInboxReads, THREAD_CHATS } from '../src/superTabs/read/inbox.js'
 import { SEED_SCAN } from '../src/superTabs/read/threadMarkSeeds.js'
 import { stableId, type Author, type Conversation, type SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
 import { PROFILE_STAGES, profileEntry, type ProfileEntry } from './bench/profile.js'
+import { profiled } from './plans.test-support.js'
+import { listNamedIndexes } from '../src/superTabs/parts/indexed.js'
+import { SCAN_FIELDS } from '../src/superTabs/read/inbox.js'
+import type { Prisma } from '@prisma/client'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -730,4 +734,77 @@ describe('what the inbox costs the database', () => {
     expect(replyBytes).toBeLessThan(60_000)
     expect(bytesFromDatabase).toBeLessThan(250_000)
   }, 120_000)
+})
+
+// Task #2148: Ken's profile showed these reads spending their time racing two plans per range, in a union no hint can reach.
+describe('reading many thread ranges at once', () => {
+  /** What one pipeline per thread answers, as these reads were written before: the answers the single read must keep. */
+  const oneByOne = (tabId: string, ranges: Array<{ conversationId: string; thread: string; sequence: Record<string, number> }>, limit: number, namedBy?: string) =>
+    perRange(db, ranges.map(r => [{ $match: { tabId, conversationId: r.conversationId, thread: r.thread, sequence: r.sequence } }, { $sort: { sequence: -1 } }, { $limit: limit },
+      ...namedBy ? [{ $match: { $or: [{ 'author.kind': 'person', 'author.id': namedBy }, { mentions: namedBy }] } }] : [],
+      { $project: { ...SCAN_FIELDS, conversationId: 1 } }] as Prisma.InputJsonValue[]))
+  /** Two chats, four threads: short, longer than any limit here, one nobody names the person in, and one with no row in its range. */
+  async function threads() {
+    const s = await scene(f => { f.group('Second') })
+    const second = (await store.readLoad(peer, s.tabId)).state.conversations.find(c => c.title === 'Second')!.id
+    const [shortRoot, longRoot, quietRoot, emptyRoot] = await insert(s.tabId, s.web, [1, 2, 3, 4].map(i => ({ text: `Root ${i}`, author: personAuthor(owner) })))
+    const [otherRoot] = await insert(s.tabId, second, [{ text: 'Other root', author: personAuthor(owner) }])
+    await insert(s.tabId, s.web, [
+      { text: 'Tagged', author: agentAuthor(s.worker), thread: shortRoot, mentions: [peer.sub] },
+      { text: 'Theirs', author: personAuthor(peer), thread: longRoot },
+      { text: 'Tagged early', author: agentAuthor(s.worker), thread: longRoot, mentions: [peer.sub] },
+      ...Array.from({ length: 30 }, (_, i) => ({ text: `Long ${i}`, author: agentAuthor(s.worker), thread: longRoot })),
+      { text: 'Tagged late', author: agentAuthor(s.worker), thread: longRoot, mentions: [peer.sub] },
+      ...Array.from({ length: 3 }, (_, i) => ({ text: `Quiet ${i}`, author: agentAuthor(s.worker), thread: quietRoot })),
+    ])
+    await insert(s.tabId, second, [{ text: 'Theirs there', author: personAuthor(peer), thread: otherRoot }, { text: 'Not theirs', author: agentAuthor(s.worker), thread: otherRoot }])
+    const top = (await db.superTabMessage.findFirstOrThrow({ where: { tabId: s.tabId, conversationId: s.web }, orderBy: { sequence: 'desc' } })).sequence, first = await sequenceOf(shortRoot!)
+    const web = (thread: string, sequence: Record<string, number>) => ({ conversationId: s.web, thread, sequence })
+    return { tabId: s.tabId, top, first, emptyRoot: emptyRoot!, ranges: (sequence: Record<string, number>) => [web(longRoot!, sequence), web(shortRoot!, sequence), web(quietRoot!, sequence),
+      web(emptyRoot!, sequence), { conversationId: second, thread: otherRoot!, sequence: { $gt: 0 } }] }
+  }
+
+  it('answers the rows one pipeline per thread answers, in the same order', async () => {
+    const f = await threads()
+    for (const sequence of [{ $lte: f.top }, { $gt: f.first }, { $lte: f.first + 10 }]) {
+      for (const limit of [1, 5, 10, 100]) {
+        expect(await newestInThreads(db, f.tabId, f.ranges(sequence), limit)).toEqual(await oneByOne(f.tabId, f.ranges(sequence), limit))
+        expect(await newestInThreads(db, f.tabId, f.ranges(sequence), limit, peer.sub)).toEqual(await oneByOne(f.tabId, f.ranges(sequence), limit, peer.sub))
+      }
+    }
+  }, 60_000)
+
+  it('names a person only within each thread\'s newest rows: an older tag or reply does not count', async () => {
+    const f = await threads()
+    const named = await newestInThreads(db, f.tabId, f.ranges({ $lte: f.top }), 5, peer.sub)
+    const texts = await db.superTabMessage.findMany({ where: { id: { in: named.map(m => m.id) } }, select: { text: true } })
+    expect(texts.map(m => m.text).sort()).toEqual(['Tagged', 'Tagged late', 'Theirs there'].sort())
+  }, 60_000)
+
+  it('answers nothing for no ranges, and a range with no rows is simply absent', async () => {
+    const f = await threads()
+    expect(await newestInThreads(db, f.tabId, [], 5)).toEqual([])
+    expect(await newestInThreads(db, f.tabId, [{ conversationId: f.ranges({ $gt: 0 })[0]!.conversationId, thread: f.emptyRoot, sequence: { $gt: 0 } }], 5)).toEqual([])
+  }, 60_000)
+
+  it('reads a batch in one operation hinted to the thread index, with no union to plan', async () => {
+    const f = await threads()
+    await listNamedIndexes(db)
+    // Limit 100 and few rows: the batch stays under its cap.
+    const entries = await profiled(db, () => newestInThreads(db, f.tabId, f.ranges({ $gt: f.first }), 100))
+    const reads = entries.filter(e => e.ns.endsWith('.SuperTabMessage') && e.op !== 'getmore')
+    expect(reads).toHaveLength(1)
+    expect(reads[0]!.command?.hint).toEqual({ tabId: 1, conversationId: 1, thread: 1, sequence: 1 })
+    expect(JSON.stringify(reads[0]!.command)).not.toContain('$unionWith')
+    expect(reads[0]!.planSummary).toContain('tabId_1_conversationId_1_thread_1_sequence_1')
+  }, 60_000)
+
+  it('falls back to each thread\'s own limit when a batch has more rows than its cap, and reads no thread past it there', async () => {
+    const f = await threads()
+    await listNamedIndexes(db)
+    const entries = await profiled(db, () => newestInThreads(db, f.tabId, f.ranges({ $lte: f.top }), 1))
+    const reads = entries.filter(e => e.ns.endsWith('.SuperTabMessage') && e.op !== 'getmore')
+    expect(reads.length).toBe(2)
+    expect(JSON.stringify(reads[1]!.command)).toContain('$unionWith')
+  }, 60_000)
 })
