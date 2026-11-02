@@ -1,6 +1,8 @@
 import 'dart:io';
 import 'dart:ui' show PointerDeviceKind;
 
+import 'package:flutter/foundation.dart'
+    show debugDefaultTargetPlatformOverride;
 import 'package:flutter/gestures.dart' show kSecondaryMouseButton;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -1665,7 +1667,11 @@ void main() {
       Future<dynamic> browser(
         WidgetTester tester, {
         String owner = 'owner',
+        // A test runs as Android unless it says: these are a mouse's browser.
+        TargetPlatform platform = TargetPlatform.macOS,
       }) async {
+        debugDefaultTargetPlatformOverride = platform;
+        addTearDown(() => debugDefaultTargetPlatformOverride = null);
         BrowserMenuGuard.debugWeb = true;
         BrowserMenuGuard.debugSink = (_) async {};
         addTearDown(BrowserMenuGuard.debugReset);
@@ -1689,7 +1695,41 @@ void main() {
         await tester.pumpWidget(const SizedBox());
         await c.flush();
         c.dispose();
+        debugDefaultTargetPlatformOverride = null;
       }
+
+      // Huy, 2026-11-02: a touch screen has nothing to hover, so the ⋯ stays.
+      for (final platform in [TargetPlatform.iOS, TargetPlatform.android]) {
+        testWidgets(
+          'on a ${platform.name} browser it is always there, a finger wide, and a tap opens the menu',
+          (tester) async {
+            final c = await browser(tester, platform: platform);
+            final size = tester.getSize(more);
+            expect(size.width, greaterThanOrEqualTo(44));
+            expect(size.height, greaterThanOrEqualTo(44));
+            // Its corner too: the whole finger's target opens it.
+            await tester.tapAt(tester.getTopLeft(more) + const Offset(2, 2));
+            await tester.pumpAndSettle();
+            expect(find.text('Details'), findsOneWidget);
+            expect(c.isMachineExpanded('studio'), isFalse);
+            await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+            await tester.pumpAndSettle();
+            expect(tester.getSize(more).width, greaterThanOrEqualTo(44));
+            await done(tester, c);
+          },
+        );
+      }
+
+      testWidgets(
+        'a browser with a mouse keeps it for hover, focus or an open menu',
+        (tester) async {
+          final c = await browser(tester);
+          expect(width(tester), 0);
+          await hover(tester);
+          expect(width(tester), 32);
+          await done(tester, c);
+        },
+      );
 
       testWidgets('shows on pointing and opens the same menu on a left click', (
         tester,
