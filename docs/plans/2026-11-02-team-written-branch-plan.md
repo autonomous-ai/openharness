@@ -29,8 +29,8 @@ project settings off.
 A branch is **Team-written** when any of these holds. It is trusted only when the check reads clean, and a failed read counts
 as Team-written:
 
-1. Its task, or the task its step belongs to, ever had an agent on a Team account assigned or joined (a lasting mark on the
-   task, kept by the server).
+1. An agent on a Team account opened its task, was assigned to it or was added to it (a lasting mark on the task, kept by the
+   server). A Team agent given only a step does not count, and neither does the project's coordinator.
 2. GitHub shows a push by the app's bot whose commit is an ancestor of the branch's head and not on the default branch. This
    also catches a batch branch that the PM pushed with Team commits inside.
 3. Its head has commits not on the default branch, and the activity log can't cover them (the log was too short, the read
@@ -44,8 +44,8 @@ Code on the default branch has passed review and counts as clean.
 
 Files: `backend/src/superTabs/commands.ts`, `machines.ts`, `model.ts`, new `backend/src/superTabs/teamWritten.ts`, tests beside them.
 
-- `Conversation.teamWritten: true` is set by `work.assign` and `conversation.agent` when the agent is `onTeamAccount`, and it
-  never clears. A step reads its task's mark.
+- `Conversation.teamWritten: true` is set when an agent on a Team account opens a task, is assigned to it or is added to it, and it
+  never clears. A step reads its task's mark. A Team agent given only a step, or the project's coordinator, marks nothing.
 - `work.assign`, `conversation.agent`, `agent.start` and `route.record` refuse an agent outside a Team account for a marked
   task or its step, with `TEAM_WRITTEN_WORK` and a reason that says where the work can go. Route candidates leave those
   machines out and say why.
@@ -54,12 +54,12 @@ Files: `backend/src/superTabs/commands.ts`, `machines.ts`, `model.ts`, new `back
 
 ### Task 2: who pushed it (backend, with a read for clients)
 
-Files: new `backend/src/github/pushOrigin.ts`, a route beside `backend/src/routes/superTabs`, a `branch-origin` read in the CLI.
+Files: new `backend/src/github/pushOrigin.ts`, `backend/src/github/app.ts`, `backend/src/superTabs/store.ts`.
 
 - Given a project and a head commit, it reads the activity log with the app's token and answers `clean`, `team` or `unknown`.
   Results are cached by head commit only, with a bounded retry. `unknown` is never cached as clean.
-- When a task gets a `review` status or a linked pull request, the server reads the origin and sets the mark from rule 2 or 3.
-  This covers a Team push onto an owner's branch.
+- At a `work.assign`, a Ready for review and a start that names a branch, the server reads the origin first and marks the task on
+  `team`. `unknown` refuses the main account without marking. This covers a Team push onto an owner's branch.
 - The answer says only the verdict: no names and no branch titles. A project the caller can't read gets the same refusal as a
   missing one.
 - Tests with `fakeGitHub.ts`: a bot push; a batch branch; a person's push; a forged author on a bot push; a failed, partial or
@@ -67,60 +67,69 @@ Files: new `backend/src/github/pushOrigin.ts`, a route beside `backend/src/route
 
 ### Task 3: the launch (CLI)
 
-Files: `cli/src/engines/facets/launch.ts`, `engines/claude/launch.ts`, `engines/codex/launch.ts`, `engines/launchPrep.ts`,
-`core/agents/launches.ts`, `core/agents/create.ts`, `superTabs/cloneTrust.ts`, `superTabs/start.ts`.
+Files: `cli/src/engines/claude/launch.ts`, `engines/codex/launch.ts`, `lib/engineLaunch.ts`, `core/agents/launches.ts`,
+`core/agents/create.ts`, `superTabs/cloneTrust.ts`, `superTabs/start.ts`, `superTabs/inCore/teamPurge.ts`,
+`desktop/lib/core/permission_modes.dart`.
 
-- The backend stamps `projectSettings: 'off'` on a start for a marked task. It is kept on the agent's row, so a resume or
-  relaunch keeps it, and a daemon restart can't drop it.
-- Claude gets `--setting-sources user --strict-mcp-config`. Codex gets no `trust_level` record, so its project layer stays out.
-- All three trust writers skip such a worktree: launch, create and the clone repair sweep. The repair sweep runs on a timer, so
-  a skip in launch alone would be undone a minute later.
-- Before building, try with the real binaries in a throwaway `CLAUDE_CONFIG_DIR` and `CODEX_HOME` whether an untrusted folder
-  stops at a question. If it does, the session starts in an empty folder Harness makes and the checkout sits beneath it.
-- The main account refuses: a daemon that is not a Team daemon rejects a start stamped `off`, and rejects a `branchRef` whose
-  origin is `team` or `unknown` unless it is on the default branch.
-- Tests: the launch line for each engine; a planted `.claude/settings.json`, `settings.local.json` and `.mcp.json` not read;
-  `folderTrust.record` not called on any of the three paths; a resume keeps the flags; the main-account refusal; an old backend
-  without the stamp, where the CLI still refuses by origin.
+- The server stamps `projectSettings: 'off'` on a start for a marked task. The host turns it into the permission mode
+  `teamWritten`, which is kept on the agent's row, so a relaunch keeps it. A resume that asks for another mode is refused.
+- Claude Code gets `--setting-sources user --strict-mcp-config`. Codex gets an engine home of its own, which trusts no project.
+- A daemon that is not a Team daemon refuses a stamped start before anything is created.
+- The server also reads the branch a start names: a bot's push moves the start to the Team account, and a branch GitHub cannot
+  place stays out of the main account.
 
-### Task 4: the normal path, `gh pr checkout` (CLI)
+### What the real engines showed (2026-11-02, throwaway config folders, this Mac)
 
-Files: `cli/src/lib/swarmGitHub.ts`, new `cli/src/superTabs/branchGuard.ts`, role text in `cli/src/lib/swarmSkills.ts`.
+| Run | Result |
+|---|---|
+| Claude Code 2.1.316, trusted folder, no flags | Planted `settings.json`, `settings.local.json` and `.mcp.json` all ran. This is H2 happening. |
+| Same folder, with the flags | None ran. |
+| Same flags, no trust record | The session stops at the trust question. |
+| Codex 0.165.0, untrusted folder | Project MCP server not loaded. |
+| Codex, a worktree whose main repository is trusted | Loaded: a worktree takes its main repository's trust. |
+| Same, with `-c projects."..".trust_level="untrusted"` | Still loaded: this does not turn it off. |
+| Same worktree, an empty `CODEX_HOME` | Not loaded. |
 
-- A Swarm agent in the main account gets a `post-checkout` hook through the same `core.hooksPath` chain the session hooks
-  already use, so a repository's own hooks still run. When its head leaves the default branch, the hook asks for the origin. On
-  `team` or `unknown` it prints a plain refusal: do not install, build, test or run this; hand the task to a Team account. The
-  task's agent is told and the task is marked.
-- Reviewer and Tester role text say the same, and say to run the origin read before building.
-- Tests: a real git checkout in a fixture runs the hook; the repository's own hook still runs; a failed read prints the refusal.
+**Change from the brief:** the brief asks for no folder trust. A Claude Code session with no trust record stops at a question nobody
+sees, so Team-written work keeps its trust record, in the Team account only. The flags are the barrier, as the runs above show.
+
+### Task 4: moved out of this change
+
+The plan first had a `post-checkout` warning for main-account agents. It needs git settings injected into every main-account
+session, and it can only warn. The server's check on assignment, start and Ready covers the workflow's own paths, so the warning is
+left out here. What that leaves open is below.
 
 ### Task 5: docs and proof
 
 - Update `docs/security/2026-11-02-team-account-boundary.md` with H2's status and what stays open.
-- `cli/src/team/boundary.spec.ts` gets an H2 block: the end-to-end path of a planted settings file and `.mcp.json` with a marker
-  file, which stays unwritten.
-- Run the full backend Super Tab integration suite, `npm run test:core` and `npm run test:harnessd`.
+- Run the full backend Super Tab integration suite, `npm run test:core` and the affected Desktop test.
 
 ## What this does not close
 
-The hook warns; it can't stop a shell. An agent in the main account that ignores the refusal, or fetches with plain `git fetch`
-and runs a test without checking out, still runs the code as the owner. Between a clean reading and the Reviewer's fetch, a Team
-agent can also push. Closing these fully takes a sandbox for every main-account agent, or a repository rule that stops the app's
-bot pushing outside its own branch prefix. The second is the stronger next step, and it needs Ken's change to repository settings,
-so it is a separate decision and not part of this task.
+- **An agent told outside the workflow.** A main-account agent that runs `gh pr checkout` on a branch it was never assigned, for
+  example because a chat message asked it to (M3), still runs that code as the owner. The server only controls who gets the work.
+- **A push after the check.** A Team agent can push between a clean reading and the Reviewer's fetch. The next Ready reads again
+  and tells a main-account agent on the task to stop, but by then it may have run the code.
+- **A person's rewrite.** A person who rebases or cherry-picks a Team agent's commits gets new commit ids, so the log shows a
+  person's push.
+- **Older pushes.** The log's scan stops a week before the pull request opened.
 
-M3 (a chat message that tells an owner's agent to check out a branch) stays its own finding. Tasks 2 and 4 narrow it.
+Closing the first two takes a sandbox for every main-account agent, or a repository rule that keeps the app's bot to its own branch
+prefix. The rule is the stronger next step. It needs a change to repository settings, so it is Ken's decision and not part of this
+task.
 
 ## Design
 
-- **Growth:** one boolean on a task, removed with the task. The origin cache is bounded in memory by head commit.
+- **Growth:** one boolean on a task, removed with the task. The origin cache keeps at most 1,000 heads in memory. A Codex agent's own
+  home is deleted when the Swarm ends that agent.
 - **Concurrency:** the mark is set inside the existing per-tab command transaction. GitHub reads run outside it, and their
   result is applied by a command that only ever adds the mark, so a late read can't clear one.
 - **Read cost:** one activity read per new head, none for a head already read, paged only as far as the merge base.
 - **Scale:** at 10x pushes the activity log's 5,000-an-hour app limit warns first. A rate limit reads `unknown`, which fails closed
   and refuses main-account work, so the refusal count is the metric to log.
-- **Compatibility:** an older CLI ignores the stamp and an older backend sends none. The server's refusal holds for the first and
-  the CLI's origin check for the second. A new start for a marked task needs a CLI with this change on Team accounts.
+- **Compatibility:** an older CLI on a Team account ignores the stamp, so its session reads project settings there, with the Team
+  account's rights and not the owner's. An older backend sends no stamp and refuses nothing, so the rule starts with the backend
+  release. Desktop lists the new mode by name, and an older Desktop shows it as unknown.
 - **Migration and rollback:** no migration. Tasks open today carry no mark until an assignment or a reading sets it. Rollback
   removes the refusal, and the mark is harmless left behind.
 - **Audience:** the server enforces who takes the work. The verdict carries no names or titles.

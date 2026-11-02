@@ -90,12 +90,22 @@ const Map<String, List<PermissionMode>> kLaunchOnlyPermissionModes = {
       'Reads only, never asks',
       'Runs its read tools and commands, refuses the rest without asking',
     ),
+    PermissionMode(
+      'teamWritten',
+      'Full, project settings off',
+      'Runs in a Team account and reads none of the branch\'s own settings',
+    ),
   ],
   'codex': [
     PermissionMode(
       'readOnlyAsk',
       'Read only, asks you',
       'Reads in its sandbox, asks you before anything outside it',
+    ),
+    PermissionMode(
+      'teamWritten',
+      'Full, project settings off',
+      'Runs in a Team account and reads none of the branch\'s own settings',
     ),
   ],
 };

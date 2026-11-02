@@ -829,6 +829,9 @@ printf '%s %s' "$harness_status" "$resumed"`], { encoding: 'utf8', stdio: ['igno
     // with its person's credentials (Lead, 10-29).
     expect(buildEngineCommandArgv('claude', { permissionMode: 'buddy', bypassPermission: true }))
       .toEqual([engineBin('claude'), '--permission-mode', 'dontAsk', '--setting-sources', 'local', '--strict-mcp-config'])
+    // Team-written work reads none of the branch's own settings, `settings.local.json` included (audit H2).
+    expect(buildEngineCommandArgv('claude', { permissionMode: 'teamWritten', bypassPermission: true }))
+      .toEqual([engineBin('claude'), '--dangerously-skip-permissions', '--setting-sources', 'user', '--strict-mcp-config'])
     // A Codex Buddy: reads in the sandbox, and asks the person at the terminal before anything outside it (Lead, 10-29).
     expect(buildEngineCommandArgv('codex', { permissionMode: 'readOnlyAsk', bypassPermission: true }))
       .toEqual([engineBin('codex'), '--ask-for-approval', 'on-request', '--sandbox', 'read-only', '-c', 'approvals_reviewer="user"', ...CODEX_SCREEN])

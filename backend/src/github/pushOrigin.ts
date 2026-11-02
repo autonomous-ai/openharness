@@ -29,6 +29,12 @@ export const projectPushOrigin = (app: { pushOrigin(repository: GitHubRepository
     return answers.includes('team') ? 'team' : answers.includes('unknown') || own.length > MAX_PULLS ? 'unknown' : 'clean'
   }
 
+export const projectBranchOrigin = (app: { branchOrigin(repository: GitHubRepository, branch: string): Promise<PushOrigin> }) =>
+  async (repositoryUrl: string | null, branch: string): Promise<PushOrigin> => {
+    const repository = githubRepository(repositoryUrl)
+    return repository ? app.branchOrigin(repository, branch) : 'unknown'
+  }
+
 const MAX_PULLS = 5
 const MAX_PR_COMMITS = 250
 const COMMIT_PAGES = 3

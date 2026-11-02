@@ -1962,9 +1962,13 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // A teammate's project started on a Mac runs in that Mac's Harness Team account, never as its owner (machines.ts). A start
       // that names no model runs its engine's own: role defaults live in the project's instructions now.
       // So does a start for code a Team agent wrote, whoever's project it is, with its project settings off (audit H2).
-      const startGroup = conversation(state, command.request.conversationId), written = teamWrittenTask(state, startGroup)
+      const startGroup = conversation(state, command.request.conversationId)
+      applyPushOrigin(state, startGroup, context.pushOrigin)
+      const written = teamWrittenTask(state, startGroup)
       const moved = teamStartRequest(state, named, home, context.teamAccountsIdle, context.teamMachines, written)
       if (written) requireTeamWrittenMachine(state, startGroup, moved.machineId)
+      // A branch GitHub cannot place stays out of the main account too, unmarked, as it may yet read clean.
+      else if (context.pushOrigin === 'unknown' && !teamAccountPool(state.machines?.find(m => m.machineId === moved.machineId))) failPushUnknown()
       const request: AgentStartRequest = written ? { ...moved, projectSettings: 'off' } : moved
       const pool = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)
       // Off the Machines list, a teammate's project never runs: nothing there shows a privacy check (machines.ts).

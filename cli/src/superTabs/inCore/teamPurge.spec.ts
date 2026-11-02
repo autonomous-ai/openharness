@@ -1,6 +1,7 @@
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { PM_HOMES } from '../teamDaemon.js'
 import { describe, expect, it, vi } from 'vitest'
 import { createSwarmAgents } from './agents.js'
 import { OWN_LEFT, SHARED_LEFT, SWEEP_LEFT, UNREADABLE_DETAIL, createConfidentialPurge, purgeRecord, recordsOtherFolder, rewriteIfUnchanged, scrubClaudeSession, sweepForSession, type PurgeTarget } from './teamPurge.js'
@@ -477,6 +478,17 @@ describe('the purge of a confidential session the Swarm ended', () => {
     const record = purgeRecord(join(home, 'super-tabs', 'team-purges.json'))
     return { purge, session, record, calls }
   }
+
+  it('removes Team-written work\'s own Codex home when the agent ends, confidential or not, and nothing else (audit H2)', async () => {
+    const { home } = teamHome()
+    const s = service(home), own = join(home, PM_HOMES, 'super-start', 'codex'), other = join(home, 'elsewhere', 'codex')
+    mkdirSync(own, { recursive: true }); mkdirSync(other, { recursive: true })
+    const session = (codexHome: string) => () => ({ agentId: 'r', sessionId: 's', registeredAt: 1, engine: 'codex', cwd: CWD, codexHome })
+    expect(await createConfidentialPurge({ confidential: () => false, home, session: session(other), purge: s.purge, record: s.record })('r')).toEqual({ skipped: true })
+    expect(existsSync(other)).toBe(true)
+    expect(await createConfidentialPurge({ confidential: () => false, home, session: session(own), purge: s.purge, record: s.record })('r')).toEqual({ skipped: true })
+    expect(existsSync(dirname(own))).toBe(false)
+  })
 
   it('deletes through the reviewed purge, scrubs, sweeps, and keeps the session in its record until the sweep passes', async () => {
     const { home, claude } = teamHome()

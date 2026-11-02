@@ -300,6 +300,8 @@ export interface SuperTabStoreHooks {
   workStarted?: (tabId: string, started: WorkHold[]) => void
   /** Who pushed these pull requests of a project's repository (github/pushOrigin.ts): the worst of their answers. Absent with no GitHub App. */
   pushOrigin?: (repositoryUrl: string | null, pullRequestUrls: string[]) => Promise<PushOrigin>
+  /** The same for a branch a start names: its open pull request's answer, clean for the default branch, unknown with no pull request. */
+  branchPushOrigin?: (repositoryUrl: string | null, branch: string) => Promise<PushOrigin>
   /** No Harness GitHub App on this server: a Mac's Harness Team account joins no Swarm and takes no teammates' work, since
    *  it has no git login to fetch or push with (commands.ts `teamAccountsIdle`). */
   teamAccountsIdle?: boolean
@@ -1215,7 +1217,19 @@ export class SuperTabStore {
    */
   private async pushOriginFor(user: AuthUser, tabId: string, command: unknown): Promise<PushOrigin | undefined> {
     const hook = this.hooks.pushOrigin
-    const asked = command as { type?: unknown; conversationId?: unknown; status?: unknown; result?: unknown } | null
+    const asked = command as { type?: unknown; conversationId?: unknown; status?: unknown; result?: unknown; request?: { branchRef?: unknown; conversationId?: unknown } } | null
+    // A start that names a branch: a person or the PM can name any branch, whoever pushed it.
+    const branch = asked?.type === 'agent.start' && typeof asked.request?.branchRef === 'string' ? asked.request.branchRef.replace(/^refs\/(heads|remotes\/origin)\//, '') : null
+    if (branch && this.hooks.branchPushOrigin) {
+      try {
+        const repositoryUrl = await transaction(this.db, async tx => {
+          const { state } = await this.load(tx, user, tabId, namedFor(command as Command))
+          const group = state.conversations.find(c => c.id === asked!.request!.conversationId)
+          return group ? groupProject(state, group).repository?.repositoryUrl ?? null : undefined
+        })
+        return repositoryUrl === undefined ? undefined : await this.hooks.branchPushOrigin(repositoryUrl, branch)
+      } catch (error) { return error instanceof SuperTabError ? undefined : 'unknown' }
+    }
     if (!hook || !asked || typeof asked.conversationId !== 'string' || !(asked.type === 'work.assign' || (asked.type === 'work.status' && asked.status === 'review'))) return undefined
     try {
       const facts = await transaction(this.db, async tx => {

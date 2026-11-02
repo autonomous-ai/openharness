@@ -144,6 +144,43 @@ describe('a task a Team agent worked on', () => {
     expect(effects.messages.find(m => m.text === TEAM_WRITTEN_STOP)?.recipients).toEqual([reviewer])
   })
 
+  it('reads who pushed the branch a start names: a bot\'s push moves it to the Team account, an unknown branch stays out of the main account', () => {
+    const f = swarm(), task = f.group()
+    const request = (conversationId: string) => ({ type: 'agent.start' as const, request: { conversationId, machineId: 'mac', engine: 'claude', name: 'Tester', cwd: '/swarm/lead', worktree: true, branchRef: 'refs/remotes/origin/fix', requirements } })
+    expect(refusal(() => f.run(request(task), owner, { pushOrigin: 'unknown' }))).toBe(TEAM_WRITTEN_WORK)
+    f.run(request(task), owner, { pushOrigin: 'team' })
+    expect(f.state.starts!.at(-1)!.request).toMatchObject({ machineId: 'mac-team', projectSettings: 'off' })
+    expect(f.state.conversations.find(c => c.id === task)!.teamWritten).toBe(true)
+  })
+
+  it('refuses an agent of another project as it refuses one on any task, so the answer says nothing of the mark', () => {
+    const f = swarm(), task = f.written()
+    const other = String(f.run({ type: 'project.create', name: 'Other', visibility: 'public', brief: '' }).result.projectId)
+    const outsider = f.member('outsider', 'mac')
+    f.state.agents.find(a => a.id === outsider)!.projectId = other
+    const code = (conversationId: string) => { try { f.run({ type: 'work.assign', conversationId, agentId: outsider }); return null } catch (error) { return (error as SuperTabError).code } }
+    f.state.conversations.find(c => c.id === task)!.assignment = null
+    const clean = f.group()
+    expect(code(task)).toBe(code(clean))
+    expect(code(task)).not.toBe(TEAM_WRITTEN_WORK)
+  })
+
+  it('marks the task and not the agent: the same Team agent\'s next task elsewhere starts clean until it is assigned there', () => {
+    const f = swarm(), task = f.written(), clean = f.group()
+    expect(f.state.conversations.find(c => c.id === task)!.teamWritten).toBe(true)
+    expect(f.state.conversations.find(c => c.id === clean)!.teamWritten).toBeUndefined()
+    expect(refusal(() => f.run({ type: 'work.assign', conversationId: clean, agentId: f.member('main-builder', 'mac') }))).toBeNull()
+  })
+
+  it('keeps the coordinator on a marked task, and it marks nothing when it runs in a Team account', () => {
+    const f = swarm(), task = f.written(), lead = f.member('lead-on-team', 'mac-team'), clean = f.group()
+    f.state.projects!.find(p => p.id === 'lead')!.leadConversationId = 'lead'
+    f.state.conversations.find(c => c.id === 'lead')!.leadId = lead
+    f.run({ type: 'conversation.agent', conversationId: clean, agentId: lead, present: true, lead: false })
+    expect(f.state.conversations.find(c => c.id === clean)!.teamWritten).toBeUndefined()
+    expect(f.state.conversations.find(c => c.id === task)!.teamWritten).toBe(true)
+  })
+
   it('reads a mark set before its assignee existed in the Swarm\'s record, on an open task, by its current assignee', () => {
     const f = swarm(), task = f.written(), stored = f.state.conversations.find(c => c.id === task)!
     delete stored.teamWritten

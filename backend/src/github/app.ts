@@ -411,6 +411,23 @@ export class GitHubApp {
     }
   }
 
+  /** Who pushed [branch]: the default branch is clean, as it passed review; any other reads its one open pull request, and with none is unknown. */
+  async branchOrigin(repository: GitHubRepository, branch: string): Promise<PushOrigin> {
+    try {
+      const resolved = await this.resolve(repository)
+      if (!resolved) return 'unknown'
+      const { token } = await this.createToken(resolved.installation, resolved.repository, PUSH_ORIGIN_PERMISSIONS)
+      const auth = `Bearer ${token}`, { owner, name } = resolved.repository
+      const about = await this.call('GET', `/repos/${owner}/${name}`, auth)
+      if (about.status === 200 && (about.body as { default_branch?: unknown }).default_branch === branch) return 'clean'
+      const listed = await this.call('GET', `/repos/${owner}/${name}/pulls?state=open&head=${encodeURIComponent(`${owner}:${branch}`)}&per_page=2`, auth)
+      const number = Array.isArray(listed.body) && listed.body.length === 1 ? (listed.body[0] as { number?: unknown }).number : null
+      return listed.status === 200 && typeof number === 'number' ? await this.pushOrigin(repository, number) : 'unknown'
+    } catch {
+      return 'unknown'
+    }
+  }
+
   private async readCiLoad(repository: GitHubRepository): Promise<CiLoad | null> {
     const resolved = await this.resolve(repository)
     if (!resolved) return null
