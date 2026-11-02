@@ -248,6 +248,69 @@ describe('a Product Manager\'s start, once its host reports it', () => {
   const messages = (effects: ReturnType<ReturnType<typeof swarm>['run']>, conversationId: string) =>
     effects.messages.filter(m => m.conversationId === conversationId).map(m => m.text)
 
+  // Task #2248, both security reviews of #2636: a person set a coordinator by hand while the Swarm was still starting one.
+  describe('a start that finishes after a person set another coordinator', () => {
+    const late = () => {
+      const f = swarm()
+      const startId = f.lead('mate-mac').result.startId as string
+      const hand = f.run({ type: 'agent.add', conversationId: f.app.conversationId, machineId: 'owner-mac', harnessId: 'by-hand', name: 'Mine',
+        configuration: config, lead: true }, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null } }).result.agentId as string
+      const home = () => f.state.conversations.find(c => c.id === f.app.conversationId)!
+      const finish = (operation?: string) => f.run({ type: 'agent.started', startId, harnessId: 'pm', configuration: config }, owner, { ...hosted(f, 'mate-team'), ...(operation ? { operationId: operation } : {}) })
+      return { f, startId, hand, home, finish }
+    }
+
+    it('never joins: no agent, the chat keeps its coordinator, and the start fails with the reason', () => {
+      const t = late()
+      const answer = t.finish()
+      expect(answer.result.agentId).toBeUndefined()
+      expect(answer.result.refused).toMatch(/already/)
+      expect(t.f.state.agents.map(a => a.harnessId)).not.toContain('pm')
+      expect(t.home()).toMatchObject({ leadId: t.hand, agentIds: [t.hand] })
+      expect(t.f.state.starts!.find(s => s.id === t.startId)).toMatchObject({ error: answer.result.refused })
+      expect(t.f.state.starts!.find(s => s.id === t.startId)!.harnessId).toBeUndefined()
+    })
+
+    it('leaves one row naming its machine, as a system row, and forgets where it was starting', () => {
+      const t = late()
+      const answer = t.finish()
+      const rows = answer.messages.filter(m => m.conversationId === t.f.app.conversationId)
+      expect(rows.map(m => m.text)).toEqual(['Product Manager started on MacBook Pro, but this project already has Mine as its Product Manager, so it did not join.'])
+      expect(rows[0]!.source).toEqual({ kind: 'system', machine: 'MacBook Pro' })
+      expect(rows[0]!.recipients).toEqual([])
+      expect(t.f.project().lead).toBeUndefined()
+    })
+
+    it('a second report fails as any failed start does, with no second row', () => {
+      const t = late()
+      t.finish()
+      expect(() => t.finish()).toThrow('This start failed')
+    })
+
+    it('takes over when the coordinator set by hand has left', () => {
+      const t = late()
+      t.home().agentIds = []
+      const pm = t.finish().result.agentId as string
+      expect(t.home()).toMatchObject({ leadId: pm, agentIds: [pm] })
+    })
+
+    it('leaves the PM switch working on the coordinator it left in place', () => {
+      const t = late()
+      t.finish()
+      t.f.machine('owner-mac').observation!.capabilities = ['leadSwitch']
+      t.f.run({ type: 'lead.switch', projectId: t.f.app.projectId, engine: 'codex', profileId: 'default' })
+      expect(t.f.state.agents.find(a => a.id === t.hand)!.switchRequest).toMatchObject({ engine: 'codex', requestedBy: 'owner' })
+    })
+
+    it('a first start with nobody set joins and leads, as before', () => {
+      const f = swarm()
+      const startId = f.lead('mate-mac').result.startId as string
+      const pm = f.run({ type: 'agent.started', startId, harnessId: 'pm', configuration: config }, owner, hosted(f, 'mate-team')).result.agentId as string
+      expect(f.state.conversations.find(c => c.id === f.app.conversationId)).toMatchObject({ leadId: pm, agentIds: [pm] })
+      expect(f.project().lead).toMatchObject({ status: 'started' })
+    })
+  })
+
   it('says when it runs another model or effort than it asked for, and nothing when it cannot tell', () => {
     const joinedWith = (configuration: AgentConfiguration) => {
       const f = swarm()
