@@ -153,6 +153,10 @@ void main() {
       Future<void> openList() async {
         await tester.tap(find.byTooltip('Project options'));
         await tester.pumpAndSettle();
+        await tester.tap(
+          find.widgetWithText(MenuItemButton, 'Project settings…'),
+        );
+        await tester.pumpAndSettle();
         await tester.tap(find.text('Archived conversations'));
         await tester.pumpAndSettle();
       }
@@ -209,6 +213,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('super-group-offline')), findsNothing);
     await tester.tap(find.byTooltip('Project options'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(MenuItemButton, 'Project settings…'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Archived conversations'));
     await tester.pumpAndSettle();
@@ -590,14 +596,7 @@ void main() {
             .selected,
         isFalse,
       );
-      expect(
-        tester
-            .widget<AppIconButton>(
-              find.byKey(const ValueKey('super-pull-requests')),
-            )
-            .selected,
-        isFalse,
-      );
+      expect(find.byKey(const ValueKey('super-pull-requests')), findsNothing);
       expect(find.byTooltip('Conversation options'), findsNothing);
       await tester.binding.setSurfaceSize(const Size(800, 700));
       await tester.pumpAndSettle();

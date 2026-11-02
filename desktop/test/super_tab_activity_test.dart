@@ -568,6 +568,45 @@ void main() {
       await c.refresh();
       expect(told.map((t) => t.$1), ['offline']);
     });
+
+    Future<(SuperTabController, ConversationServer, List<int>)>
+    openChatSetToAll() async {
+      final binding = TestWidgetsFlutterBinding.ensureInitialized();
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      final server = projectServer();
+      final c = await open(server);
+      final told = <int>[];
+      SuperTabChatNotices.of(c).onMessage = (_, s) => told.add(s);
+      await c.setNotify(c.selectedId, SuperTabNotify.all);
+      return (c, server, told);
+    }
+
+    test('the open chat is told while its Swarm is away', () async {
+      final (c, server, told) = await openChatSetToAll();
+      c.away = true;
+      fromLead(server, 'While on another Swarm');
+      await c.refresh();
+      expect(told, hasLength(1));
+    });
+
+    test('the open chat is told while another app is in front', () async {
+      final (c, server, told) = await openChatSetToAll();
+      final binding = TestWidgetsFlutterBinding.instance;
+      addTearDown(
+        () => binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed),
+      );
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      fromLead(server, 'While in another app');
+      await c.refresh();
+      expect(told, hasLength(1));
+    });
+
+    test('the open chat on screen in a focused app is not told', () async {
+      final (c, server, told) = await openChatSetToAll();
+      fromLead(server, 'While reading it');
+      await c.refresh();
+      expect(told, isEmpty);
+    });
   });
 
   group('sidebar', () {

@@ -3,7 +3,7 @@
  * it, and a `powershell` earlier on PATH is not ours to run), the script as -EncodedCommand (UTF-16LE, base64) so
  * nothing in it is quoted twice by cmd and PowerShell, and its inputs in environment variables, never in its text.
  */
-import { spawnSync } from 'node:child_process'
+import { execFile, spawnSync } from 'node:child_process'
 import { win32 } from 'node:path'
 
 export const POWERSHELL_TIMEOUT_MS = 30_000
@@ -44,4 +44,17 @@ export const runPowershell: PowershellRun = (script, inputs = {}) => {
     env: { ...process.env, ...inputs }, encoding: 'utf8', timeout: POWERSHELL_TIMEOUT_MS, windowsHide: true,
   })
   return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '', ...(result.error ? { error: result.error } : {}) }
+}
+
+/** [runPowershell] without blocking: for the daemon, whose event loop must not wait on a PowerShell. Never rejects; a
+ *  script that could not start or ran past [timeoutMs] has a null status. */
+export function runPowershellAsync(script: string, inputs: Record<string, string> = {}, timeoutMs = POWERSHELL_TIMEOUT_MS): Promise<PowershellResult> {
+  return new Promise((resolve) => {
+    execFile(powershellPath(), encodedCommandArgs(withPrelude(script)), {
+      env: { ...process.env, ...inputs }, encoding: 'utf8', timeout: timeoutMs, windowsHide: true,
+    }, (error, stdout, stderr) => {
+      const status = !error ? 0 : typeof error.code === 'number' && !error.killed ? error.code : null
+      resolve({ status, stdout: stdout ?? '', stderr: stderr ?? '', ...(error ? { error } : {}) })
+    })
+  })
 }

@@ -2,7 +2,7 @@
 import { randomUUID } from 'node:crypto'
 import { env } from '../config/env.js'
 import { localCredentialHeaders } from '../lib/localCredential.js'
-import { daemonFetch, localWsTarget } from '../lib/localTransport.js'
+import { daemonFetch, openLocalWs } from '../lib/localTransport.js'
 import type { ClientSocket } from '../lib/clientSocket.js'
 import { deviceSettingsPatchSchema } from '../lib/harnessDevices.js'
 
@@ -22,8 +22,7 @@ export interface DevicesClientDeps {
 
 export function deviceRequest(deps: DevicesClientDeps, machineId: string, type: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
-    const line = localWsTarget(deps.dataDir ?? env.ADAPTER_DATA_DIR, deps.port)
-    const socket = deps.connect(line.url, line.headers)
+    const socket = openLocalWs(deps.dataDir ?? env.ADAPTER_DATA_DIR, deps.port, deps.connect)
     const requestId = randomUUID()
     let settled = false, sent = false
     const finish = (error: Error | null, reply?: Record<string, unknown>): void => {

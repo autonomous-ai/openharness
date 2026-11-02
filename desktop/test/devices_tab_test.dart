@@ -72,6 +72,36 @@ void main() {
     );
   }
 
+  // Task #2195: Offstage mutes nothing, so a Swarm hidden behind the Store would keep its timers.
+  testWidgets('a canvas behind the Store runs no timers until it returns', (
+    tester,
+  ) async {
+    final app = createApp(store: MemoryStore());
+    await mount(tester, app);
+    bool canvasTicks() => tester
+        .widget<TickerMode>(
+          find
+              .descendant(
+                of: find.byKey(
+                  const ValueKey('workspace-canvas'),
+                  skipOffstage: false,
+                ),
+                matching: find.byType(TickerMode, skipOffstage: false),
+                skipOffstage: false,
+              )
+              .first,
+        )
+        .enabled;
+    expect(canvasTicks(), isTrue);
+    app.openStore();
+    await tester.pumpAndSettle();
+    expect(canvasTicks(), isFalse);
+    app.openDevices();
+    await tester.pumpAndSettle();
+    expect(canvasTicks(), isTrue);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   test(
     'restoring a Devices tab reserves chat before its conversation loads',
     () async {
