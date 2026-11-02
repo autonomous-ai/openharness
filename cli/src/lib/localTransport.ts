@@ -28,15 +28,16 @@ export function localSocketRoute(dataDir: string, port: number, platform: NodeJS
   const expected = unixSocketPath(dataDir, port, platform)
   // A data folder's own mode covers its socket; a short folder's lies elsewhere, so it is checked, and one that isn't private is refused as
   // a daemon that is down is: connecting to this name fails.
-  if (expected && !expected.startsWith(dataDir) && existsSync(expected) && !socketIsPrivate(expected)) return `${expected}.not-private`
-  if (!expected || existsSync(expected)) return expected
+  const checked = (socket: string): string => !socket.startsWith(dataDir) && !socketIsPrivate(socket) ? `${socket}.not-private` : socket
+  if (!expected) return expected
+  if (existsSync(expected)) return checked(expected)
   let names: string[] = []
   try { names = readdirSync(dataDir) } catch { return expected }
   for (const name of names) {
     const configured = /^daemon-(\d+)\.json$/.exec(name)?.[1]
     if (!configured || readDaemonRecord(dataDir, Number(configured), platform)?.port !== port) continue
     const socket = unixSocketPath(dataDir, Number(configured), platform)
-    if (socket && existsSync(socket)) return socket
+    if (socket && existsSync(socket)) return checked(socket)
   }
   return expected
 }

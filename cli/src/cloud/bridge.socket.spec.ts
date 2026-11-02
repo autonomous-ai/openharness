@@ -162,6 +162,32 @@ describe('a long data folder\'s short socket', () => {
   })
 })
 
+describe('a long data folder whose daemon was given another port', () => {
+  it('follows its record to the short socket, and refuses it when it is not private', async () => {
+    const hold = await holder()
+    const data = join(home, 'd'.repeat(100))
+    mkdirSync(data, { recursive: true, mode: 0o700 })
+    vi.stubEnv('HOME', home)
+    closers.push(() => vi.unstubAllEnvs())
+    // Configured for 1, given the holder's port: the socket is named for the one it was configured with.
+    writeFileSync(join(data, 'daemon-1.json'), JSON.stringify({ port: hold.port }), { mode: 0o600 })
+    const path = unixSocketPath(data, 1)!
+    const heard: string[] = []
+    const server = createServer((request, response) => { heard.push(String(request.url)); response.writeHead(200).end('{}') })
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+    await new Promise<void>(ready => server.listen(path, ready))
+    closers.push(() => new Promise(done => { server.closeAllConnections(); server.close(done) }))
+    chmodSync(path, 0o600)
+    const send = daemonFetch(data, hold.port)
+    expect((await send(`http://127.0.0.1:${hold.port}/api/status`)).status).toBe(200)
+    expect(heard).toHaveLength(1)
+    chmodSync(path, 0o666)
+    await expect(send(`http://127.0.0.1:${hold.port}/api/status`)).rejects.toThrow()
+    expect(heard).toHaveLength(1)
+    expect(hold.heard).toEqual([])
+  })
+})
+
 describe('the keys that crossed the port', () => {
   it('the service takes Harness\'s key on its socket and not on its port, and the agents\' old key on its port for now', async () => {
     const agents = bridgeKey(vault), stale = harnessKey(vault)
