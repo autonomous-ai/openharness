@@ -4654,6 +4654,33 @@ describe('lead.switch', () => {
     expect(team.agent().switchRequest).toBeDefined()
   })
 
+  it('tells the machine owner, in their Buddy chat, when another person moves the PM onto one of their other accounts', () => {
+    const lent = () => { const s = setup(['leadSwitch'], 'peer'); s.agent().machineOwnerId = 'peer'; return s }
+    const done = (s: ReturnType<typeof setup>) => s.f.run({ type: 'agent.switchResult', agentId: s.pm, switchId: s.sid(), ok: true }, { ...s.as, machineOwnerId: 'peer' })
+    const s = lent()
+    s.f.run(s.request)
+    const told = done(s).messages.filter(m => (m.source as { kind?: string } | undefined)?.kind === 'pm-switch-notice')
+    expect(told).toEqual([expect.objectContaining({ conversationId: s.f.state.conversations.find(c => c.kind === 'swarm-buddy')!.id,
+      text: 'owner moved the PM of Pilot on Studio to your Codex account "Work".', source: { kind: 'pm-switch-notice', machineId: 'host' } })])
+    const def = lent()
+    def.f.run({ ...def.request, profileId: 'default' })
+    expect(done(def).messages).toHaveLength(1)
+    const own = lent()
+    own.f.run(own.request, peer)
+    expect(done(own).messages).toHaveLength(1)
+  })
+
+  it('serves a machine\'s accounts only to its owner and the owners of projects whose PM runs there', () => {
+    const s = setup(['leadSwitch'], 'peer')
+    s.agent().machineOwnerId = 'peer'
+    s.f.state.people.push({ id: 'third', email: 'third@example.com', role: 'member', generation: 'g' } as never)
+    const read = (actor: Actor) => visibleState(s.f.state, actor, 1000).machines?.[0]?.observation?.profiles
+    expect(read(owner)).toHaveLength(1)
+    expect(read(peer)).toHaveLength(1)
+    expect(read({ kind: 'person', userId: 'third', email: 'third@example.com' })).toBeUndefined()
+    expect(read({ ...s.as, machineOwnerId: 'peer' })).toBeUndefined()
+  })
+
   it('drops a request nobody claimed on any machine\'s report, and refuses a late claim', () => {
     const s = setup()
     s.f.run(s.request)

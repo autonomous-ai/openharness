@@ -542,6 +542,8 @@ export const NOTICE_READERS = {
   // #2177's rulings: a failed start and a terminal's alert or typed input stay the people's to see.
   // A PM switch nobody answered, in its project chat (tidy.ts staleSwitches).
   switch: 'people',
+  // The machine owner's one line when another person moves a PM onto one of their non-default accounts (commands.ts agent.switchResult).
+  'pm-switch-notice': 'people',
   'start-timeout': 'people', 'terminal-alert': 'people', 'terminal-input': 'people',
 } as const satisfies Record<string, 'people' | 'recipients' | 'agent'>
 const readersOf = (kind: unknown): 'people' | 'recipients' | 'agent' =>
@@ -784,6 +786,16 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   for (const pool of visible.machines ?? []) {
     const privacy = pool.observation?.privacy
     if (privacy && 'detail' in privacy && !(actor.kind === 'person' && actor.userId === pool.contributorId)) delete (privacy as { detail?: string }).detail
+  }
+  // A machine's accounts (labels, percent left) are for those who may switch a PM running there: its owner, and the owners of
+  // projects whose PM runs on it. Agents and everyone else read the machine without them.
+  for (const pool of visible.machines ?? []) {
+    if (!pool.observation?.profiles) continue
+    const there = state.agents.filter(a => a.machineId === pool.machineId)
+    const owners = new Set(there.length ? there.map(a => a.machineOwnerId) : [pool.contributorId])
+    const mayMove = actor.kind === 'person' && (owners.has(actor.userId) ||
+      there.some(a => projectsOf(state).some(p => p.ownerId === actor.userId && state.conversations.some(c => c.id === p.leadConversationId && c.leadId === a.id))))
+    if (!mayMove) delete pool.observation.profiles
   }
   expireRemovals(visible, now)
   // A read never hands out the cleanup records it just applied (read/hostRows.ts delivers them to the machine's host).

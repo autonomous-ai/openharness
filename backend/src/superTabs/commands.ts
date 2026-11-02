@@ -1,6 +1,6 @@
 import { admitMachineStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
-import { keepUsernames, setUsername, swarmUsernames } from './usernames.js'
+import { keepUsernames, setUsername, swarmUsernames, usernameOf } from './usernames.js'
 import { z } from 'zod'
 import { tokensByModelSchema } from './costs/tokens.js'
 import {
@@ -2422,7 +2422,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (actor.kind !== 'agent' || actor.agentId !== target.id || ![target.switchRequest?.id, target.switchLanded].includes(command.switchId)) {
         fail('STALE_SWITCH', 'Only the execution host can report the current switch.', 403)
       }
-      const project = ledProject(state, target.id)
+      const project = ledProject(state, target.id), requested = target.switchRequest
       if (command.ok && target.switchRequest) moveToProfile(target, target.switchRequest.engine, target.switchRequest.profileId)
       delete target.switchRequest
       delete target.switchLanded
@@ -2433,6 +2433,14 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         ?.find(p => p.engine === target.configuration?.engine && p.id === target.profileId)?.label
       effects.messages.push({ id: operationId, conversationId: project.leadConversationId, author: sender, replyTo: null, recipients: [], source: SYSTEM_ROW,
         text: command.ok ? `PM moved to ${engine}${label ? ` · ${label}` : ''}.` : `Couldn't switch the PM: ${error || 'it failed'}. It is back on ${engine}.` })
+      // The machine owner hears when their non-default account runs another person's PM; the project line may be out of their reach.
+      const asked = requested?.requestedBy, owner = state.people.find(p => p.id === target.machineOwnerId), pool = state.machines?.find(m => m.machineId === target.machineId)
+      if (command.ok && label && asked && owner && asked !== owner.id) {
+        const who = usernameOf(state, asked) ?? state.people.find(p => p.id === asked)?.email ?? 'Someone'
+        effects.messages.push({ id: stableId(operationId, 'pm-switch-notice'), conversationId: openSwarmBuddyChat(state, owner).id, author: sender, replyTo: null, recipients: [],
+          source: { kind: 'pm-switch-notice', machineId: target.machineId },
+          text: `${who} moved the PM of ${project.name} on ${pool?.name ?? target.machineId} to your ${engine} account "${label}".` })
+      }
       break
     }
     case 'agent.stopLease': {
