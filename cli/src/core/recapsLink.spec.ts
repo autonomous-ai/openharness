@@ -86,13 +86,11 @@ describe('the recaps in their own process, as the core sees them', () => {
     expect(await link.answer('agents', {})).toEqual({ error: 'UNKNOWN_QUERY' })
   })
 
-  it('asks Harness\'s Jev for the process, signed by the core, and answers as the backend did', async () => {
-    const { deps, link } = setup()
-    const body = { state: { recap: 'Deployed' }, questions: {} }
-    expect(await link.answer('jev', { body })).toEqual({ status: 200, body: { data: { answers: {} } } })
-    expect(deps.jev).toHaveBeenCalledWith(body)
-    deps.jev.mockResolvedValueOnce({ status: 402, body: { error: { code: 'JEV_CREDITS' } } })
-    expect(await link.answer('jev', { body })).toEqual({ status: 402, body: { error: { code: 'JEV_CREDITS' } } })
+  // #2540 took Jev out of the tier, and its review (Orion) found the route left behind: a way from that process to the
+  // account's backend that nothing asks for. A question for Jev is now one the core does not know.
+  it('answers no question for Jev: the process has no way to the account\'s backend', async () => {
+    const { link } = setup()
+    expect(await link.answer('jev', { body: { state: { recap: 'Deployed' }, questions: {} } })).toEqual({ error: 'UNKNOWN_QUERY' })
   })
 
   it('asks the process for the cards of every turn still at work, and takes none it cannot read', async () => {

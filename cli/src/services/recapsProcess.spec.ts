@@ -139,38 +139,25 @@ describe('the recaps in their own process', () => {
     expect(await tier(s1)).toBe('alert')
   })
 
-  it('runs on a core API that reaches the core only through these four ways, and holds no credential', async () => {
-    const jev = vi.fn(async () => ({ status: 200, body: { data: {} } }))
-    const ways = { turnCard: vi.fn(), turnSummary: vi.fn(), lastTurn: vi.fn(async () => null), jev }
+  it('runs on a core API that reaches the core only through these three ways, and holds no credential', async () => {
+    const ways = { turnCard: vi.fn(), turnSummary: vi.fn(), lastTurn: vi.fn(async () => null) }
     const api = recapsCoreApi('/data', ways)
     expect(api.dataDir).toBe('/data')
     expect(api.transcripts.lastTurn).toBe(ways.lastTurn)
     expect(api.clients.turnCard).toBe(ways.turnCard)
     expect(api.clients.turnSummary).toBe(ways.turnSummary)
     await expect(api.account.accessToken()).rejects.toThrow('recaps holds no credential')
-    // Of the account's backend, Jev's route alone: anything else answers as no core to ask.
-    expect(await api.account.backend('POST', '/api/route/jev', { state: {} })).toEqual({ status: 200, body: { data: {} } })
-    expect(jev).toHaveBeenCalledWith({ state: {} })
-    expect(await api.account.backend('GET', '/api/route/jev')).toMatchObject({ status: 503 })
+    // None of the account's backend, Jev's old route included (#2540's review): each answers as no core to ask.
+    expect(await api.account.backend('POST', '/api/route/jev', { state: {} })).toMatchObject({ status: 503 })
     expect(await api.account.backend('POST', '/api/machines', {})).toMatchObject({ status: 503 })
-    expect(jev).toHaveBeenCalledTimes(1)
   })
 
-  it('asks the core for Jev, and reads any answer that is not the backend\'s as unavailable', async () => {
+  it('never asks the core for Jev', async () => {
     const { options, api } = setup()
-    const unavailable = { status: 503, body: { error: 'SERVICE_UNAVAILABLE' } }
-    expect(await api.account.backend('POST', '/api/route/jev', { state: 1 })).toEqual(unavailable)
     const core = connection()
     options.onConnected!(core.core)
-    core.query.mockResolvedValueOnce({ status: 200, body: { data: { answers: {} } } })
-    expect(await api.account.backend('POST', '/api/route/jev', { state: 1 })).toEqual({ status: 200, body: { data: { answers: {} } } })
-    expect(core.query).toHaveBeenLastCalledWith('jev', { body: { state: 1 } })
-    core.query.mockResolvedValueOnce({ error: 'UNKNOWN_QUERY' })
-    expect(await api.account.backend('POST', '/api/route/jev', {})).toEqual(unavailable)
-    core.query.mockResolvedValueOnce({ status: 200, body: 'not an object' })
-    expect(await api.account.backend('POST', '/api/route/jev', {})).toEqual(unavailable)
-    core.query.mockRejectedValueOnce(new Error('the core went away'))
-    expect(await api.account.backend('POST', '/api/route/jev', {})).toEqual(unavailable)
+    expect(await api.account.backend('POST', '/api/route/jev', { state: 1 })).toMatchObject({ status: 503 })
+    expect(core.query).not.toHaveBeenCalled()
   })
 
   it('runs on the real service process unless told otherwise', async () => {
