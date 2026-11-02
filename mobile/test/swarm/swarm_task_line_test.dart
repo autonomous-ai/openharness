@@ -180,7 +180,6 @@ void main() {
 
   testWidgets('waiting asks only the named reader to Answer', (tester) async {
     final semantics = tester.ensureSemantics();
-    addTearDown(semantics.dispose);
     final data = taskLine(state: 'waiting', answerFor: me);
     await pumpRow(tester, data);
     expect(find.text('Answer'), findsOneWidget);
@@ -192,6 +191,7 @@ void main() {
     await pumpRow(tester, data, readerId: 'someone-else');
     expect(find.text('Answer'), findsNothing);
     expect(find.text('working'), findsOneWidget);
+    semantics.dispose();
   });
 
   testWidgets('unknown state keeps fallback text without inventing a word', (
@@ -245,7 +245,6 @@ void main() {
       'a target absent from the read stays readable without navigation: $target',
       (tester) async {
         final semantics = tester.ensureSemantics();
-        addTearDown(semantics.dispose);
         final fake = taskLineBackend([taskLine(target: target)], target: false);
         await pumpTaskChat(tester, fake);
         expect(find.text('Fix login'), findsOneWidget);
@@ -264,6 +263,7 @@ void main() {
           isFalse,
         );
         expect(find.text('Copy'), findsNothing);
+        semantics.dispose();
       },
     );
   }
