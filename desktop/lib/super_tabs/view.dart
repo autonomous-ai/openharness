@@ -1601,7 +1601,7 @@ class _SuperTabViewState extends State<SuperTabView>
     onNotifications: _openActivity,
     needsHuman: (group) => _needsHuman(group).length,
     onSelect: (id) {
-      setState(() => _showNotifications = _showThreads = false);
+      setState(() => _showNotifications = _showThreads = _showManage = false);
       c.select(id);
       _closeSidebar();
     },
@@ -1693,7 +1693,6 @@ class _SuperTabViewState extends State<SuperTabView>
         _manageTab = SuperTabManageTab.machines;
       }
     });
-    widget.onCloseTerminal?.call();
     if (_manageTab == SuperTabManageTab.devices) widget.app!.openDevices();
   }
 

@@ -2388,7 +2388,27 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       return ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
         children: [
-          ..._machines(),
+          // Only a Swarm that can't be read is news, as under the old heading.
+          if (c.backendUnreachable)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: SuperTabMachinesPill(
+                connecting: c.stillConnecting,
+                reconnectingFor: failingSince == null
+                    ? Duration.zero
+                    : widget.now().difference(failingSince),
+              ),
+            ),
+          if (_ids.isEmpty)
+            Padding(
+              padding: const EdgeInsets.all(8),
+              child: Text(
+                "Add a machine for this Swarm's agents to use.",
+                style: DesktopChrome.metadata(),
+              ),
+            )
+          else
+            ..._machines(),
           const SizedBox(height: 8),
           Align(
             alignment: Alignment.centerRight,

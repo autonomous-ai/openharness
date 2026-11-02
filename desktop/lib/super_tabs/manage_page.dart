@@ -4,8 +4,10 @@ import 'package:flutter/material.dart';
 
 import '../core/machine_resources.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/theme/appearance_prefs_store.dart';
 import '../shared/widgets/app_dialog.dart';
 import '../state/app_state.dart';
+import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
@@ -76,7 +78,7 @@ class SuperTabManageTabs extends StatelessWidget {
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
-      child: Row(
+      child: Wrap(
         children: [
           tab(SuperTabManageTab.machines, 'Machines'),
           tab(SuperTabManageTab.models, 'Models'),
@@ -116,7 +118,14 @@ class SuperTabManagePage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
-    listenable: controller,
+    // Machines' online state and marks do not touch the controller, as in the
+    // sidebar group they came from.
+    listenable: Listenable.merge([
+      controller,
+      if (app case final app?) ...[app, app.agentUnread],
+      terminalThemeStore,
+      appearancePrefsStore,
+    ]),
     builder: (context, _) => DesktopChrome(
       child: switch (tab) {
         SuperTabManageTab.machines => SuperTabMachines(

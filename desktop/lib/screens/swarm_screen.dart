@@ -4799,14 +4799,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (app.activeSwarm.isDevices) unawaited(_devicesHarness.open());
   }
 
-  Widget _devicesButton(BuildContext context) => WorkspaceStoreButton(
-    key: const ValueKey('swarm-devices-button'),
-    width: WorkspaceStoreButton.widthOf(context, devices: true),
-    devices: true,
-    tooltip: 'Manage Harness devices',
-    onPressed: _shortcutsEnabled ? _openDevices : null,
-  );
-
   // ── the daemon (daemons/README.md) ─────────────────────────────────────────
 
   /// A `daemon_*` or `pair` frame to this computer's harnessd, only while
@@ -9352,34 +9344,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
   );
 
   String get _addPhoneTooltip => _commandTooltip('Add Phone', 'app.add_phone');
-
-  /// Harness ▸ Add Phone…, as a glyph just before Devices ([_addPhone]).
-  Widget _addPhoneButton(TerminalTheme theme) => WorkspaceBarControl(
-    key: const ValueKey('swarm-add-phone-button'),
-    label: 'Add Phone',
-    tooltip: _addPhoneTooltip,
-    onPressed: _shortcutsEnabled
-        ? () => unawaited(_addPhone(from: AddPhoneOpening.titlebar))
-        : null,
-    builder: (context, emphasized) => SizedBox(
-      width: workspaceBarCellSizeOf(context).width * 4,
-      height: workspaceBarControlHeight(context),
-      // The plain phone the account menu and Harness ▸ Add Phone… show: one
-      // silhouette everywhere (design/icon-design-system.md). Its old radio
-      // waves read as NFC, and were the row's one busy glyph.
-      child: Icon(
-        AppIcons.smartphone,
-        size: 16,
-        color: theme.foreground.withValues(
-          alpha: !_shortcutsEnabled
-              ? .28
-              : emphasized
-              ? 1
-              : .75,
-        ),
-      ),
-    ),
-  );
 
   Widget _notificationsButton(TerminalTheme theme) => KeyedSubtree(
     key: _notificationsButtonKey,
