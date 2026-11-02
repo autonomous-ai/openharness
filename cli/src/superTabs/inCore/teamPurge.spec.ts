@@ -782,7 +782,7 @@ describe('on Windows', () => {
     expect(await sweep(home, pm({ cwd }))).toBeNull()
   })
 
-  it.each(['C:\\', 'C:/', 'C:', '\\', '/', 'C:foo', 'foo\\bar', '\\\\server\\share', '\\\\server\\share\\', 'C:\\a\\..', '/Users/team/pm', '\\Users\\team', ''])(
+  it.each(['C:\\', 'C:/', 'C:', '\\', '/', 'C:foo', 'foo\\bar', '\\\\server', '\\\\server\\', '\\\\server\\share', '\\\\server\\share\\', 'C:\\a\\..', '/Users/team/pm', '\\Users\\team', ''])(
     'takes no folder from %j: with no session either, nothing is touched', async (cwd) => {
       const { home, claude } = windowsHome()
       // A line that does name it, to show it stays: a form with no drive could be any drive's folder.

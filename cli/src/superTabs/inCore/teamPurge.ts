@@ -121,7 +121,7 @@ const foldedText = (text: string, paths: FolderPaths) =>
  *  has a drive or a share: `\Users` and `/Users` are relative to whichever drive is current, so which folder they name is not known. */
 function folderOf(target: PurgeTarget, paths: FolderPaths): string | null {
   const cwd = target.cwd
-  if (!cwd || !paths.isAbsolute(cwd) || (onWindows(paths) && !/^([A-Za-z]:[\\/]|[\\/]{2})/.test(cwd))) return null
+  if (!cwd || !paths.isAbsolute(cwd) || (onWindows(paths) && !/^([A-Za-z]:[\\/]|[\\/]{2}[^\\/]+[\\/]+[^\\/]+)/.test(cwd))) return null
   const bare = (path: string) => path.replace(/[\\/]+$/, '')
   const normal = paths.normalize(cwd)
   return bare(normal) === bare(paths.parse(normal).root) ? null : cwd
