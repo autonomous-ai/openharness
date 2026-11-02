@@ -12,6 +12,8 @@
 import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import type { Socket } from 'node:net'
+import { patientExec, type ExecDone, type PatientExecOptions } from './patientExec.js'
+import { ptyHostBinary } from './ptyHost/launch.js'
 import { runPowershellAsync } from './windows/powershell.js'
 
 export type PeerAccount = (socket: Socket) => Promise<boolean>
@@ -110,14 +112,67 @@ export async function portHolderIsThisAccount(port: number, platform: NodeJS.Pla
 
 /**
  * Windows PowerShell's start and its CIM queries: about a second on x64, 20 to 25 s on the Windows ARM runner (the
- * Windows runs on #2605), so a slow or busy PC is given 45 s. A lookup past that is no for its connection. A native lookup
- * in harness-pty, in milliseconds, is its own task.
+ * Windows runs on #2605), so a slow or busy PC is given 45 s. A lookup past that is no for its connection. It runs only
+ * for a host too old to answer (see [nativeFirst]).
  */
 export const WINDOWS_PEER_MS = 45_000
 
-/** How the daemon runs [windowsPeerQuery]: Windows PowerShell, off its event loop. Tests give their own. */
+/** How the daemon asks: the script is [windowsPeerQuery]'s, for PowerShell, and its inputs name the connection. Tests give their own. */
 export type WindowsPeerRun = (script: string, inputs: Record<string, string>) => Promise<{ status: number | null; stdout: string }>
-const runWindowsPeer: WindowsPeerRun = (script, inputs) => runPowershellAsync(script, inputs, WINDOWS_PEER_MS)
+
+/**
+ * `harness-pty peer-account` takes milliseconds (#2187). A helper that takes this long is hung: its connection is refused,
+ * and the client can retry. Far more than the second the real Windows run allows, for a PC under load.
+ */
+export const WINDOWS_PEER_NATIVE_MS = 5_000
+
+/** The helper's exit and output, or `missing` when there is no file to run. */
+export type WindowsNativeRun = (inputs: Record<string, string>) => Promise<{ status: number | null; stdout: string } | 'missing'>
+type NativeExec = (file: string, args: readonly string[], options: PatientExecOptions, done: ExecDone) => void
+const nativeExec: NativeExec = patientExec(execFile)
+
+/** Runs the helper for [inputs], the connection [windowsPeerQuery] names. A file that is there and will not run is a failed lookup, not a missing one. */
+export function runWindowsNative(inputs: Record<string, string>, binary: () => string | null = ptyHostBinary, exec: NativeExec = nativeExec): ReturnType<WindowsNativeRun> {
+  let file: string | null
+  try {
+    file = binary()
+  } catch {
+    file = null
+  }
+  if (!file) return Promise.resolve('missing')
+  const args = ['peer-account', '--peer-port', inputs.HARNESS_PEER_PORT!, '--own-port', inputs.HARNESS_OWN_PORT!, '--daemon-pid', inputs.HARNESS_DAEMON_PID!]
+  return new Promise((resolve) => {
+    exec(file, args, { timeout: WINDOWS_PEER_NATIVE_MS, maxBuffer: 64 * 1024, windowsHide: true }, (error, stdout) => {
+      const code = error ? error.code : 0
+      if (code === 'ENOENT') resolve('missing')
+      else if (code === 'ETIMEDOUT') resolve({ status: null, stdout: '' })
+      else resolve({ status: typeof code === 'number' ? code : 1, stdout })
+    })
+  })
+}
+
+/**
+ * Asks the helper, and PowerShell only when the helper cannot be asked: it is missing, or a host older than this CLI says
+ * 2 for a command it does not know (or 3, unsupported). Its yes and no are final, and so is a hang or a crash: PowerShell
+ * after a no would be a second chance for a caller the helper refused, and after a hang 45 s more for each connection.
+ */
+export function nativeFirst(native: WindowsNativeRun, powershell: WindowsPeerRun): WindowsPeerRun {
+  let told = false
+  return async (script, inputs) => {
+    // The helper answers only who owns a connection. Another query through this default, as the listener check of #2608, has
+    // its own script and rules: run with no ports, the helper could say nothing, and that check would go quiet.
+    if (inputs.HARNESS_PEER_PORT === undefined) return powershell(script, inputs)
+    const answer = await native(inputs)
+    if (answer !== 'missing' && answer.status !== 2 && answer.status !== 3) return answer
+    if (!told) {
+      told = true
+      console.warn('[peer] harness-pty cannot say who is calling (missing or too old): asking PowerShell, which is far slower')
+    }
+    return powershell(script, inputs)
+  }
+}
+
+const runWindowsPeer: WindowsPeerRun = nativeFirst(runWindowsNative, (script, inputs) => runPowershellAsync(script, inputs, WINDOWS_PEER_MS))
 
 /**
  * Windows: whether the client end of the connection 127.0.0.1:[peerPort] → 127.0.0.1:[ownPort] belongs to a process of
@@ -140,18 +195,18 @@ export function windowsPeerQuery(peerPort: number, ownPort: number, daemonPid: n
       // connection's time to the second and the process's finer (the Windows run on #2605 read a process started at
       // 13:32:35 as after its connection of 13:32:35), so the process's time is cut to the second and compared with no
       // slack. Slack let the lookup's own PowerShell, started just after, take the freed id and pass (Remy's review). A
-      // reuse within the connection's own second is left to the native lookup.
+      // reuse within the connection's own second stays open here; the native lookup compares finer where Windows gives it.
       "if (-not $process.CreationDate -or -not $rows[0].CreationTime) { 'no: Windows gave no start time'; exit 0 }",
       '$started = $process.CreationDate.AddTicks(-($process.CreationDate.Ticks % [TimeSpan]::TicksPerSecond))',
       "if ($started -gt $rows[0].CreationTime) { 'no: its process started ' + $process.CreationDate.ToString('o') + ', the connection ' + $rows[0].CreationTime.ToString('o'); exit 0 }",
-      // Nor another lookup running at once: a PowerShell the daemon started, or that PowerShell's console host, started in
-      // the connection's second, could have taken the freed id (Remy's review of #2605). Nothing of that kind the daemon
-      // starts calls its port with a secret.
+      // Nor another lookup running at once: a PowerShell the daemon started, the helper that ran before it, or a console
+      // host of either, started in the connection's second, could have taken the freed id (Remy's review of #2605). Nothing
+      // of that kind the daemon starts calls its port with a secret.
       '$daemon = [int]$env:HARNESS_DAEMON_PID',
-      "if ($process.Name -match '^(powershell|conhost)\\.exe$') {",
-      "  if ($process.ParentProcessId -eq $daemon) { 'no: a PowerShell the daemon started owns it'; exit 0 }",
+      "if ($process.Name -match '^(powershell|conhost|harness-pty)\\.exe$') {",
+      "  if ($process.ParentProcessId -eq $daemon) { 'no: a ' + $process.Name + ' the daemon started owns it'; exit 0 }",
       '  $parent = Get-CimInstance Win32_Process -Filter ("ProcessId = " + [int]$process.ParentProcessId)',
-      "  if ($parent -and $parent.ParentProcessId -eq $daemon) { 'no: a console host of a PowerShell the daemon started owns it'; exit 0 }",
+      "  if ($parent -and $parent.ParentProcessId -eq $daemon) { 'no: a ' + $process.Name + ' the daemon started owns it'; exit 0 }",
       '}',
       '$owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid',
       "if ($owner.ReturnValue -eq 0 -and $owner.Sid -and $owner.Sid -eq [Security.Principal.WindowsIdentity]::GetCurrent().User.Value) { 'yes' } else { 'no: its owner is ' + $owner.Sid + ' (' + $owner.ReturnValue + ')' }",
@@ -207,7 +262,7 @@ async function askWindowsListener(port: number, run: WindowsPeerRun): Promise<bo
 }
 
 /**
- * How many lookups run at once. Each is a PowerShell in this account for up to WINDOWS_PEER_MS, and whoever heard the
+ * How many lookups run at once. Each is a process in this account, a PowerShell for up to WINDOWS_PEER_MS, and whoever heard the
  * hook token could open connections without end (Luna's review of #2605). Past these a lookup waits its turn, so the
  * owner's own burst of new connections (an agent's MCP clients on the bridge at start) is answered, not told "unknown
  * address" (Reed's review). Only past the queue too is it no, for now: that no is not kept on the connection, so a

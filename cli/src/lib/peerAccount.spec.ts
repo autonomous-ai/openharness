@@ -1,6 +1,11 @@
+import type { ExecFileException } from 'node:child_process'
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, connect, type AddressInfo, type Socket } from 'node:net'
-import { afterEach, describe, expect, it } from 'vitest'
-import { lsofShowsPeer, peerIsThisAccount, portHolderIsThisAccount, procNetListener, procNetOwner, WINDOWS_PEER_LOOKUPS, WINDOWS_PEER_MS, WINDOWS_PEER_QUEUE, windowsListenerQuery, windowsPeerQuery, type WindowsPeerRun } from './peerAccount.js'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { ExecDone } from './patientExec.js'
+import { lsofShowsPeer, nativeFirst, peerIsThisAccount, portHolderIsThisAccount, procNetListener, procNetOwner, runWindowsNative, WINDOWS_PEER_LOOKUPS, WINDOWS_PEER_MS, WINDOWS_PEER_NATIVE_MS, WINDOWS_PEER_QUEUE, windowsListenerQuery, windowsPeerQuery, type WindowsNativeRun, type WindowsPeerRun } from './peerAccount.js'
 
 describe('who is at the other end of a loopback connection', () => {
   const opened: Array<() => unknown> = []
@@ -192,10 +197,11 @@ describe('who is at the other end of a loopback connection', () => {
     // Up to four lookups run at once: a sibling's PowerShell or its console host, started by the daemon in the
     // connection's second, could take an id the caller freed (Remy's review of #2605). Nothing of that kind the daemon
     // starts calls its port with a secret, so one whose parent or grandparent is the daemon is no.
-    it('never takes a PowerShell or console host the daemon started, a sibling lookup', () => {
+    it('never takes a PowerShell, console host or harness-pty the daemon started, a sibling lookup', () => {
       const { script } = windowsPeerQuery(50_001, 18473, 42_424)
       expect(script).toContain('$daemon = [int]$env:HARNESS_DAEMON_PID')
-      expect(script).toMatch(/\$process\.Name -match '\^\(powershell\|conhost\)\\\.exe\$'/)
+      // harness-pty too: each fallback PowerShell runs beside a helper that has just refused the command.
+      expect(script).toMatch(/\$process\.Name -match '\^\(powershell\|conhost\|harness-pty\)\\\.exe\$'/)
       expect(script).toMatch(/\$process\.ParentProcessId -eq \$daemon/)
       expect(script).toMatch(/\$parent\.ParentProcessId -eq \$daemon/)
       const sibling = script.indexOf('$daemon'), owner = script.indexOf('GetOwnerSid')
@@ -262,6 +268,145 @@ describe('who is at the other end of a loopback connection', () => {
       expect(script).toMatch(/Where-Object \{ \$_\.LocalAddress -in @\('127\.0\.0\.1', '0\.0\.0\.0', '::'\) \}/)
       // Filtered before anything is decided: none of them is `none`, never another address's owner.
       expect(script.indexOf("-in @('127.0.0.1'")).toBeLessThan(script.indexOf("'none'"))
+    })
+  })
+
+  // #2187: the same question, asked of harness-pty in milliseconds. PowerShell took 20 to 25 s on the ARM runner.
+  describe('on Windows, by asking harness-pty first', () => {
+    const inputs = { HARNESS_PEER_PORT: '50001', HARNESS_OWN_PORT: '18473', HARNESS_DAEMON_PID: '42424' }
+    const socket = (remotePort: number) =>
+      ({ remoteAddress: '127.0.0.1', remotePort, localAddress: '127.0.0.1', localPort: 18473 }) as Socket
+    const powershell = (stdout = 'yes') => {
+      const calls: Array<{ script: string; inputs: Record<string, string> }> = []
+      const run: WindowsPeerRun = async (script, given) => { calls.push({ script, inputs: given }); return { status: 0, stdout } }
+      return { run, calls }
+    }
+    const native = (answer: Awaited<ReturnType<WindowsNativeRun>>): WindowsNativeRun => async () => answer
+
+    it('takes yes and no from the helper, and never asks PowerShell after them', async () => {
+      const ps = powershell('yes')
+      expect(await peerIsThisAccount(socket(54_001), 'win32', nativeFirst(native({ status: 0, stdout: 'yes\r\n' }), ps.run))).toBe(true)
+      // A no is final: asking again would let a process Windows will not open be judged by another lookup.
+      expect(await peerIsThisAccount(socket(54_002), 'win32', nativeFirst(native({ status: 0, stdout: 'no: its owner is another account\r\n' }), ps.run))).toBe(false)
+      expect(ps.calls).toEqual([])
+    })
+
+    it('hands the helper the connection and asks PowerShell the same question when it is missing or too old', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        for (const answer of ['missing', { status: 2, stdout: '' }, { status: 3, stdout: '{"unsupported":true}' }] as const) {
+          const ps = powershell('yes')
+          const seen: Array<Record<string, string>> = []
+          const helper: WindowsNativeRun = async (given) => { seen.push(given); return answer }
+          expect(await nativeFirst(helper, ps.run)('the script', inputs), JSON.stringify(answer)).toEqual({ status: 0, stdout: 'yes' })
+          expect(seen).toEqual([inputs])
+          expect(ps.calls).toEqual([{ script: 'the script', inputs }])
+        }
+        // Slower a thousand times and nothing else wrong: the log says why, once, not per connection.
+        const once = nativeFirst(native('missing'), powershell().run)
+        warn.mockClear()
+        await once('s', inputs)
+        await once('s', inputs)
+        expect(warn.mock.calls.flat().join('\n')).toMatch(/harness-pty.*PowerShell/)
+        expect(warn).toHaveBeenCalledTimes(1)
+      } finally {
+        warn.mockRestore()
+      }
+    })
+
+    // #2608's listener check asks through the same default with its own inputs: the helper only knows a connection, and
+    // running it with none would fail with no answer, and the bridge would never move off a held port (Reed's review of #2647).
+    it('sends a question the helper does not know to PowerShell, without running the helper or warning', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const ps = powershell('none')
+        let ran = 0
+        const helper: WindowsNativeRun = async () => { ran++; return { status: 0, stdout: 'yes' } }
+        const other = { HARNESS_LISTEN_PORT: '51794' }
+        expect(await nativeFirst(helper, ps.run)('another script', other)).toEqual({ status: 0, stdout: 'none' })
+        expect(ran).toBe(0)
+        expect(ps.calls).toEqual([{ script: 'another script', inputs: other }])
+        expect(warn).not.toHaveBeenCalled()
+      } finally {
+        warn.mockRestore()
+      }
+    })
+
+    // The bridge's real listener check (#2608), through the path its default takes.
+    it('keeps the bridge\'s listener check on PowerShell, with its own query, without running the helper', async () => {
+      const ps = powershell('no')
+      let ran = 0
+      const helper: WindowsNativeRun = async () => { ran++; return { status: 0, stdout: 'yes' } }
+      expect(await portHolderIsThisAccount(51_794, 'win32', nativeFirst(helper, ps.run))).toBe(false)
+      expect(ran).toBe(0)
+      expect(ps.calls).toEqual([windowsListenerQuery(51_794)])
+    })
+
+    it('says no without PowerShell for a helper that hangs, crashes or says anything else', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const answers = [{ status: null, stdout: '' }, { status: 1, stdout: '' }, { status: 101, stdout: 'yes' }, { status: 3221225477, stdout: '' }, { status: 0, stdout: 'yes yes' }, { status: 0, stdout: '' }]
+        for (const [i, answer] of answers.entries()) {
+          const ps = powershell('yes')
+          expect(await peerIsThisAccount(socket(54_100 + i), 'win32', nativeFirst(native(answer), ps.run)), JSON.stringify(answer)).toBe(false)
+          expect(ps.calls).toEqual([])
+        }
+      } finally {
+        warn.mockRestore()
+      }
+    })
+
+    const exec = (error: ExecFileException | null, stdout = '') => {
+      const calls: Array<{ file: string; args: readonly string[]; options: Record<string, unknown> }> = []
+      const run = (file: string, args: readonly string[], options: object, done: ExecDone) => {
+        calls.push({ file, args, options: options as Record<string, unknown> })
+        done(error, stdout, '')
+      }
+      return { run, calls }
+    }
+    const failed = (code: string | number | null): ExecFileException => Object.assign(new Error('failed'), { code })
+
+    it('runs the helper with the ports and the daemon as arguments, hidden, and bounded', async () => {
+      const ran = exec(null, 'yes\r\n')
+      expect(await runWindowsNative(inputs, () => 'C:\\pty\\harness-pty.exe', ran.run)).toEqual({ status: 0, stdout: 'yes\r\n' })
+      expect(ran.calls).toEqual([{ file: 'C:\\pty\\harness-pty.exe',
+        args: ['peer-account', '--peer-port', '50001', '--own-port', '18473', '--daemon-pid', '42424'],
+        options: expect.objectContaining({ timeout: WINDOWS_PEER_NATIVE_MS, windowsHide: true }) }])
+      expect(WINDOWS_PEER_NATIVE_MS).toBeGreaterThanOrEqual(1_000)
+      expect(WINDOWS_PEER_NATIVE_MS).toBeLessThan(WINDOWS_PEER_MS)
+    })
+
+    it('reads missing only when there is no file to run, and every other failure as a failure', async () => {
+      const file = () => 'harness-pty.exe'
+      expect(await runWindowsNative(inputs, () => null, exec(null).run)).toBe('missing')
+      expect(await runWindowsNative(inputs, () => { throw new Error('no runtime') }, exec(null).run)).toBe('missing')
+      expect(await runWindowsNative(inputs, file, exec(failed('ENOENT')).run)).toBe('missing')
+      expect(await runWindowsNative(inputs, file, exec(failed(2)).run)).toEqual({ status: 2, stdout: '' })
+      expect(await runWindowsNative(inputs, file, exec(failed(3), '{"unsupported":true}').run)).toEqual({ status: 3, stdout: '{"unsupported":true}' })
+      expect(await runWindowsNative(inputs, file, exec(failed(3221225477)).run)).toEqual({ status: 3221225477, stdout: '' })
+      // Past its limit: the "did not say in time" answer.
+      expect(await runWindowsNative(inputs, file, exec(failed('ETIMEDOUT')).run)).toEqual({ status: null, stdout: '' })
+      // A file there that will not run is not an older build: no, and no second lookup.
+      expect(await runWindowsNative(inputs, file, exec(failed('EACCES')).run)).toEqual({ status: 1, stdout: '' })
+      expect(await runWindowsNative(inputs, file, exec(failed(null)).run)).toEqual({ status: 1, stdout: '' })
+    })
+
+    // The default, whole: the listeners name no lookup, so this is the path a real connection takes.
+    it.skipIf(process.platform === 'win32')('asks the installed helper by default, and needs no PowerShell', async () => {
+      const dir = mkdtempSync(path.join(tmpdir(), 'peer-native-'))
+      const was = process.env.HARNESS_PTY_BIN
+      try {
+        const helper = path.join(dir, 'harness-pty')
+        writeFileSync(helper, '#!/bin/sh\necho "$@" > "$0.args"\necho yes\n')
+        chmodSync(helper, 0o755)
+        process.env.HARNESS_PTY_BIN = helper
+        expect(await peerIsThisAccount(socket(54_200), 'win32')).toBe(true)
+        expect(readFileSync(`${helper}.args`, 'utf8').trim()).toBe(`peer-account --peer-port 54200 --own-port 18473 --daemon-pid ${process.pid}`)
+      } finally {
+        if (was === undefined) delete process.env.HARNESS_PTY_BIN
+        else process.env.HARNESS_PTY_BIN = was
+        rmSync(dir, { recursive: true, force: true })
+      }
     })
   })
 
