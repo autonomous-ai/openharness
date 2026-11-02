@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 
 import 'controller.dart';
 import 'decisions.dart';
@@ -398,6 +398,9 @@ class SuperTabChatNotices {
   /// Told with the chat and how far it now goes.
   void Function(SuperTabConversation group, int sequence)? onMessage;
 
+  /// Set by the view on screen: whether a person can see its chat now.
+  bool Function()? chatShown;
+
   final _seen = <String, int>{};
   int? _epoch;
   bool _disposed = false;
@@ -420,10 +423,19 @@ class SuperTabChatNotices {
       _seen[group.id] = top;
       if (before == null || top <= before) continue;
       if (controller.notifyOf(group.id) != SuperTabNotify.all) continue;
-      if (controller.selectedId == group.id) continue;
+      if (controller.selectedId == group.id && _openChatRead) continue;
       if (top <= controller.readMark(group.id)) continue;
       onMessage?.call(group, top);
     }
+  }
+
+  /// Whether the open chat is being read now. The view on screen knows; with none up, this falls
+  /// back to the Swarm showing and the app in front.
+  bool get _openChatRead {
+    if (chatShown case final shown?) return shown();
+    final state = WidgetsBinding.instance.lifecycleState;
+    return !controller.away &&
+        (state == null || state == AppLifecycleState.resumed);
   }
 
   void _dispose() {
