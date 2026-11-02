@@ -39,4 +39,11 @@ describe('job kind', () => {
     expect(jobKindOf(group(['./cli/src']))).toBe('cli')
     expect(jobKindOf(group(['Desktop Models section']))).toBe('desktop')
   })
+  // Task steps design: a step is named by its project's instructions, so it is ranked as the work its route says, never as
+  // a review because it is linked (a marketing team's Design step is not a review).
+  it('ranks a step by its route word, else general; an old linked group stays a review', () => {
+    expect(jobKindOf({ ...group([], 'task'), step: 'Design' }, 'docs')).toBe('docs')
+    expect(jobKindOf({ ...group([], 'task'), step: 'Design' })).toBe('general')
+    expect(jobKindOf(group([], 'task'), 'docs')).toBe('review')
+  })
 })

@@ -40,4 +40,25 @@ describe('SWARM_TOOLS_SKILL', () => {
     expect(lineOf('"type":"note.add"')).toMatch(/only the project's coordinator/i)
     expect(lineOf('"type":"note.remove"')).toMatch(/coordinator/)
   })
+  // Agent context design, section 1: the skill says what each tool returns; when to use it is the instructions'.
+  it('lists mine, task and reading one thread', () => {
+    expect(SWARM_TOOLS_SKILL).toContain('- \`mine\`:')
+    expect(SWARM_TOOLS_SKILL).toContain('- \`task GROUP\`:')
+    expect(SWARM_TOOLS_SKILL).toContain('messages GROUP --thread ROOT')
+  })
+  // Task steps design: a step's name is the instructions', so the skill shows how to add one and lists no kinds of step.
+  it('says how to add a step, naming no kinds of step', () => {
+    expect(SWARM_TOOLS_SKILL).toContain('Add a step to a task:')
+    expect(SWARM_TOOLS_SKILL).not.toMatch(/Review, Test|review and test steps/i)
+  })
+  // Ken, 2026-11-02: an agent's own Ready no longer reaches the coordinator (backend commands.ts work.status).
+  it('says a review status wakes nobody by itself', () => {
+    expect(SWARM_TOOLS_SKILL).toContain('A \`review\` status wakes nobody by itself')
+    expect(SWARM_TOOLS_SKILL).not.toContain('tells only the reviewed group\'s coordinator')
+  })
+  // Final review, minor 9: the step bullet ran into the next one.
+  it('keeps the step bullet on a line of its own', () => {
+    const line = SWARM_TOOLS_SKILL.split('\n').find(l => l.startsWith('- Add a step to a task:'))!
+    expect(line).not.toContain('A review group')
+  })
 })

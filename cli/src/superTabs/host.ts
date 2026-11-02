@@ -25,6 +25,7 @@ import { TerminalHost } from './terminal.js'
 import { LimitResume } from './limitResume.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
+import { placeLine, threadLine, workLine } from './deliveryContext.js'
 import { UPDATE_REQUIRED } from './readContract.js'
 import { projectsRoot } from '../lib/projectFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
@@ -38,7 +39,7 @@ const readCommand = (entry: Entry, prefix: string, group: string, id: string, bu
   `${agentCommandOf(entry, prefix, buddy)} message ${shellQuote(group)} ${shellQuote(id)}`
 export { backend, identifier, object, SuperTabHostError } from './wire.js'
 import { leadSwitchOf, SWITCH_ADOPT_MS, switchWithin, type LeadSwitch } from './leadSwitch.js'
-import { backend, ENDED_WORK, identifier, object, SuperTabHostError } from './wire.js'
+import { backend, ENDED_WORK, identifier, object, SuperTabHostError, within } from './wire.js'
 import { parseSwarmSkill, recordSwarmSkillNotice, refreshSwarmSkill, wireRole, type CustomSwarmRole, type SkillRefresh, type SwarmSkill, type SwarmSkillGrant,
   type SwarmSkillMode } from '../lib/swarmSkills.js'
 import { recordProjectSkillsNotice, refreshProjectSkills } from '../lib/swarmInstructionsSkill.js'
@@ -144,6 +145,8 @@ export interface SuperTabHostOptions {
   attachedFiles?: typeof attachedFiles
   /** How long a pass waits on the downloads it starts (DOWNLOAD_WAIT_MS), for a spec. */
   downloadWaitMs?: number
+  /** How long a delivery waits on each read for its context lines (CONTEXT_WAIT_MS), for a spec. */
+  contextWaitMs?: number
   prepareContribution?: typeof prepareContribution
   /** This Mac's Harness Team account preparing its workspace through the relay (contribution.ts), for a spec. */
   prepareTeam?: (core: CoreApi, input: { tabId: string; machineId: string }) => Promise<Record<string, unknown>>
@@ -271,6 +274,8 @@ const DELIVERY_RETRY_MS = 1_000
  *  in the same pass; a larger one downloads on in the background while its delivery is withheld (FilesDownloading), and no
  *  later pass waits on it at all: once in, it starts a pass of its own. */
 const DOWNLOAD_WAIT_MS = 2_000
+/** How long a delivery waits on each read for its context lines: they are pointers, never worth holding a message for. */
+const CONTEXT_WAIT_MS = 3_000
 /** A delivery whose files are still downloading. Tried again like any withheld one (at most DELIVERY_RETRY_MAX_MS apart), and
  *  each try claims it again with the same claim id: that writes the delivery, so the backend never takes the claim for one
  *  nobody holds (backend deliverySettle.ts CLAIM_QUIET_MS, 10 minutes). Said once, not as a failure. */
@@ -401,11 +406,16 @@ export class SuperTabHost {
   /** The files those downloads are fetching, so two deliveries of one file download it once at a time (attachments.ts). */
   private readonly inFlight: FilesInFlight = new Map()
   private readonly downloadWaitMs: number
+  private readonly contextWaitMs: number
   /** This pass's one wait on the downloads it starts (DOWNLOAD_WAIT_MS), shared by all of them; null until one starts. */
   private passWait: Promise<null> | null = null
   /** Each delivery's quote of the message it replies to ('' when none is shown), read once like its files. A failed read is
    * not kept, so the next try reads again. */
   private readonly quotes = new Map<string, string>()
+  /** Each delivery's context lines (deliveryContext.ts), read once per delivery and kept while it is tried again. */
+  private readonly contexts = new Map<string, string>()
+  /** The one-message page `repliedTo()` read, for the thread line when the reply answers its thread's root. */
+  private readonly replyPages = new Map<string, Json>()
   private readonly active = new Set<string>()
   private readonly authorized = new Map<string, number>()
   private readonly withheld = new WithheldDeliveries()
@@ -472,7 +482,7 @@ export class SuperTabHost {
   /** Per tab and project (instructionsKey), the instructions text last read, its revision, and that revision's summary and
    *  save time once a history read answered (`failedSince`: when it first failed): read again only when the roster's
    *  revision moves, and dropped once no roster row names the project. */
-  private readonly instructionTexts = new Map<string, { revision: number; text: string
+  private readonly instructionTexts = new Map<string, { revision: number; hash: string | null; text: string
     history: { summary: string | null; savedAt: number | null } | null; failedSince?: number }>()
   private skillsRunning: Promise<void> | null = null
   private missing = new Map<string, number>()
@@ -499,6 +509,7 @@ export class SuperTabHost {
     this.observers = options.observers ?? publishObservers
     this.attachedFiles = options.attachedFiles ?? attachedFiles
     this.downloadWaitMs = options.downloadWaitMs ?? DOWNLOAD_WAIT_MS
+    this.contextWaitMs = options.contextWaitMs ?? CONTEXT_WAIT_MS
     this.prepareContribution = options.prepareContribution ?? prepareContribution
     this.machineDeps = options.machines ?? {}
     this.prepareTeam = options.prepareTeam ?? ((core, input) => prepareTeamContribution(core, input))
@@ -1094,6 +1105,8 @@ export class SuperTabHost {
     for (const deliveryId of this.files.keys()) if (!this.journal.entries[deliveryId]) this.files.delete(deliveryId)
     for (const deliveryId of [...this.downloads.keys()]) if (!this.journal.entries[deliveryId]) this.dropDownload(deliveryId)
     for (const deliveryId of this.quotes.keys()) if (!this.journal.entries[deliveryId]) this.quotes.delete(deliveryId)
+    for (const deliveryId of this.contexts.keys()) if (!this.journal.entries[deliveryId]) this.contexts.delete(deliveryId)
+    for (const deliveryId of this.replyPages.keys()) if (!this.journal.entries[deliveryId]) this.replyPages.delete(deliveryId)
     for (const entry of Object.values(this.journal.entries)) {
       const id = typedId(entry)
       if (!seen.has(entry.deliveryId)) {
@@ -1433,7 +1446,9 @@ export class SuperTabHost {
     const key = instructionsKey(target.tabId, doc.projectId, buddy ? target.agent.id : undefined)
     const path = `/api/super-tabs/${target.tabId}/projects/${doc.projectId}/instructions`, as = `asAgentId=${target.agent.id}`
     let held = this.instructionTexts.get(key)
-    if (held?.revision !== doc.revision) {
+    // The hash as well as the revision: a project with nothing saved stays at revision 0 while the template it reads changes
+    // with backend builds (2026-11-02: running agents kept the old routing after #2495 until their daemon restarted).
+    if (held?.revision !== doc.revision || held.hash !== doc.hash) {
       const answer = object(await backend(this.core, 'GET', `${path}?${as}`))
       // A newer roster's refresh reads its own revision: this one installs and says nothing.
       if (!current()) { this.skillChecks.delete(harnessId); return }
@@ -1441,7 +1456,7 @@ export class SuperTabHost {
         throw new Error(`The project's instructions read back are not revision ${doc.revision}, which this machine was told to install. Trying again later.`)
       }
       // A Buddy reads no history: it names who asked for what. Revision 0 is the built-in template: nothing was saved.
-      held = { revision: doc.revision, text: answer.text, history: buddy || !doc.revision ? { summary: null, savedAt: null } : null }
+      held = { revision: doc.revision, hash: doc.hash, text: answer.text, history: buddy || !doc.revision ? { summary: null, savedAt: null } : null }
       this.instructionTexts.set(key, held)
     }
     // Task 4's review: a failed history read kept for the revision's life left every notice without its summary and gave each
@@ -1733,6 +1748,11 @@ export class SuperTabHost {
       quote = await this.repliedTo(entry, message, command)
       if (quote !== undefined) this.quotes.set(deliveryId, quote)
     }
+    let context = this.contexts.get(deliveryId)
+    if (context === undefined) {
+      context = await this.contextLines(entry, message, command)
+      this.contexts.set(deliveryId, context)
+    }
     if (this.stopped || this.journal.entries[deliveryId] !== entry) return
     this.authorized.set(id, this.now() + 2_500)
     if (!(await this.leases()) || this.stopped) { this.authorized.delete(id); return }
@@ -1758,7 +1778,7 @@ export class SuperTabHost {
     const attached = [files.text, sent?.links.length ? ARTIFACT_LINKS(sent.links) : '', elsewhere.length ? LINKS_ELSEWHERE(elsewhere) : '',
       approving ? APPROVALS(approving.judged) : '']
       .filter(Boolean).join('\n\n')
-    this.core.turns.deliver(entry.harnessId, this.prompt(entry, message, attached, command, quote ?? '', result.buddyNews === true), id)
+    this.core.turns.deliver(entry.harnessId, this.prompt(entry, message, attached, command, quote ?? '', result.buddyNews === true, context), id)
   }
 
   /** Takes out of a person's one Buddy's folder each project worktree whose project its person no longer reads, as the Swarm
@@ -1882,6 +1902,7 @@ export class SuperTabHost {
       this.log(`reply ${id} for delivery ${entry.deliveryId} unreadable: ${error instanceof Error ? error.message : String(error)}`)
       return undefined
     }
+    this.replyPages.set(entry.deliveryId, page)
     const quoted = (Array.isArray(page.messages) ? page.messages : []).map(object).find(m => m.id === id && m.conversationId === group)
     if (!quoted || typeof quoted.text !== 'string') return ''
     if (object(quoted.source).kind === 'agent-only' && !(Array.isArray(quoted.recipientIds) && quoted.recipientIds.includes(entry.agentId))) return ''
@@ -1919,7 +1940,56 @@ export class SuperTabHost {
     return this.core.agents.byAgent(entry.harnessId)?.swarmSkill?.role === 'buddy'
   }
 
-  private prompt(entry: Entry, message: Json, files: string, prefix: string, quote: string, buddyNews = false): string {
+  /** The lines that say where a delivery is (agent context design, section 2): the conversation, the agent's own work, and
+   *  the thread it is in. Read fresh for each delivery, as the agent: a 60 s cache could build the delivery announcing a
+   *  work.assign from a read taken before it. Anything that cannot be read leaves its line out; the delivery always goes. */
+  private async contextLines(entry: Entry, message: Json, prefix: string): Promise<string> {
+    // A Buddy reads its own person's chat and holds no task, and each read it makes is judged for its grants (security
+    // reviews of #2310): it gets no context lines, so a delivery costs it no read beyond those (design call).
+    if (object(message.source).kind === 'agent-only' || this.isBuddy(entry)) return ''
+    const group = String(message.conversationId)
+    const lines: string[] = []
+    const wait = this.contextWaitMs
+    try {
+      // Bounded: a delivery never waits on its context (final review, finding 3). A read that does not answer in time
+      // leaves its lines out, and the read goes on for the next delivery.
+      const read = await within(this.sources.reads.read(entry.tabId, entry.agentId), wait)
+      if (!read) throw new Error(`no answer in ${wait} ms`)
+      const { state } = read
+      lines.push(placeLine(state, group))
+      const work = workLine(state, entry.agentId)
+      if (work) lines.push(work)
+    } catch (error) {
+      this.log(`context for delivery ${entry.deliveryId} unreadable: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    const root = message.thread
+    if (identifier(root) && root !== message.id) {
+      const thread = await within(this.threadOf(entry, group, root), wait)
+      if (thread && (thread.replies === null || thread.replies > 1)) {
+        lines.push(threadLine(thread.root, thread.replies, thread.authors,
+          `${agentCommandOf(entry, prefix)} messages ${shellQuote(group)} --thread ${shellQuote(root)}`))
+      }
+    }
+    return lines.length ? `${lines.join('\n')}\n\n` : ''
+  }
+
+  /** A thread's root and its summary, from the page `repliedTo()` read when the reply answers the root (Desktop and the
+   *  phone reply in a thread with replyTo set to the root), else from one read of the root. Null when the root is gone. */
+  private async threadOf(entry: Entry, group: string, root: string): Promise<{ root: { author: string; createdAt: string; text: string }
+    replies: number | null; authors: string[] } | null> {
+    let page = this.replyPages.get(entry.deliveryId)
+    const has = (p: Json | undefined) => (Array.isArray(p?.messages) ? p!.messages : []).map(object).some(m => m.id === root)
+    if (!has(page)) page = object(await backend(this.core, 'GET', `/api/super-tabs/${entry.tabId}/conversations/${group}/messages?asAgentId=${entry.agentId}&messageId=${root}`))
+    const row = (Array.isArray(page!.messages) ? page!.messages : []).map(object).find(m => m.id === root && m.conversationId === group)
+    if (!row || typeof row.text !== 'string') return null
+    // An older backend's one-message page has no thread summaries: the line keeps the root and the command.
+    const summary = Array.isArray(page!.threads) ? page!.threads.map(object).find(t => t.id === root) : undefined
+    const replies = Array.isArray(page!.threads) ? (summary && typeof summary.replies === 'number' ? summary.replies : 0) : null
+    return { root: { author: String(object(row.author).name ?? 'a collaborator'), createdAt: String(row.createdAt ?? ''), text: row.text },
+      replies, authors: (Array.isArray(summary?.authors) ? summary!.authors : []).map(a => String(object(a).name ?? '')).filter(Boolean) }
+  }
+
+  private prompt(entry: Entry, message: Json, files: string, prefix: string, quote: string, buddyNews = false, context = ''): string {
     const buddy = this.isBuddy(entry)
     const command = agentCommandOf(entry, prefix, buddy)
     const group = message.conversationId as string
@@ -1946,7 +2016,7 @@ export class SuperTabHost {
       + `Reply there: ${command} post ${shellQuote(group)} 'your message' UNIQUE_OPERATION_ID --reply-to ${shellQuote(String(message.id))}${to}\n`
       + `Manage agreed work and delegation: ${command} help.\n`
       + `Ask questions and post results in this conversation. ${SUPER_TAB_REPLY_STYLE} Replies to these delivered instructions must be posted here explicitly.\n\n`
-      + native + reply + said
+      + context + native + reply + said
   }
 
   /** Says why the core keeps holding this delivery: once in the log per change of reason, and once to the conversation after 30 s. */

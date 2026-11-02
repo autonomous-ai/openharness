@@ -20,6 +20,8 @@ const _copies = {
   // reader has no copy here.
   'lib/swarm/live_card_model.dart': 'lib/super_tabs/live_card_model.dart',
   'lib/swarm/linked_tasks.dart': 'lib/super_tabs/linked_tasks.dart',
+  // Task steps design: a task's steps and its merged chat.
+  'lib/swarm/task_steps.dart': 'lib/super_tabs/task_steps.dart',
   'lib/swarm/instructions_model.dart': 'lib/super_tabs/instructions_model.dart',
 };
 
