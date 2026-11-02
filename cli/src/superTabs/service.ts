@@ -104,7 +104,8 @@ const HELP = {
     { type: 'message.send', conversationId: 'GROUP', text: 'A message addressed to an agent', replyTo: null, recipientIds: ['AGENT'] },
     { type: 'conversation.create', title: 'Outcome', task: { goal: 'An independently assignable result', changes: 'What changes', constraints: 'What must stay true', owns: ['Paths or code areas'],
       review: { focus: 'Optional: what every review of it checks first, such as the most-likely-wrong list (up to 2,000 characters)', reviews: 2 } }, checks: [{ description: 'Observable acceptance evidence', independent: false }] },
-    { type: 'conversation.create', title: 'Review: Outcome', reviewOf: 'GROUP', task: { goal: 'A verdict on the linked group\'s revision', changes: 'None: read only', constraints: 'The linked group\'s constraints', owns: ['The linked group\'s owned code, read only'] }, checks: [{ description: 'Verdict with the reviewed revision', independent: false }] },
+    // A step of a task (task steps design): its name is the one the project's instructions give.
+    { type: 'conversation.create', title: 'STEP_NAME', reviewOf: 'GROUP', step: 'STEP_NAME', task: { goal: 'What this step delivers for the task', changes: 'What it changes, or None', constraints: 'The task\'s constraints', owns: ['What it works on'] }, checks: [{ description: 'Its verdict, with evidence', independent: false }] },
     { type: 'conversation.agent', conversationId: 'GROUP', agentId: 'AGENT', present: true, lead: false },
     { type: 'work.define', conversationId: 'GROUP', task: { goal: 'What to deliver', changes: 'What changes', constraints: 'What must stay true', owns: ['Paths or code areas'] }, checks: [{ description: 'Observable acceptance evidence', independent: false }] },
     { type: 'work.cancel', conversationId: 'GROUP', assignmentId: 'current', reason: 'Why the task is cancelled, in one short sentence' },
@@ -131,6 +132,18 @@ const HELP = {
 }
 
 const list = (value: unknown) => Array.isArray(value) ? value.map(object) : []
+/** [page] of a task with its [steps]' newest rows merged in by time, each tagged `step: <name>`; a step whose read fails is
+ *  named in `stepsMissing`, and the task's rows still come back. */
+async function withSteps(page: unknown, steps: Array<Record<string, unknown>>, read: (step: Record<string, unknown>) => Promise<unknown>): Promise<Record<string, unknown>> {
+  const answers = await Promise.all(steps.map(step => read(step).then(answer => ({ step, rows: list(object(answer).messages) }), () => ({ step, rows: null }))))
+  const at = (row: Record<string, unknown>) => String(row.createdAt ?? '')
+  const rows: Array<Record<string, unknown>> = [...list(object(page).messages),
+    ...answers.flatMap(({ step, rows }) => (rows ?? []).map(row => ({ ...row, step: step.step } as Record<string, unknown>)))]
+  rows.sort((a, b) => at(a) === at(b) ? String(a.id).localeCompare(String(b.id)) : at(a) < at(b) ? -1 : 1)
+  const missing = answers.filter(a => !a.rows).map(a => String(a.step.step))
+  return { ...object(page), messages: rows, ...(missing.length ? { stepsMissing: missing } : {}) }
+}
+
 /** One group by id as [identity] reads it, active or dormant (design 4.5); null when it is not there or not this agent's
  *  to read (403 or 404), so the answer never tells which. */
 async function readGroupAsAgent(core: CoreApi, path: string, id: string, identity: string): Promise<Record<string, unknown> | null> {
@@ -697,6 +710,14 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           if (payload.thread !== undefined && !identifier(payload.thread)) return { error: 'INVALID_REQUEST' }
           const thread = payload.thread !== undefined ? `&thread=${payload.thread}` : ''
           const page = await backend(core, 'GET', `${path}/conversations/${encodeURIComponent(String(payload.conversationId))}/messages?${identity}${before}${thread}`)
+          // A task's newest page shows its steps' rows by time, each tagged with its step (task steps design): the step's own
+          // conversation keeps its brief and work rows, and the talk is in the task. Older pages and threads are the task's.
+          if (!paged && !thread) {
+            const read = await swarm().catch(() => null)
+            const steps = read ? list(read.state.conversations).filter(c => isStep(c) && c.reviewOf === payload.conversationId && c.archived !== true) : []
+            if (steps.length) return { ok: true, value: markAnswered(await withSteps(page, steps, step =>
+              backend(core, 'GET', `${path}/conversations/${encodeURIComponent(String(step.id))}/messages?${identity}`)), [], agentId) }
+          }
           return { ok: true, value: markAnswered(page, [], agentId) }
         }
         if (payload.action === 'message' && identifier(payload.conversationId) && identifier(payload.messageId)) {
@@ -714,7 +735,10 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         if (payload.action === 'command' && identifier(payload.operationId) && payload.command && typeof payload.command === 'object' && !Array.isArray(payload.command)) {
           const asked = object(payload.command)
           // `current` (or no id) names the group's active assignment for the agent (superTabs/assignmentIds.ts).
-          const filled = wantsCurrent(asked) ? withCurrentAssignment(asked, (await swarm()).state, agentId) : asked
+          const current = wantsCurrent(asked) ? withCurrentAssignment(asked, (await swarm()).state, agentId) : asked
+          // An older backend refuses an unknown field: there a step opens as a plain linked task (task steps design).
+          const filled = current.type === 'conversation.create' && 'step' in current && !(await swarm()).steps
+            ? Object.fromEntries(Object.entries(current).filter(([key]) => key !== 'step')) : current
           const command = await finishingWith(core, await mentionCommand(taskCommand(filled), async () => (await swarm()).state), String(agent.harnessId))
           const send = (command: Record<string, unknown>) => backend(core, 'POST', `${path}/commands`,
             { operationId: payload.operationId, command, asAgentId: agentId })

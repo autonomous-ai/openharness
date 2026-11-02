@@ -46,4 +46,9 @@ describe('SWARM_TOOLS_SKILL', () => {
     expect(SWARM_TOOLS_SKILL).toContain('- \`task GROUP\`:')
     expect(SWARM_TOOLS_SKILL).toContain('messages GROUP --thread ROOT')
   })
+  // Task steps design: a step's name is the instructions', so the skill shows how to add one and lists no kinds of step.
+  it('says how to add a step, naming no kinds of step', () => {
+    expect(SWARM_TOOLS_SKILL).toContain('Add a step to a task:')
+    expect(SWARM_TOOLS_SKILL).not.toMatch(/Review, Test|review and test steps/i)
+  })
 })
