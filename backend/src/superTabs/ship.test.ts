@@ -181,6 +181,25 @@ describe('the ship moment', () => {
       expect(line!.source).toMatchObject({ pullRequests: [PR] })
     })
 
+    it('counts the pull requests a Done result lists, not one it only says it builds on', () => {
+      const { f, id, builder } = assigned()
+      expect(f.ships(f.finish(id, builder, `Ready: ${PR}, which builds on ${OTHER}`, builder, false))).toEqual([])
+      const [line, ...more] = f.ships(f.merge(id, PR))
+      expect(more).toEqual([])
+      expect(line!.source).toMatchObject({ pullRequests: [PR] })
+    })
+
+    it('lets a later Done replace the pull requests an earlier one waited for', () => {
+      const { f, id, builder } = assigned()
+      expect(f.ships(f.finish(id, builder, `Ready: ${PR}`, builder, false))).toEqual([])
+      const again = f.add('Ivy', id)
+      f.run({ type: 'agent.release', agentId: builder, decision: 'keep' }, f.as(f.lead))
+      f.run({ type: 'work.assign', conversationId: id, agentId: again }, owner)
+      expect(f.ships(f.finish(id, again, `Replaced by ${OTHER}`, again, false))).toEqual([])
+      const [line] = f.ships(f.merge(id, OTHER))
+      expect(line!.source).toMatchObject({ pullRequests: [OTHER] })
+    })
+
     it('ships on the merge when the Done named no pull request', () => {
       const { f, id, builder } = assigned()
       expect(f.ships(f.finish(id, builder, 'Done, nothing named.', builder, false))).toEqual([])
