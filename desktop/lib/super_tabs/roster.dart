@@ -13,6 +13,7 @@ import '../shared/widgets/app_icon_button.dart';
 import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_select_field.dart';
 import '../state/app_state.dart';
+import '../state/harness_activity.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../widgets/browser_menu_guard.dart';
@@ -84,6 +85,10 @@ class _SuperTabRosterState extends State<SuperTabRoster>
     with WidgetsBindingObserver, VisibleTick<SuperTabRoster> {
   /// One per agent menu open now, each keeping the browser's menu off.
   final _menuHolds = <Object>{};
+
+  /// Whether the agents folded under Idle (N) show; folded at first, for
+  /// this visit.
+  bool _idleOpen = false;
 
   SuperTabController get c => widget.controller;
 
@@ -326,108 +331,21 @@ class _SuperTabRosterState extends State<SuperTabRoster>
     widget.onOpenAgent,
   );
 
-  /// Name, role chip, then the model and effort in the details line's grey
-  /// (Dee, 2026-10-31). The name and chip are measured first; the model takes
-  /// what is left and is cut before either shrinks.
-  Widget _agentIdentity(
-    String name,
-    String role,
-    String badge, {
-    String? model,
-    Key? modelKey,
-  }) => LayoutBuilder(
-    builder: (context, constraints) {
-      final nameStyle = DesktopChrome.control();
-      final tagStyle = DesktopChrome.metadata();
-      final scale = MediaQuery.textScalerOf(context);
-      double measure(String text, TextStyle style) {
-        final painter = TextPainter(
-          text: TextSpan(text: text, style: style),
-          textDirection: Directionality.of(context),
-          textScaler: scale,
-          maxLines: 1,
-        )..layout();
-        final width = painter.width;
-        painter.dispose();
-        return width;
-      }
+  /// The agent's card (Quiet Swarm, screen 5).
+  Future<void> _card(SuperTabAgent agent) => _details(agent);
 
-      final badgeWidth = (measure(badge, tagStyle) + 10).clamp(
-        0.0,
-        constraints.maxWidth,
-      );
-      // One gap between name, chip and model.
-      const gap = 6.0;
-      final nameWidth = measure(name, nameStyle).clamp(
-        0.0,
-        (constraints.maxWidth - badgeWidth - gap).clamp(0.0, double.infinity),
-      );
-      Widget tag(String text) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-        decoration: BoxDecoration(
-          color: grid.AppSurface.hoverFill,
-          borderRadius: BorderRadius.circular(4),
-        ),
-        child: Text(
-          text,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: tagStyle,
-        ),
-      );
-      return Row(
-        children: [
-          if (nameWidth > 0) ...[
-            SizedBox(
-              width: nameWidth,
-              child: Text(
-                name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: nameStyle,
-              ),
-            ),
-            const SizedBox(width: gap),
-          ],
-          Semantics(
-            label: role,
-            excludeSemantics: true,
-            child: SizedBox(width: badgeWidth, child: tag(badge)),
-          ),
-          // The gap shrinks with the model, so a name that fills the row never overflows.
-          if (model != null)
-            Flexible(
-              child: Padding(
-                padding: const EdgeInsets.only(left: gap),
-                child: Text(
-                  model,
-                  key: modelKey,
-                  maxLines: 1,
-                  softWrap: false,
-                  overflow: TextOverflow.ellipsis,
-                  style: tagStyle,
-                ),
-              ),
-            ),
-        ],
-      );
-    },
-  );
-
-  /// An agent's row, in the shape the people's rows share (Dee, 2026-10-29):
-  /// avatar, name and role chip, today's one status line beneath, and the
-  /// tabs' status mark at the right. No rank and no points.
+  /// An agent's row, one line (Quiet Swarm, screen 4): avatar, name, then
+  /// its state in a word and the tabs' status mark at the right. Role, task,
+  /// model, effort and machine are on its card and its hover.
   Widget _agent(SuperTabAgent agent, SuperTabAgentState state, DateTime now) {
     final name = c.snapshot!.agentName(agent.id), shown = state.mark;
     final info = SuperTabAgentInfo(c, widget.app, agent, activity: state.words);
-    final work = state.work;
-    // The state in a word, where it runs, its engine, model and effort: on hover (Dee, 2026-10-30); the model and
-    // effort on the first line too (Dee, 2026-10-31).
+    // The state in a word, where it runs, its engine, model and effort: on hover (Dee, 2026-10-30).
     final glance = superTabAgentGlance(info, now: now);
     final project = c.snapshot!.projects
         .where((p) => p.id == _agentProjectId(agent))
         .firstOrNull;
-    final (name: role, :badge) =
+    final (name: role, badge: _) =
         c.snapshot!.roleOf(agent.id) ?? (name: 'Engineer', badge: 'Dev');
     final status = info.status ?? 'Status unavailable';
     final tooltip = [
@@ -436,24 +354,7 @@ class _SuperTabRosterState extends State<SuperTabRoster>
       if (status != glance.label) status,
       if (info.lastActive case final at?) 'Last active ${relativeAgo(at, now)}',
     ].join('\n');
-    // The row's details line (Dee, 2026-10-30): the task in plain words and
-    // how long since its last progress; with no task, the state in a word.
-    final limited =
-        glance.label.startsWith('Limited until') || glance.label == 'Switching…'
-        ? glance.label
-        : null;
-    final detail = work == null
-        ? glance.label
-        : [
-            ?limited,
-            work.group.title,
-            if (work.progressAt case final at?)
-              superTabAgentAge(now.difference(at)),
-          ].join(' · ');
-    // A task opens its conversation, a needs-you one at its question; no task, the details.
-    void open() => work == null
-        ? unawaited(_details(agent))
-        : widget.onAnswer(work.group.id);
+    void open() => unawaited(_card(agent));
     final theme = terminalThemeFor(
       grid.AppTheme.surfacePalette,
       terminalThemeStore.value,
@@ -513,37 +414,41 @@ class _SuperTabRosterState extends State<SuperTabRoster>
           child: SuperTabMemberRow(
             rowKey: ValueKey('super-member-${agent.id}'),
             onTap: open,
-            onLongPress: () => unawaited(_details(agent)),
+            onLongPress: open,
             avatar: SuperTabAvatar.agent(
               agent,
               name: name,
               size: SuperTabAvatar.rowSize,
               engineBadge: false,
             ),
-            name: _agentIdentity(
+            name: Text(
               name,
-              role,
-              badge,
-              model: glance.modelEffort,
-              modelKey: ValueKey('super-member-model-${agent.id}'),
-            ),
-            detail: Text(
-              detail,
-              key: ValueKey('super-member-line-${agent.id}'),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: DesktopChrome.metadata(),
+              style: DesktopChrome.control(),
             ),
-            trailing: ActivityMark(
-              key: ValueKey('super-member-mark-${agent.id}'),
-              activity: shown,
-              tooltip: false,
-              showIdle: true,
-              color: activityColor(
-                shown,
-                theme,
-                color: appearancePrefsStore.value.prompt.color,
-              ),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  superTabMemberWord(glance.label),
+                  key: ValueKey('super-member-word-${agent.id}'),
+                  maxLines: 1,
+                  style: DesktopChrome.metadata(),
+                ),
+                const SizedBox(width: DesktopChrome.controlGap),
+                ActivityMark(
+                  key: ValueKey('super-member-mark-${agent.id}'),
+                  activity: shown,
+                  tooltip: false,
+                  showIdle: true,
+                  color: activityColor(
+                    shown,
+                    theme,
+                    color: appearancePrefsStore.value.prompt.color,
+                  ),
+                ),
+              ],
             ),
           ),
         ),
@@ -687,7 +592,20 @@ class _SuperTabRosterState extends State<SuperTabRoster>
             : null,
         addTooltip: 'Add agent',
       ),
-      for (final agent in listed) _agent(agent, states[agent.id]!, now),
+      for (final agent in listed)
+        if (!superTabFoldsIdle(states[agent.id]!))
+          _agent(agent, states[agent.id]!, now),
+      if (listed.where((a) => superTabFoldsIdle(states[a.id]!)).toList()
+          case final idle when idle.isNotEmpty) ...[
+        SuperTabSectionHeading(
+          'Idle (${idle.length})',
+          key: const ValueKey('super-members-idle'),
+          collapsed: !_idleOpen,
+          onToggleCollapsed: () => setState(() => _idleOpen = !_idleOpen),
+        ),
+        if (_idleOpen)
+          for (final agent in idle) _agent(agent, states[agent.id]!, now),
+      ],
     ];
   }
 
@@ -776,3 +694,18 @@ class _SuperTabRosterState extends State<SuperTabRoster>
     );
   }
 }
+
+/// An agent row's state word: the glance's, as the chat says its words
+/// ("waiting", "working", "limited until 09:05").
+String superTabMemberWord(String label) =>
+    label.isEmpty ? label : '${label[0].toLowerCase()}${label.substring(1)}';
+
+/// Whether an agent folds under Idle (N): it holds no task and is idle,
+/// stopped or offline. An agent with work, lost work too, stays in view.
+bool superTabFoldsIdle(SuperTabAgentState state) =>
+    state.work == null &&
+    const {
+      HarnessActivity.idle,
+      HarnessActivity.paused,
+      HarnessActivity.offline,
+    }.contains(state.mark);
