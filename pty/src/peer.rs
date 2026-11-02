@@ -14,6 +14,9 @@ pub const TICKS_PER_SECOND: u64 = 10_000_000;
 /// What the daemon starts for a lookup: this binary, the fallback PowerShell, and their console hosts.
 const LOOKUP_PROCESSES: [&str; 3] = ["harness-pty.exe", "powershell.exe", "conhost.exe"];
 
+/// How far ahead of the clock a connection's time may read, for a clock stepped back just after.
+const CLOCK_SLACK: u64 = 5 * TICKS_PER_SECOND;
+
 /// One row of the TCP table the connection's pair of ports matched.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
@@ -41,11 +44,13 @@ pub enum Verdict {
 }
 
 /// The answer for [rows], those of the exact pair; `process` reads one by id, `None` when it is
-/// gone or cannot be opened. [lookup] is this process's id, [daemon] the daemon's.
+/// gone or cannot be opened. [lookup] is this process's id, [daemon] the daemon's, and [now] the
+/// clock as a `FILETIME`.
 pub fn verdict(
     rows: &[Row],
     lookup: u32,
     daemon: u32,
+    _now: u64,
     mut process: impl FnMut(u32) -> Option<Process>,
 ) -> Verdict {
     let no = |why: String| Verdict::No(why);
@@ -99,6 +104,16 @@ pub fn verdict(
     }
 }
 
+/// The clock as a `FILETIME`: 100 ns units since 1601.
+pub fn filetime_now() -> u64 {
+    const UNIX_EPOCH_SECONDS: u64 = 11_644_473_600;
+    let since = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    (UNIX_EPOCH_SECONDS + since.as_secs()) * TICKS_PER_SECOND
+        + u64::from(since.subsec_nanos()) / 100
+}
+
 #[cfg(windows)]
 pub use windows::ask;
 
@@ -119,7 +134,7 @@ mod windows {
         GetCurrentProcess, OpenProcessToken, PROCESS_NAME_WIN32, QueryFullProcessImageNameW,
     };
 
-    use super::{Process, Row, Verdict, verdict};
+    use super::{Process, Row, Verdict, filetime_now, verdict};
 
     /// 127.0.0.1 as the table stores it: network order in memory.
     const LOOPBACK: u32 = u32::from_ne_bytes([127, 0, 0, 1]);
@@ -133,12 +148,14 @@ mod windows {
         let Some(this) = user_of(unsafe { GetCurrentProcess() }) else {
             return Verdict::No("Windows will not give this account".into());
         };
-        verdict(&rows, std::process::id(), daemon, |pid| read(pid, &this))
+        verdict(&rows, std::process::id(), daemon, filetime_now(), |pid| {
+            read(pid, &this)
+        })
     }
 
     /// The established rows whose client end is [peer] and server end [own], both on 127.0.0.1.
     /// Windows lists a connection once from each end, so the pair of ports in this order is one.
-    fn rows(peer: u16, own: u16) -> Result<Vec<Row>, u32> {
+    pub(super) fn rows(peer: u16, own: u16) -> Result<Vec<Row>, u32> {
         // `u64` words, so the table's 64-bit timestamps are aligned.
         let mut words = vec![0u64; 4096];
         loop {
@@ -287,6 +304,7 @@ mod tests {
     const LOOKUP: u32 = 50;
     const DAEMON: u32 = 60;
     const CALLER: u32 = 70;
+    const NOW: u64 = T + 60 * TICKS_PER_SECOND;
 
     fn mine() -> Process {
         Process {
@@ -303,7 +321,7 @@ mod tests {
         }
     }
     fn asked(rows: &[Row], process: Option<Process>) -> Verdict {
-        verdict(rows, LOOKUP, DAEMON, |pid| {
+        verdict(rows, LOOKUP, DAEMON, NOW, |pid| {
             let parent = process.as_ref().and_then(|p| p.parent);
             match pid {
                 CALLER => process.clone(),
@@ -374,6 +392,7 @@ mod tests {
                 }],
                 LOOKUP,
                 DAEMON,
+                NOW,
                 |_| Some(mine()),
             ),
             "the lookup itself",
@@ -501,10 +520,84 @@ mod tests {
             }),
             _ => None,
         };
-        assert_eq!(verdict(&[row(T)], LOOKUP, DAEMON, others), Verdict::Yes);
+        assert_eq!(
+            verdict(&[row(T)], LOOKUP, DAEMON, NOW, others),
+            Verdict::Yes
+        );
         // Its parent gone, as for a shell whose launcher exited: nothing ties it to the daemon.
         let orphan = |pid| (pid == CALLER).then(|| shell.clone());
-        assert_eq!(verdict(&[row(T)], LOOKUP, DAEMON, orphan), Verdict::Yes);
+        assert_eq!(
+            verdict(&[row(T)], LOOKUP, DAEMON, NOW, orphan),
+            Verdict::Yes
+        );
+    }
+
+    // The recycled-id rule trusts the connection's time. One that read late, not being the clock
+    // we think it is, would turn the rule off without a sign (Orion's review of #2647): every
+    // process started before it, a reused id's too, would pass.
+    #[test]
+    fn a_connection_time_later_than_the_clock_is_no() {
+        for created in [
+            NOW + CLOCK_SLACK + 1,
+            NOW + 3600 * TICKS_PER_SECOND,
+            u64::MAX,
+        ] {
+            is_no(asked(&[row(created)], Some(mine())), "later than the clock");
+        }
+        assert_eq!(asked(&[row(NOW + CLOCK_SLACK)], Some(mine())), Verdict::Yes);
+    }
+
+    // Anything Windows would not say is a no, as this file's header promises (both reviews of #2647).
+    #[test]
+    fn a_name_or_parent_windows_would_not_give_is_no() {
+        let nameless = Process {
+            name: String::new(),
+            ..mine()
+        };
+        is_no(asked(&[row(T)], Some(nameless)), "will not give its name");
+        let parentless = Process {
+            parent: None,
+            ..mine()
+        };
+        is_no(
+            asked(&[row(T)], Some(parentless)),
+            "will not give its parent",
+        );
+    }
+
+    #[test]
+    fn the_clock_is_a_filetime() {
+        // 2020-01-01 as a FILETIME: the clock is later, and not by centuries.
+        const Y2020: u64 = 132_223_104_000_000_000;
+        let now = filetime_now();
+        assert!(now > Y2020 && now < Y2020 * 2, "{now}");
+    }
+
+    // The real run's proof that the rule above has a real clock to compare (Orion's review of
+    // #2647): the table's time for a connection just made is this clock, near now. The line goes
+    // to the run's log, past the test harness, to show what precision Windows gives.
+    #[cfg(windows)]
+    #[test]
+    fn windows_gives_a_connection_time_on_this_clock() {
+        use std::io::Write;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let own = listener.local_addr().unwrap().port();
+        let client = std::net::TcpStream::connect(("127.0.0.1", own)).unwrap();
+        let _accepted = listener.accept().unwrap();
+        let peer = client.local_addr().unwrap().port();
+        let rows = super::windows::rows(peer, own).unwrap();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        let (created, now) = (rows[0].created, filetime_now());
+        let _ = writeln!(
+            std::io::stderr(),
+            "[peer] connection time {created}, clock {now}, finer than a second: {}",
+            created % TICKS_PER_SECOND != 0
+        );
+        assert!(
+            created.abs_diff(now) < 10 * TICKS_PER_SECOND,
+            "{created} against {now}"
+        );
+        assert_eq!(rows[0].pid, std::process::id());
     }
 
     #[test]
