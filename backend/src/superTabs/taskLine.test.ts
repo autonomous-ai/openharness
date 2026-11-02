@@ -135,7 +135,7 @@ describe('a task\'s one line in its project chat', () => {
 
   it('posts a private project\'s task line in that project\'s own chat', () => {
     const f = fixture()
-    const project = f.run({ type: 'project.create', name: 'Secret', visibility: 'private' }).result.projectId as string
+    const project = f.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }).result.projectId as string
     const chat = f.state.projects!.find(p => p.id === project)!.leadConversationId
     const id = f.group('Hidden work', { projectId: project })
     const builder = f.add('Kai', id)

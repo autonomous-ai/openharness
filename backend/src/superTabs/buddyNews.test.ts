@@ -4,6 +4,7 @@ import { createSuperTab, forRecipients, type Actor, type Conversation, type Mess
 import { buddyChatId } from './buddies.js'
 import { assignedNotice, buddiesTold } from './buddyNews.js'
 import { SHIP_KIND } from './ship.js'
+import { TASK_LINE_KIND } from './taskLine.js'
 import { leaderboard } from './leaderboard/stats.js'
 import { weekStart } from './leaderboard/week.js'
 
@@ -177,10 +178,13 @@ describe('work the PM opens from a Buddy\'s proposal without naming anyone (grou
       .toEqual([expect.objectContaining({ conversationId: group, recipients: ['buddy'], source: { kind: 'agent-only' } })])
     const assignmentId = find().assignment!.id
     for (const check of find().checks) f.run({ type: 'work.check', conversationId: group, assignmentId, checkId: check.id, passed: true, evidence: 'ok' })
+    // The task's line says it shipped, for the person who asked (taskLine.ts), and their Buddy hears it inside the task.
     const done = f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'done', result: 'Merged https://github.com/o/r/pull/7' },
-      agentActor(worker)).messages.find(m => m.source?.kind === SHIP_KIND)!
-    expect(done).toMatchObject({ conversationId: f.app.conversationId, source: { requesterId: 'peer' }, buddyRecipients: ['buddy'] })
-    expect(done.text).toContain('requested by peer')
+      agentActor(worker))
+    expect(done.edits).toEqual([expect.objectContaining({ conversationId: f.app.conversationId, source: expect.objectContaining({ kind: TASK_LINE_KIND,
+      state: 'shipped', requesterId: 'peer' }) })])
+    expect(done.messages.filter(m => m.recipients.includes('buddy'))).toEqual([expect.objectContaining({ conversationId: group,
+      source: { kind: 'agent-only' }, text: expect.stringContaining('which they requested, shipped') })])
     const board = leaderboard({ state: f.state, groups: f.state.conversations, machines: [], projectId: f.app.projectId, week: weekStart(1000), now: 1000 })
     expect(board.people.find(p => p.personId === 'peer')).toMatchObject({ points: 3, shipped: { count: 1 } })
   })

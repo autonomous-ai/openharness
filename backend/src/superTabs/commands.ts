@@ -33,7 +33,8 @@ import { fixedOriginal, LEDGER_WEEKS, PULL_REQUEST_URL, recordAsked, recordFix, 
   recordReportedModel, recordVerdict } from './leaderboard/record.js'
 import { WEEK_MS } from './leaderboard/week.js'
 import { react, reactionSchema, type ReactionTarget } from './reactions.js'
-import { shipNotice, shippedAt } from './ship.js'
+import { shippedAt } from './ship.js'
+import { syncTaskLines } from './taskLine.js'
 import { assignedNotice, tellBuddies } from './buddyNews.js'
 import { bindPullRequestCards, bindTaskCard, pullRequestCard, recordCardMerged } from './cards.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
@@ -716,7 +717,19 @@ function open(state: SuperTabState, conversationId: string) {
 }
 
 /** Pure policy/state transition. The store commits its state, messages and delivery records in one transaction. */
+/** One command, then each task's line brought up to date (taskLine.ts), whichever way the command returned. */
 export function applyCommand(original: SuperTabState, actor: Actor, input: Command, context: CommandContext): CommandEffects {
+  const effects = applyCommandOnce(original, actor, input, context)
+  // Who moved the task, for a line its project's coordinator cannot sign and for the Buddy's news; nobody when the actor is
+  // no longer a member (a command that removed them).
+  let sender: Author | undefined
+  try { sender = author(effects.state, actor) } catch { sender = undefined }
+  syncTaskLines(original, effects, input.type === 'work.status' ? input.conversationId : undefined, sender,
+    stableId(original.id, actorKey(actor), context.operationId))
+  return effects
+}
+
+function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command, context: CommandContext): CommandEffects {
   // A credential someone pasted, or an agent echoed from its terminal, is gone before anything is stored or delivered
   // (Oct 2026: a Harness access token in a shared Lead chat). The sender's result says what went.
   const removed: CredentialKind[] = []
@@ -3064,11 +3077,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         if (short) effects.messages.push({ id: stableId(operationId, 'review-capacity', short.source.engine), conversationId: short.conversationId, author: sender,
           text: short.text, replyTo: null, recipients: coordinator ? [coordinator] : [], source: short.source,
           ...(!coordinator && short.mentions.length ? { mentions: short.mentions } : {}) })
-        // Shipped before this command: the leaderboard marks this Done as shipped just above (recordStatus).
+        // The task's line says it shipped (taskLine.ts), in place of the Shipped line; its links are kept as that line's were.
         if (command.status === 'done' && shippedAt(conversation(original, group.id)) == null) {
           appendPullRequestUrls(group, [command.result, ...group.checks.map(check => check.evidence)])
-          const shipped = shipNotice(state, group, sender, operationId)
-          if (shipped) effects.messages.push(shipped)
         }
       }
       if (actor.kind === 'agent') renewOwnTask(state, group, actor.agentId, context.now)
