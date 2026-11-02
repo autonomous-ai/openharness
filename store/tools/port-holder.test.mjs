@@ -2,23 +2,23 @@
 // Whoever holds the daemon's loopback port hears nothing from a Store package (audit H1), and each still works over the socket.
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
 import { closeBridges, listAgents as monitorAgents } from '../agents/harness-monitor/lib/bridge.mjs'
 import { closeBridges as closeMemories, listAgents as memoriesAgents } from '../agents/memories/lib/bridge.mjs'
 import { closeSessions, listHarnesses, listMachines } from '../agents/machine-monitor/lib/daemon.mjs'
 import { harnessExecute } from '../agents/autonomous-grid/lib/harness.mjs'
+import { removeTempFolders, tempFolder } from './test-folders.mjs'
 
 const CREDENTIAL = `test-local-credential-${'a'.repeat(21)}`
 const closers = []
-after(async () => { closeBridges(); closeMemories(); closeSessions(); for (const close of closers) await close() })
+after(async () => { try { closeBridges(); closeMemories(); closeSessions(); for (const close of closers) await close() } finally { removeTempFolders() } })
 
 /** A data folder as the CLI leaves it, short enough to hold a socket, with a real credential a client could read. */
 function dataDir() {
-  const dir = join(mkdtempSync(join('/tmp', 'hold-')), 'd')
+  const dir = join(tempFolder('hold-'), 'd')
   mkdirSync(dir, { mode: 0o700 })
   writeFileSync(join(dir, 'hook-credential'), `${CREDENTIAL}\n`, { mode: 0o600 })
   chmodSync(join(dir, 'hook-credential'), 0o600)

@@ -2,19 +2,20 @@
 // The small WebSocket and fetch every Store package reaches the daemon with, against raw frames on a real Unix socket.
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { chmodSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
 import { DaemonWebSocket, daemonFetch, daemonSocketPath, socketIsPrivate } from './local-daemon.mjs'
+import { removeTempFolders, tempFolder } from './test-folders.mjs'
 
 const closers = []
-after(async () => { for (const close of closers) await close() })
+after(async () => { try { for (const close of closers) await close() } finally { removeTempFolders() } })
 const PORT = 4242
 
 /** A daemon on a private socket: `upgrade(socket, unmaskedFramesSeen)`, and `rest` for plain requests. */
 async function daemon({ upgrade, rest, accept } = {}) {
-  const dir = mkdtempSync(join('/tmp', 'ld-'))
+  const dir = tempFolder('ld-')
   chmodSync(dir, 0o700)
   const sockets = new Set(), seen = []
   const server = createServer(rest ?? ((_req, res) => res.writeHead(404).end()))
@@ -107,7 +108,7 @@ test('a frame past the limit closes without being held', async () => {
 })
 
 test('no socket, one anyone can reach, a wrong accept and a refusal are each an error, then a close', async () => {
-  const dir = mkdtempSync(join('/tmp', 'ld-')); chmodSync(dir, 0o700)
+  const dir = tempFolder('ld-'); chmodSync(dir, 0o700)
   for (const socket of [open({ ADAPTER_DATA_DIR: dir })]) { const failed = once(socket, 'error'); await once(socket, 'close'); await failed }
   const open_ = await daemon(); chmodSync(open_.path, 0o666)
   assert.equal(socketIsPrivate(open_.path), false)
@@ -134,7 +135,7 @@ test('close() gives up on a daemon that never answers it', async () => {
 })
 
 test('a connection the caller gave up on stays given up: no open, nothing sent, and the daemon sees it go', async () => {
-  const dir = mkdtempSync(join('/tmp', 'ld-')); chmodSync(dir, 0o700)
+  const dir = tempFolder('ld-'); chmodSync(dir, 0o700)
   const events = [], path = join(dir, `daemon-${PORT}.sock`)
   const server = createServer()
   const gone = new Promise(resolve => server.on('upgrade', (req, stream) => {
@@ -178,7 +179,7 @@ test('fetch: a request and its body over the socket; the timeout reads as a time
   assert.equal(answer.ok, true)
   assert.deepEqual(await answer.json(), { method: 'POST', url: '/api/x?y=1', raw: '{"a":1}', local: '1' })
   await assert.rejects(daemonFetch(`${base}/slow`, { env: d.env, signal: AbortSignal.timeout(30) }), { name: 'TimeoutError' })
-  const dir = mkdtempSync(join('/tmp', 'ld-')); chmodSync(dir, 0o700)
+  const dir = tempFolder('ld-'); chmodSync(dir, 0o700)
   await assert.rejects(daemonFetch(`${base}/api/x`, { env: { ADAPTER_DATA_DIR: dir } }), /not private/)
 })
 
