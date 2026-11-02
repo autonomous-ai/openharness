@@ -2023,7 +2023,7 @@ class SwarmSearchController extends ChangeNotifier {
               : several && !profile!.offered
               ? 'Not offered to the Swarm yet'
               : several && profile!.percentLeft != null
-              ? '${profile!.percentLeft}% left'
+              ? '${profile.percentLeft}% left'
               : isCurrent
               ? 'Current agent'
               : engine.id == 'opencode'
