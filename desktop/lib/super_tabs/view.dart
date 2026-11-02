@@ -58,6 +58,7 @@ import 'route_row.dart';
 import 'terminal_row.dart';
 import 'thread_panel.dart';
 import 'work_details.dart';
+import 'manage_page.dart';
 import 'project_sidebar.dart';
 import 'buddy_sessions.dart';
 import 'swarm_switcher.dart' show fallBackToPersonal;
@@ -153,6 +154,10 @@ class _SuperTabViewState extends State<SuperTabView>
 
   bool _showNotifications = false;
 
+  /// Manage holds the main pane; [_manageTab] is which of its pages, but for
+  /// Devices, which is the pane the view holds for it ([_devicesVisible]).
+  bool _showManage = false;
+  SuperTabManageTab _manageTab = SuperTabManageTab.machines;
   // The message a tag opened, scrolled to once it is laid out.
   String? _target;
   // The conversation a link or tag opened at its own message this visit: its
@@ -288,6 +293,13 @@ class _SuperTabViewState extends State<SuperTabView>
   @override
   void didUpdateWidget(SuperTabView oldWidget) {
     super.didUpdateWidget(oldWidget);
+    // A terminal that opens shows: Manage and Activity outrank it in the pane.
+    final terminalNow = widget.terminalsVisible || widget.terminal != null;
+    final terminalBefore =
+        oldWidget.terminalsVisible || oldWidget.terminal != null;
+    if (terminalNow && !terminalBefore && !c.devicesSelected) {
+      _showManage = _showNotifications = false;
+    }
     if (oldWidget.controller != c) {
       _noticesLeave(oldWidget.controller);
       SuperTabChatNotices.of(c).chatShown = _chatShown;
@@ -470,7 +482,8 @@ class _SuperTabViewState extends State<SuperTabView>
         _devicesVisible ||
         _terminalsVisible ||
         _showPullRequests ||
-        _showNotifications) {
+        _showNotifications ||
+        _showManage) {
       return false;
     }
     final lifecycle = WidgetsBinding.instance.lifecycleState;
@@ -698,7 +711,7 @@ class _SuperTabViewState extends State<SuperTabView>
       if (group == null || !c.unreadShown(group)) continue;
       widget.onCloseTerminal?.call();
       setState(() {
-        _showNotifications = false;
+        _showNotifications = _showManage = false;
         _showPullRequests = false;
       });
       unawaited(c.select(group.id));
@@ -1583,35 +1596,19 @@ class _SuperTabViewState extends State<SuperTabView>
   Widget _sidebar() => ProjectSidebar(
     controller: c,
     app: widget.app,
-    board: _board,
-    onAddAgent: widget.onAddAgent,
     onNewProject: widget.onNewProject,
     onNewSwarm: widget.onNewSwarm,
-    devicesSelected: _devicesVisible,
     notificationsSelected: _notificationsVisible,
     attention: SuperTabAttention.of(c),
     activity: SuperTabActivity.of(c),
+    onManage: _openManage,
+    manageSelected: _manageOpen,
     // Activity on every platform (Lead, 10-31): the Mac's menu bar and Dock
     // still say what waits, and the sidebar lists it as Slack does.
     onNotifications: _openActivity,
-    onOpenAgent: (agent) {
-      _closeSidebar();
-      setState(() {
-        _showPullRequests = false;
-        _showNotifications = false;
-      });
-      (widget.onChooseAgentTerminal ?? widget.onOpenTerminal)(agent);
-    },
-    onYourDevices: widget.app?.devicesEnabled != true
-        ? null
-        : () {
-            _closeSidebar();
-            setState(() => _showNotifications = false);
-            widget.app!.openDevices();
-          },
     needsHuman: (group) => _needsHuman(group).length,
     onSelect: (id) {
-      setState(() => _showNotifications = false);
+      setState(() => _showNotifications = _showManage = false);
       c.select(id);
       _closeSidebar();
     },
@@ -1624,7 +1621,7 @@ class _SuperTabViewState extends State<SuperTabView>
   /// ([SuperTabController.buddyChatOpener]).
   Future<bool> _openBuddyChat(String projectId) {
     setState(() {
-      _showNotifications = false;
+      _showNotifications = _showManage = false;
       _showPullRequests = false;
     });
     widget.onCloseTerminal?.call();
@@ -1641,6 +1638,7 @@ class _SuperTabViewState extends State<SuperTabView>
     widget.onCloseTerminal?.call();
     setState(() {
       _showNotifications = true;
+      _showManage = false;
       _showPullRequests = false;
     });
     if (request.kind != 'mention') return;
@@ -1658,6 +1656,7 @@ class _SuperTabViewState extends State<SuperTabView>
     _closeSidebar();
     setState(() {
       _showNotifications = true;
+      _showManage = false;
       _showPullRequests = false;
     });
     widget.onCloseTerminal?.call();
@@ -1666,8 +1665,45 @@ class _SuperTabViewState extends State<SuperTabView>
   bool get _notificationsVisible =>
       _showNotifications && !_devicesVisible && !c.accessRevoked;
 
-  /// Activity holds the main pane, with no chat header.
-  bool get _listViewHoldsThePane => _notificationsVisible;
+  /// Activity or Manage holds the main pane, with no chat header.
+  bool get _listViewHoldsThePane => _notificationsVisible || _manageVisible;
+
+  bool get _manageVisible =>
+      _showManage &&
+      !_showNotifications &&
+      !_devicesVisible &&
+      !c.accessRevoked;
+
+  /// Manage shows, on any of its pages: Devices is one of them, however it
+  /// was opened.
+  bool get _manageOpen => _manageVisible || _devicesVisible;
+
+  bool get _hasDevices => widget.app?.devicesEnabled == true;
+
+  /// The sidebar's Manage, on the page it last showed.
+  void _openManage() {
+    _closeSidebar();
+    setState(() {
+      _showManage = true;
+      _showNotifications = _showPullRequests = false;
+      if (_manageTab == SuperTabManageTab.devices && !_hasDevices) {
+        _manageTab = SuperTabManageTab.machines;
+      }
+    });
+    if (_manageTab == SuperTabManageTab.devices) widget.app!.openDevices();
+  }
+
+  void _chooseManageTab(SuperTabManageTab tab) {
+    setState(() {
+      _showManage = true;
+      _manageTab = tab;
+    });
+    if (tab == SuperTabManageTab.devices) {
+      widget.app!.openDevices();
+    } else {
+      c.leaveDevices();
+    }
+  }
 
   /// Opens [root]'s thread in its chat from Activity's New replies.
   void _openThreadFromList(String conversationId, String root) {
@@ -1683,7 +1719,7 @@ class _SuperTabViewState extends State<SuperTabView>
     widget.onCloseTerminal?.call();
     _closeSidebar();
     setState(() {
-      _showNotifications = false;
+      _showNotifications = _showManage = false;
       _showPullRequests = false;
     });
     c.select(conversationId);
@@ -1761,7 +1797,7 @@ class _SuperTabViewState extends State<SuperTabView>
     }
     final shownBy = _rowShowing(id, messageId) ?? messageId;
     setState(() {
-      _showNotifications = false;
+      _showNotifications = _showManage = false;
       _showPullRequests = false;
       _back = null;
       _target = shownBy;
@@ -2185,8 +2221,8 @@ class _SuperTabViewState extends State<SuperTabView>
   /// [SuperTabWorkgroupName].
   Widget _title(SuperTabConversation? group) {
     final style = DesktopChrome.text(medium: true);
-    final name = _devicesVisible
-        ? 'Your devices'
+    final name = _manageOpen
+        ? 'Manage'
         : _notificationsVisible
         ? 'Activity'
         : group == null
@@ -2411,7 +2447,7 @@ class _SuperTabViewState extends State<SuperTabView>
             fingerTarget(
               enabled: _phone,
               AppIconButton(
-                icon: AppIcons.columns2,
+                icon: AppIcons.menu,
                 tooltip: 'Conversations',
                 onPressed: () => setState(() => _sidebarOpen = !_sidebarOpen),
               ),
@@ -4291,6 +4327,7 @@ class _SuperTabViewState extends State<SuperTabView>
           setState(() {
             _showPullRequests = false;
             _rosterOpen = false;
+            _showManage = _showNotifications = false;
           });
           (widget.onChooseAgentTerminal ?? widget.onOpenTerminal)(agent);
         },
@@ -4327,10 +4364,20 @@ class _SuperTabViewState extends State<SuperTabView>
                 center: Column(
                   children: [
                     _header(c.selected, narrow),
+                    if (_manageOpen)
+                      SuperTabManageTabs(
+                        selected: _devicesVisible
+                            ? SuperTabManageTab.devices
+                            : _manageTab,
+                        devices: _hasDevices,
+                        onChoose: _chooseManageTab,
+                      ),
                     Expanded(
                       child: SuperTabPages(
                         index: _devicesVisible
                             ? 1
+                            : _manageVisible
+                            ? 4
                             : _notificationsVisible
                             ? 3
                             : c.snapshot?.projects.isEmpty == true
@@ -4357,6 +4404,21 @@ class _SuperTabViewState extends State<SuperTabView>
                                       unawaited(_openMention(mention)),
                                   onOpenThread: _openThreadFromList,
                                   onOpenConversation: _openConversation,
+                                )
+                              : const SizedBox.shrink(),
+                          _manageVisible
+                              ? SuperTabManagePage(
+                                  controller: c,
+                                  app: widget.app,
+                                  board: _board,
+                                  tab: _manageTab,
+                                  onAddAgent: widget.onAddAgent,
+                                  onOpenAgent: (agent) {
+                                    setState(() => _showManage = false);
+                                    (widget.onChooseAgentTerminal ??
+                                            widget.onOpenTerminal)
+                                        .call(agent);
+                                  },
                                 )
                               : const SizedBox.shrink(),
                         ],

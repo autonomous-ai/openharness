@@ -86,7 +86,9 @@ void main() {
     ('planned', 'planned', AppIcons.circleDashed),
     ('working', 'working', AppIcons.circleDot),
     ('review', 'in review', AppIcons.circleDot),
+    ('ready', 'ready', AppIcons.circleDot),
     ('shipped', 'shipped', AppIcons.check),
+    ('done', 'done', AppIcons.check),
     ('stopped', 'stopped', AppIcons.circleSlash),
   ]) {
     testWidgets('a $state task is one line: its mark, name and "$word"', (

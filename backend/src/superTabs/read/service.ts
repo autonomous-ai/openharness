@@ -231,8 +231,8 @@ export class SwarmReads {
     const { group, state } = await this.readGroup(user, tabId, conversationId)
     const next = Math.min(sequence, group.data!.lastMessageSequence), now = this.now()
     const held = await this.db.superTabReadMark.findUnique({ where: { id: stableId(tabId, conversationId, user.sub) }, select: { sequence: true } })
-    await seedThreadMarks(this.db, { tabId, state, personId: user.sub, conversationId, old: held?.sequence ?? 0, next, now })
-    const stored = await writeReadMark(this.db, { tabId, personId: user.sub, conversationId, sequence: next, now })
+    const safe = await seedThreadMarks(this.db, { tabId, state, personId: user.sub, conversationId, old: held?.sequence ?? 0, next, now })
+    const stored = await writeReadMark(this.db, { tabId, personId: user.sub, conversationId, sequence: safe, now })
     // The replies also in the chat that the mark passes are read in Activity too (activity.ts).
     await markActivityChatRead(this.db, { tabId, personId: user.sub, conversationId, sequence: stored, now })
     return { sequence: stored }

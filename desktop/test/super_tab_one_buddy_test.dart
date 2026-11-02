@@ -9,7 +9,7 @@ import 'support/buddy_fixture.dart';
 import 'support/super_tab_fixture.dart';
 
 /// One Buddy per person per Swarm (Dee, 10-31; spec
-/// 2026-10-31-one-buddy-per-swarm): `# buddy` is the first row under
+/// 2026-10-31-one-buddy-per-swarm): `Buddy` is the row over
 /// Projects, with no Buddies section; New session picks a project; older
 /// project Buddy chats read only.
 void main() {
@@ -135,40 +135,45 @@ void main() {
   });
 
   group('the sidebar', () {
-    testWidgets('shows # buddy first under Projects and no Buddies section', (
-      tester,
-    ) async {
-      final server = oneBuddySwarm();
-      giveSwarmBuddy(server);
-      final c = await show(tester, server);
+    testWidgets(
+      'shows Buddy above Projects, with no # and no Buddies section',
+      (tester) async {
+        final server = oneBuddySwarm();
+        giveSwarmBuddy(server);
+        final c = await show(tester, server);
 
-      expect(buddyRow, findsOneWidget);
-      expect(
-        find.descendant(of: buddyRow, matching: find.text('buddy')),
-        findsOneWidget,
-      );
-      expect(titles(tester), isNot(contains('Buddies')));
-      expect(titles(tester), contains('Projects'));
-      // First under Projects: above every project's row.
-      final projectsHeading = tester.getBottomLeft(find.text('Projects')).dy;
-      final top = tester.getTopLeft(buddyRow).dy;
-      expect(top, greaterThan(projectsHeading));
-      expect(
-        top,
-        lessThan(
-          tester
-              .getTopLeft(find.byKey(const ValueKey('super-project-lead')))
-              .dy,
-        ),
-      );
+        expect(buddyRow, findsOneWidget);
+        expect(
+          find.descendant(of: buddyRow, matching: find.text('Buddy')),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(of: buddyRow, matching: find.text('#')),
+          findsNothing,
+        );
+        expect(titles(tester), isNot(contains('Buddies')));
+        expect(titles(tester), contains('Projects'));
+        // Over Projects' heading, so over every project's row (Quiet Swarm,
+        // screen 1).
+        final projectsHeading = tester.getTopLeft(find.text('Projects')).dy;
+        expect(tester.getBottomLeft(buddyRow).dy, lessThan(projectsHeading));
+        expect(
+          projectsHeading,
+          lessThan(
+            tester
+                .getTopLeft(find.byKey(const ValueKey('super-project-lead')))
+                .dy,
+          ),
+        );
 
-      await tester.tap(buddyRow);
-      await tester.pumpAndSettle();
-      expect(c.selectedId, 'swarm-buddy-peer');
-      // Its chat says it reads every project, and only its person reads it.
-      expect(find.textContaining('reads all your projects'), findsOneWidget);
-      await close(tester, c);
-    });
+        await tester.tap(buddyRow);
+        await tester.pumpAndSettle();
+        expect(c.selectedId, 'swarm-buddy-peer');
+        // Its chat says it reads every project, and only its person reads it.
+        expect(find.textContaining('reads all your projects'), findsOneWidget);
+        await close(tester, c);
+      },
+    );
 
     testWidgets(
       'opens the one Buddy chat on the server before any Buddy, from the row',

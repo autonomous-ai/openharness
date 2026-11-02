@@ -270,7 +270,7 @@ void main() {
             if (c.unreadShown(c.snapshot!.conversation(id)!)) id,
         ];
         expect(order, isNot(contains('roster')));
-        await tester.tap(find.byKey(const ValueKey('super-group-lead')));
+        await tester.tap(find.byKey(const ValueKey('super-message-composer')));
         await tester.pumpAndSettle();
         await _keys(tester, [
           LogicalKeyboardKey.altLeft,
@@ -340,7 +340,7 @@ void main() {
       final (c, _) = await _show(tester, Brightness.dark);
       final unread = c.snapshot!.conversations.where(c.unreadShown).length;
       expect(unread, greaterThan(1));
-      await tester.tap(find.byKey(const ValueKey('super-group-web-lead')));
+      await tester.tap(find.byKey(const ValueKey('super-message-composer')));
       await tester.pumpAndSettle();
       await _keys(tester, [
         LogicalKeyboardKey.shiftLeft,

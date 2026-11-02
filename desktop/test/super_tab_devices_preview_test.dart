@@ -110,8 +110,14 @@ Future<void> _dispose(
 }
 
 void main() {
-  for (final kind in ['web', 'Finder']) {
-    testWidgets('$kind viewer survives repeated Devices round trips', (
+  for (final (kind, viaManage) in [
+    ('web', true),
+    ('Finder', true),
+    ('web', false),
+    ('Finder', false),
+  ]) {
+    final way = viaManage ? 'Manage' : "the avatar's menu";
+    testWidgets('$kind viewer survives repeated Devices round trips, by $way', (
       tester,
     ) async {
       final finder = kind == 'Finder';
@@ -136,7 +142,16 @@ void main() {
 
       expectPreview();
       for (var visit = 0; visit < 2; visit++) {
-        await tester.tap(find.byKey(const ValueKey('super-your-devices')));
+        if (viaManage) {
+          await tester.tap(find.byKey(const ValueKey('super-manage')));
+          await tester.pumpAndSettle();
+          await tester.tap(
+            find.byKey(const ValueKey('super-manage-tab-devices')),
+          );
+        } else {
+          // What the avatar's menu does.
+          f.app.openDevices();
+        }
         await tester.pumpAndSettle();
         expect(c.devicesSelected, isTrue);
         expect(f.app.activeSwarm, same(tab));
