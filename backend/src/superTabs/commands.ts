@@ -647,7 +647,13 @@ function proposalOf(state: SuperTabState, project: SwarmProject, proposal: Comma
   }
   // The person it was sent for, as buddy.propose recorded them: the Swarm writes this source, never a sender.
   const personId = typeof proposal.source.personId === 'string' ? proposal.source.personId : undefined
-  return { buddyId: author.id, messageId: proposal.id, ...personId ? { personId } : {} }
+  // Credited to the person's one Buddy, not to the thread session that wrote it: a session ends, and its row then showed as
+  // an unnamed "Former Buddy" with no person (Diego, 11-02). Without a one Buddy (removed since), the author keeps it.
+  const owner = buddy?.buddyOf
+  const main = buddy && owner && !isSwarmBuddy(buddy)
+    ? state.agents.find(a => isSwarmBuddy(a) && !a.buddySession && a.buddyOf!.personId === owner.personId && a.buddyOf!.generation === owner.generation)
+    : undefined
+  return { buddyId: main?.id ?? author.id, messageId: proposal.id, ...personId ? { personId } : {} }
 }
 /** The person a proposal was sent for, while they are still in the Swarm and read [project]; otherwise nobody, so a person
  *  who left or lost the project is never credited and opening the group still works (the PM is told to name someone). */
