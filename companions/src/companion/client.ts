@@ -27,10 +27,12 @@ export interface PairClientDeps {
   port: number
   /** This computer's machine id, as its daemon knows it; resolved from /api/status when absent. */
   machineId: () => Promise<string | null>
-  /** A loopback socket to the daemon carrying [headers]: its local credential, which a TCP connection
-   *  must show (cli/src/lib/localCredential.ts). */
+  /** A socket to the daemon at [url], carrying [headers]: nothing over its Unix socket, or over TCP its local credential. */
   connect: (url: string, headers: Record<string, string>) => PairSocket
-  /** The daemon's local credential, read by the caller from its data dir (`hook-credential`). */
+  /** The daemon's 0600 Unix socket (cli/src/lib/localSocket.ts `unixSocketPath`), null only where it can have none: Windows, or a data
+   *  folder too long for one. Required, so no caller reaches TCP by forgetting: any account can hold that port (audit H1). */
+  socketPath: string | null
+  /** The daemon's local credential, read by the caller from its data dir (`hook-credential`), shown only where there is no socket. */
   localCredential?: string | null
   env: NodeJS.ProcessEnv
   tokenFile?: string | null
@@ -43,7 +45,9 @@ export async function pairRequest(deps: PairClientDeps, payload: Record<string, 
   if (!machineId) throw new Error('Harness is not running on this computer. Start it with `harness start`.')
   const token = presentedToken(deps.env, deps.tokenFile)
   return new Promise((resolve, reject) => {
-    const socket = deps.connect(`ws://127.0.0.1:${deps.port}/api/local-ws`, deps.localCredential ? { 'X-Harness-Local': deps.localCredential } : {})
+    const socket = deps.socketPath
+      ? deps.connect(`ws+unix://${deps.socketPath}:/api/local-ws`, {})
+      : deps.connect(`ws://127.0.0.1:${deps.port}/api/local-ws`, deps.localCredential ? { 'X-Harness-Local': deps.localCredential } : {})
     const requestId = randomUUID()
     let settled = false
     const finish = (error: Error | null, reply?: Record<string, unknown>): void => {

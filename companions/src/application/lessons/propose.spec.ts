@@ -471,7 +471,7 @@ describe('harness pair lessons', () => {
     }
     const out: string[] = []
     const errors: string[] = []
-    const base = { port: 1, machineId: async () => 'machine-a', connect, env: {} as NodeJS.ProcessEnv, output: (l: string) => out.push(l), error: (l: string) => errors.push(l) }
+    const base = { port: 1, socketPath: null, machineId: async () => 'machine-a', connect, env: {} as NodeJS.ProcessEnv, output: (l: string) => out.push(l), error: (l: string) => errors.push(l) }
     vi.useRealTimers()
     expect(await pairCommand(['lessons', 'approve', 'beef01', '--json'], base)).toBe(1)
     expect(out.pop()).toContain('"error":"CONFIRM"')

@@ -98,7 +98,7 @@ describe('harness pair <verb>', () => {
 
   it('asks as a tool client, and carries the token only when this process holds one', async () => {
     const daemon = fakeDaemon(() => ({ ok: true }))
-    const deps = { port: 1, machineId: async () => 'machine-a', connect: daemon.connect, env: {} as NodeJS.ProcessEnv }
+    const deps = { port: 1, socketPath: null, machineId: async () => 'machine-a', connect: daemon.connect, env: {} as NodeJS.ProcessEnv }
     expect(await pairRequest(deps, { verb: 'list_harnesses' })).toEqual({ ok: true })
     expect(daemon.sent[0]).toEqual({ type: 'machine_select', payload: { machineId: 'machine-a', localProtocolVersion: 1, tool: true } })
     expect(daemon.sent[1]).toMatchObject({ type: 'pair', payload: { verb: 'list_harnesses' } })
@@ -131,7 +131,7 @@ describe('harness pair <verb>', () => {
   it('prints the reply, exits 1 on a refusal and 2 on a usage error', async () => {
     const daemon = fakeDaemon((p) => p.verb === 'stop_turn' ? { ok: false, error: 'TOKEN_REQUIRED' } : { ok: true })
     const out: string[] = []
-    const deps = { port: 1, machineId: async () => 'machine-a', connect: daemon.connect, env: {} as NodeJS.ProcessEnv, output: (l: string) => out.push(l), error: (l: string) => out.push(l) }
+    const deps = { port: 1, socketPath: null, machineId: async () => 'machine-a', connect: daemon.connect, env: {} as NodeJS.ProcessEnv, output: (l: string) => out.push(l), error: (l: string) => out.push(l) }
     expect(await pairCommand(['list_machines', '--json'], deps)).toBe(0)
     expect(out.pop()).toBe('{"ok":true}')
     expect(await pairCommand(['stop_turn', 'api', '--json'], deps)).toBe(1)

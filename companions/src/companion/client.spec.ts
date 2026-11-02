@@ -55,7 +55,7 @@ function daemon(reply: (payload: Json) => Json) {
 const base = (connect: (url: string) => PairSocket, over: Partial<PairCommandDeps> = {}): PairCommandDeps & { out: string[]; err: string[] } => {
   const out: string[] = []
   const err: string[] = []
-  return { port: 4242, machineId: async () => 'machine-a', connect, env: {}, output: (l) => out.push(l), error: (l) => err.push(l), out, err, ...over }
+  return { port: 4242, socketPath: null, machineId: async () => 'machine-a', connect, env: {}, output: (l) => out.push(l), error: (l) => err.push(l), out, err, ...over }
 }
 
 let dirs: string[] = []
@@ -85,6 +85,13 @@ describe('pairRequest: one request, settled once', () => {
     // Given the daemon's local credential, the loopback socket shows it: TCP upgrades without it are refused.
     await pairRequest(base(d.connect, { localCredential: 'c'.repeat(43) }), { verb: 'status' })
     expect(d.connect).toHaveBeenLastCalledWith('ws://127.0.0.1:4242/api/local-ws', { 'X-Harness-Local': 'c'.repeat(43) })
+  })
+
+  it('goes over the daemon\'s socket where it has one, and shows the port nothing, credential or not', async () => {
+    const d = daemon(() => ({ ok: true }))
+    await pairRequest(base(d.connect, { socketPath: '/data/daemon-4242.sock', localCredential: 'c'.repeat(43) }), { verb: 'status' })
+    expect(d.connect).toHaveBeenCalledTimes(1)
+    expect(d.connect).toHaveBeenCalledWith('ws+unix:///data/daemon-4242.sock:/api/local-ws', {})
   })
 
   it('an error rejects with it; a close after it changes nothing and closes once', async () => {
