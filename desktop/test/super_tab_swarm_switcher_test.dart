@@ -9,6 +9,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
+import 'package:harness/super_tabs/machines.dart';
 import 'package:harness/super_tabs/personal_machines.dart';
 import 'package:harness/super_tabs/swarm_switcher.dart';
 import 'package:harness/super_tabs/view.dart';
@@ -996,11 +997,11 @@ void main() {
       'one at a time: the next is not set up until the last is in',
       () async {
         final (app, backend) = await _twoTabs();
-            await PersonalSwarm.of(app).show(app.activeSwarmId);
+        await PersonalSwarm.of(app).show(app.activeSwarmId);
         await _settle();
         final c = await app.superTabs.open(PersonalSwarm.of(app).id!);
-      _ownMachine(app, 'rig');
-      _ownMachine(app, 'lamp');
+        _ownMachine(app, 'rig');
+        _ownMachine(app, 'lamp');
         final hold = backend.holdPrepare = Completer<void>();
         final running = PersonalMachines.of(app).sync(c);
         await _settle();
@@ -1100,11 +1101,11 @@ void main() {
       'a failure says so on its row, waits, and does not hold the next back',
       () async {
         final (app, backend) = await _twoTabs();
-            await PersonalSwarm.of(app).show(app.activeSwarmId);
+        await PersonalSwarm.of(app).show(app.activeSwarmId);
         await _settle();
         final c = await app.superTabs.open(PersonalSwarm.of(app).id!);
-      _ownMachine(app, 'rig');
-      _ownMachine(app, 'lamp');
+        _ownMachine(app, 'rig');
+        _ownMachine(app, 'lamp');
         backend.failPrepareOn = 'rig';
         await PersonalMachines.of(app).sync(c);
         await _settle();
@@ -1145,6 +1146,119 @@ void main() {
       await running;
       await _settle();
       expect(added(backend, c.tabId), before);
+    });
+
+    group('their rows', () {
+      Finder row(String id) =>
+          find.byKey(ValueKey('super-personal-machine-$id'));
+      Future<void> pump(
+        WidgetTester tester,
+        AppNotifier app,
+        SuperTabController c,
+      ) async {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SingleChildScrollView(
+                child: SuperTabMachines(
+                  controller: c,
+                  app: app,
+                  embedded: true,
+                  onAddAgent: (_) {},
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+      }
+
+      testWidgets(
+        'an offline machine reads one word, and the row goes once it joined',
+        (tester) async {
+          late AppNotifier app;
+          late SuperTabController c;
+          await tester.runAsync(() async {
+            final (a, _, opened) = await personal(
+              before: (a) => _ownMachine(a, 'lamp', online: false),
+            );
+            app = a;
+            c = opened;
+          });
+          await pump(tester, app, c);
+          expect(
+            find.descendant(
+              of: row('lamp'),
+              matching: find.text('Machine lamp'),
+            ),
+            findsOneWidget,
+          );
+          expect(
+            find.descendant(of: row('lamp'), matching: find.text('Offline')),
+            findsOneWidget,
+          );
+          await tester.runAsync(() async {
+            app.machineStates['lamp']!
+              ..nodeOnline = true
+              ..connectionStatus = ConnectionStatus.connected;
+            await PersonalMachines.of(app).sync(c);
+            await _settle();
+            await c.refresh();
+          });
+          await tester.pump();
+          expect(row('lamp'), findsNothing);
+        },
+      );
+
+      testWidgets('a failure reads one word, with its reason on hover', (
+        tester,
+      ) async {
+        late AppNotifier app;
+        late SuperTabController c;
+        await tester.runAsync(() async {
+          final (a, backend, opened) = await personal();
+          app = a;
+          c = opened;
+          backend.failPrepareOn = 'rig';
+          _ownMachine(a, 'rig');
+          await PersonalMachines.of(a).sync(c);
+          await _settle();
+        });
+        await pump(tester, app, c);
+        expect(
+          find.descendant(of: row('rig'), matching: find.text("Couldn't add")),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: row('rig'),
+            matching: find.textContaining('Setup failed'),
+          ),
+          findsNothing,
+        );
+        expect(
+          find.descendant(
+            of: row('rig'),
+            matching: find.byTooltip('Setup failed there.'),
+          ),
+          findsOneWidget,
+        );
+      });
+
+      testWidgets('another Swarm lists none', (tester) async {
+        late AppNotifier app;
+        late SuperTabController other;
+        await tester.runAsync(() async {
+          final (a, _, _) = await personal(
+            before: (a) => _ownMachine(a, 'lamp', online: false),
+          );
+          app = a;
+          other = await a.superTabs.open('gamma');
+          await other.refresh();
+        });
+        await pump(tester, app, other);
+        expect(row('lamp'), findsNothing);
+      });
     });
   });
 }
