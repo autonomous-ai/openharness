@@ -651,11 +651,18 @@ describe('a Swarm-wide Buddy', () => {
     for (const reader of [owner, agentActor(f.pm)]) expect(visibleState(f.state, reader).agents.map(a => a.id)).not.toContain(agentId)
   })
 
-  it('never proposes to a PM: only a project session does', () => {
+  it('proposes only to a project it names, for its person\'s ask', () => {
     const { f, chat, self } = started()
     const ask = { id: 'ask', conversationId: chat, source: false, createdAt: 900, author: { kind: 'person', id: 'peer', name: 'peer', membershipGeneration: 'first' } }
     expect(() => f.run({ type: 'buddy.propose', conversationId: chat, ownerMessageId: 'ask', goal: 'Sync edits made offline', scope: 'Desktop drafts only',
-      priority: 'high' }, self, { proposalAsk: ask } as never)).toThrow(expect.objectContaining({ code: 'BUDDY_PROPOSE_SESSION' }))
+      priority: 'high' }, self, { proposalAsk: ask } as never)).toThrow(expect.objectContaining({ code: 'BUDDY_PROPOSE_PROJECT' }))
+    const named = { type: 'buddy.propose', conversationId: chat, ownerMessageId: 'ask', projectId: f.web.projectId, goal: 'Sync edits made offline', scope: 'Desktop drafts only', priority: 'high' } as const
+    expect(() => f.run({ ...named, projectId: 'made-up' }, self, { proposalAsk: ask } as never)).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
+    expect(() => f.run(named, self, { proposalAsk: { ...ask, session: true } } as never)).toThrow(expect.objectContaining({ code: 'PROPOSAL_UNASKED' }))
+    const rows = f.run(named, self, { proposalAsk: ask } as never).messages
+    expect(rows.at(-2)).toMatchObject({ conversationId: f.web.conversationId, source: { kind: 'buddy-proposal', personId: 'peer' } })
+    expect(rows.at(-1)).toMatchObject({ conversationId: chat, recipients: [], source: { kind: 'buddy-proposal-sent', projectId: f.web.projectId } })
+    expect(rows.at(-1)!.id).not.toBe(rows.at(-2)!.id)
   })
 })
 

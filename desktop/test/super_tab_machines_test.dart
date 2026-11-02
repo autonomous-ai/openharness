@@ -1657,6 +1657,231 @@ void main() {
       },
     );
 
+    group('in a browser, the ⋯ on a machine row', () {
+      final more = find.byKey(const ValueKey('super-machine-more-studio'));
+      final rowKey = find.byKey(const ValueKey('super-machine-studio'));
+      double width(WidgetTester tester) => tester.getSize(more).width;
+
+      Future<dynamic> browser(
+        WidgetTester tester, {
+        String owner = 'owner',
+      }) async {
+        BrowserMenuGuard.debugWeb = true;
+        BrowserMenuGuard.debugSink = (_) async {};
+        addTearDown(BrowserMenuGuard.debugReset);
+        final server = _RemovalServer();
+        server.state['machines'] = [machine(owner)];
+        final c = server.controller();
+        await c.refresh();
+        await mount(tester, c);
+        return c;
+      }
+
+      Future<void> hover(WidgetTester tester) async {
+        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+        addTearDown(mouse.removePointer);
+        await mouse.addPointer(location: const Offset(900, 700));
+        await mouse.moveTo(tester.getCenter(rowKey));
+        await tester.pump();
+      }
+
+      Future<void> done(WidgetTester tester, dynamic c) async {
+        await tester.pumpWidget(const SizedBox());
+        await c.flush();
+        c.dispose();
+      }
+
+      testWidgets('shows on pointing and opens the same menu on a left click', (
+        tester,
+      ) async {
+        final c = await browser(tester);
+        expect(width(tester), 0, reason: 'nothing until pointed at');
+        await hover(tester);
+        expect(width(tester), greaterThan(0));
+        await tester.tap(more);
+        await tester.pumpAndSettle();
+        expect(find.text('Details'), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('super-machine-menu-remove')),
+          findsOneWidget,
+        );
+        // The click stayed on the button: the row did not expand as well.
+        expect(c.isMachineExpanded('studio'), isFalse);
+        await tester.tap(find.text('Details'));
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('super-machine-remove')),
+          findsOneWidget,
+        );
+        await tester.tap(find.byTooltip('Close').last);
+        await tester.pumpAndSettle();
+        await done(tester, c);
+      });
+
+      testWidgets(
+        'keeps Desktop\'s permissions: another person\'s machine has Details alone',
+        (tester) async {
+          final c = await browser(tester, owner: 'someone-else');
+          await hover(tester);
+          await tester.tap(more);
+          await tester.pumpAndSettle();
+          expect(find.text('Details'), findsOneWidget);
+          expect(find.text('Remove from Swarm'), findsNothing);
+          await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+          await tester.pumpAndSettle();
+          await done(tester, c);
+        },
+      );
+
+      testWidgets('a key reaches it: focus shows it and Enter opens the menu', (
+        tester,
+      ) async {
+        final c = await browser(tester);
+        // Tab, as a person does: the row first, the ⋯ after the sidebar's other rows.
+        for (var i = 0; i < 20 && width(tester) == 0; i++) {
+          await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+          await tester.pump();
+        }
+        expect(width(tester), greaterThan(0));
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+        expect(find.text('Details'), findsOneWidget);
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        await done(tester, c);
+      });
+
+      testWidgets('the menu key on the row itself opens the menu', (
+        tester,
+      ) async {
+        final c = await browser(tester);
+        Focus.of(
+          tester.element(
+            find.byKey(const ValueKey('super-machine-name-studio')),
+          ),
+        ).requestFocus();
+        await tester.pump();
+        await tester.sendKeyEvent(LogicalKeyboardKey.contextMenu);
+        await tester.pumpAndSettle();
+        expect(find.text('Details'), findsOneWidget);
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        await done(tester, c);
+      });
+
+      testWidgets('a computer has no ⋯: its right-click stays the way in', (
+        tester,
+      ) async {
+        final server = _RemovalServer();
+        server.state['machines'] = [machine('owner')];
+        final c = server.controller();
+        await c.refresh();
+        await mount(tester, c);
+        expect(more, findsNothing);
+        await done(tester, c);
+      });
+    });
+
+    testWidgets(
+      'the browser menu stays off while the Swarm menu is open, and comes back when it closes',
+      (tester) async {
+        final told = <bool>[];
+        BrowserMenuGuard.debugWeb = true;
+        BrowserMenuGuard.debugSink = (off) async => told.add(off);
+        addTearDown(BrowserMenuGuard.debugReset);
+        final server = _RemovalServer();
+        server.state['machines'] = [machine('owner')];
+        final c = server.controller();
+        await c.refresh();
+        await mount(tester, c);
+        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+        addTearDown(mouse.removePointer);
+        await mouse.addPointer(location: const Offset(900, 700));
+        final row = find.byKey(const ValueKey('super-machine-studio'));
+        await mouse.moveTo(tester.getCenter(row));
+        await tester.pump();
+        await tester.tap(row, buttons: kSecondaryMouseButton);
+        await tester.pumpAndSettle();
+        expect(find.text('Details'), findsOneWidget);
+        // The menu's barrier took the pointer from the row: a second right-click
+        // lands on the barrier and must not bring up the browser's menu.
+        await mouse.moveTo(const Offset(900, 700));
+        await tester.pump();
+        expect(told, [true], reason: 'still off with the menu open');
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        expect(told, [
+          true,
+          false,
+        ], reason: 'a terminal has its Copy and Paste again');
+        await tester.pumpWidget(const SizedBox());
+        await c.flush();
+        c.dispose();
+      },
+    );
+
+    testWidgets(
+      'an expanded machine: a right-click on its readings opens the same menu, with the browser menu off',
+      (tester) async {
+        final told = <bool>[];
+        BrowserMenuGuard.debugWeb = true;
+        BrowserMenuGuard.debugSink = (off) async => told.add(off);
+        addTearDown(BrowserMenuGuard.debugReset);
+        final server = _RemovalServer();
+        server.state['machines'] = [machine('owner')];
+        final c = server.controller();
+        await c.refresh();
+        await mount(tester, c);
+        await tester.tap(find.byKey(const ValueKey('super-machine-studio')));
+        await tester.pumpAndSettle();
+        final below = find.textContaining(
+          RegExp('No agents yet|Offline|Refreshing|reach Harness'),
+        );
+        expect(below, findsOneWidget);
+        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+        addTearDown(mouse.removePointer);
+        await mouse.addPointer(location: const Offset(900, 700));
+        await mouse.moveTo(tester.getCenter(below));
+        await tester.pump();
+        expect(told.last, isTrue);
+        await tester.tap(below, buttons: kSecondaryMouseButton);
+        await tester.pumpAndSettle();
+        expect(find.text('Details'), findsOneWidget);
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        await tester.pumpWidget(const SizedBox());
+        await c.flush();
+        c.dispose();
+      },
+    );
+
+    testWidgets(
+      'losing the screen with the Swarm menu open gives the browser menu back',
+      (tester) async {
+        final told = <bool>[];
+        BrowserMenuGuard.debugWeb = true;
+        BrowserMenuGuard.debugSink = (off) async => told.add(off);
+        addTearDown(BrowserMenuGuard.debugReset);
+        final server = _RemovalServer();
+        server.state['machines'] = [machine('owner')];
+        final c = server.controller();
+        await c.refresh();
+        await mount(tester, c);
+        await tester.tap(
+          find.byKey(const ValueKey('super-machine-studio')),
+          buttons: kSecondaryMouseButton,
+        );
+        await tester.pumpAndSettle();
+        expect(BrowserMenuGuard.isOff, isTrue);
+        // Sign-out or access lost: the workspace goes, Navigator and all.
+        await tester.pumpWidget(const SizedBox());
+        expect(BrowserMenuGuard.isOff, isFalse);
+        expect(told.last, isFalse);
+        await c.flush();
+        c.dispose();
+      },
+    );
+
     testWidgets('machine with a Product Manager cannot be removed', (
       tester,
     ) async {

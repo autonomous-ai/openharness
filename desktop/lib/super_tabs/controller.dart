@@ -76,9 +76,18 @@ const superTabRefusedAsSent = "The server couldn't take this message.";
 final _schemaWords = RegExp(r'Unrecognized key|^command(\.\w+)*: ');
 
 class SuperTabFailure implements Exception {
-  const SuperTabFailure(this.code, this.message, {this.statusCode = 0});
+  const SuperTabFailure(
+    this.code,
+    this.message, {
+    this.statusCode = 0,
+    this.settled = false,
+  });
   final String code, message;
   final int statusCode;
+
+  /// No wait changes this answer, whatever its code ([SuperTabReading.retriesFirstRead]): a Team
+  /// computer that may not speak as the person, beside a computer that is only still starting.
+  final bool settled;
   @override
   String toString() => message;
 }
@@ -563,6 +572,8 @@ class SuperTabController extends ChangeNotifier {
   /// ([SuperTabReading.connectGrace]): still loading rather than failed.
   bool _waitingForMachine = false;
   Object? _graceFailure;
+  Timer? _firstReadRetry;
+  int _firstReadTries = 0;
 
   /// Not on screen: another tab is shown, or the page is hidden. Only a
   /// reading that [SuperTabReading.pausesAway] stops polling for it; coming
@@ -603,6 +614,10 @@ class SuperTabController extends ChangeNotifier {
 
   /// Since when the reads have been failing, while [backendUnreachable]: the first failure of this run of them.
   DateTime? unreachableSince;
+
+  /// While [backendUnreachable], no read has been answered yet since this Swarm opened: nothing was
+  /// lost, so it says Connecting rather than Reconnecting.
+  bool get stillConnecting => backendUnreachable && stateReads == 0;
 
   /// How many reads of the Swarm's state have been answered. A sidebar that is waiting for a new reading (back from
   /// the background) knows it has one when this moves.
@@ -3169,6 +3184,7 @@ class SuperTabController extends ChangeNotifier {
       unreachableSince = null;
       _waitingForMachine = false;
       _graceEnd?.cancel();
+      _firstReadRetry?.cancel();
       stateReads++;
       // How long the Swarm took to answer, and nothing it said: the log shows a slow or failing
       // backend, which the sidebar's ages and the machines' states otherwise only hint at.
@@ -3299,6 +3315,7 @@ class SuperTabController extends ChangeNotifier {
       if (_inConnectGrace(failure)) {
         _waitingForMachine = true;
         _graceFailure = failure;
+        _retryFirstRead();
       } else {
         _waitingForMachine = false;
         _readFailure(failure);
@@ -3314,7 +3331,8 @@ class SuperTabController extends ChangeNotifier {
             '${failure is SuperTabFailure ? '${failure.code} (status ${failure.statusCode})' : failure.runtimeType}',
       );
     } finally {
-      loading = _waitingForMachine;
+      // A saved view stays drawn through the grace; only an empty pane waits on a spinner.
+      loading = _waitingForMachine && snapshot == null;
       if (!quiet || stateChanged || _shown != before) _changed();
     }
   }
@@ -3493,10 +3511,7 @@ class SuperTabController extends ChangeNotifier {
   /// ([SuperTabReading.connectGrace]) runs out: its error waits for the grace.
   bool _inConnectGrace(Object failure) {
     final since = _startedAt;
-    if (stateReads > 0 ||
-        since == null ||
-        failure is! SuperTabFailure ||
-        failure.code != 'MACHINE_UNAVAILABLE') {
+    if (stateReads > 0 || since == null || !_graceCovers(failure)) {
       return false;
     }
     final left = _policy.connectGrace - clock.now().difference(since);
@@ -3509,6 +3524,32 @@ class SuperTabController extends ChangeNotifier {
       _changed();
     });
     return true;
+  }
+
+  bool _graceCovers(Object failure) {
+    final code = failure is SuperTabFailure ? failure.code : null;
+    if (!_policy.retriesFirstRead) return code == 'MACHINE_UNAVAILABLE';
+    if (_isUpdateRequired(failure)) return false;
+    // In passing: no answer at all, a 5xx, or a read before this computer has its row, which a
+    // Swarm restored at launch can make. A refusal (401, 403, 404) is the server's word.
+    return failure is! SuperTabFailure ||
+        (!failure.settled &&
+            (failure.statusCode == 0 || failure.statusCode >= 500));
+  }
+
+  /// Bounded by [SuperTabReading.firstReadRetryDelays]; the grace's end then says what failed.
+  void _retryFirstRead() {
+    final delays = SuperTabReading.firstReadRetryDelays;
+    if (!_policy.retriesFirstRead ||
+        _disposed ||
+        accessRevoked ||
+        _firstReadTries >= delays.length) {
+      return;
+    }
+    _firstReadRetry?.cancel();
+    _firstReadRetry = Timer(delays[_firstReadTries++], () {
+      if (!_disposed && !accessRevoked && stateReads == 0) unawaited(refresh());
+    });
   }
 
   /// The same messages with the same receipts: posted text does not change.
@@ -3636,6 +3677,7 @@ class SuperTabController extends ChangeNotifier {
       _quoting.clear();
       _forgetThreads();
       _poll?.cancel();
+      _firstReadRetry?.cancel();
       cancelUpload();
     }
   }
@@ -4549,6 +4591,7 @@ class SuperTabController extends ChangeNotifier {
     _poll?.cancel();
     _toldRead?.cancel();
     _graceEnd?.cancel();
+    _firstReadRetry?.cancel();
     _draftSave?.cancel();
     for (final retry in _quoteRetries) {
       retry.cancel();
