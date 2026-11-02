@@ -592,7 +592,7 @@ void main() {
   );
 
   testWidgets(
-    "shows a person's week as before where the server has no details",
+    "shows a person's numbers alone where the server has no details",
     (tester) async {
       final controller = await show(tester, humansSwarm());
       await tester.tap(person('scholes'));
@@ -601,7 +601,10 @@ void main() {
       Finder inDialog(String text) =>
           find.descendant(of: dialog, matching: find.text(text));
       expect(inDialog('scholes'), findsOneWidget);
-      expect(inDialog('Nothing landed yet'), findsOneWidget);
+      // The card's line says them; nothing repeats them below (screen 5).
+      expect(inDialog('0 shipped · 2 unblocked · 10 hours'), findsOneWidget);
+      expect(inDialog('Nothing landed yet'), findsNothing);
+      expect(inDialog('Shipped'), findsNothing);
       expect(inDialog('No pull requests merged yet'), findsNothing);
       expect(find.textContaining('last week'), findsNothing);
       await close(tester, controller);
