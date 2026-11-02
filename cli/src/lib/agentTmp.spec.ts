@@ -86,6 +86,8 @@ describe('the folder itself', () => {
     mkdirSync(folder, { mode: 0o700 })
     chmodSync(folder, 0o700)
     expect(agentTmpState(folder)).toEqual({ path: folder, state: 'private', mode: 0o700 })
+    // Another account's 0700 folder is not this account's private one.
+    expect(agentTmpState(folder, 99_999)).toEqual({ path: folder, state: 'open', mode: 0o700 })
     chmodSync(folder, 0o755)
     expect(agentTmpState(folder)).toEqual({ path: folder, state: 'open', mode: 0o755 })
     rmSync(folder, { recursive: true })

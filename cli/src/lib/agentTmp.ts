@@ -124,12 +124,14 @@ export function agentTmpRoot(deps: AgentTmpDeps = realDeps): string | null {
 
 export interface AgentTmpState { path: string; state: 'private' | 'open' | 'not-made'; mode: number | null }
 
-/** What `harness team status` shows. A link is open whatever it points at. */
-export function agentTmpState(folder: string = agentTmpFolder()): AgentTmpState {
+/** What `harness team status` shows. A link, or another account's folder, is open whatever its mode says. */
+export function agentTmpState(folder: string = agentTmpFolder(), uid: number | undefined = process.geteuid?.()): AgentTmpState {
   try {
     const stat = lstatSync(folder)
     if (!stat.isDirectory()) return { path: folder, state: 'open', mode: null }
     const mode = stat.mode & 0o777
+    // Another account's 0700 folder is private from this one, not for it (prepareAgentTmp refuses it).
+    if (uid !== undefined && stat.uid !== uid) return { path: folder, state: 'open', mode }
     return { path: folder, state: mode === 0o700 ? 'private' : 'open', mode }
   } catch (error) {
     return { path: folder, state: (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'not-made' : 'open', mode: null }
