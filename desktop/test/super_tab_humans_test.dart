@@ -541,11 +541,18 @@ void main() {
       final dialog = find.byType(SuperTabDetailDialog);
       Finder inDialog(String text) =>
           find.descendant(of: dialog, matching: find.text(text));
-      expect(inDialog('dee'), findsOneWidget);
-      // Who they are on one line under the name (Ken, 2026-10-28).
-      expect(inDialog('dee@example.com · Can collaborate'), findsOneWidget);
-      // This week's points in words, and last week's beside them rather than a difference.
-      expect(inDialog('21 points this week · 15 last week'), findsOneWidget);
+      // The card (Quiet Swarm, screen 5): name and crown, the points at the
+      // right, the three numbers under the name.
+      expect(inDialog('dee \u{1F451}'), findsOneWidget);
+      expect(inDialog('21 points'), findsOneWidget);
+      expect(inDialog('6 shipped · 3 unblocked · 0 hours'), findsOneWidget);
+      // Who they are on the avatar's hover (Ken, 2026-10-28).
+      expect(
+        find.byTooltip('dee@example.com · Can collaborate'),
+        findsOneWidget,
+      );
+      // The period on hover, and last week's beside it rather than a difference.
+      expect(find.byTooltip('Points this week · 15 last week'), findsOneWidget);
       expect(find.textContaining('pts'), findsNothing);
       expect(find.widgetWithText(TextButton, 'Close'), findsNothing);
       expect(inDialog('Shipped'), findsOneWidget);
@@ -571,7 +578,8 @@ void main() {
 
       await tester.tap(person('owner'));
       await tester.pumpAndSettle();
-      expect(inDialog('13 points this week · 20 last week'), findsOneWidget);
+      expect(inDialog('13 points'), findsOneWidget);
+      expect(find.byTooltip('Points this week · 20 last week'), findsOneWidget);
       expect(inDialog('No pull requests merged yet'), findsOneWidget);
       expect(inDialog('No questions answered yet'), findsOneWidget);
       // The machine as it calls itself, without .local.
