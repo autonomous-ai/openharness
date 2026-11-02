@@ -1,94 +1,68 @@
 import 'dart:async';
 
+import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart';
 
+import 'attention.dart';
 import 'controller.dart';
 import 'decisions.dart';
 import 'model.dart';
 import 'notifications.dart';
 
-/// One reply to the reader's message, or one reaction to it, as the server
-/// lists it (backend superTabs/activity.ts).
-class SuperTabActivityItem {
-  SuperTabActivityItem.fromJson(Map<String, dynamic> row)
-    : id = row['id'] as String,
-      kind = row['kind'] == 'reaction'
-          ? SuperTabActivityKind.reaction
-          : SuperTabActivityKind.reply,
-      conversationId = row['conversationId'] as String,
-      conversationTitle = row['conversationTitle'] as String? ?? '',
-      projectName = row['projectName'] as String? ?? '',
-      messageId = row['messageId'] as String,
-      messageSequence = (row['messageSequence'] as num?)?.toInt() ?? 0,
-      threadId = row['threadId'] as String?,
-      actor = superTabMap(row['actor']),
-      emoji = row['emoji'] as String?,
-      text = row['text'] as String? ?? '',
-      createdAt = DateTime.tryParse(row['createdAt'] as String? ?? ''),
-      read = row['read'] == true;
+/// What one row of Needs you is.
+enum SuperTabNeedKind { decision, agent, mention }
 
-  final String id, conversationId, conversationTitle, projectName, messageId;
-  final SuperTabActivityKind kind;
-  final int messageSequence;
+/// One row of Needs you: a decision asked of the reader, an agent waiting on
+/// them, or a tag of them.
+class SuperTabNeed {
+  const SuperTabNeed({
+    required this.kind,
+    required this.id,
+    required this.title,
+    required this.conversationId,
+    this.at,
+    this.decision,
+    this.mention,
+    this.unread = true,
+  });
+  final SuperTabNeedKind kind;
 
-  /// The thread a reply that lives only there is in; null in the main stream.
-  final String? threadId;
+  /// Stable across reads: `decision:<id>`, `agent:<group>`, `mention:<id>`.
+  final String id;
 
-  /// `kind` (person | agent), `id` and `name`, named by the server.
-  final Map<String, dynamic> actor;
+  /// What the row says: the question, `<agent> is waiting on you`, or
+  /// `<author> mentioned you in # <project>`.
+  final String title;
+  final String conversationId;
+  final DateTime? at;
+  final SuperTabDecision? decision;
+  final SuperTabMention? mention;
 
-  /// The reaction (`thumbs_up`, `check`, …); null for a reply.
-  final String? emoji;
-
-  /// The reply's text, or the reacted message's.
-  final String text;
-  final DateTime? createdAt;
-  final bool read;
-
-  String get actorName => actor['name'] as String? ?? 'Someone';
-  String? get actorId => actor['id'] as String?;
-  bool get byAgent => actor['kind'] == 'agent';
-
-  SuperTabActivityItem _asRead() =>
-      SuperTabActivityItem.fromJson({..._json, 'read': true});
-
-  Map<String, dynamic> get _json => {
-    'id': id,
-    'kind': kind.name,
-    'conversationId': conversationId,
-    'conversationTitle': conversationTitle,
-    'projectName': projectName,
-    'messageId': messageId,
-    'messageSequence': messageSequence,
-    'threadId': threadId,
-    'actor': actor,
-    'emoji': emoji,
-    'text': text,
-    'createdAt': createdAt?.toIso8601String(),
-    'read': read,
-  };
+  /// Bold: a tag the reader has already read past is shown plain.
+  final bool unread;
 }
 
-enum SuperTabActivityKind { reply, reaction }
-
-/// What the Activity view lists, as Slack's tabs: everything, or one kind.
-enum SuperTabActivityFilter { all, decisions, mentions, replies, reactions }
-
-/// The reader's Activity in one Swarm (Slack's Activity): decisions asked of
-/// them and their tags ([SuperTabDecisions], [SuperTabMentions]), with the
-/// replies to their messages and the reactions to them, read from the server
-/// when its digest moves or the view opens — never on a timer. Rows the view
-/// showed are marked read on every device when it is left, as the Threads
-/// view reads what it shows. One per controller.
+/// The reader's Activity in one Swarm: the one place for everything new for
+/// them (Quiet Swarm design, screens 6 and 11b). Three lists over what the
+/// Swarm already holds, no feed of its own:
+///
+/// * Needs you: decisions asked of them, agents waiting on them and their
+///   tags. Its length is Activity's number.
+/// * New replies: the followed threads with replies they have not read.
+/// * Done today: tasks that shipped today.
+///
+/// Leaving the view marks nothing read: it shows no reply or reaction row,
+/// and a thread is read when it is opened. One per controller.
 class SuperTabActivity extends ChangeNotifier {
   SuperTabActivity._(this.controller)
     : mentions = SuperTabMentions.of(controller),
-      decisions = SuperTabDecisions.of(controller) {
-    controller.addListener(_changed);
+      decisions = SuperTabDecisions.of(controller),
+      attention = SuperTabAttention.of(controller) {
+    controller.addListener(notifyListeners);
     controller.onDispose(dispose);
     mentions.addListener(notifyListeners);
     decisions.addListener(notifyListeners);
-    _changed();
+    attention.addListener(notifyListeners);
   }
 
   @visibleForTesting
@@ -102,40 +76,85 @@ class SuperTabActivity extends ChangeNotifier {
   final SuperTabController controller;
   final SuperTabMentions mentions;
   final SuperTabDecisions decisions;
+  final SuperTabAttention attention;
+  bool _open = false, _disposed = false;
 
-  /// Replies and reactions, newest first, in chats this Swarm still lists.
-  List<SuperTabActivityItem> items = const [];
-  bool loaded = false, more = false;
-  String? error;
+  SuperTabSnapshot? get _snapshot =>
+      controller.accessRevoked ? null : controller.snapshot;
 
-  /// False on a server before Activity (it answered 404): replies and
-  /// reactions are not listed, and nothing is asked again.
-  bool supported = true;
+  /// Decisions asked of the reader, then agents waiting on them, then their
+  /// tags; each newest first.
+  List<SuperTabNeed> get needsYou {
+    final snapshot = _snapshot;
+    if (snapshot == null) return const [];
+    final epoch = DateTime.fromMillisecondsSinceEpoch(0);
+    final asked = decisions.open;
+    final decided = {for (final d in asked) d.conversationId};
+    final people = {for (final p in snapshot.people) p.id: p};
+    return [
+      for (final d in [
+        ...asked,
+      ]..sort((a, b) => (b.createdAt ?? epoch).compareTo(a.createdAt ?? epoch)))
+        SuperTabNeed(
+          kind: SuperTabNeedKind.decision,
+          id: 'decision:${d.id}',
+          title: d.question,
+          conversationId: d.conversationId,
+          at: d.createdAt,
+          decision: d,
+        ),
+      for (final group in snapshot.conversations)
+        if (_waiting(snapshot, group, decided))
+          SuperTabNeed(
+            kind: SuperTabNeedKind.agent,
+            id: 'agent:${group.id}',
+            title:
+                '${_agentName(snapshot, group.assignment!['agentId'] as String)} is waiting on you',
+            conversationId: group.id,
+          ),
+      for (final m in [
+        ...mentions.waiting,
+      ]..sort((a, b) => (b.createdAt ?? epoch).compareTo(a.createdAt ?? epoch)))
+        SuperTabNeed(
+          kind: SuperTabNeedKind.mention,
+          id: 'mention:${m.id}',
+          title:
+              '${people[m.leadId]?.username ?? m.leadName} mentioned you in # ${m.projectName}',
+          conversationId: m.conversationId,
+          at: m.createdAt,
+          mention: m,
+          unread: mentionUnread(m),
+        ),
+    ];
+  }
 
-  SuperTabActivityFilter filter = SuperTabActivityFilter.all;
-  bool _open = false;
+  /// A task whose agent waits on the reader (it needs a decision, or is
+  /// stuck) and has not already asked it as a decision.
+  bool _waiting(
+    SuperTabSnapshot snapshot,
+    SuperTabConversation group,
+    Set<String> decided,
+  ) {
+    final work = group.assignment;
+    if (work == null ||
+        group.closed ||
+        group.isBuddyChat ||
+        decided.contains(group.id) ||
+        !superTabWorkWaits(work['status']) ||
+        snapshot.agent(work['agentId'] as String? ?? '') == null) {
+      return false;
+    }
+    final asked = work['askedOf'];
+    return asked == null || asked == controller.accountId;
+  }
 
-  /// Rows shown as unread in this visit: they stay bold until the view is
-  /// left, though reading them on another device cleared them.
-  final Set<String> _newThisVisit = {};
+  String _agentName(SuperTabSnapshot snapshot, String agentId) {
+    final agent = snapshot.agent(agentId);
+    return agent?.displayName ?? agent?.name ?? 'An agent';
+  }
 
-  String? _digest;
-  int? _epoch;
-  Future<void>? _loading;
-  bool _dirty = false, _disposed = false;
-  int _asked = 0, _shown = 0;
-  DateTime? _waitUntil;
-  Timer? _retry;
-
-  String get _path =>
-      '/api/super-tabs/${Uri.encodeComponent(controller.tabId)}';
-
-  /// Whether [item] shows bold.
-  bool isUnread(SuperTabActivityItem item) =>
-      !item.read || _newThisVisit.contains(item.id);
-
-  /// Whether [mention] shows bold: waiting and not read past, as its chat's
-  /// red number counts it (attention.dart).
+  /// Whether [mention] shows bold: not read past, as its chat's red number
+  /// counts it (attention.dart).
   bool mentionUnread(SuperTabMention mention) =>
       mention.resolvedBy == null &&
       (mention.messageSequence ?? (1 << 52)) >
@@ -143,210 +162,77 @@ class SuperTabActivity extends ChangeNotifier {
               ? controller.readMark(mention.conversationId)
               : controller.threadReadMark(mention.threadId!));
 
-  /// The Activity row's red number: what is the reader's own to answer, as
-  /// Notifications counted it (their tags and decisions), and replies to them
-  /// not yet seen. Reactions only make the row bold, as in Slack.
+  /// The followed threads with replies the reader has not read, newest reply
+  /// first; one read during this visit stays, bold, until the view is left.
+  List<SuperTabFollowedThread> get newReplies => [
+    for (final t in attention.shown)
+      if (attention.isNew(t)) t,
+  ];
+
+  /// Tasks that shipped today (the reader's day), newest first: no review or
+  /// test step, no Buddy chat.
+  List<SuperTabConversation> get doneToday {
+    final snapshot = _snapshot;
+    if (snapshot == null) return const [];
+    final now = clock.now();
+    bool today(DateTime at) =>
+        at.year == now.year && at.month == now.month && at.day == now.day;
+    return [
+      for (final g in snapshot.conversations)
+        if (g.shippedAt case final at? when today(at.toLocal()))
+          if (g.reviewOf == null && !g.isBuddyChat) g,
+    ]..sort((a, b) => b.shippedAt!.compareTo(a.shippedAt!));
+  }
+
+  /// The Activity row's red number: what is the reader's own to answer, and
+  /// nothing else. The server counts tags and decisions before their lists
+  /// are read; waiting agents come from the Swarm itself.
   int get count {
-    final snapshot = controller.snapshot;
-    if (controller.accessRevoked || snapshot == null) return 0;
+    final snapshot = _snapshot;
+    if (snapshot == null) return 0;
+    final decided = {for (final d in decisions.open) d.conversationId};
     return snapshot.mentionsWaiting +
         snapshot.decisionsWaiting +
-        items
-            .where((i) => i.kind == SuperTabActivityKind.reply && !i.read)
+        snapshot.conversations
+            .where((g) => _waiting(snapshot, g, decided))
             .length;
   }
 
-  /// Whether the Activity row is bold: anything unread in it.
-  bool get unread => count > 0 || items.any((i) => !i.read);
+  /// Whether the Activity row is bold: something needs the reader, or a thread
+  /// they follow has replies they have not read.
+  bool get unread => count > 0 || attention.threadsUnread;
 
-  /// The view opened: reads now; what is unread stays bold until [closed].
+  /// The view opened: reads what it lists now; what is new stays bold until
+  /// [closed].
   void opened() {
     _open = true;
-    _newThisVisit
-      ..clear()
-      ..addAll(items.where((i) => !i.read).map((i) => i.id));
-    unawaited(load());
+    attention.opened();
     unawaited(mentions.load());
+    unawaited(decisions.load());
   }
 
-  /// The view was left: what it showed is read on every device.
+  /// The view was left. It marks nothing read: it showed no reply or reaction
+  /// row, and a thread is read when it is opened.
   void closed() {
     if (!_open) return;
     _open = false;
-    _newThisVisit.clear();
     // The view is going away while this runs (its dispose): what listens is
     // told after the frame's teardown, never during it.
     scheduleMicrotask(() {
       if (_disposed) return;
-      unawaited(_markShownRead());
+      attention.closed();
       notifyListeners();
     });
-  }
-
-  void setFilter(SuperTabActivityFilter value) {
-    if (filter == value) return;
-    filter = value;
-    notifyListeners();
-  }
-
-  Future<void> _markShownRead() async {
-    final newest = items
-        .where((i) => !i.read)
-        .map((i) => i.createdAt)
-        .whereType<DateTime>()
-        .fold<DateTime?>(null, (a, b) => a == null || b.isAfter(a) ? b : a);
-    if (newest == null || !supported || controller.accessRevoked) return;
-    final epoch = controller.visibilityEpoch;
-    // Shown read at once; the server's answer is the next read's.
-    items = [
-      for (final i in items)
-        if (!i.read && !i.createdAt!.isAfter(newest)) i._asRead() else i,
-    ];
-    notifyListeners();
-    try {
-      await controller.request(
-        'POST',
-        '$_path/activity/read',
-        body: {'through': newest.toUtc().toIso8601String()},
-      );
-    } catch (_) {
-      // Unread again on the next read; nothing else to do.
-      if (!_disposed && controller.visibilityEpoch == epoch) {
-        _digest = null;
-      }
-    }
-  }
-
-  void _clear() {
-    items = const [];
-    loaded = false;
-    more = false;
-    error = null;
-    _newThisVisit.clear();
-    _retry?.cancel();
-    _retry = null;
-  }
-
-  void _changed() {
-    if (_disposed) return;
-    if (controller.accessRevoked) {
-      if (loaded || items.isNotEmpty || error != null) {
-        _clear();
-        // An answer on its way belongs to the access that is gone.
-        _shown = ++_asked;
-        _digest = null;
-        notifyListeners();
-      }
-      return;
-    }
-    final snapshot = controller.snapshot;
-    if (snapshot == null) return;
-    final epoch = controller.visibilityEpoch;
-    if (epoch != null && epoch != _epoch) {
-      final moved = _epoch != null;
-      _epoch = epoch;
-      if (moved) {
-        // Who may read what changed: nothing read before shows until read
-        // again.
-        _clear();
-        _shown = ++_asked;
-        _digest = null;
-        notifyListeners();
-      }
-    }
-    // A server before Activity sends no digest: nothing to read.
-    final digest = snapshot.activityDigest;
-    if (digest == null || !supported) return;
-    if (digest == _digest && loaded) return;
-    _digest = digest;
-    unawaited(load());
-  }
-
-  /// Joins a read under way, and has it read once more when asked again.
-  Future<void> load() {
-    if (_disposed || !supported) return Future.value();
-    if (_loading case final running?) {
-      _dirty = true;
-      return running;
-    }
-    return _loading = () async {
-      do {
-        _dirty = false;
-        await _read();
-      } while (_dirty && !_disposed);
-    }().whenComplete(() => _loading = null);
-  }
-
-  Future<void> _read() async {
-    if (controller.accessRevoked || controller.snapshot == null) return;
-    if (_waitUntil case final wait? when DateTime.now().isBefore(wait)) {
-      // Asked too often: one read when the wait is over, no more.
-      _retry ??= Timer(wait.difference(DateTime.now()), () {
-        _retry = null;
-        unawaited(load());
-      });
-      return;
-    }
-    final asked = ++_asked;
-    final epoch = controller.visibilityEpoch;
-    bool current() =>
-        !_disposed &&
-        !controller.accessRevoked &&
-        asked > _shown &&
-        controller.visibilityEpoch == epoch;
-    try {
-      final answer = await controller.request('GET', '$_path/activity');
-      if (!current()) return;
-      _shown = asked;
-      final readable = {
-        for (final g in controller.snapshot?.conversations ?? const []) g.id,
-      };
-      items = [
-        for (final row in answer['items'] as List? ?? const [])
-          if (SuperTabActivityItem.fromJson(superTabMap(row)) case final i
-              // Only chats this reader still has; a chat lost since is not
-              // shown on the server's word alone.
-              when readable.contains(i.conversationId))
-            i,
-      ];
-      more = answer['more'] == true;
-      loaded = true;
-      error = null;
-      _waitUntil = null;
-      if (_open) {
-        _newThisVisit.addAll(items.where((i) => !i.read).map((i) => i.id));
-      }
-      notifyListeners();
-    } catch (failure) {
-      if (!current()) return;
-      _shown = asked;
-      if (failure is SuperTabFailure && failure.statusCode == 404) {
-        // A server before Activity: tags and decisions still show.
-        supported = false;
-        loaded = true;
-        error = null;
-        notifyListeners();
-        return;
-      }
-      if (failure is SuperTabFailure && failure.statusCode == 429) {
-        _waitUntil = DateTime.now().add(const Duration(seconds: 5));
-      }
-      // The digest is read again on its next move, or by Retry.
-      _digest = null;
-      loaded = true;
-      error = 'Could not load activity.';
-      notifyListeners();
-    }
   }
 
   @override
   void dispose() {
     if (_disposed) return;
     _disposed = true;
-    _retry?.cancel();
-    controller.removeListener(_changed);
+    controller.removeListener(notifyListeners);
     mentions.removeListener(notifyListeners);
     decisions.removeListener(notifyListeners);
+    attention.removeListener(notifyListeners);
     super.dispose();
   }
 }
