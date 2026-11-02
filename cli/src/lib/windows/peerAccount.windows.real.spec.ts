@@ -2,10 +2,11 @@
 // connection this process made is this account's. Windows only; the Windows workflow runs it with src/lib/windows.
 // Another account's connection cannot be made from one account's test run; that answer is pinned by the unit spec. The yes
 // below also shows Windows gives both times the check compares: the process started before its connection was made.
+// The workflow names the host it built in HARNESS_PTY_BIN, so these run the native lookup; PowerShell has its own case.
 import { spawn } from 'node:child_process'
 import { connect, createServer, type AddressInfo, type Socket } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
-import { peerIsThisAccount, windowsPeerQuery } from '../peerAccount.js'
+import { peerIsThisAccount, runWindowsNative, WINDOWS_PEER_MS, windowsPeerQuery } from '../peerAccount.js'
 import { runPowershellAsync } from './powershell.js'
 
 const WINDOWS = process.platform === 'win32'
@@ -54,5 +55,52 @@ describe.runIf(WINDOWS)('who is calling, asked of Windows', () => {
     const socket = await accepted
     cleanup.push(() => socket.destroy())
     if (!await peerIsThisAccount(socket, 'win32')) expect.fail(await asked(socket))
+  }, 240_000)
+
+  /** A connection of this process's: its accepted end, and the client to drop. */
+  const connection = async () => {
+    const server = createServer()
+    cleanup.push(() => server.close())
+    await new Promise<void>((resolve) => { server.listen(0, '127.0.0.1', resolve) })
+    const accepted = new Promise<Socket>((resolve) => { server.once('connection', resolve) })
+    const client = connect((server.address() as AddressInfo).port, '127.0.0.1')
+    cleanup.push(() => client.destroy())
+    const socket = await accepted
+    cleanup.push(() => socket.destroy())
+    return { socket, client }
+  }
+
+  // Acceptance of #2187: under a second on x64 and ARM, where PowerShell took about 1 s and 20 to 25 s. The helper itself
+  // is asked, so a lookup that fell back to PowerShell cannot pass here, and each time is printed for the run's log.
+  it('answers by the native helper in under a second, yes and then no', async () => {
+    for (let i = 0; i < 5; i++) {
+      const { socket, client } = await connection()
+      const query = windowsPeerQuery(socket.remotePort!, socket.localPort!)
+      const start = performance.now()
+      const yes = await runWindowsNative(query.inputs)
+      const took = performance.now() - start
+      console.log(`[peer] native lookup ${i + 1}: ${Math.round(took)} ms`)
+      expect(yes, 'the helper answered').toEqual({ status: 0, stdout: expect.stringMatching(/^yes\r?\n$/) })
+      expect(took).toBeLessThan(1_000)
+
+      await new Promise<void>((resolve) => { client.once('close', () => resolve()); client.destroy() })
+      const start2 = performance.now()
+      const no = await runWindowsNative(query.inputs)
+      expect(performance.now() - start2).toBeLessThan(1_000)
+      expect(no).toEqual({ status: 0, stdout: expect.stringMatching(/^no: 0 connections match\r?\n$/) })
+    }
+  }, 120_000)
+
+  it('answers a real connection through the default path in under a second', async () => {
+    const { socket } = await connection()
+    const start = performance.now()
+    expect(await peerIsThisAccount(socket, 'win32')).toBe(true)
+    expect(performance.now() - start).toBeLessThan(1_000)
+  }, 60_000)
+
+  // The fallback for an older host stays real too.
+  it('still gets the same yes from PowerShell, for an older host', async () => {
+    const { socket } = await connection()
+    if (!await peerIsThisAccount(socket, 'win32', (script, inputs) => runPowershellAsync(script, inputs, WINDOWS_PEER_MS))) expect.fail(await asked(socket))
   }, 240_000)
 })

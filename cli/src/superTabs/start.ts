@@ -539,7 +539,7 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       const refused = text(object(joined.result).refused)
       if (refused) {
         const closed = await target.request('agent_close', { agentId: nativeId, mode: 'now' }, 60_000).catch((): Json => ({}))
-        return { ok: false, error: refused, refused, startId, machineId: request.machineId, harnessId: nativeId, ...(closed.closed === true ? {} : { closeFailed: true }) }
+        return { ok: false, error: refused, refused, startId, machineId: request.machineId, creationId, harnessId: nativeId, ...(closed.closed === true ? {} : { closeFailed: true }) }
       }
     }
     await target.request('super_tabs', { action: 'wake' }).catch(() => {})
