@@ -48,11 +48,11 @@ N/A because this stores, syncs and exposes nothing new: the row reads a count it
 
 **Files:**
 - Modify: `desktop/lib/super_tabs/project_sidebar.dart`
-- Test: `desktop/test/super_tab_project_row_mentions_test.dart`
+- Test: `desktop/test/super_tab_attention_test.dart`
 
 **Interfaces:**
 - Consumes: `SuperTabAttention.mentionsIn(String conversationId)`.
 
 - [ ] **Step 1: Write the failing test and commit it.** A tag in a task conversation shows no number on the collapsed project row.
-- [ ] **Step 2: Run it to verify it fails:** `flutter test test/super_tab_project_row_mentions_test.dart`.
+- [ ] **Step 2: Run it to verify it fails:** `flutter test test/super_tab_attention_test.dart`.
 - [ ] **Step 3: Implement it and commit.**
