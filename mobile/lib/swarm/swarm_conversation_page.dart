@@ -939,6 +939,30 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     }
   }
 
+  ({Map<int, String> references, String key}) _numberedReferences(
+    SwarmConversation c,
+    String text,
+  ) {
+    final numbers = _conversationReferencePattern
+        .allMatches(text)
+        .map((match) => int.tryParse(match[1]!))
+        .whereType<int>()
+        .toSet();
+    final snapshot = c.reader.snapshot;
+    final references = {
+      for (final conversation
+          in snapshot?.conversations ?? const <SuperTabConversation>[])
+        if (conversation.number != null &&
+            numbers.contains(conversation.number))
+          conversation.number!: conversation.id,
+    };
+    return (
+      references: references,
+      key: [for (final number in numbers) '$number:${references[number] ?? ''}']
+          .join(','),
+    );
+  }
+
   /// One of thread [t]'s messages as the chat draws its own, less what only
   /// the chat has: no quote, no thread line, no Reply (the box is the reply).
   Widget _threadRow(
@@ -966,7 +990,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       taggedAddresses: _taggedOf(c, m),
       readerId: c.reader.accountId,
       onOpenTask: _taskOpener(c, m),
-      references: _numberedConversations(c),
+      references: _numberedReferences(c, m.text).references,
       onOpenConversation: (id) => _openNumberedConversation(c, id),
       grouped: grouped,
       lit: lit,
@@ -1816,27 +1840,13 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
           final card = snapshot == null || group == null
               ? null
               : SwarmCardFacts.of(snapshot, group, m.id);
-          final referenceNumbers = _conversationReferencePattern
-              .allMatches(m.text)
-              .map((match) => int.tryParse(match[1]!))
-              .whereType<int>()
-              .toSet();
-          final references = {
-            for (final conversation
-                in snapshot?.conversations ?? const <SuperTabConversation>[])
-              if (conversation.number != null &&
-                  referenceNumbers.contains(conversation.number))
-                conversation.number!: conversation.id,
-          };
-          final referenceInputs = [
-            for (final number in referenceNumbers)
-              '$number:${references[number] ?? ''}',
-          ].join(',');
+          final numbered = _numberedReferences(c, m.text);
+          final references = numbered.references;
           return _row(
             key,
             (
               m,
-              referenceInputs,
+              numbered.key,
               // Drop a cached opener when access to its target changes.
               snapshot?.conversation(
                 m.source['taskId'] is String
