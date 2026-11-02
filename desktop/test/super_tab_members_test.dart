@@ -1,5 +1,8 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/models.dart';
+import 'package:harness/state/harness_activity.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/roster.dart';
@@ -179,35 +182,36 @@ void main() {
   final scope = find.byKey(const ValueKey('roster-scope'));
 
   group('People', () {
-    testWidgets('the heading is the project-or-Swarm choice, beside the close', (
-      tester,
-    ) async {
-      final f = await people(tester);
-      await f.show(tester);
-      expect(
-        find.descendant(of: scope, matching: find.text('All projects')),
-        findsOneWidget,
-      );
-      expect(tester.getCenter(scope).dy, tester.getCenter(close).dy);
-      expect(find.text('People'), findsOneWidget);
-      expect(find.text('Agents'), findsOneWidget);
-      expect(find.text('Humans'), findsNothing);
-      // Points are the last 7 days; no picker for the period or the week.
-      expect(find.byKey(const ValueKey('leaderboard-period')), findsNothing);
-      expect(find.byKey(const ValueKey('leaderboard-week')), findsNothing);
-      await tester.tap(scope);
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('This project').last);
-      await tester.pumpAndSettle();
-      expect(
-        find.descendant(of: scope, matching: find.text('This project')),
-        findsOneWidget,
-      );
-      expect(find.text('openharness'), findsNothing);
-      await tester.tap(close);
-      expect(f.closed, isTrue);
-      await f.close(tester);
-    });
+    testWidgets(
+      'the heading is the project-or-Swarm choice, beside the close',
+      (tester) async {
+        final f = await people(tester);
+        await f.show(tester);
+        expect(
+          find.descendant(of: scope, matching: find.text('All projects')),
+          findsOneWidget,
+        );
+        expect(tester.getCenter(scope).dy, tester.getCenter(close).dy);
+        expect(find.text('People'), findsOneWidget);
+        expect(find.text('Agents'), findsOneWidget);
+        expect(find.text('Humans'), findsNothing);
+        // Points are the last 7 days; no picker for the period or the week.
+        expect(find.byKey(const ValueKey('leaderboard-period')), findsNothing);
+        expect(find.byKey(const ValueKey('leaderboard-week')), findsNothing);
+        await tester.tap(scope);
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('This project').last);
+        await tester.pumpAndSettle();
+        expect(
+          find.descendant(of: scope, matching: find.text('This project')),
+          findsOneWidget,
+        );
+        expect(find.text('openharness'), findsNothing);
+        await tester.tap(close);
+        expect(f.closed, isTrue);
+        await f.close(tester);
+      },
+    );
 
     testWidgets('with no project open the heading reads All projects alone', (
       tester,
@@ -247,13 +251,13 @@ void main() {
       );
       expect(find.byKey(const ValueKey('leaderboard-crown-dee')), findsNothing);
       // The numbers go on the card.
-      expect(find.byKey(const ValueKey('leaderboard-meta-owner')), findsNothing);
+      expect(
+        find.byKey(const ValueKey('leaderboard-meta-owner')),
+        findsNothing,
+      );
       expect(find.textContaining('shipped'), findsNothing);
       // One line: as tall as a row with nothing under its name.
-      expect(
-        tester.getSize(row).height,
-        tester.getSize(person('tony')).height,
-      );
+      expect(tester.getSize(row).height, tester.getSize(person('tony')).height);
       expect(find.byTooltip('Points in the last 7 days'), findsWidgets);
       await f.close(tester);
     });
@@ -279,6 +283,155 @@ void main() {
       );
       expect(find.byTooltip('Points this week'), findsWidgets);
       expect(find.byKey(const ValueKey('leaderboard-week')), findsNothing);
+      await f.close(tester);
+    });
+  });
+
+  group('Agents', () {
+    /// Finn (agent-3) waits on a person, Sage (agent-1) works, Juno (agent-4)
+    /// lost its task; Atlas (agent-0) and Nova (agent-2) hold none.
+    Future<RosterFixture> agents(WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(280, 760));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final f = RosterFixture();
+      await f.initialize();
+      addTearDown(f.dispose);
+      final list = f.server.state['agents'] as List;
+      list.add({
+        ...(list[3] as Map).cast<String, Object>(),
+        'id': 'agent-4',
+        'harnessId': 'a4',
+        'name': 'Juno',
+        'displayName': 'Juno',
+        'configuration': {
+          'engine': 'claude',
+          'model': 'claude-opus-5-5',
+          'effort': 'high',
+        },
+      });
+      (f.server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
+        {
+          ...conversationFixture('ask', 'Pick a sign-in page'),
+          'assignment': {'agentId': 'agent-3', 'status': 'needs_human'},
+        },
+        {
+          ...conversationFixture('build', 'Windows credential fix'),
+          'assignment': {'agentId': 'agent-1', 'status': 'working'},
+        },
+        {
+          ...conversationFixture('gone', 'Old work'),
+          'assignment': {'agentId': 'agent-4', 'status': 'lost'},
+        },
+      ]);
+      await f.controller.refresh();
+      final machine = f.app.stateOf('m')!;
+      machine.agents = [
+        for (final i in [0, 1, 3, 4])
+          Agent(id: 'a$i', name: 'n$i', engine: 'codex'),
+      ];
+      machine.processingAgentIds.add('a1');
+      return f;
+    }
+
+    Finder word(int i) => find.byKey(ValueKey('super-member-word-agent-$i'));
+    final idle = find.byKey(const ValueKey('super-members-idle'));
+
+    testWidgets('a row is one line: name, status word and mark', (
+      tester,
+    ) async {
+      final f = await agents(tester);
+      await f.show(tester);
+      expect(f.inRow(1, find.text('Sage')), findsOneWidget);
+      expect(tester.widget<Text>(word(1)).data, 'working');
+      expect(tester.widget<Text>(word(3)).data, 'waiting');
+      expect(tester.widget<Text>(word(4)).data, 'lost');
+      expect(f.activity(tester, 1), HarnessActivity.working);
+      // Role, model, effort and the task go on the card.
+      expect(f.inRow(1, find.text('Dev')), findsNothing);
+      expect(f.model(1), findsNothing);
+      expect(f.line(1), findsNothing);
+      expect(find.textContaining('Windows credential fix'), findsNothing);
+      // The word sits on the name's line, before the mark.
+      expect(
+        tester.getCenter(word(1)).dy,
+        moreOrLessEquals(
+          tester.getCenter(f.inRow(1, find.text('Sage'))).dy,
+          epsilon: 1,
+        ),
+      );
+      expect(
+        tester.getCenter(word(1)).dx,
+        lessThan(
+          tester
+              .getCenter(
+                f.inRow(
+                  1,
+                  find.byKey(const ValueKey('super-member-mark-agent-1')),
+                ),
+              )
+              .dx,
+        ),
+      );
+      await f.close(tester);
+    });
+
+    testWidgets('waiting first, then working; idle folds under Idle (N)', (
+      tester,
+    ) async {
+      final f = await agents(tester);
+      await f.show(tester);
+      // Atlas and Nova hold no task: folded.
+      expect(f.row(0), findsNothing);
+      expect(f.row(2), findsNothing);
+      expect(
+        find.descendant(of: idle, matching: find.text('Idle (2)')),
+        findsOneWidget,
+      );
+      final tops = [
+        for (final i in [3, 1, 4]) tester.getTopLeft(f.row(i)).dy,
+      ];
+      expect(tops, [...tops]..sort());
+      // Lost work stays above the fold.
+      expect(
+        tester.getTopLeft(f.row(4)).dy,
+        lessThan(tester.getTopLeft(idle).dy),
+      );
+      await tester.tap(find.text('Idle (2)'));
+      await tester.pumpAndSettle();
+      expect(f.row(0), findsOneWidget);
+      expect(f.row(2), findsOneWidget);
+      expect(tester.widget<Text>(word(0)).data, 'idle');
+      expect(
+        tester.getTopLeft(f.row(0)).dy,
+        greaterThan(tester.getTopLeft(idle).dy),
+      );
+      await tester.tap(find.text('Idle (2)'));
+      await tester.pumpAndSettle();
+      expect(f.row(0), findsNothing);
+      await f.close(tester);
+    });
+
+    testWidgets('a click opens the agent card, not the task', (tester) async {
+      final f = await agents(tester);
+      await f.show(tester);
+      await tester.tap(f.row(1));
+      await tester.pumpAndSettle();
+      expect(f.answered, isNull);
+      expect(find.byKey(const ValueKey('super-agent-card')), findsOneWidget);
+      await f.close(tester);
+    });
+
+    testWidgets('right-click keeps Details and Remove from Swarm', (
+      tester,
+    ) async {
+      final f = await agents(tester);
+      await f.show(tester);
+      await tester.tap(f.row(1), buttons: kSecondaryMouseButton);
+      await tester.pumpAndSettle();
+      expect(find.text('Details'), findsOneWidget);
+      expect(find.text('Remove from Swarm'), findsOneWidget);
+      await tester.tapAt(Offset.zero);
+      await tester.pumpAndSettle();
       await f.close(tester);
     });
   });
