@@ -35,6 +35,12 @@ class BrowserMenuGuard {
   /// Whether this runs in a browser, where a right-click is not sure to reach the app.
   static bool get inBrowser => _web;
 
+  /// Whether this runs in a phone's or tablet's browser, where nothing can hover.
+  static bool get onTouchScreen =>
+      _web &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS);
+
   /// Whether the browser's menu is off now.
   static bool get isOff => _off;
 

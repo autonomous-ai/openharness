@@ -315,6 +315,31 @@ describe('SwarmCards.tick', () => {
     expect(t.seen.at(-1)).toEqual([])
   })
 
+  it('holds the first list while a Swarm could not be read yet, and only for a minute: a list without it says it went', async () => {
+    const t = setup({ t1: { lastChangedAt: 1, state: swarm() }, t2: { lastChangedAt: 1, state: swarm({ name: 'two' }) } })
+    t.failing.set('t1', 500)
+    await t.cards.tick()
+    expect(t.seen).toEqual([])
+    t.failing.delete('t1')
+    await t.cards.tick()
+    expect(t.seen.at(-1)?.map(c => c.id)).toEqual(['t1', 't2'])
+    // Refused is an answer: no wait.
+    const refused = setup({ t1: { lastChangedAt: 1, state: swarm() }, t2: { lastChangedAt: 1, state: swarm({ name: 'two' }) } })
+    refused.failing.set('t1', 403)
+    await refused.cards.tick()
+    expect(refused.seen.at(-1)?.map(c => c.id)).toEqual(['t2'])
+    // One that keeps failing does not hide the others for long.
+    const stuck = setup({ t1: { lastChangedAt: 1, state: swarm() }, t2: { lastChangedAt: 1, state: swarm({ name: 'two' }) } })
+    stuck.failing.set('t1', 500)
+    await stuck.cards.tick()
+    stuck.advance(59_000)
+    await stuck.cards.tick()
+    expect(stuck.seen).toEqual([])
+    stuck.advance(2_000)
+    await stuck.cards.tick()
+    expect(stuck.seen.at(-1)?.map(c => c.id)).toEqual(['t2'])
+  })
+
   it('keeps a tab it already read when another failure happens on re-read', async () => {
     const t = setup({ t1: { lastChangedAt: 1, state: swarm() } })
     await t.cards.tick()

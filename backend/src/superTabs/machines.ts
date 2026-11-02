@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { engineUnusable } from './engineHealth.js'
 import { MAX_HARNESSES, tokensByModelSchema } from './costs/tokens.js'
@@ -69,6 +70,14 @@ export const cleanupOverdue = (cleanup: MachineCleanup, now: number): boolean =>
 export type RemovalEnd = 'confirmed' | 'offline' | 'timedOut'
 /** Older contributions may name engines that Swarm no longer starts. Their fresh
  * observation lists the supported engines that are actually installed. */
+/** The default account's id for an engine on a machine: the CLI and Desktop compute the same 16 hex (sha256 of `machine:engine:default`). */
+export const defaultProfileId = (machineId: string, engine: string): string =>
+  createHash('sha256').update(`${machineId}:${engine}:default`).digest('hex').slice(0, 16)
+
+/** A profile id as the agent stores it: the default account (literal or hashed) is absent. */
+export const storedProfileId = (machineId: string, engine: string, profileId: string | undefined): string | undefined =>
+  profileId === undefined || profileId === 'default' || profileId === defaultProfileId(machineId, engine) ? undefined : profileId
+
 export function contributedEngines(pool: ContributedMachine, observation: MachineObservation | undefined = pool.observation): string[] {
   const supported = (engine: string) => engine === 'claude' || engine === 'codex'
   return pool.engines.some(engine => !supported(engine))
@@ -156,6 +165,11 @@ export const machineObservationSchema = z.object({ generation: z.string().max(16
   /** What this host can launch beyond workers: `leadStart`, a project's Product Manager (leadStart.ts). Absent from hosts
    *  before it, which are never given one. */
   capabilities: z.array(z.string().regex(/^[a-zA-Z]{1,40}$/)).max(16).optional(),
+  /** The accounts a Product Manager could move to, per engine (cli superTabs/profiles): `id` is a stable 16-hex handle,
+   *  `label` a name its owner chose (never an email, so no '@'), `leftPercent` the allowance left. Absent from hosts before it. */
+  profiles: z.array(z.object({ engine: z.enum(['claude', 'codex']), id: z.string().regex(/^[0-9a-f]{16}$/),
+    label: z.string().min(1).max(40).refine(l => !l.includes('@')), leftPercent: z.number().int().min(0).max(100).nullable(),
+    resetsAt: z.string().datetime().nullable() }).strict()).max(16).optional(),
 }).strict()
 export type MachineObservation = z.infer<typeof machineObservationSchema>
 
@@ -177,13 +191,15 @@ export const preparableStart = (start: AgentStart, machineId: string): boolean =
  */
 export function storedObservation(pool: ContributedMachine, observation: MachineObservation,
   opts: { team: boolean; now: number; preparable: (startId: string) => boolean }): StoredReading {
-  const { privacy: reported, harnessProgress, harnessTokens, preparingStartIds, ...reading } = observation
+  const { privacy: reported, harnessProgress, harnessTokens, preparingStartIds, profiles, ...reading } = observation
   const running = (id: string) => observation.runningHarnessIds.includes(id)
   const progress = harnessProgress && Object.fromEntries(Object.entries(harnessProgress).filter(([id]) => running(id)))
   const tokens = harnessTokens && Object.fromEntries(Object.entries(harnessTokens).filter(([id]) => running(id)))
   const preparing = preparingStartIds?.filter(opts.preparable)
   const privacy = observedPrivacy(pool.observation?.privacy, reported, opts.team, opts.now)
-  return { ...reading, quotas: observation.quotas.filter(q => contributedEngines(pool, observation).includes(q.engine)), receivedAt: opts.now,
+  const engines = contributedEngines(pool, observation)
+  return { ...reading, quotas: observation.quotas.filter(q => engines.includes(q.engine)), receivedAt: opts.now,
+    ...(profiles ? { profiles: profiles.filter(p => engines.includes(p.engine)) } : {}),
     sessionKind: opts.team ? 'team' : 'computer', ...(privacy ? { privacy } : {}), ...(progress ? { harnessProgress: progress } : {}),
     ...(tokens ? { harnessTokens: tokens } : {}), ...(preparing ? { preparingStartIds: preparing } : {}) }
 }
@@ -244,7 +260,7 @@ export function observedPrivacy(previous: StoredPrivacy | undefined, reported: M
   return { ...reported, seenAt: same ? previous.seenAt : now }
 }
 
-export type TeamWorkCode = 'MACHINE_OFFLINE' | 'TEAM_ACCOUNT_REQUIRED' | 'PRIVACY_UNCHECKED' | 'PRIVACY_CHECK_FAILED' | 'PRIVACY_CHECK_STALE'
+export type TeamWorkCode = 'TEAM_WRITTEN_WORK' | 'MACHINE_OFFLINE' | 'TEAM_ACCOUNT_REQUIRED' | 'PRIVACY_UNCHECKED' | 'PRIVACY_CHECK_FAILED' | 'PRIVACY_CHECK_STALE'
   | 'MACHINE_IN_OTHER_WORKSPACE' | 'NOT_SWARM_MACHINE'
 export interface TeamWorkRefusal { code: TeamWorkCode; reason: string }
 /** Refusals that hold until a person acts on the machine; a stale check or an offline machine may pass again by itself. */
@@ -384,11 +400,12 @@ export function productManagerOn(state: SuperTabState, machineId: string): strin
 
 /** Where a new agent for [project] runs when a start names [machineId]: the Mac's team account when the project is not
  *  its contributor's own and the Mac has one in this Swarm, else the machine named. */
-export function teamMachineFor(state: SuperTabState, machineId: string, project: SwarmProject, idle = false, live?: readonly string[]): string {
+export function teamMachineFor(state: SuperTabState, machineId: string, project: SwarmProject, idle = false, live?: readonly string[], teamWritten = false): string {
   // With no GitHub App on this server a team account cannot fetch or push, so the work stays on the Mac, as before.
   if (idle) return machineId
   const pool = state.machines?.find(m => m.machineId === machineId)
-  if (!pool || project.ownerId === pool.contributorId) return machineId
+  // [teamWritten]: code a Team agent wrote takes the Team account even in its owner's own project (teamWritten.ts, audit H2).
+  if (!pool || (!teamWritten && project.ownerId === pool.contributorId)) return machineId
   return teamPoolOf(state, pool, live)?.machineId ?? machineId
 }
 
@@ -430,8 +447,8 @@ export function buddyProjectsOn(state: SuperTabState, pool: ContributedMachine, 
  * stay with the owner's daemon, and a Mac without a team account here refuses it as before (teamWorkCheck).
  */
 export function teamStartRequest(state: SuperTabState, request: AgentStartRequest, project: SwarmProject, idle = false,
-  live?: readonly string[]): AgentStartRequest {
-  const machineId = teamMachineFor(state, request.machineId, project, idle, live)
+  live?: readonly string[], teamWritten = false): AgentStartRequest {
+  const machineId = teamMachineFor(state, request.machineId, project, idle, live, teamWritten)
   if (machineId === request.machineId) return request
   const pool = state.machines!.find(m => m.machineId === request.machineId)!, team = state.machines!.find(m => m.machineId === machineId)!
   return { ...request, machineId, cwd: request.cwd === projectFolder(pool, project) ? projectFolder(team, project) : request.cwd }

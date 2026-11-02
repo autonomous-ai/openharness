@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   LoopbackClient, LoopbackError, handoffTerminal, openRemoteTerminal, orderForPicker, pickMachine, remoteCommand, remoteFailureLine,
   type LoopbackSocket, type RemoteCommandDeps, type RemoteMachineChoice,
+  loopbackUrl,
 } from './remoteCommand.js'
 
 const machines: RemoteMachineChoice[] = [
@@ -36,7 +37,7 @@ class FakeDaemon {
   readonly sent: Array<{ type: string; payload: Record<string, unknown> }> = []
   constructor(private readonly answer: (socket: FakeSocket, frame: { type: string; payload: Record<string, unknown> }) => void) {}
   connect = (url: string): LoopbackSocket => {
-    expect(url).toBe('ws://127.0.0.1:18473/api/local-ws')
+    expect(url).toMatch(/^ws\+unix:\/\/.*\/daemon-18473\.sock:\/api\/local-ws$/)
     const socket = new FakeSocket((frame) => { this.sent.push(frame); this.answer(socket, frame) })
     setTimeout(() => socket.emit('open'), 0)
     return socket
@@ -170,7 +171,7 @@ describe('the loopback calls', () => {
 
   it('a daemon that never answers is a TIMEOUT, not a hang', async () => {
     const silent = new FakeDaemon(() => {})
-    const client = new LoopbackClient('ws://127.0.0.1:18473/api/local-ws', silent.connect)
+    const client = new LoopbackClient(loopbackUrl(18473), silent.connect)
     await expect(client.select('box-1', 30)).rejects.toMatchObject({ code: 'TIMEOUT' })
     client.close()
   })

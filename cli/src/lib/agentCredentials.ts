@@ -9,8 +9,9 @@
  * token anywhere but to its caller.
  */
 import { execFile } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
+import { homedir, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 
@@ -19,9 +20,33 @@ const execFileAsync = promisify(execFile)
 /** The Keychain service Claude Code stores its OAuth sign-in under (no `CLAUDE_CONFIG_DIR`). */
 export const CLAUDE_KEYCHAIN_SERVICE = 'Claude Code-credentials'
 
+/**
+ * The Keychain service Claude Code uses for a CLAUDE_CONFIG_DIR: the plain name, or the name plus
+ * `-<sha256(dir)[0..8]>` of the directory exactly as given. `CLAUDE_SECURESTORAGE_CONFIG_DIR` wins
+ * over the directory, and an empty one means the plain name — the rule of
+ * `desktop/lib/usage/usage_credentials.dart` `keychainService`.
+ */
+export function claudeKeychainService(configDir?: string, environment: NodeJS.ProcessEnv = process.env): string {
+  const secure = environment.CLAUDE_SECURESTORAGE_CONFIG_DIR
+  const hashed = secure ?? configDir
+  if (!hashed) return CLAUDE_KEYCHAIN_SERVICE
+  return `${CLAUDE_KEYCHAIN_SERVICE}-${createHash('sha256').update(hashed).digest('hex').slice(0, 8)}`
+}
+
+/**
+ * The Keychain account Claude Code writes under. Without `-a`, `security` answers with whichever
+ * item matches the service first, which can be a stale one under another user name.
+ */
+export function claudeKeychainAccount(environment: NodeJS.ProcessEnv = process.env): string {
+  const name = environment.USER ?? userInfo().username
+  return /^[a-zA-Z0-9._-]+$/.test(name) ? name : 'claude-code-user'
+}
+
 /** Everything reading reaches outside for, so a spec never touches a real home or Keychain. */
 export interface CredentialReadDeps {
   home?: string
+  /** A profile's CLAUDE_CONFIG_DIR: its Keychain item and files instead of the default account's. */
+  configDir?: string
   platform?: NodeJS.Platform
   /** The Keychain item's secret (its JSON), or null. Production asks `security`. */
   readKeychain?: () => Promise<string | null>
@@ -43,7 +68,7 @@ export async function readClaudeStored(
 ): Promise<{ raw: string; source: ClaudeCredentialSource } | null> {
   const keychain = await readClaudeKeychain(deps)
   if (keychain !== null) return { raw: keychain, source: 'keychain' }
-  const file = await readText(claudeCredentialsPath(deps.home ?? homedir()))
+  const file = await readText(deps.configDir ? join(deps.configDir, '.credentials.json') : claudeCredentialsPath(deps.home ?? homedir()))
   return file !== null ? { raw: file, source: 'file' } : null
 }
 
@@ -55,7 +80,7 @@ export async function readClaudeKeychain(deps: CredentialReadDeps = {}): Promise
   try {
     const { stdout } = await execFileAsync(
       'security',
-      ['find-generic-password', '-s', CLAUDE_KEYCHAIN_SERVICE, '-w'],
+      ['find-generic-password', '-a', claudeKeychainAccount(), '-s', claudeKeychainService(deps.configDir), '-w'],
       { timeout: 5_000 },
     )
     const out = stdout.trim()

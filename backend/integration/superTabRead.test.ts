@@ -429,6 +429,9 @@ describe('host form (design 4.10)', () => {
     const readers = [{ email: peer.email, userId: peer.sub }, { email: outsider.email, userId: outsider.sub }]
     expect(rows.get(s.lead)).toMatchObject({ lead: true, active: true, leadsConversationId: null, lastChangedAt: MIGRATED, observers: readers,
       confidential: true, membersWatch: true })
+    // The chat a PM's host rebuilds its start prompt from when it switches it, a real id (2026-11-02, both reviews of #2527).
+    expect((rows.get(s.lead) as Row & { ledConversationId?: string }).ledConversationId).toBe('lead')
+    expect(rows.get(s.worker)).toMatchObject({ ledConversationId: null })
     expect(rows.get(s.worker)).toMatchObject({ observers: readers, confidential: false, membersWatch: false })
     // Its only group is finished and dormant, yet not archived: the host must not hand it to automatic cleanup.
     expect(rows.get(s.more.idle)).toMatchObject({ lead: false, active: true })

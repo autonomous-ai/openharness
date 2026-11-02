@@ -445,10 +445,10 @@ class WsConn {
       throw StateError('The local daemon pipe is unavailable');
     }
     final transport =
-        localTransport ??
-        LocalDaemonTransport(
-          credential: kUnderTest ? null : readDaemonCredential,
-        );
+        localTransport ?? LocalDaemonTransport.detect(uri);
+    if (!transport.portAllowed) {
+      throw StateError('The local daemon socket is unavailable');
+    }
     return IOWebSocketChannel.connect(uri, headers: transport.tcpHeaders());
   }
 

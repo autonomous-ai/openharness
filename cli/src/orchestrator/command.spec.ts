@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { env } from '../config/env.js'
 import { WebSocketServer } from 'ws'
 import * as authSession from '../lib/authSession.js'
 import { summarizeOrchestratorReply, parseOrchestratorArgs, localOrchestratorRequest, orchestratorCommand } from './command.js'
@@ -69,7 +70,11 @@ describe('orchestrator argument validation', () => {
 
 describe('real loopback orchestrator transport', () => {
   const servers: WebSocketServer[] = []
+  const savedDataDir = env.ADAPTER_DATA_DIR
+  // Too long to hold a socket: the case where this asks the fake daemon's port.
+  beforeEach(() => { env.ADAPTER_DATA_DIR = `/unused-${'x'.repeat(100)}` })
   afterEach(async () => {
+    env.ADAPTER_DATA_DIR = savedDataDir
     vi.restoreAllMocks()
     await Promise.all(servers.splice(0).map(server => new Promise<void>(resolve => { for (const client of server.clients) client.terminate(); server.close(() => resolve()) })))
   })

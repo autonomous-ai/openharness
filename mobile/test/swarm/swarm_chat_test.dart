@@ -2293,6 +2293,41 @@ void main() {
       expect(key('swarm-reply-bar'), findsNothing);
     });
 
+    testWidgets('in the main chat, Copy on a message says Copied, then Copy '
+        'again (Tony, 11-02)', (tester) async {
+      final copied = <String?>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+            if (call.method == 'Clipboard.setData') {
+              copied.add((call.arguments as Map)['text'] as String?);
+            }
+            return null;
+          });
+      addTearDown(
+        () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null),
+      );
+      const words = 'The build is green';
+      await pump(tester, backend([message('m1', 1, text: words)]));
+      await tester.tap(find.text(words));
+      await tester.pumpAndSettle();
+
+      Finder inRow(String label) => find.descendant(
+        of: key('swarm-message-m1'),
+        matching: find.text(label),
+      );
+      await tester.tap(inRow('Copy'));
+      await tester.pumpAndSettle();
+      expect(copied, [words]);
+      expect(inRow('Copied'), findsOneWidget);
+
+      await tester.tap(inRow('Copied'));
+      await tester.pump(kSwarmCopiedFor);
+      await tester.pump();
+      expect(copied, [words], reason: 'one copy');
+      expect(inRow('Copy'), findsOneWidget);
+    });
+
     testWidgets('in a thread, a tap on a message offers Copy, as in the chat, '
         'and Copy copies its text (Dee, 11-01)', (tester) async {
       String? copied;
@@ -2322,6 +2357,14 @@ void main() {
         await tester.tap(copy);
         await tester.pumpAndSettle();
         expect(copied, text);
+        expect(
+          find.descendant(
+            of: key('swarm-thread-message-$id'),
+            matching: find.text('Copied'),
+          ),
+          findsOneWidget,
+          reason: '$id says it copied',
+        );
       }
     });
 

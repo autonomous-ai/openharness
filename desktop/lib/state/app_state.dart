@@ -1,4 +1,5 @@
 import '../core/home_dir.dart';
+import '../usage/usage_account_key.dart';
 import '../measurement/product_measurement.dart';
 import '../measurement/product_runtime_health.dart';
 import '../measurement/product_connections.dart';
@@ -96,6 +97,7 @@ import '../settings/config_store.dart';
 import '../settings/experimental_features.dart';
 import '../core/local_key_value_store.dart';
 import '../core/harness_file_store.dart';
+import '../super_tabs/swarm_accounts.dart';
 import '../super_tabs/attachment_upload.dart';
 import '../super_tabs/avatar_upload.dart';
 import '../super_tabs/backend_transport.dart';
@@ -104,7 +106,8 @@ import '../super_tabs/controller.dart';
 import '../super_tabs/join_machine.dart';
 import '../super_tabs/identity.dart' show superTabMachineName;
 import '../super_tabs/view_store.dart';
-import '../super_tabs/notifications.dart' show superTabChatNotice, superTabMentionNotice;
+import '../super_tabs/notifications.dart'
+    show superTabChatNotice, superTabMentionNotice;
 import '../measurement/setup_preference_store.dart';
 import '../devices/device_hosts.dart';
 import '../stats/harness_stats.dart';
@@ -266,12 +269,50 @@ class AgentForkAttempt {
   Future<ForkAgentResult>? get pending => _inFlight;
 }
 
+/// One account an engine can run under on a machine, as Change agent offers it.
+class AgentProfile {
+  const AgentProfile({
+    required this.id,
+    required this.key,
+    required this.label,
+    this.path,
+    this.percentLeft,
+    this.offered = true,
+    this.canOffer = false,
+  });
+
+  /// False when the machine's owner has not offered this account to the Swarm. Using it does not:
+  /// only Swarm accounts… does ([AppNotifier.setAccountOffered]).
+  final bool offered;
+
+  /// Not the default account, on a CLI that says what is offered: Swarm accounts… can list it.
+  final bool canOffer;
+
+  /// The account's Swarm profile id ([swarmProfileId]): what `usage_read` and the current-account check use.
+  final String id;
+
+  /// What [AppNotifier.changeAgent] is given: the folder, or `'default'` for the default account.
+  final String key;
+  final String label;
+  final String? path;
+
+  /// Null when the machine could not read this account's usage.
+  final int? percentLeft;
+}
+
+/// Null and `'default'` both mean the machine's default account.
+bool sameAgentProfile(String? a, String? b) =>
+    (a ?? 'default') == (b ?? 'default');
+
 /// One deliberate creation, retained by the form if its reply is lost. Reusing
 /// it checks the original request; opening New agent starts a fresh intent.
 class _AgentChange {
-  _AgentChange(this.source, this.engine, this.revision);
+  _AgentChange(this.source, this.engine, this.revision, [this.profile]);
   final Agent source;
   final String engine;
+
+  /// The account folder to start in ([AgentProfile.key]); null keeps the default.
+  final String? profile;
   final int revision;
   final creation = AgentCreationAttempt(background: true);
   Future<String?>? pending;
@@ -722,6 +763,8 @@ enum AttachIntent { person, automatic }
 /// Machines asked for from outside the workspace ([AppNotifier.requestMachines]): the device to
 /// select there, or the first phone or app.
 typedef MachinesRequest = ({String? devicePub, bool phones});
+
+const buddyKeepsItsEngine = 'A Buddy keeps its engine for now';
 
 /// Change agent on a Swarm Buddy, which keeps running and so keeps its agent
 /// (hn's `BUDDY_KEEPS_ITS_AGENT`, word for word).
@@ -10824,6 +10867,7 @@ class AppNotifier extends ChangeNotifier {
           prev.engineDisplayName != agent.engineDisplayName ||
           prev.engineIconHint != agent.engineIconHint ||
           prev.codexHome != agent.codexHome ||
+          prev.claudeHome != agent.claudeHome ||
           prev.modelName != agent.modelName ||
           prev.modelEffort != agent.modelEffort ||
           prev.gridModel != agent.gridModel ||
@@ -15164,6 +15208,262 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  Future<Map<String, dynamic>> listClaudeProfiles(
+    String machineId, {
+    Set<String> observedPaths = const {},
+  }) async {
+    try {
+      return await _conn(machineId).request(
+        'claude_profiles_list',
+        payload: {'observedPaths': observedPaths.toList()},
+        timeout: const Duration(seconds: 10),
+      );
+    } catch (error) {
+      return {'error': 'UNREACHABLE'};
+    }
+  }
+
+  final _addingClaude = <String>{};
+
+  /// This computer's accounts its owner can offer to the Swarm or take back. Throws when it cannot
+  /// tell, so the screen says so and never reads a failure as "no accounts".
+  Future<List<SwarmAccount>> swarmAccounts(String machineId) async {
+    if (stateOf(machineId)?.isLocalMachine != true) {
+      throw StateError('not this computer');
+    }
+    final agents = stateOf(machineId)?.agents ?? const <Agent>[];
+    return [
+      for (final engine in const ['claude', 'codex'])
+        ...await () async {
+          final reply = engine == 'claude'
+              ? await listClaudeProfiles(
+                  machineId,
+                  observedPaths: {for (final a in agents) ?a.claudeHome},
+                )
+              : await listCodexProfiles(
+                  machineId,
+                  observedPaths: {for (final a in agents) ?a.codexHome},
+                );
+          final rows = reply['profiles'];
+          if (rows is! List) throw StateError('no list');
+          return [
+            for (final row in rows)
+              if (row is Map &&
+                  row['path'] is String &&
+                  row['offered'] is bool &&
+                  row['default'] != true)
+                SwarmAccount(
+                  engine: engine,
+                  path: row['path'] as String,
+                  label: row['label'] as String? ?? row['path'] as String,
+                  offered: row['offered'] as bool,
+                ),
+          ];
+        }(),
+    ];
+  }
+
+  /// Offers an account of this computer to the Swarm, or takes it back. Null when done, or what to
+  /// tell the owner.
+  Future<String?> setAccountOffered(
+    String machineId,
+    String engine,
+    String path,
+    bool offered,
+  ) async {
+    if (stateOf(machineId)?.isLocalMachine != true) {
+      return 'Accounts can be offered on their own computer only.';
+    }
+    String? code;
+    try {
+      final reply = await _conn(machineId).request(
+        'swarm_account_offer',
+        payload: {'engine': engine, 'path': path, 'offered': offered},
+        timeout: const Duration(seconds: 10),
+      );
+      code = reply['error'] as String?;
+    } on WsRequestFailure catch (failure) {
+      code = failure.code;
+    } catch (_) {
+      code = 'UNREACHABLE';
+    }
+    return switch (code) {
+      null => null,
+      'NOT_FOUND' => 'That account’s folder is gone.',
+      'UNSUPPORTED' ||
+      'UNKNOWN_TYPE' => 'Update Harness on this computer to offer accounts.',
+      'TOO_MANY' => 'Too many accounts are offered. Withdraw one first.',
+      _ => 'Couldn’t reach this computer. Try again.',
+    };
+  }
+
+  /// What `usage_read` last said per account, kept so opening the picker again does not call the vendors again.
+  final _usageCache = <(String, String, String), ({DateTime at, int? left})>{};
+  static const _usageFresh = Duration(minutes: 5);
+  static const _usageReadsPerEngine = 8;
+
+  /// Where Codex keeps the default account, which the picker names `'default'`.
+  static String _codexDefaultHome() =>
+      Platform.environment['CODEX_HOME'] ?? '${homeDir()}/.codex';
+
+  /// The accounts [engine] runs under on [machineId], each with the share of its limit left when
+  /// the machine can read it. Empty for any other engine or when the machine does not answer.
+  Future<List<AgentProfile>> agentProfiles(
+    String machineId,
+    String engine,
+  ) async {
+    if (engine != 'claude' && engine != 'codex') return const [];
+    // Profile requests are not sealed for the relay, so only this computer's own daemon is asked.
+    if (stateOf(machineId)?.isLocalMachine != true) return const [];
+    final observed = {
+      for (final a in stateOf(machineId)?.agents ?? const <Agent>[])
+        ?(engine == 'claude' ? a.claudeHome : a.codexHome),
+    };
+    final Map<String, dynamic> reply;
+    try {
+      reply = engine == 'claude'
+          ? await listClaudeProfiles(machineId, observedPaths: observed)
+          : await listCodexProfiles(machineId, observedPaths: observed);
+    } catch (_) {
+      return const [];
+    }
+    final rows = reply['profiles'];
+    if (rows is! List) return const [];
+    final defaultId = swarmProfileId(machineId, engine, 'default');
+    final profiles = [
+      for (final row in rows)
+        if (row is Map && row['path'] is String)
+          () {
+            final path = row['path'] as String;
+            final rowId = row['id'] as String?;
+            // An old Claude CLI names its default account with the literal 'default'.
+            final legacy = engine == 'claude' && rowId == 'default';
+            // The CLI marks the default row; an old Codex CLI sends no flag, so its env folder is it.
+            final isDefault =
+                row['default'] == true ||
+                legacy ||
+                rowId == defaultId ||
+                (engine == 'codex' &&
+                    row['default'] == null &&
+                    path == _codexDefaultHome());
+            return (
+              path: path,
+              offered: row['offered'] != false,
+              canOffer: row['offered'] is bool && !isDefault,
+              label: row['label'] as String? ?? path,
+              id: isDefault
+                  ? defaultId
+                  : (rowId ?? swarmProfileId(machineId, engine, path)),
+              isDefault: isDefault,
+              legacy: legacy,
+            );
+          }(),
+    ];
+    // One account has no choice to show, so its usage is not worth a vendor call.
+    var budget = profiles.length > 1 ? _usageReadsPerEngine : 0;
+    return Future.wait([
+      for (final p in profiles)
+        () async {
+          final key = (machineId, engine, p.id);
+          var cached = _usageCache[key];
+          if ((cached == null ||
+                  clock.now().difference(cached.at) >= _usageFresh) &&
+              budget > 0) {
+            budget--;
+            int? left;
+            try {
+              // An old CLI does not know profile reads: its plain read answers both
+              // engines' default accounts, so take the one for this engine.
+              final usage = parseUsageReadResult(
+                await _conn(machineId).request(
+                  'usage_read',
+                  payload: p.legacy
+                      ? const {}
+                      : {
+                          'profile': {'engine': engine, 'id': p.id},
+                        },
+                  timeout: const Duration(seconds: 10),
+                ),
+              );
+              final tightest =
+                  (p.legacy
+                          ? usage
+                                .where((u) => u.provider.name == engine)
+                                .firstOrNull
+                          : usage.firstOrNull)
+                      ?.tightest;
+              if (tightest != null) {
+                left = (100 - tightest.usedPercent).round().clamp(0, 100);
+              }
+            } catch (_) {}
+            cached = _usageCache[key] = (at: clock.now(), left: left);
+          }
+          return AgentProfile(
+            id: p.id,
+            key: p.isDefault ? 'default' : p.path,
+            label: p.label,
+            path: p.path,
+            percentLeft: cached?.left,
+            offered: p.offered,
+            canOffer: p.canOffer,
+          );
+        }(),
+    ]);
+  }
+
+  /// Opens a Claude that is signed out in a new account folder beside the others on [machineId]:
+  /// the picker lists it once the person has run /login there. A pane cannot be given an
+  /// environment, so Claude is started with `claudeHome` instead of `CLAUDE_CONFIG_DIR`.
+  Future<String?> addClaudeAccount(String machineId, String agentId) async {
+    if (stateOf(machineId)?.isLocalMachine != true) {
+      return 'A Claude account can be added on this computer only.';
+    }
+    final source = stateOf(machineId)?.agents
+        .where((a) => a.id == agentId)
+        .firstOrNull;
+    final folder =
+        source?.project?.cwd ??
+        (source == null ? null : stateOf(machineId)?.projectOf(source)?.cwd);
+    if (folder == null) {
+      return 'This harness has no project folder to open Claude in.';
+    }
+    // One add at a time per machine: a second click would pick the same folder.
+    if (!_addingClaude.add(machineId)) {
+      return 'A Claude account is already being added.';
+    }
+    try {
+      final listed = await listClaudeProfiles(machineId);
+      final rows =
+          (listed['profiles'] as List?)?.whereType<Map>().toList() ?? [];
+      final home = rows.isEmpty ? null : rows.first['path'] as String?;
+      if (home == null) return 'Could not reach this machine.';
+      // A folder is free when the machine does not list it and no agent here runs in it.
+      final taken = {
+        for (final r in rows) r['path'],
+        for (final a in stateOf(machineId)?.agents ?? const <Agent>[])
+          a.claudeHome,
+      };
+      var n = 1;
+      while (taken.contains('$home/.harness/claude-profiles/$n')) {
+        n++;
+      }
+      final path = '$home/.harness/claude-profiles/$n';
+      // The folder only exists once Claude has signed in there; the machine finds it by itself then.
+      final error = await createAgent(
+        machineId,
+        engine: 'claude',
+        folder: folder,
+        claudeHome: path,
+      );
+      if (error == null) {
+        agentChangeNotice?.call('Run /login, then pick it again');
+      }
+      return error;
+    } finally {
+      _addingClaude.remove(machineId);
+    }
+  }
+
   /// Starts an agent, or recovers this form's earlier request after a lost reply.
   /// Returns null on success, or an inline message; [attempt] tells the form
   /// whether to offer Check status instead of inviting another creation.
@@ -15213,6 +15513,7 @@ class AppNotifier extends ChangeNotifier {
     bool bypassPermission = true,
     String? permissionMode,
     String? codexHome,
+    String? claudeHome,
     String? dsh,
     String? swarmRole,
     String? swarmSkillMode,
@@ -15237,6 +15538,7 @@ class AppNotifier extends ChangeNotifier {
       // dialog derives from the same choice.
       'permissionMode': ?permissionMode,
       'codexHome': ?codexHome,
+      'claudeHome': ?claudeHome,
       // The harness this agent is created from. `engine` above is its BASE —
       // the machine refuses the pair when they disagree (`INVALID_DSH`).
       'dsh': ?dsh,
@@ -15706,6 +16008,9 @@ class AppNotifier extends ChangeNotifier {
           ? null
           : _creationPlacementError(targetId, split, placement: placement);
       if (placementError != null) return placementError;
+      if (choices['claudeHome'] != null && choices['engine'] != 'claude') {
+        return 'Choose a Claude account only for Claude';
+      }
       if (choices['codexHome'] != null) {
         if (choices['engine'] != 'codex') {
           return 'Choose a Codex profile only for Codex';
@@ -17301,6 +17606,24 @@ class AppNotifier extends ChangeNotifier {
   /// top, which shows it as a snack bar; null when no screen is listening.
   void Function(String message)? agentChangeNotice;
 
+  /// Whether [agentId] is a Swarm Buddy, as any open Swarm's roster says. Its machine refuses to
+  /// stop it, so Change agent cannot switch it.
+  @visibleForTesting
+  final buddyAgentsForTest = <(String, String)>{};
+
+  bool isSwarmBuddy(String machineId, String agentId) =>
+      buddyAgentsForTest.contains((machineId, agentId)) ||
+      superTabs.loadedControllers.any(
+        (c) =>
+            c.snapshot?.agents.any(
+              (a) =>
+                  a.isBuddy &&
+                  a.machineId == machineId &&
+                  a.harnessId == agentId,
+            ) ==
+            true,
+      );
+
   List<String> agentSwitchEngines(String machineId, Agent source) {
     if (source.dsh == 'autonomous/pair') {
       return const ['opencode', 'codex', 'claude'];
@@ -17322,14 +17645,25 @@ class AppNotifier extends ChangeNotifier {
 
   /// One switch intent owns its creation receipt. Save the old conversation,
   /// then move all views as soon as the replacement terminal can be attached.
-  Future<String?> changeAgent(String machineId, String agentId, String engine) {
+  Future<String?> changeAgent(
+    String machineId,
+    String agentId,
+    String engine, {
+    String? profile,
+  }) {
     final source = stateOf(machineId)?.agents
         .where((a) => a.id == agentId)
         .firstOrNull;
     if (source == null) {
       return Future.value('This harness is no longer available.');
     }
-    if (source.engine == engine) return Future.value();
+    final currentProfile = source.engine == 'claude'
+        ? source.claudeHome
+        : source.codexHome;
+    if (source.engine == engine &&
+        (profile == null || sameAgentProfile(profile, currentProfile))) {
+      return Future.value();
+    }
     if (stateOf(machineId)?.machine.isShared != false) {
       return Future.value('Shared harnesses are view-only.');
     }
@@ -17343,6 +17677,9 @@ class AppNotifier extends ChangeNotifier {
         'This agent is not supported by the installed harness.',
       );
     }
+    if (isSwarmBuddy(machineId, agentId)) {
+      return Future.value(buddyKeepsItsEngine);
+    }
     final key = (machineId, agentId);
     if (source.dsh == 'autonomous/pair' &&
         _agentChanges[key] == null &&
@@ -17354,25 +17691,35 @@ class AppNotifier extends ChangeNotifier {
     }
     var operation = _agentChanges[key];
     if (operation?.pending case final pending?) {
-      return operation!.engine == engine
+      return operation!.engine == engine &&
+              sameAgentProfile(operation.profile, profile)
           ? pending
           : Future.value('The agent is already switching.');
     }
     if (operation != null &&
         ((!operation.preservingViews &&
-                (!operation.handoffHeld || operation.engine != engine)) ||
+                (!operation.handoffHeld ||
+                    operation.engine != engine ||
+                    !sameAgentProfile(operation.profile, profile))) ||
             operation.launchFailed ||
             (operation.creation._finished &&
                 operation.creation.agentId == null))) {
       _agentChanges.remove(key);
       operation = null;
     }
-    if (operation != null && operation.engine != engine) {
+    if (operation != null &&
+        (operation.engine != engine ||
+            !sameAgentProfile(operation.profile, profile))) {
       return Future.value(
         'Check the pending switch to ${operation.engine} before choosing another agent.',
       );
     }
-    final change = operation ??= _AgentChange(source, engine, _authRevision);
+    final change = operation ??= _AgentChange(
+      source,
+      engine,
+      _authRevision,
+      profile,
+    );
     _agentChanges[key] = change;
     return change.pending = _changeAgent(
       machineId,
@@ -17578,6 +17925,12 @@ class AppNotifier extends ChangeNotifier {
         engine: change.engine,
         folder: folder,
         dsh: source.dsh,
+        codexHome: change.engine == 'codex' && change.profile != 'default'
+            ? change.profile
+            : null,
+        claudeHome: change.engine == 'claude' && change.profile != 'default'
+            ? change.profile
+            : null,
         name: source.displayName,
         permissionMode: mode,
         bypassPermission: mode == 'auto' || mode == 'full',

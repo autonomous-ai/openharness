@@ -317,6 +317,9 @@ class SwarmDestination {
     this.agentId,
     this.modelId,
     this.agentEngine,
+    this.agentProfile,
+    this.addsClaudeAccount = false,
+    this.managesSwarmAccounts = false,
     this.storeId,
     this.engine,
     this.closedId,
@@ -365,6 +368,15 @@ class SwarmDestination {
   final String? swarmId, machineId, agentId, engine;
   final String? modelId;
   final String? agentEngine;
+
+  /// The account to run [agentEngine] under ([AgentProfile.key]); null when the machine has one.
+  final String? agentProfile;
+
+  /// The row that opens a new Claude account folder to sign in to.
+  final bool addsClaudeAccount;
+
+  /// The row that opens Swarm accounts, where an account is offered or taken back.
+  final bool managesSwarmAccounts;
   bool get isAgentChoice => agentEngine != null;
   bool get isModel => modelId != null;
   final String? storeId;

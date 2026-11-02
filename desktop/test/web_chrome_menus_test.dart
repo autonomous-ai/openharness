@@ -11,9 +11,11 @@ import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/web/shell/web_chrome.dart';
 import 'package:harness/widgets/account_menu.dart';
 import 'package:harness/widgets/swarm_switcher.dart';
+import 'package:harness/widgets/workspace_account_button.dart';
 
 import 'support/capture.dart';
 import 'support/real_fonts.dart';
+import 'support/super_tab_phone.dart';
 import 'swarm_state_test.dart' show createApp;
 
 /// The web bar after Huy's ask (2026-11-02): no left menu; the avatar's account
@@ -300,6 +302,98 @@ void main() {
         }
         await captureWindow(tester, _captureDir, 'phone-$width-dark-bar');
         await _done(tester, app);
+      });
+    }
+
+    // Huy, 2026-11-02: the phone bar's icons line up evenly and are one size.
+    for (final width in [360.0, 390.0]) {
+      for (final name in ['a', 'A tab with a very long name that cannot fit']) {
+        testWidgets(
+          'its icons line up evenly and match at $width, tab "$name"',
+          (tester) async {
+            final app = _app();
+            app.renameSwarm(app.activeSwarmId, name);
+            await _mount(tester, Size(width, 740), app: app);
+            Finder icon(String key, Type type) => find.descendant(
+              of: find.byKey(ValueKey(key)),
+              matching: find.byType(type),
+            );
+            final cells = [
+              for (final key in [
+                'web-new-menu-button',
+                'swarm-search-button',
+                'workspace-notifications-button',
+                'swarm-account-button',
+              ])
+                tester.getRect(find.byKey(ValueKey(key))),
+            ];
+            // Every icon has the same square, side by side, so the spacing is even.
+            for (final cell in cells) {
+              expect(cell.size, const Size(44, 44));
+            }
+            for (var i = 1; i < cells.length; i++) {
+              expect(cells[i].left, cells[i - 1].right);
+            }
+            // And what is drawn in it is one size, the avatar's circle too.
+            final drawn = [
+              tester.getRect(icon('web-new-menu-button', Icon).first),
+              tester.getRect(icon('swarm-search-button', Icon).first),
+              tester.getRect(
+                icon('workspace-notifications-button', Icon).first,
+              ),
+              tester.getRect(icon('swarm-account-button', AccountAvatar).first),
+            ];
+            for (final rect in drawn) {
+              expect(rect.size, const Size(20, 20));
+            }
+            for (var i = 0; i < drawn.length; i++) {
+              expect(drawn[i].center, cells[i].center);
+            }
+            // The row starts and ends the same distance from the screen's edges.
+            final label = tester.getRect(icon('web-tab-switcher', Text).first);
+            expect(label.left, 16);
+            expect(drawn.last.right, width - 16);
+            await _done(tester, app);
+          },
+        );
+      }
+    }
+
+    // Huy, 2026-11-02: each row was even on its own, but not with the other.
+    for (final width in [360.0, 390.0]) {
+      testWidgets('the Swarm header under it shares its edges at $width', (
+        tester,
+      ) async {
+        final size = Size(width, 740);
+        final app = await _mount(tester, size);
+        final name = tester.getRect(
+          find
+              .descendant(
+                of: find.byKey(const ValueKey('web-tab-switcher')),
+                matching: find.byType(Text),
+              )
+              .first,
+        );
+        final avatar = tester.getRect(
+          find
+              .descendant(of: _avatar, matching: find.byType(AccountAvatar))
+              .first,
+        );
+        await _done(tester, app);
+
+        final (_, controller) = await mountPhoneSuperTab(tester, size);
+        Rect icon(String tooltip) => tester.getRect(
+          find
+              .descendant(
+                of: find.byTooltip(tooltip),
+                matching: find.byType(Icon),
+              )
+              .first,
+        );
+        expect(icon('Conversations').left, name.left);
+        expect(icon('Members and machines').center.dx, avatar.center.dx);
+        expect(tester.takeException(), isNull);
+        await unmountPhoneSuperTab(tester, controller);
       });
     }
 

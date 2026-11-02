@@ -10,6 +10,7 @@
  */
 import { AGENT_SETTING_NAMES, askThePersonFirst, PERSON_SAID_YES, type AgentSettings } from '../lib/agentSettings.js'
 import { localCredentialHeaders } from '../lib/localCredential.js'
+import { daemonFetch } from '../lib/localTransport.js'
 import { env } from '../config/env.js'
 import { daemonUnreachableText } from '../lib/daemonState.js'
 import { outsideCaller } from './model.js'
@@ -97,7 +98,7 @@ export async function settingsCommand(argv: readonly string[], deps: SettingsDep
   }
   let answer: Answer
   try {
-    const response = await (deps.fetch ?? fetch)(`http://127.0.0.1:${deps.port}/api/agent-settings`, {
+    const response = await (deps.fetch ?? daemonFetch(deps.dataDir ?? env.ADAPTER_DATA_DIR, deps.port))(`http://127.0.0.1:${deps.port}/api/agent-settings`, {
       method: change ? 'PATCH' : 'GET',
       // The local API's CSRF gate: a write must say it comes from this computer.
       headers: { 'x-adapter-local': '1', ...localCredentialHeaders(deps.dataDir ?? env.ADAPTER_DATA_DIR), ...(change ? { 'content-type': 'application/json' } : {}) },

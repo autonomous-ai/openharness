@@ -437,7 +437,8 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     ].join('\n');
     // The row's details line (Dee, 2026-10-30): the task in plain words and
     // how long since its last progress; with no task, the state in a word.
-    final limited = glance.label.startsWith('Limited until')
+    final limited =
+        glance.label.startsWith('Limited until') || glance.label == 'Switching…'
         ? glance.label
         : null;
     final detail = work == null

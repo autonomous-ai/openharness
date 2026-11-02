@@ -91,6 +91,9 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
     lead: !!ledProject(state, target.id),
     // Removed (model.ts leadsRemoved); an older CLI still reads the field, so it stays, always empty.
     leadsConversationId: null,
+    // The conversation it leads: the chat its host rebuilds its start prompt from when it switches it (cli leadSwitchRequest.ts).
+    // A field of its own: an older host reads leadsConversationId as "only this conversation's deliveries" (cli host.ts).
+    ledConversationId: ledProject(state, target.id)?.leadConversationId ?? null,
     stopRequested: target.workDecision === 'stop' && !state.conversations.some(c => activeWork(c) && c.assignment?.agentId === target.id),
     observers: lookups.people.filter(p => p.id !== user.sub && canWatchAgent(state, { kind: 'person', userId: p.id, email: p.email }, target, closed))
       .map(p => ({ email: p.email, userId: p.id })),

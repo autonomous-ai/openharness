@@ -1,6 +1,8 @@
 import 'dart:io';
 import 'dart:ui' show PointerDeviceKind;
 
+import 'package:flutter/foundation.dart'
+    show debugDefaultTargetPlatformOverride;
 import 'package:flutter/gestures.dart' show kSecondaryMouseButton;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -503,6 +505,7 @@ void main() {
       WidgetTester tester,
       int agents, {
       int buddies = 0,
+      Duration age = Duration.zero,
     }) async {
       final server = ConversationServer();
       server.state['agents'] = [
@@ -528,7 +531,8 @@ void main() {
           'name': 'Studio Mac',
           'contributorId': 'owner',
           'observation': {
-            'receivedAt': DateTime.now().millisecondsSinceEpoch,
+            'receivedAt':
+                DateTime.now().millisecondsSinceEpoch - age.inMilliseconds,
             'resources': {'cpuPercent': 12},
           },
         },
@@ -573,12 +577,45 @@ void main() {
       await unmount(tester, c);
     });
 
+    testWidgets(
+      'an offline machine keeps its total and says nothing is running, in the muted ink',
+      (tester) async {
+        final c = await mount(tester, 34, age: const Duration(minutes: 10));
+        final text = find.descendant(
+          of: line,
+          matching: find.text('34 agents · none running, machine offline'),
+        );
+        expect(text, findsOneWidget);
+        expect(
+          tester.widget<Text>(text).style?.color,
+          DesktopChrome.control(color: DesktopChrome.muted).color,
+        );
+        expect(find.textContaining('working'), findsNothing);
+        await unmount(tester, c);
+      },
+    );
+
+    testWidgets(
+      'one agent on an offline machine reads "1 agent · none running"',
+      (tester) async {
+        final c = await mount(tester, 1, age: const Duration(minutes: 10));
+        expect(
+          find.descendant(
+            of: line,
+            matching: find.text('1 agent · none running, machine offline'),
+          ),
+          findsOneWidget,
+        );
+        await unmount(tester, c);
+      },
+    );
+
     testWidgets('one: "1 agent" with a chevron, no avatar and no agent row', (
       tester,
     ) async {
       final c = await mount(tester, 1);
       expect(
-        find.descendant(of: line, matching: find.text('1 agent')),
+        find.descendant(of: line, matching: find.text('1 agent · 0 working')),
         findsOneWidget,
       );
       expect(
@@ -600,7 +637,10 @@ void main() {
       (tester) async {
         final c = await mount(tester, 2, buddies: 3);
         expect(
-          find.descendant(of: line, matching: find.text('2 agents')),
+          find.descendant(
+            of: line,
+            matching: find.text('2 agents · 0 working'),
+          ),
           findsOneWidget,
         );
         await tester.tap(line);
@@ -627,7 +667,7 @@ void main() {
       final c = await mount(tester, 20);
       expect(line, findsOneWidget);
       expect(
-        find.descendant(of: line, matching: find.text('20 agents')),
+        find.descendant(of: line, matching: find.text('20 agents · 0 working')),
         findsOneWidget,
       );
       for (var i = 0; i < 20; i++) {
@@ -706,7 +746,10 @@ void main() {
         );
         await tester.pump();
         expect(
-          find.descendant(of: line, matching: find.text('5 agents')),
+          find.descendant(
+            of: line,
+            matching: find.text('5 agents · 2 working'),
+          ),
           findsOneWidget,
         );
         expect(find.text('Nova'), findsNothing);
@@ -1680,7 +1723,11 @@ void main() {
       Future<dynamic> browser(
         WidgetTester tester, {
         String owner = 'owner',
+        // A test runs as Android unless it says: these are a mouse's browser.
+        TargetPlatform platform = TargetPlatform.macOS,
       }) async {
+        debugDefaultTargetPlatformOverride = platform;
+        addTearDown(() => debugDefaultTargetPlatformOverride = null);
         BrowserMenuGuard.debugWeb = true;
         BrowserMenuGuard.debugSink = (_) async {};
         addTearDown(BrowserMenuGuard.debugReset);
@@ -1704,7 +1751,41 @@ void main() {
         await tester.pumpWidget(const SizedBox());
         await c.flush();
         c.dispose();
+        debugDefaultTargetPlatformOverride = null;
       }
+
+      // Huy, 2026-11-02: a touch screen has nothing to hover, so the ⋯ stays.
+      for (final platform in [TargetPlatform.iOS, TargetPlatform.android]) {
+        testWidgets(
+          'on a ${platform.name} browser it is always there, a finger wide, and a tap opens the menu',
+          (tester) async {
+            final c = await browser(tester, platform: platform);
+            final size = tester.getSize(more);
+            expect(size.width, greaterThanOrEqualTo(44));
+            expect(size.height, greaterThanOrEqualTo(44));
+            // Its corner too: the whole finger's target opens it.
+            await tester.tapAt(tester.getTopLeft(more) + const Offset(2, 2));
+            await tester.pumpAndSettle();
+            expect(find.text('Details'), findsOneWidget);
+            expect(c.isMachineExpanded('studio'), isFalse);
+            await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+            await tester.pumpAndSettle();
+            expect(tester.getSize(more).width, greaterThanOrEqualTo(44));
+            await done(tester, c);
+          },
+        );
+      }
+
+      testWidgets(
+        'a browser with a mouse keeps it for hover, focus or an open menu',
+        (tester) async {
+          final c = await browser(tester);
+          expect(width(tester), 0);
+          await hover(tester);
+          expect(width(tester), 32);
+          await done(tester, c);
+        },
+      );
 
       testWidgets('shows on pointing and opens the same menu on a left click', (
         tester,

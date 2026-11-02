@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto'
+import { env } from '../config/env.js'
+import { localWsTarget } from './localTransport.js'
 import { readdir, readFile, realpath } from 'node:fs/promises'
 import { dirname, isAbsolute, join, posix, resolve, win32 } from 'node:path'
 import { addressOf, atMachineRefusal, EXIT, machineOption, refusalNext, REFUSED_CODES, step, VIA_MCP_ENV } from '../agentClient/commands.js'
@@ -483,7 +485,7 @@ export function daemonSession(deps: Pick<NewCommandDeps, 'port' | 'connect' | 't
   close: () => void
 }> {
   return new Promise((resolveSession, rejectSession) => {
-    const socket = deps.connect(`ws://127.0.0.1:${deps.port}/api/local-ws`)
+    const socket = deps.connect(localWsTarget(env.ADAPTER_DATA_DIR, deps.port).url)
     const waiting = new Map<string, { done: (payload: Record<string, unknown>) => void; fail: (error: Error) => void; timer: NodeJS.Timeout }>()
     let ready = false
     const failAll = (error: Error): void => {

@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import { localCredentialHeaders } from '../lib/localCredential.js'
+import { localWsTarget } from '../lib/localTransport.js'
 import { WebSocket } from 'ws'
 import { env } from '../config/env.js'
 import { readAuthSession } from '../lib/authSession.js'
@@ -7,7 +7,8 @@ import { readAuthSession } from '../lib/authSession.js'
 export function localOrchestratorRequest(port: number, machineId: string, payload: Record<string, unknown>, timeoutMs = 30_000): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     const requestId = randomBytes(16).toString('hex')
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/api/local-ws`, { headers: localCredentialHeaders(env.ADAPTER_DATA_DIR) })
+    const line = localWsTarget(env.ADAPTER_DATA_DIR, port)
+    const ws = new WebSocket(line.url, { headers: line.headers })
     let settled = false
     const finish = (error?: Error, reply?: Record<string, unknown>): void => {
       if (settled) return

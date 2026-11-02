@@ -51,16 +51,18 @@ class WebTabSwitcher extends StatelessWidget {
     ].join(' ');
     return Row(
       children: [
-        Flexible(
-          child: fingerTarget(
-            enabled: true,
-            _switcher(context, label, enabled, theme),
+        // All the room the name leaves: + stays beside the other icons, however
+        // short the name is.
+        Expanded(
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: fingerTarget(
+              enabled: true,
+              _switcher(context, label, enabled, theme),
+            ),
           ),
         ),
-        fingerTarget(
-          enabled: true,
-          WebNewMenuButton(app: app, commands: commands),
-        ),
+        phoneBarCell(WebNewMenuButton(app: app, commands: commands)),
       ],
     );
   }

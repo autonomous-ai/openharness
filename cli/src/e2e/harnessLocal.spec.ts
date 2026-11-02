@@ -1,6 +1,10 @@
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { afterEach, describe, expect, it } from 'vitest'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { env } from '../config/env.js'
 import { startHookServer, type HookServerHandlers } from '../hookServer.js'
 import { machineId } from './harnessLocal.js'
 
@@ -9,7 +13,15 @@ import { machineId } from './harnessLocal.js'
 // stopped at "daemon /api/status has no machineId" the day its daemon updated to 0.4.21 (2026-10-19), because
 // the e2e asked without it. Against the real server, so a change to that gate fails here, not on grid-dev.
 let server: Server | null = null
+const savedDataDir = env.ADAPTER_DATA_DIR
+beforeEach(() => {
+  // Too long to hold a socket: the case where the e2e asks a daemon's port. Over a socket no credential is shown at all.
+  env.ADAPTER_DATA_DIR = join(mkdtempSync(join(tmpdir(), 'harness-local-')), 'd'.repeat(100))
+  mkdirSync(env.ADAPTER_DATA_DIR, { mode: 0o700 })
+})
 afterEach(async () => {
+  rmSync(dirname(env.ADAPTER_DATA_DIR), { recursive: true, force: true })
+  env.ADAPTER_DATA_DIR = savedDataDir
   delete process.env.HARNESS_PORT
   delete process.env.HARNESS_MACHINE_ID
   await new Promise<void>((done) => (server ? server.close(() => done()) : done()))

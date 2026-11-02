@@ -69,6 +69,7 @@ class _App extends AppNotifier {
     bool bypassPermission = false,
     String? permissionMode,
     String? codexHome,
+    String? claudeHome,
     String? swarmId,
     PaneSplitRequest? split,
     String? dsh,

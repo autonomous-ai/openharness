@@ -65,6 +65,7 @@ import 'project_sidebar.dart';
 import 'buddy_sessions.dart';
 import 'swarm_switcher.dart' show fallBackToPersonal;
 import 'project_options.dart';
+import 'switch_pm.dart';
 import 'project_status_card.dart';
 import 'pane_layout.dart';
 import '../widgets/dial_list_scroll.dart';
@@ -1392,6 +1393,11 @@ class _SuperTabViewState extends State<SuperTabView>
       }
       return;
     }
+    if (action == 'switch-pm') {
+      final project = c.snapshot?.projectFor(group.id);
+      if (project != null) await showSwitchPm(context, c, project.id);
+      return;
+    }
     if (c.snapshot?.isProjectLead(group.id) == true && action != 'archived') {
       final project = c.snapshot!.projectFor(group.id);
       if (project != null) await showProjectAction(context, c, project, action);
@@ -2279,7 +2285,11 @@ class _SuperTabViewState extends State<SuperTabView>
   Widget _header(SuperTabConversation? group, bool narrow, bool showRoster) =>
       Container(
         constraints: const BoxConstraints(minHeight: 52),
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
+        // A phone's rows line up (Huy, 2026-11-02): the sidebar icon starts at
+        // the top bar's edge, and the people icon sits under its avatar.
+        padding: _phone
+            ? kPhoneBarRowPadding
+            : const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
         decoration: BoxDecoration(
           border: Border(bottom: BorderSide(color: DesktopChrome.rim)),
         ),
@@ -2449,6 +2459,12 @@ class _SuperTabViewState extends State<SuperTabView>
           // them sends no coordinatorName.
           if (project?.hasInstructions == true)
             item('Instructions', () => _groupAction('instructions', group)),
+          // While the PM has a switch under way, there is nothing to ask for.
+          if (editable &&
+              project != null &&
+              c.snapshot?.maySwitchLead(project.id, c.accountId) == true &&
+              c.snapshot?.leadOf(project.id)?.switchRequest == null)
+            item('Switch PM…', () => _groupAction('switch-pm', group)),
           if (editable && project?.ownerId == c.accountId)
             item('Delete Project', () => _groupAction('delete', group)),
         ] else if (_isBuddyChat(group)) ...[
@@ -2699,6 +2715,7 @@ class _SuperTabViewState extends State<SuperTabView>
           '${inThread ? 'super-thread-message' : 'super-message'}-${message.id}',
         ),
         message: message,
+        controller: c,
       );
     }
     if (SuperTabShipRow.shows(message)) {

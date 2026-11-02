@@ -1,5 +1,5 @@
 import { createServer } from 'node:http'
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -122,7 +122,9 @@ describe('per-user daemon discovery', () => {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     cleanup.push(() => new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()) }))
     const port = (server.address() as { port: number }).port
-    const dataDir = directory()
+    // Too long to hold a socket: the one case where the credential goes to the port.
+    const dataDir = join(directory(), 'd'.repeat(100))
+    mkdirSync(dataDir, { mode: 0o700 })
     const credential = loadOrCreateHookCredential(dataDir)
     expect(await legacyDaemonStatus(port, 43210, 'this-user', dataDir)).toEqual(status)
     expect(await legacyDaemonStatus(port, 43210, 'this-user')).toEqual(status)

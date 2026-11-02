@@ -1148,6 +1148,83 @@ it.each(['/api/hook/session-end', '/api/hook/turn-start', '/api/hook/tool-start'
   },
 )
 
+describe('audit H1: what a secret heard on the daemon\'s port can do', () => {
+  const call = (port: number, path: string, headers: Record<string, string>, method = 'GET') =>
+    fetch(`http://127.0.0.1:${port}${path}`, { method, headers, ...(method === 'POST' ? { body: '{}' } : {}) })
+
+  const serve = async (peerAccount: () => Promise<boolean>) => {
+    const started = await startHookServer(0, {
+      onRegistered: vi.fn(), onSessionEnd: vi.fn(), onStatus: async () => ({ supported: true, secretDetail: 'x' }),
+      onAutonomousDeviceRequest: async () => ({ status: 200, body: { ok: true } }),
+    }, { peerAccount })
+    return { port: started.port, close: () => new Promise<void>((resolve) => { started.server.closeAllConnections(); started.server.close(() => resolve()) }) }
+  }
+  const credential = () => readFileSync(join(env.ADAPTER_DATA_DIR, 'hook-credential'), 'utf8').trim()
+  const hookToken = () => readFileSync(join(env.ADAPTER_DATA_DIR, 'hook-token'), 'utf8').trim()
+
+  it('the credential opens nothing for a caller of another account', async () => {
+    const asked = vi.fn(async () => false)
+    const { port, close } = await serve(asked)
+    try {
+      const secret = credential()
+      expect((await call(port, '/api/machines', { 'X-Harness-Local': secret })).status).toBe(401)
+      expect((await call(port, '/api/machines', { Authorization: `Bearer ${secret}` })).status).toBe(401)
+      expect(await (await call(port, '/api/status', { 'X-Harness-Local': secret })).json()).not.toHaveProperty('secretDetail')
+      expect((await call(port, '/api/autonomous-device/status', { Authorization: `Bearer ${secret}` })).status).toBe(403)
+      expect(asked).toHaveBeenCalled()
+    } finally { await close() }
+  })
+
+  it('the credential works for a caller of this account', async () => {
+    const { port, close } = await serve(async () => true)
+    try {
+      expect(await (await call(port, '/api/status', { 'X-Harness-Local': credential() })).json()).toHaveProperty('secretDetail')
+      expect((await call(port, '/api/autonomous-device/status', { Authorization: `Bearer ${credential()}` })).status).toBe(200)
+    } finally { await close() }
+  })
+
+  it('a wrong credential never makes the daemon ask who is calling', async () => {
+    const asked = vi.fn(async () => true)
+    const { port, close } = await serve(asked)
+    try {
+      expect((await call(port, '/api/machines', { 'X-Harness-Local': 'w'.repeat(43) })).status).toBe(401)
+      expect(asked).not.toHaveBeenCalled()
+    } finally { await close() }
+  })
+
+  it('the hook token opens the hook routes and nothing else', async () => {
+    const { port, close } = await serve(async () => true)
+    try {
+      const token = hookToken()
+      expect(token).not.toBe(credential())
+      expect((await call(port, '/api/hook/session-start', { 'x-harness-hook-token': token }, 'POST')).status).not.toBe(401)
+      const shown: Array<Record<string, string>> = [{ 'X-Harness-Local': token }, { Authorization: `Bearer ${token}` }, { 'x-harness-hook-token': token }]
+      for (const headers of shown) {
+        expect((await call(port, '/api/machines', headers)).status).toBe(401)
+        expect(await (await call(port, '/api/status', headers)).json()).not.toHaveProperty('secretDetail')
+        expect((await call(port, '/api/autonomous-device/status', headers)).status).toBe(403)
+      }
+    } finally { await close() }
+  })
+
+  it('a hook token or credential opens no hook route for a caller of another account', async () => {
+    const { port, close } = await serve(async () => false)
+    try {
+      for (const secret of [hookToken(), credential()]) {
+        expect((await call(port, '/api/hook/session-start', { 'x-harness-hook-token': secret }, 'POST')).status).toBe(401)
+        expect((await call(port, '/api/hook/session-end', { 'x-harness-hook-token': secret }, 'POST')).status).toBe(401)
+      }
+    } finally { await close() }
+  })
+
+  it('an engine plugin loaded before the hook token keeps reporting with the credential', async () => {
+    const { port, close } = await serve(async () => true)
+    try {
+      expect((await call(port, '/api/hook/session-start', { 'x-harness-hook-token': credential() }, 'POST')).status).not.toBe(401)
+    } finally { await close() }
+  })
+})
+
 describe('the loopback port wants this OS user\'s local credential', () => {
   // Another OS user's process reaches 127.0.0.1 too — a guest's harness running as its own user
   // (docs/plans/2026-10-19-guest-machine-sharing-plan.md). Only this user can read the 0600 credential.

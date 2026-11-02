@@ -15,6 +15,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { localCredentialHeaders } from './lib/localCredential.js'
+import { localWsTarget } from './lib/localTransport.js'
 import { env } from './config/env.js'
 import { emitKeypressEvents } from 'node:readline'
 import { WebSocket } from 'ws'
@@ -225,8 +226,9 @@ export class LoopbackClient {
   }
 }
 
-export function loopbackUrl(port: number): string {
-  return `ws://127.0.0.1:${port}/api/local-ws`
+/** The daemon's private socket where it can have one: never a port another account may hold (lib/localTransport.ts). */
+export function loopbackUrl(port: number, dataDir: string = env.ADAPTER_DATA_DIR): string {
+  return localWsTarget(dataDir, port).url
 }
 
 /** A `terminal` agent on [machineId], created the way the desktop's ⌘⇧T creates one: at home. */

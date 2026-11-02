@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { applyOpencodeSessionModel, parseOpencodeModelId, opencodeMajorVersion, opencodeV2TurnOpen } from '../../engines/launchControl.js'
 import { isOpencodeV2 } from '../../engines/launchControl.js'
+import { moveCodexConversation } from '../../engines/codex/providerMove.js'
 import { binaryOnPath } from '../../lib/binaryOnPath.js'
 import { builtinSqlite } from '../../lib/sqliteBuiltin.js'
 import { validateLaunchOverrides } from '../../lib/launchOverrides.js'
@@ -31,6 +32,7 @@ vi.mock('../../engines/inProcess.js', async (real) => {
   const actual = await real<typeof import('../../engines/inProcess.js')>()
   return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
 })
+vi.mock('../../engines/codex/providerMove.js', () => ({ moveCodexConversation: vi.fn(async () => 'prepared') }))
 vi.mock('../../lib/binaryOnPath.js', () => ({ binaryOnPath: vi.fn(() => true) }))
 vi.mock('../../lib/sqliteBuiltin.js', async (real) => ({ ...await real<object>(), builtinSqlite: vi.fn(() => null) }))
 vi.mock('../../lib/gatewayRuntime.js', async (real) => ({ ...await real<object>(), probeGatewayRuntime: vi.fn(async () => ({ kind: 'none' })) }))
@@ -398,6 +400,33 @@ describe('retargeting an agent', () => {
       const run = setup(row)
       expect(await run.retarget({ agentId: 'a1', grid: to })).toEqual({ ok: true })
       expect(vi.mocked(restartAgent).mock.calls[0][0]).toEqual({ engine: 'codex', sessionId: 's1', ...(forks ? { continueInFork: true } : {}) })
+    })
+
+    it('prepares the fork onto a grid with the launch\'s own arguments, environment and executable', async () => {
+      const launch = { current: () => true, executable: { command: '/native/codex' }, environment: { NATIVE: '1' } } as unknown as NativeLaunch
+      const run = setup(agent({ engine: 'codex' }), {
+        relaunchOverrides: async () => ({ ok: true, overrides: { native: launch, env: { GRID_KEY: 'k' }, extraArgs: ['-m', 'big'], clearEnv: [] } }),
+      })
+      await run.retarget({ agentId: 'a1', grid })
+      expect(await vi.mocked(restartAgent).mock.calls[0][2].prepareFork!()).toBe('prepared')
+      const move = vi.mocked(moveCodexConversation).mock.calls[0][0]
+      expect(move).toMatchObject({ sessionId: 's1', toGrid: true, args: ['-m', 'big'], cwd: '/work', env: { GRID_KEY: 'k', NATIVE: '1' } })
+      expect(move.argv(['app-server'])).toEqual(process.platform === 'win32' ? expect.anything() : ['/native/codex', 'app-server'])
+    })
+
+    it('prepares the fork home on the engine on the path, with the grid\'s variables gone', async () => {
+      vi.stubEnv('ANTHROPIC_BASE_URL', 'http://grid.local')
+      const run = setup(agent({ engine: 'codex', gridLaunch: grid, cwd: null }), {
+        relaunchOverrides: (async () => ({ ok: true, overrides: { env: {}, clearEnv: [] } })) as never,
+      })
+      await run.retarget({ agentId: 'a1', grid: null })
+      await vi.mocked(restartAgent).mock.calls[0][2].prepareFork!()
+      const move = vi.mocked(moveCodexConversation).mock.calls[0][0]
+      vi.unstubAllEnvs()
+      expect(move).toMatchObject({ toGrid: false, args: [] })
+      expect(move).not.toHaveProperty('cwd')
+      expect(move.env.ANTHROPIC_BASE_URL).toBeUndefined()
+      expect(move.argv(['app-server']).at(-1)).toBe('app-server')
     })
 
     it('resumes an engine whose conversations follow any provider (Claude Code) on every move', async () => {

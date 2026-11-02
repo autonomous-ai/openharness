@@ -467,13 +467,7 @@ class SwarmMessageRow extends StatelessWidget {
                     label: inThread ? 'Reply in thread' : 'Reply',
                     onTap: reply,
                   ),
-                SwarmSmallButton(
-                  icon: LucideIcons.copy,
-                  label: 'Copy',
-                  onTap: () => unawaited(
-                    Clipboard.setData(ClipboardData(text: message.text)),
-                  ),
-                ),
+                SwarmCopyButton(text: message.text),
               ],
             ),
           ),
@@ -780,6 +774,59 @@ class SwarmSmallButton extends StatelessWidget {
       ),
     );
   }
+}
+
+/// How long Copy reads Copied after a copy.
+const kSwarmCopiedFor = Duration(seconds: 3);
+
+/// A message's Copy (Tony, 11-02): once the clipboard has [text] it reads
+/// Copied with a check for [kSwarmCopiedFor]. Taps meanwhile neither copy again
+/// nor restart that time. A copy that failed stays Copy, to try again.
+class SwarmCopyButton extends StatefulWidget {
+  const SwarmCopyButton({super.key, required this.text});
+
+  final String text;
+
+  @override
+  State<SwarmCopyButton> createState() => _SwarmCopyButtonState();
+}
+
+class _SwarmCopyButtonState extends State<SwarmCopyButton> {
+  bool _copying = false;
+  Timer? _reset;
+
+  bool get _copied => _reset != null;
+
+  Future<void> _copy() async {
+    if (_copying || _copied) return;
+    _copying = true;
+    try {
+      await Clipboard.setData(ClipboardData(text: widget.text));
+    } on PlatformException {
+      return;
+    } finally {
+      _copying = false;
+    }
+    if (!mounted) return;
+    setState(() {
+      _reset = Timer(kSwarmCopiedFor, () {
+        if (mounted) setState(() => _reset = null);
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _reset?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => SwarmSmallButton(
+    icon: _copied ? LucideIcons.check : LucideIcons.copy,
+    label: _copied ? 'Copied' : 'Copy',
+    onTap: () => unawaited(_copy()),
+  );
 }
 
 /// A file's size as a chat shows it: whole kilobytes, rounded up, or megabytes to one place.

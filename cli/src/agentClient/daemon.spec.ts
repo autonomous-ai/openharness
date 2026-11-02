@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { randomBytes } from 'node:crypto'
 import http from 'node:http'
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -77,8 +77,9 @@ describe('a line to the daemon that cannot open', () => {
   })
 })
 
-it('dials the port this user recorded when another daemon took the configured port', async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'agent-daemon-port-'))
+it('where no socket can exist, dials the port this user recorded when another daemon took the configured port', async () => {
+  const dataDir = join(mkdtempSync(join(tmpdir(), 'agent-daemon-port-')), 'd'.repeat(100))
+  mkdirSync(dataDir, { mode: 0o700 })
   const server = new WebSocketServer({ host: '127.0.0.1', port: 0 })
   try {
     await new Promise<void>((resolve) => server.once('listening', resolve))

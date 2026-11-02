@@ -224,6 +224,9 @@ const cachedKey = (tabId: string, leadId: string, chatId: string | undefined, ch
 const isSide = (v: unknown): v is CardSide => v === 'pm' || v === 'buddy'
 const tabOf = (read: SwarmRead): TabCache => ({ lastChangedAt: read.lastChangedAt, state: read.state })
 
+/** How long the first list waits for a Swarm whose read failed, before going without it. */
+const UNREAD_HOLD_MS = 60_000
+
 export class SwarmCards {
   onCards?: (cards: SwarmCard[]) => void
   onRecap?: (recap: LeadRecap) => void
@@ -241,6 +244,9 @@ export class SwarmCards {
   /** Whether a harness is here and in a turn, as the last poll read it; null before the first. */
   private live: ((harnessId: string) => { inTurn: boolean; since?: number } | null) | null = null
   private last: string | null = null
+  /** The first list is held back: a Swarm in it could not be read yet, and a list without it tells the dial that Swarm went. */
+  private holding = false
+  private unreadSince: number | null = null
   /** When each shown Lead's clock started (ms, `${card}/${lead}`), as the list last sent said. */
   private lastStarts = new Map<string, number>()
   private me: string | undefined
@@ -386,6 +392,7 @@ export class SwarmCards {
   private async poll(): Promise<void> {
     const rows = await this.listTabs()
     const known = new Map<string, TabCache>()
+    let unread = false
     await Promise.all(rows.map(async row => {
       const id = row.id as string, held = this.tabs.get(id)
       // A row without a numeric change time cannot say it is unchanged: that tab is always read again.
@@ -393,10 +400,17 @@ export class SwarmCards {
       try { known.set(id, tabOf(await this.reads.read(id))) } catch (error) {
         // Lost access drops only this card; any other failure keeps what was read before.
         const status = error instanceof SuperTabHostError ? error.status : 0
-        if (held && status !== 401 && status !== 403) known.set(id, held)
+        if (status === 401 || status === 403) return
+        if (held) known.set(id, held)
+        else unread = true
       }
     }))
     this.tabs = known
+    // After a restart nothing is held, so one passing failure (a 5xx, a timeout) would leave that Swarm out of the first list,
+    // and the dial takes a list without a Swarm to mean it went. Bounded: a Swarm that keeps failing must not hide the others.
+    const first = unread && this.last === null
+    this.unreadSince = first ? this.unreadSince ?? this.now() : null
+    this.holding = this.unreadSince !== null && this.now() - this.unreadSince < UNREAD_HOLD_MS
     // A Swarm that left the cards (access lost) takes the dial's side with it.
     for (const tabId of [...this.sides.keys()]) if (!known.has(tabId)) this.sides.delete(tabId)
     this.rows = rows.map(row => ({ id: row.id as string, name: row.name }))
@@ -414,6 +428,7 @@ export class SwarmCards {
 
   /** The cards from the last reads, said when they changed. */
   private emit(): void {
+    if (this.holding) return
     const live = this.live ?? (() => null)
     const cards: SwarmCard[] = []
     for (const row of this.rows) {

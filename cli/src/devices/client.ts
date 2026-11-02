@@ -2,6 +2,7 @@
 import { randomUUID } from 'node:crypto'
 import { env } from '../config/env.js'
 import { localCredentialHeaders } from '../lib/localCredential.js'
+import { daemonFetch, localWsTarget } from '../lib/localTransport.js'
 import type { ClientSocket } from '../lib/clientSocket.js'
 import { deviceSettingsPatchSchema } from '../lib/harnessDevices.js'
 
@@ -10,7 +11,7 @@ export interface DevicesClientDeps {
   /** The daemon's data dir, where its local credential is (lib/localCredential.ts). */
   dataDir?: string
   machineId(): Promise<string | null>
-  /** A loopback socket to the daemon, carrying [headers] (its local credential). */
+  /** A line to the daemon: its private socket's address, or where there can be none its port and [headers]. */
   connect(url: string, headers?: Record<string, string>): ClientSocket
   fetch?: typeof fetch
   request?: (machineId: string, type: string, payload?: Record<string, unknown>) => Promise<Record<string, unknown>>
@@ -21,7 +22,8 @@ export interface DevicesClientDeps {
 
 export function deviceRequest(deps: DevicesClientDeps, machineId: string, type: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
-    const socket = deps.connect(`ws://127.0.0.1:${deps.port}/api/local-ws`, localCredentialHeaders(deps.dataDir ?? env.ADAPTER_DATA_DIR))
+    const line = localWsTarget(deps.dataDir ?? env.ADAPTER_DATA_DIR, deps.port)
+    const socket = deps.connect(line.url, line.headers)
     const requestId = randomUUID()
     let settled = false, sent = false
     const finish = (error: Error | null, reply?: Record<string, unknown>): void => {
@@ -59,8 +61,9 @@ interface Host { machineId: string; name: string; online: boolean }
 async function ownedHosts(deps: DevicesClientDeps): Promise<Host[]> {
   const localId = await deps.machineId()
   if (!localId) throw new Error('Start Harness on this computer first.')
-  const response = await (deps.fetch ?? fetch)(`http://127.0.0.1:${deps.port}/api/machines`, {
-    headers: { 'x-adapter-local': '1', ...localCredentialHeaders(deps.dataDir ?? env.ADAPTER_DATA_DIR) }, signal: AbortSignal.timeout(8000),
+  const dataDir = deps.dataDir ?? env.ADAPTER_DATA_DIR
+  const response = await (deps.fetch ?? daemonFetch(dataDir, deps.port))(`http://127.0.0.1:${deps.port}/api/machines`, {
+    headers: { 'x-adapter-local': '1', ...localCredentialHeaders(dataDir) }, signal: AbortSignal.timeout(8000),
   })
   if (!response.ok) throw new Error('Could not read the account’s computers. Sign in and try again.')
   const body = await response.json() as { data?: { machines?: Record<string, unknown>[] }; machines?: Record<string, unknown>[] }

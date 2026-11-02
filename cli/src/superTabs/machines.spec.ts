@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
@@ -16,7 +16,7 @@ import { processCoreApi } from '../services/processCoreApi.js'
 import type { PrivacyObservation } from '../team/privacy.js'
 
 function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation | null = () => null, relayed: () => boolean = () => false) {
-  let now = 1000, stamp = 's0'
+  let now = 1000, stamp = 's0', team = false
   const core = fakeCore({ dataDir: '/isolated-pool-fixture', agents: {
     byAgent: vi.fn(id => id === 'running' ? { agentId: id } as never : undefined),
     stopped: vi.fn(async id => id === 'stopped'),
@@ -24,7 +24,7 @@ function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation 
   const pool = { tabId: 'tab', machine: { machineId: 'host', generation: 'grant', cwd: '/repo', engines: ['codex'], paused: false },
     harnessIds: ['running', 'stopped'], starts: [{ id: 'start', dispatched: false }], paused: false }
   const backend = vi.fn(async (_core: unknown, method: string, path: string, _body?: unknown): Promise<unknown> => path.includes('/hosts/host/changes') ? hostForm([], { pools: [pool] }) : { revision: 1 })
-  const request = vi.fn(async (_type: string): Promise<Record<string, unknown>> => ({ providers: [{ provider: 'codex', outcome: 'answered', httpStatus: 200,
+  const request = vi.fn(async (_type: string, _payload?: unknown): Promise<Record<string, unknown>> => ({ providers: [{ provider: 'codex', outcome: 'answered', httpStatus: 200,
     body: { account_email: 'private@example.com', secret: 'private-token', rate_limit: { primary_window: { used_percent: 25, reset_at: 1234567890 } } } }] }))
   const close = vi.fn(), open = vi.fn(async () => ({ machineId: 'host', request, close }))
   const capabilities = vi.fn(async (_input: { cwd: string; tools: string[]; devices: string[] }) => ({ ok: true, resources: { cpuPercent: 20, memoryTotalBytes: 1000, memoryUsedBytes: 200, projectDiskFreeBytes: 1000 }, tools: { git: true } }))
@@ -50,9 +50,11 @@ function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation 
   })
   const wire = async (core: unknown, method: string, path: string, body?: unknown): Promise<unknown> =>
     method === 'POST' && path.endsWith('/readings') ? readings(core, path, body) : backend(core, method, path, body)
-  const deps = { backend: wire, open, capabilities, start, prepare, log, env, privacy, modelsStamp, relayed, now: () => now }
+  const claudeProfiles = vi.fn((): unknown[] => [])
+  const codexProfiles = vi.fn((): unknown[] => [])
+  const deps = { team: () => team, backend: wire, open, capabilities, claudeProfiles, codexProfiles, start, prepare, log, env, privacy, modelsStamp, relayed, now: () => now }
   const machine = new ContributedMachines(core, 'host', deps as never)
-  return { deps, machine, pool, core, backend, readings, open, request, close, capabilities, start, prepare, log, modelsStamp, advance: () => { now += 16000 }, step: (ms: number) => { now += ms },
+  return { setTeam: (on: boolean) => { team = on }, deps, claudeProfiles, codexProfiles, machine, pool, core, backend, readings, open, request, close, capabilities, start, prepare, log, modelsStamp, advance: () => { now += 16000 }, step: (ms: number) => { now += ms },
     stamp: (next: string) => { stamp = next } }
 }
 
@@ -337,7 +339,7 @@ describe('contributed machine executor', () => {
     Object.assign(f.pool, { capabilitiesWanted: true })
     await f.machine.tick()
     const posted = (g: typeof f) => g.backend.mock.calls.filter(c => c[1] === 'POST').map(c => c[3] as Record<string, unknown>)
-    expect(posted(f)[0]).toMatchObject({ capabilities: ['leadStart', 'buddySessions', 'swarmBuddy'] })
+    expect(posted(f)[0]).toMatchObject({ capabilities: ['leadStart', 'buddySessions', 'swarmBuddy', 'leadSwitch'] })
     // A backend from before them does not ask, and would refuse the field.
     const older = fixture()
     await older.machine.tick()
@@ -2394,5 +2396,117 @@ describe('one call for all of a machine\'s readings (DB 2.5)', () => {
     expect(f.readings).toHaveBeenCalledTimes(2)
     expect((f.readings.mock.calls[1]![2] as { readings: Array<{ tabId: string }> }).readings.map(r => r.tabId)).toEqual(['tab', 'second-tab'])
     launched(); await pass
+  })
+})
+
+// The accounts a Product Manager could move to (spec 2026-11-02-pm-switch-engine-account, section 5): ids and labels, never a path.
+describe('the profiles a machine reports', () => {
+  const posted = (f: ReturnType<typeof fixture>) => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/')).map(c => c[3] as Record<string, unknown>)
+  const id = (n: string) => n.repeat(16).slice(0, 16)
+  const both = () => {
+    const f = fixture()
+    Object.assign(f.pool.machine, { engines: ['claude', 'codex'] })
+    Object.assign(f.pool, { capabilitiesWanted: true })
+    f.claudeProfiles.mockReturnValue([{ id: id('d'), default: true, path: '/Users/me', label: 'me@corp', reportLabel: 'Claude', offered: true },
+      { id: id('a'), path: '/Users/me/.claude-work', label: 'Work', reportLabel: 'Work', offered: true },
+      { id: id('b'), path: '/Users/me/.claude-other', label: 'Other', reportLabel: '.claude-other', offered: false }])
+    f.codexProfiles.mockReturnValue([{ path: '/Users/me/.codex-two', label: 'two', offered: true }, { path: '/Users/me/.codex-found', label: 'found', offered: false }])
+    f.request.mockImplementation(async (type: string, payload?: unknown): Promise<Record<string, unknown>> => {
+      if (type !== 'usage_read') return {}
+      const profile = (payload as { profile?: { engine: string } } | undefined)?.profile
+      const claude = { provider: 'claude', outcome: 'answered', httpStatus: 200, body: { five_hour: { utilization: 30, resets_at: '2026-11-02T10:00:00Z' }, seven_day: { utilization: 10 } } }
+      const codex = { provider: 'codex', outcome: 'answered', httpStatus: 200, body: { rate_limit: { primary_window: { used_percent: 25, reset_at: 1793613600 } } } }
+      return { providers: profile ? [profile.engine === 'claude' ? claude : codex] : [claude, codex] }
+    })
+    return f
+  }
+
+  it('lists profiles with ids and report labels, no paths', async () => {
+    const f = both()
+    await f.machine.tick()
+    const profiles = posted(f).at(-1)!.profiles as Array<Record<string, unknown>>
+    expect(profiles).toEqual([
+      { engine: 'claude', id: expect.stringMatching(/^[0-9a-f]{16}$/), label: 'Default', leftPercent: 70, resetsAt: '2026-11-02T10:00:00.000Z' },
+      { engine: 'claude', id: id('a'), label: 'Work', leftPercent: 70, resetsAt: '2026-11-02T10:00:00.000Z' },
+      { engine: 'codex', id: expect.stringMatching(/^[0-9a-f]{16}$/), label: 'Default', leftPercent: 75, resetsAt: expect.any(String) },
+      { engine: 'codex', id: expect.stringMatching(/^[0-9a-f]{16}$/), label: '.codex-two', leftPercent: 75, resetsAt: expect.any(String) },
+    ])
+    expect(new Set(profiles.map(p => p.id)).size).toBe(4)
+    expect(JSON.stringify(profiles)).not.toMatch(/Users|@/)
+  })
+
+  it('reports and reads only the accounts the owner offered, never a discovered one', async () => {
+    const f = both()
+    await f.machine.tick()
+    const profiles = posted(f).at(-1)!.profiles as Array<{ label: string }>
+    expect(profiles.map(p => p.label)).not.toContain('.claude-other')
+    expect(profiles.map(p => p.label)).not.toContain('.codex-found')
+    const read = f.request.mock.calls.filter(c => c[0] === 'usage_read').map(c => JSON.stringify(c[1]))
+    expect(read.join()).not.toContain(id('b'))
+  })
+
+  it('a Team daemon reports its default accounts only', async () => {
+    const f = both()
+    f.setTeam(true)
+    await f.machine.tick()
+    const profiles = posted(f).at(-1)!.profiles as Array<{ engine: string; label: string }>
+    expect(profiles.map(p => [p.engine, p.label])).toEqual([['claude', 'Default'], ['codex', 'Default']])
+    expect(f.request.mock.calls.filter(c => (c[1] as { profile?: unknown } | undefined)?.profile)).toEqual([])
+  })
+
+  it("reports the default Codex home once, as Default", async () => {
+    const f = both()
+    const home = join(process.env.CODEX_HOME || join(homedir(), '.codex'))
+    f.codexProfiles.mockReturnValue([{ path: (() => { try { return realpathSync(home) } catch { return home } })(), label: 'x', offered: true }, { path: '/Users/me/.codex-two', label: 'two', offered: true }])
+    await f.machine.tick()
+    const codex = (posted(f).at(-1)!.profiles as Array<{ engine: string; label: string }>).filter(p => p.engine === 'codex')
+    expect(codex.map(p => p.label)).toEqual(['Default', '.codex-two'])
+  })
+
+  it('leaves out an engine this machine does not offer, an entry the backend would refuse, and what is over the caps', async () => {
+    const f = both()
+    Object.assign(f.pool.machine, { engines: ['claude'] })
+    f.claudeProfiles.mockReturnValue([{ id: id('d'), default: true, path: '/h', label: 'x', reportLabel: 'x', offered: true },
+      ...Array.from({ length: 12 }, (_, i) => ({ id: id(i.toString(16)), path: `/h/${i}`, label: `p${i}`, reportLabel: i === 0 ? 'a@b' : i === 1 ? '' : `p${i}`, offered: true }))])
+    await f.machine.tick()
+    const profiles = posted(f).at(-1)!.profiles as Array<{ engine: string; label: string }>
+    expect(profiles.every(p => p.engine === 'claude')).toBe(true)
+    expect(profiles).toHaveLength(8)
+    expect(profiles.map(p => p.label)).not.toContain('a@b')
+    expect(f.request.mock.calls.filter(c => (c[1] as { profile?: unknown } | undefined)?.profile).length).toBeLessThanOrEqual(8)
+  })
+
+  it('reads each profile at most once in 3 minutes and not at all while Anthropic limits the reads', async () => {
+    const f = both()
+    const profileReads = () => f.request.mock.calls.filter(c => c[0] === 'usage_read' && (c[1] as { profile?: unknown } | undefined)?.profile).length
+    await f.machine.tick(); f.advance(); await f.machine.tick()
+    const first = profileReads()
+    expect(first).toBe(2)
+    f.step(180_000); await f.machine.tick()
+    expect(profileReads()).toBe(first + 2)
+    const answer = f.request.getMockImplementation() as (type: string, payload?: unknown) => Promise<Record<string, unknown>>
+    f.request.mockImplementation(async (type: string, payload?: unknown): Promise<Record<string, unknown>> => (payload as { profile?: unknown } | undefined)?.profile
+      ? { providers: [{ provider: 'claude', outcome: 'answered', httpStatus: 429, body: {} }] } : answer(type, payload))
+    f.step(180_000); await f.machine.tick()
+    const limited = profileReads()
+    f.step(180_000); await f.machine.tick()
+    expect(profileReads()).toBe(limited)
+    expect((posted(f).at(-1)!.profiles as Array<{ engine: string; leftPercent: number | null }>).find(p => p.engine === 'claude')!.leftPercent).toBe(70)
+  })
+
+  it('drops the profiles after the backend refuses the field, and offers them again ten minutes later', async () => {
+    const f = both()
+    const original = f.backend.getMockImplementation()!
+    f.backend.mockImplementation(async (core, method, path, body) => {
+      if (method === 'POST' && (body as Record<string, unknown>)?.profiles) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key: profiles', 400)
+      return original(core, method, path, body)
+    })
+    const has = () => posted(f).map(b => 'profiles' in b)
+    await f.machine.tick()
+    expect(has()).toEqual([true, false])
+    f.advance(); await f.machine.tick()
+    expect(has().at(-1)).toBe(false)
+    f.step(600_000); await f.machine.tick()
+    expect(has().slice(-2)).toEqual([true, false])
   })
 })

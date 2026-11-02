@@ -154,6 +154,10 @@ class SuperTabAgent {
       alerting = List.unmodifiable(
         (row['alerting'] as List?)?.whereType<String>() ?? const <String>[],
       ),
+      switchRequest = row['switchRequest'] is Map
+          ? Map.unmodifiable(superTabMap(row['switchRequest']))
+          : null,
+      profileId = row['profileId'] as String?,
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       downSince = DateTime.tryParse(row['downSince'] as String? ?? ''),
       workDecision = row['workDecision'] as String?,
@@ -171,6 +175,14 @@ class SuperTabAgent {
   /// What its machine is alerting about now (backend terminal.ts): `prompt`
   /// while it waits at a prompt in its terminal, gone once that is answered.
   final List<String> alerting;
+
+  /// A Product Manager's switch to another engine or account that is asked for
+  /// and not yet done (backend `switchRequest`); null otherwise.
+  final Map<String, dynamic>? switchRequest;
+
+  /// The account on its machine it runs in; `default` when none is chosen.
+  /// Null until the backend reports it: the engine's default account.
+  final String? profileId;
 
   /// Since when its machine has reported its session gone, or its host confirmed a stop (backend machines.ts). Null
   /// while it runs.
@@ -682,6 +694,23 @@ class SuperTabSnapshot {
 
   bool isLead(String agentId) => leadProjectForAgent(agentId) != null;
 
+  /// [projectId]'s Product Manager, while it has one.
+  SuperTabAgent? leadOf(String projectId) {
+    final id = conversation(projectById(projectId)?.leadConversationId ?? '')
+        ?.leadId;
+    return id == null ? null : agent(id);
+  }
+
+  /// Whether [accountId] may switch [projectId]'s Product Manager: the project's
+  /// owner, or the owner of the machine it runs on (the backend decides again).
+  bool maySwitchLead(String projectId, String? accountId) {
+    final lead = leadOf(projectId);
+    return lead != null &&
+        accountId != null &&
+        (projectById(projectId)?.ownerId == accountId ||
+            lead.machineOwnerId == accountId);
+  }
+
   /// What [projectId] calls its coordinator: its `coordinatorName`, or [kDefaultCoordinatorName] from a backend
   /// that names none.
   String coordinatorNameOf(String projectId) =>
@@ -904,6 +933,37 @@ List<SuperTabServedModel> superTabServedModels(
           name: m['name'] is String
               ? m['name'] as String
               : m['model'] as String,
+        ),
+  ];
+}
+
+/// One account of a machine as its report lists it (backend
+/// `observation.profiles`): opaque id, a label with no path or email, and what
+/// is left of its allowance when known.
+typedef SuperTabProfile = ({
+  String engine,
+  String id,
+  String label,
+  int? leftPercent,
+  DateTime? resetsAt,
+});
+
+/// The accounts [pool] reports; empty from a machine that reports none.
+List<SuperTabProfile> superTabProfilesOf(Map<String, dynamic>? pool) {
+  final observation = pool?['observation'];
+  final rows = observation is Map ? observation['profiles'] : null;
+  return [
+    for (final p in rows is List ? rows : const [])
+      if (p is Map &&
+          p['engine'] is String &&
+          p['id'] is String &&
+          p['label'] is String)
+        (
+          engine: p['engine'] as String,
+          id: p['id'] as String,
+          label: p['label'] as String,
+          leftPercent: (p['leftPercent'] as num?)?.toInt(),
+          resetsAt: DateTime.tryParse(p['resetsAt'] as String? ?? ''),
         ),
   ];
 }
@@ -1203,6 +1263,14 @@ class SuperTabMessage {
   /// The agent a "waiting at a prompt" note is about; null for any other row.
   String? get promptAlertAgentId =>
       source['kind'] == 'terminal-alert' && source['alert'] == 'prompt'
+      ? source['agentId'] as String?
+      : null;
+
+  /// The Product Manager a usage-limit note is about; null for any other row.
+  String? get leadLimitAgentId =>
+      source['kind'] == 'terminal-alert' &&
+          source['alert'] == 'limit' &&
+          source['lead'] == true
       ? source['agentId'] as String?
       : null;
 

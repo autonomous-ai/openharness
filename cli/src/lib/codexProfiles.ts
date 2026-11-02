@@ -15,11 +15,14 @@ import { homedir } from 'os'
 import { join } from 'path'
 import { env } from '../config/env.js'
 import { discoverCodexProfiles } from './codexProfileDiscovery.js'
+import { offeredFolders } from './accountOffers.js'
 import { hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirectory } from './secureState.js'
 
 export interface CodexProfile {
   path: string
   label: string
+  /** The default account or one the owner offered (lib/accountOffers.ts); any other is the owner's own to pick, not the Swarm's. */
+  offered?: boolean
 }
 
 export type CodexProfileError = { error: 'INVALID_PATH' | 'NOT_FOUND' }
@@ -102,6 +105,12 @@ export function linkCodexProfile(path: string): CodexProfile | CodexProfileError
   return profile
 }
 
+/** The Codex account that needs no CODEX_HOME: an inherited CODEX_HOME, or ~/.codex. */
+export function defaultCodexHome(home: string = homedir(), environment: Record<string, string | undefined> = process.env): string {
+  const folder = environment.CODEX_HOME || join(home, '.codex')
+  try { return realpathSync(folder) } catch { return folder }
+}
+
 function processEnvironment(): Record<string, string> {
   const environment: Record<string, string> = {}
   for (const [key, value] of Object.entries(process.env)) {
@@ -124,6 +133,7 @@ export function listCodexProfiles(
     environment: processEnvironment(),
   },
 ): CodexProfile[] {
+  const offered = offeredFolders('codex')
   const candidates = new Set<string>([...readLinkedPaths(), ...observedPaths])
   try {
     for (const path of discoverCodexProfiles(discoveryOptions)) {
@@ -132,11 +142,12 @@ export function listCodexProfiles(
   } catch {
     // A discovery failure must not hide linked/observed profiles that are still good.
   }
+  const defaultHome = defaultCodexHome(discoveryOptions.home, discoveryOptions.environment)
   const profiles = new Map<string, CodexProfile>()
   for (const path of candidates) {
     const resolved = resolveCodexProfilePath(path)
     // A vanished folder or a malformed persisted entry must not be offered as a working profile.
-    if (!('error' in resolved)) profiles.set(resolved.path, resolved)
+    if (!('error' in resolved)) profiles.set(resolved.path, { ...resolved, offered: offered.has(resolved.path) || resolved.path === defaultHome })
   }
   return [...profiles.values()].sort((a, b) => {
     const byLabel = a.label.toLowerCase().localeCompare(b.label.toLowerCase())

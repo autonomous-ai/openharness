@@ -8,8 +8,18 @@
 import { closeSync, constants, fstatSync, openSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { daemonSocketPath, socketIsPrivate } from './local-daemon.mjs'
+
+/** Where a check using the `ws` package opens the daemon's bridge, and what it shows: its private socket and nothing, where one can be
+ *  (a holder of the TCP port would hear anything sent to it, audit H1). */
+export function daemonBridge(port = 18473, env = process.env) {
+  const socket = daemonSocketPath(port, env)
+  if (socket && !socketIsPrivate(socket)) throw new Error(`The Harness socket is missing or not private: ${socket}. Start Harness as this user.`)
+  return socket ? { url: `ws+unix://${socket}:/api/local-ws`, headers: {} } : { url: `ws://127.0.0.1:${port}/api/local-ws`, headers: localCredentialHeaders(env) }
+}
 
 export function localCredentialHeaders(env = process.env) {
+  if (daemonSocketPath(65_535, env)) return {}
   const dir = env.ADAPTER_DATA_DIR || join(homedir(), '.harness', 'cli', 'data')
   const uid = typeof process.getuid === 'function' ? process.getuid() : null
   // Windows reports every file as 0o666 and every folder as 0o777, so the mode checks below would always refuse

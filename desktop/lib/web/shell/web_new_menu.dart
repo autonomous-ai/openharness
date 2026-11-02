@@ -8,8 +8,8 @@ import '../../state/workspace_chrome.dart';
 import '../../terminal/terminal_theme.dart';
 import '../../terminal/terminal_theme_store.dart';
 import '../../theme/app_theme.dart' show AppColors;
-import '../../widgets/finger_target.dart';
 import '../../widgets/pane_menu.dart';
+import '../../widgets/finger_target.dart';
 import '../../widgets/workspace_bar_control.dart';
 import 'web_dropdown_control.dart';
 import 'web_layout.dart';
@@ -66,7 +66,9 @@ class _WebNewMenuButtonState extends State<WebNewMenuButton> {
         child: Center(
           child: Icon(
             AppIcons.plus,
-            size: AppIcons.inlineSize,
+            size: workspaceIsCompact(context)
+                ? kPhoneBarIcon
+                : AppIcons.inlineSize,
             color: theme.foreground.withValues(
               alpha: !enabled
                   ? .28

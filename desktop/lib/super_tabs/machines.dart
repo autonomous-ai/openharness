@@ -19,6 +19,7 @@ import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../usage/models_menu_controller.dart';
 import '../widgets/browser_menu_guard.dart';
+import '../widgets/finger_target.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
 import '../widgets/harness_activity_mark.dart';
@@ -1048,9 +1049,24 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
           superTabMap(raw)['engine'] as String: superTabMap(raw),
     };
     final configured = (pool?['engines'] as List?)?.whereType<String>();
+    // What the machine has installed (its readiness, probed by the CLI), per engine.
+    final readiness = observation['readiness'];
+    final installed = {
+      for (final raw
+          in (readiness is Map ? readiness['engines'] : null) as List? ?? [])
+        if (raw is Map && raw['installed'] == true) raw['engine'],
+    };
+    // A list that still names a retired engine (OpenCode) cannot say which of the two it offers: Claude and Codex
+    // come from what it reported or has installed.
     final allowed =
         configured?.any((engine) => !_chipEngines.contains(engine)) == true
-        ? quotas.keys.toList()
+        ? [
+            for (final engine in _chipEngines)
+              if (configured!.contains(engine) ||
+                  quotas.containsKey(engine) ||
+                  installed.contains(engine))
+                engine,
+          ]
         : configured?.where(_chipEngines.contains).toList();
     var accounts =
         _usage?.rows
@@ -1108,10 +1124,14 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             null => _unfigured(
               engine,
               poolId,
-              superMachineAllowanceReason(
-                quotas[engine],
-                reasons is Map ? reasons[engine] : null,
-              ),
+              quotas[engine] == null &&
+                      !(reasons is Map && reasons[engine] != null) &&
+                      (stale || installed.contains(engine))
+                  ? (stale ? kAllowanceNotReadOffline : kAllowanceNotRead)
+                  : superMachineAllowanceReason(
+                      quotas[engine],
+                      reasons is Map ? reasons[engine] : null,
+                    ),
               struck: suspended[engine],
             ),
           },
@@ -1959,7 +1979,27 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   /// screen of rows. The list opens over the sidebar, grouped by what each is doing.
   Widget _agentCount(_MachineView view) {
     final count = view.agents.length;
-    final label = count == 1 ? '1 agent' : '$count agents';
+    final total = count == 1 ? '1 agent' : '$count agents';
+    // What is happening now, not only how many exist. A machine that reads offline runs nothing, whatever its agents
+    // last did, unless a session this Desktop holds says one is working (the list below says the same); one the
+    // Desktop cannot read says only the total, since nothing is known of what they do.
+    final working = view.agents
+        .where(
+          (agent) => switch (_activity(view, agent)) {
+            HarnessActivity.working || HarnessActivity.starting => true,
+            _ => false,
+          },
+        )
+        .length;
+    final offline =
+        view.status == SuperTabMachineStatus.offline && working == 0;
+    final label = offline
+        ? '$total · none running, machine offline'
+        : view.status == SuperTabMachineStatus.live ||
+              view.status == SuperTabMachineStatus.late ||
+              view.status == SuperTabMachineStatus.offline
+        ? '$total · $working working'
+        : total;
     return LayoutBuilder(
       builder: (context, constraints) {
         final width = constraints.maxWidth.clamp(240.0, 320.0);
@@ -2007,7 +2047,9 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                             label,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: DesktopChrome.control(),
+                            style: DesktopChrome.control(
+                              color: offline ? DesktopChrome.muted : null,
+                            ),
                           ),
                         ),
                         Icon(
@@ -2670,28 +2712,38 @@ class _MachineMoreState extends State<_MachineMore> {
 
   @override
   Widget build(BuildContext context) {
-    final shown = _focused || _open || _RowHover.of(context);
+    // A touch screen has nothing to hover (Huy, 2026-11-02): the ⋯ stays, a finger's size.
+    final touch = BrowserMenuGuard.onTouchScreen;
+    final shown = touch || _focused || _open || _RowHover.of(context);
+    final extent = touch ? kFingerTarget : _MachineMore.width;
+    final button = AppIconButton(
+      icon: AppIcons.ellipsis,
+      tooltip: 'More',
+      size: 16,
+      onPressed: () => unawaited(_press()),
+    );
     return Focus(
       canRequestFocus: false,
       skipTraversal: true,
       onFocusChange: (focused) => setState(() => _focused = focused),
       child: SizedBox(
-        width: shown ? _MachineMore.width : 0,
-        height: _MachineMore.width,
+        width: shown ? extent : 0,
+        height: extent,
         child: OverflowBox(
           alignment: Alignment.centerRight,
-          minWidth: _MachineMore.width,
-          maxWidth: _MachineMore.width,
+          minWidth: extent,
+          maxWidth: extent,
           child: Opacity(
             opacity: shown ? 1 : 0,
             child: IgnorePointer(
               ignoring: !shown,
-              child: AppIconButton(
-                icon: AppIcons.ellipsis,
-                tooltip: 'More',
-                size: 16,
-                onPressed: () => unawaited(_press()),
-              ),
+              child: touch
+                  ? GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => unawaited(_press()),
+                      child: Center(child: button),
+                    )
+                  : button,
             ),
           ),
         ),
@@ -2813,10 +2865,19 @@ class _MachineReadings extends StatelessWidget {
         ),
       (
         'Subscriptions',
-        view.allowances.isEmpty ? null : view.subscriptionsAside,
+        view.allowances.isEmpty
+            ? (view.status == SuperTabMachineStatus.offline ? 'offline' : null)
+            : view.subscriptionsAside,
         (width) => view.allowances.isEmpty
             ? Text(
-                'No Claude or Codex allowance reported for this machine',
+                // Only a machine read just now is known to have none; one offline, out of reach or being read again
+                // may have an allowance it cannot report at this moment.
+                switch (view.status) {
+                  SuperTabMachineStatus.live || SuperTabMachineStatus.late =>
+                    'No Claude or Codex allowance reported for this machine',
+                  SuperTabMachineStatus.offline => kAllowanceNotReadOffline,
+                  _ => kAllowanceNotRead,
+                },
                 style: DesktopChrome.text(
                   size: 11,
                   height: 1.3,

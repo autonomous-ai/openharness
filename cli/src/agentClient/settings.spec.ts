@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -122,8 +122,9 @@ describe('harness settings', () => {
     expect(d.asked).toEqual([])
   })
 
-  it('shows the daemon this OS user\'s local credential, which its loopback port wants', async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'settings-cred-'))
+  it('shows the daemon this OS user\'s local credential only where no socket can exist', async () => {
+    const dataDir = join(mkdtempSync(join(tmpdir(), 'settings-cred-')), 'd'.repeat(100))
+    mkdirSync(dataDir, { mode: 0o700 })
     try {
       const credential = loadOrCreateHookCredential(dataDir)
       const asked: Record<string, string>[] = []
