@@ -87,7 +87,7 @@ describe('a join the server refused', () => {
     const result = await onFakeClock(() => startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open))
     expect(closes(f)).toEqual([['agent_close', { agentId: 'native', mode: 'now' }, expect.any(Number)]])
     expect(switchCall(f)).toBeUndefined()
-    expect(result).toMatchObject({ ok: false, error: REASON, startId: 'start', harnessId: 'native', refused: REASON })
+    expect(result).toMatchObject({ ok: false, error: REASON, startId: 'start', creationId: 'super-native-receipt', harnessId: 'native', refused: REASON })
     expect(result).not.toHaveProperty('agentId')
   })
 
