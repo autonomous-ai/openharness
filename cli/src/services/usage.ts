@@ -9,8 +9,7 @@ import type { CorePorts } from '../core/api.js'
  */
 import type { CoreApi, ServiceRequests } from '../core/api.js'
 import { readAccountUsage, type AccountUsageDeps, type AccountUsageReading } from '../lib/accountUsage.js'
-import { listClaudeProfiles, profileId } from '../lib/claudeProfiles.js'
-import { listCodexProfiles } from '../lib/codexProfiles.js'
+import { profileHome } from '../lib/claudeProfiles.js'
 import { internalOnThrow } from './requestErrors.js'
 
 /** The request usage answers for the apps, declared in core/api.ts for the core to route. */
@@ -21,17 +20,12 @@ export interface UsageDeps {
   read: (profile?: Pick<AccountUsageDeps, 'claudeHome' | 'codexHome' | 'only'>) => Promise<AccountUsageReading[]>
 }
 
-/** The reader's arguments for one profile the machine knows, or null for an id it does not. */
-function profileHome(core: CoreApi, engine: unknown, id: unknown): Pick<AccountUsageDeps, 'claudeHome' | 'codexHome' | 'only'> | null {
-  if (engine !== 'claude' && engine !== 'codex') return null
-  if (id === 'default') return { only: engine }
-  const machineId = core.daemon.machineId()
-  if (engine === 'claude') {
-    const found = listClaudeProfiles([], { machineId }).find((p) => p.id === id)
-    return found ? { claudeHome: found.path } : null
-  }
-  const found = listCodexProfiles().find((p) => profileId(machineId, 'codex', p.path) === id)
-  return found ? { codexHome: found.path } : null
+/** The reader's arguments for one profile the machine knows (by the shared id rule, lib/claudeProfiles.ts profileHome), or null. */
+function readerOf(core: CoreApi, engine: unknown, id: unknown): Pick<AccountUsageDeps, 'claudeHome' | 'codexHome' | 'only'> | null {
+  if (typeof id !== 'string' || (engine !== 'claude' && engine !== 'codex')) return null
+  const home = profileHome(engine, id, core.daemon.machineId())
+  if (home === null) return null
+  return home === 'default' ? { only: engine } : engine === 'claude' ? { claudeHome: home } : { codexHome: home }
 }
 
 export function startUsage(core: CoreApi, deps: UsageDeps = { read: readAccountUsage }): ServiceRequests {
@@ -46,7 +40,7 @@ export function startUsage(core: CoreApi, deps: UsageDeps = { read: readAccountU
       let home: Pick<AccountUsageDeps, 'claudeHome' | 'codexHome' | 'only'> | undefined
       if (wanted) {
         if (!asker.owner) return { error: 'OWNER_REQUIRED' }
-        const found = profileHome(core, wanted.engine, wanted.id)
+        const found = readerOf(core, wanted.engine, wanted.id)
         if (!found) return { error: 'PROFILE_UNKNOWN' }
         home = found
       }

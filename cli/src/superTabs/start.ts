@@ -31,7 +31,7 @@ const PRE_DISPATCH_REFUSALS = new Set([
 ])
 // A daemon that cannot take the launch model answers these before it makes a receipt, so the same creation id can be
 // sent again without it. Any other refusal still ends the start.
-const LAUNCH_MODEL_REFUSALS = new Set(['LAUNCH_MODEL_UNSUPPORTED', 'INVALID_LAUNCH_MODEL'])
+export const LAUNCH_MODEL_REFUSALS = new Set(['LAUNCH_MODEL_UNSUPPORTED', 'INVALID_LAUNCH_MODEL'])
 // The join turn must finish before the pane accepts a model switch, and it ends only once the roster shows the agent.
 const MODEL_SWITCH_WAIT_MS = 60_000
 const MODEL_SWITCH_RETRY_MS = 1_000
@@ -65,7 +65,7 @@ const LASTING_REFUSALS = new Set(['RULE_BROKEN', 'REQUIREMENT_UNMET', 'REVIEW_RE
 /** A Buddy's start note: its owner's chat, where it talks, and nothing to wait for. */
 /** A project's Product Manager the Swarm started here (backend leadStart.ts): the Lead of the project's conversation, with
  *  the lines Desktop's own-machine launch gives one (desktop super_tabs/launch_prompt.dart). */
-function leadPrompt(tabId: string, chat: string, roleName: string): string {
+export function leadPrompt(tabId: string, chat: string, roleName: string): string {
   return `You are the Product Manager of the project whose conversation is ${chat}, started by the Swarm on this machine. ${roleLine(roleName)}Run harness super-tab --tab ${tabId} status until this harness appears in the roster. Read the conversation with harness super-tab --tab ${tabId} messages ${chat}; if it is empty, ask there what to work on. Reply with harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID [--reply-to MESSAGE_ID], and answer each message once. ${INSTRUCTIONS_LINE(tabId)} Run harness super-tab help for commands. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
 }
 /** Workflow lives in the project's instructions, not in this prompt (project instructions, phase 3). */

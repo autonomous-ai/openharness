@@ -1,7 +1,9 @@
 /**
  * Claude profiles — CLAUDE_CONFIG_DIR folders this machine can point a Claude agent at, the Claude
  * counterpart of `codexProfiles.ts` (same persistence, same "answered on the machine in question").
- * The default account (no CLAUDE_CONFIG_DIR) is always first, with the id 'default'.
+ * The default account (no CLAUDE_CONFIG_DIR) is always first, marked `default`; its id is the one every component uses for
+ * it, `profileId(machine, 'claude', 'default')`. A profile's `path` is the folder as it was given or linked, which is what
+ * Claude Code hashes for its Keychain item and what CLAUDE_CONFIG_DIR must hold; its id is of the real path.
  *
  * Two labels: `label` is for the machine's owner (may be an email); `reportLabel` is what leaves the
  * machine and so never holds an '@'.
@@ -10,9 +12,9 @@
 import { createHash, randomUUID } from 'crypto'
 import { closeSync, constants, fchmodSync, fsyncSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
-import { basename, join } from 'path'
+import { basename, join, resolve, sep } from 'path'
 import { env } from '../config/env.js'
-import { listCodexProfiles } from './codexProfiles.js'
+import { defaultCodexHome, listCodexProfiles } from './codexProfiles.js'
 import { hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirectory } from './secureState.js'
 
 export interface ClaudeProfile {
@@ -20,6 +22,8 @@ export interface ClaudeProfile {
   path: string
   label: string
   reportLabel: string
+  /** Set on the default account alone. */
+  default?: true
 }
 
 export type ClaudeProfileError = { error: 'INVALID_PATH' | 'NOT_FOUND' }
@@ -57,10 +61,11 @@ function reportLabelFor(path: string, displayName: string | undefined): string {
   return found.slice(0, REPORT_LABEL_MAX)
 }
 
-function profileFor(machineId: string, path: string, isDefault = false): ClaudeProfile {
+function profileFor(machineId: string, path: string, real: string, isDefault = false): ClaudeProfile {
   const { displayName, emailAddress } = accountOf(path)
   return {
-    id: isDefault ? 'default' : profileId(machineId, 'claude', path),
+    id: profileId(machineId, 'claude', isDefault ? 'default' : real),
+    ...(isDefault ? { default: true as const } : {}),
     path,
     label: displayName ?? emailAddress ?? basename(path),
     reportLabel: reportLabelFor(path, displayName),
@@ -115,9 +120,9 @@ export function linkClaudeProfile(path: string, machineId: string): { profile: C
   const resolved = resolveFolder(path)
   if (typeof resolved !== 'string') return resolved
   const linked = readLinkedPaths()
-  linked.add(resolved)
+  linked.add(path)
   writeLinkedPaths(linked)
-  return { profile: profileFor(machineId, resolved) }
+  return { profile: profileFor(machineId, path, resolved) }
 }
 
 function holdsProfile(folder: string): boolean {
@@ -163,11 +168,14 @@ export function listClaudeProfiles(
   const home = options.home ?? homedir()
   const candidates = new Set<string>([...readLinkedPaths(), ...observedPaths, ...discover(home, options.environment ?? process.env)])
   const defaultPath = resolveFolder(home)
-  const defaultProfile = profileFor(options.machineId, typeof defaultPath === 'string' ? defaultPath : home, true)
+  const defaultProfile = profileFor(options.machineId, home, typeof defaultPath === 'string' ? defaultPath : home, true)
   const profiles = new Map<string, ClaudeProfile>()
   for (const candidate of candidates) {
     const resolved = resolveFolder(candidate)
-    if (typeof resolved === 'string' && resolved !== defaultProfile.path) profiles.set(resolved, profileFor(options.machineId, resolved))
+    // De-duplicated by the real folder; the path kept is the first one given.
+    if (typeof resolved === 'string' && resolved !== (typeof defaultPath === 'string' ? defaultPath : home) && !profiles.has(resolved)) {
+      profiles.set(resolved, profileFor(options.machineId, candidate, resolved))
+    }
   }
   const others = [...profiles.values()].sort((a, b) => a.label.toLowerCase().localeCompare(b.label.toLowerCase()) || a.path.localeCompare(b.path))
   return [defaultProfile, ...others]
@@ -190,5 +198,20 @@ export function profileHome(
   if (id === 'default' || id === profileId(machineId, engine, 'default')) return 'default'
   if (engine === 'claude') return listClaudeProfiles([], { ...options, machineId }).find((p) => p.id === id)?.path ?? null
   const discovery = options.home ? { home: options.home, environment: (options.environment ?? {}) as Record<string, string> } : undefined
-  return listCodexProfiles([], discovery).find((p) => profileId(machineId, 'codex', p.path) === id)?.path ?? null
+  const found = listCodexProfiles([], discovery).find((p) => profileId(machineId, 'codex', p.path) === id)?.path ?? null
+  // The default Codex home is the default account, whichever of its two ids was asked.
+  return found === defaultCodexHome(options.home, options.environment) ? 'default' : found
+}
+
+/**
+ * Whether [claudeHome] may be handed to an agent as its CLAUDE_CONFIG_DIR: a profile this machine lists (the default account
+ * has none), or a folder under `~/.harness/claude-profiles/`, where Desktop's "Add Claude account" makes a new one before it
+ * holds any file. Any other path would be written into (hooks, folder trust) and adopted for good (core/agents/launches.ts).
+ */
+export function claudeHomeOffered(
+  claudeHome: string, machineId: string, options: { home?: string; environment?: NodeJS.ProcessEnv } = {},
+): boolean {
+  const own = join(options.home ?? homedir(), '.harness', 'claude-profiles') + sep
+  if (resolve(claudeHome) === claudeHome && claudeHome.startsWith(own)) return true
+  return listClaudeProfiles([], { ...options, machineId }).some((p) => !p.default && p.path === claudeHome)
 }

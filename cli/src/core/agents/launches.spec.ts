@@ -263,6 +263,14 @@ describe('agent_create, refused before any pane exists', () => {
     expect(vi.mocked(create!).mock.calls.map(([input]) => 'claudeHome' in input)).toEqual([false, false, false, false])
   })
 
+  it('claudeHome is accepted only when it is a profile this machine offers', async () => {
+    const { ask, create } = setup({ claudeHomeOffered: (home) => home === '/homes/offered' })
+    expect(await ask({ engine: 'claude', cwd: '/w', claudeHome: '/homes/other' })).toStrictEqual({ error: 'INVALID_CLAUDE_HOME', detail: 'claudeHome is not a Claude profile of this machine' })
+    expect(create).not.toHaveBeenCalled()
+    await ask({ engine: 'claude', cwd: '/w', claudeHome: '/homes/offered' })
+    expect(vi.mocked(create!).mock.calls[0][0]).toMatchObject({ claudeHome: '/homes/offered' })
+  })
+
   it('claudeHome reaches the create input', async () => {
     const { ask, create } = setup()
     await ask({ engine: 'claude', cwd: '/w', claudeHome: '/homes/claude' })

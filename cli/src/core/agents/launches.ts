@@ -77,12 +77,14 @@ export interface LaunchRequestDeps {
   guestCreate?: () => GuestCreate | null
   /** Which Swarm roles and skill modes a start may ask for (superTabs/inCore/launch.ts); absent while the Swarm is off. */
   swarmLaunch?: Pick<SwarmLaunch, 'role' | 'mode'>
+  /** Whether a `claudeHome` is a Claude profile of this machine (lib/claudeProfiles.ts claudeHomeOffered); absent, any is. */
+  claudeHomeOffered?: (claudeHome: string) => boolean
 }
 
 type Reply = (result: Record<string, unknown>) => void
 type CreateInput = Parameters<CreateAgent>[0]
 
-export function createLaunchRequests({ receipts, createAgent, prepareCreate, prepareEngine, forkAgent, resumeAgent, restartAgent, byAgent, toProject, modelTarget, guestCreate, swarmLaunch }: LaunchRequestDeps) {
+export function createLaunchRequests({ receipts, createAgent, prepareCreate, prepareEngine, forkAgent, resumeAgent, restartAgent, byAgent, toProject, modelTarget, guestCreate, swarmLaunch, claudeHomeOffered }: LaunchRequestDeps) {
   const validateInstalled = async (input: CreateInput, known?: ReturnType<typeof installedDsh>): Promise<{ error: string; detail: string } | null> => {
     if (input.dsh) {
       const installed = known ?? installedDsh(input.dsh)
@@ -401,6 +403,10 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       : null
     if (claudeHome && (engine !== 'claude' || grid.state === 'ok')) {
       reply({ error: 'INVALID_CLAUDE_HOME', detail: 'claudeHome is only valid for claude, without a grid' })
+      return
+    }
+    if (claudeHome && claudeHomeOffered && !claudeHomeOffered(claudeHome)) {
+      reply({ error: 'INVALID_CLAUDE_HOME', detail: 'claudeHome is not a Claude profile of this machine' })
       return
     }
     // A DSH is refused, never approximated: an agent created as its plain base engine would look

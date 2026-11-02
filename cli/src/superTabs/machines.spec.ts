@@ -16,7 +16,7 @@ import { processCoreApi } from '../services/processCoreApi.js'
 import type { PrivacyObservation } from '../team/privacy.js'
 
 function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation | null = () => null, relayed: () => boolean = () => false) {
-  let now = 1000, stamp = 's0'
+  let now = 1000, stamp = 's0', team = false
   const core = fakeCore({ dataDir: '/isolated-pool-fixture', agents: {
     byAgent: vi.fn(id => id === 'running' ? { agentId: id } as never : undefined),
     stopped: vi.fn(async id => id === 'stopped'),
@@ -52,9 +52,9 @@ function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation 
     method === 'POST' && path.endsWith('/readings') ? readings(core, path, body) : backend(core, method, path, body)
   const claudeProfiles = vi.fn((): unknown[] => [])
   const codexProfiles = vi.fn((): unknown[] => [])
-  const deps = { backend: wire, open, capabilities, claudeProfiles, codexProfiles, start, prepare, log, env, privacy, modelsStamp, relayed, now: () => now }
+  const deps = { team: () => team, backend: wire, open, capabilities, claudeProfiles, codexProfiles, start, prepare, log, env, privacy, modelsStamp, relayed, now: () => now }
   const machine = new ContributedMachines(core, 'host', deps as never)
-  return { deps, claudeProfiles, codexProfiles, machine, pool, core, backend, readings, open, request, close, capabilities, start, prepare, log, modelsStamp, advance: () => { now += 16000 }, step: (ms: number) => { now += ms },
+  return { setTeam: (on: boolean) => { team = on }, deps, claudeProfiles, codexProfiles, machine, pool, core, backend, readings, open, request, close, capabilities, start, prepare, log, modelsStamp, advance: () => { now += 16000 }, step: (ms: number) => { now += ms },
     stamp: (next: string) => { stamp = next } }
 }
 
@@ -2407,7 +2407,7 @@ describe('the profiles a machine reports', () => {
     const f = fixture()
     Object.assign(f.pool.machine, { engines: ['claude', 'codex'] })
     Object.assign(f.pool, { capabilitiesWanted: true })
-    f.claudeProfiles.mockReturnValue([{ id: 'default', path: '/Users/me', label: 'me@corp', reportLabel: 'Claude' },
+    f.claudeProfiles.mockReturnValue([{ id: id('d'), default: true, path: '/Users/me', label: 'me@corp', reportLabel: 'Claude' },
       { id: id('a'), path: '/Users/me/.claude-work', label: 'Work', reportLabel: 'Work' }])
     f.codexProfiles.mockReturnValue([{ path: '/Users/me/.codex-two', label: 'two' }])
     f.request.mockImplementation(async (type: string, payload?: unknown): Promise<Record<string, unknown>> => {
@@ -2434,6 +2434,15 @@ describe('the profiles a machine reports', () => {
     expect(JSON.stringify(profiles)).not.toMatch(/Users|@/)
   })
 
+  it('a Team daemon reports its default accounts only', async () => {
+    const f = both()
+    f.setTeam(true)
+    await f.machine.tick()
+    const profiles = posted(f).at(-1)!.profiles as Array<{ engine: string; label: string }>
+    expect(profiles.map(p => [p.engine, p.label])).toEqual([['claude', 'Default'], ['codex', 'Default']])
+    expect(f.request.mock.calls.filter(c => (c[1] as { profile?: unknown } | undefined)?.profile)).toEqual([])
+  })
+
   it("reports the default Codex home once, as Default", async () => {
     const f = both()
     const home = join(process.env.CODEX_HOME || join(homedir(), '.codex'))
@@ -2446,7 +2455,7 @@ describe('the profiles a machine reports', () => {
   it('leaves out an engine this machine does not offer, an entry the backend would refuse, and what is over the caps', async () => {
     const f = both()
     Object.assign(f.pool.machine, { engines: ['claude'] })
-    f.claudeProfiles.mockReturnValue([{ id: 'default', path: '/h', label: 'x', reportLabel: 'x' },
+    f.claudeProfiles.mockReturnValue([{ id: id('d'), default: true, path: '/h', label: 'x', reportLabel: 'x' },
       ...Array.from({ length: 12 }, (_, i) => ({ id: id(i.toString(16)), path: `/h/${i}`, label: `p${i}`, reportLabel: i === 0 ? 'a@b' : i === 1 ? '' : `p${i}` }))])
     await f.machine.tick()
     const profiles = posted(f).at(-1)!.profiles as Array<{ engine: string; label: string }>

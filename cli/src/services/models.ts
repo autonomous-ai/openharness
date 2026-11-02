@@ -19,8 +19,8 @@ import { installedDsh } from '../dsh/installed.js'
 import { ApiConnections, apiConnectionsRequest } from '../lib/apiConnections.js'
 import { apiModelsRequest, apiTargetAnswer, refreshApiFor, rememberSavedApis } from '../lib/apiModels.js'
 import { appEngineOps, scanAppModels } from '../lib/appModels.js'
-import { linkClaudeProfile, listClaudeProfiles } from '../lib/claudeProfiles.js'
-import { linkCodexProfile, listCodexProfiles } from '../lib/codexProfiles.js'
+import { linkClaudeProfile, listClaudeProfiles, profileId } from '../lib/claudeProfiles.js'
+import { defaultCodexHome, linkCodexProfile, listCodexProfiles } from '../lib/codexProfiles.js'
 import { createGridAccess, gridNamesLocal, reconcileGridAttach } from '../lib/gridAttach.js'
 import { deriveHarnessGridName, resetGridDeriveMemo, signedInGridEmail } from '../lib/gridDerive.js'
 import { ensureHarnessGrid } from '../lib/gridEnsure.js'
@@ -534,7 +534,10 @@ export function launchTargetRequests(core: CoreApi, onRemove: (connectionId: str
         ? payload.observedPaths.filter((p): p is string => typeof p === 'string')
         : []
       try {
-        return { profiles: listCodexProfiles(observed) }
+        const machineId = core.daemon.machineId(), defaultHome = defaultCodexHome()
+        // Each account's one id (the default's is shared with the machine report); the default is marked, as Claude's is.
+        return { profiles: listCodexProfiles(observed).map((p) => p.path === defaultHome
+          ? { ...p, id: profileId(machineId, 'codex', 'default'), default: true } : { ...p, id: profileId(machineId, 'codex', p.path) }) }
       } catch {
         return { error: 'CODEX_PROFILES_FAILED' }
       }

@@ -102,6 +102,12 @@ export function linkCodexProfile(path: string): CodexProfile | CodexProfileError
   return profile
 }
 
+/** The Codex account that needs no CODEX_HOME: an inherited CODEX_HOME, or ~/.codex. */
+export function defaultCodexHome(home: string = homedir(), environment: Record<string, string | undefined> = process.env): string {
+  const folder = environment.CODEX_HOME || join(home, '.codex')
+  try { return realpathSync(folder) } catch { return folder }
+}
+
 function processEnvironment(): Record<string, string> {
   const environment: Record<string, string> = {}
   for (const [key, value] of Object.entries(process.env)) {

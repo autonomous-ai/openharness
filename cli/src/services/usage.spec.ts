@@ -63,6 +63,16 @@ describe('the usage service', () => {
     expect(read).toHaveBeenCalledWith({ only: 'codex' })
   })
 
+  it('usage_read takes the default account by its hex id too, for both engines', async () => {
+    const read = vi.fn(async () => [])
+    const core = fakeCore()
+    const requests = startUsage(core, { read })
+    for (const engine of ['claude', 'codex'] as const) {
+      await requests.usage_read!({ profile: { engine, id: profileId(core.daemon.machineId(), engine, 'default') } }, ASKER)
+    }
+    expect(read.mock.calls).toEqual([[{ only: 'claude' }], [{ only: 'codex' }]])
+  })
+
   it('usage_read finds a Claude and a Codex profile by id', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'usage-profile-'))
     try {
@@ -78,7 +88,7 @@ describe('the usage service', () => {
       const requests = startUsage(core, { read })
       await requests.usage_read!({ profile: { engine: 'claude', id: profileId('machine-1', 'claude', join(real, 'claude')) } }, ASKER)
       await requests.usage_read!({ profile: { engine: 'codex', id: profileId('machine-1', 'codex', join(real, 'codex')) } }, ASKER)
-      expect(read.mock.calls).toEqual([[{ claudeHome: join(real, 'claude') }], [{ codexHome: join(real, 'codex') }]])
+      expect(read.mock.calls).toEqual([[{ claudeHome: join(dir, 'claude') }], [{ codexHome: join(real, 'codex') }]])
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

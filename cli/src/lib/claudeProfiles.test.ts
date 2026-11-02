@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import type * as ClaudeProfilesModule from './claudeProfiles.js'
@@ -32,21 +32,23 @@ describe('claudeProfiles', () => {
     delete process.env.ADAPTER_DATA_DIR
   })
 
-  it("lists the default account first with id 'default'", async () => {
-    const { listClaudeProfiles } = await loadModule()
+  it('names the default account by its hex id, marked default, and pins the id vector', async () => {
+    const { listClaudeProfiles, profileId } = await loadModule()
+    expect(profileId('m', 'claude', 'default')).toBe('71dc90339553114c')
     account(home, { displayName: 'Me' })
     account(join(home, '.claude-work'), { displayName: 'Work' })
     const profiles = listClaudeProfiles([], { home, environment: {}, machineId })
-    expect(profiles.map((p) => p.id)).toEqual(['default', expect.stringMatching(/^[0-9a-f]{16}$/)])
-    expect(profiles[0]).toMatchObject({ path: home, label: 'Me', reportLabel: 'Me' })
+    expect(profiles.map((p) => p.id)).toEqual([profileId(machineId, 'claude', 'default'), expect.stringMatching(/^[0-9a-f]{16}$/)])
+    expect(profiles[0]).toMatchObject({ path: home, label: 'Me', reportLabel: 'Me', default: true })
+    expect(profiles[1]).not.toHaveProperty('default')
     expect(profiles[1]).toMatchObject({ path: join(home, '.claude-work'), label: 'Work' })
   })
 
   it('lists the default account even with no .claude.json, and folders without Claude files are not offered', async () => {
-    const { listClaudeProfiles } = await loadModule()
+    const { listClaudeProfiles, profileId } = await loadModule()
     mkdirSync(join(home, '.claude-empty'))
     const profiles = listClaudeProfiles([], { home, environment: {}, machineId })
-    expect(profiles).toEqual([{ id: 'default', path: home, label: expect.any(String), reportLabel: expect.any(String) }])
+    expect(profiles).toEqual([{ id: profileId(machineId, 'claude', 'default'), default: true, path: home, label: expect.any(String), reportLabel: expect.any(String) }])
   })
 
   it('finds the inherited CLAUDE_CONFIG_DIR and a folder holding only settings.json', async () => {
@@ -173,9 +175,42 @@ describe('profileHome', () => {
     const codex = join(home, '.codex-two')
     mkdirSync(codex)
     writeFileSync(join(codex, 'auth.json'), '{}')
-    const found = profileHome('codex', profileId(machineId, 'codex', codex), machineId, { home, environment: { CODEX_HOME: codex } })
+    const found = profileHome('codex', profileId(machineId, 'codex', codex), machineId, { home, environment: {} })
     expect(found).toBe(codex)
     expect(codexReportLabel('/x/.codex-two')).toBe('.codex-two')
     expect(codexReportLabel('/x/jane@corp')).toBe('Codex')
+  })
+
+  it('keeps a symlinked folder as it was given (Claude Code hashes that path), with the id of its real path', async () => {
+    const { linkClaudeProfile, listClaudeProfiles, profileHome, profileId } = await loadModule()
+    const real = join(home, 'real-claude')
+    mkdirSync(real)
+    const given = join(home, '.claude-link')
+    symlinkSync(real, given)
+    const linked = linkClaudeProfile(given, machineId)
+    expect(linked).toMatchObject({ profile: { path: given, id: profileId(machineId, 'claude', real) } })
+    const listed = listClaudeProfiles([], { home, environment: {}, machineId })
+    expect(listed.filter((p) => p.path === given)).toHaveLength(1)
+    expect(profileHome('claude', profileId(machineId, 'claude', real), machineId, { home, environment: {} })).toBe(given)
+  })
+
+  it('the default Codex home answers as the default account, by the id of its path too', async () => {
+    const { profileHome, profileId } = await loadModule()
+    const codex = join(home, '.codex')
+    mkdirSync(codex)
+    writeFileSync(join(codex, 'auth.json'), '{}')
+    expect(profileHome('codex', profileId(machineId, 'codex', codex), machineId, { home, environment: {} })).toBe('default')
+  })
+
+  it('offers a claudeHome that is a listed profile or a folder under ~/.harness/claude-profiles, never the default or any other path', async () => {
+    const { claudeHomeOffered } = await loadModule()
+    const work = join(home, '.claude-work')
+    account(work, { displayName: 'Work' })
+    const options = { home, environment: {} }
+    expect(claudeHomeOffered(work, machineId, options)).toBe(true)
+    expect(claudeHomeOffered(join(home, '.harness', 'claude-profiles', 'new-one'), machineId, options)).toBe(true)
+    expect(claudeHomeOffered(join(home, '.harness', 'claude-profiles', '..', '..', 'elsewhere'), machineId, options)).toBe(false)
+    expect(claudeHomeOffered(home, machineId, options)).toBe(false)
+    expect(claudeHomeOffered(join(home, 'not-listed'), machineId, options)).toBe(false)
   })
 })

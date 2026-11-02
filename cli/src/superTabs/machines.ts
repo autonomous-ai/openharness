@@ -7,7 +7,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import type { CoreApi } from '../core/api.js'
 import { openDaemon } from '../agentClient/daemon.js'
 import { codingRefusal } from '../lib/codingModel.js'
-import { backend, identifier, object, SuperTabHostError } from './wire.js'
+import { backend, FIELD_REFUSED_MS, fieldRefused, identifier, object, SuperTabHostError } from './wire.js'
 import type { SwarmSources } from './host.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
@@ -24,7 +24,7 @@ import { teamRelayed } from '../team/relay.js'
 import type { PrivacyObservation } from '../team/privacy.js'
 import { repositoryKey } from './route.js'
 import { listClaudeProfiles, codexReportLabel, profileId } from '../lib/claudeProfiles.js'
-import { listCodexProfiles } from '../lib/codexProfiles.js'
+import { defaultCodexHome, listCodexProfiles } from '../lib/codexProfiles.js'
 import { usageTarget, validModelTokens, validUsageTarget, type ModelTokens } from '../lib/agentUsageWire.js'
 
 const finite = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : null
@@ -36,7 +36,6 @@ const VERIFIED_TOOL_TTL_MS = 10 * 60_000
 /** After a backend refuses a new field (privacy, from before the Harness Team account; harnessProgress, from before
  *  task leases), how long the reading goes without it before the field is offered again: a backend deployed meanwhile
  *  is heard from within this long. */
-const FIELD_REFUSED_MS = 10 * 60_000
 const UNVERIFIED_TOOL_TTL_MS = 60_000
 /** How long a session's folder stands as clean or not before git is asked again: a minute bounds the work to one
  *  `git status` per running session a minute, and the backend stops an idle worker only on a report under 2 minutes old. */
@@ -146,7 +145,7 @@ export interface MachineDeps {
    *  (team/relay.ts), so one it has not signed in itself is ready all the same. */
   relayed?: () => boolean
   /** The Claude and Codex profile folders this machine offers ([listClaudeProfiles], [listCodexProfiles]). */
-  claudeProfiles?: (machineId: string) => Array<{ id: string; path: string; reportLabel: string }>
+  claudeProfiles?: (machineId: string) => Array<{ id: string; path: string; reportLabel: string; default?: true }>
   codexProfiles?: () => Array<{ path: string }>
 }
 const MACHINE_DEPS = { claudeProfiles: (machineId: string) => listClaudeProfiles([], { machineId }), codexProfiles: () => listCodexProfiles(), backend, open: openDaemon, capabilities: readCapabilities, start: startAgent, now: Date.now }
@@ -168,7 +167,6 @@ const READINGS_MAX = 64
 const readingsMissing = (error: unknown) => error instanceof SuperTabHostError
   && (error.status === 404 || error.status === 413 || (error.status === 403 && error.code === 'TEAM_SESSION_LIMITED'))
 /** A reading the backend would not validate: the next, older form of it is tried (an older backend refusing a newer field). */
-const fieldRefused = (error: unknown) => error instanceof SuperTabHostError && error.status === 400 && error.code === 'VALIDATION_ERROR'
 /** One Swarm's reading of this pass, to send. */
 interface Reading { tab: string; observation: Record<string, unknown>; localModels: LocalModelReading[] | null; signature: string }
 
@@ -320,14 +318,15 @@ export class ContributedMachines {
     engines: string[], allowances: Array<{ engine: string; windows: Parameters<typeof allowanceLeft>[0] }>) {
     const found: Array<{ engine: 'claude' | 'codex'; id: string; label: string; leftPercent: number | null; resetsAt: string | null }> = []
     const accounts = {
-      claude: () => this.deps.claudeProfiles!(this.machineId).filter(p => p.id !== 'default').map(p => ({ id: p.id, label: p.reportLabel })),
+      claude: () => this.deps.claudeProfiles!(this.machineId).filter(p => !p.default).map(p => ({ id: p.id, label: p.reportLabel })),
       // The default Codex account is ~/.codex or an inherited CODEX_HOME: reported once, as Default.
       codex: () => this.deps.codexProfiles!().filter(p => p.path !== defaultCodexHome()).map(p => ({ id: profileId(this.machineId, 'codex', p.path), label: codexReportLabel(p.path) })),
     }
     for (const engine of ['claude', 'codex'] as const) {
       if (!engines.includes(engine)) continue
       const defaultLeft = allowanceLeft(allowances.find(a => a.engine === engine)?.windows ?? [])
-      const listed = [{ id: profileId(this.machineId, engine, 'default'), label: 'Default', read: 'default' }, ...accounts[engine]().map(a => ({ ...a, read: a.id }))]
+      // A Team user's other folders are not offered: a switch there takes the default account only (leadSwitchRequest.ts).
+      const listed = [{ id: profileId(this.machineId, engine, 'default'), label: 'Default', read: 'default' }, ...((this.deps.team ?? (() => readAuthSession()?.kind === 'team'))() ? [] : accounts[engine]().map(a => ({ ...a, read: a.id })))]
         .filter(({ id, label }) => /^[0-9a-f]{16}$/.test(id) && label.length > 0 && label.length <= 40 && !label.includes('@')).slice(0, MAX_PROFILES_PER_ENGINE)
       for (const { id, label, read } of listed) {
         const { left, resetsAt } = read === 'default' ? defaultLeft : await this.profileAllowance(local, engine, read)
@@ -1145,10 +1144,6 @@ const USAGE_FRESH_MS = 3 * 60_000
 /** After a refused read: Anthropic's own retry-after. */
 const USAGE_LIMITED_MS = 5 * 60_000
 const MAX_PROFILES = 16
-const defaultCodexHome = (): string => {
-  const home = process.env.CODEX_HOME || join(homedir(), '.codex')
-  try { return realpathSync(home) } catch { return home }
-}
 const MAX_PROFILES_PER_ENGINE = 8
 /** The allowance left on an account, from its tightest window, and when that window resets (ISO, as the backend takes it). */
 function allowanceLeft(windows: ReturnType<typeof quotaOf>['windows']): { left: number | null; resetsAt: string | null } {
