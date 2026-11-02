@@ -1757,6 +1757,36 @@ describe('any agent of the project', () => {
       text: 'owner added Shared to the project. The project chat holds only its coordinator among agents, so Shared works in its tasks.' })])
   })
 
+  // Ken, 2026-11-02: nothing recorded who put the Reviewer in the project chat. Each agent added to or removed from a chat
+  // leaves a row there naming who did it, shown to the chat's readers and waking nobody.
+  it('leaves a row naming who added or removed an agent', () => {
+    const { f, engineer, E } = project(), group = f.group()
+    const rows = (effects: { messages: Array<{ conversationId: string; text: string; recipients: string[]; source?: Record<string, unknown> }> }) =>
+      effects.messages.filter(m => m.source?.kind === 'system' && /^\S+( \S+)? (added|removed|joined|left)\b/.test(m.text) && !m.text.includes('Swarm'))
+        .map(m => [m.conversationId, m.text, m.recipients])
+    const name = (id: string) => f.state.agents.find(a => a.id === id)!.displayName
+    const member = (agentId: string, present: boolean) => ({ type: 'conversation.agent', conversationId: group, agentId, present, lead: false }) as Command
+    expect(rows(f.run(member(engineer, true), owner))).toEqual([[group, `owner added ${name(engineer)}.`, []]])
+    expect(rows(f.run(member(engineer, false), f.leadActor))).toEqual([[group, `${name(f.lead)} removed ${name(engineer)}.`, []]])
+    // An assignment, a post naming an agent from outside, and an agent's own first post there each say so too.
+    expect(rows(f.run({ type: 'work.assign', conversationId: group, agentId: engineer }, f.leadActor))).toEqual([[group, `${name(f.lead)} added ${name(engineer)}.`, []]])
+    expect(rows(f.run({ type: 'message.send', conversationId: group, text: 'Please review.', replyTo: null, recipientIds: [f.worker] }, E)))
+      .toEqual([[group, `${name(engineer)} added ${name(f.worker)}.`, []]])
+    const outsider = f.add('outsider', 'owner', f.group())
+    expect(rows(f.run({ type: 'message.send', conversationId: group, text: 'Here too.', replyTo: null, recipientIds: [] }, { kind: 'agent', agentId: outsider, machineOwnerId: 'host-owner' })))
+      .toEqual([[group, `${name(outsider)} joined.`, []]])
+    // A start's line names who started it.
+    const request = { conversationId: group, machineId: 'machine', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
+      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 80, tools: [], devices: [], quotaRequired: false } }
+    const startId = f.run({ type: 'agent.start', request } as Command, f.leadActor, { contribution: f.contribution }).result.startId as string
+    f.run({ type: 'agent.startDispatch', startId }, f.leadActor, { contribution: f.contribution })
+    expect(f.run({ type: 'agent.started', startId, harnessId: 'builder', configuration: { ...config, engine: 'claude' } }, f.leadActor, { contribution: f.contribution })
+      .messages.map(m => m.text)).toEqual([`${name(f.lead)} added Builder. Ready for an assignment.`])
+    // Nothing changed, nothing said; an agent removed from the Swarm has its removal row alone.
+    expect(rows(f.run(member(engineer, true), owner))).toEqual([])
+    expect(rows(f.run({ type: 'agent.remove', agentId: outsider }))).toEqual([])
+  })
+
   // Security review L2: the project chat is the people's and is never archived, so its work, name and records are its
   // coordinator's or a person's, as its members are. Any agent defined work there, assigned it, started agents into it,
   // renamed it and recorded merges on it.
