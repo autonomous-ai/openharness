@@ -54,6 +54,14 @@ export function taskOwner(state: SuperTabState, step: Conversation): string | nu
   return task ? ownerOf(state, task) : null
 }
 
-/** Whether [agentId] holds an open step of task [taskId]. */
+/** Whether [agentId] holds or held a step of task [taskId], open or finished: its posts there are about that step's work
+ *  (Ken, 2026-11-02: a Reviewer's "both re-checks pass", after its step was done, reached the PM). */
 export const holdsStepOf = (state: SuperTabState, taskId: string, agentId: string): boolean =>
-  stepsOf(state, taskId).some(s => activeWork(s) && s.assignment!.agentId === agentId)
+  stepsOf(state, taskId).some(s => s.assignment?.agentId === agentId)
+
+/** Whether [agentId] has held steps only, never a task, in the groups loaded: a Reviewer or Tester the instructions keep,
+ *  whatever its role is called, so its idle time is no news for the coordinator. */
+export const onlyStepsHeld = (groups: readonly Conversation[], agentId: string): boolean => {
+  const held = groups.filter(g => g.assignment?.agentId === agentId)
+  return held.length > 0 && held.every(isStep)
+}

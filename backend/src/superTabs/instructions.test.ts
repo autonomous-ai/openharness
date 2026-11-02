@@ -45,6 +45,8 @@ describe('the built-in template', () => {
     expect(TEMPLATE_WORKFLOW).toContain('run `mine`')
     expect(TEMPLATE_WORKFLOW).toContain('read `task GROUP`')
     expect(TEMPLATE_WORKFLOW).toContain('read the thread before acting on it')
+    // Ken, 2026-11-02: an Engineer posted "review and test pass" and then set Done, two messages for one event.
+    expect(TEMPLATE_WORKFLOW).toContain('that status is how the PM hears, once')
     expect(TEMPLATE_WORKFLOW).toContain('The PM reads `mine` for progress, not `status`.')
     expect(TEMPLATE_WORKFLOW.split('\n').filter(l => /^\d+\. /.test(l))).toHaveLength(11)
   })

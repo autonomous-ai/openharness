@@ -2547,7 +2547,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // In a task, an agent holding one of its open steps reaches the task's owner instead (task steps design).
       const owner = ownerOf(state, group)
       const ownerHere = actor.kind === 'agent' && owner && owner !== actor.agentId && holdsStepOf(state, group.id, actor.agentId) ? owner : null
-      const memberToLead = actor.kind === 'agent' && !command.agentOnly && !addressed.length && assigned !== actor.agentId && ownerHere ? [ownerHere]
+      // In a step, any agent but the coordinator talks to the task's owner: its own agent after its work ended too (a lost or
+      // done step's agent, 2026-11-02, reached the PM).
+      const stepTold = actor.kind === 'agent' && isStep(group) && actor.agentId !== group.leadId ? taskOwner(state, group) : null
+      const ownerInStep = actor.kind === 'agent' && stepTold && stepTold !== actor.agentId ? stepTold : null
+      const memberToLead = actor.kind === 'agent' && !command.agentOnly && !addressed.length && assigned !== actor.agentId && (ownerHere ?? ownerInStep) ? [(ownerHere ?? ownerInStep)!]
         : actor.kind === 'agent' && !command.agentOnly && !addressed.length && assigned !== actor.agentId && group.leadId
         && group.leadId !== actor.agentId && group.agentIds.includes(group.leadId) ? [group.leadId] : []
       // Buddy thread sessions (buddySessions.ts): a session thread's replies reach its session alone and stay in its thread; the
