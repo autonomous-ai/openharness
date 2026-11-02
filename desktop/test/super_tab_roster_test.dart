@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/core/relative_time.dart';
 import 'package:harness/notify/alert_sounds.dart';
@@ -14,6 +15,7 @@ import 'package:harness/super_tabs/agent_details.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/roster.dart';
+import 'package:harness/widgets/browser_menu_guard.dart';
 import 'package:harness/widgets/engine_identity.dart';
 import 'package:harness/widgets/harness_activity_mark.dart';
 
@@ -33,6 +35,9 @@ class RosterFixture {
   SuperTabConversation? added;
   String? answered;
   final boundary = GlobalKey();
+
+  /// Where the roster keeps its scope choice; none by default.
+  LocalKeyValueStore? storage;
   bool disposed = false;
 
   Future<void> initialize() async {
@@ -98,6 +103,7 @@ class RosterFixture {
               onAddAgent: (group) => added = group,
               onAnswer: (id) => answered = id,
               onOpenAgent: (agent) => opened = agent,
+              storage: storage,
               now: now ?? DateTime.now,
             ),
           ),
@@ -936,6 +942,25 @@ void main() {
     await f.close(tester);
   });
 
+  testWidgets(
+    'in a browser, pointing at an agent row switches the browser menu off',
+    (tester) async {
+      final told = <bool>[];
+      BrowserMenuGuard.debugWeb = true;
+      BrowserMenuGuard.debugSink = (off) async => told.add(off);
+      addTearDown(BrowserMenuGuard.debugReset);
+      final f = await fixture(tester);
+      await f.show(tester);
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      addTearDown(mouse.removePointer);
+      await mouse.addPointer(location: const Offset(1, 1));
+      await mouse.moveTo(tester.getCenter(f.row(0)));
+      await tester.pump();
+      expect(told, [true]);
+      await f.close(tester);
+    },
+  );
+
   testWidgets('project Product Manager cannot be removed from the roster', (
     tester,
   ) async {
@@ -1749,7 +1774,7 @@ void main() {
     'agents on another computer show their Swarm state with the tabs\' marks, most urgent first',
     (tester) async {
       final f = await fixture(tester);
-      await tester.binding.setSurfaceSize(const Size(280, 540));
+      await tester.binding.setSurfaceSize(const Size(280, 600));
       final now = DateTime.now().millisecondsSinceEpoch;
       // This Mac reads neither computer itself: only the Swarm says how they are.
       f.server.state['machines'] = [

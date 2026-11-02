@@ -13,6 +13,7 @@ import '../../shared/widgets/section_scaffold.dart';
 import '../../shared/widgets/toolbar_pill.dart';
 import '../../state/app_state.dart';
 import '../../widgets/restart_agent_action.dart';
+import '../../widgets/laid_out_list.dart';
 
 /// Settings ▸ Connectors: connect a service once on this computer, and every
 /// local agent (Claude Code, Codex, OpenCode) gets it. The same list and
@@ -175,7 +176,7 @@ class _ConnectorsSectionState extends State<ConnectorsSection> {
         Expanded(
           child: _controller.cards.isEmpty && _controller.loading
               ? const Center(child: Text('Loading connectors…'))
-              : ListView(
+              : LaidOutListView(
                   children: [
                     _group(context, 'Connected', on,
                         query.isEmpty ? 'Nothing connected yet. Choose a service below.' : 'No connected service matches.'),

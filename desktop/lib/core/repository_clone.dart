@@ -4,87 +4,16 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
-class GitHubRepository {
-  const GitHubRepository._(this.url, this.name);
-  final String url, name;
+import 'github_repository.dart';
+import 'ssh_hosts.dart';
 
-  static GitHubRepository? parse(String input) {
-    final text = input.trim();
-    final ssh = text.startsWith('git@github.com:');
-    String path;
-    if (ssh) {
-      path = text.substring('git@github.com:'.length);
-    } else {
-      final uri = Uri.tryParse(
-        text.contains('://') ? text : 'https://github.com/$text',
-      );
-      if (uri == null ||
-          uri.scheme != 'https' ||
-          uri.host != 'github.com' ||
-          uri.userInfo.isNotEmpty ||
-          uri.hasPort ||
-          uri.hasQuery ||
-          uri.hasFragment) {
-        return null;
-      }
-      path = uri.path.replaceFirst(RegExp(r'^/'), '');
-    }
-    path = path
-        .replaceFirst(RegExp(r'/$'), '')
-        .replaceFirst(RegExp(r'\.git$'), '');
-    final parts = path.split('/');
-    if (parts.length != 2 ||
-        !RegExp(r'^[A-Za-z0-9][A-Za-z0-9-]{0,38}$').hasMatch(parts[0]) ||
-        !RegExp(r'^[A-Za-z0-9_.-]{1,100}$').hasMatch(parts[1]) ||
-        parts[1] == '.' ||
-        parts[1] == '..') {
-      return null;
-    }
-    return GitHubRepository._(
-      ssh ? 'git@github.com:$path.git' : 'https://github.com/$path.git',
-      parts[1],
-    );
-  }
-}
+export 'github_repository.dart';
 
 class RepositoryCloneException implements Exception {
   const RepositoryCloneException(this.message);
   final String message;
   @override
   String toString() => message;
-}
-
-/// One repository however git spells its address: `github.com/owner/repo`
-/// for `https://github.com/Owner/Repo.git/`, `git@github.com:owner/repo`,
-/// `ssh://git@github.com:22/owner/repo.git` and `git://…`, credentials and
-/// ports left out. Lowercased: host names are case-insensitive, and so are
-/// GitHub's owner and repository names, the only host a clone is asked for.
-/// Null for a local path or anything else that names no host. Mirrors
-/// `repositoryIdentity` in cli/src/lib/projectFolder.ts.
-String? repositoryIdentity(String address) {
-  final raw = address.trim();
-  String host, path;
-  // scp-like `[user@]host:path`: no scheme, and no slash before its colon.
-  final scp = raw.contains('://')
-      ? null
-      : RegExp(r'^(?:[^@/\s]+@)?([^:/\s]+):(\S+)$').firstMatch(raw);
-  if (scp != null) {
-    host = scp.group(1)!;
-    path = scp.group(2)!;
-  } else {
-    final uri = Uri.tryParse(raw);
-    const schemes = {'https', 'http', 'ssh', 'git', 'git+ssh', 'ssh+git'};
-    if (uri == null || !schemes.contains(uri.scheme.toLowerCase())) {
-      return null;
-    }
-    host = uri.host;
-    path = uri.path;
-  }
-  path = path
-      .replaceFirst(RegExp(r'^/+'), '')
-      .replaceFirst(RegExp(r'/+$'), '')
-      .replaceFirst(RegExp(r'\.git$', caseSensitive: false), '');
-  return host.isEmpty || path.isEmpty ? null : '$host/$path'.toLowerCase();
 }
 
 typedef GitCloneProcess = Future<Process> Function(
@@ -101,12 +30,23 @@ typedef GitOriginReader = Future<String?> Function(String folder);
 /// is already a checkout of the same repository is that project, and is used
 /// rather than refused.
 class RepositoryClone {
-  RepositoryClone({GitCloneProcess? startProcess, GitOriginReader? readOrigin})
-    : _startProcess = startProcess ?? _startGit,
-      _readOrigin = readOrigin ?? readCheckoutOrigin;
+  RepositoryClone({
+    GitCloneProcess? startProcess,
+    GitOriginReader? readOrigin,
+    SshHosts? sshHosts,
+  }) : _startProcess = startProcess ?? _startGit,
+       _readOrigin = readOrigin ?? readCheckoutOrigin,
+       _sshHosts = sshHosts ?? SshHosts();
   final GitCloneProcess _startProcess;
   final GitOriginReader _readOrigin;
+  final SshHosts _sshHosts;
+  final _stagings = <Directory>[];
   Process? _process;
+
+  /// The `~/.ssh/config` alias the clone went through, when it needed one: a
+  /// second GitHub account, which later pushes from the checkout use too.
+  String? clonedVia;
+  bool _hostKeyUntrusted = false;
   bool _cancelled = false;
   bool _started = false;
 
@@ -166,12 +106,18 @@ class RepositoryClone {
   }
 
   /// Whether [folder] is a checkout of [repository]: anything else there
-  /// (another repository, a folder of files) stays the person's, refused.
+  /// (another repository, a folder of files) stays the person's, refused. An
+  /// origin cloned through an SSH alias names the repository its host does.
   Future<bool> _holds(String folder, GitHubRepository repository) async {
     try {
       final origin = await _readOrigin(folder);
-      return origin != null &&
-          repositoryIdentity(origin) == repositoryIdentity(repository.url);
+      if (origin == null) return false;
+      // Both sides: a pasted alias names the repository its host does too.
+      return await resolvedRepositoryIdentity(origin, _sshHosts.resolveHost) ==
+          await resolvedRepositoryIdentity(
+            repository.url,
+            _sshHosts.resolveHost,
+          );
     } catch (_) {
       return false;
     }
@@ -185,9 +131,6 @@ class RepositoryClone {
   Future<String> run(GitHubRepository repository, String parent) async {
     if (_started) throw StateError('A clone can only be started once.');
     _started = true;
-    Directory? staging;
-    Timer? deadline;
-    var timedOut = false;
     try {
       if (!p.isAbsolute(parent) || !await Directory(parent).exists()) {
         throw const RepositoryCloneException(
@@ -206,26 +149,126 @@ class RepositoryClone {
           '“${repository.name}” already exists here. Choose another destination, or open that folder.',
         );
       }
-      if (_cancelled) throw const RepositoryCloneException('Clone cancelled.');
-      staging = await Directory(parent).createTemp('.harness-clone-');
-      final checkout = p.join(staging.path, 'checkout');
-      final process = _process = await _startProcess(
-        ['clone', '--', repository.url, checkout],
-        {
-          'GIT_TERMINAL_PROMPT': '0',
-          'GCM_INTERACTIVE': 'Never',
-          if (!Platform.environment.containsKey('GIT_SSH_COMMAND'))
-            'GIT_SSH_COMMAND': 'ssh -oBatchMode=yes -oConnectTimeout=20',
-        },
+      if (repository.alias case final alias?) {
+        final host = await _sshHosts.resolveHost(alias);
+        // No answer is not "another host": ssh timed out, or is missing.
+        if (host == null) {
+          throw RepositoryCloneException(
+            'Could not read $alias from ssh on this computer. Check that ssh works, then retry.',
+          );
+        }
+        if (!isGitHubHost(host)) {
+          throw RepositoryCloneException(
+            '$alias isn\'t a GitHub host on this computer.',
+          );
+        }
+      }
+      final checkout = await _cloneWithAccess(repository, parent);
+      if (await FileSystemEntity.type(destination, followLinks: false) !=
+          FileSystemEntityType.notFound) {
+        // Another start cloned the same repository meanwhile: that one is
+        // kept and this staging goes (below).
+        if (await _holds(destination, repository)) return destination;
+        throw RepositoryCloneException(
+          '“${repository.name}” was created while cloning. Choose another destination.',
+        );
+      }
+      await Directory(checkout).rename(destination);
+      return destination;
+    } on ProcessException {
+      throw const RepositoryCloneException(
+        'Git could not start. Install Git on this computer, then retry.',
       );
-      unawaited(process.stdin.close());
-      if (_cancelled) process.kill();
-      deadline = Timer(const Duration(minutes: 5), () {
-        timedOut = true;
-        process.kill();
-      });
-      // Drain both streams, retaining only a bounded diagnostic for classifying
-      // failures. Git URLs/credential-helper output never enter the UI or logs.
+    } on FileSystemException {
+      throw const RepositoryCloneException(
+        'Could not write to this destination. Choose a folder you can edit.',
+      );
+    } finally {
+      _process = null;
+      await _removeStagings();
+    }
+  }
+
+  /// A refused attempt's staging goes before the next one starts, so a quit
+  /// mid-run leaves at most one `.harness-clone-*` behind.
+  Future<void> _removeStagings() async {
+    for (final staging in [..._stagings]) {
+      _stagings.remove(staging);
+      try {
+        if (await staging.exists()) await staging.delete(recursive: true);
+      } on FileSystemException {
+        /* The checkout outcome remains authoritative. */
+      }
+    }
+  }
+
+  /// Clones through each way this computer may reach [repository] — what was
+  /// pasted, the other transport, then its `~/.ssh/config` GitHub aliases —
+  /// moving on only when GitHub refused access or ssh would not trust its host
+  /// key. On 2026-10-30 a developer Mac
+  /// with SSH keys and no HTTPS credential failed every browser link, and its
+  /// second account's repositories answered only through an alias.
+  Future<String> _cloneWithAccess(
+    GitHubRepository repository,
+    String parent,
+  ) async {
+    final tried = <String>{};
+    var attempts = cloneAttempts(repository, const []);
+    var aliasesRead = false;
+    for (var i = 0; i < attempts.length; i++) {
+      final url = attempts[i];
+      if (!tried.add(url)) continue;
+      final checkout = await _cloneOnce(url, parent);
+      if (checkout == null) await _removeStagings();
+      if (checkout != null) {
+        clonedVia = GitHubRepository.parse(url)?.alias;
+        return checkout;
+      }
+      // Refused: the aliases are read only now, when they may be needed.
+      if (!aliasesRead) {
+        aliasesRead = true;
+        attempts = cloneAttempts(repository, await _sshHosts.githubAliases());
+        i = -1;
+      }
+    }
+    // What the person can act on: a computer that may have access once it
+    // trusts the key has not been refused.
+    if (_hostKeyUntrusted) {
+      throw const RepositoryCloneException(
+        "This computer doesn't trust GitHub's SSH host key. Check it by connecting once with ssh -T git@github.com, then retry.",
+      );
+    }
+    throw RepositoryAccessDenied(repository);
+  }
+
+  /// One `git clone` of [url] into a fresh staging folder: the checkout, or
+  /// null when this way in is closed, by GitHub's refusal or an untrusted host
+  /// key ([_hostKeyUntrusted]). Any other failure ends the clone.
+  Future<String?> _cloneOnce(String url, String parent) async {
+    if (_cancelled) throw const RepositoryCloneException('Clone cancelled.');
+    final staging = await Directory(parent).createTemp('.harness-clone-');
+    _stagings.add(staging);
+    final checkout = p.join(staging.path, 'checkout');
+    var timedOut = false;
+    final process = _process = await _startProcess(
+      ['clone', '--', url, checkout],
+      {
+        'GIT_TERMINAL_PROMPT': '0',
+        'GCM_INTERACTIVE': 'Never',
+        if (!Platform.environment.containsKey('GIT_SSH_COMMAND'))
+          'GIT_SSH_COMMAND': 'ssh -oBatchMode=yes -oConnectTimeout=20',
+      },
+    );
+    unawaited(process.stdin.close());
+    if (_cancelled) process.kill();
+    final deadline = Timer(const Duration(minutes: 5), () {
+      timedOut = true;
+      process.kill();
+    });
+    try {
+      // Drain both streams, retaining only a bounded diagnostic for
+      // classifying failures. Git URLs/credential-helper output never enter
+      // the UI or logs.
       final output = process.stdout.drain<void>();
       var diagnostic = '';
       final errors = process.stderr
@@ -247,48 +290,39 @@ class RepositoryClone {
           'Cloning took too long. Check the connection and retry.',
         );
       }
-      if (code != 0) {
-        if (RegExp(
-          r'authentication|permission denied|could not read Username|repository not found',
-          caseSensitive: false,
-        ).hasMatch(diagnostic)) {
-          throw const RepositoryCloneException(
-            'Could not access this repository. Check the URL and your GitHub access on this computer.',
-          );
-        }
-        throw const RepositoryCloneException(
-          'Could not clone the repository. Check the URL and connection, then retry.',
-        );
+      if (code == 0) return checkout;
+      // Checked first: ssh's warning about a changed key also says "Password
+      // authentication is disabled". GitHub was never asked, so this is no
+      // refusal, but an alias may carry its own HostKeyAlias.
+      if (RegExp(
+        r'host key verification failed',
+        caseSensitive: false,
+      ).hasMatch(diagnostic)) {
+        _hostKeyUntrusted = true;
+        return null;
       }
-      if (await FileSystemEntity.type(destination, followLinks: false) !=
-          FileSystemEntityType.notFound) {
-        // Another start cloned the same repository meanwhile: that one is
-        // kept and this staging goes (below).
-        if (await _holds(destination, repository)) return destination;
-        throw RepositoryCloneException(
-          '“${repository.name}” was created while cloning. Choose another destination.',
-        );
+      // A private repository answers "not found" to whoever cannot see it.
+      if (RegExp(
+        r'authentication|permission denied|could not read Username|repository not found',
+        caseSensitive: false,
+      ).hasMatch(diagnostic)) {
+        return null;
       }
-      await Directory(checkout).rename(destination);
-      return destination;
-    } on ProcessException {
       throw const RepositoryCloneException(
-        'Git could not start. Install Git on this computer, then retry.',
-      );
-    } on FileSystemException {
-      throw const RepositoryCloneException(
-        'Could not write to this destination. Choose a folder you can edit.',
+        'Could not clone the repository. Check the URL and connection, then retry.',
       );
     } finally {
-      deadline?.cancel();
-      _process = null;
-      if (staging != null) {
-        try {
-          if (await staging.exists()) await staging.delete(recursive: true);
-        } on FileSystemException {
-          /* The checkout outcome remains authoritative. */
-        }
-      }
+      deadline.cancel();
     }
   }
+}
+
+/// Every way this computer has to GitHub was refused: the repository is
+/// private to accounts it is not signed in as, or does not exist.
+class RepositoryAccessDenied extends RepositoryCloneException {
+  RepositoryAccessDenied(GitHubRepository repository)
+    : super(
+        'No access to ${repository.slug} on '
+        '${Platform.isMacOS ? 'this Mac' : 'this computer'}.',
+      );
 }

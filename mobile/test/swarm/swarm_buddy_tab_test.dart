@@ -6,6 +6,7 @@ import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 import 'package:harness_mobile/swarm/swarm_buddy.dart';
+import 'package:harness_mobile/swarm/swarm_home_list.dart';
 import 'package:harness_mobile/swarm/swarm_home_prefs.dart';
 import 'package:harness_mobile/swarm/swarm_home_view.dart';
 import 'package:harness_mobile/swarm/model.dart';
@@ -975,5 +976,46 @@ void main() {
       prefs.show(null);
       expect(prefs.buddySwarmId, other);
     });
+
+    test(
+      'the Buddy tab\'s Swarm and Home\'s Sort and Filter are kept together, '
+      'each chosen before the choices are back standing over what is read',
+      () async {
+        final store = MemoryKeyValueStore();
+        final first = SwarmHomePrefs(accountId: 'me', store: store);
+        await pumpEventQueue();
+        first
+          ..showBuddy('s1')
+          ..setFilter(SwarmHomeFilter.mentions)
+          ..setSort(SwarmHomeSort.newest)
+          ..setUnreadsFirst(true);
+        await pumpEventQueue();
+        first.dispose();
+
+        final back = SwarmHomePrefs(accountId: 'me', store: store);
+        await pumpEventQueue();
+        expect(back.buddySwarmId, 's1');
+        expect(back.filter, SwarmHomeFilter.mentions);
+        expect(back.sort, SwarmHomeSort.newest);
+        expect(back.unreadsFirst, isTrue);
+        back.dispose();
+
+        final early = SwarmHomePrefs(accountId: 'me', store: store)
+          ..showBuddy('s2');
+        await pumpEventQueue();
+        expect(early.buddySwarmId, 's2');
+        expect(early.filter, SwarmHomeFilter.mentions);
+        early.dispose();
+
+        final kept = SwarmHomePrefs(accountId: 'me', store: store);
+        await pumpEventQueue();
+        expect(
+          kept.buddySwarmId,
+          's2',
+          reason: 'written though nothing else moved',
+        );
+        kept.dispose();
+      },
+    );
   });
 }

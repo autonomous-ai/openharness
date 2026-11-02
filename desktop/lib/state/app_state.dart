@@ -343,6 +343,10 @@ class AgentCreationAttempt {
   String? get agentId => _agentId;
   String? _outcome;
   String? _preparedFolder;
+
+  /// The SSH alias this attempt's own clone went through, until its harness
+  /// starts and the person is told.
+  String? _clonedVia;
   ProjectFolderRequest? _projectFolder;
 
   /// The worktree this computer made for this attempt, set only where it is
@@ -14946,6 +14950,10 @@ class AppNotifier extends ChangeNotifier {
         },
         timeout: const Duration(seconds: 10),
       );
+    } on WsRequestFailure catch (failure) {
+      // The machine answered. NOT_FOUND says a folder is not there, which a
+      // machine that could not be reached does not know.
+      return {'error': failure.code};
     } catch (error) {
       return {'error': 'UNREACHABLE'};
     }
@@ -15154,7 +15162,36 @@ class AppNotifier extends ChangeNotifier {
   Future<String> prepareLocalProjectFolder(
     ProjectFolderRequest request, {
     String label = 'harness',
-  }) => request.prepareLocal(label: label);
+  }) async {
+    String? via;
+    final folder = await request.prepareLocal(
+      label: label,
+      onClonedVia: (alias) => via = alias,
+    );
+    if (via case final alias?) rememberClonedVia(folder, alias);
+    return folder;
+  }
+
+  @visibleForTesting
+  void rememberClonedVia(String folder, String alias) =>
+      _clonedViaFolders[folder] = alias;
+
+  /// A folder this computer's own clone reached through an SSH alias, until
+  /// its creation takes it. Kept by folder, it outlived a creation that failed,
+  /// and a later start in that folder announced a clone it never made.
+  final _clonedViaFolders = <String, String>{};
+
+  /// The alias a machine's own clone went through (cli launches.ts
+  /// `clonedVia`), when it names a safe one.
+  static String? _clonedViaOf(Map<String, dynamic> result) {
+    final via = result['clonedVia'];
+    final alias = via is Map ? via['alias'] : null;
+    return alias is String && isSafeSshAlias(alias) ? alias : null;
+  }
+
+  void _announceClonedVia(String? alias) {
+    if (alias != null) agentChangeNotice?.call('Cloned via $alias');
+  }
 
   Future<String?> createAgent(
     String machineId, {
@@ -15730,6 +15767,11 @@ class AppNotifier extends ChangeNotifier {
                     engineIdentity(dshId).label)
               : engineIdentity(choices['engine'] as String?).label,
         );
+        if (preparedBefore == null) {
+          creation._clonedVia = _clonedViaFolders.remove(
+            creation._preparedFolder,
+          );
+        }
         if (preparedBefore == null && project.createsWorktree) {
           creation._worktreeMadeHere = (
             folder: creation._preparedFolder!,
@@ -15999,6 +16041,16 @@ class AppNotifier extends ChangeNotifier {
           creation._existingFolder = folder;
           return creation._complete(_projectExistsMessage(folder, machineName));
         }
+        // Every way that machine has to GitHub was refused (cli launches.ts
+        // `access`): one short line, in the app's words, names the repository.
+        final denied = failure['access'] == 'denied'
+            ? GitHubRepository.parse('${choices['repositoryUrl'] ?? ''}')
+            : null;
+        if (denied != null) {
+          return creation._complete(
+            'No access to ${denied.slug} on $machineName.',
+          );
+        }
         return creation._complete(
           _creationFailureMessage(
             failure['code'] as String,
@@ -16025,6 +16077,8 @@ class AppNotifier extends ChangeNotifier {
     creation._complete(null);
     if (_disposed || machineStates[machineId] != machine) return null;
     creation._agentId = agent.id;
+    _announceClonedVia(creation._clonedVia ?? _clonedViaOf(result));
+    creation._clonedVia = null;
     if (choices['prompt'] case final String prompt
         when prompt.trim().isNotEmpty) {
       _firstMessages[(machineId, agent.id)] = prompt;
