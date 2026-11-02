@@ -88,6 +88,17 @@ describe('who is at the other end of a loopback connection', () => {
       expect(query.script).toContain('GetOwnerSid')
       expect(query.script).toContain('[Security.Principal.WindowsIdentity]::GetCurrent().User.Value')
     })
+
+    // Windows keeps naming a socket's creator after it exits when a child inherited the handle, and the id can go to one of
+    // the owner's processes since: an account that heard the credential could wait for that and be read as the owner (Luna's
+    // review of #2605). The process found must have started before the connection was made.
+    it('takes the owning process only when it started before the connection was made: never a recycled process id', () => {
+      const { script } = windowsPeerQuery(50_001, 18473)
+      expect(script).toMatch(/\$process\.CreationDate -gt \$rows\[0\]\.CreationTime/)
+      const creation = script.indexOf('CreationDate'), owner = script.indexOf('GetOwnerSid')
+      expect(creation).toBeGreaterThan(-1)
+      expect(creation).toBeLessThan(owner)
+    })
   })
 
   it('reads the owner of the client end from /proc/net/tcp, not the server end', () => {
