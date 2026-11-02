@@ -17,6 +17,7 @@ class SuperTabReading {
     this.messagesWithState = false,
     this.drawsSaved = false,
     this.confirmsSaved = false,
+    this.drawsSavedAtOnce = false,
   });
 
   /// Desktop's: a first open asks for the state and the open conversation at
@@ -31,6 +32,7 @@ class SuperTabReading {
     messagesWithState: true,
     drawsSaved: true,
     confirmsSaved: true,
+    drawsSavedAtOnce: true,
   );
 
   /// Null keeps a full read every poll. Otherwise, once the open conversation
@@ -92,10 +94,16 @@ class SuperTabReading {
   /// (`SuperTabSavedViews`).
   final bool drawsSaved;
 
-  /// With [drawsSaved], true holds a saved view's parts for the first read
-  /// to start from but draws them only once that read has answered, so a
-  /// conversation the reader lost since is never on screen.
+  /// With [drawsSaved], true is Desktop's way with saved views: read before the
+  /// first read, for it to start from, and forgetting only another account's.
   final bool confirmsSaved;
+
+  /// With [confirmsSaved], true draws the saved view as soon as it is read,
+  /// and false holds it until the first read has answered. Views are kept per
+  /// account and another account's is forgotten at sign-in, so what draws is
+  /// this account's own. A conversation it lost since shows until that first
+  /// read answers, as on the web (Dee, task #2169).
+  final bool drawsSavedAtOnce;
 
   /// Whether the poll adapts at all; false is Desktop's fixed period.
   bool get adapts => quietPoll != null || pausesAway;
