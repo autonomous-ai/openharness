@@ -178,6 +178,9 @@ class _FootAction extends StatelessWidget {
   );
 }
 
+/// What a model's row keeps inside its own edges.
+const _modelRowInset = grid.AppDesktop.controlGap + grid.AppDesktop.menuInset;
+
 class _ManageModels extends StatelessWidget {
   const _ManageModels({
     required this.controller,
@@ -195,7 +198,7 @@ class _ManageModels extends StatelessWidget {
     return LaidOutListView(
       // A model's row has its own 12 inside: its mark starts under the heading.
       padding: const EdgeInsets.symmetric(
-        horizontal: SuperTabMessageRow.horizontalInset - 12,
+        horizontal: SuperTabMessageRow.horizontalInset - _modelRowInset,
         vertical: grid.AppDesktop.controlGap,
       ),
       children: [
@@ -210,7 +213,7 @@ class _ManageModels extends StatelessWidget {
           ),
         const SizedBox(height: 8),
         Padding(
-          padding: const EdgeInsets.only(right: 12),
+          padding: const EdgeInsets.only(right: _modelRowInset),
           child: _FootAction(
             label: 'Your models…',
             actionKey: const ValueKey('super-local-models'),
