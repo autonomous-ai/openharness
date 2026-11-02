@@ -17,7 +17,6 @@ import 'identity.dart' show superTabMachineName;
 import 'machine_status.dart' show kSuperTabMachineOfflineAfter;
 import 'model.dart';
 import 'buddy_chat.dart';
-import 'catch_up.dart';
 import 'project_github.dart';
 import 'parts.dart';
 import 'read_marks.dart';
@@ -204,9 +203,6 @@ class SuperTabController extends ChangeNotifier {
       );
       _decisionsAside.addAll(
         (initial['decisionsAside'] as List? ?? const []).whereType<String>(),
-      );
-      _statusFolded.addAll(
-        (initial['statusFolded'] as List? ?? const []).whereType<String>(),
       );
       devicesSelected = initial['devicesSelected'] == true;
       projectsGroupOpen = initial['projectsGroupOpen'] as bool? ?? true;
@@ -945,26 +941,6 @@ class SuperTabController extends ChangeNotifier {
     if (_decisionsAside.length != before) _saveSoon();
   }
 
-  /// The projects whose status card the reader folded to its heading line:
-  /// saved on this computer for this reader. Only the newest
-  /// [statusFoldedKept] are kept, so the set cannot grow without end.
-  final _statusFolded = <String>{};
-  static const statusFoldedKept = 200;
-  bool statusFolded(String projectId) => _statusFolded.contains(projectId);
-
-  void setStatusFolded(String projectId, {required bool folded}) {
-    // Folded again moves it to the newest end.
-    _statusFolded.remove(projectId);
-    if (folded) {
-      _statusFolded.add(projectId);
-      while (_statusFolded.length > statusFoldedKept) {
-        _statusFolded.remove(_statusFolded.first);
-      }
-    }
-    _saveSoon();
-    _changed();
-  }
-
   void toggleProjectsGroup() {
     projectsGroupOpen = !projectsGroupOpen;
     _saveSoon();
@@ -1624,6 +1600,8 @@ class SuperTabController extends ChangeNotifier {
     bool newSession = false,
     VoidCallback? onSending,
     ({String conversationId, String root})? to,
+    bool plain = false,
+    List<String> recipients = const [],
   }) async {
     final open = to ?? openedThread;
     if (open == null || accessRevoked) return null;
@@ -1670,8 +1648,9 @@ class SuperTabController extends ChangeNotifier {
       'type': 'message.send',
       'conversationId': open.conversationId,
       'text': text,
-      'replyTo': open.root,
-      'recipientIds': addressed,
+      // With [plain], a message of [to]'s conversation, not a reply in a thread.
+      'replyTo': plain ? null : open.root,
+      'recipientIds': addressed.isEmpty ? recipients : addressed,
       if (tagged.isNotEmpty) 'mentions': tagged,
       // A session's thread stays in the thread: never also sent.
       if (alsoSend && !newSession) 'alsoSend': true,
@@ -1896,6 +1875,23 @@ class SuperTabController extends ChangeNotifier {
 
   final _merges = <String, SuperTabStepsMerge>{};
 
+  /// A number that moves when [id] or one of its steps has something new.
+  int? taskProgress(String id) {
+    final state = snapshot;
+    final task = state?.conversation(id);
+    if (state == null || task == null) return null;
+    return superTabStepsOf(state, task).fold<int>(
+      task.lastMessageSequence,
+      (sum, step) => sum + step.lastMessageSequence,
+    );
+  }
+
+  /// Reads a task that is not the selected conversation, with its steps.
+  Future<void> loadTaskMessages(String id) async {
+    await loadMessages(id);
+    if (!_disposed) _readSteps(id, light: false);
+  }
+
   /// The name of the step [message] was written in; null for a task's own.
   String? stepNameOf(SuperTabMessage message) {
     final group = snapshot?.conversation(message.conversationId);
@@ -2097,19 +2093,6 @@ class SuperTabController extends ChangeNotifier {
               '/attachments/${Uri.encodeComponent(attachmentId)}',
         ),
       )['attachment'],
-    ),
-  );
-
-  /// What the reader missed in [id] after [after] (backend catchUp.ts).
-  Future<SuperTabCatchUp> readCatchUp(
-    String id,
-    int after,
-  ) async => SuperTabCatchUp.fromJson(
-    superTabMap(
-      await request(
-        'GET',
-        '$_path/conversations/${Uri.encodeComponent(id)}/catch-up?after=$after',
-      ),
     ),
   );
 
@@ -2504,7 +2487,6 @@ class SuperTabController extends ChangeNotifier {
     'expandedProjects': expandedProjects.toList(),
     'expandedMachines': expandedMachines.toList(),
     'decisionsAside': _decisionsAside.toList(),
-    'statusFolded': _statusFolded.toList(),
     'devicesSelected': devicesSelected,
     'projectsGroupOpen': projectsGroupOpen,
     'unreadOnly': unreadOnly,
@@ -3885,6 +3867,7 @@ class SuperTabController extends ChangeNotifier {
     for (var i = 0; i < next.length; i++) {
       final a = shown[i], b = next[i];
       if (a.id != b.id ||
+          a.text != b.text ||
           a.deliveries.length != b.deliveries.length ||
           !_sameReactions(a.reactions, b.reactions)) {
         return false;
