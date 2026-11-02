@@ -64,7 +64,8 @@ async function listen(t, base) {
 }
 
 /** A viewer on a workspace looking at [grid], asleep, a fake `grid` it reads with, and a fake bridge. */
-// Too long a path to hold a socket: the fake bridge here is on TCP.
+// Too long a path to hold a socket, and a home too long as well: the fake bridge here is on TCP.
+process.env.HOME = `/${'h'.repeat(120)}`;
 const NO_SOCKET = join(tmpdir(), 'grid-wake-'.padEnd(120, 'x'));
 async function setup(t, respond, { grid = 'test-grid', verbs = verbsFor(grid, 'asleep'), bridgeUrl, giveUpMs = 5000, intervalMs = 50 } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'grid-wake-')), log = join(dir, 'calls.log');
