@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/super_tabs/ship_row.dart';
 import 'package:harness/super_tabs/unread_line.dart';
 
 import 'super_tab_mentions_test.dart' show showView;
@@ -57,22 +58,43 @@ void main() {
     expect(find.textContaining('Three fixes'), findsNothing);
   });
 
-  testWidgets('a Shipped card leaves the chat', (tester) async {
+  Map<String, dynamic> shipped() => row(
+    's1',
+    1,
+    'Shipped: Avatars',
+    kind: 'ship',
+    source: {'title': 'Avatars', 'conversationId': 'task-1'},
+  );
+
+  testWidgets('a Shipped card stays while no line says the task shipped', (
+    tester,
+  ) async {
+    final c = await showView(tester, project([shipped()]));
+    await c.loadMessages('lead');
+    await tester.pumpAndSettle();
+    expect(find.byType(SuperTabShipRow), findsOneWidget);
+  });
+
+  testWidgets('a Shipped card leaves the chat once the task has its line', (
+    tester,
+  ) async {
     final c = await showView(
       tester,
       project([
+        shipped(),
         row(
-          's1',
-          1,
-          'Shipped: Avatars',
-          kind: 'ship',
-          source: {'title': 'Avatars'},
+          'l1',
+          2,
+          'Avatars · shipped',
+          kind: 'task-line',
+          source: {'taskId': 'task-1', 'title': 'Avatars', 'state': 'shipped'},
         ),
       ]),
     );
     await c.loadMessages('lead');
     await tester.pumpAndSettle();
-    expect(find.textContaining('Avatars'), findsNothing);
+    expect(find.byType(SuperTabShipRow), findsNothing);
+    expect(find.text('Avatars'), findsOneWidget);
   });
 
   for (final kind in [

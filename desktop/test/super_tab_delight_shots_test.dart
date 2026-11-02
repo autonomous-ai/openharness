@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/profile_sheet.dart';
+import 'package:harness/super_tabs/ship_row.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/capture.dart';
@@ -116,6 +117,21 @@ ConversationServer office() {
       },
     ],
   );
+  server.append('🎉 Shipped: Avatars and moments of delight');
+  server.messages.last
+    ..['author'] = river
+    ..['createdAt'] = ago(const Duration(seconds: 5))
+    ..['source'] = {
+      'kind': 'ship',
+      'conversationId': 'group-261',
+      'title': 'Avatars and moments of delight',
+      'pullRequests': [
+        'https://github.com/autonomous-ai/openharness/pull/1760',
+      ],
+      'requesterId': 'owner',
+      'builderIds': ['kai'],
+      'reviewerIds': ['ellis'],
+    };
   return server;
 }
 
@@ -168,12 +184,14 @@ Future<void> showOffice(
 
 void main() {
   setUpAll(() => loadCaptureFonts(shots));
+  setUp(SuperTabShipRow.resetPlayed);
 
   testWidgets('screenshots for review', (tester) async {
     await showOffice(tester);
     await captureWindow(tester, shots, 'office-dark-confetti');
     await tester.pumpAndSettle();
     await captureWindow(tester, shots, 'office-dark');
+    SuperTabShipRow.resetPlayed();
     await showOffice(tester, brightness: Brightness.light, reduceMotion: true);
     await tester.pumpAndSettle();
     await captureWindow(tester, shots, 'office-light-reduced-motion');
