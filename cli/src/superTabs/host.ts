@@ -357,7 +357,7 @@ const agentIdOf = (machineId: string, harnessId: string) =>
 export const buddyChatIdOf = (projectId: string, personId: string, generation: string) =>
   createHash('sha256').update(JSON.stringify(['buddy', projectId, personId, generation])).digest('hex').slice(0, 24)
 /** A Buddy's thread session (spec 2026-10-30-buddy-thread-sessions) ends after this long with its screen unchanged, nothing
- *  waiting for it and nothing delivered to it: a session still working on a long question changes its screen. */
+ *  waiting for it, nothing delivered to it and no turn open: a long job with a quiet screen is still working. */
 export const BUDDY_SESSION_IDLE_MS = 30 * 60_000
 /** How long a thread session's terminal may be missing before it counts as stopped, so a slow read is never taken for one. */
 export const BUDDY_SESSION_GONE_MS = 60_000
@@ -1200,7 +1200,7 @@ export class SuperTabHost {
 
   /** A Buddy's thread sessions (spec 2026-10-30-buddy-thread-sessions) end on their own, so none is left running on its
    *  person's machine: idle for BUDDY_SESSION_IDLE_MS, with no screen change, nothing waiting for it and nothing delivered
-   *  in that time, or its terminal gone for BUDDY_SESSION_GONE_MS. This host asks the backend as the machine's owner, who is
+   *  in that time and no turn open, or its terminal gone for BUDDY_SESSION_GONE_MS. This host asks the backend as the machine's owner, who is
    *  the Buddy's person (a Buddy runs only on its person's own machine); the backend then ends it, and this host closes it
    *  as any session the backend ends (endSession). Asked once, retried with backoff while the backend does not answer. */
   private watchThreadSessions(data: unknown[]): void {
@@ -1250,9 +1250,17 @@ export class SuperTabHost {
       const ending = reason, short = String(agent.harnessId).slice(0, 8)
       // One id per session and reason: a retry is the same request, and a changed reason never reuses an id for another.
       // An older chat's Buddy is removed from that chat, as its person's Remove there does; its chat stays.
-      void backend(this.core, 'POST', `/api/super-tabs/${row.tabId}/commands`, { operationId: `buddy-session-end-${agent.id}-${ending}`,
+      const harnessId = agent.harnessId
+      const end = () => backend(this.core, 'POST', `/api/super-tabs/${row.tabId}/commands`, { operationId: `buddy-session-end-${agent.id}-${ending}`,
         command: oldChat ? { type: 'buddy.remove', projectId: agent.projectId } : { type: 'buddy.sessionEnd', conversationId, thread: session.thread, reason: ending } })
         .then(() => { state.ended = true; this.log(`Ended thread session ${short} in Swarm ${row.tabId}: ${ending}.`) })
+      // A long job can leave the screen as it was: its spinner is not progress (terminal.ts STATUS_LINE). A turn still open is
+      // work however quiet (Scholes, 11-02: a busy session never closes), and a read that fails says nothing, so it retries.
+      void (ending === 'idle' ? this.core.agents.activity([harnessId]) : Promise.resolve({} as Record<string, string>))
+        .then(activity => {
+          if (activity[harnessId] === 'working') state.activeAt = this.now()
+          else return end()
+        })
         .catch(error => {
           state.retryAt = this.now() + Math.min(END_RETRY_MAX_MS, END_RETRY_MS * 2 ** state.failures++)
           this.log(`Could not end thread session ${short} in Swarm ${row.tabId} (${ending}): ${error instanceof Error ? error.message : String(error)}`)

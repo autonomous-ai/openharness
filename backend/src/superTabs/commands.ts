@@ -36,7 +36,7 @@ import { assignedNotice, tellBuddies } from './buddyNews.js'
 import { bindPullRequestCards, bindTaskCard, pullRequestCard, recordCardMerged } from './cards.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
 import { BUILT_IN_ROLE_DEFAULTS, agentProjectId, audienceOf, canReadProject, deleteProject, isConfidential, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, requestedByLine, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
-import { BUDDY_SESSION_CAPABILITY, chatOwner, endSessionEntry, entryProject, liveSessions, mainBuddyOf, MAX_BUDDY_SESSIONS, MAX_SESSION_WAITING, requireChatOwner, SESSION_ENDED_KIND, sessionAgentsOf, sessionOf, setSessions, type SessionEndReason } from './buddySessions.js'
+import { BUDDY_SESSION_CAPABILITY, chatOwner, endSessionEntry, entryProject, liveSessions, mainBuddyOf, MAX_SESSION_WAITING, requireChatOwner, SESSION_ENDED_KIND, sessionAgentsOf, sessionOf, setSessions, type SessionEndReason } from './buddySessions.js'
 import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, isSwarmBuddy, isSwarmBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, openBuddyChat, openSwarmBuddyChat, PM_LINE_KIND, PROPOSAL_ASK_MS, proposalText, renameBuddy, requireBuddyCommand, swarmBuddyChatId } from './buddies.js'
 import { BUDDY_OWN_MACHINE_REFUSAL, CODEX_BUDDY_REFUSAL } from './buddyContract.js'
 import { launchRefusedLine, leadJoined, leadStartFailed, leadStarting, placeLead } from './leadStart.js'
@@ -1005,7 +1005,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (!pool?.observation?.capabilities?.includes(BUDDY_SESSION_CAPABILITY)) {
         fail('BUDDY_SESSION_UNSUPPORTED', `Update Harness on ${pool?.name ?? 'your Buddy\'s computer'} to start sessions.`)
       }
-      if (liveSessions(state, chat).length >= MAX_BUDDY_SESSIONS) fail('BUDDY_SESSIONS_FULL', `${MAX_BUDDY_SESSIONS} sessions are running. End one to start another.`)
+      // Sessions have no count of their own (Scholes, 11-02): idle ones close themselves. The one limit is the machine's, which
+      // its owner set to protect it (Lead, 11-02), said in words a person can act on. A Buddy-only machine has none (below).
+      if (!pool.buddyOnly && machineSlots(state, pool) >= pool.maxAgents) {
+        fail('MACHINE_FULL', `${pool.name} is already running as many agents as it allows. End a session there, or try again when one finishes.`)
+      }
       const contributor = person(state, main.contributorId)
       // In the one Buddy chat a session works in one project its person reads, or, with none named, as the main Buddy does
       // (spec: The model). A project's own chat has its project.

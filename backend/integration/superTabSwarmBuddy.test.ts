@@ -199,6 +199,26 @@ describe('a project session', () => {
     expect((await f.store.read(peer, f.tab, agentId)).state.conversations.map(c => c.id)).not.toContain(f.secret.conversationId)
   })
 
+  it('reopens with its history: a new session of the same project reads the one before it, of another project never', async () => {
+    const f = await swarm()
+    const { chat } = await buddy(f)
+    const { thread, agentId } = await projectSession(f, chat, f.web.projectId, 'Plan web sync')
+    await send(f, chat, 'EARLIER ANSWER: use a queue', { replyTo: thread }, peer, agentId)
+    await f.execute({ type: 'buddy.sessionEnd', conversationId: chat, thread, reason: 'idle' }, peer)
+    const reopen = async (projectId: string, text: string) =>
+      f.launch(String((await send(f, chat, text, { replyTo: thread, newSession: true, sessionProjectId: projectId })).result.startId))
+    const again = await reopen(f.web.projectId, 'Carry on')
+    expect(await texts(f, chat, peer, again, { thread })).toEqual(['Plan web sync', 'EARLIER ANSWER: use a queue', 'Session ended: idle for 30 minutes.', 'Carry on'])
+    await send(f, chat, 'SECOND ANSWER', { replyTo: thread }, peer, again)
+    await f.execute({ type: 'buddy.sessionEnd', conversationId: chat, thread, reason: 'ended' }, peer)
+    // Another project's session in that thread reads its person's words alone.
+    const other = await reopen(f.secret.projectId, 'Now the secret project')
+    const read = JSON.stringify(await f.store.messages(peer, f.tab, chat, { thread }, other))
+    expect(read).not.toContain('EARLIER ANSWER')
+    expect(read).not.toContain('SECOND ANSWER')
+    expect(read).toContain('Plan web sync')
+  })
+
   it('reads in its thread only its person\'s words and its own, never a main-Buddy root or excerpt', async () => {
     const f = await swarm()
     const { chat, main } = await buddy(f)

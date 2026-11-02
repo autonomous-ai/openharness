@@ -112,7 +112,7 @@ export interface Agent {
 /** A thread session's thread root and the main chat's last sequence it may read (buddySessions.ts). A project session also
  *  names its project (buddies.ts; Dee, 10-31): it reads that project alone, and is the only Buddy that writes into it. */
 export interface BuddySession { thread: string; from: number; projectId?: string }
-/** A Buddy chat's live or starting thread session, at most MAX_BUDDY_SESSIONS (buddySessions.ts). `agentId` once it runs;
+/** A Buddy chat's live or starting thread session (buddySessions.ts); it leaves when the session ends. `agentId` once it runs;
  *  `waiting`, the person's messages sent while it started, delivered to it when it joins. */
 export interface BuddySessionEntry { thread: string; startId: string; agentId?: string; at: number; waiting?: string[] }
 export type AgentRole = 'builder' | 'reviewer'

@@ -3842,6 +3842,33 @@ describe('ending a Buddy\'s thread sessions', () => {
     await vi.waitFor(() => expect(ends(t)).toHaveLength(1))
   })
 
+  it('never ends one in a long job with a quiet screen: an open turn is work, and it ends 30 minutes after the turn closes', async () => {
+    const t = lifeFixture([sessionRow()])
+    t.live(true)
+    let state = 'working'
+    t.core.agents.activity = vi.fn(async () => ({ harness: state })) as never
+    await t.poll()
+    await awake(t, 3 * BUDDY_SESSION_IDLE_MS)
+    expect(ends(t)).toEqual([])
+    expect(t.core.agents.activity).toHaveBeenCalledWith(['harness'])
+    state = 'idle'
+    await awake(t, BUDDY_SESSION_IDLE_MS)
+    await t.poll(1)
+    await vi.waitFor(() => expect(ends(t)).toHaveLength(1))
+  })
+
+  it('does not end one whose activity cannot be read, and ends it once the read answers', async () => {
+    const t = lifeFixture([sessionRow()])
+    t.live(true)
+    t.core.agents.activity = vi.fn(async () => { throw new Error('worker restarting') }) as never
+    await t.poll()
+    await awake(t, BUDDY_SESSION_IDLE_MS + 60_000)
+    expect(ends(t)).toEqual([])
+    t.core.agents.activity = vi.fn(async () => ({ harness: 'idle' })) as never
+    await awake(t, 5 * 60_000)
+    await vi.waitFor(() => expect(ends(t)).toHaveLength(1))
+  })
+
   it('never ends one a delivery waits for', async () => {
     const t = lifeFixture([sessionRow()])
     t.live(true)
