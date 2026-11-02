@@ -7,10 +7,13 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/account_keys.dart';
+import 'package:harness/super_tabs/leaderboard/model.dart';
+import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/roster_scope.dart';
 
 import 'super_tab_roster_test.dart' show RosterFixture;
 import 'support/capture.dart';
+import 'support/super_tab_fixture.dart' show projectFixture;
 
 /// The roster's scope menu (Dee, 2026-11-02): the whole Swarm, or only the
 /// project open in the chat, for Humans and Agents alike.
@@ -24,8 +27,10 @@ class _Memory implements LocalKeyValueStore {
 
   @override
   Future<String?> read(String key) async {
+    // The value as it was when asked, however long the disk takes to answer.
+    final value = values[key];
     await hold?.future;
-    return values[key];
+    return value;
   }
 
   @override
@@ -316,6 +321,27 @@ void main() {
       await f.close(tester);
     },
   );
+
+  test("another project's board never decides who is in this one", () {
+    final project = SuperTabProject.fromJson({
+      ...projectFixture(
+        'os',
+        'autonomous-os',
+        'os-lead',
+        visibility: 'private',
+      ),
+      'members': [
+        {'id': 'tony'},
+      ],
+    });
+    final other = SuperTabLeaderboard.fromJson({
+      'projectId': 'lead',
+      'people': [score('dee', 1, 1)],
+    });
+    expect(personInProject(project, 'dee', board: other), isFalse);
+    expect(personInProject(project, 'tony', board: other), isTrue);
+    expect(personInProject(project, 'owner', board: other), isTrue);
+  });
 
   testWidgets('light and dark, with both menus', (tester) async {
     final f = await swarm(tester);
