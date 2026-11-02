@@ -1,6 +1,6 @@
 import { createServer, connect, type AddressInfo, type Socket } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
-import { lsofShowsPeer, peerIsThisAccount, portHolderIsThisAccount, procNetListener, procNetOwner, WINDOWS_PEER_LOOKUPS, windowsPeerQuery, type WindowsPeerRun } from './peerAccount.js'
+import { lsofShowsPeer, peerIsThisAccount, portHolderIsThisAccount, procNetListener, procNetOwner, WINDOWS_PEER_LOOKUPS, WINDOWS_PEER_QUEUE, windowsPeerQuery, type WindowsPeerRun } from './peerAccount.js'
 
 describe('who is at the other end of a loopback connection', () => {
   const opened: Array<() => unknown> = []
@@ -89,38 +89,66 @@ describe('who is at the other end of a loopback connection', () => {
       expect(query.script).toContain('[Security.Principal.WindowsIdentity]::GetCurrent().User.Value')
     })
 
-    // Whoever heard the hook token could open connections without end, each a PowerShell in the owner's account for up to
-    // 8 s (Luna's review of #2605). A few run at once; one past them is no.
-    it('runs a few lookups at once and answers no past them, without asking', async () => {
+    /** Answers every lookup asked so far, and those that start as slots free, until none is left. */
+    const drain = async (finish: Array<() => void>): Promise<void> => {
+      for (;;) {
+        await new Promise((resolve) => { setImmediate(resolve) })
+        if (finish.length === 0) return
+        for (const done of finish.splice(0)) done()
+      }
+    }
+    const held = () => {
       let asked = 0
       const finish: Array<() => void> = []
-      const slow: WindowsPeerRun = () => { asked++; return new Promise((resolve) => { finish.push(() => resolve({ status: 0, stdout: 'yes' })) }) }
-      const pending = Array.from({ length: WINDOWS_PEER_LOOKUPS }, (_, i) => peerIsThisAccount(socket({ remotePort: 51_000 + i }), 'win32', slow))
-      expect(await peerIsThisAccount(socket({ remotePort: 51_100 }), 'win32', slow)).toBe(false)
-      expect(asked).toBe(WINDOWS_PEER_LOOKUPS)
-      for (const done of finish.splice(0)) done()
+      const run: WindowsPeerRun = () => { asked++; return new Promise((resolve) => { finish.push(() => resolve({ status: 0, stdout: 'yes' })) }) }
+      return { run, finish, asked: () => asked }
+    }
+
+    // The owner's bridge asks once per new connection, and an agent may open several at start: past the four running, a
+    // lookup waits its turn, and nobody is told "unknown address" for it (Reed's review of #2605).
+    it('gives a burst of ten connections all their answer: past four running, they wait their turn', async () => {
+      let running = 0, most = 0
+      const run: WindowsPeerRun = async () => {
+        running++
+        most = Math.max(most, running)
+        await new Promise((resolve) => { setTimeout(resolve, 5) })
+        running--
+        return { status: 0, stdout: 'yes' }
+      }
+      const answers = await Promise.all(Array.from({ length: 10 }, (_, i) => peerIsThisAccount(socket({ remotePort: 51_000 + i }), 'win32', run)))
+      expect(answers).toEqual(answers.map(() => true))
+      expect(most).toBe(WINDOWS_PEER_LOOKUPS)
+    })
+
+    // Whoever heard the hook token could open connections without end, each a PowerShell in the owner's account for up to
+    // 8 s (Luna's review of #2605): past the running ones and a bounded queue, the answer is no, without asking.
+    it('answers no, without asking, once the running lookups and the queue are full', async () => {
+      const slow = held()
+      const pending = Array.from({ length: WINDOWS_PEER_LOOKUPS + WINDOWS_PEER_QUEUE }, (_, i) => peerIsThisAccount(socket({ remotePort: 51_100 + i }), 'win32', slow.run))
+      expect(await peerIsThisAccount(socket({ remotePort: 51_300 }), 'win32', slow.run)).toBe(false)
+      expect(slow.asked()).toBe(WINDOWS_PEER_LOOKUPS)
+      await drain(slow.finish)
       expect(await Promise.all(pending)).toEqual(pending.map(() => true))
-      expect(await peerIsThisAccount(socket({ remotePort: 51_101 }), 'win32', answering('yes').run)).toBe(true)
+      expect(slow.asked()).toBe(WINDOWS_PEER_LOOKUPS + WINDOWS_PEER_QUEUE)
     })
 
     // A keep-alive client (an MCP client on the bridge) asks again on the same connection: a no for being busy must not
     // stick to it, and is not "another account" (Luna's review of #2605).
     it('keeps no busy refusal on the connection: the same socket is asked again once a slot frees', async () => {
-      const finish: Array<() => void> = []
-      const slow: WindowsPeerRun = () => new Promise((resolve) => { finish.push(() => resolve({ status: 0, stdout: 'yes' })) })
-      const pending = Array.from({ length: WINDOWS_PEER_LOOKUPS }, (_, i) => peerIsThisAccount(socket({ remotePort: 52_000 + i }), 'win32', slow))
-      const caller = socket({ remotePort: 52_100 })
+      const slow = held()
+      const pending = Array.from({ length: WINDOWS_PEER_LOOKUPS + WINDOWS_PEER_QUEUE }, (_, i) => peerIsThisAccount(socket({ remotePort: 52_000 + i }), 'win32', slow.run))
+      const caller = socket({ remotePort: 52_300 })
       const warned: string[] = []
       const warn = console.warn
       console.warn = (line: string) => { warned.push(line) }
       try {
-        expect(await peerIsThisAccount(caller, 'win32', slow)).toBe(false)
+        expect(await peerIsThisAccount(caller, 'win32', slow.run)).toBe(false)
       } finally {
         console.warn = warn
       }
       expect(warned.join('\n')).toMatch(/busy/)
       expect(warned.join('\n')).not.toMatch(/not this account/)
-      for (const done of finish.splice(0)) done()
+      await drain(slow.finish)
       await Promise.all(pending)
       expect(await peerIsThisAccount(caller, 'win32', answering('yes').run)).toBe(true)
     })
