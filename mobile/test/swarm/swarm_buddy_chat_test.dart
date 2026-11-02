@@ -773,34 +773,36 @@ void main() {
       );
     });
 
-    testWidgets('with every machine paused, it says how to resume, offers no '
-        'Start, and an offline one says only that', (tester) async {
-      final fake = backend(
-        machines: [
-          {...machine('mac-1', 'Only Paused'), 'paused': true},
-        ],
-      );
-      await pump(
-        tester,
-        fake,
-        computers: FakeComputers(const [])
-          ..own = [(id: 'mac-1', name: 'Only Paused', away: false)],
-      );
-      expect(
-        find.text(
-          'New work is paused on your machines. Choose Resume new work in '
-          'Machines to start your Buddy.',
-        ),
-        findsOneWidget,
-      );
-      expect(key('swarm-buddy-start-button'), findsNothing);
-      await tester.tap(key('swarm-buddy-machine'));
-      await tester.pumpAndSettle();
-      expect(find.text('paused'), findsOneWidget);
-      await tester.tap(find.text('Only Paused'), warnIfMissed: false);
-      await tester.pumpAndSettle();
-      expect(fake.commands, isEmpty);
-    });
+    testWidgets(
+      'with every machine paused, it says how to resume and offers no Start',
+      (tester) async {
+        final fake = backend(
+          machines: [
+            {...machine('mac-1', 'Only Paused'), 'paused': true},
+          ],
+        );
+        await pump(
+          tester,
+          fake,
+          computers: FakeComputers(const [])
+            ..own = [(id: 'mac-1', name: 'Only Paused', away: false)],
+        );
+        expect(
+          find.text(
+            'New work is paused on your machines. Choose Resume new work in '
+            'Machines to start your Buddy.',
+          ),
+          findsOneWidget,
+        );
+        expect(key('swarm-buddy-start-button'), findsNothing);
+        await tester.tap(key('swarm-buddy-machine'));
+        await tester.pumpAndSettle();
+        expect(find.text('paused'), findsOneWidget);
+        await tester.tap(find.text('Only Paused'), warnIfMissed: false);
+        await tester.pumpAndSettle();
+        expect(fake.commands, isEmpty);
+      },
+    );
 
     testWidgets('a machine both paused and offline says offline, and the words '
         'for all offline stay', (tester) async {
