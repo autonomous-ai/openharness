@@ -230,6 +230,9 @@ export interface Assignment {
   /** On a linked task (reviewOf): when its own Reviewer's verdict in the build asked for changes. Its quiet time does not count
    *  until the build's next Ready clears it (liveness.ts waitingForRevision). */
   changesRequestedAt?: number
+  /** On a linked task: when its agent last wrote to the build's Engineer, as a verdict usually is. It holds the quiet time while
+   *  the Engineer isn't waiting on a review, until the build's next Ready clears it (liveness.ts waitingForRevision). */
+  toldEngineerAt?: number
   /** A two-review task's hand-overs and reviewers' verdicts, from the automatic reviews (#2382) before project instructions;
    *  never written since (phase 4: the server opens and counts no review), kept on older rows. */
   handoffs?: number

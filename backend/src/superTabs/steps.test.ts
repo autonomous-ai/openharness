@@ -102,6 +102,95 @@ describe('assigning a step', () => {
     expect(f.group(id).assignment!.id).not.toBe(first)
   })
 
+  // Task #2241: a verdict is a post, in the step's chat or the task's, addressed to the Engineer.
+  describe('a post to its Engineer', () => {
+    const post = (f: ReturnType<typeof stepsFixture>, conversationId: string, recipientIds: string[], actor: string) =>
+      f.run({ type: 'message.send', conversationId, text: 'Ready to merge: No. One Critical.', replyTo: null, recipientIds } as Command, f.as(actor))
+    const reviewing = () => {
+      const f = stepsFixture()
+      const id = f.step('Review')
+      const rev = f.add('rev', id)
+      f.run({ type: 'work.assign', conversationId: id, agentId: rev }, f.as(f.dev))
+      return { f, id, rev }
+    }
+
+    it('from the step\'s own agent is kept, in the step\'s chat or the task\'s', () => {
+      const a = reviewing()
+      post(a.f, a.id, [a.f.dev], a.rev)
+      expect(a.f.group(a.id).assignment!.toldEngineerAt).toBe(a.f.now)
+      // A plain post in a step reaches its Engineer by default, so it counts too.
+      const b = reviewing()
+      post(b.f, b.id, [], b.rev)
+      expect(b.f.group(b.id).assignment!.toldEngineerAt).toBe(b.f.now)
+      // Named from the task's own chat, once the Reviewer is in it.
+      const c = reviewing()
+      c.f.run({ type: 'conversation.agent', conversationId: c.f.task, agentId: c.rev, present: true, lead: false })
+      post(c.f, c.f.task, [c.f.dev], c.rev)
+      expect(c.f.group(c.id).assignment!.toldEngineerAt).toBe(c.f.now)
+    })
+
+    it('is what counts: not a post to someone else, nor the Engineer\'s own post to the step', () => {
+      const f = reviewing()
+      const other = f.f.add('other', f.id)
+      post(f.f, f.id, [other], f.rev)
+      expect(f.f.group(f.id).assignment!.toldEngineerAt).toBeUndefined()
+      post(f.f, f.id, [f.rev], f.f.dev)
+      expect(f.f.group(f.id).assignment!.toldEngineerAt).toBeUndefined()
+    })
+
+    // An existing rule (integration/superTabLiveness.test.ts): a Reviewer's note to a working Engineer keeps no hung Reviewer.
+    it('holds nothing when it\'s a note to an Engineer already working, but a verdict does', () => {
+      const f = reviewing()
+      const note = (text: string) => f.f.run({ type: 'message.send', conversationId: f.id, text, replyTo: null, recipientIds: [f.f.dev] } as Command, f.f.as(f.rev))
+      note('Still reading the parser changes.')
+      expect(f.f.group(f.id).assignment!.toldEngineerAt).toBeUndefined()
+      note('Ready to merge: Yes, once CI is green.')
+      expect(f.f.group(f.id).assignment!.toldEngineerAt).toBeUndefined()
+      note('**Ready to merge: With fixes.** One Important finding.')
+      expect(f.f.group(f.id).assignment!.toldEngineerAt).toBe(f.f.now)
+    })
+
+    it('counts whatever it says when the Engineer was waiting on this review, as a Tester\'s verdict has no set form', () => {
+      const f = reviewing()
+      f.f.run({ type: 'work.status', conversationId: f.f.task, assignmentId: f.f.group(f.f.task).assignment!.id, status: 'review', result: 'PR 7' } as Command, f.f.as(f.f.dev))
+      f.f.run({ type: 'message.send', conversationId: f.id, text: 'Sign-in fails offline, steps below.', replyTo: null, recipientIds: [f.f.dev] } as Command, f.f.as(f.rev))
+      expect(f.f.group(f.id).assignment!.toldEngineerAt).toBe(f.f.now)
+    })
+
+    // Review of #2659: Engineers often ask by post, "fixed at abc, please re-check", so a hung Reviewer must not stay held.
+    it('ends with the Engineer\'s post to it, in the step\'s chat or the task\'s, and its 30 minutes restart', () => {
+      const a = reviewing()
+      post(a.f, a.id, [a.f.dev], a.rev)
+      a.f.tick(60_000)
+      post(a.f, a.id, [a.rev], a.f.dev)
+      expect(a.f.group(a.id).assignment!.toldEngineerAt).toBeUndefined()
+      expect(a.f.group(a.id).assignment).toMatchObject({ status: 'working', progressAt: a.f.now })
+      const b = reviewing()
+      post(b.f, b.id, [b.f.dev], b.rev)
+      b.f.run({ type: 'conversation.agent', conversationId: b.f.task, agentId: b.rev, present: true, lead: false })
+      b.f.tick(60_000)
+      post(b.f, b.f.task, [b.rev], b.f.dev)
+      expect(b.f.group(b.id).assignment!.toldEngineerAt).toBeUndefined()
+      expect(b.f.group(b.id).assignment).toMatchObject({ progressAt: b.f.now })
+    })
+
+    it('gives no time to a Reviewer that isn\'t waiting: the Engineer\'s posts keep no idle Reviewer', () => {
+      const f = reviewing()
+      const before = f.f.group(f.id).assignment!.progressAt
+      f.f.tick(60_000)
+      post(f.f, f.id, [f.rev], f.f.dev)
+      expect(f.f.group(f.id).assignment!.progressAt).toBe(before)
+    })
+
+    it('ends with the Engineer\'s next Ready', () => {
+      const f = reviewing()
+      post(f.f, f.id, [f.f.dev], f.rev)
+      f.f.run({ type: 'work.status', conversationId: f.f.task, assignmentId: f.f.group(f.f.task).assignment!.id, status: 'review', result: 'PR 7, fixed' } as Command, f.f.as(f.f.dev))
+      expect(f.f.group(f.id).assignment!.toldEngineerAt).toBeUndefined()
+      expect(f.f.group(f.id).assignment).toMatchObject({ status: 'working', progressAt: f.f.now })
+    })
+  })
+
   // The fix round Reviewers already wait through (liveness.ts waitingForRevision, Diego 2026-11-01), pinned for steps.
   it('stays working across its owner\'s fix round', () => {
     const f = stepsFixture()
