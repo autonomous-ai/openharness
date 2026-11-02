@@ -36,19 +36,19 @@ describe('the built-in template', () => {
   // groups to hold, batch and triage work. Agents forgot which task they were on (agent context design, section 3).
   it('the template workflow has one task per request, steps, and the context tools', () => {
     expect(TEMPLATE_WORKFLOW).toContain('1. One request is one task.')
-    // Ken, 2026-11-02: the PM sets the task's team once, then stays out of it until the Engineer reports.
-    expect(TEMPLATE_WORKFLOW).toContain('and its Tester when the change needs one')
-    expect(TEMPLATE_WORKFLOW).toContain('assigns them to the Reviewer and the Tester the task names')
+    // Ken, 2026-11-02: the PM says what the task needs once, then stays out of it until the Engineer reports.
+    expect(TEMPLATE_WORKFLOW).toContain('It says which\n   reviews and tests the task needs')
+    expect(TEMPLATE_WORKFLOW).toContain("That is the PM's part until the Engineer reports.")
     expect(TEMPLATE_WORKFLOW).toContain('The PM opens no task to hold, batch, triage or list work')
     expect(TEMPLATE_WORKFLOW).toContain('adds a review step to its task')
     expect(TEMPLATE_WORKFLOW).toContain('it adds no new step for a second round')
     expect(TEMPLATE_WORKFLOW).toContain('run `mine`')
     expect(TEMPLATE_WORKFLOW).toContain('read `task GROUP`')
     expect(TEMPLATE_WORKFLOW).toContain('read the thread before acting on it')
-    // Ken, 2026-11-02 (from openharness): the PM names both Reviewers a two-review task needs, and the Engineer picks a
-    // missing one itself instead of asking the PM.
-    expect(TEMPLATE_WORKFLOW).toContain('two Reviewers when the task needs two reviews')
-    expect(TEMPLATE_WORKFLOW).toContain('the Engineer picks a free Reviewer that has not worked on this task itself, without asking the PM')
+    // Ken, 2026-11-02 (from openharness): a two-review task gets two review steps; the Engineer picks its Reviewers
+    // itself instead of asking the PM (since 2026-11-03, when the pull request is ready).
+    expect(TEMPLATE_WORKFLOW).toContain('A task that needs two\n   reviews gets two review steps.')
+    expect(TEMPLATE_WORKFLOW).toContain('never one that\n   worked on this task itself')
     // Ken, 2026-11-02: an Engineer posted "review and test pass" and then set Done, two messages for one event.
     expect(TEMPLATE_WORKFLOW).toContain('that status is how the PM hears, once')
     expect(TEMPLATE_WORKFLOW).toContain('The PM reads `mine` for progress, not `status`.')
@@ -93,7 +93,7 @@ describe('the built-in template', () => {
     // Ken, 2026-11-03: Reviewers named when a task opened were busy, stopped or out of quota an hour or more later (10 of
     // 36 named in two days reviewed nothing), and 202 reviews in 48 hours ran on the PM's own Mac Studio account.
     const workflow = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Workflow'), INSTRUCTIONS_TEMPLATE.indexOf('## Routing'))
-      .replaceAll('\n   ', ' ')
+      .replace(/\n +/g, ' ')
     expect(workflow).toContain('names a Reviewer or Tester only when the task needs that one agent')
     expect(workflow).toContain('It picks each Reviewer and Tester then, by Routing\'s order (the one the PM named, if any)')
     expect(workflow).toContain('If an assignment is refused, the Engineer asks the PM once, naming the step and the agent it picked.')
@@ -104,7 +104,7 @@ describe('the built-in template', () => {
     // Ken, 2026-11-03: the PM reused idle agents on its own machine about 300 times in 48 hours (it took the route's first
     // candidate 11% of the time) until that Claude account, the PM's own, reached 0% with 4 days to its reset. The 5-hour
     // window is never hit, so only the weekly quota counts. No plan size here: projects differ.
-    const routing = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Routing')).replaceAll('\n  ', ' ').replaceAll('\n     ', ' ')
+    const routing = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Routing')).replace(/\n +/g, ' ')
     expect(routing).toContain('Every assignment (an Engineer, a Reviewer, a Tester, an idle agent reused) picks in this order:')
     expect(routing).toContain('The PM\'s own account (the engine it runs on, on its machine) keeps the PM running for the whole week.')
     expect(routing).toContain('weekly quota left above the share of its week left (with 5 of 7 days to go, above 71%)')

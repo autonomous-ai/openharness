@@ -50,17 +50,18 @@ export const TEMPLATE_ROLES = `## Roles
 
 export const TEMPLATE_WORKFLOW = `## Workflow
 
-1. One request is one task. The PM opens it with its goal and "Done when" and assigns an Engineer. It also
-   names its Reviewer, two Reviewers when the task needs two reviews, and its Tester when the change needs one; when
-   no agent is free for a role, it starts one.
+1. One request is one task. The PM opens it with its goal and "Done when" and assigns an Engineer. It says which
+   reviews and tests the task needs (two reviews, a test on a Mac, on a device), and names a Reviewer or Tester only
+   when the task needs that one agent; when no agent can take a role, it starts one.
    That is the PM's part until the Engineer reports. The PM opens no task to hold, batch, triage or list work: that
    goes in its notes or the project chat.
 2. When the pull request is ready, the Engineer adds a review step to its task, and a test step when the change is
    something a user sees or uses (screens, CLI commands, install and release, sign-in, connections between machines,
-   devices). It assigns them to the Reviewer and the Tester the task names, and messages them directly.
+   devices). It picks each Reviewer and Tester then, by Routing's order (the one the PM named, if any), never one that
+   worked on this task itself, assigns them and messages them directly.
    Review and test run in parallel. Refactors, docs and test-only changes get a review only. A task that needs two
-   reviews gets two review steps. When the task needs a Reviewer the PM did not name,
-   the Engineer picks a free Reviewer that has not worked on this task itself, without asking the PM.
+   reviews gets two review steps. If an assignment is refused, the Engineer asks the PM once, naming the step and the
+   agent it picked.
 3. Findings go straight to the Engineer. The Engineer fixes them and asks the same Reviewer or Tester again in the same
    step; it adds no new step for a second round. While the Engineer fixes them, the Reviewer or Tester stays Working on its step:
    blocked and needs_human are only for something a person must do.
@@ -87,18 +88,22 @@ export const TEMPLATE_ROUTING = `## Routing
   Sol, and after a second to Opus or Astra.
 - A Tester runs on a machine that has what the change needs: a Mac for Desktop, the machine the device is plugged into for
   firmware. The machine comes before the model. A mid-strength model is enough for most testing.
-- Between candidates of equal strength, quota decides. An account's share per day is its weekly quota left
-  divided by the days until it resets; work goes first to the largest share per day, so no account ends its week with
-  quota left and none runs dry early (20% left resetting in 1 day comes before 80% in 5 days).
-- An idle agent is reused only when its account has the quota for the task; otherwise a new agent starts on the account
-  with the largest share per day.
-- An account with less than a day's share for a task takes no new big task. When every account of the strongest models
-  is under 20% of its week, Engineers move to the next model and that quota is kept for reviews and urgent work.
-- An agent that runs out mid-task waits if its 5-hour window resets within 30 minutes; otherwise its pushed branch moves
-  to an agent on another account.
-- Urgent work (production down, security) ignores quota.
-- The route's lines show each account's quota left and reset time, but its order does not rank by them: the PM works out
-  each candidate's share per day from those lines, and gives the reason when it picks another.`
+- Every assignment (an Engineer, a Reviewer, a Tester, an idle agent reused) picks in this order:
+  1. What the work needs: the machine, a model strong enough, a machine not paused.
+  2. The PM's own account (the engine it runs on, on its machine) keeps the PM running for the whole week. It takes
+     other work only while ahead of its week: weekly quota left above the share of its week left (with 5 of 7 days
+     to go, above 71%). At or below that line it takes no new work and idle agents there are not reused.
+  3. Every other account is used while it has weekly quota left: the one resetting soonest first, then the one with
+     the most left.
+  4. An idle agent is reused only between candidates equal so far, except the same Reviewer for its next round and
+     work that follows straight on from what the agent just did.
+  5. Between equals, the machine with fewer agents working. Then price.
+- The route's lines show each account's weekly quota left and reset time, but its order does not rank by them: the PM
+  applies this order itself. Picking against it needs a reason in the route's override: urgency, context, or a machine
+  the work needs. "Idle" is not a reason.
+- An agent whose account runs out of weekly quota mid-task, or whose account is the PM's and falls below its line,
+  hands its pushed branch to an agent on another account.
+- Urgent work (production down, security) ignores quota.`
 
 /** The title and the opening words, which say what the document is for. */
 export const TEMPLATE_INTRO = `# Project instructions
