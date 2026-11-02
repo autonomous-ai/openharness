@@ -11,6 +11,7 @@ import { costRows } from '../src/superTabs/costs/read.js'
 import { readEvidence } from '../src/superTabs/evidence/store.js'
 import { recentDecisions } from '../src/superTabs/routeDecisions.js'
 import { settleStuckDeliveries } from '../src/superTabs/deliverySettle.js'
+import { listNamedIndexes } from '../src/superTabs/parts/indexed.js'
 import { revokeNativeContexts } from '../src/superTabs/native.js'
 import { outsider, owner, peer, richSwarm, swarm } from '../src/superTabs/read/fixture.test-support.js'
 import { threadSummaries } from '../src/superTabs/threads.js'
@@ -238,6 +239,8 @@ describe('the delivery pass', () => {
     await db.$runCommandRaw({ insert: 'SuperTabDelivery', documents: open })
     const judged: Array<{ tabId: string; rows: unknown[] }> = []
     const store = { settleDeliveries: async (tabId: string, rows: unknown[]) => { judged.push({ tabId, rows }); return 0 } }
+    // As the worker has at startup: its plan is named, or a fourth status plans it on `compaction` and sorts.
+    await listNamedIndexes(db)
     const [, profile] = await profiled('SuperTabDelivery', () => settleStuckDeliveries(db, store, T0))
     await db.superTabDelivery.deleteMany({ where: { messageId: 'A-m900' } })
     // One scan of the index per unfinished status, merged in id order.
