@@ -36,7 +36,8 @@ Future<(SuperTabLaunchFixture, SuperTabController)> _mount(
         'configuration': {'engine': 'codex'},
       },
   ];
-  (state['conversations'] as List)[0]['agentIds'] = [
+  // A workgroup: the project chat shows its coordinator's terminal alone (#2207).
+  (state['conversations'] as List)[1]['agentIds'] = [
     for (var i = 0; i < agents; i++) 'agent-$i',
   ];
   f.app.machineStates['m']!.agents = [
@@ -58,7 +59,9 @@ Future<(SuperTabLaunchFixture, SuperTabController)> _mount(
   if (finder) f.app.finderRoots.set('m', 'native-0', _finderRoot);
   final c = await f.app.superTabs.open(tabId);
   await c.refresh();
-  c.selectGroupTerminals('lead');
+  c
+    ..select('offline')
+    ..selectGroupTerminals('offline');
   if (legacyDevices) {
     final tab = f.app.activeSwarm;
     tab.panes
@@ -150,7 +153,7 @@ void main() {
           await persisted.load();
           expect(persisted.rootOf('m', 'native-0'), _finderRoot);
         }
-        await tester.tap(find.byKey(const ValueKey('super-group-lead')));
+        await tester.tap(find.byKey(const ValueKey('super-group-offline')));
         await tester.pumpAndSettle();
         expect(c.devicesSelected, isFalse);
         expectPreview();
@@ -186,7 +189,7 @@ void main() {
         expect(tab.panes.single.isDevices, isTrue);
         expect(tab.panes.single.ownerAgentId, isNull);
         expect(tab.manualLayout, isNull);
-        c.select('lead');
+        c.select('offline');
         await tester.pumpAndSettle();
         expect(tab.panes.map((pane) => pane.agentId), ['native-0', 'native-1']);
       }
@@ -214,7 +217,7 @@ void main() {
     expect(tab.focusedPaneId, tab.panes.single.id);
     expect(tab.zoomedPaneId, isNull);
     expect(tab.manualLayout, isNull);
-    c.select('lead');
+    c.select('offline');
     await tester.pumpAndSettle();
     expect(tab.panes.map((pane) => pane.agentId), ['native-0', 'native-1']);
     c.selectDevices();

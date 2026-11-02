@@ -29,7 +29,9 @@ void main() {
           'configuration': {'engine': 'codex'},
         },
       ];
-      (server.state['conversations'] as List)[0]['agentIds'] = ['pm'];
+      (server.state['conversations'] as List)[0]
+        ..['agentIds'] = ['pm']
+        ..['leadId'] = 'pm';
       final c = server.controller();
       await c.refresh();
       c.setDraft('lead', 'Keep discussing this project.');

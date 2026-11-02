@@ -2298,10 +2298,11 @@ class _SuperTabViewState extends State<SuperTabView>
   bool get _menuNamesViews =>
       _phone && !_devicesVisible && !_listViewHoldsThePane;
 
-  /// How many terminals [group]'s [term] opens: its agents', and in the
-  /// person's own Personal Swarm their panes of its project.
+  /// How many terminals [group]'s [term] opens: its agents' (a project chat's
+  /// coordinator alone), and in the person's own Personal Swarm their panes of
+  /// its project.
   int _terminalCount(SuperTabConversation group) =>
-      group.agentIds.length +
+      (c.snapshot?.paneAgentIds(group.id) ?? group.agentIds).length +
       switch (widget.app) {
         final app? => PersonalProjects.of(app).panesFor(c, group.id).length,
         null => 0,

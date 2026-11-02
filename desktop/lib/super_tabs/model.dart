@@ -695,6 +695,17 @@ class SuperTabSnapshot {
   bool isProjectLead(String conversationId) =>
       projects.any((p) => p.leadConversationId == conversationId);
 
+  /// The agents whose terminals [conversationId] opens: a project chat's
+  /// coordinator alone, whoever else an older Swarm still holds there (#2207);
+  /// any other group's members.
+  List<String> paneAgentIds(String conversationId) {
+    final group = conversation(conversationId);
+    if (group == null) return const [];
+    if (!isProjectLead(conversationId)) return group.agentIds;
+    final lead = group.leadId;
+    return lead != null && group.agentIds.contains(lead) ? [lead] : const [];
+  }
+
   SuperTabProject? leadProjectForAgent(String agentId) => projects
       .where((p) => conversation(p.leadConversationId)?.leadId == agentId)
       .firstOrNull;

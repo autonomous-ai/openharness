@@ -34,6 +34,7 @@ void main() {
       final mobileLead = {
         ...conversationFixture('mobile-lead', 'Product Manager'),
         'projectId': 'mobile',
+        'leadId': 'nova',
         'agentIds': ['nova'],
       };
       final mobileWork = {
