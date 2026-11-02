@@ -588,7 +588,8 @@ static int workspace_index(const char *id)
  * where the dial is in it. A Lead id is not an agent id: it reaches the cable only in supertab.* requests (A_SUPERTAB),
  * never in focus, agent.open or voice.begin. Voice goes to the Lead's `local` harness id.
  */
-enum { SUPERTAB_RECAP_GET, SUPERTAB_OPEN, SUPERTAB_SELECT, SUPERTAB_SIDE };   // SIDE: id "buddy" or "pm"
+// SIDE: id "buddy" or "pm". SIDE_KEPT: the side a restart took off the face, told to the daemon without moving the window.
+enum { SUPERTAB_RECAP_GET, SUPERTAB_OPEN, SUPERTAB_SELECT, SUPERTAB_SIDE, SUPERTAB_SIDE_KEPT };
 #define SWARM_WAITS 16
 #define SWARM_SAID 24   // one per inbox entry the Lead messages can fill (NOTICES)
 static EXT_RAM_BSS_ATTR ht_supertabs_t swarm;
@@ -3376,6 +3377,7 @@ static void worker(void *unused)
             static const char *ops[] = {"supertab.recap.get", "supertab.open", "supertab.select"};
             if (a.value >= SUPERTAB_RECAP_GET && a.value <= SUPERTAB_SELECT) cable_client_supertab_send(ops[a.value], a.text, a.id);
             else if (a.value == SUPERTAB_SIDE) cable_client_supertab_side(a.text, !strcmp(a.id, "buddy"));
+            else if (a.value == SUPERTAB_SIDE_KEPT) cable_client_supertab_side_kept(a.text);
             break;
         }
         case A_NOTICE_READ:
@@ -5212,14 +5214,14 @@ static void swarm_tabs_changed(void)
 // A daemon that restarts (each CLI update) drops the session and takes 5-40 s to resend the Swarm cards, and one that had
 // just started said "no Swarms" before it had read them (Diego's dial, 2026-10-29, 2026-11-02): the Swarm taken off the face
 // comes back on the Lead and side it showed, with no pick sent, however long that took, as long as the person has not moved
-// on. A daemon that remembers no side is told it. Only that Swarm; one that really went stays gone (ui_supertabs_ids).
+// on. A daemon that remembers no side is told it, without moving the window. Only that Swarm; one that really went stays gone (ui_supertabs_ids).
 static bool swarm_regain(const ht_supertab_t *t)
 {
     if (!t || !sw.lost.tab[0] || swarm_mode() || strcmp(t->id, sw.lost.tab) || !swarm_may_follow()) return false;
     char lead[ID_MAX]; COPY(lead, sw.lost.lead);
     bool buddies = false;
     for (int i = 0; i < t->lead_n; i++) buddies |= t->leads[i].buddies;
-    if (sw.lost.buddy && buddies && !swarm_side_buddy(t->id)) { swarm_side_put(t->id, true); swarm_side_send(t->id); }
+    if (sw.lost.buddy && buddies && !swarm_side_buddy(t->id)) { swarm_side_put(t->id, true); swarm_send(SUPERTAB_SIDE_KEPT, t->id, "buddy"); }
     swarm_enter(t, lead, false);
     return true;
 }

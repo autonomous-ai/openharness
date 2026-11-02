@@ -202,7 +202,7 @@ static bool queue(action_t a) {
     if (a.kind==A_NOTICE_READ) { notice_reads_sent++; notice_read_queued=a; }
     if (a.kind==A_DESKTOP) { desktop_opens++; COPY(opened_agent,a.id); }
     if (a.kind==A_SUPERTAB && swarm_sent<64) {
-        static const char *ops[]={"recap.get","open","select","side"};
+        static const char *ops[]={"recap.get","open","select","side","side-kept"};
         snprintf(swarm_wire[swarm_sent++],sizeof swarm_wire[0],"%s %s %s",ops[a.value],a.text,a.id);
     }
     if (a.kind==A_STOP_YES) COPY(stopped_agent,a.id);
@@ -2135,7 +2135,7 @@ static void swarm_restart_checks(void) {
     ui_supertabs_clear(); assert(!swarm_side_buddy("s1")); fake_ms += 40000; swarm_sent = 0;
     { const char one[1][ID_MAX] = {"s1"}; ui_supertabs_ids(one, 1); }
     buddy_card("lead");
-    assert(swarm_mode() && !strcmp(sw.lead, "B1") && swarm_side_buddy("s1") && wire_has(0, "side s1 buddy"));
+    assert(swarm_mode() && !strcmp(sw.lead, "B1") && swarm_side_buddy("s1") && wire_has(0, "side-kept s1 buddy") && !wire_has(0, "side s1 buddy"));
     puts("Swarm restart: the face keeps its Swarm, Lead and side across a session down or an empty list with no time limit, follows the app, and only the person or a Swarm really gone ends it");
 }
 static void swarm_buddy_checks(const char *dir) {

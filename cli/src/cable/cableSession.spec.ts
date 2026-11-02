@@ -4833,6 +4833,10 @@ describe('swarm cards', () => {
         expect(vi.mocked(host.superTabSelected!).mock.calls).toEqual([['st1', 'proj1', 'buddy'], ['st1', 'proj1', 'pm']])
         // The cards still hear each side: the dial's faces follow from them as before.
         expect(swarmCardSide.mock.calls).toEqual([['st1', 'buddy'], ['st1', 'pm']])
+        // A side the dial kept across a restart, with no finger on it: the cards hear it, and the window stays.
+        port.say({ t: 'supertab.side', tab: 'st1', side: 'buddy', kept: true }); await settle()
+        expect(swarmCardSide).toHaveBeenLastCalledWith('st1', 'buddy')
+        expect(vi.mocked(host.superTabSelected!).mock.calls).toHaveLength(2)
         // The window's announce of the move it made for the dial is not sent back as a focus.
         state.open = { ...onDesk(), fromDevice: true }
         await session.syncSwarmCards(true)
