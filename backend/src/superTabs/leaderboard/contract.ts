@@ -99,6 +99,8 @@ export interface Leaderboard {
   week: number
   /** The rolling period this sums, when one was asked for; `end` is the read's time. Absent from a week's answer. */
   period?: { name: PeriodName; start: number; end: number }
+  /** Sums every project the reader may read, and lists everyone in the Swarm: the roster's All projects. Absent otherwise. */
+  allProjects?: true
   /** The team's goal: everyone's points count toward it. */
   goal: { openRequests: number; thisWeek: WeekGoal; lastWeek: WeekGoal | null }
   /** Every person who reads the project, most points first. */

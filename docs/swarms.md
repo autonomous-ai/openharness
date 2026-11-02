@@ -403,6 +403,11 @@ are still written for older apps, which keep their week picker, as a new app
 does on an older server. Time recorded by week before the finer records began
 counts once, at the end of its week.
 
+On Desktop, All projects sums every project the reader can read, for the chosen
+period, and lists everyone in the Swarm. A project the reader can't read adds
+nothing to anyone's numbers. Choosing one project shows that project's own. The
+phone's board is always one project's.
+
 Each person has three numbers:
 
 - **Shipped**: requests the person asked for whose pull request merged. A group

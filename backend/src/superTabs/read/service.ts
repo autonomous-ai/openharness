@@ -20,7 +20,7 @@ import { readChanged, readLastChangedAt, readLastChangedAts, readLight, readLigh
 import { migrateSwarm } from '../migration/migrate.js'
 import * as parts from '../parts/index.js'
 import type { GroupData, Part, SwarmParts } from '../parts/index.js'
-import { canReadGroup, readConversation, readProject } from '../projects.js'
+import { canReadProject, canReadGroup, readConversation, readProject } from '../projects.js'
 import { isBuddyReader } from '../buddies.js'
 import { workspacesRequired } from '../workspaceStore.js'
 import type { Leaderboard } from '../leaderboard/contract.js'
@@ -320,20 +320,22 @@ export class SwarmReads {
 
   /** One project's leaderboard for a week (leaderboard/stats.ts), for the people who read the project. It sums only the
    *  groups the reader may read, dormant ones of the kept weeks included, and never a private conversation. */
-  async leaderboard(user: AuthUser, tabId: string, projectId: string, week?: number, period?: PeriodName): Promise<Leaderboard> {
+  async leaderboard(user: AuthUser, tabId: string, projectId: string, week?: number, period?: PeriodName, allProjects = false): Promise<Leaderboard> {
     if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const now = this.now(), start = readableWeek(week, now)
     return this.read(user, tabId, async (tx, cached) => {
       const state = parts.reassemble(await readParts(tx, cached, tabId), { share: true })
       const actor = await this.store.actor(tx, user, state)
       readProject(state, actor, projectId)
-      const dormant = await recentDormantGroups(tx, tabId, projectId, now - LEDGER_WEEKS * WEEK_MS)
+      // Every project this reader reads, by the same check as the one asked for; what they may not read is never loaded.
+      const readable = allProjects ? (state.projects ?? []).filter(p => canReadProject(state, actor, p)).map(p => p.id) : undefined
+      const dormant = await recentDormantGroups(tx, tabId, readable ?? projectId, now - LEDGER_WEEKS * WEEK_MS)
       const groups = [...state.conversations.filter(g => !g.dormant), ...dormant].filter(g => !isLeads(g) && canReadGroup(state, actor, g))
       const names = await profileNames(tx, state.people.map(p => p.id))
       // Which machines the reader sees, with the daily rows no other read carries.
       const machines = (visibleState(state, actor, now).machines ?? [])
         .map(m => ({ ...m, lentDays: state.machines?.find(own => own.machineId === m.machineId)?.lentDays }))
-      return leaderboard({ state, groups, machines, projectId, week: start, now, period, names })
+      return leaderboard({ state, groups, machines, projectId, week: start, now, period, allProjects: readable, names })
     })
   }
 

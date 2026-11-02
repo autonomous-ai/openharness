@@ -100,6 +100,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
   /// narrowing the list puts the choice back on All projects, and saves that,
   /// rather than carrying it over to whichever project opens next.
   void _scopeMoved() {
+    _followScope();
     if (_choice.scope != SuperTabRosterScope.project) {
       _scopedId = null;
       return;
@@ -117,11 +118,22 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     }
   }
 
+  /// The board sums what the list shows: every readable project under All
+  /// projects, the open one under its own name.
+  void _followScope() => unawaited(
+    _board.showAllProjects(_choice.scope == SuperTabRosterScope.all),
+  );
+
   @override
   void initState() {
     super.initState();
     c.addListener(_scopeMoved);
     _choice.addListener(_scopeMoved);
+    // A board shared with a roster of an earlier visit follows this one, after
+    // this build: others are listening to it.
+    scheduleMicrotask(() {
+      if (mounted) _followScope();
+    });
     _tick = Timer.periodic(
       const Duration(seconds: 30),
       (_) => mounted ? setState(() {}) : null,
@@ -548,7 +560,14 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     // Only the open project's board: an answer for any other never lends
     // its numbers to these rows.
     final board = switch (_board.board) {
-      final board? when projectId != null && board.projectId == projectId =>
+      // Nor numbers of another scope: a whole-Swarm board says nothing of who
+      // is in this project. A board of a week is the open project's alone.
+      final board?
+          when projectId != null &&
+              board.projectId == projectId &&
+              (board.period == null ||
+                  board.allProjects ==
+                      (_choice.scope == SuperTabRosterScope.all)) =>
         board,
       _ => null,
     };
@@ -606,27 +625,45 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             context,
             points: board.people.map((s) => s.points),
           );
-    final week = weekName(_board.week, current);
+    final week = board?.spanName ?? weekName(_board.week, current);
     final openProject = projectId == null
         ? null
         : state?.projectById(projectId);
-    final showWeek = board != null || _board.week != null;
-    Widget weekSelect({double? width}) => AppSelectField<int>(
-      key: const ValueKey('leaderboard-week'),
-      value: _board.week ?? current,
-      width: width,
-      height: DesktopChrome.compactControlHeight,
-      semanticLabel: 'Week',
-      options: [
-        for (var back = 0; back < 4; back++)
-          SelectOption(
-            value: current - back * weekMs,
-            label: capitalized(weekName(current - back * weekMs, current)),
-          ),
-      ],
-      onChanged: (week) =>
-          unawaited(_board.showWeek(week == current ? null : week)),
-    );
+    final showWeek =
+        board != null ||
+        _board.week != null ||
+        (_board.period ?? leaderboardDefaultPeriod) != leaderboardDefaultPeriod;
+    Widget weekSelect({double? width}) => switch (_board.period) {
+      final period? => AppSelectField<String>(
+        key: const ValueKey('leaderboard-period'),
+        value: period,
+        width: width,
+        height: DesktopChrome.compactControlHeight,
+        semanticLabel: 'Period',
+        options: [
+          for (final option in leaderboardPeriods)
+            SelectOption(value: option, label: leaderboardPeriodLabel(option)),
+        ],
+        onChanged: (period) => unawaited(_board.showPeriod(period)),
+      ),
+      // A server before periods keeps the weeks.
+      null => AppSelectField<int>(
+        key: const ValueKey('leaderboard-week'),
+        value: _board.week ?? current,
+        width: width,
+        height: DesktopChrome.compactControlHeight,
+        semanticLabel: 'Week',
+        options: [
+          for (var back = 0; back < 4; back++)
+            SelectOption(
+              value: current - back * weekMs,
+              label: capitalized(weekName(current - back * weekMs, current)),
+            ),
+        ],
+        onChanged: (week) =>
+            unawaited(_board.showWeek(week == current ? null : week)),
+      ),
+    };
     return [
       // Humans and Agents: the two roles in one team (Dee, 2026-10-29).
       SuperTabSectionHeading(

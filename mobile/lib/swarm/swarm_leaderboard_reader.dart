@@ -29,15 +29,29 @@ Map<String, dynamic> _map(Object? value) =>
 class SwarmLeaderboard {
   SwarmLeaderboard.fromJson(Map<String, dynamic> json)
     : week = _int(json['week']),
+      period = switch (_map(json['period'])['name']) {
+        final String name when name.isNotEmpty => name,
+        _ => null,
+      },
       shipped = _int(_map(_map(json['goal'])['thisWeek'])['shipped']),
       shippedBefore = _int(_map(_map(json['goal'])['lastWeek'])['shipped']),
       people = List.unmodifiable([
         for (final row in json['people'] as List? ?? const [])
-          if (row is Map) SwarmScore.fromJson(_map(row)),
+          if (row is Map)
+            SwarmScore.fromJson(
+              _map(row),
+              period: switch (_map(json['period'])['name']) {
+                final String name when name.isNotEmpty => name,
+                _ => null,
+              },
+            ),
       ]);
 
   /// The week's Monday 00:00 UTC, in epoch milliseconds.
   final int week;
+
+  /// The rolling period this sums; null from a server that sums weeks.
+  final String? period;
 
   /// What the project shipped in the week.
   final int shipped;
@@ -49,10 +63,35 @@ class SwarmLeaderboard {
   final List<SwarmScore> people;
 }
 
+/// The rolling periods the board offers, the default in the middle (the
+/// desktop's `leaderboardPeriods`).
+const swarmPeriods = ['24h', '7d', '30d'];
+const swarmDefaultPeriod = '7d';
+
+/// "Last 7d": a period in the picker.
+String swarmPeriodLabel(String period) => 'Last $period';
+
+String _periodLength(String period) => switch (period) {
+  '24h' => '24 hours',
+  '30d' => '30 days',
+  _ => '7 days',
+};
+
+/// "in the last 7 days": what a period's numbers cover, in a sentence.
+String swarmPeriodSpan(String period) => 'in the last ${_periodLength(period)}';
+
+/// "the 7 days before"; null for Last 30d, which has no comparison.
+String? swarmPeriodEarlier(String period) =>
+    period == '30d' ? null : 'the ${_periodLength(period)} before';
+
 /// One person's week on the board.
 class SwarmScore {
-  SwarmScore.fromJson(Map<String, dynamic> json)
-    : personId = json['personId'] as String? ?? '',
+  SwarmScore.fromJson(Map<String, dynamic> json, {String? period})
+    : spanName = period == null ? 'this week' : swarmPeriodSpan(period),
+      earlierName = period == null
+          ? 'last week'
+          : 'the ${_periodLength(period)} before',
+      personId = json['personId'] as String? ?? '',
       points = _int(json['points']),
       rank = _int(json['rank']),
       medal = SwarmMedal.values.asNameMap()[json['medal']],
@@ -85,7 +124,11 @@ class SwarmScore {
   /// The profile name; null from a server before names.
   final String? displayName;
 
-  /// The same scoring for the week before; null from a server before it.
+  /// What the points cover and what [prevWeekPoints] covers, in a sentence.
+  final String spanName, earlierName;
+
+  /// The same scoring for the time before; null from a server before it, and
+  /// for Last 30d, which has no comparison.
   final int? prevWeekPoints;
 }
 
@@ -119,7 +162,7 @@ String? swarmTrend(SwarmScore score) {
   final before = score.prevWeekPoints;
   if (before == null || before == score.points) return null;
   final change = score.points - before;
-  return '${change > 0 ? 'up' : 'down'} ${change.abs()} from last week';
+  return '${change > 0 ? 'up' : 'down'} ${change.abs()} from ${score.earlierName}';
 }
 
 String _plural(int count, String one) =>
@@ -175,6 +218,13 @@ class SwarmLeaderboardReader extends ChangeNotifier {
   /// The Monday of the week shown; null for this week.
   int? week;
 
+  String _period = swarmDefaultPeriod;
+  bool _weeksOnly = false;
+
+  /// The rolling period shown; null while the server only sums weeks (a server
+  /// before periods), which keeps the week picker. Told once per reader.
+  String? get period => _weeksOnly ? null : _period;
+
   int _read = 0;
   Timer? _timer;
   bool _disposed = false;
@@ -187,6 +237,17 @@ class SwarmLeaderboardReader extends ChangeNotifier {
       if (inFront()) unawaited(refresh());
     });
     unawaited(refresh());
+  }
+
+  /// Shows another rolling period.
+  Future<void> showPeriod(String period) {
+    if (period == _period) return Future.value();
+    _period = period;
+    // Another period's numbers under this one's name would mislead.
+    board = null;
+    error = null;
+    _notify();
+    return refresh();
   }
 
   /// Shows another week, null for this one.
@@ -203,21 +264,32 @@ class SwarmLeaderboardReader extends ChangeNotifier {
 
   Future<void> refresh() async {
     if (_disposed) return;
-    final read = ++_read, week = this.week;
+    final read = ++_read, week = this.week, period = this.period;
     try {
       final answer = await request(
         'GET',
         '/api/super-tabs/${Uri.encodeComponent(tabId)}/leaderboard'
             '?projectId=${Uri.encodeQueryComponent(projectId)}'
-            '${week == null ? '' : '&week=$week'}',
+            '${period != null
+                ? '&period=$period'
+                : week == null
+                ? ''
+                : '&week=$week'}',
       );
       if (read != _read || _disposed) return;
       if (answer is! Map) throw const FormatException();
       board = SwarmLeaderboard.fromJson(answer.cast<String, dynamic>());
+      if (board!.period == null) _weeksOnly = true;
       error = null;
       unavailable = false;
     } on SuperTabFailure catch (failure) {
       if (read != _read || _disposed) return;
+      // A server before periods refuses the question, and only that one: any
+      // other failure, however early, leaves the periods on for the next read.
+      if (failure.statusCode == 400 && period != null) {
+        _weeksOnly = true;
+        return refresh();
+      }
       if (failure.statusCode == 404) {
         board = null;
         error = null;
@@ -254,8 +326,8 @@ List<(String, String)> swarmPersonWeek(SwarmScore score) {
     (
       'Points',
       score.medal == null
-          ? '${score.points} this week'
-          : '${score.points} this week · place ${score.rank}',
+          ? '${score.points} ${score.spanName}'
+          : '${score.points} ${score.spanName} · place ${score.rank}',
     ),
     (
       'Shipped',

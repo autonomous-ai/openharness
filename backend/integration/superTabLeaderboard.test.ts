@@ -191,6 +191,34 @@ describe('the leaderboard read', () => {
       expect(JSON.stringify(parts.body.data)).not.toMatch(/lentDays|reviewHours/)
     })
 
+    it('All projects sums what the reader may read: a private project counts for its reader, and nothing of it reaches anyone else', async () => {
+      const s = await scene()
+      const url = `/api/super-tabs/${s.tabId}/leaderboard?projectId=lead&period=30d`
+      // Peer's own request in the private project they cannot read.
+      const asOwner = await get(`${url}&scope=all`, owner), asOutsider = await get(`${url}&scope=all`, outsider)
+      expect(asOwner.body.data.allProjects).toBe(true)
+      expect(score(asOwner.body, peer.sub).shipped.count).toBe(3)
+      expect(score(asOutsider.body, peer.sub).shipped.count).toBe(2)
+      expect(JSON.stringify(asOutsider.body.data)).not.toMatch(/Hidden|Secret/)
+      expect(JSON.stringify(asOutsider.body.data)).not.toContain(s.secret)
+      expect(asOwner.body.data.goal.thisWeek.shipped).toBe(3)
+      // A private chat's ship record counts for no one, whatever the scope.
+      expect(JSON.stringify(asOwner.body.data)).not.toMatch(/Peer and PM/)
+      const one = await get(url, owner)
+      expect(score(one.body, peer.sub).shipped.count).toBe(2)
+      expect(one.body.data).not.toHaveProperty('allProjects')
+    })
+
+    it('reads All projects\' dormant groups too, and refuses it for a week', async () => {
+      const s = await scene(state => {
+        const secret = state.conversations.find(c => c.title === 'Hidden')!
+        Object.assign(secret, { dormant: true, lastActivityAt: new Date(NOW - 2 * HOUR).toISOString() })
+      })
+      const url = `/api/super-tabs/${s.tabId}/leaderboard?projectId=lead&period=7d&scope=all`
+      expect(score((await get(url, owner)).body, peer.sub).details.shipped.map((d: { title: string }) => d.title)).toContain('Hidden')
+      expect((await get(`/api/super-tabs/${s.tabId}/leaderboard?projectId=lead&scope=all`)).status).toBe(400)
+    })
+
     it('answers the same whatever the reader asks twice', async () => {
       const s = await scene()
       const url = `/api/super-tabs/${s.tabId}/leaderboard?projectId=lead&period=30d`

@@ -322,6 +322,106 @@ void main() {
     },
   );
 
+  group('with the rolling periods', () {
+    /// A server that answers by period: All projects sums to 90 for the owner,
+    /// the open project to 30, and tony is listed only in the whole-Swarm sum.
+    void rolling(RosterFixture f) => f.server.leaderboardAnswer = (path) {
+      final all = path.contains('scope=all');
+      final name = RegExp(r'period=(\w+)').firstMatch(path)?.group(1) ?? '7d';
+      return {
+        'projectId': 'lead',
+        'week': DateTime.utc(2026, 10, 26).millisecondsSinceEpoch,
+        'period': {'name': name, 'start': 1, 'end': 2},
+        if (all) 'allProjects': true,
+        'people': [
+          score('owner', all ? 90 : 30, 1),
+          if (all) score('tony', 40, 2),
+          score('dee', 12, all ? 3 : 2),
+        ],
+        'waiting': {'total': 0, 'people': <Object>[]},
+      };
+    };
+
+    Finder points(String id, String value) =>
+        find.descendant(of: person(id), matching: find.textContaining(value));
+
+    testWidgets('All projects shows Swarm-wide points for the chosen period; '
+        'a project its own', (tester) async {
+      final f = await swarm(tester);
+      rolling(f);
+      await f.show(tester);
+      expect(f.server.leaderboardReads.last, endsWith('&period=7d&scope=all'));
+      expect(points('owner', '90'), findsWidgets);
+      expect(points('tony', '40'), findsWidgets);
+      expect(find.byKey(const ValueKey('leaderboard-week')), findsNothing);
+
+      await tester.tap(find.byKey(const ValueKey('leaderboard-period')));
+      await tester.pumpAndSettle();
+      expect(find.text('Last 24h'), findsWidgets);
+      expect(find.text('Last 30d'), findsWidgets);
+      await tester.tap(find.text('Last 30d').last);
+      await tester.pumpAndSettle();
+      expect(f.server.leaderboardReads.last, endsWith('&period=30d&scope=all'));
+
+      await choose(tester, 'openharness');
+      expect(f.server.leaderboardReads.last, endsWith('&period=30d'));
+      expect(points('owner', '30'), findsWidgets);
+      expect(points('owner', '90'), findsNothing);
+      expect(person('tony'), findsNothing);
+
+      await choose(tester, 'All projects');
+      expect(f.server.leaderboardReads.last, endsWith('&period=30d&scope=all'));
+      expect(points('owner', '90'), findsWidgets);
+      expect(person('tony'), findsOneWidget);
+      await f.close(tester);
+    });
+
+    testWidgets('never lends whole-Swarm numbers or names to a project while '
+        'its own read is out', (tester) async {
+      final f = await swarm(tester);
+      rolling(f);
+      await f.show(tester);
+      final gate = Completer<void>();
+      f.server.leaderboardGate = gate.future;
+      await tester.tap(scope);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('openharness').last);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(points('owner', '90'), findsNothing);
+      gate.complete();
+      await tester.pumpAndSettle();
+      expect(points('owner', '30'), findsWidgets);
+      await f.close(tester);
+    });
+
+    testWidgets('a project lost while narrowed goes back to All projects and '
+        'reads it', (tester) async {
+      final f = await swarm(tester);
+      rolling(f);
+      await f.show(tester);
+      await choose(tester, 'openharness');
+      expect(f.server.leaderboardReads.last, isNot(contains('scope=all')));
+      f.server.state['projects'] = (f.server.state['projects'] as List)
+          .where((p) => (p as Map)['id'] != 'lead')
+          .toList();
+      await f.controller.refresh();
+      await tester.pumpAndSettle();
+      expect(points('owner', '30'), findsNothing);
+      await f.close(tester);
+    });
+
+    testWidgets('from a server before periods: the week menu, its own project '
+        'as before', (tester) async {
+      final f = await swarm(tester);
+      await f.show(tester);
+      expect(find.byKey(const ValueKey('leaderboard-week')), findsOneWidget);
+      expect(find.byKey(const ValueKey('leaderboard-period')), findsNothing);
+      expect(points('owner', '30'), findsWidgets);
+      await f.close(tester);
+    });
+  });
+
   test("another project's board never decides who is in this one", () {
     final project = SuperTabProject.fromJson({
       ...projectFixture(

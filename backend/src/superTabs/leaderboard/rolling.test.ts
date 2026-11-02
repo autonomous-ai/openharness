@@ -67,6 +67,40 @@ describe('the rolling periods', () => {
   })
 })
 
+describe('All projects', () => {
+  const twoProjects = () => {
+    const state = swarm()
+    state.projects!.push({ ...state.projects![0]!, id: 'other', leadConversationId: 'other-lead', name: 'Other' }, { ...state.projects![0]!, id: 'secret', leadConversationId: 'secret-lead', name: 'Secret' })
+    return state
+  }
+  const here = shipped(NOW - HOUR), there = shipped(NOW - 2 * HOUR, { projectId: 'other', title: 'Over there' }), tucked = shipped(NOW - 3 * HOUR, { projectId: 'secret', title: 'Tucked away' })
+  const all = (projects: string[], groups: Conversation[]) => leaderboard({ state: twoProjects(), groups, machines: [], projectId: 'lead', week: THIS_WEEK, now: NOW, period: '7d', allProjects: projects })
+
+  it('sums every project it is given, one project\'s board only its own', () => {
+    const groups = [here, there]
+    const view = all(['lead', 'other'], groups)
+    expect(view.allProjects).toBe(true)
+    expect(view.goal.thisWeek.shipped).toBe(2)
+    expect(dee(view)).toMatchObject({ points: 6, shipped: { count: 2 } })
+    const one = leaderboard({ state: twoProjects(), groups, machines: [], projectId: 'lead', week: THIS_WEEK, now: NOW, period: '7d' })
+    expect(one).not.toHaveProperty('allProjects')
+    expect(dee(one)).toMatchObject({ points: 3, shipped: { count: 1 } })
+  })
+
+  it('counts nothing of a project the reader may not read, though its group is at hand', () => {
+    const view = all(['lead', 'other'], [here, there, tucked])
+    expect(dee(view).shipped.count).toBe(2)
+    expect(JSON.stringify(view)).not.toContain('Tucked away')
+  })
+
+  it('keeps the sidebar\'s recent models to the open project', () => {
+    const run = (projectId: string, model: string) => group({ projectId, ledger: { runs: [{ assignmentId: `a-${model}`, at: NOW - HOUR, engine: 'claude', model }] } })
+    const view = all(['lead', 'other'], [run('lead', 'opus'), run('other', 'sonnet')])
+    expect(view.recentModels.map(m => m.model)).toEqual(['opus'])
+    expect(view.byModel.map(m => m.model).sort()).toEqual(['opus', 'sonnet'])
+  })
+})
+
 describe('Lent in a rolling period', () => {
   it('shares a day out over the part of it that has passed, so the periods add up', () => {
     const pool = { lentDays: [{ day: TODAY, busyMs: 6 * HOUR }, { day: TODAY - DAY, busyMs: 12 * HOUR }, { day: TODAY - 2 * DAY, busyMs: 24 * HOUR }] }

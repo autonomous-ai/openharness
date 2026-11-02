@@ -5,7 +5,7 @@
  * left out here too.
  */
 import type { ContributedMachine } from '../machines.js'
-import { isLeads, type Conversation, type SuperTabState } from '../model.js'
+import { isLeads, type Agent, type Conversation, type SuperTabState } from '../model.js'
 import { isBuddy } from '../buddies.js'
 import { agentProjectId, canReadProject, projectOf } from '../projects.js'
 import { firstAssignedAt, waitedOn, waitsNow, type RanOn, type Unblock } from './record.js'
@@ -39,21 +39,26 @@ export interface LeaderboardInput {
   now: number
   /** A rolling period ending now to sum instead of [week] (rolling.ts); [week] is then only the answer's label. */
   period?: PeriodName
+  /** Sum every one of these projects instead of [projectId] alone: the ones the reader may read, whose groups [groups] holds.
+   *  Everyone in the Swarm is then listed. [projectId] stays the board's project and its recent models. */
+  allProjects?: string[]
   /** People's profile names by id, read with the board (read.ts profileNames); absent ones go by their email. */
   names?: ReadonlyMap<string, string>
 }
 
-export function leaderboard({ state, groups, machines: visibleMachines, projectId, week, now, period, names }: LeaderboardInput): Leaderboard {
+export function leaderboard({ state, groups, machines: visibleMachines, projectId, week, now, period, allProjects, names }: LeaderboardInput): Leaderboard {
   const project = projectOf(state, projectId)
   // The Lead conversation is where plans are approved: its answers count, though nothing there is a request that ships.
-  const visible = groups.filter(g => !isLeads(g) && !g.audience && (g.projectId ?? 'lead') === projectId)
-  const shared = visible.filter(g => g.id !== project.leadConversationId)
+  const projectIds = new Set(allProjects ?? [projectId])
+  const visible = groups.filter(g => !isLeads(g) && !g.audience && projectIds.has(g.projectId ?? 'lead'))
+  const leadConversations = new Set([...projectIds].map(id => projectOf(state, id).leadConversationId))
+  const shared = visible.filter(g => !leadConversations.has(g.id))
   const requests = shared.filter(g => !g.reviewOf)
   // Shipped with a PR: what agents and models are credited for. A person's points also need them to have asked (review
   // of #2097: a group opened from a Buddy's proposal may name no requester).
   const shippedRequests = requests.filter(g => g.ledger?.shippedAt != null && (g.pullRequestUrls?.length ?? 0) > 0)
   const landed = shippedRequests.filter(g => g.requesterId)
-  const players = state.people.filter(p => canReadProject(state, { kind: 'person', userId: p.id, email: p.email }, project))
+  const players = allProjects ? state.people : state.people.filter(p => canReadProject(state, { kind: 'person', userId: p.id, email: p.email }, project))
   const { current, previous } = period ? periodSpans(period, now) : { current: weekSpan(week), previous: weekSpan(week - WEEK_MS) }
   // Each person's records, gathered once: the board scores every player three times (Diego's issue file, 2026-10-27).
   const landedBy = byKey(landed, g => g.requesterId!)
@@ -99,13 +104,14 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
   return {
     projectId, week,
     ...period ? { period: { name: period, start: current.start, end: now } } : {},
+    ...allProjects ? { allProjects: true as const } : {},
     goal: { openRequests: requests.filter(open).length, thisWeek: goal(current), lastWeek: previous && goal(previous) },
     people,
     waiting: waitingNow(state, shared),
     models: { thisWeek: modelShare(requests, current), lastWeek: previous && modelShare(requests, previous) },
-    agents: agentScores(state, projectId, shippedNow),
+    agents: agentScores(state, projectIds, shippedNow),
     byModel: modelScores(requests, shippedNow, current),
-    recentModels: recentModels(requests, now),
+    recentModels: recentModels(requests.filter(g => (g.projectId ?? 'lead') === projectId), now),
   }
 }
 
@@ -131,11 +137,13 @@ function recentModels(requests: Conversation[], now: number): RecentModel[] {
  *  Buddy by the groups opened from its proposals. One credited this week stays listed after it was removed or replaced,
  *  as "Former PM" or "Former Buddy" once the Swarm no longer has it (full review of #2097). Builders and Reviewers are
  *  counted by model instead (modelScores). */
-function agentScores(state: SuperTabState, projectId: string, shippedThisWeek: Conversation[]): AgentScore[] {
-  const pmId = state.conversations.find(c => c.id === projectOf(state, projectId).leadConversationId)?.leadId
+function agentScores(state: SuperTabState, projectIds: ReadonlySet<string>, shippedThisWeek: Conversation[]): AgentScore[] {
+  const leads = new Set([...projectIds].map(id => projectOf(state, id).leadConversationId))
+  const pmIds = new Set(state.conversations.filter(c => leads.has(c.id)).map(c => c.leadId))
+  const inScope = (a: Agent) => projectIds.has(agentProjectId(state, a) ?? '')
   const shipped = new Map<string, { kind: 'pm' | 'buddy'; count: number }>()
   for (const a of state.agents) {
-    if (a.id === pmId || (isBuddy(a) && agentProjectId(state, a) === projectId)) shipped.set(a.id, { kind: isBuddy(a) ? 'buddy' : 'pm', count: 0 })
+    if (pmIds.has(a.id) || (isBuddy(a) && inScope(a))) shipped.set(a.id, { kind: isBuddy(a) ? 'buddy' : 'pm', count: 0 })
   }
   const credit = (agentId: string, kind: 'pm' | 'buddy') => {
     const entry = shipped.get(agentId) ?? { kind, count: 0 }
@@ -151,7 +159,7 @@ function agentScores(state: SuperTabState, projectId: string, shippedThisWeek: C
   const scored = [...shipped].map(([agentId, { kind, count }]) => {
     // Who it is now only while it is this project's: an agent id stays the same when its terminal is added again
     // elsewhere, and a private project's names and owners are not this board's to show (review of #2128).
-    const a = state.agents.find(agent => agent.id === agentId && agentProjectId(state, agent) === projectId)
+    const a = state.agents.find(agent => agent.id === agentId && inScope(agent))
     return { agentId, displayName: a ? a.displayName ?? a.name : kind === 'pm' ? 'Former PM' : 'Former Buddy', kind,
       personId: a?.buddyOf?.personId ?? null, machineId: a?.machineId ?? '', points: count * SHIPPED_POINTS, shipped: count }
   }).sort((a, b) => b.points - a.points || (a.kind === b.kind ? a.displayName.localeCompare(b.displayName) : a.kind === 'pm' ? -1 : 1))
