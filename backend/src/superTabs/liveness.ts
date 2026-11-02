@@ -111,9 +111,25 @@ function ownLinkedTasks(state: SuperTabState, build: Conversation, agentId: stri
 /** A linked task waits for the new revision from its own Reviewer's verdict asking for changes until the build's next Ready,
  *  while that build is still active, so its quiet time does not count then (Diego, 2026-11-01: a Reviewer waiting on a normal
  *  fix round of ~31 minutes lost its task, its Lead was woken and its verdict refused). It follows the Reviewer, never the
- *  Engineer: an Engineer's own posts or "working" heartbeats keep no idle Reviewer (review of #2487). */
+ *  Engineer: an Engineer's own posts or "working" heartbeats keep no idle Reviewer (review of #2487). A verdict is usually a
+ *  post to the Engineer, which holds only while the Engineer isn't itself waiting on a review, so a "starting now" followed by
+ *  silence still moves (#2241: 35 attempts lost in a day). */
 export function waitingForRevision(state: SuperTabState, group: Conversation): boolean {
-  return group.assignment?.changesRequestedAt !== undefined && !!reviewedBuild(state, group)
+  const build = reviewedBuild(state, group)
+  if (!build) return false
+  const assignment = group.assignment
+  return assignment?.changesRequestedAt !== undefined || (assignment?.toldEngineerAt !== undefined && !waitingForReview(build.assignment!))
+}
+
+/** [agentId] wrote to its Engineer, in its own linked task's chat or in the build's: it may now wait for the new revision
+ *  (waitingForRevision). Written in that post's own write. */
+export function toldEngineer(state: SuperTabState, group: Conversation, agentId: string, recipients: string[], now: number): void {
+  const own = activeWork(group) && group.assignment!.agentId === agentId && reviewedBuild(state, group) ? [group] : ownLinkedTasks(state, group, agentId)
+  for (const step of own) {
+    if (!recipients.includes(reviewedBuild(state, step)!.assignment!.agentId)) continue
+    step.assignment!.toldEngineerAt = now
+    recordTaskState(state, step, now)
+  }
 }
 
 /** [agentId]'s verdict in [build] asked for changes (a failed check by someone other than its assignee): its own linked task
@@ -128,8 +144,9 @@ export function changesRequested(state: SuperTabState, build: Conversation, agen
 /** [build] is ready for review again: each linked task that waited for this revision counts its quiet time from now, so the end
  *  of the wait does not lose it, as an Engineer whose review found problems does (restartQuietTime). */
 export function revisionReady(state: SuperTabState, build: Conversation, now: number): void {
-  for (const linked of state.conversations.filter(c => c.reviewOf === build.id && activeWork(c) && c.assignment!.changesRequestedAt !== undefined)) {
+  for (const linked of state.conversations.filter(c => c.reviewOf === build.id && activeWork(c) && (c.assignment!.changesRequestedAt !== undefined || c.assignment!.toldEngineerAt !== undefined))) {
     delete linked.assignment!.changesRequestedAt
+    delete linked.assignment!.toldEngineerAt
     restartQuietTime(linked.assignment!, now)
     recordTaskState(state, linked, now)
   }

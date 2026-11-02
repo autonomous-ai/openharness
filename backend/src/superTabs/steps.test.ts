@@ -118,15 +118,21 @@ describe('assigning a step', () => {
       const a = reviewing()
       post(a.f, a.id, [a.f.dev], a.rev)
       expect(a.f.group(a.id).assignment!.toldEngineerAt).toBe(a.f.now)
+      // A plain post in a step reaches its Engineer by default, so it counts too.
       const b = reviewing()
-      b.f.run({ type: 'conversation.agent', conversationId: b.f.task, agentId: b.rev, action: 'add' } as Command, b.f.as(b.f.dev))
-      post(b.f, b.f.task, [b.f.dev], b.rev)
+      post(b.f, b.id, [], b.rev)
       expect(b.f.group(b.id).assignment!.toldEngineerAt).toBe(b.f.now)
+      // Named from the task's own chat, once the Reviewer is in it.
+      const c = reviewing()
+      c.f.run({ type: 'conversation.agent', conversationId: c.f.task, agentId: c.rev, present: true, lead: false })
+      post(c.f, c.f.task, [c.f.dev], c.rev)
+      expect(c.f.group(c.id).assignment!.toldEngineerAt).toBe(c.f.now)
     })
 
-    it('is what counts: not a post to nobody, nor the Engineer\'s own post to the step', () => {
+    it('is what counts: not a post to someone else, nor the Engineer\'s own post to the step', () => {
       const f = reviewing()
-      post(f.f, f.id, [], f.rev)
+      const other = f.f.add('other', f.id)
+      post(f.f, f.id, [other], f.rev)
       expect(f.f.group(f.id).assignment!.toldEngineerAt).toBeUndefined()
       post(f.f, f.id, [f.rev], f.f.dev)
       expect(f.f.group(f.id).assignment!.toldEngineerAt).toBeUndefined()
