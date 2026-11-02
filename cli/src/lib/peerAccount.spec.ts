@@ -332,6 +332,16 @@ describe('who is at the other end of a loopback connection', () => {
       }
     })
 
+    // The bridge's real listener check (#2608), through the path its default takes.
+    it('keeps the bridge\'s listener check on PowerShell, with its own query, without running the helper', async () => {
+      const ps = powershell('no')
+      let ran = 0
+      const helper: WindowsNativeRun = async () => { ran++; return { status: 0, stdout: 'yes' } }
+      expect(await portHolderIsThisAccount(51_794, 'win32', nativeFirst(helper, ps.run))).toBe(false)
+      expect(ran).toBe(0)
+      expect(ps.calls).toEqual([windowsListenerQuery(51_794)])
+    })
+
     it('says no without PowerShell for a helper that hangs, crashes or says anything else', async () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       try {
