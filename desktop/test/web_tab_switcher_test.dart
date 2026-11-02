@@ -307,7 +307,8 @@ void main() {
   testWidgets('a wide window keeps the row of tabs', (tester) async {
     final app = await mount(tester, const Size(1280, 800));
     expect(find.byKey(const ValueKey('web-tab-switcher')), findsNothing);
-    expect(find.byKey(const ValueKey('swarm-store-button')), findsOneWidget);
+    expect(find.byKey(const ValueKey('swarm-search-button')), findsOneWidget);
+    expect(find.byKey(const ValueKey('swarm-store-button')), findsNothing);
     expect(
       find.byKey(const ValueKey('workspace-subscription-usage')),
       findsOneWidget,

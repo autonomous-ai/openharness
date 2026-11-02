@@ -445,7 +445,9 @@ void main() {
     expect(
       bar.dy,
       lessThan(
-        tester.getTopLeft(find.byKey(const ValueKey('super-activity'))).dy,
+        tester
+            .getTopLeft(find.byKey(const ValueKey('project-sidebar-projects')))
+            .dy,
       ),
     );
 

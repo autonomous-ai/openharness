@@ -18,27 +18,21 @@ void main() {
         newHarnessOpensInBox = composerInBox;
         addTearDown(() => newHarnessOpensInBox = false);
         final storage = MemoryStore();
-        final app = createApp(store: storage);
+        final app = createApp(store: storage)
+          ..currentUser = const CurrentUserProfile(
+            name: 'Dee Example',
+            email: 'dee@example.com',
+          );
         await mount(tester, app);
-        final button = find.byKey(const ValueKey('swarm-devices-button'));
-        expect(button, findsOneWidget);
+        // In the avatar's menu, not on the bar (Quiet Swarm, screen 0).
         expect(
-          tester.getCenter(button).dx,
-          greaterThan(
-            tester
-                .getCenter(find.byKey(const ValueKey('swarm-search-button')))
-                .dx,
-          ),
+          find.byKey(const ValueKey('swarm-devices-button')),
+          findsNothing,
         );
-        expect(
-          tester.getCenter(button).dx,
-          lessThan(
-            tester
-                .getCenter(find.byKey(const ValueKey('swarm-store-button')))
-                .dx,
-          ),
-        );
-        await tester.tap(button);
+        await tester.tap(find.byKey(const ValueKey('swarm-account-button')));
+        await tester.pump();
+        await tester.pump();
+        await tester.tap(find.byKey(const ValueKey('account-menu-devices')));
         await tester.pumpAndSettle();
         expect(app.activeSwarm.isDevices, isTrue);
         app.openDevices();

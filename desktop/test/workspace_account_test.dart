@@ -432,7 +432,7 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pump();
     await tester.pump();
-    expect(chosen, AccountMenuChoice.customize);
+    expect(chosen, AccountMenuChoice.devices);
 
     await _mountMenu(tester, onChoice: answer);
     await tester.tapAt(const Offset(40, 700));
