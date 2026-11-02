@@ -48,26 +48,34 @@ Future<AppNotifier> _mount(
   return app;
 }
 
+Future<void> _openAccount(WidgetTester tester) async {
+  await tester.tap(find.byKey(const ValueKey('swarm-account-button')));
+  await tester.pump(const Duration(milliseconds: 100));
+}
+
 Future<void> _openMenu(WidgetTester tester) async {
-  await tester.tap(find.byKey(const ValueKey('web-app-menu-button')));
+  await tester.tap(find.byKey(const ValueKey('web-new-menu-button')));
   await tester.pump(const Duration(milliseconds: 100));
 }
 
 void main() {
-  testWidgets('the menu button opens Settings with one click', (tester) async {
+  testWidgets('a browser wears the avatar; it opens Settings in one click', (
+    tester,
+  ) async {
     final app = await _mount(tester);
+    expect(app.viewer, isNotNull);
     await _openMenu(tester);
-    expect(
-      find.byKey(const ValueKey('web-menu:machines.list')),
-      findsOneWidget,
-    );
-    expect(find.byKey(const ValueKey('web-menu:web.sign_out')), findsOneWidget);
     // An empty tab has no pane to split.
     expect(
       find.byKey(const ValueKey('web-menu:pane.split_right')),
       findsNothing,
     );
-    await tester.tap(find.byKey(const ValueKey('web-menu:app.settings')));
+    expect(find.byKey(const ValueKey('web-menu:swarm.new')), findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pump(const Duration(milliseconds: 100));
+    await _openAccount(tester);
+    expect(find.byKey(const ValueKey('account-menu-signOut')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('account-menu-settings')));
     await tester.pump(const Duration(milliseconds: 400));
     expect(find.byType(SettingsScreen), findsOneWidget);
     expect(tester.takeException(), isNull);
@@ -84,14 +92,14 @@ void main() {
         Focus.of(tester.element(find.byKey(ValueKey('web-menu:$id'))))
             .hasPrimaryFocus;
     // Opened by a click: the pointer picks the row, so none starts lit.
-    expect(lit('super_tab.new'), isFalse);
+    expect(lit('swarm.new'), isFalse);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pump();
-    // The first row: New Swarm.
-    expect(lit('super_tab.new'), isTrue);
+    // The first row: New tab.
+    expect(lit('swarm.new'), isTrue);
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pump(const Duration(milliseconds: 100));
-    expect(find.byKey(const ValueKey('web-menu:machines.list')), findsNothing);
+    expect(find.byKey(const ValueKey('web-menu:swarm.new')), findsNothing);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
     app.dispose();
@@ -123,8 +131,7 @@ void main() {
 
   testWidgets('View on a machine picks it and closes Machines', (tester) async {
     final app = await _mount(tester, connectedMachine: 'remote-box');
-    await _openMenu(tester);
-    await tester.tap(find.byKey(const ValueKey('web-menu:machines.list')));
+    await tester.tap(find.textContaining('Machines ').hitTestable());
     await tester.pump(const Duration(milliseconds: 400));
     final search = tester
         .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))

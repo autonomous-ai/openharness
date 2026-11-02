@@ -34,11 +34,7 @@ Future<void> _mount(WidgetTester tester, Size size) async {
     MaterialApp(
       theme: ThemeData.dark(),
       home: WorkspaceChromeScope(
-        chrome: WorkspaceChrome(
-          leadingWidth: (_) => 0,
-          leading: (_, _) => const SizedBox.shrink(),
-          compactBelow: 720,
-        ),
+        chrome: WorkspaceChrome(compactBelow: 720),
         child: Scaffold(
           body: NewHarnessForm(
             controller: box,
