@@ -103,6 +103,7 @@ class _FirstApp extends AppNotifier {
     bool bypassPermission = true,
     String? permissionMode,
     String? codexHome,
+    String? claudeHome,
     String? dsh,
     String? swarmRole,
     String? swarmSkillMode,

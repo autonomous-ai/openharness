@@ -429,6 +429,9 @@ class Agent {
   final String? engineIconHint;
   final String? codexHome;
 
+  /// The Claude account folder (`CLAUDE_CONFIG_DIR`) this agent runs in; null for the default account.
+  final String? claudeHome;
+
   /// Model observed in this session by the daemon, when available. Independent
   /// of [gridModel], which determines subscription versus local-model routing.
   final String? modelName;
@@ -563,6 +566,7 @@ class Agent {
     this.engineDisplayName,
     this.engineIconHint,
     this.codexHome,
+    this.claudeHome,
     this.modelName,
     this.modelEffort,
     this.gridModel,
@@ -728,6 +732,9 @@ class Agent {
       engineDisplayName: _safeLabel(j['engineDisplayName']),
       engineIconHint: _safeLabel(j['engineIconHint']),
       codexHome: j['engine'] == 'codex' ? _safeCodexHome(j['codexHome']) : null,
+      claudeHome: j['engine'] == 'claude'
+          ? _safeCodexHome(j['claudeHome'])
+          : null,
       modelName: model?.name,
       modelEffort: model?.effort,
       gridModel: _safeLabel(grid?['model']),
@@ -808,6 +815,7 @@ class Agent {
     engineDisplayName: engineDisplayName,
     engineIconHint: engineIconHint,
     codexHome: codexHome,
+    claudeHome: claudeHome,
     modelName: modelName,
     modelEffort: modelEffort,
     gridModel: gridModel,
