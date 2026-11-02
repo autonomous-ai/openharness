@@ -2242,22 +2242,30 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                               _focus.requestFocus();
                             },
                           ),
-                        if (c.offersSessions) ...[
-                          const SizedBox(width: AppSpace.xs),
-                          Flexible(
-                            child: SwarmNewSessionChip(
-                              on: c.newSession,
-                              blocked: c.sessionBlocked,
-                              onChanged: (on) {
-                                _sessionNote.value = null;
-                                c.newSession = on;
-                              },
-                              onBlocked: () =>
-                                  _sessionNote.value = c.sessionBlocked,
-                            ),
-                          ),
-                        ],
-                        const Spacer(),
+                        // The rest of the row: the chip takes what its label
+                        // needs, and gives up letters only when the row is full.
+                        Expanded(
+                          child: c.offersSessions
+                              ? Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(
+                                      left: AppSpace.xs,
+                                    ),
+                                    child: SwarmNewSessionChip(
+                                      on: c.newSession,
+                                      blocked: c.sessionBlocked,
+                                      onChanged: (on) {
+                                        _sessionNote.value = null;
+                                        c.newSession = on;
+                                      },
+                                      onBlocked: () =>
+                                          _sessionNote.value = c.sessionBlocked,
+                                    ),
+                                  ),
+                                )
+                              : const SizedBox.shrink(),
+                        ),
                         if (voice != null) SwarmVoiceMic(voice: voice),
                         SwarmRoundButton(
                           key: const ValueKey('swarm-send'),
