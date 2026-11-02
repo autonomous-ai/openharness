@@ -14,6 +14,7 @@ import 'attachment_upload.dart';
 import 'avatar_upload.dart';
 import 'message_link.dart';
 import 'identity.dart' show superTabMachineName;
+import 'machine_status.dart' show kSuperTabMachineOfflineAfter;
 import 'model.dart';
 import 'buddy_chat.dart';
 import 'catch_up.dart';
@@ -461,6 +462,11 @@ class SuperTabController extends ChangeNotifier {
       if (_toldTimes.length > _kToldTimes) _toldTimes.remove(_toldTimes.first);
     }
     if (main) {
+      // A wait for a machine's report may be the slow one: this one is not.
+      if (!_toldMain) {
+        _toldRead?.cancel();
+        _toldRead = null;
+      }
       _toldMain = true;
     } else {
       _toldMachine = true;
@@ -480,7 +486,7 @@ class SuperTabController extends ChangeNotifier {
     final last = _lastFullRead;
     final wait = last == null
         ? Duration.zero
-        : _readGap - clock.now().difference(last);
+        : _toldGap - clock.now().difference(last);
     if (wait <= Duration.zero) {
       unawaited(refresh());
       return;
@@ -517,9 +523,14 @@ class SuperTabController extends ChangeNotifier {
     return pollInterval;
   }
 
+  /// How long what the reader was told waits since the last read. A change
+  /// to the Swarm: [_readGap], on screen or off. A machine's report alone says
+  /// nothing a Swarm not on screen shows: its slow pace ([_every]).
+  Duration get _toldGap => _toldMain || _every < _readGap ? _readGap : _every;
+
   bool get _gapPassed {
     final last = _lastFullRead;
-    return last == null || clock.now().difference(last) >= _readGap;
+    return last == null || clock.now().difference(last) >= _toldGap;
   }
 
   /// Whether this poll reads. Always, unless the server pushes: then only when
@@ -3287,6 +3298,7 @@ class SuperTabController extends ChangeNotifier {
       }
       // A first open draws its sidebar now, not once its chat answers.
       if (stateReads == 1) _changed();
+      _watchMachineSilence();
       final sidebarMs = took.elapsedMilliseconds;
       final changedAtBefore = lastChangedAt;
       lastChangedAt = parts.lastChangedAt;
@@ -3362,6 +3374,41 @@ class SuperTabController extends ChangeNotifier {
       // A saved view stays drawn through the grace; only an empty pane waits on a spinner.
       loading = _waitingForMachine && snapshot == null;
       if (!quiet || stateChanged || _shown != before) _changed();
+    }
+  }
+
+  /// The machines whose last report is too old to call them online, as last
+  /// worked out. A machine going silent sends nothing, and another's heartbeat
+  /// no longer redraws: everything that reads a machine's age (agent marks,
+  /// the terminal's notice) redraws when this set changes, which is rare.
+  Set<String>? _silentMachines;
+  Timer? _silenceWatch;
+
+  void _watchMachineSilence() {
+    _silenceWatch?.cancel();
+    final rows = snapshot?.machines;
+    if (_disposed || rows == null || _startedAt == null) return;
+    final now = clock.now();
+    final silent = <String>{};
+    DateTime? next;
+    for (final m in rows) {
+      final observation = m['observation'];
+      final at = observation is Map ? observation['receivedAt'] : null;
+      final passes = at is num
+          ? DateTime.fromMillisecondsSinceEpoch(at.toInt())
+                .add(kSuperTabMachineOfflineAfter)
+          : null;
+      if (passes == null || !passes.isAfter(now)) {
+        silent.add(m['machineId'] as String);
+      } else if (next == null || passes.isBefore(next)) {
+        next = passes;
+      }
+    }
+    final before = _silentMachines;
+    _silentMachines = silent;
+    if (before != null && !setEquals(before, silent)) _changed();
+    if (next != null) {
+      _silenceWatch = Timer(next.difference(now), _watchMachineSilence);
     }
   }
 
@@ -4615,6 +4662,7 @@ class SuperTabController extends ChangeNotifier {
     _markAll?._commit();
     _disposed = true;
     _machinesChanged.dispose();
+    _silenceWatch?.cancel();
     for (final then in _onDispose) {
       then();
     }
