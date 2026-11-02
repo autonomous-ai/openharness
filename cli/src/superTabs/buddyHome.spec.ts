@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, st
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { BUDDY_COPIES_FILE, buddyProjectsOf, folderName, prepareBuddyHome, pruneBuddyHome, refreshBuddyHome, refreshBuddyHomeIfDue, removeBuddyHome, trustBuddyHome } from './buddyHome.js'
+import { BUDDY_COPIES_FILE, buddyProjectsOf, folderName, prepareBuddyHome, pruneBuddyHome, buddyHomeDue, refreshBuddyHome, removeBuddyHome, trustBuddyHome } from './buddyHome.js'
 
 // A person's one Buddy's folder (spec 2026-10-31-one-buddy-per-swarm, Folder): one worktree per project checkout on the
 // machine, each from its own checkout, and a lost project's out before the next turn. Real git, in a throwaway folder.
@@ -322,34 +322,36 @@ describe('a Buddy\'s copy of a project follows its default branch', { timeout: 3
     expect(head(copy(p.home))).toBe(head(p.teammate))
   })
 
-  it('runs at most hourly, across restarts, by the age of its file; never for a future date a clock change left', async () => {
-    const p = project(root())
+  it('never locks a file outside through a folder a commit turned into a link (review of #2524)', async () => {
+    const r = root(), p = project(r), outside = join(r, 'outside')
+    mkdirSync(outside)
+    writeFileSync(join(outside, 'b.txt'), 'theirs', { mode: 0o644 })
+    mkdirSync(join(p.teammate, 'a'))
+    commit(p.teammate, 'a/b.txt', 'in the folder\n')
+    git(p.teammate, 'push', '-q', 'origin', 'main')
     await prepareBuddyHome(p.home, p.web)
-    const old = head(copy(p.home)), file = join(p.home, BUDDY_COPIES_FILE), now = Date.now()
-    advance(p.teammate)
-    await refreshBuddyHomeIfDue(p.home, now + 59 * 60_000)
-    expect(head(copy(p.home))).toBe(old)
-    await refreshBuddyHomeIfDue(p.home, now + 61 * 60_000)
-    expect(head(copy(p.home))).toBe(head(p.teammate))
-    // A clock moved back past the file's date does not stop it for good.
-    const later = new Date(now + 3_600_000)
-    utimesSync(file, later, later)
-    advance(p.teammate, 'LATER')
-    await refreshBuddyHomeIfDue(p.home, now)
-    expect(head(copy(p.home))).toBe(head(p.teammate))
-  })
-
-  it('a slow pass does not hold a delivery past its wait, and finishes after it', async () => {
-    const p = project(root())
-    await prepareBuddyHome(p.home, p.web)
-    rmSync(join(p.home, BUDDY_COPIES_FILE))
-    const old = head(copy(p.home))
-    advance(p.teammate)
-    await refreshBuddyHomeIfDue(p.home, Date.now(), 0)
-    // Back before git could have moved it; the pass it joins is still running.
-    expect(head(copy(p.home))).toBe(old)
+    expect(existsSync(join(copy(p.home), 'a', 'b.txt'))).toBe(true)
+    git(p.teammate, 'rm', '-q', '-r', 'a')
+    symlinkSync(outside, join(p.teammate, 'a'))
+    git(p.teammate, 'add', 'a')
+    git(p.teammate, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'link')
+    git(p.teammate, 'push', '-q', 'origin', 'main')
     await refreshBuddyHome(p.home)
     expect(head(copy(p.home))).toBe(head(p.teammate))
+    expect(statSync(join(outside, 'b.txt')).mode & 0o222).not.toBe(0)
+  })
+
+  it('is due at most hourly, across restarts, by the age of its file; a clock moved back does not stop it for good', async () => {
+    const p = project(root())
+    await prepareBuddyHome(p.home, p.web)
+    const file = join(p.home, BUDDY_COPIES_FILE), now = Date.now()
+    expect(buddyHomeDue(p.home, now + 59 * 60_000)).toBe(false)
+    expect(buddyHomeDue(p.home, now + 61 * 60_000)).toBe(true)
+    const later = new Date(now + 3_600_000)
+    utimesSync(file, later, later)
+    expect(buddyHomeDue(p.home, now)).toBe(true)
+    rmSync(file)
+    expect(buddyHomeDue(p.home)).toBe(true)
   })
 
   it('a lost project: its name leaves the file, and a pass running then stops and writes nothing back', async () => {
@@ -365,7 +367,7 @@ describe('a Buddy\'s copy of a project follows its default branch', { timeout: 3
     await pass
     expect(existsSync(join(p.home, BUDDY_COPIES_FILE))).toBe(false)
     expect(existsSync(join(p.home, 'projects', 'Secret'))).toBe(false)
-    await refreshBuddyHomeIfDue(p.home)
+    await refreshBuddyHome(p.home)
     expect(copies(p.home)).not.toContain('Secret')
     expect(copies(p.home)).toContain('Web: at')
   })

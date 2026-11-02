@@ -9,7 +9,7 @@
  */
 import { execFile } from 'node:child_process'
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 import { launchEnvironment } from '../engines/kit/launchExecutable.js'
 import { folderTrust } from '../engines/launchPrep.js'
@@ -33,8 +33,6 @@ const ID = /^[A-Za-z0-9_-]{1,64}$/
  *  was, so "at most hourly" holds across a daemon restart. */
 export const BUDDY_COPIES_FILE = 'project-copies.txt'
 const REFRESH_EVERY_MS = 60 * 60_000
-/** A delivery waits this long for a due pass, so a first message after a quiet hour reads new code; the pass then goes on. */
-const DELIVERY_WAIT_MS = 10_000
 /** All of one pass's fetches share this: 50 projects offline must not hold a Buddy's start for 50 timeouts. */
 const FETCH_BUDGET_MS = 30_000
 const FETCH_TIMEOUT_MS = 20_000
@@ -134,15 +132,21 @@ export function refreshBuddyHome(home: string): Promise<void> {
   return done
 }
 
-/** Before a delivery, once its person's access is checked (host.ts pruneBuddyFolder): a pass when the last was an hour ago. Run
- *  at a delivery, not on a timer, as only then does anything read the copies: an idle Buddy costs its person no fetches. */
-export async function refreshBuddyHomeIfDue(home: string, now = Date.now(), waitMs = DELIVERY_WAIT_MS): Promise<void> {
+/** Whether the last pass was an hour ago. Read at a delivery, not on a timer, as only then does anything read the copies: an idle
+ *  Buddy costs its person no fetches. */
+export function buddyHomeDue(home: string, now = Date.now()): boolean {
   const last = lstatSync(join(home, BUDDY_COPIES_FILE), { throwIfNoEntry: false })?.mtimeMs
-  if (last !== undefined && now >= last && now - last < REFRESH_EVERY_MS) return
-  let timer: NodeJS.Timeout | undefined
-  await Promise.race([refreshBuddyHome(home), new Promise<void>(resolve => { timer = setTimeout(resolve, waitMs); timer.unref?.() })])
-  clearTimeout(timer)
+  return last === undefined || now < last || now - last >= REFRESH_EVERY_MS
 }
+
+/** The pass running in [home], if any. */
+export const buddyHomeRefreshing = (home: string): Promise<void> | undefined => refreshing.get(home)?.done
+
+/** Whether [home] holds a project outside [readable], so that it must be pruned before its Buddy's next turn. */
+export const buddyHomeHoldsLost = (home: string, readable: ReadonlySet<string>): boolean => listed(home).some(row => !readable.has(row.id))
+
+/** Tells a running pass to stop, without waiting for it: the delivery loop serves every agent on the machine (review of #2524). */
+export function stopBuddyHomeRefresh(home: string): void { refreshing.get(home)?.stop.abort() }
 
 async function refreshPass(home: string, signal: AbortSignal): Promise<void> {
   ownFolders(home)
@@ -199,10 +203,12 @@ async function refreshCopy(path: string, name: string, deadline: number, signal:
 
 /** The lock a launch applies (lib/swarmSkills.ts lockBuddyFolder) for the files a move wrote: git makes them writable. */
 function lockFiles(path: string, names: readonly string[]): void {
+  const real = realpathSync(path)
   for (const name of names) {
     const file = join(path, name), entry = lstatSync(file, { throwIfNoEntry: false })
-    // Never through a link: it may lead outside the folder.
-    if (entry?.isFile()) chmodSync(file, entry.mode & 0o555)
+    // Never through a link, the file's own or a folder's on its way: a commit replacing folder a with a link still lists a/b.txt,
+    // and a chmod there changed a file outside (review of #2524).
+    if (entry?.isFile() && realpathSync(dirname(file)) === dirname(join(real, name))) chmodSync(file, entry.mode & 0o555)
   }
 }
 

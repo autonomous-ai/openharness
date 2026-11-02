@@ -9,7 +9,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
 import { readdir, readFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, normalize, relative, sep } from 'node:path'
-import { BUDDY_HOME_MANIFEST, BUDDY_HOMES, pruneBuddyHome, refreshBuddyHomeIfDue, removeBuddyHome } from './buddyHome.js'
+import { BUDDY_HOME_MANIFEST, BUDDY_HOMES, buddyHomeDue, buddyHomeHoldsLost, buddyHomeRefreshing, pruneBuddyHome, refreshBuddyHome, removeBuddyHome, stopBuddyHomeRefresh } from './buddyHome.js'
 import type { BackendNotice, CoreApi, TurnDelivery } from '../core/api.js'
 import { shellQuote } from '../orchestrator/prompts.js'
 import { agentCommandPrefix, fullCommandPrefix } from './shortCommand.js'
@@ -280,6 +280,11 @@ const CONTEXT_WAIT_MS = 3_000
  *  each try claims it again with the same claim id: that writes the delivery, so the backend never takes the claim for one
  *  nobody holds (backend deliverySettle.ts CLAIM_QUIET_MS, 10 minutes). Said once, not as a failure. */
 class FilesDownloading extends Error {}
+/** A Buddy's project copies are moving (buddyHome.ts): its message waits, quietly, in the same way, and nobody else's does. */
+class BuddyCopiesMoving extends FilesDownloading {}
+/** How long a Buddy's messages wait on a pass over its copies, so a first message after a quiet hour reads new code. */
+const BUDDY_COPIES_WAIT_MS = 10_000
+const BUDDY_COPIES_RETRY_MS = 60 * 60_000
 /** A delivery's files on their way. [stop] ends them when the delivery leaves (attachments.ts stops a file once no delivery
  *  wants it, and removes its part); [result] is set once they are in; [said]: a pass stopped waiting on it. */
 interface Download {
@@ -406,6 +411,10 @@ export class SuperTabHost {
   /** The files those downloads are fetching, so two deliveries of one file download it once at a time (attachments.ts). */
   private readonly inFlight: FilesInFlight = new Map()
   private readonly downloadWaitMs: number
+  /** Each Buddy folder with a pass running that held a message: since when, and which deliveries. */
+  private readonly copiesHeld = new Map<string, { since: number; deliveries: Set<string> }>()
+  /** When this host last started a pass over each Buddy folder. One small number per folder, for as long as the daemon runs. */
+  private readonly copiesTried = new Map<string, number>()
   private readonly contextWaitMs: number
   /** This pass's one wait on the downloads it starts (DOWNLOAD_WAIT_MS), shared by all of them; null until one starts. */
   private passWait: Promise<null> | null = null
@@ -1029,7 +1038,7 @@ export class SuperTabHost {
           const claimKey = `claim:${delivery.id}`
           if (this.backedOff(claimKey)) {
             const download = this.downloads.get(delivery.id)
-            if (download?.said && !download.result) held = true
+            if (download?.said && !download.result || [...this.copiesHeld.values()].some(hold => hold.deliveries.has(String(delivery.id)))) held = true
             continue
           }
           // Checked before anything is typed: a new delivery, or one held while its agent may since have stopped leading. A
@@ -1740,7 +1749,7 @@ export class SuperTabHost {
     }
     // A person's one Buddy reads only the projects its person reads now: a project they lost leaves its folder before this
     // turn (buddyHome.ts; spec 2026-10-31-one-buddy-per-swarm, Access). A read that fails withholds the delivery, tried again.
-    if (this.isBuddy(entry)) await this.pruneBuddyFolder(entry)
+    if (this.isBuddy(entry)) await this.pruneBuddyFolder(entry, deliveryId, `list:${target.tabId}:${target.agent.id}`)
     this.prefix ??= this.agentCommand(this.core, this.machineId).catch(() => fullCommandPrefix(this.core.daemon, this.machineId))
     const command = await this.prefix
     let quote = this.quotes.get(deliveryId)
@@ -1783,18 +1792,48 @@ export class SuperTabHost {
 
   /** Takes out of a person's one Buddy's folder each project worktree whose project its person no longer reads, as the Swarm
    *  says to the Buddy now, then brings the rest to their default branches when that is due. Nothing for any other Buddy: its
-   *  folder is one project's worktree. */
-  private async pruneBuddyFolder(entry: Entry): Promise<void> {
+   *  folder is one project's worktree. No pass is ever waited for here: this loop hands every agent on the machine its input
+   *  (review of #2524). A message waits instead, as one whose files are downloading does. */
+  private async pruneBuddyFolder(entry: Entry, deliveryId: string, listKey: string): Promise<void> {
     const cwd = this.core.agents.byAgent(entry.harnessId)?.cwd
     if (!cwd || !existsSync(join(cwd, BUDDY_HOME_MANIFEST))) return
     const { state } = await this.sources.reads.read(entry.tabId, entry.agentId)
     const agent = (Array.isArray(state.agents) ? state.agents.map(object) : []).find(a => a.id === entry.agentId)
     if (agent?.buddyScope !== 'swarm') return
     const readable = new Set((Array.isArray(state.projects) ? state.projects.map(object) : []).flatMap(p => identifier(p.id) ? [p.id] : []))
-    const gone = await pruneBuddyHome(cwd, readable)
-    if (gone.length) this.log(`Took ${gone.length} project folder(s) out of Buddy ${entry.harnessId.slice(0, 8)}'s folder: its person no longer reads them.`)
-    // After the check above, whose failed read throws: new code of a project reaches only a person who still reads it.
-    await refreshBuddyHomeIfDue(cwd)
+    let pass = buddyHomeRefreshing(cwd)
+    // A project just lost must leave before this turn, however long the pass takes to stop: never delivered past it.
+    const mustWait = !!pass && buddyHomeHoldsLost(cwd, readable)
+    if (mustWait) stopBuddyHomeRefresh(cwd)
+    if (!pass) {
+      const gone = await pruneBuddyHome(cwd, readable)
+      if (gone.length) this.log(`Took ${gone.length} project folder(s) out of Buddy ${entry.harnessId.slice(0, 8)}'s folder: its person no longer reads them.`)
+      // After the check above, whose failed read throws: new code of a project reaches only a person who still reads it.
+      // Started once an hour here too: a pass that cannot write its file (a folder refused, a full disk) leaves it due, and its
+      // message, tried again when the pass ends, would otherwise start another for ever and never go in.
+      const tried = this.copiesTried.get(cwd)
+      if (buddyHomeDue(cwd) && (tried === undefined || Math.abs(this.now() - tried) >= BUDDY_COPIES_RETRY_MS)) {
+        this.copiesTried.set(cwd, this.now())
+        pass = refreshBuddyHome(cwd)
+      }
+    }
+    if (!pass) return
+    let hold = this.copiesHeld.get(cwd)
+    if (!hold) {
+      const started = hold = { since: this.now(), deliveries: new Set<string>() }
+      this.copiesHeld.set(cwd, started)
+      void pass.then(() => {
+        this.copiesHeld.delete(cwd)
+        if (this.stopped) return
+        // Delivered at once, not after its back-off.
+        for (const id of started.deliveries) this.deliveryRetries.delete(`claim:${id}`)
+        this.pushes.add(listKey)
+        void this.tick()
+      })
+    }
+    if (!mustWait && this.now() - hold.since >= BUDDY_COPIES_WAIT_MS) { hold.deliveries.delete(deliveryId); return }
+    hold.deliveries.add(deliveryId)
+    throw new BuddyCopiesMoving('Its project copies are moving.')
   }
 
   /** A delivery's files, downloaded off the poll loop. A pass waits only on the downloads it starts, all together for at most
