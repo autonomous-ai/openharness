@@ -2262,6 +2262,20 @@ describe('a session reopened after its agent was removed', () => {
     expect((await state(f)).agents.filter(a => a.id === f.idle)).toHaveLength(1)
   })
 
+  // Reviews of #2207 (Cleo, Orion, Luna, Echo): a report closed and reopened sessions with no row, so an agent could come back to
+  // read its chats unrecorded. Each chat it leaves or rejoins says so, written as the agent, waking nobody.
+  it('says in its group that it left when its session closed, and that it rejoined when the session reopened', async () => {
+    const f = await removed()
+    const said = async () => (await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: f.group }, orderBy: { sequence: 'asc' } }))
+      .filter(m => m.text.startsWith('"Idle one"')).map(m => [m.text, m.recipientIds])
+    expect(await said()).toEqual([['"Idle one" left: its session closed.', []]])
+    await resume(f)
+    expect(await said()).toEqual([['"Idle one" left: its session closed.', []], ['"Idle one" rejoined: its session reopened.', []]])
+    // A report that changes nothing says nothing again.
+    await resume(f)
+    expect(await said()).toHaveLength(2)
+  })
+
   it('stays out while the report does not list it running', async () => {
     const f = await removed()
     f.clock.now += MINUTE
