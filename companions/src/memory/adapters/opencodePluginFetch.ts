@@ -20,7 +20,9 @@ export function pluginFetchSource(name: string, socket: string | null): string {
     return new Promise((resolve, reject) => {
       const asked = request({ socketPath: socket, method: init.method, path: new URL(url).pathname, signal: init.signal,
         headers: { ...init.headers, "content-length": String(Buffer.byteLength(init.body)) } }, (answer) => {
-        resolve(new Response(Readable.toWeb(answer), { status: answer.statusCode }))
+        // A Response may have no body with these, and refuses one.
+        try { resolve(new Response([101, 204, 205, 304].includes(answer.statusCode) ? null : Readable.toWeb(answer), { status: answer.statusCode })) }
+        catch (error) { reject(error) }
       })
       asked.on("error", reject)
       asked.end(init.body)

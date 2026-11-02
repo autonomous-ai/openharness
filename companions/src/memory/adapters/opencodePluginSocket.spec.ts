@@ -83,6 +83,11 @@ describe('the recall plugin over the socket', () => {
     expect(await (await recall(hold.port, real.path))('memory-context', 's', {})).toBeNull()
   })
 
+  it('an answer with no body, a 204, gives null and throws nothing outside the call', async () => {
+    const hold = await holder(), real = await daemon((response) => response.writeHead(204).end())
+    await expect((await recall(hold.port, real.path))('memory-context', 's', {})).resolves.toBeNull()
+  })
+
   it('an abort cuts the request', async () => {
     const hold = await holder(), real = await daemon(() => { /* never answers */ })
     const stop = new AbortController()

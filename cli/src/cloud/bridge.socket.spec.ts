@@ -1,15 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { bridgeKey, bridgeSocketPath, harnessKey, retireBridgeKey, rotateHarnessKey, KEY_GRACE_MS } from '../lib/connectors/agents.js'
 import { serveBridgeSocket } from '../lib/connectors/bridge.js'
 import type { LocalSocketServer } from '../lib/localSocket.js'
 import { Store } from '../lib/connectors/store.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { startConnectors } from '../services/connectors.js'
-import { fetchOverSocket, socketIsPrivate } from '../lib/localTransport.js'
+import { daemonFetch, fetchOverSocket, socketIsPrivate } from '../lib/localTransport.js'
+import { unixSocketPath } from '../lib/localSocket.js'
 import { bridgeRoute, connectionsBridge } from './bridge.js'
 import { McpClient } from './mcp.js'
 
@@ -134,6 +135,30 @@ describe('cloud agents and the bridge', () => {
     closers.push(() => vi.unstubAllEnvs())
     expect(bridgeSocketPath(long)).toBeNull()
     expect(bridgeRoute(long).base).toMatch(/^http:\/\/127\.0\.0\.1:\d+\//)
+  })
+})
+
+describe('a long data folder\'s short socket', () => {
+  it('is not used when it is not private: nothing is sent to it, and nothing to the port', async () => {
+    const hold = await holder()
+    const data = join(home, 'd'.repeat(100))
+    vi.stubEnv('HOME', home)
+    closers.push(() => vi.unstubAllEnvs())
+    const path = unixSocketPath(data, hold.port)!
+    expect(path).toContain('/.harness/s/')
+    const heard: string[] = []
+    const server = createServer((request, response) => { heard.push(String(request.url)); response.writeHead(200).end('{}') })
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+    await new Promise<void>(ready => server.listen(path, ready))
+    closers.push(() => new Promise(done => { server.closeAllConnections(); server.close(done) }))
+    const send = daemonFetch(data, hold.port)
+    chmodSync(path, 0o600)
+    expect((await send(`http://127.0.0.1:${hold.port}/api/status`)).status).toBe(200)
+    expect(heard).toHaveLength(1)
+    chmodSync(path, 0o666)
+    await expect(send(`http://127.0.0.1:${hold.port}/api/status`)).rejects.toThrow()
+    expect(heard).toHaveLength(1)
+    expect(hold.heard).toEqual([])
   })
 })
 

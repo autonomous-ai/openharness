@@ -163,6 +163,16 @@ void main() {
       );
     });
 
+    test('a long folder with no HOME still has a socket to fail on, so the port is not allowed', () {
+      final path = defaultDaemonSocketPath(
+        1,
+        environment: {'ADAPTER_DATA_DIR': '/${'x' * 100}'},
+        isWindows: false,
+      );
+      expect(path, isNotNull);
+      expect(File(path!).existsSync(), isFalse);
+    });
+
     test('is never looked for under flutter test', () {
       expect(
         LocalDaemonTransport.detect(Uri.parse('http://127.0.0.1:18473')).candidate,

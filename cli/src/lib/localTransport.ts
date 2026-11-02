@@ -26,6 +26,9 @@ const LOCAL_WS_PATH = '/api/local-ws'
  */
 export function localSocketRoute(dataDir: string, port: number, platform: NodeJS.Platform = process.platform): string | null {
   const expected = unixSocketPath(dataDir, port, platform)
+  // A data folder's own mode covers its socket; a short folder's lies elsewhere, so it is checked, and one that isn't private is refused as
+  // a daemon that is down is: connecting to this name fails.
+  if (expected && !expected.startsWith(dataDir) && existsSync(expected) && !socketIsPrivate(expected)) return `${expected}.not-private`
   if (!expected || existsSync(expected)) return expected
   let names: string[] = []
   try { names = readdirSync(dataDir) } catch { return expected }

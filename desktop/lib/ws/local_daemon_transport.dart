@@ -53,8 +53,9 @@ String? defaultDaemonSocketPath(
   if (utf8.encode(path).length <= _maxSocketPathBytes) return path;
   // Too long to hold a socket: the daemon's is under the home folder, named by
   // the folder's hash (CLI `lib/localSocket.ts` `socketPathIn`).
-  final home = (environment ?? Platform.environment)['HOME'];
-  if (home == null || home.isEmpty) return null;
+  // No HOME: the empty path has no socket, so this reads as the daemon being
+  // down, never as a place with no socket at all, which would allow the port.
+  final home = (environment ?? Platform.environment)['HOME'] ?? '';
   final hash = const DartSha256().hashSync(utf8.encode(dataDir)).bytes;
   final hex = hash.take(8).map((b) => b.toRadixString(16).padLeft(2, '0')).join();
   final short = '$home/.harness/s/$hex/${daemonSocketName(port)}';
