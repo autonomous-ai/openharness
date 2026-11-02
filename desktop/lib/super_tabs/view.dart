@@ -67,6 +67,7 @@ import 'swarm_switcher.dart' show fallBackToPersonal;
 import 'project_options.dart';
 import 'switch_pm.dart';
 import 'project_status_card.dart';
+import 'task_line.dart';
 import 'pane_layout.dart';
 import 'view_room.dart';
 import '../widgets/dial_list_scroll.dart';
@@ -2795,6 +2796,31 @@ class _SuperTabViewState extends State<SuperTabView>
     bool inThread = false,
   }) {
     _index();
+    // A task's message and a Buddy's proposal are one line that opens (Quiet
+    // Swarm, screens 1 and 2); inside its own thread, a proposal reads whole.
+    if (message.isTaskLine) {
+      final taskId = message.source['taskId'];
+      return SuperTabTaskLine(
+        key: ValueKey('super-message-${message.id}'),
+        message: message,
+        readerId: c.accountId,
+        onOpen: taskId is String && c.snapshot?.conversation(taskId) != null
+            ? () => _openTask(taskId, message.id)
+            : null,
+      );
+    }
+    final proposer = inThread ? null : _proposalOwner(message);
+    if (proposer != null) {
+      return SuperTabProposalLine(
+        key: ValueKey('super-message-${message.id}'),
+        message: message,
+        owner: proposer,
+        onOpen: () {
+          setState(() => _openedTask = null);
+          c.openThread(message.id);
+        },
+      );
+    }
     if (message.terminalEvent || message.source['kind'] == 'overlap') {
       return SuperTabTerminalRow(
         key: ValueKey(
@@ -2984,6 +3010,7 @@ class _SuperTabViewState extends State<SuperTabView>
 
   /// The open thread of the selected conversation, beside the chat.
   Widget? _threadPanel() {
+    if (_taskPanel() case final panel?) return panel;
     final open = c.openedThread;
     if (open == null || open.conversationId != c.selectedId) return null;
     final rows = c.threadMessages(open.root);
@@ -2998,6 +3025,36 @@ class _SuperTabViewState extends State<SuperTabView>
       sessionActivity: (session) =>
           superTabSessionActivity(c, widget.app, session),
       machineName: widget.machineName,
+    );
+  }
+
+  /// The task a line opened beside its project's chat (Quiet Swarm, screen 3):
+  /// which, and the line, whose word the panel says.
+  ({String id, String line, String chat})? _openedTask;
+
+  void _openTask(String taskId, String line) {
+    c.closeThread();
+    setState(() => _openedTask = (id: taskId, line: line, chat: c.selectedId));
+  }
+
+  Widget? _taskPanel() {
+    final open = _openedTask;
+    final task = open == null ? null : c.snapshot?.conversation(open.id);
+    if (open == null || task == null || open.chat != c.selectedId) return null;
+    final line = c.messages(open.chat).where((m) => m.id == open.line).firstOrNull;
+    final rows = c.messages(open.id);
+    final byId = {for (final m in rows) m.id: m};
+    return SuperTabTaskPanel(
+      key: ValueKey('super-task-panel-${open.id}'),
+      controller: c,
+      taskId: open.id,
+      word: line == null ? '' : superTabTaskWord(line, c.accountId),
+      row: (message) => _message(message, false, byId, inThread: true),
+      onClose: () => setState(() => _openedTask = null),
+      onOpenInFull: () {
+        setState(() => _openedTask = null);
+        unawaited(c.select(open.id));
+      },
     );
   }
 
