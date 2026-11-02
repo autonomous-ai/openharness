@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
@@ -140,6 +141,19 @@ void main() {
       await tester.tap(key('swarm-new-session'));
       await tester.pumpAndSettle();
       expect(key('swarm-session-project'), findsNothing);
+    });
+
+    testWidgets('the chip shows its whole label when the row has room for it '
+        '(the test font is wider than the phone\'s)', (tester) async {
+      await pump(tester, sessionBackend());
+      // Room for the label beside + and Tag, but not for twice its width:
+      // the chip is not squeezed to half of what is left.
+      tester.view.physicalSize = const Size(1680, 2532);
+      await tester.pumpAndSettle();
+      final label = tester.renderObject<RenderParagraph>(
+        find.text('New session'),
+      );
+      expect(label.didExceedMaxLines, isFalse);
     });
 
     testWidgets('a chat that cannot start one says why when the chip is '
