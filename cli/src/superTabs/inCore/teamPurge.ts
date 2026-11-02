@@ -400,6 +400,15 @@ export const PURGE_RECORD_UNREADABLE = 'PURGE_RECORD_UNREADABLE'
 export const UNREADABLE_DETAIL = "This machine's record of purges still to finish could not be read and was kept aside, as the daemon's log says at "
   + "each start. The account stays held until its owner clears it as #2142's risk note says, by file names only."
 
+/** The folder of an agent's own engine home `<homes>/<creation>/codex`, to delete whole; null for any other path. Either separator,
+ *  as a Windows path has `\\` (Windows pass, task #2022), and never a path that climbs out. */
+export function ownHomeFolder(homes: string, codexHome: string | null | undefined): string | null {
+  if (!codexHome || !codexHome.startsWith(homes)) return null
+  const [first, creation, name, ...rest] = codexHome.slice(homes.length).split(/[\\/]/)
+  if (first !== '' || !creation || creation === '.' || creation === '..' || name !== 'codex' || rest.length) return null
+  return codexHome.slice(0, homes.length + 1 + creation.length)
+}
+
 /**
  * The purge of [agentId]'s data, once the Swarm ended it for good, when it was confidential: kept in [record] before the
  * first deletion and dropped once the sweep finds nothing. A retry finishes from the record, the session gone or not.
@@ -420,7 +429,13 @@ export function createConfidentialPurge(deps: {
     const session = deps.session(agentId)
     let target = deps.record.get(agentId)
     if (!target) {
-      if (!session || !deps.confidential(agentId)) return { skipped: true }
+      // Team-written Codex work has an engine home of its own too (superTabs/start.ts): it goes with the agent, confidential or not.
+      if (session && !deps.confidential(agentId)) {
+        const own = ownHomeFolder(join(deps.home, PM_HOMES), session.codexHome)
+        if (own) await rm(own, { recursive: true, force: true })
+        return { skipped: true }
+      }
+      if (!session) return { skipped: true }
       target = { agentId: session.agentId, sessionId: session.sessionId ?? null, cwd: session.cwd, engine: session.engine, codexHome: session.codexHome ?? null }
       deps.record.put(target)
     }

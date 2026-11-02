@@ -151,7 +151,7 @@ export function createAgentCreator({
     // Never from a relayed request, which could name any repository here. Codex's trust also sets defaults for the
     // person's own sessions in that folder, so it stays theirs to give.
     const trustSwarmFolder = !trustEmptyProject && context?.local === true && !dsh && engine === 'claude' && !!input.swarmRole
-      && permissionMode === 'full' && await swarmFolder(cwd)
+      && (permissionMode === 'full' || permissionMode === 'teamWritten') && await swarmFolder(cwd)
     if (!authority.current()) return stale()
     // A harness can pin its permission mode (`dshPinnedPermissionMode`): the Grid harness starts model
     // servers, which Codex's sandbox would start without a GPU. Pinned before anything reads the mode,
@@ -319,7 +319,7 @@ export function createAgentCreator({
     // The Swarm starts its agents in full mode, so a machine that never accepted full mode's warning stops each one there
     // before its first turn (Claude Code's "Yes, I accept", the Mac Studio, 2026-10-26). The Swarm's owner chose that mode
     // for it; recorded the way the engine records the person's own yes, in the home this launch reads.
-    if (input.swarmRole && permissionMode === 'full') {
+    if (input.swarmRole && (permissionMode === 'full' || permissionMode === 'teamWritten')) {
       try { acceptFullMode(engine, native ? { ...native.environment, ...gridLaunch?.env, ...dshEnv } : undefined) }
       catch (error) { console.warn(`[agent] full mode acceptance · ${error instanceof Error ? error.message : error}`) }
     }

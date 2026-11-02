@@ -206,7 +206,8 @@ export async function repairSwarmCloneTrust(core: CoreApi, row: Json, profile?: 
   const agents = local.filter(agent => ids.has(agent.agentId))
   // A backend-selected path is not authority to edit a local config file. Only a Codex profile a
   // locally registered Codex agent already uses can select another config.toml for this consent.
-  const known = profile && isAbsolute(profile) ? local.find(agent => agent.engine === 'codex'
+  // Never a Team-written agent's own home, which stays one that trusts no project (engines/codex/launch.ts, audit H2).
+  const known = profile && isAbsolute(profile) ? local.find(agent => agent.engine === 'codex' && agent.permissionMode !== 'teamWritten'
     && agent.codexHome && resolve(agent.codexHome) === resolve(profile)) : undefined
   let complete = discovered
   // The service has a separate shell cache from core. Use the same captured locations as native launch.
@@ -244,6 +245,8 @@ export async function repairSwarmCloneTrust(core: CoreApi, row: Json, profile?: 
     const profiles = new Set(known?.codexHome ? [known.codexHome] : [])
     for (const agent of agents) {
       if (agent.engine !== 'codex' || !agent.codexHome || !agent.cwd) continue
+      // Team-written work's own home stays one that trusts no project (engines/codex/launch.ts, audit H2).
+      if (agent.permissionMode === 'teamWritten') continue
       const cwd = await realpath(agent.cwd).catch(() => null)
       if (cwd && paths.some(path => within(path, cwd))) profiles.add(agent.codexHome)
     }
