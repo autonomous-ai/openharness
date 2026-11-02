@@ -126,7 +126,6 @@ Future<void> pumpSidebar(
   SuperTabController c,
   SuperTabAttention attention, {
   Brightness brightness = Brightness.dark,
-  bool threadsSelected = false,
 }) async {
   await tester.binding.setSurfaceSize(const Size(300, 900));
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -138,12 +137,9 @@ Future<void> pumpSidebar(
           listenable: c,
           builder: (context, _) => ProjectSidebar(
             controller: c,
-            onAddAgent: (_) {},
             needsHuman: (_) => 0,
             onSelect: c.select,
             attention: attention,
-            onThreads: () {},
-            threadsSelected: threadsSelected,
           ),
         ),
       ),
@@ -227,7 +223,7 @@ void main() {
       });
 
       testWidgets('a tag in a reply that lives only in a thread counts on '
-          'Threads, not on the project row', (tester) async {
+          'its thread, not on the project row', (tester) async {
         final server = projectServer();
         server.followedThreads = {
           'unread': [unreadThread('message-1', 2, conversationId: 'lead')],
@@ -237,7 +233,7 @@ void main() {
         server.tag('message-1', threadId: 'message-1');
         final (c, attention) = await opened(server);
         await pumpSidebar(tester, c, attention);
-        expect(inRow('super-threads', find.text('1')), findsOneWidget);
+        expect(attention.threadMentions, 1);
         expect(
           inRow('super-group-lead', find.byType(SuperTabCountBadge)),
           findsNothing,
@@ -307,8 +303,8 @@ void main() {
         findsOneWidget,
       );
       expect(inRow('super-group-offline', find.text('2')), findsOneWidget);
-      // Threads carries the tag inside a thread.
-      expect(inRow('super-threads', find.text('1')), findsOneWidget);
+      // The tag inside a thread is counted apart from the row.
+      expect(attention.threadMentions, 1);
       // The project chat: unread, nothing for the reader, so no number.
       expect(
         inRow('super-group-lead', find.byType(SuperTabCountBadge)),
@@ -400,52 +396,31 @@ void main() {
         );
         expect(unread.style?.color, DesktopChrome.foreground);
         expect(unread.style?.fontWeight, grid.AppFont.semibold);
-        // Threads: a followed thread has new replies.
-        final threads = rowText(tester, 'super-threads', 'Threads');
-        expect(threads.style?.color, DesktopChrome.foreground);
-        expect(threads.style?.fontWeight, grid.AppFont.semibold);
         await close(tester, c);
       });
     }
-
-    testWidgets('Threads is muted with nothing new', (tester) async {
-      final server = projectServer();
-      server.followedThreads = {
-        'unread': [],
-        'read': [readThread('message-1', 2)],
-        'more': false,
-      };
-      final c = await openHere(server);
-      final attention = SuperTabAttention.of(c);
-      await attention.load();
-      await pumpSidebar(tester, c, attention);
-      final threads = rowText(tester, 'super-threads', 'Threads');
-      expect(threads.style?.color, DesktopChrome.muted);
-      expect(threads.style?.fontWeight, isNot(grid.AppFont.semibold));
-      await close(tester, c);
-    });
   });
 
-  testWidgets('a project row lights whole on hover, chevron included, as wide '
-      'as its selected highlight', (tester) async {
+  testWidgets('a project row lights whole on hover, as wide as its selected '
+      'highlight', (tester) async {
     final server = projectServer();
     server.followedThreads = {'unread': [], 'read': [], 'more': false};
     final c = await openHere(server);
     final attention = SuperTabAttention.of(c);
     c.select('offline');
     await pumpSidebar(tester, c, attention);
-    final toggle = find.byKey(const ValueKey('super-project-toggle-lead'));
+    final row = find.byKey(const ValueKey('super-group-lead'));
     final groundFinder = find
-        .ancestor(of: toggle, matching: find.byType(Material))
+        .ancestor(of: row, matching: find.byType(Material))
         .first;
     Material ground() => tester.widget<Material>(groundFinder);
     expect(ground().color, Colors.transparent);
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     addTearDown(mouse.removePointer);
     await mouse.addPointer(location: Offset.zero);
-    await mouse.moveTo(tester.getCenter(toggle));
+    await mouse.moveTo(tester.getRect(row).centerRight - const Offset(4, 0));
     await tester.pumpAndSettle();
-    // The whole row's ground, the one that holds the chevron too.
+    // The whole row's ground, out to its end.
     expect(ground().color, grid.AppSurface.hoverFill);
     await mouse.moveTo(
       tester.getCenter(inRow('super-group-lead', find.text('web-project'))),
@@ -453,7 +428,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(ground().color, grid.AppSurface.hoverFill);
     final hovered = tester.getRect(groundFinder);
-    expect(hovered.right, greaterThanOrEqualTo(tester.getRect(toggle).right));
+    expect(hovered.right, greaterThanOrEqualTo(tester.getRect(row).right));
     c.select('lead');
     await tester.pumpAndSettle();
     expect(ground().color, grid.AppSurface.selectedFill);
@@ -658,26 +633,6 @@ void main() {
       // The tag is waiting, but the thread is not listed: no number.
       expect(attention.mentions.waiting, hasLength(1));
       expect(attention.threadMentions, 0);
-    });
-
-    testWidgets('the sidebar Threads row shows no number for a tag in a '
-        'thread the list leaves out, the very case of an empty list', (
-      tester,
-    ) async {
-      final server = projectServer();
-      server.followedThreads = {'unread': [], 'read': [], 'more': true};
-      server.tag('message-1', threadId: 'message-1', messageSequence: 2);
-      final c = await openHere(server);
-      final attention = SuperTabAttention.of(c);
-      await attention.mentions.load();
-      await attention.load();
-      await pumpSidebar(tester, c, attention);
-      expect(
-        inRow('super-threads', find.byType(SuperTabCountBadge)),
-        findsNothing,
-      );
-      expect(inRow('super-threads', find.text('1')), findsNothing);
-      await close(tester, c);
     });
 
     test('a tag in a thread the reader unfollowed (never listed) counts '

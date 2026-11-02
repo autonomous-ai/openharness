@@ -468,6 +468,86 @@ describe('reading a chat never reads a reply only in a thread (Diego, 11-01)', (
     expect(after.read.map((t: any) => t.root.text)).toEqual(['Peer root'])
   })
 
+  it('keeps a thread-only reply after SEED_SCAN hidden notices unread once the chat is read', async () => {
+    const s = await scene()
+    const [root] = await insert(s.tabId, s.web, [{ text: 'Peer question', author: personAuthor(peer) }])
+    const old = await sequenceOf(root!)
+    await markRead(s.tabId, s.web, old, peer)
+    await insert(s.tabId, s.web, [
+      ...Array.from({ length: SEED_SCAN }, (_, i) => ({ text: `Hidden notice ${i}`, author: agentAuthor(s.worker),
+        source: { kind: 'note', recipientsOnly: true }, recipientIds: [s.worker] })),
+      { text: 'Answer', author: agentAuthor(s.worker), thread: root },
+      { text: 'Main', author: personAuthor(owner) },
+    ])
+    const top = await newest(s.tabId, s.web)
+    await markRead(s.tabId, s.web, top, peer)
+    expect(await marksOf(s.tabId, peer)).toEqual({ [root!]: { sequence: old, follow: null } })
+    expect(unreadRoots((await inbox(s.tabId, peer)).body.data)).toEqual(['Peer question: 1'])
+    expect((await threadsRead(s.tabId, peer)).body.data.unread.map((t: any) => t.root.text)).toEqual(['Peer question'])
+  })
+
+  it('holds a capped chat read at the last scanned reply and seeds the later thread on the next read', async () => {
+    const s = await scene()
+    const [early, late] = await insert(s.tabId, s.web, [{ text: 'Early', author: personAuthor(peer) }, { text: 'Late', author: personAuthor(peer) }])
+    const old = await sequenceOf(late!)
+    await markRead(s.tabId, s.web, old, peer)
+    const replies = await insert(s.tabId, s.web, Array.from({ length: SEED_SCAN }, (_, i) => ({ text: `Own reply ${i}`, author: personAuthor(peer), thread: early })))
+    const boundary = await sequenceOf(replies.at(-1)!)
+    await insert(s.tabId, s.web, [{ text: 'Late answer', author: agentAuthor(s.worker), thread: late }, { text: 'Main', author: personAuthor(owner) }])
+    const top = await newest(s.tabId, s.web)
+    const first = await post(`/api/super-tabs/${s.tabId}/conversations/${s.web}/read`, peer, { sequence: top })
+    expect(first.status).toBe(200)
+    expect(first.body.data.sequence).toBe(boundary)
+    expect((await db.superTabReadMark.findUniqueOrThrow({ where: { id: stableId(s.tabId, s.web, peer.sub) } })).sequence).toBe(boundary)
+    expect(unreadRoots((await inbox(s.tabId, peer)).body.data)).toEqual(['Late: 1'])
+    await markRead(s.tabId, s.web, top, peer)
+    expect(await marksOf(s.tabId, peer)).toEqual({ [late!]: { sequence: boundary, follow: null } })
+    expect(unreadRoots((await inbox(s.tabId, peer)).body.data)).toEqual(['Late: 1'])
+  })
+
+  it('holds the mark before an unhandled thread when more than 50 threads have answers', async () => {
+    const s = await scene()
+    const roots = await insert(s.tabId, s.web, Array.from({ length: 51 }, (_, i) => ({ text: `Question ${i}`, author: personAuthor(peer) })))
+    const old = await sequenceOf(roots.at(-1)!)
+    await markRead(s.tabId, s.web, old, peer)
+    const replies = await insert(s.tabId, s.web, roots.map(thread => ({ text: 'Answer', author: agentAuthor(s.worker), thread })))
+    await insert(s.tabId, s.web, [{ text: 'Main', author: personAuthor(owner) }])
+    const top = await newest(s.tabId, s.web)
+    const first = await post(`/api/super-tabs/${s.tabId}/conversations/${s.web}/read`, peer, { sequence: top })
+    expect(first.body.data.sequence).toBe(await sequenceOf(replies[49]!))
+    expect(Object.keys(await marksOf(s.tabId, peer))).toEqual(expect.arrayContaining(roots.slice(0, 50)))
+    expect((await marksOf(s.tabId, peer))[roots[50]!]).toBeUndefined()
+    await markRead(s.tabId, s.web, top, peer)
+    expect(Object.keys(await marksOf(s.tabId, peer))).toHaveLength(51)
+    expect((await marksOf(s.tabId, peer))[roots[0]!]).toEqual({ sequence: old, follow: null })
+  })
+
+  it('advances through a row ceiling containing no replies and leaves another chat unchanged', async () => {
+    const s = await scene()
+    const [root] = await insert(s.tabId, s.web, [{ text: 'Question', author: personAuthor(peer) }])
+    await markRead(s.tabId, s.web, await sequenceOf(root!), peer)
+    const main = await insert(s.tabId, s.web, Array.from({ length: 5_001 }, (_, i) => ({ text: `Main ${i}`, author: personAuthor(owner) })))
+    const top = await newest(s.tabId, s.web)
+    const first = await post(`/api/super-tabs/${s.tabId}/conversations/${s.web}/read`, peer, { sequence: top })
+    expect(first.body.data.sequence).toBe(await sequenceOf(main[4_999]!))
+    await markRead(s.tabId, s.web, top, peer)
+    expect((await db.superTabReadMark.findUniqueOrThrow({ where: { id: stableId(s.tabId, s.web, peer.sub) } })).sequence).toBe(top)
+    expect(await db.superTabReadMark.count({ where: { tabId: s.tabId, personId: peer.sub, conversationId: { not: s.web } } })).toBe(0)
+  })
+
+  it('does not spend the thread-mark budget on threads the person is not in', async () => {
+    const s = await scene()
+    const roots = await insert(s.tabId, s.web, Array.from({ length: 51 }, (_, i) => ({ text: `Question ${i}`, author: personAuthor(i === 0 ? peer : owner) })))
+    const old = await sequenceOf(roots.at(-1)!)
+    await markRead(s.tabId, s.web, old, peer)
+    await insert(s.tabId, s.web, roots.map(thread => ({ text: 'Answer', author: agentAuthor(s.worker), thread })))
+    await insert(s.tabId, s.web, [{ text: 'Main', author: personAuthor(owner) }])
+    const top = await newest(s.tabId, s.web)
+    const response = await post(`/api/super-tabs/${s.tabId}/conversations/${s.web}/read`, peer, { sequence: top })
+    expect(response.body.data.sequence).toBe(top)
+    expect(await marksOf(s.tabId, peer)).toEqual({ [roots[0]!]: { sequence: old, follow: null } })
+  })
+
   it('does so for each thread the person started, replied in, was tagged in or follows, and for no other', async () => {
     const s = await scene()
     const [started, replied, taggedRoot, taggedReply, followed, notTheirs] = await insert(s.tabId, s.web, [
@@ -567,12 +647,12 @@ describe('reading a chat never reads a reply only in a thread (Diego, 11-01)', (
     expect(unreadRoots((await inbox(s.tabId, peer)).body.data)).toEqual(['Peer root: 1'])
   })
 
-  it(`reads one bounded range from the old mark upward (${SEED_SCAN} rows), whatever the range's length`, async () => {
+  it(`reads one bounded row range even when main rows vastly outnumber replies, whatever the range's length`, async () => {
     const s = await scene()
     const [early, late] = await insert(s.tabId, s.web, [{ text: 'Early', author: personAuthor(peer) }, { text: 'Late', author: personAuthor(peer) }])
     await markRead(s.tabId, s.web, await sequenceOf(late!), peer)
     await insert(s.tabId, s.web, [{ text: 'Early reply', author: agentAuthor(s.worker), thread: early },
-      ...Array.from({ length: SEED_SCAN + 100 }, (_, i) => ({ text: `Main ${i}`, author: personAuthor(owner) })),
+      ...Array.from({ length: 5_100 }, (_, i) => ({ text: `Main ${i}`, author: personAuthor(owner) })),
       { text: 'Late reply', author: agentAuthor(s.worker), thread: late }])
     const top = await newest(s.tabId, s.web)
     await db.$runCommandRaw({ profile: 0 })
@@ -589,8 +669,10 @@ describe('reading a chat never reads a reply only in a thread (Diego, 11-01)', (
       rows.filter(r => r.op !== 'getmore').map(r => `  ${r.ns.split('.').at(-1)} ${r.op} ${r.planSummary ?? ''} docs=${r.docsExamined ?? 0} keys=${r.keysExamined ?? 0}`).join('\n'))
     // The range read, the thread's root and the look-back for whether the person is in it: never one read per row or thread.
     expect(messages.length).toBeLessThanOrEqual(3)
-    expect(examined).toBeLessThanOrEqual(SEED_SCAN + 10)
-    // The cap: a thread-only reply past the first SEED_SCAN rows of the range is not seen by this read.
+    expect(examined).toBeLessThanOrEqual(5_010)
+    const stored = await db.superTabReadMark.findUniqueOrThrow({ where: { id: stableId(s.tabId, s.web, peer.sub) } })
+    expect(stored.sequence).toBeLessThan(top)
+    // The row ceiling holds the mark before the late reply; a later read can seed it.
     expect(await marksOf(s.tabId, peer)).toEqual({ [early!]: { sequence: await sequenceOf(late!), follow: null } })
   }, 60_000)
 })

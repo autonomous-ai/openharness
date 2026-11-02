@@ -247,11 +247,20 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
-    for (final number in ['21', '87%']) {
+    void holdsWhole(String number) {
       expect(find.text(number), findsOneWidget, reason: number);
       final paragraph = tester.renderObject<RenderParagraph>(find.text(number));
       expect(paragraph.didExceedMaxLines, isFalse, reason: number);
     }
+
+    holdsWhole('21');
+    // The models' shares are in Manage › Models.
+    await tester.tap(find.byKey(const ValueKey('super-manage')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('super-manage-tab-models')));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    holdsWhole('87%');
     await close(tester, controller);
   });
 }
