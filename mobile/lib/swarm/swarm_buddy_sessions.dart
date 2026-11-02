@@ -1,5 +1,6 @@
 import 'model.dart';
 import 'swarm_buddy.dart';
+import 'swarm_outbox.dart' show SwarmPost;
 import 'swarm_reader.dart';
 
 // Buddy thread sessions on the phone (spec docs/superpowers/specs/2026-10-30-
@@ -13,6 +14,19 @@ import 'swarm_reader.dart';
 /// yet (an older backend, or one of its servers during a release).
 const swarmSessionsUnavailable =
     "New sessions aren't available yet; send without it?";
+
+/// Whether [post] was refused only because the server does not know New
+/// session (the schema's `Unrecognized key`, naming the field).
+bool swarmRefusedForSessions(SwarmPost post) {
+  final command = post.body['command'];
+  final failure = post.refusedBy;
+  return command is Map &&
+      command['newSession'] == true &&
+      failure != null &&
+      failure.code == 'VALIDATION_ERROR' &&
+      failure.message.contains('Unrecognized key') &&
+      failure.message.contains('newSession');
+}
 
 /// How long New session is not offered after a server refused it.
 const swarmSessionsRefusedFor = Duration(minutes: 10);

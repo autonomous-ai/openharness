@@ -258,7 +258,7 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
         _uploads.forget(post.files);
       }
       _restore(post);
-      if (_refusedForSessions(post)) {
+      if (swarmRefusedForSessions(post)) {
         swarmSessionsRefused(reader);
         error = swarmSessionsUnavailable;
       } else {
@@ -1310,19 +1310,6 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
     }
   }
 
-  /// [post] was refused only because the server does not know New session
-  /// (the schema's `Unrecognized key`, naming the field).
-  bool _refusedForSessions(SwarmPost post) {
-    final command = post.body['command'];
-    final failure = post.refusedBy;
-    return command is Map &&
-        command['newSession'] == true &&
-        failure != null &&
-        failure.code == 'VALIDATION_ERROR' &&
-        failure.message.contains('Unrecognized key') &&
-        failure.message.contains('newSession');
-  }
-
   /// A refused post's text back in the draft, before anything typed since.
   void _restore(SwarmPost post) {
     final sent = post.held;
@@ -1341,7 +1328,7 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
     _replyingTo ??= sent.replyTo;
     // Refused for New session itself, it comes back without it, ready to send
     // as a plain message; refused for anything else, the choice stays.
-    if (!_refusedForSessions(post)) {
+    if (!swarmRefusedForSessions(post)) {
       _newSession = _newSession || sent.newSession;
       _sessionProjectId ??= sent.sessionProjectId;
     }

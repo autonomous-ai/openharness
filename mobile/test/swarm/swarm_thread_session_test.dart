@@ -24,7 +24,7 @@ void main() {
         page ??
         [
           sessionMessage('m1', 1, author: me),
-          sessionMessage('m2', 2, root: 'm1', session: true),
+          sessionMessage('m2', 2, root: 'm1', author: me),
         ];
     final fake = backend ?? sessionBackend(page: rows);
     fake.routes['$sessionMessages?thread=m1'] = (_) => {
@@ -128,6 +128,7 @@ void main() {
         engine: 'codex',
         page: [sessionMessage('m1', 1, author: me)],
       ),
+      page: [sessionMessage('m1', 1, author: me)],
     );
     expect(thread.sessionBlocked, 'Sessions need a Claude Code Buddy');
     thread
@@ -144,6 +145,7 @@ void main() {
         threadSessions: false,
         page: [sessionMessage('m1', 1, author: me)],
       ),
+      page: [sessionMessage('m1', 1, author: me)],
     );
     expect(thread.offersSessions, isFalse);
   });
@@ -155,7 +157,10 @@ void main() {
       "command: Unrecognized key: 'newSession'",
       statusCode: 400,
     );
-    final (_, _, thread) = await rig(backend: fake);
+    final (_, _, thread) = await rig(
+      backend: fake,
+      page: [sessionMessage('m1', 1, author: me)],
+    );
     thread
       ..newSession = true
       ..draft = 'Start one';
