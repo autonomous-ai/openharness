@@ -10,6 +10,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/attention.dart';
 import 'package:harness/super_tabs/buddy_rows.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 
@@ -159,6 +160,125 @@ Text rowText(WidgetTester tester, String key, String text) =>
 
 void main() {
   group('the red number counts only what is for the reader', () {
+    // Dee: the 7, 7 and 3 on project rows never cleared, and opening them showed none of what they counted.
+    group('a project row counts only what opening it shows', () {
+      Future<(SuperTabController, SuperTabAttention)> opened(
+        ConversationServer server,
+      ) async {
+        final c = await openHere(server);
+        final attention = SuperTabAttention.of(c);
+        await attention.mentions.load();
+        await attention.decisions.load();
+        await attention.load();
+        return (c, attention);
+      }
+
+      testWidgets('a tag in a task conversation shows no number on the '
+          'collapsed row, which is still bold and kept by the unread filter', (
+        tester,
+      ) async {
+        final server = projectServer();
+        fromLead(server, 'Please look', conversationId: 'offline');
+        server.tag('message-1', conversationId: 'offline');
+        final (c, attention) = await opened(server);
+        await pumpSidebar(tester, c, attention);
+        expect(attention.mentionsIn('offline'), 1);
+        expect(
+          inRow('super-group-lead', find.byType(SuperTabCountBadge)),
+          findsNothing,
+        );
+        expect(
+          rowText(tester, 'super-group-lead', 'web-project').style?.fontWeight,
+          FontWeight.w600,
+        );
+        c.toggleUnreadOnly();
+        await tester.pumpAndSettle();
+        expect(find.byKey(const ValueKey('super-group-lead')), findsOneWidget);
+        // Still listed where it can be opened, and on its own row once expanded.
+        expect(attention.mentions.waiting, hasLength(1));
+        c.toggleProject('lead');
+        await tester.pumpAndSettle();
+        expect(inRow('super-group-offline', find.text('1')), findsOneWidget);
+        await close(tester, c);
+      });
+
+      testWidgets('a tag in the project chat counts collapsed or open, and '
+          'reading it clears it', (tester) async {
+        final server = projectServer();
+        server.tag('message-1', messageSequence: 1);
+        fromLead(server, 'Please look');
+        final (c, attention) = await opened(server);
+        await pumpSidebar(tester, c, attention);
+        expect(inRow('super-group-lead', find.text('1')), findsOneWidget);
+        c.toggleProject('lead');
+        await tester.pumpAndSettle();
+        expect(inRow('super-group-lead', find.text('1')), findsOneWidget);
+        c.toggleProject('lead');
+        await tester.pumpAndSettle();
+        c.select('lead');
+        await tester.pumpAndSettle();
+        c.markRead('lead');
+        await tester.pumpAndSettle();
+        expect(
+          inRow('super-group-lead', find.byType(SuperTabCountBadge)),
+          findsNothing,
+        );
+        await close(tester, c);
+      });
+
+      testWidgets('a tag in a reply that lives only in a thread counts on '
+          'Threads, not on the project row', (tester) async {
+        final server = projectServer();
+        server.followedThreads = {
+          'unread': [unreadThread('message-1', 2, conversationId: 'lead')],
+          'read': [],
+          'more': false,
+        };
+        server.tag('message-1', threadId: 'message-1');
+        final (c, attention) = await opened(server);
+        await pumpSidebar(tester, c, attention);
+        expect(inRow('super-threads', find.text('1')), findsOneWidget);
+        expect(
+          inRow('super-group-lead', find.byType(SuperTabCountBadge)),
+          findsNothing,
+        );
+        await close(tester, c);
+      });
+
+      testWidgets('every number shown clears by reading what it counts', (
+        tester,
+      ) async {
+        final server = projectServer();
+        fromLead(server, 'In the task', conversationId: 'offline');
+        server.tag('message-1', conversationId: 'offline');
+        server.tag('message-1', messageSequence: 1);
+        fromLead(server, 'In the chat');
+        final (c, attention) = await opened(server);
+        await pumpSidebar(tester, c, attention);
+        expect(inRow('super-group-lead', find.text('1')), findsOneWidget);
+        c.select('lead');
+        await tester.pumpAndSettle();
+        c.markRead('lead');
+        await tester.pumpAndSettle();
+        expect(find.byType(SuperTabCountBadge), findsNothing);
+        await close(tester, c);
+      });
+
+      testWidgets('a muted project chat shows no number', (tester) async {
+        final server = projectServer();
+        server.tag('message-1', messageSequence: 1);
+        fromLead(server, 'Please look');
+        final (c, attention) = await opened(server);
+        await c.setNotify('lead', SuperTabNotify.muted);
+        await pumpSidebar(tester, c, attention);
+        expect(
+          inRow('super-group-lead', find.byType(SuperTabCountBadge)),
+          findsNothing,
+        );
+        await close(tester, c);
+      });
+    });
+
     testWidgets('a tag in the chat counts on its row; a tag in a thread on '
         'Threads; a decision on its row; plain unread is bold with no '
         'number', (tester) async {
@@ -201,8 +321,8 @@ void main() {
       await close(tester, c);
     });
 
-    testWidgets('a collapsed project counts the tags of the workgroups it '
-        'hides', (tester) async {
+    testWidgets('a collapsed project counts its own chat\'s tags, not those of '
+        'the workgroups it hides', (tester) async {
       final server = projectServer();
       server.followedThreads = {'unread': [], 'read': [], 'more': false};
       fromLead(server, 'News', conversationId: 'offline');
@@ -212,7 +332,7 @@ void main() {
       final attention = SuperTabAttention.of(c);
       await attention.mentions.load();
       await pumpSidebar(tester, c, attention);
-      expect(inRow('super-group-lead', find.text('2')), findsOneWidget);
+      expect(inRow('super-group-lead', find.text('1')), findsOneWidget);
       c.toggleProject('lead');
       await tester.pumpAndSettle();
       expect(inRow('super-group-lead', find.text('1')), findsOneWidget);

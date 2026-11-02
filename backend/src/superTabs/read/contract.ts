@@ -283,6 +283,7 @@ export interface HostPool {
   localGrid?: string
   reservations: Array<{ harnessId: string; generation: string }>
   harnessIds: string[]
+  removedHarnessIds?: string[]
   githubApp?: true
   /** The host may say what it launches beyond workers in its readings (leadStart.ts). */
   capabilitiesWanted?: true

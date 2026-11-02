@@ -45,7 +45,7 @@ Future<void> showSwitchPm(
       requireWrite: true,
       child: StatefulBuilder(
         builder: (context, update) => ListenableBuilder(
-          listenable: c,
+          listenable: Listenable.merge([c, c.machinesChanged]),
           builder: (context, _) {
             final snapshot = c.snapshot;
             final lead = snapshot?.leadOf(projectId);
