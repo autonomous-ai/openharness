@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
@@ -6,6 +7,7 @@ import 'keymap.dart';
 import 'keymap_commands.dart';
 import 'keymap_dispatch.dart';
 import 'keymap_keyboard.dart';
+import 'text_editing_keys.dart';
 
 const composerOwnedStrokes = [
   KeyStroke('w', control: true),
@@ -138,6 +140,29 @@ class _KeymapHostState extends State<KeymapHost> with WidgetsBindingObserver {
         ?.widget
         .controller
         .value;
+    // A caret in a text field owns the standard editing keys: ⌘← is the line
+    // start there, not "focus the pane to the left". Menus built on a field
+    // (the picker, the project menu) keep their own keys. A chord already
+    // under way finishes first.
+    final contextKind = region?.contextKind ?? KeymapContext.workspace;
+    if (value != null &&
+        !_dispatch.hasPending &&
+        contextKind != KeymapContext.picker &&
+        contextKind != KeymapContext.project) {
+      final typed = keyStrokeForEvent(event);
+      final platform = defaultTargetPlatform;
+      if (textFieldKillsLine(typed, platform: platform)) {
+        Actions.maybeInvoke(context, killLineIntent);
+        return KeyEventResult.handled;
+      }
+      if (textFieldKeepsStroke(
+        typed,
+        platform: platform,
+        hasText: value.text.isNotEmpty,
+      )) {
+        return KeyEventResult.ignored;
+      }
+    }
     final composing =
         region?.composing?.call() == true ||
         (value != null &&
