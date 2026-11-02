@@ -25,9 +25,9 @@ describe('SWARM_TOOLS_SKILL', () => {
     expect(SWARM_TOOLS_SKILL).toContain(CHEAP_FIRST_HELP)
     expect(SWARM_TOOLS_SKILL).not.toContain('leaves out only')
   })
-  it('has the reviewing agent named with --to, since a review status tells only the group\'s coordinator', () => {
+  it('has the reviewing agent named with --to, since a review status wakes nobody by itself', () => {
     expect(SWARM_TOOLS_SKILL).not.toContain('so it is told when that work is ready for review')
-    expect(lineOf('`reviewOf` naming')).toMatch(/--to/)
+    expect(lineOf('is a step of that task')).toMatch(/--to/)
   })
   it('tells an older Swarm\'s answer from a passing failure, and a stale save from one that hands text back', () => {
     expect(lineOf('INSTRUCTIONS_UNAVAILABLE')).toMatch(/no project instructions yet/)
