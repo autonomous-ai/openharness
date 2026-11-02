@@ -351,6 +351,7 @@ void main() {
       async.elapse(const Duration(seconds: 1));
       expect(theirs!.showingSaved, isFalse);
       expect(theirs!.snapshot, isNull);
+      expect(theirs!.messages('lead'), isEmpty);
       other.dispose();
       backend.servers['tab']!.holdReads!.complete();
       backend.servers['tab']!.holdReads = null;

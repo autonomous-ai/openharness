@@ -2114,6 +2114,9 @@ class SuperTabController extends ChangeNotifier {
 
   void _keepRows(String id, List rows) {
     if (!_policy.drawsSaved) return;
+    _recentChats
+      ..remove(id)
+      ..insert(0, id);
     final kept = _rows[id] ??= {};
     for (final row in rows) {
       final map = superTabMap(row);
@@ -2140,6 +2143,7 @@ class SuperTabController extends ChangeNotifier {
         : shown;
     final rows = [for (final message in page) ?_rows[id]?[message.id]];
     return {
+      if (_savedChatsOf(id) case final chats when chats.isNotEmpty) 'chats': chats,
       'format': superTabReadFormat,
       'savedAt': readAt.millisecondsSinceEpoch,
       'lastChangedAt': lastChangedAt,
@@ -2154,6 +2158,67 @@ class SuperTabController extends ChangeNotifier {
 
   /// A conversation's page as the backend reads it.
   static const _savedPage = 100;
+
+  /// How many other chats a saved view keeps the last rows of, newest read first, and how many rows of each: every chat then
+  /// opens from this device, and its first read replaces them (Quiet Swarm, Speed). Inside the view, so they are this account's
+  /// alone and go when it does; one over its limit drops the oldest chats first ([SuperTabSavedViews.write]).
+  static const _savedChats = 5, _savedChatRows = 30;
+
+  /// The chats this device read, newest first.
+  final _recentChats = <String>[];
+
+  List<Map<String, dynamic>> _savedChatsOf(String open) {
+    final chats = <Map<String, dynamic>>[];
+    for (final id in _recentChats) {
+      if (chats.length == _savedChats) break;
+      final shown = _messages[id];
+      if (id == open || shown == null || shown.isEmpty || snapshot?.conversation(id) == null) continue;
+      final page = shown.length > _savedChatRows ? shown.sublist(shown.length - _savedChatRows) : shown;
+      final rows = [for (final message in page) ?_rows[id]?[message.id]];
+      if (rows.isNotEmpty) {
+        chats.add({'id': id, 'messages': rows, 'next': SuperTabPage.of(page.first).toJson()});
+      }
+    }
+    return chats;
+  }
+
+  /// Draws the other chats of a saved view, each only if the saved state lists it and all its rows are its own; a broken one is
+  /// skipped. Each one's first read takes the latest page whole, as the saved page may be short of what came since.
+  void _drawSavedChats(Object? chats, SuperTabSnapshot saved, String open) {
+    if (chats is! List) return;
+    for (final chat in chats) {
+      try {
+        final map = superTabMap(chat);
+        final id = map['id'] as String;
+        if (id == open || saved.conversation(id) == null) continue;
+        final rows = [for (final row in map['messages'] as List) superTabMap(row)];
+        final messages = rows.map(SuperTabMessage.fromJson).toList();
+        if (messages.isEmpty || messages.any((m) => m.conversationId != id)) continue;
+        _messages[id] = messages..sort(superTabMessageOrder);
+        _keepRows(id, rows);
+        _before[id] = SuperTabPage.read(map['next']);
+        _latestWanted.add(id);
+      } on FormatException {
+        continue;
+      } on TypeError {
+        continue;
+      }
+    }
+  }
+
+  /// What the first read says this reader no longer has: its kept chats go with it.
+  void _dropLostChats() {
+    final state = snapshot;
+    if (state == null) return;
+    for (final id in _messages.keys.toList()) {
+      if (id == selectedId || state.conversation(id) != null) continue;
+      _messages.remove(id);
+      _rows.remove(id);
+      _before.remove(id);
+      _latestWanted.remove(id);
+      _recentChats.remove(id);
+    }
+  }
 
   /// How long a saved view's cursor is good for: the backend keeps
   /// tombstones 7 days and reloads older cursors an hour before that.
@@ -2209,6 +2274,7 @@ class SuperTabController extends ChangeNotifier {
         _keepRows(id, rows);
         _before[id] = SuperTabPage.read(view['next']);
       }
+      _drawSavedChats(view['chats'], saved, id is String ? id : selectedId);
       _showingSaved = true;
       loading = false;
       if (_startedAt != null) _changed();
@@ -3304,6 +3370,7 @@ class SuperTabController extends ChangeNotifier {
       if (_showingSaved) {
         // Read now: the saved view, and its Updating line, give way.
         _showingSaved = false;
+        _dropLostChats();
         stateChanged = true;
       }
     } catch (failure) {
