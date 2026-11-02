@@ -325,7 +325,9 @@ void main() {
           tabId: 't',
           request: (method, path, {body}) async {
             paths.add(path);
-            if (path.contains('period=')) throw older;
+            if (path.contains('period=')) {
+              throw older;
+            }
             return answer();
           },
         );
@@ -347,12 +349,13 @@ void main() {
         final reader = SuperTabLeaderboardReader(
           tabId: 't',
           request: (method, path, {body}) async {
-            if (fail)
+            if (fail) {
               throw const SuperTabFailure(
                 'OFFLINE',
                 'No connection.',
                 statusCode: 503,
               );
+            }
             return rolling('7d');
           },
         );

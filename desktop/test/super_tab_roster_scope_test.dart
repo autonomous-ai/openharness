@@ -411,6 +411,39 @@ void main() {
       await f.close(tester);
     });
 
+    testWidgets('light and dark, both menus and Swarm-wide points', (
+      tester,
+    ) async {
+      final f = await swarm(tester);
+      rolling(f);
+      final saved = grid.AppTheme.brightness.value;
+      addTearDown(() => grid.AppTheme.brightness.value = saved);
+      for (final brightness in Brightness.values) {
+        grid.AppTheme.brightness.value = brightness;
+        await f.show(tester, brightness: brightness);
+        FocusManager.instance.primaryFocus?.unfocus();
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        expect(
+          find.descendant(
+            of: find.byKey(const ValueKey('leaderboard-period')),
+            matching: find.text('Last 7d'),
+          ),
+          findsOneWidget,
+        );
+        if (captureDir != null) {
+          await captureBoundary(
+            tester,
+            f.boundary.currentContext!.findRenderObject()!
+                as RenderRepaintBoundary,
+            captureDir,
+            'roster-period-${brightness.name}',
+          );
+        }
+      }
+      await f.close(tester);
+    });
+
     testWidgets('from a server before periods: the week menu, its own project '
         'as before', (tester) async {
       final f = await swarm(tester);
