@@ -8,6 +8,7 @@ import { createServer, request as httpRequest } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { managedNodePath } from '../nodeRuntime.js'
 import { FakeGateway, FakeService } from '../../testing/connectorServers.js'
 import { bridgeKey, harnessKey, sync } from './agents.js'
 import { createBridge } from './bridge.js'
@@ -270,7 +271,7 @@ describe('key-only connections for the cloud agents', () => {
 })
 
 describe('agent configs', () => {
-  it('gives each agent bridge addresses and keeps its own servers', () => {
+  it('gives each agent the shim and keeps its own servers', () => {
     const claude = join(home, '.claude.json')
     writeFileSync(claude, JSON.stringify({ numStartups: 3, mcpServers: { notion: { command: 'my-notion' } } }))
     const codex = join(home, '.codex', 'config.toml')
@@ -282,15 +283,16 @@ describe('agent configs', () => {
     for (const code of ['linear', 'notion']) vault.save(code, { access_token: 'secret-' + code, source: 'dcr', mcp_entry: { url: `https://mcp.${code}.example/mcp`, headers: { Authorization: 'Bearer secret-' + code } } })
     vault.save('github', { access_token: 'secret-github', source: 'gateway' })
     expect(sync(vault, env)).toEqual({ claude: ['linear'], codex: ['linear', 'notion'], opencode: ['linear', 'notion'] })
-    const key = bridgeKey(vault)
+    const socket = join(vault.root, 'bridge.sock')
+    const shim = (code: string) => [join(vault.root, 'mcp-shim.mjs'), '--socket', socket, code]
     const data = JSON.parse(readFileSync(claude, 'utf8'))
     expect(data.numStartups).toBe(3)
     expect(data.mcpServers.notion).toEqual({ command: 'my-notion' })
-    expect(data.mcpServers.linear).toEqual({ type: 'http', url: `http://127.0.0.1:51793/${key}/linear/mcp` })
+    expect(data.mcpServers.linear).toEqual({ type: 'stdio', command: managedNodePath(), args: shim('linear') })
     const toml = readFileSync(codex, 'utf8')
     expect(toml.startsWith('model = "gpt-5"\n\n[mcp_servers.mine]\ncommand = "mine"\n')).toBe(true)
-    expect(toml).toContain(`[mcp_servers.notion]\nurl = "http://127.0.0.1:51793/${key}/notion/mcp"`)
-    expect(JSON.parse(readFileSync(opencode, 'utf8')).mcp.linear.type).toBe('remote')
+    expect(toml).toContain(`[mcp_servers.notion]\ncommand = ${JSON.stringify(managedNodePath())}\nargs = ${JSON.stringify(shim('notion'))}`)
+    expect(JSON.parse(readFileSync(opencode, 'utf8')).mcp.linear).toEqual({ type: 'local', command: [managedNodePath(), ...shim('linear')], enabled: true })
     for (const path of [claude, codex, opencode]) expect(readFileSync(path, 'utf8')).not.toContain('secret-')
     vault.disconnect('linear')
     vault.disconnect('notion')
