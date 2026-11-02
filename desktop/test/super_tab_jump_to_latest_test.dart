@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
+import 'package:harness/widgets/laid_out_list.dart';
 
 import 'support/super_tab_fixture.dart';
 
@@ -51,7 +52,7 @@ void main() {
   Finder inPanel(Finder finder) =>
       find.descendant(of: panel(), matching: finder);
   ScrollController threadScroll(WidgetTester tester) =>
-      tester.widget<ListView>(inPanel(find.byType(ListView))).controller!;
+      tester.widget<ListView>(inPanel(find.byType(LaidOutListView))).controller!;
 
   ConversationServer chat(int count) {
     final server = ConversationServer();

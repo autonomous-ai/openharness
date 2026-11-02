@@ -197,8 +197,8 @@ export async function markDone(tx: Tx, tabId: string, id: string, personId: stri
 }
 
 /** A person's unexpired tags in a Swarm, waiting or answered, newest first: the rows [readable] lists and counts. */
-const tagRows = (tabId: string, personId: string, now: number, open: boolean) => ({
-  where: { tabId, personId, createdAt: { gt: new Date(now - MENTION_EXPIRY_MS) }, ...(open ? waiting : { resolvedAt: { not: null } }) },
+const tagRows = (tabId: string, personId: string, now: number, open: boolean | null) => ({
+  where: { tabId, personId, createdAt: { gt: new Date(now - MENTION_EXPIRY_MS) }, ...(open === null ? {} : open ? waiting : { resolvedAt: { not: null } }) },
   orderBy: { createdAt: 'desc' as const }, take: 500,
 })
 
@@ -213,7 +213,7 @@ export async function waitingTagConversations(tx: Tx, tabId: string, personId: s
  *  counts this same list. Ordinary loads leave quiet (dormant) conversations out of the state, so the ones a tag is in are
  *  read here: the count and the list check the same conversations whichever state they get.
  *  ponytail: capped at 500 per state; page it if a person ever gets more in 30 days. */
-async function readable(tx: Tx, tabId: string, state: SuperTabState, actor: Extract<Actor, { kind: 'person' }>, now: number, open: boolean) {
+async function readable(tx: Tx, tabId: string, state: SuperTabState, actor: Extract<Actor, { kind: 'person' }>, now: number, open: boolean | null) {
   person(state, actor.userId)
   const rows = await tx.superTabMention.findMany(tagRows(tabId, actor.userId, now, open))
   const groups = new Map(state.conversations.map(c => [c.id, c]))
@@ -270,6 +270,40 @@ export async function listMentions(tx: Tx, tabId: string, state: SuperTabState, 
       // Where the tagged message is in its chat: Desktop clears its red number once the reader has read past it (Slack).
       messageSequence: message?.sequence ?? null }
   })
+}
+
+/** A thread a person's own tag is in: the tagged message's thread (a reply's root, or a root itself), in the tag's conversation. */
+export interface TaggedThread { conversationId: string; threadId: string; at: number }
+
+/** The threads the person's own unexpired tags are in, waiting or answered, newest tag first, once each, at most `limit` of those
+ *  `keep` accepts (the caller's own filters apply before the count, so threads it drops never use up the limit) (the
+ *  Threads list, read/followedThreads.ts: a tag in a chat they never opened has no thread mark, so no other read finds it). Only
+ *  tags [readable] lists: conversations they can read, never a held Lead notice before its time. A message is taken only in the
+ *  conversation its tag names, and only its thread id leaves here, so a tag never names a thread of another chat. Its root
+ *  and replies are read and checked by the caller. The tags by one indexed read of at most 500 rows (tagRows), their messages by id
+ *  in one more. */
+export async function taggedThreads(tx: Tx, tabId: string, state: SuperTabState, actor: Extract<Actor, { kind: 'person' }>, now: number,
+  limit: number, keep: (thread: TaggedThread) => boolean = () => true): Promise<TaggedThread[]> {
+  const tagged = await readable(tx, tabId, state, actor, now, null)
+  if (!tagged.length) return []
+  const found = await readBy(tx, 'SuperTabMessage', 'id', [{ $match: { _id: { $in: [...new Set(tagged.map(t => t.row.messageId))] }, tabId } },
+    { $project: { conversationId: 1, thread: 1 } }])
+  const messages = new Map(found.map(r => [r._id as string, r]))
+  const seen = new Set<string>()
+  const threads: TaggedThread[] = []
+  for (const { row } of tagged) {
+    const message = messages.get(row.messageId)
+    const threadId = typeof message?.thread === 'string' ? message.thread : null
+    if (!threadId || message!.conversationId !== row.conversationId) continue
+    const key = `${row.conversationId}\u0000${threadId}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    const thread = { conversationId: row.conversationId, threadId, at: row.createdAt.getTime() }
+    if (!keep(thread)) continue
+    threads.push(thread)
+    if (threads.length >= limit) break
+  }
+  return threads
 }
 
 /** For each tagged message that is a thread reply only (not also sent to the chat), its thread's root: the tag belongs to the

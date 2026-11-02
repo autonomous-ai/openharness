@@ -40,12 +40,28 @@ export function endSteps(state: SuperTabState, task: Conversation, reason: strin
  *  its verdict, and one asleep under a done task was not loaded when that task was archived later, so it stayed open in an
  *  archived task (final review, minor 5). */
 export const stepSleeps = (task: { archived: boolean; dormant: boolean } | null): boolean => !task || task.archived
-/** The task's owner for [step]: the agent assigned its task while that work is open, else null (the coordinator's then). */
-export function taskOwner(state: SuperTabState, step: Conversation): string | null {
-  const task = isStep(step) ? state.conversations.find(c => c.id === step.reviewOf) : undefined
-  return task && activeWork(task) ? task.assignment!.agentId : null
+/** The agent that owns [task]: its assignee while that agent is in the Swarm, its own work done or not, else null (the
+ *  coordinator's then). Ken, 2026-11-02: a Builder set its task done before its Tester's verdict, and the verdict reached
+ *  the PM; the verdict is still the Builder's to act on. */
+export function ownerOf(state: SuperTabState, task: Conversation): string | null {
+  const agentId = task.assignment?.agentId
+  return agentId && state.agents.some(a => a.id === agentId) ? agentId : null
 }
 
-/** Whether [agentId] holds an open step of task [taskId]. */
+/** The task's owner for [step] (ownerOf its task), or null. */
+export function taskOwner(state: SuperTabState, step: Conversation): string | null {
+  const task = isStep(step) ? state.conversations.find(c => c.id === step.reviewOf) : undefined
+  return task ? ownerOf(state, task) : null
+}
+
+/** Whether [agentId] holds or held a step of task [taskId], open or finished: its posts there are about that step's work
+ *  (Ken, 2026-11-02: a Reviewer's "both re-checks pass", after its step was done, reached the PM). */
 export const holdsStepOf = (state: SuperTabState, taskId: string, agentId: string): boolean =>
-  stepsOf(state, taskId).some(s => activeWork(s) && s.assignment!.agentId === agentId)
+  stepsOf(state, taskId).some(s => s.assignment?.agentId === agentId)
+
+/** Whether [agentId] has held steps only, never a task, in the groups loaded: a Reviewer or Tester the instructions keep,
+ *  whatever its role is called, so its idle time is no news for the coordinator. */
+export const onlyStepsHeld = (groups: readonly Conversation[], agentId: string): boolean => {
+  const held = groups.filter(g => g.assignment?.agentId === agentId)
+  return held.length > 0 && held.every(isStep)
+}

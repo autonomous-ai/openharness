@@ -15,6 +15,7 @@ import 'model.dart';
 import 'reply_box.dart';
 import 'section_heading.dart';
 import 'workgroup_name.dart';
+import '../widgets/laid_out_list.dart';
 
 /// How many threads with new replies read their replies when the view opens;
 /// the rest show their root and count until opened.
@@ -87,7 +88,7 @@ class _SuperTabThreadsViewState extends State<SuperTabThreadsView> {
           unawaited(a.showReplies(thread));
         }
       });
-      return ListView(
+      return LaidOutListView(
         key: const ValueKey('super-threads-view'),
         padding: const EdgeInsets.only(bottom: grid.AppDesktop.groupGap),
         children: [

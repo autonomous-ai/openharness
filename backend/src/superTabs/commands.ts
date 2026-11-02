@@ -9,7 +9,7 @@ import {
   type Actor, type AgentConfiguration, type AgentStart, type AgentStartRequest, type BuddySessionEntry, type WorkTask, type Agent, type Author, type Check, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
 import { jobKindOf } from './evidence/jobKind.js'
-import { endSteps, holdsStepOf, isStep, taskOwner } from './steps.js'
+import { endSteps, holdsStepOf, isStep, ownerOf, taskOwner } from './steps.js'
 import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSaveSchema } from './routingPolicy.js'
 import { askedInSchema, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema } from './rules.js'
@@ -2545,8 +2545,13 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // the 486 messages it got in a day were such copies). The assigned worker keeps its own rule above; a note to itself
       // stays its own.
       // In a task, an agent holding one of its open steps reaches the task's owner instead (task steps design).
-      const ownerHere = actor.kind === 'agent' && assigned && assigned !== actor.agentId && holdsStepOf(state, group.id, actor.agentId) ? assigned : null
-      const memberToLead = actor.kind === 'agent' && !command.agentOnly && !addressed.length && assigned !== actor.agentId && ownerHere ? [ownerHere]
+      const owner = ownerOf(state, group)
+      const ownerHere = actor.kind === 'agent' && owner && owner !== actor.agentId && holdsStepOf(state, group.id, actor.agentId) ? owner : null
+      // In a step, any agent but the coordinator talks to the task's owner: its own agent after its work ended too (a lost or
+      // done step's agent, 2026-11-02, reached the PM).
+      const stepTold = actor.kind === 'agent' && isStep(group) && actor.agentId !== group.leadId ? taskOwner(state, group) : null
+      const ownerInStep = actor.kind === 'agent' && stepTold && stepTold !== actor.agentId ? stepTold : null
+      const memberToLead = actor.kind === 'agent' && !command.agentOnly && !addressed.length && assigned !== actor.agentId && (ownerHere ?? ownerInStep) ? [(ownerHere ?? ownerInStep)!]
         : actor.kind === 'agent' && !command.agentOnly && !addressed.length && assigned !== actor.agentId && group.leadId
         && group.leadId !== actor.agentId && group.agentIds.includes(group.leadId) ? [group.leadId] : []
       // Buddy thread sessions (buddySessions.ts): a session thread's replies reach its session alone and stay in its thread; the
