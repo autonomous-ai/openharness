@@ -23,7 +23,7 @@
 1. The old daemon is still closing when the new one binds: it retries for 10 seconds before it gives up the port.
 2. Another process holds the port: a new port and a **new** token, so whatever that process heard is dead.
 3. A private file that is corrupt, a link, someone else's or open to others: ignored, with a new grant and no crash.
-4. A token heard on the port while the daemon was down keeps working once it returns, because the token is reused. This is new, and stays as a named limit: see Design.
+4. A token heard on the port while the daemon was down keeps working once it returns, because the token is reused. This is new, and stays as a named limit, ended by a 30-day rotation at a restart: see Design.
 5. Revoking the Team account's token cuts a reused token as it does a minted one.
 
 ## Design
@@ -38,7 +38,7 @@
 - **Identity:** N/A because no login changes.
 - **Failure:** a failed save is logged, and only continuity is lost. The port taken gets a logged fallback.
 - **Platforms:** the same code on macOS, Linux and Windows. Windows skips the mode check, as the folder's ACL covers it.
-- **Security limit:** while the daemon is down, a local account that takes the port hears the token from running agents, and could reuse it once the daemon returns if it let the port go first. Today it could hear the old token too, but that token dies at the restart. The token only spends model calls through the relay's allowed paths (#2541), never the owner's sign-in.
+- **Security limit:** while the daemon is down, a local account that takes the port hears the token from running agents, and could reuse it once the daemon returns if it let the port go first. Today it could hear the old token too, but that token dies at the restart. The token only spends model calls through the relay's allowed paths (#2541), never the owner's sign-in. A restart more than 30 days after it was minted starts a new one (security review 1).
 
 ---
 

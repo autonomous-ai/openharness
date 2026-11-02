@@ -79,50 +79,90 @@ describe('the owner\'s daemon, for the Harness Team account', () => {
 
   // Task #2125: a running Team agent keeps the address and token it launched with, so a restart of this daemon stranded it.
   describe('across a restart of this daemon', () => {
-    const KEPT = { url: 'http://127.0.0.1:61375', token: 'k'.repeat(43) }
+    const KEPT = { url: 'http://127.0.0.1:61375', token: 'k'.repeat(43), mintedAt: 1_000 }
     const taken = () => Object.assign(new Error('taken'), { code: 'EADDRINUSE' })
 
     it('comes back on the same port, takes the same token back and publishes the same grant', async () => {
-      const f = publisher({ remembered: () => KEPT, remember: vi.fn(), forget: vi.fn() })
+      const f = publisher({ remembered: () => KEPT, remember: vi.fn(), forget: vi.fn(), now: () => 2_000 })
       await f.p.tick()
       expect(f.deps.startRelay).toHaveBeenCalledWith(61375)
       expect(f.running.adoptToken).toHaveBeenCalledWith(TEAM_RELAY_GUEST, KEPT.token)
       expect(f.running.mintToken).not.toHaveBeenCalled()
-      expect(f.deps.publish).toHaveBeenCalledWith(config, KEPT)
+      expect(f.deps.publish).toHaveBeenCalledWith(config, { url: KEPT.url, token: KEPT.token })
     })
 
     it('remembers a new grant before it publishes it', async () => {
       const remember = vi.fn()
-      const f = publisher({ remembered: () => null, remember, forget: vi.fn() })
+      const f = publisher({ remembered: () => null, remember, forget: vi.fn(), now: () => 5_000 })
       await f.p.tick()
       expect(f.deps.startRelay).toHaveBeenCalledWith(undefined)
-      expect(remember).toHaveBeenCalledWith({ url: 'http://127.0.0.1:9', token: TOKEN })
+      expect(remember).toHaveBeenCalledWith({ url: 'http://127.0.0.1:9', token: TOKEN, mintedAt: 5_000 })
     })
 
     it('waits for a port the old daemon is still closing', async () => {
       const running = relay(), wait = vi.fn(async () => {})
       const startRelay = vi.fn<TeamRelayPublisherDeps['startRelay']>().mockRejectedValueOnce(taken()).mockRejectedValueOnce(taken()).mockResolvedValue(running)
-      const f = publisher({ remembered: () => KEPT, remember: vi.fn(), forget: vi.fn(), startRelay, wait })
+      const f = publisher({ remembered: () => KEPT, remember: vi.fn(), forget: vi.fn(), startRelay, wait, now: () => 2_000 })
       await f.p.tick()
       expect(wait).toHaveBeenCalledTimes(2)
       expect(running.adoptToken).toHaveBeenCalledWith(TEAM_RELAY_GUEST, KEPT.token)
-      expect(f.deps.publish).toHaveBeenCalledWith(config, KEPT)
+      expect(f.deps.publish).toHaveBeenCalledWith(config, { url: KEPT.url, token: KEPT.token })
     })
 
     it('gives up a port held for good: a new port and a new token, so what its holder heard is dead', async () => {
       const running = relay(), remember = vi.fn()
       const startRelay = vi.fn<TeamRelayPublisherDeps['startRelay']>(async port => { if (port) throw taken(); return running })
-      const f = publisher({ remembered: () => KEPT, remember, forget: vi.fn(), startRelay, wait: async () => {} })
+      const f = publisher({ remembered: () => KEPT, remember, forget: vi.fn(), startRelay, wait: async () => {}, now: () => 2_000 })
       await f.p.tick()
       expect(startRelay).toHaveBeenLastCalledWith(undefined)
       expect(startRelay.mock.calls.filter(([port]) => port === 61375)).toHaveLength(10)
       expect(running.adoptToken).not.toHaveBeenCalled()
-      expect(remember).toHaveBeenCalledWith({ url: 'http://127.0.0.1:9', token: TOKEN })
+      expect(remember).toHaveBeenCalledWith({ url: 'http://127.0.0.1:9', token: TOKEN, mintedAt: 2_000 })
       expect(f.deps.publish).toHaveBeenCalledWith(config, { url: 'http://127.0.0.1:9', token: TOKEN })
     })
 
+    it('gives the token an end: at a restart past 30 days it starts with a new port and token, and says running agents need a restart', async () => {
+      const DAY = 86_400_000
+      for (const [age, kept] of [[29 * DAY, true], [31 * DAY, false]] as const) {
+        const remember = vi.fn()
+        const f = publisher({ remembered: () => KEPT, remember, forget: vi.fn(), now: () => KEPT.mintedAt + age })
+        await f.p.tick()
+        expect(f.deps.startRelay, String(age)).toHaveBeenCalledWith(kept ? 61375 : undefined)
+        expect(remember).toHaveBeenCalledTimes(kept ? 0 : 1)
+        if (!kept) expect(JSON.stringify(vi.mocked(f.deps.log).mock.calls)).toContain('restart')
+      }
+    })
+
+    it('never takes a grant dated in the future as young', async () => {
+      const f = publisher({ remembered: () => ({ ...KEPT, mintedAt: 9_000 }), remember: vi.fn(), forget: vi.fn(), now: () => 2_000 })
+      await f.p.tick()
+      expect(f.deps.startRelay).toHaveBeenCalledWith(undefined)
+    })
+
+    it('drops the old grant before anything else when it gives way: a failed save never revives the old token on the old port', async () => {
+      for (const over of [
+        { now: () => KEPT.mintedAt + 31 * 86_400_000 },
+        { now: () => 2_000, wait: async () => {}, startRelay: vi.fn<TeamRelayPublisherDeps['startRelay']>(async port => { if (port) throw taken(); return relay() }) },
+      ] as Array<Partial<TeamRelayPublisherDeps>>) {
+        const order: string[] = []
+        const f = publisher({ remembered: () => KEPT, forget: () => order.push('forget'), remember: () => { order.push('remember'); throw new Error('disk full') }, ...over })
+        await f.p.tick()
+        expect(order).toEqual(['forget', 'remember'])
+      }
+    })
+
+    it('falls through to a new port on any other failure to listen there, and says why', async () => {
+      const running = relay()
+      const startRelay = vi.fn<TeamRelayPublisherDeps['startRelay']>(async port => { if (port) throw new Error('bad port'); return running })
+      const f = publisher({ remembered: () => KEPT, remember: vi.fn(), forget: vi.fn(), startRelay, now: () => 2_000 })
+      await f.p.tick()
+      expect(startRelay).toHaveBeenCalledTimes(2)
+      expect(f.deps.publish).toHaveBeenCalledWith(config, { url: 'http://127.0.0.1:9', token: TOKEN })
+      expect(JSON.stringify(vi.mocked(f.deps.log).mock.calls)).toContain('bad port')
+    })
+
     it('does not swallow another failure to start', async () => {
-      const f = publisher({ remembered: () => KEPT, remember: vi.fn(), forget: vi.fn(), startRelay: vi.fn(async () => { throw new Error('no sockets') }) })
+      const f = publisher({ remembered: () => KEPT, remember: vi.fn(), forget: vi.fn(), startRelay: vi.fn(async () => { throw new Error('no sockets') }), now: () => 2_000 })
       await f.p.tick()
       expect(f.deps.publish).not.toHaveBeenCalled()
       expect(f.deps.log).toHaveBeenCalledWith('team relay: no sockets')
@@ -176,13 +216,14 @@ describe('the owner\'s daemon, for the Harness Team account', () => {
       const second = run()
       await second.p.tick()
       expect(second.published[0]).toEqual(agent)
+      expect(Object.keys(agent).sort()).toEqual(['token', 'url'])
       expect(await ask()).toBe(200)
       await second.p.stop()
     })
   })
 
   describe('the kept grant on disk', () => {
-    const KEPT = { url: 'http://127.0.0.1:61375', token: 'k'.repeat(43) }
+    const KEPT = { url: 'http://127.0.0.1:61375', token: 'k'.repeat(43), mintedAt: 1_000 }
     const folder = () => { const dir = mkdtempSync(join(tmpdir(), 'team-relay-grant-')); cleanup.push(dir); return dir }
 
     it('round-trips, closed to everyone else', () => {
@@ -200,6 +241,9 @@ describe('the owner\'s daemon, for the Harness Team account', () => {
       ['open to others', (file: string) => writeFileSync(file, JSON.stringify(KEPT), { mode: 0o644 })],
       ['another address', (file: string) => writeFileSync(file, JSON.stringify({ ...KEPT, url: 'http://evil.example:1' }), { mode: 0o600 })],
       ['a bad token', (file: string) => writeFileSync(file, JSON.stringify({ ...KEPT, token: 'short' }), { mode: 0o600 })],
+      ['a port past the last', (file: string) => writeFileSync(file, JSON.stringify({ ...KEPT, url: 'http://127.0.0.1:70000' }), { mode: 0o600 })],
+      ['port zero', (file: string) => writeFileSync(file, JSON.stringify({ ...KEPT, url: 'http://127.0.0.1:0' }), { mode: 0o600 })],
+      ['undated', (file: string) => { const { mintedAt: _m, ...rest } = KEPT; writeFileSync(file, JSON.stringify(rest), { mode: 0o600 }) }],
       ['a link', (file: string) => { const real = `${file}.real`; writeFileSync(real, JSON.stringify(KEPT), { mode: 0o600 }); symlinkSync(real, file) }],
     ])('ignores a file that is %s', (_name, make) => {
       const file = join(folder(), 'grant.json')

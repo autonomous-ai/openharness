@@ -23,7 +23,7 @@ import { teamEngineReporter, type TeamEngineReporter } from '../team/engines.js'
 import { AUTO_SETUP_REASONS, realTeamAutoSetup, type AutoSetupReason, type TeamAutoSetup } from '../team/autoSetup.js'
 import { openDaemon } from '../agentClient/daemon.js'
 import { readTeamConfig } from '../team/config.js'
-import { realTeamRelayPublisher, type TeamRelayPublisher } from '../team/relay.js'
+import { realTeamRelayPublisher, TEAM_RELAY_GRANT_FILE, type TeamRelayPublisher } from '../team/relay.js'
 import { readLastTry, refreshCreationId, refreshTeamAccount, teamRefreshFile, writeLastTry, type TeamRefreshDeps } from '../team/refresh.js'
 import { readTeamStatus } from '../team/privacy.js'
 import { ensureTeamTmux, TMUX_MANIFEST_URL, tmuxRunsAt, untarGz, type TeamTmuxDeps, type TeamTmuxOutcome } from '../team/tmux.js'
@@ -366,7 +366,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     port => startSubscriptionRelay({ owner: createOwnerSubscriptions(), log: line => console.log(`[team] relay · ${line}`), ...(port ? { port } : {}) }),
     () => readTeamConfig(), options.team ?? (() => readAuthSession()?.kind === 'team'), line => console.log(`[team] ${line}`),
     // In the owner's closed home: a running Team agent's relay outlives this daemon (task #2125).
-    join(core.dataDir, 'team-relay-grant.json'),
+    join(core.dataDir, TEAM_RELAY_GRANT_FILE),
     // A team account still on a build that cannot use the relay is updated from here (team/refresh.ts).
     (publishedAt) => refreshTeamAccount(realTeamRefreshDeps(core, publishedAt)))))()
   let autoSetup: Promise<Pick<TeamAutoSetup, 'offer' | 'decline'> & Partial<Pick<TeamAutoSetup, 'status'>>> | null = null

@@ -51,6 +51,7 @@ import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE, type 
 import { ancestorsOnce, removeSignIn, SIGN_OUT_BUTTON_FLAG, signOutAsked, type Asker, type SignOutAsked } from './lib/signOut.js'
 import { AUTH_DIR, AuthSessionError, AuthSessionManager, harnessSessionRequest, knownSsoClientId, newSignInEpoch, readAuthSession, readSignedOut, ssoClientIdFor, updateAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
 import { revokeHarnessRefresh } from './team/handoff.js'
+import { TEAM_RELAY_GRANT_FILE } from './team/relay.js'
 import { handOffToGrid } from './lib/gridHandoff.js'
 import { claimTicket, qrSignIn, type QrSignInTokens } from './lib/qrSignIn.js'
 import { pickSignInMethod, signInMethodFlag, signInProviderName, withSignInProvider, type SignInMethod, type SignInProvider } from './lib/signInMethodPicker.js'
@@ -1767,6 +1768,8 @@ function clearAdapterState(): void {
       'summaries.json',
       'summary-scratch',
       'e2e',
+      // The Team account's kept relay grant (team/relay.ts): a reset starts its token over.
+      TEAM_RELAY_GRANT_FILE,
       // The session search index (lib/sessionSearch/): rebuilt from the transcripts on the next start.
       SESSION_SEARCH_FILE,
       `${SESSION_SEARCH_FILE}-wal`,
