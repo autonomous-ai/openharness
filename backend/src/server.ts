@@ -25,6 +25,7 @@ import { prisma } from './lib/prisma.js'
 import { backendReadinessChecks, createReadiness, drainBeforeClosing, processDrain } from './lib/readiness.js'
 import { configureSwarmStamps } from './superTabs/cache.js'
 import { startCacheStats } from './superTabs/cacheStats.js'
+import { startDeliveryCalls } from './lib/deliveryCalls.js'
 import { readDelta } from './superTabs/cachedReads.js'
 import { watchGroupIndexes } from './superTabs/parts/indexed.js'
 import { startMessageReadStats } from './superTabs/messageReadStats.js'
@@ -151,6 +152,8 @@ async function start(): Promise<void> {
   const stopQueryStats = startQueryStats()
   // Every minute, how often Swarm transactions ran again and commands loaded twice (superTabs/retryStats.ts, DB 2.1).
   const stopRetryStats = startRetryStats()
+  // Every minute: re-claims, refused receipt reads and holds, what the daemons' delivery loop costs (spec 2026-11-02 poll cost).
+  const stopDeliveryCalls = startDeliveryCalls()
   // Every minute: how the Swarm read cache served reads (hit, patched, loaded in full and why) and what its checks found.
   const stopCacheStats = startCacheStats()
   const stopRouteLatency = startRouteLatency(registerRouteLatency(app))
@@ -243,6 +246,7 @@ async function start(): Promise<void> {
       // The last partial minute of these logs, once the drain and the usage flush have run their queries.
       stopQueryStats()
       stopRetryStats()
+      stopDeliveryCalls()
       stopCacheStats()
       stopRouteLatency()
       stopMachineReportLog()

@@ -139,6 +139,22 @@ describe('Activity: replies to a person\'s messages', () => {
     expect((await items(s.tabId)).map(i => i.messageId)).toEqual([outsiderReply, peerReply])
   })
 
+  it('stops new reply Activity while the thread is unfollowed and resumes after following again', async () => {
+    const s = await scene()
+    const root = await send(s.tabId, s.web, 'Owner root')
+    const first = await send(s.tabId, s.web, 'Peer answers', peer, root)
+    expect((await items(s.tabId)).map(i => i.messageId)).toEqual([first])
+
+    expect((await call('POST', `/api/super-tabs/${s.tabId}/conversations/${s.web}/threads/${root}/follow`, owner, { follow: false })).status).toBe(200)
+    const whileUnfollowed = await send(s.tabId, s.web, 'Peer answers while unfollowed', peer, root)
+    expect((await items(s.tabId)).map(i => i.messageId)).toEqual([first])
+
+    expect((await call('POST', `/api/super-tabs/${s.tabId}/conversations/${s.web}/threads/${root}/follow`, owner, { follow: true })).status).toBe(200)
+    const afterFollowing = await send(s.tabId, s.web, 'Peer answers after following', peer, root)
+    expect((await items(s.tabId)).map(i => i.messageId)).toEqual([afterFollowing, first])
+    expect((await items(s.tabId)).some(i => i.messageId === whileUnfollowed)).toBe(false)
+  })
+
   it('lists nothing for a top-level message, or for a message of another person\'s chat', async () => {
     const s = await scene()
     await send(s.tabId, s.web, 'Top level by peer', peer)

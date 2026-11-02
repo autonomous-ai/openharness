@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { bridgeKey, bridgePort, bridgeSocketPath, saveBridgePort } from '../lib/connectors/agents.js'
+import { bridgeKey, bridgePort, bridgeSocketPath, harnessKey, readBridgePipe, saveBridgePort } from '../lib/connectors/agents.js'
+import { randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { request as httpRequest } from 'node:http'
 import { connect, createServer } from 'node:net'
@@ -390,5 +391,52 @@ describe('the connectors service', () => {
       status = await fetch(`http://127.0.0.1:${port}/x/linear/mcp`, { method: 'POST', body: '{}' }).then(answer => answer.status, () => 0)
     }
     expect(status).toBe(404)
+  })
+
+  // Task #2162 (Reed's review of #2605): on Windows the bridge had only its port, which the Team account can hold from boot.
+  describe('on Windows', () => {
+    const freePort = async (): Promise<number> => {
+      const free = createServer()
+      await new Promise<void>(resolve => free.listen(0, '127.0.0.1', resolve))
+      const port = (free.address() as { port: number }).port
+      await new Promise(done => free.close(done))
+      return port
+    }
+    // A Unix socket named as a pipe stands for it; short, as a socket has to fit.
+    const shortPipe = (): { folder: string; pipe: string } => {
+      const folder = mkdtempSync(join('/tmp', 'cw-'))
+      return { folder, pipe: join(folder, 'p', `harness-${randomBytes(16).toString('hex')}`) }
+    }
+
+    it('serves the bridge on a proven pipe, records it, and takes Harness\'s key off the port', async () => {
+      const { folder, pipe } = shortPipe()
+      mkdirSync(join(folder, 'p'))
+      const vault = new Store(join(home, 'store'), env)
+      const stale = harnessKey(vault)
+      bridgeKey(vault)
+      const port = await freePort()
+      try {
+        startConnectors(fakeCore(), { vault, env, port, offered: async () => ({}), retryMs: 5, platform: 'win32', pipePath: () => pipe })
+        await vi.waitFor(() => expect(readBridgePipe(vault)?.pipe).toBe(pipe))
+        expect(vault.file('harness-key.json')).toMatchObject({ socketOnly: true })
+        expect(harnessKey(vault)).not.toBe(stale)
+        expect(typeof vault.file('bridge.json').keyRetiresAt).toBe('number')
+        await vi.waitFor(async () => expect((await fetch(`http://127.0.0.1:${port}/${harnessKey(vault)}/connections`)).status).toBe(404))
+      } finally { rmSync(folder, { recursive: true, force: true }) }
+    })
+
+    it('tries the pipe again, saying so once, when it cannot listen yet', async () => {
+      const { folder, pipe } = shortPipe()
+      const vault = new Store(join(home, 'store'), env)
+      const said = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        // Its folder is not there yet: the first listens fail.
+        startConnectors(fakeCore(), { vault, env, port: await freePort(), offered: async () => ({}), retryMs: 5, platform: 'win32', pipePath: () => pipe })
+        await vi.waitFor(() => expect(said.mock.calls.flat().join(' ')).toContain('the bridge\'s pipe is not listening'))
+        mkdirSync(join(folder, 'p'))
+        await vi.waitFor(() => expect(readBridgePipe(vault)?.pipe).toBe(pipe))
+        expect(said.mock.calls.flat().filter(line => String(line).includes('pipe is not listening'))).toHaveLength(1)
+      } finally { said.mockRestore(); rmSync(folder, { recursive: true, force: true }) }
+    })
   })
 })

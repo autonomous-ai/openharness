@@ -1,6 +1,6 @@
 import { createServer, connect, type AddressInfo, type Socket } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
-import { lsofShowsPeer, peerIsThisAccount, portHolderIsThisAccount, procNetListener, procNetOwner, WINDOWS_PEER_LOOKUPS, WINDOWS_PEER_MS, WINDOWS_PEER_QUEUE, windowsPeerQuery, type WindowsPeerRun } from './peerAccount.js'
+import { lsofShowsPeer, peerIsThisAccount, portHolderIsThisAccount, procNetListener, procNetOwner, WINDOWS_PEER_LOOKUPS, WINDOWS_PEER_MS, WINDOWS_PEER_QUEUE, windowsListenerQuery, windowsPeerQuery, type WindowsPeerRun } from './peerAccount.js'
 
 describe('who is at the other end of a loopback connection', () => {
   const opened: Array<() => unknown> = []
@@ -203,6 +203,68 @@ describe('who is at the other end of a loopback connection', () => {
     })
   })
 
+  // Reed's review of #2605: Windows answered null here, so the connectors bridge never moved off a port the Team account held
+  // from boot, and the owner's agents kept sending their tool calls to that account (task #2162).
+  describe('on Windows, who holds a listening port, by asking Windows', () => {
+    const answering = (stdout: string, status: number | null = 0) => {
+      const asked: Array<{ script: string; inputs: Record<string, string> }> = []
+      const run: WindowsPeerRun = async (script, inputs) => { asked.push({ script, inputs }); return { status, stdout } }
+      return { run, asked }
+    }
+
+    it('says no for another account\'s listener, yes for this account\'s, and nothing for a free port', async () => {
+      expect(await portHolderIsThisAccount(51793, 'win32', answering('no\r\n').run)).toBe(false)
+      expect(await portHolderIsThisAccount(51793, 'win32', answering('yes\r\n').run)).toBe(true)
+      expect(await portHolderIsThisAccount(51793, 'win32', answering('none\r\n').run)).toBeNull()
+    })
+
+    it('says nothing when the lookup fails, times out, throws or answers anything else', async () => {
+      for (const [stdout, status] of [['no', 1], ['yes', null], ['', 0], ['maybe', 0], ['yes\nno', 0]] as const) {
+        expect(await portHolderIsThisAccount(51793, 'win32', answering(stdout, status).run), `${stdout}/${status}`).toBeNull()
+      }
+      expect(await portHolderIsThisAccount(51793, 'win32', () => Promise.reject(new Error('no PowerShell')))).toBeNull()
+    })
+
+    it('passes the port as an input, never in the script\'s text', async () => {
+      const { run, asked } = answering('no')
+      await portHolderIsThisAccount(51794, 'win32', run)
+      expect(asked[0]!.inputs).toEqual({ HARNESS_LISTEN_PORT: '51794' })
+      expect(asked[0]!.script).not.toContain('51794')
+      expect(asked[0]!.script).toBe(windowsListenerQuery(51794).script)
+    })
+
+    it('counts a listener as this account\'s only by its process\'s SID, and only a process that started before it', () => {
+      const { script } = windowsListenerQuery(51793)
+      expect(script).toMatch(/Get-NetTCPConnection -State Listen -LocalPort \(\[int\]\$env:HARNESS_LISTEN_PORT\)/)
+      expect(script).toMatch(/GetOwnerSid/)
+      expect(script).toMatch(/WindowsIdentity\]::GetCurrent\(\)\.User\.Value/)
+      expect(script).toMatch(/\$started -gt \$row\.CreationTime/)
+    })
+
+    // The Windows run on #2605: Windows gives a socket's time to the second and a process's finer, so a process that opened its
+    // listener within the second it started read as started after it. Here that would move the bridge off its own port.
+    it('compares the listener\'s whole-second time with the process\'s cut to the second, with no slack, as the peer check does', () => {
+      const { script } = windowsListenerQuery(51793)
+      expect(script).toMatch(/\$started = \$process\.CreationDate\.AddTicks\(-\(\$process\.CreationDate\.Ticks % \[TimeSpan\]::TicksPerSecond\)\)/)
+      expect(script).toMatch(/\$started -gt \$row\.CreationTime/)
+      expect(script).not.toMatch(/AddSeconds/)
+    })
+
+    // Remy's review of #2605: the lookup's own PowerShell can take a freed id, and is never the holder.
+    it('never counts the lookup\'s own process as the holder', () => {
+      expect(windowsListenerQuery(51793).script).toMatch(/\$row\.OwningProcess -eq \$PID\) \{ continue \}/)
+    })
+
+    // Quinn 2's review of #2608: a listener of this account's on another address (::1, 127.0.0.2) answered yes, so the bridge
+    // waited instead of moving off another account's 127.0.0.1. Only a listener that keeps 127.0.0.1's port from being bound counts.
+    it('counts only the listeners that hold 127.0.0.1\'s port: on it, on any IPv4 address, or on any address dual-stack', () => {
+      const { script } = windowsListenerQuery(51793)
+      expect(script).toMatch(/Where-Object \{ \$_\.LocalAddress -in @\('127\.0\.0\.1', '0\.0\.0\.0', '::'\) \}/)
+      // Filtered before anything is decided: none of them is `none`, never another address's owner.
+      expect(script.indexOf("-in @('127.0.0.1'")).toBeLessThan(script.indexOf("'none'"))
+    })
+  })
+
   it('reads the owner of the client end from /proc/net/tcp, not the server end', () => {
     const table = [
       '  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode',
@@ -220,7 +282,6 @@ describe('who is at the other end of a loopback connection', () => {
     opened.push(() => server.close())
     await new Promise<void>(resolve => { server.listen(0, '127.0.0.1', resolve) })
     expect(await portHolderIsThisAccount((server.address() as AddressInfo).port)).toBe(true)
-    expect(await portHolderIsThisAccount(1, 'win32')).toBeNull()
     const table = [
       '  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode',
       '   0: 0100007F:C94F 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1002        0 1',
