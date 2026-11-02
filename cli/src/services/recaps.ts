@@ -21,7 +21,6 @@ import type { CoreApi, CorePorts, RecapSession, RecapsPort, RecapWatchers, TurnC
 import { AgentNotifications } from '../lib/agentNotifications.js'
 import { CommanderMirror, SUBAGENT_IDLE_MS } from '../lib/commander.js'
 import { deriveTurnSummary } from '../lib/deviceRecap.js'
-import { createJevDecide } from '../lib/jev/jevClient.js'
 import { createTierDecider, type TierDecision, type TierInput } from '../lib/notifyTier.js'
 
 export interface RecapsOptions {
@@ -32,7 +31,7 @@ export interface RecapsOptions {
   recapForce?: boolean
   /** Whether a recap is cut for every turn, a device watching or not (`RECAP_WITHOUT_DEVICE`). */
   recapWithoutDevice?: () => boolean
-  /** How loudly a finished turn tells. Defaults to rules plus Jev (off with `HARNESS_NOTIFY_SMART=0`). */
+  /** How loudly a finished turn tells. Defaults to the fixed rules (lib/notifyTier.ts). */
   decideTier?: (input: TierInput) => Promise<TierDecision>
 }
 
@@ -59,7 +58,6 @@ export function createRecaps(core: CoreApi, options: RecapsOptions = {}): Recaps
   // How loudly each finished turn tells (lib/notifyTier.ts), decided here once for the dial, the phone and the
   // window: the `summary` card and the apps' `turn_summary` both carry it, so the devices ask nobody again.
   const tierOf = options.decideTier ?? createTierDecider({
-    jev: process.env.HARNESS_NOTIFY_SMART === '0' ? null : createJevDecide({ backend: (method, path, body) => core.account.backend(method, path, body) }),
     log: (line) => console.log(`[recap] ${line}`),
   })
   const mirror = new CommanderMirror({
@@ -101,12 +99,14 @@ export function createRecaps(core: CoreApi, options: RecapsOptions = {}): Recaps
     alwaysGenerate: () => options.recapWithoutDevice?.() ?? env.RECAP_WITHOUT_DEVICE,
     changed: options.changed,
     // Asked only while someone away from this desk can hear it — a device, or an app over the relay. The window
-    // here does not read a tier, so with neither there is nothing to decide and no Jev decision to pay for.
+    // here does not read a tier, so with neither there is nothing to decide.
     decideTier: async (turn) => {
       if (!watchers.device && !watchers.remote) return null
       const session = sessions.get(turn.sessionId)
+      // A Swarm agent tells its news through the Swarm's chat cards, so its turn is silent on the devices.
+      const swarm = !!(session && core.agents.byAgent(session.agentId)?.swarmSkill)
       const decision = await tierOf({ agent: session?.name ?? '', engine: session?.engine ?? '', recap: turn.recap,
-        durationS: turn.durationS, stats: turn.stats, subagent: false, onScreen: false, failed: false })
+        durationS: turn.durationS, stats: turn.stats, subagent: false, onScreen: false, failed: false, swarm })
       return decision.tier
     },
   })
