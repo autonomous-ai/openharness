@@ -80,8 +80,12 @@ export function projectOpenWork(state: Json, agentId: string): TaskLine[] {
   const leads = new Set(leadConversations(state))
   const lead = list(state.conversations).find(c => leads.has(String(c.id)) && c.leadId === agentId)
   if (!lead) return []
+  // A missing projectId is the default project, 'lead', as the backend reads it (groupProject): a new Swarm's Lead
+  // conversation has none while its tasks say 'lead' (E2E 2026-11-02: the PM's mine counted none of them).
+  const projectOf = (g: Json) => String(g.projectId ?? 'lead')
+  const home = String(list(state.projects).find(p => p.leadConversationId === lead.id)?.id ?? projectOf(lead))
   return list(state.conversations)
-    .filter(g => isTask(state, g) && g.archived !== true && (g.projectId ?? null) === (lead.projectId ?? null)
+    .filter(g => isTask(state, g) && g.archived !== true && projectOf(g) === home
       && (!g.assignment || isOpen(g)))
     .map(g => lineOf(state, g))
 }

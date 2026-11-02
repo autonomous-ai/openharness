@@ -171,3 +171,19 @@ describe('steps', () => {
     expect(text).toContain('▶ Review (Rev1): working')
   })
 })
+
+// E2E 2026-11-02: a new Swarm's default project is 'lead', whose Lead conversation has no projectId while its tasks say
+// 'lead' (backend groupProject reads a missing one as 'lead'): the PM's mine counted none of them.
+describe('the default project', () => {
+  it('the coordinator\'s mine counts the tasks of a Lead conversation with no projectId', () => {
+    const state = {
+      projects: [{ id: 'lead', name: 'Main', leadConversationId: 'lead' }],
+      agents: [{ id: 'pm', name: 'PM' }, { id: 'dev1', name: 'Dev1' }],
+      conversations: [
+        { id: 'lead', title: 'Main', leadId: 'pm', agentIds: ['pm'], archived: false, checks: [], assignment: null },
+        { ...task('g1', 1, 'Fix login', 'dev1', 'review'), projectId: 'lead' },
+      ],
+    }
+    expect(mineText(state, changed({}), 'pm', NOW)).toBe('#1 Fix login (conversation g1) — Dev1, review\n1 open task.')
+  })
+})
