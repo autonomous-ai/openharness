@@ -133,6 +133,15 @@ void main() {
       expect(sent(fake)['sessionProjectId'], webProject);
     });
 
+    testWidgets('a project\'s own Buddy chat, where the Swarm has no one '
+        'Buddy, offers no project to pick', (tester) async {
+      final fake = sessionBackend(swarmChat: false, swarmBuddy: false);
+      await pump(tester, fake);
+      await tester.tap(key('swarm-new-session'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-session-project'), findsNothing);
+    });
+
     testWidgets('a chat that cannot start one says why when the chip is '
         'tapped, and sends plain', (tester) async {
       final fake = sessionBackend(engine: 'codex');
@@ -211,6 +220,43 @@ void main() {
       expect(ends, hasLength(1));
       expect(ends.single['thread'], 'm1');
       expect(ends.single['reason'], 'ended');
+    });
+
+    testWidgets('a session\'s thread offers neither New session nor Also '
+        'send', (tester) async {
+      final fake = threadBackend(
+        replies: live,
+        sessions: [
+          {'thread': 'm1', 'startId': 's1', 'at': 1},
+        ],
+      );
+      await pump(tester, fake, thread: 'm1');
+      expect(key('swarm-thread-new-session'), findsNothing);
+      expect(key('swarm-thread-also-send'), findsNothing);
+    });
+
+    testWidgets('a refused End session says why on the thread page', (
+      tester,
+    ) async {
+      final fake = threadBackend(
+        replies: live,
+        sessions: [
+          {'thread': 'm1', 'startId': 's1', 'at': 1},
+        ],
+      );
+      fake.routes[sessionCommands] = (_) => throw const SuperTabFailure(
+        'FORBIDDEN',
+        'The session could not be ended.',
+        statusCode: 403,
+      );
+      await pump(tester, fake, thread: 'm1');
+      await tester.tap(key('swarm-thread-session-end'));
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<Text>(key('swarm-thread-post-error')).data,
+        'The session could not be ended.',
+      );
+      expect(find.text('End session'), findsOneWidget);
     });
 
     testWidgets('a session still starting says so', (tester) async {

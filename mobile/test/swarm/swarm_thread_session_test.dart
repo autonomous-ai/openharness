@@ -169,4 +169,68 @@ void main() {
     expect(thread.error, swarmSessionsUnavailable);
     expect(thread.offersSessions, isFalse);
   });
+
+  group(
+    'a thread a session answers now (Desktop offersAlsoSend, _offersSession)',
+    () {
+      final liveRows = [
+        sessionMessage('m1', 1, author: me),
+        sessionMessage('m2', 2, root: 'm1', author: me, session: true),
+        sessionMessage('m3', 3, root: 'm1', session: true),
+      ];
+      final live = [
+        {'thread': 'm1', 'startId': 's1', 'agentId': 'agent-session', 'at': 1},
+      ];
+
+      test('offers neither New session nor Also send, and sends a plain reply '
+          'to the session', () async {
+        final (fake, _, thread) = await rig(
+          backend: sessionBackend(sessions: live, page: liveRows),
+          page: liveRows,
+        );
+        expect(thread.session, isNotNull);
+        expect(thread.offersSessions, isFalse);
+        expect(thread.offersAlsoSend, isFalse);
+        thread
+          ..newSession = true
+          ..alsoSend = true
+          ..draft = 'Next step';
+        expect(thread.newSession, isFalse);
+        expect(await thread.send(), isTrue);
+        expect(sent(fake).containsKey('newSession'), isFalse);
+        expect(sent(fake).containsKey('alsoSend'), isFalse);
+      });
+
+      test('Also send is offered in a plain thread, not for a reply that '
+          'starts a session', () async {
+        final (_, _, thread) = await rig();
+        expect(thread.offersAlsoSend, isTrue);
+        thread.newSession = true;
+        expect(thread.offersAlsoSend, isFalse);
+      });
+
+      test('its status line stays after a server refusal, while New session '
+          'is not offered', () async {
+        final (_, chat, thread) = await rig(
+          backend: sessionBackend(sessions: live, page: liveRows),
+          page: liveRows,
+        );
+        swarmSessionsRefused(chat.reader);
+        expect(thread.session, isNotNull);
+      });
+
+      test('a refused End session says why in the thread', () async {
+        final fake = sessionBackend(sessions: live, page: liveRows);
+        fake.routes[sessionCommands] = (_) => throw const SuperTabFailure(
+          'FORBIDDEN',
+          'The session could not be ended.',
+          statusCode: 403,
+        );
+        final (_, _, thread) = await rig(backend: fake, page: liveRows);
+        expect(await thread.endSession(), isFalse);
+        expect(thread.error, 'The session could not be ended.');
+        expect(thread.endingSession, isFalse);
+      });
+    },
+  );
 }

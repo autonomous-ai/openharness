@@ -64,6 +64,7 @@ FakeSwarm sessionBackend({
   bool threadSessions = true,
   bool sessionsFromChat = true,
   bool swarmBuddy = true,
+  bool swarmChat = true,
   String role = 'owner',
   Map<String, dynamic>? machine,
 }) {
@@ -106,10 +107,11 @@ FakeSwarm sessionBackend({
             agentIds: [if (buddy) 'agent-wren'],
             lastMessageSequence: page.length,
           ),
-          'kind': 'swarm-buddy',
+          'kind': swarmChat ? 'swarm-buddy' : 'buddy',
           'buddyOwnerId': me,
           'buddySessions': sessions,
-        }..remove('projectId'),
+          if (swarmChat) 'projectId': null,
+        }..removeWhere((k, v) => k == 'projectId' && v == null),
         {...groupData('lead-web', title: 'Web'), 'projectId': webProject},
       ],
       agents: [
@@ -117,9 +119,10 @@ FakeSwarm sessionBackend({
         if (buddy)
           {
             ...buddyData('agent-wren', displayName: 'Wren', engine: engine),
-            'buddyScope': 'swarm',
+            if (swarmChat) 'buddyScope': 'swarm',
             'downSince': ?downSince,
-          }..remove('projectId'),
+            if (swarmChat) 'projectId': null,
+          }..removeWhere((k, v) => k == 'projectId' && v == null),
         ...extraAgents,
       ],
       machines: [machine ?? sessionMachine()],
