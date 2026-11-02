@@ -654,6 +654,99 @@ void main() {
       expect(find.text('Mentions could not be read.'), findsNothing);
     });
 
+    /// [fake] with a second Swarm, whose mentions [read] answers.
+    void secondSwarm(
+      FakeSwarm fake,
+      FutureOr<Object?> Function(Map<String, dynamic>?) read,
+    ) {
+      const second = 'tab-2';
+      fake.routes['/api/super-tabs/list'] = (_) => {
+        'tabs': [
+          {'id': tab, 'name': 'Phone Swarm', 'ownerId': me},
+          {'id': second, 'name': 'Other Swarm', 'ownerId': me},
+        ],
+        'next': null,
+      };
+      const derived = {'mentionsWaiting': 1};
+      fake.routes['/api/super-tabs/$second/parts'] = (_) =>
+          firstLoad(tabId: second, derived: derived);
+      fake.routes['/api/super-tabs/$second/changes'] = (_) =>
+          changes(cursor: 'c2', derived: derived);
+      fake.routes['/api/super-tabs/$second/decisions?state=open'] = (_) => {
+        'decisions': <Object>[],
+      };
+      fake.routes['/api/super-tabs/$second/mentions?state=waiting'] = read;
+    }
+
+    testWidgets('one Swarm\'s mentions failing says so even with another '
+        'Swarm\'s mention listed, and goes once it answers', (tester) async {
+      var fail = true;
+      final fake = backend(mentions: (_) => tagInWeb());
+      secondSwarm(fake, (_) {
+        if (fail) {
+          throw SuperTabFailure('BUSY', 'Busy', statusCode: 503);
+        }
+        return {'mentions': <Object>[]};
+      });
+      final store = MemoryKeyValueStore()
+        ..values['swarm_home.$me'] = jsonEncode({'filter': 'mentions'});
+      final host = await pump(tester, fake, store: store);
+      expect(project_(web), findsOneWidget);
+      expect(key('swarm-mentions-failed'), findsOneWidget);
+      expect(key('swarm-filter-show-all'), findsNothing);
+
+      fail = false;
+      await host.session!.inbox.asks('tab-2')!.load();
+      await tester.pumpAndSettle();
+      expect(project_(web), findsOneWidget);
+      expect(key('swarm-mentions-failed'), findsNothing);
+    });
+
+    testWidgets('a failed read of a Swarm then taken away does not keep '
+        'saying so', (tester) async {
+      final fake = backend(mentions: (_) => tagInWeb());
+      secondSwarm(
+        fake,
+        (_) => throw SuperTabFailure('BUSY', 'Busy', statusCode: 503),
+      );
+      final store = MemoryKeyValueStore()
+        ..values['swarm_home.$me'] = jsonEncode({'filter': 'mentions'});
+      final host = await pump(tester, fake, store: store);
+      expect(key('swarm-mentions-failed'), findsOneWidget);
+
+      host.session!.inbox.reader('tab-2')!.revoke();
+      await tester.pump();
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      expect(key('swarm-mentions-failed'), findsNothing);
+    });
+
+    testWidgets('a cold start with Mentions saved shows one skeleton, not '
+        'two', (tester) async {
+      final parts = Completer<Object?>();
+      final answer = Completer<Object?>();
+      final fake = backend(mentions: (_) => answer.future);
+      final load = fake.routes['/api/super-tabs/$tab/parts']!;
+      fake.routes['/api/super-tabs/$tab/parts'] = (body) async {
+        await parts.future;
+        return load(body);
+      };
+      final store = MemoryKeyValueStore()
+        ..values['swarm_home.$me'] = jsonEncode({'filter': 'mentions'});
+      await pump(tester, fake, store: store, settle: false);
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(key('swarm-mentions-loading'), findsNothing);
+      expect(find.byType(SwarmSkeletonRows), findsOneWidget);
+
+      parts.complete();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(key('swarm-mentions-loading'), findsWidgets);
+      answer.complete({'mentions': <Object>[]});
+      await tester.pumpAndSettle();
+    });
+
     testWidgets('a choice is still there after the app is opened again', (
       tester,
     ) async {

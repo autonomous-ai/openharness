@@ -616,7 +616,8 @@ class _SwarmPageState extends State<SwarmPage> {
       filter,
     );
     // Mentions come from their own read: until it answers, none listed says
-    // nothing, and a failed one is not none.
+    // nothing. A failed one is not none, and says so even over the mentions
+    // another Swarm has listed.
     final mentionsOn = filter == SwarmHomeFilter.mentions;
     final mentionsComing = mentionsOn && asking.isNotEmpty;
     final mentionsFailed =
@@ -661,28 +662,31 @@ class _SwarmPageState extends State<SwarmPage> {
           quiet.isNotEmpty ||
           empty ||
           nothingListed ||
+          mentionsFailed ||
           create != null) ...[
         SwarmCaption('Projects', first: first && lists.pinned.isEmpty),
         SwarmGroup(
           children: [
             if (empty) const SwarmRow(title: 'No project yet', onTap: null),
-            if (nothingListed) ...[
+            if (mentionsFailed)
+              const SwarmRow(
+                key: ValueKey('swarm-mentions-failed'),
+                title: 'Mentions could not be read.',
+                onTap: null,
+              )
+            else if (nothingListed)
               SwarmRow(
                 key: const ValueKey('swarm-filter-none'),
-                title: mentionsFailed
-                    ? 'Mentions could not be read.'
-                    : mentionsOn
-                    ? 'No mentions.'
-                    : 'Nothing unread.',
+                title: mentionsOn ? 'No mentions.' : 'Nothing unread.',
                 onTap: null,
               ),
+            if (nothingListed)
               SwarmRow(
                 key: const ValueKey('swarm-filter-show-all'),
                 title: 'Show all',
                 chevron: null,
                 onTap: () => home.setFilter(SwarmHomeFilter.all),
               ),
-            ],
             for (final p in lists.recent) row(p),
             if (quiet.isNotEmpty) ...[
               SwarmOtherProjectsRow(
@@ -699,7 +703,8 @@ class _SwarmPageState extends State<SwarmPage> {
         ),
       ] else if (reading.isNotEmpty || failed.isNotEmpty)
         SwarmCaption('Projects', first: first && lists.pinned.isEmpty),
-      if (mentionsComing) ...[
+      // A Swarm still to be read has its skeleton below: one is enough.
+      if (mentionsComing && reading.isEmpty) ...[
         const SizedBox(height: 8),
         SwarmSkeletonRows(id: 'swarm-mentions-loading', dot: true),
       ],
