@@ -1,12 +1,12 @@
 import { existsSync, realpathSync } from 'node:fs'
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 /** `path` with symlinks resolved as far as it exists; the part that does not exist yet is kept as written. */
 function realOrResolved(path: string): string {
   let existing = resolve(path)
   const rest: string[] = []
   while (!existsSync(existing) && dirname(existing) !== existing) {
-    rest.unshift(existing.slice(dirname(existing).length + 1))
+    rest.unshift(basename(existing))
     existing = dirname(existing)
   }
   try { return join(realpathSync(existing), ...rest) } catch { return resolve(path) }
@@ -37,6 +37,6 @@ export function inheritedAccountDataFolder(
   if (!home || !dataDir || !accountHome) return false
   const account = realOrResolved(accountHome)
   if (realOrResolved(home) === account) return false
-  const inside = relative(join(account, '.harness'), realOrResolved(dataDir))
+  const inside = relative(realOrResolved(join(account, '.harness')), realOrResolved(dataDir))
   return inside !== '' && !inside.startsWith('..') && !isAbsolute(inside) && !inside.startsWith(sep)
 }

@@ -44,6 +44,23 @@ describe('real locations', () => {
   })
 })
 
+describe('a ~/.harness that is itself a link', () => {
+  it('is judged by where it leads: the folder it leads to is the account\'s', () => {
+    const base = mkdtempSync(join(tmpdir(), 'home-data-folder-'))
+    try {
+      const account = join(base, 'account')
+      const elsewhere = join(base, 'disk', 'harness')
+      mkdirSync(join(elsewhere, 'cli', 'data'), { recursive: true })
+      mkdirSync(account, { recursive: true })
+      symlinkSync(elsewhere, join(account, '.harness'))
+      const throwaway = { HOME: join(base, 'throwaway') }
+      expect(inheritedAccountDataFolder({ ...throwaway, ADAPTER_DATA_DIR: join(elsewhere, 'cli', 'data') }, account, 'darwin')).toBe(true)
+      expect(inheritedAccountDataFolder({ ...throwaway, ADAPTER_DATA_DIR: join(account, '.harness', 'cli', 'data') }, account, 'darwin')).toBe(true)
+      expect(inheritedAccountDataFolder({ ...throwaway, ADAPTER_DATA_DIR: join(base, 'mine') }, account, 'darwin')).toBe(false)
+    } finally { rmSync(base, { recursive: true, force: true }) }
+  })
+})
+
 describe('config/startHome', () => {
   const saved = { argv: process.argv, data: process.env.ADAPTER_DATA_DIR, home: process.env.HOME }
   afterEach(() => {
@@ -68,7 +85,7 @@ describe('config/startHome', () => {
     expect(await load('start')).toBeUndefined()
   })
 
-  it.each(['stop', 'logout', 'update', 'reset'])('%s follows HOME too, and says it dropped the variable', async (command) => {
+  it.each(['stop', 'logout', 'update', 'reset', 'team'])('%s follows HOME too, and says it dropped the variable', async (command) => {
     const said = vi.spyOn(console, 'error').mockImplementation(() => {})
     expect(await load(command)).toBeUndefined()
     expect(said).toHaveBeenCalledWith(expect.stringContaining('ignoring ADAPTER_DATA_DIR='))
