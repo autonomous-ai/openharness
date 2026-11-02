@@ -74,6 +74,7 @@ void main() {
 
   testWidgets('the bar sits above the app, reads in the page\'s own '
       'surface and offers Reload to a thumb', (tester) async {
+    final handle = tester.ensureSemantics();
     await mount(tester);
     latest = '1.3.52';
     await watcher.check();
@@ -90,6 +91,7 @@ void main() {
       find.byKey(const ValueKey('web-update-reload')),
     );
     expect(semantics.label, 'Reload');
+    handle.dispose();
   });
 }
 
