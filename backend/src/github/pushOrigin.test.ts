@@ -52,6 +52,30 @@ describe('who pushed a pull request', () => {
     expect(await origin({ commits: [commit(HEAD, 'ken@example.com', bot)] })).toBe('team')
   })
 
+  // Task #2136: Harness's commits now carry an address no GitHub account owns, so GitHub links them to nobody. The log still knows.
+  describe('with the commit identity Harness by Autonomous', () => {
+    const harness = (sha: string) => ({ sha, author: null, committer: null,
+      commit: { author: { name: 'Harness by Autonomous', email: 'noreply@autonomous.ai' }, committer: { name: 'Harness by Autonomous', email: 'noreply@autonomous.ai' } } })
+
+    it('reads team for a Team agent\'s commit: the log names the bot that pushed it', async () => {
+      expect(await origin({ commits: [{ ...commit(HEAD), author: null, committer: null }], activity: [[push(HEAD, bot)]] })).toBe('team')
+    })
+
+    it('reads team when a branch\'s author writes a person\'s address on a commit the bot pushed', async () => {
+      const forged = { sha: HEAD, author: person, committer: person, commit: { author: { email: 'ken@example.com' }, committer: { email: 'ken@example.com' } } }
+      expect(await origin({ commits: [forged], activity: [[push(HEAD, bot)]] })).toBe('team')
+    })
+
+    it('reads team for that address on a person\'s push: a cherry-picked Team commit keeps its author', async () => {
+      expect(await origin({ commits: [harness(HEAD)], activity: [[push(HEAD)]] })).toBe('team')
+    })
+
+    it('still reads clean for a person\'s own commits with a co-author line naming Harness', async () => {
+      const own = { ...commit(HEAD), commit: { message: 'Fix\n\nCo-authored-by: Harness by Autonomous <noreply@autonomous.ai>', author: { email: 'ken@example.com' }, committer: { email: 'ken@example.com' } } }
+      expect(await origin({ commits: [own], activity: [[push(HEAD)]] })).toBe('clean')
+    })
+  })
+
   it('reads unknown when the log does not show who pushed its head, or names nobody', async () => {
     expect(await origin({ activity: [[push('other')]] })).toBe('unknown')
     expect(await origin({ activity: [[push(HEAD, null)]] })).toBe('unknown')
