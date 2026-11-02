@@ -104,13 +104,7 @@ void main() {
     tester,
   ) async {
     await tester.pumpWidget(
-      host(
-        chrome: WorkspaceChrome(
-          leadingWidth: (_) => 0,
-          leading: (_, _) => const SizedBox.shrink(),
-          menuOnEveryTab: true,
-        ),
-      ),
+      host(chrome: WorkspaceChrome(menuOnEveryTab: true)),
     );
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     addTearDown(mouse.removePointer);

@@ -28,8 +28,9 @@ const COMPUTER = VIEWPORTS.find((v) => v.name === '1440');
 // Flows whose controls are measured for tap size on phones: on the Super Tab
 // fixture, all of them.
 const TAP_FLOWS = FIXTURE !== 'app' ? FLOWS.map((f) => f.name) : [
-  'signin', 'first-machine', 'computers', 'workspace', 'app-menu', 'tab-switcher',
-  'footer-menu', 'notifications', 'open-harness', 'machines', 'all-commands',
+  'signin', 'first-machine', 'computers', 'workspace', 'new-menu', 'more-menu',
+  'account-menu', 'tab-switcher',
+  'footer-menu', 'notifications', 'open-harness', 'machines',
   'appearance', 'split-pane', 'store', 'settings', 'settings-notifications',
   'settings-keyboard-shortcuts', 'new-tab', 'error-banner', 'new-device', 'link-password',
   'taken-over', 'view-only',
@@ -48,7 +49,6 @@ const SCROLLERS = [
   { flow: 'many-tabs', area: 'tab row (trackpad sideways)', box: [60, 0, 1300, 40], wheel: [-300, 0] },
   { flow: 'store', area: 'store page', box: [120, 60, 1300, 860], wheel: [0, 600] },
   { flow: 'open-harness', area: 'picker filter chips', box: [320, 330, 1100, 360], wheel: [0, 200] },
-  { flow: 'all-commands', area: 'command list', box: [320, 380, 720, 880], wheel: [0, 400] },
   { flow: 'appearance', area: 'appearance panel', box: [1230, 120, 1440, 900], wheel: [0, 500] },
   { flow: 'settings-keyboard-shortcuts', area: 'shortcut list', box: [270, 100, 1440, 900], wheel: [0, 600] },
   { flow: 'split-pane', area: 'new harness form', box: [300, 150, 1140, 880], wheel: [0, 400] },
@@ -58,24 +58,22 @@ const SCROLLERS = [
 const SWIPES = [
   { flow: 'tab-switcher', area: 'tab switcher list', from: [195, 600], to: [195, 250] },
   { flow: 'machines', area: 'machines list', from: [195, 600], to: [195, 250] },
-  { flow: 'app-menu', area: 'app menu', from: [120, 500], to: [120, 200] },
   { flow: 'store', area: 'store page', from: [195, 650], to: [195, 200] },
   { flow: 'settings', area: 'settings list', from: [195, 650], to: [195, 200] },
   { flow: 'settings-keyboard-shortcuts', area: 'shortcut list', from: [195, 650], to: [195, 200] },
-  { flow: 'all-commands', area: 'command list', from: [195, 650], to: [195, 250] },
   { flow: 'first-machine', area: 'connect page', from: [195, 650], to: [195, 200] },
   { flow: 'signin', area: 'sign-in page', from: [195, 650], to: [195, 200] },
 ];
 
 // Controls hovered with the mouse at 1440.
 const HOVERS = [
-  { flow: 'workspace', name: 'New Tab' },
+  { flow: 'workspace', name: 'New', exact: true },
   { flow: 'workspace', name: 'Open Harness' },
   { flow: 'workspace', name: 'Close Pane' },
   { flow: 'workspace', name: 'Agent: Claude Code' },
   { flow: 'workspace', name: 'Click to open Harness Monitor' },
   { flow: 'many-tabs', name: 'docs' },
-  { flow: 'app-menu', name: 'Settings', exact: true },
+  { flow: 'account-menu', name: 'Settings', exact: true },
   { flow: 'signin', name: 'Continue with Google' },
   { flow: 'first-machine', name: 'Download app' },
   { flow: 'settings', name: 'Privacy', exact: true },

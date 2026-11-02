@@ -4,9 +4,9 @@
 //
 // Fix group: phone search drill-down. Each group keeps its flows here, so parallel groups never
 // edit the same file; load-flows.mjs reads every file in this folder.
-import { menu } from './steps.mjs';
+import { picker } from './steps.mjs';
 
-const machines = menu('Machines');
+const machines = picker('@');
 
 export const FLOWS = [
   { name: 'search-machines', scenario: 'workspace', steps: machines },

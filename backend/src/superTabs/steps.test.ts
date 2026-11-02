@@ -187,10 +187,24 @@ describe('who hears a step', () => {
     expect(to(status('done', 'Passed'), id)).toEqual([[f.dev]])
   })
 
-  it('with no owner, a step\'s done reaches the coordinator', () => {
+  // Ken, 2026-11-02 (screenshot): a Builder set its task done before its Tester's verdict, and the verdict reached the PM.
+  // The task's assignee owns it while that agent is in the Swarm, its work done or not.
+  it('a step\'s done reaches the owner after the owner\'s own work is done', () => {
     const { f, id, status } = reviewing()
-    // The task's own work is over: nobody owns it now.
     status('done', 'Merged', f.task, f.dev)
+    expect(to(status('done', 'Passed'), id)).toEqual([[f.dev]])
+  })
+
+  it('an unnamed post in the task reaches the owner after the owner\'s own work is done', () => {
+    const { f, post, status } = reviewing()
+    status('done', 'Merged', f.task, f.dev)
+    expect(to(post(f.task), f.task)).toEqual([[f.dev]])
+  })
+
+  it('with the owner gone from the Swarm, a step\'s done reaches the coordinator', () => {
+    const { f, id, status } = reviewing()
+    status('done', 'Merged', f.task, f.dev)
+    f.run({ type: 'agent.remove', agentId: f.dev } as Command)
     expect(to(status('done', 'Passed'), id)).toEqual([[f.lead]])
   })
 

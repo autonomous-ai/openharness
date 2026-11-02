@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../state/harness_sessions.dart';
 import '../state/session_tail.dart';
+import 'laid_out_list.dart';
 
 /// Use the same under-a-minute wording as the search result's activity label.
 String sessionPreviewAge(DateTime at, DateTime now) =>
@@ -153,7 +154,7 @@ class _SessionTailViewState extends State<SessionTailView> {
                 }
                 return false;
               },
-              child: ListView.builder(
+              child: LaidOutListView.builder(
                 key: ValueKey(
                   'session-tail:${tailKey.machineId}:${tailKey.sessionId}',
                 ),

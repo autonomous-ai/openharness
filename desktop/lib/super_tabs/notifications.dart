@@ -12,6 +12,7 @@ import 'identity.dart';
 import 'machine_status.dart' show superTabAgo;
 import 'model.dart';
 import 'section_heading.dart';
+import '../widgets/laid_out_list.dart';
 
 /// A Lead's tag of the reader in one message (spec 2026-10-24-lead-mentions.md).
 class SuperTabMention {
@@ -468,7 +469,7 @@ class _SuperTabNotificationsState extends State<SuperTabNotifications> {
     builder: (context, _) {
       grid.AppTheme.watch(context);
       final m = widget.mentions;
-      return ListView(
+      return LaidOutListView(
         padding: const EdgeInsets.only(bottom: 16),
         children: [
           if (m.error case final error?)

@@ -6,6 +6,7 @@ import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'identity.dart';
 import 'model.dart';
+import '../widgets/laid_out_list.dart';
 
 /// `@` tags in a composer, the same in the main chat's box and a thread's
 /// reply box: where a tag is being typed, who it offers, how a pick goes into
@@ -194,7 +195,7 @@ class SuperTabCompletionList extends StatelessWidget {
       constraints: BoxConstraints(
         maxHeight: MediaQuery.sizeOf(context).height * .3,
       ),
-      child: ListView(
+      child: LaidOutListView(
         key: listKey,
         shrinkWrap: true,
         padding: const EdgeInsets.symmetric(

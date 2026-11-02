@@ -17,6 +17,7 @@ import 'harness_activity_mark.dart';
 import 'engine_identity.dart';
 import 'pane_header_actions.dart';
 import 'rename_agent_dialog.dart';
+import 'laid_out_list.dart';
 
 /// One message of a cloud harness's conversation, as `cloud_transcript` gives it.
 typedef CloudMessage = ({String id, String from, String text});
@@ -315,7 +316,7 @@ class _CloudChatPaneState extends State<CloudChatPane> {
       return Center(child: Text('Reading the conversation…', style: muted));
     }
     // Newest at the bottom, kept in view as messages arrive.
-    return ListView(
+    return LaidOutListView(
       key: const ValueKey('cloud-conversation'),
       controller: _scroll,
       reverse: true,
