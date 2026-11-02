@@ -831,7 +831,11 @@ export class SuperTabStore {
       const delivery = await tx.superTabDelivery.findFirst({ where: { id: command.deliveryId, tabId }, select: { conversationId: true } })
       if (delivery) groupIds.push(delivery.conversationId)
     }
-    if (command.type === 'agent.remove' || command.type === 'agent.input' || command.type === 'agent.alert' || command.type === 'agent.rebind') agentIds.push(command.agentId)
+    if (command.type === 'agent.remove') agentIds.push(command.agentId)
+    // These only ask about the agent. A coordinator's project chat, always loaded, answers them, and every group it was ever in is
+    // what a read by agent gave: 1,668 on prod, growing with every task (Ken's profile, 2026-11-02, up to 1.66 s a read). Filtering
+    // that read by dormant would not do: its index has no dormant, so it examines them all, and removals need them (design D8).
+    if ((command.type === 'agent.input' || command.type === 'agent.alert' || command.type === 'agent.rebind') && !ledProject(state, command.agentId)) agentIds.push(command.agentId)
     if (command.type === 'agent.remove') startAgentIds.push(command.agentId)
     if (command.type === 'machine.remove') {
       const pool = state.machines?.find(m => m.machineId === command.machineId)
