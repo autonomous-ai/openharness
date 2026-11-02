@@ -109,9 +109,11 @@ void main() {
   Future<void> openMenu(WidgetTester tester) async {
     await tester.tap(find.byTooltip('Project options'));
     await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(MenuItemButton, 'Project settings…'));
+    await tester.pumpAndSettle();
   }
 
-  final item = find.widgetWithText(MenuItemButton, 'Switch PM…');
+  final item = find.text('Switch PM…');
 
   Future<void> finish(WidgetTester tester) async {
     await tester.pump(const Duration(milliseconds: 250));

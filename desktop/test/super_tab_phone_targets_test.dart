@@ -143,7 +143,7 @@ void main() {
       seed: _agentMessages,
     );
     expect(find.byKey(const ValueKey('super-terminals')), findsOneWidget);
-    expect(find.byKey(const ValueKey('super-pull-requests')), findsOneWidget);
+    expect(find.byTooltip('Project options'), findsOneWidget);
     const mouse = {
       'Reply': Size(32, 32),
       'Copy message': Size(32, 32),

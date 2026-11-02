@@ -13,6 +13,7 @@ const {
   AuthSessionManager,
   clearAuthSession,
   ensureSignInEpoch,
+  teamSignInEpoch,
   hasAuthSession,
   markSignedOut,
   newSignInEpoch,
@@ -78,6 +79,13 @@ describe('sign-in epoch', () => {
       writeAuthSession({ ...baseSession(), machineId: 'machine-new', signInEpoch: 'next@2' })
       await manager().updateMachineId('machine-old', undefined)
       expect(readAuthSession()).toMatchObject({ machineId: 'machine-new' })
+    })
+
+    it('is dropped by a Team sign-in when the lookup started with no epoch, though its epoch reads as adopted', async () => {
+      writeAuthSession({ ...baseSession(), machineId: 'machine-new', signInEpoch: teamSignInEpoch() })
+      await manager().updateMachineId('machine-old', undefined)
+      expect(readAuthSession()).toMatchObject({ machineId: 'machine-new' })
+      expect(signInOf(readAuthSession()!.signInEpoch)?.adopted).toBe(true)
     })
 
     it('is kept when the session from before epochs was only given one meanwhile', async () => {

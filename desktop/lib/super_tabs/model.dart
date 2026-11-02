@@ -1237,6 +1237,10 @@ class SuperTabMessage {
   /// The line the server writes in a thread when its session ends.
   bool get sessionEnded => source['kind'] == 'buddy-session-ended';
 
+  /// A task's own message, the server keeps current as the task moves (Quiet
+  /// Swarm 2/6): its text is the task's name.
+  bool get isTaskLine => source['kind'] == 'task-line';
+
   /// Why its session ended, for [sessionEnded] rows: `ended`, `idle`,
   /// `stopped` or `failed`.
   String? get sessionEndReason =>

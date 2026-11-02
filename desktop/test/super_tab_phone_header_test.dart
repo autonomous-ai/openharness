@@ -1,8 +1,7 @@
-// The Super Tab's header on a phone (the web below compactBelow): Chat, the
-// people and machines and the ⋮ menu stay in the bar, a finger's size each,
-// and the menu names what the bar drew as bare icons — the group's terminals
-// and its pull requests — while the header says which of them is open. A
-// wider window keeps the icons.
+// The Super Tab's header on a phone (the web below compactBelow): the project
+// menu, the terminal and the people and machines stay in the bar, a finger's
+// size each, and the menu names pull requests, while the header says which
+// view is open.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -11,36 +10,36 @@ import 'package:harness/super_tabs/roster.dart';
 
 import 'support/super_tab_phone.dart';
 
-final _options = find.byKey(const ValueKey('super-group-options'));
+final _menu = find.byTooltip('Project options');
 final _people = find.byTooltip('Members');
 final _openView = find.byKey(const ValueKey('super-open-view'));
 
 void main() {
-  testWidgets('a phone keeps Chat and the menu in the bar, a finger each', (
+  testWidgets('a phone keeps the menu, the terminal and people in the bar', (
     tester,
   ) async {
     final (_, controller) = await mountPhoneSuperTab(
       tester,
       const Size(390, 844),
     );
-    expect(find.byKey(const ValueKey('super-terminals')), findsNothing);
     expect(find.byKey(const ValueKey('super-pull-requests')), findsNothing);
+    expect(find.byKey(const ValueKey('super-chat')), findsNothing);
     for (final control in [
       find.byTooltip('Conversations'),
-      find.byKey(const ValueKey('super-chat')),
+      find.byKey(const ValueKey('super-terminals')),
       _people,
-      _options,
     ]) {
       expect(control, findsOneWidget);
       final size = tester.getSize(control);
       expect(size.width, greaterThanOrEqualTo(44));
       expect(size.height, greaterThanOrEqualTo(44));
     }
+    expect(_menu, findsOneWidget);
     expect(tester.takeException(), isNull);
     await unmountPhoneSuperTab(tester, controller);
   });
 
-  testWidgets('the phone menu names terminals and pull requests', (
+  testWidgets('the phone menu\'s rows are a finger high, and name the views', (
     tester,
   ) async {
     var terminals = 0;
@@ -49,20 +48,17 @@ void main() {
       const Size(390, 844),
       onOpenGroupTerminals: () => terminals++,
     );
-    Future<void> choose(String label) async {
-      await tester.tap(_options);
-      await tester.pumpAndSettle();
-      final row = find.widgetWithText(MenuItemButton, label);
-      expect(tester.getSize(row).height, greaterThanOrEqualTo(44));
-      await tester.tap(row);
-      await tester.pumpAndSettle();
-    }
-
-    await choose('Group terminals (1)');
+    await tester.tap(find.byKey(const ValueKey('super-terminals')));
+    await tester.pumpAndSettle();
     expect(terminals, 1);
 
-    await choose('Pull requests');
-    // Chat is no longer the view: the pull requests are.
+    await tester.tap(_menu);
+    await tester.pumpAndSettle();
+    final row = find.widgetWithText(MenuItemButton, 'Pull requests');
+    expect(tester.getSize(row).height, greaterThanOrEqualTo(44));
+    await tester.tap(row);
+    await tester.pumpAndSettle();
+    // Chat is no longer the view: the pull requests are, and it comes back.
     expect(
       tester
           .widget<AppIconButton>(find.byKey(const ValueKey('super-chat')))
@@ -73,16 +69,16 @@ void main() {
     await unmountPhoneSuperTab(tester, controller);
   });
 
-  testWidgets('a wide window keeps the icons in the header', (tester) async {
+  testWidgets('a wide window draws the same header', (tester) async {
     final (_, controller) = await mountPhoneSuperTab(
       tester,
       const Size(1280, 800),
     );
     expect(find.byKey(const ValueKey('super-terminals')), findsOneWidget);
-    expect(find.byKey(const ValueKey('super-pull-requests')), findsOneWidget);
-    await tester.tap(_options);
+    expect(find.byKey(const ValueKey('super-pull-requests')), findsNothing);
+    await tester.tap(_menu);
     await tester.pumpAndSettle();
-    expect(find.text('Pull requests'), findsNothing);
+    expect(find.text('Pull requests'), findsOneWidget);
     expect(find.text('Members'), findsNothing);
     await unmountPhoneSuperTab(tester, controller);
   });
@@ -111,7 +107,7 @@ void main() {
   testWidgets('a phone header says which view is open', (tester) async {
     final (_, chat) = await mountPhoneSuperTab(tester, const Size(390, 844));
     expect(_openView, findsNothing, reason: 'the chat is the default view');
-    await tester.tap(_options);
+    await tester.tap(_menu);
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(MenuItemButton, 'Pull requests'));
     await tester.pumpAndSettle();

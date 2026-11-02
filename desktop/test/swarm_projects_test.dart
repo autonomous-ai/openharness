@@ -188,14 +188,18 @@ void main() {
       conversationId: 'design-lead',
     );
     await mount(tester, c);
-    await tester.tap(find.byTooltip('Pull requests'));
+    await tester.tap(find.byTooltip('Project options'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(MenuItemButton, 'Pull requests'));
     await tester.pumpAndSettle();
     expect(find.text('example/lamp #12'), findsOneWidget);
     expect(find.text('example/design #8'), findsNothing);
     expect(find.text('This project'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('super-group-design-lead')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Pull requests'));
+    await tester.tap(find.byTooltip('Project options'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(MenuItemButton, 'Pull requests'));
     await tester.pumpAndSettle();
     expect(find.text('example/design #8'), findsOneWidget);
     expect(find.text('example/lamp #12'), findsNothing);
@@ -238,7 +242,10 @@ void main() {
       await mount(tester, c);
       await tester.tap(find.byTooltip('Project options'));
       await tester.pumpAndSettle();
-      expect(find.byIcon(AppIcons.ellipsisVertical), findsOneWidget);
+      await tester.tap(
+        find.widgetWithText(MenuItemButton, 'Project settings…'),
+      );
+      await tester.pumpAndSettle();
       expect(find.text('Project details'), findsOneWidget);
       expect(find.text('Update cadence'), findsNothing);
       expect(find.textContaining('Every 5 minutes'), findsNothing);
