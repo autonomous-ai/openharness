@@ -3,9 +3,9 @@ import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFile
 import { tmpdir } from 'node:os'
 import { dirname, join, win32 } from 'node:path'
 import { PM_HOMES } from '../teamDaemon.js'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createSwarmAgents } from './agents.js'
-import { OWN_LEFT, SHARED_LEFT, SWEEP_LEFT, UNREADABLE_DETAIL, createConfidentialPurge, isPmCodexHome, ownHomeFolder, purgeRecord, recordsOtherFolder, rewriteIfUnchanged, scrubClaudeSession, sweepForSession, type PurgeTarget } from './teamPurge.js'
+import { OWN_LEFT, SHARED_LEFT, SWEEP_LEFT, UNREADABLE_DETAIL, createConfidentialPurge, isPmCodexHome, ownHomeFolder, purgeRecord, withPurgeRetries, recordsOtherFolder, rewriteIfUnchanged, scrubClaudeSession, sweepForSession, type PurgeTarget } from './teamPurge.js'
 
 /** A folder that goes between the sweep's listing of its parent and its own read: removed just before that read. */
 const vanish = vi.hoisted(() => ({ path: '' }))
@@ -963,5 +963,132 @@ describe('on Windows', () => {
     expect(existsSync(join(claude, 'projects', WSLUG))).toBe(false)
     expect(readFileSync(outside, 'utf8')).toBe('someone else\'s')
     expect(readFileSync(join(parent, '.claude.json'), 'utf8')).toContain(KEY)
+  })
+})
+
+// Task #2264, Echo and Reed on #2675: nothing tried again once a host gave up, not even a restart.
+describe('a purge that did not finish', () => {
+  const MINUTE = 60_000
+  const fixture = (home: string, recordFile = join(home, 'super-tabs', 'team-purges.json')) => {
+    const own = join(home, PM_HOMES, 'super-start', 'codex')
+    mkdirSync(own, { recursive: true })
+    const record = purgeRecord(recordFile)
+    const state = { failing: true, live: false }
+    const purge = vi.fn(async (request: Record<string, unknown>) => {
+      if (state.live) return { error: 'AGENT_RUNNING' }
+      if (state.failing) return { error: 'SERVICE_DOWN' }
+      return request.mode === 'inspect' ? { reviewId: 'review-1' } : { ok: true }
+    })
+    const ended = createConfidentialPurge({ confidential: () => true, home, record, purge,
+      session: agentId => ({ agentId, sessionId: 'session', registeredAt: 1, engine: 'codex', cwd: null, codexHome: own }) })
+    const reports: unknown[] = [], logs: string[] = []
+    const start = () => withPurgeRetries(ended, { record, report: status => reports.push(status), log: line => logs.push(line) })
+    return { own, record, state, purge, ended, reports, logs, start, recordFile }
+  }
+  /** Lets a due retry's disk work finish: it reads real folders, which fake timers do not wait for. */
+  const pass = async (ms: number) => {
+    await vi.advanceTimersByTimeAsync(ms)
+    vi.useRealTimers()
+    await new Promise(resolve => setTimeout(resolve, 60))
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  }
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }) })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('is retried after a restart and clears, its engine home gone', async () => {
+    const home = dir()
+    const before = fixture(home)
+    const first = before.start()
+    expect(await first('pm')).toMatchObject({ error: 'SERVICE_DOWN' })
+    first.stop()
+    expect(existsSync(before.own)).toBe(true)
+    // The daemon starts again, with only the file left.
+    const after = fixture(home)
+    expect(after.record.pending().map(t => t.agentId)).toEqual(['pm'])
+    after.state.failing = false
+    const second = after.start()
+    await pass(MINUTE + 1)
+    expect(existsSync(dirname(after.own))).toBe(false)
+    expect(after.record.pending()).toEqual([])
+    expect(after.reports.at(-1)).toMatchObject({ pending: 0, unreadable: false })
+    second.stop()
+  })
+
+  it('tries again with growing waits while it fails, and stops once none is left', async () => {
+    const f = fixture(dir())
+    const retried = f.start()
+    await retried('pm')
+    const tries = () => f.purge.mock.calls.length
+    const first = tries()
+    await pass(MINUTE - 1)
+    expect(tries()).toBe(first)
+    await pass(1)
+    expect(tries()).toBe(first + 1)
+    await pass(MINUTE)
+    expect(tries()).toBe(first + 1)
+    await pass(MINUTE)
+    expect(tries()).toBe(first + 2)
+    for (const wait of [5, 15, 30, 30]) await pass(wait * MINUTE)
+    expect(tries()).toBe(first + 6)
+    expect(f.record.pending().map(t => t.agentId)).toEqual(['pm'])
+    expect(f.reports.at(-1)).toMatchObject({ pending: 1, unreadable: false })
+    f.state.failing = false
+    await pass(30 * MINUTE)
+    expect(f.record.pending()).toEqual([])
+    const done = tries()
+    await pass(120 * MINUTE)
+    expect(tries()).toBe(done)
+    retried.stop()
+  })
+
+  it('leaves a session that came back alone: the reviewed purge refuses it, and it stays pending', async () => {
+    const f = fixture(dir())
+    const retried = f.start()
+    await retried('pm')
+    f.state.live = true
+    await pass(MINUTE)
+    expect(existsSync(f.own)).toBe(true)
+    expect(f.record.pending().map(t => t.agentId)).toEqual(['pm'])
+    expect(f.purge.mock.calls.every(([request]) => request.mode === 'inspect')).toBe(true)
+    retried.stop()
+  })
+
+  it('runs nothing with its record unreadable, and says so', async () => {
+    const home = dir(), file = join(home, 'super-tabs', 'team-purges.json')
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, 'not json')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const f = fixture(home, file)
+    warn.mockRestore()
+    const retried = f.start()
+    await pass(MINUTE)
+    expect(f.purge).not.toHaveBeenCalled()
+    expect(f.reports.at(-1)).toMatchObject({ pending: 0, unreadable: true })
+    retried.stop()
+  })
+
+  it('shares one run between a host\'s close and a retry of the same agent', async () => {
+    const f = fixture(dir())
+    f.state.failing = false
+    let open!: () => void
+    const held = new Promise<void>(resolve => { open = resolve })
+    const slow = vi.fn(async (agentId: string) => { await held; return f.ended(agentId) })
+    const retried = withPurgeRetries(slow, { record: f.record, report: () => {}, log: () => {} })
+    const both = [retried('pm'), retried('pm')]
+    expect(slow).toHaveBeenCalledTimes(1)
+    open()
+    await Promise.all(both)
+    retried.stop()
+  })
+
+  it('reports a count only: no agent, session or path', async () => {
+    const f = fixture(dir())
+    const retried = f.start()
+    await retried('pm-secret')
+    const said = JSON.stringify(f.reports.at(-1))
+    expect(Object.keys(f.reports.at(-1) as object).sort()).toEqual(['at', 'pending', 'unreadable'])
+    expect(said).not.toContain('pm-secret')
+    expect(said).not.toContain('session')
+    retried.stop()
   })
 })
