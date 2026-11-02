@@ -29,6 +29,15 @@ describe('who joined or left each chat in one command', () => {
     expect(memberChanges(before, after).map(c => [c.group.id, c.agent.id, c.added])).toEqual([['task', 'b', false], ['other', 'b', false]])
   })
 
+  // Luna's re-review: any row wakes its chat (parts/commit.ts), so a long-lived agent's close woke every quiet chat it was
+  // ever in. Nobody reads there; its leaving is not said in an archived or dormant chat.
+  it('says no removal in an archived or dormant chat, which a row would wake', () => {
+    const before = swarm([group('old', ['a', 'b'], { archived: true }), group('quiet', ['b'], { dormant: true }), group('task', ['b'])])
+    const after = swarm([group('old', ['a'], { archived: true }), group('quiet', [], { dormant: true }), group('task', [])], [agent('a')])
+    expect(memberChanges(before, after).map(c => c.group.id)).toEqual(['task'])
+    expect(sessionRows(before, after, new Set(['b']), 'report-1').map(r => r.conversationId)).toEqual(['task'])
+  })
+
   it('finds nothing when no chat changed, in whatever order its members are kept', () => {
     const state = swarm([group('task', ['a', 'b'])])
     expect(memberChanges(state, swarm([group('task', ['a', 'b'])]))).toEqual([])

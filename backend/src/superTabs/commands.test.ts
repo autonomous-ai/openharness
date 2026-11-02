@@ -1578,11 +1578,15 @@ describe('message attachments', () => {
     expect(() => f.run({ type: 'agent.remove', agentId: worker }, { ...workerActor, agentId: other })).toThrow()
     const releaseId = f.state.agents.find(a => a.id === worker)!.releaseId!
     const chats = f.state.conversations.filter(c => c.agentIds.includes(worker)).map(c => c.id)
+    // A quiet chat it was in too: a row there would wake it (Luna's re-review).
+    const quiet = f.group()
+    Object.assign(f.state.conversations.find(c => c.id === quiet)!, { agentIds: [worker], dormant: true })
     const name = f.state.agents.find(a => a.id === worker)!.displayName
     const removed = f.run({ type: 'agent.remove', agentId: worker, releaseId }, workerActor)
-    // Each chat it was in says it left (Luna's review of #2207): its own host confirmed the stop.
+    // Each chat it was in says it left (Luna's review of #2207): its own host confirmed the stop. The quiet one stays quiet.
     expect(chats.length).toBeGreaterThan(0)
     expect(removed.messages.map(m => [m.conversationId, m.text, m.recipients])).toEqual(chats.map(id => [id, `"${name}" left.`, []]))
+    expect(f.state.conversations.find(c => c.id === quiet)).toMatchObject({ agentIds: [], dormant: true })
     expect(removed.cancelledAgents).toContain(worker)
     expect(f.state.agents.some(a => a.id === worker)).toBe(false)
     // Its host closed the session before confirming; nothing is left for it to close.
@@ -2828,7 +2832,7 @@ it('marks every row the system writes in the owner\'s name, so a Lead cannot quo
   run({ type: 'machine.contribute', machineId: 'mac', name: 'Mac', cwd: '/swarm', engines: ['codex'], maxAgents: 2 },
     { contribution: { machineOwnerId: 'owner', contributorId: 'owner' }, abandonedStartIds: ['s2'] })
   expect(rows.map(r => r.text)).toEqual(expect.arrayContaining(['Builder never started and will not start now.',
-    'Could not start Builder: its machine could not prepare or launch it. Whoever started it, the Product Manager and the machine owner can read why.', 'owner removed worker from the Swarm.']))
+    'Could not start Builder: its machine could not prepare or launch it. Whoever started it, the Product Manager and the machine owner can read why.', 'owner removed "worker" from the Swarm.']))
   expect(rows.filter(r => !r.source).map(r => r.text)).toEqual([])
 })
 
@@ -3012,7 +3016,8 @@ describe('machine.remove', () => {
     expect(f.state.conversations.find(c => c.id === group)!.assignment!.status).toBe('reconciling')
     const notice = effects.messages.find(m => m.conversationId === group)!
     expect(notice).toMatchObject({ author: { kind: 'person', id: 'owner' }, source: { kind: 'machine-removed', machine: 'Studio' } })
-    expect(notice.text).toBe(`owner removed Studio from the Swarm, and ${workerName} with it. Its task "Offline editing" has no agent now.`)
+    // Its name quoted, as in every row naming an agent (Luna's re-review of #2207).
+    expect(notice.text).toBe(`owner removed Studio from the Swarm, and "${workerName}" with it. Its task "Offline editing" has no agent now.`)
     expect(notice.recipients).toEqual([lead])
     // Its own row names the agent it took, so no member row repeats it (Echo's review of #2207).
     expect(effects.messages.map(m => m.conversationId)).toEqual([group])
@@ -4481,7 +4486,7 @@ describe('notices of failed work', () => {
     expect(texts.length).toBeGreaterThanOrEqual(7)
     for (const text of texts) expect(text).not.toMatch(NEXT_STEP)
     expect(texts).toEqual(expect.arrayContaining([expect.stringContaining('lost its task'), expect.stringContaining('can\'t get answers from its model'),
-      expect.stringContaining('instead of'), expect.stringContaining('removed worker from the Swarm. Its task "Offline editing" has no agent now.'),
+      expect.stringContaining('instead of'), expect.stringContaining('removed "worker" from the Swarm. Its task "Offline editing" has no agent now.'),
       expect.stringContaining('removed Studio from the Swarm'), 'Builder never started and will not start now.']))
   })
 })
