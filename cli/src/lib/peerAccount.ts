@@ -139,22 +139,31 @@ export function windowsPeerQuery(peerPort: number, ownPort: number): { script: s
 
 /**
  * How many lookups run at once. Each is a PowerShell in this account for up to WINDOWS_PEER_MS, and whoever heard the
- * hook token could open connections without end (Luna's review of #2605): one past these is no, for now. That no is not
- * kept on the connection, so a keep-alive client asking again on it is asked of Windows once a slot frees.
+ * hook token could open connections without end (Luna's review of #2605). Past these a lookup waits its turn, so the
+ * owner's own burst of new connections (an agent's MCP clients on the bridge at start) is answered, not told "unknown
+ * address" (Reed's review). Only past the queue too is it no, for now: that no is not kept on the connection, so a
+ * keep-alive client asking again on it is asked of Windows once a slot frees.
  */
 export const WINDOWS_PEER_LOOKUPS = 4
+export const WINDOWS_PEER_QUEUE = 32
 let windowsLookups = 0
+const waiting: Array<() => void> = []
 
-/** A Windows answer: yes, no, or not asked: too many lookups were running, or the lookup never finished. */
+/** A Windows answer: yes, no, or not asked: too many lookups were running and waiting, or the lookup never finished. */
 type WindowsAnswer = boolean | 'busy' | 'timeout'
 
 async function askWindows(socket: Socket, run: WindowsPeerRun): Promise<WindowsAnswer> {
   const peerPort = socket.remotePort, ownPort = socket.localPort
   // As on Linux and macOS: only an exact pair of addresses makes the pair of ports name one connection.
   if (!peerPort || !ownPort || socket.remoteAddress !== '127.0.0.1' || socket.localAddress !== '127.0.0.1') return false
-  if (windowsLookups >= WINDOWS_PEER_LOOKUPS) return 'busy'
+  if (windowsLookups >= WINDOWS_PEER_LOOKUPS) {
+    if (waiting.length >= WINDOWS_PEER_QUEUE) return 'busy'
+    // The slot is handed over by the lookup that ends (below), so the count never drops between them.
+    await new Promise<void>((resolve) => { waiting.push(resolve) })
+  } else {
+    windowsLookups++
+  }
   const query = windowsPeerQuery(peerPort, ownPort)
-  windowsLookups++
   try {
     const result = await run(query.script, query.inputs)
     // runPowershellAsync gives a null status to a script it ended at its limit, or one that never started.
@@ -163,7 +172,9 @@ async function askWindows(socket: Socket, run: WindowsPeerRun): Promise<WindowsA
   } catch {
     return false
   } finally {
-    windowsLookups--
+    const next = waiting.shift()
+    if (next) next()
+    else windowsLookups--
   }
 }
 

@@ -2,6 +2,7 @@
 // connection this process made is this account's. Windows only; the Windows workflow runs it with src/lib/windows.
 // Another account's connection cannot be made from one account's test run; that answer is pinned by the unit spec. The yes
 // below also shows Windows gives both times the check compares: the process started before its connection was made.
+import { spawn } from 'node:child_process'
 import { connect, createServer, type AddressInfo, type Socket } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 import { peerIsThisAccount } from '../peerAccount.js'
@@ -28,5 +29,20 @@ describe.runIf(WINDOWS)('who is calling, asked of Windows', () => {
     cleanup.push(() => socket2.destroy())
     await new Promise<void>((resolve) => { gone.once('close', () => resolve()); gone.destroy() })
     expect(await peerIsThisAccount(socket2, 'win32')).toBe(false)
+  }, 30_000)
+
+  // The check takes only a process that started before its connection was made. A process that connects in its first
+  // moments must still read as yes, whatever the two times' precision (Reed's review of #2605).
+  it('says yes for a fresh process that connects at once', async () => {
+    const server = createServer()
+    cleanup.push(() => server.close())
+    await new Promise<void>((resolve) => { server.listen(0, '127.0.0.1', resolve) })
+    const accepted = new Promise<Socket>((resolve) => { server.once('connection', resolve) })
+    const port = (server.address() as AddressInfo).port
+    const child = spawn(process.execPath, ['-e', `require('net').connect(${port}, '127.0.0.1'); setTimeout(() => {}, 20000)`], { stdio: 'ignore' })
+    cleanup.push(() => child.kill())
+    const socket = await accepted
+    cleanup.push(() => socket.destroy())
+    expect(await peerIsThisAccount(socket, 'win32')).toBe(true)
   }, 30_000)
 })
