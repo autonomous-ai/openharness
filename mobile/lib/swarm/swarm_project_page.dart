@@ -870,6 +870,12 @@ class _ProjectMenu extends StatelessWidget {
           )
         : null;
     return MenuAnchor(
+      // Home C sits near the top of the phone, so use the extra row of height
+      // needed for all six 44-point actions plus the menu's panel padding.
+      // Without it the scrollable menu leaves Notifications below the fold.
+      style: AppMenu.style(
+        maxHeight: AppControl.menuMaxHeight + minTouchTarget,
+      ),
       alignmentOffset: const Offset(0, AppSpace.xs),
       menuChildren: [
         if (terminal != null)
