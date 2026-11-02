@@ -67,3 +67,42 @@ describe('opening a step', () => {
     expect(() => f.step('   ')).toThrow()
   })
 })
+
+describe('assigning a step', () => {
+  it('joins its agent to its task', () => {
+    const f = stepsFixture()
+    const id = f.step('Review')
+    const rev = f.add('rev', id)
+    expect(f.group(f.task).agentIds).not.toContain(rev)
+    f.run({ type: 'work.assign', conversationId: id, agentId: rev }, f.as(f.dev))
+    expect(f.group(id).assignment).toMatchObject({ agentId: rev, status: 'working' })
+    expect(f.group(f.task).agentIds).toContain(rev)
+  })
+
+  it('may be assigned again once done', () => {
+    const f = stepsFixture()
+    const id = f.step('Review')
+    const rev = f.add('rev', id)
+    f.run({ type: 'work.assign', conversationId: id, agentId: rev }, f.as(f.dev))
+    const first = f.group(id).assignment!.id
+    f.run({ type: 'work.status', conversationId: id, assignmentId: first, status: 'done', result: 'Passed' } as Command, f.as(rev))
+    f.run({ type: 'work.assign', conversationId: id, agentId: rev }, f.as(f.dev))
+    expect(f.group(id).assignment).toMatchObject({ agentId: rev, status: 'working' })
+    expect(f.group(id).assignment!.id).not.toBe(first)
+  })
+
+  // The fix round Reviewers already wait through (liveness.ts waitingForRevision, Diego 2026-11-01), pinned for steps.
+  it('stays working across its owner\'s fix round', () => {
+    const f = stepsFixture()
+    const id = f.step('Review')
+    const rev = f.add('rev', id)
+    f.run({ type: 'work.assign', conversationId: id, agentId: rev }, f.as(f.dev))
+    const check = f.group(f.task).checks[0]!.id
+    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'review', result: 'PR 7' } as Command, f.as(f.dev))
+    f.run({ type: 'work.check', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, checkId: check, passed: false, evidence: 'Drops the session' } as Command, f.as(rev))
+    expect(f.group(id).assignment!.changesRequestedAt).toBeDefined()
+    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'review', result: 'PR 7, fixed' } as Command, f.as(f.dev))
+    expect(f.group(id).assignment).toMatchObject({ status: 'working' })
+    expect(f.group(id).assignment!.changesRequestedAt).toBeUndefined()
+  })
+})

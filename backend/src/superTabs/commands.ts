@@ -2714,6 +2714,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // Any assignment, an agent's or a person's, takes a worker that lost its task back into routing (model.ts lostTask).
       delete worker.lostTask
       if (!group.agentIds.includes(worker.id)) group.agentIds.push(worker.id)
+      // A step's agent works in its task's chat, where its owner and the other steps' agents are (task steps design).
+      const owning = group.step && group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : undefined
+      if (owning && !owning.agentIds.includes(worker.id) && joinsProject(state, owning, worker.id)) owning.agentIds.push(worker.id)
       rememberAttempt(group)
       group.assignment = { id: operationId, agentId: worker.id, status: 'working', configuration: structuredClone(worker.configuration),
         execution: { machineId: worker.machineId, harnessId: worker.harnessId, machineOwnerId: worker.machineOwnerId }, result: null }
