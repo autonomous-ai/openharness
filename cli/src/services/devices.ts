@@ -380,8 +380,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       ended.delete(agentId)
       const who = cableHost.describe(agentId)
       // Decided once already, by the recaps (services/recaps.ts), for the phone as well: the dial follows it and
-      // nobody is asked again. A card without one (a cloud agent's, a recaps from before) is decided here.
-      if (event.tier) {
+      // nobody is asked again. A card without one (a cloud agent's, a recaps from before) is decided here, and so is
+      // a Team machine's, whatever its card says: it runs Swarm work only (#2540's review: its own tier alerted).
+      if (event.tier && !onTeamMachine(event)) {
         tally(who?.name ?? '', event.tier, 'recaps', 'decided upstream', 0)
         void cable.summary(agentId, recap, event.text, event.tier, event.fullText, false)
         return
@@ -421,12 +422,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const swarmWorker = (event: DialEvent): boolean => {
     const session = event.machineId ? undefined : core.agents.byAgent(event.agentId)
     const role = session?.startedBy === 'agent' ? session.swarmSkill?.role : undefined
-    return role === 'agent' || (!!event.machineId && teamMachines.has(event.machineId))
+    return role === 'agent' || onTeamMachine(event)
   }
+  /** An agent on one of the account's Harness Team machines, which run Swarm work only. */
+  const onTeamMachine = (event: DialEvent): boolean => !!event.machineId && teamMachines.has(event.machineId)
   /** Any Swarm agent, whatever its role (PM, Buddy, Builder, Reviewer, Tester): its registry row carries `swarmSkill`, or it runs
    *  on a Harness Team account. Its news reaches the dial through the Swarm's cards, so its finished turn is silent. */
   const swarmAgent = (event: DialEvent): boolean =>
-    (!event.machineId && !!core.agents.byAgent(event.agentId)?.swarmSkill) || (!!event.machineId && teamMachines.has(event.machineId))
+    (!event.machineId && !!core.agents.byAgent(event.agentId)?.swarmSkill) || onTeamMachine(event)
   /** Whether an agent on another machine is a Swarm's Builder or Reviewer, as the Swarm service read it last
    *  (superTabs/cards.ts `worker`). Asked once a minute at most per agent: a failing worker fails every 1-2 s. */
   const WORKER_ANSWER_MS = 60_000
