@@ -520,7 +520,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       await openSuperTabMembers(tester);
-      expect(find.text('Humans'), findsOneWidget);
+      expect(find.text('People'), findsOneWidget);
       final member = find.byKey(const ValueKey('super-member-agent-0'));
       await tester.scrollUntilVisible(
         member,

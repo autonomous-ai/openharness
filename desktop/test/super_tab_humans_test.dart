@@ -1,6 +1,5 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/detail_dialog.dart';
@@ -120,50 +119,6 @@ void main() {
       await close(tester, controller);
     },
   );
-
-  testWidgets('switching the week sorts by that week\'s points', (
-    tester,
-  ) async {
-    final server = humansSwarm();
-    final controller = await show(tester, server);
-    final ids = [
-      'peer',
-      'owner',
-      'tony',
-      'scholes',
-      'diego',
-      'huy',
-      'maximilian.alexander.longname',
-    ];
-    expect(order(tester, ids), ids);
-    // Last week: diego led, Dee had nothing.
-    final week = Map<String, int>.from({
-      'diego': 30,
-      'huy': 9,
-      'tony': 9,
-      'owner': 1,
-      'peer': 0,
-      'scholes': 0,
-      'maximilian.alexander.longname': 0,
-    });
-    for (final score in server.leaderboard!['people'] as List) {
-      score['points'] = week[score['personId']];
-    }
-    await tester.tap(find.byKey(const ValueKey('leaderboard-week')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Last week').last);
-    await tester.pumpAndSettle();
-    expect(order(tester, ids), [
-      'diego',
-      'huy',
-      'tony',
-      'owner',
-      'peer',
-      'maximilian.alexander.longname',
-      'scholes',
-    ]);
-    await close(tester, controller);
-  });
 
   testWidgets(
     'lends no order from a board for another project, a failed read or a lost project',
@@ -291,65 +246,6 @@ void main() {
     },
   );
 
-  testWidgets(
-    'writes the three numbers as one quiet line under the name, hiding zeros',
-    (tester) async {
-      final controller = await show(tester, humansSwarm());
-      // Each person's whole line, in full words on hover.
-      final lines = {
-        'peer': '6 shipped · 3 unblocked',
-        'owner': '1 shipped · 4 unblocked · 20 agent-hours lent',
-        'tony': '2 shipped',
-        'scholes': '2 unblocked · 10 agent-hours lent',
-        'diego': '1 unblocked · 10 agent-hours lent',
-      };
-      String shown(String id) => tester
-          .widget<Text>(
-            find.descendant(of: part('meta', id), matching: find.byType(Text)),
-          )
-          .data!;
-      for (final MapEntry(key: id, value: line) in lines.entries) {
-        expect(find.byTooltip(line), findsOneWidget, reason: id);
-        // What fits is whole items from the start, never part of a word.
-        final full = line.replaceAll('agent-hours', 'hours');
-        final text = shown(id);
-        expect(full.startsWith(text), isTrue, reason: '$id: $text');
-        expect(
-          text == full || full.substring(text.length).startsWith(' · '),
-          isTrue,
-          reason: '$id: $text',
-        );
-        final paragraph = tester.renderObject<RenderParagraph>(
-          find.descendant(
-            of: part('meta', id),
-            matching: find.byType(RichText),
-          ),
-        );
-        expect(paragraph.didExceedMaxLines, isFalse, reason: id);
-      }
-      expect(shown('tony'), '2 shipped');
-      // Ken's line is too long for the pane: whole items fall off its end.
-      expect(
-        shown('owner'),
-        isNot(lines['owner']!.replaceAll('agent-hours', 'hours')),
-      );
-      // Nothing to say, no line at all.
-      expect(part('meta', 'huy'), findsNothing);
-      final style = styleOf(
-        tester,
-        find.descendant(of: part('meta', 'peer'), matching: find.byType(Text)),
-      );
-      expect(style.fontSize, grid.AppType.captionSize);
-      expect(style.color, grid.AppPalette.textSecondary);
-      // The line starts where the name does.
-      expect(
-        tester.getTopLeft(part('meta', 'peer')).dx,
-        tester.getTopLeft(nameIn('peer', 'dee')).dx,
-      );
-      await close(tester, controller);
-    },
-  );
-
   Finder crown(String id) => part('crown', id);
 
   testWidgets(
@@ -395,25 +291,6 @@ void main() {
       await close(tester, controller);
     },
   );
-
-  testWidgets("on a past week the crown names that week, not this one", (
-    tester,
-  ) async {
-    final semantics = tester.ensureSemantics();
-    final controller = await show(tester, humansSwarm());
-    await tester.tap(find.byKey(const ValueKey('leaderboard-week')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Last week').last);
-    await tester.pumpAndSettle();
-    expect(crown('peer'), findsOneWidget);
-    expect(
-      find.bySemanticsLabel(RegExp('Number one last week')),
-      findsOneWidget,
-    );
-    expect(find.bySemanticsLabel(RegExp('this week')), findsNothing);
-    semantics.dispose();
-    await close(tester, controller);
-  });
 
   testWidgets('crowns no one in a week where no one has points yet', (
     tester,
@@ -524,51 +401,6 @@ void main() {
     await close(tester, controller);
   });
 
-  testWidgets('puts the waiting line in the quiet metadata hierarchy', (
-    tester,
-  ) async {
-    final controller = await show(tester, humansSwarm());
-    final waiting = find.byKey(const ValueKey('leaderboard-waiting'));
-    final heading = find.descendant(
-      of: waiting,
-      matching: find.text('1 agent is waiting on you'),
-    );
-    expect(heading, findsOneWidget);
-    expect(styleOf(tester, heading).fontSize, grid.AppType.captionSize);
-    expect(styleOf(tester, heading).color, grid.AppPalette.textSecondary);
-    expect(find.textContaining('Dee 1'), findsNothing);
-    expect(styleOf(tester, heading).fontSize, grid.AppType.captionSize);
-    await close(tester, controller);
-  });
-
-  testWidgets('says in words how many agents wait on whom, the viewer as you', (
-    tester,
-  ) async {
-    final server = humansSwarm();
-    server.leaderboard!['waiting'] = {
-      'total': 4,
-      'people': [
-        {
-          'personId': 'owner',
-          'count': 3,
-          'conversationIds': ['g1'],
-        },
-        {
-          'personId': 'peer',
-          'count': 1,
-          'conversationIds': ['offline'],
-        },
-      ],
-    };
-    final controller = await show(tester, server);
-    final waiting = find.byKey(const ValueKey('leaderboard-waiting'));
-    Finder line(String text) =>
-        find.descendant(of: waiting, matching: find.text(text));
-    expect(line('3 agents are waiting on ken'), findsOneWidget);
-    expect(line('1 agent is waiting on you'), findsOneWidget);
-    await close(tester, controller);
-  });
-
   testWidgets(
     'keeps a row with no points after those with points, its 0 in the points style',
     (tester) async {
@@ -671,19 +503,6 @@ void main() {
       await close(tester, controller);
     },
   );
-
-  testWidgets('reads another week from the small week picker', (tester) async {
-    final server = humansSwarm();
-    final controller = await show(tester, server);
-    final picker = find.byKey(const ValueKey('leaderboard-week'));
-    expect(tester.getSize(picker).height, lessThanOrEqualTo(32));
-    await tester.tap(picker);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Last week').last);
-    await tester.pumpAndSettle();
-    expect(server.leaderboardReads.last, contains('&week='));
-    await close(tester, controller);
-  });
 
   testWidgets('has no separate leaderboard view or trophy', (tester) async {
     final controller = await show(
@@ -852,14 +671,6 @@ void main() {
     expect(find.text('Pull request 19'), findsOneWidget);
     expect(find.text('No machines lent yet'), findsOneWidget);
     expect(tester.takeException(), isNull);
-    await close(tester, controller);
-  });
-
-  testWidgets('opens the waiting conversation from Answer', (tester) async {
-    final controller = await show(tester, humansSwarm());
-    await tester.tap(find.text('Answer'));
-    await tester.pumpAndSettle();
-    expect(controller.selectedId, 'offline');
     await close(tester, controller);
   });
 

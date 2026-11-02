@@ -2144,7 +2144,7 @@ void main() {
         // The tokens follow the app's theme, as the app's scope sets them.
         grid.AppTheme.brightness.value = brightness;
         await f.show(tester, brightness: brightness);
-        expect(find.text('Humans'), findsOneWidget);
+        expect(find.text('People'), findsOneWidget);
         double avatar(Finder row) => tester
             .getTopLeft(
               find.descendant(of: row, matching: find.byType(SuperTabAvatar)),

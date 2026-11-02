@@ -31,7 +31,8 @@ screenshots.
 - "Agents are grouped: waiting on a person first, then working; idle agents fold under "Idle (N)"."
 - "The project-or-Swarm choice Dee added today becomes Members' heading."
 - Anything the design doesn't draw stays as it is (right-click Details / Remove from Swarm, the + on People and
-  Agents, the waiting line, Edit profile, the row hovers).
+  Agents, Edit profile, the row hovers). The waiting line under People goes: agents waiting on a person live only in
+  Activity's Needs you (Lead, 2026-11-02).
 - Desktop tests use a memory store and the fake server; never a test that signs this Mac out of the real CLI.
 - Swarm code stays out of `cli/src/core`. No on/off switch: it ships on.
 - Stay inside the owned files: `roster.dart`, `roster_scope.dart`, `agent_details.dart`, `leaderboard/person_row.dart`,

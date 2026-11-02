@@ -312,23 +312,6 @@ void main() {
     },
   );
 
-  testWidgets('keeps the last 7 days whichever week the right pane shows', (
-    tester,
-  ) async {
-    final server = modelsSwarm();
-    final controller = await show(tester, server);
-    await openSuperTabMembers(tester);
-    await tester.tap(find.byKey(const ValueKey('leaderboard-week')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Last week').last);
-    await tester.pumpAndSettle();
-    expect(server.leaderboardReads.last, contains('&week='));
-    expect(headingText, findsOneWidget);
-    expect(find.textContaining('last week'), findsNothing);
-    expect(inRow('Opus 5.5', find.text('87%')), findsOneWidget);
-    await close(tester, controller);
-  });
-
   testWidgets(
     'shows the week\'s models from a server before the last 7 days, still headed Models',
     (tester) async {

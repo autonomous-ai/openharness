@@ -56,28 +56,19 @@ void main() {
   Finder rank(String id) => find.byKey(ValueKey('super-member-rank-$id'));
   Finder points(String id) => find.byKey(ValueKey('super-member-points-$id'));
 
-  testWidgets('shows Humans under a heading with the week, and no list pills', (
+  testWidgets('shows People under a heading, with no week and no list pills', (
     tester,
   ) async {
     final controller = await show(tester, membersSwarm());
     for (final pill in ['humans', 'agents', 'models']) {
       expect(find.byKey(ValueKey('leaderboard-tab-$pill')), findsNothing);
     }
-    expect(find.text('Humans'), findsOneWidget);
-    expect(find.text('People'), findsNothing);
-    final week = find.byKey(const ValueKey('leaderboard-week'));
-    expect(week, findsOneWidget);
-    // The week sits on the Humans heading's line, at its trailing edge.
-    expect(
-      (tester.getCenter(week).dy - tester.getCenter(find.text('Humans')).dy)
-          .abs(),
-      lessThan(8),
-    );
-    expect(
-      tester.getCenter(week).dx,
-      greaterThan(tester.getCenter(find.text('Humans')).dx),
-    );
-    // Humans first, then the Agents below them.
+    expect(find.text('People'), findsOneWidget);
+    expect(find.text('Humans'), findsNothing);
+    // The last 7 days, on hover: no week or period menu (Quiet Swarm).
+    expect(find.byKey(const ValueKey('leaderboard-week')), findsNothing);
+    expect(find.byKey(const ValueKey('leaderboard-period')), findsNothing);
+    // People first, then the Agents below them.
     expect(find.byKey(const ValueKey('super-person-peer')), findsOneWidget);
     expect(
       tester.getTopLeft(member('lead-agent')).dy,
