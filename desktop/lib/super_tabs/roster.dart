@@ -634,6 +634,8 @@ class _SuperTabRosterState extends State<SuperTabRoster>
         SuperTabSectionHeading(
           'Idle (${idle.length})',
           key: const ValueKey('super-members-idle'),
+          // In line with People and Agents, which do not fold.
+          startInset: 16,
           collapsed: !_idleOpen,
           onToggleCollapsed: () => setState(() => _idleOpen = !_idleOpen),
         ),
