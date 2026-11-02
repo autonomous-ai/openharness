@@ -352,6 +352,94 @@ void main() {
       expect('${store.held}', isNot(contains('mine')));
     });
 
+    test(
+      'a Swarm lost while the app was closed goes at the next list',
+      () async {
+        store
+          ..heldBy = me
+          ..held = {
+            'drafts': [
+              {'tab': 'lost', 'chat': 'x', 'text': 'lost words'},
+              {'tab': tab, 'chat': 'g1', 'text': 'kept words'},
+            ],
+            'posts': [
+              {
+                'tab': 'lost',
+                'chat': 'x',
+                'posts': [
+                  {'messageId': 'lost post'},
+                ],
+              },
+            ],
+          };
+        final inbox = await app();
+        expect(inbox.kept.draft('lost', 'x', null), isNull);
+        expect(inbox.kept.posts('lost', 'x', null), isEmpty);
+        expect(inbox.kept.draft(tab, 'g1', null)?.text, 'kept words');
+        await pumpEventQueue();
+        expect('${store.held}', isNot(contains('lost')));
+      },
+    );
+
+    test('the same when what was kept reads back after the list', () async {
+      store
+        ..heldBy = me
+        ..held = {
+          'drafts': [
+            {'tab': 'lost', 'chat': 'x', 'text': 'lost words'},
+          ],
+          'posts': <Object>[],
+        };
+      final slow = _SlowStore(store);
+      final inbox = SwarmInbox(
+        accountId: me,
+        request: swarm.request,
+        keptStore: slow,
+      );
+      addTearDown(inbox.dispose);
+      await inbox.refresh();
+      slow.gate.complete();
+      await inbox.kept.ready;
+      await pumpEventQueue();
+      expect(inbox.kept.draft('lost', 'x', null), isNull);
+      expect('${store.held}', isNot(contains('lost words')));
+    });
+
+    test('a list that fails drops nothing', () async {
+      store
+        ..heldBy = me
+        ..held = {
+          'drafts': [
+            {'tab': 'other', 'chat': 'x', 'text': 'stays'},
+          ],
+          'posts': <Object>[],
+        };
+      swarm.routes['/api/super-tabs/list'] = lost;
+      final inbox = await app();
+      expect(inbox.kept.draft('other', 'x', null)?.text, 'stays');
+    });
+
+    test('a drop before what was kept reads back reaches the file', () async {
+      store
+        ..heldBy = me
+        ..held = {
+          'drafts': [
+            {'tab': 'gone', 'chat': 'x', 'text': 'old words'},
+            {'tab': 'stays', 'chat': 'y', 'text': 'other words'},
+          ],
+          'posts': <Object>[],
+        };
+      final slow = _SlowStore(store);
+      final kept = SwarmKept(accountId: me, store: slow);
+      addTearDown(kept.dispose);
+      kept.dropSwarm('gone');
+      slow.gate.complete();
+      await kept.ready;
+      await pumpEventQueue();
+      expect('${store.held}', isNot(contains('old words')));
+      expect('${store.held}', contains('other words'));
+    });
+
     test('a chat lost while open takes its draft and posts', () async {
       final inbox = await app();
       final c = await chat(inbox);
@@ -454,3 +542,23 @@ void main() {
 }
 
 final _gone = <SwarmConversation>{};
+
+/// A store whose read waits for [gate].
+class _SlowStore implements SwarmKeptStore {
+  _SlowStore(this.inner);
+  final SwarmKeptStore inner;
+  final gate = Completer<void>();
+
+  @override
+  Future<Map<String, dynamic>?> read(String accountId) async {
+    await gate.future;
+    return inner.read(accountId);
+  }
+
+  @override
+  Future<void> write(String accountId, Map<String, dynamic> kept) =>
+      inner.write(accountId, kept);
+
+  @override
+  Future<void> clear() => inner.clear();
+}
