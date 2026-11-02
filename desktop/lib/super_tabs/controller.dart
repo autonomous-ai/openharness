@@ -2959,14 +2959,16 @@ class SuperTabController extends ChangeNotifier {
   bool isOwn(SuperTabMessage m) =>
       !m.fromAgent && !m.fromTerminal && m.authorId == accountId;
 
-  /// Whether what [id] gained since sequence [after] is all the reader's own, sent from any device.
-  /// Unsure is no: a message that can't be read is told about, never lost.
+  /// Whether what [id]'s main stream gained since sequence [after] is all the reader's own, sent from
+  /// any device. Unsure is no: a message that can't be read is told about, never lost.
   Future<bool> onlyOwnSince(String id, int after) async {
     try {
       final answer = await request('GET', '${_messagesPath(id)}?after=$after');
-      final rows = answer['messages'] as List;
-      return rows.isNotEmpty &&
-          rows.every((row) => isOwn(SuperTabMessage.fromJson(superTabMap(row))));
+      if (answer['next'] != null) return false;
+      final main = (answer['messages'] as List)
+          .map((row) => SuperTabMessage.fromJson(superTabMap(row)))
+          .where((message) => message.inMainStream);
+      return main.isNotEmpty && main.every(isOwn);
     } catch (_) {
       return false;
     }
