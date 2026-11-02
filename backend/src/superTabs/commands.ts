@@ -239,7 +239,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('agent.stopLease'), agentId: id, releaseId: id }).strict(),
   z.object({ type: z.literal('agent.switchClaim'), agentId: id, switchId: id }).strict(),
   // The host's own words for why it failed: free text, so capped and redacted.
-  z.object({ type: z.literal('agent.switchResult'), agentId: id, switchId: id, ok: z.boolean(), error: z.string().trim().min(1).max(300).optional() }).strict(),
+  z.object({ type: z.literal('agent.switchResult'), agentId: id, switchId: id, ok: z.boolean(), error: z.string().trim().min(1).max(300).optional(), down: z.boolean().optional() }).strict(),
   z.object({ type: z.literal('agent.stopRefused'), agentId: id, releaseId: id }).strict(),
   z.object({ type: z.literal('agent.remove'), agentId: id, releaseId: id.optional() }).strict(),
   z.object({ type: z.literal('agent.release'), agentId: id, decision: z.enum(['keep', 'stop']) }).strict(),
@@ -2343,7 +2343,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       moveToProfile(target, engine, landed)
       // Whatever request was pending is settled; its result, when it comes, is still the one line the chat gets.
-      if (target.switchRequest) target.switchLanded = target.switchRequest.id
+      if (target.switchRequest) target.switchLanded = { id: target.switchRequest.id, requestedBy: target.switchRequest.requestedBy }
       delete target.switchRequest
       target.harnessId = command.harnessId
       target.replacement = { previousHarnessId: command.previousHarnessId, harnessId: command.harnessId }
@@ -2419,11 +2419,14 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     case 'agent.switchResult': {
       const target = agent(state, command.agentId)
       // agent.rebind clears a request whose new session started but keeps its id, so the result of either is the one to answer.
-      if (actor.kind !== 'agent' || actor.agentId !== target.id || ![target.switchRequest?.id, target.switchLanded].includes(command.switchId)) {
+      if (actor.kind !== 'agent' || actor.agentId !== target.id || ![target.switchRequest?.id, target.switchLanded?.id].includes(command.switchId)) {
         fail('STALE_SWITCH', 'Only the execution host can report the current switch.', 403)
       }
-      const project = ledProject(state, target.id), requested = target.switchRequest
-      if (command.ok && target.switchRequest) moveToProfile(target, target.switchRequest.engine, target.switchRequest.profileId)
+      const project = ledProject(state, target.id), landed = target.switchLanded?.id === command.switchId ? target.switchLanded : undefined
+      const asked = (landed ?? target.switchRequest)?.requestedBy
+      // A rebind already moved the PM: a failure the host reported as it landed is not what happened.
+      const moved = command.ok || !!landed
+      if (moved && !landed && target.switchRequest) moveToProfile(target, target.switchRequest.engine, target.switchRequest.profileId)
       delete target.switchRequest
       delete target.switchLanded
       if (!project) break
@@ -2432,10 +2435,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const label = target.profileId && state.machines?.find(m => m.machineId === target.machineId)?.observation?.profiles
         ?.find(p => p.engine === target.configuration?.engine && p.id === target.profileId)?.label
       effects.messages.push({ id: operationId, conversationId: project.leadConversationId, author: sender, replyTo: null, recipients: [], source: SYSTEM_ROW,
-        text: command.ok ? `PM moved to ${engine}${label ? ` · ${label}` : ''}.` : `Couldn't switch the PM: ${error || 'it failed'}. It is back on ${engine}.` })
+        text: moved ? `PM moved to ${engine}${label ? ` · ${label}` : ''}.`
+          : `Couldn't switch the PM: ${error || 'it failed'}. ${command.down ? `It has not come back on ${engine} yet; its machine keeps trying.` : `It is back on ${engine}.`}` })
       // The machine owner hears when their non-default account runs another person's PM; the project line may be out of their reach.
-      const asked = requested?.requestedBy, owner = state.people.find(p => p.id === target.machineOwnerId), pool = state.machines?.find(m => m.machineId === target.machineId)
-      if (command.ok && label && asked && owner && asked !== owner.id) {
+      const owner = state.people.find(p => p.id === target.machineOwnerId), pool = state.machines?.find(m => m.machineId === target.machineId)
+      if (moved && label && asked && owner && asked !== owner.id) {
         const who = usernameOf(state, asked) ?? state.people.find(p => p.id === asked)?.email ?? 'Someone'
         effects.messages.push({ id: stableId(operationId, 'pm-switch-notice'), conversationId: openSwarmBuddyChat(state, owner).id, author: sender, replyTo: null, recipients: [],
           source: { kind: 'pm-switch-notice', machineId: target.machineId },

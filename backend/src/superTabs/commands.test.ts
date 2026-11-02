@@ -4780,6 +4780,38 @@ describe('lead.switch', () => {
     expect(code(() => s.f.run({ ...result, switchId: 'made-up' }, s.as))).toBe('STALE_SWITCH')
   })
 
+  it('tells the machine owner after a real switch, where the rebind lands before the result', () => {
+    const s = setup(['leadSwitch'], 'peer')
+    s.agent().machineOwnerId = 'peer'
+    s.f.run(s.request)
+    const switchId = s.sid(), requester = s.agent().switchRequest!.requestedBy
+    s.f.run({ type: 'agent.rebind', agentId: s.pm, machineId: 'host', projectId: 'lead', previousHarnessId: 'pm', harnessId: 'pm-2', profileId: WORK,
+      configuration: { ...config, engine: 'codex' } }, { ...s.as, machineOwnerId: 'peer' })
+    expect(s.agent().switchRequest).toBeUndefined()
+    expect(s.agent().switchLanded).toEqual({ id: switchId, requestedBy: requester })
+    const done = s.f.run({ type: 'agent.switchResult', agentId: s.pm, switchId, ok: true }, { ...s.as, machineOwnerId: 'peer' })
+    expect(done.messages.filter(m => (m.source as { kind?: string } | undefined)?.kind === 'pm-switch-notice')).toEqual([expect.objectContaining({
+      text: 'owner moved the PM of Pilot on Studio to your Codex account "Work".' })])
+    expect(s.agent().switchLanded).toBeUndefined()
+  })
+
+  it('never says a landed switch failed: a rebind that beat a failure report wins', () => {
+    const s = setup()
+    s.f.run(s.request)
+    const switchId = s.sid()
+    s.f.run({ type: 'agent.rebind', agentId: s.pm, machineId: 'host', projectId: 'lead', previousHarnessId: 'pm', harnessId: 'pm-2', profileId: WORK,
+      configuration: { ...config, engine: 'codex' } }, s.as)
+    const done = s.f.run({ type: 'agent.switchResult', agentId: s.pm, switchId, ok: false, error: 'the new session did not start in time' }, s.as)
+    expect(done.messages[0]!.text).toBe('PM moved to Codex · Work.')
+  })
+
+  it('says a PM that has not come back is not back', () => {
+    const s = setup()
+    s.f.run(s.request)
+    const failed = s.f.run({ type: 'agent.switchResult', agentId: s.pm, switchId: s.sid(), ok: false, error: 'the new session could not start', down: true }, s.as)
+    expect(failed.messages[0]!.text).toBe("Couldn't switch the PM: the new session could not start. It has not come back on Codex yet; its machine keeps trying.")
+  })
+
   it('writes the host\'s error as one clean line', () => {
     const s = setup()
     s.f.run(s.request)

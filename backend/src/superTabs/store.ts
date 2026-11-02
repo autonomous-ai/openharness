@@ -785,6 +785,8 @@ export class SuperTabStore {
       // And their one Buddy chat, which takes it too (spec: Guard).
       if (asked && command.delegate) swarmChat(asked.personId)
     }
+    // A switch's result tells the machine's owner in their one Buddy chat, quiet or not (commands.ts agent.switchResult).
+    if (command.type === 'agent.switchResult') swarmChat(state.agents.find(a => a.id === command.agentId)?.machineOwnerId)
     // A project's sharing ends its sessions in the one Buddy chats of whoever loses it (commands.ts endLostProjectSessions).
     if (command.type === 'project.sharing') {
       for (const owner of new Set([...state.agents.filter(a => a.buddySession?.projectId === command.projectId).map(a => a.buddyOf!.personId),

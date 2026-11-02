@@ -65,8 +65,9 @@ export interface Agent {
   releaseId?: string
   /** A person's request to move this Product Manager to another engine or account (lead.switch), carried out by its host.
    *  `id` is the operation that asked; `claimedUntil` is set once the host took it (agent.switchClaim). */
-  /** The switch request the last rebind settled, until its result arrives: that result is the one line the chat gets. */
-  switchLanded?: string
+  /** The switch request the last rebind settled, until its result arrives: that result is the one line the chat gets, and
+   *  it still tells the machine owner who asked. */
+  switchLanded?: { id: string; requestedBy: string }
   switchRequest?: { id: string; engine: string; profileId: string; model?: string; effort?: string; requestedBy: string; at: string; claimedUntil?: string }
   /** The account it runs in on its machine once a switch moved it; absent for the machine's default account. */
   profileId?: string
