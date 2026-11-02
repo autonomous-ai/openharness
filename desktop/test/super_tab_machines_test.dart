@@ -1821,6 +1821,41 @@ void main() {
     );
 
     testWidgets(
+      'an expanded machine: a right-click on its readings opens the same menu, with the browser menu off',
+      (tester) async {
+        final told = <bool>[];
+        BrowserMenuGuard.debugWeb = true;
+        BrowserMenuGuard.debugSink = (off) async => told.add(off);
+        addTearDown(BrowserMenuGuard.debugReset);
+        final server = _RemovalServer();
+        server.state['machines'] = [machine('owner')];
+        final c = server.controller();
+        await c.refresh();
+        await mount(tester, c);
+        await tester.tap(find.byKey(const ValueKey('super-machine-studio')));
+        await tester.pumpAndSettle();
+        final below = find.textContaining(
+          RegExp('No agents yet|Offline|Refreshing|reach Harness'),
+        );
+        expect(below, findsOneWidget);
+        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+        addTearDown(mouse.removePointer);
+        await mouse.addPointer(location: const Offset(900, 700));
+        await mouse.moveTo(tester.getCenter(below));
+        await tester.pump();
+        expect(told.last, isTrue);
+        await tester.tap(below, buttons: kSecondaryMouseButton);
+        await tester.pumpAndSettle();
+        expect(find.text('Details'), findsOneWidget);
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        await tester.pumpWidget(const SizedBox());
+        await c.flush();
+        c.dispose();
+      },
+    );
+
+    testWidgets(
       'losing the screen with the Swarm menu open gives the browser menu back',
       (tester) async {
         final told = <bool>[];

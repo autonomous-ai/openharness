@@ -354,13 +354,15 @@ describe('the Windows remove script', () => {
     expect(script).toContain('belongs to another account; nothing was removed" 4')
   })
 
-  it('removes the shared files only when marked and empty, the relay folders and the sentinel, and names the team computer', () => {
+  it('removes the shared files only when marked and empty, the relay folders and the sentinel', () => {
     const script = buildWindowsRemoveScript(removeInput())
     expect(script).toContain("$SENTINEL = 'C:\\Users\\owner-placeholder\\.harness-team-privacy'")
     expect(script).toContain("Get-ChildItem -LiteralPath $SHARED -Force -Filter 'team-relay-*'")
-    expect(script).toContain('say "team computer $computer"')
+    // Nothing the team account wrote is read as an administrator to name a machine to remove (audit L3).
+    expect(script).not.toContain('computer-id')
+    expect(script).not.toContain('$COMPUTER_ID')
     expect(at(script, 'Test-Path -LiteralPath $SHARED_MARK')).toBeGreaterThan(at(script, 'Remove-Tree $STATUS_DIR'))
-    // A line ending in LF alone: the owner's side reads it with ./script.ts TEAM_COMPUTER_LINE, whose $ stops before a CR.
+    // A line ending in LF alone: the owner's side splits this output at LF.
     expect(script).toContain('[Console]::Out.Write("harness: $m`n")')
   })
 

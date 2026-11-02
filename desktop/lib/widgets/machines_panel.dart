@@ -323,6 +323,7 @@ class _MachinesPanelState extends State<_MachinesPanel>
 
   @override
   void dispose() {
+    BrowserMenuGuard.release(_rowMenus);
     WidgetsBinding.instance.removeObserver(this);
     app.removeListener(_machinesChanged);
     _resourceTimer?.cancel();
@@ -543,9 +544,13 @@ class _MachinesPanelState extends State<_MachinesPanel>
       onOpen: () {
         if (!identical(_openRowMenu, controller)) _openRowMenu?.close();
         _openRowMenu = controller;
+        BrowserMenuGuard.hold(_rowMenus);
       },
       onClose: () {
-        if (identical(_openRowMenu, controller)) _openRowMenu = null;
+        if (identical(_openRowMenu, controller)) {
+          _openRowMenu = null;
+          BrowserMenuGuard.release(_rowMenus);
+        }
         _restoreFocus();
       },
       menuChildren: [

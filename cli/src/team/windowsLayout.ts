@@ -56,7 +56,6 @@ export function windowsTeamPaths(home: string = WINDOWS_TEAM_HOME) {
     runtime: `${harness}\\runtime`,
     auth: `${harness}\\auth`,
     session: `${harness}\\auth\\session.json`,
-    computerId: `${harness}\\computer-id`,
     /** npm's `--global --prefix` on Windows puts the commands in the prefix itself, not in its bin folder. */
     npmPrefix: `${home}\\.local`,
     bin: `${home}\\.local\\bin`,

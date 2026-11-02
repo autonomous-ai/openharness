@@ -80,8 +80,9 @@ function fake(over: Partial<TeamCommandDeps> & { adminResult?: Awaited<ReturnTyp
 const TEAM_COMPUTER = 'ebe7fc88-cd44-491f-aa61-9963fa0dfd82'
 const MACHINES = [
   { machineId: 'm1', computerId: 'c'.repeat(32), sessionKind: 'computer' },
-  { machineId: 'm-team', computerId: TEAM_COMPUTER.replace(/-/g, ''), sessionKind: 'team' },
+  { machineId: 'm-team', computerId: TEAM_COMPUTER.replace(/-/g, ''), sessionKind: 'team', hostMachineId: 'm1' },
   { machineId: 'm-mini', computerId: 'a'.repeat(32), sessionKind: 'team' },
+  { machineId: 'm-other-mac-team', computerId: 'b'.repeat(32), sessionKind: 'team', hostMachineId: 'm-other-mac' },
 ]
 
 const reported = (startedAt: number): TeamStatus => ({ version: 1, signIn: { state: 'signed-in', at: startedAt + 3_000 }, privacy: { passed: true, checkedAt: startedAt + 3_000 } })
@@ -282,6 +283,21 @@ describe('harness team status', () => {
     expect(text).toContain('mode 750 ✗ should be 700')
   })
 
+  it('shows the owner\'s agents\' private temporary folder, and says when it is not private', async () => {
+    const line = async (state: 'private' | 'open' | 'not-made', mode: number | null) => {
+      const f = fake({ readConfig: () => config, accountExists: vi.fn(async () => true), agentTmp: () => ({ path: `${OWNER_HOME}/.harness/agent-tmp`, state, mode }) })
+      await teamCommand(['status'], f.deps)
+      return f.out.join('\n').split('\n').find(text => text.startsWith('  temp files'))
+    }
+    expect(await line('private', 0o700)).toBe(`  temp files  ${OWNER_HOME}/.harness/agent-tmp · mode 700 ✓`)
+    expect(await line('open', 0o755)).toContain('mode 755 ✗')
+    expect(await line('open', null)).toContain('✗')
+    expect(await line('not-made', null)).toContain('made when your next agent starts')
+    const json = fake({ readConfig: () => config, accountExists: vi.fn(async () => true), agentTmp: () => ({ path: '/p', state: 'private', mode: 0o700 }) })
+    await teamCommand(['status', '--json'], json.deps)
+    expect(JSON.parse(json.out[0]!).agentTmp).toEqual({ path: '/p', state: 'private', mode: '700' })
+  })
+
   it('answers in JSON, and says plainly when there is no team account or the computer is dedicated', async () => {
     const f = fake({ readConfig: () => config, accountExists: vi.fn(async () => true) })
     await teamCommand(['status', '--json'], f.deps)
@@ -299,7 +315,6 @@ describe('harness team status', () => {
 })
 
 describe('harness team remove', () => {
-  // The team daemon's computer id as its file holds it, with dashes; the backend lists it without (MACHINES).
   const removed = { ok: true as const, stdout: `harness: deleted the account harnessteam\nharness: team computer ${TEAM_COMPUTER}\nharness: removed the Harness Team account, its home folder and its daemon\n` }
   const refused = { ok: false as const, code: 'FAILED' as const, status: 9,
     message: 'could not delete the account harnessteam: macOS did not allow it (eDSPermissionError). Nothing was removed: the Harness Team account and its daemon run as before' }
@@ -324,10 +339,10 @@ describe('harness team remove', () => {
     expect(cancelled.err[0]).toBe('✗ Nothing was removed: sudo did not get an administrator password.')
   })
 
-  it('takes the team account\'s computer off the owner\'s account once the account is gone, which signs it out', async () => {
+  it('takes this computer\'s team machine off the owner\'s account once the account is gone, which signs it out', async () => {
     const f = fake({ readConfig: () => config, adminResult: removed })
     expect(await teamCommand(['remove'], f.deps)).toBe(0)
-    // Only the team machine with that computer id: not this computer's, not another team machine.
+    // Only the team machine the backend says lives on this computer: not this computer's own, not any other team machine.
     expect(f.deps.delete).toHaveBeenCalledTimes(1)
     expect(f.deps.delete).toHaveBeenCalledWith('/api/machines/m-team', { authorization: 'Bearer x' })
     expect(f.out.join('\n')).toContain('✓ Took its computer off your Harness account, which signs it out.')
@@ -337,15 +352,36 @@ describe('harness team remove', () => {
     expect(JSON.parse(json.out.at(-1)!)).toEqual({ ok: true, removed: true, computer: { removed: 1 } })
   })
 
-  it('never takes off this computer\'s own machine, or anything when no computer was named', async () => {
-    const own = fake({ readConfig: () => config, adminResult: { ok: true, stdout: `harness: team computer ${'c'.repeat(32)}\n` } })
-    expect(await teamCommand(['remove'], own.deps)).toBe(0)
-    expect(own.deps.delete).not.toHaveBeenCalled()
-    const unnamed = fake({ readConfig: () => config, adminResult: { ok: true, stdout: 'harness: removed the Harness Team account, its home folder and its daemon\n' } })
-    expect(await teamCommand(['remove'], unnamed.deps)).toBe(0)
-    expect(unnamed.deps.get).not.toHaveBeenCalled()
-    expect(unnamed.deps.delete).not.toHaveBeenCalled()
-    expect(unnamed.out.join('\n')).toContain('If its computer, "Mac-placeholder · Team", is still on your Harness account, remove it there: harness machines')
+  // Audit L3: the id came from a file the Team account wrote, so a Team agent could name the owner's team machine on another Mac.
+  it('ignores a computer id the Team account wrote: another Mac\'s team machine stays', async () => {
+    for (const named of ['b'.repeat(32), 'a'.repeat(32), 'c'.repeat(32)]) {
+      const f = fake({ readConfig: () => config, adminResult: { ok: true, stdout: `harness: team computer ${named}\n` } })
+      expect(await teamCommand(['remove'], f.deps)).toBe(0)
+      expect(f.deps.delete).toHaveBeenCalledTimes(1)
+      expect(f.deps.delete).toHaveBeenCalledWith('/api/machines/m-team', { authorization: 'Bearer x' })
+    }
+  })
+
+  it('still takes it off when the Team account deleted or emptied its id file', async () => {
+    const f = fake({ readConfig: () => config, adminResult: { ok: true, stdout: 'harness: removed the Harness Team account, its home folder and its daemon\n' } })
+    expect(await teamCommand(['remove'], f.deps)).toBe(0)
+    expect(f.deps.delete).toHaveBeenCalledWith('/api/machines/m-team', { authorization: 'Bearer x' })
+  })
+
+  it('takes nothing off, and says what to do, when the backend links no team machine to this computer', async () => {
+    const elsewhere = { ...computer, machineId: 'm-no-team' }
+    const f = fake({ readConfig: () => config, adminResult: removed, session: () => elsewhere, auth: vi.fn(async () => ({ session: elsewhere, headers: { authorization: 'Bearer x' } })) })
+    expect(await teamCommand(['remove'], f.deps)).toBe(0)
+    expect(f.deps.delete).not.toHaveBeenCalled()
+    expect(f.out.join('\n')).toContain('If its computer, "Mac-placeholder · Team", is still on your Harness account, remove it there: harness machines')
+  })
+
+  it('takes nothing off when this computer has no machine id to compare with: a missing id must not match a team machine with no Mac', async () => {
+    const { machineId: _none, ...noMachine } = computer
+    const f = fake({ readConfig: () => config, adminResult: removed, session: () => noMachine, auth: vi.fn(async () => ({ session: noMachine, headers: { authorization: 'Bearer x' } })) })
+    expect(await teamCommand(['remove'], f.deps)).toBe(0)
+    expect(f.deps.delete).not.toHaveBeenCalled()
+    expect(f.out.join('\n')).toContain('If its computer, "Mac-placeholder · Team", is still on your Harness account, remove it there: harness machines')
   })
 
   it('says how to finish when the computer cannot be taken off: signed out here, or the backend failing', async () => {

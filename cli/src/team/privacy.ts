@@ -11,7 +11,7 @@
  * folder above it was searchable), fails the check, and the first failing item is what the machine reports.
  */
 import { spawnSync } from 'node:child_process'
-import { closeSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
+import { closeSync, constants, fstatSync, mkdirSync, openSync, readSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { TeamConfig } from './config.js'
 import type { TeamEngines } from './engines.js'
@@ -152,6 +152,33 @@ export function enginesOf(value: unknown): TeamEngines | undefined {
   return result
 }
 
+/** A status is well under 1 KiB: its one free text is capped at 300 characters. */
+const STATUS_MAX_BYTES = 64 * 1024
+
+/**
+ * The status file, which the Team account may replace with anything, and which the owner's daemon reads about once a minute
+ * (superTabs/service.ts). A FIFO there blocked a plain read for good and stopped the owner's Swarm service at every restart; a
+ * link to /dev/zero would run until memory is gone (audit M5). So: never through a link, never waiting on a FIFO, a plain file
+ * only, and never more than the limit, whatever fstat said a moment ago. As ./handoff.ts reads its code. Throws otherwise.
+ */
+export function readStatusFile(path: string): string {
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+  try {
+    const stat = fstatSync(fd)
+    if (!stat.isFile() || stat.size > STATUS_MAX_BYTES) throw new Error('not a status file')
+    const buffer = Buffer.alloc(STATUS_MAX_BYTES + 1)
+    let length = 0
+    for (let got = 1; got > 0 && length < buffer.length; length += got) got = readSync(fd, buffer, length, buffer.length - length, null)
+    if (length > STATUS_MAX_BYTES) throw new Error('not a status file')
+    return buffer.toString('utf8', 0, length)
+  } finally { closeSync(fd) }
+}
+
+/** Free text from the status file, fit for the owner's terminal: the Team account wrote it, and `harness team status` prints it
+ *  (audit L1). Without control characters, which carry escape codes, and format characters, which reorder or hide text. Cut
+ *  after that, so padding cannot push the words out. */
+const statusText = (text: string): string => text.replace(/[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/gu, '').slice(0, 300)
+
 const ITEMS = new Set<string>(['sentinel', 'home-listing', 'gitconfig', 'ssh', 'projects', 'keychain', 'chrome', 'safari', 'firefox', 'credentials', 'edge',
   'standard-user', 'unchecked'])
 
@@ -161,12 +188,12 @@ function privacyOf(value: unknown): PrivacyResult | undefined {
   if (typeof v.checkedAt !== 'number' || !Number.isFinite(v.checkedAt)) return undefined
   if (v.passed === true) return { passed: true, checkedAt: v.checkedAt }
   if (v.passed === false && typeof v.item === 'string' && ITEMS.has(v.item) && typeof v.detail === 'string') {
-    return { passed: false, item: v.item as PrivacyItem, detail: v.detail.slice(0, 300), checkedAt: v.checkedAt }
+    return { passed: false, item: v.item as PrivacyItem, detail: statusText(v.detail), checkedAt: v.checkedAt }
   }
   return undefined
 }
 
-export function readTeamStatus(path: string, read: (path: string) => string = (p) => readFileSync(p, 'utf8')): TeamStatus | null {
+export function readTeamStatus(path: string, read: (path: string) => string = readStatusFile): TeamStatus | null {
   let raw: unknown
   try { raw = JSON.parse(read(path)) } catch { return null }
   if (!raw || typeof raw !== 'object' || (raw as { version?: unknown }).version !== 1) return null
@@ -174,7 +201,7 @@ export function readTeamStatus(path: string, read: (path: string) => string = (p
   const status: TeamStatus = { version: 1 }
   const signIn = value.signIn as Record<string, unknown> | undefined
   if (signIn && typeof signIn === 'object' && ['signed-in', 'failed', 'signed-out'].includes(String(signIn.state)) && typeof signIn.at === 'number') {
-    status.signIn = { state: signIn.state as 'signed-in', at: signIn.at, ...(typeof signIn.detail === 'string' ? { detail: signIn.detail.slice(0, 300) } : {}) }
+    status.signIn = { state: signIn.state as 'signed-in', at: signIn.at, ...(typeof signIn.detail === 'string' ? { detail: statusText(signIn.detail) } : {}) }
   }
   const privacy = privacyOf(value.privacy)
   if (privacy) status.privacy = privacy
