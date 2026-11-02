@@ -64,6 +64,7 @@ import 'buddy_sessions.dart';
 import 'swarm_switcher.dart' show fallBackToPersonal;
 import 'project_options.dart';
 import 'project_status.dart';
+import 'ship_row.dart';
 import 'switch_pm.dart';
 import 'task_line.dart';
 import 'pane_layout.dart';
@@ -1958,8 +1959,21 @@ class _SuperTabViewState extends State<SuperTabView>
       messages,
       (agentId) => c.snapshot?.agent(agentId),
     );
+    // A task's line says it shipped: its Shipped card, from before it had the
+    // line, leaves. One with no line stays (Quiet Swarm, part 2).
+    final lined = {
+      for (final m in messages)
+        if (m.isTaskLine) m.source['taskId'],
+    };
     return messages
-        .where((m) => _shown(m) && m.inMainStream && !answered.contains(m.id))
+        .where(
+          (m) =>
+              _shown(m) &&
+              m.inMainStream &&
+              !answered.contains(m.id) &&
+              !(SuperTabShipRow.shows(m) &&
+                  lined.contains(m.source['conversationId'])),
+        )
         .toList();
   }
 
@@ -1972,8 +1986,7 @@ class _SuperTabViewState extends State<SuperTabView>
 
   /// What people never read in a chat, in the list and as a reply's quote: a
   /// message waiting for an agent, notices older backends stored, the PM's own
-  /// notices about the work (backend NOTICE_READERS), and Shipped, which each
-  /// task's line now says (Quiet Swarm).
+  /// notices about the work (backend NOTICE_READERS).
   static const _neverShown = {
     'delivery-hold',
     'work-stalled',
@@ -1987,7 +2000,6 @@ class _SuperTabViewState extends State<SuperTabView>
     'overlap',
     'pair-loop',
     'notice-digest',
-    'ship',
   };
 
   static bool _shown(SuperTabMessage m) =>
@@ -2934,6 +2946,15 @@ class _SuperTabViewState extends State<SuperTabView>
           setState(() => _openedTask = null);
           c.openThread(message.id);
         },
+      );
+    }
+    if (SuperTabShipRow.shows(message)) {
+      return SuperTabShipRow(
+        key: ValueKey(
+          '${inThread ? 'super-thread-message' : 'super-message'}-${message.id}',
+        ),
+        message: message,
+        controller: c,
       );
     }
     if (message.terminalEvent) {
