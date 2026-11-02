@@ -86,12 +86,14 @@ export function procNetListener(table: string, port: number): number | null {
 
 /**
  * Whether the process listening on loopback [port] runs as this account: null when that cannot be said (a listener gone
- * by now, a lookup that failed, Windows). macOS shows an account only its own sockets, so a port that is taken but not
- * among them is another account's.
+ * by now, a lookup that failed). macOS shows an account only its own sockets, so a port that is taken but not among them
+ * is another account's. Windows is asked ([windowsListenerQuery], [run]): it answered null until task #2162, so the
+ * connectors bridge never moved off a port the Team account held from boot (Reed's review of #2605).
  */
-export async function portHolderIsThisAccount(port: number, platform: NodeJS.Platform = process.platform): Promise<boolean | null> {
+export async function portHolderIsThisAccount(port: number, platform: NodeJS.Platform = process.platform, run: WindowsPeerRun = runWindowsPeer): Promise<boolean | null> {
+  if (platform === 'win32') return askWindowsListener(port, run)
   const uid = process.getuid?.()
-  if (platform === 'win32' || uid === undefined) return null
+  if (uid === undefined) return null
   if (platform === 'linux') {
     // A kernel with no IPv6 has no tcp6, and /proc/net/tcp alone says who holds the port then.
     const tables = await Promise.all(['/proc/net/tcp', '/proc/net/tcp6'].map(file => readFile(file, 'utf8').catch(() => '')))
@@ -134,6 +136,43 @@ export function windowsPeerQuery(peerPort: number, ownPort: number): { script: s
       "if ($owner.ReturnValue -eq 0 -and $owner.Sid -and $owner.Sid -eq [Security.Principal.WindowsIdentity]::GetCurrent().User.Value) { 'yes' } else { 'no' }",
     ].join('\n'),
     inputs: { HARNESS_PEER_PORT: String(peerPort), HARNESS_OWN_PORT: String(ownPort) },
+  }
+}
+
+/**
+ * Windows: whose the listeners on loopback [port] are. Prints `none` when nothing listens, `yes` when one of them belongs
+ * to a process of this account (a second daemon or a handover of its own, which the bridge waits out), and `no` otherwise.
+ * As in [windowsPeerQuery], the owner is compared by SID, and a process that started after its listener was made (an id
+ * reused since its creator exited) or one gone is not this account's: the answer that moves the bridge is the safe one.
+ * The port is an input, never in the script's text.
+ */
+export function windowsListenerQuery(port: number): { script: string; inputs: Record<string, string> } {
+  return {
+    script: [
+      '$rows = @(Get-NetTCPConnection -State Listen -LocalPort ([int]$env:HARNESS_LISTEN_PORT) -ErrorAction SilentlyContinue)',
+      "if ($rows.Count -eq 0) { 'none'; exit 0 }",
+      '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
+      'foreach ($row in $rows) {',
+      '  $process = Get-CimInstance Win32_Process -Filter ("ProcessId = " + [int]$row.OwningProcess)',
+      '  if (-not $process -or -not $process.CreationDate -or -not $row.CreationTime -or $process.CreationDate -gt $row.CreationTime) { continue }',
+      '  $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid',
+      "  if ($owner.ReturnValue -eq 0 -and $owner.Sid -and $owner.Sid -eq $me) { 'yes'; exit 0 }",
+      '}',
+      "'no'",
+    ].join('\n'),
+    inputs: { HARNESS_LISTEN_PORT: String(port) },
+  }
+}
+
+async function askWindowsListener(port: number, run: WindowsPeerRun): Promise<boolean | null> {
+  const query = windowsListenerQuery(port)
+  try {
+    const result = await run(query.script, query.inputs)
+    if (result.status !== 0) return null
+    const answer = result.stdout.trim()
+    return answer === 'yes' ? true : answer === 'no' ? false : null
+  } catch {
+    return null
   }
 }
 
