@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/swarm_conversation.dart';
+import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_inbox.dart';
 import 'package:harness_mobile/swarm/swarm_kept.dart';
 import 'package:harness_mobile/swarm/swarm_outbox.dart';
@@ -153,6 +154,65 @@ void main() {
       c.draft = '';
       await before.kept.flush();
       expect((await chat(await app())).draft, isEmpty);
+    });
+  });
+
+  group('on the page', () {
+    Future<SwarmHost> open(WidgetTester tester, {required String draft}) async {
+      store
+        ..heldBy = me
+        ..held = {
+          'drafts': [
+            {'tab': tab, 'chat': 'g1', 'text': draft},
+          ],
+          'posts': <Object>[],
+        };
+      final account = ValueNotifier<String?>(me);
+      final host = SwarmHost(
+        accountId: () => account.value,
+        account: account,
+        request: swarm.request,
+        notices: SilentSystemNotices(),
+        features: ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
+          ..value = {PhoneExperiment.swarm},
+        readMarks: MemoryKeyValueStore(),
+        kept: store,
+      )..foreground = false;
+      addTearDown(host.dispose);
+      await host.session!.inbox.kept.ready;
+      await host.session!.inbox.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          builder: (_, child) => SwarmScope(notifier: host, child: child!),
+          home: const SwarmConversationPage(swarmId: tab, conversationId: 'g1'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      return host;
+    }
+
+    String box(WidgetTester tester) =>
+        tester.widget<TextField>(find.byType(TextField)).controller!.text;
+
+    testWidgets('the words kept are in the box when the chat opens', (
+      tester,
+    ) async {
+      await open(tester, draft: 'half a thought');
+      expect(box(tester), 'half a thought');
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(seconds: 1));
+    });
+
+    testWidgets('what is typed then is what is kept', (tester) async {
+      final host = await open(tester, draft: 'half');
+      await tester.enterText(find.byType(TextField), 'half a thought');
+      await tester.pump();
+      expect(
+        host.session!.inbox.kept.draft(tab, 'g1', null)?.text,
+        'half a thought',
+      );
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(seconds: 1));
     });
   });
 
@@ -309,10 +369,11 @@ void main() {
       final before = await app();
       before.kept.setDraft(tab, 'gone', null, 'secret words');
       await before.kept.flush();
-      swarm.routes['/api/super-tabs/$tab/conversations/gone'] = (_) =>
+      swarm.routes['/api/super-tabs/$tab/groups/gone'] = (_) =>
           throw const SuperTabFailure('NOT_FOUND', 'No.', statusCode: 404);
       final after = await app();
       await pumpEventQueue();
+      expect(swarm.paths, contains('/api/super-tabs/$tab/groups/gone'));
       expect(after.kept.draft(tab, 'gone', null), isNull);
       expect('${store.held}', isNot(contains('secret words')));
     });
@@ -321,7 +382,7 @@ void main() {
       final before = await app();
       before.kept.setDraft(tab, 'maybe', null, 'keep me');
       await before.kept.flush();
-      swarm.routes['/api/super-tabs/$tab/conversations/maybe'] = (_) =>
+      swarm.routes['/api/super-tabs/$tab/groups/maybe'] = (_) =>
           throw const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.');
       final after = await app();
       await pumpEventQueue();
