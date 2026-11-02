@@ -52,7 +52,7 @@ bool _serverTakesSessions(SwarmReader reader, {required bool fromChat}) {
 
 /// Whether [chat] is the reader's own Buddy chat, where a thread may have a
 /// session of its own: not someone else's, nor an older one kept to read.
-bool _ownBuddyChat(SwarmReader reader, SuperTabConversation chat) =>
+bool swarmOwnBuddyChat(SwarmReader reader, SuperTabConversation chat) =>
     !reader.accessRevoked &&
     chat.isBuddyChat &&
     chat.buddyOwnerId == reader.accountId &&
@@ -62,7 +62,7 @@ bool _ownBuddyChat(SwarmReader reader, SuperTabConversation chat) =>
 /// chat, with a Buddy, on a server that takes New session on a top-level
 /// message. It may still show disabled, saying why ([swarmSessionBlocked]).
 bool swarmOffersChatSessions(SwarmReader reader, SuperTabConversation chat) =>
-    _ownBuddyChat(reader, chat) &&
+    swarmOwnBuddyChat(reader, chat) &&
     _serverTakesSessions(reader, fromChat: true) &&
     swarmBuddy(reader, chat.projectId) != null;
 
@@ -74,7 +74,7 @@ bool swarmOffersThreadSessions(
   SuperTabConversation chat, {
   required bool hadSession,
 }) =>
-    _ownBuddyChat(reader, chat) &&
+    swarmOwnBuddyChat(reader, chat) &&
     _serverTakesSessions(reader, fromChat: false) &&
     (swarmBuddy(reader, chat.projectId) != null || hadSession);
 

@@ -186,21 +186,29 @@ class SwarmThread extends ChangeNotifier implements SwarmFilesBox {
   /// New session is chosen for the next reply (Desktop's thread composer).
   bool _newSession = false;
 
-  /// Whether the box shows New session: the person's own Buddy chat, on a
-  /// server that takes it for a reply — with a Buddy, or in a thread that had
-  /// a session, whose reply must start a new one. It may still show disabled,
-  /// saying why ([sessionBlocked]).
-  bool get offersSessions {
+  /// The person's own Buddy chat, on a server that takes New session for a
+  /// reply — with a Buddy, or in a thread that had a session, whose reply
+  /// must start a new one.
+  bool get _sessionsPossible {
     final group = chat.conversation;
     return group != null &&
         canPost &&
         swarmOffersThreadSessions(reader, group, hadSession: _hadSession);
   }
 
+  /// Whether the box shows New session: [_sessionsPossible], in a thread no
+  /// session answers now (Desktop's `_offersSession`). It may still show
+  /// disabled, saying why ([sessionBlocked]).
+  bool get offersSessions => _sessionsPossible && session == null;
+
+  /// Whether the box shows Also send: not in a session's thread, which stays
+  /// in the thread, nor for a reply that starts a session.
+  bool get offersAlsoSend => !newSession && session == null;
+
   /// Why a session cannot start now; null when it can.
   String? get sessionBlocked {
     final group = chat.conversation;
-    return group == null || !offersSessions
+    return group == null || !_sessionsPossible
         ? null
         : swarmSessionBlocked(reader, group);
   }
@@ -209,24 +217,30 @@ class SwarmThread extends ChangeNotifier implements SwarmFilesBox {
   bool get _hadSession => messages.any((m) => m.buddySession);
 
   /// The live or starting session answering the thread; null when none does,
-  /// or in a chat that is not the person's own Buddy chat.
+  /// or in a chat that is not the person's own Buddy chat. Shown whether or
+  /// not New session is offered.
   SuperTabBuddySession? get session {
     final group = chat.conversation;
-    return group == null || !offersSessions ? null : group.sessionFor(root);
+    return group == null || !swarmOwnBuddyChat(reader, group)
+        ? null
+        : group.sessionFor(root);
   }
 
   /// The row saying the thread's last session ended (its ended line, else its
   /// last session reply), while no session answers it: a plain reply would be
   /// refused, so a new one must start.
   SuperTabMessage? get sessionEndedRow {
-    if (!offersSessions || session != null) return null;
+    final group = chat.conversation;
+    if (group == null || !swarmOwnBuddyChat(reader, group) || session != null) {
+      return null;
+    }
     final rows = messages;
     return rows.where((m) => m.sessionEnded).lastOrNull ??
         rows.where((m) => m.buddySession).lastOrNull;
   }
 
   /// The thread's session ended: New session shows on and locked.
-  bool get sessionLocked => sessionEndedRow != null;
+  bool get sessionLocked => _sessionsPossible && sessionEndedRow != null;
 
   /// Whether the next reply starts a session: locked, or chosen and not
   /// blocked.
@@ -243,7 +257,10 @@ class SwarmThread extends ChangeNotifier implements SwarmFilesBox {
   Future<bool> endSession() async {
     if (_disposed) return false;
     final done = await chat.endSession(root);
-    if (!_disposed) _tell();
+    if (_disposed) return done;
+    // Said where the person pressed it: this page shows the thread's error.
+    if (!done && chat.endRefusal != null) error = chat.endRefusal;
+    _tell();
     return done;
   }
 
@@ -597,7 +614,7 @@ class SwarmThread extends ChangeNotifier implements SwarmFilesBox {
           'replyTo': root,
           'recipientIds': const <String>[],
           // A session's thread stays in the thread: never also sent.
-          if (_alsoSend && !startsSession) 'alsoSend': true,
+          if (_alsoSend && offersAlsoSend) 'alsoSend': true,
           if (startsSession) 'newSession': true,
           if (ids.isNotEmpty) 'attachmentIds': ids,
           // As the desktop's: the server refuses it in an older Buddy chat.

@@ -99,10 +99,5 @@ void main() {
     expect([ended.sessionEnded, ended.sessionEndReason], [true, 'idle']);
     final plain = message({'buddySession': true});
     expect([plain.sessionEnded, plain.sessionEndReason], [false, null]);
-    expect(plain.sessionRoot, isTrue);
-    expect(
-      message({'buddySession': true, 'thread': 'other'}).sessionRoot,
-      isFalse,
-    );
   });
 }

@@ -2196,7 +2196,11 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                     ),
                   ),
           ),
-          if (c.newSession && !talking)
+          // Where a session works is the Swarm's one Buddy chat's to pick;
+          // a project's own Buddy chat sends no project.
+          if (c.newSession &&
+              !talking &&
+              c.conversation?.isSwarmBuddyChat == true)
             SwarmSessionProjectRow(
               key: const ValueKey('swarm-session-project'),
               chat: c,

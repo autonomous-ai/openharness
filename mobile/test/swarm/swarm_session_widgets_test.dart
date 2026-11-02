@@ -173,10 +173,12 @@ void main() {
       final fake = threadBackend(replies: plain);
       await pump(tester, fake, thread: 'm1');
       expect(key('swarm-thread-session-line'), findsNothing);
-      await tester.tap(key('swarm-thread-new-session'));
-      await tester.pump();
       await tester.tap(key('swarm-thread-also-send'));
       await tester.pump();
+      await tester.tap(key('swarm-thread-new-session'));
+      await tester.pump();
+      // A reply that starts a session is not offered to the chat too.
+      expect(key('swarm-thread-also-send'), findsNothing);
       await tester.enterText(key('swarm-thread-field'), 'Look into it');
       await tester.pump();
       await tester.tap(key('swarm-thread-send'));

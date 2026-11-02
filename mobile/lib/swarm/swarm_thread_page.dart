@@ -640,13 +640,16 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
                               ? () => unawaited(_pickFiles())
                               : null,
                         ),
-                      Expanded(
-                        child: _AlsoSend(
-                          label: t.alsoSendLabel,
-                          value: t.alsoSend,
-                          onChanged: (on) => t.alsoSend = on,
-                        ),
-                      ),
+                      if (t.offersAlsoSend)
+                        Expanded(
+                          child: _AlsoSend(
+                            label: t.alsoSendLabel,
+                            value: t.alsoSend,
+                            onChanged: (on) => t.alsoSend = on,
+                          ),
+                        )
+                      else
+                        const Spacer(),
                       // The main chat's mic, beside Send as there.
                       if (voice != null) SwarmVoiceMic(voice: voice),
                       SwarmRoundButton(

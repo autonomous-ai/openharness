@@ -1220,10 +1220,6 @@ class SuperTabMessage {
       sessionEnded ? source['reason'] as String? : null;
   bool get threadReply => thread != null && thread != id;
 
-  /// A Buddy chat message that started its own thread's session from the
-  /// main chat: its thread's root, in the session's thread.
-  bool get sessionRoot => buddySession && !threadReply;
-
   /// Whether the main stream lists it: a thread reply only when also sent.
   bool get inMainStream => !threadReply || alsoInChat;
   final int sequence;

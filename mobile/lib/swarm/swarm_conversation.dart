@@ -368,6 +368,10 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
   /// The threads whose session an end is under way for.
   final _ending = <String>{};
 
+  /// Why the last End session was refused; null when it was not. The page
+  /// that pressed it says it (the thread's).
+  String? endRefusal;
+
   /// Whether an end is under way for [root]'s session.
   bool endingSession(String root) => _ending.contains(root);
 
@@ -384,7 +388,7 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
         !_ending.add(root)) {
       return false;
     }
-    error = null;
+    endRefusal = null;
     notifyListeners();
     String? refused;
     try {
@@ -409,7 +413,7 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
     if (_disposed) return refused == null;
     _ending.remove(root);
     if (refused != null) {
-      error = refused;
+      endRefusal = refused;
     } else {
       unawaited(reader.refresh());
       unawaited(_reread());
