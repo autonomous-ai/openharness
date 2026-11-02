@@ -78,8 +78,9 @@ action, from the project's menu or from the limit line, whoever owns that machin
   - Label: the account's `displayName` from `<dir>/.claude.json` `oauthAccount`, else the folder name, else (for Orca's
     `home`) `Orca <first 4 of the uuid>`. A label never carries an email address when it leaves the machine (see 5).
 - RPCs `claude_profiles_list {observedPaths}` and `claude_profile_link {path}` sit beside the Codex pair in
-  `services/models.ts` `launchTargetRequests`, in `core/api.ts` `MODELS_REQUESTS`, and in both E2EE type lists
-  (`lib/e2ee/core.ts`, `desktop/lib/e2ee/envelope.dart`). Both answer the machine owner only (`OWNER_REQUIRED`), and so do
+  `services/models.ts` `launchTargetRequests` and in `core/api.ts` `MODELS_REQUESTS`. They stay off the E2EE type lists
+  (`lib/e2ee/core.ts` is pinned by the interop keystone and is not edited for this work), so they serve the machine's own
+  windows and its host; a relayed window does not list another machine's accounts. Both answer the machine owner only (`OWNER_REQUIRED`), and so do
   the Codex pair from now on: they disclose folder paths.
 - Every profile has an opaque `id`: the first 16 hex of sha256(`<machine id>:<engine>:<realpath>`). Only the machine maps an
   id back to a folder.

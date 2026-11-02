@@ -38,7 +38,7 @@
 
 **Files:**
 - Create: `cli/src/lib/claudeProfiles.ts`, `cli/src/lib/claudeProfiles.test.ts`
-- Modify: `cli/src/services/models.ts:511-546` (`launchTargetRequests`), `cli/src/core/api.ts:727-732` (`MODELS_REQUESTS`), `cli/src/lib/e2ee/core.ts:360,386`, `desktop/lib/e2ee/envelope.dart:88-89`, `cli/src/services/models.spec.ts`
+- Modify: `cli/src/services/models.ts:511-546` (`launchTargetRequests`), `cli/src/core/api.ts:727-732` (`MODELS_REQUESTS`), `cli/src/services/models.spec.ts` (never `cli/src/lib/e2ee/core.ts` or `desktop/lib/e2ee/envelope.dart`: the RPCs serve the local machine only)
 
 **Interfaces:**
 - Produces: `interface ClaudeProfile { id: string; path: string; label: string; reportLabel: string }`; `listClaudeProfiles(observedPaths?: string[], options?: { home?: string; environment?: NodeJS.ProcessEnv; machineId: string }): ClaudeProfile[]`; `linkClaudeProfile(path: string, machineId: string): { profile: ClaudeProfile } | { error: 'INVALID_PATH' | 'NOT_FOUND' }`; `profileId(machineId: string, engine: 'claude' | 'codex', realpath: string): string`; RPCs `claude_profiles_list { observedPaths }` → `{ profiles }`, `claude_profile_link { path }` → `{ profile } | { error }`.
@@ -52,7 +52,7 @@
   - `profileId is stable and 16 hex`.
   - In `models.spec.ts`: `claude_profiles_list and codex_profiles_list answer OWNER_REQUIRED to a guest`.
 - [ ] **Step 2: Run** `cd cli && npx vitest run src/lib/claudeProfiles.test.ts src/services/models.spec.ts`. Expected: FAIL (module missing; codex RPC answers a guest).
-- [ ] **Step 3: Implement** by copying `codexProfiles.ts`/`codexProfileDiscovery.ts` patterns (file `claude-profiles.json`, 0600, atomic, 256 cap; a folder counts when it holds `.claude.json` or `settings.json`; discovery = inherited `CLAUDE_CONFIG_DIR`, `~/.claude-*`, Orca `claude-profiles/*/home`). Add the two RPCs beside the Codex pair with `if (!asker.owner) reply({ error: 'OWNER_REQUIRED' })` on all four, and add the types to `MODELS_REQUESTS` and both E2EE lists (CLI and Desktop).
+- [ ] **Step 3: Implement** by copying `codexProfiles.ts`/`codexProfileDiscovery.ts` patterns (file `claude-profiles.json`, 0600, atomic, 256 cap; a folder counts when it holds `.claude.json` or `settings.json`; discovery = inherited `CLAUDE_CONFIG_DIR`, `~/.claude-*`, Orca `claude-profiles/*/home`). Add the two RPCs beside the Codex pair with `if (!asker.owner) reply({ error: 'OWNER_REQUIRED' })` on all four, and add the types to `MODELS_REQUESTS` only.
 - [ ] **Step 4: Run** the same command, then `npm run test:core`. Expected: PASS, 100% for `services/models.ts`.
 - [ ] **Step 5: Commit** `feat(cli): Claude profiles, listed and linked like Codex profiles`.
 
