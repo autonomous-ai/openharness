@@ -1,3 +1,5 @@
+import 'dart:ui' show SemanticsAction;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
@@ -30,7 +32,7 @@ Map<String, dynamic> taskLine({
     'kind': 'task-line',
     'state': state,
     'title': title,
-    'conversationId': target,
+    'taskId': target,
     'answerFor': ?answerFor,
   },
 };
@@ -38,53 +40,53 @@ Map<String, dynamic> taskLine({
 Map<String, dynamic> legacyShip(String target, int sequence) => {
   ...taskLine(id: 'ship-$target', sequence: sequence),
   'text': 'Shipped: $target',
-  'source': {'kind': 'ship', 'conversationId': target, 'title': target},
+  'source': {'kind': 'ship', 'taskId': target, 'title': target},
 };
 
-FakeSwarm taskLineBackend(List<Map<String, dynamic>> page, {bool target = true}) => FakeSwarm()
-  ..routes['/api/super-tabs/list'] = (_) =>
+FakeSwarm taskLineBackend(
+  List<Map<String, dynamic>> page, {
+  bool target = true,
+}) {
+  final fake = FakeSwarm();
+  fake.routes['/api/super-tabs/list'] = (_) => {
+    'tabs': [
+      {'id': tab, 'name': 'Phone Swarm', 'ownerId': me},
+    ],
+    'next': null,
+  };
+  fake.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(
+    groups: [
+      groupData(leadChat, title: 'Project chat', lastMessageSequence: 10),
+      if (target) groupData('task-1', title: 'Fix login'),
+    ],
+  );
+  fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
+  fake.routes['/api/super-tabs/$tab/decisions'] = (_) => {
+    'decisions': <Object>[],
+  };
+  fake.routes['/api/super-tabs/$tab/mentions'] = (_) => {
+    'mentions': <Object>[],
+  };
+  fake.routes['/api/super-tabs/$tab/conversations/$leadChat/messages'] = (_) =>
+      {'messages': page.reversed.toList(), 'threads': <Object>[], 'next': null};
+  fake.routes['/api/super-tabs/$tab/conversations/task-1/messages'] = (_) => {
+    'messages': [
       {
-          'tabs': [
-            {'id': tab, 'name': 'Phone Swarm', 'ownerId': me},
-          ],
-          'next': null,
-        }
-        ..routes['/api/super-tabs/$tab/parts'] = (_) =>
-            firstLoad(
-                groups: [
-                  groupData(
-                    leadChat,
-                    title: 'Project chat',
-                    lastMessageSequence: 10,
-                  ),
-                  if (target) groupData('task-1', title: 'Fix login'),
-                ],
-              )
-              ..routes['/api/super-tabs/$tab/changes'] = (_) =>
-                  changes(cursor: 'c2')
-                    ..routes['/api/super-tabs/$tab/decisions'] = (_) =>
-                        {'decisions': <Object>[]}
-                          ..routes['/api/super-tabs/$tab/mentions'] = (_) =>
-                              {'mentions': <Object>[]}
-                                ..routes['/api/super-tabs/$tab/conversations/$leadChat/messages'] = (_) =>
-                                    {
-                                        'messages': page.reversed.toList(),
-                                        'threads': <Object>[],
-                                        'next': null,
-                                      }
-                                      ..routes['/api/super-tabs/$tab/conversations/task-1/messages'] = (_) => {
-                                        'messages': [
-                                          {
-                                            ...taskLine(),
-                                            'id': 'task-message',
-                                            'conversationId': 'task-1',
-                                            'text': 'Inside the task chat',
-                                            'source': {'kind': 'message'},
-                                          },
-                                        ],
-                                        'threads': <Object>[],
-                                        'next': null,
-                                      }..routes['/api/super-tabs/$tab/commands'] = (_) => {'result': <String, dynamic>{}};
+        ...taskLine(),
+        'id': 'task-message',
+        'conversationId': 'task-1',
+        'text': 'Inside the task chat',
+        'source': {'kind': 'message'},
+      },
+    ],
+    'threads': <Object>[],
+    'next': null,
+  };
+  fake.routes['/api/super-tabs/$tab/commands'] = (_) => {
+    'result': <String, dynamic>{},
+  };
+  return fake;
+}
 
 Future<SwarmHost> pumpTaskChat(WidgetTester tester, FakeSwarm fake) async {
   await tester.binding.setSurfaceSize(const Size(390, 844));
