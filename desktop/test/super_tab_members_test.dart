@@ -435,4 +435,158 @@ void main() {
       await f.close(tester);
     });
   });
+
+  group('Cards', () {
+    final card = find.byKey(const ValueKey('super-agent-card'));
+    final task = find.byKey(const ValueKey('super-card-task'));
+    final run = find.byKey(const ValueKey('super-card-run'));
+
+    Future<RosterFixture> juno(WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(900, 760));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final f = RosterFixture();
+      await f.initialize();
+      addTearDown(f.dispose);
+      final list = f.server.state['agents'] as List;
+      (list[1] as Map)['configuration'] = {
+        'engine': 'claude',
+        'model': 'claude-opus-5-5',
+        'effort': 'high',
+      };
+      (f.server.state['conversations'] as List).add({
+        ...conversationFixture('build', 'Windows credential fix'),
+        'assignment': {'agentId': 'agent-1', 'status': 'working'},
+      });
+      await f.controller.refresh();
+      return f;
+    }
+
+    testWidgets('the agent card: role, task, model · effort · machine, '
+        'Open terminal and Details…', (tester) async {
+      final f = await juno(tester);
+      await f.show(tester);
+      await tester.tap(f.row(1));
+      await tester.pumpAndSettle();
+      expect(card, findsOneWidget);
+      expect(
+        find.descendant(of: card, matching: find.text('Sage')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: card, matching: find.text('Dev')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: task,
+          matching: find.text('Windows credential fix'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<Text>(find.descendant(of: run, matching: find.byType(Text)))
+            .data,
+        startsWith('Opus 5.5 · high · '),
+      );
+      expect(find.text('Open terminal'), findsOneWidget);
+      expect(find.text('Details…'), findsOneWidget);
+      // Open terminal opens the agent.
+      await tester.tap(find.text('Open terminal'));
+      await tester.pumpAndSettle();
+      expect(card, findsNothing);
+      expect(f.opened?.id, 'agent-1');
+      await f.close(tester);
+    });
+
+    testWidgets("the card's task opens its conversation", (tester) async {
+      final f = await juno(tester);
+      await f.show(tester);
+      await tester.tap(f.row(1));
+      await tester.pumpAndSettle();
+      await tester.tap(task);
+      await tester.pumpAndSettle();
+      expect(card, findsNothing);
+      expect(f.answered, 'build');
+      await f.close(tester);
+    });
+
+    testWidgets('Details… opens the full details', (tester) async {
+      final f = await juno(tester);
+      await f.show(tester);
+      await tester.tap(f.row(1));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Details…'));
+      await tester.pumpAndSettle();
+      expect(card, findsNothing);
+      expect(find.text('Engine'), findsOneWidget);
+      expect(find.text('Claude Code'), findsWidgets);
+      await f.close(tester);
+    });
+
+    testWidgets('an agent with nothing known shows no task or run line', (
+      tester,
+    ) async {
+      final f = await juno(tester);
+      f.server.state['machines'] = <Object>[];
+      await f.controller.refresh();
+      await f.show(tester, nativeState: false);
+      await tester.tap(find.text('Idle (3)'));
+      await tester.pumpAndSettle();
+      await tester.tap(f.row(3));
+      await tester.pumpAndSettle();
+      expect(card, findsOneWidget);
+      expect(task, findsNothing);
+      expect(run, findsNothing);
+      await f.close(tester);
+    });
+
+    testWidgets('the person card: crown, points and the three numbers', (
+      tester,
+    ) async {
+      final f = await people(tester);
+      await f.show(tester);
+      await tester.tap(person('owner'));
+      await tester.pumpAndSettle();
+      final dialog = find.byType(Dialog);
+      expect(
+        find.descendant(of: dialog, matching: find.text('owner \u{1F451}')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: dialog, matching: find.text('424 points')),
+        findsOneWidget,
+      );
+      expect(find.byTooltip('Points in the last 7 days'), findsWidgets);
+      expect(
+        find.descendant(
+          of: dialog,
+          matching: find.text('11 shipped · 4 unblocked · 41 hours'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: dialog, matching: find.text('Manage people')),
+        findsOneWidget,
+      );
+      await f.close(tester);
+    });
+
+    testWidgets('a person with no points yet reads 0 of each', (tester) async {
+      final f = await people(tester);
+      await f.show(tester);
+      await tester.tap(person('tony'));
+      await tester.pumpAndSettle();
+      final dialog = find.byType(Dialog);
+      expect(
+        find.descendant(of: dialog, matching: find.text('tony')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: dialog, matching: find.textContaining('points')),
+        findsNothing,
+      );
+      await f.close(tester);
+    });
+  });
 }
