@@ -30,8 +30,9 @@ Daemon-level checks over the same loopback WebSocket the desktop uses (`ws://127
 They need a running daemon with the harness installed on this machine, and `cli/node_modules` (for `ws`).
 Run them as the OS user Harness runs as: they reach the daemon over its 0600 socket in `ADAPTER_DATA_DIR`
 (default `~/.harness/cli/data`, or `~/.harness/s/<hash>` for a folder too long for a socket), `local-daemon.mjs`, and nothing goes to its TCP port, which any account can hold. Only where a
-socket cannot be (Windows, or a home too long as well) do they use the port, with `hook-credential` as `X-Harness-Local`
-(`local-credential.mjs`).
+socket cannot be (a home too long as well) do they use the port, with `hook-credential` as `X-Harness-Local`
+(`local-credential.mjs`). On Windows they send no credential to the port, which the Team account's daemon can hold from
+boot (audit W1): until they use the daemon's pipe, they cannot reach the daemon there.
 
 ```sh
 node store/tools/dsh-e2e.mjs <machineId> <dshId> <engine> <workspace> [--keep] [--restart] [--bypass] [--no-verdict]

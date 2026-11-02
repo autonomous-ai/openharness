@@ -5,7 +5,8 @@
  * - What each account may do in the folders the elevated setup script makes, read from the security descriptors it writes
  *   and decoded bit by bit: the team account adds nothing to the sign-in handover folder and cannot remove it, and no other
  *   account reads the code or the relay's token.
- * - The owner's local credential over TCP on Windows, pinned as it is today (finding W1, still open): closing it turns these red.
+ * - The owner's local credential over TCP on Windows (finding W1, fixed): no client puts it on a TCP request, and the daemon
+ *   counts it from no other account.
  */
 import { mkdtempSync } from 'node:fs'
 import type { Socket } from 'node:net'
@@ -13,7 +14,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { loadOrCreateHookCredential } from '../lib/hookAuth.js'
-import { LOCAL_CREDENTIAL_HEADER, localCredentialHeaders } from '../lib/localCredential.js'
+import { localCredentialHeaders } from '../lib/localCredential.js'
 import { peerIsThisAccount } from '../lib/peerAccount.js'
 import { buildWindowsSetupScript, type WindowsSetupScriptInput } from './windowsScript.js'
 
@@ -122,16 +123,16 @@ describe('the folders the Windows setup script makes, by what each account may d
   })
 })
 
-describe('W1, still open: the owner\'s local credential over TCP on Windows', () => {
-  it('a client puts the credential on a loopback TCP request, where macOS and Linux send none', () => {
+describe('W1: the owner\'s local credential never goes over TCP on Windows', () => {
+  it('a client puts no credential on a loopback TCP request, on Windows as on macOS and Linux', () => {
     const data = mkdtempSync(join(tmpdir(), 'team-win-boundary-'))
     loadOrCreateHookCredential(data)
     expect(localCredentialHeaders(data, 'darwin')).toEqual({})
-    expect(Object.keys(localCredentialHeaders(data, 'win32'))).toEqual([LOCAL_CREDENTIAL_HEADER])
+    expect(localCredentialHeaders(data, 'win32')).toEqual({})
   })
 
-  it('the daemon counts it from any account: Windows answers yes without asking who is calling', async () => {
+  it('the daemon counts it only from this account: Windows is asked who is calling, and another account is refused', async () => {
     const stranger = { remoteAddress: '127.0.0.1', remotePort: 50_001, localAddress: '127.0.0.1', localPort: 18473 } as Socket
-    await expect(peerIsThisAccount(stranger, 'win32')).resolves.toBe(true)
+    await expect(peerIsThisAccount(stranger, 'win32', async () => ({ status: 0, stdout: 'no\r\n' }))).resolves.toBe(false)
   })
 })

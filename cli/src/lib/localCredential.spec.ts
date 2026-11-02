@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { hookCredentialPath, loadOrCreateHookCredential } from './hookAuth.js'
-import { LOCAL_CREDENTIAL_HEADER, localCredentialHeaders, localCredentialMatches, readLocalCredential, suppliedLocalCredential } from './localCredential.js'
+import { localCredentialHeaders, localCredentialMatches, readLocalCredential, suppliedLocalCredential } from './localCredential.js'
 
 const dirs: string[] = []
 afterEach(() => dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true })))
@@ -14,12 +14,12 @@ function dataDir(): string {
 }
 
 describe('the daemon\'s local credential', () => {
-  it('is the hook credential, sent as X-Harness-Local by a process that can read it', () => {
+  it('is the hook credential, read by a process that can read it, and put on no request on Windows', () => {
     const dir = dataDir()
     const credential = loadOrCreateHookCredential(dir)
     expect(readLocalCredential(dir)).toBe(credential)
-    // Windows, whose rules are its callers'. On macOS and Linux see team/localCredential.spec.ts.
-    expect(localCredentialHeaders(dir, 'win32')).toEqual({ [LOCAL_CREDENTIAL_HEADER]: credential })
+    // Windows clients use the daemon's pipe (audit W1). On macOS and Linux see team/localCredential.spec.ts.
+    expect(localCredentialHeaders(dir, 'win32')).toEqual({})
   })
 
   it('adds no header when there is no credential to read, or one another user could have written', () => {
