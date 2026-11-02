@@ -133,6 +133,11 @@ would hand over a lasting credential.
 **Fix:** allow only the paths and methods the engines use, and refuse encoded separators. The one token is shared by every Team
 agent, and lasts until the daemon restarts; a per-launch token would limit a leak (M2).
 
+**Since task #2125:** the Team account's token and port now outlive a restart of the owner's daemon, so running agents keep reaching the
+model. While the daemon is down, a local account that takes the port hears the token from running agents, and could reuse it if it let
+the port go before the daemon returned. It only spends model calls through the relay's allowed paths, never the owner's sign-in. If
+the port stays taken, the daemon moves to a new port and a new token.
+
 ### M5. A Team agent can stop the owner's Swarm service (Medium)
 
 The status folder belongs to the Team account, and `team/privacy.ts:169` reads the file with a plain `readFileSync`. The owner's

@@ -363,8 +363,10 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   // On the Mac's owner's daemon, while a Harness Team account exists here: the owner's subscriptions for it, through a
   // relay of its own (team/relay.ts). Kept through a lost backend connection, which running agents do not need.
   const relay = (options.teamRelay ?? (() => realTeamRelayPublisher(
-    () => startSubscriptionRelay({ owner: createOwnerSubscriptions(), log: line => console.log(`[team] relay · ${line}`) }),
+    port => startSubscriptionRelay({ owner: createOwnerSubscriptions(), log: line => console.log(`[team] relay · ${line}`), ...(port ? { port } : {}) }),
     () => readTeamConfig(), options.team ?? (() => readAuthSession()?.kind === 'team'), line => console.log(`[team] ${line}`),
+    // In the owner's closed home: a running Team agent's relay outlives this daemon (task #2125).
+    join(core.dataDir, 'team-relay-grant.json'),
     // A team account still on a build that cannot use the relay is updated from here (team/refresh.ts).
     (publishedAt) => refreshTeamAccount(realTeamRefreshDeps(core, publishedAt)))))()
   let autoSetup: Promise<Pick<TeamAutoSetup, 'offer' | 'decline'> & Partial<Pick<TeamAutoSetup, 'status'>>> | null = null

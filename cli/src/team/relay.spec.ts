@@ -1,15 +1,17 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
-import { CODEX_RELAY_ACCOUNT, type SubscriptionRelay } from '../lib/subscriptionRelay.js'
+import { CODEX_RELAY_ACCOUNT, startSubscriptionRelay, type SubscriptionRelay } from '../lib/subscriptionRelay.js'
 import { engineAccount } from '../lib/engineAccount.js'
 import type { TeamConfig } from './config.js'
 import {
-  publishTeamRelay, publishWindowsTeamRelay, readTeamRelay, readWindowsTeamRelay, setfaclGrant, TEAM_RELAY_GUEST, teamRelayDir, teamRelayFile,
+  publishTeamRelay, publishWindowsTeamRelay, readRememberedGrant, readTeamRelay, writeRememberedGrant, readWindowsTeamRelay, setfaclGrant, TEAM_RELAY_GUEST, teamRelayDir, teamRelayFile,
   teamRelayLaunch, teamRelayPublished, NO_PM_RELAY, type OwnerRelayLaunch, TeamRelayPublisher, prepareCodexHome, installedCodexVersion,
   CODEX_CLIENT_VERSION_FALLBACK, settleCodexModel, offeredCodexModels, codexModelNotOffered,
-  type TeamRelayLaunchDeps, type TeamRelayPublisherDeps, type TeamRelayReadDeps, type WindowsRelayFs,
+  type TeamRelayGrant, type TeamRelayLaunchDeps, type TeamRelayPublisherDeps, type TeamRelayReadDeps, type WindowsRelayFs,
 } from './relay.js'
 
 const config = { user: 'harnessteam', owner: 'owner', ownerHome: '/Users/owner' } as TeamConfig
@@ -18,7 +20,7 @@ const cleanup: string[] = []
 afterEach(() => { for (const dir of cleanup.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 
 function relay(): SubscriptionRelay {
-  return { port: 9, url: 'http://127.0.0.1:9', mintToken: vi.fn(() => TOKEN), revoke: vi.fn(), close: vi.fn(async () => {}) }
+  return { port: 9, url: 'http://127.0.0.1:9', mintToken: vi.fn(() => TOKEN), adoptToken: vi.fn(), revoke: vi.fn(), close: vi.fn(async () => {}) }
 }
 
 function publisher(over: Partial<TeamRelayPublisherDeps> = {}) {
@@ -73,6 +75,137 @@ describe('the owner\'s daemon, for the Harness Team account', () => {
     await f.p.tick()
     await f.p.stop()
     expect(f.deps.withdraw).toHaveBeenCalledTimes(2)
+  })
+
+  // Task #2125: a running Team agent keeps the address and token it launched with, so a restart of this daemon stranded it.
+  describe('across a restart of this daemon', () => {
+    const KEPT = { url: 'http://127.0.0.1:61375', token: 'k'.repeat(43) }
+    const taken = () => Object.assign(new Error('taken'), { code: 'EADDRINUSE' })
+
+    it('comes back on the same port, takes the same token back and publishes the same grant', async () => {
+      const f = publisher({ remembered: () => KEPT, remember: vi.fn(), forget: vi.fn() })
+      await f.p.tick()
+      expect(f.deps.startRelay).toHaveBeenCalledWith(61375)
+      expect(f.running.adoptToken).toHaveBeenCalledWith(TEAM_RELAY_GUEST, KEPT.token)
+      expect(f.running.mintToken).not.toHaveBeenCalled()
+      expect(f.deps.publish).toHaveBeenCalledWith(config, KEPT)
+    })
+
+    it('remembers a new grant before it publishes it', async () => {
+      const remember = vi.fn()
+      const f = publisher({ remembered: () => null, remember, forget: vi.fn() })
+      await f.p.tick()
+      expect(f.deps.startRelay).toHaveBeenCalledWith(undefined)
+      expect(remember).toHaveBeenCalledWith({ url: 'http://127.0.0.1:9', token: TOKEN })
+    })
+
+    it('waits for a port the old daemon is still closing', async () => {
+      const running = relay(), wait = vi.fn(async () => {})
+      const startRelay = vi.fn<TeamRelayPublisherDeps['startRelay']>().mockRejectedValueOnce(taken()).mockRejectedValueOnce(taken()).mockResolvedValue(running)
+      const f = publisher({ remembered: () => KEPT, remember: vi.fn(), forget: vi.fn(), startRelay, wait })
+      await f.p.tick()
+      expect(wait).toHaveBeenCalledTimes(2)
+      expect(running.adoptToken).toHaveBeenCalledWith(TEAM_RELAY_GUEST, KEPT.token)
+      expect(f.deps.publish).toHaveBeenCalledWith(config, KEPT)
+    })
+
+    it('gives up a port held for good: a new port and a new token, so what its holder heard is dead', async () => {
+      const running = relay(), remember = vi.fn()
+      const startRelay = vi.fn<TeamRelayPublisherDeps['startRelay']>(async port => { if (port) throw taken(); return running })
+      const f = publisher({ remembered: () => KEPT, remember, forget: vi.fn(), startRelay, wait: async () => {} })
+      await f.p.tick()
+      expect(startRelay).toHaveBeenLastCalledWith(undefined)
+      expect(startRelay.mock.calls.filter(([port]) => port === 61375)).toHaveLength(10)
+      expect(running.adoptToken).not.toHaveBeenCalled()
+      expect(remember).toHaveBeenCalledWith({ url: 'http://127.0.0.1:9', token: TOKEN })
+      expect(f.deps.publish).toHaveBeenCalledWith(config, { url: 'http://127.0.0.1:9', token: TOKEN })
+    })
+
+    it('does not swallow another failure to start', async () => {
+      const f = publisher({ remembered: () => KEPT, remember: vi.fn(), forget: vi.fn(), startRelay: vi.fn(async () => { throw new Error('no sockets') }) })
+      await f.p.tick()
+      expect(f.deps.publish).not.toHaveBeenCalled()
+      expect(f.deps.log).toHaveBeenCalledWith('team relay: no sockets')
+    })
+
+    it('still publishes when the grant cannot be remembered, and says so without the token', async () => {
+      const f = publisher({ remembered: () => null, remember: () => { throw new Error('disk full') }, forget: vi.fn() })
+      await f.p.tick()
+      expect(f.deps.publish).toHaveBeenCalled()
+      expect(JSON.stringify(vi.mocked(f.deps.log).mock.calls)).toContain('disk full')
+      expect(JSON.stringify(vi.mocked(f.deps.log).mock.calls)).not.toContain(TOKEN)
+    })
+
+    it('keeps the grant when it stops, and forgets it once the team account is gone', async () => {
+      let present: TeamConfig | null = config
+      const forget = vi.fn()
+      const f = publisher({ config: () => present, remembered: () => null, remember: vi.fn(), forget })
+      await f.p.tick()
+      await f.p.stop()
+      expect(f.deps.withdraw).toHaveBeenCalledWith('owner')
+      expect(forget).not.toHaveBeenCalled()
+      present = null
+      await f.p.tick()
+      expect(forget).toHaveBeenCalled()
+    })
+
+    it('reaches the model through a real relay before and after: what a running agent holds keeps working', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'team-relay-restart-')); cleanup.push(dir)
+      const file = join(dir, 'team-relay-grant.json')
+      const owner = { read: async () => ({ provider: 'claude' as const, accessToken: 'owner-fixture', expiresAt: null, accountId: null }), refresh: async () => null }
+      const upstream = createServer((_req, res) => { res.writeHead(200); res.end('{}') })
+      await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve))
+      onTestFinished(() => { upstream.closeAllConnections(); upstream.close() })
+      const claude = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`
+      const run = () => {
+        let present = false
+        const published: TeamRelayGrant[] = []
+        const p = new TeamRelayPublisher({ config: () => config, user: () => 'owner', team: () => false,
+          startRelay: port => startSubscriptionRelay({ owner, upstream: { claude }, ...(port ? { port } : {}) }),
+          publish: async (_c, grant) => { present = true; published.push(grant) }, published: () => present, withdraw: () => { present = false }, log: () => {},
+          remembered: () => readRememberedGrant(file), remember: grant => writeRememberedGrant(file, grant), forget: () => rmSync(file, { force: true }), wait: async () => {} })
+        return { p, published }
+      }
+      const first = run()
+      await first.p.tick()
+      const agent = first.published[0]!
+      const ask = async () => (await fetch(`${agent.url}/claude/v1/messages`, { method: 'POST', headers: { authorization: `Bearer ${agent.token}` }, body: '{}' })).status
+      expect(await ask()).toBe(200)
+      await first.p.stop()
+      await expect(ask()).rejects.toThrow()
+      const second = run()
+      await second.p.tick()
+      expect(second.published[0]).toEqual(agent)
+      expect(await ask()).toBe(200)
+      await second.p.stop()
+    })
+  })
+
+  describe('the kept grant on disk', () => {
+    const KEPT = { url: 'http://127.0.0.1:61375', token: 'k'.repeat(43) }
+    const folder = () => { const dir = mkdtempSync(join(tmpdir(), 'team-relay-grant-')); cleanup.push(dir); return dir }
+
+    it('round-trips, closed to everyone else', () => {
+      const file = join(folder(), 'grant.json')
+      writeRememberedGrant(file, KEPT)
+      expect(readRememberedGrant(file)).toEqual(KEPT)
+      expect(statSync(file).mode & 0o777).toBe(0o600)
+      writeRememberedGrant(file, { ...KEPT, url: 'http://127.0.0.1:61376' })
+      expect(readRememberedGrant(file)?.url).toBe('http://127.0.0.1:61376')
+    })
+
+    it.each([
+      ['missing', () => {}],
+      ['corrupt', (file: string) => writeFileSync(file, 'not json', { mode: 0o600 })],
+      ['open to others', (file: string) => writeFileSync(file, JSON.stringify(KEPT), { mode: 0o644 })],
+      ['another address', (file: string) => writeFileSync(file, JSON.stringify({ ...KEPT, url: 'http://evil.example:1' }), { mode: 0o600 })],
+      ['a bad token', (file: string) => writeFileSync(file, JSON.stringify({ ...KEPT, token: 'short' }), { mode: 0o600 })],
+      ['a link', (file: string) => { const real = `${file}.real`; writeFileSync(real, JSON.stringify(KEPT), { mode: 0o600 }); symlinkSync(real, file) }],
+    ])('ignores a file that is %s', (_name, make) => {
+      const file = join(folder(), 'grant.json')
+      make(file)
+      expect(readRememberedGrant(file)).toBeNull()
+    })
   })
 
   it('starts a relay that failed again on the next look, and says why', async () => {
