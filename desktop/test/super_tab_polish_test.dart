@@ -377,7 +377,7 @@ void main() {
 
         await shot('');
         if (profile.scale > 1) {
-          await tester.tap(find.byTooltip('Members and machines'));
+          await tester.tap(find.byTooltip('Members'));
           await tester.pumpAndSettle();
           await shot('-resources');
           expect(tester.takeException(), isNull);
