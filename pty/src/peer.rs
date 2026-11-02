@@ -11,6 +11,9 @@
 /// `FILETIME` units in one second.
 pub const TICKS_PER_SECOND: u64 = 10_000_000;
 
+/// The file name of the lookup: this binary.
+const LOOKUP_NAME: &str = "harness-pty.exe";
+
 /// One row of the TCP table the connection's pair of ports matched.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
@@ -40,12 +43,242 @@ pub enum Verdict {
 /// The answer for [rows], those of the exact pair; `process` reads one by id, `None` when it is
 /// gone or cannot be opened. [lookup] is this process's id, [daemon] the daemon's.
 pub fn verdict(
-    _rows: &[Row],
-    _lookup: u32,
-    _daemon: u32,
-    _process: impl FnMut(u32) -> Option<Process>,
+    rows: &[Row],
+    lookup: u32,
+    daemon: u32,
+    mut process: impl FnMut(u32) -> Option<Process>,
 ) -> Verdict {
-    Verdict::Yes
+    let no = |why: String| Verdict::No(why);
+    let [row] = rows else {
+        return no(format!("{} connections match", rows.len()));
+    };
+    // The lookup's own process is never the caller: it could have taken a freed id.
+    if row.pid == lookup {
+        return no("the lookup itself owns it".into());
+    }
+    let Some(caller) = process(row.pid) else {
+        return no("its process is gone".into());
+    };
+    if row.created == 0 || caller.started == 0 {
+        return no("Windows gave no start time".into());
+    }
+    // Windows keeps naming a socket's creator after it exits when a child inherited the handle,
+    // and the id may have gone to another process since: only one that started before the
+    // connection was made can be its owner. A connection time to the second alone is compared to
+    // the second, so a fresh process that connected at once still reads as yes; a finer one closes
+    // a reuse within that second too.
+    let started = if row.created % TICKS_PER_SECOND == 0 {
+        caller.started - caller.started % TICKS_PER_SECOND
+    } else {
+        caller.started
+    };
+    if started > row.created {
+        return no(format!(
+            "its process started after its connection ({} > {})",
+            caller.started, row.created
+        ));
+    }
+    // Nor another lookup running at once, or its console host, started in the connection's second:
+    // it could have taken the freed id, and nothing of the kind the daemon starts calls its port
+    // with a secret.
+    let lookup_of_daemon =
+        |p: &Process| p.parent == Some(daemon) && p.name.eq_ignore_ascii_case(LOOKUP_NAME);
+    if lookup_of_daemon(&caller) {
+        return no("a lookup the daemon started owns it".into());
+    }
+    if caller.name.eq_ignore_ascii_case("conhost.exe")
+        && caller
+            .parent
+            .and_then(&mut process)
+            .is_some_and(|p| lookup_of_daemon(&p))
+    {
+        return no("a console host of a lookup the daemon started owns it".into());
+    }
+    match caller.this_account {
+        Some(true) => Verdict::Yes,
+        Some(false) => no("its owner is another account".into()),
+        None => no("Windows will not give its owner".into()),
+    }
+}
+
+#[cfg(windows)]
+pub use windows::ask;
+
+#[cfg(windows)]
+mod windows {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+
+    use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, HANDLE, NO_ERROR};
+    use windows_sys::Win32::NetworkManagement::IpHelper::{
+        GetExtendedTcpTable, MIB_TCP_STATE_ESTAB, MIB_TCPROW_OWNER_MODULE,
+        TCP_TABLE_OWNER_MODULE_CONNECTIONS,
+    };
+    use windows_sys::Win32::Networking::WinSock::AF_INET;
+    use windows_sys::Win32::Security::{
+        EqualSid, GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser,
+    };
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcess, OpenProcessToken, PROCESS_NAME_WIN32, QueryFullProcessImageNameW,
+    };
+
+    use super::{Process, Row, Verdict, verdict};
+
+    /// 127.0.0.1 as the table stores it: network order in memory.
+    const LOOPBACK: u32 = u32::from_ne_bytes([127, 0, 0, 1]);
+
+    /// The answer for the client end of 127.0.0.1:[peer] -> 127.0.0.1:[own].
+    pub fn ask(peer: u16, own: u16, daemon: u32) -> Verdict {
+        let rows = match rows(peer, own) {
+            Ok(rows) => rows,
+            Err(code) => return Verdict::No(format!("Windows gave no connections ({code})")),
+        };
+        let Some(this) = user_of(unsafe { GetCurrentProcess() }) else {
+            return Verdict::No("Windows will not give this account".into());
+        };
+        verdict(&rows, std::process::id(), daemon, |pid| read(pid, &this))
+    }
+
+    /// The established rows whose client end is [peer] and server end [own], both on 127.0.0.1.
+    /// Windows lists a connection once from each end, so the pair of ports in this order is one.
+    fn rows(peer: u16, own: u16) -> Result<Vec<Row>, u32> {
+        // `u64` words, so the table's 64-bit timestamps are aligned.
+        let mut words = vec![0u64; 4096];
+        loop {
+            let mut size = (words.len() * 8) as u32;
+            let code = unsafe {
+                GetExtendedTcpTable(
+                    words.as_mut_ptr().cast(),
+                    &mut size,
+                    0,
+                    AF_INET as u32,
+                    TCP_TABLE_OWNER_MODULE_CONNECTIONS,
+                    0,
+                )
+            };
+            if code == ERROR_INSUFFICIENT_BUFFER {
+                words.resize((size as usize).div_ceil(8) + 512, 0);
+                continue;
+            }
+            if code != NO_ERROR {
+                return Err(code);
+            }
+            break;
+        }
+        // MIB_TCPTABLE_OWNER_MODULE: a count, then rows at the rows' own alignment.
+        let count = unsafe { *words.as_ptr().cast::<u32>() } as usize;
+        let first = unsafe {
+            words
+                .as_ptr()
+                .cast::<u8>()
+                .add(std::mem::align_of::<MIB_TCPROW_OWNER_MODULE>())
+        }
+        .cast::<MIB_TCPROW_OWNER_MODULE>();
+        let table = unsafe { std::slice::from_raw_parts(first, count) };
+        let port = |value: u32| u16::from_be(value as u16);
+        Ok(table
+            .iter()
+            .filter(|r| {
+                r.dwState == MIB_TCP_STATE_ESTAB as u32
+                    && r.dwLocalAddr == LOOPBACK
+                    && r.dwRemoteAddr == LOOPBACK
+                    && port(r.dwLocalPort) == peer
+                    && port(r.dwRemotePort) == own
+            })
+            .map(|r| Row {
+                pid: r.dwOwningPid,
+                created: r.liCreateTimestamp as u64,
+            })
+            .collect())
+    }
+
+    /// What Windows says of [pid]; `None` when it has exited or cannot be opened.
+    fn read(pid: u32, this: &[u8]) -> Option<Process> {
+        let (process, synchronize) = crate::ps::open_process(pid)?;
+        let handle = process.as_raw_handle() as HANDLE;
+        if crate::ps::process_exited(handle, synchronize) {
+            return None;
+        }
+        Some(Process {
+            started: crate::ps::process_started(handle).unwrap_or(0),
+            parent: crate::ps::process_parent(handle),
+            name: file_name(handle),
+            this_account: user_of(handle).map(|user| same_sid(&user, this)),
+        })
+    }
+
+    fn file_name(process: HANDLE) -> String {
+        let mut path = vec![0u16; 1024];
+        let mut size = path.len() as u32;
+        let ok = unsafe {
+            QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, path.as_mut_ptr(), &mut size)
+        };
+        if ok == 0 {
+            return String::new();
+        }
+        let path = String::from_utf16_lossy(&path[..size as usize]);
+        path.rsplit('\\').next().unwrap_or_default().to_string()
+    }
+
+    /// The `TOKEN_USER` of [process]'s token, in `u64` words as bytes; `None` when Windows will not
+    /// give it, as for another account's process.
+    fn user_of(process: HANDLE) -> Option<Vec<u8>> {
+        let mut token: HANDLE = std::ptr::null_mut();
+        if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) } == 0 {
+            return None;
+        }
+        let token = unsafe { OwnedHandle::from_raw_handle(token as _) };
+        let mut size = 0u32;
+        unsafe {
+            GetTokenInformation(
+                token.as_raw_handle() as HANDLE,
+                TokenUser,
+                std::ptr::null_mut(),
+                0,
+                &mut size,
+            )
+        };
+        if size == 0 {
+            return None;
+        }
+        let mut words = vec![0u64; (size as usize).div_ceil(8)];
+        let ok = unsafe {
+            GetTokenInformation(
+                token.as_raw_handle() as HANDLE,
+                TokenUser,
+                words.as_mut_ptr().cast(),
+                size,
+                &mut size,
+            )
+        };
+        if ok == 0 {
+            return None;
+        }
+        let bytes =
+            unsafe { std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), words.len() * 8) };
+        Some(sid_bytes(bytes))
+    }
+
+    /// The SID's own bytes out of a `TOKEN_USER` buffer.
+    fn sid_bytes(buffer: &[u8]) -> Vec<u8> {
+        let user = unsafe { &*buffer.as_ptr().cast::<TOKEN_USER>() };
+        let sid = user.User.Sid.cast::<u8>();
+        // A SID: revision, sub-authority count, 6 bytes of authority, then 4 bytes per sub-authority.
+        let count = unsafe { *sid.add(1) } as usize;
+        unsafe { std::slice::from_raw_parts(sid, 8 + count * 4) }.to_vec()
+    }
+
+    fn same_sid(a: &[u8], b: &[u8]) -> bool {
+        let (mut a, mut b) = (aligned(a), aligned(b));
+        unsafe { EqualSid(a.as_mut_ptr().cast(), b.as_mut_ptr().cast()) != 0 }
+    }
+
+    fn aligned(bytes: &[u8]) -> Vec<u32> {
+        let mut words = vec![0u32; bytes.len().div_ceil(4)];
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), words.as_mut_ptr().cast(), bytes.len())
+        };
+        words
+    }
 }
 
 #[cfg(test)]
@@ -58,10 +291,18 @@ mod tests {
     const CALLER: u32 = 70;
 
     fn mine() -> Process {
-        Process { started: T - 5 * TICKS_PER_SECOND, parent: Some(1), name: "node.exe".into(), this_account: Some(true) }
+        Process {
+            started: T - 5 * TICKS_PER_SECOND,
+            parent: Some(1),
+            name: "node.exe".into(),
+            this_account: Some(true),
+        }
     }
     fn row(created: u64) -> Row {
-        Row { pid: CALLER, created }
+        Row {
+            pid: CALLER,
+            created,
+        }
     }
     fn asked(rows: &[Row], process: Option<Process>) -> Verdict {
         verdict(rows, LOOKUP, DAEMON, |pid| {
@@ -69,7 +310,11 @@ mod tests {
             match pid {
                 CALLER => process.clone(),
                 // The parent of the process asked of, for the console-host rule.
-                pid if Some(pid) == parent => Some(Process { parent: Some(DAEMON), name: "harness-pty.exe".into(), ..mine() }),
+                pid if Some(pid) == parent => Some(Process {
+                    parent: Some(DAEMON),
+                    name: "harness-pty.exe".into(),
+                    ..mine()
+                }),
                 _ => None,
             }
         })
@@ -94,8 +339,26 @@ mod tests {
 
     #[test]
     fn another_account_or_an_owner_windows_will_not_give_is_no() {
-        is_no(asked(&[row(T)], Some(Process { this_account: Some(false), ..mine() })), "another account");
-        is_no(asked(&[row(T)], Some(Process { this_account: None, ..mine() })), "will not give");
+        is_no(
+            asked(
+                &[row(T)],
+                Some(Process {
+                    this_account: Some(false),
+                    ..mine()
+                }),
+            ),
+            "another account",
+        );
+        is_no(
+            asked(
+                &[row(T)],
+                Some(Process {
+                    this_account: None,
+                    ..mine()
+                }),
+            ),
+            "will not give",
+        );
     }
 
     #[test]
@@ -105,18 +368,47 @@ mod tests {
 
     #[test]
     fn the_lookup_itself_is_never_the_caller() {
-        is_no(verdict(&[Row { pid: LOOKUP, created: T }], LOOKUP, DAEMON, |_| Some(mine())), "the lookup itself");
+        is_no(
+            verdict(
+                &[Row {
+                    pid: LOOKUP,
+                    created: T,
+                }],
+                LOOKUP,
+                DAEMON,
+                |_| Some(mine()),
+            ),
+            "the lookup itself",
+        );
     }
 
     #[test]
     fn a_process_started_after_its_connection_has_taken_a_freed_id() {
-        is_no(asked(&[row(T)], Some(Process { started: T + 1, ..mine() })), "started after");
+        is_no(
+            asked(
+                &[row(T)],
+                Some(Process {
+                    started: T + TICKS_PER_SECOND,
+                    ..mine()
+                }),
+            ),
+            "started after",
+        );
     }
 
     #[test]
     fn a_time_windows_did_not_give_is_no() {
         is_no(asked(&[row(0)], Some(mine())), "no start time");
-        is_no(asked(&[row(T)], Some(Process { started: 0, ..mine() })), "no start time");
+        is_no(
+            asked(
+                &[row(T)],
+                Some(Process {
+                    started: 0,
+                    ..mine()
+                }),
+            ),
+            "no start time",
+        );
     }
 
     // Windows may give the connection's time to the second alone, as Get-NetTCPConnection did on
@@ -124,31 +416,92 @@ mod tests {
     #[test]
     fn a_connection_time_to_the_second_compares_to_the_second() {
         let second = T - T % TICKS_PER_SECOND;
-        assert_eq!(asked(&[row(second)], Some(Process { started: second + 5, ..mine() })), Verdict::Yes);
-        is_no(asked(&[row(second)], Some(Process { started: second + TICKS_PER_SECOND, ..mine() })), "started after");
+        assert_eq!(
+            asked(
+                &[row(second)],
+                Some(Process {
+                    started: second + 5,
+                    ..mine()
+                })
+            ),
+            Verdict::Yes
+        );
+        is_no(
+            asked(
+                &[row(second)],
+                Some(Process {
+                    started: second + TICKS_PER_SECOND,
+                    ..mine()
+                }),
+            ),
+            "started after",
+        );
     }
 
     // A connection time finer than a second closes W1's gap: no reuse within its own second.
     #[test]
     fn a_finer_connection_time_compares_exactly() {
         let fine = T - T % TICKS_PER_SECOND + 7;
-        assert_eq!(asked(&[row(fine)], Some(Process { started: fine, ..mine() })), Verdict::Yes);
-        is_no(asked(&[row(fine)], Some(Process { started: fine + 1, ..mine() })), "started after");
+        assert_eq!(
+            asked(
+                &[row(fine)],
+                Some(Process {
+                    started: fine,
+                    ..mine()
+                })
+            ),
+            Verdict::Yes
+        );
+        is_no(
+            asked(
+                &[row(fine)],
+                Some(Process {
+                    started: fine + 1,
+                    ..mine()
+                }),
+            ),
+            "started after",
+        );
     }
 
     #[test]
     fn another_lookup_or_its_console_host_may_have_taken_a_freed_id() {
-        let lookup = Process { parent: Some(DAEMON), name: "harness-pty.exe".into(), ..mine() };
-        is_no(asked(&[row(T)], Some(lookup)), "a lookup the daemon started");
-        let host = Process { parent: Some(80), name: "conhost.exe".into(), ..mine() };
+        let lookup = Process {
+            parent: Some(DAEMON),
+            name: "harness-pty.exe".into(),
+            ..mine()
+        };
+        is_no(
+            asked(&[row(T)], Some(lookup)),
+            "a lookup the daemon started",
+        );
+        let host = Process {
+            parent: Some(80),
+            name: "conhost.exe".into(),
+            ..mine()
+        };
         is_no(asked(&[row(T)], Some(host)), "a console host of a lookup");
         // The names in any case, as Windows files them.
-        let upper = Process { parent: Some(DAEMON), name: "HARNESS-PTY.EXE".into(), ..mine() };
+        let upper = Process {
+            parent: Some(DAEMON),
+            name: "HARNESS-PTY.EXE".into(),
+            ..mine()
+        };
         is_no(asked(&[row(T)], Some(upper)), "a lookup the daemon started");
     }
 
     #[test]
     fn a_program_of_this_account_the_daemon_started_is_still_yes() {
-        assert_eq!(asked(&[row(T)], Some(Process { parent: Some(DAEMON), name: "node.exe".into(), ..mine() })), Verdict::Yes);
+        assert_eq!(
+            asked(
+                &[row(T)],
+                Some(Process {
+                    parent: Some(DAEMON),
+                    name: "node.exe".into(),
+                    ..mine()
+                })
+            ),
+            Verdict::Yes
+        );
     }
 }
