@@ -161,6 +161,12 @@ const LANE_RETRY_MAX_MS = 30_000
 /** How a pick of a machine ended: `code` is the daemon's, `message` is shown to a person (CableHost.selectMachine). */
 type MachinePick = { ok: true } | { ok: false; code: string; message: string }
 
+/** A pick on its way; `replaced` when it took over from another still running. */
+interface PendingPick { machineId: string; replaced: boolean; done: Promise<MachinePick> }
+
+/** A pick's end that says no about that machine and nothing about the lane (deviceFleet.ts select and codeFor). */
+const REFUSALS = new Set(['NEEDS_LINK', 'UNKNOWN_MACHINE', 'NOT_YOURS', 'BILLING'])
+
 export class DaemonCableHost implements CableHost {
   /**
    * This host's own router: over the bare fleet it is given (its tests), or over none, for this computer
@@ -184,7 +190,7 @@ export class DaemonCableHost implements CableHost {
    * the last. The announce on plug-in names it rather than `selected`: announcing the older machine would replace the newer
    * choice at the lane (deviceLink.ts select).
    */
-  private pending: { machineId: string; done: Promise<MachinePick> } | null = null
+  private pending: PendingPick | null = null
 
   /** Counts plug-ins: a lane open that lands after an unplug or a replug belongs to an older one and does nothing. */
   private plugIn = 0
@@ -277,15 +283,14 @@ export class DaemonCableHost implements CableHost {
     // the only one left to tell the dial: an app follow's answer is dropped once a newer focus arrives (reviews of #2504).
     if (this.pending?.machineId === machineId) return this.pending.done
     // Set before the select starts, so a fleet call that fails at once still finds it and clears it.
-    const entry = { machineId, done: null as unknown as Promise<MachinePick> }
+    const entry: PendingPick = { machineId, replaced: this.pending !== null, done: null as unknown as Promise<MachinePick> }
     this.pending = entry
     entry.done = this.pickMachine(entry)
     return entry.done
   }
 
-  private async pickMachine(entry: { machineId: string; done: Promise<MachinePick> }): Promise<MachinePick> {
+  private async pickMachine(entry: PendingPick): Promise<MachinePick> {
     const { machineId } = entry
-    const plugIn = this.plugIn
     let selected: Awaited<ReturnType<FleetRouting['select']>>
     let newest = false
     try {
@@ -302,11 +307,12 @@ export class DaemonCableHost implements CableHost {
       return { ok: false, code: 'SUPERSEDED', message: 'Another machine was chosen' }
     }
     if (!selected.ok) {
-      // The lane may still be where a replaced pick took it: the fleet refuses an unlinked machine before asking the lane,
-      // so the dial stayed here while the backend and any reconnect stayed on the machine the person left (reviews of
-      // #2504). Said again now, as picking this machine again would not: it is already selected. Not for a dial unplugged
-      // meanwhile, which would open the lane it just let go, and not when the lane has a newer select already.
-      if (plugIn === this.plugIn && selected.code !== 'SUPERSEDED') {
+      // The lane may still be where the pick this one replaced took it: the fleet refuses an unlinked machine before asking
+      // the lane, so the dial stayed here while the backend and any reconnect stayed on the machine the person left (reviews
+      // of #2504). Said again now, as picking this machine again would not: it is already selected. Only for a refusal, and
+      // only with a pick replaced: that one was still running, so the lane is up. Any other failure may be the lane's end (a
+      // revoke, a 4403, an unplug), and telling it anything would dial straight back past what it decided.
+      if (entry.replaced && REFUSALS.has(selected.code)) {
         void this.announceSelection().catch((err) => this.wiring.log(`cable: could not announce (${(err as Error).message})`))
       }
       return selected

@@ -1137,7 +1137,9 @@ describe('announcing over the real lane', () => {
     let socket: WebSocket | null = null
     const wss = new WebSocketServer({ port: 0, host: '127.0.0.1', handleProtocols: (protocols) => [...protocols][0] ?? false })
     await new Promise<void>((resolve) => wss.once('listening', () => resolve()))
+    let connections = 0
     wss.on('connection', (ws) => {
+      connections++
       socket = ws
       ws.on('message', (raw) => {
         const frame = JSON.parse(raw.toString()) as { type?: string; payload?: { machineId?: string } }
@@ -1165,7 +1167,9 @@ describe('announcing over the real lane', () => {
     const host = new DaemonCableHost(wiring({ log: (line: string) => { lines.push(line) } }), fleet)
     const announced = () => lines.filter((line) => line.includes('could not announce'))
     const welcome = (machineId: string) => socket?.send(JSON.stringify({ type: 'e2e_welcome', machineId, payload: {} }))
-    return { host, selects, answerNewest, lines, announced, seal, welcome }
+    const revoke = () => socket?.send(JSON.stringify({ type: 'device_revoked' }))
+    const closeWith = (code: number) => socket?.close(code)
+    return { host, selects, answerNewest, lines, announced, seal, welcome, revoke, closeWith, connections: () => connections }
   }
 
   it('logs no "could not announce" for a plug-in that announces through both paths when the backend answers', async () => {
@@ -1233,6 +1237,38 @@ describe('announcing over the real lane', () => {
     expect(selects).toEqual(['cloud-1', 'mine'])
     expect(host.selectedMachine()).toBe('mine')
     expect(announced()).toEqual([])
+  })
+
+  describe('a lane that ends during a pick stays ended (review of #2504)', () => {
+    /** A pick in its handshake, on a lane about to end. */
+    const inHandshake = async () => {
+      const up = await plugged({ linked: 'cloud-1' })
+      const first = up.host.selectMachine('cloud-1')
+      await soon('the pick', () => up.selects.length === 1)
+      up.answerNewest()
+      await soon('its hello', () => up.seal.hello.mock.calls.length === 1)
+      return { ...up, first }
+    }
+
+    it('sends no select on the way out of a revoke', async () => {
+      const { host, selects, revoke, first } = await inHandshake()
+      revoke()
+      expect(await first).toMatchObject({ ok: false, code: 'UNREACHABLE' })
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      expect(selects).toEqual(['cloud-1'])
+      expect(host.selectedMachine()).toBe('mine')
+    })
+
+    it('dials nothing after the backend refuses the lane with 4403, whatever is picked next', async () => {
+      const { host, selects, closeWith, connections, lines, first } = await inHandshake()
+      closeWith(4403)
+      expect(await first).toMatchObject({ ok: false })
+      await soon('the refusal', () => lines.some((line) => line.includes('not authorized')))
+      expect(await host.selectMachine('unlinked')).toMatchObject({ code: 'NEEDS_LINK' })
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      expect(connections()).toBe(1)
+      expect(selects).toEqual(['cloud-1'])
+    })
   })
 
   it('says nothing of an announce a newer pick replaced, and the pick lands', async () => {
@@ -1352,38 +1388,65 @@ describe('a pick a newer pick replaced', () => {
     expect(host.selectedMachine()).toBe('other')
   })
 
-  it('says where the dial is after the newest pick fails, and only then', async () => {
+  it('says where the dial is when a machine refuses a pick that replaced another, and not for a replaced pick failing', async () => {
     const { fleet, asked } = slow()
     const host = new DaemonCableHost(wiring(), fleet)
     const older = host.selectMachine('other')
     const newest = host.selectMachine('second')
     asked[0]!.fail(new Error('the machine did not answer'))
     await older
-    expect(asked.map((a) => a.machineId)).toEqual(['other', 'second'])   // a replaced pick failing says nothing
-    asked[1]!.fail(new Error('the machine did not answer'))
-    expect(await newest).toMatchObject({ ok: false, code: 'UNREACHABLE' })
+    expect(asked.map((a) => a.machineId)).toEqual(['other', 'second'])
+    asked[1]!.fail(new FleetError('BILLING', 'second-mac needs a subscription'))
+    expect(await newest).toMatchObject({ ok: false, code: 'BILLING' })
     expect(asked.map((a) => a.machineId)).toEqual(['other', 'second', 'mine'])
     asked[2]!.ok()
+  })
+
+  it('tells the lane nothing after a refusal with no pick replaced: it never moved', async () => {
+    const { fleet, asked } = slow()
+    const host = new DaemonCableHost(wiring(), fleet)
+    const pick = host.selectMachine('other')
+    asked[0]!.fail(new FleetError('NEEDS_LINK', 'Link it first'))
+    expect(await pick).toMatchObject({ code: 'NEEDS_LINK' })
+    expect(asked).toHaveLength(1)
+  })
+
+  it('tells the lane nothing after a failure that is not a refusal: it may be the lane\'s end', async () => {
+    const { fleet, asked } = slow()
+    const host = new DaemonCableHost(wiring(), fleet)
+    const older = host.selectMachine('other')
+    const newest = host.selectMachine('second')
+    asked[1]!.fail(new Error('socket closed (4403)'))
+    expect(await newest).toMatchObject({ code: 'UNREACHABLE' })
+    asked[0]!.ok()
+    await older
+    expect(asked).toHaveLength(2)
   })
 
   it('opens nothing again when a pick fails because the dial was unplugged', async () => {
     const { fleet, asked } = slow()
     const host = new DaemonCableHost(wiring(), fleet)
-    const pick = host.selectMachine('other')
+    const older = host.selectMachine('other')
+    const pick = host.selectMachine('second')
     host.onDialGone()
-    asked[0]!.fail(new Error('released'))
+    asked[1]!.fail(new Error('released'))
     await pick
-    expect(asked).toHaveLength(1)
+    asked[0]!.fail(new Error('released'))
+    await older
+    expect(asked).toHaveLength(2)
     expect(fleet.release).toHaveBeenCalledWith(true)
   })
 
   it('leaves the lane alone when it says a newer select replaced the pick', async () => {
     const { fleet, asked } = slow()
     const host = new DaemonCableHost(wiring(), fleet)
-    const pick = host.selectMachine('other')
-    asked[0]!.fail(new FleetError('SUPERSEDED', 'Another machine was chosen'))
+    const older = host.selectMachine('other')
+    const pick = host.selectMachine('second')
+    asked[1]!.fail(new FleetError('SUPERSEDED', 'Another machine was chosen'))
     expect(await pick).toMatchObject({ ok: false, code: 'SUPERSEDED' })
-    expect(asked).toHaveLength(1)
+    asked[0]!.ok()
+    await older
+    expect(asked).toHaveLength(2)
   })
 
   it('leaves nothing pending when the fleet call fails at once', async () => {
