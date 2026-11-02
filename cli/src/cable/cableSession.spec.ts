@@ -4084,6 +4084,21 @@ describe('swarm cards', () => {
     } finally { await session.stop() }
   })
 
+  it('on attach sends the focus after the cards, however late the restarted daemon reads them', async () => {
+    const state = { cards: null as SwarmCard[] | null, open: { superTabId: 'st1', projectId: 'proj2', fromDevice: false } }
+    const { session, port } = await connect(cardHost(state))
+    try {
+      port.say(PRO)
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      expect(port.types().filter((t) => t.startsWith('supertab'))).toEqual([])
+      state.cards = [card('st1')]
+      await session.syncSwarmCards(false)
+      await vi.waitFor(() => expect(ofType(port, 'supertab.focus')).toHaveLength(1))
+      expect(port.types().filter((t) => t.startsWith('supertab'))).toEqual(['supertabs', 'supertab', 'supertab.focus'])
+      expect(ofType(port, 'supertab.focus')[0]).toEqual({ t: 'supertab.focus', tab: 'st1', lead: 'lead2' })
+    } finally { await session.stop() }
+  })
+
   it('resync sends everything again, as attach does', async () => {
     const state = { cards: [card('st1')], open: { superTabId: 'st1', projectId: 'proj2', fromDevice: false } }
     const { session, port } = await connect(cardHost(state))

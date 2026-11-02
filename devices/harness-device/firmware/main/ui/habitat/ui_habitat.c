@@ -599,8 +599,10 @@ static EXT_RAM_BSS_ATTR struct {
     bool retried;                     // its recap was asked for a second time
     struct { char tab[ID_MAX], lead[ID_MAX]; } focus[HT_SUPERTABS_MAX];   // the Lead the desktop last showed, per Swarm
     char pending[ID_MAX];             // a Swarm the desktop opened before its `swarms` frame said so (ui_supertab_focus)
-    // The Swarm and Lead an emptied list took off the face, not the person, and when: it comes back if the Swarm does.
-    struct { char tab[ID_MAX], lead[ID_MAX]; uint32_t at; } lost;
+    // The Swarm, Lead and side a session down or an emptied list took off the face, not the person: stale until that
+    // Swarm's card returns, and it comes back then (swarm_regain). The person touching the dial, or a list that came back
+    // without that Swarm, ends it.
+    struct swarm_lost { char tab[ID_MAX], lead[ID_MAX]; bool buddy; } lost;
     bool auto_tabs;                   // TABS opened by the dial itself, not touched since: it browses no desk tab
     // Super Tab waits from this machine's harnesses, shown only through the Lead whose `local` names the harness.
     struct { char agent[ID_MAX], request[80], swarm[HT_SUPERTAB_NAME], text[240]; bool stuck, shown; } waits[SWARM_WAITS];
@@ -772,6 +774,7 @@ static void swarm_enter(const ht_supertab_t *t, const char *lead, bool select)
     if (swarm_mode() && strcmp(sw.tab, t->id)) swarm_leave();
     if (workspace.phase != HT_WORKSPACE_IDLE) ht_workspace_cancel_request(&workspace);
     s.loading = false;
+    sw.lost.tab[0] = 0; sw.auto_tabs = false;   // this face supersedes the one a restart took, and the TABS it left
     COPY(sw.tab, t->id);
     sw.desk[0] = 0; swarm_desk_note();
     int i = swarm_lead_index(t, lead);
@@ -5054,9 +5057,10 @@ static int desk_row_count;
 static char desk_selected[ID_MAX];
 // Whether a desktop focus may take the dial into a Swarm now: from HOME or an agent, never while talking, nor over a
 // question or a form.
+// A TABS the dial opened by itself is no screen of the person's: the app's focus and a returning Swarm take it over.
 static bool swarm_may_follow(void)
 {
-    return !s.voice_open && !question_view(s.view) && (s.view == HOME || s.view == AGENT);
+    return !s.voice_open && !question_view(s.view) && (s.view == HOME || s.view == AGENT || (s.view == TABS && sw.auto_tabs));
 }
 static void swarms_apply(void)
 {
@@ -5205,17 +5209,17 @@ static void swarm_tabs_changed(void)
     int index = tab_index_of(focused);
     ht_tab_carousel_reset(&tab_carousel, tabs_total(), index >= 0 ? index : tab_index_here());
 }
-// A daemon that had just started said "no Swarms" before it had read them, and the real list came 2 s later (Diego's dial,
-// 2026-10-29): the Swarm the list took off the face comes back on the Lead it showed, with no pick sent, as long as the
-// person has not moved on. Only that Swarm, within 10 s; one that really went stays gone.
+// A daemon that restarts (each CLI update) drops the session and takes 5-40 s to resend the Swarm cards, and one that had
+// just started said "no Swarms" before it had read them (Diego's dial, 2026-10-29, 2026-11-02): the Swarm taken off the face
+// comes back on the Lead and side it showed, with no pick sent, however long that took, as long as the person has not moved
+// on. A daemon that remembers no side is told it. Only that Swarm; one that really went stays gone (ui_supertabs_ids).
 static bool swarm_regain(const ht_supertab_t *t)
 {
-    if (!t || !sw.lost.tab[0] || swarm_mode() || strcmp(t->id, sw.lost.tab)) return false;
-    bool fresh = (int32_t)(ms() - sw.lost.at) < 10000;
-    bool untouched = s.view == TABS ? sw.auto_tabs : swarm_may_follow();
-    if (!fresh || !untouched) { sw.lost.tab[0] = 0; return false; }
+    if (!t || !sw.lost.tab[0] || swarm_mode() || strcmp(t->id, sw.lost.tab) || !swarm_may_follow()) return false;
     char lead[ID_MAX]; COPY(lead, sw.lost.lead);
-    sw.lost.tab[0] = 0;
+    bool buddies = false;
+    for (int i = 0; i < t->lead_n; i++) buddies |= t->leads[i].buddies;
+    if (sw.lost.buddy && buddies && !swarm_side_buddy(t->id)) { swarm_side_put(t->id, true); swarm_side_send(t->id); }
     swarm_enter(t, lead, false);
     return true;
 }
@@ -5227,10 +5231,16 @@ void ui_supertabs_ids(const char ids[][ID_MAX], int n)
     swarm_events(ev, count);
     if (swarm_mode() && !swarm_here()) {
         // The Swarm on the face is gone: back to the list. Remembered, for a list that came empty before the real one.
-        COPY(sw.lost.tab, sw.tab); COPY(sw.lost.lead, sw.lead); sw.lost.at = ms();
+        COPY(sw.lost.tab, sw.tab); COPY(sw.lost.lead, sw.lead); sw.lost.buddy = swarm_side_buddy(sw.tab);
         sw.tab[0] = sw.lead[0] = sw.desk[0] = 0;
         ht_supertabs_recap_open(&swarm, "", "", ms());
         if (s.view == HOME || s.view == AGENT || s.view == AGENTS) { tabs_open(); sw.auto_tabs = s.view == TABS; }
+    }
+    // The cards are back, without it: that Swarm really went. An empty list says nothing yet: it may not have read them.
+    if (n > 0 && sw.lost.tab[0]) {
+        bool listed = false;
+        for (int i = 0; i < n; i++) listed |= !strcmp(ids[i], sw.lost.tab);
+        if (!listed) sw.lost.tab[0] = 0;
     }
     swarms_apply();
     swarm_tabs_changed();
@@ -5325,6 +5335,8 @@ void ui_supertab_focus(const char *tab, const char *lead)
     // As `focus` today: never while talking, nor over a question or a form.
     bool free = !s.voice_open && !question_view(s.view) && s.view != FORM && s.view != DRAFT && s.view != DRAFT_OPTIONS;
     sw.pending[0] = 0;
+    // The app is on another Lead of the Swarm coming back: the face comes back on that one.
+    if (i >= 0 && !strcmp(sw.lost.tab, tab)) COPY(sw.lost.lead, lead);
     if (swarm_regain(t)) { change(); display_unlock(); return; }
     if (t && (i >= 0 || !lead[0]) && free) {
         if (swarm_mode() && !strcmp(sw.tab, tab)) {
@@ -5450,7 +5462,12 @@ void ui_supertabs_clear(void)
     for (int i = s.notice_count - 1; i >= 0; i--) if (s.notice[i].swarm) notice_remove(s.notice[i].agent_id, true);
     notice_sync_view();
     ht_supertabs_reset(&swarm);
+    // What is on the face stays, stale, until its card returns (swarm_regain); a face already waiting for one keeps waiting.
+    struct swarm_lost lost = sw.lost;
+    bool auto_tabs = sw.auto_tabs;
+    if (swarm_mode()) { COPY(lost.tab, sw.tab); COPY(lost.lead, sw.lead); lost.buddy = swarm_side_buddy(sw.tab); }
     memset(&sw, 0, sizeof sw);
+    sw.lost = lost; sw.auto_tabs = auto_tabs;
     swarms_apply();
     swarm_tabs_changed();
     change();
