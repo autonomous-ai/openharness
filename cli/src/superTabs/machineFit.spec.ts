@@ -1,7 +1,7 @@
 // cli/src/superTabs/machineFit.spec.ts
 import { describe, expect, it, vi } from 'vitest'
 import { START_REQUIREMENTS, startRequirements } from './capacity.js'
-import { CI_LIMIT, CI_READ_MS, CI_RETRY_MINUTES, CI_UNCHECKED, ciHold, ciLoadOf, floorOf, heavyNeed, MACHINE_FIT_MAKER, machineFit, PLACED_RECENT_MS, placedHeavyWork,
+import { CI_LIMIT, CI_OVER_NOTE, CI_READ_MS, CI_RETRY_MINUTES, CI_UNCHECKED, ciHold, ciLoadOf, floorOf, heavyNeed, MACHINE_FIT_MAKER, machineFit, PLACED_RECENT_MS, placedHeavyWork,
   type CiLoad } from './machineFit.js'
 import { choose, parseAssessment, type Assessment, type Catalog, type Probe } from './route.js'
 import { ROUTE_PLUGIN_MAKERS, type PluginInput } from './routePlugins.js'
@@ -177,6 +177,35 @@ describe('the CI jobs limit', () => {
     // The macOS runners have their own, smaller limit.
     expect(ciHold({ ci: { jobs: 2, macos: 2 } }, load(4, 0, 3, 0))).toBeNull()
     expect(ciHold({ ci: { jobs: 2, macos: 2 } }, load(4, 0, 3, 1))).toContain('4 on macOS against 5, and this task starts 2 more (2 on macOS).')
+  })
+  it('a need above the limit counts as the limit, so an idle account starts it and GitHub queues the rest (Diego, 11-02)', () => {
+    // More jobs than the account runs at once could never fit under the limit: it was held "for 10 minutes" forever at zero load.
+    expect(ciHold({ ci: { jobs: 21, macos: 0 } }, load(0))).toBeNull()
+    expect(ciHold({ ci: { jobs: 100, macos: 0 } }, load(0))).toBeNull()
+    expect(ciHold({ ci: { jobs: 6, macos: 6 } }, load(0))).toBeNull()
+    expect(ciHold({ ci: { jobs: 21, macos: 6 } }, load(0))).toBeNull()
+    // The cap is the whole need, not a free pass: any load at all still holds it, and a small need is judged as before.
+    expect(ciHold({ ci: { jobs: 21, macos: 0 } }, load(1))).toContain('this task starts 20 more')
+    expect(ciHold({ ci: { jobs: 6, macos: 6 } }, load(0, 0, 1))).toContain('this task starts 6 more (5 on macOS)')
+    expect(ciHold({ ci: { jobs: 5, macos: 0 } }, load(18))).toContain('18 running or queued against the account\'s limit of 20')
+    expect(ciHold({ ci: { jobs: 5, macos: 0 } }, load(15))).toBeNull()
+  })
+  it('says in the route answer when a need is above the limit, held or not, and nothing when it fits', () => {
+    const idle = ok(route([on('a', { memory: 16, disk: 100 })], a({ ci: { jobs: 21, macos: 0 } }), machineFit({ ci: load(0) })))
+    expect(idle.shown[0]!.notes).toEqual([`Machine fit: ${CI_OVER_NOTE({ ci: { jobs: 21, macos: 0 } })}`])
+    expect(CI_OVER_NOTE({ ci: { jobs: 21, macos: 0 } })).toBe("This task starts 21 CI jobs, more than the account's limit of 20 at once: it is offered as if it started 20, and GitHub queues the rest.")
+    expect(CI_OVER_NOTE({ ci: { jobs: 8, macos: 6 } })).toBe("This task starts 6 CI jobs on macOS, more than the account's limit of 5 at once: it is offered as if it started 5, and GitHub queues the rest.")
+    expect(CI_OVER_NOTE({ ci: { jobs: 30, macos: 7 } })).toContain('30 CI jobs')
+    expect(CI_OVER_NOTE({ ci: { jobs: 30, macos: 7 } })).toContain('7 CI jobs on macOS')
+    expect(CI_OVER_NOTE({ ci: { jobs: 20, macos: 5 } })).toBeNull()
+    expect(CI_OVER_NOTE({})).toBeNull()
+    // Unread load: the unchecked note and the over-limit note both show.
+    expect(ok(route([on('a', { memory: 16, disk: 100 })], a({ ci: { jobs: 21, macos: 0 } }))).shown[0]!.notes).toEqual([`Machine fit: ${CI_UNCHECKED} ${CI_OVER_NOTE({ ci: { jobs: 21, macos: 0 } })}`])
+    // Beside a heavy fit.
+    expect(ok(route([on('a', { memory: 5, disk: 100 })], a({ ci: { jobs: 21, macos: 0 }, heavy: ['build'] }), machineFit({ ci: load(0) }))).shown[0]!.notes[0]).toMatch(/rank first\. This task starts 21 CI jobs/)
+    // Held by the load, the hold's reason is the answer, and it too names the cap.
+    const held = route([on('a', { memory: 16, disk: 100 })], a({ ci: { jobs: 21, macos: 0 } }), machineFit({ ci: load(3) }))
+    expect(held).toMatchObject({ error: 'NO_CANDIDATE' })
   })
   it('never holds work that declares no CI of its own, nor when the load is unknown', () => {
     expect(ciHold({}, load(40, 10, 5, 5))).toBeNull()

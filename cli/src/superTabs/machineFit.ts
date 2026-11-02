@@ -73,16 +73,30 @@ export function placedHeavyWork(starts: Json[], now: number, hostOf: (machineId:
 
 /** Jobs running and queued on GitHub Actions, in all and on macOS runners (the server's read of the project's repository). */
 export interface CiLoad { running: number; queued: number; macosRunning: number; macosQueued: number }
+/** The CI jobs a task is counted as starting: at most the account's limit, since it can never run more at once and GitHub queues
+ *  the rest. Counting the full need held a task of 21 jobs "for 10 minutes" forever, even on an idle account (Diego, 11-02). */
+const counted = (ci: { jobs: number; macos: number }) => ({ jobs: Math.min(ci.jobs, CI_LIMIT.jobs), macos: Math.min(ci.macos, CI_LIMIT.macos) })
+/** Said when a task starts more CI jobs than the account runs at once, or null when it fits; the route offers it as if it
+ *  started the limit. */
+export function CI_OVER_NOTE(needs: Pick<Needs, 'ci'>): string | null {
+  if (!needs.ci) return null
+  const { jobs, macos } = needs.ci, over: string[] = []
+  if (jobs > CI_LIMIT.jobs) over.push(`${jobs} CI jobs, more than the account's limit of ${CI_LIMIT.jobs} at once: it is offered as if it started ${CI_LIMIT.jobs}`)
+  if (macos > CI_LIMIT.macos) over.push(`${macos} CI jobs on macOS, more than the account's limit of ${CI_LIMIT.macos} at once: it is offered as if it started ${CI_LIMIT.macos}`)
+  return over.length ? `This task starts ${over.join('. It also starts ')}, and GitHub queues the rest.` : null
+}
 /** Why work that starts [needs.ci] must wait for CI, or null when it fits under the limit, or declares no CI, or the load is
- *  unknown (the route then says the limit was not checked). Queued jobs count: they already wait for the limit. */
+ *  unknown (the route then says the limit was not checked). Queued jobs count: they already wait for the limit. A need above
+ *  the limit counts as the limit ([counted]), so only the load can hold it. */
 export function ciHold(needs: Pick<Needs, 'ci'>, load: CiLoad | null): string | null {
   if (!needs.ci || !load) return null
-  const busy = load.running + load.queued, mac = load.macosRunning + load.macosQueued
-  const over = busy + needs.ci.jobs > CI_LIMIT.jobs || mac + needs.ci.macos > CI_LIMIT.macos
+  const busy = load.running + load.queued, mac = load.macosRunning + load.macosQueued, need = counted(needs.ci)
+  const over = busy + need.jobs > CI_LIMIT.jobs || mac + need.macos > CI_LIMIT.macos
   if (!over) return null
-  const starts = `${needs.ci.jobs} more${needs.ci.macos ? ` (${needs.ci.macos} on macOS)` : ''}`
+  const starts = `${need.jobs} more${need.macos ? ` (${need.macos} on macOS)` : ''}`
+  const above = CI_OVER_NOTE(needs)
   return `${CI_HOLD_OPENING}: ${busy} running or queued against the account's limit of ${CI_LIMIT.jobs}, ${mac} on macOS against ${CI_LIMIT.macos}, `
-    + `and this task starts ${starts}. Route it again in ${CI_RETRY_MINUTES} minutes.`
+    + `and this task starts ${starts}. Route it again in ${CI_RETRY_MINUTES} minutes.${above ? ` ${above}` : ''}`
 }
 /** Said when a task starts CI and the load could not be read. */
 export const CI_UNCHECKED = `This repository's running CI jobs could not be read, so the account's limit of ${CI_LIMIT.jobs} jobs (${CI_LIMIT.macos} on macOS) was not checked.`
@@ -99,8 +113,9 @@ export function machineFit(input: { placed?: ReadonlyMap<string, Placed>; hostOf
       const hold = ciHold(needs, input.ci ?? null)
       if (hold) return { refuse: true, reason: hold }
       const fit = fitOf(candidate, needs, input.placed?.get(hostOf(candidate.machineId)))
-      if (!needs.ci || input.ci) return fit
-      return fit ? { ...fit, reason: `${fit.reason} ${CI_UNCHECKED}` } : { reason: CI_UNCHECKED }
+      const said = [needs.ci && !input.ci ? CI_UNCHECKED : null, CI_OVER_NOTE(needs)].filter((w): w is string => !!w).join(' ')
+      if (!said) return fit
+      return fit ? { ...fit, reason: `${fit.reason} ${said}` } : { reason: said }
     },
   }
 }
