@@ -43,15 +43,15 @@ export const TEMPLATE_ROLES = `## Roles
 
 export const TEMPLATE_WORKFLOW = `## Workflow
 
-1. One request is one task. The PM opens it with its goal and "Done when", assigns an Engineer, and names its Reviewer,
-   and its Tester when the change needs one; when no agent is free for a role, it starts one. That is the PM's part
-   until the Engineer reports. The PM opens no task to hold, batch, triage or list work: that goes in its notes or the
-   project chat.
+1. One request is one task. The PM opens it with its goal and "Done when" and assigns an Engineer. It also
+   names its Reviewer, and its Tester when the change needs one; when no agent is free for a role, it starts one.
+   That is the PM's part until the Engineer reports. The PM opens no task to hold, batch, triage or list work: that
+   goes in its notes or the project chat.
 2. When the pull request is ready, the Engineer adds a review step to its task, and a test step when the change is
    something a user sees or uses (screens, CLI commands, install and release, sign-in, connections between machines,
-   devices), and assigns them to the Reviewer and the Tester the task names. It messages them directly. Review and
-   test run in parallel. Refactors, docs and test-only changes get a review only. A task whose review plan asks for two
-   reviews gets two review steps.
+   devices). It assigns them to the Reviewer and the Tester the task names, and messages them directly.
+   Review and test run in parallel. Refactors, docs and test-only changes get a review only. A task whose review plan
+   asks for two reviews gets two review steps.
 3. Findings go straight to the Engineer. The Engineer fixes them and asks the same Reviewer or Tester again in the same
    step; it adds no new step for a second round.
 4. When the review passes, and the test passes where there is one, the Engineer tells the PM once.
