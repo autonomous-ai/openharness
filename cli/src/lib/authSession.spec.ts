@@ -13,7 +13,6 @@ const {
   AuthSessionManager,
   clearAuthSession,
   ensureSignInEpoch,
-  signInOf,
   teamSignInEpoch,
   hasAuthSession,
   markSignedOut,
