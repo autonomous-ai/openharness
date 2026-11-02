@@ -2159,6 +2159,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         // Only a Swarm that can't be read is news; a live one says nothing.
         trailing: c.backendUnreachable
             ? SuperTabMachinesPill(
+                connecting: c.stillConnecting,
                 reconnectingFor: failingSince == null
                     ? Duration.zero
                     : widget.now().difference(failingSince),
