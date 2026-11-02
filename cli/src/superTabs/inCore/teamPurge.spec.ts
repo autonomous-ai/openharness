@@ -1,9 +1,9 @@
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, win32 } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { createSwarmAgents } from './agents.js'
-import { OWN_LEFT, SHARED_LEFT, SWEEP_LEFT, UNREADABLE_DETAIL, createConfidentialPurge, purgeRecord, recordsOtherFolder, rewriteIfUnchanged, scrubClaudeSession, sweepForSession, type PurgeTarget } from './teamPurge.js'
+import { OWN_LEFT, SHARED_LEFT, SWEEP_LEFT, UNREADABLE_DETAIL, createConfidentialPurge, isPmCodexHome, purgeRecord, recordsOtherFolder, rewriteIfUnchanged, scrubClaudeSession, sweepForSession, type PurgeTarget } from './teamPurge.js'
 
 /** A folder that goes between the sweep's listing of its parent and its own read: removed just before that read. */
 const vanish = vi.hoisted(() => ({ path: '' }))
@@ -567,6 +567,16 @@ describe('the purge of a confidential session the Swarm ended', () => {
     expect(existsSync(join(home, '.harness-pm-homes', 'super-start-1'))).toBe(false)
   })
 
+  it('of a Codex session whose home is not one of pmEngineHome\'s, leaves every Product Manager\'s home', async () => {
+    // One level under the PM homes folder, its parent is that folder: a purge of it took every other PM's home with it.
+    const home = dir(), other = join(home, '.harness-pm-homes', 'super-start-2', 'codex')
+    mkdirSync(other, { recursive: true })
+    const s = service(home, join(home, '.harness-pm-homes', 'codex'))
+    const ended = createConfidentialPurge({ confidential: () => true, home, session: s.session, purge: s.purge, record: s.record })
+    expect(await ended('pm')).toEqual({ ok: true })
+    expect(existsSync(other)).toBe(true)
+  })
+
   it('leaves any other session alone; a refused review or delete stops it, the session kept in its record', async () => {
     const home = dir()
     const record = purgeRecord(join(home, 'super-tabs', 'team-purges.json'))
@@ -686,5 +696,23 @@ describe('the record of purges still to finish', () => {
     expect(warn.mock.calls.map(([line]) => String(line))).toEqual([said(aside), said(aside), said(`${aside}, ${aside}.1`),
       said([aside, ...Array.from({ length: 10 }, (_, i) => `${aside}.${i + 1}`)].join(', '))])
     warn.mockRestore()
+  })
+})
+
+// Windows audit (task #2022): the check looked for `${homes}/`, and Windows' paths have `\`, so a purged Codex Product
+// Manager's own home stayed in the Team account for its next agent to read.
+describe('isPmCodexHome', () => {
+  it('is the home pmEngineHome makes, by Windows\' separators as well as this platform\'s', () => {
+    expect(isPmCodexHome('C:\\Users\\harnessteam', 'C:\\Users\\harnessteam\\.harness-pm-homes\\super-start-1\\codex', win32)).toBe(true)
+    expect(isPmCodexHome('/Users/harnessteam', '/Users/harnessteam/.harness-pm-homes/super-start-1/codex')).toBe(true)
+  })
+
+  it('is nothing else: not the PM homes folder or one level under it, a sibling folder, a way out, or another home', () => {
+    const home = 'C:\\Users\\harnessteam', homes = `${home}\\.harness-pm-homes`
+    for (const codexHome of [homes, `${homes}\\codex`, `${homes}\\super-start-1`, `${homes}\\super-start-1\\codex\\sessions`,
+      `${homes}\\super-start-1\\other`, `${home}\\.harness-pm-homes-old\\super-start-1\\codex`, `${homes}\\..\\x\\codex`,
+      'C:\\Users\\owner\\.harness-pm-homes\\super-start-1\\codex', 'D:\\.harness-pm-homes\\super-start-1\\codex', '']) {
+      expect(isPmCodexHome(home, codexHome, win32), codexHome).toBe(false)
+    }
   })
 })

@@ -15,7 +15,7 @@
  */
 import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync, type Dirent } from 'node:fs'
 import { readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, sep, type PlatformPath } from 'node:path'
 import { createInterface } from 'node:readline'
 import { PM_HOMES } from '../teamDaemon.js'
 
@@ -99,6 +99,21 @@ export type ScrubTold = 'shared' | 'unread' | 'unreadTodos' | 'unreadBackups'
 const listed = (dir: string) => readdir(dir).catch((error: NodeJS.ErrnoException) => error.code === 'ENOENT' ? [] as string[] : null)
 
 /** Claude Code's folder name for a project folder: every character but a letter or digit made a dash. */
+/**
+ * Whether [codexHome] is a Product Manager's own Codex home in the Team user's [home], `<home>/.harness-pm-homes/<id>/codex`
+ * as superTabs/teamDaemon.ts pmEngineHome makes it, by [paths]' own rules: purge deletes its parent whole. A check for
+ * `${homes}/` never matched Windows' `\`, so a purged Codex PM's home stayed for the account's next agent to read, and it took
+ * a home one level under the PM homes folder, whose parent is every PM's homes (Windows audit, task #2022).
+ */
+export function isPmCodexHome(home: string, codexHome: string, paths: Pick<PlatformPath, 'join' | 'relative' | 'isAbsolute' | 'sep'> =
+  { join, relative, isAbsolute, sep }): boolean {
+  if (!codexHome) return false
+  const inside = paths.relative(paths.join(home, PM_HOMES), codexHome)
+  if (paths.isAbsolute(inside)) return false
+  const [id, last, ...more] = inside.split(paths.sep)
+  return !!id && id !== '..' && id !== '.' && last === 'codex' && more.length === 0
+}
+
 const claudeSlug = (cwd: string) => cwd.replace(/[^A-Za-z0-9]/g, '-')
 const SESSION = /^[A-Za-z0-9_-]{1,160}$/
 /** Its folder, when it names one that is no root: an empty or root key would match every other session's. */
@@ -422,8 +437,7 @@ export function createConfidentialPurge(deps: {
       const deleted = await deps.purge({ ...reference, mode: 'delete', reviewId: review.reviewId, choices: { sessionData: true, worktreeData: false } })
       if (typeof deleted.error === 'string') return deleted
     }
-    const homes = join(deps.home, PM_HOMES)
-    if (target.codexHome && target.codexHome.startsWith(`${homes}/`)) await rm(dirname(target.codexHome), { recursive: true, force: true })
+    if (target.codexHome && isPmCodexHome(deps.home, target.codexHome)) await rm(dirname(target.codexHome), { recursive: true, force: true })
     if (target.engine === 'claude') {
       const keep = (found: readonly string[]) => {
         const pastes = [...new Set([...target!.pastes ?? [], ...found])]
