@@ -54,6 +54,14 @@ if (process.env.MOCK_PROJECT_SEARCH === '1') {
       `autonomous-harness-2026-${String(i).padStart(3, '0')}`, 'main'))
   }
 }
+if (process.env.MOCK_OLD_HARNESSES === '1') {
+  // A month-old history in a folder of its own, for the harness list's `▸ N older`.
+  for (let i = 0; i < 25; i++) {
+    const older = new Date(Date.parse(now) - (30 + i) * 86_400_000).toISOString()
+    agents[LOCAL].push(project({ ...agent(`old-${i}`, `Old session ${i}`, i % 2 ? 'opencode' : 'codex', 'stopped'), createdAt: older, updatedAt: older },
+      'old-repo', 'main'))
+  }
+}
 if (process.env.MOCK_SHARED_LAYOUT === '1') {
   for (let i = 1; i <= 9; i++) agents[LOCAL].push(agent(`shared-layout-${i}`, `Shared pane ${i}`, 'terminal'))
 }
