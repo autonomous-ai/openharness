@@ -749,6 +749,13 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
               const hint = await swarm().then(read => staleAssignmentHint(command, read.state, agentId), () => '')
               throw new SuperTabHostError(error.code, `${error.message}${hint ? ` ${hint}` : ''}`, error.status)
             }
+            // A backend rolled back since this machine's first load (which said `steps: true`) refuses the field: the step
+            // opens as a plain linked task (final review, minor 7). Only that refusal: a bad name is refused by name.
+            if ('step' in command && command.type === 'conversation.create' && error instanceof SuperTabHostError && error.status === 400
+              && error.code === 'VALIDATION_ERROR' && /Unrecognized key[^"]*"step"/.test(error.message)) {
+              const { step: _step, ...plain } = command
+              return { ok: true, operationId: payload.operationId, value: await send(plain) }
+            }
             // A backend from before cost records refuses the totals; the status itself still goes.
             if (command.tokens && error instanceof SuperTabHostError && error.status === 400 && error.code === 'VALIDATION_ERROR' && /"tokens"|'tokens'/.test(error.message)) {
               const { tokens: _tokens, ...status } = command

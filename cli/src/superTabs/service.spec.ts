@@ -1613,6 +1613,21 @@ describe('a task\'s steps in messages and commands', () => {
     expect(object(sent[0]!.command)).toMatchObject({ type: 'conversation.create', reviewOf: 'g1835' })
     expect(object(sent[0]!.command)).not.toHaveProperty('step')
   })
+  // Final review, minor 7: the flag is read at the first load, so a backend rolled back since refuses `step`; the command is
+  // sent once more without it, and the step opens as a plain linked task.
+  it('sends it again without step when the backend refuses the field', async () => {
+    const t = setup(); const sent = wired(t, { steps: true })
+    const answer = vi.mocked(t.core.account.backend).getMockImplementation()!
+    vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => method === 'POST' && path.endsWith('/commands')
+      && 'step' in object(object(body).command)
+      ? { status: 400, body: { success: false, error: { code: 'VALIDATION_ERROR', message: 'Unrecognized key: "step"' } } } as never
+      : answer(method, path, body))
+    const result = await t.ask({ action: 'command', tabId: 'tab', harnessId: 'native', operationId: 'op-1',
+      command: { type: 'conversation.create', title: 'Review', reviewOf: 'g1835', step: 'Review', checks: [] } }, owner)
+    expect(result).toMatchObject({ ok: true })
+    expect(sent).toHaveLength(1)
+    expect(object(sent[0]!.command)).not.toHaveProperty('step')
+  })
   it('step is sent to a backend that has steps', async () => {
     const t = setup(); const sent = wired(t, { steps: true })
     await t.ask({ action: 'command', tabId: 'tab', harnessId: 'native', operationId: 'op-1',

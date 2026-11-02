@@ -98,7 +98,8 @@ Swarm and machine settings (each refused unless you may change that setting; a p
   - Start only on the Swarm's listed machines; to use another, a person adds it first. \`resume START_ID\` finishes a pending start without creating another agent; repeat \`start\` with the same id after an interruption. Two failed starts in a row suspend the engine on that machine; the route says so.
   - A start that fails is reported (\`START_FAILED\`, with why) and moved nowhere: you decide what next, and the project's coordinator is told too.
   - Starts can be refused when too many starts are pending.
-- Add a step to a task: create a conversation with \`reviewOf\` set to the task and \`step\` set to the step's name from your project's instructions, then assign it. A step's status reaches the task's assignee. - A review group is a group created with \`reviewOf\` naming the group it reviews. A \`review\` status wakes nobody by itself: when the work is ready for review, name the reviewing agent with \`--to\` in your post.
+- Add a step to a task: create a conversation with \`reviewOf\` set to the task and \`step\` set to the step's name from your project's instructions, then assign it. A step's status reaches the task's assignee.
+- A review group is a group created with \`reviewOf\` naming the group it reviews. A \`review\` status wakes nobody by itself: when the work is ready for review, name the reviewing agent with \`--to\` in your post.
 
 ## Requests, tasks and cards
 - A group opened for a person's request, asked in the chat or proposed by their Buddy, names them as requester (\`requesterId\`, or \`conversation.requester\` later). It records only that they asked, never what they wrote.

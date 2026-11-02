@@ -172,7 +172,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   // `audience`: a private conversation that only these people and the project's Lead read (projects.ts canReadGroup).
   z.object({ type: z.literal('conversation.create'), projectId: id.optional(), title, brief: z.string().trim().max(8000).optional(), task: task.optional(), reviewOf: id.optional(),
     // A step of the task `reviewOf` names (task steps design): its name as the instructions give it, free text in any language.
-    step: z.string().trim().min(1).max(40).optional(), checks: z.array(check).max(40),
+    // No line break or control character: the name is printed in agents' terminals (final review, minor 10).
+    step: z.string().trim().min(1).max(40).regex(/^[^\u0000-\u001f\u007f]+$/, 'A step name is one line of text.').optional(), checks: z.array(check).max(40),
     audience: z.object({ personIds: z.array(id).max(200) }).strict().optional(), requesterId: id.optional(),
     // The Buddy's proposal message in the project chat the group comes from (Lead, 2026-10-29): the Buddy earns when it ships.
     proposalMessageId: id.optional() }).strict()

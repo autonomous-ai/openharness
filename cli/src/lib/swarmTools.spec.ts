@@ -56,4 +56,9 @@ describe('SWARM_TOOLS_SKILL', () => {
     expect(SWARM_TOOLS_SKILL).toContain('A \`review\` status wakes nobody by itself')
     expect(SWARM_TOOLS_SKILL).not.toContain('tells only the reviewed group\'s coordinator')
   })
+  // Final review, minor 9: the step bullet ran into the next one.
+  it('keeps the step bullet on a line of its own', () => {
+    const line = SWARM_TOOLS_SKILL.split('\n').find(l => l.startsWith('- Add a step to a task:'))!
+    expect(line).not.toContain('A review group')
+  })
 })
