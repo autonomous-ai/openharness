@@ -901,6 +901,9 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     }
     _syncTick();
     _redrawMoved();
+    if (!c.away && _timer?.isActive != true && !_reading && widget.app?.foreground.value == true && (!kUnderTest || widget.readLocal != null)) {
+      unawaited(_refresh());
+    }
   }
 
   /// Redraws what no longer says what it drew, and nothing else.
@@ -1020,7 +1023,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       await _readTeamSetup();
     } finally {
       _reading = false;
-      if (mounted && widget.app?.foreground.value == true) {
+      // A Swarm that isn't showing reads nothing; coming back reads at once ([_machinesMoved]).
+      if (mounted && !c.away && widget.app?.foreground.value == true) {
         _timer = Timer(const Duration(seconds: 15), _refresh);
       }
     }
