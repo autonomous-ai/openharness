@@ -144,6 +144,7 @@ export function restoreSessions(state: SuperTabState, machineId: string, running
   const records = state.removedSessions
   if (!records?.length) return []
   const restored: Agent[] = []
+  const projectChats = new Set(projectsOf(state).map(p => p.leadConversationId))
   const left = records.filter(record => {
     if (record.machineId !== machineId) return true
     if (now - record.removedAt >= REMOVED_KEEP_MS) return false
@@ -158,8 +159,10 @@ export function restoreSessions(state: SuperTabState, machineId: string, running
     for (const group of state.conversations) {
       if (group.archived || group.dormant || group.kind || group.audience || (state.projects && group.projectId !== record.agent.projectId)) continue
       if (barredFromTeamWritten(state, group, record.agent)) continue
-      if (record.groupIds.includes(group.id) && !group.agentIds.includes(record.agent.id)) group.agentIds.push(record.agent.id)
       if (record.leadOf.includes(group.id) && !group.leadId) group.leadId = record.agent.id
+      // A project chat holds only its coordinator among agents (#2207): a member there comes back to it only as its coordinator.
+      if (projectChats.has(group.id) && group.leadId !== record.agent.id) continue
+      if (record.groupIds.includes(group.id) && !group.agentIds.includes(record.agent.id)) group.agentIds.push(record.agent.id)
     }
     restored.push(record.agent)
     return false
