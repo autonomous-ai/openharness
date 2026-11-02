@@ -231,7 +231,8 @@ describe('a host check', () => {
     const { id: _id, ...row } = (await db.swarmGroup.findFirst({ where: { tabId, key: web } }))!
     await db.swarmGroup.createMany({ data: Array.from({ length: EXTRA }, (_, i) => {
       const key = `more-${String(i).padStart(3, '0')}`
-      return { ...row, id: `${tabId}:${key}`, key, ordinal: 100 + i, hostDigest: `digest-${String(i).padStart(3, '0')}`, data: { ...row.data as object, id: key, title: key } }
+      return { ...row, id: `${tabId}:${key}`, key, ordinal: 100 + i, hostDigest: `digest-${String(i).padStart(3, '0')}`,
+        agentIds: [], executionMachineId: null, data: { ...row.data as object, id: key, title: key, agentIds: [], assignment: null } }
     }) })
     await age(tabId)
     return { tabId, machineId }
@@ -251,7 +252,8 @@ describe('a host check', () => {
       .filter(e => e.ns.endsWith('.SwarmGroup'))
     const tab = answer!.tabs.find(t => t.tabId === tabId)!
     expect(tab.etag.slice(22)).toBe((await pipeline(tabId))!)
-    // The old check was a $group over every live conversation: at least all EXTRA keys examined.
-    expect(entries.reduce((sum, e) => sum + (e.keysExamined ?? 0), 0)).toBeLessThan(EXTRA / 2)
+    // The old check was a $group over every live conversation, planned on the live index (its key, digest and dormancy);
+    // the entry reads only what changed, through the changes index. (The host's rows read others of their own, not asserted here.)
+    expect(entries.filter(e => e.planSummary?.includes('hostDigest'))).toEqual([])
   })
 })
