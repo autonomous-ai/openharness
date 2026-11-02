@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/leaderboard/reader.dart';
@@ -121,6 +124,63 @@ void main() {
     c.away = false;
     await Future<void>.delayed(const Duration(milliseconds: 40));
     expect(server.leaderboardReads.length, greaterThan(read));
+  });
+
+  test('a project board reads at once when its Swarm returns, having missed a read', () {
+    fakeAsync((async) {
+      final server = ConversationServer()
+        ..leaderboard = {'people': const <Object>[]};
+      final c = server.controller();
+      unawaited(c.refresh());
+      async.flushMicrotasks();
+      final board = SuperTabProjectBoard(c);
+      async.flushMicrotasks();
+      c.away = true;
+      final read = server.leaderboardReads.length;
+      async.elapse(const Duration(minutes: 6));
+      expect(server.leaderboardReads, hasLength(read));
+      c.away = false;
+      async.flushMicrotasks();
+      expect(server.leaderboardReads, hasLength(read + 1));
+      c.away = true;
+      c.away = false;
+      async.flushMicrotasks();
+      expect(
+        server.leaderboardReads,
+        hasLength(read + 1),
+        reason: 'it missed nothing this time',
+      );
+      board.dispose();
+      c.dispose();
+    });
+  });
+
+  testWidgets('of a stack of pages, only the one showing ticks', (
+    tester,
+  ) async {
+    final shown = <int>[], hidden = <int>[];
+    Widget pages(int index) => Directionality(
+      textDirection: TextDirection.ltr,
+      child: SuperTabPages(
+        index: index,
+        children: [
+          _Panel(builds: shown, changes: []),
+          _Panel(builds: hidden, changes: []),
+        ],
+      ),
+    );
+    await tester.pumpWidget(pages(0));
+    shown.clear();
+    hidden.clear();
+    await tester.pump(const Duration(seconds: 3));
+    expect(shown, isNotEmpty);
+    expect(hidden, isEmpty);
+    await tester.pumpWidget(pages(1));
+    shown.clear();
+    hidden.clear();
+    await tester.pump(const Duration(seconds: 3));
+    expect(shown, isEmpty);
+    expect(hidden, isNotEmpty);
   });
 
   testWidgets('leaves no timer behind when it goes', (tester) async {

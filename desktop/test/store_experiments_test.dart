@@ -337,6 +337,24 @@ void main() {
       // An already captured callback must be harmless even before the next frame.
       oldOpen();
       expect(app.activeSwarm.isStore, isTrue);
+      // Task #2195: the Store hides the canvas, and a Swarm on it then runs no timers.
+      expect(
+        tester
+            .widget<TickerMode>(
+              find
+                  .descendant(
+                    of: find.byKey(
+                      const ValueKey('workspace-canvas'),
+                      skipOffstage: false,
+                    ),
+                    matching: find.byType(TickerMode, skipOffstage: false),
+                    skipOffstage: false,
+                  )
+                  .first,
+            )
+            .enabled,
+        isFalse,
+      );
       await tester.pumpAndSettle();
       expect(find.text('Open'), findsNothing);
       expect(ids(), isNot(contains('autonomous/pair')));

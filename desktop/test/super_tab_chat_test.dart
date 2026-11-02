@@ -132,6 +132,25 @@ void main() {
     }
   });
 
+  testWidgets('a chat behind the terminals runs no timers until it returns', (
+    tester,
+  ) async {
+    final server = ConversationServer()..append('Hello');
+    final c = server.controller();
+    addTearDown(c.dispose);
+    await c.refresh();
+    bool chatTicks() => TickerMode.valuesOf(
+      tester.element(find.text('Hello', skipOffstage: false)),
+    ).enabled;
+    await showReadView(tester, c);
+    expect(chatTicks(), isTrue);
+    await showReadView(tester, c, terminals: true);
+    expect(chatTicks(), isFalse);
+    await showReadView(tester, c);
+    expect(chatTicks(), isTrue);
+    await closeReadView(tester, c);
+  });
+
   testWidgets('returning from terminals reads the already loaded transcript', (
     tester,
   ) async {

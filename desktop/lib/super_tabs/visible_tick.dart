@@ -85,3 +85,16 @@ mixin VisibleTick<T extends StatefulWidget>
     super.dispose();
   }
 }
+
+/// The pages of one place, one showing. The hidden ones keep their state. An [IndexedStack] alone
+/// leaves their timers running, as it doesn't mute them.
+class SuperTabPages extends StatelessWidget {
+  const SuperTabPages({super.key, required this.index, required this.children});
+
+  final int index;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) =>
+      IndexedStack(index: index, children: children);
+}

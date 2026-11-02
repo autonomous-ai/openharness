@@ -293,10 +293,14 @@ void _controllerTests() {
   // Review of #1791, 2: the saved read is no longer bounded.
   // Task #2195: every chat opens from what this device has for this account, and the read corrects it.
   group('the last messages of each chat', () {
-    Map<String, dynamic> savedWithChats(ConversationServer server, Iterable<String> chats) {
+    Map<String, dynamic> savedWithChats(
+      ConversationServer server,
+      Iterable<String> chats,
+    ) {
       late Map<String, dynamic> view;
       fakeAsync((async) {
-        final c = _controller(_Reads(server), reading: SuperTabReading.desktop)..start();
+        final c = _controller(_Reads(server), reading: SuperTabReading.desktop)
+          ..start();
         async.flushMicrotasks();
         for (final id in chats) {
           unawaited(c.loadMessages(id));
@@ -317,15 +321,22 @@ void _controllerTests() {
         server
           ..append('Since', conversationId: 'offline')
           ..holdReads = Completer<void>();
-        final c = _controller(_Reads(server), reading: SuperTabReading.desktop)..drawSaved(view);
-        expect(c.messages('offline').map((m) => m.text), contains('In the other chat'));
+        final c = _controller(_Reads(server), reading: SuperTabReading.desktop)
+          ..drawSaved(view);
+        expect(
+          c.messages('offline').map((m) => m.text),
+          contains('In the other chat'),
+        );
         server.holdReads!.complete();
         server.holdReads = null;
         c.start();
         async.flushMicrotasks();
         unawaited(c.loadMessages('offline'));
         async.flushMicrotasks();
-        expect(c.messages('offline').map((m) => m.text), containsAll(['In the other chat', 'Since']));
+        expect(
+          c.messages('offline').map((m) => m.text),
+          containsAll(['In the other chat', 'Since']),
+        );
         c.dispose();
       });
     });
@@ -336,8 +347,11 @@ void _controllerTests() {
         ..append('Secret', conversationId: 'offline');
       final view = savedWithChats(server, ['offline']);
       fakeAsync((async) {
-        (server.state['conversations'] as List).removeWhere((g) => g['id'] == 'offline');
-        final c = _controller(_Reads(server), reading: SuperTabReading.desktop)..drawSaved(view);
+        (server.state['conversations'] as List).removeWhere(
+          (g) => g['id'] == 'offline',
+        );
+        final c = _controller(_Reads(server), reading: SuperTabReading.desktop)
+          ..drawSaved(view);
         expect(c.messages('offline'), isNotEmpty);
         c.start();
         async.flushMicrotasks();
@@ -356,7 +370,13 @@ void _controllerTests() {
         final c = SuperTabController(
           tabId: 'tab',
           accountId: 'owner',
-          request: (method, path, {body}) => Future.error(const SuperTabFailure('FORBIDDEN', 'You no longer have access.', statusCode: 403)),
+          request: (method, path, {body}) => Future.error(
+            const SuperTabFailure(
+              'FORBIDDEN',
+              'You no longer have access.',
+              statusCode: 403,
+            ),
+          ),
           save: server.save,
           initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': 'lead'},
           reading: SuperTabReading.desktop,
@@ -375,71 +395,143 @@ void _controllerTests() {
         ..append('In the other chat', conversationId: 'offline');
       final view = savedWithChats(server, ['offline']);
       final chats = view['chats'] as List;
-      final row = {...(((chats.first as Map)['messages'] as List).first as Map)};
+      final row = {
+        ...(((chats.first as Map)['messages'] as List).first as Map),
+      };
       chats
-        ..add({'id': 'private', 'messages': [{...row, 'conversationId': 'private'}]})
-        ..add({'id': 'lead', 'messages': [row]})
+        ..add({
+          'id': 'private',
+          'messages': [
+            {...row, 'conversationId': 'private'},
+          ],
+        })
+        ..add({
+          'id': 'lead',
+          'messages': [row],
+        })
         ..add('broken');
       fakeAsync((async) {
-        final c = _controller(_Reads(server), reading: SuperTabReading.desktop)..drawSaved(view);
+        final c = _controller(_Reads(server), reading: SuperTabReading.desktop)
+          ..drawSaved(view);
         expect(c.messages('private'), isEmpty);
         expect(c.messages('offline'), isNotEmpty);
-        expect(c.messages('lead').map((m) => m.conversationId).toSet(), {'lead'});
+        expect(c.messages('lead').map((m) => m.conversationId).toSet(), {
+          'lead',
+        });
         c.dispose();
       });
     });
 
-    test('keeps at most 5 other chats of 30 rows each, the latest read first', () {
+    test(
+      'keeps at most 5 other chats of 30 rows each, the latest read first',
+      () {
+        final server = ConversationServer()..append('Hello');
+        final ids = <String>[];
+        final conversations = server.state['conversations'] as List;
+        for (var i = 0; i < 7; i++) {
+          final id = 'chat-$i';
+          ids.add(id);
+          conversations.add({
+            ...(conversations.first as Map<String, dynamic>),
+            'id': id,
+          });
+          for (var m = 0; m < 40; m++) {
+            server.append('m$m', conversationId: id);
+          }
+        }
+        final view = savedWithChats(server, ids);
+        final kept = view['chats'] as List;
+        expect(kept.map((c) => (c as Map)['id']), [
+          'chat-6',
+          'chat-5',
+          'chat-4',
+          'chat-3',
+          'chat-2',
+        ]);
+        expect(((kept.first as Map)['messages'] as List).length, 30);
+      },
+    );
+
+    test('a restart keeps the order the chats were read in', () {
       final server = ConversationServer()..append('Hello');
       final ids = <String>[];
       final conversations = server.state['conversations'] as List;
-      for (var i = 0; i < 7; i++) {
+      for (var i = 0; i < 3; i++) {
         final id = 'chat-$i';
         ids.add(id);
-        conversations.add({...(conversations.first as Map<String, dynamic>), 'id': id});
-        for (var m = 0; m < 40; m++) {
-          server.append('m$m', conversationId: id);
-        }
+        conversations.add({
+          ...(conversations.first as Map<String, dynamic>),
+          'id': id,
+        });
+        server.append('m', conversationId: id);
       }
       final view = savedWithChats(server, ids);
-      final kept = view['chats'] as List;
-      expect(kept.map((c) => (c as Map)['id']), ['chat-6', 'chat-5', 'chat-4', 'chat-3', 'chat-2']);
-      expect(((kept.first as Map)['messages'] as List).length, 30);
-    });
-
-    test('a view over its limit drops the oldest chats, and keeps the open one', () async {
-      final store = MemoryStore();
-      final views = SuperTabSavedViews(store, maxBytes: 4096);
-      await views.claim('owner');
-      final view = {
-        ..._view(),
-        'chats': [
-          {'id': 'a', 'messages': [{'text': 'x' * 100}]},
-          {'id': 'b', 'messages': [{'text': 'x' * 8000}]},
-        ],
-      };
-      expect(await views.write('owner', 'tab', view), isTrue);
-      final kept = await views.read('owner', 'tab');
-      expect(kept, isNotNull);
-      expect((kept!['chats'] as List).map((c) => (c as Map)['id']), ['a']);
-    });
-
-    test('a sent message shows before the server answers, with its quiet mark', () {
-      final server = ConversationServer()..append('Hello');
       fakeAsync((async) {
-        final c = _controller(_Reads(server), reading: SuperTabReading.desktop)..start();
-        async.flushMicrotasks();
-        server.holdCommands = Completer<void>();
-        c.setDraft('lead', 'On its way');
-        unawaited(c.send());
-        expect(c.outgoing('lead').single.text, 'On its way');
-        expect(c.outgoing('lead').single.state, SuperTabOutgoingState.sending);
-        server.holdCommands!.complete();
-        server.holdCommands = null;
-        async.flushMicrotasks();
+        final c = _controller(_Reads(server), reading: SuperTabReading.desktop)
+          ..drawSaved(view);
+        expect(
+          (c.savedView!['chats'] as List).map((chat) => (chat as Map)['id']),
+          ['chat-2', 'chat-1', 'chat-0'],
+        );
         c.dispose();
       });
     });
+
+    test(
+      'a view over its limit drops the oldest chats, and keeps the open one',
+      () async {
+        final store = MemoryStore();
+        final views = SuperTabSavedViews(store, maxBytes: 4096);
+        await views.claim('owner');
+        final view = {
+          ..._view(),
+          'chats': [
+            {
+              'id': 'a',
+              'messages': [
+                {'text': 'x' * 100},
+              ],
+            },
+            {
+              'id': 'b',
+              'messages': [
+                {'text': 'x' * 8000},
+              ],
+            },
+          ],
+        };
+        expect(await views.write('owner', 'tab', view), isTrue);
+        final kept = await views.read('owner', 'tab');
+        expect(kept, isNotNull);
+        expect((kept!['chats'] as List).map((c) => (c as Map)['id']), ['a']);
+      },
+    );
+
+    test(
+      'a sent message shows before the server answers, with its quiet mark',
+      () {
+        final server = ConversationServer()..append('Hello');
+        fakeAsync((async) {
+          final c = _controller(
+            _Reads(server),
+            reading: SuperTabReading.desktop,
+          )..start();
+          async.flushMicrotasks();
+          server.holdCommands = Completer<void>();
+          c.setDraft('lead', 'On its way');
+          unawaited(c.send());
+          expect(c.outgoing('lead').single.text, 'On its way');
+          expect(
+            c.outgoing('lead').single.state,
+            SuperTabOutgoingState.sending,
+          );
+          server.holdCommands!.complete();
+          server.holdCommands = null;
+          async.flushMicrotasks();
+          c.dispose();
+        });
+      },
+    );
   });
 
   // Task #2169: Desktop draws at once, as the saved view is this account's own (SuperTabSavedViews is keyed by account).
@@ -451,7 +543,8 @@ void _controllerTests() {
         server
           ..append('Done.')
           ..holdReads = Completer<void>();
-        final c = _controller(_Reads(server), reading: SuperTabReading.desktop)..drawSaved(view);
+        final c = _controller(_Reads(server), reading: SuperTabReading.desktop)
+          ..drawSaved(view);
         expect(c.snapshot!.name, 'Pilot');
         expect(c.messages('lead').single.text, 'Please start.');
         expect(c.showingSaved, isTrue);
@@ -463,33 +556,49 @@ void _controllerTests() {
         server.holdReads = null;
         async.flushMicrotasks();
         expect(c.showingSaved, isFalse);
-        expect(c.messages('lead').map((m) => m.text), ['Please start.', 'Done.']);
+        expect(c.messages('lead').map((m) => m.text), [
+          'Please start.',
+          'Done.',
+        ]);
         c.dispose();
       });
     });
 
-    test('a first read that is refused takes the saved view off the screen', () {
-      final server = ConversationServer()..append('Hello');
-      final view = _saved(server);
-      fakeAsync((async) {
-        final c = SuperTabController(
-          tabId: 'tab',
-          accountId: 'owner',
-          request: (method, path, {body}) => Future.error(const SuperTabFailure('FORBIDDEN', 'You no longer have access.', statusCode: 403)),
-          save: server.save,
-          initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': 'lead'},
-          reading: SuperTabReading.desktop,
-        )..drawSaved(view);
-        expect(c.snapshot, isNotNull);
-        c.start();
-        async.flushMicrotasks();
-        expect(c.accessRevoked, isTrue);
-        expect(c.showingSaved, isFalse);
-        expect(c.snapshot, isNull);
-        expect(c.messages('lead'), isEmpty);
-        c.dispose();
-      });
-    });
+    test(
+      'a first read that is refused takes the saved view off the screen',
+      () {
+        final server = ConversationServer()..append('Hello');
+        final view = _saved(server);
+        fakeAsync((async) {
+          final c = SuperTabController(
+            tabId: 'tab',
+            accountId: 'owner',
+            request: (method, path, {body}) => Future.error(
+              const SuperTabFailure(
+                'FORBIDDEN',
+                'You no longer have access.',
+                statusCode: 403,
+              ),
+            ),
+            save: server.save,
+            initial: {
+              'tabId': 'tab',
+              'accountId': 'owner',
+              'selectedId': 'lead',
+            },
+            reading: SuperTabReading.desktop,
+          )..drawSaved(view);
+          expect(c.snapshot, isNotNull);
+          c.start();
+          async.flushMicrotasks();
+          expect(c.accessRevoked, isTrue);
+          expect(c.showingSaved, isFalse);
+          expect(c.snapshot, isNull);
+          expect(c.messages('lead'), isEmpty);
+          c.dispose();
+        });
+      },
+    );
   });
 
   test('a saved view read after the Swarm was refused draws nothing', () {
@@ -1301,42 +1410,39 @@ void _reviewTests() {
     });
   });
 
-  test(
-    'an earlier page asked for over the saved view leaves no gap when the '
-    'read replacing that view lands first',
-    () {
-      final server = ConversationServer();
-      for (var i = 1; i <= 120; i++) {
+  test('an earlier page asked for over the saved view leaves no gap when the '
+      'read replacing that view lands first', () {
+    final server = ConversationServer();
+    for (var i = 1; i <= 120; i++) {
+      server.append('m$i');
+    }
+    final view = _saved(server);
+    fakeAsync((async) {
+      for (var i = 121; i <= 270; i++) {
         server.append('m$i');
       }
-      final view = _saved(server);
-      fakeAsync((async) {
-        for (var i = 121; i <= 270; i++) {
-          server.append('m$i');
-        }
-        final reads = _Reads(server)..holdOlder = Completer<void>();
-        final c = _controller(reads)
-          ..drawSaved(view)
-          ..start();
-        // Scrolled up at once: from where the saved page said earlier
-        // continues, while the read replacing that page is on its way.
-        unawaited(c.loadMessages('lead', older: true));
-        async.flushMicrotasks();
-        expect(c.messages('lead').first.text, 'm171');
-        reads.holdOlder!.complete();
-        reads.holdOlder = null;
-        async.flushMicrotasks();
+      final reads = _Reads(server)..holdOlder = Completer<void>();
+      final c = _controller(reads)
+        ..drawSaved(view)
+        ..start();
+      // Scrolled up at once: from where the saved page said earlier
+      // continues, while the read replacing that page is on its way.
+      unawaited(c.loadMessages('lead', older: true));
+      async.flushMicrotasks();
+      expect(c.messages('lead').first.text, 'm171');
+      reads.holdOlder!.complete();
+      reads.holdOlder = null;
+      async.flushMicrotasks();
 
-        final sequences = c.messages('lead').map((m) => m.sequence).toList();
-        expect(sequences.last, 270);
-        for (var i = 1; i < sequences.length; i++) {
-          expect(sequences[i], sequences[i - 1] + 1, reason: 'at $i');
-        }
-        expect(c.hasOlder('lead'), sequences.first > 1);
-        c.dispose();
-      });
-    },
-  );
+      final sequences = c.messages('lead').map((m) => m.sequence).toList();
+      expect(sequences.last, 270);
+      for (var i = 1; i < sequences.length; i++) {
+        expect(sequences[i], sequences[i - 1] + 1, reason: 'at $i');
+      }
+      expect(c.hasOlder('lead'), sequences.first > 1);
+      c.dispose();
+    });
+  });
 
   // Finding 2.
   test('nothing is written back while the saved view is on screen', () {
