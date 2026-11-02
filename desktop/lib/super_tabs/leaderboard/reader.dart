@@ -78,7 +78,7 @@ class SuperTabLeaderboardReader extends ChangeNotifier {
       board = null;
       error = null;
     }
-    _timer ??= Timer.periodic(every, (_) => unawaited(refresh()));
+    _timer ??= Timer.periodic(every, (_) => unawaited(tick()));
     return refresh();
   }
 
@@ -98,6 +98,10 @@ class SuperTabLeaderboardReader extends ChangeNotifier {
     _timer?.cancel();
     _timer = null;
   }
+
+  /// A timed read. A reader that is off screen skips it.
+  @protected
+  Future<void> tick() => refresh();
 
   Future<void> refresh() async {
     final projectId = _projectId;
@@ -188,6 +192,10 @@ class SuperTabProjectBoard extends SuperTabLeaderboardReader {
       unawaited(show(projectId));
     }
   }
+
+  /// A Swarm that isn't showing reads no board; the next tick after it returns does.
+  @override
+  Future<void> tick() => controller.away ? Future.value() : refresh();
 
   @override
   void dispose() {

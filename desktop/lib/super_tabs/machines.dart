@@ -24,6 +24,7 @@ import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
 import '../widgets/harness_activity_mark.dart';
 import '../widgets/workspace_subscription_usage.dart';
+import 'visible_tick.dart';
 import 'add_computers.dart';
 import 'agent_details.dart';
 import 'controller.dart';
@@ -772,7 +773,8 @@ Future<void> _machineSettingsDialog(
   );
 }
 
-class _SuperTabMachinesState extends State<SuperTabMachines> {
+class _SuperTabMachinesState extends State<SuperTabMachines>
+    with WidgetsBindingObserver, VisibleTick<SuperTabMachines> {
   final _samples = <String, (MachineResources, DateTime)>{};
   String? _selectedMachineId;
 
@@ -784,8 +786,6 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   /// reporting through it are refreshing until one more is. Null: the app has not been away.
   int? _swarmReadsAtReturn;
 
-  /// Once a second, so that ages, states and the heading's count follow the clock between the Swarm's reads.
-  Timer? _tick;
   final _tips = <String, GlobalKey<TooltipState>>{};
 
   /// One per Swarm menu open now, each keeping the browser's menu off.
@@ -817,9 +817,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   @override
   void initState() {
     super.initState();
-    if (!kUnderTest) {
-      _tick = Timer.periodic(const Duration(seconds: 1), (_) => _changed());
-    }
+    // Once a second while on screen, so that ages, states and the heading's count follow the clock between reads.
+    if (!kUnderTest) visibleTick(const Duration(seconds: 1));
     unawaited(_readTeamSetup());
     if ((!kUnderTest || widget.readLocal != null) && widget.app != null) {
       _updateUsage();
@@ -830,6 +829,14 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
 
   void _changed() {
     if (mounted) setState(() {});
+  }
+
+  /// Off screen it reads nothing; back on screen it reads at once.
+  @override
+  void onScreenChanged(bool onScreen) {
+    _timer?.cancel();
+    _timer = null;
+    if (onScreen && (!kUnderTest || widget.readLocal != null) && widget.app != null) unawaited(_refresh());
   }
 
   /// Reads why this Mac has no Harness Team account, only while its person's
@@ -916,7 +923,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       await _readTeamSetup();
     } finally {
       _reading = false;
-      if (mounted && widget.app?.foreground.value == true) {
+      if (mounted && onScreen && widget.app?.foreground.value == true) {
         _timer = Timer(const Duration(seconds: 15), _refresh);
       }
     }
@@ -928,7 +935,6 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     _menuHolds.clear();
     _revision++;
     _timer?.cancel();
-    _tick?.cancel();
     widget.app?.foreground.removeListener(_foreground);
     _usage?.removeListener(_changed);
     _usage?.dispose();
