@@ -249,6 +249,13 @@ class SuperTabController extends ChangeNotifier {
           if (key is String && value is num) _threadSeen[key] = value.toInt();
         }
       }
+      if (initial['openThread'] case {
+        'conversationId': final String conversation,
+        'root': final String root,
+      }) {
+        openedThread = (conversationId: conversation, root: root);
+        _reopenThread = true;
+      }
       if (initial['threadDrafts'] case final Map saved) {
         for (final MapEntry(key: root, value: draft) in saved.entries) {
           if (root is! String || draft is! Map) continue;
@@ -729,6 +736,9 @@ class SuperTabController extends ChangeNotifier {
 
   /// The thread open beside the chat.
   ({String conversationId, String root})? openedThread;
+
+  /// A thread restored open, whose replies its first read of the Swarm brings.
+  bool _reopenThread = false;
   final _attachments = <String, HarnessAttachments>{};
 
   /// The files waiting to go with the next reply of each thread, by its
@@ -1392,6 +1402,7 @@ class SuperTabController extends ChangeNotifier {
     openedThread = (conversationId: selectedId, root: root);
     _pruneThreadFiles();
     _seeThread(root);
+    _saveSoon();
     _changed();
     unawaited(loadThread());
   }
@@ -1400,6 +1411,7 @@ class SuperTabController extends ChangeNotifier {
     if (openedThread == null) return;
     openedThread = null;
     _pruneThreadFiles();
+    _saveSoon();
     _changed();
   }
 
@@ -2357,6 +2369,8 @@ class SuperTabController extends ChangeNotifier {
     'threadSeen': Map<String, int>.fromEntries(
       _threadSeen.entries.skip(max(0, _threadSeen.length - 500)),
     ),
+    if (openedThread case final open?)
+      'openThread': {'conversationId': open.conversationId, 'root': open.root},
     // ponytail: the newest 500, as threadSeen.
     if (_threadDrafts.isNotEmpty)
       'threadDrafts': {
@@ -3310,6 +3324,11 @@ class SuperTabController extends ChangeNotifier {
         }
         selectedId = _shownFor(selectedId);
         if (localAccessChanged) _saveSoon();
+        if (_reopenThread) {
+          _reopenThread = false;
+          // Still open: a conversation this read leaves out closed it above.
+          unawaited(loadThread());
+        }
         // A new store holds no closed groups yet, nor one a saved view drew:
         // the open projects read theirs.
         if (read.full || stateReads == 1) {
