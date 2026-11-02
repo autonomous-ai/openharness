@@ -72,6 +72,7 @@ async function overSocket(socketPath: string, input: Request, pipe?: PipeTarget)
     const req = request({ socketPath, method: input.method, path: `${url.pathname}${url.search}`, headers, signal: input.signal }, (res) => {
       if (pipe && nonce && !pipeProven(res.headers, pipe.token, nonce)) {
         reject(new PipeUnproven(pipe.pipe))
+        res.destroy()
         req.destroy()
         return
       }

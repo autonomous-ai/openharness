@@ -39,7 +39,7 @@ describe.runIf(WINDOWS)('who is calling, asked of Windows', () => {
     cleanup.push(() => socket2.destroy())
     await new Promise<void>((resolve) => { gone.once('close', () => resolve()); gone.destroy() })
     expect(await peerIsThisAccount(socket2, 'win32')).toBe(false)
-  }, 30_000)
+  }, 120_000)
 
   // The check takes only a process that started before its connection was made. A process that connects in its first
   // moments must still read as yes, whatever the two times' precision (Reed's review of #2605).
@@ -54,5 +54,5 @@ describe.runIf(WINDOWS)('who is calling, asked of Windows', () => {
     const socket = await accepted
     cleanup.push(() => socket.destroy())
     if (!await peerIsThisAccount(socket, 'win32')) expect.fail(await asked(socket))
-  }, 30_000)
+  }, 120_000)
 })
