@@ -40,7 +40,7 @@ Map<String, dynamic> taskLine({
 Map<String, dynamic> legacyShip(String target, int sequence) => {
   ...taskLine(id: 'ship-$target', sequence: sequence),
   'text': 'Shipped: $target',
-  'source': {'kind': 'ship', 'taskId': target, 'title': target},
+  'source': {'kind': 'ship', 'conversationId': target, 'title': target},
 };
 
 FakeSwarm taskLineBackend(
