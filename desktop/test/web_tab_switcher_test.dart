@@ -116,7 +116,9 @@ void main() {
     expect(app.activeSwarmId, first);
 
     final count = app.swarms.length;
-    await tester.tap(find.byKey(const ValueKey('web-new-tab-button')));
+    await tester.tap(find.byKey(const ValueKey('web-new-menu-button')));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.byKey(const ValueKey('web-menu:swarm.new')));
     await tester.pump(const Duration(milliseconds: 100));
     expect(app.swarms.length, count + 1);
 
@@ -167,11 +169,10 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
     expect(app.panes.map((pane) => pane.id), [100, 101]);
 
-    await tester.tap(find.byKey(const ValueKey('web-app-menu-button')));
+    await tester.tap(find.byKey(const ValueKey('web-new-menu-button')));
     await tester.pump(const Duration(milliseconds: 100));
-    // The phone menu carries Store (its bar has no Store button), not Add phone.
+    // The phone menu carries Store: its bar has no Store button.
     expect(find.byKey(const ValueKey('web-menu:app.store')), findsOneWidget);
-    expect(find.byKey(const ValueKey('web-menu:app.add_phone')), findsNothing);
     await capture(tester, 'web-phone-app-menu');
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
@@ -203,7 +204,7 @@ void main() {
       );
 
       // One harness drawn alone still has a desk to split: the menu offers it.
-      await tester.tap(find.byKey(const ValueKey('web-app-menu-button')));
+      await tester.tap(find.byKey(const ValueKey('web-new-menu-button')));
       await tester.pump(const Duration(milliseconds: 100));
       expect(
         find.byKey(const ValueKey('web-menu:pane.split_right')),
@@ -236,9 +237,8 @@ void main() {
   );
 
   const barControls = [
-    'web-app-menu-button',
     'web-tab-switcher',
-    'web-new-tab-button',
+    'web-new-menu-button',
     'swarm-search-button',
     'workspace-notifications-button',
   ];
@@ -262,7 +262,7 @@ void main() {
       }
       rects.add(rect);
     }
-    for (final key in ['web-app-menu-button', 'swarm-search-button']) {
+    for (final key in ['swarm-search-button']) {
       final icon = tester.widget<Icon>(
         find.descendant(
           of: find.byKey(ValueKey(key)),
@@ -280,7 +280,7 @@ void main() {
     tester,
   ) async {
     final app = await mount(tester, const Size(1280, 800));
-    for (final key in ['web-app-menu-button', 'swarm-search-button']) {
+    for (final key in ['swarm-search-button']) {
       expect(tester.getSize(find.byKey(ValueKey(key))).height, 28);
     }
     await tester.pumpWidget(const SizedBox.shrink());

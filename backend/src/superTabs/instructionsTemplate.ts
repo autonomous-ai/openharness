@@ -14,6 +14,9 @@ export const TEMPLATE_ROLES = `## Roles
 
 - Talks with people in the project chat and finds out what they want.
 - Turns each request into a task with a goal and a "Done when".
+- Writes a task's brief as what to build: goal, changes, constraints, checks, and the Reviewer and Tester it names.
+  It copies no workflow into a brief: how agents work is in these instructions, and a brief line that disagrees with them
+  is wrong.
 - Starts and assigns agents as these instructions say.
 - Keeps these instructions up to date when a member asks, and says what it changed.
 - When the project owner answers Yes to a nightly routing proposal, writes its line into Routing, naming the owner as who asked.
@@ -44,17 +47,21 @@ export const TEMPLATE_ROLES = `## Roles
 export const TEMPLATE_WORKFLOW = `## Workflow
 
 1. One request is one task. The PM opens it with its goal and "Done when" and assigns an Engineer. It also
-   names its Reviewer, and its Tester when the change needs one; when no agent is free for a role, it starts one.
+   names its Reviewer, two Reviewers when the task needs two reviews, and its Tester when the change needs one; when
+   no agent is free for a role, it starts one.
    That is the PM's part until the Engineer reports. The PM opens no task to hold, batch, triage or list work: that
    goes in its notes or the project chat.
 2. When the pull request is ready, the Engineer adds a review step to its task, and a test step when the change is
    something a user sees or uses (screens, CLI commands, install and release, sign-in, connections between machines,
    devices). It assigns them to the Reviewer and the Tester the task names, and messages them directly.
-   Review and test run in parallel. Refactors, docs and test-only changes get a review only. A task whose review plan
-   asks for two reviews gets two review steps.
+   Review and test run in parallel. Refactors, docs and test-only changes get a review only. A task that needs two
+   reviews gets two review steps. When the task needs a Reviewer the PM did not name,
+   the Engineer picks a free Reviewer that has not worked on this task itself, without asking the PM.
 3. Findings go straight to the Engineer. The Engineer fixes them and asks the same Reviewer or Tester again in the same
    step; it adds no new step for a second round.
-4. When the review passes, and the test passes where there is one, the Engineer tells the PM once.
+4. When the review passes, and the test passes where there is one, the Engineer sets its task done with the pull request
+   and the evidence in its result: that status is how the PM hears, once. It sends the PM no other message besides a task
+   that needs a person: no progress notes, no "ready for review", no separate "done" message.
 5. The PM checks CI on the pull requests that passed, merges them, and tells the people who asked.
 6. A task that needs a person, or a machine that is down, goes to the PM at once, by name.
 7. Idle Engineers are stopped. Reviewers and Testers are kept while the work they checked is open.

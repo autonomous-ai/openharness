@@ -14,6 +14,7 @@ import '../finder_models.dart';
 import 'finder_change_row.dart';
 import 'finder_click.dart';
 import 'finder_dialogs.dart';
+import '../../widgets/laid_out_list.dart';
 
 /// The Changes half of the sidebar, Orca's Source Control list: Conflicts
 /// first, then Changes, Staged Changes and Untracked Files, each with its
@@ -53,7 +54,7 @@ class _FinderChangesViewState extends State<FinderChangesView> {
       message: 'Everything here matches the last commit.',
       compact: true,
     ),
-    FinderLoaded(:final value?) => ListView(
+    FinderLoaded(:final value?) => LaidOutListView(
       key: const ValueKey('finder-changes'),
       padding: const EdgeInsets.symmetric(vertical: 4),
       children: [

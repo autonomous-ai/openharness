@@ -378,6 +378,10 @@ class AgentCreationAttempt {
   String? get agentId => _agentId;
   String? _outcome;
   String? _preparedFolder;
+
+  /// The SSH alias this attempt's own clone went through, until its harness
+  /// starts and the person is told.
+  String? _clonedVia;
   ProjectFolderRequest? _projectFolder;
 
   /// The worktree this computer made for this attempt, set only where it is
@@ -15409,12 +15413,17 @@ class AppNotifier extends ChangeNotifier {
       label: label,
       onClonedVia: (alias) => via = alias,
     );
-    if (via case final alias?) _clonedViaFolders[folder] = alias;
+    if (via case final alias?) rememberClonedVia(folder, alias);
     return folder;
   }
 
+  @visibleForTesting
+  void rememberClonedVia(String folder, String alias) =>
+      _clonedViaFolders[folder] = alias;
+
   /// A folder this computer's own clone reached through an SSH alias, until
-  /// its creation tells the person ([_announceClonedVia]).
+  /// its creation takes it. Kept by folder, it outlived a creation that failed,
+  /// and a later start in that folder announced a clone it never made.
   final _clonedViaFolders = <String, String>{};
 
   /// The alias a machine's own clone went through (cli launches.ts
@@ -16008,6 +16017,11 @@ class AppNotifier extends ChangeNotifier {
                     engineIdentity(dshId).label)
               : engineIdentity(choices['engine'] as String?).label,
         );
+        if (preparedBefore == null) {
+          creation._clonedVia = _clonedViaFolders.remove(
+            creation._preparedFolder,
+          );
+        }
         if (preparedBefore == null && project.createsWorktree) {
           creation._worktreeMadeHere = (
             folder: creation._preparedFolder!,
@@ -16313,10 +16327,8 @@ class AppNotifier extends ChangeNotifier {
     creation._complete(null);
     if (_disposed || machineStates[machineId] != machine) return null;
     creation._agentId = agent.id;
-    _announceClonedVia(
-      _clonedViaFolders.remove(creation._preparedFolder) ??
-          _clonedViaOf(result),
-    );
+    _announceClonedVia(creation._clonedVia ?? _clonedViaOf(result));
+    creation._clonedVia = null;
     if (choices['prompt'] case final String prompt
         when prompt.trim().isNotEmpty) {
       _firstMessages[(machineId, agent.id)] = prompt;
