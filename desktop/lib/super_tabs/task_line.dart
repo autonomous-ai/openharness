@@ -25,7 +25,9 @@ String superTabTaskWord(SuperTabMessage message, String readerId) =>
       'waiting' =>
         message.source['answerFor'] == readerId ? 'Answer' : 'working',
       'review' => 'in review',
+      'ready' => 'ready',
       'shipped' => 'shipped',
+      'done' => 'done',
       'stopped' => 'stopped',
       _ => '',
     };
@@ -41,7 +43,8 @@ String superTabTaskName(SuperTabMessage message) =>
 IconData superTabTaskMark(SuperTabMessage message) =>
     switch (message.source['state']) {
       'planned' => AppIcons.circleDashed,
-      'shipped' => AppIcons.check,
+      'ready' => AppIcons.circleDot,
+      'shipped' || 'done' => AppIcons.check,
       'stopped' => AppIcons.circleSlash,
       _ => AppIcons.circleDot,
     };
