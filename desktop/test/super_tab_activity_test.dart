@@ -730,19 +730,22 @@ void main() {
       c.dispose();
     });
 
-    testWidgets('the unread filter keeps it only while it has something '
-        'unread', (tester) async {
+    testWidgets('the unread filter keeps it shown, bold only while it has '
+        'something unread', (tester) async {
       final server = oneBuddySwarm();
       giveSwarmBuddy(server);
       final c = await show(tester, server);
       expect(buddyRow, findsOneWidget);
       c.toggleUnreadOnly();
       await tester.pumpAndSettle();
-      expect(buddyRow, findsNothing);
+      expect(c.unreadOnly, isTrue);
+      expect(buddyRow, findsOneWidget);
+      expect(buddyName(tester).style?.fontWeight, isNot(grid.AppFont.semibold));
       server.append('A word from Wren', conversationId: 'swarm-buddy-peer');
       await c.refresh();
       await tester.pumpAndSettle();
       expect(buddyRow, findsOneWidget);
+      expect(buddyName(tester).style?.fontWeight, grid.AppFont.semibold);
       await tester.pumpWidget(const SizedBox());
       await c.flush();
       c.dispose();
