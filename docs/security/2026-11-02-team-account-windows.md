@@ -11,13 +11,13 @@ text and values the code produces. Nothing on a real account, permission or file
 **The folders hold; the daemon's port does not.** Ports were covered only in part: the Team daemon's own port was not read. The ACLs setup writes keep the Team account out of the owner's profile.
 Other accounts can't read the sign-in code or the relay's token, and the daemon's pipe proves both ends. On Windows the owner's
 local credential went over TCP to whoever holds the daemon's port, and the daemon accepted it from any account (W1, fixed in
-task #2095; the connectors bridge's port is fixed in task #2162).
+task #2095; the connectors bridge's port is fixed in task #2162, pending its real Windows run).
 The Team account's daemon starts at boot, before the owner signs in. Purge was written for POSIX paths. It never deleted a
 Codex Product Manager's own home on Windows (W2, fixed in this pull request), and it can't finish a Claude Code one there (W3).
 
 | ID | Rating | Finding | Status |
 |---|---|---|---|
-| W1 | **High** | The owner's local credential goes to whoever holds the daemon's port, and opens the daemon from any account | **Fixed** in task #2095 for every client, test first. Store add-ons stop working on Windows until they use its pipe (own task). The connectors bridge: fixed in task #2162 |
+| W1 | **High** | The owner's local credential goes to whoever holds the daemon's port, and opens the daemon from any account | **Fixed** in task #2095 for every client, test first. Store add-ons stop working on Windows until they use its pipe (own task). The connectors bridge: fix in task #2162, pending its real Windows run |
 | W2 | **High** | Purge left a Codex Product Manager's whole home on Windows, and could take every PM's home on any platform | **Fixed here**, test first |
 | W3 | Medium | Purge can't scrub a Claude Code Product Manager on Windows: the account stays held, its memory stays | Read in code, fix requested |
 | W4 | Medium | The Team account can stall the owner's read of its status file | Read in code, fix requested |
@@ -77,7 +77,7 @@ make the daemon refuse the credential over TCP from another account. Windows can
   boot. They now send none there, so the daemon refuses their credentialed requests on Windows (their text blames the
   credential) until they use its pipe, a task already started. Until then they still dial the port without it: whoever holds
   it can accept them, hear their requests and answer them.
-- The connectors bridge (task #2162, from Reed's review of #2605, Medium at least). Until then, `portHolderIsThisAccount`
+- The connectors bridge (task #2162, from Reed's review of #2605, Medium at least; called fixed once its real Windows run is green). Until then, `portHolderIsThisAccount`
   answered null on Windows, so the bridge never moved off a port another account held, and agents' entries and Harness's own
   `bridgeRoute` named that port. The bridge's default port, 51793, is the same for every account, and the Team account's daemon
   starts connectors at boot, so in practice the Team account read every tool call of the owner's agents and could return false
