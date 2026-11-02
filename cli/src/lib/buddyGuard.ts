@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { chmodSync, closeSync, existsSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync,
   writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative } from 'node:path'
+import { buddyTmpParent } from './agentTmp.js'
 import { homedir, tmpdir } from 'node:os'
 import { isTeamAccount } from '../team/config.js'
 import { buddyAccountFile } from './buddyAccount.js'
@@ -75,7 +76,7 @@ const SYSTEM_READABLE = process.platform === 'darwin'
  *  agent records stay closed), [tmpDirs] where Claude Code keeps other sessions' tool output, and [repos] the project's repositories (owner/name), the only ones gh api reads. */
 export function buddyWideOf(input: { home: string; dataDir: string; tmpDirs: readonly string[]; repos: readonly string[]; hosts?: readonly string[];
   system?: readonly string[]; launch?: string; closed?: readonly string[]; otherSessions?: readonly string[] }): BuddyWide {
-  return { home: input.home, launch: input.launch ?? randomUUID(), accountFile: buddyAccountFile(input.dataDir), readable: [input.home, ...(input.system ?? SYSTEM_READABLE)], repos: input.repos, hosts: input.hosts ?? [], sessionTemp: input.tmpDirs, denied: [...CLOSED_IN_HOME.map(path => join(input.home, path)), input.dataDir, ...input.tmpDirs, ...(input.closed ?? [])],
+  return { home: input.home, launch: input.launch ?? randomUUID(), accountFile: buddyAccountFile(input.dataDir), readable: [input.home, ...(input.system ?? SYSTEM_READABLE)], repos: input.repos, hosts: input.hosts ?? [], sessionTemp: input.tmpDirs, denied: [...CLOSED_IN_HOME.map(path => join(input.home, path)), input.dataDir, buddyTmpParent(input.dataDir), ...input.tmpDirs, ...(input.closed ?? [])],
     approvalsDir: join(input.dataDir, 'buddy-approvals'), ...(input.otherSessions?.length ? { otherSessions: input.otherSessions } : {}) }
 }
 
@@ -208,7 +209,7 @@ const TOOL_SIGN_INS = ['.config/gh', '.config/argocd', '.argocd', '.kube']
  * command of the session. Ken chose it over running those tools outside the sandbox (10-30), so the sandbox's no-writes
  * and host list hold for them too.
  */
-export function buddySandboxSettings(root: string, wide: BuddyWide): Record<string, unknown> {
+export function buddySandboxSettings(root: string, wide: BuddyWide, ownTemp: string | null = null): Record<string, unknown> {
   // Open to the sandbox: the tools' own sign-ins, and Claude Code's temporary folder, where every command's output goes
   // (with it closed, even cat failed: "cat: stdout: Operation not permitted", Claude Code 2.1.314). The guard keeps both
   // closed to the Buddy's own reads.
@@ -222,7 +223,8 @@ export function buddySandboxSettings(root: string, wide: BuddyWide): Record<stri
     // temporary folder (both found by the real sandbox test, review of #2310). That folder itself stays writable: Claude
     // Code writes a file there for each command from inside the sandbox ("/bin/bash: /tmp/claude-501/cwd-…: Operation not
     // permitted" without it).
-    filesystem: { allowWrite: [], denyWrite: [...new Set([root, ...cloneOf(root), ...wide.sessionTemp.map(path => `${path}/-*`)])],
+    // Beside a Team account its own temporary folder is the one exception, out of every Buddy's, which stay closed (lib/agentTmp.ts).
+    filesystem: { allowWrite: ownTemp ? [ownTemp] : [], ...(ownTemp ? { allowRead: [ownTemp] } : {}), denyWrite: [...new Set([root, ...cloneOf(root), ...wide.sessionTemp.map(path => `${path}/-*`)])],
       denyRead: wide.denied.filter(path => !signIns.has(path)) },
   }
 }
@@ -281,7 +283,7 @@ const KEPT_MS = 24 * 60 * 60 * 1000
 /** The folder that holds the one Buddies' folders (superTabs/buddyHome.ts BUDDY_HOMES, which a spec keeps equal): this file's
  *  guard is written from lib, which imports nothing of superTabs. */
 const ONE_BUDDY_HOMES = 'buddy-home'
-export const buddyGuardSource = (root: string, reads: BuddyReads, wide: BuddyWide | null = null): string => String.raw`#!/usr/bin/env node
+export const buddyGuardSource = (root: string, reads: BuddyReads, wide: BuddyWide | null = null, ownTemp: string | null = null): string => String.raw`#!/usr/bin/env node
 // A Buddy's guard, written by Harness (cli/src/lib/buddyGuard.ts). Do not edit: Harness writes it again at each launch.
 import { createHash } from 'node:crypto'
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs'
@@ -296,6 +298,8 @@ const KEPT_MS = ${KEPT_MS}
 // Wide mode (docs/specs/2026-10-30-buddy-read-access.md): null keeps every read in the folder. Set only for a Buddy on its
 // person's own machine, under their own account; it names their home and the places in it that stay closed.
 const WIDE = ${JSON.stringify(wide)}
+// Its own private temporary folder beside a Team account (lib/agentTmp.ts), null elsewhere: read here, in either mode, and no other Buddy's.
+const OWN_TEMP = ${JSON.stringify(ownTemp)}
 // A person's one Buddy or plain session: its folder holds every project's code, and a proposal goes to any one project's PM.
 const ONE_BUDDY = ${JSON.stringify(basename(dirname(root)) === ONE_BUDDY_HOMES)}
 const TOOLS = new Set(['TodoWrite', 'ToolSearch'])
@@ -375,6 +379,17 @@ function inside(path) {
     rest = rest ? join(basename(at), rest) : basename(at)
     at = dirname(at)
   }
+}
+
+// Whether [path] is in its own temporary folder: named whole, by its real path, so a link or a ".." out is out, and with no
+// secret's name below that folder. 'file': one regular file, for content search, which in a folder would read those names too.
+function ownTemp(path, kind) {
+  if (!OWN_TEMP || typeof path !== 'string' || !isAbsolute(path)) return false
+  const real = realOf(path)
+  if (!real || !under(real, OWN_TEMP)) return false
+  if (secretName(relative(OWN_TEMP, real)) || secretName(relative(OWN_TEMP, resolve(path)))) return false
+  if (kind !== 'file') return true
+  try { return statSync(real).isFile() } catch { return false }
 }
 
 // Whether [part], read as a path from the folder, leaves it: absolute (the machine's files, /dev), a ".." part, or, by its
@@ -809,12 +824,12 @@ function decide(input) {
   if (TOOLS.has(input.tool_name)) return true
   // Its read tools, in its folder: Read a file there, Grep and Glob there (their folder by default), LS a folder there.
   // Read opens what its person sent it too, and the Artifact tool reads the links they sent.
-  if (input.tool_name === 'Read') return inside(tool.file_path) || attached(tool.file_path) || outsideAllowed(tool.file_path, 'any')
+  if (input.tool_name === 'Read') return inside(tool.file_path) || attached(tool.file_path) || ownTemp(tool.file_path, 'any') || outsideAllowed(tool.file_path, 'any')
   if (input.tool_name === 'Artifact') return artifactAllowed(tool)
-  if (input.tool_name === 'LS') return inside(tool.path) || outsideAllowed(tool.path, 'dir')
-  if (input.tool_name === 'Grep') return tool.path === undefined || inside(tool.path) || outsideAllowed(tool.path, 'file')
+  if (input.tool_name === 'LS') return inside(tool.path) || ownTemp(tool.path, 'any') || outsideAllowed(tool.path, 'dir')
+  if (input.tool_name === 'Grep') return tool.path === undefined || inside(tool.path) || ownTemp(tool.path, 'file') || outsideAllowed(tool.path, 'file')
   if (input.tool_name === 'Glob') {
-    return (tool.path === undefined || inside(tool.path) || outsideAllowed(tool.path, 'tree')) && typeof tool.pattern === 'string'
+    return (tool.path === undefined || inside(tool.path) || ownTemp(tool.path, 'any') || outsideAllowed(tool.path, 'tree')) && typeof tool.pattern === 'string'
       && !outward(tool.pattern)
   }
   // A command never leaves Claude Code's sandbox (wide mode's, lib/buddyGuard.ts buddySandboxSettings): the guard's allow

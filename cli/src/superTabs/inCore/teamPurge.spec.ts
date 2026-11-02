@@ -1,3 +1,4 @@
+import { buddyTmpFolder, buddyTmpParent } from '../../lib/agentTmp.js'
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -71,6 +72,19 @@ const transcript = (cwd: string | null, ...lines: string[]) => [JSON.stringify({
 const call = (cwd: string, name: string, input: Record<string, string>) => JSON.stringify({ type: 'assistant', cwd, message: { content: [{ type: 'tool_use', name, input }] } })
 /** What a failed sweep of a shared transcript folder answers. */
 const left = (kind: keyof typeof SHARED_LEFT) => SHARED_LEFT[kind]
+
+describe('a Buddy\'s private temporary folder when its session ends', () => {
+  it('goes with its other traces, and another Buddy\'s stays', async () => {
+    const home = dir(), folder = join(dir(), 'buddy-one'), other = join(dir(), 'buddy-two')
+    mkdirSync(folder); mkdirSync(other)
+    const mine = buddyTmpFolder(folder), theirs = buddyTmpFolder(other)
+    for (const at of [mine, theirs]) { mkdirSync(at, { recursive: true }); writeFileSync(join(at, 'output'), 'private') }
+    await scrubClaudeSession(home, target({ sessionId: null, cwd: folder }))
+    expect(existsSync(mine)).toBe(false)
+    expect(existsSync(theirs)).toBe(true)
+    rmSync(buddyTmpParent(), { recursive: true, force: true })
+  })
+})
 
 describe('scrubbing a Claude Code session from the Team user\'s shared home', () => {
   // Security review 2 of #2375: Claude Code's transcript folder name makes every '/' and '.' a dash, so a removed worktree
