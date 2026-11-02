@@ -1884,24 +1884,38 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             ),
           ),
         ),
-        if (expanded) ...[
-          if (view.agents.isNotEmpty) _agentCount(view),
-          _MachineReadings(view: view),
-          if (view.agents.isEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(36, 4, 32, 8),
-              child: Text(
-                view.status == SuperTabMachineStatus.offline
-                    ? 'Offline'
-                    : view.status == SuperTabMachineStatus.unknown
-                    ? "Can't reach Harness"
-                    : view.status == SuperTabMachineStatus.refreshing
-                    ? 'Refreshing…'
-                    : 'No agents yet',
-                style: DesktopChrome.metadata(),
+        // The rest of the machine belongs to its menu too: a right-click on its readings is not the browser's.
+        if (expanded)
+          BrowserMenuOff(
+            active: true,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onSecondaryTapUp: (event) =>
+                  unawaited(_menu(view, event.globalPosition)),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (view.agents.isNotEmpty) _agentCount(view),
+                  _MachineReadings(view: view),
+                  if (view.agents.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(36, 4, 32, 8),
+                      child: Text(
+                        view.status == SuperTabMachineStatus.offline
+                            ? 'Offline'
+                            : view.status == SuperTabMachineStatus.unknown
+                            ? "Can't reach Harness"
+                            : view.status == SuperTabMachineStatus.refreshing
+                            ? 'Refreshing…'
+                            : 'No agents yet',
+                        style: DesktopChrome.metadata(),
+                      ),
+                    ),
+                ],
               ),
             ),
-        ],
+          ),
       ],
     );
   }

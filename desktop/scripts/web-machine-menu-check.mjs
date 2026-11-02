@@ -70,7 +70,7 @@ try {
     const row = all.split(';').find((r) => r.startsWith(`${key}=`));
     if (!row) return null;
     const [x, y, w, h] = row.split('=')[1].split(',').map(Number);
-    return { x: x + w / 2, y: y + h / 2, w };
+    return { x: x + w / 2, y: y + h / 2, w, bottom: y + h };
   };
   for (let i = 0; i < 120 && !(await rect('super-machine-studio')); i++) await sleep(500);
   await read(`window.__menus = []; window.addEventListener('contextmenu', (e) => window.__menus.push(e.defaultPrevented))`);
@@ -102,9 +102,24 @@ try {
   await move(row);
   await click(row, 'right');
   check('right-click on a machine row opens the Swarm menu, not the browser menu', (await swarmMenu()) && !(await browserMenu()));
+  const before = await read('window.__menus.length');
   await click({ x: row.x, y: row.y + 200 }, 'right');
-  check('a second right-click with that menu open does not bring up the browser menu', !(await browserMenu()));
+  const fired = (await read('window.__menus.length')) > before;
+  check('a second right-click with that menu open does not bring up the browser menu', fired && !(await browserMenu()));
   if (await swarmMenu()) await escape();
+
+  await move(row);
+  await click(row, 'left');
+  await sleep(300);
+  const entry = await rect('super-machine-entry-studio');
+  const below = { x: entry.x, y: entry.bottom - 6 };
+  await move(below);
+  await click(below, 'right');
+  check("right-click on an expanded machine's readings opens the Swarm menu, not the browser menu", (await swarmMenu()) && !(await browserMenu()));
+  if (await swarmMenu()) await escape();
+  await move(row);
+  await click(row, 'left');
+  await sleep(300);
 
   await move(terminal);
   await click(terminal, 'right');
