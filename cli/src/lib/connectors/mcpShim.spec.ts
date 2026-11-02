@@ -283,6 +283,37 @@ describe.skipIf(process.platform === 'win32')('the MCP clients\' way to the brid
     expect(shim.lines).toEqual([{ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2025-06-18', opens: 1 } }, { jsonrpc: '2.0', id: 2, result: { ok: true } }])
   })
 
+  it('a 404 while reopening does not wait on itself: the request is answered and the shim ends', async () => {
+    let initializes = 0
+    const server = createServer((request, response) => {
+      let raw = ''
+      request.on('data', chunk => { raw += chunk })
+      request.on('end', () => {
+        const message = JSON.parse(raw) as { id?: number; method: string }
+        if (message.method === 'initialize') {
+          initializes++
+          response.writeHead(200, { 'Content-Type': 'application/json', 'Mcp-Session-Id': `s${initializes}` }).end(JSON.stringify({ jsonrpc: '2.0', id: message.id, result: {} }))
+          return
+        }
+        // The first notification is taken; from then on nothing but `initialize` is, a connection going away.
+        if (message.method === 'notifications/initialized' && initializes === 1) { response.writeHead(202).end(); return }
+        response.writeHead(404).end()
+      })
+    })
+    vault.save('linear', { access_token: 't', source: 'dcr', mcp_entry: { url: `http://127.0.0.1:${await listen(server)}/mcp`, headers: {} } })
+    const local = await serveBridgeSocket(vault, bridgeSocketPath(vault)!)
+    closers.push(() => local.close())
+    const child = shimProcess('linear', bridgeSocketPath(vault)!, 60_000)
+    const out: string[] = []
+    child.stdout.on('data', chunk => out.push(String(chunk)))
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }) + '\n')
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n')
+    child.stdin.end(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }) + '\n')
+    expect(await new Promise(resolve => child.on('exit', resolve))).toBe(0)
+    const lines = out.join('').trim().split('\n').map(line => JSON.parse(line) as { id: number; error?: unknown })
+    expect(lines.find(line => line.id === 2)).toMatchObject({ error: { code: -32001 } })
+  })
+
   it('a 404 with no session behind it is the answer, and a new session is tried only once', async () => {
     let posts = 0
     const server = createServer((request, response) => {

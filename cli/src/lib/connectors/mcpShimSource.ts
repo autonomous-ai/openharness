@@ -132,9 +132,10 @@ const post = (raw, sent, quiet = false, retried = false) => new Promise((resolve
 let reopening = null
 const reopen = () => reopening ??= (async () => {
   session = undefined
-  const status = await post(opening, JSON.parse(opening), true)
+  // Each marked as retried: a 404 here must not wait on the very reopen that sent it.
+  const status = await post(opening, JSON.parse(opening), true, true)
   if (status >= 300 || status === 0) return false
-  if (opened) await post(opened, JSON.parse(opened), true)
+  if (opened) await post(opened, JSON.parse(opened), true, true)
   return true
 })().finally(() => { reopening = null })
 

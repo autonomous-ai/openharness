@@ -68,8 +68,9 @@ export function bridgeSocketPath(vault: Store, platform: NodeJS.Platform = proce
 export type McpEntry = { url: string } | { command: string; args: string[] }
 
 /**
- * The shim, written fresh into the vault's private folder (mcpShimSource.ts), and the node to run it: Harness's managed one, by a
- * stable path, as an agent started outside Harness may have neither `harness` nor a node on its PATH.
+ * The shim, written fresh into the vault's private folder (mcpShimSource.ts). Its node is Harness's managed one, as an agent started
+ * outside Harness may have neither `harness` nor a node on its PATH. That path names a version, or this process's node where no runtime
+ * is recorded: the daemon's next start writes the entries again.
  */
 function writeShim(vault: Store): string {
   const path = join(vault.root, 'mcp-shim.mjs')

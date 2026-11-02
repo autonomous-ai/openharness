@@ -25,8 +25,9 @@ security review made a condition of #2550.
 - Concurrency: requests run side by side as they do over HTTP; `initialize` and notifications go first and in order. The vault's
   own lock still guards its files. A second daemon on the vault finds a live socket and retries, as the port's listener does.
 - Read cost: N/A because each message is the one request it was before. Each client now holds one shim process open.
-- Scale: one node process per MCP server per running agent, about 50 MiB resident each (39 for a bare node), measured
-  2026-11-02. Process count warns first; 5 connections on 20 agents is 100 processes.
+- Scale: one node process per MCP server per running agent: 18 MB of memory footprint each (12 for a bare node; 50 and 39 MiB resident),
+  measured on an idle Mac 2026-11-02. Process count warns first. 3 connections on 43 agent sessions is about 130 processes, about 2.3 GB of
+  footprint; 10x that is too much for one Mac, so review this at 300 shim processes.
 - Compatibility: entries are rewritten at each daemon start. A running client keeps its old address until it restarts, and the port
   still answers it. A server's own unprompted stream (GET) is not relayed, so `*_changed` notifications are lost.
 - Migration and rollback: no data migration. A rollback writes URL entries again at the next start, and the key is still in
