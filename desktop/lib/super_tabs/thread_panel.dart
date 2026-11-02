@@ -88,6 +88,10 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
   void initState() {
     super.initState();
     _focus.requestFocus();
+    // Not while building: seeing a thread may tell the controller's listeners.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) c.threadPaneShown();
+    });
     _scroll.addListener(_measureAfterFrame);
   }
 

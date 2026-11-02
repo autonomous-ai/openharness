@@ -661,10 +661,16 @@ void main() {
         await pumpEventQueue();
         c.dispose();
         server.threadMarkPosts.clear();
+        // From someone else: a reader's own reply is never unread.
         server.append('A reply while the Swarm was closed.');
         server.messages.last
           ..['thread'] = 'message-1'
-          ..['replyTo'] = 'message-1';
+          ..['replyTo'] = 'message-1'
+          ..['author'] = {
+            'kind': 'person',
+            'id': 'member',
+            'name': 'member@example.com',
+          };
         return (server, await again(server));
       }
 
@@ -703,15 +709,16 @@ void main() {
 
       testThread('the real pane says it is shown', (tester) async {
         final server = threaded();
-        final first = server.controller();
-        await tester.runAsync(() async {
-          await first.refresh();
-          first.openThread('message-1');
-          await first.flush();
-          first.dispose();
-          server.threadMarkPosts.clear();
-        });
-        await show(tester, server, initial: server.saved);
+        await show(
+          tester,
+          server,
+          initial: {
+            'tabId': 'tab',
+            'accountId': 'owner',
+            'selectedId': 'lead',
+            'openThread': {'conversationId': 'lead', 'root': 'message-1'},
+          },
+        );
         expect(panel, findsOneWidget);
         await tester.pumpAndSettle();
         expect(server.threadMarkPosts, isNotEmpty);

@@ -262,6 +262,7 @@ class SuperTabController extends ChangeNotifier {
       }) {
         openedThread = (conversationId: conversation, root: root);
         _reopenThread = true;
+        _threadUnshown = true;
       }
       if (initial['threadDrafts'] case final Map saved) {
         for (final MapEntry(key: root, value: draft) in saved.entries) {
@@ -746,6 +747,19 @@ class SuperTabController extends ChangeNotifier {
 
   /// A thread restored open, whose replies its first read of the Swarm brings.
   bool _reopenThread = false;
+
+  /// A thread restored open whose pane has not been on screen: the read mark
+  /// is the account's on every device, and this controller may be open with
+  /// nothing shown, so nothing counts as read until [threadPaneShown].
+  bool _threadUnshown = false;
+
+  /// The pane of the open thread is on screen.
+  void threadPaneShown() {
+    if (!_threadUnshown) return;
+    _threadUnshown = false;
+    if (openedThread case final open?) _seeThread(open.root);
+  }
+
   final _attachments = <String, HarnessAttachments>{};
 
   /// The files waiting to go with the next reply of each thread, by its
@@ -1308,6 +1322,7 @@ class SuperTabController extends ChangeNotifier {
   }
 
   void _seeThread(String root) {
+    if (_threadUnshown) return;
     final open = openedThread;
     final last = max(
       (open == null ? null : _threads[open.conversationId]?[root])
@@ -1435,6 +1450,7 @@ class SuperTabController extends ChangeNotifier {
   void openThread(String root) {
     if (accessRevoked) return;
     openedThread = (conversationId: selectedId, root: root);
+    _threadUnshown = false;
     _pruneThreadFiles();
     _seeThread(root);
     _saveSoon();
