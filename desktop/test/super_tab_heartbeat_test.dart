@@ -159,6 +159,68 @@ void main() {
     );
   });
 
+  group('a Swarm not on screen', () {
+    test('keeps its slow pace through a minute of heartbeats', () {
+      fakeAsync((async) {
+        final r = _Rig(async, away: true);
+        r.minute();
+        // ignore: avoid_print
+        print(
+          'COUNT off screen: state reads ${r.states}, messages reads '
+          '${r.messages}, controller notifications ${r.told}',
+        );
+        expect(r.states, lessThanOrEqualTo(4));
+        expect(r.messages, 0);
+        expect(r.told, 0);
+        r.close();
+      });
+    });
+
+    test('still reads a real change at the old pace, heartbeats or not', () {
+      fakeAsync((async) {
+        final r = _Rig(async, away: true);
+        r.beat('m1');
+        async.elapse(const Duration(seconds: 1));
+        r.paths.clear();
+        r.server.append('A reply');
+        r.c.told(main: true, at: clock.now().millisecondsSinceEpoch);
+        async.elapse(const Duration(seconds: 3));
+        expect(r.states, 1);
+        expect(r.c.messages('lead').last.text, 'A reply');
+        r.close();
+      });
+    });
+  });
+
+  group('a machine that goes silent', () {
+    test('redraws once as it passes the offline threshold, no push needed', () {
+      fakeAsync((async) {
+        final r = _Rig(async);
+        for (var i = 0; i < 16; i++) {
+          r.beat(_Rig._ids[i % 4]);
+          async.elapse(const Duration(seconds: 3));
+        }
+        expect(r.told, 1);
+        r.close();
+      });
+    });
+
+    test('redraws once as it comes back', () {
+      fakeAsync((async) {
+        final r = _Rig(async);
+        for (var i = 0; i < 16; i++) {
+          r.beat(_Rig._ids[i % 4]);
+          async.elapse(const Duration(seconds: 3));
+        }
+        r.told = 0;
+        r.beat('m5');
+        async.elapse(const Duration(seconds: 3));
+        expect(r.told, 1);
+        r.close();
+      });
+    });
+  });
+
   test('a read failing during a heartbeat still says so', () {
     fakeAsync((async) {
       final r = _Rig(async);
