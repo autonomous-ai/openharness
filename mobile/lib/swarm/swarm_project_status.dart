@@ -9,6 +9,7 @@ import '../shared/theme/app_space.dart';
 import '../shared/theme/app_theme.dart';
 import '../shared/theme/app_type.dart';
 import 'model.dart';
+import 'swarm_home_keeper.dart';
 import 'swarm_inbox.dart';
 import 'swarm_leaderboard.dart' show SwarmProjectSheetFrame;
 import 'swarm_need_rows.dart';
@@ -139,8 +140,14 @@ class SwarmProjectStatus extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
-    // The session tells of answers held for Undo, which the rows say.
-    listenable: Listenable.merge([reader, session.inbox, session]),
+    // The session tells of answers held for Undo, which the rows say; the
+    // asks, of what waits on the person being read.
+    listenable: Listenable.merge([
+      reader,
+      session.inbox,
+      session,
+      ?session.inbox.asks(swarmId),
+    ]),
     builder: (context, _) {
       AppTheme.watch(context);
       final snapshot = reader.accessRevoked ? null : reader.snapshot;
@@ -151,11 +158,24 @@ class SwarmProjectStatus extends StatelessWidget {
       final status = project.status;
       final waiting = swarmProjectNeedsYou(session, reader, swarmId, projectId);
       if (status == null && waiting.isEmpty) {
+        // "Nothing to report" only once the Swarm was read and what waits on
+        // the person with it: the view kept on the phone holds neither, and a
+        // read that failed says so rather than "nothing".
+        final asks = session.inbox.asks(swarmId);
+        final (key, line) = switch ((
+          swarmHomeKept(reader),
+          reader.error ?? asks?.error,
+          asks == null || asks.loading,
+        )) {
+          (_, final error?, _) => ('error', error),
+          (true, _, _) || (_, _, true) => ('updating', 'Updating…'),
+          _ => ('empty', 'Nothing to report yet.'),
+        };
         return Padding(
           padding: const EdgeInsets.all(AppSpace.screenInset),
           child: Text(
-            'Nothing to report yet.',
-            key: ValueKey('swarm-project-status-empty-$projectId'),
+            line,
+            key: ValueKey('swarm-project-status-$key-$projectId'),
             style: AppType.body(color: AppPalette.textSecondary),
           ),
         );

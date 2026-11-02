@@ -7,12 +7,17 @@ import 'package:harness_mobile/core/local_key_value_store.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/swarm_activity_page.dart';
+import 'package:harness_mobile/swarm/model.dart';
+import 'package:harness_mobile/swarm/parts.dart';
+import 'package:harness_mobile/swarm/swarm_home_cache.dart';
 import 'package:harness_mobile/swarm/swarm_home_prefs.dart';
+import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_status.dart';
 import 'package:harness_mobile/swarm/swarm_project_tabs.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
+import 'package:harness_mobile/swarm/waiting_work.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
@@ -379,6 +384,125 @@ void main() {
       await host.session!.inbox.reader(tab)!.refresh();
       await tester.pumpAndSettle();
       expect(key('swarm-project-status-need-decision:d1'), findsOneWidget);
+    });
+  });
+
+  group('cold start, on the Home kept', () {
+    final updating = key('swarm-project-status-updating-$project');
+    final failed = key('swarm-project-status-error-$project');
+
+    /// The phone opens on the Home kept, which holds neither report nor
+    /// decisions; the Swarm's read is [parts], the list's is [list].
+    Future<SwarmHost> coldStatus(
+      WidgetTester tester,
+      FakeSwarm fake, {
+      FutureOr<Object?> Function(Map<String, dynamic>? body)? list,
+    }) async {
+      final cache = memoryHomeCache();
+      final state = SuperTabParts.firstLoad(firstLoad(head: head())).state;
+      await tester.runAsync(
+        () => cache.write(me, [
+          (
+            id: tab,
+            name: 'Phone Swarm',
+            view: swarmHomeSwarm(
+              SuperTabSnapshot.fromJson(state),
+              swarmPartners(state),
+            ),
+          ),
+        ]),
+      );
+      // No computer answers the list, as on a cold start in a tunnel.
+      fake.routes['/api/super-tabs/list'] =
+          list ?? (_) => Completer<Object?>().future;
+      final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
+        ..value = {PhoneExperiment.swarm};
+      account = ValueNotifier<String?>(me);
+      final host = SwarmHost(
+        accountId: () => account.value,
+        account: account,
+        request: fake.request,
+        notices: SilentSystemNotices(),
+        features: features,
+        homeCache: cache,
+        readMarks: MemoryKeyValueStore(),
+      )..foreground = false;
+      addTearDown(host.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          builder: (context, child) =>
+              SwarmScope(notifier: host, child: child!),
+          home: const SwarmPage(),
+        ),
+      );
+      for (var i = 0; i < 100 && host.session!.inbox.swarms.isEmpty; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)),
+        );
+        await tester.pump();
+      }
+      await tester.pump();
+      // Opened from the Home kept, as the phone does on a cold start.
+      await tester.tap(key('swarm-project-$tab-$project'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      return host;
+    }
+
+    testWidgets('while the Swarm is still being read, Status says Updating… '
+        'and never "Nothing to report"; the report replaces it', (
+      tester,
+    ) async {
+      final fake = backend(
+        status: {'text': 'Report on the server', 'at': today},
+      );
+      final read = Completer<Object?>();
+      final parts = fake.routes['/api/super-tabs/$tab/parts']!;
+      fake.routes['/api/super-tabs/$tab/parts'] = (_) => read.future;
+      await coldStatus(tester, fake);
+      await openStatus(tester);
+      expect(updating, findsOneWidget);
+      expect(empty, findsNothing);
+      expect(find.text('Nothing to report yet.'), findsNothing);
+
+      read.complete(parts(null));
+      await tester.pumpAndSettle();
+      expect(find.text('Report on the server'), findsOneWidget);
+      expect(updating, findsNothing);
+    });
+
+    testWidgets('when the read fails, Status says so and never "Nothing to '
+        'report"; the read that recovers brings the report', (tester) async {
+      final fake = backend(
+        status: {'text': 'Report on the server', 'at': today},
+      );
+      final parts = fake.routes['/api/super-tabs/$tab/parts']!;
+      fake.routes['/api/super-tabs/$tab/parts'] = (_) =>
+          throw const SuperTabFailure('UNAVAILABLE', 'Down.', statusCode: 503);
+      final host = await coldStatus(tester, fake);
+      await openStatus(tester);
+      await tester.pumpAndSettle();
+      expect(empty, findsNothing);
+      expect(find.text('Nothing to report yet.'), findsNothing);
+      expect(failed, findsOneWidget);
+      expect(find.text('Down.'), findsOneWidget);
+
+      fake.routes['/api/super-tabs/$tab/parts'] = parts;
+      await host.session!.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
+      expect(find.text('Report on the server'), findsOneWidget);
+      expect(failed, findsNothing);
+    });
+
+    testWidgets('a report that read fine with decisions that fail to load '
+        'says so, not "Nothing to report"', (tester) async {
+      final fake = backend(decisions: [decision('d1')]);
+      fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) =>
+          throw const SuperTabFailure('UNAVAILABLE', 'Down.', statusCode: 503);
+      await pumpStatus(tester, fake);
+      await tester.pumpAndSettle();
+      expect(empty, findsNothing);
+      expect(find.text('Nothing to report yet.'), findsNothing);
     });
   });
 
