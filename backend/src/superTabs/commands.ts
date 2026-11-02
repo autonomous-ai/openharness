@@ -1284,6 +1284,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     // Its capacity left with it: no slot there is held for anyone now.
     state.harnessReservations = state.harnessReservations?.filter(r => r.machineId !== machineId)
     state.releasedHarnesses = state.releasedHarnesses?.filter(r => r.machineId !== machineId)
+    state.removedSessions = state.removedSessions?.filter(r => r.machineId !== machineId)
     const machine = pool?.name ?? 'a machine'
     // Routing lives in each project's instructions (project instructions), but reads still serve the old rules, older CLIs
     // still route by them and a rollback would enforce them: for this release a machines rule still loses the machine, and
@@ -3191,7 +3192,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
 /** A contribution owns capacity independently of membership. Reuse invalidates every prior stop proof. */
 export { swarmGridName } from './model.js'
 
-function reserveHarnessSlot(state: SuperTabState, machineId: string, harnessId: string, generation: string) {
+export function reserveHarnessSlot(state: SuperTabState, machineId: string, harnessId: string, generation: string) {
   const observation = state.machines?.find(m => m.machineId === machineId)?.observation
   const renewed = !!(state.harnessReservations?.some(r => r.machineId === machineId && r.harnessId === harnessId)
     || state.releasedHarnesses?.some(r => r.machineId === machineId && r.harnessId === harnessId)

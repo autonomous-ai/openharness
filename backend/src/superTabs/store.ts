@@ -13,7 +13,7 @@ import { isTeamSession, teamMachine, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE 
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
 import { DELETED_SWARM_COMMANDS, DELETION_COMMANDS, notThere } from './deletion.js'
-import { applyCommand, authorizeCommandAccess, IGNORED_NOTE, LOOP_NOTICE_AT, mayResumeStart, operationSchema, PAIR_CHAIN_LIMIT, postable, ruleProject, type Command, type CommandContext } from './commands.js'
+import { applyCommand, authorizeCommandAccess, IGNORED_NOTE, LOOP_NOTICE_AT, mayResumeStart, operationSchema, PAIR_CHAIN_LIMIT, postable, reserveHarnessSlot, ruleProject, type Command, type CommandContext } from './commands.js'
 import { redactCredentials } from './credentials.js'
 import type { AvatarUpload } from './profile.js'
 import { reactionCounts, type ReactionTarget } from './reactions.js'
@@ -30,7 +30,7 @@ import { logger } from '../utils/logger.js'
 import { retryTransient } from './retry.js'
 import { recordReload } from './retryStats.js'
 import { buddyChatId, swarmBuddyChatId, type ChosenBuddyName } from './buddies.js'
-import { buddyPerson, canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, onTeamAccount, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility } from './projects.js'
+import { buddyPerson, canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, onTeamAccount, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { SESSION_ENDED_KIND, sessionContext, sessionReadsRow, type ContextRow } from './buddySessions.js'
 import { isBuddy, isBuddyChat, isBuddyReader, refuseBuddyRouting, routingRow } from './buddies.js'
@@ -43,7 +43,7 @@ import { confidentialSessions, otherRegistrations, recordConfidential } from './
 import { answersRequest, dirtyGroups, noteWorkChanges, projectUpdateRequest, UNANSWERED_REQUEST_MS } from './projectUpdates.js'
 import { cloneData } from './cloneData.js'
 import { digestDue, digestMessageId, digestOf, digestRequest, digestSince } from './digest.js'
-import { closedAgents, nextRemovalAt, removeClosedAgents } from './closedAgents.js'
+import { closedAgents, nextRemovalAt, removeClosedAgents, reopened, restoreSessions } from './closedAgents.js'
 import { judgedMachines, loseTasks, nextLossAt, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { archivable, archiveLine, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests } from './tidy.js'
 import { clock, insertParts, loadActive, loadGroups, loadLightGroups, loadMachineParts, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
@@ -2928,8 +2928,11 @@ export class SuperTabStore {
       let loaded = loadedFrom(row, observed)
       // Agents this reading shows closed leave with their groups' membership, so every group they are in is read, quiet ones too.
       const closed = closedAgents(loaded.state, machineId, observation, this.now()).map(a => a.id)
-      if (closed.length) {
-        const more = await loadGroups(tx, tabId, 'agents', { agentIds: { $in: closed } })
+      // Sessions it shows open again come back with their groups (closedAgents.ts restoreSessions), so those are read too.
+      const back = reopened(loaded.state, machineId, observation.runningHarnessIds)
+      if (closed.length || back.length) {
+        const more = [...closed.length ? await loadGroups(tx, tabId, 'agents', { agentIds: { $in: closed } }) : [],
+          ...back.length ? await loadGroups(tx, tabId, 'key', { key: { $in: back.flatMap(r => [...r.groupIds, ...r.leadOf]) } }) : []]
         loaded = loadedFrom(row, { ...observed, groups: [...new Map([...observed.groups, ...more].map(g => [g.key, g])).values()] })
       }
       const state = cloneData(loaded.state)
@@ -2997,6 +3000,15 @@ export class SuperTabStore {
       const checked = [...loseTasks(state, now, worker => worker.machineId === machineId), ...sweep ? sweepLiveness(state, now) : []]
       // Then the agents it shows closed leave, those with no active work left: the Lead is told of their tasks above (closedAgents.ts).
       removedIds.push(...removeClosedAgents(state, state.agents.filter(a => closed.includes(a.id)), now).map(a => a.id))
+      // And the sessions it shows open again come back, by this report alone: it is proved this machine's contributor's above.
+      const elsewhere = back.length ? await otherRegistrations(tx, state, back.map(r => ({ machineId, harnessId: r.harnessId }))) : null
+      const granted = new Set<string>()
+      for (const record of back) {
+        try { await this.agentGrant(tx, state, record.agent); granted.add(record.harnessId) } catch (error) { if (!(error instanceof SuperTabError)) throw error }
+      }
+      restoreSessions(state, machineId, observation.runningHarnessIds, user.sub, now,
+        new Set(back.flatMap(r => elsewhere?.registered.has(sessionKey(machineId, r.harnessId)) || elsewhere?.confidential.has(sessionKey(machineId, r.harnessId)) ? [r.harnessId] : [])),
+        granted, harnessId => reserveHarnessSlot(state, machineId, harnessId, `rejoin-${stamp}`))
       const written = await saved(checked)
       // What the next reports of this machine need to skip the load, as this commit leaves the Swarm.
       const mine = state.machines?.find(m => m.machineId === machineId)
