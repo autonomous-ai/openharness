@@ -239,6 +239,7 @@ void main() {
 
       await tester.tap(key('swarm-project-menu'));
       await tester.pumpAndSettle();
+      await tester.ensureVisible(key('swarm-project-menu-notifications'));
       await tester.tap(key('swarm-project-menu-notifications'));
       await tester.pumpAndSettle();
       expect(ticked(tester), 'Mentions only');
@@ -250,6 +251,7 @@ void main() {
 
       await tester.tap(key('swarm-project-menu'));
       await tester.pumpAndSettle();
+      await tester.ensureVisible(key('swarm-project-menu-notifications'));
       await tester.tap(key('swarm-project-menu-notifications'));
       await tester.pumpAndSettle();
       expect(ticked(tester), 'Muted');
