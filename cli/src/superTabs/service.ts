@@ -10,7 +10,7 @@ import { backend, swarmRoleFor, hostJournalFile, identifier, object, SuperTabHos
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads, type SwarmRead } from './swarmReads.js'
 import { within } from './wire.js'
-import { isCoordinator, mineText, taskText } from './agentContext.js'
+import { isCoordinator, isStep, mineText, taskText } from './agentContext.js'
 import { machineChoices } from '../lib/newCommand.js'
 import { wireRole } from '../lib/swarmSkills.js'
 import { START_REQUIREMENTS } from './capacity.js'
@@ -155,7 +155,14 @@ const POOLS_FRESH_MS = 5_000
  *  that still sends it. */
 function statusView(answer: Record<string, unknown>, agentId: string): Record<string, unknown> {
   const { otherProjectsWork, leadsConversationId, ...state } = object(answer.state)
-  const conversations = list(state.conversations).filter(c => c.kind !== 'leads' && (leadsConversationId == null || c.id !== leadsConversationId))
+  const shown = list(state.conversations).filter(c => c.kind !== 'leads' && (leadsConversationId == null || c.id !== leadsConversationId))
+  // A task's steps are printed under it, not as rows of their own (task steps design); one whose task is not here stays a row.
+  const ids = new Set(shown.map(c => c.id))
+  const nested = (c: Record<string, unknown>) => isStep(c) && ids.has(c.reviewOf)
+  const conversations = shown.filter(c => !nested(c)).map(c => {
+    const steps = shown.filter(s => nested(s) && s.reviewOf === c.id)
+    return steps.length ? { ...c, steps } : c
+  })
   if (isCoordinator(state, agentId)) {
     return { ...answer, state: { ...state, conversations,
       ...(Array.isArray(otherProjectsWork) ? { otherProjectsWork: list(otherProjectsWork).map(work =>

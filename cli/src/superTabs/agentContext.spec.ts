@@ -129,3 +129,45 @@ describe('task', () => {
     expect(taskText(group, swarm([group]), null, changed({}), NOW)).toContain('Earlier attempts could not be read.')
   })
 })
+
+// Task steps design: a step is shown inside its task, never as a task of its own.
+describe('steps', () => {
+  const withSteps = () => swarm([
+    task('g1835', 1835, 'Fix login', 'dev1', 'working'),
+    task('g1918', 1918, 'Review', 'rev1', 'working', { reviewOf: 'g1835', step: 'Review',
+      checks: [{ id: 'c', description: 'Verdict', independent: false, evidence: null, passedBy: 'agent:rev1' }] }),
+    task('g1919', 1919, 'Test', 'dev1', 'done', { reviewOf: 'g1835', step: 'Test', assignment: { id: 'a', agentId: 'dev1', status: 'done', result: 'Passed on a Mac' } }),
+  ], { agents: [{ id: 'pm', name: 'PM' }, { id: 'dev1', name: 'Dev1' }, { id: 'rev1', name: 'Rev1' }] })
+
+  it('mine shows a step\'s agent its step by its task', () => {
+    expect(mineText(withSteps(), changed({}), 'rev1', NOW)).toBe('#1835 Fix login · Review (conversation g1918) — working')
+  })
+
+  it('mine shows the owner its task\'s steps on one line', () => {
+    expect(mineText(withSteps(), changed({}), 'dev1', NOW)).toBe(
+      '#1835 Fix login (conversation g1835) — working\n  steps: Review (Rev1): working · Test (Dev1): done')
+  })
+
+  it('the coordinator\'s open work counts tasks, not steps', () => {
+    const text = mineText(withSteps(), changed({}), 'pm', NOW)
+    expect(text).toContain('#1835 Fix login (conversation g1835) — Dev1, working\n  steps: Review (Rev1): working · Test (Dev1): done')
+    expect(text).not.toContain('#1918')
+    expect(text.endsWith('1 open task.')).toBe(true)
+  })
+
+  it('task lists its steps', () => {
+    const state = withSteps()
+    const group = (state.conversations as Array<Record<string, unknown>>).find(c => c.id === 'g1835')!
+    const text = taskText(group, state, [], changed({}), NOW)
+    expect(text).toContain('Steps:\n- Review (Rev1): working, 1 of 1 checks passed (conversation g1918)\n- Test (Dev1): done: Passed on a Mac (conversation g1919)')
+    expect(text).not.toContain('Linked:')
+  })
+
+  it('task of a step shows its task with the step marked', () => {
+    const state = withSteps()
+    const step = (state.conversations as Array<Record<string, unknown>>).find(c => c.id === 'g1918')!
+    const text = taskText(step, state, [], changed({}), NOW)
+    expect(text.split('\n')[0]).toBe('#1835 Fix login (conversation g1835)')
+    expect(text).toContain('▶ Review (Rev1): working')
+  })
+})

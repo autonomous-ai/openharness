@@ -4,7 +4,7 @@
  * conversation id, so agents and the PM lost track of which task a message was about and who else had answered in its
  * thread. Each line is left out when it does not apply or cannot be read; the delivery always goes.
  */
-import { isCoordinator, openWorkOf, projectOpenWork } from './agentContext.js'
+import { isCoordinator, isStep, openWorkOf, projectOpenWork } from './agentContext.js'
 
 type Json = Record<string, unknown>
 const object = (value: unknown): Json => value && typeof value === 'object' && !Array.isArray(value) ? value as Json : {}
@@ -26,9 +26,14 @@ export function placeLine(state: Json, groupId: string): string {
     return person ? `In ${String(person.email)}'s Buddy chat ${at}` : `In a Buddy chat ${at}`
   }
   const title = JSON.stringify(String(group.title ?? ''))
+  // A step is said as its task and its name (task steps design).
+  const task = isStep(group) ? list(state.conversations).find(c => c.id === group.reviewOf) : undefined
+  if (task) return `In ${taskWords(task)}, step ${JSON.stringify(String(group.step))} ${at}`
   if (group.reviewOf || typeof group.number !== 'number') return `In ${title} ${at}`
-  return `In task #${group.number} ${title} ${at}`
+  return `In ${taskWords(group)} ${at}`
 }
+const taskWords = (task: Json): string =>
+  `task ${typeof task.number === 'number' ? `#${task.number} ` : ''}${JSON.stringify(String(task.title ?? ''))}`
 
 const and = (items: string[]): string => items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`
 
@@ -40,7 +45,9 @@ export function workLine(state: Json, agentId: string): string | null {
   }
   const own = openWorkOf(state, agentId)
   if (!own.length) return null
-  const named = own.slice(0, WORK_SHOWN).map(t => `task ${t.number !== null ? `#${t.number} ` : ''}${JSON.stringify(t.title)} (${t.status})`)
+  const named = own.slice(0, WORK_SHOWN).map(t => t.step && t.taskTitle !== null
+    ? `task ${t.taskNumber !== null ? `#${t.taskNumber} ` : ''}${JSON.stringify(t.taskTitle)}, step ${JSON.stringify(t.step)} (${t.status})`
+    : `task ${t.number !== null ? `#${t.number} ` : ''}${JSON.stringify(t.title)} (${t.status})`)
   return `You are assigned ${and(named)}.${own.length > WORK_SHOWN ? ` And ${own.length - WORK_SHOWN} more: mine.` : ''}`
 }
 

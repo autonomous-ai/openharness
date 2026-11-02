@@ -66,3 +66,14 @@ describe('threadLine', () => {
       .toContain(`"${'r'.repeat(200)}…"`)
   })
 })
+
+describe('steps', () => {
+  const stepped = { ...state, conversations: [...state.conversations,
+    { id: 'g20', projectId: 'app', number: 20, title: 'Thiết kế "v2"', step: 'Thiết kế "v2"', reviewOf: 'g12', leadId: 'pm', archived: false, assignment: { agentId: 'rev', status: 'working' } }] }
+  it('a step\'s row says its task and step', () => {
+    expect(placeLine(stepped, 'g20')).toBe('In task #12 "Fix login", step "Thiết kế \\"v2\\"" (conversation g20).')
+  })
+  it('names a step the agent holds by its task', () => {
+    expect(workLine(stepped, 'rev')).toBe('You are assigned task #12 "Fix login", step "Thiết kế \\"v2\\"" (working).')
+  })
+})

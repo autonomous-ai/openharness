@@ -1551,3 +1551,18 @@ describe('mine and task', () => {
     expect(answer.help.task).toEqual(expect.stringContaining('task GROUP'))
   })
 })
+
+describe('status with steps', () => {
+  it('prints a task\'s steps under it, not as rows', async () => {
+    const t = setup()
+    const conversations = [{ id: 'g1835', number: 1835, title: 'Fix login', archived: false, checks: [] },
+      { id: 'g1918', number: 1918, title: 'Review', reviewOf: 'g1835', step: 'Review', archived: false, checks: [] },
+      { id: 'g9', number: 9, title: 'Old review', reviewOf: 'g1835', archived: false, checks: [] }]
+    vi.mocked(t.core.account.backend).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true,
+      data: swarmData(t.agent, path, { agents: [t.agent], conversations }) } }) as never)
+    const answer = await t.ask({ action: 'status', tabId: 'tab', harnessId: 'native' }, owner) as { value: { state: { conversations: Array<Record<string, unknown>> } } }
+    const rows = answer.value.state.conversations
+    expect(rows.map(c => c.id)).toEqual(['g1835', 'g9'])
+    expect((rows[0]!.steps as Array<Record<string, unknown>>).map(s => s.id)).toEqual(['g1918'])
+  })
+})
