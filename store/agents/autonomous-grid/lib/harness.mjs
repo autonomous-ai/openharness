@@ -36,23 +36,21 @@ export function bridgeUrl(env = process.env) {
  * The same function, by the same name, is in every Store package that talks to the daemon.
  */
 export function localCredentialHeaders(env = process.env) {
-  // Where a socket can be, nothing carries the credential: a holder of the TCP port would hear it (localDaemon.mjs).
-  if (daemonSocketPath(65_535, env)) return {};
+  // Where a socket can be, and on Windows, where the daemon's pipe is the way, nothing carries the credential: a holder of the
+  // TCP port would hear it (localDaemon.mjs; on Windows the Team account's daemon can hold it from boot, audit W1).
+  if (process.platform === 'win32' || daemonSocketPath(65_535, env)) return {};
   const dir = env.ADAPTER_DATA_DIR || join(homedir(), '.harness', 'cli', 'data');
   const uid = typeof process.getuid === 'function' ? process.getuid() : null;
-  // Windows reports every file as 0o666 and every folder as 0o777, so the mode checks below would always refuse
-  // the credential the daemon wrote; there its protection is the profile folder's ACL (cli hookAuth.ts).
-  const posixModes = process.platform !== 'win32';
   const opened = [];
   try {
     const folder = openSync(dir, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
     opened.push(folder);
     const where = fstatSync(folder);
-    if (!where.isDirectory() || (uid !== null && where.uid !== uid) || (posixModes && (where.mode & 0o022) !== 0)) return {};
+    if (!where.isDirectory() || (uid !== null && where.uid !== uid) || (where.mode & 0o022) !== 0) return {};
     const file = openSync(join(dir, 'hook-credential'), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     opened.push(file);
     const stat = fstatSync(file);
-    if (!stat.isFile() || stat.size > 128 || (uid !== null && stat.uid !== uid) || (posixModes && (stat.mode & 0o777) !== 0o600)) return {};
+    if (!stat.isFile() || stat.size > 128 || (uid !== null && stat.uid !== uid) || (stat.mode & 0o777) !== 0o600) return {};
     const value = readFileSync(file, 'utf8').trim();
     return /^[A-Za-z0-9_-]{43}$/.test(value) ? { 'X-Harness-Local': value } : {};
   } catch {
@@ -67,8 +65,8 @@ export const CREDENTIAL_REFUSED = "Harness refused this process's local credenti
 /** Whether the daemon behind a bridge socket that would not open refused the credential: a WebSocket
  *  cannot report the 401, so the same headers are shown once over plain HTTP, which can. */
 export async function credentialRefused(url, headers, env = process.env) {
-  // Over the socket no credential is shown, and the port may be anyone's: there is nothing to ask it.
-  if (daemonSocketPath(65_535, env)) return false;
+  // Over the socket or the pipe no credential is shown, and the port may be anyone's: there is nothing to ask it.
+  if (process.platform === 'win32' || daemonSocketPath(65_535, env)) return false;
   try {
     const answer = await fetch(url.replace(/^ws:/, 'http:'), { headers, signal: AbortSignal.timeout(2000) });
     await answer.body?.cancel();

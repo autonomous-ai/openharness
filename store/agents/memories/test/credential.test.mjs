@@ -81,14 +81,14 @@ test('the local credential is read the way the CLI reads it, and only then', () 
   assert.deepEqual(localCredentialHeaders({ ADAPTER_DATA_DIR: dataDir({ credential: 'too-short' }) }), {})
 })
 
-// Windows reports every file as 0o666 and every folder as 0o777, so the POSIX mode checks would refuse the
-// credential the daemon wrote and the daemon, which wants it on TCP there, would answer 401 (cli hookAuth.ts).
-test('on Windows the credential is read whatever mode the folder and file report', (t) => {
+// On Windows the credential never goes to the port, whose holder may be another account's: the Team account's daemon
+// starts at boot, before the owner's (audit W1). The package reaches the daemon over its proven pipe instead (localDaemon.mjs).
+test('on Windows no credential is read: it never goes to the port', (t) => {
   const platform = Object.getOwnPropertyDescriptor(process, 'platform')
   Object.defineProperty(process, 'platform', { value: 'win32' })
   t.after(() => Object.defineProperty(process, 'platform', platform))
-  assert.deepEqual(localCredentialHeaders({ ADAPTER_DATA_DIR: dataDir({ mode: 0o666, folderMode: 0o777 }) }), { 'X-Harness-Local': CREDENTIAL })
-  assert.deepEqual(localCredentialHeaders({ ADAPTER_DATA_DIR: dataDir({ credential: 'too-short', mode: 0o666 }) }), {}, 'the value is still checked')
+  assert.deepEqual(localCredentialHeaders({ ADAPTER_DATA_DIR: dataDir({ mode: 0o666, folderMode: 0o777 }) }), {})
+  assert.deepEqual(localCredentialHeaders({ ADAPTER_DATA_DIR: dataDir() }), {}, 'nor a credential the POSIX checks would pass')
 })
 
 test('the bridge shows the daemon its local credential', async (t) => {
