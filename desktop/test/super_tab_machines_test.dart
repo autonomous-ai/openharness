@@ -711,7 +711,12 @@ void main() {
           // Closed on its machine and kept by someone: not Idle (Huy, 2026-11-02).
           agent('kept', 'Kai')
             ..['workDecision'] = 'keep'
-            ..['downSince'] = DateTime.now().toUtc().toIso8601String(),
+            ..['downSince'] = DateTime.now().toUtc().toIso8601String()
+            ..['configuration'] = {
+              'engine': 'claude',
+              'model': 'opus',
+              'effort': 'high',
+            },
         ];
         (server.state['agents'] as List)[2]['role'] = 'reviewer';
         (server.state['conversations'] as List)[0]
@@ -811,11 +816,14 @@ void main() {
           );
         }
         expect(find.descendant(of: list, matching: agentAvatar), findsNothing);
-        // Hovering the kept, closed agent says so, as its line and its group do; an idle one does not.
+        // Hovering the kept, closed agent reads as its line does, the mockup Huy approved: status, machine, model, effort.
         Finder tip(String id) => find.ancestor(
           of: row(id),
           matching: find.byWidgetPredicate(
-            (w) => w is Tooltip && (w.message ?? '').contains('Kept (closed)'),
+            (w) =>
+                w is Tooltip &&
+                (w.message ?? '').startsWith('Kept (closed) · ') &&
+                (w.message ?? '').endsWith(' · Opus · high'),
           ),
         );
         expect(tip('kept'), findsOneWidget);
