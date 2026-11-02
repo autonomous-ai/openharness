@@ -294,6 +294,22 @@ void main() {
       expect(find.text('100%'), findsOneWidget);
       await tester.pump(const Duration(milliseconds: 300));
     });
+
+    testWidgets("a model's mark starts under Manage's heading", (tester) async {
+      final server = swarm()
+        ..leaderboard = board('lead')
+        ..followedThreads = null;
+      await showView(tester, server);
+      await tester.tap(_key('super-manage'));
+      await tester.pumpAndSettle();
+      await tester.tap(_key('super-manage-tab-models'));
+      await tester.pumpAndSettle();
+      final heading = tester.getTopLeft(find.text('Manage').last).dx;
+      final row = find.byKey(const ValueKey('super-model-Opus 5.5'));
+      // A row keeps 12 inside its own edges.
+      expect(tester.getTopLeft(row).dx + 12, heading);
+      await tester.pump(const Duration(milliseconds: 300));
+    });
   });
 
   group('Manage', () {
