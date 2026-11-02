@@ -2812,7 +2812,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       recordPost(state, group, actor, { replyTo: command.replyTo, text, reply: context.reply, openTags: context.openTags }, context.now)
       if (actor.kind === 'agent') renewOwnTask(state, group, actor.agentId, context.now)
       // A verdict is usually a post to the Engineer: its own step then waits for the new revision (liveness.ts waitingForRevision).
-      if (actor.kind === 'agent') toldEngineer(state, group, actor.agentId, recipients, context.now)
+      if (actor.kind === 'agent') toldEngineer(state, group, actor.agentId, recipients, text, context.now)
       leadActed(group.id, 'post')
       break
     }

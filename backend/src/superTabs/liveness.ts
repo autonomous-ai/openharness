@@ -121,12 +121,18 @@ export function waitingForRevision(state: SuperTabState, group: Conversation): b
   return assignment?.changesRequestedAt !== undefined || (assignment?.toldEngineerAt !== undefined && !waitingForReview(build.assignment!))
 }
 
+/** The Reviewer's verdict asking for changes, in the form the project's reviewers write (code-reviewer.md). */
+const ASKS_FOR_CHANGES = /ready to merge:\W*(no|with fixes)\b/i
+
 /** [agentId] wrote to its Engineer, in its own linked task's chat or in the build's: it may now wait for the new revision
- *  (waitingForRevision). Written in that post's own write. */
-export function toldEngineer(state: SuperTabState, group: Conversation, agentId: string, recipients: string[], now: number): void {
+ *  (waitingForRevision), if the Engineer was waiting on this review (a Tester's verdict has no set form), or it asks for changes
+ *  while the Engineer already fixes someone else's. A note to a working Engineer keeps no Reviewer that then hangs. Written in
+ *  that post's own write. */
+export function toldEngineer(state: SuperTabState, group: Conversation, agentId: string, recipients: string[], text: string, now: number): void {
   const own = activeWork(group) && group.assignment!.agentId === agentId && reviewedBuild(state, group) ? [group] : ownLinkedTasks(state, group, agentId)
   for (const step of own) {
-    if (!recipients.includes(reviewedBuild(state, step)!.assignment!.agentId)) continue
+    const engineer = reviewedBuild(state, step)!.assignment!
+    if (!recipients.includes(engineer.agentId) || !(waitingForReview(engineer) || ASKS_FOR_CHANGES.test(text))) continue
     step.assignment!.toldEngineerAt = now
     recordTaskState(state, step, now)
   }

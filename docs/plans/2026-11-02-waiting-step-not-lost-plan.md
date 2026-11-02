@@ -4,7 +4,7 @@
 
 **Goal:** A Review or Test step that has spoken to its task's Engineer stays with its agent while the Engineer fixes, and is moved as before once a newer head is ready and it stays quiet for 30 minutes.
 
-**Architecture:** `waitingForRevision` in `liveness.ts` already holds a step's quiet time, but only a failed `work.check` starts it, and Reviewers now give their verdict as a post. So a post from the step's agent to the Engineer records when it was made. It holds the step while the Engineer isn't waiting on a review, and the Engineer's next Ready ends it through `revisionReady`, which already restarts the quiet time.
+**Architecture:** `waitingForRevision` in `liveness.ts` already holds a step's quiet time, but only a failed `work.check` starts it, and Reviewers now give their verdict as a post. So a post from the step's agent to the Engineer records when it was made, if the Engineer was waiting on this review or the post asks for changes (`Ready to merge: No` or `With fixes`). It holds the step while the Engineer isn't waiting on a review, and the Engineer's next Ready ends it through `revisionReady`, which already restarts the quiet time.
 
 **Tech Stack:** TypeScript, Vitest, real Mongo for the integration suite.
 
@@ -22,7 +22,9 @@
 1. A step whose agent never wrote to the Engineer is moved as before.
 2. A post while the Engineer is waiting on a review holds nothing: "starting now" and then silence still moves. So does a verdict the Engineer doesn't pick up within 30 minutes.
 3. The Engineer's own posts and heartbeats start nothing (review of #2487).
-4. A named limit: a Reviewer that writes to an Engineer who is working, then hangs with a live session, isn't moved until that Engineer's next Ready or the task ends. The PM's 30-minute read of open tasks still shows it.
+4. A note to an Engineer already working holds nothing, as `integration/superTabLiveness.test.ts` already pinned: "still reading", then silence, moves.
+5. The server reads one phrase of a post's text, the form the instructions set for a verdict. A Reviewer who words it differently while the Engineer is working is moved as before, which is the safe side.
+6. A named limit: a Reviewer that writes to an Engineer waiting on its review, then hangs with a live session, isn't moved once that Engineer goes back to working, until the next Ready or the task's end. The PM's 30-minute read of open tasks still shows it.
 
 ## Design
 
@@ -46,9 +48,9 @@
 - Test: `backend/src/superTabs/liveness.test.ts`, `backend/src/superTabs/steps.test.ts`
 
 **Interfaces:**
-- Produces: `Assignment.toldEngineerAt?: number`; `toldEngineer(state, group, agentId, recipients, now): void`.
+- Produces: `Assignment.toldEngineerAt?: number`; `toldEngineer(state, group, agentId, recipients, text, now): void`.
 
-- [ ] **Step 1: Write the failing tests:** through commands, a Reviewer's post to the Engineer with the Engineer working isn't lost past 30 minutes; the same step, after the Engineer's next Ready and 30 quiet minutes, is lost; a post while the Engineer waits on review holds nothing; a step that never wrote is lost; a post to someone else holds nothing; the Engineer's own post holds nothing; a stopped session is still lost at once.
+- [ ] **Step 1: Write the failing tests:** through commands, a Reviewer's post to the Engineer with the Engineer working isn't lost past 30 minutes; the same step, after the Engineer's next Ready and 30 quiet minutes, is lost; a post while the Engineer waits on review holds nothing; a step that never wrote is lost; a post to someone else holds nothing; a note to a working Engineer holds nothing, and a verdict asking for changes does; the Engineer's own post holds nothing; a stopped session is still lost at once.
 - [ ] **Step 2: Run them:** `npm test -- src/superTabs/liveness.test.ts src/superTabs/steps.test.ts` in `backend`. Expected: the hold tests FAIL, and the moved-as-before tests pass on main.
 - [ ] **Step 3: Implement** `toldEngineer`, call it where a post renews its task, extend `waitingForRevision` and clear the field in `revisionReady`.
 - [ ] **Step 4: Run them.** Expected: PASS.
