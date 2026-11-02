@@ -2217,14 +2217,16 @@ class _SuperTabViewState extends State<SuperTabView>
   final _composerFieldKey = GlobalKey();
 
   /// The height above the keyboard below which a phone's composer keeps one row.
-  static const _phoneComposerTwoRowsFrom = 280.0;
+  static const _phoneComposerTwoRowsFrom = 320.0;
 
   /// The lines a phone's field may grow to with [room] above the keyboard: 5,
   /// less what the header and the actions need on a small phone, whose pane
   /// overflowed otherwise (320x568 with a 216 px keyboard, review of #2583).
+  /// Never 1: a field of one line is single-line, which strips line breaks
+  /// from a draft ("one\ntwo" became "onetwo", test of #2583).
   int _phoneComposerLines(double room) {
     final line = MediaQuery.textScalerOf(context).scale(20);
-    return ((room - 275) / line).floor().clamp(1, 5);
+    return ((room - 275) / line).floor().clamp(2, 5);
   }
 
   /// The composer's field and its controls: a row on a wide window. A phone

@@ -328,4 +328,39 @@ void main() {
       await unmountPhoneSuperTab(tester, c);
     },
   );
+
+  // The Tester at b68a639b7: a field of one line is a single-line field, which
+  // strips line breaks, so a draft of three lines became "onetwothree".
+  for (final (size, keyboard) in [
+    (const Size(320, 308), 0.0),
+    (const Size(390, 308), 0.0),
+    (const Size(320, 568), 260.0),
+    (const Size(320, 568), 300.0),
+    (const Size(667, 375), 190.0),
+  ]) {
+    testWidgets(
+      'line breaks survive at ${size.width}x${size.height} with a ${keyboard}px keyboard, and nothing overflows',
+      (tester) async {
+        final (_, c) = await mountPhoneSuperTab(
+          tester,
+          size,
+          server: _buddyChat(),
+          initial: 'offline',
+        );
+        tester.view.viewInsets = FakeViewPadding(bottom: keyboard);
+        addTearDown(tester.view.resetViewInsets);
+        await tester.pumpAndSettle();
+        await tester.enterText(_field, 'one\ntwo\nthree');
+        await tester.pumpAndSettle();
+        expect(
+          tester.widget<TextField>(_field).controller!.text,
+          'one\ntwo\nthree',
+        );
+        // At least the 2 lines main gives there.
+        expect(tester.getSize(_field).height, greaterThanOrEqualTo(40));
+        expect(tester.takeException(), isNull);
+        await unmountPhoneSuperTab(tester, c);
+      },
+    );
+  }
 }
