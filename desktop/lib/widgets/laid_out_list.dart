@@ -51,6 +51,25 @@ class LaidOutListView extends ListView {
     super.clipBehavior,
   }) : super.builder();
 
+  LaidOutListView.separated({
+    super.key,
+    super.scrollDirection,
+    super.reverse,
+    super.controller,
+    super.primary,
+    super.physics,
+    super.shrinkWrap,
+    super.padding,
+    required super.itemBuilder,
+    required super.separatorBuilder,
+    required super.itemCount,
+    super.findChildIndexCallback,
+    super.scrollCacheExtent,
+    super.keyboardDismissBehavior,
+    super.restorationId,
+    super.clipBehavior,
+  }) : super.separated();
+
   @override
   Widget buildChildLayout(BuildContext context) =>
       LaidOutSliverList(delegate: childrenDelegate);

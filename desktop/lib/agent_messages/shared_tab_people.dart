@@ -12,6 +12,7 @@ import 'shared_tab_errors.dart';
 import 'shared_tab_placement.dart' show plainSharedText, shortSharedText;
 import 'shared_tabs.dart';
 import 'shared_tabs_model.dart';
+import '../widgets/laid_out_list.dart';
 
 /// The plain words for a warning about a shared tab (1c spec, Errors).
 String sharedTabAlertText(String code) => switch (code) {
@@ -206,7 +207,7 @@ class _SharedTabPeopleState extends State<SharedTabPeople> {
     final menu = sharedTabMenu(app, widget.deskTabId);
     final pending = [for (final i in tab.pendingInvites) i];
 
-    return ListView(
+    return LaidOutListView(
       key: const ValueKey('shared-tab-people'),
       shrinkWrap: true,
       padding: EdgeInsets.zero,
