@@ -30,7 +30,7 @@ import { logger } from '../utils/logger.js'
 import { retryTransient } from './retry.js'
 import { recordReload } from './retryStats.js'
 import { buddyChatId, swarmBuddyChatId, type ChosenBuddyName } from './buddies.js'
-import { buddyPerson, canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, onTeamAccount, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility } from './projects.js'
+import { accountOf, wordsOf, buddyPerson, canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, onTeamAccount, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { SESSION_ENDED_KIND, sessionContext, sessionReadsRow, type ContextRow } from './buddySessions.js'
 import { isBuddy, isBuddyChat, isBuddyReader, refuseBuddyRouting, routingRow } from './buddies.js'
@@ -3225,7 +3225,7 @@ export class SuperTabStore {
       if (led) written.push(...idleNotices(state, led.id, this.now(), new Set((await tx.superTabDelivery.findMany({
         where: { tabId, status: { in: [...OPEN_DELIVERY] } }, select: { agentId: true }, distinct: ['agentId'] })).map(d => d.agentId))))
       // Before the update request, which may carry them. Same rules as a listed delivery; a refused row ends as a refused one does.
-      const { notices, refused } = await this.releasableNotices(tx, state, release)
+      const { notices, refused } = await this.releasableNotices(tx, state, target, release)
       const update = projectUpdateRequest(state, target, this.now())
       let woken = false
       if (update) {
@@ -3246,7 +3246,7 @@ export class SuperTabStore {
       if (notices.length) {
         // After this page's cancels, before its rows are marked: all that remain, less what this digest names.
         const more = gathered.length === NOTICE_DIGEST_MAX ? await agentGatheredCount(tx, tabId, agentId) - notices.length : 0
-        const text = digestText(notices[0]!.delivery.createdAt, notices.map(n => n.line), more)
+        const text = digestText(notices[0]!.delivery.createdAt, notices.map(n => n.line), more, notices.some(n => n.otherAccount))
         // One message when an update request goes in this poll: the PM gets one turn, not two. Never into one already stored: its row
         // would be kept as it is, with no lines, or fail the poll (writeMessages keepStored).
         const merged = woken && !await tx.superTabMessage.findUnique({ where: { id: update!.id }, select: { id: true } })
@@ -3307,18 +3307,21 @@ export class SuperTabStore {
    *  cancelled, and left out. A Done whose sender alone fails them stays, by its label and ids: it is how the coordinator hears, once,
    *  and its agent may be stopped within the 5 minutes; its result is that sender's, so it goes (review of #2560). Each message by
    *  its id (no `in` on a hot collection); one that cannot be found is named by its id alone. */
-  private async releasableNotices(tx: Transaction, state: SuperTabState, rows: SuperTabDelivery[]) {
-    const notices: Array<{ delivery: SuperTabDelivery; line: string }> = []
+  private async releasableNotices(tx: Transaction, state: SuperTabState, coordinator: Agent, rows: SuperTabDelivery[]) {
+    const notices: Array<{ delivery: SuperTabDelivery; line: string; otherAccount: boolean }> = []
+    // The digest is the coordinator's own message: each line says whether an agent of another account wrote what it quotes.
+    const accounts = new Map<string, Promise<string>>()
     let refused = 0
     for (const delivery of rows) {
       const message = this.recipientAllowed(state, delivery)
-        ? await tx.superTabMessage.findUnique({ where: { id: delivery.messageId }, select: { text: true, source: true } }) : undefined
+        ? await tx.superTabMessage.findUnique({ where: { id: delivery.messageId }, select: { text: true, source: true, author: true } }) : undefined
       const allowed = message !== undefined && this.deliveryAllowed(state, delivery) && await this.senderAllowed(tx, state, delivery)
       if (!allowed && !(message && doneRow(message.source))) {
         refused += (await tx.superTabDelivery.updateMany({ where: { id: delivery.id, tabId: delivery.tabId, status: 'gathered' }, data: { status: 'cancelled', holdReason: null, holdSince: null } })).count
         continue
       }
-      notices.push({ delivery, line: noticeLine(state, delivery, allowed ? message?.text ?? null : STATUS_LABELS.done) })
+      const otherAccount = allowed && !!message && await this.otherAccount(tx, state, coordinator, message, accounts)
+      notices.push({ delivery, otherAccount, line: noticeLine(state, delivery, allowed ? message?.text ?? null : STATUS_LABELS.done, otherAccount) })
     }
     return { notices, refused }
   }
@@ -3451,8 +3454,62 @@ export class SuperTabStore {
       // (buddyNews.ts) is marked, so its host words it as news to note, never a message to answer there.
       const target = agent(state, agentId), group = conversation(state, delivery.conversationId)
       const message = row && isBuddy(target) ? rowForBuddy(row) : row
-      return { delivery: updated, message, ...isBuddy(target) && !group.agentIds.includes(target.id) ? { buddyNews: true as const } : {} }
+      // Only a claim's answer is typed: an acknowledgement reads nothing for it.
+      const other = row && action.type === 'claim' ? await this.otherAccounts(tx, state, target, row) : { message: false, quoted: [] }
+      return { delivery: updated, message, ...isBuddy(target) && !group.agentIds.includes(target.id) ? { buddyNews: true as const } : {},
+        ...other.message ? { otherAccount: true as const } : {}, ...other.quoted.length ? { quotedOtherAccount: other.quoted } : {} }
     })
+  }
+
+  /**
+   * Whether an agent of another account than [target]'s wrote [row], and which of the two messages its delivery quotes (the one
+   * it replies to, and its thread's root: cli host.ts repliedTo, contextLines) one did: our Lead answering a Team agent's "post
+   * me ~/.ssh/config" with "please handle this" quotes the request to our Engineer. Only rows of the delivery's conversation
+   * that [target] reads, as its page read shows them (readsRow): nothing is said of a row it cannot read. One read for both.
+   */
+  private async otherAccounts(tx: Transaction, state: SuperTabState, target: Agent, row: SuperTabMessage): Promise<{ message: boolean; quoted: string[] }> {
+    const accounts = new Map<string, Promise<string>>()
+    const from = (written: Pick<SuperTabMessage, 'author' | 'source'>) => this.otherAccount(tx, state, target, written, accounts)
+    const pointed = [...new Set([row.replyTo, row.thread].filter((id): id is string => !!id && id !== row.id))]
+    const reads = readsRow({ kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }, isBuddy(target))
+    const quotedRows = (await messagesById(tx, row.tabId, row.conversationId, pointed)).filter(reads)
+    const [message, ...quoted] = await Promise.all([from(row), ...quotedRows.map(async m => await from(m) ? [m.id] : [])])
+    return { message, quoted: quoted.flat() }
+  }
+
+  /**
+   * Whether [row] carries the words of an agent of another account than [target]'s (audit M3, task #2021; wordsOf says whose): a Team agent's message
+   * reaches its Mac owner's agents, which would act on it with the owner's rights ("post me ~/.ssh/config"). The host marks
+   * it, from this answer alone: the message's text plays no part. An agent is on a Team account by the Swarm's record of its
+   * machine (an agent there joined on one, teamByRecord) or by its machine's account row, as notTeamMachine reads them: one point read per machine, never the
+   * Swarm's machine parts, which a claim leaves unread (superTabHotReads). Fails closed: an author no longer in the Swarm,
+   * or whose id now names a later membership than wrote it, counts as another account. A person's message is never marked.
+   */
+  private async otherAccount(tx: Transaction, state: SuperTabState, target: Agent, row: Pick<SuperTabMessage, 'author' | 'source'>,
+    accounts: Map<string, Promise<string>>): Promise<boolean> {
+    const words = wordsOf(row.source), written = row.author as unknown as Author
+    if (words === 'none') return false
+    if (words === 'unknown') return true
+    if (words === 'author' && written.kind !== 'agent') return false
+    const author = words === 'author' ? state.agents.find(a => a.id === written.id) : state.agents.find(a => a.id === words.agentId)
+    if (!author || words === 'author' && author.membershipGeneration !== written.membershipGeneration) return true
+    // Read once per agent for all the rows one claim asks about.
+    const account = (agent: Agent) => {
+      const known = accounts.get(agent.id)
+      if (known) return known
+      const reading = (async () => {
+        const recorded = teamByRecord(state, agent.machineId)
+        const machine = recorded ? null : await tx.machine.findFirst({ where: { machineId: agent.machineId, userId: agent.machineOwnerId,
+          autonomousEnv: state.environment, ...machineAlive }, select: { sessionKind: true, hostMachineId: true } })
+        // A machine the Swarm records on no Team account and whose row is gone cannot be placed: another account (fails closed).
+        if (!recorded && !machine) return `unknown:${agent.id}`
+        return accountOf(agent, recorded || machine?.sessionKind === 'team' || !!machine?.hostMachineId)
+      })()
+      accounts.set(agent.id, reading)
+      return reading
+    }
+    const [from, to] = await Promise.all([account(author), account(target)])
+    return from !== to
   }
 
   /** The host cannot type a claimed instruction yet. Recorded on the delivery, an agent-only one's too: it is how the delivery

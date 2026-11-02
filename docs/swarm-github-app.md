@@ -216,9 +216,11 @@ address. The `commit-msg` hook adds any missing trailers to a message written in
 editor. Trailers already in the message are not added again, so an amend keeps one
 of each. An empty message still aborts the commit.
 
-In a Harness Team account, the commits themselves are by "Harness" at the app's bot
-account's address (`Harness <id+<app>[bot]@users.noreply.github.com>`), which links them
-to that account on GitHub, as its pull requests are: the
+Every such commit also carries `Co-authored-by: Harness by Autonomous <noreply@autonomous.ai>`.
+
+In a Harness Team account, the commits themselves are by `Harness by Autonomous <noreply@autonomous.ai>`. No GitHub
+account owns that address, so GitHub links them to nobody; a Team agent's branch is told apart by who pushed it, from
+GitHub's activity log, which names the app's bot account. The
 account has no git identity of its own, and its commits read `Harness Team
 <harnessteam@<host>.local>` before. The token response names it as `commitAs` for a
 team account only; the daemon writes it to the session's `gitconfig`, which the

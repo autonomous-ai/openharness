@@ -202,6 +202,9 @@ describe('a session\'s gh login and trailers', () => {
     expect(statSync(join(dir, 'gitconfig')).mode & 0o777).toBe(0o600)
     expect(ident()).toMatch(/^Harness <245891234\+harness\[bot\]@users\.noreply\.github\.com> /)
     expect(vars('GIT_COMMITTER_IDENT')).toMatch(/^Harness </)
+    // Dee, task #2136: what a current server names.
+    writeSessionGitHub(dir, 'ghs_fixtureToken0000001', [], { name: 'Harness by Autonomous', email: 'noreply@autonomous.ai' })
+    expect(ident()).toMatch(/^Harness by Autonomous <noreply@autonomous\.ai> /)
     // An older server names the app's bot account instead (2026-10-28 to 11-02): still taken.
     writeSessionGitHub(dir, 'ghs_fixtureToken0000001', [], { name: 'harness-for-autonomous[bot]', email: '245891234+harness-for-autonomous[bot]@users.noreply.github.com' })
     expect(ident()).toMatch(/^harness-for-autonomous\[bot\] </)
@@ -209,7 +212,7 @@ describe('a session\'s gh login and trailers', () => {
     // A refusal keeps it; an answer without one (an older server, a person's machine) or with anything else drops it.
     writeSessionGitHub(dir, null)
     expect(ident()).toMatch(/^Harness </)
-    for (const other of [null, { name: 'Mallory', email: 'm@example.com' }, { ...bot, name: 'x[bot]\n[core]' }, { ...bot, name: 'Harness\n[core]' }, 'bot']) {
+    for (const other of [null, { name: 'Mallory', email: 'm@example.com' }, { ...bot, name: 'x[bot]\n[core]' }, { ...bot, name: 'Harness\n[core]' }, { name: 'Harness by Autonomous', email: 'noreply@example.com' }, 'bot']) {
       writeSessionGitHub(dir, 'ghs_fixtureToken0000001', [], bot)
       writeSessionGitHub(dir, 'ghs_fixtureToken0000001', [], other)
       expect(existsSync(join(dir, 'gitconfig'))).toBe(false)
