@@ -31,13 +31,25 @@ import 'swarm_switcher.dart' show PersonalSwarm;
 const kScratchRepo = 'scratch';
 const kScratchProjectName = 'scratch';
 
+/// The form an agent reports its project's remote in: `host[:port]/owner/repo`
+/// with no scheme, user or `.git` (the CLI's `canonicalRepository`, and
+/// `canonicalGitRemote` for this computer's own reading). Every real remote
+/// arrives so; a host needs a dot and a letter-only last label, which a folder
+/// path (`/srv/api`, `./api`, `C:\api`) never has.
+final _canonicalRemote = RegExp(
+  r'^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}(?::\d+)?/\S+$',
+  caseSensitive: false,
+);
+
 /// A pane's repo as one string for every computer: the remote's host and path,
 /// lower case, without scheme, user, password, port or `.git`, so
-/// `git@github.com:Owner/Api.git` and `https://github.com/owner/api` are one.
+/// `git@github.com:Owner/Api.git`, `https://github.com/owner/api` and the
+/// `github.com/owner/api` an agent reports are one.
 /// Null for no remote, or one only this computer can reach (a folder).
 String? normalizedRemote(String? remote) {
   var text = remote?.trim() ?? '';
   if (text.isEmpty) return null;
+  if (_canonicalRemote.hasMatch(text)) text = 'https://$text';
   String? host, path;
   final url = RegExp(
     r'^([a-z][a-z0-9+.-]*)://(.*)$',
