@@ -494,6 +494,60 @@ void main() {
     expect(pages.last.conversationId, 'task-42');
   });
 
+  testWidgets('a message links when its numbered conversation arrives', (
+    tester,
+  ) async {
+    final fake = backend([message('m1', 1, text: '#42')]);
+    final host = await pump(tester, fake);
+
+    // The message was rendered before its conversation entered the snapshot.
+    await tester.tap(find.text('#42', findRichText: true));
+    await tester.pumpAndSettle();
+    var pages = tester.widgetList<SwarmConversationPage>(
+      find.byType(SwarmConversationPage),
+    );
+    expect(pages.last.conversationId, 'g1');
+
+    fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+      cursor: 'c3',
+      lastChangedAt: 200,
+      groups: [
+        part(
+          'task-42',
+          2,
+          groupData('task-42', number: 42, title: 'Task 42'),
+        ),
+      ],
+    );
+    await host.session!.inbox.reader(tab)!.refresh();
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('#42', findRichText: true));
+    await tester.pumpAndSettle();
+    pages = tester.widgetList<SwarmConversationPage>(
+      find.byType(SwarmConversationPage),
+    );
+    expect(pages.last.conversationId, 'task-42');
+    final openPages = pages.length;
+
+    fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+      cursor: 'c4',
+      lastChangedAt: 300,
+      groups: [
+        {'key': 'task-42', 'version': 3, 'changedAt': 3, 'deleted': true},
+      ],
+    );
+    await host.session!.inbox.reader(tab)!.refresh();
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('#42', findRichText: true));
+    await tester.pumpAndSettle();
+    pages = tester.widgetList<SwarmConversationPage>(
+      find.byType(SwarmConversationPage),
+    );
+    expect(pages, hasLength(openPages));
+  });
+
   testWidgets('a numbered PR message opens that PR conversation', (
     tester,
   ) async {

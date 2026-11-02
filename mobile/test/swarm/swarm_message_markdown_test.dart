@@ -224,6 +224,15 @@ void main() {
     expect(opened, isEmpty);
   });
 
+  testWidgets('Markdown images show a label without creating an image', (
+    tester,
+  ) async {
+    await show(tester, '![private report](https://example.com/private.png)');
+
+    expect(find.text('Image: private report'), findsOneWidget);
+    expect(find.byType(Image), findsNothing);
+  });
+
   testWidgets('long pressing a rendered link opens the message menu', (
     tester,
   ) async {
