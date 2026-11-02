@@ -51,13 +51,11 @@ Future<void> pumpSidebar(
           listenable: c,
           builder: (context, _) => ProjectSidebar(
             controller: c,
-            onAddAgent: (_) {},
             needsHuman: (_) => 0,
             onSelect: c.select,
             attention: SuperTabAttention.of(c),
             activity: SuperTabActivity.of(c),
             onNotifications: () {},
-            onThreads: () {},
           ),
         ),
       ),
@@ -598,7 +596,7 @@ void main() {
     });
   });
 
-  group('the one # buddy row (#2447) follows the same rules', () {
+  group('the one Buddy row (#2447) follows the same rules', () {
     Future<SuperTabController> show(
       WidgetTester tester,
       ConversationServer server,
@@ -627,7 +625,7 @@ void main() {
 
     final buddyRow = find.byKey(const ValueKey('super-swarm-buddy'));
     Text buddyName(WidgetTester tester) => tester.widget<Text>(
-      find.descendant(of: buddyRow, matching: find.text('buddy')),
+      find.descendant(of: buddyRow, matching: find.text('Buddy')),
     );
 
     testWidgets('muted: greyed with its mark, never bold; first in the next '

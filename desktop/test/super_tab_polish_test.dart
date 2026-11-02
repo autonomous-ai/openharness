@@ -12,7 +12,6 @@ import 'package:harness/core/open_in_browser.dart';
 import 'package:harness/super_tabs/message_text.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/recording_notice.dart';
-import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -386,28 +385,23 @@ void main() {
           await tester.pumpAndSettle();
           await tester.tap(find.byTooltip('Conversations'));
           await tester.pumpAndSettle();
-          // Below the pinned Chat with PM and the projects, a scroll away.
-          await tester.scrollUntilVisible(
-            find.text('Machines'),
-            100,
-            scrollable: find
-                .descendant(
-                  of: find.byType(ProjectSidebar),
-                  matching: find.byType(Scrollable),
-                )
-                .first,
+          // Manage, where the machines are, stands at the foot however long
+          // the list: no scroll away.
+          expect(
+            find.byKey(const ValueKey('super-manage')).hitTestable(),
+            findsOneWidget,
           );
-          expect(find.text('Machines'), findsOneWidget);
           expect(tester.takeException(), isNull);
           await shot('-projects');
           expect(tester.takeException(), isNull);
         } else {
-          expect(find.text('Machines'), findsOneWidget);
           expect(find.text('Projects'), findsOneWidget);
-          // The Machines group lives beside Projects in the left sidebar.
+          // Manage's row starts where the project rows do.
           expect(
-            tester.getTopLeft(find.text('Machines')).dx,
-            tester.getTopLeft(find.text('Projects')).dx,
+            tester.getTopLeft(find.byKey(const ValueKey('super-manage'))).dx,
+            tester
+                .getTopLeft(find.byKey(const ValueKey('super-group-lead')))
+                .dx,
           );
         }
         // Capture one row treatment across disclosure, label and nested work.

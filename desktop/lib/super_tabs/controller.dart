@@ -894,6 +894,14 @@ class SuperTabController extends ChangeNotifier {
     _changed();
   }
 
+  /// The devices pane gives way to what was open under it.
+  void leaveDevices() {
+    if (_disposed || !devicesSelected) return;
+    _moveView();
+    _saveSoon();
+    _changed();
+  }
+
   /// Whether the Machines group's "Offline · N" disclosure is open; it starts closed.
   bool offlineMachinesOpen = false;
 

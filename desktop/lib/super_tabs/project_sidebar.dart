@@ -56,35 +56,31 @@ class ProjectSidebar extends StatelessWidget {
     required this.controller,
     required this.onSelect,
     required this.needsHuman,
-    required this.onAddAgent,
     this.app,
     this.onNewProject,
     this.onNewSwarm,
-    this.onYourDevices,
+    this.onManage,
+    this.manageSelected = false,
     this.devicesSelected = false,
     this.onNotifications,
     this.notificationsSelected = false,
     this.attention,
     this.activity,
-    this.onThreads,
-    this.threadsSelected = false,
-    this.onOpenAgent,
     this.onOpenBuddyChat,
-    this.readLocal,
-    this.board,
-    this.now = DateTime.now,
   });
   final SuperTabController controller;
   final ValueChanged<String> onSelect;
   final int Function(SuperTabConversation group) needsHuman;
-  final ValueChanged<SuperTabConversation> onAddAgent;
   final AppNotifier? app;
   final VoidCallback? onNewProject;
 
   /// The existing New Swarm. Given, the bar starts with the Swarm dropdown
   /// ([SwarmSwitcher]), which offers it last.
   final VoidCallback? onNewSwarm;
-  final VoidCallback? onYourDevices;
+
+  /// Opens Manage (Machines, Models, Devices, Swarm), the row at the foot.
+  final VoidCallback? onManage;
+  final bool manageSelected;
   final bool devicesSelected;
 
   /// Opens the Activity view (Slack's Activity): decisions asked of the
@@ -102,34 +98,18 @@ class ProjectSidebar extends StatelessWidget {
   /// it rows carry no number.
   final SuperTabAttention? attention;
 
-  /// Opens the Threads view; no Threads row without it.
-  final VoidCallback? onThreads;
-  final bool threadsSelected;
-
-  /// Whether a row other than a conversation (devices, Notifications,
-  /// Threads) holds the main pane.
+  /// Whether a row other than a conversation (Manage, devices, Notifications)
+  /// holds the main pane.
   bool get _paneCovered =>
-      devicesSelected || notificationsSelected || threadsSelected;
-  final ValueChanged<SuperTabAgent>? onOpenAgent;
+      manageSelected || devicesSelected || notificationsSelected;
 
   /// Opens the reader's Buddy chat in a project, by project id; the
   /// controller's [SuperTabController.openBuddyChat] when not given.
   final ValueChanged<String>? onOpenBuddyChat;
 
-  /// The open project's week board the right pane shows, for Models; none
-  /// without it.
-  final SuperTabLeaderboardReader? board;
-
-  /// Forwarded to the embedded [SuperTabMachines]; a test gives it to have
-  /// the Machines group's readings taken without a real machine.
-  @visibleForTesting
-  final Future<MachineResources?> Function(String machineId)? readLocal;
-
   /// Forwarded to the embedded [SuperTabMachines]; a test gives it to pin
   /// the clock its readings' ages are counted against.
   @visibleForTesting
-  final DateTime Function() now;
-
   /// Projects and workgroups share a text column. Only projects use its icon.
   static const _iconColumn = SuperTabSectionHeading.actionWidth;
 
@@ -289,7 +269,7 @@ class ProjectSidebar extends StatelessWidget {
   Widget _drawRow(
     SuperTabConversation group, {
     SuperTabProject? project,
-    // A channel that is no project: # buddy, the reader's one Buddy chat.
+    // A chat that is no project: Buddy, the reader's one Buddy chat.
     String? label,
     String? key,
     required bool selected,
@@ -341,7 +321,16 @@ class ProjectSidebar extends StatelessWidget {
                 expanded: expanded,
                 child: InkWell(
                   key: ValueKey(key ?? 'super-group-${group.id}'),
-                  onTap: !tappable ? null : onTap ?? () => onSelect(group.id),
+                  onTap: !tappable
+                      ? null
+                      : onTap ??
+                            // A second click on the open project shows its
+                            // workgroups (Quiet Swarm: no chevrons).
+                            (project != null &&
+                                    !_paneCovered &&
+                                    controller.selectedId == group.id
+                                ? () => controller.toggleProject(project.id)
+                                : () => onSelect(group.id)),
                   hoverColor: Colors.transparent,
                   focusColor: grid.AppSurface.hoverFill,
                   borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
@@ -350,8 +339,14 @@ class ProjectSidebar extends StatelessWidget {
                       SizedBox(width: SuperTabSectionHeading.indentFor(0)),
                       SizedBox(
                         width: _iconColumn,
-                        child: project != null || label != null
+                        child: project != null
                             ? _channelMark()
+                            : label != null
+                            ? Icon(
+                                AppIcons.bot,
+                                size: AppIcons.inlineSize,
+                                color: DesktopChrome.foreground,
+                              )
                             : null,
                       ),
                       Expanded(
@@ -507,9 +502,6 @@ class ProjectSidebar extends StatelessWidget {
                 ),
               ),
             ),
-            // At the far right edge, since it is always there and the mark
-            // beside it comes and goes (Dee, 2026-10-28).
-            if (project != null) _toggle(project, expanded: expanded),
           ],
         ),
       ),
@@ -545,35 +537,6 @@ class ProjectSidebar extends StatelessWidget {
           },
           child: child,
         );
-
-  /// The chevron that shows or hides a project's conversations: '>' while
-  /// they are hidden, 'v' while shown. Focused, Enter or Space toggles it; on
-  /// the focused name, → shows them and ← hides them.
-  Widget _toggle(SuperTabProject project, {required bool expanded}) =>
-      Semantics(
-        button: true,
-        expanded: expanded,
-        child: InkWell(
-          key: ValueKey('super-project-toggle-${project.id}'),
-          onTap: () => controller.toggleProject(project.id),
-          // Its row lights whole on hover (_RowSurface).
-          hoverColor: Colors.transparent,
-          focusColor: grid.AppSurface.hoverFill,
-          borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-          child: Tooltip(
-            message: expanded ? 'Hide conversations' : 'Show conversations',
-            child: SizedBox(
-              width: _iconColumn,
-              height: 36,
-              child: Icon(
-                expanded ? AppIcons.chevronDown : AppIcons.chevronRight,
-                size: AppIcons.inlineSize,
-                color: DesktopChrome.muted,
-              ),
-            ),
-          ),
-        ),
-      );
 
   /// A project's "Closed (N)" row and, when it is open, the closed groups under it: archived ones and finished
   /// ones that left the active set, as read for the project so far.
@@ -739,13 +702,10 @@ class ProjectSidebar extends StatelessWidget {
     final busy = controller.saving || controller.hasPendingAction;
     return _drawRow(
       chat ?? _unopenedSwarmBuddyChat,
-      label: kSwarmBuddyChannel,
+      label: 'Buddy',
       key: 'super-swarm-buddy',
       selected:
-          chat != null &&
-          !devicesSelected &&
-          !notificationsSelected &&
-          controller.selectedId == chat.id,
+          chat != null && !_paneCovered && controller.selectedId == chat.id,
       waiting: false,
       // Muted, it is greyed and never bold, as every chat (_drawRow).
       unread: chat != null && controller.unreadShown(chat),
@@ -929,166 +889,115 @@ class ProjectSidebar extends StatelessWidget {
     final reading = _SidebarReading(controller, needsHuman, attention);
     return Material(
       color: DesktopChrome.surface,
-      child: LaidOutListView(
-        padding: const EdgeInsets.all(8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if ((app, onNewSwarm) case (final app?, final onNewSwarm?))
-            SwarmSwitcher(
-              app: app,
-              controller: controller,
-              onNewSwarm: onNewSwarm,
-              row:
-                  ({
-                    required label,
-                    required icon,
-                    required onTap,
-                    required trailing,
-                  }) => _navigationRow(
-                    key: 'super-swarm-switcher',
-                    label: label,
-                    icon: icon,
-                    onTap: onTap,
-                    trailing: trailing,
+          Expanded(
+            child: LaidOutListView(
+              padding: const EdgeInsets.all(8),
+              children: [
+                if ((app, onNewSwarm) case (final app?, final onNewSwarm?))
+                  SwarmSwitcher(
+                    app: app,
+                    controller: controller,
+                    onNewSwarm: onNewSwarm,
+                    row:
+                        ({
+                          required label,
+                          required icon,
+                          required onTap,
+                          required trailing,
+                        }) => _navigationRow(
+                          key: 'super-swarm-switcher',
+                          label: label,
+                          icon: icon,
+                          onTap: onTap,
+                          trailing: trailing,
+                        ),
                   ),
+                // Slack's Activity, where Notifications was (Lead, 10-31): one row.
+                if (onNotifications != null)
+                  _navigationRow(
+                    key: 'super-activity',
+                    label: 'Activity',
+                    icon: AppIcons.bell,
+                    onTap: onNotifications,
+                    selected: notificationsSelected,
+                    unread: activity?.unread ?? false,
+                    badge:
+                        activity?.count ??
+                        (snapshot?.mentionsWaiting ?? 0) +
+                            (snapshot?.decisionsWaiting ?? 0),
+                  ),
+                // One Buddy for the whole Swarm, under Activity (Quiet Swarm, screen 1).
+                if (controller.oneBuddy) ?_swarmBuddyRow(),
+                const SizedBox(height: 20),
+                SuperTabSectionHeading(
+                  key: const ValueKey('project-sidebar-projects'),
+                  'Projects',
+                  // Slack's unread filter: only chats with something unread.
+                  actions: [
+                    AppIconButton(
+                      key: const ValueKey('super-unread-only'),
+                      icon: AppIcons.listFilter,
+                      selected: controller.unreadOnly,
+                      tooltip: controller.unreadOnly
+                          ? 'Show all chats'
+                          : 'Show unread chats only',
+                      onPressed: controller.toggleUnreadOnly,
+                    ),
+                  ],
+                  onAdd: controller.canWrite ? onNewProject : null,
+                  addTooltip: 'New project',
+                  endInset: 0,
+                  collapsed: !controller.projectsGroupOpen,
+                  onToggleCollapsed: controller.toggleProjectsGroup,
+                ),
+                if (controller.projectsGroupOpen) ...[
+                  for (final (_, channel) in _channels(snapshot, reading))
+                    channel,
+                ],
+                const SizedBox(height: 16),
+                // Buddies replaced Chat with PM in every Swarm (Ken, 10-29); where the
+                // server gives one Buddy for the whole Swarm, it is # buddy above.
+                if (!controller.oneBuddy) ...[
+                  SuperTabSectionHeading(
+                    'Buddies',
+                    onAdd:
+                        controller.canWrite &&
+                            !controller.saving &&
+                            !controller.hasPendingAction &&
+                            buddyProjects(controller).isNotEmpty
+                        ? () => unawaited(
+                            showAddBuddy(context, controller, app: app),
+                          )
+                        : null,
+                    addTooltip: 'Add a Buddy',
+                    endInset: 0,
+                    collapsed: !controller.buddiesGroupOpen,
+                    onToggleCollapsed: controller.toggleBuddiesGroup,
+                  ),
+                  if (controller.buddiesGroupOpen)
+                    ..._buddies(projects, reading),
+                  const SizedBox(height: 16),
+                ],
+              ],
             ),
-          if (onNewProject != null)
-            _navigationRow(
-              key: 'super-new-project',
-              label: 'New project',
-              icon: AppIcons.plus,
-              onTap: controller.canWrite ? onNewProject : null,
-            ),
-          if (onYourDevices != null)
-            _navigationRow(
-              key: 'super-your-devices',
-              label: 'Your devices',
-              icon: AppIcons.circle,
-              onTap: onYourDevices,
-              selected: devicesSelected,
-            ),
-          // The Swarm's models (docs/plans/2026-10-23-swarm-local-models.md), for everyone: the owner sets them up here,
-          // and everyone runs and shares models here once they are. What each machine offers is on the machine.
-          if (snapshot != null)
-            _navigationRow(
-              key: 'super-local-models',
-              label: 'Your models',
-              icon: AppIcons.brain,
-              onTap: () =>
-                  showSwarmLocalModels(context, controller, app: app, now: now),
-            ),
-          // Slack's Activity, where Notifications was (Lead, 10-31): one row.
-          if (onNotifications != null)
-            _navigationRow(
-              key: 'super-activity',
-              label: 'Activity',
-              icon: AppIcons.bell,
-              onTap: onNotifications,
-              selected: notificationsSelected,
-              unread: activity?.unread ?? false,
-              badge:
-                  activity?.count ??
-                  (snapshot?.mentionsWaiting ?? 0) +
-                      (snapshot?.decisionsWaiting ?? 0),
-            ),
-          if (onThreads != null)
-            _navigationRow(
-              key: 'super-threads',
-              label: 'Threads',
-              icon: AppIcons.messagesSquare,
-              onTap: onThreads,
-              selected: threadsSelected,
-              unread: attention?.threadsUnread ?? false,
-              badge: attention?.threadMentions ?? 0,
-            ),
-          if (onNewProject != null ||
-              onYourDevices != null ||
-              onNotifications != null ||
-              onThreads != null ||
-              controller.isOwner ||
-              snapshot?.localModels?.enabled == true)
-            const SizedBox(height: 20),
-          SuperTabSectionHeading(
-            'Projects',
-            // Slack's unread filter: only chats with something unread.
-            actions: [
-              AppIconButton(
-                key: const ValueKey('super-unread-only'),
-                icon: AppIcons.listFilter,
-                selected: controller.unreadOnly,
-                tooltip: controller.unreadOnly
-                    ? 'Show all chats'
-                    : 'Show unread chats only',
-                onPressed: controller.toggleUnreadOnly,
+          ),
+          // At the foot, however long the list (Quiet Swarm, screen 1).
+          if (onManage != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: grid.AppDesktop.controlGap,
               ),
-            ],
-            onAdd: controller.canWrite ? onNewProject : null,
-            addTooltip: 'New project',
-            endInset: 0,
-            collapsed: !controller.projectsGroupOpen,
-            onToggleCollapsed: controller.toggleProjectsGroup,
-          ),
-          if (controller.projectsGroupOpen) ...[
-            // One Buddy for the whole Swarm, pinned first (Dee, 10-31).
-            if (controller.oneBuddy) ?_swarmBuddyRow(),
-            for (final (_, channel) in _channels(snapshot, reading)) channel,
-          ],
-          const SizedBox(height: 16),
-          // Buddies replaced Chat with PM in every Swarm (Ken, 10-29); where the
-          // server gives one Buddy for the whole Swarm, it is # buddy above.
-          if (!controller.oneBuddy) ...[
-            SuperTabSectionHeading(
-              'Buddies',
-              onAdd:
-                  controller.canWrite &&
-                      !controller.saving &&
-                      !controller.hasPendingAction &&
-                      buddyProjects(controller).isNotEmpty
-                  ? () => unawaited(showAddBuddy(context, controller, app: app))
-                  : null,
-              addTooltip: 'Add a Buddy',
-              endInset: 0,
-              collapsed: !controller.buddiesGroupOpen,
-              onToggleCollapsed: controller.toggleBuddiesGroup,
+              child: _navigationRow(
+                key: 'super-manage',
+                label: 'Manage',
+                icon: AppIcons.settings,
+                onTap: onManage,
+                selected: manageSelected,
+              ),
             ),
-            if (controller.buddiesGroupOpen) ..._buddies(projects, reading),
-            const SizedBox(height: 16),
-          ],
-          // Machine online/offline, unread marks and theme changes do not touch
-          // the controller the rest of this sidebar rebuilds on, so this group
-          // watches them itself — the same sources the roster merged before the
-          // move (roster.dart).
-          ListenableBuilder(
-            listenable: Listenable.merge([
-              controller,
-              if (app != null) ...[app!, app!.agentUnread],
-              terminalThemeStore,
-              appearancePrefsStore,
-            ]),
-            builder: (context, _) {
-              grid.AppTheme.watch(context);
-              return SuperTabMachines(
-                controller: controller,
-                app: app,
-                onAddAgent: onAddAgent,
-                onOpenAgent: onOpenAgent,
-                embedded: true,
-                collapsed: !controller.machinesGroupOpen,
-                onToggleCollapsed: controller.toggleMachinesGroup,
-                readLocal: readLocal,
-                now: now,
-              );
-            },
-          ),
-          if (board case final board?) ...[
-            const SizedBox(height: 16),
-            LeaderboardModelsSection(
-              board: board,
-              projectId: snapshot?.projectFor(controller.selectedId)?.id,
-              collapsed: !controller.modelsGroupOpen,
-              onToggleCollapsed: controller.toggleModelsGroup,
-              now: now,
-            ),
-          ],
         ],
       ),
     );
