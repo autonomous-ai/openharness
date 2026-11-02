@@ -70,18 +70,18 @@ describe('the live-agent read', () => {
 describe('an agent added again after its tombstone is gone', () => {
   const added = (tabId: string, key: string) => db.$transaction(tx => guardedWrite(tx, tabId, { op: 'insert', kind: 'agent', key, ordinal: 1, first: 1,
     data: { id: key, machineId: 'm', machineOwnerId: maker.sub, contributorId: maker.sub } }, NOW))
-  const configuration = (tabId: string, agentId: string, revision: number) => ({ id: `${tabId}:${agentId}:${revision}`, tabId, agentId, revision,
-    configuration: {}, assignmentIds: [], actorKey: 'person:owner', observedAt: new Date(NOW - DAY) })
 
-  it('starts above its configuration revisions, so versions never go back', async () => {
-    await db.superTabConfiguration.createMany({ data: [configuration(other, 'back', 500), configuration(other, 'back', 900),
-      configuration(busy, 'back', 5000)] })
+  // Desktop keeps the newest version it saw of each part, a tombstone's too, until it reloads (desktop parts.dart _newer): an
+  // agent back at or below its tombstone's version stays hidden there.
+  it('starts above every version its Swarm\'s purged agents reached', async () => {
+    await db.$runCommandRaw({ update: 'SwarmHead', updates: [{ q: { _id: `${other}:head` }, u: { $set: { agentFloor: 900 } } }] })
     expect(await added(other, 'back')).toBe(901)
     expect((await db.swarmAgent.findUniqueOrThrow({ where: { id: `${other}:back` } })).version).toBe(901)
   })
 
-  it('starts at the first version when it has no configuration', async () => {
-    expect(await added(other, 'new')).toBe(1)
+  it('starts at the first version in a Swarm that purged none', async () => {
+    const fresh = (await store.create(maker, randomUUID(), 'Fresh')).id
+    expect(await added(fresh, 'new')).toBe(1)
   })
 })
 
@@ -102,12 +102,14 @@ describe('the hourly purge of agent tombstones', () => {
     second = (await store.create(maker, randomUUID(), 'Purged too')).id
     await db.swarmAgent.createMany({ data: [
       ...['unnamed', 'member', 'lead', 'assignee', 'started', 'in-dormant', 'in-removed', 'removed-start'].map(key => removed(tab, key, due)),
+      // The highest versions: a purged one sets its Swarm's floor, a kept one does not.
+      { ...removed(tab, 'purged-high', due), version: 90 }, { ...removed(tab, 'kept-high', due), version: 500 },
       agent(tab, 'later', { deleted: true, purgeAt: new Date(NOW + DAY) }),
       ...Array.from({ length: 5 }, (_, i) => agent(tab, `live-${i}`)),
       removed(second, 'unnamed', due),
     ] })
     await db.swarmGroup.createMany({ data: [
-      group('open-1', { agentIds: ['member', 'live-0'] }), group('open-2', { leadId: 'lead', assignment: { agentId: 'assignee' } }),
+      group('open-1', { agentIds: ['member', 'live-0', 'kept-high'] }), group('open-2', { leadId: 'lead', assignment: { agentId: 'assignee' } }),
       group('quiet', { agentIds: ['in-dormant'] }, { dormant: true }), group('gone', { agentIds: ['in-removed'] }, { deleted: true }),
     ] })
     await db.swarmStart.createMany({ data: [start('s-live', 'started'), start('s-removed', 'removed-start', { deleted: true })] })
@@ -116,8 +118,8 @@ describe('the hourly purge of agent tombstones', () => {
   })
 
   it('deletes only tombstones past their purge time that nothing open names', async () => {
-    expect(first).toEqual({ purged: 5, kept: 4 })
-    expect(await keysIn(tab)).toEqual(['assignee', 'lead', 'later', ...Array.from({ length: 5 }, (_, i) => `live-${i}`), 'member', 'started'].sort())
+    expect(first).toEqual({ purged: 6, kept: 5 })
+    expect(await keysIn(tab)).toEqual(['assignee', 'kept-high', 'lead', 'later', ...Array.from({ length: 5 }, (_, i) => `live-${i}`), 'member', 'started'].sort())
     expect(await keysIn(second)).toEqual([])
     const later = await db.swarmAgent.findUniqueOrThrow({ where: { id: `${tab}:later` } })
     expect(later).toMatchObject({ deleted: true, data: { id: 'later' }, purgeAt: new Date(NOW + DAY) })
@@ -125,8 +127,16 @@ describe('the hourly purge of agent tombstones', () => {
     expect(await db.swarmAgent.count({ where: { tabId: busy } })).toBe(LIVE + REMOVED)
   })
 
+  it('raises each Swarm\'s agent floor to the highest version it purged, before the tombstones go', async () => {
+    const floor = async (tabId: string) => ((await db.swarmHead.aggregateRaw({ pipeline: [{ $match: { _id: `${tabId}:head` } },
+      { $project: { _id: 0, agentFloor: 1 } }] })) as unknown as Array<{ agentFloor?: number }>)[0]?.agentFloor
+    expect(await floor(tab)).toBe(90)
+    expect(await floor(second)).toBe(1)
+    expect(await floor(busy)).toBeUndefined()
+  })
+
   it('keeps a tombstone an open conversation or a live start names, compacted, and checks it again a day later', async () => {
-    for (const key of ['member', 'lead', 'assignee', 'started']) {
+    for (const key of ['member', 'lead', 'assignee', 'started', 'kept-high']) {
       expect(await db.swarmAgent.findUniqueOrThrow({ where: { id: `${tab}:${key}` } }), key)
         .toMatchObject({ deleted: true, data: {}, purgeAt: new Date(NOW + AGENT_RECHECK_MS) })
     }
@@ -139,7 +149,7 @@ describe('the hourly purge of agent tombstones', () => {
     const found = reads(entries, 'SwarmAgent', ['purgeAt']).filter(e => e.op !== 'update' && e.op !== 'remove')
     expect(found, JSON.stringify(plan(found))).toHaveLength(1)
     expect(found[0]!.planSummary, JSON.stringify(plan(found))).toMatch(/IXSCAN \{ purgeAt: 1 \}/)
-    expect(found[0]!.docsExamined, JSON.stringify(plan(found))).toBe(9)
+    expect(found[0]!.docsExamined, JSON.stringify(plan(found))).toBe(11)
     // One read per Swarm with due tombstones, of its open conversations only.
     const groups = reads(entries, 'SwarmGroup', ['agentIds'])
     expect(groups.map(e => e.command?.hint), JSON.stringify(plan(groups))).toEqual([{ tabId: 1, dormant: 1, changedAt: 1 }, { tabId: 1, dormant: 1, changedAt: 1 }])
