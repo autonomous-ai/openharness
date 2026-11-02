@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/super_tabs/activity.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/message_text.dart';
@@ -151,6 +152,42 @@ void main() {
     expect(chatTicks(), isTrue);
     await closeReadView(tester, c);
   });
+
+  // Task #2219: All new messages goes quiet only while the open chat is read on screen.
+  testWidgets(
+    'an open chat set to All is told behind the terminals, not on screen',
+    (tester) async {
+      final server = ConversationServer()..append('Hello');
+      final c = server.controller();
+      addTearDown(c.dispose);
+      await c.refresh();
+      final told = <int>[];
+      void fromTeammate(String text) {
+        server.append(text);
+        server.messages.last['author'] = {
+          'kind': 'agent',
+          'id': 'lead-agent',
+          'name': 'Lead',
+        };
+      }
+
+      SuperTabChatNotices.of(c).onMessage = (_, s) => told.add(s);
+      await c.setNotify(c.selectedId, SuperTabNotify.all);
+      await showReadView(tester, c);
+      fromTeammate('While reading it');
+      await tester.runAsync(c.refresh);
+      await tester.runAsync(pumpEventQueue);
+      await tester.pump();
+      expect(told, isEmpty);
+      await showReadView(tester, c, terminals: true);
+      fromTeammate('Behind the terminals');
+      await tester.runAsync(c.refresh);
+      await tester.runAsync(pumpEventQueue);
+      await tester.pump();
+      expect(told, hasLength(1));
+      await closeReadView(tester, c);
+    },
+  );
 
   testWidgets('returning from terminals reads the already loaded transcript', (
     tester,

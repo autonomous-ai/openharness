@@ -72,7 +72,6 @@ import { remoteCommand } from './remoteCommand.js'
 import { tuiCommand } from './tui/index.js'
 import { machineChoices, newCommand, type MachineRow, type NewMachine } from './lib/newCommand.js'
 import { gridSetupCommand } from './lib/gridSetupCommand.js'
-import { localCredentialHeaders } from './lib/localCredential.js'
 import { WebSocket as NewCommandSocket } from 'ws'
 import { describeMasterStatus, readStatusFile } from './harnessd/master.js'
 import { namedNode } from './harnessd/processName.js'
@@ -2955,7 +2954,7 @@ switch (cmd) {
         port: daemonPort(),
         localMachineId: wantedDaemonIdentity(),
         daemonRunning: isDaemonRunning, unreachable: () => daemonUnreachableText(),
-        connect: (url) => new NewCommandSocket(url, { headers: localCredentialHeaders(env.ADAPTER_DATA_DIR) }),
+        connect: (url, headers) => new NewCommandSocket(url, { headers }),
         output: (line) => console.log(line),
         error: (line) => console.error(line),
       }).then((code) => { process.exitCode = code }).catch(onError)
@@ -2990,7 +2989,7 @@ switch (cmd) {
       localMachineId: wantedDaemonIdentity(),
       daemonRunning: isDaemonRunning, unreachable: () => daemonUnreachableText(),
       listMachines: usableMachines,
-      connect: (url) => new NewCommandSocket(url, { headers: localCredentialHeaders(env.ADAPTER_DATA_DIR) }),
+      connect: (url, headers) => new NewCommandSocket(url, { headers }),
       output: (line) => console.log(line),
       error: (line) => console.error(line),
       origin: () => agentOrigin(),

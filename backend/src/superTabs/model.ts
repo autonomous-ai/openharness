@@ -551,6 +551,8 @@ export const NOTICE_READERS = {
   'note-removed': 'recipients',
   'project-report': 'people', route: 'people', 'route-override': 'people', 'buddy-proposal': 'people', 'buddy-proposal-sent': 'people', 'buddy-session-ended': 'people',
   'decision-delegated': 'people', 'machine-removed': 'people', 'machine-left': 'people', ship: 'people',
+  // A task's one line in its project chat, edited as it moves (taskLine.ts): people read a task's state there.
+  'task-line': 'people',
   // A project PM's private line in a person's one Buddy chat, marked with its project (commands.ts person.tell): its person
   // reads it, as they read the line in their older project chat.
   'pm-line': 'people',
@@ -637,6 +639,8 @@ export interface CommandEffects {
   instructions?: import('./instructions.js').InstructionsWrite
   /** A coordinator's note kept or a note removed, written outside the tab state by the store (instructions.ts). */
   notes?: import('./instructions.js').NotesWrite
+  /** Stored messages given new words: a task's line as the task moves (taskLine.ts). */
+  edits?: import('./taskLine.js').MessageEdit[]
 }
 /** `details` go to the caller with the code: what it needs to act on the refusal (a stale save's current text). */
 export class SuperTabError extends Error {

@@ -340,6 +340,12 @@ class SuperTabConversation {
       task = row['task'] is Map
           ? SuperTabTask.fromJson(superTabMap(row['task']))
           : null,
+      requesterId = row['requesterId'] as String?,
+      shippedAt = row['shippedAt'] is num
+          ? DateTime.fromMillisecondsSinceEpoch(
+              (row['shippedAt'] as num).toInt(),
+            )
+          : null,
       lastMessageSequence = (row['lastMessageSequence'] as num?)?.toInt() ?? 0,
       lastMainSequence = (row['lastMainSequence'] as num?)?.toInt(),
       assignment = row['assignment'] == null
@@ -415,6 +421,14 @@ class SuperTabConversation {
   /// leaves it. Null from a backend before threads, or before this
   /// conversation's first message since.
   final int? lastMainSequence;
+
+  /// The person who asked for this task; null on a conversation that is no
+  /// task, and from a server that does not say.
+  final String? requesterId;
+
+  /// When it shipped (its first Done); null until it has, and from a server
+  /// that does not say.
+  final DateTime? shippedAt;
   final Map<String, dynamic>? assignment;
 
   /// Whether its task waits on purpose or is stuck, as the server last found

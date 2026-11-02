@@ -33,7 +33,8 @@ import { fixedOriginal, LEDGER_WEEKS, PULL_REQUEST_URL, recordAsked, recordFix, 
   recordReportedModel, recordVerdict } from './leaderboard/record.js'
 import { WEEK_MS } from './leaderboard/week.js'
 import { react, reactionSchema, type ReactionTarget } from './reactions.js'
-import { shipNotice, shippedAt } from './ship.js'
+import { shippedAt } from './ship.js'
+import { syncTaskLines } from './taskLine.js'
 import { assignedNotice, tellBuddies } from './buddyNews.js'
 import { bindPullRequestCards, bindTaskCard, pullRequestCard, recordCardMerged } from './cards.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
@@ -716,7 +717,19 @@ function open(state: SuperTabState, conversationId: string) {
 }
 
 /** Pure policy/state transition. The store commits its state, messages and delivery records in one transaction. */
+/** One command, then each task's line brought up to date (taskLine.ts), whichever way the command returned. */
 export function applyCommand(original: SuperTabState, actor: Actor, input: Command, context: CommandContext): CommandEffects {
+  const effects = applyCommandOnce(original, actor, input, context)
+  // Who moved the task, for a line its project's coordinator cannot sign and for the Buddy's news; nobody when the actor is
+  // no longer a member (a command that removed them).
+  let sender: Author | undefined
+  try { sender = author(effects.state, actor) } catch { sender = undefined }
+  syncTaskLines(original, effects, input.type === 'work.status' ? input.conversationId : undefined, sender,
+    stableId(original.id, actorKey(actor), context.operationId))
+  return effects
+}
+
+function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command, context: CommandContext): CommandEffects {
   // A credential someone pasted, or an agent echoed from its terminal, is gone before anything is stored or delivered
   // (Oct 2026: a Harness access token in a shared Lead chat). The sender's result says what went.
   const removed: CredentialKind[] = []
@@ -2722,7 +2735,14 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         && stepOwner && stepOwner !== actor.agentId ? stepOwner
         : actor.kind === 'agent' && activeWork(group) && group.assignment?.agentId === actor.agentId
         && group.leadId && group.leadId !== actor.agentId && group.agentIds.includes(group.leadId) ? group.leadId : null
-      const agentRecipient = leadToWorker ?? workerToLead
+      // The task's owner talks to its step's agent the same way (Diego, 2026-11-02: an Engineer's "fixed, please re-check" in its
+      // Review step woke the PM and the Reviewer never heard it). Its unnamed post there reaches that agent alone, never the
+      // coordinator. A reply to someone else, or a post leadWorkerBounced holds back, falls back to the coordinator as before:
+      // nothing is dropped.
+      const ownerToStepAgent = actor.kind === 'agent' && isStep(group) && assigned && assigned !== actor.agentId
+        && taskOwner(state, group) === actor.agentId && group.agentIds.includes(assigned) && (!context.reply || replyAgent === assigned)
+        && !leadWorkerBounced(context.recent, actor.agentId, assigned) ? assigned : null
+      const agentRecipient = leadToWorker ?? workerToLead ?? ownerToStepAgent
       // Any other agent's unnamed post in the group reaches its Lead: an agent whose task here was lost, moved or cancelled has
       // its status and results refused, so its posts are all the Lead hears from it. They reached no one until 10-29, when a
       // moved prod-watch agent's "the backend worker is down" alarm and its answers to the Lead's questions had no delivery,
@@ -2738,7 +2758,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const stepTold = actor.kind === 'agent' && isStep(group) && actor.agentId !== group.leadId ? taskOwner(state, group) : null
       const ownerInStep = actor.kind === 'agent' && stepTold && stepTold !== actor.agentId ? stepTold : null
       const memberToLead = actor.kind === 'agent' && !command.agentOnly && !addressed.length && assigned !== actor.agentId && (ownerHere ?? ownerInStep) ? [(ownerHere ?? ownerInStep)!]
-        : actor.kind === 'agent' && !command.agentOnly && !addressed.length && assigned !== actor.agentId && group.leadId
+        : actor.kind === 'agent' && !command.agentOnly && !addressed.length && assigned !== actor.agentId && !ownerToStepAgent && group.leadId
         && group.leadId !== actor.agentId && group.agentIds.includes(group.leadId) ? [group.leadId] : []
       // Buddy thread sessions (buddySessions.ts): a session thread's replies reach its session alone and stay in its thread; the
       // main Buddy hears the rest. Decided here from the thread, so every client, an old one or the phone, is routed alike.
@@ -3064,11 +3084,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         if (short) effects.messages.push({ id: stableId(operationId, 'review-capacity', short.source.engine), conversationId: short.conversationId, author: sender,
           text: short.text, replyTo: null, recipients: coordinator ? [coordinator] : [], source: short.source,
           ...(!coordinator && short.mentions.length ? { mentions: short.mentions } : {}) })
-        // Shipped before this command: the leaderboard marks this Done as shipped just above (recordStatus).
+        // The task's line says it shipped (taskLine.ts), in place of the Shipped line; its links are kept as that line's were.
         if (command.status === 'done' && shippedAt(conversation(original, group.id)) == null) {
           appendPullRequestUrls(group, [command.result, ...group.checks.map(check => check.evidence)])
-          const shipped = shipNotice(state, group, sender, operationId)
-          if (shipped) effects.messages.push(shipped)
         }
       }
       if (actor.kind === 'agent') renewOwnTask(state, group, actor.agentId, context.now)
