@@ -337,4 +337,51 @@ void main() {
       await _unmount(tester, c);
     },
   );
+
+  testWidgets(
+    'an offline machine that lists Claude and Codex but sent no reading and no install report says it is not read yet, never to update',
+    (tester) async {
+      final c = await _mount(tester, [_pool('m', age: _offlineAge)]);
+      const unread = 'Not read yet. Shows when the machine is back online';
+      expect(_inCard('m', 'claude', unread), findsOneWidget);
+      expect(_inCard('m', 'codex', unread), findsOneWidget);
+      expect(find.textContaining('Update Harness'), findsNothing);
+      await _unmount(tester, c);
+    },
+  );
+
+  testWidgets(
+    'a machine the Swarm cannot be read for does not claim to have no allowance',
+    (tester) async {
+      final server = ConversationServer();
+      (server.state['people'] as List).add({
+        'id': 'peer',
+        'email': 'peer@example.com',
+        'role': 'collaborator',
+      });
+      server.state['machines'] = [
+        _pool('m', engines: ['opencode']),
+      ];
+      final c = server.controller(account: 'owner');
+      await c.refresh();
+      c.toggleMachineExpanded('m');
+      server.failReads = true;
+      await c.refresh();
+      expect(c.backendUnreachable, isTrue);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SuperTabMachines(controller: c, onAddAgent: (_) {}),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.text('No Claude or Codex allowance reported for this machine'),
+        findsNothing,
+      );
+      expect(find.text('Not read yet'), findsOneWidget);
+      await _unmount(tester, c);
+    },
+  );
 }

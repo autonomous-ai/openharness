@@ -1126,7 +1126,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
               poolId,
               quotas[engine] == null &&
                       !(reasons is Map && reasons[engine] != null) &&
-                      installed.contains(engine)
+                      (stale || installed.contains(engine))
                   ? (stale ? kAllowanceNotReadOffline : kAllowanceNotRead)
                   : superMachineAllowanceReason(
                       quotas[engine],
@@ -2865,10 +2865,14 @@ class _MachineReadings extends StatelessWidget {
             : view.subscriptionsAside,
         (width) => view.allowances.isEmpty
             ? Text(
-                // An offline machine may have an allowance it cannot report now; only an online one is known to have none.
-                view.status == SuperTabMachineStatus.offline
-                    ? kAllowanceNotReadOffline
-                    : 'No Claude or Codex allowance reported for this machine',
+                // Only a machine read just now is known to have none; one offline, out of reach or being read again
+                // may have an allowance it cannot report at this moment.
+                switch (view.status) {
+                  SuperTabMachineStatus.live || SuperTabMachineStatus.late =>
+                    'No Claude or Codex allowance reported for this machine',
+                  SuperTabMachineStatus.offline => kAllowanceNotReadOffline,
+                  _ => kAllowanceNotRead,
+                },
                 style: DesktopChrome.text(
                   size: 11,
                   height: 1.3,
