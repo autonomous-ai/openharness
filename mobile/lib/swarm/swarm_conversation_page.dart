@@ -259,10 +259,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// Each entry's row as last built, with what it was built from ([_row]).
   final _rows = <String, ({Object inputs, Widget row})>{};
 
-  /// Message #N links use the conversation numbers from this snapshot.
-  SuperTabSnapshot? _referencesFrom;
-  Map<int, String> _referencesByNumber = const {};
-
   /// Swarm Home C's New messages line: the message it sits above once
   /// placed, and whether it was placed this visit.
   String? _lineAt;
@@ -638,9 +634,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   void _see() {
     final session = _session, c = _conversation;
     if (session == null || c == null) return;
-    // Numbered references come from this reader's snapshot, which may change
-    // while a message row stays cached.
-    _referencesFrom = null;
     _syncSteps(c);
     if (_ownerUnknown && c.reader.snapshot != null) {
       _ownerUnknown = false;
@@ -938,18 +931,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
         openSwarmConversation(context, widget.swarmId, taskId);
       }
     };
-  }
-
-  Map<int, String> _numberedConversations(SwarmConversation c) {
-    final snapshot = c.reader.snapshot;
-    if (identical(snapshot, _referencesFrom)) return _referencesByNumber;
-    _referencesFrom = snapshot;
-    _referencesByNumber = {
-      for (final conversation
-          in snapshot?.conversations ?? const <SuperTabConversation>[])
-        if (conversation.number != null) conversation.number!: conversation.id,
-    };
-    return _referencesByNumber;
   }
 
   void _openNumberedConversation(SwarmConversation c, String id) {
@@ -1835,14 +1816,21 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
           final card = snapshot == null || group == null
               ? null
               : SwarmCardFacts.of(snapshot, group, m.id);
-          final references = _numberedConversations(c);
           final referenceNumbers = _conversationReferencePattern
               .allMatches(m.text)
-              .map((match) => int.tryParse(match[1]!));
+              .map((match) => int.tryParse(match[1]!))
+              .whereType<int>()
+              .toSet();
+          final references = {
+            for (final conversation
+                in snapshot?.conversations ?? const <SuperTabConversation>[])
+              if (conversation.number != null &&
+                  referenceNumbers.contains(conversation.number))
+                conversation.number!: conversation.id,
+          };
           final referenceInputs = [
             for (final number in referenceNumbers)
-              if (number != null)
-                if (references[number] case final String id) '$number:$id',
+              '$number:${references[number] ?? ''}',
           ].join(',');
           return _row(
             key,
