@@ -81,7 +81,19 @@ export const TEMPLATE_ROUTING = `## Routing
 - Low-risk docs, tests and fixtures go to a model on the Swarm's grid first. After a failed review they move to Sonnet or
   Sol, and after a second to Opus or Astra.
 - A Tester runs on a machine that has what the change needs: a Mac for Desktop, the machine the device is plugged into for
-  firmware. The machine comes before the model. A mid-strength model is enough for most testing.`
+  firmware. The machine comes before the model. A mid-strength model is enough for most testing.
+- Between candidates of equal strength, quota decides. An account's share per day is its weekly quota left
+  divided by the days until it resets; work goes first to the largest share per day, so no account ends its week with
+  quota left and none runs dry early (20% left resetting in 1 day comes before 80% in 5 days).
+- An idle agent is reused only when its account has the quota for the task; otherwise a new agent starts on the account
+  with the largest share per day.
+- An account with less than a day's share for a task takes no new big task. When every account of the strongest models
+  is under 20% of its week, Engineers move to the next model and that quota is kept for reviews and urgent work.
+- An agent that runs out mid-task waits if its 5-hour window resets within 30 minutes; otherwise its pushed branch moves
+  to an agent on another account.
+- Urgent work (production down, security) ignores quota.
+- The route's lines show each account's quota left and reset time, but its order does not rank by them: the PM works out
+  each candidate's share per day from those lines, and gives the reason when it picks another.`
 
 /** The title and the opening words, which say what the document is for. */
 export const TEMPLATE_INTRO = `# Project instructions

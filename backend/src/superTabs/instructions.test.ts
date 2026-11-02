@@ -74,6 +74,18 @@ describe('the built-in template', () => {
     expect(pm).toContain('- When the project owner answers Yes to a nightly routing proposal, writes its line into Routing, naming the owner as who asked.')
     expect(Buffer.byteLength(INSTRUCTIONS_TEMPLATE)).toBeLessThan(16_384)
   })
+  it('routes by each account\'s weekly quota left per day until its reset, which the route\'s order does not rank by', () => {
+    // Ken, 2026-11-02: in a week of the autonomous.ai Swarm the PM took the route's first candidate 7% of the time, work piled
+    // onto one machine, accounts sat at 0% for days while others reset with 95% unused.
+    const routing = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Routing'))
+    expect(routing).toContain('An account\'s share per day is its weekly quota left')
+    expect(routing).toContain('(20% left resetting in 1 day comes before 80% in 5 days)')
+    expect(routing).toContain('An idle agent is reused only when its account has the quota for the task')
+    expect(routing).toContain('Engineers move to the next model and that quota is kept for reviews and urgent work.')
+    expect(routing).toContain('waits if its 5-hour window resets within 30 minutes')
+    expect(routing).toContain('Urgent work (production down, security) ignores quota.')
+    expect(routing).toContain('its order does not rank by them')
+  })
 })
 
 describe('role names', () => {
