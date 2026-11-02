@@ -66,7 +66,7 @@ A sent message already shows at once with a quiet sending mark (`outgoing`, `Sup
 - Test: `desktop/test/ws_conn_decode_test.dart`
 
 **Interfaces:**
-- Produces: `decodeFrame(String raw) -> Future<Map<String, dynamic>>`, in an isolate above `largeFrameChars` (64 KB).
+- Produces: `decodeFrame(String raw) -> Future<Map<String, dynamic>>`, in an isolate above `largeFrameChars` (256 KB, where its start stops costing more than it saves).
 
 - [ ] **Step 1: Commit the failing tests:** a large frame goes to the isolate decoder and a small one doesn't; a small frame after a large one arrives second; a bad large frame is dropped and the next arrives; a failed spawn still decodes.
 - [ ] **Step 2: Watch them fail,** then implement, run them and commit.

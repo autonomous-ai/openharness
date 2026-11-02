@@ -155,9 +155,9 @@ class WsRequestFailure implements Exception {
 
 /// One SSO-authenticated, machine-scoped connection to `/api/web-ws`.
 class WsConn {
-  /// Above this a frame decodes in an isolate: an answer of hundreds of KB took the UI thread long enough to drop frames
-  /// (Quiet Swarm, Speed). Below it, an isolate costs more than the decode.
-  static const largeFrameChars = 64 * 1024;
+  /// Above this a frame decodes in an isolate. Starting one holds this thread about 3 ms itself, the time of a decode of about
+  /// this size on a current Mac (566 KB took 7 ms, measured for #2195), so below it the isolate would cost more than it saves.
+  static const largeFrameChars = 256 * 1024;
 
   /// How a large frame decodes; tests hold it to see the order.
   @visibleForTesting
