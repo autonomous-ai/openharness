@@ -8,6 +8,7 @@ import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/project_visibility.dart';
 
 import 'support/super_tab_fixture.dart';
+import 'support/super_tab_members.dart';
 
 ConversationServer projectsServer() {
   final server = ConversationServer();
@@ -70,7 +71,10 @@ void main() {
     );
     expect(find.text('Leads'), findsNothing);
     expect(find.text('Projects'), findsOneWidget);
-    expect(find.text('Humans'), findsOneWidget);
+    // The right column opens only from Members (Quiet Swarm).
+    expect(find.text('People'), findsNothing);
+    await openSuperTabMembers(tester);
+    expect(find.text('People'), findsOneWidget);
     // The roster's heading; the leaderboard's Agents pill is the other one.
     expect(
       find.descendant(
