@@ -12,6 +12,7 @@ import '../state/app_state.dart';
 import '../state/harness_activity.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
+import 'agent_line.dart';
 import 'agent_mark.dart';
 import 'controller.dart';
 import 'identity.dart';
@@ -145,8 +146,6 @@ class SuperTabAgentInfo {
       return 'Waiting for a person to answer';
     }
     if (activity == HarnessActivity.needsInput) return 'Needs input';
-    // Closed on its machine and kept by someone: the same word as its line and its group (agent_line.dart).
-    if (agent.keptClosed && workStatus != 'lost') return 'Kept (closed)';
     if (taskGroup case final group?) {
       return switch (workStatus) {
         'planned' => 'Assigned to "${group.title}"',
@@ -178,7 +177,15 @@ class SuperTabAgentInfo {
     };
   }
 
-  String get tooltip => [
+  String get tooltip =>
+      // Closed on its machine and kept by someone: it reads as its line does (agent_line.dart), the mockup Huy approved.
+      agent.keptClosed &&
+          activity != HarnessActivity.offline &&
+          taskGroup?.assignment?['status'] != 'lost'
+      ? superTabAgentGlance(this).line
+      : _tooltip;
+
+  String get _tooltip => [
     if (engine case final value?) [value, ?model].join(' '),
     ?machine,
     if (status case final value?)
