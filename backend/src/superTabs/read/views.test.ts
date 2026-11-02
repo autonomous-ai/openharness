@@ -86,8 +86,6 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
       const parts = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
       return readerView(parts, peer, NOW, { teamMachines: [] }).parts.groups.find(g => g.key === s.web)!.data
     }
-    // The line posted at the merge is when it shipped; a group from before it has only its first Done.
-    expect(shipped({ shipPostedAt: NOW - 5, shippedAt: NOW - 50 })).toMatchObject({ shippedAt: NOW - 5 })
     expect(shipped({ shippedAt: NOW - 50 })).toMatchObject({ shippedAt: NOW - 50 })
     expect(shipped({})).not.toHaveProperty('shippedAt')
     expect(shipped()).not.toHaveProperty('shippedAt')

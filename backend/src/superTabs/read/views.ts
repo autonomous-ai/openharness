@@ -59,13 +59,14 @@ export const envelope = <T>(part: Pick<Part, 'key' | 'version' | 'changedAt'>, d
   ({ key: part.key, version: part.version, changedAt: part.changedAt, data })
 
 /** A group as readers get it: its message counter, a dormant flag only when dormant, never the store's bookkeeping or the
- *  leaderboard's (the leaderboard read sums it). */
+ *  leaderboard's (the leaderboard read sums it), except when it shipped. */
 export function groupView(group: Conversation, seenMachines: ReadonlySet<string>): GroupView {
-  const { messageSeq, reportSeq: _report, lastActivityAt: _activity, ledger: _ledger, proposals: _proposals, dormant, audience, ...rest } = withSeenRequirement(group, seenMachines)
+  const { messageSeq, reportSeq: _report, lastActivityAt: _activity, ledger, proposals: _proposals, dormant, audience, ...rest } = withSeenRequirement(group, seenMachines)
   // A Buddy chat names its owner instead of an audience: an app from before Buddies takes a private chat of the reader
   // alone for their Chat with PM, and would send what they write for the PM to their Buddy instead (buddies.ts).
   const readers = isBuddyChat(group) ? { buddyOwnerId: audience!.people[0]!.id } : audience ? { audience } : {}
-  return { ...rest, messageSeq: messageSeq ?? 0, ...(dormant ? { dormant: true as const } : {}), ...readers }
+  const shippedAt = ledger?.shippedAt
+  return { ...rest, messageSeq: messageSeq ?? 0, ...(dormant ? { dormant: true as const } : {}), ...(shippedAt === undefined ? {} : { shippedAt }), ...readers }
 }
 
 /** A conversation's whole data as the reader may see it: a task's requirement lists only the machines they see. */
