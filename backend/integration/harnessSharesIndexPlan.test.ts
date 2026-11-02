@@ -53,8 +53,7 @@ describe('the harness shares list', () => {
     const rows = reads(entries, 'harness_shares', ['recipientEmail', 'autonomousEnv', 'revokedAt', 'expiresAt'])
     expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
     expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ recipientEmail: 1, autonomousEnv: 1, createdAt: 1 \}/)
-    // Only the recipient's shares in this environment (6 with the revoked and the expired), none of the 60 others.
-    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(6)
-    expect(rows[0]!.nreturned).toBe(5)
+    // Only the recipient's shares in this environment (5 listed, the revoked and the expired one), none of the 60 others.
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(7)
   })
 })

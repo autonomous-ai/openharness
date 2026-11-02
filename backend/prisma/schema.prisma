@@ -879,6 +879,8 @@ model HarnessShare {
 
   @@unique([machineId, agentId, recipientEmail])
   @@index([recipientEmail, autonomousEnv, expiresAt])
+  /// The share list's order (routes/harnessShares.ts): one recipient's shares by createdAt, read without a sort in memory.
+  @@index([recipientEmail, autonomousEnv, createdAt])
   @@index([ownerId, machineId])
   @@map("harness_shares")
 }
