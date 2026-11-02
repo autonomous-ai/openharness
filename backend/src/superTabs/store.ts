@@ -44,6 +44,7 @@ import { answersRequest, dirtyGroups, noteWorkChanges, projectUpdateRequest, UNA
 import { cloneData } from './cloneData.js'
 import { digestDue, digestMessageId, digestOf, digestRequest, digestSince } from './digest.js'
 import { closedAgents, nextRemovalAt, removeClosedAgents, reopened, restoreRefusal, restoreSessions } from './closedAgents.js'
+import { sessionRows } from './memberRows.js'
 import { judgedMachines, loseTasks, nextLossAt, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { archivable, archiveLine, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests } from './tidy.js'
 import { clock, insertParts, loadActive, loadGroups, loadLightGroups, loadMachineParts, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
@@ -3003,7 +3004,8 @@ export class SuperTabStore {
       // they keep running when the Lead's own machine is the one that died.
       const checked = [...loseTasks(state, now, worker => worker.machineId === machineId), ...sweep ? sweepLiveness(state, now) : []]
       // Then the agents it shows closed leave, those with no active work left: the Lead is told of their tasks above (closedAgents.ts).
-      removedIds.push(...removeClosedAgents(state, state.agents.filter(a => closed.includes(a.id)), now).map(a => a.id))
+      const closedOut = removeClosedAgents(state, state.agents.filter(a => closed.includes(a.id)), now).map(a => a.id)
+      removedIds.push(...closedOut)
       // And the sessions it shows open again come back, by this report alone: it is proved this machine's contributor's above.
       const allowed = new Set<string>()
       if (back.length) {
@@ -3027,7 +3029,10 @@ export class SuperTabStore {
       const restored = restoreSessions(state, machineId, observation.runningHarnessIds, now, allowed, harnessId => reserveHarnessSlot(state, machineId, harnessId, `rejoin-${stamp}`))
       // An agent reads its groups again from here: said, as nothing else records why (security review 2 of #2601).
       for (const agent of restored) logger.info('[swarm] a reopened session rejoined', { tabId, agentId: agent.id, machineId, projectId: agent.projectId ?? null })
-      const written = await saved(checked)
+      // And in each chat they left or came back to, for its readers: nothing else there says why they are gone or back (reviews of
+      // #2207, memberRows.ts sessionRows).
+      const membership = sessionRows(loaded.state, state, new Set([...closedOut, ...restored.map(a => a.id)]), `${machineId}:${stamp}`)
+      const written = await saved([...checked, ...membership])
       // What the next reports of this machine need to skip the load, as this commit leaves the Swarm.
       const mine = state.machines?.find(m => m.machineId === machineId)
       return { ...written, ...mine ? { record: { lentCount: lentAgents(state, mine, mine.observation?.runningHarnessIds ?? []),

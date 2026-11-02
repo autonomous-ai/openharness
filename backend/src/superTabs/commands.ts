@@ -40,7 +40,7 @@ import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema,
 import { switchExpired } from './tidy.js'
 import { BUILT_IN_ROLE_DEFAULTS, agentProjectId, audienceOf, canReadProject, deleteProject, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, requestedByLine, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
 import { recordClosing } from './closedAgents.js'
-import { actorName, memberChanges, memberRowText } from './memberRows.js'
+import { actorLabel, memberChanges, memberRowText, quotedName } from './memberRows.js'
 import { BUDDY_SESSION_CAPABILITY, chatOwner, endSessionEntry, entryProject, liveSessions, mainBuddyOf, MAX_SESSION_WAITING, requireChatOwner, SESSION_ENDED_KIND, sessionAgentsOf, sessionOf, setSessions, type SessionEndReason } from './buddySessions.js'
 import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, isSwarmBuddy, isSwarmBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, openBuddyChat, openSwarmBuddyChat, PM_LINE_KIND, PROPOSAL_ASK_MS, PROPOSAL_SENT_KIND, proposalSentText, proposalText, renameBuddy, requireBuddyCommand, swarmBuddyChatId } from './buddies.js'
 import { BUDDY_OWN_MACHINE_REFUSAL, CODEX_BUDDY_REFUSAL } from './buddyContract.js'
@@ -735,6 +735,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   assignAgentDisplayNames(state.agents)
   const result: Record<string, unknown> = {}
   const effects: CommandEffects = { state, messages: ended, cancelledAgents: [], previousAttempts: [], routeDecisions: [], result }
+  /** Agents this command took out of the Swarm with a row of its own in each of their chats (agent.remove, removeMachine). */
+  const announcedRemovals = new Set<string>()
   const operationId = stableId(state.id, actorKey(actor), context.operationId)
 
   // A deleted Swarm (deletion.ts) takes only its hosts' confirmations and its owner's restore; anything else, from anyone,
@@ -1286,6 +1288,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
    *  until its host deletes the Swarm's folders there — or leaves at once when that host is offline
    *  (spec 2026-10-23-remove-machine.md). */
   const removeMachine = (machineId: string, pool: ContributedMachine | undefined, members: Agent[], how: (machine: string) => string, lead = false) => {
+    // Its row in each group names them, so no member row repeats it.
+    for (const member of members) announcedRemovals.add(member.id)
     const pending = state.starts?.filter(s => s.request.machineId === machineId && !s.harnessId && !s.error) ?? []
     // A launch already under way would arrive with nowhere to go; it finishes in moments.
     if (pending.some(s => s.dispatched)) fail('STARTS_PENDING', 'An agent is starting on this machine. Try again in a moment.')
@@ -2027,7 +2031,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (existing && (existing.hostGrant ?? null) !== (grant.hostGrant ?? null)) {
         fail('CONTRIBUTION_REVOKED', 'Reconcile and remove this old contribution before adding it under the new machine share.', 403)
       }
-      if (sharedHere && !existing) message(group.id, `${who} added ${command.name} to the project. The project chat holds only its coordinator among agents, so ${command.name} works in its tasks.`, [], null, SYSTEM_ROW)
+      if (sharedHere && !existing) message(group.id, `${who} added ${quotedName(command.name)} to the project. The project chat holds only its coordinator among agents, so ${quotedName(command.name)} works in its tasks.`, [], null, SYSTEM_ROW)
       else if (!group.agentIds.includes(agentId)) group.agentIds.push(agentId)
       if (command.lead) {
         keepLead(group, agentId)
@@ -2407,8 +2411,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // A Buddy always starts on a Swarm machine: its chat hears once it settles, as the Lead does for a worker.
       // Naming who started it, as any agent added to a chat is named with who added it (#2207).
       else if (!start.request.buddyOf) {
-        const starter = actorName(state, start.actorKey)
-        const joined = starter ? `${starter} added ${start.request.name}.` : `${start.request.name} joined.`
+        const starter = actorLabel(state, start.actorKey)
+        const joined = starter ? `${starter} added ${quotedName(start.request.name)}.` : `${quotedName(start.request.name)} joined.`
         message(group.id, `${joined} ${start.poolGeneration ? 'Preparing its model.' : 'Ready for an assignment.'}`, [], null, bookkeeping(group.id, SYSTEM_ROW))
       }
       break
@@ -2594,6 +2598,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const affected = actor.kind === 'person' ? state.conversations.filter(group => group.agentIds.includes(target.id)
         || group.leadId === target.id || group.assignment?.agentId === target.id) : []
       removeAgent(target, { close: !hostStop })
+      // A person's removal says so in each of its chats; its host's confirmed stop leaves the member row.
+      if (affected.length) announcedRemovals.add(target.id)
       for (const group of affected) {
         const task = group.assignment?.agentId === target.id && activeWork(group)
           ? ` Its task "${group.title}" has no agent now.` : ''
@@ -2784,7 +2790,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         // An agent of this project that another agent names from outside the group joins it, so it can read and answer there
         // (joinsProject). A person's message adds nobody: a person adds an agent to a task with conversation.agent.
         if (!group.agentIds.includes(id)) {
-          projectChatJoin(group, id, target.displayName ?? target.name, true)
+          // Named only when it is of this chat's project: another's is refused below without its name (Orion's review).
+          if (agentProjectId(state, target) === groupProject(state, group).id) projectChatJoin(group, id, target.displayName ?? target.name, true)
           if (actor.kind !== 'agent' || !joinsProject(state, group, id)) fail('INVALID_RECIPIENT', 'Choose an agent in this conversation.', 400)
           teamJoin(groupProject(state, group), id, group)
           group.agentIds.push(id)
@@ -3219,9 +3226,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   keepUsernames(original, state)
   // Every agent added to or removed from a chat leaves a row there naming who did it (Ken, #2207), for the chat's readers and
   // waking nobody. A start's own line names its starter (agent.started).
-  const membership = command.type === 'agent.started' ? [] : memberChanges(original, state)
+  // Not for a removal this command already said in each chat, nor for a Swarm being deleted.
+  const membership = command.type === 'agent.started' || command.type === 'swarm.delete' ? []
+    : memberChanges(original, state).filter(c => !announcedRemovals.has(c.agent.id) || state.agents.some(a => a.id === c.agent.id))
   if (membership.length) {
-    const by = { id: actor.kind === 'agent' ? actor.agentId : actor.userId, name: actorName(state, actorKey(actor)) ?? who }
+    const by = { id: actor.kind === 'agent' ? actor.agentId : actor.userId, label: actorLabel(state, actorKey(actor)) ?? who }
     for (const { group, agent: member, added } of membership) {
       effects.messages.push({ id: stableId(operationId, 'member', group.id, member.id), conversationId: group.id, author: sender,
         text: memberRowText(by, { id: member.id, name: member.displayName ?? member.name }, added), replyTo: null, recipients: [], source: SYSTEM_ROW })

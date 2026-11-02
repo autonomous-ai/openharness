@@ -260,7 +260,7 @@ describe('Super Tab collaboration policy', () => {
       name: 'Lead', configuration: config, lead: true, initialMessage: 'Discuss the architecture.' }, owner,
     { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } })
     expect(result.messages).toEqual([expect.objectContaining({ text: 'Discuss the architecture.', recipients: [], author: expect.objectContaining({ kind: 'person', id: 'owner' }) }),
-      expect.objectContaining({ text: `owner added ${f.state.agents[0]!.displayName}.`, recipients: [], source: { kind: 'system' } })])
+      expect.objectContaining({ text: `owner added "${f.state.agents[0]!.displayName}".`, recipients: [], source: { kind: 'system' } })])
     expect(f.state.conversations[0]!.leadId).toBe(result.result.agentId)
   })
   it('keeps adding an agent separate from creating conversations and assigning work', () => {
@@ -1054,7 +1054,7 @@ describe('agent bookkeeping in the chats people read', () => {
     // No agent but its coordinator starts into the project chat (#2207); its coordinator's lines are lead.start's (leadStart.test).
     expect(() => lines('lead', 'in-lead')).toThrow(expect.objectContaining({ code: 'PROJECT_CHAT_COORDINATOR_ONLY' }))
     const pm = f.state.agents.find(a => a.id === lead)!.displayName
-    expect(lines(group, 'in-task')).toEqual([[`${pm} added Builder. Preparing its model.`, true], ['Builder is ready for an assignment.', true]])
+    expect(lines(group, 'in-task')).toEqual([[`"${pm}" added "Builder". Preparing its model.`, true], ['Builder is ready for an assignment.', true]])
   })
 })
 
@@ -1761,7 +1761,7 @@ describe('any agent of the project', () => {
     expect(f.state.agents.map(a => a.id)).toContain(shared.result.agentId)
     expect(chat().agentIds).not.toContain(shared.result.agentId)
     expect(shared.messages).toEqual([expect.objectContaining({ conversationId: 'lead', recipients: [], source: { kind: 'system' },
-      text: 'owner added Shared to the project. The project chat holds only its coordinator among agents, so Shared works in its tasks.' })])
+      text: 'owner added "Shared" to the project. The project chat holds only its coordinator among agents, so "Shared" works in its tasks.' })])
   })
 
   // Ken, 2026-11-02: nothing recorded who put the Reviewer in the project chat. Each agent added to or removed from a chat
@@ -1771,7 +1771,8 @@ describe('any agent of the project', () => {
     const rows = (effects: { messages: Array<{ conversationId: string; text: string; recipients: string[]; source?: Record<string, unknown> }> }) =>
       effects.messages.filter(m => m.source?.kind === 'system' && /^\S+( \S+)? (added|removed|joined|left)\b/.test(m.text) && !m.text.includes('Swarm'))
         .map(m => [m.conversationId, m.text, m.recipients])
-    const name = (id: string) => f.state.agents.find(a => a.id === id)!.displayName
+    // Quoted, as the rows give agents' names (Luna's review).
+    const name = (id: string) => JSON.stringify(f.state.agents.find(a => a.id === id)!.displayName)
     const member = (agentId: string, present: boolean) => ({ type: 'conversation.agent', conversationId: group, agentId, present, lead: false }) as Command
     expect(rows(f.run(member(engineer, true), owner))).toEqual([[group, `owner added ${name(engineer)}.`, []]])
     expect(rows(f.run(member(engineer, false), f.leadActor))).toEqual([[group, `${name(f.lead)} removed ${name(engineer)}.`, []]])
@@ -1788,7 +1789,7 @@ describe('any agent of the project', () => {
     const startId = f.run({ type: 'agent.start', request } as Command, f.leadActor, { contribution: f.contribution }).result.startId as string
     f.run({ type: 'agent.startDispatch', startId }, f.leadActor, { contribution: f.contribution })
     expect(f.run({ type: 'agent.started', startId, harnessId: 'builder', configuration: { ...config, engine: 'claude' } }, f.leadActor, { contribution: f.contribution })
-      .messages.map(m => m.text)).toEqual([`${name(f.lead)} added Builder. Ready for an assignment.`])
+      .messages.map(m => m.text)).toEqual([`${name(f.lead)} added "Builder". Ready for an assignment.`])
     // Nothing changed, nothing said; an agent removed from the Swarm has its removal row alone.
     expect(rows(f.run(member(engineer, true), owner))).toEqual([])
     expect(rows(f.run({ type: 'agent.remove', agentId: outsider }))).toEqual([])
@@ -2926,9 +2927,9 @@ describe('the owner\'s rules, after review', () => {
     const byHand = f.run({ type: 'conversation.agent', conversationId: group, agentId: f.worker, present: true, lead: true })
     expect(byHand.result.warnings).toBeUndefined()
     // Only the row naming who added it (#2207).
-    expect(byHand.messages.map(m => m.text)).toEqual(['owner added worker.'])
+    expect(byHand.messages.map(m => m.text)).toEqual(['owner added "worker".'])
     expect(f.run({ type: 'conversation.agent', conversationId: 'lead', agentId: f.worker, present: false, lead: false }, f.leadActor).messages.map(m => m.text))
-      .toEqual([`${f.state.agents.find(a => a.id === f.lead)!.displayName} removed worker.`])
+      .toEqual([`"${f.state.agents.find(a => a.id === f.lead)!.displayName}" removed "worker".`])
   })
   it('takes the owner\'s opt-out from grid models first into the instructions, and refuses no start', () => {
     const f = routed(), task = f.group()
@@ -3002,8 +3003,6 @@ describe('machine.remove', () => {
     const named = (id: string) => { const a = f.state.agents.find(x => x.id === id)!; return a.displayName ?? a.name }
     const workerName = named(worker)
     const effects = f.run({ type: 'machine.remove', machineId: 'host' })
-    // Its agents' chats say who took them out (Echo's review of #2207).
-    expect(effects.messages.filter(m => m.conversationId === group).map(m => m.text)).toContain(`owner removed "${workerName}".`)
 
     expect(f.state.machines).toEqual([expect.objectContaining({ machineId: 'host', paused: true,
       removal: { id: effects.result.removalId, state: 'cleaning', requestedAt: new Date(1000).toISOString() } })])
@@ -3015,6 +3014,7 @@ describe('machine.remove', () => {
     expect(notice).toMatchObject({ author: { kind: 'person', id: 'owner' }, source: { kind: 'machine-removed', machine: 'Studio' } })
     expect(notice.text).toBe(`owner removed Studio from the Swarm, and ${workerName} with it. Its task "Offline editing" has no agent now.`)
     expect(notice.recipients).toEqual([lead])
+    // Its own row names the agent it took, so no member row repeats it (Echo's review of #2207).
     expect(effects.messages.map(m => m.conversationId)).toEqual([group])
     expect(new Set(effects.messages.map(m => m.id)).size).toBe(effects.messages.length)
   })
