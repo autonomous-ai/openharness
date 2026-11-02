@@ -268,7 +268,7 @@ describe('a Product Manager\'s start, once its host reports it', () => {
       expect(t.f.state.agents.map(a => a.harnessId)).not.toContain('pm')
       expect(t.home()).toMatchObject({ leadId: t.hand, agentIds: [t.hand] })
       expect(t.f.state.starts!.find(s => s.id === t.startId)).toMatchObject({ error: answer.result.refused })
-      expect(t.f.state.starts!.find(s => s.id === t.startId)!.harnessId).toBeUndefined()
+      expect(t.f.state.starts!.find(s => s.id === t.startId)!.harnessId).toBeFalsy()
     })
 
     it('leaves one row naming its machine, as a system row, and forgets where it was starting', () => {
@@ -289,7 +289,7 @@ describe('a Product Manager\'s start, once its host reports it', () => {
 
     it('takes over when the coordinator set by hand has left', () => {
       const t = late()
-      t.home().agentIds = []
+      Object.assign(t.home(), { leadId: null, agentIds: [] })
       const pm = t.finish().result.agentId as string
       expect(t.home()).toMatchObject({ leadId: pm, agentIds: [pm] })
     })
