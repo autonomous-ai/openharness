@@ -28,7 +28,7 @@
 
 ## Design
 
-- **Growth:** the newest 500 thread drafts are kept; a sent or emptied draft leaves at once. Files in memory end with the account or when their conversation goes.
+- **Growth:** the newest 500 thread drafts are kept; a sent or emptied draft leaves at once. Files in memory are kept for the newest 8 Swarms let go, and end with the account or when their conversation goes.
 - **Concurrency:** saves already run one after another (`_persist`); this adds fields only.
 - **Read cost:** read once at the controller's start; a save writes the state it already writes.
 - **Scale:** 10x threads is capped at 500 drafts. Saved state's size warns first.
@@ -76,7 +76,7 @@
 
 **Files:**
 - Modify: `desktop/lib/super_tabs/controller.dart`, `desktop/lib/super_tabs/client.dart`
-- Test: `desktop/test/super_tab_thread_composer_test.dart`
+- Test: `desktop/test/super_tab_reading_client_test.dart`
 
 **Interfaces:**
 - Produces: `SuperTabKeptFiles get keptFiles`; `void adoptFiles(SuperTabKeptFiles kept)`.
