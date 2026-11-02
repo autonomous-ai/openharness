@@ -102,6 +102,45 @@ describe('assigning a step', () => {
     expect(f.group(id).assignment!.id).not.toBe(first)
   })
 
+  // Task #2241: a verdict is a post, in the step's chat or the task's, addressed to the Engineer.
+  describe('a post to its Engineer', () => {
+    const post = (f: ReturnType<typeof stepsFixture>, conversationId: string, recipientIds: string[], actor: string) =>
+      f.run({ type: 'message.send', conversationId, text: 'Ready to merge: No. One Critical.', replyTo: null, recipientIds } as Command, f.as(actor))
+    const reviewing = () => {
+      const f = stepsFixture()
+      const id = f.step('Review')
+      const rev = f.add('rev', id)
+      f.run({ type: 'work.assign', conversationId: id, agentId: rev }, f.as(f.dev))
+      return { f, id, rev }
+    }
+
+    it('from the step\'s own agent is kept, in the step\'s chat or the task\'s', () => {
+      const a = reviewing()
+      post(a.f, a.id, [a.f.dev], a.rev)
+      expect(a.f.group(a.id).assignment!.toldEngineerAt).toBe(a.f.now)
+      const b = reviewing()
+      b.f.run({ type: 'conversation.agent', conversationId: b.f.task, agentId: b.rev, action: 'add' } as Command, b.f.as(b.f.dev))
+      post(b.f, b.f.task, [b.f.dev], b.rev)
+      expect(b.f.group(b.id).assignment!.toldEngineerAt).toBe(b.f.now)
+    })
+
+    it('is what counts: not a post to nobody, nor the Engineer\'s own post to the step', () => {
+      const f = reviewing()
+      post(f.f, f.id, [], f.rev)
+      expect(f.f.group(f.id).assignment!.toldEngineerAt).toBeUndefined()
+      post(f.f, f.id, [f.rev], f.f.dev)
+      expect(f.f.group(f.id).assignment!.toldEngineerAt).toBeUndefined()
+    })
+
+    it('ends with the Engineer\'s next Ready', () => {
+      const f = reviewing()
+      post(f.f, f.id, [f.f.dev], f.rev)
+      f.f.run({ type: 'work.status', conversationId: f.f.task, assignmentId: f.f.group(f.f.task).assignment!.id, status: 'review', result: 'PR 7, fixed' } as Command, f.f.as(f.f.dev))
+      expect(f.f.group(f.id).assignment!.toldEngineerAt).toBeUndefined()
+      expect(f.f.group(f.id).assignment).toMatchObject({ status: 'working', progressAt: f.f.now })
+    })
+  })
+
   // The fix round Reviewers already wait through (liveness.ts waitingForRevision, Diego 2026-11-01), pinned for steps.
   it('stays working across its owner\'s fix round', () => {
     const f = stepsFixture()
