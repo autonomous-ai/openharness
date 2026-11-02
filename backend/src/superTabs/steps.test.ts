@@ -6,6 +6,8 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
+import { extracted } from './parts/write.js'
+import { stepSleeps } from './steps.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const config: AgentConfiguration = { engine: 'codex', model: 'test-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
@@ -104,5 +106,55 @@ describe('assigning a step', () => {
     f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'review', result: 'PR 7, fixed' } as Command, f.as(f.dev))
     expect(f.group(id).assignment).toMatchObject({ status: 'working' })
     expect(f.group(id).assignment!.changesRequestedAt).toBeUndefined()
+  })
+})
+
+describe('a step closes with its task', () => {
+  const finishStep = (f: ReturnType<typeof stepsFixture>, id: string, agent: string) =>
+    f.run({ type: 'work.status', conversationId: id, assignmentId: f.group(id).assignment!.id, status: 'done', result: 'Passed' } as Command, f.as(agent))
+
+  it('is not marked finished work while open or done, so the archive pass never takes it on its own clock', () => {
+    const f = stepsFixture()
+    const id = f.step('Review')
+    const rev = f.add('rev', id)
+    f.run({ type: 'work.assign', conversationId: id, agentId: rev }, f.as(f.dev))
+    finishStep(f, id, rev)
+    expect(extracted('group', f.group(id), 1).workFinished).toBe(false)
+  })
+
+  it('keeps an old linked group\'s mark: it archives on its own clock as today', () => {
+    const f = stepsFixture()
+    const old = f.run({ type: 'conversation.create', title: 'Review', brief: 'x', reviewOf: f.task, checks: [] }, f.as(f.dev)).result.conversationId as string
+    expect(extracted('group', f.group(old), 1).workFinished).toBe(true)
+  })
+
+  it('archiving a task by hand cancels its working step', () => {
+    const f = stepsFixture()
+    const working = f.step('Review'), done = f.step('Test')
+    const rev = f.add('rev', working), tester = f.add('tester', done)
+    f.run({ type: 'work.assign', conversationId: working, agentId: rev }, f.as(f.dev))
+    f.run({ type: 'work.assign', conversationId: done, agentId: tester }, f.as(f.dev))
+    finishStep(f, done, tester)
+    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'done', result: 'Merged' } as Command, f.as(f.dev))
+    const effects = f.run({ type: 'conversation.archive', conversationId: f.task, archived: true } as Command)
+    expect(f.group(working)).toMatchObject({ archived: true, assignment: { status: 'cancelled', result: 'Fix login was archived.' } })
+    expect(f.group(done)).toMatchObject({ archived: true, assignment: { status: 'done' } })
+    expect(effects.messages.filter(m => m.conversationId === working).map(m => [m.text, m.recipients])).toEqual([['Fix login was archived.', [rev]]])
+  })
+
+  it('cancelling an unassigned task closes its steps', () => {
+    const f = stepsFixture()
+    const other = f.run({ type: 'conversation.create', title: 'Docs', brief: 'Write docs.', checks: [] }, f.as(f.lead)).result.conversationId as string
+    const id = f.step('Review', f.as(f.lead), other)
+    f.run({ type: 'work.cancel', conversationId: other, assignmentId: 'current', reason: 'Not needed' } as Command, f.as(f.lead))
+    expect(f.group(other).archived).toBe(true)
+    expect(f.group(id).archived).toBe(true)
+  })
+
+  it('sleeps only once its task is archived or dormant', () => {
+    expect(stepSleeps(null)).toBe(true)
+    expect(stepSleeps({ archived: false, dormant: false })).toBe(false)
+    expect(stepSleeps({ archived: true, dormant: false })).toBe(true)
+    expect(stepSleeps({ archived: false, dormant: true })).toBe(true)
   })
 })

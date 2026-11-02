@@ -9,6 +9,7 @@ import {
   type Actor, type AgentConfiguration, type AgentStart, type AgentStartRequest, type BuddySessionEntry, type WorkTask, type Agent, type Author, type Check, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
 import { jobKindOf } from './evidence/jobKind.js'
+import { closeSteps } from './steps.js'
 import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSaveSchema } from './routingPolicy.js'
 import { askedInSchema, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema } from './rules.js'
@@ -827,6 +828,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   /** Any other row the system writes in the actor's name. Without a source, a notice written as the owner read as the owner
    * asking, and a Lead could quote it to change rules (review of #1594). Only `message.send` and an initial message stay plain. */
   const SYSTEM_ROW = { kind: 'system' }
+  /** A task archived: its steps archive with it, an open one cancelled, and that step's agent is told why (task steps design). */
+  const closeStepsOf = (task: Conversation) => {
+    const reason = `${task.title} was archived.`
+    for (const step of closeSteps(state, task, reason)) message(step.id, reason, [step.assignment!.agentId], null, SYSTEM_ROW)
+  }
   /** Agent bookkeeping, a routing line or an agent joined or ready: no one's in the project chat, which carries only what
    *  people read or decide on (the Lead's ruling, 2026-10-29); a task's chat keeps it as its record. */
   const bookkeeping = (conversationId: string, source: Record<string, unknown>) =>
@@ -1807,6 +1813,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (group.id === groupProject(state, group).leadConversationId) fail('LEAD_CONVERSATION', 'The Lead conversation stays available.')
       if (command.archived && activeWork(group)) fail('WORK_ACTIVE', 'Resolve the active assignment before archiving this conversation.')
       group.archived = command.archived
+      if (command.archived) closeStepsOf(group)
       // Archived by hand, it leaves the active set until it is reopened (spec, Archive), once its reports are acknowledged:
       // until then the sweep leaves it in the active set, where the report check sees it (design section 3.6).
       if (command.archived && !dirtyGroups(state, groupProject(state, group)).includes(group)) group.dormant = true
@@ -2840,6 +2847,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         message(group.id, `${who} cancelled this task: ${command.reason.replace(/[.\s]+$/, '')}.`, [], null, SYSTEM_ROW)
         // Its line is a report the coordinator acknowledges first, so the sweep puts it to sleep later (sweeps.ts), as for any archive.
         group.archived = true
+        closeStepsOf(group)
         break
       }
       if (!assignment || assignment.id !== command.assignmentId) fail('STALE_ASSIGNMENT', 'This is no longer the active assignment.')

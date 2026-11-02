@@ -47,6 +47,7 @@ import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './part
 import { memberSwarms } from './swarmRows.js'
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { loadDeliveryParts, ms } from './parts/light.js'
+import { closeSteps } from './steps.js'
 import { guardedWrite, partId } from './parts/write.js'
 import { retryable } from './retry.js'
 import { touchesFor } from './parts/touches.js'
@@ -3404,6 +3405,9 @@ export class SuperTabStore {
       // Its work is over: a decision still waiting there waits no more (Dee, 10-31), as when the work ended by a command.
       await withdrawIn(tx, tabId, [groupId], now)
       group.archived = true
+      // Its steps archive with it (task steps design): its work is done or cancelled and its pull requests settled, so a
+      // step still open there has nothing left to check.
+      closeSteps(state, group, `${group.title} was archived.`)
       const line = finished ? archiveLine(state, group, now) : reviewCloseLine(state, group, checked, now), rows = line ? [line] : []
       const sequences = numberMessages(state, rows, now)
       if (!dirtyGroups(state, groupProject(state, group)).includes(group)) group.dormant = true
