@@ -7,6 +7,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, wr
 import { createServer, request as httpRequest } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { managedNodePath } from '../nodeRuntime.js'
 import { FakeGateway, FakeService } from '../../testing/connectorServers.js'
 import { bridgeKey, harnessKey, sync } from './agents.js'
 import { createBridge } from './bridge.js'
@@ -263,15 +264,15 @@ describe('agent configs', () => {
     vault.save('github', { access_token: 'secret-github', source: 'gateway' })
     expect(sync(vault, env)).toEqual({ claude: ['linear'], codex: ['linear', 'notion'], opencode: ['linear', 'notion'] })
     const socket = join(vault.root, 'bridge.sock')
-    const shim = (code: string) => [process.argv[1], 'connections', 'mcp', code, '--socket', socket]
+    const shim = (code: string) => [join(vault.root, 'mcp-shim.mjs'), '--socket', socket, code]
     const data = JSON.parse(readFileSync(claude, 'utf8'))
     expect(data.numStartups).toBe(3)
     expect(data.mcpServers.notion).toEqual({ command: 'my-notion' })
-    expect(data.mcpServers.linear).toEqual({ type: 'stdio', command: process.execPath, args: shim('linear') })
+    expect(data.mcpServers.linear).toEqual({ type: 'stdio', command: managedNodePath(), args: shim('linear') })
     const toml = readFileSync(codex, 'utf8')
     expect(toml.startsWith('model = "gpt-5"\n\n[mcp_servers.mine]\ncommand = "mine"\n')).toBe(true)
-    expect(toml).toContain(`[mcp_servers.notion]\ncommand = ${JSON.stringify(process.execPath)}\nargs = ${JSON.stringify(shim('notion'))}`)
-    expect(JSON.parse(readFileSync(opencode, 'utf8')).mcp.linear).toEqual({ type: 'local', command: [process.execPath, ...shim('linear')], enabled: true })
+    expect(toml).toContain(`[mcp_servers.notion]\ncommand = ${JSON.stringify(managedNodePath())}\nargs = ${JSON.stringify(shim('notion'))}`)
+    expect(JSON.parse(readFileSync(opencode, 'utf8')).mcp.linear).toEqual({ type: 'local', command: [managedNodePath(), ...shim('linear')], enabled: true })
     for (const path of [claude, codex, opencode]) expect(readFileSync(path, 'utf8')).not.toContain('secret-')
     vault.disconnect('linear')
     vault.disconnect('notion')

@@ -47,9 +47,13 @@ function listen(bridge: Server, port: number, retryMs: number): void {
   bridge.listen(port, '127.0.0.1')
 }
 
-/** The MCP clients' way in (lib/connectors/mcpShim.ts). While a live socket is there (a core handing over), try again. */
-function listenSocket(vault: Store, path: string, retryMs: number): void {
-  serveBridgeSocket(vault, path).catch(() => { setTimeout(() => listenSocket(vault, path, retryMs), retryMs).unref() })
+/** The MCP clients' way in (lib/connectors/mcpShimSource.ts). While a live socket is there (a core handing over), try again.
+ *  Said once: its clients are told Harness is not running, though it is. */
+function listenSocket(vault: Store, path: string, retryMs: number, said = false): void {
+  serveBridgeSocket(vault, path).catch((error: unknown) => {
+    if (!said) console.warn(`[connectors] the bridge's socket is not listening (${path}), trying again: ${error instanceof Error ? error.message : String(error)}`)
+    setTimeout(() => listenSocket(vault, path, retryMs, true), retryMs).unref()
+  })
 }
 
 export function startConnectors(core: CoreApi, overrides: Partial<ConnectorsDeps> = {}): ServiceRequests {

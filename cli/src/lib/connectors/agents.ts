@@ -1,6 +1,6 @@
 /**
  * Connected services, given to each agent as an MCP server on the local bridge. Agent configs hold only the command of a stdio
- * shim to the bridge's 0600 socket (mcpShim.ts), or where no socket can be (Windows, a folder too long for one) a 127.0.0.1
+ * shim to the bridge's 0600 socket (mcpShimSource.ts), or where no socket can be (Windows, a folder too long for one) a 127.0.0.1
  * address with this user's capability in it; the bridge adds the credential to each request (Grid's design). A renewed token
  * needs no config change, and an agent already running keeps working.
  *
@@ -12,6 +12,8 @@ import { randomBytes } from 'node:crypto'
 import { existsSync, readFileSync, realpathSync, renameSync, writeFileSync, mkdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
+import { managedNodePath } from '../nodeRuntime.js'
+import { MCP_SHIM_SOURCE } from './mcpShimSource.js'
 import { CODE, locked, writePrivate, type Store } from './store.js'
 import { transport } from './rest.js'
 
@@ -65,10 +67,19 @@ export function bridgeSocketPath(vault: Store, platform: NodeJS.Platform = proce
 /** How an MCP client reaches one connection. */
 export type McpEntry = { url: string } | { command: string; args: string[] }
 
-/** The shim, by this very Harness's node and script: an agent started outside Harness may not have `harness` on its PATH. An
- *  update that moves them restarts the daemon, which writes the entries again. */
-function shimEntry(code: string, socket: string): McpEntry {
-  return { command: process.execPath, args: [process.argv[1], 'connections', 'mcp', code, '--socket', socket] }
+/**
+ * The shim, written fresh into the vault's private folder (mcpShimSource.ts), and the node to run it: Harness's managed one, by a
+ * stable path, as an agent started outside Harness may have neither `harness` nor a node on its PATH.
+ */
+function writeShim(vault: Store): string {
+  const path = join(vault.root, 'mcp-shim.mjs')
+  mkdirSync(vault.root, { recursive: true, mode: 0o700 })
+  if (!existsSync(path) || readFileSync(path, 'utf8') !== MCP_SHIM_SOURCE) {
+    const staged = `${path}.${process.pid}.tmp`
+    writeFileSync(staged, MCP_SHIM_SOURCE, { mode: 0o600 })
+    renameSync(staged, path)
+  }
+  return path
 }
 
 function home(env: NodeJS.ProcessEnv): string { return env.HOME || homedir() }
@@ -178,8 +189,11 @@ export function agents(env: NodeJS.ProcessEnv = process.env): Agent[] {
 export function sync(vault: Store, env: NodeJS.ProcessEnv = process.env, list: Agent[] = agents(env)): Record<string, string[]> {
   const codes = Object.entries(vault.tokens()).filter(([code, token]) => transport(token) !== 'none' && CODE.test(code)).map(([code]) => code)
   const socket = bridgeSocketPath(vault)
+  const shim = codes.length && socket ? writeShim(vault) : ''
   const key = codes.length && !socket ? bridgeKey(vault) : ''
-  const wanted = Object.fromEntries(codes.map((code): [string, McpEntry] => [code, socket ? shimEntry(code, socket) : { url: bridgeUrl(key, code, bridgePort(env)) }]))
+  const wanted = Object.fromEntries(codes.map((code): [string, McpEntry] => [code, socket
+    ? { command: managedNodePath(), args: [shim, '--socket', socket, code] }
+    : { url: bridgeUrl(key, code, bridgePort(env)) }]))
   return locked(vault.root, () => {
     const record = vault.file('projections.json') as Record<string, unknown>
     const changed: Record<string, string[]> = {}

@@ -77,8 +77,8 @@ them in `~/.local/share/harness-os/connections`; they are moved here the first t
 ## Agents and the bridge
 
 Agent configs never hold a token (`agents.ts`). Each connection with tools (an MCP server, or REST tools
-the bridge serves) becomes an entry that runs `harness connections mcp <code> --socket <path>`, a stdio shim to
-the bridge's 0600 socket (`mcpShim.ts`). It holds no key, because reaching the socket is the credential, and it never
+the bridge serves) becomes an entry that runs `mcp-shim.mjs --socket <path> <code>` with Harness's node: a small stdio shim
+in this folder, to the bridge's 0600 socket (`mcpShimSource.ts`). It holds no key, because reaching the socket is the credential, and it never
 falls back to a port, so whoever holds a port hears no tool call:
 
 | Agent | File | Entry |

@@ -4,7 +4,7 @@
  * the answer back (event streams included). A service reached by REST (no MCP server the grant can use) is
  * answered here instead, its REST tools served as MCP (rest.ts). Runs in the daemon (services/connectors.ts).
  *
- * MCP clients come through a stdio shim (mcpShim.ts) to a second listener on a 0600 socket (serveBridgeSocket), so no tool call
+ * MCP clients come through a stdio shim (mcpShimSource.ts) to a second listener on a 0600 socket (serveBridgeSocket), so no tool call
  * goes to a port another account can hold. The port stays for clients still running on it, Windows, and a folder too long for
  * a socket.
  *
@@ -14,7 +14,7 @@
  * - `/<key>/<code>/api/<path>`: one request to a key-only connection's own API (`api_entry`), with its key.
  */
 import { timingSafeEqual } from 'node:crypto'
-import { mkdirSync } from 'node:fs'
+import { chmodSync, mkdirSync } from 'node:fs'
 import { createServer, type IncomingMessage, type RequestListener, type Server, type ServerResponse } from 'node:http'
 import { dirname } from 'node:path'
 import { Readable } from 'node:stream'
@@ -72,7 +72,9 @@ export function createBridge(vault: Store, options: BridgeOptions): Server {
 
 /** The bridge for MCP clients on its 0600 socket: their MCP servers only, as an agent's key reaches (no Harness key here). */
 export async function serveBridgeSocket(vault: Store, path: string): Promise<LocalSocketServer> {
+  // The socket's privacy rests on this folder too, which may be older than this code.
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+  chmodSync(dirname(path), 0o700)
   const listening = await listenLocalSocket(bridgeHandler(vault, { key: () => SOCKET_KEY, socket: true }), path)
   listening.server.unref()
   return listening

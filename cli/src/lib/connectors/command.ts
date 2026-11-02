@@ -9,7 +9,6 @@ import { call, CallFailure, OFFICIAL_HOSTS, type Output } from './call.js'
 import * as gateway from './gateway.js'
 import { forgetPage, PageServer, rememberPage, runningPage } from './page.js'
 import { refresh, refreshDue } from './renew.js'
-import { runMcpShim } from './mcpShim.js'
 import { ConnectorError, locked, RENAMED, Store, validateCode } from './store.js'
 
 export const connectionsUsage = `Connected services (Linear, Notion, GitHub, Google…), shared by every local agent:
@@ -23,8 +22,6 @@ export const connectionsUsage = `Connected services (Linear, Notion, GitHub, Goo
                                        (Devin Cloud, Cursor Cloud); never given to the agents here
   harness connections refresh [<code>] renew tokens that are due (or this one now)
   harness connections sync             give Claude Code, Codex and OpenCode their MCP entries again
-  harness connections mcp <code> --socket <path>
-                                       an MCP client's stdio way to a connection, run from its entry
   harness connections call <code> <METHOD> <https-url> [--query K=V] [--json BODY|-] [--data K=V]
                                        [--form K=V|K=@file] [--header K:V]
                                        one REST request with the account's token, which you never see`
@@ -131,11 +128,6 @@ export async function connectionsCommand(argv: string[], io: Output = { out: tex
   try {
     if (!verb || verb === 'open') return await openPage(vault, io)
     if (verb === 'serve') return await serve(vault, rest, io)
-    // What an MCP client runs (its entry in the client's configuration, agents.ts): stdout is the client's, so nothing else here.
-    if (verb === 'mcp' && rest.length === 3 && rest[1] === '--socket') {
-      await runMcpShim(validateCode(rest[0]), rest[2], process.stdin, process.stdout)
-      return 0
-    }
     if (verb === 'connect' && rest.length === 1) return await connectHere(vault, rest[0], io)
     if (verb === 'list' && (rest.length === 0 || (rest.length === 1 && rest[0] === '--json'))) return list(vault, rest[0] === '--json', io)
     if (verb === 'info' && rest.length === 1) return info(vault, validateCode(rest[0]), io)

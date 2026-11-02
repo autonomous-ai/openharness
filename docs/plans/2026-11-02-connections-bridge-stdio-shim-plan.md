@@ -6,7 +6,9 @@ security review made a condition of #2550.
 
 ## Design
 
-- **The shim.** A client's entry runs `harness connections mcp <code> --socket <path>`. It speaks MCP's stdio transport to the client
+- **The shim.** A client's entry runs Harness's node on `mcp-shim.mjs --socket <path> <code>`, a small script written into the vault's
+  private folder, as the Buddy guard is written. An entry naming the running script would name the lean bundle from the daemon, which has
+  no CLI, or a worktree; naming cli.js would load all of it per connection per agent; the updater ships only cli.js and notify.mjs. It speaks MCP's stdio transport to the client
   and MCP's HTTP transport to the bridge over the socket. It streams answers, tracks the session, and sends one POST per message.
 - **The socket.** The bridge's handler gets a second listener at `<vault>/bridge.sock`, 0600, through `listenLocalSocket`. It sits
   in the vault's private folder because a daemon and a `harness connections sync` from anywhere agree on that path, and the entry
@@ -23,15 +25,16 @@ security review made a condition of #2550.
 - Concurrency: requests run side by side as they do over HTTP; `initialize` and notifications go first and in order. The vault's
   own lock still guards its files. A second daemon on the vault finds a live socket and retries, as the port's listener does.
 - Read cost: N/A because each message is the one request it was before. Each client now holds one shim process open.
-- Scale: one small node process per MCP server per running agent. Process count warns first.
+- Scale: one node process per MCP server per running agent, about 50 MiB resident each (39 for a bare node, mostly shared), measured
+  2026-11-02. Process count warns first; 5 connections on 20 agents is 100 processes.
 - Compatibility: entries are rewritten at each daemon start. A running client keeps its old address until it restarts, and the port
   still answers it. A server's own unprompted stream (GET) is not relayed, so `*_changed` notifications are lost.
 - Migration and rollback: no data migration. A rollback writes URL entries again at the next start, and the key is still in
   `bridge.json` or made on demand.
 - Audience: the filesystem enforces it: 0700 folder, 0600 socket, this account only.
 - Identity: the socket's owner is the OS account running the daemon; no login is read.
-- Failure: each failure answers the request by its id, so a client never waits for ever: daemon down, service refusal, or an
-  unreadable answer.
+- Failure: each failure answers the request by its id, so a client never waits for ever: daemon down, service refusal, an unreadable
+  answer, or a socket not private. A forgotten session is reopened once. A socket that cannot bind is logged once.
 - Platforms: macOS and Linux. Windows keeps the address until it has its own way.
 
 ## Steps
