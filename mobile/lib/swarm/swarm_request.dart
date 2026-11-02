@@ -42,15 +42,16 @@ String superTabOperationId() {
 /// [file] is read as it goes, never whole when it is large. [onProgress] is
 /// told the part sent, from 0 to 1. A refusal throws a [SuperTabFailure]
 /// carrying the backend's code.
-typedef SwarmUpload = Future<Map<String, dynamic>> Function({
-  required String tabId,
-  required String conversationId,
-  required String name,
-  required String mime,
-  required SwarmOutgoingFile file,
-  required CancelToken cancel,
-  required void Function(double sent) onProgress,
-});
+typedef SwarmUpload =
+    Future<Map<String, dynamic>> Function({
+      required String tabId,
+      required String conversationId,
+      required String name,
+      required String mime,
+      required SwarmOutgoingFile file,
+      required CancelToken cancel,
+      required void Function(double sent) onProgress,
+    });
 
 /// The upload of a phone that cannot reach the backend with a file.
 Future<Map<String, dynamic>> refuseSwarmUpload({

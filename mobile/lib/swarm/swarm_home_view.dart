@@ -45,12 +45,11 @@ SwarmHomeSwarm swarmHomeSwarm(
       for (final a in snapshot.agents)
         // A thread's own session is not drawn: kept, it would read as the
         // Buddy until the next read.
-        if (a.buddySession == null)
-          {
-            ..._agent(a),
-            if (buddies.buddyOwners[a.id] case final owner?)
-              'buddyOf': {'personId': owner},
-          },
+        if (a.buddySession == null) {
+          ..._agent(a),
+          if (buddies.buddyOwners[a.id] case final owner?)
+            'buddyOf': {'personId': owner},
+        },
     ],
     'conversations': [
       for (final c in snapshot.conversations)
