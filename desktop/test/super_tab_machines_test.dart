@@ -1539,6 +1539,42 @@ void main() {
       },
     );
 
+    testWidgets(
+      'a Swarm-wide Buddy has no project: its name is listed alone and Remove still asks',
+      (tester) async {
+        final server = _RemovalServer();
+        server.state['machines'] = [machine('owner')];
+        server.preview = {
+          'blockedBy': null,
+          'agents': [
+            {'id': 'a1', 'name': 'Wren', 'projectName': ''},
+          ],
+          'soleSourceProjects': <Object>[],
+        };
+        final c = server.controller();
+        await c.refresh();
+        await mount(tester, c);
+        await tester.tap(
+          find.byKey(const ValueKey('super-machine-studio')),
+          buttons: kSecondaryMouseButton,
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.byKey(const ValueKey('super-machine-menu-remove')),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Remove Studio from this Swarm?'), findsOneWidget);
+        expect(find.text('Wren'), findsOneWidget);
+        expect(find.textContaining('Wren ·'), findsNothing);
+        expect(find.text('Could not check this machine.'), findsNothing);
+        await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+        await tester.pumpAndSettle();
+        await tester.pumpWidget(const SizedBox());
+        await c.flush();
+        c.dispose();
+      },
+    );
+
     testWidgets('a right-click offers it to whoever may remove the machine', (
       tester,
     ) async {

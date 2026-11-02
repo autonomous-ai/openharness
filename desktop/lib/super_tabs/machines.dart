@@ -1536,7 +1536,9 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                                   for (final agent in preview.agents) ...[
                                     const SizedBox(height: 4),
                                     Text(
-                                      '${agent.name} · ${agent.projectName}',
+                                      agent.projectName.isEmpty
+                                          ? agent.name
+                                          : '${agent.name} · ${agent.projectName}',
                                     ),
                                     if (agent.task != null)
                                       Text(
@@ -2220,10 +2222,10 @@ class _RemovalPreview {
       final agent = superTabMap(item);
       final name = agent['name'], projectName = agent['projectName'];
       final task = agent['task'];
+      // A Swarm-wide Buddy has no project: the server sends an empty name.
       if (name is! String ||
           name.isEmpty ||
           projectName is! String ||
-          projectName.isEmpty ||
           (task != null && task is! String)) {
         throw const FormatException('Invalid machine removal preview');
       }
