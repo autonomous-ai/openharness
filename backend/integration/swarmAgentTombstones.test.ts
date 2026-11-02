@@ -6,6 +6,7 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import { listNamedIndexes } from '../src/superTabs/parts/indexed.js'
 import { loadDeliveryParts } from '../src/superTabs/parts/light.js'
+import { guardedWrite } from '../src/superTabs/parts/write.js'
 import { planDatabase, plan, profiled, reads } from './plans.test-support.js'
 
 // Prod profile 2026-11-02 (v1.3.86): a Swarm's live-agent read planned on [tabId, changedAt] and examined 1,070 agents to
@@ -62,5 +63,23 @@ describe('the live-agent read', () => {
     const read = reads(entries, 'SwarmAgent', ['tabId', 'deleted'])
     expect(read[0]!.planSummary, JSON.stringify(plan(read))).toMatch(/IXSCAN \{ tabId: 1, deleted: 1 \}/)
     expect(read[0]!.docsExamined, JSON.stringify(plan(read))).toBe(0)
+  })
+})
+
+describe('an agent added again after its tombstone is gone', () => {
+  const added = (tabId: string, key: string) => db.$transaction(tx => guardedWrite(tx, tabId, { op: 'insert', kind: 'agent', key, ordinal: 1, first: 1,
+    data: { id: key, machineId: 'm', machineOwnerId: maker.sub, contributorId: maker.sub } }, NOW))
+  const configuration = (tabId: string, agentId: string, revision: number) => ({ id: `${tabId}:${agentId}:${revision}`, tabId, agentId, revision,
+    configuration: {}, assignmentIds: [], actorKey: 'person:owner', observedAt: new Date(NOW - DAY) })
+
+  it('starts above its configuration revisions, so versions never go back', async () => {
+    await db.superTabConfiguration.createMany({ data: [configuration(other, 'back', 500), configuration(other, 'back', 900),
+      configuration(busy, 'back', 5000)] })
+    expect(await added(other, 'back')).toBe(901)
+    expect((await db.swarmAgent.findUniqueOrThrow({ where: { id: `${other}:back` } })).version).toBe(901)
+  })
+
+  it('starts at the first version when it has no configuration', async () => {
+    expect(await added(other, 'new')).toBe(1)
   })
 })
