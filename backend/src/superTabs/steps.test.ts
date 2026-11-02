@@ -138,6 +138,25 @@ describe('assigning a step', () => {
       expect(f.f.group(f.id).assignment!.toldEngineerAt).toBeUndefined()
     })
 
+    // An existing rule (integration/superTabLiveness.test.ts): a Reviewer's note to a working Engineer keeps no hung Reviewer.
+    it('holds nothing when it\'s a note to an Engineer already working, but a verdict does', () => {
+      const f = reviewing()
+      const note = (text: string) => f.f.run({ type: 'message.send', conversationId: f.id, text, replyTo: null, recipientIds: [f.f.dev] } as Command, f.f.as(f.rev))
+      note('Still reading the parser changes.')
+      expect(f.f.group(f.id).assignment!.toldEngineerAt).toBeUndefined()
+      note('Ready to merge: Yes, once CI is green.')
+      expect(f.f.group(f.id).assignment!.toldEngineerAt).toBeUndefined()
+      note('**Ready to merge: With fixes.** One Important finding.')
+      expect(f.f.group(f.id).assignment!.toldEngineerAt).toBe(f.f.now)
+    })
+
+    it('counts whatever it says when the Engineer was waiting on this review, as a Tester\'s verdict has no set form', () => {
+      const f = reviewing()
+      f.f.run({ type: 'work.status', conversationId: f.f.task, assignmentId: f.f.group(f.f.task).assignment!.id, status: 'review', result: 'PR 7' } as Command, f.f.as(f.f.dev))
+      f.f.run({ type: 'message.send', conversationId: f.id, text: 'Sign-in fails offline, steps below.', replyTo: null, recipientIds: [f.f.dev] } as Command, f.f.as(f.rev))
+      expect(f.f.group(f.id).assignment!.toldEngineerAt).toBe(f.f.now)
+    })
+
     it('ends with the Engineer\'s next Ready', () => {
       const f = reviewing()
       post(f.f, f.id, [f.f.dev], f.rev)
