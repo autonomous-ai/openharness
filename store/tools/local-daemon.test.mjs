@@ -182,8 +182,11 @@ test('fetch: a request and its body over the socket; the timeout reads as a time
   await assert.rejects(daemonFetch(`${base}/api/x`, { env: { ADAPTER_DATA_DIR: dir } }), /not private/)
 })
 
-test('no socket on Windows or for a path too long; there the port is the only way', () => {
+test('a long folder has a socket under the home folder; Windows, and a home too long as well, have none', () => {
+  const long = `/${'x'.repeat(100)}`
   assert.equal(daemonSocketPath(PORT, { ADAPTER_DATA_DIR: '/d' }, 'win32'), null)
-  assert.equal(daemonSocketPath(PORT, { ADAPTER_DATA_DIR: `/${'x'.repeat(100)}` }, 'linux'), null)
   assert.equal(daemonSocketPath(PORT, { ADAPTER_DATA_DIR: '/d' }, 'linux'), `/d/daemon-${PORT}.sock`)
+  const hash = createHash('sha256').update(long).digest('hex').slice(0, 16)
+  assert.equal(daemonSocketPath(PORT, { ADAPTER_DATA_DIR: long, HOME: '/h' }, 'linux'), `/h/.harness/s/${hash}/daemon-${PORT}.sock`)
+  assert.equal(daemonSocketPath(PORT, { ADAPTER_DATA_DIR: long, HOME: `/${'h'.repeat(100)}` }, 'linux'), null)
 })

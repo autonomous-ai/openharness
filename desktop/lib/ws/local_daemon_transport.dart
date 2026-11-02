@@ -10,6 +10,7 @@ import '../core/test_run.dart';
 import 'daemon_pipe_record.dart';
 import 'trusted_pipe.dart';
 import 'windows_pipe.dart';
+import 'package:cryptography/dart.dart';
 
 /// The daemon's Unix socket, beside its loopback port (CLI `lib/localSocket.ts`).
 ///
@@ -20,8 +21,8 @@ import 'windows_pipe.dart';
 /// account can bind that port once it is free, after a reboot until this user
 /// logs in or during a restart, and would hear the credential and the request
 /// (audit H1, docs/security/2026-11-02-team-account-boundary.md). With the
-/// socket missing, the daemon is down. The port remains only for a data folder
-/// whose path is too long to hold a socket.
+/// socket missing, the daemon is down. The port remains only where neither the
+/// data folder nor the home folder is short enough to hold a socket.
 ///
 /// There is one socket per control port, `daemon-<port>.sock`, named for the
 /// port the app would otherwise dial: the socket and the fallback always lead
@@ -36,7 +37,7 @@ const _maxSocketPathBytes = 96;
 /// Where the socket of the daemon on [port] would be —
 /// `$ADAPTER_DATA_DIR/daemon-<port>.sock`, by default
 /// `~/.harness/cli/data/daemon-<port>.sock` — or null where there is none
-/// (Windows, or a path too long to be a socket).
+/// (Windows, or a home too long as well).
 String? defaultDaemonSocketPath(
   int port, {
   Map<String, String>? environment,
@@ -49,7 +50,15 @@ String? defaultDaemonSocketPath(
   );
   if (dataDir == null) return null;
   final path = '$dataDir/${daemonSocketName(port)}';
-  return utf8.encode(path).length <= _maxSocketPathBytes ? path : null;
+  if (utf8.encode(path).length <= _maxSocketPathBytes) return path;
+  // Too long to hold a socket: the daemon's is under the home folder, named by
+  // the folder's hash (CLI `lib/localSocket.ts` `socketPathIn`).
+  final home = (environment ?? Platform.environment)['HOME'];
+  if (home == null || home.isEmpty) return null;
+  final hash = const DartSha256().hashSync(utf8.encode(dataDir)).bytes;
+  final hex = hash.take(8).map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  final short = '$home/.harness/s/$hex/${daemonSocketName(port)}';
+  return utf8.encode(short).length <= _maxSocketPathBytes ? short : null;
 }
 
 /// The header a call to the daemon's loopback PORT carries its local

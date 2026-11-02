@@ -135,9 +135,31 @@ void main() {
         '/srv/h/daemon-18474.sock',
       );
       expect(defaultDaemonSocketPath(18473, environment: {'HOME': '/Users/me'}, isWindows: true), isNull);
+      // Too long for a socket: under the home folder, by the folder's hash, the
+      // same hash as the CLI's (pinned for `/x` in cli localSocket.spec.ts).
+      expect(
+        defaultDaemonSocketPath(
+          18473,
+          environment: {'HOME': '/h', 'ADAPTER_DATA_DIR': '/${'x' * 100}'},
+          isWindows: false,
+        ),
+        matches(RegExp(r'^/h/\.harness/s/[0-9a-f]{16}/daemon-18473\.sock$')),
+      );
       expect(
         defaultDaemonSocketPath(18473, environment: {'HOME': '/${'x' * 100}'}, isWindows: false),
         isNull,
+      );
+    });
+
+    test('a long folder\'s socket matches the CLI\'s hash', () {
+      // sha256('/' + 'x' * 100)[0..16], as cli/src/lib/localSocket.ts computes it.
+      expect(
+        defaultDaemonSocketPath(
+          1,
+          environment: {'HOME': '/h', 'ADAPTER_DATA_DIR': '/${'x' * 100}'},
+          isWindows: false,
+        ),
+        '/h/.harness/s/e50e7828cbafcbee/daemon-1.sock',
       );
     });
 

@@ -7,6 +7,9 @@ import { createServer } from 'node:net'
 import { test } from 'node:test'
 import { daemonBridge, localCredentialHeaders } from './local-credential.mjs'
 
+// A folder too long for a socket has one under the home folder: only a home too long as well is left on the port.
+process.env.HOME = `/${'h'.repeat(120)}`
+
 const CREDENTIAL = `test-local-credential-${'a'.repeat(21)}` // the CLI's shape: 43 base64url characters
 
 /** A data folder as the CLI leaves it: 0700, holding a 0600 `hook-credential` (or none). */
@@ -41,7 +44,7 @@ test('where a socket can be, a check opens it and shows nothing, and only if it 
   const short = mkdtempSync(join('/tmp', 'tools-'))
   writeFileSync(join(short, 'hook-credential'), `${CREDENTIAL}\n`, { mode: 0o600 })
   chmodSync(short, 0o700)
-  const env = { ADAPTER_DATA_DIR: short }, path = join(short, 'daemon-18473.sock')
+  const env = { ADAPTER_DATA_DIR: short, HOME: '/h' }, path = join(short, 'daemon-18473.sock')
   assert.deepEqual(localCredentialHeaders(env), {})
   assert.throws(() => daemonBridge(18473, env), /missing or not private/, 'no socket: the daemon is down, and the port is not tried')
   const server = createServer()

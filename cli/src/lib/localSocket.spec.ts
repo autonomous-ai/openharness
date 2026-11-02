@@ -413,6 +413,8 @@ describe('a data folder too long to hold a socket', () => {
 
   it('pins the rule every client copies', () => {
     expect(socketPathIn(long, 'bridge.sock', '/h')).toBe(`/h/.harness/s/${hash(long)}/bridge.sock`)
+    // Desktop's test pins the same hash (desktop/test/local_daemon_transport_test.dart).
+    expect(hash(`/${'x'.repeat(100)}`)).toBe('e50e7828cbafcbee')
     expect(hash('/x')).toBe('b3d1db318671a024')
   })
 

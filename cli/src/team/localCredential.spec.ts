@@ -3,6 +3,7 @@
  * A listener here stands for that account. The listener runs as this user: what is tested is what it is sent, and for
  * what it could do with that, a stand-in says the caller is another account.
  */
+import { createHash } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server } from 'node:http'
@@ -71,11 +72,11 @@ describe('audit H1: whoever holds the daemon\'s port hears nothing it can use', 
     return { port: typeof address === 'string' ? 0 : (address as AddressInfo).port, heard }
   }
 
-  const runHook = async (root: string, data: string, port: number): Promise<void> => {
+  const runHook = async (root: string, data: string, port: number, home: string = root): Promise<void> => {
     const hook = spawn(process.execPath, [NOTIFY, '--port', String(port), '--data-dir', data], {
       stdio: ['pipe', 'ignore', 'ignore'],
       // Its own empty tmux folder, so the pane's routing reads no real tmux server.
-      env: { PATH: process.env.PATH, HOME: root, TMUX_PANE: '%999', TMUX_TMPDIR: root },
+      env: { PATH: process.env.PATH, HOME: home, TMUX_PANE: '%999', TMUX_TMPDIR: root },
     })
     hook.stdin.end(JSON.stringify({ hook_event_name: 'UserPromptSubmit', prompt: 'a private prompt', session_id: '11111111-1111-4111-8111-111111111111', cwd: root }))
     await new Promise<void>((resolve) => { hook.on('exit', () => resolve()) })
@@ -109,10 +110,32 @@ describe('audit H1: whoever holds the daemon\'s port hears nothing it can use', 
     expect(daemon.heard.length).toBeGreaterThan(0)
   }, 30_000)
 
-  it('where a socket cannot exist, a hook sends only its own token over TCP', async () => {
+  it('a data folder too long for a socket: the hook uses its short one, and a holder of the port hears nothing', async () => {
+    const { root, data } = dataFolder(true)
+    const home = realpathSync(mkdtempSync(join('/tmp', 'hc-')))
+    cleanup.push(() => rmSync(home, { recursive: true, force: true }))
+    const folder = join(home, '.harness', 's', createHash('sha256').update(data).digest('hex').slice(0, 16))
+    mkdirSync(folder, { recursive: true, mode: 0o700 })
+    const { port, heard } = await holder()
+    const daemon = await holder(join(folder, `daemon-${port}.sock`))
+    await runHook(root, data, port, home)
+    expect(heard).toEqual([])
+    expect(daemon.heard.length).toBeGreaterThan(0)
+  }, 30_000)
+
+  it('the same with its short socket gone: nothing goes to the port', async () => {
+    const { root, data } = dataFolder(true)
+    const home = realpathSync(mkdtempSync(join('/tmp', 'hc-')))
+    cleanup.push(() => rmSync(home, { recursive: true, force: true }))
+    const { port, heard } = await holder()
+    await runHook(root, data, port, home)
+    expect(heard).toEqual([])
+  }, 30_000)
+
+  it('where no socket can exist, a home too long as well, a hook sends only its own token over TCP', async () => {
     const { root, data } = dataFolder(true)
     const { port, heard } = await holder()
-    await runHook(root, data, port)
+    await runHook(root, data, port, `/${'h'.repeat(120)}`)
     expect(heard.length).toBeGreaterThan(0)
     expect(secretIn(heard)).toBe(false)
     expect(heard[0]!.headers['x-harness-hook-token']).toBe(HOOK_TOKEN)
