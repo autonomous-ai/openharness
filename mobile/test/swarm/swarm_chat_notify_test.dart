@@ -319,7 +319,7 @@ void main() {
       final r = await unreadAndTagged();
       expect(news(r), (bold: true, tags: 1));
       expect(swarmProjectNews(r.reader, r.asks), {
-        project: (bold: true, tags: 1),
+        project: (bold: true, tags: 0, hasWaitingTag: true),
       });
 
       final held = hold(r.swarm);

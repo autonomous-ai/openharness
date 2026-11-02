@@ -317,10 +317,10 @@ class SwarmOtherProjectsRow extends StatelessWidget {
 /// How a project's team is, as its dot on Home: red with someone down,
 /// yellow with someone waiting or a tag waiting on the person, green with
 /// someone working, faint otherwise.
-Color swarmProjectColor(SwarmTeamGlance glance, SwarmRowNews news) =>
+Color swarmProjectColor(SwarmTeamGlance glance, SwarmProjectNews news) =>
     glance.down > 0
     ? swarmStateColor(SwarmAgentState.down)
-    : glance.waiting > 0 || news.tags > 0
+    : glance.waiting > 0 || news.tags > 0 || news.hasWaitingTag
     ? swarmStateColor(SwarmAgentState.waiting)
     : glance.working > 0
     ? swarmStateColor(SwarmAgentState.working)
