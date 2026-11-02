@@ -26,8 +26,14 @@ function inspectPiPane(capture: string): PaneInspection {
   const footer = parsePiFooterProfile(text) !== null || PI_FOOTER_BUDGET.test(text)
   const rules: number[] = []
   lines.forEach((line, index) => { if (/^\s*─{8,}\s*$/.test(line)) rules.push(index) })
-  const dialog = /Thinking Level|Select reasoning depth|Type to search|Enter to select|Only showing models from/i
-    .test(lines.join('\n'))
+  const picker = /Thinking Level|Select reasoning depth|Type to search|Enter to select|Only showing models from/i
+  // An open picker REPLACES the composer box: the captured pi pane has neither rule nor footer
+  // (engines/pi/runtimeProfile.spec.ts, `other-screens.golden.json`), so that shape is the
+  // `rules.length < 2` return below. Once the box IS on screen it is the current interaction, and
+  // picker text above it is scrollback from an earlier one — read there, it held a pane busy
+  // forever over a composer nobody was typing in. The generic reader scopes DIALOG_UI the same way
+  // (kit/pane.ts `currentPaneUi`).
+  const dialog = rules.length < 2 ? picker.test(text) : picker.test(lines.slice(rules[rules.length - 2]).join('\n'))
   if (rules.length < 2) return { idle: false, plan: false, dialog, draft: false }
   const band = lines.slice(rules[rules.length - 2] + 1, rules[rules.length - 1]).join('').trim()
   const draft = band.length > 0
