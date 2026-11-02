@@ -3137,8 +3137,10 @@ class _SuperTabViewState extends State<SuperTabView>
 
   /// The open thread of the selected conversation, beside the chat.
   Widget? _threadPanel() {
-    if (_taskPanel() case final panel?) return panel;
     final open = c.openedThread;
+    // A thread opened from anywhere takes the panel's place, for good.
+    if (open != null) _openedTask = null;
+    if (_taskPanel() case final panel?) return panel;
     if (open == null || open.conversationId != c.selectedId) return null;
     final rows = c.threadMessages(open.root);
     final byId = {for (final m in rows) m.id: m};
@@ -4375,7 +4377,10 @@ class _SuperTabViewState extends State<SuperTabView>
               Positioned.fill(
                 child: BlockSemantics(
                   child: GestureDetector(
-                    onTap: c.closeThread,
+                    onTap: () {
+                      setState(() => _openedTask = null);
+                      c.closeThread();
+                    },
                     child: ColoredBox(
                       color: grid.AppDesktop.veil(Theme.of(context).brightness),
                       child: Align(
