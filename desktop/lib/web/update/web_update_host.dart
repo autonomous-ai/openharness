@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/widgets.dart';
 
+import '../../core/web_build_version.dart';
 import '../../core/web_release.dart';
 import '../../ws/ws_conn.dart' show appVersionRead, declaredAppVersion;
 import '../parts/page_reload.dart'
@@ -47,10 +48,14 @@ class WebUpdateHost extends StatefulWidget {
   /// Each time the page comes back to the front.
   final Stream<void> pageShown;
 
-  static Future<String?> _runningVersion() async {
-    await appVersionRead;
-    return declaredAppVersion;
-  }
+  /// The release this build was built as; for a build that cannot say, what
+  /// the start-up read of the host's manifest said.
+  static Future<String?> _runningVersion() => webRunningVersion(
+    readHost: () async {
+      await appVersionRead;
+      return declaredAppVersion;
+    },
+  );
 
   static Stream<void> _pageShown() => visible.pageShown();
 
@@ -82,6 +87,8 @@ class _WebUpdateHostState extends State<WebUpdateHost> {
       readLatest: widget.readLatest,
       every: widget.every,
     )..start();
+    // A page an old cache kept may be out of date already: ask once now.
+    unawaited(watcher.check());
     _shown = widget.pageShown.listen((_) => unawaited(watcher.check()));
     setState(() => _watcher = watcher);
   }

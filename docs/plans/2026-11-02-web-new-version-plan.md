@@ -4,11 +4,24 @@
 
 **Goal:** An open Harness web page says so within minutes of a new web release ("A new version of Harness is ready." with Reload), Reload loads the new build, and the account menu shows the running version ("Harness X.Y.Z").
 
-**Architecture:** The host already serves `release.json` (`no-store`, written by `scripts/build-web-release.sh`, read at start-up by `webReleaseVersion` for the running version). A new `WebUpdateWatcher` re-reads it every few minutes and when the tab comes back to the front, and says "new" when it names a version other than the one this page started with. A quiet bar at the top of the page (`WebUpdateFrame`, inside the store frame, above the app) shows it; Reload clears any old service worker and its caches, then reloads. The account menu takes the running version as an optional line, given only by the web build. Desktop (native) draws and does nothing new.
+**Architecture:** The host already serves `release.json` (`no-store`, written by `scripts/build-web-release.sh`, read at start-up by `webReleaseVersion` for the running version). A new `WebUpdateWatcher` re-reads it every few minutes, once at start-up and when the tab comes back to the front, and says "new" when it names a version other than the one this page was built as (compiled in by `build-web-release.sh`, since a page an old cache keeps would otherwise take the host's version for its own). A quiet bar at the top of the page (`WebUpdateFrame`, inside the store frame, above the app) shows it; Reload clears any old service worker and its caches, then reloads. The account menu takes the running version as an optional line, given only by the web build. Desktop (native) draws and does nothing new.
 
 **Tech Stack:** Flutter web (`desktop/`), `package:web`, `flutter_test`.
 
 **Spec:** Task #2185 (Huy). Mockup posted in the project chat: a bar "A new version of Harness is ready.    Reload", and "Harness 1.3.51" under Settings · Sign out in the account menu. No server or website change: the website's `release.json` and `index.html` are already `no-store` (`website/next.config.js`), and releases already start no service worker (`website/scripts/harness-web-assets.mjs`).
+
+## Design
+
+- growth: N/A because nothing is stored; the page keeps one watcher and one timer.
+- concurrency: N/A because the page only reads; two tabs each read for themselves.
+- read cost: one small file (`release.json`, `no-store`) per open page every 5 minutes and when the tab comes back to the front; nothing is read once the bar shows.
+- scale: 10x the open pages is 10x a few hundred bytes every 5 minutes; the host's request rate for `/harness-web/release.json` is the metric that warns first.
+- compatibility: an old page without this code shows nothing and is not affected; a new page on a host without `release.json` (`flutter run`) never shows the bar.
+- migration + rollback: none; reverting the PR removes the bar, the timer and the menu line. A build's own version is compiled in (`--dart-define=HARNESS_BUILD_VERSION`), so a page an old cache keeps still knows it is out of date (review of #2622).
+- audience: N/A because the file and the version are public.
+- identity: N/A because no account is involved.
+- failure: an unreadable `release.json` changes nothing (no bar, none cleared); Reload's cleanup steps may each fail and the page still reloads.
+- platforms: browser only; Desktop draws and runs nothing new.
 
 ## Global Constraints
 
