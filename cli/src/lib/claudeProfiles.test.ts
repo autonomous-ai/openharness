@@ -126,3 +126,56 @@ describe('claudeProfiles', () => {
     expect(new Set([id, profileId('n', 'claude', '/a'), profileId('m', 'codex', '/a'), profileId('m', 'claude', '/b')]).size).toBe(4)
   })
 })
+
+describe('Desktop-added accounts', () => {
+  it('finds <home>/.harness/claude-profiles/* folders once they hold Claude files', async () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'claude-profiles-data-'))
+    home = realpathSync(mkdtempSync(join(tmpdir(), 'claude-profiles-home-')))
+    const { listClaudeProfiles } = await loadModule()
+    const base = join(home, '.harness', 'claude-profiles')
+    account(join(base, 'acct1'), { displayName: 'Desk' })
+    mkdirSync(join(base, 'empty'), { recursive: true })
+    const labels = listClaudeProfiles([], { home, environment: {}, machineId }).map((p) => p.label)
+    expect(labels).toContain('Desk')
+    expect(labels).not.toContain('empty')
+    rmSync(dataDir, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true })
+    delete process.env.ADAPTER_DATA_DIR
+  })
+})
+
+describe('profileHome', () => {
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'claude-profiles-data-'))
+    home = realpathSync(mkdtempSync(join(tmpdir(), 'claude-profiles-home-')))
+  })
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true })
+    rmSync(home, { recursive: true, force: true })
+    delete process.env.ADAPTER_DATA_DIR
+  })
+
+  it('maps a reported id back to its folder, the default account to default, and an unknown id to null', async () => {
+    const { listClaudeProfiles, profileHome, profileId } = await loadModule()
+    account(join(home, '.claude-work'), { displayName: 'Work' })
+    const options = { home, environment: {} }
+    const work = listClaudeProfiles([], { ...options, machineId })[1]
+    expect(profileHome('claude', work.id, machineId, options)).toBe(work.path)
+    expect(profileHome('claude', 'default', machineId, options)).toBe('default')
+    expect(profileHome('claude', profileId(machineId, 'claude', 'default'), machineId, options)).toBe('default')
+    expect(profileHome('codex', profileId(machineId, 'codex', 'default'), machineId, options)).toBe('default')
+    expect(profileHome('claude', 'f'.repeat(16), machineId, options)).toBeNull()
+    expect(profileHome('codex', 'f'.repeat(16), machineId, options)).toBeNull()
+    expect(profileHome('gemini', 'default', machineId, options)).toBeNull()
+  })
+
+  it('finds a Codex folder by its id', async () => {
+    const { profileHome, profileId, codexReportLabel } = await loadModule()
+    const codex = join(home, '.codex-two')
+    mkdirSync(codex)
+    writeFileSync(join(codex, 'auth.json'), '{}')
+    const found = profileHome('codex', profileId(machineId, 'codex', codex), machineId, { home, environment: { CODEX_HOME: codex } })
+    expect(found).toBe(codex)
+    expect(codexReportLabel('/x/.codex-two')).toBe('.codex-two')
+    expect(codexReportLabel('/x/jane@corp')).toBe('Codex')
+  })
+})

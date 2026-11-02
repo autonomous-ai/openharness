@@ -12,6 +12,7 @@ import { closeSync, constants, fchmodSync, fsyncSync, openSync, readdirSync, rea
 import { homedir } from 'os'
 import { basename, join } from 'path'
 import { env } from '../config/env.js'
+import { listCodexProfiles } from './codexProfiles.js'
 import { hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirectory } from './secureState.js'
 
 export interface ClaudeProfile {
@@ -137,7 +138,7 @@ function entries(folder: string): string[] {
   }
 }
 
-/** The inherited CLAUDE_CONFIG_DIR, conventional `~/.claude-*` folders and Orca's per-profile homes. */
+/** The inherited CLAUDE_CONFIG_DIR, conventional `~/.claude-*` folders and Orca's per-profile homes and Desktop's own. */
 function discover(home: string, environment: NodeJS.ProcessEnv): string[] {
   const found: string[] = []
   const inherited = environment.CLAUDE_CONFIG_DIR
@@ -145,6 +146,8 @@ function discover(home: string, environment: NodeJS.ProcessEnv): string[] {
   found.push(...entries(home).filter((e) => basename(e).startsWith('.claude-')))
   const orca = join(home, 'Library', 'Application Support', 'orca', 'claude-profiles')
   found.push(...entries(orca).map((e) => join(e, 'home')))
+  // Where Desktop's "Add Claude account…" puts the folders it creates.
+  found.push(...entries(join(home, '.harness', 'claude-profiles')))
   return found.filter(holdsProfile)
 }
 
@@ -168,4 +171,24 @@ export function listClaudeProfiles(
   }
   const others = [...profiles.values()].sort((a, b) => a.label.toLowerCase().localeCompare(b.label.toLowerCase()) || a.path.localeCompare(b.path))
   return [defaultProfile, ...others]
+}
+
+/** What leaves the machine for a Codex folder: its name, and never one holding an '@' (an email). */
+export function codexReportLabel(path: string): string {
+  const name = basename(path)
+  return (name.includes('@') ? 'Codex' : name).slice(0, REPORT_LABEL_MAX)
+}
+
+/**
+ * The folder a reported profile id stands for: 'default' for the engine's default account (the literal 'default', which an
+ * older backend sends, or its reported id), a path for a profile this machine still has, null for an unknown or gone one.
+ */
+export function profileHome(
+  engine: string, id: string, machineId: string, options: { home?: string; environment?: NodeJS.ProcessEnv } = {},
+): string | 'default' | null {
+  if (engine !== 'claude' && engine !== 'codex') return null
+  if (id === 'default' || id === profileId(machineId, engine, 'default')) return 'default'
+  if (engine === 'claude') return listClaudeProfiles([], { ...options, machineId }).find((p) => p.id === id)?.path ?? null
+  const discovery = options.home ? { home: options.home, environment: (options.environment ?? {}) as Record<string, string> } : undefined
+  return listCodexProfiles([], discovery).find((p) => profileId(machineId, 'codex', p.path) === id)?.path ?? null
 }

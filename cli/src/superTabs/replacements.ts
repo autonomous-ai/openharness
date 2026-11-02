@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, linkSync, mkdirSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, linkSync, realpathSync, mkdirSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { CoreApi } from '../core/api.js'
 import { readPrivateStateFile, secureStateDirectory, syncStateDirectory } from '../lib/secureState.js'
+import { profileId } from '../lib/claudeProfiles.js'
 import { parseRuntimeProfile } from '../lib/runtimeProfileWire.js'
 import { handoffIntentHash } from '../lib/handoffAuthority.js'
 import { validateHandoff } from '../lib/handoffValidation.js'
@@ -74,6 +75,14 @@ async function candidates(core: CoreApi, machineId: string): Promise<Replacement
   return result
 }
 
+/** The account the replacement runs in, by the opaque id the machine reports its profiles with. */
+function accountId(machineId: string, agent: { engine: string; claudeHome?: string | null; codexHome?: string | null }): string {
+  const engine = agent.claudeHome ? 'claude' : agent.codexHome ? 'codex' : agent.engine as 'claude' | 'codex'
+  const home = agent.claudeHome || agent.codexHome
+  if (!home) return profileId(machineId, engine, 'default')
+  try { return profileId(machineId, engine, realpathSync(home)) } catch { return profileId(machineId, engine, home) }
+}
+
 export async function replacementObservations(core: CoreApi, machineId: string, rows: unknown[]) {
   // Healthy members need no recovery or disk scan. In particular, do not reread every historical
   // handoff and its transcript on a machine with live Swarm members every five seconds.
@@ -105,7 +114,7 @@ export async function replacementObservations(core: CoreApi, machineId: string, 
     const known = profile?.sessionId === target.agentId && profile.engine === target.engine
     const configuration = { engine: target.engine, model: known ? profile.model : null, effort: known ? profile.effort : null,
       contextWindow: null, engineVersion: null }
-    const command = { type: 'agent.rebind', agentId: agent.id, machineId, projectId: agent.projectId ?? 'lead',
+    const command = { type: 'agent.rebind', agentId: agent.id, profileId: accountId(machineId, target), machineId, projectId: agent.projectId ?? 'lead',
       previousHarnessId: agent.harnessId, harnessId: target.agentId, configuration }
     observations.push({ path: `/api/super-tabs/${row.tabId}/commands`, body: {
       operationId: `replacement-${digest([row.tabId, agent.id, report.changeId, target.agentId])}`, asAgentId: agent.id, command } })

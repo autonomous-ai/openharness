@@ -1,8 +1,9 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { realpathSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { handoffIntentHash, type PreparedHandoff } from '../lib/handoffAuthority.js'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
+import { profileId } from '../lib/claudeProfiles.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { recordReplacement, replacementObservations } from './replacements.js'
 
@@ -30,6 +31,22 @@ it('durably reports Change agent, and a new host can recover the exact replaceme
     type: 'agent.rebind', agentId: 'member', machineId: 'machine', projectId: 'project', previousHarnessId: 'old', harnessId: 'new',
     configuration: { engine: 'claude', model: 'sonnet', effort: 'high', contextWindow: null, engineVersion: null } } } })
   expect(await replacementObservations(f.core, 'machine', [f.row])).toEqual(observations)
+})
+
+it.each([
+  ['the default Claude account', {}, profileId('machine', 'claude', 'default')],
+  ['a Claude profile folder', { claudeHome: tmpdir() }, profileId('machine', 'claude', realpathSync(tmpdir()))],
+  ['a Codex profile folder', { engine: 'codex', codexHome: tmpdir() }, profileId('machine', 'codex', realpathSync(tmpdir()))],
+  ['a profile folder that is gone', { claudeHome: '/gone/.claude-x' }, profileId('machine', 'claude', '/gone/.claude-x')],
+  ['the default Codex account', { engine: 'codex' }, profileId('machine', 'codex', 'default')],
+])('names the account of the replacement in agent.rebind: %s', async (_name, extra, expected) => {
+  const f = fixture()
+  Object.assign(f.next, extra)
+  f.old.engine = 'claude'
+  const payload = { ...f.payload, targetEngine: f.next.engine }
+  await recordReplacement(f.core, payload)
+  const [observation] = await replacementObservations(f.core, 'machine', [f.row])
+  expect((observation.body.command as { profileId: string }).profileId).toBe(expected)
 })
 
 it.each(['source-live', 'different-folder', 'different-engine', 'different-receipt', 'not-live', 'foreign-machine', 'stopping'])('holds a replacement with %s', async kind => {
