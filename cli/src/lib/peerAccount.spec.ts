@@ -1,6 +1,6 @@
 import { createServer, connect, type AddressInfo, type Socket } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
-import { lsofShowsPeer, peerIsThisAccount, portHolderIsThisAccount, procNetListener, procNetOwner, windowsPeerQuery, type WindowsPeerRun } from './peerAccount.js'
+import { lsofShowsPeer, peerIsThisAccount, portHolderIsThisAccount, procNetListener, procNetOwner, WINDOWS_PEER_LOOKUPS, windowsPeerQuery, type WindowsPeerRun } from './peerAccount.js'
 
 describe('who is at the other end of a loopback connection', () => {
   const opened: Array<() => unknown> = []
@@ -87,6 +87,20 @@ describe('who is at the other end of a loopback connection', () => {
       expect(query.script).toContain('Get-NetTCPConnection')
       expect(query.script).toContain('GetOwnerSid')
       expect(query.script).toContain('[Security.Principal.WindowsIdentity]::GetCurrent().User.Value')
+    })
+
+    // Whoever heard the hook token could open connections without end, each a PowerShell in the owner's account for up to
+    // 8 s (Luna's review of #2605). A few run at once; one past them is no.
+    it('runs a few lookups at once and answers no past them, without asking', async () => {
+      let asked = 0
+      const finish: Array<() => void> = []
+      const slow: WindowsPeerRun = () => { asked++; return new Promise((resolve) => { finish.push(() => resolve({ status: 0, stdout: 'yes' })) }) }
+      const pending = Array.from({ length: WINDOWS_PEER_LOOKUPS }, (_, i) => peerIsThisAccount(socket({ remotePort: 51_000 + i }), 'win32', slow))
+      expect(await peerIsThisAccount(socket({ remotePort: 51_100 }), 'win32', slow)).toBe(false)
+      expect(asked).toBe(WINDOWS_PEER_LOOKUPS)
+      for (const done of finish.splice(0)) done()
+      expect(await Promise.all(pending)).toEqual(pending.map(() => true))
+      expect(await peerIsThisAccount(socket({ remotePort: 51_101 }), 'win32', answering('yes').run)).toBe(true)
     })
 
     // Windows keeps naming a socket's creator after it exits when a child inherited the handle, and the id can go to one of
