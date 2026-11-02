@@ -120,7 +120,9 @@ async function start(): Promise<void> {
   logger.info('[swarm-decisions] closed waiting decisions of finished work', { closed: await swarms.withdrawEndedDecisions() })
   // Agent tombstones compacted for good before #2150 get a purge time, so the sweeps purge them (superTabs/agentTombstones.ts).
   // Remove in the release after the one that runs it.
-  logger.info('[swarm-sweeps] queued compacted agent tombstones for purge', { queued: await requeueCompactedAgents(prisma, Date.now()) })
+  // A failure leaves them compacted, as before, and never stops the worker starting.
+  await requeueCompactedAgents(prisma, Date.now()).then(queued => logger.info('[swarm-sweeps] queued compacted agent tombstones for purge', { queued }),
+    error => logger.warn('[swarm-sweeps] queuing compacted agent tombstones failed', { error: error instanceof Error ? error.message : String(error) }))
   stopSweeps = startSwarmSweeps(prisma, undefined, () => swarms.workspaces.finishRemovals())
   // The dead old state of migrated Swarms goes by itself, a few at a time (superTabs/migration/dropLegacyJob.ts).
   stopLegacyDrop = startLegacyDrop(prisma)
