@@ -544,9 +544,9 @@ describe('one machine: a Mac and its Harness Team account', () => {
     }
   })
 
-  // Tried in listed owners' Swarms only (machines.ts teamAccountSwarm, 2026-10-28): anyone else's Swarm never gets a team
-  // account, and says so, so neither the Mac's daemon nor Desktop offers to set one up for it.
-  it('joins only a Swarm the team account is tried in, and tells the others they use none', async () => {
+  // Every Swarm alike (2026-11-02): it was tried in listed owners' Swarms only (SWARM_TEAM_ACCOUNT_OWNERS, 10-28 to 11-02),
+  // and a list left in a deployment must neither keep a team account out of a Swarm nor tell a Swarm it uses none.
+  it('joins every Swarm its Mac was added to, whatever SWARM_TEAM_ACCOUNT_OWNERS says, and tells none it uses none', async () => {
     await db.machine.update({ where: { machineId: 'team-mac' }, data: { hostMachineId: 'personal-mac' } })
     onTestFinished(async () => {
       vi.unstubAllEnvs()
@@ -559,9 +559,6 @@ describe('one machine: a Mac and its Harness Team account', () => {
     const joins = async () => (await rosterRows(store, person, 'personal-mac')).some(r => r.tabId === tab && 'joinTeam' in r)
     const derived = async () => (await new SwarmReads(store).firstLoad(person, tab)).derived
     vi.stubEnv('SWARM_TEAM_ACCOUNT_OWNERS', 'someone@example.com')
-    expect(await joins()).toBe(false)
-    expect(await derived()).toMatchObject({ teamAccounts: false })
-    vi.stubEnv('SWARM_TEAM_ACCOUNT_OWNERS', `someone@example.com,${owner.email.toUpperCase()}`)
     expect(await joins()).toBe(true)
     expect(await derived()).not.toHaveProperty('teamAccounts')
   })
