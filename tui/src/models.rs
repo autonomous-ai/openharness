@@ -1867,6 +1867,10 @@ pub fn on_act(app: &mut App, machine: &str, reply: Result<Value, RpcError>) {
 
 /// Move the harness in [payload] (`agent_retarget`): its pane restarts on the model.
 fn retarget(app: &mut App, machine: &str, payload: Value, name: &str, job: bool) {
+    if app.fleet.shares.contains_key(machine) {
+        if job { fail(app, crate::fleet::GUEST_MODEL) } else { app.say(crate::fleet::GUEST_MODEL, theme::WARN) }
+        return;
+    }
     let n = name.to_string();
     let agent = payload["agentId"].as_str().unwrap_or("").to_string();
     // Where it goes: a grid's or an API's model, or (clearGrid) back to its own login.
@@ -1889,6 +1893,7 @@ fn retarget(app: &mut App, machine: &str, payload: Value, name: &str, job: bool)
 /// A refusal of `agent_retarget` in words a person can act on.
 fn retarget_error(e: &RpcError) -> String {
     match e.code.as_str() {
+        "GUEST_NOT_ALLOWED" | "GUEST_HARNESS" => crate::fleet::GUEST_MODEL.into(),
         _ if !e.detail.is_empty() => e.detail.clone(),
         "UNSUPPORTED_ON_REMOTE" => "That machine cannot switch models — update Harness there.".into(),
         "OWNER_REQUIRED" => "Only this computer's owner can use its saved APIs.".into(),

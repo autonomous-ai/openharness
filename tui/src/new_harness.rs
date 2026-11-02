@@ -142,6 +142,9 @@ pub struct Form {
     resource_generation: String,
     projects: HashMap<String, Project>,
     modes: HashMap<String, String>,
+    /// The machine is shared with this account: a guest there starts Claude Code or Codex in its workspace
+    /// or a folder the owner shares, with no model or profile of the owner's (as_guest).
+    guest: bool,
 }
 impl Form {
     /// Where the form was last drawn, with a side chooser beside it (empty before its first frame).
@@ -170,13 +173,13 @@ impl Form {
         // The machine is its own row, here and on the page: not "project @ machine" in one.
         let mut fields = vec![Field::Task, Field::Agent, Field::Machine, Field::Project];
         if !page && git_controls { fields.extend([Field::Branch, Field::Worktree]); }
-        if self.draft.what.engine != "terminal" {
+        if self.draft.what.engine != "terminal" && !self.guest {
             fields.push(Field::Model);
         }
         if !data::modes(&self.draft.what.engine).is_empty() {
             fields.push(Field::Approvals);
         }
-        if self.draft.what.engine == "codex" && self.draft.model.is_none() {
+        if self.draft.what.engine == "codex" && self.draft.model.is_none() && !self.guest {
             fields.push(Field::Profile);
         }
         if page && git_controls { fields.extend([Field::Worktree, Field::Branch]); }
@@ -222,6 +225,13 @@ impl Form {
         }
     }
     fn project_name(&self) -> String {
+        // A guest's own space there, by name, as its Project chooser lists it.
+        let workspace = match &self.draft.project {
+            Project::New(n) => n.is_empty(),
+            Project::Folder(p) => !self.home.is_empty() && p.trim_end_matches('/') == self.home.trim_end_matches('/'),
+            Project::Clone(_) => false,
+        };
+        if self.guest && workspace { return "My workspace".into() }
         match &self.draft.project {
             Project::Folder(p) => p.trim_end_matches('/').rsplit('/').next()
                 .filter(|name| !name.is_empty()).unwrap_or("/").into(),
@@ -461,6 +471,7 @@ pub fn open(app: &mut App, machine: Option<String>, cwd: Option<String>) {
         }
         resolve_launch_machine(app, &mut form);
         refresh_form(app, &mut form);
+        if form.guest && !form.starting && form.attempt.is_none() { crate::input::load_guest_folders(app, form.draft.machine.clone()) }
         app.modal = Some(Modal::NewHarness(form));
         return;
     }
@@ -575,13 +586,16 @@ fn make_form(app: &mut App, machine: Option<String>, cwd: Option<String>, surfac
         resource_generation: String::new(),
         projects: HashMap::new(),
         modes: HashMap::new(),
+        guest: false,
     });
     refresh_form(app, &mut form);
+    if form.guest { as_guest(app, &mut form) }
     sync_git(app, &mut form, false);
     Some(form)
 }
 fn refresh_form(app: &App, form: &mut Form) {
     form.machine_label = machine_label(app, &form.draft.machine);
+    form.guest = app.fleet.shares.contains_key(app.fleet.launch_machine_id(&form.draft.machine));
     form.local_only = crate::local::is_local(&form.draft.machine) && app.daemon_down;
     // Git discovery can finish while its controls have keyboard focus.
     if matches!(form.focus, Field::Branch | Field::Worktree) && !form.fields().contains(&form.focus) {
@@ -1203,6 +1217,24 @@ fn set_machine(app: &mut App, form: &mut Form, machine: &str) {
     form.resource_generation.clear();
     crate::input::load_dsh(app, machine.into(), false);
     refresh_form(app, form);
+    if form.guest { as_guest(app, form) }
+}
+/// A guest on a machine shared with this account (docs/plans/2026-10-19-guest-machine-sharing-plan.md), as the
+/// desktop app starts one: in its workspace, on Claude Code unless it chose Codex — an engine or a Store harness
+/// it cannot start there gives way — with no model or profile of the owner's, and the folders the owner shares
+/// read again, since the owner may have changed them since this machine connected.
+fn as_guest(app: &mut App, form: &mut Form) {
+    if form.draft.what.dsh.is_some() || !matches!(form.draft.what.engine.as_str(), "claude" | "codex") {
+        set_engine(form, "claude");
+        form.draft.what = What { engine: "claude".into(), label: theme::engine_label("claude").into(), dsh: None };
+    }
+    form.draft.model = None;
+    form.draft.profile = None;
+    if !matches!(&form.draft.project, Project::Folder(p) if app.guest_folders.get(&form.draft.machine).into_iter().flatten().any(|(f, _)| f == p)) {
+        set_project(form, Project::New(String::new()));
+    }
+    if matches!(form.focus, Field::Model | Field::Profile) { form.focus = Field::Create }
+    crate::input::load_guest_folders(app, form.draft.machine.clone());
 }
 fn set_engine(form: &mut Form, engine: &str) {
     form.modes.insert(
@@ -2050,6 +2082,30 @@ mod tests {
         assert_eq!(ids(agent_rows(&app, "dee")), ["engine:claude", "engine:codex"]);
         // This account's own machines still offer every engine.
         assert!(agent_rows(&app, "local").len() > 2);
+    }
+
+    // The engine remembered here (OpenCode, the first default) is not one a guest can start: the daemon refused
+    // the launch and the form stayed locked on "Launch not confirmed". It gives way to Claude Code, as on the desktop,
+    // and the owner's models and profiles are never offered.
+    #[tokio::test]
+    async fn on_a_machine_shared_with_it_a_guest_starts_on_claude_code_in_its_workspace_with_no_model_or_profile() {
+        let mut app = app();
+        app.fleet.machines.push(crate::fleet::Machine { shared: false, id: "dee".into(), name: "dee-studio".into(), local: false,
+            status: "online".into(), reach: crate::fleet::Reach::Ready });
+        app.fleet.shares.insert("dee".into(), crate::fleet::MachineShare { owner: "Dee".into(), email: "dee@acme.io".into(), team: false });
+        app.homes.insert("dee".into(), "/Users/Shared/HarnessGuests/hg_0/work".into());
+        open(&mut app, Some("dee".into()), None);
+        let Some(Modal::NewHarness(mut form)) = app.modal.take() else { panic!("the form") };
+        assert_eq!(form.draft.what.engine, "claude");
+        assert!(form.draft.what.dsh.is_none());
+        assert!(!form.fields().contains(&Field::Model));
+        assert_eq!(form.project_name(), "My workspace");
+        set_engine(&mut form, "codex");
+        form.draft.what = What { engine: "codex".into(), label: theme::engine_label("codex").into(), dsh: None };
+        assert!(!form.fields().contains(&Field::Profile), "no profile of the owner's");
+        // Its own machine offers them again.
+        set_machine(&mut app, &mut form, "local");
+        assert!(form.fields().contains(&Field::Model) && form.fields().contains(&Field::Profile));
     }
 
     fn app() -> App {

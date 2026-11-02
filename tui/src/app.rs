@@ -2223,6 +2223,8 @@ impl App {
     }
 
     pub fn resume(&mut self, pane_id: u64) {
+        // A guest's harness is never relaunched: that would run it the owner's way, as the owner.
+        if self.panes.get(&pane_id).is_some_and(|p| self.fleet.shares.contains_key(&p.machine_id)) { return self.say(crate::fleet::GUEST_RELAUNCH, theme::WARN) }
         let Some(pane) = self.panes.get_mut(&pane_id) else { return };
         let Some(link) = self.links.get(&pane.machine_id).and_then(|s| s.link.clone()) else { return };
         // Selecting a saved conversation may have opened its old terminal already.

@@ -486,6 +486,12 @@ pub fn answer_text(q: &Question, typed: &str) -> Option<String> {
     }
 }
 
+/// What a guest on a machine shared with this account is told, before asking, of what its daemon refuses
+/// a guest (core/guestPolicy.ts): as the desktop app says it.
+pub const GUEST_RELAUNCH: &str = "On a computer shared with you, harnesses can't be restarted, resumed or forked. Start a new one.";
+pub const GUEST_MODEL: &str = "On a computer shared with you, a harness keeps the model it started with. Start a new one to use another.";
+pub const GUEST_AGENT: &str = "On a computer shared with you, a harness keeps the agent it started with. Start a new one.";
+
 /// A whole machine another account shares with this one (backend lib/machineAccess.ts): its owner
 /// named this account's address, or shared it with everyone at their domain ([team]) and this account
 /// added it. Used as the account's own; its owner alone renames, removes or shares it.

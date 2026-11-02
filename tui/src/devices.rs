@@ -809,9 +809,14 @@ fn run_act(app: &mut App, act: Act) {
                 again(app);
             });
         }
+        // One change to the sharing at a time: each is built from the list as last read, so a second one
+        // sent while the first waits (on the admin prompt, say) would undo it.
+        Act::Share { .. } | Act::ShareFolders { .. } if is_loading(app, SHARE_SAVING) => fail(app, "Wait for the last change to finish."),
         Act::Share { emails, same_domain, said } => {
+            loading(app, SHARE_SAVING, true);
             // The first share turns guest access on: each guest runs as their own account here, which takes one
             // admin prompt on this computer. A CLI from before guests says nothing of it, and is not asked.
+            // Asked once: whatever it answers, the share is saved, and the list says what is still missing.
             let access = app.devices.sharing.as_ref().and_then(|s| s.as_ref().ok()).and_then(|v| v.get("guestAccess")).and_then(Value::as_str).map(str::to_string);
             if (!emails.is_empty() || same_domain) && access.as_deref().is_some_and(|a| a != "ready") {
                 note(app, "Enter your password on this computer to finish setting up.");
@@ -819,29 +824,30 @@ fn run_act(app: &mut App, act: Act) {
                     match shared_answer(reply) {
                         Ok(v) => {
                             if let Some(Ok(sharing)) = app.devices.sharing.as_mut() { sharing["guestAccess"] = v.get("guestAccess").cloned().unwrap_or(json!("ready")) }
-                            run_act(app, Act::Share { emails, same_domain, said })
+                            save_share(app, emails, same_domain, said)
                         }
-                        Err(message) => { fail(app, message); again(app) }
+                        Err(message) => { loading(app, SHARE_SAVING, false); fail(app, message); again(app) }
                     }
                 });
                 return;
             }
-            note(app, "Saving…");
-            let payload = json!({ "action": "set", "emails": emails, "sameDomain": same_domain });
-            ask(app, Req::Rpc { ty: "shared_machines", payload }, None, move |app, reply| {
-                match shared_answer(reply) {
-                    Ok(v) => { app.devices.sharing = Some(Ok(v)); note(app, said) }
-                    Err(message) => fail(app, message),
-                }
-                again(app);
-            });
+            save_share(app, emails, same_domain, said)
         }
         Act::ShareFolders { folders, said } => {
+            loading(app, SHARE_SAVING, true);
             note(app, "Saving…");
             let folders: Vec<Value> = folders.into_iter().map(|(path, write)| json!({ "path": path, "write": write })).collect();
             ask(app, Req::Rpc { ty: "shared_machines", payload: json!({ "action": "set_folders", "folders": folders }) }, None, move |app, reply| {
+                loading(app, SHARE_SAVING, false);
                 match shared_answer(reply) {
-                    Ok(v) => { app.devices.sharing = Some(Ok(v)); note(app, said) }
+                    Ok(v) => {
+                        app.devices.sharing = Some(Ok(v));
+                        // A folder no longer shared has no level of its own: back to the sharing.
+                        if let Some(path) = app.devices.sub.as_deref().and_then(|s| s.strip_prefix("folder:")) {
+                            if !sharing_folders(app).iter().any(|(p, _)| p == path) { app.devices.sub = Some("share:".into()) }
+                        }
+                        note(app, said)
+                    }
                     Err(message) => fail(app, message),
                 }
                 again(app);
@@ -1136,8 +1142,11 @@ pub fn key(app: &mut App, kind: PickerKind, picker: Picker, key: KeyEvent) -> Re
 fn step_back(app: &mut App, view: View) {
     app.devices.footer = None;
     if let Some(sub) = app.devices.sub.take() {
+        // Out of a shared folder, to the sharing it is in.
+        let (to, row) = match sub.strip_prefix("folder:") { Some(path) => (Some("share:".to_string()), format!("shr:folder:{path}")), None => (None, sub) };
+        app.devices.sub = to;
         again(app);
-        if let Some(p) = picker_mut(app) { p.clear_query(); p.select(&sub) }
+        if let Some(p) = picker_mut(app) { p.clear_query(); p.select(&row) }
         return;
     }
     app.devices.phone.open = false;
@@ -1256,6 +1265,23 @@ fn machine_action(app: &mut App, rest: &str) {
     }
 }
 
+/// A change to this computer's sharing is on its way (Act::Share, Act::ShareFolders).
+const SHARE_SAVING: &str = "share-saving";
+
+/// Who this computer is shared with, saved (`set`); the change already marked SHARE_SAVING.
+fn save_share(app: &mut App, emails: Vec<String>, same_domain: bool, said: String) {
+    note(app, "Saving…");
+    let payload = json!({ "action": "set", "emails": emails, "sameDomain": same_domain });
+    ask(app, Req::Rpc { ty: "shared_machines", payload }, None, move |app, reply| {
+        loading(app, SHARE_SAVING, false);
+        match shared_answer(reply) {
+            Ok(v) => { app.devices.sharing = Some(Ok(v)); note(app, said) }
+            Err(message) => fail(app, message),
+        }
+        again(app);
+    });
+}
+
 /// Enter on a row of this computer's sharing.
 fn share_action(app: &mut App, rest: &str) {
     if rest == "reload" { return load_sharing(app) }
@@ -1277,8 +1303,11 @@ fn share_action(app: &mut App, rest: &str) {
             confirm(app, format!("Stop sharing {here} with {email}?"), Act::Share { emails: rest, same_domain, said: format!("No longer shared with {email}") })
         }
         ("guests-on", _) => {
+            if is_loading(app, SHARE_SAVING) { return fail(app, "Wait for the last change to finish.") }
+            loading(app, SHARE_SAVING, true);
             note(app, "Enter your password on this computer to finish setting up.");
             ask(app, Req::Rpc { ty: "shared_machines", payload: json!({ "action": "enable_guests" }) }, None, move |app, reply| {
+                loading(app, SHARE_SAVING, false);
                 match shared_answer(reply) {
                     Ok(v) => {
                         if let Some(Ok(sharing)) = app.devices.sharing.as_mut() { sharing["guestAccess"] = v.get("guestAccess").cloned().unwrap_or(json!("ready")) }
@@ -1291,7 +1320,17 @@ fn share_action(app: &mut App, rest: &str) {
         }
         ("folder-read", _) => entry(app, Entry::ShareFolder { write: false }, "Share a folder they can view", "", false),
         ("folder-write", _) => entry(app, Entry::ShareFolder { write: true }, "Share a folder they can edit", "", false),
-        ("folder", path) => {
+        ("folder", path) => sub(app, format!("folder:{path}")),
+        // How much people may do in a folder, as a Mac's File Sharing says it (the desktop's Can view / Can edit).
+        ("view" | "edit", path) => {
+            let write = rest.starts_with("edit:");
+            let folders = sharing_folders(app);
+            if !folders.iter().any(|(p, _)| p == path) { return fail(app, format!("{path} is no longer shared")) }
+            if folders.iter().any(|(p, w)| p == path && *w == write) { return note(app, if write { "They can already edit it" } else { "They can already view it" }) }
+            let folders = folders.into_iter().map(|(p, w)| if p == path { (p, write) } else { (p, w) }).collect();
+            run_act(app, Act::ShareFolders { folders, said: format!("{}: {}", folder_name(path), if write { "can edit" } else { "can view" }) })
+        }
+        ("unshare", path) => {
             let rest: Vec<(String, bool)> = sharing_folders(app).into_iter().filter(|(p, _)| p != path).collect();
             confirm(app, format!("Stop sharing {path}?"), Act::ShareFolders { folders: rest, said: format!("Stopped sharing {path}") })
         }
@@ -1380,6 +1419,7 @@ pub fn fill(app: &App, view: View, picker: &mut Picker) {
         View::Connect => connect_rows(app),
         View::Machines => match app.devices.sub.as_deref() {
             Some("share:") => share_rows(app),
+            Some(sub) if sub.starts_with("folder:") => folder_rows(app, &sub["folder:".len()..]),
             Some(sub) => match sub.strip_prefix("m:") { Some(id) => action_rows(app, id), None => machines_rows(app) },
             None => machines_rows(app),
         },
@@ -1565,10 +1605,31 @@ fn share_rows(app: &App) -> Vec<Row> {
     rows.push(Row::new("shr:folder-read", "Share a folder they can view…").group(folders).extra("folder share read").lead(dot("+", theme::TEAL)));
     rows.push(Row::new("shr:folder-write", "Share a folder they can edit…").group(folders).extra("folder share edit write").lead(dot("+", theme::TEAL)));
     for (path, write) in sharing_folders(app) {
-        rows.push(Row::new(format!("shr:folder:{path}"), path.clone()).group(folders).extra("folder remove").lead(dot("·", theme::MUTED))
-            .right(if write { "can edit" } else { "read only" }));
+        rows.push(Row::new(format!("shr:folder:{path}"), path.clone()).group(folders).extra("folder view edit remove").lead(dot("·", theme::MUTED))
+            .right(if write { "can edit" } else { "can view" }));
     }
     rows
+}
+
+/// A shared folder's own level: how much people may do in it, or stop sharing it.
+fn folder_rows(app: &App, path: &str) -> Vec<Row> {
+    let group = folder_name(path);
+    let Some(write) = sharing_folders(app).into_iter().find(|(p, _)| p == path).map(|(_, w)| w) else {
+        return vec![info("folder-gone", format!("{path} is no longer shared"), &group)];
+    };
+    let pick = |on: bool| if on { dot("✓", theme::ONLINE) } else { dot(" ", theme::MUTED) };
+    vec![
+        Row::new(format!("shr:view:{path}"), "Can view").group(group.clone()).extra("read only access").lead(pick(!write))
+            .detail(vec![span("open and read files", fg(theme::MUTED))]),
+        Row::new(format!("shr:edit:{path}"), "Can edit").group(group.clone()).extra("write access").lead(pick(write))
+            .detail(vec![span("also change, add and delete files", fg(theme::MUTED))]),
+        Row::new(format!("shr:unshare:{path}"), "Stop sharing…").group(group).extra("remove folder").lead(dot("✗", theme::MUTED)),
+    ]
+}
+
+/// A folder by its name, as the desktop's sharing lists it ("/" for the root).
+fn folder_name(path: &str) -> String {
+    path.trim_end_matches('/').rsplit('/').next().filter(|n| !n.is_empty()).unwrap_or("/").to_string()
 }
 
 /// Who uses this computer through its sharing now, and how it reached them (`email` or `domain`).
@@ -1797,7 +1858,21 @@ fn share_preview(app: &App, rest: &str) -> Vec<Line<'static>> {
         ("folder", path) => {
             let write = sharing_folders(app).iter().any(|(p, w)| p == path && *w);
             let mut out = vec![bold(path.to_string()).into(), Line::raw(""), kv("access", if write { "can edit" } else { "can view" })];
-            out.extend(enter_does("asks y/n, then stops sharing it"));
+            out.extend(enter_does("choose whether they can view or edit it, or stop sharing it"));
+            out
+        }
+        ("view" | "edit", path) => {
+            let write = rest.starts_with("edit:");
+            let mut out = vec![bold(if write { "Can edit" } else { "Can view" }).into(), Line::raw(""),
+                Line::raw(if write { "People you share with can open it and change, add or delete files." } else { "People you share with can open it and read the files." })];
+            if write { out.extend([Line::raw(""), Line::styled("They see everything inside, even passwords and keys.", fg(theme::WARN))]) }
+            let now = sharing_folders(app).iter().any(|(p, w)| p == path && *w == write);
+            out.extend(enter_does(if now { "nothing: it is shared this way now".to_string() } else { format!("shares {} this way", folder_name(path)) }));
+            out
+        }
+        ("unshare", path) => {
+            let mut out = vec![bold(format!("Stop sharing {}", folder_name(path))).into(), Line::raw(""), Line::raw(path.to_string())];
+            out.extend(enter_does("asks y/n, then stops sharing it — people lose access at once"));
             out
         }
         _ => vec![],
@@ -1859,6 +1934,7 @@ fn head(buf: &mut Buffer, app: &App, title: &str, x: u16, y: u16, right: u16, c:
     let mut at = x + settings::put(buf, x, y, right.saturating_sub(x), title, c.base.add_modifier(Modifier::BOLD));
     let level = match app.devices.sub.as_deref() {
         Some("share:") => Some(format!("Share {}", app.fleet.local_machine_name())),
+        Some(sub) if sub.starts_with("folder:") => Some(format!("Share {}  ›  {}", app.fleet.local_machine_name(), folder_name(&sub["folder:".len()..]))),
         sub => sub.and_then(|s| s.strip_prefix("m:")).map(|id| name_of(app, id)),
     };
     app.devices.back_at.set(level.as_ref().map(|_| (app.size, Rect::new(x, y, at - x, 1))));
@@ -2351,6 +2427,57 @@ mod tests {
         assert!(has(&log, &rpc("set", json!({ "emails": ["ann@gmail.com"], "sameDomain": true }))));
     }
 
+    // The admin prompt is asked for once a share: a helper that still is not ready after it (not-authorized, say)
+    // leaves the share saved and the Turn on sharing row to say so, never a second prompt straight after.
+    #[test]
+    fn a_share_asks_for_the_admin_prompt_once_even_when_guest_access_is_still_not_ready_after_it() {
+        let mut app = app((150, 42));
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let seen = log.clone();
+        let policy = Arc::new(Mutex::new(json!({ "emails": [], "sameDomain": false, "domain": "acme.io", "members": [], "guestAccess": "missing" })));
+        app.devices.runner = Some(Box::new(move |req: &Req| {
+            seen.lock().unwrap().push(req.clone());
+            let Req::Rpc { ty: "shared_machines", payload } = req else { return world(req) };
+            let mut p = policy.lock().unwrap();
+            Some(Reply::Rpc(Ok(match payload["action"].as_str() {
+                Some("enable_guests") => { p["guestAccess"] = json!("not-authorized"); json!({ "ok": true, "guestAccess": "not-authorized" }) }
+                Some("set") => { p["emails"] = payload["emails"].clone(); p["sameDomain"] = payload["sameDomain"].clone(); p.clone() }
+                _ => p.clone(),
+            })))
+        }));
+        open(&mut app, View::Machines);
+        go_to(&mut app, "share:");
+        press(&mut app, KeyCode::Enter);
+        go_to(&mut app, "shr:domain");
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('Y'));
+        let asked: Vec<String> = log.lock().unwrap().iter().filter_map(|r| match r { Req::Rpc { payload, .. } => payload["action"].as_str().map(str::to_string), _ => None }).collect();
+        assert_eq!(asked.iter().filter(|a| *a != "get").cloned().collect::<Vec<_>>(), ["enable_guests", "set"]);
+        assert!(row_of(&app, "shr:guests-on").is_some(), "the list says people can't use it yet");
+        assert!(!is_loading(&app, SHARE_SAVING));
+    }
+
+    // Each change is built from the list as last read: a second one while the first is on its way would undo it.
+    #[test]
+    fn a_change_to_the_sharing_waits_for_the_last_one() {
+        let mut app = app((150, 42));
+        let log = sharing_world(&mut app);
+        open(&mut app, View::Machines);
+        go_to(&mut app, "share:");
+        press(&mut app, KeyCode::Enter);
+        loading(&mut app, SHARE_SAVING, true);
+        go_to(&mut app, "shr:domain");
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('Y'));
+        assert!(!log.lock().unwrap().iter().any(|r| matches!(r, Req::Rpc { payload, .. } if payload["action"] == "set")));
+        assert!(app.devices.footer.as_ref().is_some_and(|(t, err, _)| *err && t.contains("last change")));
+        loading(&mut app, SHARE_SAVING, false);
+        go_to(&mut app, "shr:domain");
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('Y'));
+        assert!(has(&log, &rpc("set", json!({ "emails": [], "sameDomain": true }))));
+    }
+
     #[test]
     fn shared_already_it_says_guests_wait_on_guest_access_and_turns_it_on() {
         // Not shared yet: nothing to say.
@@ -2397,7 +2524,7 @@ mod tests {
         assert!(matches!(&app.devices.ask, Some(Ask::Confirm { question, .. }) if question.contains("even passwords and keys")), "{:?}", app.devices.ask);
         press(&mut app, KeyCode::Char('Y'));
         assert!(has(&log, &rpc("set_folders", json!({ "folders": [{ "path": "/Users/dee/docs", "write": false }] }))));
-        assert_eq!(row_of(&app, "shr:folder:/Users/dee/docs").map(|r| r.right.clone()), Some("read only".into()));
+        assert_eq!(row_of(&app, "shr:folder:/Users/dee/docs").map(|r| r.right.clone()), Some("can view".into()));
 
         go_to(&mut app, "shr:folder-write");
         press(&mut app, KeyCode::Enter);
@@ -2414,11 +2541,30 @@ mod tests {
         press(&mut app, KeyCode::Enter);
         assert!(app.devices.footer.as_ref().is_some_and(|(t, err, _)| !err && t.contains("already")));
 
-        // Taken back after a yes.
+        // A folder opens its own level: from view to edit there, at once, as the desktop's Can view / Can edit menu
+        // changes it; Esc goes back to the sharing, on that folder.
         go_to(&mut app, "shr:folder:/Users/dee/docs");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.devices.sub.as_deref(), Some("folder:/Users/dee/docs"));
+        go_to(&mut app, "shr:edit:/Users/dee/docs");
+        press(&mut app, KeyCode::Enter);
+        assert!(has(&log, &rpc("set_folders", json!({ "folders": [{ "path": "/Users/dee/docs", "write": true }, { "path": "/Users/dee/code/app", "write": true }] }))));
+        assert_eq!(row_of(&app, "shr:edit:/Users/dee/docs").map(|r| r.lead.iter().map(|s| s.content.to_string()).collect::<String>()), Some("✓ ".into()));
+        go_to(&mut app, "shr:view:/Users/dee/docs");
+        press(&mut app, KeyCode::Enter);
+        assert!(has(&log, &rpc("set_folders", json!({ "folders": [{ "path": "/Users/dee/docs", "write": false }, { "path": "/Users/dee/code/app", "write": true }] }))));
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.devices.sub.as_deref(), Some("share:"));
+        assert_eq!(row_of(&app, "shr:folder:/Users/dee/docs").map(|r| r.right.clone()), Some("can view".into()));
+
+        // Taken back after a yes, from its level, which then gives way to the sharing.
+        go_to(&mut app, "shr:folder:/Users/dee/docs");
+        press(&mut app, KeyCode::Enter);
+        go_to(&mut app, "shr:unshare:/Users/dee/docs");
         press(&mut app, KeyCode::Enter);
         press(&mut app, KeyCode::Char('Y'));
         assert!(has(&log, &rpc("set_folders", json!({ "folders": [{ "path": "/Users/dee/code/app", "write": true }] }))));
+        assert_eq!(app.devices.sub.as_deref(), Some("share:"));
         assert!(row_of(&app, "shr:folder:/Users/dee/docs").is_none());
         let text = |id: &str| preview(&app, View::Machines, id).iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>()).collect::<Vec<_>>().join("\n");
         assert!(text("shr:folder-write").contains("even passwords and keys"));

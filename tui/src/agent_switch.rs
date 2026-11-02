@@ -285,7 +285,7 @@ fn source_for(app: &App, pane: u64) -> Option<Agent> {
 
 pub fn pane_supports(app: &App, pane: u64) -> bool {
     source_for(app, pane).is_some_and(|a| a.engine != "terminal" && a.dsh_id != "autonomous/pair"
-        && app.fleet.machine(&a.machine_id).is_some_and(|m| !m.shared))
+        && app.fleet.machine(&a.machine_id).is_some_and(|m| !m.shared) && !app.fleet.shares.contains_key(&a.machine_id))
 }
 
 pub fn pane_label(app: &App, pane: u64) -> String {
@@ -309,6 +309,7 @@ fn engines(app: &App, source: &Agent) -> Vec<String> {
 pub fn open(app: &mut App, pane: u64) {
     if app.read_only() { app.error("This client is read-only"); return }
     let Some(source) = source_for(app, pane) else { app.error("This harness is no longer available"); return };
+    if app.fleet.shares.contains_key(&source.machine_id) { app.error(crate::fleet::GUEST_AGENT); return }
     if !pane_supports(app, pane) { app.error(if source.dsh_id == "autonomous/pair" { "Open this collection in Companions to change its agent" } else { "This pane cannot change agents" }); return }
     // Reopening is a fresh selection. A stale preparation may be discarded only before
     // Close was sent; an uncertain Close or create keeps its original receipt.

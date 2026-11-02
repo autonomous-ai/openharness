@@ -1097,6 +1097,7 @@ pub fn run(app: &mut App, command: &str) {
         }
         "clone" => {
             let Some((machine, agent)) = focused_agent(app) else { app.say("This pane has no harness in it", theme::MUTED); return };
+            if app.fleet.shares.contains_key(&machine) { return app.say(crate::fleet::GUEST_RELAUNCH, theme::WARN) }
             let Some(link) = app.link(&machine) else { return };
             if app.capture.is_none() { app.say("Cloning…", theme::SOFT) }
             app.spawn(async move { link.rpc("agent_fork", json!({ "agentId": agent, "creationId": uuid::Uuid::new_v4().to_string() }), Duration::from_secs(120)).await }, move |app, reply| match reply {
@@ -1240,6 +1241,7 @@ pub fn harness_verb(app: &mut App, verb: &str, (machine, agent): (String, String
 }
 
 fn clone_on(app: &mut App, machine: String, agent: String) {
+    if app.fleet.shares.contains_key(&machine) { return app.say(crate::fleet::GUEST_RELAUNCH, theme::WARN) }
     let Some(link) = app.link(&machine) else { return };
     if app.capture.is_none() { app.say("Cloning…", theme::SOFT) }
     app.spawn(async move { link.rpc("agent_fork", json!({ "agentId": agent, "creationId": uuid::Uuid::new_v4().to_string() }), Duration::from_secs(120)).await }, move |app, reply| match reply {
@@ -1252,6 +1254,8 @@ fn clone_on(app: &mut App, machine: String, agent: String) {
 }
 
 fn agent_rpc_on(app: &mut App, machine: String, agent: String, ty: &'static str, done: &'static str) {
+    // A guest's harness is never relaunched: that would run it the owner's way, as the owner.
+    if matches!(ty, "agent_restart" | "agent_resume") && app.fleet.shares.contains_key(&machine) { return app.say(crate::fleet::GUEST_RELAUNCH, theme::WARN) }
     let Some(link) = app.link(&machine) else { return };
     app.spawn(async move { link.rpc(ty, json!({ "agentId": agent }), Duration::from_secs(120)).await }, move |app, reply| match reply {
         Ok(_) => { app.say(done, theme::ONLINE); app.relist(&machine) }
@@ -1273,6 +1277,8 @@ pub(crate) fn load_guest_folders(app: &mut App, machine: String) {
         let folders = reply.get("folders").and_then(Value::as_array).into_iter().flatten()
             .filter_map(|f| Some((f.get("path")?.as_str().filter(|p| p.starts_with('/'))?.to_string(), f.get("write") == Some(&Value::Bool(true))))).collect();
         app.guest_folders.insert(machine, folders);
+        // An open New Harness lists them now.
+        crate::new_harness::refresh(app);
     });
 }
 

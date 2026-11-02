@@ -27,9 +27,15 @@ pub struct RpcError {
     pub detail: String,
 }
 
+/// Refusals a machine shared with this account answers with a sentence for people
+/// (core/guestPolicy.ts, core/agents/guestCreate.ts): shown as said, without the code.
+const SAID_FOR_PEOPLE: &[&str] = &["GUEST_NOT_ALLOWED", "NOT_YOUR_HARNESS", "GUEST_HARNESS", "GUEST_UNSUPPORTED"];
+
 impl std::fmt::Display for RpcError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.detail.is_empty() || self.detail == self.code { write!(f, "{}", self.code) } else { write!(f, "{}: {}", self.code, self.detail) }
+        if self.detail.is_empty() || self.detail == self.code { write!(f, "{}", self.code) }
+        else if SAID_FOR_PEOPLE.contains(&self.code.as_str()) { write!(f, "{}", self.detail) }
+        else { write!(f, "{}: {}", self.code, self.detail) }
     }
 }
 
@@ -255,11 +261,13 @@ impl Link {
         }
     }
 
-    /// `request`, with an `error` field in the reply returned as an error.
+    /// `request`, with an `error` field in the reply returned as an error: its `detail`, or the
+    /// `message` a guest's refusal carries (backendSocket.ts).
     pub async fn rpc(&self, ty: &str, payload: Value, timeout: Duration) -> Result<Value, RpcError> {
         let (_, reply) = self.request(ty, payload, timeout).await?;
         if let Some(code) = reply.get("error").and_then(Value::as_str) {
-            return Err(RpcError::new(code, reply.get("detail").and_then(Value::as_str).unwrap_or("")));
+            let said = reply.get("detail").or_else(|| reply.get("message")).and_then(Value::as_str).unwrap_or("");
+            return Err(RpcError::new(code, said));
         }
         Ok(reply)
     }
@@ -321,6 +329,15 @@ fn dechunk(body: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod recovery_tests {
     use super::*;
+
+    // A guest was shown "GUEST_NOT_ALLOWED" for a restart, a clone or a model on a machine shared with it: the
+    // sentence it is told is what it reads. Other refusals keep their code, for a report.
+    #[test]
+    fn a_refusal_said_for_people_reads_as_said() {
+        assert_eq!(RpcError::new("GUEST_NOT_ALLOWED", "That isn't available on a computer shared with you.").to_string(), "That isn't available on a computer shared with you.");
+        assert_eq!(RpcError::new("GUEST_NOT_ALLOWED", "").to_string(), "GUEST_NOT_ALLOWED");
+        assert_eq!(RpcError::new("TIMEOUT", "no answer within 20s").to_string(), "TIMEOUT: no answer within 20s");
+    }
     use std::os::unix::fs::PermissionsExt;
 
     struct TestSocket(PathBuf);
