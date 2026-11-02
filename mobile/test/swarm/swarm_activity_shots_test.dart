@@ -490,7 +490,7 @@ void main() {
 
       const tabs = [
         'swarm-tab-home',
-        'swarm-tab-buddies',
+        'swarm-tab-buddy',
         'swarm-tab-activity',
         'swarm-tab-you',
       ];
@@ -535,9 +535,9 @@ void main() {
         'swarm-activity-reply-',
       ]);
 
-      await openTab('buddies');
-      await capture('buddies');
-      await captureTargets('buddies-targets', [...tabs, 'swarm-buddies-row-']);
+      await openTab('buddy');
+      await capture('buddy');
+      await captureTargets('buddy-targets', tabs);
 
       await tester.pumpWidget(const SizedBox());
       host.dispose();
