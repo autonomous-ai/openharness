@@ -3181,6 +3181,7 @@ class _SuperTabViewState extends State<SuperTabView>
       mark: line == null ? null : superTabTaskMark(line),
       rows: () => _shownMessages(open.id),
       row: (message) => _message(message, false, byId, inThread: true),
+      outgoing: (sent) => _outgoingRow(sent, byId, grouped: false),
       onClose: () => setState(() => _openedTask = null),
       onOpenInFull: () {
         setState(() => _openedTask = null);

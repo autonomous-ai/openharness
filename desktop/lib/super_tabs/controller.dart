@@ -1597,6 +1597,8 @@ class SuperTabController extends ChangeNotifier {
     bool newSession = false,
     VoidCallback? onSending,
     ({String conversationId, String root})? to,
+    bool plain = false,
+    List<String> recipients = const [],
   }) async {
     final open = to ?? openedThread;
     if (open == null || accessRevoked) return null;
@@ -1643,8 +1645,9 @@ class SuperTabController extends ChangeNotifier {
       'type': 'message.send',
       'conversationId': open.conversationId,
       'text': text,
-      'replyTo': open.root,
-      'recipientIds': addressed,
+      // With [plain], a message of [to]'s conversation, not a reply in a thread.
+      'replyTo': plain ? null : open.root,
+      'recipientIds': addressed.isEmpty ? recipients : addressed,
       if (tagged.isNotEmpty) 'mentions': tagged,
       // A session's thread stays in the thread: never also sent.
       if (alsoSend && !newSession) 'alsoSend': true,

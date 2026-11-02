@@ -211,6 +211,7 @@ class SuperTabTaskPanel extends StatefulWidget {
     this.mark,
     required this.rows,
     required this.row,
+    required this.outgoing,
     required this.onClose,
     required this.onOpenInFull,
   });
@@ -230,6 +231,9 @@ class SuperTabTaskPanel extends StatefulWidget {
 
   final Widget Function(SuperTabMessage message) row;
 
+  /// A reply on its way, or refused with its Retry, as the chat draws one.
+  final Widget Function(SuperTabOutgoing sent) outgoing;
+
   final VoidCallback onClose;
   final VoidCallback onOpenInFull;
 
@@ -248,6 +252,7 @@ class _SuperTabTaskPanelState extends State<SuperTabTaskPanel> {
   void initState() {
     super.initState();
     c.addListener(_follow);
+    _reply.text = c.threadDraft(widget.taskId);
     _follow();
   }
 
@@ -260,6 +265,7 @@ class _SuperTabTaskPanelState extends State<SuperTabTaskPanel> {
     }
     if (old.taskId != widget.taskId) {
       _read = -1;
+      _reply.text = c.threadDraft(widget.taskId);
       _follow();
     }
   }
@@ -280,18 +286,27 @@ class _SuperTabTaskPanelState extends State<SuperTabTaskPanel> {
     unawaited(c.loadTaskMessages(widget.taskId));
   }
 
-  /// A plain message in the task's own conversation.
+  bool get _busy => c.uploading || c.saving || c.hasPendingAction;
+
+  /// A plain message in the task's own conversation, to the agent with the
+  /// task. Refused while something else saves: the words stay in the box.
   Future<void> _send() async {
-    final text = _reply.text.trim();
-    if (text.isEmpty || !c.canQueueText) return;
-    _reply.clear();
-    await c.command({
-      'type': 'message.send',
-      'conversationId': widget.taskId,
-      'text': text,
-      'replyTo': null,
-      'recipientIds': const <String>[],
-    });
+    final id = widget.taskId;
+    final files = c.threadAttachments(id, id);
+    if (_busy || (_reply.text.trim().isEmpty && files.isEmpty)) return;
+    final task = c.snapshot?.conversation(id);
+    final assignee = task?.assignment?['agentId'];
+    c.setThreadDraft(id, _reply.text, conversationId: id);
+    await c.sendThreadReply(
+      to: (conversationId: id, root: id),
+      plain: true,
+      recipients: [
+        if (assignee is String && task!.agentIds.contains(assignee)) assignee,
+      ],
+      onSending: () {
+        if (mounted && widget.taskId == id) _reply.clear();
+      },
+    );
   }
 
   @override
@@ -375,9 +390,12 @@ class _SuperTabTaskPanelState extends State<SuperTabTaskPanel> {
             ),
           ),
           Expanded(
-            child: ListView.builder(
-              itemCount: rows.length,
-              itemBuilder: (context, index) => widget.row(rows[index]),
+            child: ListView(
+              children: [
+                for (final message in rows) widget.row(message),
+                for (final sent in c.outgoing(widget.taskId))
+                  if (sent.thread == null) widget.outgoing(sent),
+              ],
             ),
           ),
           if (c.canWrite && task?.archived == false)
@@ -388,10 +406,19 @@ class _SuperTabTaskPanelState extends State<SuperTabTaskPanel> {
               files: c.threadAttachments(widget.taskId, widget.taskId),
               enabled: true,
               writable: true,
-              busy: !c.canQueueText,
-              error: null,
-              onEdited: (_) {},
+              busy: _busy,
+              error:
+                  c.composerError(widget.taskId) ??
+                  c.threadComposerError(widget.taskId, widget.taskId),
+              onEdited: (text) => c.setThreadDraft(
+                widget.taskId,
+                text,
+                conversationId: widget.taskId,
+              ),
               onSend: () => unawaited(_send()),
+              surfaceKey: const ValueKey('super-task-reply-surface'),
+              fieldKey: const ValueKey('super-task-reply'),
+              sendKey: const ValueKey('super-task-send'),
             ),
         ],
       );
