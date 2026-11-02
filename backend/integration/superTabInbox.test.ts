@@ -522,6 +522,32 @@ describe('reading a chat never reads a reply only in a thread (Diego, 11-01)', (
     expect((await marksOf(s.tabId, peer))[roots[0]!]).toEqual({ sequence: old, follow: null })
   })
 
+  it('advances through a row ceiling containing no replies and leaves another chat unchanged', async () => {
+    const s = await scene()
+    const [root] = await insert(s.tabId, s.web, [{ text: 'Question', author: personAuthor(peer) }])
+    await markRead(s.tabId, s.web, await sequenceOf(root!), peer)
+    const main = await insert(s.tabId, s.web, Array.from({ length: 5_001 }, (_, i) => ({ text: `Main ${i}`, author: personAuthor(owner) })))
+    const top = await newest(s.tabId, s.web)
+    const first = await post(`/api/super-tabs/${s.tabId}/conversations/${s.web}/read`, peer, { sequence: top })
+    expect(first.body.data.sequence).toBe(await sequenceOf(main[4_999]!))
+    await markRead(s.tabId, s.web, top, peer)
+    expect((await db.superTabReadMark.findUniqueOrThrow({ where: { id: stableId(s.tabId, s.web, peer.sub) } })).sequence).toBe(top)
+    expect(await db.superTabReadMark.count({ where: { tabId: s.tabId, personId: peer.sub, conversationId: { not: s.web } } })).toBe(0)
+  })
+
+  it('does not spend the thread-mark budget on threads the person is not in', async () => {
+    const s = await scene()
+    const roots = await insert(s.tabId, s.web, Array.from({ length: 51 }, (_, i) => ({ text: `Question ${i}`, author: personAuthor(i === 0 ? peer : owner) })))
+    const old = await sequenceOf(roots.at(-1)!)
+    await markRead(s.tabId, s.web, old, peer)
+    await insert(s.tabId, s.web, roots.map(thread => ({ text: 'Answer', author: agentAuthor(s.worker), thread })))
+    await insert(s.tabId, s.web, [{ text: 'Main', author: personAuthor(owner) }])
+    const top = await newest(s.tabId, s.web)
+    const response = await post(`/api/super-tabs/${s.tabId}/conversations/${s.web}/read`, peer, { sequence: top })
+    expect(response.body.data.sequence).toBe(top)
+    expect(await marksOf(s.tabId, peer)).toEqual({ [roots[0]!]: { sequence: old, follow: null } })
+  })
+
   it('does so for each thread the person started, replied in, was tagged in or follows, and for no other', async () => {
     const s = await scene()
     const [started, replied, taggedRoot, taggedReply, followed, notTheirs] = await insert(s.tabId, s.web, [
