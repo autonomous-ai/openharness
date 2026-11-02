@@ -1858,6 +1858,9 @@ model SwarmAgent {
 
   @@unique([tabId, key])
   @@index([tabId, changedAt])
+  /// A Swarm's live agents (parts/light.ts, load.ts, read/host.ts): without it the read planned on [tabId, changedAt] and
+  /// examined every tombstone too (prod 2026-11-02: 1,070 examined for 40 returned).
+  @@index([tabId, deleted])
   @@index([machineId, deleted])
   @@index([tabId, contributorId])
   /// One agent's registrations in every Swarm (confidential.ts, sessionScope.ts): host rows read them on every changed tab.
