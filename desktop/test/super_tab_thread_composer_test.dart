@@ -93,6 +93,7 @@ void main() {
     WidgetTester tester,
     ConversationServer server, {
     String account = 'owner',
+    Map<String, dynamic>? initial,
   }) async {
     // One logical pixel per device pixel, so the platform's drop position
     // needs no scaling on any host.
@@ -100,7 +101,7 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     await tester.binding.setSurfaceSize(const Size(1400, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final c = shown = server.controller(account: account);
+    final c = shown = server.controller(account: account, initial: initial);
     await c.refresh();
     await tester.pumpWidget(
       MaterialApp(
@@ -632,18 +633,89 @@ void main() {
       expect(jsonEncode(server.saved), isNot(contains('private words')));
     });
 
-    test('the thread open beside the chat opens again, with its replies', () async {
-      final server = threaded();
-      final c = server.controller();
-      await c.refresh();
-      c.openThread('message-1');
-      await c.flush();
-      c.dispose();
-      final next = await again(server);
-      expect(next.openedThread, (conversationId: 'lead', root: 'message-1'));
-      await next.refresh();
-      await pumpEventQueue();
-      expect(next.threadMessages('message-1'), isNotEmpty);
+    test(
+      'the thread open beside the chat opens again, with its replies',
+      () async {
+        final server = threaded();
+        final c = server.controller();
+        await c.refresh();
+        c.openThread('message-1');
+        await c.flush();
+        c.dispose();
+        final next = await again(server);
+        expect(next.openedThread, (conversationId: 'lead', root: 'message-1'));
+        await next.refresh();
+        await pumpEventQueue();
+        expect(next.threadMessages('message-1'), isNotEmpty);
+      },
+    );
+
+    // The read mark is the account's, on every device: a controller can open with nothing on screen.
+    group('a thread that opened again', () {
+      Future<(ConversationServer, SuperTabController)> restored() async {
+        final server = threaded();
+        final c = server.controller();
+        await c.refresh();
+        c.openThread('message-1');
+        await c.flush();
+        await pumpEventQueue();
+        c.dispose();
+        server.threadMarkPosts.clear();
+        server.append('A reply while the Swarm was closed.');
+        server.messages.last
+          ..['thread'] = 'message-1'
+          ..['replyTo'] = 'message-1';
+        return (server, await again(server));
+      }
+
+      test('marks nothing read while its pane is not on screen', () async {
+        final (server, next) = await restored();
+        await next.refresh();
+        await pumpEventQueue();
+        await next.refresh();
+        await pumpEventQueue();
+        expect(next.threadMessages('message-1'), isNotEmpty);
+        expect(server.threadMarkPosts, isEmpty);
+        final thread = next.thread('lead', 'message-1')!;
+        expect(next.threadUnread(thread), isTrue);
+      });
+
+      test('marks it read once its pane is shown', () async {
+        final (server, next) = await restored();
+        await next.refresh();
+        await pumpEventQueue();
+        next.threadPaneShown();
+        await pumpEventQueue();
+        expect(server.threadMarkPosts, isNotEmpty);
+        final thread = next.thread('lead', 'message-1')!;
+        expect(next.threadUnread(thread), isFalse);
+      });
+
+      test('opened by hand marks it read as before', () async {
+        final (server, next) = await restored();
+        await next.refresh();
+        await pumpEventQueue();
+        next.openThread('message-1');
+        await next.loadThread();
+        await pumpEventQueue();
+        expect(server.threadMarkPosts, isNotEmpty);
+      });
+
+      testThread('the real pane says it is shown', (tester) async {
+        final server = threaded();
+        final first = server.controller();
+        await tester.runAsync(() async {
+          await first.refresh();
+          first.openThread('message-1');
+          await first.flush();
+          first.dispose();
+          server.threadMarkPosts.clear();
+        });
+        await show(tester, server, initial: server.saved);
+        expect(panel, findsOneWidget);
+        await tester.pumpAndSettle();
+        expect(server.threadMarkPosts, isNotEmpty);
+      });
     });
 
     test('a thread closed before the Swarm was let go stays closed', () async {
@@ -670,20 +742,23 @@ void main() {
       expect(server.saved!['openThread'], isNull);
     });
 
-    test('a saved thread in a conversation no longer read does not open', () async {
-      final server = threaded();
-      final c = server.controller(
-        initial: {
-          'tabId': 'tab',
-          'accountId': 'owner',
-          'selectedId': 'lead',
-          'openThread': {'conversationId': 'not-mine', 'root': 'message-1'},
-        },
-      );
-      addTearDown(c.dispose);
-      await c.refresh();
-      expect(c.openedThread, isNull);
-    });
+    test(
+      'a saved thread in a conversation no longer read does not open',
+      () async {
+        final server = threaded();
+        final c = server.controller(
+          initial: {
+            'tabId': 'tab',
+            'accountId': 'owner',
+            'selectedId': 'lead',
+            'openThread': {'conversationId': 'not-mine', 'root': 'message-1'},
+          },
+        );
+        addTearDown(c.dispose);
+        await c.refresh();
+        expect(c.openedThread, isNull);
+      },
+    );
 
     test('a malformed saved thread opens nothing', () {
       final server = threaded();
