@@ -157,7 +157,7 @@ class SuperTabAgent {
       switchRequest = row['switchRequest'] is Map
           ? Map.unmodifiable(superTabMap(row['switchRequest']))
           : null,
-      profileId = row['profileId'] as String? ?? 'default',
+      profileId = row['profileId'] as String?,
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       downSince = DateTime.tryParse(row['downSince'] as String? ?? ''),
       confidential = row['confidential'] == true,
@@ -180,7 +180,8 @@ class SuperTabAgent {
   final Map<String, dynamic>? switchRequest;
 
   /// The account on its machine it runs in; `default` when none is chosen.
-  final String profileId;
+  /// Null until the backend reports it: the engine's default account.
+  final String? profileId;
 
   /// Since when its machine has reported its session gone, or its host confirmed a stop (backend machines.ts). Null
   /// while it runs.

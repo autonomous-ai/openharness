@@ -1,4 +1,5 @@
 import '../core/home_dir.dart';
+import '../usage/usage_account_key.dart';
 import '../measurement/product_measurement.dart';
 import '../measurement/product_runtime_health.dart';
 import '../measurement/product_connections.dart';
@@ -267,16 +268,18 @@ class AgentForkAttempt {
   Future<ForkAgentResult>? get pending => _inFlight;
 }
 
-/// One deliberate creation, retained by the form if its reply is lost. Reusing
-/// it checks the original request; opening New agent starts a fresh intent.
 /// One account an engine can run under on a machine, as Change agent offers it.
 class AgentProfile {
   const AgentProfile({
+    required this.id,
     required this.key,
     required this.label,
     this.path,
     this.percentLeft,
   });
+
+  /// The account's Swarm profile id ([swarmProfileId]): what `usage_read` and the current-account check use.
+  final String id;
 
   /// What [AppNotifier.changeAgent] is given: the folder, or `'default'` for the default account.
   final String key;
@@ -291,6 +294,8 @@ class AgentProfile {
 bool sameAgentProfile(String? a, String? b) =>
     (a ?? 'default') == (b ?? 'default');
 
+/// One deliberate creation, retained by the form if its reply is lost. Reusing
+/// it checks the original request; opening New agent starts a fresh intent.
 class _AgentChange {
   _AgentChange(this.source, this.engine, this.revision, [this.profile]);
   final Agent source;
@@ -745,9 +750,10 @@ enum AttachIntent { person, automatic }
 /// select there, or the first phone or app.
 typedef MachinesRequest = ({String? devicePub, bool phones});
 
+const buddyKeepsItsEngine = 'A Buddy keeps its engine for now';
+
 /// Change agent on a Swarm Buddy, which keeps running and so keeps its agent
 /// (hn's `BUDDY_KEEPS_ITS_AGENT`, word for word).
-const buddyKeepsItsEngine = 'A Buddy keeps its engine for now';
 const buddyKeepsItsAgent =
     'A Swarm Buddy keeps its agent. To use another agent, its person removes the Buddy and adds a new one.';
 
@@ -15211,6 +15217,17 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  final _addingClaude = <String>{};
+
+  /// What `usage_read` last said per account, kept so opening the picker again does not call the vendors again.
+  final _usageCache = <(String, String, String), ({DateTime at, int? left})>{};
+  static const _usageFresh = Duration(minutes: 5);
+  static const _usageReadsPerEngine = 8;
+
+  /// Where Codex keeps the default account, which the picker names `'default'`.
+  static String _codexDefaultHome() =>
+      Platform.environment['CODEX_HOME'] ?? '${homeDir()}/.codex';
+
   /// The accounts [engine] runs under on [machineId], each with the share of its limit left when
   /// the machine can read it. Empty for any other engine or when the machine does not answer.
   Future<List<AgentProfile>> agentProfiles(
@@ -15222,8 +15239,7 @@ class AppNotifier extends ChangeNotifier {
     if (stateOf(machineId)?.isLocalMachine != true) return const [];
     final observed = {
       for (final a in stateOf(machineId)?.agents ?? const <Agent>[])
-        if (engine == 'claude' ? a.claudeHome : a.codexHome case final home?)
-          home,
+        ?(engine == 'claude' ? a.claudeHome : a.codexHome),
     };
     final Map<String, dynamic> reply;
     try {
@@ -15235,20 +15251,39 @@ class AppNotifier extends ChangeNotifier {
     }
     final rows = reply['profiles'];
     if (rows is! List) return const [];
-    return Future.wait([
+    final defaultId = swarmProfileId(machineId, engine, 'default');
+    final profiles = [
       for (final row in rows)
         if (row is Map && row['path'] is String)
-          () async {
-            final path = row['path'] as String;
-            final id = row['id'] as String? ?? path;
-            final isDefault = engine == 'claude' && id == 'default';
+          (
+            path: row['path'] as String,
+            label: row['label'] as String? ?? row['path'] as String,
+            // The CLI names an account by its realpath; the default one is a row too.
+            id:
+                row['id'] as String? ??
+                (engine == 'codex' && row['path'] == _codexDefaultHome()
+                    ? defaultId
+                    : swarmProfileId(machineId, engine, row['path'] as String)),
+          ),
+    ];
+    // One account has no choice to show, so its usage is not worth a vendor call.
+    var budget = profiles.length > 1 ? _usageReadsPerEngine : 0;
+    return Future.wait([
+      for (final p in profiles)
+        () async {
+          final key = (machineId, engine, p.id);
+          var cached = _usageCache[key];
+          if ((cached == null ||
+                  clock.now().difference(cached.at) >= _usageFresh) &&
+              budget > 0) {
+            budget--;
             int? left;
             try {
               final usage = parseUsageReadResult(
                 await _conn(machineId).request(
                   'usage_read',
                   payload: {
-                    'profile': {'engine': engine, 'id': id},
+                    'profile': {'engine': engine, 'id': p.id},
                   },
                   timeout: const Duration(seconds: 10),
                 ),
@@ -15258,13 +15293,16 @@ class AppNotifier extends ChangeNotifier {
                 left = (100 - tightest.usedPercent).round().clamp(0, 100);
               }
             } catch (_) {}
-            return AgentProfile(
-              key: isDefault ? 'default' : path,
-              label: row['label'] as String? ?? path,
-              path: path,
-              percentLeft: left,
-            );
-          }(),
+            cached = _usageCache[key] = (at: clock.now(), left: left);
+          }
+          return AgentProfile(
+            id: p.id,
+            key: p.id == defaultId ? 'default' : p.path,
+            label: p.label,
+            path: p.path,
+            percentLeft: cached?.left,
+          );
+        }(),
     ]);
   }
 
@@ -15281,29 +15319,44 @@ class AppNotifier extends ChangeNotifier {
     final folder =
         source?.project?.cwd ??
         (source == null ? null : stateOf(machineId)?.projectOf(source)?.cwd);
-    if (folder == null)
+    if (folder == null) {
       return 'This harness has no project folder to open Claude in.';
-    final listed = await listClaudeProfiles(machineId);
-    final rows = (listed['profiles'] as List?)?.whereType<Map>().toList() ?? [];
-    final home = rows.isEmpty ? null : rows.first['path'] as String?;
-    if (home == null) return 'Could not reach this machine.';
-    final taken = {for (final r in rows) r['path']};
-    var n = 1;
-    while (taken.contains('$home/.harness/claude-profiles/$n')) {
-      n++;
     }
-    final path = '$home/.harness/claude-profiles/$n';
-    // The folder only exists once Claude has started in it, so a refusal here is not fatal.
-    await linkClaudeProfile(machineId, path);
-    final error = await createAgent(
-      machineId,
-      engine: 'claude',
-      folder: folder,
-      claudeHome: path,
-    );
-    if (error == null)
-      agentChangeNotice?.call('Run /login, then pick it again');
-    return error;
+    // One add at a time per machine: a second click would pick the same folder.
+    if (!_addingClaude.add(machineId)) {
+      return 'A Claude account is already being added.';
+    }
+    try {
+      final listed = await listClaudeProfiles(machineId);
+      final rows =
+          (listed['profiles'] as List?)?.whereType<Map>().toList() ?? [];
+      final home = rows.isEmpty ? null : rows.first['path'] as String?;
+      if (home == null) return 'Could not reach this machine.';
+      // A folder is free when the machine does not list it and no agent here runs in it.
+      final taken = {
+        for (final r in rows) r['path'],
+        for (final a in stateOf(machineId)?.agents ?? const <Agent>[])
+          a.claudeHome,
+      };
+      var n = 1;
+      while (taken.contains('$home/.harness/claude-profiles/$n')) {
+        n++;
+      }
+      final path = '$home/.harness/claude-profiles/$n';
+      // The folder only exists once Claude has signed in there; the machine finds it by itself then.
+      final error = await createAgent(
+        machineId,
+        engine: 'claude',
+        folder: folder,
+        claudeHome: path,
+      );
+      if (error == null) {
+        agentChangeNotice?.call('Run /login, then pick it again');
+      }
+      return error;
+    } finally {
+      _addingClaude.remove(machineId);
+    }
   }
 
   /// Starts an agent, or recovers this form's earlier request after a lost reply.
@@ -17511,8 +17564,9 @@ class AppNotifier extends ChangeNotifier {
         'This agent is not supported by the installed harness.',
       );
     }
-    if (isSwarmBuddy(machineId, agentId))
+    if (isSwarmBuddy(machineId, agentId)) {
       return Future.value(buddyKeepsItsEngine);
+    }
     final key = (machineId, agentId);
     if (source.dsh == 'autonomous/pair' &&
         _agentChanges[key] == null &&

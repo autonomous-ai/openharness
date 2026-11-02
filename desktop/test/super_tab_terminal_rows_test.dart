@@ -332,8 +332,10 @@ void main() {
       final time = MaterialLocalizations.of(
         tester.element(find.byType(SuperTabTerminalRow)),
       ).formatTimeOfDay(TimeOfDay.fromDateTime(local));
-      expect(find.textContaining('until '), findsWidgets);
-      expect(find.textContaining(time), findsWidgets);
+      // The backend's sentence stays verbatim; the reset time is its own muted text.
+      expect(find.text('Wren hit a usage limit.'), findsOneWidget);
+      expect(find.textContaining('until '), findsOneWidget);
+      expect(find.textContaining(time), findsOneWidget);
       final button = find.widgetWithText(TextButton, 'Switch PM…');
       expect(button, findsOneWidget);
 

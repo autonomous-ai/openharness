@@ -9,6 +9,8 @@ import 'support/super_tab_fixture.dart';
 /// Switch PM (spec 2026-11-02-pm-switch-engine-account-design.md, section 8):
 /// who is offered it, what its dialog lists and what Confirm sends.
 void main() {
+  // sha256('m:claude:default') and sha256('m:codex:default'), first 16 hex.
+  const claudeDefault = '71dc90339553114c', codexDefault = '07f54db4cdffbb30';
   ConversationServer swarm({Map<String, dynamic> pm = const {}}) {
     final server = ConversationServer();
     server.state['people'] = [
@@ -27,7 +29,7 @@ void main() {
           'profiles': [
             {
               'engine': 'claude',
-              'id': 'default',
+              'id': claudeDefault,
               'label': 'Default',
               'leftPercent': 40,
               'resetsAt': null,
@@ -38,6 +40,13 @@ void main() {
               'label': 'Work',
               'leftPercent': 0,
               'resetsAt': '2099-01-02T15:00:00.000Z',
+            },
+            {
+              'engine': 'codex',
+              'id': codexDefault,
+              'label': 'Default',
+              'leftPercent': 90,
+              'resetsAt': null,
             },
             {
               'engine': 'codex',
@@ -156,6 +165,7 @@ void main() {
       expect(find.text('Claude Code · Work'), findsOneWidget);
       expect(find.textContaining('0% left · resets '), findsOneWidget);
       expect(find.text('Codex · Side'), findsOneWidget);
+      expect(find.text('Codex · Default'), findsOneWidget);
       expect(find.text('70% left'), findsOneWidget);
       expect(
         find.text(
@@ -165,7 +175,7 @@ void main() {
       );
       ListTile row(String key) =>
           tester.widget<ListTile>(find.byKey(ValueKey(key)));
-      expect(row('switch-pm-claude-default').enabled, isFalse);
+      expect(row('switch-pm-claude-$claudeDefault').enabled, isFalse);
       expect(row('switch-pm-claude-aaaaaaaaaaaaaaaa').enabled, isFalse);
       expect(row('switch-pm-codex-bbbbbbbbbbbbbbbb').enabled, isTrue);
       await tester.tap(find.text('Cancel'));
@@ -183,6 +193,7 @@ void main() {
       await tester.tap(item);
       await tester.pumpAndSettle();
       expect(find.text('Codex · Default'), findsOneWidget);
+      expect(find.text('Current'), findsOneWidget);
       expect(
         tester
             .widget<ListTile>(
@@ -224,6 +235,36 @@ void main() {
     expect(sent.single['engine'], 'codex');
     expect(sent.single['profileId'], 'bbbbbbbbbbbbbbbb');
     expect(find.byType(AlertDialog), findsNothing);
+    await finish(tester);
+  });
+
+  testWidgets(
+    'the PM\'s own profileId marks its row; no id means its engine\'s default',
+    (tester) async {
+      await mount(
+        tester,
+        swarm(pm: {'profileId': 'aaaaaaaaaaaaaaaa'}),
+        'owner',
+      );
+      await openMenu(tester);
+      await tester.tap(item);
+      await tester.pumpAndSettle();
+      ListTile row(String key) =>
+          tester.widget<ListTile>(find.byKey(ValueKey(key)));
+      expect(row('switch-pm-claude-$claudeDefault').enabled, isTrue);
+      expect(find.textContaining('Current'), findsOneWidget);
+      await tester.tap(find.text('Cancel'));
+      await finish(tester);
+    },
+  );
+
+  testWidgets('a lent machine\'s borrower does not see Switch PM…', (
+    tester,
+  ) async {
+    final server = swarm(pm: {'machineOwnerId': 'ken'});
+    await mount(tester, server, 'mac');
+    await openMenu(tester);
+    expect(item, findsNothing);
     await finish(tester);
   });
 

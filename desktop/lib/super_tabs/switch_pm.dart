@@ -2,21 +2,27 @@ import 'package:flutter/material.dart';
 
 import '../shared/widgets/app_dialog.dart';
 import '../state/lead_placement.dart';
+import '../usage/usage_account_key.dart';
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'model.dart';
 
-/// "2:00 PM" for today, "Nov 3, 2:00 PM" for another day, in the reader's time.
+/// "2:00 PM" for today, "Nov 3, 2:00 PM" for another day this year, with the
+/// year after that, in the reader's time.
 String switchPmTime(BuildContext context, DateTime at) {
   final local = at.toLocal(), now = DateTime.now();
   final l10n = MaterialLocalizations.of(context);
   final time = l10n.formatTimeOfDay(TimeOfDay.fromDateTime(local));
-  return local.year == now.year &&
-          local.month == now.month &&
-          local.day == now.day
-      ? time
-      : '${l10n.formatShortDate(local)}, $time';
+  if (local.year == now.year &&
+      local.month == now.month &&
+      local.day == now.day) {
+    return time;
+  }
+  final day = local.year == now.year
+      ? l10n.formatShortMonthDay(local)
+      : l10n.formatShortDate(local);
+  return '$day, $time';
 }
 
 /// Moves [projectId]'s Product Manager to another engine or account on the
@@ -29,6 +35,8 @@ Future<void> showSwitchPm(
 ) {
   ({String engine, String id})? picked;
   var busy = false;
+  // An earlier refusal belongs to that dialog, not to this one.
+  if (!c.hasPendingAction) c.operationError = null;
   return showAppDialog<void>(
     context: context,
     builder: (context) => SuperTabDialogScope(
@@ -43,7 +51,8 @@ Future<void> showSwitchPm(
             final lead = snapshot?.leadOf(projectId);
             final pool = snapshot?.pool(lead?.machineId ?? '');
             var profiles = superTabProfilesOf(pool);
-            if (profiles.isEmpty && lead != null) {
+            final reported = profiles.isNotEmpty;
+            if (!reported && lead != null) {
               // A machine that reports no accounts: its default account, per
               // engine it offers.
               final offered = (pool?['engines'] as List?)?.whereType<String>();
@@ -64,8 +73,18 @@ Future<void> showSwitchPm(
                   kLeadEngines.indexOf(a.engine) -
                   kLeadEngines.indexOf(b.engine),
             );
+            // A PM that reports no account runs its engine's default one.
+            final currentId =
+                lead?.profileId ??
+                (reported
+                    ? swarmProfileId(
+                        lead?.machineId ?? '',
+                        lead?.engine ?? '',
+                        'default',
+                      )
+                    : 'default');
             bool current(SuperTabProfile p) =>
-                p.engine == lead?.engine && p.id == lead?.profileId;
+                p.engine == lead?.engine && p.id == currentId;
             final switching = lead?.switchRequest != null;
             return AlertDialog(
               title: const Text('Switch PM'),
@@ -111,7 +130,14 @@ Future<void> showSwitchPm(
                       ],
                       if (c.hasPendingAction)
                         TextButton(
-                          onPressed: c.saving ? null : c.retry,
+                          onPressed: c.saving
+                              ? null
+                              : () async {
+                                  final result = await c.retry();
+                                  if (context.mounted && result != null) {
+                                    Navigator.pop(context);
+                                  }
+                                },
                           child: const Text('Check pending action'),
                         ),
                     ],

@@ -11,6 +11,7 @@ import '../models/local_model.dart';
 import '../models/model_search_catalog.dart';
 import '../models/swarm_models_target.dart';
 import '../usage/models_menu_controller.dart' show subscriptionSearchId;
+import '../usage/usage_account_key.dart';
 import '../core/dsh_catalog.dart';
 import '../store/experimental_harnesses.dart';
 import '../core/machine_resources.dart';
@@ -1985,9 +1986,17 @@ class SwarmSearchController extends ChangeNotifier {
       final isBuddy =
           current != null &&
           app.isSwarmBuddy(agentSelectionMachineId!, current.id);
+      // The agent's account id: its folder's, or the engine's default.
       final currentHome = current?.engine == 'claude'
           ? current?.claudeHome
           : current?.codexHome;
+      final currentId = current == null
+          ? null
+          : swarmProfileId(
+              agentSelectionMachineId!,
+              current.engine ?? '',
+              currentHome ?? 'default',
+            );
       SwarmDestination row(
         EngineIdentity engine, {
         AgentProfile? profile,
@@ -1995,10 +2004,7 @@ class SwarmSearchController extends ChangeNotifier {
       }) {
         final isCurrent =
             current?.engine == engine.id &&
-            (!several ||
-                (profile!.key == 'default'
-                    ? currentHome == null
-                    : currentHome == profile.path));
+            (!several || profile!.id == currentId);
         final base = engine.id == 'claude' ? 'Claude Code' : engine.label;
         return SwarmDestination(
           id: 'engine:${engine.id}${several ? ':${profile!.key}' : ''}',

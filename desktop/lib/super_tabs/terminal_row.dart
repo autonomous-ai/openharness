@@ -75,9 +75,6 @@ class SuperTabTerminalRow extends StatelessWidget {
     final until = message.leadLimitAgentId == null
         ? null
         : DateTime.tryParse(message.source['limitedUntil'] as String? ?? '');
-    final text = until == null
-        ? message.text
-        : '${message.text.replaceFirst(RegExp(r'\.$'), '')} until ${switchPmTime(context, until)}.';
     final project = message.leadLimitAgentId == null
         ? null
         : controller.snapshot?.leadProjectForAgent(message.leadLimitAgentId!);
@@ -104,7 +101,9 @@ class SuperTabTerminalRow extends StatelessWidget {
               spacing: 4,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                Text.rich(_typed(text, style), style: style),
+                Text.rich(_typed(message.text, style), style: style),
+                if (until != null)
+                  Text('until ${switchPmTime(context, until)}', style: style),
                 if (project != null && _canSwitch)
                   _action(
                     context,

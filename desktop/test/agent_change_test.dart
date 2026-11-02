@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/api/api_client.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
+import 'package:harness/core/home_dir.dart';
 import 'package:harness/e2ee/envelope.dart';
 import 'package:harness/state/agent_handoff_file.dart';
 import 'package:harness/state/agent_switch_handoff.dart';
@@ -19,6 +20,7 @@ import 'package:harness/devices/devices_harness_controller.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/swarm_search.dart';
 import 'package:harness/terminal/terminal_binary.dart';
+import 'package:harness/usage/usage_account_key.dart';
 import 'package:harness/widgets/engine_identity.dart';
 
 import 'support/harness_monitor.dart';
@@ -133,13 +135,13 @@ class ProfileConnection extends SwitchConnection {
   final usageReads = <Map<String, dynamic>>[];
   final claudeRows = <Map<String, dynamic>>[
     {
-      'id': 'default',
+      'id': '71dc90339553114c',
       'path': '/home/me',
       'label': 'Default',
       'reportLabel': 'Default',
     },
     {
-      'id': 'w1',
+      'id': '5629f1d572da7cc4',
       'path': '/home/me/.claude-work',
       'label': 'Work',
       'reportLabel': 'Work',
@@ -162,6 +164,7 @@ class ProfileConnection extends SwitchConnection {
       case 'codex_profiles_list':
         return {
           'profiles': [
+            {'path': '${homeDir()}/.codex', 'label': 'Default'},
             {'path': '/home/me/.codex-a', 'label': 'A'},
             {'path': '/home/me/.codex-b', 'label': 'B'},
           ],
@@ -169,7 +172,7 @@ class ProfileConnection extends SwitchConnection {
       case 'usage_read':
         usageReads.add(Map.of(payload));
         final id = (payload['profile'] as Map)['id'];
-        if (id == '/home/me/.codex-b') throw StateError('no reading');
+        if (id == '77103ab28be2ebd0') throw StateError('no reading');
         return {
           'providers': [
             {
@@ -215,6 +218,8 @@ AppNotifier fixture(
   bool companion = false,
   String? harnessId,
   String sourceEngine = 'codex',
+  String? claudeHome,
+  String? codexHome,
 }) {
   final app = createApp(connectionForTest: (_) => connection, connected: true);
   connection.app = app;
@@ -227,6 +232,8 @@ AppNotifier fixture(
     closeSupported: true,
     terminalAvailable: true,
     permissionMode: 'ask',
+    claudeHome: claudeHome,
+    codexHome: codexHome,
     project: const AgentProject(name: 'work', cwd: '/projects/work'),
     dsh:
         harnessId ??
@@ -1444,7 +1451,7 @@ void main() {
       expect(search.rows.last.addsClaudeAccount, isTrue);
       expect([
         for (final r in connection.usageReads) (r['profile'] as Map)['id'],
-      ], contains('w1'));
+      ], contains('5629f1d572da7cc4'));
     });
 
     test('a same-engine change to another account closes and creates with claudeHome', () async {
@@ -1520,6 +1527,128 @@ void main() {
       );
     });
 
+    Future<SwarmSearchController> pick(AppNotifier app) async {
+      final search = SwarmSearchController(app, []);
+      addTearDown(search.dispose);
+      search.setQuery('&');
+      search.setAgentSelection('m', 'a0');
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      return search;
+    }
+
+    test('a Codex pane on the default account has the default row current and no change', () async {
+      final connection = ProfileConnection();
+      final app = fixture(connection, sourceEngine: 'codex');
+      app.stateOf('m')!.localOnly = true;
+      addTearDown(app.dispose);
+      final search = await pick(app);
+      final row = search.rows.firstWhere((r) => r.title == 'Codex · Default');
+      expect(row.current, isTrue);
+      expect(row.agentProfile, 'default');
+      expect(
+        search.rows.firstWhere((r) => r.title == 'Codex · A').current,
+        isFalse,
+      );
+      await app.addAgentToSwarm('m', 'a0');
+      expect(
+        await app.changeAgent('m', 'a0', 'codex', profile: 'default'),
+        isNull,
+      );
+      expect(connection.events, isEmpty);
+      expect(connection.creations, isEmpty);
+    });
+
+    test('Codex and default accounts are read by their computed ids', () async {
+      final connection = ProfileConnection();
+      final app = fixture(connection, sourceEngine: 'claude');
+      app.stateOf('m')!.localOnly = true;
+      addTearDown(app.dispose);
+      await pick(app);
+      final ids = [
+        for (final r in connection.usageReads) (r['profile'] as Map)['id'],
+      ];
+      expect(ids, contains('07f54db4cdffbb30')); // codex default
+      expect(ids, contains(swarmProfileId('m', 'codex', '/home/me/.codex-a')));
+      expect(ids, isNot(contains('/home/me/.codex-a')));
+    });
+
+    test(
+      'a Claude agent on a folder marks the row whose id is that folder\'s',
+      () async {
+        final connection = ProfileConnection();
+        final app = fixture(
+          connection,
+          sourceEngine: 'claude',
+          claudeHome: '/home/me/.claude-work',
+        );
+        app.stateOf('m')!.localOnly = true;
+        addTearDown(app.dispose);
+        final search = await pick(app);
+        expect(
+          search.rows.firstWhere((r) => r.title == 'Claude · Work').current,
+          isTrue,
+        );
+        expect(
+          search.rows.firstWhere((r) => r.title == 'Claude · Default').current,
+          isFalse,
+        );
+      },
+    );
+
+    test('usage is cached for five minutes and read for at most 8 accounts per engine', () async {
+      final connection = ProfileConnection();
+      for (var i = 0; i < 10; i++) {
+        connection.claudeRows.add({
+          'id': swarmProfileId('m', 'claude', '/home/me/.c$i'),
+          'path': '/home/me/.c$i',
+          'label': 'C$i',
+        });
+      }
+      final app = fixture(connection, sourceEngine: 'claude');
+      app.stateOf('m')!.localOnly = true;
+      addTearDown(app.dispose);
+      await pick(app);
+      int claudeReads() => connection.usageReads
+          .where((r) => (r['profile'] as Map)['engine'] == 'claude')
+          .length;
+      expect(claudeReads(), 8);
+      // Opening again reads only the accounts it could not reach the first time.
+      await pick(app);
+      final ids = [
+        for (final r in connection.usageReads) (r['profile'] as Map)['id'],
+      ];
+      expect(ids.toSet().length, ids.length);
+      expect(claudeReads(), 12);
+    });
+
+    test('Add Claude account… skips folders that are listed or used by an agent, and a double click adds one', () async {
+      final connection = ProfileConnection();
+      connection.claudeRows.add({
+        'id': '39f7292d285c38ed',
+        'path': '/home/me/.harness/claude-profiles/1',
+        'label': 'One',
+      });
+      final app = fixture(
+        connection,
+        sourceEngine: 'codex',
+        claudeHome: '/home/me/.harness/claude-profiles/2',
+      );
+      app.stateOf('m')!.localOnly = true;
+      addTearDown(app.dispose);
+      final results = await Future.wait([
+        app.addClaudeAccount('m', 'a0'),
+        app.addClaudeAccount('m', 'a0'),
+      ]);
+      expect(results.where((r) => r == null), hasLength(1));
+      expect(connection.creations, hasLength(1));
+      expect(
+        connection.creations.single,
+        containsPair('claudeHome', '/home/me/.harness/claude-profiles/3'),
+      );
+      // Settled: the next one may go.
+      expect(await app.addClaudeAccount('m', 'a0'), isNull);
+    });
+
     test(
       'Add Claude account… links the next free folder and opens Claude in it',
       () async {
@@ -1530,7 +1659,8 @@ void main() {
         String? notice;
         app.agentChangeNotice = (m) => notice = m;
         expect(await app.addClaudeAccount('m', 'a0'), isNull);
-        expect(connection.links, ['/home/me/.harness/claude-profiles/1']);
+        // The folder does not exist yet, so there is nothing to link.
+        expect(connection.links, isEmpty);
         expect(connection.creations.single, containsPair('engine', 'claude'));
         expect(
           connection.creations.single,
