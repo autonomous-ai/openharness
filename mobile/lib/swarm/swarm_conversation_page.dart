@@ -38,6 +38,7 @@ import 'swarm_face.dart';
 import 'swarm_file_picker.dart';
 import 'swarm_outgoing_files.dart';
 import 'swarm_inbox.dart';
+import 'swarm_reader.dart';
 import 'swarm_live_card.dart';
 import 'swarm_message_link.dart';
 import 'swarm_message_receipt.dart';
@@ -58,9 +59,32 @@ import 'swarm_unread_line.dart';
 import 'swarm_voice.dart';
 import 'team_glance.dart';
 
-final _conversationReferencePattern = RegExp(
-  r'(?<![\w/])#([1-9][0-9]*)(?!\w)',
-);
+final _conversationReferencePattern = RegExp(r'(?<![\w/])#([1-9][0-9]*)(?!\w)');
+
+/// What a message can link to from the current read of its Swarm. A chat may
+/// still hold an older reader while the inbox has replaced it.
+@visibleForTesting
+Map<int, String> swarmNumberedReferences(SwarmReader? reader, String text) {
+  if (reader == null || reader.accessRevoked) return const {};
+  final numbers = _conversationReferencePattern
+      .allMatches(text)
+      .map((match) => int.tryParse(match[1]!))
+      .whereType<int>()
+      .toSet();
+  return {
+    for (final conversation
+        in reader.snapshot?.conversations ?? const <SuperTabConversation>[])
+      if (conversation.number != null && numbers.contains(conversation.number))
+        conversation.number!: conversation.id,
+  };
+}
+
+/// The same current-reader access check used when a numbered link is tapped.
+@visibleForTesting
+bool swarmCanOpenNumberedConversation(SwarmReader? reader, String id) =>
+    reader != null &&
+    !reader.accessRevoked &&
+    reader.snapshot?.conversation(id) != null;
 
 /// Opens [conversationId] of Swarm [swarmId] over the current page: a
 /// project's own chat as its project ([SwarmOpenedChat]).
@@ -934,7 +958,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   }
 
   void _openNumberedConversation(SwarmConversation c, String id) {
-    if (mounted && c.reader.snapshot?.conversation(id) != null) {
+    final reader = _session?.inbox.reader(c.reader.tabId);
+    if (mounted && swarmCanOpenNumberedConversation(reader, id)) {
       openSwarmConversation(context, widget.swarmId, id);
     }
   }
@@ -948,15 +973,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
         .map((match) => int.tryParse(match[1]!))
         .whereType<int>()
         .toSet();
-    final snapshot =
-        _session?.inbox.reader(c.reader.tabId)?.snapshot ?? c.reader.snapshot;
-    final references = {
-      for (final conversation
-          in snapshot?.conversations ?? const <SuperTabConversation>[])
-        if (conversation.number != null &&
-            numbers.contains(conversation.number))
-          conversation.number!: conversation.id,
-    };
+    final reader = _session?.inbox.reader(c.reader.tabId);
+    final references = swarmNumberedReferences(reader, text);
     return (
       references: references,
       key: [for (final number in numbers) '$number:${references[number] ?? ''}']
