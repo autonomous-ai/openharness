@@ -278,8 +278,9 @@ describe('reading a status file the Team account can replace', () => {
     const fifo = join(folder(), 'status.json')
     execFileSync('mkfifo', [fifo])
     // A writer that holds the FIFO open for 3 seconds, and writes nothing: a blocking read comes back only when it ends, so
-    // this fails on the clock instead of hanging the test run.
-    const writer = spawn('sh', ['-c', 'exec 3>"$0"; sleep 3', fifo], { stdio: 'ignore' })
+    // this fails on the clock instead of hanging the test run. Opened with <>, never >: the shell may start after the code
+    // under test has replaced the FIFO with a file, and > would then empty that file (seen on CI's Linux, #2546).
+    const writer = spawn('sh', ['-c', 'exec 3<>"$0"; sleep 3', fifo], { stdio: 'ignore' })
     try {
       const started = Date.now()
       expect(readTeamStatus(fifo)).toBeNull()
@@ -317,7 +318,7 @@ describe('reading a status file the Team account can replace', () => {
   it('the team daemon\'s own write survives a FIFO in its place', () => {
     const file = join(folder(), 'status.json')
     execFileSync('mkfifo', [file])
-    const writer = spawn('sh', ['-c', 'exec 3>"$0"; sleep 3', file], { stdio: 'ignore' })
+    const writer = spawn('sh', ['-c', 'exec 3<>"$0"; sleep 3', file], { stdio: 'ignore' })
     try {
       const started = Date.now()
       writeTeamStatus(file, { signIn: { state: 'signed-in', at: 1 } })
