@@ -39,7 +39,10 @@ const isOpen = (group: Json): boolean => {
 const leadConversations = (state: Json): string[] =>
   Array.isArray(state.projects) ? list(state.projects).map(p => String(p.leadConversationId)) : ['lead']
 /** A step of a task (task steps design): a linked group with a name; an older linked group has none. */
-export const isStep = (group: Json): boolean => typeof group.step === 'string' && group.step !== '' && typeof group.reviewOf === 'string'
+export const isStep = (group: Json): boolean => typeof group.reviewOf === 'string'
+/** A step's name: the one it was opened with, else its title (a linked task opened without one is a step too, Ken
+ *  2026-11-02; backend steps.ts stepName). */
+export const stepName = (group: Json): string => text(group.step) ?? String(group.title ?? '')
 /** Work an agent may hold: a group of a project that is not its Lead conversation, a Buddy chat or any other kind. */
 const isWork = (state: Json, group: Json): boolean => !group.kind && !leadConversations(state).includes(String(group.id))
 /** A task: work that is not a step. */
@@ -63,7 +66,7 @@ function lineOf(state: Json, group: Json): TaskLine {
     status: text(assignment.status) ?? 'unassigned', agentName: agentName(state, assignment.agentId),
     updatedAt: null, result: text(assignment.result),
     pullRequestUrls: Array.isArray(group.pullRequestUrls) ? group.pullRequestUrls.filter((u): u is string => typeof u === 'string') : [],
-    step: text(group.step), taskId: text(group.reviewOf),
+    step: isStep(group) ? stepName(group) : null, taskId: text(group.reviewOf),
   }
 }
 

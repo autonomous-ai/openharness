@@ -44,12 +44,12 @@ describe('mine', () => {
     expect(mineText(state, changed({}), 'dev1', NOW)).toBe('No task is assigned to you.')
   })
 
-  it('lists linked tasks of its work with their assignee', () => {
+  it('lists the steps of its work with their assignee', () => {
     const state = swarm([task('g12', 12, 'Fix login', 'dev1', 'working'),
       task('g13', 13, 'Review: Fix login', 'rev1', 'working', { reviewOf: 'g12' })])
-    expect(mineText(state, changed({}), 'dev1', NOW)).toContain('\n  linked: #13 Review: Fix login (conversation g13) — Rev1, working')
-    // The Reviewer sees the task its work is linked to, either way.
-    expect(mineText(state, changed({}), 'rev1', NOW)).toContain('\n  linked: #12 Fix login (conversation g12) — Dev1, working')
+    expect(mineText(state, changed({}), 'dev1', NOW)).toContain('\n  steps: Review: Fix login (Rev1): working')
+    // The Reviewer sees its step by the task it belongs to.
+    expect(mineText(state, changed({}), 'rev1', NOW)).toBe('#12 Fix login · Review: Fix login (conversation g13) — working')
   })
 
   it('the coordinator\'s mine lists its project\'s open tasks and counts them', () => {
@@ -62,7 +62,9 @@ describe('mine', () => {
     expect(text).toContain('#14 Docs (conversation g14) — unassigned')
     expect(text).not.toContain('#15')
     expect(text).not.toContain('Web work')
-    expect(text.endsWith('3 open tasks.')).toBe(true)
+    // g12 and g14; g16 is a step of g12, shown under it.
+    expect(text).toContain('  steps: Review (Rev1): review')
+    expect(text.endsWith('2 open tasks.')).toBe(true)
   })
 
   it('with nothing says so', () => {
@@ -108,7 +110,7 @@ describe('task', () => {
       '- gone, lost, 2026-11-01 09:00 UTC: Stalled',
       '- Dev1, stopped, 2026-10-31 09:00 UTC',
     ])
-    expect(text).toContain('- #13 Review: Fix login (conversation g13) — Rev1, working')
+    expect(text).toContain('Steps:\n- Review: Fix login (Rev1): working (conversation g13)')
     expect(text).toContain('messages g12')
     expect(text).toContain('messages g12 --thread ROOT')
   })
@@ -195,5 +197,15 @@ describe('a stopped agent', () => {
     const text = taskText(group, swarm([group]), [], changed({}), NOW, new Map([['gone', 'Avery']]))
     expect(text).toContain('Assignee: Avery')
     expect(text).toContain('✓ Tests pass — by Avery')
+  })
+})
+
+// Ken, 2026-11-02: every linked task is a step, named or not (backend steps.ts isStep).
+describe('a linked task with no step name', () => {
+  it('is a step named by its title', () => {
+    const state = swarm([task('g12', 12, 'Fix login', 'dev1', 'working'),
+      task('g13', 13, 'Test: PR #7', 'rev1', 'working', { reviewOf: 'g12' })])
+    expect(mineText(state, changed({}), 'dev1', NOW)).toBe('#12 Fix login (conversation g12) — working\n  steps: Test: PR #7 (Rev1): working')
+    expect(mineText(state, changed({}), 'rev1', NOW)).toBe('#12 Fix login · Test: PR #7 (conversation g13) — working')
   })
 })

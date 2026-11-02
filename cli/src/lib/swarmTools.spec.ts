@@ -61,4 +61,9 @@ describe('SWARM_TOOLS_SKILL', () => {
     const line = SWARM_TOOLS_SKILL.split('\n').find(l => l.startsWith('- Add a step to a task:'))!
     expect(line).not.toContain('A review group')
   })
+  // Ken, 2026-11-02: every linked task is a step, named or not.
+  it('says any group linked by reviewOf is a step of that task', () => {
+    expect(SWARM_TOOLS_SKILL).toContain('Any group created with \`reviewOf\` is a step of that task')
+    expect(SWARM_TOOLS_SKILL).not.toContain('A review group is a group created with')
+  })
 })

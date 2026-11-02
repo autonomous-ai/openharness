@@ -1573,8 +1573,9 @@ describe('status with steps', () => {
       data: swarmData(t.agent, path, { agents: [t.agent], conversations }) } }) as never)
     const answer = await t.ask({ action: 'status', tabId: 'tab', harnessId: 'native' }, owner) as { value: { state: { conversations: Array<Record<string, unknown>> } } }
     const rows = answer.value.state.conversations
-    expect(rows.map(c => c.id)).toEqual(['g1835', 'g9'])
-    expect((rows[0]!.steps as Array<Record<string, unknown>>).map(s => s.id)).toEqual(['g1918'])
+    // Every linked group is a step, named or not (Ken, 2026-11-02).
+    expect(rows.map(c => c.id)).toEqual(['g1835'])
+    expect((rows[0]!.steps as Array<Record<string, unknown>>).map(s => s.id)).toEqual(['g1918', 'g9'])
   })
 })
 
