@@ -357,6 +357,60 @@ it('attaches to a proposal only files inside the Buddy\'s own folder, uploaded t
     rmSync(outside, { recursive: true, force: true })
   }
 })
+it('sends a one Buddy\'s proposal file only from the named project\'s folder, and refuses before any upload otherwise (Scholes, 11-02)', async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const { tmpdir } = await import('node:os')
+  const home = mkdtempSync(join(tmpdir(), 'buddy-home-'))
+  try {
+    for (const dir of ['web', 'secret']) {
+      mkdirSync(join(home, 'projects', dir), { recursive: true })
+      writeFileSync(join(home, 'projects', dir, 'plan.md'), `# ${dir}\n`)
+    }
+    writeFileSync(join(home, '.buddy-projects.json'), JSON.stringify([{ id: 'p-web', name: 'Web', dir: 'web' }, { id: 'p-secret', name: 'Secret', dir: 'secret' }]))
+    const frames = [{ id: 'buddy', engine: 'claude', status: 'active', tmuxPane: '%7', project: { cwd: home } }]
+    let agent: Record<string, unknown> = { id: 'buddy' }
+    const seen: string[] = []
+    const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
+      if (type === 'agents_list') return { agents: frames }
+      if (payload.step === 'sent') { seen.push(String(payload.conversationId)); return { ok: true, value: { agentId: 'buddy', attachmentIds: null } } }
+      if (payload.action === 'status') return { ok: true, value: { state: { agents: [agent], conversations: [{ id: 'chat', kind: 'swarm-buddy' }],
+        projects: [{ id: 'p-web', leadConversationId: 'web-chat' }, { id: 'p-secret', leadConversationId: 'secret-chat' }, { id: 'p-away', leadConversationId: 'away-chat' }] } } }
+      return { ok: true, value: { revision: 9, result: { messageId: 'm' } } }
+    })
+    const sent: string[] = []
+    const fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      sent.push(await ((init!.body as FormData).get('file') as File).text())
+      return new Response(JSON.stringify({ success: true, data: { attachment: { id: 'f1' } } }), { status: 200 })
+    })
+    const deps = { where: () => where, open: async () => ({ request, close: vi.fn(), machineId: 'machine' }), print: vi.fn(), pane: '%7',
+      fetch: fetch as unknown as typeof globalThis.fetch }
+    const propose = (projectId: string | undefined, file: string) => superTabCommand([...prefix, 'propose', 'op', JSON.stringify({ conversationId: 'chat', ownerMessageId: 'ask',
+      ...(projectId ? { projectId } : {}), goal: 'G', scope: 'S', priority: 'normal' }), '--attach', join(home, 'projects', file, 'plan.md')], deps)
+    const error = () => JSON.parse(deps.print.mock.calls.at(-1)![0]).error as string
+    // Another project's file, a project not named, one that is not on this machine: nothing is uploaded.
+    expect(await propose('p-web', 'secret')).toBe(1)
+    expect(error()).toContain('outside your folder')
+    expect(await propose(undefined, 'web')).toBe(1)
+    expect(error()).toContain('Name the project')
+    expect(await propose('p-unknown', 'web')).toBe(1)
+    expect(error()).toContain('Name the project')
+    expect(await propose('p-away', 'web')).toBe(1)
+    expect(error()).toContain('not on this machine')
+    expect(fetch).not.toHaveBeenCalled()
+    // A session of one project names no other.
+    agent = { id: 'buddy', buddySession: { thread: 't', projectId: 'p-secret' } }
+    expect(await propose('p-web', 'web')).toBe(1)
+    expect(error()).toContain('its own project')
+    expect(fetch).not.toHaveBeenCalled()
+    agent = { id: 'buddy' }
+    expect(await propose('p-web', 'web')).toBe(0)
+    expect(sent).toEqual(['# web\n'])
+    expect(seen).toEqual(['web-chat'])
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
 it('sends a proposal file\'s bytes as they were when checked, even if the path then turns into a link out of the folder', async () => {
   const { mkdtempSync, writeFileSync, symlinkSync, unlinkSync, rmSync } = await import('node:fs')
   const { join } = await import('node:path')

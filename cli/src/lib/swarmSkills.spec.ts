@@ -774,6 +774,11 @@ describe('the Buddy skill (Ken\'s Buddy spec, 10-28)', () => {
     for (const step of ['Ask the goal first', 'Offer 2 or 3 options', 'Agree the scope']) expect(text).toContain(step)
     expect(text).toContain('Only when your owner asks')
     expect(text).toContain('harness super-tab --tab TAB propose OPERATION_ID')
+    // Scholes (11-02): its one Buddy sends, naming the project, and asks which when it is unclear; never "open a session".
+    expect(text).toContain('"projectId":"PROJECT"')
+    expect(text).toContain('If they read several and it is unclear which one this is for, ask them first.')
+    expect(text).toContain('never tell them to open a session just to send')
+    expect(text).not.toContain('tell them to start a New session')
     expect(text).toContain('Never assign work, start agents, change code or open pull requests')
     // What it may run, as its guard allows it (lib/buddyGuard.ts), in place of 'only harness super-tab' (Ken, 10-29).
     expect(text).toContain('git grep, log, show, diff, blame and status; gh issue view and list; gh pr view, list and diff')
