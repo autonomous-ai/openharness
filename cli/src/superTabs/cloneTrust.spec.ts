@@ -228,6 +228,13 @@ describe('consented Swarm clones', () => {
     expect(claudeWrites()).toBe(before)
     machine.stop()
   })
+  it('does not write a Team-written agent\'s own Codex home when a start names it (audit H2)', async () => {
+    const f = fixture(true), source = clone(join(f.oldRoot, 'project')), profile = join(home, 'written-selected')
+    mkdirSync(profile); writeFileSync(join(profile, 'config.toml'), '')
+    vi.mocked(f.core.agents.all).mockReturnValue([{ agentId: 'written', engine: 'codex', codexHome: profile, permissionMode: 'teamWritten' }] as never)
+    await prepareSwarmProject(f.core, f.row, { request: { conversationId: 'work', cwd: source, codexHome: profile }, dispatched: false }, async () => source)
+    expect(folderTrust('codex', profile)!.trusts(source)).toBe(false)
+  })
   it('does not write a backend-selected Codex home that no local agent uses', async () => {
     const f = fixture(true), source = clone(join(f.oldRoot, 'project')), home = join(process.env.HOME!, '.cargo')
     mkdirSync(home)

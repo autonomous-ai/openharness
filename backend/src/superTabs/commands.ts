@@ -1,4 +1,4 @@
-import { applyPushOrigin, failPushUnknown, markTeamWritten, requireTeamWrittenAccount, requireTeamWrittenMachine, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
+import { applyPushOrigin, failPushUnknown, failTeamWritten, mainAccountMembers, markTeamWritten, requireNameable, requireTeamWrittenAccount, requireTeamWrittenMachine, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
 import type { PushOrigin } from '../github/pushOrigin.js'
 import { admitMachineStart, BUDDY_WINDOWS_REFUSAL, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, machineSlots, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
@@ -172,6 +172,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('project.role.remove'), projectId: id, roleId }).strict(),
   z.object({ type: z.literal('project.roles.reset'), projectId: id, roles: roleSet }).strict(),
   // `audience`: a private conversation that only these people and the project's Lead read (projects.ts canReadGroup).
+  z.object({ type: z.literal('work.teamWritten'), conversationId: id }).strict(),
   z.object({ type: z.literal('conversation.create'), projectId: id.optional(), title, brief: z.string().trim().max(8000).optional(), task: task.optional(), reviewOf: id.optional(),
     // A step of the task `reviewOf` names (task steps design): its name as the instructions give it, free text in any language.
     // No line break or control character: the name is printed in agents' terminals (final review, minor 10).
@@ -808,7 +809,29 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     const member = agent(state, agentId)
     requireTeamWork(state, member.machineId, member.contributorId, project, context.now, context.teamMachines, context.otherWorkspaceMachines)
     // A named agent or a poster joins a task as an assignment would: Team-written code stays in a Team account (audit H2).
-    if (group) requireTeamWrittenAccount(state, group, member)
+    if (group) {
+      requireTeamWrittenAccount(state, group, member)
+      marking(group, () => markTeamWritten(state, group, member))
+    }
+  }
+  /** Runs [mark], and tells every main-account member when it just marked [group]'s task: nothing else reaches a session
+   *  that already has the branch, or a member the workflow would ask again (teamWritten.ts, audit H2). */
+  const marking = (group: Conversation, mark: () => void) => {
+    const was = teamWrittenTask(state, group)
+    mark()
+    if (was || !teamWrittenTask(state, group)) return
+    for (const told of mainAccountMembers(state, group, actor.kind === 'agent' ? actor.agentId : undefined)) {
+      effects.messages.push({ id: stableId(operationId, 'team-written-stop', told.conversationId), conversationId: told.conversationId, author: sender,
+        text: TEAM_WRITTEN_STOP, replyTo: null, recipients: told.agentIds, source: SYSTEM_ROW })
+    }
+  }
+  /** What GitHub's read says for an agent about to take [group]'s work (store.ts pushOriginFor): a bot's push marks the task and
+   *  refuses the main account, and the store keeps that mark after this command is refused. Unknown refuses it unmarked. */
+  const pushedRefusal = (group: Conversation, worker: Agent) => {
+    marking(group, () => applyPushOrigin(state, group, context.pushOrigin))
+    if (onTeamAccount(state, worker) || ledProject(state, worker.id)?.id === groupProject(state, group).id) return
+    if (context.pushOrigin === 'unknown') failPushUnknown()
+    if (context.pushOrigin === 'team') failTeamWritten({ pushed: true })
   }
   /** A session already in the Swarm that a person's agent.add names joins [group] as conversation.agent adds one (security
    *  review S2): a Buddy stays in its own chat; it is of the group's project; a stopping one joins nowhere; a teammate's agent
@@ -820,7 +843,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     if (member.workDecision === 'stop') fail('STOP_REQUESTED', 'This agent is stopping. Wait for its execution host.')
     requireTeamWork(state, member.machineId, member.contributorId, groupProject(state, group), context.now, context.teamMachines, context.otherWorkspaceMachines)
     requireTeamWrittenAccount(state, group, member)
-    markTeamWritten(state, group, member)
+    marking(group, () => markTeamWritten(state, group, member))
   }
   /** The project chat is the people's and is never archived: its work, name and records are its coordinator's or a person's,
    *  as its members are (conversation.agent, joinsProject; security review L2). A task's are any agent's of its project. */
@@ -1401,6 +1424,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // project's instructions cannot choose a model before any agent reads them (project instructions, design call).
       const asked = withRoleDefaults(request, BUILT_IN_ROLE_DEFAULTS.lead)
       const start = placeLead(state, project, person(state, actor.userId), machineId, asked, operationId, context)
+      // A branch a Team agent pushed, or GitHub cannot place, never starts a PM in the main account (audit H2).
+      if (context.pushOrigin && context.pushOrigin !== 'clean' && !teamAccountPool(state.machines?.find(m => m.machineId === start.request.machineId))) failTeamWritten()
       Object.assign(result, { startId: start.id, machineId: start.request.machineId })
       break
     }
@@ -1967,7 +1992,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // that names no model runs its engine's own: role defaults live in the project's instructions now.
       // So does a start for code a Team agent wrote, whoever's project it is, with its project settings off (audit H2).
       const startGroup = conversation(state, command.request.conversationId)
-      applyPushOrigin(state, startGroup, context.pushOrigin)
+      marking(startGroup, () => applyPushOrigin(state, startGroup, context.pushOrigin))
       const written = teamWrittenTask(state, startGroup)
       const moved = teamStartRequest(state, named, home, context.teamAccountsIdle, context.teamMachines, written)
       if (written) requireTeamWrittenMachine(state, startGroup, moved.machineId)
@@ -2462,8 +2487,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         // An agent added to a task may work on it, so a teammate's agent is added only where it may take that project's work,
         // as an assignment checks (machines.ts teamWorkCheck).
         requireTeamWork(state, member.machineId, member.contributorId, groupProject(state, group), context.now, context.teamMachines, context.otherWorkspaceMachines)
+        pushedRefusal(group, member)
         requireTeamWrittenAccount(state, group, member)
-        markTeamWritten(state, group, member)
+        marking(group, () => markTeamWritten(state, group, member))
         if (!group.agentIds.includes(command.agentId)) group.agentIds.push(command.agentId)
         // Added to a task, it is reused, as an assignment reuses a worker: its finished-work mark goes.
         delete member.workDecision
@@ -2606,6 +2632,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const recipients = [...new Set([...addressed, ...memberToLead, ...(addressed.length || !automatic ? [] : [automatic])])]
       for (const id of recipients) {
         const target = agent(state, id)
+        // Naming an agent asks it to act, and a re-test is asked this way: a post's default addressee is only told (audit H2).
+        if (actor.kind === 'agent' && addressed.includes(id)) requireNameable(state, group, agent(state, actor.agentId), target)
         // In a Buddy chat a session hears its own thread alone, and the main Buddy none of it.
         if (session && (session.inSession ? id !== session.to : !!target.buddySession)) fail('INVALID_RECIPIENT', 'Choose an agent in this conversation.', 400)
         // An agent of this project that another agent names from outside the group joins it, so it can read and answer there
@@ -2762,6 +2790,13 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       bindTaskCard(group, effects.messages.at(-1)!)
       break
     }
+    case 'work.teamWritten': {
+      // Only on the server's own read: a refused command rolled its mark back (store.ts execute), and no client's word marks a task.
+      if (context.pushOrigin !== 'team') fail('NOT_FOUND', 'This conversation is unavailable.', 404)
+      const group = open(state, command.conversationId)
+      marking(group, () => applyPushOrigin(state, group, 'team'))
+      break
+    }
     case 'work.assign': {
       chatOnly(command.conversationId)
       projectChatWork(command.conversationId)
@@ -2779,10 +2814,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // A teammate's agent on a personal machine keeps what it has; it takes no new task for another person's project.
       requireTeamWork(state, worker.machineId, worker.contributorId, home, context.now, context.teamMachines, context.otherWorkspaceMachines)
       // Team-written code runs only in a Team account, and a Team agent's work marks the task (teamWritten.ts, audit H2).
-      applyPushOrigin(state, group, context.pushOrigin)
-      if (context.pushOrigin === 'unknown' && !onTeamAccount(state, worker)) failPushUnknown()
+      pushedRefusal(group, worker)
       requireTeamWrittenAccount(state, group, worker)
-      markTeamWritten(state, group, worker)
+      marking(group, () => markTeamWritten(state, group, worker))
       if (worker.workDecision === 'stop') fail('STOP_REQUESTED', 'This worker is stopping. Wait for its execution host.')
       if (state.conversations.some(c => activeWork(c) && c.assignment?.agentId === worker.id)) fail('AGENT_BUSY', 'This agent already owns an active assignment.')
       // An older client assigns in a custom role: kept for older readers, and the role name it means for a worker without
@@ -2854,14 +2888,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         }
         else effects.result.notAsked = `Not asked ${person(state, personId).email}: ${context.openDecisions} decisions you asked them are still open, and at most ${MAX_OPEN_DECISIONS} can be. Wait for answers before asking more.`
       }
-      // A Team agent's push can land on any branch: its Ready reads who pushed. An agent in the main account already on a step
-      // of this task is told to stop, as nothing else reaches a session that fetched the branch (teamWritten.ts, audit H2).
-      if (command.status === 'review' && context.pushOrigin === 'team' && !teamWrittenTask(state, group)) {
-        applyPushOrigin(state, group, 'team')
-        const stepsAgents = state.conversations.filter(c => c.reviewOf === (group.reviewOf ?? group.id) && activeWork(c)).map(c => c.assignment!.agentId)
-          .filter(id => { const a = state.agents.find(x => x.id === id); return !!a && !onTeamAccount(state, a) })
-        if (stepsAgents.length) effects.messages.push({ id: stableId(operationId, 'team-written-stop'), conversationId: group.id, author: sender, text: TEAM_WRITTEN_STOP, replyTo: null, recipients: stepsAgents, source: SYSTEM_ROW })
-      }
+      // A Team agent's push can land on any branch: its Ready reads who pushed (teamWritten.ts, audit H2).
+      if (command.status === 'review') marking(group, () => applyPushOrigin(state, group, context.pushOrigin))
       const changed = assignment.status !== command.status || assignment.result !== command.result || !!command.ask, previous = assignment.status
       const waited = waitingForReview(assignment)
       assignment.status = command.status

@@ -22,6 +22,7 @@ export const ACTIONS_READ_PERMISSIONS = { actions: 'read', metadata: 'read' } as
 /** What reading who pushed a pull request's commits may do (pushOrigin.ts): read the pull request and the repository's activity log. */
 export const PUSH_ORIGIN_PERMISSIONS = { contents: 'read', pull_requests: 'read', metadata: 'read' } as const
 const PUSH_ORIGINS_KEPT = 1000
+const PUSH_UNKNOWN_MS = 60_000
 export type TokenPermissions = Readonly<Record<string, 'read' | 'write'>>
 /** Jobs running and waiting on a repository's GitHub Actions, in all and on macOS runners: counts only. */
 export interface CiLoad { running: number; queued: number; macosRunning: number; macosQueued: number }
@@ -127,7 +128,7 @@ export class GitHubApp {
   private readonly shownNames = new Map<string, { name: string; until: number }>()
   /** Each repository's CI load while fresh, or being read ([ciLoad]), by its name in lower case; per server process. */
   private readonly ciLoads = new Map<string, { value: Promise<CiLoad | null>; until: number }>()
-  private readonly pushOrigins = new Map<string, PushOrigin>()
+  private readonly pushOrigins = new Map<string, { origin: PushOrigin; until: number }>()
   /** Each repository's CI reads in the last hour, and its last load read, for [CI_READS_PER_HOUR]. */
   private readonly ciReads = new Map<string, { at: number[]; last: { load: CiLoad | null; at: number } | null }>()
   /** When each repository's "not installed" was last forgotten on request ([forget]). */
@@ -381,8 +382,7 @@ export class GitHubApp {
   }
 
   /**
-   * Who pushed the pull request [number]'s commits (pushOrigin.ts), remembered by its head alone. Only `clean` and `team` are
-   * remembered: an `unknown` is read again, and a failure never reads as clean. Null when this app is not on the repository.
+   * Who pushed the pull request [number]'s commits (pushOrigin.ts), remembered by its head alone. A failure never reads as clean.
    */
   async pushOrigin(repository: GitHubRepository, number: number): Promise<PushOrigin> {
     try {
@@ -390,20 +390,26 @@ export class GitHubApp {
       if (!resolved) return 'unknown'
       const { token } = await this.createToken(resolved.installation, resolved.repository, PUSH_ORIGIN_PERMISSIONS)
       const auth = `Bearer ${token}`, name = `${resolved.repository.owner}/${resolved.repository.name}`
-      const read: GitHubRead = async path => {
+      const call: GitHubRead = async path => {
         const answer = await this.call('GET', path, auth)
         const next = /<https:\/\/[^/>]+(\/[^>]+)>;\s*rel="next"/.exec(answer.link ?? '')?.[1]
         return { status: answer.status, body: answer.body, ...(next ? { next } : {}) }
       }
-      const head = await read(`/repos/${name}/pulls/${number}`)
-      const sha = (head.body as { head?: { sha?: unknown } }).head?.sha
+      const pullPath = `/repos/${name}/pulls/${number}`
+      const pull = await call(pullPath)
+      const sha = (pull.body as { head?: { sha?: unknown } }).head?.sha
       const key = typeof sha === 'string' ? `${name.toLowerCase()}@${sha}` : null
       const known = key ? this.pushOrigins.get(key) : undefined
-      if (known) return known
-      const origin = await readPushOrigin(read, name, number)
-      if (key && origin !== 'unknown') {
+      if (known && known.until > this.now()) return known.origin
+      // The same read of the pull request decides the head and the answer, so a push in between cannot file it under another commit.
+      const read: GitHubRead = path => path === pullPath ? Promise.resolve(pull) : call(path)
+      const identity = await this.commitIdentity(token)
+      const bot = /\+([^@]+\[bot\])@/.exec(identity?.email ?? '')?.[1] ?? null
+      const origin = await readPushOrigin(read, name, number, bot)
+      if (key) {
         if (this.pushOrigins.size >= PUSH_ORIGINS_KEPT) this.pushOrigins.delete(this.pushOrigins.keys().next().value!)
-        this.pushOrigins.set(key, origin)
+        // An answer for a head holds for good. An `unknown` is asked again a minute later, so retries cost no more than that.
+        this.pushOrigins.set(key, { origin, until: origin === 'unknown' ? this.now() + PUSH_UNKNOWN_MS : Infinity })
       }
       return origin
     } catch {

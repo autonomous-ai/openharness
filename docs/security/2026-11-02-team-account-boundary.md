@@ -74,14 +74,24 @@ there with its project settings off. Until then, route those Reviewers and Teste
 **Status (task #2025, `docs/plans/2026-11-02-team-written-branch-plan.md`):** the attack was then tried with Claude Code 2.1.316 on a
 fixture: planted `settings.json`, `settings.local.json` and `.mcp.json` all ran in a trusted folder. The fix:
 
-- The server refuses a main-account agent for a task a Team agent worked on, and for any branch GitHub's activity log shows the app's
-  bot pushed to. If GitHub can't say, the main account is refused too.
+- The server refuses a main-account agent for a task a Team agent worked on, and for any pull request GitHub's activity log shows the
+  app's bot pushed to. If GitHub can't say, or a review names no pull request, the main account is refused too.
+- A new mark tells every main-account member of the task and its steps to stop, and another agent's post can't name them.
 - These agents start with project settings off, and a daemon in the main account refuses such a start.
 
-**Still open:** a main-account agent that checks out a branch outside the workflow, for example when a chat message asks it to (M3);
-a push between the check and the fetch; a person's rebase of a Team agent's commits; and pushes more than a week before the pull
-request opened. The server decides who gets work and cannot stop a shell. Closing the first two takes a sandbox for every
-main-account agent, or a repository rule that keeps the app's bot to its own branch prefix.
+**Still open:**
+- a main-account agent that checks out a branch outside the workflow, for example when a chat message asks it to (M3);
+- a push between the check and the fetch;
+- a rebase or cherry-pick of a Team agent's commits by a person or an owner's agent, whose push GitHub shows as a person's;
+- pushes more than a week before the pull request and its oldest commit;
+- the default branch, which reads clean because it is protected;
+- the PM, which builds batch branches in the main account. The batch and `make merge-pr` must run from a default-branch checkout.
+
+The server decides who gets work and cannot stop a shell. Closing the first two takes a sandbox for every main-account agent, or a
+repository rule that keeps the app's bot to its own branch prefix.
+
+Work that needs the owner's tools or devices has no home once its task is marked: it is reviewed in a Team account, merged, and then
+checked on the owner's device, unless the owners decide otherwise.
 
 ### M1. The owner's files in the shared `/tmp` are readable, and can be planted (Medium)
 

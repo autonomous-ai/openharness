@@ -49,8 +49,30 @@ export function requireTeamWrittenMachine(state: SuperTabState, group: Conversat
   if (teamWrittenTask(state, group) && !teamAccountPool(state.machines?.find(m => m.machineId === machineId))) failTeamWritten()
 }
 
-export function failTeamWritten(): never {
-  return fail(TEAM_WRITTEN_WORK, TEAM_WRITTEN_REASON, 403)
+export function failTeamWritten(details?: Record<string, unknown>): never {
+  return fail(TEAM_WRITTEN_WORK, TEAM_WRITTEN_REASON, 403, details)
+}
+
+/** Refuses an agent naming a main-account member of Team-written work in a post: how a re-test or re-check is asked for. */
+export function requireNameable(state: SuperTabState, group: Conversation, sender: Agent, named: Agent): void {
+  if (coordinates(state, group, sender) || named.id === sender.id) return
+  requireTeamWrittenAccount(state, group, named)
+}
+
+/** Everyone to tell when [group]'s task has just been marked, by the conversation that reaches them, each once: the main-account
+ *  members of the task and of every step, finished steps included, as the workflow asks them again. Not the coordinator. */
+export function mainAccountMembers(state: SuperTabState, group: Conversation, except?: string): Array<{ conversationId: string; agentIds: string[] }> {
+  const task = taskOf(state, group) ?? group
+  const seen = new Set<string>(except ? [except] : [])
+  return [task, ...state.conversations.filter(c => c.reviewOf === task.id)].flatMap(c => {
+    const agentIds = c.agentIds.filter(id => {
+      const member = state.agents.find(a => a.id === id)
+      if (!member || seen.has(id) || onTeamAccount(state, member) || coordinates(state, group, member)) return false
+      seen.add(id)
+      return true
+    })
+    return agentIds.length ? [{ conversationId: c.id, agentIds }] : []
+  })
 }
 
 /** GitHub's record of who pushed: a bot among [group]'s pushes marks its task for good. A clean reading clears nothing. */

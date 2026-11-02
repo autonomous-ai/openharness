@@ -31,8 +31,8 @@ as Team-written:
 
 1. An agent on a Team account opened its task, was assigned to it or was added to it (a lasting mark on the task, kept by the
    server). A Team agent given only a step does not count, and neither does the project's coordinator.
-2. GitHub shows a push by the app's bot whose commit is an ancestor of the branch's head and not on the default branch. This
-   also catches a batch branch that the PM pushed with Team commits inside.
+2. GitHub shows a push by the app's bot of a commit in the pull request. This also catches a batch branch that the PM pushed with
+   Team commits inside.
 3. Its head has commits not on the default branch, and the activity log can't cover them (the log was too short, the read
    failed, or the commit came from a fork).
 
@@ -44,8 +44,9 @@ Code on the default branch has passed review and counts as clean.
 
 Files: `backend/src/superTabs/commands.ts`, `machines.ts`, `model.ts`, new `backend/src/superTabs/teamWritten.ts`, tests beside them.
 
-- `Conversation.teamWritten: true` is set when an agent on a Team account opens a task, is assigned to it or is added to it, and it
-  never clears. A step reads its task's mark. A Team agent given only a step, or the project's coordinator, marks nothing.
+- `Conversation.teamWritten: true` is set when an agent on a Team account opens a task, is assigned to it, is added to it or is named
+  into it, and it never clears. Any new mark tells every main-account member of the task and its steps to stop, finished steps
+  included, and a post by another agent that names one of them is refused. A step reads its task's mark. A Team agent given only a step, or the project's coordinator, marks nothing.
 - `work.assign`, `conversation.agent`, `agent.start` and `route.record` refuse an agent outside a Team account for a marked
   task or its step, with `TEAM_WRITTEN_WORK` and a reason that says where the work can go. Route candidates leave those
   machines out and say why.
@@ -58,8 +59,11 @@ Files: new `backend/src/github/pushOrigin.ts`, `backend/src/github/app.ts`, `bac
 
 - Given a project and a head commit, it reads the activity log with the app's token and answers `clean`, `team` or `unknown`.
   Results are cached by head commit only, with a bounded retry. `unknown` is never cached as clean.
-- At a `work.assign`, a Ready for review and a start that names a branch, the server reads the origin first and marks the task on
-  `team`. `unknown` refuses the main account without marking. This covers a Team push onto an owner's branch.
+- At a `work.assign`, an added agent, a Ready for review and a start that names a branch (a PM's too), the server reads the origin
+  first and marks the task on `team`, and the mark stays even when the command that read it is refused. `unknown` refuses the main
+  account without marking. A step that names no pull request reads `unknown`. This covers a Team push onto an owner's branch.
+- The whole log is too long to walk: 2,000 events reached 3.3 days on this repository. So the read asks two narrow questions: who
+  pushed the head, on its own branch (`ref=`), and which of these commits the app's bot ever pushed (`actor=`).
 - The answer says only the verdict: no names and no branch titles. A project the caller can't read gets the same refusal as a
   missing one.
 - Tests with `fakeGitHub.ts`: a bot push; a batch branch; a person's push; a forged author on a bot push; a failed, partial or
@@ -109,14 +113,27 @@ left out here. What that leaves open is below.
 - **An agent told outside the workflow.** A main-account agent that runs `gh pr checkout` on a branch it was never assigned, for
   example because a chat message asked it to (M3), still runs that code as the owner. The server only controls who gets the work.
 - **A push after the check.** A Team agent can push between a clean reading and the Reviewer's fetch. The next Ready reads again
-  and tells a main-account agent on the task to stop, but by then it may have run the code.
-- **A person's rewrite.** A person who rebases or cherry-picks a Team agent's commits gets new commit ids, so the log shows a
-  person's push.
-- **Older pushes.** The log's scan stops a week before the pull request opened.
+  and tells every main-account member to stop, but by then one may have run the code.
+- **A rewrite by a person or an owner's agent.** An owner's agent on its own project pushes with the owner's login, so GitHub shows
+  it as a person. If a person or that agent rebases or cherry-picks a Team agent's commits, the new commits have new ids and the
+  branch reads clean. A marked task keeps its mark; a new branch on another task does not get one.
+- **Old pushes.** The scan of the bot's pushes stops a week before the older of the pull request and its oldest commit. A commit's
+  date can be forged, which can only narrow this back to the pull request's own week.
+- **The default branch.** It reads clean without a check, because it passed review. A Team token could push to it if the branch
+  were unprotected. Here it is protected, and that protection is what this rests on.
+- **The PM.** It is exempt as "never builds or runs it", but nothing enforces that. It builds batch branches in the main account, and
+  a `Makefile` or `.claude` settings from a batch branch would run as the owner. The batch and `make merge-pr` must run from a
+  default-branch checkout. That is a rule for the project's instructions, not something this code enforces.
 
 Closing the first two takes a sandbox for every main-account agent, or a repository rule that keeps the app's bot to its own branch
 prefix. The rule is the stronger next step. It needs a change to repository settings, so it is Ken's decision and not part of this
 task.
+
+## Work that needs the owner's tools or devices
+
+A Team account has none of the owner's tools or devices, so firmware on a plugged-in device and other owner-only checks have no home
+once a task is marked. This code offers no exception. The default is that such a task is reviewed in a Team account, merged, and then
+checked on the owner's device, because code on the default branch has passed review. Scholes and Ken can decide otherwise.
 
 ## Design
 
@@ -124,7 +141,8 @@ task.
   home is deleted when the Swarm ends that agent.
 - **Concurrency:** the mark is set inside the existing per-tab command transaction. GitHub reads run outside it, and their
   result is applied by a command that only ever adds the mark, so a late read can't clear one.
-- **Read cost:** one activity read per new head, none for a head already read, paged only as far as the merge base.
+- **Read cost:** per new head, up to 3 pull request reads, 3 pages of the branch's log and 20 pages of the bot's pushes. A head with
+  an answer is not read again, and an `unknown` is read again after a minute at most.
 - **Scale:** at 10x pushes the activity log's 5,000-an-hour app limit warns first. A rate limit reads `unknown`, which fails closed
   and refuses main-account work, so the refusal count is the metric to log.
 - **Compatibility:** an older CLI on a Team account ignores the stamp, so its session reads project settings there, with the Team

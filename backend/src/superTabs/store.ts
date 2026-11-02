@@ -7,7 +7,8 @@ import { isDeepStrictEqual } from 'node:util'
 import type { Machine, Prisma, PrismaClient, SuperTabDelivery, SuperTabMessage } from '@prisma/client'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { machineAlive } from '../lib/prisma.js'
-import type { PushOrigin } from '../github/pushOrigin.js'
+import { pullRequestsIn, type PushOrigin } from '../github/pushOrigin.js'
+import { githubRepository } from '../github/repository.js'
 import { isTeamSession, teamMachine, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
@@ -1197,6 +1198,12 @@ export class SuperTabStore {
       return done
     } catch (error) {
       if (input.command?.type === 'message.send' && input.command.newSession && error instanceof SuperTabError) logger.info('Buddy session refused', { tabId, code: error.code })
+      // A refusal for a bot's push rolled its mark back. The mark stays, so a post or a join that reads no GitHub is refused next (review 1 of #2559).
+      const pushedOn = input.command && 'conversationId' in input.command ? input.command.conversationId : undefined
+      if (error instanceof SuperTabError && error.details?.pushed === true && typeof pushedOn === 'string') {
+        await this.executeOnce(user, tabId, { operationId: `team-written-${stableId(input.operationId, pushedOn)}`, command: { type: 'work.teamWritten', conversationId: pushedOn } }, asAgentId, hostMachineId)
+          .catch(failure => logger.warn('Team-written mark failed', { tabId, error: String(failure) }))
+      }
       // A queued start its machine will not take for good — no Harness Team account, or one that is not private — fails
       // with that reason instead of waiting there: its host would otherwise try to launch it on every pass, and it would
       // hold a slot. A stale check or an offline machine may pass again by itself, so that start keeps waiting.
@@ -1224,30 +1231,39 @@ export class SuperTabStore {
    */
   private async pushOriginFor(user: AuthUser, tabId: string, command: unknown): Promise<PushOrigin | undefined> {
     const hook = this.hooks.pushOrigin
-    const asked = command as { type?: unknown; conversationId?: unknown; status?: unknown; result?: unknown; request?: { branchRef?: unknown; conversationId?: unknown } } | null
+    const asked = command as { type?: unknown; conversationId?: unknown; status?: unknown; result?: unknown; present?: unknown; projectId?: unknown; branchRef?: unknown;
+      request?: { branchRef?: unknown; conversationId?: unknown } } | null
+    if (!asked) return undefined
     // A start that names a branch: a person or the PM can name any branch, whoever pushed it.
-    const branch = asked?.type === 'agent.start' && typeof asked.request?.branchRef === 'string' ? asked.request.branchRef.replace(/^refs\/(heads|remotes\/origin)\//, '') : null
-    if (branch && this.hooks.branchPushOrigin) {
-      try {
+    const ref = asked.type === 'agent.start' ? asked.request?.branchRef : asked.type === 'lead.start' ? asked.branchRef : undefined
+    try {
+      if (typeof ref === 'string' && this.hooks.branchPushOrigin) {
+        const branch = ref.replace(/^refs\/(heads|remotes\/origin)\//, '')
         const repositoryUrl = await transaction(this.db, async tx => {
           const { state } = await this.load(tx, user, tabId, namedFor(command as Command))
-          const group = state.conversations.find(c => c.id === asked!.request!.conversationId)
+          if (asked.type === 'lead.start') return projectsOf(state).find(p => p.id === asked.projectId)?.repository?.repositoryUrl ?? null
+          const group = state.conversations.find(c => c.id === asked.request?.conversationId)
           return group ? groupProject(state, group).repository?.repositoryUrl ?? null : undefined
         })
         return repositoryUrl === undefined ? undefined : await this.hooks.branchPushOrigin(repositoryUrl, branch)
-      } catch (error) { return error instanceof SuperTabError ? undefined : 'unknown' }
-    }
-    if (!hook || !asked || typeof asked.conversationId !== 'string' || !(asked.type === 'work.assign' || (asked.type === 'work.status' && asked.status === 'review'))) return undefined
-    try {
+      }
+      const reads = asked.type === 'work.assign' || asked.type === 'work.teamWritten' || (asked.type === 'conversation.agent' && asked.present === true) || (asked.type === 'work.status' && asked.status === 'review')
+      if (!hook || typeof asked.conversationId !== 'string' || !reads) return undefined
       const facts = await transaction(this.db, async tx => {
         const { state } = await this.load(tx, user, tabId, namedFor(command as Command))
         const group = state.conversations.find(c => c.id === asked.conversationId)
         if (!group) return null
         const task = group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : undefined
-        return { repositoryUrl: groupProject(state, group).repository?.repositoryUrl ?? null,
-          urls: [...new Set([...group.pullRequestUrls ?? [], ...task?.pullRequestUrls ?? [], ...typeof asked.result === 'string' ? pullRequestLinks(asked.result) : []])] }
+        const repositoryUrl = groupProject(state, group).repository?.repositoryUrl ?? null
+        const urls = [...group.pullRequestUrls ?? [], ...task?.pullRequestUrls ?? [],
+          ...[group.brief, group.title, task?.brief, task?.title, typeof asked.result === 'string' ? asked.result : ''].flatMap(text => text ? pullRequestsIn(text, repositoryUrl) : [])]
+        return { repositoryUrl, urls: [...new Set(urls)], step: !!group.reviewOf }
       })
-      return facts?.urls.length ? await hook(facts.repositoryUrl, facts.urls) : undefined
+      if (!facts) return undefined
+      if (facts.urls.length) return await hook(facts.repositoryUrl, facts.urls)
+      // A step reads or runs a branch, and with no pull request named nothing shows whose. It may name one in a sentence no read
+      // can parse, and then its agent runs `gh pr checkout` itself (security review 2 of #2559).
+      return facts.step && facts.repositoryUrl && githubRepository(facts.repositoryUrl) ? 'unknown' : undefined
     } catch (error) {
       if (error instanceof SuperTabError) return undefined
       return 'unknown'

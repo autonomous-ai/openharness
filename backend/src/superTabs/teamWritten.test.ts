@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import type { ContributedMachine } from './machines.js'
 import { createSuperTab, SuperTabError, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
+import { LEAD_CAPABILITY } from './leadStart.js'
 import { TEAM_WRITTEN_STOP, TEAM_WRITTEN_WORK, teamWrittenTask } from './teamWritten.js'
 
 // Audit H2: a branch a Team agent wrote runs only in a Team account, whoever's project it is, so nothing the branch
@@ -142,6 +143,76 @@ describe('a task a Team agent worked on', () => {
       { kind: 'agent', agentId: builder, machineOwnerId: 'owner' }, { pushOrigin: 'team' })
     expect(f.state.conversations.find(c => c.id === task)!.teamWritten).toBe(true)
     expect(effects.messages.find(m => m.text === TEAM_WRITTEN_STOP)?.recipients).toEqual([reviewer])
+  })
+
+  it('tells every main-account member once when it is marked, finished steps included, and never the coordinator or a Team agent', () => {
+    const f = swarm(), task = f.group(), builder = f.member('main-builder', 'mac'), tester = f.member('main-tester', 'mac'), team = f.member('team-reviewer', 'mac-team')
+    f.run({ type: 'work.assign', conversationId: task, agentId: builder })
+    const assignmentId = f.state.conversations.find(c => c.id === task)!.assignment!.id
+    const testStep = f.group({ reviewOf: task, step: 'Test' }), reviewStep = f.group({ reviewOf: task, step: 'Review' })
+    f.run({ type: 'work.assign', conversationId: testStep, agentId: tester })
+    f.run({ type: 'work.assign', conversationId: reviewStep, agentId: team })
+    // The Tester's step ended: it is still a member, and the same-step re-ask would reach it.
+    f.state.conversations.find(c => c.id === testStep)!.assignment!.status = 'done'
+    const effects = f.run({ type: 'work.status', conversationId: task, assignmentId, status: 'review', result: 'https://github.com/acme/app/pull/7' }, owner, { pushOrigin: 'team' })
+    const told = effects.messages.filter(m => m.text === TEAM_WRITTEN_STOP).flatMap(m => m.recipients)
+    expect(told.sort()).toEqual([builder, tester].sort())
+  })
+
+  it('tells the main-account members when a Team agent is assigned to their clean task', () => {
+    const f = swarm(), task = f.group(), builder = f.member('main-builder', 'mac')
+    f.run({ type: 'conversation.agent', conversationId: task, agentId: builder, present: true, lead: false })
+    const effects = f.run({ type: 'work.assign', conversationId: task, agentId: f.member('team-builder', 'mac-team') })
+    expect(effects.messages.find(m => m.text === TEAM_WRITTEN_STOP)?.recipients).toEqual([builder])
+  })
+
+  it('refuses a post that names a main-account member of a marked task: the re-test the workflow asks for', () => {
+    const f = swarm(), task = f.group(), builder = f.member('main-builder', 'mac'), tester = f.member('main-tester', 'mac')
+    f.run({ type: 'work.assign', conversationId: task, agentId: builder })
+    const step = f.group({ reviewOf: task, step: 'Test' })
+    f.run({ type: 'work.assign', conversationId: step, agentId: tester })
+    f.state.conversations.find(c => c.id === task)!.teamWritten = true
+    const asBuilder: Actor = { kind: 'agent', agentId: builder, machineOwnerId: 'owner' }
+    const post = (conversationId: string, recipientIds: string[], actor: Actor) => f.run({ type: 'message.send', conversationId, text: 'Please test again.', replyTo: null, recipientIds }, actor)
+    expect(refusal(() => post(step, [tester], asBuilder))).toBe(TEAM_WRITTEN_WORK)
+    expect(refusal(() => post(task, [tester], asBuilder))).toBe(TEAM_WRITTEN_WORK)
+    // A Team agent may still be named, and a person speaks to whom they choose.
+    const team = f.member('team-tester', 'mac-team')
+    f.run({ type: 'conversation.agent', conversationId: task, agentId: team, present: true, lead: false })
+    expect(refusal(() => post(task, [team], asBuilder))).toBeNull()
+    expect(refusal(() => post(task, [tester], owner))).toBeNull()
+  })
+
+  it('reads who pushed before adding an agent: a bot\'s push or an unknown refuses the main account, and a Team agent still joins', () => {
+    const f = swarm(), task = f.group(), main = f.member('main-reviewer', 'mac')
+    const add = (agentId: string, pushOrigin: 'team' | 'unknown') => f.run({ type: 'conversation.agent', conversationId: task, agentId, present: true, lead: false }, owner, { pushOrigin })
+    expect(refusal(() => add(main, 'unknown'))).toBe(TEAM_WRITTEN_WORK)
+    expect(refusal(() => add(main, 'team'))).toBe(TEAM_WRITTEN_WORK)
+    expect(refusal(() => add(f.member('team-a', 'mac-team'), 'unknown'))).toBeNull()
+  })
+
+  it('refuses a PM start in the main account on a branch a bot pushed or GitHub cannot place, and takes a clean one', () => {
+    for (const [pushOrigin, code] of [['team', TEAM_WRITTEN_WORK], ['unknown', TEAM_WRITTEN_WORK], ['clean', null]] as const) {
+      const f = swarm()
+      const projectId = String(f.run({ type: 'project.create', name: 'New', visibility: 'public', brief: '' }).result.projectId)
+      f.state.machines!.find(m => m.machineId === 'mac')!.observation!.capabilities = [LEAD_CAPABILITY]
+      expect(refusal(() => f.run({ type: 'lead.start', projectId, machineId: 'mac', engine: 'claude', branchRef: 'refs/remotes/origin/fix', repositoryUrl: 'https://github.com/acme/app' }, owner, { pushOrigin, machineVersions: { mac: '99.0.0', 'mac-team': '99.0.0' } })), pushOrigin).toBe(code)
+    }
+  })
+
+  it('marks only on the server\'s own read: a client asking for the mark without one is refused', () => {
+    const f = swarm(), task = f.group()
+    expect(refusal(() => f.run({ type: 'work.teamWritten', conversationId: task }))).toBe('NOT_FOUND')
+    expect(f.state.conversations.find(c => c.id === task)!.teamWritten).toBeUndefined()
+    f.run({ type: 'work.teamWritten', conversationId: task }, owner, { pushOrigin: 'team' })
+    expect(f.state.conversations.find(c => c.id === task)!.teamWritten).toBe(true)
+  })
+
+  it('marks a clean task when another agent names a Team agent into it', () => {
+    const f = swarm(), task = f.group(), builder = f.member('main-builder', 'mac')
+    f.run({ type: 'work.assign', conversationId: task, agentId: builder })
+    f.run({ type: 'message.send', conversationId: task, text: 'Please look.', replyTo: null, recipientIds: [f.member('team-a', 'mac-team')] }, { kind: 'agent', agentId: builder, machineOwnerId: 'owner' })
+    expect(f.state.conversations.find(c => c.id === task)!.teamWritten).toBe(true)
   })
 
   it('reads who pushed the branch a start names: a bot\'s push moves it to the Team account, an unknown branch stays out of the main account', () => {

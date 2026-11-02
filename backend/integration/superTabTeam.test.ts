@@ -187,6 +187,40 @@ describe('a task a Team agent worked on', () => {
     await expect(asked.execute(owner, tab, { operationId: randomUUID(), command: { type: 'work.assign', conversationId: review, agentId: main } }))
       .rejects.toMatchObject({ code: 'TEAM_WRITTEN_WORK' })
     expect(read).toHaveBeenCalledWith(null, ['https://github.com/acme/app/pull/7'])
+    // The refusal rolled its command back, and the mark still stays: the same agent cannot be added right after.
+    expect((await storedState(tab)).conversations.find(c => c.id === clean)?.teamWritten).toBe(true)
+    await expect(run(tab, { type: 'conversation.agent', conversationId: review, agentId: main, present: true, lead: false })).rejects.toMatchObject({ code: 'TEAM_WRITTEN_WORK' })
+    await expect(run(tab, { type: 'work.assign', conversationId: review, agentId: main })).rejects.toMatchObject({ code: 'TEAM_WRITTEN_WORK' })
+  })
+
+  it('stores a mark set from a step on its task, and tells the main-account members in their own chats', async () => {
+    const { tab, builder } = await fixture()
+    const clean = await task(tab, 'Owner work'), main = await owners(tab, clean), review = await step(tab, clean)
+    const state = await storedState(tab)
+    state.conversations.find(c => c.id === clean)!.pullRequestUrls = ['https://github.com/acme/app/pull/9']
+    await saveState(tab, state)
+    const asked = new SuperTabStore(db, Date.now, undefined, { pushOrigin: async () => 'team' })
+    await asked.execute(owner, tab, { operationId: randomUUID(), command: { type: 'work.assign', conversationId: review, agentId: builder } })
+    expect((await storedState(tab)).conversations.find(c => c.id === clean)?.teamWritten).toBe(true)
+    const told = await db.superTabMessage.findMany({ where: { tabId: tab, conversationId: clean, text: { startsWith: 'Stop: GitHub shows' } } })
+    expect(told).toHaveLength(1)
+    expect(JSON.stringify(told[0])).toContain(main)
+  })
+
+  it('reads the pull request a step\'s brief names, and refuses the main account on a step that names none', async () => {
+    const { tab } = await fixture()
+    const state0 = await storedState(tab)
+    state0.projects!.find(p => p.id === 'lead')!.repository = { machineId: 'owner-host', cwd: '/repo', repositoryUrl: 'https://github.com/acme/app' }
+    await saveState(tab, state0)
+    const clean = await task(tab, 'Owner work'), main = await owners(tab, clean), bare = await step(tab, clean)
+    const named = String((await run(tab, { type: 'conversation.create', projectId: 'lead', title: 'Review', brief: 'Read PR #2500', reviewOf: clean, step: 'Review 2', checks: [] })).result.conversationId)
+    const read = vi.fn(async () => 'clean' as const)
+    const asked = new SuperTabStore(db, Date.now, undefined, { pushOrigin: read })
+    const assign = (conversationId: string) => asked.execute(owner, tab, { operationId: randomUUID(), command: { type: 'work.assign', conversationId, agentId: main } })
+    await expect(assign(bare)).rejects.toMatchObject({ code: 'TEAM_WRITTEN_WORK' })
+    expect(read).not.toHaveBeenCalled()
+    await expect(assign(named)).resolves.toBeTruthy()
+    expect(read).toHaveBeenCalledWith('https://github.com/acme/app', ['https://github.com/acme/app/pull/2500'])
   })
 
   it('refuses the main account while GitHub cannot say, and takes it once GitHub answers clean', async () => {
