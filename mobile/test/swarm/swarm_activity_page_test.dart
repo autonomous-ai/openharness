@@ -123,6 +123,85 @@ void main() {
     }
   });
 
+  // Tony's phone list, task 26, as Desktop's decisions_view.dart.
+  group('Answered', () {
+    Map<String, dynamic> settled(
+      String id,
+      int minute, {
+      bool delegated = false,
+    }) => {
+      'id': id,
+      'projectId': 'lead',
+      'projectName': 'Mobile',
+      'conversationId': leadChat,
+      'conversationTitle': 'Lead',
+      'askerName': 'River',
+      'question': 'Question $id?',
+      'options': ['Merge', 'Wait'],
+      'recommended': 0,
+      'choice': 0,
+      if (delegated) 'delegated': true,
+      'createdAt': DateTime.utc(2026, 10, 29, 1, minute).toIso8601String(),
+    };
+
+    testWidgets('lists the newest 5, the coordinator\'s answer never as the '
+        'person\'s own', (tester) async {
+      final fake = activityBackend();
+      fake.routes['/api/super-tabs/$tab/decisions?state=settled'] = (_) => {
+        'decisions': [
+          settled('a1', 1),
+          settled('a2', 2, delegated: true),
+          settled('a3', 3),
+          settled('a4', 4),
+          settled('a5', 5),
+          settled('a6', 6),
+        ],
+      };
+      await pump(tester, fake);
+      await tester.scrollUntilVisible(key('swarm-answered'), 200);
+      expect(find.text('Answered'), findsOneWidget);
+      expect(
+        find.text('Question a1?'),
+        findsNothing,
+        reason: 'the oldest of 6',
+      );
+      expect(find.text('Question a6?'), findsOneWidget);
+      expect(find.text('You chose: Merge'), findsNWidgets(4));
+      expect(find.text('Product Manager decided: Merge'), findsOneWidget);
+    });
+
+    testWidgets('says when it could not be read, and reads again on asking', (
+      tester,
+    ) async {
+      final fake = activityBackend();
+      var down = true;
+      fake.routes['/api/super-tabs/$tab/decisions?state=settled'] = (_) {
+        if (down) throw StateError('Offline');
+        return {
+          'decisions': [settled('a1', 1)],
+        };
+      };
+      await pump(tester, fake);
+      expect(
+        find.text('Could not load answered decisions. Try again.'),
+        findsOneWidget,
+      );
+      down = false;
+      await tester.tap(key('swarm-answered-retry'));
+      await tester.pumpAndSettle();
+      expect(find.text('You chose: Merge'), findsOneWidget);
+    });
+
+    testWidgets('shows nothing with none answered', (tester) async {
+      final fake = activityBackend();
+      fake.routes['/api/super-tabs/$tab/decisions?state=settled'] = (_) => {
+        'decisions': <Object>[],
+      };
+      await pump(tester, fake);
+      expect(find.text('Answered'), findsNothing);
+    });
+  });
+
   testWidgets('Approve asks first, naming the option; Cancel sends nothing', (
     tester,
   ) async {
