@@ -464,30 +464,49 @@ mod tests {
         );
     }
 
+    // W1's rule, whichever way the lookups run: the daemon's PowerShell, this binary, or the console
+    // host of either, as its child or its child's child (Remy's review of #2605). While a fallback
+    // PowerShell runs, a helper that just refused the command is alive too.
     #[test]
-    fn another_lookup_or_its_console_host_may_have_taken_a_freed_id() {
-        let lookup = Process {
-            parent: Some(DAEMON),
-            name: "harness-pty.exe".into(),
-            ..mine()
-        };
-        is_no(
-            asked(&[row(T)], Some(lookup)),
-            "a lookup the daemon started",
-        );
-        let host = Process {
+    fn what_the_daemon_starts_for_lookups_may_have_taken_a_freed_id() {
+        for name in [
+            "harness-pty.exe",
+            "powershell.exe",
+            "conhost.exe",
+            "HARNESS-PTY.EXE",
+            "PowerShell.EXE",
+        ] {
+            for parent in [DAEMON, 80] {
+                let process = Process {
+                    parent: Some(parent),
+                    name: name.into(),
+                    ..mine()
+                };
+                is_no(asked(&[row(T)], Some(process)), "the daemon started");
+            }
+        }
+    }
+
+    #[test]
+    fn a_powershell_the_daemon_did_not_start_is_yes() {
+        let shell = Process {
             parent: Some(80),
-            name: "conhost.exe".into(),
+            name: "powershell.exe".into(),
             ..mine()
         };
-        is_no(asked(&[row(T)], Some(host)), "a console host of a lookup");
-        // The names in any case, as Windows files them.
-        let upper = Process {
-            parent: Some(DAEMON),
-            name: "HARNESS-PTY.EXE".into(),
-            ..mine()
+        let others = |pid| match pid {
+            CALLER => Some(shell.clone()),
+            80 => Some(Process {
+                parent: Some(2),
+                name: "explorer.exe".into(),
+                ..mine()
+            }),
+            _ => None,
         };
-        is_no(asked(&[row(T)], Some(upper)), "a lookup the daemon started");
+        assert_eq!(verdict(&[row(T)], LOOKUP, DAEMON, others), Verdict::Yes);
+        // Its parent gone, as for a shell whose launcher exited: nothing ties it to the daemon.
+        let orphan = |pid| (pid == CALLER).then(|| shell.clone());
+        assert_eq!(verdict(&[row(T)], LOOKUP, DAEMON, orphan), Verdict::Yes);
     }
 
     #[test]

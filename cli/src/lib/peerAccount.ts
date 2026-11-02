@@ -119,6 +119,13 @@ export const WINDOWS_PEER_MS = 45_000
 export type WindowsPeerRun = (script: string, inputs: Record<string, string>) => Promise<{ status: number | null; stdout: string }>
 const runWindowsPeer: WindowsPeerRun = (script, inputs) => runPowershellAsync(script, inputs, WINDOWS_PEER_MS)
 
+export const WINDOWS_PEER_NATIVE_MS = 0
+export type WindowsNativeRun = (inputs: Record<string, string>) => Promise<{ status: number | null; stdout: string } | 'missing'>
+export const nativeFirst = (_native: WindowsNativeRun, powershell: WindowsPeerRun): WindowsPeerRun => powershell
+export async function runWindowsNative(_inputs: Record<string, string>, _binary?: () => string | null, _exec?: (file: string, args: readonly string[], options: object, done: (error: (Error & { code?: unknown }) | null, stdout: string, stderr: string) => void) => void): Promise<{ status: number | null; stdout: string } | 'missing'> {
+  return 'missing'
+}
+
 /**
  * Windows: whether the client end of the connection 127.0.0.1:[peerPort] → 127.0.0.1:[ownPort] belongs to a process of
  * this account. Prints `yes`, or `no: <why>` for the daemon's log. Windows lists the client's end with its own port as the local one. The owner is
