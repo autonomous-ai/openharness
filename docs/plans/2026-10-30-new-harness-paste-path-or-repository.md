@@ -54,7 +54,7 @@ stopping at the first that works:
 2. the same repository over the other transport (HTTPS ↔ SSH);
 3. up to three SSH host aliases from the computer's SSH configuration whose host name is github.com.
 
-It moves to the next only when GitHub **refused access**. A network failure or a timeout stops at once.
+It moves to the next only when GitHub **refused access** or ssh would not trust its host key. A network failure or a timeout stops at once. A host key among the failures is what the person is told, not "No access": GitHub was not asked.
 While it runs, the composer shows the static line **Cloning org/repo…**. A checkout that is reused is no clone, so the line stays **Starting harness…**. When an alias was used, the person
 sees one short line, **Cloned via gh-<account>**. The new checkout's `origin` is the address that worked, so
 later pushes go through the same account. When every way is refused, the composer shows one line, **No

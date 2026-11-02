@@ -2743,6 +2743,9 @@ class NewHarnessController extends ChangeNotifier {
     _resetProfiles();
     _machineRevision++;
     _listDebounce?.cancel();
+    _hiddenFolderDebounce?.cancel();
+    _hiddenFolders.clear();
+    _hiddenFolderAsked = null;
     _listings.clear();
     _loadingFolders.clear();
     _visibleFolder = folderRefreshError = null;
@@ -3866,7 +3869,17 @@ class NewHarnessController extends ChangeNotifier {
         : paths.dirname(full);
     final names = parent == null ? null : _listings[parent];
     if (parent != null && names == null) _requestListing(parent);
-    if (!trailing && names != null && names.contains(paths.basename(full))) {
+    final name = paths.basename(full);
+    final hidden =
+        !trailing &&
+        parent != null &&
+        _machine?.isLocalMachine != true &&
+        name.startsWith('.') &&
+        name != '.' &&
+        name != '..';
+    if (hidden && !_hiddenFolders.contains(full)) _askAboutHiddenFolder(full);
+    if (!trailing &&
+        (_hiddenFolders.contains(full) || names?.contains(name) == true)) {
       return NewHarnessOption(
         id: pasteOpenId,
         synthetic: true,
@@ -3891,14 +3904,16 @@ class NewHarnessController extends ChangeNotifier {
   @visibleForTesting
   SshHosts sshHosts = SshHosts();
 
-  /// What each pasted alias stands for on this computer, '' when ssh could not
-  /// say; absent while it is being read.
+  /// What each pasted alias stands for on this computer; absent until it is
+  /// asked about.
   final _aliasHosts = <String, String>{};
 
   Future<void> _resolveAlias(String alias) async {
     final host = await sshHosts.resolveHost(alias);
     if (_disposed) return;
-    _aliasHosts[alias] = host ?? '';
+    // ssh that cannot say (a timeout, no ssh) has not called it another host:
+    // it stays offered, and the launch reads it again and says what went wrong.
+    if (host != null) _aliasHosts[alias] = host;
     if (field == NewHarnessField.projectMenu ||
         field == NewHarnessField.projectRepository) {
       _refresh();
@@ -4090,9 +4105,9 @@ class NewHarnessController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Whether nothing is at `~/harnesses/<name>` where the harness will run.
-  /// Saying nothing about a clone is less wrong than announcing one that is not
-  /// happening, so false also covers a computer that cannot say.
+  /// Whether nothing is at `<projects folder>/<name>` where the harness will
+  /// run. Saying nothing about a clone is less wrong than announcing one that
+  /// is not happening, so false also covers a computer that cannot say.
   Future<bool> _cloneDestinationIsFree(GitHubRepository repository) async {
     final id = _machineId;
     final home = await _ensureHome(id);
@@ -4108,15 +4123,64 @@ class NewHarnessController extends ChangeNotifier {
     // fs_list_dir (cli fsBrowse.ts) leaves hidden folders out: `.github` would
     // look free whether it is there or not.
     if (repository.name.startsWith('.')) return false;
-    final answer = await app.listRemoteFolder(id, root);
-    // The first clone on that computer: ~/harnesses is made for it.
-    if (answer['error'] == 'NOT_FOUND') return true;
-    final entries = answer['entries'];
-    if (answer['error'] != null || entries is! List) return false;
-    final listed = entries.any(
-      (entry) => entry is Map && entry['name'] == repository.name,
+    // This app is not told which folder that computer's daemon uses: Harness OS
+    // keeps its projects in ~/projects (cli projectsRoot). A case-insensitive
+    // disk holds `Repo` as `repo`, so any spelling may be the same folder.
+    final name = repository.name.toLowerCase();
+    for (final folder in [root, _pathsFor(id, home).join(home, 'projects')]) {
+      final answer = await app.listRemoteFolder(id, folder);
+      // The first clone on that computer: the folder is made for it.
+      if (answer['error'] == 'NOT_FOUND') continue;
+      final entries = answer['entries'];
+      if (answer['error'] != null ||
+          entries is! List ||
+          answer['truncated'] == true) {
+        return false;
+      }
+      final listed = entries.any(
+        (entry) =>
+            entry is Map &&
+            entry['name'] is String &&
+            (entry['name'] as String).toLowerCase() == name,
+      );
+      if (listed) return false;
+    }
+    return true;
+  }
+
+  /// Folders another computer has said are there though their parent's listing
+  /// leaves them out: fs_list_dir (cli fsBrowse.ts) hides dot folders, so each
+  /// is asked about by its own path. Not a [_listings] entry: a failed listing
+  /// is kept there as empty, and here that would read as a folder.
+  final _hiddenFolders = <String>{};
+  Timer? _hiddenFolderDebounce;
+
+  /// The folder last asked about. A refresh runs the path row again, and the
+  /// parent's listing arriving is one: without this each pushed the question
+  /// back, or asked it twice.
+  String? _hiddenFolderAsked;
+
+  void _askAboutHiddenFolder(String folder) {
+    if (_hiddenFolderAsked == folder) return;
+    _hiddenFolderAsked = folder;
+    _hiddenFolderDebounce?.cancel();
+    _hiddenFolderDebounce = Timer(
+      const Duration(milliseconds: 80),
+      () => unawaited(_readHiddenFolder(folder)),
     );
-    return !listed && answer['truncated'] != true;
+  }
+
+  Future<void> _readHiddenFolder(String folder) async {
+    final id = _machineId;
+    final revision = _machineRevision;
+    final answer = await app.listRemoteFolder(id, folder);
+    if (_disposed || id != _machineId || revision != _machineRevision) return;
+    if (answer['error'] != null || answer['entries'] is! List) return;
+    _hiddenFolders.add(folder);
+    if (field == NewHarnessField.project ||
+        field == NewHarnessField.projectMenu) {
+      _refresh();
+    }
   }
 
   /// Ask for [folder]'s listing. A local folder is read at once, off this
@@ -4869,6 +4933,7 @@ class NewHarnessController extends ChangeNotifier {
     _appTick?.cancel();
     _projectRefresh?.cancel();
     _listDebounce?.cancel();
+    _hiddenFolderDebounce?.cancel();
     app.removeListener(_onApp);
     _modelUsage?.removeListener(_refresh);
     if (_ownsModelUsage) _modelUsage?.dispose();

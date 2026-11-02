@@ -17,6 +17,7 @@ import '../state/harness_activity.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../usage/models_menu_controller.dart';
+import '../widgets/browser_menu_guard.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
 import '../widgets/harness_activity_mark.dart';
@@ -1536,7 +1537,9 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                                   for (final agent in preview.agents) ...[
                                     const SizedBox(height: 4),
                                     Text(
-                                      '${agent.name} · ${agent.projectName}',
+                                      agent.projectName.isEmpty
+                                          ? agent.name
+                                          : '${agent.name} · ${agent.projectName}',
                                     ),
                                     if (agent.task != null)
                                       Text(
@@ -1762,47 +1765,59 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     }
   }
 
+  /// Where a long press opens the menu: under the middle of the row, which the touch gives no point for.
+  Offset _longPressAt(BuildContext rowContext) {
+    final box = rowContext.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return Offset.zero;
+    return box.localToGlobal(Offset(box.size.width / 2, box.size.height));
+  }
+
   Widget _machine(_MachineView view) {
     final tipKey = _tips.putIfAbsent(view.id, GlobalKey<TooltipState>.new);
     final expanded = c.isMachineExpanded(view.id);
     final selected = _selectedMachineId == view.id;
-    final row = Material(
-      color: selected ? grid.AppSurface.selectedFill : Colors.transparent,
-      borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-      clipBehavior: Clip.antiAlias,
-      // No chevron (Dee, 2026-10-27): a click expands the machine, and its
-      // details are in the right-click menu, or a long press on a touch screen.
-      child: InkWell(
-        key: ValueKey('super-machine-${view.id}'),
-        onTap: () {
-          c.toggleMachineExpanded(view.id);
-          _changed();
-        },
-        onLongPress: () => unawaited(_openDetails(view)),
-        onSecondaryTapUp: (event) =>
-            unawaited(_menu(view, event.globalPosition)),
-        hoverColor: grid.AppSurface.hoverFill,
-        focusColor: grid.AppSurface.hoverFill,
+    final row = BrowserMenuOff(
+      active: true,
+      child: Material(
+        color: selected ? grid.AppSurface.selectedFill : Colors.transparent,
         borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-        onFocusChange: (focused) {
-          if (focused &&
-              FocusManager.instance.highlightMode ==
-                  FocusHighlightMode.traditional) {
-            tipKey.currentState?.ensureTooltipVisible();
-          } else if (!focused) {
-            Tooltip.dismissAllToolTips();
-          }
-        },
-        child: Semantics(
-          expanded: expanded,
-          child: _MachineLine(
-            view: view,
-            onSetUpTeam: view.setUpTeam
-                ? () async {
-                    await showTeamAccountSetup(context, widget.app!);
-                    await _readTeamSetup();
-                  }
-                : null,
+        clipBehavior: Clip.antiAlias,
+        // No chevron (Dee, 2026-10-27): a click expands the machine, and its
+        // details are in the right-click menu, or a long press on a touch screen.
+        child: Builder(
+          builder: (rowContext) => InkWell(
+            key: ValueKey('super-machine-${view.id}'),
+            onTap: () {
+              c.toggleMachineExpanded(view.id);
+              _changed();
+            },
+            onLongPress: () => unawaited(_menu(view, _longPressAt(rowContext))),
+            onSecondaryTapUp: (event) =>
+                unawaited(_menu(view, event.globalPosition)),
+            hoverColor: grid.AppSurface.hoverFill,
+            focusColor: grid.AppSurface.hoverFill,
+            borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+            onFocusChange: (focused) {
+              if (focused &&
+                  FocusManager.instance.highlightMode ==
+                      FocusHighlightMode.traditional) {
+                tipKey.currentState?.ensureTooltipVisible();
+              } else if (!focused) {
+                Tooltip.dismissAllToolTips();
+              }
+            },
+            child: Semantics(
+              expanded: expanded,
+              child: _MachineLine(
+                view: view,
+                onSetUpTeam: view.setUpTeam
+                    ? () async {
+                        await showTeamAccountSetup(context, widget.app!);
+                        await _readTeamSetup();
+                      }
+                    : null,
+              ),
+            ),
           ),
         ),
       ),
@@ -2208,10 +2223,10 @@ class _RemovalPreview {
       final agent = superTabMap(item);
       final name = agent['name'], projectName = agent['projectName'];
       final task = agent['task'];
+      // A Swarm-wide Buddy has no project: the server sends an empty name.
       if (name is! String ||
           name.isEmpty ||
           projectName is! String ||
-          projectName.isEmpty ||
           (task != null && task is! String)) {
         throw const FormatException('Invalid machine removal preview');
       }

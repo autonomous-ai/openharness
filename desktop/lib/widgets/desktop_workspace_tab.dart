@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
@@ -11,6 +10,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_menu.dart';
 import '../state/workspace_chrome.dart';
 import 'box_chrome.dart';
+import 'browser_menu_guard.dart';
 import 'desktop_chrome.dart';
 
 /// The Flutter counterpart of the AppKit tab: a centered name/status group
@@ -225,17 +225,12 @@ class _DesktopWorkspaceTabState extends State<DesktopWorkspaceTab> {
   /// right-click. It is off only while the pointer is over a tab that has a
   /// menu, so a right-click anywhere else (a terminal, a text field) keeps the
   /// browser's Copy and Paste.
-  bool _browserMenuOff = false;
-
   void _syncBrowserMenu() {
-    final off = kIsWeb && _hovered && _hasMenu && mounted;
-    if (off == _browserMenuOff) return;
-    _browserMenuOff = off;
-    unawaited(
-      off
-          ? BrowserContextMenu.disableContextMenu()
-          : BrowserContextMenu.enableContextMenu(),
-    );
+    if (_hovered && _hasMenu && mounted) {
+      BrowserMenuGuard.hold(this);
+    } else {
+      BrowserMenuGuard.release(this);
+    }
   }
 
   @override
@@ -246,10 +241,7 @@ class _DesktopWorkspaceTabState extends State<DesktopWorkspaceTab> {
 
   @override
   void dispose() {
-    if (_browserMenuOff) {
-      _browserMenuOff = false;
-      unawaited(BrowserContextMenu.enableContextMenu());
-    }
+    BrowserMenuGuard.release(this);
     super.dispose();
   }
 
