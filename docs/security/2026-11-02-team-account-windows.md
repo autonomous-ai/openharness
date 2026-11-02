@@ -17,7 +17,7 @@ Codex Product Manager's own home on Windows (W2, fixed in this pull request), an
 
 | ID | Rating | Finding | Status |
 |---|---|---|---|
-| W1 | **High** | The owner's local credential goes to whoever holds the daemon's port, and opens the daemon from any account | **Fixed** in task #2095, test first; not yet run on Windows |
+| W1 | **High** | The owner's local credential goes to whoever holds the daemon's port, and opens the daemon from any account | **Fixed** in task #2095 (CLI, hooks, daemon) and task #2161 (Store packages), test first; the Store packages run on Windows in the Windows workflow |
 | W2 | **High** | Purge left a Codex Product Manager's whole home on Windows, and could take every PM's home on any platform | **Fixed here**, test first |
 | W3 | Medium | Purge can't scrub a Claude Code Product Manager on Windows: the account stays held, its memory stays | Read in code, fix requested |
 | W4 | Medium | The Team account can stall the owner's read of its status file | Read in code, fix requested |
@@ -69,6 +69,12 @@ make the daemon refuse the credential over TCP from another account. Windows can
 - CLI clients never put the credential on TCP (`localCredentialHeaders` gives nothing on Windows). Their fetch helper and their
   WebSockets go over the pipe (`lib/localTransport.ts` `daemonFetch`, `openLocalWs`), and with no pipe they say Harness is not
   running.
+- The Store packages (machine monitor, harness monitor, memories, autonomous grid) and the checks in `store/tools` (task #2161):
+  their one shared transport (`lib/localDaemon.mjs`, a copy of `store/tools/local-daemon.mjs`) reaches the daemon over its pipe as
+  the hook does, with the pipe auth and the daemon's proof before any answer or WebSocket open, and with no live pipe says Harness
+  is not running. Their `localCredentialHeaders` give nothing on Windows and their 401 probe never runs there
+  (`store/tools/windows-pipe.test.mjs`, run on Windows by the Windows workflow, with `store/tools/windows-ci/store-pipe.mjs`
+  against the installed daemon).
 - Still open: the connectors bridge's MCP clients can only dial its HTTP address, so whoever holds the bridge's port still hears
   its key and the tool calls (as on macOS). The key opens nothing from another account now. Closing it needs a local transport for
   MCP clients that proves the daemon, a separate task.
