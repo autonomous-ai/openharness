@@ -381,7 +381,8 @@ async function httpFixture(blocked: (agentId: string) => boolean = () => false, 
     onPromptSubmitted: (_id, text) => prompts.push(text),
     onAdmissionHeld: (_id, reason) => reasons.push(reason),
     ...overrides,
-  }, { admissionReceiptCapacity, admissionBytesCapacity })
+  // The order of concurrent retries is what this file pins; each real lookup of who is calling takes its own time.
+  }, { admissionReceiptCapacity, admissionBytesCapacity, peerAccount: async () => true })
   server = started.server
   const post = async (override: Record<string, unknown> = {}, order: { id?: string; firedAt?: number } = {}, path = 'session-start') => {
     const response = await fetch(`http://127.0.0.1:${started.port}/api/hook/${path}`, {

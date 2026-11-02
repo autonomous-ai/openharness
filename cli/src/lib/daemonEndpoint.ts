@@ -1,6 +1,7 @@
 import { request } from 'node:http'
 import { lstatSync } from 'node:fs'
 import { localCredentialHeaders } from './localCredential.js'
+import { daemonFetch } from './localTransport.js'
 import { localSocketPath } from './localSocket.js'
 import { readDaemonRecord, writeDaemonRecord, type DaemonPipeRecord } from './daemonRecord.js'
 import { daemonPipe, type LocalDaemonOptions } from './windows/daemonPipe.js'
@@ -72,8 +73,9 @@ const NULL_BODY = new Set([204, 205, 304])
 /**
  * A control call to the running daemon (cli.ts `daemonCall`: `harness pair`, `harness devices`, …). On Windows it
  * goes over the daemon's pipe when there is one, and only an answer that proves the token is taken. It falls back
- * to loopback TCP, as on every other OS, when there is nothing to reach: no record, a daemon proven gone, or
- * nothing listening. A pipe that answers without the proof is not retried over TCP: whatever answered took the
+ * to loopback TCP when there is nothing to reach: no record, a daemon proven gone, or nothing listening. On macOS and
+ * Linux it goes over the daemon's private socket, and never the port while a socket can exist (lib/localTransport.ts).
+ * A pipe that answers without the proof is not retried over TCP: whatever answered took the
  * daemon's name, and the caller is told so.
  */
 export async function localDaemonCall(
@@ -95,9 +97,9 @@ export async function localDaemonCall(
       }
     }
   }
-  return (options.fetch ?? fetch)(`http://127.0.0.1:${options.tcpPort}${path}`, {
+  return (options.fetch ?? daemonFetch(dataDir, configuredPort, fetch, options.platform))(`http://127.0.0.1:${options.tcpPort}${path}`, {
     method,
-    headers: { ...headers, ...localCredentialHeaders(dataDir) },
+    headers: { ...headers, ...localCredentialHeaders(dataDir, options.platform) },
     body: text,
   })
 }

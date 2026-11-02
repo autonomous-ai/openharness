@@ -14,10 +14,27 @@ import { delimiter, dirname, join } from 'node:path'
 import { CODE, locked, writePrivate, type Store } from './store.js'
 import { transport } from './rest.js'
 
-/** The bridge's fixed address, which every agent entry names. HARNESS_CONNECTIONS_PORT moves it (tests). */
-export function bridgePort(env: NodeJS.ProcessEnv = process.env): number {
-  const port = Number(env.HARNESS_CONNECTIONS_PORT ?? 51793)
-  return Number.isInteger(port) && port >= 0 && port < 65536 ? port : 51793
+const validPort = (port: unknown): port is number => typeof port === 'number' && Number.isInteger(port) && port >= 0 && port < 65536
+
+/**
+ * The bridge's address, which every agent entry names: 51793, or the port [vault] saved because another account held
+ * that one (saveBridgePort). HARNESS_CONNECTIONS_PORT fixes it (tests).
+ */
+export function bridgePort(env: NodeJS.ProcessEnv = process.env, vault?: Store): number {
+  if (env.HARNESS_CONNECTIONS_PORT !== undefined) {
+    const port = Number(env.HARNESS_CONNECTIONS_PORT)
+    return validPort(port) ? port : 51793
+  }
+  const saved = vault?.file('bridge.json').port
+  return validPort(saved) && saved > 0 ? saved : 51793
+}
+
+/**
+ * Remember the port the bridge moved to. A Team account's daemon starts at boot and this user's only at login, so that
+ * account can hold 51793 before this bridge ever starts (audit H1), and it then would hear every agent's tool calls.
+ */
+export function saveBridgePort(vault: Store, port: number): void {
+  locked(vault.root, () => { writePrivate(join(vault.root, 'bridge.json'), { ...vault.file('bridge.json'), port }) })
 }
 
 /** The capability in every bridge address, so only this user's agents can use it. */
@@ -26,7 +43,7 @@ export function bridgeKey(vault: Store): string {
     const key = vault.file('bridge.json').key
     if (typeof key === 'string' && key.length >= 32) return key
     const fresh = randomBytes(32).toString('base64url')
-    writePrivate(join(vault.root, 'bridge.json'), { key: fresh })
+    writePrivate(join(vault.root, 'bridge.json'), { ...vault.file('bridge.json'), key: fresh })
     return fresh
   })
 }
@@ -156,7 +173,7 @@ export function agents(env: NodeJS.ProcessEnv = process.env): Agent[] {
 export function sync(vault: Store, env: NodeJS.ProcessEnv = process.env, list: Agent[] = agents(env)): Record<string, string[]> {
   const codes = Object.entries(vault.tokens()).filter(([code, token]) => transport(token) !== 'none' && CODE.test(code)).map(([code]) => code)
   const key = codes.length ? bridgeKey(vault) : ''
-  const wanted = Object.fromEntries(codes.map(code => [code, bridgeUrl(key, code, bridgePort(env))]))
+  const wanted = Object.fromEntries(codes.map(code => [code, bridgeUrl(key, code, bridgePort(env, vault))]))
   return locked(vault.root, () => {
     const record = vault.file('projections.json') as Record<string, unknown>
     const changed: Record<string, string[]> = {}
