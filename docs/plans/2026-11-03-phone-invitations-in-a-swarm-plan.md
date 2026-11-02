@@ -45,7 +45,7 @@ Neither the backend nor Desktop has a decline (`invite.accept` and `invite.revok
 - growth: N/A because nothing new is stored.
 - concurrency: N/A because this only reads; join keeps its one receipt per invitation.
 - read cost: with a Swarm, one read of the list on opening, then at most every 5 minutes, or on pull to refresh. With no Swarm, every poll, as today.
-- scale: at 10x phones the slower pace holds it to about a third of a percent of today's Home polls per phone; the metric is `GET /api/super-tabs/invitations` per minute.
+- scale: one read per open phone per 5 minutes, a twentieth of Home's 15 s poll; the read is indexed by email and capped at 100 Swarms. 10x phones stays small; the metric that warns first is `GET /api/super-tabs/invitations` per minute.
 - compatibility: an older server answers 404, which reads as none, as today.
 - migration + rollback: N/A because nothing is stored.
 - audience: the server lists only the account's own invitations.
