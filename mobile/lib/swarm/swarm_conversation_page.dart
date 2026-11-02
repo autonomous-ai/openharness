@@ -29,6 +29,8 @@ import 'swarm_chat_menu.dart';
 import 'swarm_file_links.dart';
 import 'swarm_choices.dart';
 import 'swarm_conversation.dart';
+import 'linked_tasks.dart' show superTabIsStep, superTabStepName;
+import 'task_steps.dart';
 import 'swarm_face.dart';
 import 'swarm_file_picker.dart';
 import 'swarm_outgoing_files.dart';
@@ -607,6 +609,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   void _see() {
     final session = _session, c = _conversation;
     if (session == null || c == null) return;
+    _syncSteps(c);
     if (_ownerUnknown && c.reader.snapshot != null) {
       _ownerUnknown = false;
       _unreadLine = swarmIsOwnBuddyChat(c.reader, widget.conversationId);
@@ -648,6 +651,12 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       c.reader.removeListener(_guardVoice);
       c.dispose();
     }
+    for (final step in _steps.values) {
+      step
+        ..removeListener(_stepsMoved)
+        ..dispose();
+    }
+    _steps.clear();
     if (_buddy != widget.buddy) _buddy?.dispose();
     _buddy = null;
     _rows.clear();
@@ -1401,8 +1410,47 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
           person.chosenUsername ?? person.email.split('@').first: person.email,
   };
 
+  /// The open task's steps, each read on its own, merged into its chat (task
+  /// steps design): a step keeps its own conversation.
+  final _steps = <String, SwarmConversation>{};
+
+  /// The merged chat, the same list while no row changed, so the timeline is
+  /// not made again on every build (final review, minor 8).
+  final _merge = SuperTabStepsMerge();
+
+  void _stepsMoved() {
+    if (mounted) setState(() {});
+  }
+
+  /// Opens a reader for each step the task has now, and closes those it no
+  /// longer has.
+  void _syncSteps(SwarmConversation c) {
+    final snapshot = c.reader.snapshot;
+    final task = snapshot?.conversation(c.id);
+    final wanted = snapshot == null || task == null
+        ? const <String>{}
+        : {for (final step in superTabStepsOf(snapshot, task)) step.id};
+    for (final id in [..._steps.keys]) {
+      if (wanted.contains(id)) continue;
+      _steps.remove(id)!
+        ..removeListener(_stepsMoved)
+        ..dispose();
+    }
+    for (final id in wanted) {
+      if (_steps.containsKey(id)) continue;
+      final step = _steps[id] = SwarmConversation(c.reader, id, shown: false)
+        ..addListener(_stepsMoved);
+      unawaited(step.load());
+    }
+  }
+
   String _nameOf(SwarmConversation c, SuperTabMessage m) {
-    final name = c.reader.snapshot?.authorName(m) ?? m.authorName;
+    final named = c.reader.snapshot?.authorName(m) ?? m.authorName;
+    // A step's row in its task's chat names its step (task steps design).
+    final group = c.reader.snapshot?.conversation(m.conversationId);
+    final name = group != null && superTabIsStep(group)
+        ? '$named · ${superTabStepName(group)}'
+        : named;
     if (!swarmIsPmLine(c.reader, m)) return name;
     // The coordinator's own badge, whatever its role is called.
     final badge = c.reader.snapshot?.roleOf(m.authorId)?.badge ?? 'PM';
@@ -1508,8 +1556,14 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       }
     }
     final snapshot = c.reader.snapshot;
-    // A reply only in its thread shows there alone.
-    final stream = c.stream;
+    // A reply only in its thread shows there alone. A task's steps' rows are
+    // merged in by time (task steps design).
+    final stream = _steps.isEmpty
+        ? c.stream
+        : _merge.of(c.stream, {
+            for (final MapEntry(:key, :value) in _steps.entries)
+              key: value.stream,
+          });
     final answered = answeredPromptAlerts(
       stream,
       (agentId) => snapshot?.agent(agentId),

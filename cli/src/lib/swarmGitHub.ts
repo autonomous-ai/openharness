@@ -167,7 +167,8 @@ const GH_CONFIG = 'version: "1"\n'
 const TOKEN = /^[A-Za-z0-9_][A-Za-z0-9_.-]{19,4095}$/
 
 /** Who a session's commits are by, as the server names the Harness GitHub App's bot account; nothing else is written. */
-const COMMIT_NAME = /^[a-z0-9][a-z0-9-]{0,99}\[bot\]$/
+/** Who a Team account's commits are by: "Harness" (2026-11-02), or an older backend's name for the app's bot account. */
+const COMMIT_NAME = /^(?:Harness|[a-z0-9][a-z0-9-]{0,99}\[bot\])$/
 const COMMIT_EMAIL = /^[0-9]{1,20}\+[a-z0-9][a-z0-9-]{0,99}\[bot\]@users\.noreply\.github\.com$/
 
 /**

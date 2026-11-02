@@ -292,6 +292,9 @@ export interface Conversation {
   task?: WorkTask
   /** A review group names the group whose work it reviews; only a Reviewer is assigned it, and a Reviewer nothing else. */
   reviewOf?: string
+  /** A step of the task `reviewOf` names (task steps design, 2026-11-02): its name as the instructions give it, in any
+   *  language. Readers show it inside its task, never as a task of its own. Absent on a linked group opened before steps. */
+  step?: string
   /** An automatic review's hand-over of a two-review task (#2382); never written since project instructions, phase 4. */
   reviewStamp?: ReviewStamp
   checks: Check[]

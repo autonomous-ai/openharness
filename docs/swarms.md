@@ -918,9 +918,12 @@ are delivered at once, with no delay.
   every one is close to running out). The review-capacity note is the
   coordinator's alone; a project chat with no coordinator in it has its people
   read it, tagging who can fix it.
-- **Status changes**: the task's own agent's Ready for review, Needs a human,
-  Stuck and Done reach the coordinator. A status anyone else sets reaches the
-  task's agent and the coordinator.
+- **Status changes**: the task's own agent's Needs a human, Stuck and Done reach
+  the coordinator; its Ready wakes nobody by itself, as it names whom it hands to
+  (Ken, 2026-11-02). A step's own agent's Ready and Done reach its task's owner
+  (the task's assignee while that work is open), else the coordinator; its Needs
+  a human and Stuck reach both. A status anyone else sets reaches the task's
+  agent and the coordinator.
 - **Stalled tasks**: a task whose agent reported nothing for 30 minutes, and a
   task in review for 30 minutes with no linked task open (since its last
   progress or since its last linked task ended), are told to the coordinator
@@ -1046,13 +1049,16 @@ and on which model is the document's to say, and the agents follow it.
   nobody's skill. Where a note and the document disagree, the coordinator follows
   the newer one.
 - **The template** has the work go from "ready" to "passed" with no coordinator
-  action in between. The agent whose work is ready opens its own review, linked
-  to its task, and messages the Reviewer, and the Tester when users see the
-  change. Review and test run in parallel. A reviewer, not the agent that did the
-  work, passes the verdict. Findings go straight to the agent, which fixes them
-  and asks again. The coordinator hears once, merges and tells the people who
-  asked. Idle Engineers are stopped; Reviewers and Testers are kept while the
-  work they checked is open.
+  action in between. One request is one task; the PM opens no task to hold,
+  batch, triage or list work (its notes or the project chat hold that). The
+  agent whose work is ready adds a review step to its task, and a test step when
+  users see the change, and messages the Reviewer and the Tester. Review and test
+  run in parallel. A reviewer, not the agent that did the work, passes the
+  verdict. Findings go straight to the agent, which fixes them and asks the same
+  Reviewer again in the same step. The coordinator hears once, merges and tells
+  the people who asked. Idle Engineers are stopped; Reviewers and Testers are
+  kept while the work they checked is open. Agents read `mine` when unsure what
+  they work on and `task GROUP` before saying they are done.
 - **Buddies** read the document as their member's helper, never the history or
   the notes, and change it only by asking the coordinator.
 - **Older projects** start on the built-in template (revision 0) until their
@@ -1107,6 +1113,35 @@ Design (docs/feature-design-rules.md):
   and taken by the next run.
 - Platforms: the backend is the same everywhere; Desktop and the web app (which
   runs Desktop's screens) edit, the phone reads.
+
+## Steps inside a task
+
+Design: [docs/plans/2026-11-02-task-steps-design.md](plans/2026-11-02-task-steps-design.md).
+A step is a linked conversation (`reviewOf` names its task) with a name the
+project's instructions give (`step`, free text in any language): review, test, a
+marketing team's design or brand check. It keeps its own number, assignment,
+lease, attempts, costs and checks; readers show it inside its task.
+
+- **Opening one**: `conversation.create` with `reviewOf` and `step`, on an open
+  task of the same project that is not itself a step. Its opener joins the task;
+  so does each agent assigned to it, so the task's chat is where its work is
+  talked over.
+- **Who hears it**: its agent's Ready and Done go to the task's owner, not the
+  coordinator; an unnamed post from its agent, in the step or in the task, does
+  too. With no owner, the coordinator hears them.
+- **Closing**: a step archives and sleeps with its task, never on its own clock;
+  archiving a task cancels its open steps and tells their agents.
+- **Reading**: `status` prints steps under their task; `mine` and `task GROUP`
+  show them; a delivery names the task and step. Desktop and the phone hide steps
+  from the task list, put them on the task's row ("Review (Nova): working") and
+  merge their messages into the task's chat with the step's name beside the
+  author. The CLI sends `step` only to a backend whose first load says
+  `steps: true`; elsewhere a step opens as a plain linked task.
+- **Every linked task is a step**, named or not (Ken, 2026-11-02: a PM opened
+  "Test: PR #2514" the old way a minute after saving the steps workflow, and the
+  Tester's posts reached it). One opened without `step` is named by its title.
+  A row written before this keeps the archive mark it had until it is written
+  again.
 
 ## A message that is not getting in
 

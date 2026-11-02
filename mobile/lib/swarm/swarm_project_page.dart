@@ -13,6 +13,7 @@ import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
+import 'linked_tasks.dart';
 import 'model.dart';
 import 'swarm_buddy.dart';
 import 'swarm_buddy_chat.dart';
@@ -50,7 +51,7 @@ swarmProjectWork(
   SwarmBuddies buddies = SwarmBuddies.none,
 }) {
   final work =
-      snapshot.conversations
+      superTabListedWork(snapshot.conversations)
           .where(
             (g) =>
                 g.projectId == project.id &&

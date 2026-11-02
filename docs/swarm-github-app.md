@@ -21,7 +21,7 @@ On GitHub, open the organization, then **Settings → Developer settings → Git
 
 | Field | Value |
 | --- | --- |
-| GitHub App name | A name of your choice, for example `Harness for Acme`. GitHub needs it to be unique. |
+| GitHub App name | `Harness` where it is free (GitHub needs it to be unique). Its address and its bot account follow it (`github.com/apps/harness`, `harness[bot]`): renaming the app later changes both, so set `GITHUB_APP_SLUG` again. |
 | Homepage URL | `https://harness.autonomous.ai` |
 | Callback URL, Setup URL | Leave empty. |
 | Webhook → Active | Clear it. Harness subscribes to no events. |
@@ -216,8 +216,9 @@ address. The `commit-msg` hook adds any missing trailers to a message written in
 editor. Trailers already in the message are not added again, so an amend keeps one
 of each. An empty message still aborts the commit.
 
-In a Harness Team account, the commits themselves are by the app's bot account
-(`<app>[bot] <id+<app>[bot]@users.noreply.github.com>`), as its pull requests are: the
+In a Harness Team account, the commits themselves are by "Harness" at the app's bot
+account's address (`Harness <id+<app>[bot]@users.noreply.github.com>`), which links them
+to that account on GitHub, as its pull requests are: the
 account has no git identity of its own, and its commits read `Harness Team
 <harnessteam@<host>.local>` before. The token response names it as `commitAs` for a
 team account only; the daemon writes it to the session's `gitconfig`, which the

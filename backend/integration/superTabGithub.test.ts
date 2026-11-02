@@ -187,7 +187,7 @@ describe('the GitHub token endpoint', () => {
     const response = await env.app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/github-token?asAgentId=${worker}`,
       headers: { authorization: `Bearer ${host.sub}`, 'x-test-team': '1' }, payload: { machineId: 'gh-host' } })
     expect(response.statusCode, response.body).toBe(200)
-    expect(response.json().data.commitAs).toEqual({ name: 'harness-fixture[bot]', email: '4242+harness-fixture[bot]@users.noreply.github.com' })
+    expect(response.json().data.commitAs).toEqual({ name: 'Harness', email: '4242+harness-fixture[bot]@users.noreply.github.com' })
     // GitHub not saying who the bot is leaves it out, and the token is still given.
     const other = await fresh()
     other.github.control.botId = null

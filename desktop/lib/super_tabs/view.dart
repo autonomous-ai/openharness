@@ -249,7 +249,11 @@ class _SuperTabViewState extends State<SuperTabView>
             snapshot!.conversation(project!.leadConversationId)?.leadId ==
                 message.authorId
         ? '$name (${snapshot.roleOf(message.authorId)?.badge ?? 'PM'}) → you'
-        : name;
+        : switch (c.stepNameOf(message)) {
+            // A step's row in its task's chat names its step (task steps design).
+            final String step => '$name · $step',
+            null => name,
+          };
   }
 
   @override
@@ -385,7 +389,7 @@ class _SuperTabViewState extends State<SuperTabView>
     }
     _selected = id;
     setState(() {});
-    final mark = c.readMark(id), shown = _shownMessages(id);
+    final mark = c.readMark(id), shown = _ownShown(id);
     if (c.awaitsNewest(id)) {
       // Held from an earlier visit: the line is placed, the end followed and
       // anything marked read once the newest messages have landed.
@@ -1948,7 +1952,7 @@ class _SuperTabViewState extends State<SuperTabView>
   /// The messages [id]'s list shows, in order.
   /// A thread reply shows in its thread, and here only when also sent.
   List<SuperTabMessage> _shownMessages(String id) {
-    final messages = c.messages(id);
+    final messages = c.taskMessages(id);
     final answered = answeredPromptAlerts(
       messages,
       (agentId) => c.snapshot?.agent(agentId),
@@ -1958,6 +1962,13 @@ class _SuperTabViewState extends State<SuperTabView>
         .toList();
   }
 
+  /// [id]'s own rows as its list shows them: without its steps' rows, which
+  /// are numbered in their own conversations (task steps design).
+  List<SuperTabMessage> _ownShown(String id) => [
+    for (final m in _shownMessages(id))
+      if (m.conversationId == id) m,
+  ];
+
   /// A message waiting for an agent is never announced; notices older
   /// backends stored stay hidden, in the list and as a reply's quote.
   static bool _shown(SuperTabMessage m) => m.source['kind'] != 'delivery-hold';
@@ -1965,9 +1976,13 @@ class _SuperTabViewState extends State<SuperTabView>
   /// The row of [id]'s list that shows [messageId]: its own, or the notice
   /// that folds it in. Null while the message is not loaded.
   String? _rowShowing(String id, String messageId) {
-    final shown = _shownMessages(id);
-    final message = shown.where((m) => m.id == messageId).firstOrNull;
+    final message = _shownMessages(id)
+        .where((m) => m.id == messageId)
+        .firstOrNull;
     if (message == null) return null;
+    // A step's row is a row of its own: no notice of the task folds it in.
+    if (message.conversationId != id) return message.id;
+    final shown = _ownShown(id);
     return superTabTranscriptEntries(shown)
         .lastWhere(
           (e) => superTabMessageOrder(e.message, message) <= 0,
@@ -2943,7 +2958,7 @@ class _SuperTabViewState extends State<SuperTabView>
   void _moveSplitToView(String id, SuperTabChatScroll scroll) {
     final split = _split[id];
     if (split == null) return;
-    final messages = _shownMessages(id);
+    final messages = _ownShown(id);
     final at = messages.indexWhere((m) => superTabMessageOrder(m, split) >= 0);
     final top = _rowAtTop();
     if (at < 0 || messages.length - at <= _rowsBelowSplit || top == null) {
@@ -3127,6 +3142,14 @@ class _SuperTabViewState extends State<SuperTabView>
         .toList();
     final pendingById = {for (final sent in outgoing) sent.operationId: sent};
     final messages = [...actualMessages, ...outgoing.map(_outgoingMessage)];
+    // The task's own rows, for what is placed by sequence (the split, its
+    // grouping, the count of new rows, the read mark): each conversation
+    // numbers its own messages, so its steps' rows have no place in it.
+    final ownMessages = [
+      for (final m in actualMessages)
+        if (m.conversationId == c.selectedId) m,
+    ];
+    final ownWithOutgoing = [...ownMessages, ...outgoing.map(_outgoingMessage)];
     final entries = superTabTranscriptEntries(messages);
     final byId = {for (final message in messages) message.id: message};
     final rowIndex = {
@@ -3137,12 +3160,12 @@ class _SuperTabViewState extends State<SuperTabView>
     int? rowOf(Key key) => key is ValueKey<String> ? rowIndex[key.value] : null;
     final split = _splitAt(
       c.selectedId,
-      superTabTranscriptEntries(actualMessages),
+      superTabTranscriptEntries(ownMessages),
     );
     // Rows on their way group by the same rule, so a quick line keeps the
     // shape it will have once confirmed; one Not sent keeps its name and
     // actions.
-    final grouped = _joined(messages, _split[c.selectedId])
+    final grouped = _joined(ownWithOutgoing, _split[c.selectedId])
       ..removeWhere(
         (id) => switch (pendingById[id]?.state) {
           SuperTabOutgoingState.refused ||
@@ -3230,7 +3253,9 @@ class _SuperTabViewState extends State<SuperTabView>
     final newAfter = _newAfter[c.selectedId];
     final newCount = newAfter == null
         ? 0
-        : messages.where((message) => message.sequence > newAfter).length;
+        : ownWithOutgoing
+              .where((message) => message.sequence > newAfter)
+              .length;
     // More came than were read: the count is a floor.
     final moreNew = c.hasNewer(c.selectedId);
     // Scrolled away from the newest message, or newer pages wait unread.
@@ -3373,7 +3398,7 @@ class _SuperTabViewState extends State<SuperTabView>
                               if (atEnd) {
                                 // A row still sending has no place in the transcript.
                                 final sequence =
-                                    actualMessages.lastOrNull?.sequence ?? 0;
+                                    ownMessages.lastOrNull?.sequence ?? 0;
                                 WidgetsBinding.instance.addPostFrameCallback((
                                   _,
                                 ) {

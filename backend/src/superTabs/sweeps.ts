@@ -1,5 +1,6 @@
 import type { Prisma, PrismaClient } from '@prisma/client'
 import type { AgentStart, Conversation } from './model.js'
+import { stepSleeps } from './steps.js'
 import { clock, guardedWrite, PartConflict, type HeadData, type ProgressData } from './parts/index.js'
 import { DORMANT_AFTER_MS, RETENTION_MS } from './parts/types.js'
 import { deletedSwarms } from './deletion.js'
@@ -86,6 +87,12 @@ async function sleepQuietGroups(db: PrismaClient, now: number): Promise<number> 
     if (!progress.has(id)) progress.set(id, ((await db.swarmProgress.findUnique({ where: { id } }))?.data as unknown as ProgressData | undefined) ?? null)
     return progress.get(id)!
   }
+  const tasks = new Map<string, { archived: boolean; dormant: boolean } | null>()
+  const taskOf = async (tabId: string, key: string) => {
+    const id = `${tabId}:${key}`
+    if (!tasks.has(id)) tasks.set(id, await db.swarmGroup.findUnique({ where: { tabId_key: { tabId, key } }, select: { archived: true, dormant: true } }))
+    return tasks.get(id)!
+  }
   // A deleted Swarm's groups stay as they are for its restore (deletion.ts).
   const isDeleted = deletedSwarms(db)
   let slept = 0, after: { at: Date; id: string } | null = null
@@ -98,6 +105,8 @@ async function sleepQuietGroups(db: PrismaClient, now: number): Promise<number> 
       const quiet = row.lastActivityAt.getTime() < now - DORMANT_AFTER_MS && ['done', 'cancelled'].includes(group.assignment?.status ?? '')
       if (!group.archived && !quiet) continue
       if ((await leadsOf(row.tabId)).has(group.id)) continue
+      // A step sleeps with its task (task steps design): read once per task in this pass.
+      if (group.reviewOf && !stepSleeps(await taskOf(row.tabId, group.reviewOf))) continue
       const reports = group.audience ? null : await progressOf(row.tabId, group.projectId ?? 'lead')
       if (reports && (group.reportSeq ?? 0) > (reports.summarized[group.id] ?? reports.summarizedFloor)) continue
       if (await guarded(db, { tabId: row.tabId, op: 'update', kind: 'group', key: row.key, seen: row.version, data: { ...group, dormant: true } })) slept++

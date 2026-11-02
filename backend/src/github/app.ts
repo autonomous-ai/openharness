@@ -49,6 +49,9 @@ export function readPrivateKey(value: string): KeyObject {
 
 /** Both empty: the feature is off. One without the other, or a value that cannot be right, stops the backend at startup
  *  rather than failing the first agent that asks. */
+/** The name a Harness GitHub App's commits carry, whatever the app is called on GitHub (cli/src/lib/swarmGitHub.ts accepts it). */
+export const COMMIT_NAME = 'Harness'
+
 export function githubAppConfig(env: { GITHUB_APP_ID: string; GITHUB_APP_PRIVATE_KEY: string; GITHUB_APP_SLUG: string }): GitHubAppConfig | null {
   const appId = env.GITHUB_APP_ID.trim(), key = env.GITHUB_APP_PRIVATE_KEY.trim(), slug = env.GITHUB_APP_SLUG.trim()
   if (!appId && !key) return null
@@ -137,7 +140,7 @@ export class GitHubApp {
   }
 
   /**
-   * Who the app's commits are by: its bot account as GitHub names it (`<slug>[bot]`, `<id>+<slug>[bot]@users.noreply.github.com`),
+   * Who the app's commits are by: "Harness", at its bot account's address (`<id>+<slug>[bot]@users.noreply.github.com`),
    * so a commit made with the app's token shows the app, not the made-up address of the machine account that ran git. A Harness
    * Team account has no git identity of its own, so its commits read "Harness Team <harnessteam@<host>.local>", unverified and
    * linked to nobody (PR #1934, 2026-10-28). Read once and kept; null while GitHub cannot say, asked again ten minutes later.
@@ -160,7 +163,9 @@ export class GitHubApp {
         const user = await this.call('GET', `/users/${encodeURIComponent(login)}`, token ? `Bearer ${token}` : null)
         const id = (user.body as { id?: unknown }).id
         if (user.status === 200 && typeof id === 'number' && Number.isSafeInteger(id) && id > 0) {
-          value = { name: login, email: `${id}+${login}@users.noreply.github.com` }
+          // Shown as "Harness" (2026-11-02: no "harness-for-autonomous[bot]"); the bot's noreply address is what links the
+          // commit to the app's account on GitHub.
+          value = { name: COMMIT_NAME, email: `${id}+${login}@users.noreply.github.com` }
         } else console.warn(`[github] the app's bot account ${login} was not read: HTTP ${user.status}`)
       }
     } catch (error) {
