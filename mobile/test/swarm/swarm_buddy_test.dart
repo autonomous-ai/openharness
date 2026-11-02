@@ -68,6 +68,161 @@ void main() {
       expect(swarmBuddyChat(r, 'project-other'), isNull);
     });
 
+    group("the person's one Swarm Buddy (Diego, 11-02)", () {
+      Map<String, dynamic> oneBuddy(
+        String id, {
+        String owner = me,
+        Map<String, dynamic> extra = const {},
+      }) =>
+          {...buddyData(id, owner: owner), 'buddyScope': 'swarm', ...extra}
+            ..remove('projectId');
+
+      final twoProjects = headData(
+        projects: [
+          ...(headData()['projects'] as List).cast<Map<String, dynamic>>(),
+          {
+            'id': 'project-2',
+            'name': 'Web',
+            'ownerId': me,
+            'leadConversationId': 'lead-2',
+            'visibility': 'public',
+            'members': <Object>[],
+            'updateMinutes': 5,
+          },
+        ],
+      );
+
+      SwarmReader read(FakeSwarm swarm, List<Map<String, dynamic>> agents) {
+        swarm.routes['/api/super-tabs/$tab/parts'] = (_) =>
+            firstLoad(head: twoProjects, agents: agents);
+        return reader(swarm);
+      }
+
+      test('is the Buddy in every project the person reads', () async {
+        final r = read(FakeSwarm(), [oneBuddy('agent-ivy')]);
+        addTearDown(r.dispose);
+
+        await r.refresh();
+
+        expect(swarmBuddy(r, project)?.id, 'agent-ivy');
+        expect(
+          swarmBuddy(r, 'project-2')?.id,
+          'agent-ivy',
+          reason: 'it belongs to no project, so it is theirs in each',
+        );
+        expect(swarmBuddy(r, 'project-3'), isNull, reason: 'not read');
+      });
+
+      test("never shows someone else's, in any project", () async {
+        final r = read(FakeSwarm(), [
+          oneBuddy('agent-ivy', owner: 'person-dee'),
+        ]);
+        addTearDown(r.dispose);
+
+        await r.refresh();
+
+        expect(swarmBuddy(r, project), isNull);
+        expect(swarmBuddy(r, 'project-2'), isNull);
+        expect(r.buddies.buddyOwners['agent-ivy'], 'person-dee');
+      });
+
+      test(
+        "a thread's session agent is not the Buddy, in any project",
+        () async {
+          final r = read(FakeSwarm(), [
+            {
+              ...buddyData('agent-session'),
+              'buddySession': {'conversationId': 'g1', 'projectId': project},
+            },
+            oneBuddy('agent-ivy'),
+          ]);
+          addTearDown(r.dispose);
+
+          await r.refresh();
+
+          expect(
+            swarmBuddy(r, project)?.id,
+            'agent-ivy',
+            reason:
+                "the session agent has the project's id, and is still not it",
+          );
+          expect(swarmBuddy(r, 'project-2')?.id, 'agent-ivy');
+          expect(
+            r.buddies.buddyOwners.containsKey('agent-session'),
+            isTrue,
+            reason: 'still a Buddy agent, kept out of the team lists',
+          );
+        },
+      );
+
+      test("a Buddy of one project's own keeps that project", () async {
+        final r = read(FakeSwarm(), [
+          oneBuddy('agent-ivy'),
+          buddyData('agent-wren'),
+        ]);
+        addTearDown(r.dispose);
+
+        await r.refresh();
+
+        expect(swarmBuddy(r, project)?.id, 'agent-wren');
+        expect(swarmBuddy(r, 'project-2')?.id, 'agent-ivy');
+      });
+
+      test('a first read without it that recovers still shows it, and '
+          'access ending forgets it in every project', () async {
+        final swarm = FakeSwarm();
+        swarm.routes['/api/super-tabs/$tab/changes'] = (_) => {
+          ...changes(cursor: 'c2', lastChangedAt: 200),
+          'agents': [part('agent-ivy', 1, oneBuddy('agent-ivy'))],
+        };
+        final r = read(swarm, []);
+        addTearDown(r.dispose);
+
+        await r.refresh();
+        expect(swarmBuddy(r, 'project-2'), isNull);
+
+        await r.refresh();
+        expect(swarmBuddy(r, 'project-2')?.id, 'agent-ivy');
+
+        r.revoke();
+        expect(swarmBuddy(r, project), isNull);
+        expect(swarmBuddy(r, 'project-2'), isNull);
+      });
+
+      test("its start is the start in every project while the server keeps "
+          "one Buddy; a session's start is nobody's", () async {
+        final swarm = FakeSwarm();
+        Map<String, dynamic> start(String id, Map<String, dynamic> extra) {
+          final row = buddyStartData(id, chatId: 'x');
+          return {
+            ...row,
+            'request': {...(row['request'] as Map), ...extra}
+              ..remove('conversationId'),
+          };
+        }
+
+        swarm.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(
+          head: twoProjects,
+          derived: {'swarmBuddy': true},
+          starts: [
+            start('s1', {'buddyScope': 'swarm'}),
+            start('s2', {
+              'buddyScope': 'swarm',
+              'projectId': 'project-2',
+              'buddySession': {'conversationId': 'g1'},
+            }),
+          ],
+        );
+        final r = reader(swarm);
+        addTearDown(r.dispose);
+
+        await r.refresh();
+
+        expect(swarmBuddyStart(r, 'project-2')?['id'], 's1');
+        expect(swarmBuddyStart(r, project)?['id'], 's1');
+      });
+    });
+
     test('follows a Buddy added later, and forgets every Buddy once access '
         'ends', () async {
       final swarm = FakeSwarm();

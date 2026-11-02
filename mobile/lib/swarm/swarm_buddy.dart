@@ -50,18 +50,33 @@ class SwarmBuddies {
     }
     final buddyOwners = <String, String>{};
     final ownBuddies = <String, String>{};
+    String? swarmWide;
     for (final row in _rows(state['agents'])) {
       if (row case {
         'id': final String id,
         'buddyOf': {'personId': final String person},
       }) {
         buddyOwners[id] = person;
-        if (person == accountId) {
+        // A thread's session agent is no Buddy of the person's: it never
+        // stands for the Buddy in a project (Desktop's `isMainBuddy`).
+        if (person != accountId || row['buddySession'] != null) continue;
+        if (row['buddyScope'] == 'swarm') {
+          // The person's one Buddy belongs to no project: it reads every
+          // project they read (spec 2026-10-31-one-buddy-per-swarm).
+          swarmWide ??= id;
+        } else {
           ownBuddies.putIfAbsent(
             row['projectId'] as String? ?? 'lead',
             () => id,
           );
         }
+      }
+    }
+    if (swarmWide != null) {
+      // A Buddy of one project's own keeps that project; the one Buddy
+      // fills every other project the reader reads.
+      for (final project in {'lead', ..._projectIds(state['projects'])}) {
+        ownBuddies.putIfAbsent(project, () => swarmWide!);
       }
     }
     return SwarmBuddies._(
@@ -95,6 +110,11 @@ class SwarmBuddies {
   /// The starts of the reader's own Buddies, oldest first: one is under way
   /// while it has neither a harness nor an error.
   final List<Map<String, dynamic>> ownStarts;
+
+  static Iterable<String> _projectIds(Object? list) => [
+    for (final row in _rows(list))
+      if (row['id'] case final String id) id,
+  ];
 
   static Iterable<Map<String, dynamic>> _rows(Object? list) => [
     if (list is List)
@@ -170,8 +190,14 @@ Map<String, dynamic>? swarmBuddyStart(SwarmReader reader, String projectId) {
   final chat = reader.buddies.ownChats[projectId];
   for (final start in reader.buddies.ownStarts.reversed) {
     final request = start['request'] as Map;
+    // A thread session's start is its thread's, never the Buddy's own.
+    if (request['buddySession'] != null) continue;
     if (request['projectId'] == projectId ||
-        (chat != null && request['conversationId'] == chat)) {
+        (chat != null && request['conversationId'] == chat) ||
+        // The one Buddy's start, in every project, while the server keeps
+        // one per Swarm: a second Start there would be refused.
+        (reader.snapshot?.swarmBuddy == true &&
+            request['buddyScope'] == 'swarm')) {
       return start;
     }
   }
