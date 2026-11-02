@@ -74,11 +74,10 @@ async function overSocket(socketPath: string, input: Request): Promise<Response>
  */
 export function daemonFetch(dataDir: string, port: number, base: typeof fetch = fetch, platform: NodeJS.Platform = process.platform): typeof fetch {
   return (input, init) => {
-    const target = new Request(input, init)
-    const url = new URL(target.url)
+    const url = new URL(input instanceof Request ? input.url : String(input))
     const saved = readDaemonRecord(dataDir, port, platform)?.port
     const daemon = url.hostname === '127.0.0.1' && (Number(url.port) === port || Number(url.port) === saved)
     const socket = daemon ? localSocketRoute(dataDir, port, platform) : null
-    return socket ? overSocket(socket, target) : base(input, init)
+    return socket ? overSocket(socket, new Request(input, init)) : base(input, init)
   }
 }

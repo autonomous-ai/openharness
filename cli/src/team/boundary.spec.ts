@@ -295,13 +295,13 @@ describe('the privacy check, on the real file system', () => {
   })
 })
 
-/** A hole the audit found (finding H1), pinned as it is today: this turns red the day it is closed, and then says the opposite. */
+/** A hole the audit found (finding H1), now closed: the real hook, with a made-up credential, against a plain listener on the port. Its other cases are in localCredential.spec.ts. */
 describe('the owner\'s credential and whoever holds the daemon\'s port', () => {
   const NOTIFY = fileURLToPath(new URL('../../hook/notify.mjs', import.meta.url))
   /** Made up for this test: never a real credential. */
   const CREDENTIAL = 'A'.repeat(43)
 
-  it('H1, still open: an engine hook hands its credential to any listener on the daemon\'s port', async () => {
+  it('H1: an engine hook hands its credential to no listener on the daemon\'s port', async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'hc-')))
     const data = join(root, 'data')
     mkdirSync(data, { mode: 0o700 })
@@ -323,7 +323,8 @@ describe('the owner\'s credential and whoever holds the daemon\'s port', () => {
       })
       hook.stdin.end(JSON.stringify({ hook_event_name: 'SessionStart', session_id: '11111111-1111-4111-8111-111111111111', cwd: root, source: 'startup' }))
       await new Promise<void>(resolve => { hook.on('exit', () => resolve()) })
-      expect(heard).toContain(CREDENTIAL)
+      // Nothing at all: the hook goes over the daemon's 0600 socket, and with none there the daemon is down.
+      expect(heard).toEqual([])
     } finally {
       await new Promise<void>(resolve => { impostor.close(() => resolve()) })
       rmSync(root, { recursive: true, force: true })

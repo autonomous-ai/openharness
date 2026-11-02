@@ -319,7 +319,7 @@ function daemonSocket(port, dataDir) {
 function hookRoute(port) {
   const dataDir = paths().dataDir
   if (process.platform === 'win32') return { address: { host: '127.0.0.1', port }, token: readHookCredential() }
-  if (Buffer.byteLength(join(dataDir, 'daemon-65535.sock')) > MAX_SOCKET_PATH_BYTES) return { address: { host: '127.0.0.1', port }, token: readHookCredential('hook-token') }
+  if (Buffer.byteLength(join(dataDir, `daemon-${port}.sock`)) > MAX_SOCKET_PATH_BYTES) return { address: { host: '127.0.0.1', port }, token: readHookCredential('hook-token') }
   const socketPath = daemonSocket(port, dataDir)
   return socketPath ? { address: { socketPath }, token: readHookCredential() } : null
 }
