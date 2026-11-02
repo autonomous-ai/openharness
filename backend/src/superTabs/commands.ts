@@ -377,7 +377,9 @@ export interface CommandContext {
   reply?: { id: string; conversationId: string; author: Author; createdAt: number; thread?: string | null; threadSource?: Record<string, unknown> | null
     agentOnly?: true
     /** In a Buddy chat: its thread has had a thread session (a `buddySession` reply), read by the store (buddySessions.ts). */
-    sessionThread?: true }
+    sessionThread?: true
+    /** The project of the thread's latest session row: a session reopened there keeps it (Scholes, 11-02). */
+    sessionProject?: string }
   /** For a person's `message.send`: the tags waiting on them in that conversation, read by the store (leaderboard/record.ts). */
   openTags?: Array<{ messageId: string; createdAt: number }>
   /** For `buddy.rename` and `buddy.create`: the names chosen in this Swarm's Buddy chats, quiet ones included, read by the
@@ -1014,7 +1016,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // In the one Buddy chat a session works in one project its person reads, or, with none named, as the main Buddy does
       // (spec: The model). A project's own chat has its project.
       const swarm = isSwarmBuddyChat(chat)
-      const project = swarm ? command.sessionProjectId ? readProject(state, actor, command.sessionProjectId) : undefined : groupProject(state, chat)
+      // Reopened in its thread with none named (a thread's reply box has no choice), it keeps its project, while its person reads it.
+      const projectId = command.sessionProjectId ?? context.reply?.sessionProject
+      const project = swarm ? projectId ? readProject(state, actor, projectId) : undefined : groupProject(state, chat)
       const me = person(state, owner.id)
       const folder = project ? { cwd: projectFolder(pool, project), worktree: true, ...(swarm ? { buddyNarrow: true as const } : {}) }
         : { cwd: buddyHomeFolder(pool, me), worktree: false, buddyScope: 'swarm' as const, buddyProjects: buddyProjectsOn(state, pool, me) }

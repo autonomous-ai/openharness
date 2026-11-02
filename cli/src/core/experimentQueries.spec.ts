@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
+import { processCoreApi } from '../services/processCoreApi.js'
 import { answerExperimentQuery, answerMachineAddonsQuery, createForExperiment, creationForExperiment } from './experimentQueries.js'
 
 const agent = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/w' }) as RegisteredSession
@@ -27,6 +28,22 @@ describe('the cloud agents\' doors', () => {
 })
 
 describe('the Super Tab service\'s door', () => {
+  it('answers a Buddy session\'s turn through the real process path, to the Super Tab service alone', async () => {
+    const activity = vi.fn(async () => ({ harness: 'working' as const }))
+    const core = fakeCore({ agents: { activity } } as never)
+    const both = new Set(['superTabs', 'cloud'])
+    const api = (service: string) => processCoreApi('/data', service, { ask: async (query: string, payload: Record<string, unknown>) => {
+      const answer = await answerExperimentQuery(core, both, service, query, payload)
+      if (!answer) throw new Error('UNKNOWN_QUERY')
+      return answer
+    } })
+    expect(await api('superTabs').agents.activity(['harness'])).toEqual({ harness: 'working' })
+    expect(activity).toHaveBeenCalledWith(['harness'])
+    activity.mockClear()
+    expect(await api('cloud').agents.activity(['harness'])).toEqual({})
+    expect(activity).not.toHaveBeenCalled()
+  })
+
   it('is the Super Tab service\'s alone, and hands its members\' waits to the core whole', async () => {
     const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn() }
     const core = fakeCore({ superTabs })

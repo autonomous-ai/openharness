@@ -143,8 +143,8 @@ function ownWords(row: SessionRow, personId: string | undefined, selfId: string)
   return !!author && ((author.kind === 'person' && author.id === personId) || (author.kind === 'agent' && author.id === selfId))
 }
 
-/** Whether [row] was written by a session of [projectId] that ended in this thread, so one reopened there has its history
- *  (Scholes, 11-02). The mark is on the row: a main Buddy's rows and another project's session's never carry it. */
+/** Whether [row] is an agent's row of a session of [projectId] in this thread, so one reopened there has its history (Scholes,
+ *  11-02). The server sets the mark on the row: a main Buddy's rows and another project's session's never carry it. */
 function earlierSessionOf(row: SessionRow, projectId: string): boolean {
   return (row.author as { kind?: unknown } | null | undefined)?.kind === 'agent' && row.buddySession === true && row.buddyProject === projectId
 }

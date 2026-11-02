@@ -1254,12 +1254,15 @@ export class SuperTabHost {
       const end = () => backend(this.core, 'POST', `/api/super-tabs/${row.tabId}/commands`, { operationId: `buddy-session-end-${agent.id}-${ending}`,
         command: oldChat ? { type: 'buddy.remove', projectId: agent.projectId } : { type: 'buddy.sessionEnd', conversationId, thread: session.thread, reason: ending } })
         .then(() => { state.ended = true; this.log(`Ended thread session ${short} in Swarm ${row.tabId}: ${ending}.`) })
-      // A long job can leave the screen as it was: its spinner is not progress (terminal.ts STATUS_LINE). A turn still open is
-      // work however quiet (Scholes, 11-02: a busy session never closes), and a read that fails says nothing, so it retries.
-      void (ending === 'idle' ? this.core.agents.activity([harnessId]) : Promise.resolve({} as Record<string, string>))
+      // A long job can leave the screen as it was: its spinner is not progress (terminal.ts STATUS_LINE). Only a closed turn ends
+      // it (Scholes, 11-02: a busy session never closes). An open turn with its evidence lapsed reads unknown, and a read that
+      // failed reads as no answer (processCoreApi.ts): neither says it is idle, so it retries.
+      void (ending === 'idle' ? this.core.agents.activity([harnessId]) : Promise.resolve({ [harnessId]: 'idle' } as Record<string, string>))
         .then(activity => {
-          if (activity[harnessId] === 'working') state.activeAt = this.now()
-          else return end()
+          const turn = activity[harnessId]
+          if (turn === 'working') state.activeAt = this.now()
+          else if (turn === 'idle') return end()
+          else throw new Error('its turn could not be read')
         })
         .catch(error => {
           state.retryAt = this.now() + Math.min(END_RETRY_MAX_MS, END_RETRY_MS * 2 ** state.failures++)
