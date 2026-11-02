@@ -255,6 +255,10 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// Each entry's row as last built, with what it was built from ([_row]).
   final _rows = <String, ({Object inputs, Widget row})>{};
 
+  /// Message #N links use the conversation numbers from this snapshot.
+  SuperTabSnapshot? _referencesFrom;
+  Map<int, String> _referencesByNumber = const {};
+
   /// Swarm Home C's New messages line: the message it sits above once
   /// placed, and whether it was placed this visit.
   String? _lineAt;
@@ -929,6 +933,24 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     };
   }
 
+  Map<int, String> _numberedConversations(SwarmConversation c) {
+    final snapshot = c.reader.snapshot;
+    if (identical(snapshot, _referencesFrom)) return _referencesByNumber;
+    _referencesFrom = snapshot;
+    _referencesByNumber = {
+      for (final conversation
+          in snapshot?.conversations ?? const <SuperTabConversation>[])
+        if (conversation.number != null) conversation.number!: conversation.id,
+    };
+    return _referencesByNumber;
+  }
+
+  void _openNumberedConversation(SwarmConversation c, String id) {
+    if (mounted && c.reader.snapshot?.conversation(id) != null) {
+      openSwarmConversation(context, widget.swarmId, id);
+    }
+  }
+
   /// One of thread [t]'s messages as the chat draws its own, less what only
   /// the chat has: no quote, no thread line, no Reply (the box is the reply).
   Widget _threadRow(
@@ -956,6 +978,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       taggedAddresses: _taggedOf(c, m),
       readerId: c.reader.accountId,
       onOpenTask: _taskOpener(c, m),
+      references: _numberedConversations(c),
+      onOpenConversation: (id) => _openNumberedConversation(c, id),
       grouped: grouped,
       lit: lit,
       followed: followed,
@@ -1853,6 +1877,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               taggedAddresses: tagged,
               readerId: c.reader.accountId,
               onOpenTask: _taskOpener(c, m),
+              references: _numberedConversations(c),
+              onOpenConversation: (id) => _openNumberedConversation(c, id),
               grouped: grouped,
               lit: lit,
               followed: followed,

@@ -275,6 +275,8 @@ class SwarmMessageRow extends StatelessWidget {
     this.card,
     this.onLongPress,
     this.onOpenTask,
+    this.references = const {},
+    this.onOpenConversation,
   });
 
   final SuperTabMessage message;
@@ -310,6 +312,12 @@ class SwarmMessageRow extends StatelessWidget {
 
   /// Opens a task held by the current reader; null for an unavailable target.
   final VoidCallback? onOpenTask;
+
+  /// The numbered conversations `#N` links in a message can open.
+  final Map<int, String> references;
+
+  /// Opens a conversation resolved from [references].
+  final ValueChanged<String>? onOpenConversation;
 
   /// Null where the person cannot post, or in the thread itself.
   final VoidCallback? onReply;
@@ -421,9 +429,11 @@ class SwarmMessageRow extends StatelessWidget {
               child: SwarmMessageText(
                 text: part.text,
                 mentionNames: mentions.names,
+                references: references,
                 tagged: tagged,
                 addresses: taggedAddresses,
                 onTap: onTap,
+                onOpenConversation: onOpenConversation,
               ),
             ),
         for (final file in message.attachments) _attachment(context, file),
