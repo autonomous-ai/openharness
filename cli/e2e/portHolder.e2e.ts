@@ -16,9 +16,9 @@ const started: IsolatedDaemon[] = []
 afterEach(async () => { for (const each of started.splice(0)) await each.close() })
 
 it('a daemon that lost its port still hears hooks, and the holder of the port hears nothing', async () => {
-  const heard: Array<IncomingMessage['headers']> = []
-  const holder = createServer((req, res) => { heard.push(req.headers); req.resume(); res.end('{}') })
-  holder.on('upgrade', (req, socket) => { heard.push(req.headers); socket.destroy() })
+  const heard: Array<{ method?: string; url?: string; headers: IncomingMessage['headers'] }> = []
+  const holder = createServer((req, res) => { heard.push({ method: req.method, url: req.url, headers: req.headers }); req.resume(); res.end('{}') })
+  holder.on('upgrade', (req, socket) => { heard.push({ method: req.method, url: req.url, headers: req.headers }); socket.destroy() })
   await new Promise<void>((resolve) => { holder.listen(0, '127.0.0.1', resolve) })
   const port = (holder.address() as AddressInfo).port
   try {
@@ -35,7 +35,12 @@ it('a daemon that lost its port still hears hooks, and the holder of the port he
     await new Promise<void>((resolve) => { hook.on('exit', () => resolve()) })
     // The daemon took it, over the socket: it says what it did with a hook whose pane is not one of its own.
     await until('the daemon to hear the hook', () => /\[hooks\] 11111111/.test(d.log()), 30_000)
-    expect(heard).toEqual([])
+    // A start may ask the port who is there, with no secret: `GET /api/health` or `/api/status`, as anyone can. Nothing else
+    // reaches the holder: no hook, no request with a body, no header carrying a secret.
+    for (const request of heard) {
+      expect(`${request.method} ${request.url}`).toMatch(/^GET \/api\/(health|status)$/)
+      expect(Object.keys(request.headers).filter(name => /harness|authorization|cookie/i.test(name))).toEqual([])
+    }
   } finally {
     holder.closeAllConnections()
     await new Promise<void>((resolve) => { holder.close(() => resolve()) })
