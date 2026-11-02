@@ -65,8 +65,9 @@ export async function readFollowedThreads(store: SuperTabStore, user: AuthUser, 
   const eligible = threadRows.filter(r => r.follow !== false && groups.has(r.conversationId) && !listed.has(threadKey(r.conversationId, r.threadId)))
   // Threads they are tagged in and hold no mark row of: the inbox lists none in a chat they never opened.
   const held = new Set(threadRows.map(r => threadKey(r.conversationId, r.threadId)))
-  const tagged = (await taggedThreads(db, tabId, state, { kind: 'person', userId: personId, email: user.email }, Date.now(), TAGGED_THREADS + 1))
-    .filter(t => groups.has(t.conversationId) && !held.has(threadKey(t.conversationId, t.threadId)) && !listed.has(threadKey(t.conversationId, t.threadId)))
+  // The filters run before the count, so tags in archived chats or in threads they hold a mark of never use up the cap.
+  const tagged = await taggedThreads(db, tabId, state, { kind: 'person', userId: personId, email: user.email }, Date.now(), TAGGED_THREADS + 1,
+    t => groups.has(t.conversationId) && !held.has(threadKey(t.conversationId, t.threadId)) && !listed.has(threadKey(t.conversationId, t.threadId)))
   const byTag: ThreadMarkRow[] = tagged.slice(0, TAGGED_THREADS).map(t => ({ conversationId: t.conversationId, threadId: t.threadId, sequence: 0, follow: null, updatedAt: t.at }))
   const candidates = [...eligible.slice(0, READ_CANDIDATES), ...byTag]
   let more = inbox.more || eligible.length > READ_CANDIDATES || tagged.length > TAGGED_THREADS

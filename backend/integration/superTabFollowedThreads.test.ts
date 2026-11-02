@@ -590,4 +590,34 @@ describe('a thread the person is tagged in, in a chat they never opened (GET /th
     expect(roots(body.data.read)).toContain(`Root ${TAGGED_THREADS + 4}`)
     expect(roots(body.data.read)).not.toContain('Root 0')
   })
+
+  /** An older tag in `older`, and TAGGED_THREADS + 1 newer ones in `chat` (the caller then hides them from the list). */
+  async function olderBehindNewer(tabId: string, older: string, chat: string, worker: string) {
+    const old = await tagged(tabId, older, 'Older', worker)
+    await db.superTabMention.updateMany({ where: { tabId, messageId: old.reply }, data: { createdAt: new Date(Date.now() - 3_600_000) } })
+    const roots = await insert(tabId, chat, Array.from({ length: TAGGED_THREADS + 1 }, (_, i) => ({ text: `Newer ${i}`, author: personAuthor(owner) })))
+    const replies = await insert(tabId, chat, roots.map(thread => ({ text: 'Reply', author: agentAuthor(worker), thread, mentions: [peer.sub] })))
+    for (const reply of replies) await tag(tabId, chat, reply)
+    return roots
+  }
+
+  it('does not let newer tags in an archived chat use up the cap and hide an older tag in an open chat', async () => {
+    const s = await scene()
+    await olderBehindNewer(s.tabId, s.web, s.openChat, s.worker)
+    await editChat(s.tabId, s.openChat, data => { data.archived = true })
+    const { body } = await threads(s.tabId, peer)
+    expect(roots(body.data.read)).toEqual(['Older root'])
+    expect(body.data.more).toBe(false)
+    expect(JSON.stringify(body.data)).not.toMatch(/Newer/)
+  })
+
+  it('does not let newer tags in threads they unfollowed use up the cap and hide an older tag', async () => {
+    const s = await scene()
+    const newer = await olderBehindNewer(s.tabId, s.web, s.web, s.worker)
+    for (const root of newer) expect((await follow(s.tabId, s.web, root, false, peer)).status).toBe(200)
+    const { body } = await threads(s.tabId, peer)
+    expect(roots(body.data.read)).toEqual(['Older root'])
+    expect(body.data.more).toBe(false)
+    expect(JSON.stringify(body.data)).not.toMatch(/Newer/)
+  })
 })

@@ -275,14 +275,15 @@ export async function listMentions(tx: Tx, tabId: string, state: SuperTabState, 
 /** A thread a person's own tag is in: the tagged message's thread (a reply's root, or a root itself), in the tag's conversation. */
 export interface TaggedThread { conversationId: string; threadId: string; at: number }
 
-/** The threads the person's own unexpired tags are in, waiting or answered, newest tag first, once each, at most `limit` (the
+/** The threads the person's own unexpired tags are in, waiting or answered, newest tag first, once each, at most `limit` of those
+ *  `keep` accepts (the caller's own filters apply before the count, so threads it drops never use up the limit) (the
  *  Threads list, read/followedThreads.ts: a tag in a chat they never opened has no thread mark, so no other read finds it). Only
  *  tags [readable] lists: conversations they can read, never a held Lead notice before its time. A message is taken only in the
  *  conversation its tag names, and only its thread id leaves here, so a tag never names a thread of another chat. Its root
  *  and replies are read and checked by the caller. The tags by one indexed read of at most 500 rows (tagRows), their messages by id
  *  in one more. */
 export async function taggedThreads(tx: Tx, tabId: string, state: SuperTabState, actor: Extract<Actor, { kind: 'person' }>, now: number,
-  limit: number): Promise<TaggedThread[]> {
+  limit: number, keep: (thread: TaggedThread) => boolean = () => true): Promise<TaggedThread[]> {
   const tagged = await readable(tx, tabId, state, actor, now, null)
   if (!tagged.length) return []
   const found = await readBy(tx, 'SuperTabMessage', 'id', [{ $match: { _id: { $in: [...new Set(tagged.map(t => t.row.messageId))] }, tabId } },
@@ -297,7 +298,9 @@ export async function taggedThreads(tx: Tx, tabId: string, state: SuperTabState,
     const key = `${row.conversationId}\u0000${threadId}`
     if (seen.has(key)) continue
     seen.add(key)
-    threads.push({ conversationId: row.conversationId, threadId, at: row.createdAt.getTime() })
+    const thread = { conversationId: row.conversationId, threadId, at: row.createdAt.getTime() }
+    if (!keep(thread)) continue
+    threads.push(thread)
     if (threads.length >= limit) break
   }
   return threads
