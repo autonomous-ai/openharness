@@ -54,7 +54,9 @@ export const TEMPLATE_WORKFLOW = `## Workflow
    asks for two reviews gets two review steps.
 3. Findings go straight to the Engineer. The Engineer fixes them and asks the same Reviewer or Tester again in the same
    step; it adds no new step for a second round.
-4. When the review passes, and the test passes where there is one, the Engineer tells the PM once.
+4. When the review passes, and the test passes where there is one, the Engineer sets its task done with the pull request
+   and the evidence in its result: that status is how the PM hears, once. It sends the PM no other message besides a task
+   that needs a person: no progress notes, no "ready for review", no separate "done" message.
 5. The PM checks CI on the pull requests that passed, merges them, and tells the people who asked.
 6. A task that needs a person, or a machine that is down, goes to the PM at once, by name.
 7. Idle Engineers are stopped. Reviewers and Testers are kept while the work they checked is open.

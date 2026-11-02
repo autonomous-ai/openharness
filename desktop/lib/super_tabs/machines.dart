@@ -37,6 +37,7 @@ import 'model.dart';
 import 'join_machine.dart' show superTabSuggestedAgentSlots;
 import 'team_account_setup.dart';
 import 'section_heading.dart';
+import '../widgets/laid_out_list.dart';
 
 export 'machine_status.dart';
 
@@ -2175,7 +2176,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             mainAxisSize: MainAxisSize.min,
             children: children,
           )
-        : ListView(children: children);
+        : LaidOutListView(children: children);
   }
 }
 

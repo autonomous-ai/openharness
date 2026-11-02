@@ -1128,7 +1128,12 @@ lease, attempts, costs and checks; readers show it inside its task.
   talked over.
 - **Who hears it**: its agent's Ready and Done go to the task's owner, not the
   coordinator; an unnamed post from its agent, in the step or in the task, does
-  too. With no owner, the coordinator hears them.
+  too. The owner is the task's assignee while that agent is in the Swarm, its
+  own work done or not (a late verdict is still its to act on); with none, the
+  coordinator hears them. Any agent's unnamed post in a step, and in a task from
+  an agent that held one of its steps (open or done), goes to the owner too. An
+  agent that has held only steps is never reported idle: the instructions keep
+  Reviewers and Testers.
 - **Closing**: a step archives and sleeps with its task, never on its own clock;
   archiving a task cancels its open steps and tells their agents.
 - **Reading**: `status` prints steps under their task; `mine` and `task GROUP`

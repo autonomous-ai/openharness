@@ -140,7 +140,9 @@ void main() {
 
   testWidgets('a phone\'s New tab page rows are a finger tall', (tester) async {
     await _mount(tester, const Size(360, 740), () => withPanes(signedIn(), 3));
-    await tester.tap(find.byKey(const ValueKey('web-new-tab-button')));
+    await tester.tap(find.byKey(const ValueKey('web-new-menu-button')));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.byKey(const ValueKey('web-menu:swarm.new')));
     await tester.pump(const Duration(milliseconds: 500));
     for (final height in _newTabRowHeights(tester)) {
       expect(height, greaterThanOrEqualTo(44));
