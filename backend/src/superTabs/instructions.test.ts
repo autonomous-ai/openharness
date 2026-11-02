@@ -37,7 +37,7 @@ describe('the built-in template', () => {
   it('the template workflow has one task per request, steps, and the context tools', () => {
     expect(TEMPLATE_WORKFLOW).toContain('1. One request is one task.')
     // Ken, 2026-11-02: the PM sets the task's team once, then stays out of it until the Engineer reports.
-    expect(TEMPLATE_WORKFLOW).toContain('names its Reviewer, and its Tester when the change needs one')
+    expect(TEMPLATE_WORKFLOW).toContain('and its Tester when the change needs one')
     expect(TEMPLATE_WORKFLOW).toContain('assigns them to the Reviewer and the Tester the task names')
     expect(TEMPLATE_WORKFLOW).toContain('The PM opens no task to hold, batch, triage or list work')
     expect(TEMPLATE_WORKFLOW).toContain('adds a review step to its task')
@@ -45,6 +45,12 @@ describe('the built-in template', () => {
     expect(TEMPLATE_WORKFLOW).toContain('run `mine`')
     expect(TEMPLATE_WORKFLOW).toContain('read `task GROUP`')
     expect(TEMPLATE_WORKFLOW).toContain('read the thread before acting on it')
+    // Ken, 2026-11-02 (from openharness): the PM names both Reviewers a two-review task needs, and the Engineer picks a
+    // missing one itself instead of asking the PM.
+    expect(TEMPLATE_WORKFLOW).toContain('two Reviewers when the task needs two reviews')
+    expect(TEMPLATE_WORKFLOW).toContain('the Engineer picks a free Reviewer that has not worked on this task itself, without asking the PM')
+    // Ken, 2026-11-02: an Engineer posted "review and test pass" and then set Done, two messages for one event.
+    expect(TEMPLATE_WORKFLOW).toContain('that status is how the PM hears, once')
     expect(TEMPLATE_WORKFLOW).toContain('The PM reads `mine` for progress, not `status`.')
     expect(TEMPLATE_WORKFLOW.split('\n').filter(l => /^\d+\. /.test(l))).toHaveLength(11)
   })

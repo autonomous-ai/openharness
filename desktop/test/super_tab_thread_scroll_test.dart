@@ -7,6 +7,7 @@ import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/thread_panel.dart';
 import 'package:harness/super_tabs/view.dart';
+import 'package:harness/widgets/laid_out_list.dart';
 
 import 'support/super_tab_fixture.dart';
 
@@ -48,7 +49,7 @@ void main() {
   Finder inPanel(Finder finder) =>
       find.descendant(of: panel(), matching: finder);
   ScrollPosition threadScroll(WidgetTester tester) => tester
-      .widget<ListView>(inPanel(find.byType(ListView)))
+      .widget<ListView>(inPanel(find.byType(LaidOutListView)))
       .controller!
       .position;
 
@@ -200,7 +201,7 @@ void main() {
     c.openThread('message-1');
     await tester.pumpAndSettle();
 
-    await tester.drag(inPanel(find.byType(ListView)), const Offset(0, 400));
+    await tester.drag(inPanel(find.byType(LaidOutListView)), const Offset(0, 400));
     await tester.pumpAndSettle();
     final read = threadScroll(tester).pixels;
     expect(threadScroll(tester).extentAfter, greaterThan(40));
@@ -224,7 +225,7 @@ void main() {
   /// Flings the thread back up and lets it coast for a moment, still moving.
   Future<void> flingUp(WidgetTester tester) async {
     await tester.fling(
-      inPanel(find.byType(ListView)),
+      inPanel(find.byType(LaidOutListView)),
       const Offset(0, 600),
       4000,
     );

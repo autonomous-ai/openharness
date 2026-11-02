@@ -5,7 +5,11 @@
  *
  * A read thread is listed only from the person's thread mark rows (a thread they opened on some device, or followed), in chats
  * they read now (the inbox's chats: active, unarchived, the messages read's check), most recently moved first, at most
- * READ_CANDIDATES. One is listed when they follow it, or started it, replied in it or were tagged in it (root or reply), and it
+ * READ_CANDIDATES; and from their own tags (mentions.ts taggedThreads), at most TAGGED_THREADS more, newest tag first: a thread
+ * they are tagged in has no mark in a chat they never opened (the inbox counts that chat as read, so it lists none of its
+ * threads), and the Threads view promises tagged threads. A thread with a mark row of theirs, an unfollowed one too, is judged by
+ * the row alone; a tag only adds the threads they hold none of. The tag list is theirs alone and checked as the Activity list is
+ * (chats they read now); the thread's root and replies are checked below as for any candidate. One is listed when they follow it, or started it, replied in it or were tagged in it (root or reply), and it
  * has a reply. Rows are those a page shows a person (inbox.ts readable): never an agent-only notice or a delivered copy.
  *
  * Cost: the inbox's reads (without the chats' latest messages); the candidates' roots by id in one read; each candidate thread's
@@ -20,6 +24,8 @@ import type { ThreadReply } from '../pageReads.js'
 import { threadSummaries } from '../threads.js'
 import { readBy } from '../parts/indexed.js'
 import type { SuperTabStore } from '../store.js'
+import { taggedThreads } from '../mentions.js'
+import type { ThreadMarkRow } from '../readMarks.js'
 import { FIELDS, inboxRead, INBOX_READS, INBOX_WINDOW_MS, isReply, MEMBER_SCAN, newestFirst, perRange, preview, readable, row, SCAN_FIELDS, threadKey,
   type InboxMessage, type InboxThread, type Row } from './inbox.js'
 
@@ -27,6 +33,8 @@ import { FIELDS, inboxRead, INBOX_READS, INBOX_WINDOW_MS, isReply, MEMBER_SCAN, 
 export const MAX_READ_THREADS = 30
 /** Thread mark rows checked for read threads, most recently moved first: room for those the person turns out not to be in. */
 export const READ_CANDIDATES = 2 * MAX_READ_THREADS
+/** Threads found only by the person's tags that are checked as candidates, newest tag first, besides READ_CANDIDATES. */
+export const TAGGED_THREADS = 30
 /** Rows read per candidate thread, newest first. */
 export const THREAD_SCAN = MEMBER_SCAN
 export const THREADS_READS = INBOX_READS
@@ -55,8 +63,14 @@ export async function readFollowedThreads(store: SuperTabStore, user: AuthUser, 
   const listed = new Set(unread.map(t => threadKey(t.conversationId, t.rootId)))
   const groups = new Map(chats.map(g => [g.id, g]))
   const eligible = threadRows.filter(r => r.follow !== false && groups.has(r.conversationId) && !listed.has(threadKey(r.conversationId, r.threadId)))
-  const candidates = eligible.slice(0, READ_CANDIDATES)
-  let more = inbox.more || eligible.length > READ_CANDIDATES
+  // Threads they are tagged in and hold no mark row of: the inbox lists none in a chat they never opened.
+  const held = new Set(threadRows.map(r => threadKey(r.conversationId, r.threadId)))
+  // The filters run before the count, so tags in archived chats or in threads they hold a mark of never use up the cap.
+  const tagged = await taggedThreads(db, tabId, state, { kind: 'person', userId: personId, email: user.email }, Date.now(), TAGGED_THREADS + 1,
+    t => groups.has(t.conversationId) && !held.has(threadKey(t.conversationId, t.threadId)) && !listed.has(threadKey(t.conversationId, t.threadId)))
+  const byTag: ThreadMarkRow[] = tagged.slice(0, TAGGED_THREADS).map(t => ({ conversationId: t.conversationId, threadId: t.threadId, sequence: 0, follow: null, updatedAt: t.at }))
+  const candidates = [...eligible.slice(0, READ_CANDIDATES), ...byTag]
+  let more = inbox.more || eligible.length > READ_CANDIDATES || tagged.length > TAGGED_THREADS
   if (!candidates.length) return { unread, read: [], more }
   // Every root by its id, in one read; a root counts only in the chat its mark names, and only one the person reads.
   const found = (await readBy(db, 'SuperTabMessage', 'id', [{ $match: { _id: { $in: candidates.map(c => c.threadId) }, tabId } },

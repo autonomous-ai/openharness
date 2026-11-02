@@ -26,6 +26,7 @@ import 'swarm_new_project_sheet.dart';
 import 'swarm_project_page.dart';
 import 'swarm_reader.dart';
 import 'swarm_row.dart';
+import 'swarm_home_view_sheet.dart';
 import 'swarm_session.dart';
 import 'swarm_start.dart';
 import 'swarm_style.dart';
@@ -378,9 +379,10 @@ class _SwarmPageState extends State<SwarmPage> {
     );
   }
 
-  /// The unread filter and Mark all read, at the end of the top bar (the
-  /// desktop's, on its Projects heading): the filter lit while on; Mark all
-  /// read greyed with nothing unread in the Swarms [shown].
+  /// Sort and filter and Mark all read, at the end of the top bar (the
+  /// desktop's, on its Projects heading): a dot on the first with anything but
+  /// the defaults on; Mark all read greyed with nothing unread in the Swarms
+  /// [shown].
   Widget _attention(
     BuildContext context,
     SwarmSession session,
@@ -394,13 +396,13 @@ class _SwarmPageState extends State<SwarmPage> {
       mainAxisSize: MainAxisSize.min,
       children: [
         SwarmIconButton(
-          key: const ValueKey('swarm-unread-only'),
+          key: const ValueKey('swarm-home-view'),
           icon: LucideIcons.listFilter300,
-          label: home.unreadOnly
-              ? 'Show all projects'
-              : 'Show unread projects only',
-          selected: home.unreadOnly,
-          onPressed: home.toggleUnreadOnly,
+          label:
+              'Sort and filter: ${swarmHomeSortLabel(home)}, '
+              '${swarmHomeFilterLabel(home.filter)}',
+          dot: home.viewChanged,
+          onPressed: () => unawaited(showSwarmHomeViewSheet(context, session)),
         ),
         SwarmIconButton(
           key: const ValueKey('swarm-mark-all-read'),
@@ -620,13 +622,33 @@ class _SwarmPageState extends State<SwarmPage> {
           reading.add(swarm.id);
       }
     }
-    final all = swarmHomeLists(projects, pins: session.home.pins, now: now);
-    final unreadOnly = session.home.unreadOnly;
-    final lists = unreadOnly ? swarmHomeUnreadOnly(all) : all;
-    // The filter on with nothing to list: it says so, and offers them all.
-    final nothingUnread =
-        unreadOnly &&
+    final home = session.home;
+    final filter = home.filter;
+    final lists = swarmHomeFiltered(
+      swarmHomeLists(
+        projects,
+        pins: home.pins,
+        now: now,
+        sort: home.sort,
+        unreadsFirst: home.unreadsFirst,
+      ),
+      filter,
+    );
+    // Mentions come from their own read: until it answers, none listed says
+    // nothing. A failed one is not none, and says so even over the mentions
+    // another Swarm has listed.
+    final mentionsOn = filter == SwarmHomeFilter.mentions;
+    final mentionsComing = mentionsOn && asking.isNotEmpty;
+    final mentionsFailed =
+        mentionsOn &&
+        shown.any((swarm) => inbox.asks(swarm.id)?.readFailed ?? false);
+    // The filter on with nothing to list, and nothing still to come: it says
+    // so, and offers them all.
+    final nothingListed =
+        filter != SwarmHomeFilter.all &&
         projects.isNotEmpty &&
+        reading.isEmpty &&
+        !mentionsComing &&
         lists.pinned.isEmpty &&
         lists.recent.isEmpty &&
         lists.quiet.isEmpty;
@@ -658,25 +680,32 @@ class _SwarmPageState extends State<SwarmPage> {
       if (lists.recent.isNotEmpty ||
           quiet.isNotEmpty ||
           empty ||
-          nothingUnread ||
+          nothingListed ||
+          mentionsFailed ||
           create != null) ...[
         SwarmCaption('Projects', first: first && lists.pinned.isEmpty),
         SwarmGroup(
           children: [
             if (empty) const SwarmRow(title: 'No project yet', onTap: null),
-            if (nothingUnread) ...[
+            if (mentionsFailed)
               const SwarmRow(
-                key: ValueKey('swarm-unread-none'),
-                title: 'Nothing unread.',
+                key: ValueKey('swarm-mentions-failed'),
+                title: 'Mentions could not be read.',
+                onTap: null,
+              )
+            else if (nothingListed)
+              SwarmRow(
+                key: const ValueKey('swarm-filter-none'),
+                title: mentionsOn ? 'No mentions.' : 'Nothing unread.',
                 onTap: null,
               ),
+            if (nothingListed)
               SwarmRow(
-                key: const ValueKey('swarm-unread-show-all'),
+                key: const ValueKey('swarm-filter-show-all'),
                 title: 'Show all',
                 chevron: null,
-                onTap: session.home.toggleUnreadOnly,
+                onTap: () => home.setFilter(SwarmHomeFilter.all),
               ),
-            ],
             for (final p in lists.recent) row(p),
             if (quiet.isNotEmpty) ...[
               SwarmOtherProjectsRow(
@@ -693,6 +722,11 @@ class _SwarmPageState extends State<SwarmPage> {
         ),
       ] else if (reading.isNotEmpty || failed.isNotEmpty)
         SwarmCaption('Projects', first: first && lists.pinned.isEmpty),
+      // A Swarm still to be read has its skeleton below: one is enough.
+      if (mentionsComing && reading.isEmpty) ...[
+        const SizedBox(height: 8),
+        SwarmSkeletonRows(id: 'swarm-mentions-loading', dot: true),
+      ],
       for (final (i, id) in reading.indexed) ...[
         if (projects.isNotEmpty || i > 0) const SizedBox(height: 8),
         SwarmSkeletonRows(id: 'swarm-projects-loading-$id', dot: true),

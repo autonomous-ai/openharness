@@ -383,15 +383,33 @@ the project chat. (On 2026-10-29 production held 9 such chats in 4 Swarms, and n
 
 ## Leaderboard
 
-The leaderboard shows how each person helped the team ship this week. People
+The leaderboard shows how each person helped the team ship over a period. People
 compete for fun, but the reward is shared: the team's goal is on top, and
 everyone's points count toward it. In Desktop and the web app it is the right
 pane's Humans section; there is no separate view. The team goal is one line at
-the top, beside a small week picker. Below it, everyone is listed, with no
+the top, beside a small period picker. Below it, everyone is listed, with no
 cut-off and most points first. Each person is one row: avatar, name and points
 in fixed columns, with a quiet line of their Shipped, Unblocked and Lent under it.
 It shows the project of the open conversation to the people who can read that
 project. A server without a leaderboard leaves the names without numbers.
+
+The picker offers Last 24h, Last 7d and Last 30d, ending now; Last 7d is the
+default. Each period is compared with the one of the same length before it,
+except Last 30d, which shows no comparison because the board keeps five weeks of
+records. Ship times, answers and attempts have exact times. Review verdicts are
+kept by hour, and Lent by day and by the project of the task it went to. A day's
+Lent is shared out evenly when a period starts or ends inside it, so Last 24h's
+lent hours are an estimate. Weekly records are still written for older apps, which
+keep their week picker, as a new app does on an older server. Time recorded by
+week before the finer records began counts once, in the middle of its week.
+A period's Lent is what the board's own project earned, plus any of that older
+weekly time, which names no project.
+
+On Desktop, All projects sums every project the reader can read, for the chosen
+period, and lists everyone in the Swarm. A project the reader can't read adds
+nothing to anyone's numbers. Older Lent recorded by week names no project, so it
+counts only for someone who is on a project the reader can read. Choosing one
+project shows that project's own. The phone's board is always one project's.
 
 Each person has three numbers:
 
@@ -1130,7 +1148,10 @@ lease, attempts, costs and checks; readers show it inside its task.
   coordinator; an unnamed post from its agent, in the step or in the task, does
   too. The owner is the task's assignee while that agent is in the Swarm, its
   own work done or not (a late verdict is still its to act on); with none, the
-  coordinator hears them.
+  coordinator hears them. Any agent's unnamed post in a step, and in a task from
+  an agent that held one of its steps (open or done), goes to the owner too. An
+  agent that has held only steps is never reported idle: the instructions keep
+  Reviewers and Testers.
 - **Closing**: a step archives and sleeps with its task, never on its own clock;
   archiving a task cancels its open steps and tells their agents.
 - **Reading**: `status` prints steps under their task; `mine` and `task GROUP`

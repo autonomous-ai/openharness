@@ -29,12 +29,7 @@ Future<void> _open(WidgetTester tester, Size size) async {
     MaterialApp(
       theme: grid.buildAppTheme(brightness: Brightness.dark),
       home: WorkspaceChromeScope(
-        chrome: WorkspaceChrome(
-          leadingWidth: (_) => 0,
-          leading: (_, _) => const SizedBox.shrink(),
-          compactBelow: 720,
-          showsKeyHints: false,
-        ),
+        chrome: WorkspaceChrome(compactBelow: 720, showsKeyHints: false),
         child: Builder(
           builder: (context) => Scaffold(
             body: TextButton(
@@ -127,7 +122,7 @@ void main() {
         ),
       );
       await tester.pump(const Duration(milliseconds: 200));
-      await tester.tap(find.byKey(const ValueKey('web-app-menu-button')));
+      await tester.tap(find.byKey(const ValueKey('web-new-menu-button')));
       await tester.pump(const Duration(milliseconds: 300));
       await tester.tap(find.byKey(const ValueKey('web-menu:pane.split_right')));
       await tester.pump(const Duration(milliseconds: 500));

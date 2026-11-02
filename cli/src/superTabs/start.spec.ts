@@ -9,7 +9,8 @@ import { SuperTabHostError } from './wire.js'
 const teamDaemon = vi.hoisted(() => ({ value: false, relayed: true, offered: null as null | { slugs: string[]; listed: string[] } }))
 vi.mock('./teamDaemon.js', async (original) => ({ ...await original<object>(), isTeamDaemon: () => teamDaemon.value }))
 vi.mock('../team/relay.js', async (original) => ({ ...await original<object>(), teamRelayed: () => teamDaemon.relayed, offeredCodexModels: async () => teamDaemon.offered }))
-vi.mock('./buddyHome.js', async (original) => ({ ...await original<object>(), prepareBuddyHome: async () => ({ ready: [], missing: [] }), trustBuddyHome: async () => {} }))
+const prepared = vi.hoisted(() => ({ value: { ready: [] as string[], missing: [] as string[] } }))
+vi.mock('./buddyHome.js', async (original) => ({ ...await original<object>(), prepareBuddyHome: async () => prepared.value, trustBuddyHome: async () => {} }))
 const where = { port: 14001, machineId: 'lead-machine', dataDir: '/fixture' }
 /** A queued start is watched before the Lead moves on (startAgent); these tests read the queued answer at once. */
 const noPause = async () => {}
@@ -345,6 +346,19 @@ it('admits a person\'s one Buddy by the disk its folder is made on, as the folde
     expect(payload.cwd).toContain(join('worktrees', 'buddy-home'))
     expect(payload.projectSource).toBeUndefined()
   } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+it('tells a person\'s one Buddy where to read which revision each project copy is at, and when it may say it is behind', async () => {
+  const f = fixture()
+  f.start.request = { ...f.start.request, cwd: join(tmpdir(), 'swarm-buddy-prompt', '.buddy-peer'), worktree: false, buddyScope: 'swarm', buddyOf: { personId: 'peer', generation: 'g' } } as typeof f.start.request
+  // The mocked folder has its copies ready.
+  prepared.value = { ready: ['Web'], missing: [] }
+  try {
+    await startAgent({ action: 'start', tabId: 'tab', operationId: 'one-buddy-copies', request: f.start.request }, f.scoped, where, f.open)
+    const prompt = String(f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!.prompt)
+    expect(prompt).toContain('project-copies.txt')
+    expect(prompt).toContain('Say your copy is behind only when that file says it may be')
+  } finally { prepared.value = { ready: [], missing: [] } }
 })
 
 it.each(['claude'])('starts a %s thread session as a Buddy in every way, told its thread and to answer only there, with no message text', async engine => {

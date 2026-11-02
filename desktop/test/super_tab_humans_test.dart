@@ -866,7 +866,7 @@ void main() {
     final server = humansSwarm();
     final controller = await show(tester, server);
     expect(server.leaderboardReads, [
-      '/api/super-tabs/tab/leaderboard?projectId=lead',
+      '/api/super-tabs/tab/leaderboard?projectId=lead&period=7d&scope=all',
     ]);
     await close(tester, controller);
   });

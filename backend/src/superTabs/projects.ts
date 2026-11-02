@@ -127,7 +127,11 @@ export const NO_PROJECT = ''
 
 /** The project whose Lead (Product Manager) this agent is: the Lead of that project's Lead conversation. */
 export function ledProject(state: SuperTabState, agentId: string): SwarmProject | undefined {
-  return projectsOf(state).find(p => state.conversations.some(c => c.id === p.leadConversationId && c.leadId === agentId))
+  // One scan of the conversations, then one of the projects in their order: a scan of every conversation per project was
+  // ledProject's callback, 13.5 M calls in the 2026-11-02 prod profiles (12 profiles), mostly from markConfidential.
+  const led = new Set<string>()
+  for (const c of state.conversations) if (c.leadId === agentId) led.add(c.id)
+  return led.size ? projectsOf(state).find(p => led.has(p.leadConversationId)) : undefined
 }
 
 /** Whose active work other projects' Leads see and are alerted about. A private project's work stays with its own people. */
@@ -263,9 +267,24 @@ export function canReadAgent(state: SuperTabState, actor: Actor, target: Agent):
 
 /** A session that reads people's private messages: its project's Lead (the Product Manager each person chats with privately),
  *  or any agent in a private conversation, so a replaced Lead's earlier screen stays closed too. */
-export const confidentialSession = (state: SuperTabState, target: Agent): boolean =>
-  !!ledProject(state, target.id) || privateMember(state, target.id)
-const privateMember = (state: SuperTabState, agentId: string) => state.conversations.some(c => !!c.audience && c.agentIds.includes(agentId))
+export const confidentialSession = (state: SuperTabState, target: Agent): boolean => {
+  const { leaders, privateMembers } = confidentialSets(state)
+  return leaders.has(target.id) || privateMembers.has(target.id)
+}
+
+/** Who confidentialSession holds confidential, for every agent at once: the Leads of a project's Lead conversation, and every
+ *  member of a private conversation (one with an audience). One pass over the conversations: asking per agent scanned them
+ *  per project and agent on every command (markConfidential), 13.5 M of ledProject's callbacks and 1.6 M of the private
+ *  member check's in the 2026-11-02 prod profiles. Built per call, never kept on the state, since a command changes it. */
+export function confidentialSets(state: SuperTabState): { leaders: ReadonlySet<string>; privateMembers: ReadonlySet<string> } {
+  const leadChats = new Set(projectsOf(state).map(p => p.leadConversationId))
+  const leaders = new Set<string>(), privateMembers = new Set<string>()
+  for (const c of state.conversations) {
+    if (c.leadId !== null && leadChats.has(c.id)) leaders.add(c.leadId)
+    if (c.audience) for (const id of c.agentIds) privateMembers.add(id)
+  }
+  return { leaders, privateMembers }
+}
 
 /** Whether an agent's session is confidential: marked, or a Lead or private member now, here or (`elsewhere`) in another Swarm. */
 export const isConfidential = (state: SuperTabState, target: Agent, elsewhere = false): boolean =>
@@ -281,13 +300,14 @@ export interface OtherRegistrations { registered: Set<string>; confidential: Set
  *  a session registered elsewhere a Lead or a private conversation's member. Registrations from before the rule stay. */
 export function requireSingleRegistration(before: SuperTabState, after: SuperTabState, elsewhere: OtherRegistrations): void {
   const prior = new Map(before.agents.map(a => [a.id, a]))
+  const then = confidentialSets(before), now = confidentialSets(after)
   for (const target of after.agents) {
     const was = prior.get(target.id), key = sessionKey(target.machineId, target.harnessId)
     if ((!was || was.harnessId !== target.harnessId) && elsewhere.confidential.has(key)) {
       fail('SESSION_CONFIDENTIAL', 'This terminal reads private chats in another Swarm. Start a new agent here.')
     }
-    const lead = !!ledProject(after, target.id) && !(was && ledProject(before, target.id))
-    const member = privateMember(after, target.id) && !(was && privateMember(before, target.id))
+    const lead = now.leaders.has(target.id) && !(was && then.leaders.has(target.id))
+    const member = now.privateMembers.has(target.id) && !(was && then.privateMembers.has(target.id))
     if ((lead || member) && elsewhere.registered.has(key)) {
       fail('SESSION_CONFIDENTIAL', 'This terminal also works in another Swarm, so it cannot lead or read private chats. Start a new agent for this.')
     }
@@ -297,7 +317,9 @@ export function requireSingleRegistration(before: SuperTabState, after: SuperTab
 /** A session becomes confidential the moment it is a Lead or in a private conversation, and stays so until it leaves the
  *  Swarm (its session closes), even once that membership ends (Lead ruling, final review Critical 1). */
 export function markConfidential(state: SuperTabState): void {
-  for (const target of state.agents) if (!target.confidential && confidentialSession(state, target)) target.confidential = true
+  // Every command runs this for every agent: one pass for all of them, not one per agent (confidentialSets).
+  const { leaders, privateMembers } = confidentialSets(state)
+  for (const target of state.agents) if (!target.confidential && (leaders.has(target.id) || privateMembers.has(target.id))) target.confidential = true
 }
 
 /** Whether a session's terminal is closed to watching in this Swarm. A confidential session's screen and scrollback hold

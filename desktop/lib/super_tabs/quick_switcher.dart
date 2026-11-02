@@ -17,6 +17,7 @@ import 'dialog_scope.dart';
 import 'identity.dart';
 import 'model.dart';
 import 'profile_sheet.dart';
+import '../widgets/laid_out_list.dart';
 
 const _gap = grid.AppDesktop.controlGap;
 
@@ -475,7 +476,7 @@ class _QuickSwitcherState extends State<_QuickSwitcher> {
                             style: DesktopChrome.text(),
                           ),
                         )
-                      : ListView.builder(
+                      : LaidOutListView.builder(
                           controller: _scroll,
                           padding: const EdgeInsets.symmetric(
                             horizontal: grid.AppDesktop.panelPadding,
