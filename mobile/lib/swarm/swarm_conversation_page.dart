@@ -948,7 +948,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
         .map((match) => int.tryParse(match[1]!))
         .whereType<int>()
         .toSet();
-    final snapshot = c.reader.snapshot;
+    final snapshot =
+        _session?.inbox.reader(c.reader.tabId)?.snapshot ?? c.reader.snapshot;
     final references = {
       for (final conversation
           in snapshot?.conversations ?? const <SuperTabConversation>[])
@@ -1374,7 +1375,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                         // Message links can target any conversation in the
                         // Swarm, not only this chat. Rebuild when that index
                         // changes even if this chat's messages did not.
-                        listenable: Listenable.merge([c, c.reader, _held]),
+                        listenable: Listenable.merge([c, session.inbox, _held]),
                         builder: (context, _) =>
                             _messages(context, session, c, view, tty),
                       ),
