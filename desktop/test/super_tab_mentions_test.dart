@@ -1408,11 +1408,16 @@ void main() {
         );
         expect(tab['attention'], 2);
       } else {
+        // A Swarm's tab is its name, bold when something there waits, with
+        // no count (Quiet Swarm, screen 0).
+        expect(find.byKey(ValueKey('tab-tags:${swarm.id}')), findsNothing);
+        expect(find.byKey(ValueKey('tab-activity:${swarm.id}')), findsNothing);
         expect(
           tester
-              .widget<Text>(find.byKey(ValueKey('tab-tags:${swarm.id}')))
-              .data,
-          '2',
+              .widget<Text>(find.byKey(ValueKey('tab-label:${swarm.id}')))
+              .style
+              ?.fontWeight,
+          grid.AppFont.semibold,
         );
       }
       await tester.pumpWidget(const SizedBox());

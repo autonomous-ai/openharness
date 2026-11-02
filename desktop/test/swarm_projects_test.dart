@@ -85,11 +85,10 @@ void main() {
       tester.getBottomLeft(create).dy,
       lessThan(tester.getTopLeft(project).dy),
     );
-    await tester.tap(find.byKey(const ValueKey('super-group-lead')));
-    await tester.pumpAndSettle();
     expect(c.selectedId, 'lead');
     expect(find.text('12  Offline editing'), findsNothing);
-    await tester.tap(find.byKey(const ValueKey('super-project-toggle-lead')));
+    // Already open: a click on it shows its workgroups.
+    await tester.tap(find.byKey(const ValueKey('super-group-lead')));
     await tester.pumpAndSettle();
     expect(find.text('12  Offline editing'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('super-group-offline')));
@@ -120,6 +119,9 @@ void main() {
         matching: find.text('Lamp OS'),
       );
       // Enter on the project opens its chat; → shows its workgroups.
+      await c.select('offline');
+      c.expandedProjects.remove('lead');
+      await tester.pumpAndSettle();
       Focus.of(tester.element(projectName)).requestFocus();
       await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
@@ -138,9 +140,7 @@ void main() {
       expect(workgroupBounds.left, projectBounds.left);
       expect(
         workgroupBounds.right,
-        tester
-            .getRect(find.byKey(const ValueKey('super-project-toggle-lead')))
-            .right,
+        tester.getRect(find.byKey(const ValueKey('super-group-lead'))).right,
       );
       // Workgroups share the project name column in the compact sidebar.
       expect(

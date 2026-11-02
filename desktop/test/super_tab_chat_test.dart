@@ -392,7 +392,7 @@ void main() {
         ?.fontWeight;
     expect(c.unread(c.selected!), isFalse);
     expect(projectWeight(), grid.AppFont.semibold);
-    await tester.tap(find.byKey(const ValueKey('super-project-toggle-lead')));
+    await tester.tap(find.byKey(const ValueKey('super-group-lead')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('super-group-offline')));
     await tester.pumpAndSettle();

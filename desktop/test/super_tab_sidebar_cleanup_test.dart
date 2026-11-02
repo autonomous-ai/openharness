@@ -79,18 +79,18 @@ Future<void> closeSwarm(WidgetTester tester, SuperTabController c) async {
 
 void main() {
   // Slack's Activity takes Notifications' place on every platform (Lead,
-  // 10-31), and takes in Threads (Quiet Swarm): on a Mac too, beside the menu
-  // bar and the Dock.
+  // 10-31), and takes in Threads: on a Mac too, beside the menu bar and the
+  // Dock. The rest moved
+  // into Manage, at the foot (Quiet Swarm, screen 1).
   for (final platform in [TargetPlatform.macOS, TargetPlatform.linux]) {
-    testWidgets('the top reads New project, Your devices, Your models, '
-        'Activity with its count', (tester) async {
+    testWidgets('the top reads Activity with its count, and Manage is at the '
+        'foot', (tester) async {
       final c = await showSwarm(tester);
-      expect(topRows(tester), [
-        'New project',
-        'Your devices',
-        'Your models',
-        'Activity3',
-      ]);
+      expect(topRows(tester), ['Activity3']);
+      expect(
+        tester.getTopLeft(find.byKey(const ValueKey('super-manage'))).dy,
+        greaterThan(tester.getTopLeft(find.text('Projects')).dy),
+      );
       expect(find.text('Notifications'), findsNothing);
       expect(tester.takeException(), isNull);
       await closeSwarm(tester, c);

@@ -126,15 +126,19 @@ class LeaderboardModelsSection extends StatelessWidget {
     required this.board,
     required this.projectId,
     required this.collapsed,
-    required this.onToggleCollapsed,
+    this.onToggleCollapsed,
     this.now = DateTime.now,
+    this.heading = true,
   });
   final SuperTabLeaderboardReader board;
 
   /// The open project; a board of any other shows nothing.
   final String? projectId;
   final bool collapsed;
-  final VoidCallback onToggleCollapsed;
+  final VoidCallback? onToggleCollapsed;
+
+  /// False where the page already says Models (Manage).
+  final bool heading;
   final DateTime Function() now;
 
   @override
@@ -155,16 +159,17 @@ class LeaderboardModelsSection extends StatelessWidget {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          SuperTabSectionHeading(
-            'Models',
-            key: const ValueKey('super-models-heading'),
-            endInset: 0,
-            collapsed: collapsed,
-            onToggleCollapsed: onToggleCollapsed,
-            titleTooltip: read.recentModels != null
-                ? 'Share of agent work, last 7 days'
-                : 'Share of agent work, $span',
-          ),
+          if (heading)
+            SuperTabSectionHeading(
+              'Models',
+              key: const ValueKey('super-models-heading'),
+              endInset: 0,
+              collapsed: collapsed,
+              onToggleCollapsed: onToggleCollapsed,
+              titleTooltip: read.recentModels != null
+                  ? 'Share of agent work, last 7 days'
+                  : 'Share of agent work, $span',
+            ),
           if (!collapsed)
             for (final share in shares) _row(share, span, style, column),
         ],

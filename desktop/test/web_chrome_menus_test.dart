@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/screens/swarm_screen.dart';
@@ -132,15 +133,25 @@ void main() {
       await _done(tester, app);
     });
 
-    testWidgets('the avatar sits at the right end, Store before it', (
-      tester,
-    ) async {
+    testWidgets('the avatar sits at the right end, Search and Notifications '
+        'before it, and Store in its menu', (tester) async {
       final app = await _mount(tester, _wide);
-      final store = find.byKey(const ValueKey('swarm-store-button'));
-      expect(
-        tester.getTopLeft(_avatar).dx,
-        greaterThan(tester.getTopRight(store).dx - 1),
-      );
+      for (final key in [
+        'swarm-search-button',
+        'workspace-notifications-button',
+      ]) {
+        expect(
+          tester.getTopLeft(_avatar).dx,
+          greaterThan(tester.getTopRight(find.byKey(ValueKey(key))).dx - 1),
+          reason: key,
+        );
+      }
+      expect(find.byKey(const ValueKey('swarm-store-button')), findsNothing);
+      await _tap(tester, _avatar);
+      expect(find.byKey(const ValueKey('account-menu-store')), findsOneWidget);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
       await _done(tester, app);
     });
 
