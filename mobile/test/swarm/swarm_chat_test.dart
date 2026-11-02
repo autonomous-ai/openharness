@@ -516,8 +516,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(
-      host.session!.inbox.reader(tab)!.snapshot!.conversation('task-42'),
-      isNotNull,
+      host.session!.inbox.reader(tab)!.snapshot!.conversation('task-42')?.number,
+      42,
     );
     final row = tester.widget<SwarmMessageRow>(
       find.byWidgetPredicate(
