@@ -318,6 +318,46 @@ void main() {
     });
   });
 
+  // Task #2169: the saved view of the account signed in draws at once; another account's is never read.
+  test('Desktop: the same account opens to its saved view before any read, and another account never does', () {
+    fakeAsync((async) {
+      final backend = _Backend(), storage = MemoryStore();
+      backend.servers['tab']!.append('For the owner only');
+      final first = _client(backend, storage: storage, reading: SuperTabReading.desktop)
+        ..bind('owner')
+        ..show('tab');
+      first.open('tab');
+      async.elapse(const Duration(seconds: 1));
+      first.show(null);
+      async.flushMicrotasks();
+      first.dispose();
+      backend.servers['tab']!.holdReads = Completer<void>();
+
+      final same = _client(backend, storage: storage, reading: SuperTabReading.desktop)
+        ..bind('owner')
+        ..show('tab');
+      SuperTabController? shown;
+      same.open('tab').then((c) => shown = c);
+      async.elapse(const Duration(seconds: 1));
+      expect(shown!.showingSaved, isTrue);
+      expect(shown!.snapshot, isNotNull);
+      same.dispose();
+      async.flushMicrotasks();
+
+      final other = _client(backend, storage: storage, reading: SuperTabReading.desktop)..bind('someone-else');
+      async.flushMicrotasks();
+      SuperTabController? theirs;
+      other.open('tab').then((c) => theirs = c);
+      async.elapse(const Duration(seconds: 1));
+      expect(theirs!.showingSaved, isFalse);
+      expect(theirs!.snapshot, isNull);
+      other.dispose();
+      backend.servers['tab']!.holdReads!.complete();
+      backend.servers['tab']!.holdReads = null;
+      async.flushMicrotasks();
+    });
+  });
+
   test('a Swarm released while it opens never reads; its open fails', () {
     fakeAsync((async) {
       final backend = _Backend();
