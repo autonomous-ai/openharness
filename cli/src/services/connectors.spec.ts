@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { bridgePort, saveBridgePort } from '../lib/connectors/agents.js'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -128,6 +129,51 @@ describe('the connectors service', () => {
     const vault = new Store(join(home, 'store'), env)
     const requests = startConnectors(fakeCore(), { vault, env, port: 0, offered: async () => { throw new Error('boom') } })
     expect(await requests.connectors!({ action: 'list' }, OWNER)).toEqual({ error: 'CONNECTORS_FAILED', detail: 'Connections are unavailable. Try again.' })
+  })
+
+  it('moves off a port another account holds, tells agents, and comes back to the saved port next time', async () => {
+    const holder = createServer()
+    await new Promise<void>(resolve => holder.listen(0, '127.0.0.1', resolve))
+    const taken = (holder.address() as { port: number }).port
+    // No port named: the bridge's own choice, which is the one that may move.
+    const { HARNESS_CONNECTIONS_PORT: _named, ...free } = env
+    const vault = new Store(join(home, 'store'), free)
+    // Stands for 51793, which the bridge asks for by default: a Team daemon has held it since boot.
+    saveBridgePort(vault, taken)
+    const said = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      startConnectors(fakeCore(), { vault, env: free, offered: async () => ({}), retryMs: 5 })
+      let moved = taken
+      for (let n = 0; n < 200 && moved === taken; n++) {
+        await new Promise(resolve => setTimeout(resolve, 10))
+        moved = bridgePort(free, new Store(join(home, 'store'), free))
+      }
+      expect(moved).not.toBe(taken)
+      expect(said.mock.calls.flat().join(' ')).toContain(`bridge port ${taken} is not available`)
+      expect(said.mock.calls.flat().join(' ')).toContain(`the bridge moved to port ${moved}`)
+      expect(await fetch(`http://127.0.0.1:${moved}/x/linear/mcp`, { method: 'POST', body: '{}' }).then(answer => answer.status)).toBe(404)
+    } finally {
+      said.mockRestore()
+      await new Promise<void>(resolve => holder.close(() => resolve()))
+    }
+  })
+
+  it('says so when the port it moved to cannot be saved', async () => {
+    const holder = createServer()
+    await new Promise<void>(resolve => holder.listen(0, '127.0.0.1', resolve))
+    const { HARNESS_CONNECTIONS_PORT: _named, ...free } = env
+    const vault = new Store(join(home, 'store'), free)
+    saveBridgePort(vault, (holder.address() as { port: number }).port)
+    const said = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      startConnectors(fakeCore(), { vault, env: free, offered: async () => ({}), retryMs: 5 })
+      vi.spyOn(vault, 'file').mockImplementation(() => { throw new Error('disk full') })
+      for (let n = 0; n < 200 && !said.mock.calls.flat().join(' ').includes('could not save'); n++) await new Promise(resolve => setTimeout(resolve, 10))
+      expect(said.mock.calls.flat().join(' ')).toContain("could not save the bridge's new port: disk full")
+    } finally {
+      said.mockRestore()
+      await new Promise<void>(resolve => holder.close(() => resolve()))
+    }
   })
 
   it('waits for its port while another process holds it', async () => {

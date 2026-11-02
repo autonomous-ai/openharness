@@ -19,7 +19,10 @@ export interface Bridge {
 }
 
 /** Through Harness's own key (agents.ts `harnessKey`), never the one in the agents' configurations. */
-export function connectionsBridge(base: () => string = () => `http://127.0.0.1:${bridgePort()}/${harnessKey(new Store())}`): Bridge {
+export function connectionsBridge(base: () => string = () => {
+  const vault = new Store()
+  return `http://127.0.0.1:${bridgePort(process.env, vault)}/${harnessKey(vault)}`
+}): Bridge {
   return {
     async connections() {
       const answer = await fetch(`${base()}/connections`, { signal: AbortSignal.timeout(10_000) })

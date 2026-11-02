@@ -6,16 +6,13 @@
  * the paired relay (`machine_select` naming it).
  */
 import { randomUUID } from 'node:crypto'
-import { localCredentialHeaders } from '../lib/localCredential.js'
-import { existsSync } from 'node:fs'
 import { WebSocket } from 'ws'
 import { env } from '../config/env.js'
 import { readAuthSession } from '../lib/authSession.js'
-import { savedDaemonPort } from '../lib/daemonEndpoint.js'
+import { localWsTarget } from '../lib/localTransport.js'
 import { daemonPipe, type LocalDaemonOptions } from '../lib/windows/daemonPipe.js'
 import { pipeWebSocket } from '../lib/windows/pipeClient.js'
 import { computerId, daemonUnreachableText } from '../lib/daemonState.js'
-import { unixSocketPath } from '../lib/localSocket.js'
 import { paneOwner, sendPane } from '../messages/command.js'
 
 export class AgentClientError extends Error {
@@ -61,19 +58,16 @@ export function whereFor(pane: string | undefined, owner: typeof paneOwner = pan
     harnessPane: !!found || (!!pane && pane.startsWith('p') && sendPane({ HARNESS_PANE: pane }) === pane) }
 }
 
-/** The Unix socket on macOS/Linux, or the authenticated daemon pipe on Windows. The Unix legacy
- *  fallback uses loopback TCP and the local credential; Windows never sends that credential to a
- *  port whose listener may belong to another OS user or outlive a stale daemon record. */
+/** The Unix socket on macOS/Linux, or the authenticated daemon pipe on Windows. Neither falls back to the port:
+ *  its listener may belong to another OS user or outlive a stale daemon record (lib/localTransport.ts). */
 export async function connectSocket(where: Where, options: LocalDaemonOptions = {}): Promise<ClientSocket> {
   if ((options.platform ?? process.platform) === 'win32') {
     const target = await (options.pipe ?? daemonPipe)(where.dataDir, where.port)
     if (!target) throw new AgentClientError('DAEMON_UNREACHABLE', daemonUnreachableText(null, where.dataDir))
     return pipeWebSocket(target)
   }
-  const path = unixSocketPath(where.dataDir, where.port)
-  return path && existsSync(path)
-    ? new WebSocket(`ws+unix://${path}:/api/local-ws`)
-    : new WebSocket(`ws://127.0.0.1:${savedDaemonPort(where.dataDir, where.port)}/api/local-ws`, { headers: localCredentialHeaders(where.dataDir) })
+  const target = localWsTarget(where.dataDir, where.port)
+  return new WebSocket(target.url, { headers: target.headers })
 }
 
 export const DEFAULT_TIMEOUT_MS = 20_000

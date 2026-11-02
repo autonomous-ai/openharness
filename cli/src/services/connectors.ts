@@ -14,8 +14,9 @@
  * account's machines (lib/connectors/vaultSync.ts).
  */
 import type { Server } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import type { CoreApi, ServiceRequests } from '../core/api.js'
-import { bridgePort, sync } from '../lib/connectors/agents.js'
+import { bridgePort, saveBridgePort, sync } from '../lib/connectors/agents.js'
 import { createBridge } from '../lib/connectors/bridge.js'
 import { services, type GatewayRow } from '../lib/connectors/catalog.js'
 import { addApiKey, addCustom, cards, disconnect, Flows, signInFor } from '../lib/connectors/connect.js'
@@ -41,16 +42,36 @@ export interface ConnectorsDeps {
   vaultPort: VaultPort | null
 }
 
-/** Listen on the bridge's fixed port; while another process holds it (a core handing over), try again. */
-function listen(bridge: Server, port: number, retryMs: number): void {
-  bridge.on('error', () => { setTimeout(() => bridge.listen(port, '127.0.0.1'), retryMs).unref() })
+/** How many tries a held port gets: the bridge of the process this one replaced may still be letting go of it. */
+const TRIES_BEFORE_MOVING = 3
+
+/**
+ * Listen on [port]. Another process holding it means agents' connections reach that process, not this bridge, so that is
+ * said once, and after a few tries [moved] (when given) has the bridge take a free port and tell the agents about it.
+ * Another account can hold it with no race, from boot until this user logs in (audit H1).
+ */
+function listen(bridge: Server, port: number, retryMs: number, moved?: (port: number) => void): void {
+  let tries = 0
+  let moving = false
+  bridge.on('listening', () => {
+    if (moving && moved) moved((bridge.address() as AddressInfo).port)
+    moving = false
+    tries = 0
+  })
+  bridge.on('error', (error: NodeJS.ErrnoException) => {
+    tries++
+    if (tries === 1) console.warn(`[connections] bridge port ${port} is not available (${error.message}); trying again every ${retryMs} ms`)
+    moving = !!moved && tries >= TRIES_BEFORE_MOVING
+    setTimeout(() => bridge.listen(moving ? 0 : port, '127.0.0.1'), retryMs).unref()
+  })
   bridge.listen(port, '127.0.0.1')
 }
 
 export function startConnectors(core: CoreApi, overrides: Partial<ConnectorsDeps> = {}): ServiceRequests {
   const env = overrides.env ?? process.env
+  const store = overrides.vault ?? new Store(undefined, env)
   const deps: ConnectorsDeps = {
-    vault: overrides.vault ?? new Store(undefined, env), port: overrides.port ?? bridgePort(env),
+    vault: store, port: overrides.port ?? bridgePort(env, store),
     offered: overrides.offered ?? (() => gateway.available()), env, retryMs: overrides.retryMs ?? 5_000,
     vaultPort: overrides.vaultPort !== undefined ? overrides.vaultPort
       : core.account.signedIn() ? vaultPortOf((op, payload = {}) => answerVaultOp(core.account, { ...payload, op })) : null,
@@ -59,7 +80,12 @@ export function startConnectors(core: CoreApi, overrides: Partial<ConnectorsDeps
   const flows = new Flows(vault, env)
   const bridge = createBridge(vault, { key: () => String(vault.file('bridge.json').key ?? ''), harnessKey: () => String(vault.file('harness-key.json').key ?? '') })
   bridge.unref()
-  listen(bridge, deps.port, deps.retryMs)
+  // A port a test or HARNESS_CONNECTIONS_PORT names stays that port.
+  const movable = overrides.port === undefined && env.HARNESS_CONNECTIONS_PORT === undefined
+  listen(bridge, deps.port, deps.retryMs, movable ? (port) => {
+    console.warn(`[connections] the bridge moved to port ${port}; agents started from now on use it`)
+    try { saveBridgePort(vault, port); sync(vault, env) } catch (error) { console.warn(`[connections] could not save the bridge's new port: ${(error as Error).message}`) }
+  } : undefined)
   try { sync(vault, env) } catch { /* A config that cannot be written now is written at the next connect. */ }
 
   // Connections the same on every computer of the account: read now, at each `connectors_changed`, and

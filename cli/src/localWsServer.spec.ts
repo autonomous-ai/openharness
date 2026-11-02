@@ -222,6 +222,14 @@ describe('local CLI WebSocket', () => {
     }
   })
 
+  // Audit H1: another account may have heard it while it held this port during a restart.
+  it('refuses a TCP upgrade with the right credential from another account', async () => {
+    const credential = 'c'.repeat(43)
+    const url = await start(new FakeBackend(), { localCredential: credential, peerAccount: async () => false })
+    const ws = new WebSocket(url, { headers: { 'x-harness-local': credential } })
+    expect(await new Promise<number>((resolve) => ws.once('unexpected-response', (_req, res) => resolve(res.statusCode ?? 0)))).toBe(401)
+  })
+
   it('takes an upgrade over the daemon\'s socket with no credential, the TCP port still wanting one', async () => {
     const dir = mkdtempSync('/tmp/lws-cred-')
     const socketPath = join(dir, 'daemon.sock')

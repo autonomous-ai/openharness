@@ -18,12 +18,13 @@ describe('the daemon\'s local credential', () => {
     const dir = dataDir()
     const credential = loadOrCreateHookCredential(dir)
     expect(readLocalCredential(dir)).toBe(credential)
-    expect(localCredentialHeaders(dir)).toEqual({ [LOCAL_CREDENTIAL_HEADER]: credential })
+    // Windows, whose rules are its callers'. On macOS and Linux see team/localCredential.spec.ts.
+    expect(localCredentialHeaders(dir, 'win32')).toEqual({ [LOCAL_CREDENTIAL_HEADER]: credential })
   })
 
   it('adds no header when there is no credential to read, or one another user could have written', () => {
     const dir = dataDir()
-    expect(localCredentialHeaders(dir)).toEqual({})
+    expect(localCredentialHeaders(dir, 'win32')).toEqual({})
     loadOrCreateHookCredential(dir)
     chmodSync(hookCredentialPath(dir), 0o644)
     expect(readLocalCredential(dir)).toBeNull()
