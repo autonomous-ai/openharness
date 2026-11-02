@@ -64,7 +64,10 @@ class SwarmNewSessionChip extends StatelessWidget {
         onTap: tap,
         child: SizedBox(
           height: 44,
+          // Only as wide as the chip: in a roomy row a plain Center would
+          // fill it and put the chip in the middle.
           child: Center(
+            widthFactor: 1,
             child: Container(
               height: 36,
               padding: SwarmComposer.tagPadding,
