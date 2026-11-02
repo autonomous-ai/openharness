@@ -480,7 +480,16 @@ void main() {
           mention('t5', chat: 'private', thread: 'p1', sequence: 9),
         ],
       );
-      r.swarm.routes[threadsRoute] = (_) => {'unread': [], 'read': []};
+      r.swarm.routes[threadsRoute] = (_) => {
+        'unread': [],
+        'read': [
+          row('g1', 'm1'),
+          row('g1', 'm9'),
+          row('g2', 'm3'),
+          row('private', 'p1'),
+        ],
+      };
+      await show(r.threads);
       await r.reader.refresh();
       await settle();
 
@@ -488,6 +497,85 @@ void main() {
 
       r.marks.markThreadRead('g1', 'm1', 4);
       expect(r.threads.threadMentions, 0);
+    });
+
+    test('counts only tags in threads the page lists: one the server left '
+        'out stays in Activity and counts nothing', () async {
+      final r = rig(
+        mentions: [
+          mention('t1', thread: 'm1', sequence: 4), // listed (unread)
+          mention('t2', thread: 'm2', sequence: 5), // listed (read)
+          mention('t3', thread: 'm3', sequence: 6), // left out by the server
+          mention('t4', chat: 'g1', thread: 'm1', sequence: 7), // same thread
+        ],
+      );
+      r.swarm.routes[threadsRoute] = (_) => {
+        'unread': [row('g1', 'm1', unread: 1)],
+        'read': [row('g1', 'm2')],
+      };
+      await show(r.threads);
+      await r.reader.refresh();
+      await settle();
+
+      expect(r.threads.loaded, isTrue);
+      expect(r.threads.threadMentions, 3, reason: 't1, t4 and t2; never t3');
+      expect(
+        r.threads.asks!.mentions,
+        hasLength(4),
+        reason: 'all still in Activity',
+      );
+    });
+
+    test('is none until the list has been read, and again once it is taken '
+        'away', () async {
+      final r = rig(mentions: [mention('t1', thread: 'm1', sequence: 4)]);
+      final list = Completer<Object?>();
+      r.swarm.routes[threadsRoute] = (_) => list.future;
+      await show(r.threads);
+      await r.reader.refresh();
+      await settle();
+
+      expect(r.threads.loaded, isFalse);
+      expect(r.threads.threadMentions, 0, reason: 'nothing listed yet');
+
+      list.complete({
+        'unread': [],
+        'read': [row('g1', 'm1')],
+      });
+      await settle();
+      expect(r.threads.threadMentions, 1);
+
+      r.reader.revoke();
+      expect(r.threads.threadMentions, 0, reason: 'access lost');
+    });
+
+    test('a failed first list counts nothing and, once it recovers, counts '
+        'again; the failed read is not repeated on every redraw', () async {
+      final r = rig(mentions: [mention('t1', thread: 'm1', sequence: 4)]);
+      var failing = true;
+      r.swarm.routes[threadsRoute] = (_) {
+        if (failing) throw Exception('offline');
+        return {
+          'unread': [],
+          'read': [row('g1', 'm1')],
+        };
+      };
+      await show(r.threads);
+      await r.reader.refresh();
+      await settle();
+
+      expect(r.threads.error, isNotNull);
+      expect(r.threads.loaded, isFalse);
+      expect(r.threads.threadMentions, 0);
+      final reads = threadReads(r.swarm);
+      expect(reads, lessThanOrEqualTo(2), reason: 'bounded, no retry loop');
+
+      failing = false;
+      r.tick(const Duration(seconds: 30));
+      await r.threads.load();
+      await settle();
+      expect(r.threads.error, isNull);
+      expect(r.threads.threadMentions, 1);
     });
   });
 }
