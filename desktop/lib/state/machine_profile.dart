@@ -51,10 +51,24 @@ String? profileNeighborId(
 /// A profile only hides. When it would hide every tab, this window shows them
 /// all rather than a tab being made to stand in: making one would add it to
 /// the account desk, on every computer.
+///
+/// Whether any tab is the computer's own is asked of the tabs that name a
+/// computer: one with no agent yet matches every profile, so a New Tab opened
+/// under a profile none of the tabs were on hid all of them, and was then the
+/// last tab in sight, which ⌘W does not close.
 List<Swarm> swarmsForMachineProfile(List<Swarm> swarms, String? machineId) {
   final shown = [
     for (final swarm in swarms)
       if (swarmMatchesMachineProfile(swarm, machineId)) swarm,
   ];
-  return shown.isEmpty ? swarms : shown;
+  return shown.any(_namesAMachine) ? shown : swarms;
+}
+
+/// A tab whose membership comes from a computer: its agents, its orchestrator
+/// or its title's. Not the Store, a Super Tab or a tab with nothing in it yet.
+bool _namesAMachine(Swarm swarm) {
+  if (swarm.isUtility || swarm.isSuperTab) return false;
+  return swarm.panes.any((pane) => pane.machineId.isNotEmpty) ||
+      (swarm.orchestratorMachineId?.isNotEmpty ?? false) ||
+      (swarm.titleMachineId?.isNotEmpty ?? false);
 }
