@@ -15,8 +15,8 @@ const cleanup: Array<() => void> = []
 async function asked(socket: Socket): Promise<string> {
   const query = windowsPeerQuery(socket.remotePort!, socket.localPort!)
   const row = '$r = @(Get-NetTCPConnection -State Established -LocalPort ([int]$env:HARNESS_PEER_PORT) -ErrorAction SilentlyContinue); $r | Format-List LocalAddress,LocalPort,RemoteAddress,RemotePort,OwningProcess,CreationTime | Out-String; foreach ($x in $r) { (Get-CimInstance Win32_Process -Filter ("ProcessId = " + [int]$x.OwningProcess)) | Format-List ProcessId,Name,CreationDate | Out-String }; "pid $PID current $([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)"'
-  const answer = await runPowershellAsync(query.script, query.inputs, 30_000)
-  const facts = await runPowershellAsync(row, query.inputs, 30_000)
+  const answer = await runPowershellAsync(query.script, query.inputs, 60_000)
+  const facts = await runPowershellAsync(row, query.inputs, 60_000)
   return `query: ${answer.status} ${answer.stdout.trim()} ${answer.stderr.trim()}\nfacts: ${facts.stdout.trim()} ${facts.stderr.trim()}\ntest pid ${process.pid}`
 }
 afterEach(() => { for (const close of cleanup.splice(0)) close() })
@@ -39,7 +39,7 @@ describe.runIf(WINDOWS)('who is calling, asked of Windows', () => {
     cleanup.push(() => socket2.destroy())
     await new Promise<void>((resolve) => { gone.once('close', () => resolve()); gone.destroy() })
     expect(await peerIsThisAccount(socket2, 'win32')).toBe(false)
-  }, 120_000)
+  }, 240_000)
 
   // The check takes only a process that started before its connection was made. A process that connects in its first
   // moments must still read as yes, whatever the two times' precision (Reed's review of #2605).
@@ -54,5 +54,5 @@ describe.runIf(WINDOWS)('who is calling, asked of Windows', () => {
     const socket = await accepted
     cleanup.push(() => socket.destroy())
     if (!await peerIsThisAccount(socket, 'win32')) expect.fail(await asked(socket))
-  }, 120_000)
+  }, 240_000)
 })

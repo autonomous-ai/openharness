@@ -87,6 +87,9 @@ async function overSocket(socketPath: string, input: Request, pipe?: PipeTarget)
     })
     // As fetch fails: a TypeError with the reason as its cause, which the callers' "is it running" texts read.
     req.on('error', (error) => { reject(input.signal.aborted ? error : Object.assign(new TypeError('fetch failed'), { cause: error })) })
+    // A write the socket finishes after the answer was refused and the request destroyed fails with EPIPE on Linux, when
+    // nothing listens on the socket any more: the request has settled by then (Linux CI on #2605).
+    req.on('socket', (socket) => { socket.on('error', () => {}) })
     req.end(body ?? undefined)
   })
 }
