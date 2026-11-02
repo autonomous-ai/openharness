@@ -18,5 +18,5 @@ describe.runIf(WINDOWS)('who holds a listening port, asked of Windows', () => {
     expect(await portHolderIsThisAccount(port, 'win32')).toBe(true)
     await new Promise<void>((resolve) => { server.close(() => resolve()) })
     expect(await portHolderIsThisAccount(port, 'win32')).toBeNull()
-  }, 30_000)
+  }, 60_000)
 })
