@@ -348,8 +348,14 @@ void main() {
       expect(f.activity(tester, 1), HarnessActivity.working);
       // Role, model, effort and the task go on the card.
       expect(f.inRow(1, find.text('Dev')), findsNothing);
-      expect(f.model(1), findsNothing);
-      expect(f.line(1), findsNothing);
+      expect(
+        find.byKey(const ValueKey('super-member-model-agent-1')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('super-member-line-agent-1')),
+        findsNothing,
+      );
       expect(find.textContaining('Windows credential fix'), findsNothing);
       // The word sits on the name's line, before the mark.
       expect(
@@ -443,7 +449,8 @@ void main() {
           )
           .single
           .message!;
-      expect(hover.split('\n').last, 'Windows credential fix · 4m');
+      expect(hover, contains('Windows credential fix'));
+      expect(hover.split('\n').last, 'Last progress 4 minutes ago');
       await f.close(tester);
     });
 
