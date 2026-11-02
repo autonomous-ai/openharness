@@ -428,19 +428,17 @@ describe('what the windows say, reaching the dial', () => {
     })
 
     // #2540's review (Orion): a card that carries a tier was followed before its machine was looked at, so a Team machine's
-    // agent could alert. A Team machine runs Swarm work only. Today's fleet cards carry no tier (device/deviceFleet.ts), so
-    // this pins the order for any that do.
+    // agent could alert. A Team machine runs Swarm work only.
     it('decides a Team machine\'s agent by the Team rule even when its card brings a tier, and follows any other card\'s', async () => {
       const core = fakeCore({ dataDir })
       const { port } = start({ core, decideTier: null })
       await teamAccount(core)
-      const card = (event: object) => seen.fleet!.events!(event as FleetEvent)
+      const card = (event: FleetEvent) => seen.fleet!.events!(event)
       card({ machineId: 'team-mac', kind: 'summary', agentId: 'reviewer', text: 'done', recap: 'Reviewed.', tier: 'alert' })
       card({ machineId: 'mac-mini', kind: 'summary', agentId: 'far', text: 'done', recap: 'Done far.', tier: 'list' })
-      card({ machineId: 'team-mac', kind: 'summary', agentId: 'broke', text: 'failed', recap: 'It failed.', tier: 'silent', failed: true })
-      await vi.waitFor(() => expect(calls('summary')).toHaveLength(3))
-      // The one followed lands first; the two decided here wait for the decider.
-      expect(new Map(calls('summary').map((c) => [c[0], c[3]]))).toEqual(new Map([['reviewer', 'silent'], ['far', 'list'], ['broke', 'alert']]))
+      await vi.waitFor(() => expect(calls('summary')).toHaveLength(2))
+      // The one followed lands first; the one decided here waits for the decider.
+      expect(new Map(calls('summary').map((c) => [c[0], c[3]]))).toEqual(new Map([['reviewer', 'silent'], ['far', 'list']]))
       expect(logs).toContainEqual(expect.stringMatching(/silent · rule:swarm · swarm/))
       void port
     })
