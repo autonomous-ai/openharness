@@ -7,6 +7,7 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import { listNamedIndexes } from '../src/superTabs/parts/indexed.js'
 import { loadDeliveryParts } from '../src/superTabs/parts/light.js'
 import { guardedWrite } from '../src/superTabs/parts/write.js'
+import { AGENT_RECHECK_MS, purgeAgentTombstones } from '../src/superTabs/agentTombstones.js'
 import { planDatabase, plan, profiled, reads } from './plans.test-support.js'
 
 // Prod profile 2026-11-02 (v1.3.86): a Swarm's live-agent read planned on [tabId, changedAt] and examined 1,070 agents to
@@ -81,5 +82,68 @@ describe('an agent added again after its tombstone is gone', () => {
 
   it('starts at the first version when it has no configuration', async () => {
     expect(await added(other, 'new')).toBe(1)
+  })
+})
+
+describe('the hourly purge of agent tombstones', () => {
+  let tab: string, second: string
+  let first: Awaited<ReturnType<typeof purgeAgentTombstones>>, again: Awaited<ReturnType<typeof purgeAgentTombstones>>
+  let entries: Awaited<ReturnType<typeof profiled>>, repeat: Awaited<ReturnType<typeof profiled>>
+  const due = new Date(NOW - DAY)
+  const group = (key: string, data: Record<string, unknown>, fields: Record<string, unknown> = {}) => ({ id: `${tab}:${key}`, tabId: tab, key,
+    version: 1, changedAt: new Date(NOW - DAY), ordinal: 1, data: { id: key, agentIds: [], leadId: null, ...data },
+    agentIds: (data.agentIds as string[] | undefined) ?? [], lastActivityAt: new Date(NOW - DAY), ...fields })
+  const start = (key: string, agentId: string, fields: Record<string, unknown> = {}) => ({ id: `${tab}:${key}`, tabId: tab, key, version: 1,
+    changedAt: new Date(NOW - DAY), ordinal: 1, data: {}, machineId: 'm', conversationId: 'c', agentId, ...fields })
+  const keysIn = async (tabId: string) => (await db.swarmAgent.findMany({ where: { tabId }, select: { key: true } })).map(a => a.key).sort()
+
+  beforeAll(async () => {
+    tab = (await store.create(maker, randomUUID(), 'Purged')).id
+    second = (await store.create(maker, randomUUID(), 'Purged too')).id
+    await db.swarmAgent.createMany({ data: [
+      ...['unnamed', 'member', 'lead', 'assignee', 'started', 'in-dormant', 'in-removed', 'removed-start'].map(key => removed(tab, key, due)),
+      agent(tab, 'later', { deleted: true, purgeAt: new Date(NOW + DAY) }),
+      ...Array.from({ length: 5 }, (_, i) => agent(tab, `live-${i}`)),
+      removed(second, 'unnamed', due),
+    ] })
+    await db.swarmGroup.createMany({ data: [
+      group('open-1', { agentIds: ['member', 'live-0'] }), group('open-2', { leadId: 'lead', assignment: { agentId: 'assignee' } }),
+      group('quiet', { agentIds: ['in-dormant'] }, { dormant: true }), group('gone', { agentIds: ['in-removed'] }, { deleted: true }),
+    ] })
+    await db.swarmStart.createMany({ data: [start('s-live', 'started'), start('s-removed', 'removed-start', { deleted: true })] })
+    entries = await profiled(db, async () => { first = await purgeAgentTombstones(db, NOW) })
+    repeat = await profiled(db, async () => { again = await purgeAgentTombstones(db, NOW) })
+  })
+
+  it('deletes only tombstones past their purge time that nothing open names', async () => {
+    expect(first).toEqual({ purged: 5, kept: 4 })
+    expect(await keysIn(tab)).toEqual(['assignee', 'lead', 'later', ...Array.from({ length: 5 }, (_, i) => `live-${i}`), 'member', 'started'].sort())
+    expect(await keysIn(second)).toEqual([])
+    const later = await db.swarmAgent.findUniqueOrThrow({ where: { id: `${tab}:later` } })
+    expect(later).toMatchObject({ deleted: true, data: { id: 'later' }, purgeAt: new Date(NOW + DAY) })
+    // Other Swarms' agents and tombstones not yet due stay.
+    expect(await db.swarmAgent.count({ where: { tabId: busy } })).toBe(LIVE + REMOVED)
+  })
+
+  it('keeps a tombstone an open conversation or a live start names, compacted, and checks it again a day later', async () => {
+    for (const key of ['member', 'lead', 'assignee', 'started']) {
+      expect(await db.swarmAgent.findUniqueOrThrow({ where: { id: `${tab}:${key}` } }), key)
+        .toMatchObject({ deleted: true, data: {}, purgeAt: new Date(NOW + AGENT_RECHECK_MS) })
+    }
+    expect(again).toEqual({ purged: 0, kept: 0 })
+    const read = reads(repeat, 'SwarmAgent', ['purgeAt'])
+    expect(read.map(e => e.docsExamined), JSON.stringify(plan(read))).toEqual([0])
+  })
+
+  it('finds due tombstones by the purge index and the names by the open-conversation index', () => {
+    const found = reads(entries, 'SwarmAgent', ['purgeAt']).filter(e => e.op !== 'update' && e.op !== 'remove')
+    expect(found, JSON.stringify(plan(found))).toHaveLength(1)
+    expect(found[0]!.planSummary, JSON.stringify(plan(found))).toMatch(/IXSCAN \{ purgeAt: 1 \}/)
+    expect(found[0]!.docsExamined, JSON.stringify(plan(found))).toBe(9)
+    const groups = reads(entries, 'SwarmGroup', ['agentIds'])
+    expect(groups, JSON.stringify(plan(groups))).toHaveLength(1)
+    expect(groups[0]!.command?.hint, JSON.stringify(plan(groups))).toEqual({ tabId: 1, dormant: 1, changedAt: 1 })
+    const starts = reads(entries, 'SwarmStart', ['agentId'])
+    expect(starts[0]!.planSummary, JSON.stringify(plan(starts))).toMatch(/IXSCAN \{ tabId: 1, agentId: 1 \}/)
   })
 })
