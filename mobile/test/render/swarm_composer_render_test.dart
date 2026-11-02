@@ -20,11 +20,13 @@ import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:image_picker/image_picker.dart' show XFile;
 
 import '../voice_fakes.dart';
+import '../swarm/swarm_chat_dictation_test.dart' show FakeDictation;
 import '../swarm/swarm_fixture.dart';
 
 /// Renders a phone Swarm chat's composer in the states Tony's composer brief
 /// (11-01) names — empty, text, five lines, the @ picker open, a reply, files
-/// and listening — in light and dark, on a 393 x 852 iPhone with the keyboard
+/// and listening, the voice row's Send live, off and sending — in light and
+/// dark, on a 393 x 852 iPhone with the keyboard
 /// up (336 tall), in the system fonts, to PNGs a reviewer can compare.
 ///
 /// Only keys the composer has had since before the card are used, so the same
@@ -163,6 +165,8 @@ void main() {
     Future<GlobalKey> chat(
       WidgetTester tester, {
       _MeteredRecorder? recorder,
+      FakeTranscriber? stt,
+      FakeDictation? dictation,
     }) async {
       await tester.runAsync(_loadFonts);
       final photos = (await tester.runAsync(
@@ -210,10 +214,11 @@ void main() {
         notices: SilentSystemNotices(),
         features: features,
         voice: () => VoiceInputController(
-          transcriber: FakeTranscriber().call,
+          transcriber: (stt ?? FakeTranscriber()).call,
           recorder: recorder ?? _MeteredRecorder(),
           language: ValueNotifier('en'),
         ),
+        dictation: dictation,
       )..foreground = false;
       addTearDown(host.dispose);
       final key = GlobalKey();
@@ -318,6 +323,48 @@ void main() {
         await tester.pump(const Duration(milliseconds: 120));
       }
       await shoot(tester, key, 'composer-listening-$look');
+    });
+
+    // Tony, 11-01: the voice row's Send, right of stop: off on an empty box
+    // with the phone's recognizer, live once it has words.
+    for (final words in ['', 'Check whether PR #2466 has merged']) {
+      final name = words.isEmpty ? 'off' : 'live';
+      testWidgets('voice row Send $name, dictation ($look)', skip: skip, (
+        tester,
+      ) async {
+        final dictation = FakeDictation();
+        final key = await chat(tester, dictation: dictation);
+        await tester.showKeyboard(find.byType(TextField));
+        await tester.tap(find.byKey(const ValueKey('swarm-mic')));
+        for (var i = 0; i < 5; i++) {
+          await tester.pump();
+        }
+        if (words.isNotEmpty) dictation.say(words);
+        for (var i = 0; i < 24; i++) {
+          dictation.loud(const [0.3, 0.7, 0.5, 0.9][i % 4]);
+          await tester.pump(const Duration(milliseconds: 120));
+        }
+        await shoot(tester, key, 'composer-voice-send-$name-$look');
+      });
+    }
+
+    testWidgets('voice row Send while sending ($look)', skip: skip, (
+      tester,
+    ) async {
+      final recorder = _MeteredRecorder();
+      final stt = FakeTranscriber()..pending = Completer<String>();
+      final key = await chat(tester, recorder: recorder, stt: stt);
+      await type(tester, 'Check whether PR #2466');
+      await tester.tap(find.byKey(const ValueKey('swarm-mic')));
+      for (var i = 0; i < 24; i++) {
+        recorder.meter.value = const [0.3, 0.7, 0.5, 0.9][i % 4];
+        await tester.pump(const Duration(milliseconds: 120));
+      }
+      await tester.tap(find.byKey(const ValueKey('swarm-voice-send')));
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(milliseconds: 120));
+      }
+      await shoot(tester, key, 'composer-voice-sending-$look');
     });
   }
 }
