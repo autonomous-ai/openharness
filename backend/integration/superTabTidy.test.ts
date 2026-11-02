@@ -388,6 +388,30 @@ describe('a review nobody reviews', () => {
     expect(await f.isArchived()).toBe(false)
   })
 
+  // Forced by a security review of #2572: the other write commits after this one loaded the task and before it saved.
+  it('a task handed on while the write runs keeps its step: the touch on the task makes the write retry and decline', async () => {
+    const f = await waiting(true)
+    await verdict(f)
+    await f.execute({ type: 'work.cancel', conversationId: f.reviewed, assignmentId: f.work, reason: 'Landed outside the Swarm' }, host, f.lead)
+    f.clock.now += 40 * MINUTE
+    const store = f.timed as unknown as { save: (...args: unknown[]) => Promise<unknown> }
+    const save = store.save
+    let raced = false
+    store.save = async function (this: unknown, ...args: unknown[]) {
+      if (!raced) {
+        raced = true
+        await f.execute({ type: 'work.assign', conversationId: f.reviewed, agentId: f.builder })
+      }
+      return save.apply(this, args)
+    }
+    try {
+      expect(await f.timed.archiveFinished(f.tab, f.review.key, { [PR]: 'merged' }, f.reviewed)).toBe(false)
+    } finally { store.save = save }
+    expect(raced).toBe(true)
+    expect(await f.isArchived()).toBe(false)
+    expect(((await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.reviewed } })).data as { assignment: { status: string } }).assignment.status).toBe('working')
+  })
+
   it('is marked at a worker restart once its task ended, and archives then alone only when the task\'s pull requests are settled', async () => {
     const SECOND = 'https://github.com/example/parser/pull/10'
     const f = await waiting(true)
