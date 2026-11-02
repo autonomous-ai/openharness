@@ -41,7 +41,7 @@ import { confidentialSessions, otherRegistrations, recordConfidential } from './
 import { answersRequest, dirtyGroups, noteWorkChanges, projectUpdateRequest, UNANSWERED_REQUEST_MS } from './projectUpdates.js'
 import { cloneData } from './cloneData.js'
 import { digestDue, digestMessageId, digestOf, digestRequest, digestSince } from './digest.js'
-import { closedAgents, removeClosedAgents } from './closedAgents.js'
+import { closedAgents, nextRemovalAt, removeClosedAgents } from './closedAgents.js'
 import { judgedMachines, loseTasks, nextLossAt, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { archivable, archiveLine, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests } from './tidy.js'
 import { clock, insertParts, loadActive, loadGroups, loadLightGroups, loadMachineParts, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
@@ -2887,9 +2887,18 @@ export class SuperTabStore {
         await recordEvidence(tx, tabId, loaded.state, state, now)
         const version = (await this.save(tx, loaded, state, stamp, touches)).versions.get(`machine:${machineId}`) ?? 0
         await this.writeMessages(tx, tabId, state, rows, sequences, true)
-        // Nothing more is delivered to an agent that left, whatever was written for it just now.
-        if (removedIds.length) await tx.superTabDelivery.updateMany({ where: { tabId, agentId: { in: removedIds }, status: { in: ['queued', 'claimed', 'uncertain'] } },
-          data: { status: 'cancelled', holdReason: null, holdSince: null } })
+        // Nothing more is delivered to an agent that left, whatever was written for it just now, and no terminal opened on its old
+        // session stays valid (as a removal by command does). One plain match each: an `in` here is sent as $expr (hotFilters).
+        for (const agentId of removedIds) {
+          for (const status of ['queued', 'claimed', 'uncertain']) {
+            await tx.superTabDelivery.updateMany({ where: { tabId, agentId, status }, data: { status: 'cancelled', holdReason: null, holdSince: null } })
+          }
+        }
+        if (removedIds.length) {
+          const watchersLost = await revokeNativeContexts(tx, loaded.state, state)
+          const told = this.hooks.accessChanged
+          if (told && watchersLost.length) afterCommit(tx, () => told(tabId))
+        }
         return { version }
       }
       if (!state.machines?.includes(pool)) return saved()
@@ -2916,13 +2925,13 @@ export class SuperTabStore {
       // they keep running when the Lead's own machine is the one that died.
       const checked = [...loseTasks(state, now, worker => worker.machineId === machineId), ...sweep ? sweepLiveness(state, now) : []]
       // Then the agents it shows closed leave, those with no active work left: the Lead is told of their tasks above (closedAgents.ts).
-      removedIds.push(...removeClosedAgents(state, state.agents.filter(a => closed.includes(a.id))).map(a => a.id))
+      removedIds.push(...removeClosedAgents(state, state.agents.filter(a => closed.includes(a.id)), now).map(a => a.id))
       const written = await saved(checked)
       // What the next reports of this machine need to skip the load, as this commit leaves the Swarm.
       const mine = state.machines?.find(m => m.machineId === machineId)
       return { ...written, ...mine ? { record: { lentCount: lentAgents(state, mine, mine.observation?.runningHarnessIds ?? []),
         lentProjects: lentProjects(state, mine, mine.observation?.runningHarnessIds ?? []),
-        removals: !!state.machines?.some(m => m.removal), deadline: Math.min(nextLossAt(state, machineId) ?? Infinity, now + DEADLINE_CAP_MS),
+        removals: !!state.machines?.some(m => m.removal), deadline: Math.min(nextLossAt(state, machineId) ?? Infinity, nextRemovalAt(state, machineId, now) ?? Infinity, now + DEADLINE_CAP_MS),
         team: teamByRecord(state, machineId), members: state.people.map(p => p.id),
         preparable: (state.starts ?? []).filter(s => preparableStart(s, machineId)).map(s => s.id), at: now } } : {} }
     })

@@ -768,6 +768,15 @@ void main() {
           );
         }
         expect(find.descendant(of: list, matching: agentAvatar), findsNothing);
+        // Hovering the kept, closed agent says so, as its line and its group do; an idle one does not.
+        Finder tip(String id) => find.ancestor(
+          of: row(id),
+          matching: find.byWidgetPredicate(
+            (w) => w is Tooltip && (w.message ?? '').contains('Kept (closed)'),
+          ),
+        );
+        expect(tip('kept'), findsOneWidget);
+        expect(tip('idle'), findsNothing);
 
         await tester.tap(row('rev'));
         await tester.pump();

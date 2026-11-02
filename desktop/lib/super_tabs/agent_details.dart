@@ -145,6 +145,8 @@ class SuperTabAgentInfo {
       return 'Waiting for a person to answer';
     }
     if (activity == HarnessActivity.needsInput) return 'Needs input';
+    // Closed on its machine and kept by someone: the same word as its line and its group (agent_line.dart).
+    if (agent.keptClosed && workStatus != 'lost') return 'Kept (closed)';
     if (taskGroup case final group?) {
       return switch (workStatus) {
         'planned' => 'Assigned to "${group.title}"',
