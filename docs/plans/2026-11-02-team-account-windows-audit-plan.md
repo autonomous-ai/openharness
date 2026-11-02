@@ -82,7 +82,7 @@ test first: purge's check of a Codex Product Manager's home, which looked for `/
 **Files:**
 - Create: `docs/security/2026-11-02-team-account-windows.md`
 
-- [ ] **Step 1:** Write each finding: rating, evidence by file and line, how it was found, what fixes it; then what holds.
-- [ ] **Step 2:** Run the Team and purge specs and the typecheck.
+- [x] **Step 1:** Write each finding: rating, evidence by file and line, how it was found, what fixes it; then what holds.
+- [x] **Step 2:** Run the Team and purge specs and the typecheck.
 - [ ] **Step 3:** Open the pull request with its "Requested by" line, the checklist and red/green evidence.
 - [ ] **Step 4:** Send one fix request per open hole to the PM; add two review steps (Quinn 2, Luna) and message them.
