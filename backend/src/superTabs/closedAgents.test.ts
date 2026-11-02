@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand } from './commands.js'
-import { closedAgents, DOWN_REMOVE_MS, REMOVED_KEPT, removeClosedAgents, restoreRefusal, restoreSessions, STOPPED_REMOVE_MS } from './closedAgents.js'
+import { closedAgents, DOWN_REMOVE_MS, REMOVED_KEEP_MS, REMOVED_KEPT, removeClosedAgents, reopened, restoreRefusal, restoreSessions, STOPPED_REMOVE_MS } from './closedAgents.js'
 import { MACHINE_FRESH_MS } from './machines.js'
 import { createSuperTab, type Actor, type Agent, type Conversation, type RemovedSession, type SuperTabState } from './model.js'
 import { projectsOf } from './projects.js'
@@ -106,6 +106,35 @@ describe('removeClosedAgents: what a removal leaves for the host', () => {
       execution: { machineId: 'mac', machineOwnerId: 'owner', harnessId: 'worker' }, result: null } as never
     expect(removeClosedAgents(f.state, [f.worker], NOW)).toEqual([])
     expect(f.state.closingSessions).toBeUndefined()
+  })
+})
+
+// A person's choice stands over an older record (security review 1 of #2601).
+describe('a person\'s add or remove of the session', () => {
+  const recordOf = (target: Agent) => ({ machineId: 'mac', harnessId: target.harnessId, agent: target, groupIds: ['lead'], leadOf: [], removedAt: NOW })
+
+  it('takes its record with it when they add it back', () => {
+    const f = fixture()
+    const state = { ...f.state, agents: f.state.agents.filter(a => a.id !== f.worker.id), removedSessions: [recordOf(f.worker)] }
+    const added = applyCommand(state, person, { type: 'agent.add', conversationId: 'lead', machineId: 'mac', harnessId: 'worker', name: 'worker', lead: false, configuration: config },
+      { now: NOW, operationId: 'add-again', contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }).state
+    expect(added.removedSessions ?? []).toEqual([])
+  })
+
+  it('takes its record with it when they remove it, so a reopen does not undo that', () => {
+    const f = fixture()
+    f.worker.workDecision = 'stop'
+    const state = { ...f.state, removedSessions: [recordOf(f.worker), { ...recordOf(f.worker), harnessId: 'another' }] }
+    const removed = applyCommand(state, person, { type: 'agent.remove', agentId: f.worker.id }, { now: NOW, operationId: 'remove-it' }).state
+    expect(removed.agents.map(a => a.id)).not.toContain(f.worker.id)
+    expect((removed.removedSessions ?? []).map(r => r.harnessId)).toEqual(['another'])
+  })
+
+  it('an expired record is not reopened, so it writes no session record', () => {
+    const f = fixture()
+    const state = { ...f.state, removedSessions: [{ ...recordOf(f.worker), removedAt: NOW - REMOVED_KEEP_MS }] }
+    expect(reopened(state, 'mac', ['worker'], NOW)).toEqual([])
+    expect(reopened(state, 'mac', ['worker'], NOW - 1)).toHaveLength(1)
   })
 })
 
