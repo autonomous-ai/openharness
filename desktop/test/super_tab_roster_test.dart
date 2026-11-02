@@ -34,6 +34,7 @@ class RosterFixture {
   SuperTabAgent? opened;
   SuperTabConversation? added;
   String? answered;
+  bool closed = false;
   final boundary = GlobalKey();
 
   /// Where the roster keeps its scope choice; none by default.
@@ -103,6 +104,7 @@ class RosterFixture {
               onAddAgent: (group) => added = group,
               onAnswer: (id) => answered = id,
               onOpenAgent: (agent) => opened = agent,
+              onClose: () => closed = true,
               storage: storage,
               now: now ?? DateTime.now,
             ),
