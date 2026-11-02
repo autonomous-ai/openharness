@@ -4,8 +4,9 @@ import 'model.dart';
 // Kept byte-identical on Desktop (lib/super_tabs/task_steps.dart) and the
 // phone (lib/swarm/task_steps.dart): mobile/test/swarm/desktop_parity_test.dart.
 
-/// [task]'s steps that are not archived, by number (task steps design): each
-/// keeps its own conversation, shown inside its task.
+/// [task]'s steps, by number (task steps design): each keeps its own
+/// conversation, shown inside its task. An open task shows those not archived;
+/// an archived one keeps the steps archived with it, and their rows.
 List<SuperTabConversation> superTabStepsOf(
   SuperTabSnapshot snapshot,
   SuperTabConversation task,
@@ -15,7 +16,7 @@ List<SuperTabConversation> superTabStepsOf(
       if (superTabIsStep(g) &&
           g.reviewOf == task.id &&
           g.projectId == task.projectId &&
-          !g.archived)
+          (task.archived || !g.archived))
         g,
   ];
   int order(SuperTabConversation g) => g.number ?? 1 << 30;

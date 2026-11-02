@@ -714,7 +714,10 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           // conversation keeps its brief and work rows, and the talk is in the task. Older pages and threads are the task's.
           if (!paged && !thread) {
             const read = await swarm().catch(() => null)
-            const steps = read ? list(read.state.conversations).filter(c => isStep(c) && c.reviewOf === payload.conversationId && c.archived !== true) : []
+            // An archived task keeps the steps archived with it, and their rows (final review, minor 6).
+            const task = read ? list(read.state.conversations).find(c => c.id === payload.conversationId) : undefined
+            const steps = read ? list(read.state.conversations).filter(c => isStep(c) && c.reviewOf === payload.conversationId
+              && (task?.archived === true || c.archived !== true)) : []
             if (steps.length) return { ok: true, value: markAnswered(await withSteps(page, steps, step =>
               backend(core, 'GET', `${path}/conversations/${encodeURIComponent(String(step.id))}/messages?${identity}`)), [], agentId) }
           }

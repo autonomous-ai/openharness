@@ -79,4 +79,31 @@ void main() {
       ['s1', 's2'],
     );
   });
+
+  // Final review, minor 6: an archived task's chat kept none of its finished
+  // steps' rows, as they archive with it.
+  test("an archived task keeps its archived steps", () {
+    final server = ConversationServer();
+    (server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
+      {
+        ...conversationFixture('s1', 'Review'),
+        'number': 31,
+        'reviewOf': 'offline',
+        'step': 'Review',
+        'archived': true,
+      },
+    ]);
+    (server.state['conversations'] as List)
+            .cast<Map<String, dynamic>>()
+            .firstWhere((g) => g['id'] == 'offline')['archived'] =
+        true;
+    final snapshot = SuperTabSnapshot.fromJson(server.state);
+    expect(
+      superTabStepsOf(
+        snapshot,
+        snapshot.conversation('offline')!,
+      ).map((g) => g.id),
+      ['s1'],
+    );
+  });
 }

@@ -1601,6 +1601,18 @@ describe('a task\'s steps in messages and commands', () => {
     expect(answer.value.messages.map(m => m.id)).toEqual(['t1', 's1', 't2'])
     expect(answer.value.stepsMissing).toEqual(['Test'])
   })
+  // Final review, minor 6: an archived task keeps its steps' rows, archived with it.
+  it('messages of an archived task still merges its archived steps', async () => {
+    const t = setup()
+    const archived = conversations.map(c => ({ ...c, archived: true }))
+    vi.mocked(t.core.account.backend).mockImplementation(async (_method, path) => {
+      const read = /\/conversations\/(g\d+)\/messages\?/.exec(path)
+      if (read) return ok({ messages: read[1] === 'g1918' ? [row('s1', 'g1918', '2026-11-02T09:05:00Z')] : [], next: null, threads: [] }) as never
+      return ok(swarmData(t.agent, path, { agents: [t.agent], conversations: archived })) as never
+    })
+    const answer = await t.ask({ action: 'messages', tabId: 'tab', harnessId: 'native', conversationId: 'g1835' }, owner) as { value: { messages: Array<Record<string, unknown>> } }
+    expect(answer.value.messages.map(m => m.id)).toEqual(['s1'])
+  })
   it('messages of a step reads the step alone', async () => {
     const t = setup(); wired(t, { steps: true })
     const answer = await t.ask({ action: 'messages', tabId: 'tab', harnessId: 'native', conversationId: 'g1918' }, owner) as { value: { messages: Array<Record<string, unknown>> } }
