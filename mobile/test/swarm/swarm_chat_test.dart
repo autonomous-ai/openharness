@@ -500,23 +500,29 @@ void main() {
     final fake = backend([message('m1', 1, text: '#42')]);
     final host = await pump(tester, fake);
     expect(find.text('#42', findRichText: true), findsOneWidget);
+    final cachedRow = tester.widget<SwarmMessageRow>(
+      find.byWidgetPredicate(
+        (widget) => widget is SwarmMessageRow && widget.message.id == 'm1',
+      ),
+    );
+    expect(cachedRow.references, isEmpty);
 
     fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
       cursor: 'c3',
       lastChangedAt: 200,
       groups: [
-        part(
-          'task-42',
-          2,
-          groupData('task-42', number: 42, title: 'Task 42'),
-        ),
+        part('task-42', 2, groupData('task-42', number: 42, title: 'Task 42')),
       ],
     );
     await host.session!.inbox.reader(tab)!.refresh();
     await tester.pumpAndSettle();
 
     expect(
-      host.session!.inbox.reader(tab)!.snapshot!.conversation('task-42')?.number,
+      host.session!.inbox
+          .reader(tab)!
+          .snapshot!
+          .conversation('task-42')
+          ?.number,
       42,
     );
     final row = tester.widget<SwarmMessageRow>(
@@ -525,6 +531,7 @@ void main() {
       ),
     );
     expect(row.references[42], 'task-42');
+    expect(row, isNot(same(cachedRow)));
 
     await tester.tap(find.text('#42', findRichText: true));
     await tester.pumpAndSettle();
@@ -545,6 +552,14 @@ void main() {
     );
     await host.session!.inbox.reader(tab)!.refresh();
     await tester.pumpAndSettle();
+
+    final revokedRow = tester.widget<SwarmMessageRow>(
+      find.byWidgetPredicate(
+        (widget) => widget is SwarmMessageRow && widget.message.id == 'm1',
+      ),
+    );
+    expect(revokedRow.references, isEmpty);
+    expect(revokedRow, isNot(same(row)));
 
     await tester.tap(find.text('#42', findRichText: true));
     await tester.pumpAndSettle();
