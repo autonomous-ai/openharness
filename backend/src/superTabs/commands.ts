@@ -647,10 +647,13 @@ function proposalOf(state: SuperTabState, project: SwarmProject, proposal: Comma
   }
   // The person it was sent for, as buddy.propose recorded them: the Swarm writes this source, never a sender.
   const personId = typeof proposal.source.personId === 'string' ? proposal.source.personId : undefined
-  // Credited to the person's one Buddy, not to the thread session that wrote it: a session ends, and its row then showed as
-  // an unnamed "Former Buddy" with no person (Diego, 11-02). Without a one Buddy (removed since), the author keeps it.
-  const owner = buddy?.buddyOf
-  const main = buddy && owner && !isSwarmBuddy(buddy)
+  // Credited to the person's one Buddy, not to the thread session that wrote it: a session ends (after 30 idle minutes, often
+  // before the PM opens the group), and its row then showed as an unnamed "Former Buddy" with no person (Diego, 11-02). The
+  // person is the session's owner, else (the author gone) the one the Swarm recorded the proposal for, at their current
+  // membership. Without a one Buddy (removed since), the author keeps it.
+  const gone = !buddy ? state.people.find(p => p.id === personId) : undefined
+  const owner = buddy?.buddyOf ?? (gone ? { personId: gone.id, generation: gone.generation } : undefined)
+  const main = owner && !(buddy && isSwarmBuddy(buddy))
     ? state.agents.find(a => isSwarmBuddy(a) && !a.buddySession && a.buddyOf!.personId === owner.personId && a.buddyOf!.generation === owner.generation)
     : undefined
   return { buddyId: main?.id ?? author.id, messageId: proposal.id, ...personId ? { personId } : {} }

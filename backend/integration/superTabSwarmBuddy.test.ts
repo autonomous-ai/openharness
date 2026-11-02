@@ -233,16 +233,18 @@ describe('a project session', () => {
   })
 
   /** peer's session proposes in web, the PM opens the group from it and the group's PR merges; the session then ends. */
-  async function shippedFromSession(f: Swarm) {
+  async function shippedFromSession(f: Swarm, { endBeforeOpen = false } = {}) {
     const { chat, main } = await buddy(f)
     const { thread, agentId } = await projectSession(f, chat, f.web.projectId, 'Let us plan web offline sync')
     const ask = String((await send(f, chat, 'Send it to the PM', { replyTo: thread })).result.messageId)
     const proposal = String((await f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, goal: 'Offline sync', scope: 'Web only',
       priority: 'normal' }, peer, agentId)).result.messageId)
+    // Sessions end by themselves after 30 idle minutes, so the PM often opens the group after the session is gone.
+    if (endBeforeOpen) await f.execute({ type: 'buddy.sessionEnd', conversationId: chat, thread, reason: 'ended' }, peer)
     const group = String((await f.execute({ type: 'conversation.create', projectId: f.web.projectId, title: 'Offline sync', brief: 'Web keeps edits offline.',
       checks: [], proposalMessageId: proposal }, owner, f.pms.web)).result.conversationId)
     await f.execute({ type: 'conversation.merged', conversationId: group, pullRequestUrl: 'https://github.com/example/app/pull/7' })
-    await f.execute({ type: 'buddy.sessionEnd', conversationId: chat, thread, reason: 'ended' }, peer)
+    if (!endBeforeOpen) await f.execute({ type: 'buddy.sessionEnd', conversationId: chat, thread, reason: 'ended' }, peer)
     return { chat, main, agentId, group }
   }
   const buddyRows = async (f: Swarm, user: AuthUser, projectId: string) =>
@@ -262,6 +264,32 @@ describe('a project session', () => {
     // The same row to another reader of the project, and in a project it shipped nothing in: listed, with 0 shipped.
     expect((await buddyRows(f, owner, f.web.projectId)).map(r => [r.agentId, r.displayName, r.personId, r.shipped])).toEqual([[main, name, peer.sub, 1]])
     expect((await buddyRows(f, peer, 'lead')).map(r => [r.agentId, r.displayName, r.personId, r.shipped])).toEqual([[main, name, peer.sub, 0]])
+  })
+
+  it('credits the one Buddy when the session ended before the PM opened the group from its proposal (reviewer of #2507)', async () => {
+    const f = await swarm()
+    const { main, agentId, group } = await shippedFromSession(f, { endBeforeOpen: true })
+    expect((await f.store.read(peer, f.tab)).state.agents.map(a => a.id)).not.toContain(agentId)
+    expect((await f.store.read(owner, f.tab)).state.conversations.find(c => c.id === group)!.ledger!.proposal!.buddyId).toBe(main)
+    const name = (await f.store.read(peer, f.tab)).state.agents.find(a => a.id === main)!.displayName
+    expect((await buddyRows(f, peer, f.web.projectId)).map(r => [r.agentId, r.displayName, r.personId, r.shipped])).toEqual([[main, name, peer.sub, 1]])
+  })
+
+  it('names nobody when the session ended and its person lost the project before the PM opened the group', async () => {
+    const f = await swarm()
+    const { chat, main } = await buddy(f)
+    const { thread, agentId } = await projectSession(f, chat, f.web.projectId, 'Plan it')
+    const ask = String((await send(f, chat, 'Send it', { replyTo: thread })).result.messageId)
+    const proposal = String((await f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, goal: 'G', scope: 'S', priority: 'normal' },
+      peer, agentId)).result.messageId)
+    await f.execute({ type: 'buddy.sessionEnd', conversationId: chat, thread, reason: 'ended' }, peer)
+    await f.execute({ type: 'project.sharing', projectId: f.web.projectId, visibility: 'private', memberIds: [owner.sub] })
+    const group = String((await f.execute({ type: 'conversation.create', projectId: f.web.projectId, title: 'T', brief: '', checks: [], proposalMessageId: proposal },
+      owner, f.pms.web)).result.conversationId)
+    await f.execute({ type: 'conversation.merged', conversationId: group, pullRequestUrl: 'https://github.com/example/app/pull/8' })
+    const board = await new SwarmReads(f.store).leaderboard(owner, f.tab, f.web.projectId)
+    expect(board.agents.filter(a => a.kind === 'buddy').map(a => [a.agentId, a.displayName, a.personId, a.machineId])).toEqual([[main, 'Former Buddy', null, '']])
+    expect(JSON.stringify(board)).not.toMatch(/Peer Mac|peer-mac/)
   })
 
   it('never names the one Buddy, its person or its Mac on a board of a project its person no longer reads', async () => {
