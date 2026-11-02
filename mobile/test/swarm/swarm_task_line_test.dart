@@ -225,7 +225,16 @@ void main() {
   testWidgets('tapping a line opens its task chat without a reply action', (
     tester,
   ) async {
+    final semantics = tester.ensureSemantics();
     await pumpTaskChat(tester, taskLineBackend([taskLine()]));
+    expect(
+      tester
+          .getSemantics(find.bySemanticsLabel('Fix login, working'))
+          .getSemanticsData()
+          .hasAction(SemanticsAction.tap),
+      isTrue,
+    );
+    semantics.dispose();
     await tester.tap(find.byKey(const ValueKey('swarm-message-line-1')));
     await tester.pumpAndSettle();
     expect(find.text('Inside the task chat'), findsOneWidget);
