@@ -270,7 +270,11 @@ Future<void> showSuperTabAgentDetails(
   return showAppDialog<void>(
     context: context,
     builder: (context) => ListenableBuilder(
-      listenable: Listenable.merge([controller, ?app]),
+      listenable: Listenable.merge([
+        controller,
+        controller.machinesChanged,
+        ?app,
+      ]),
       builder: (context, _) {
         final current = controller.snapshot?.agent(agent.id) ?? agent;
         // The same words the Agents list's hover says: the Swarm's state first.

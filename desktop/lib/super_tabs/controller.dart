@@ -14,6 +14,7 @@ import 'attachment_upload.dart';
 import 'avatar_upload.dart';
 import 'message_link.dart';
 import 'identity.dart' show superTabMachineName;
+import 'machine_status.dart' show kSuperTabMachineOfflineAfter;
 import 'model.dart';
 import 'buddy_chat.dart';
 import 'catch_up.dart';
@@ -332,6 +333,12 @@ class SuperTabController extends ChangeNotifier {
   /// What the tab says once [updateRequired] (docs/naming-system.md).
   static const updateMessage = 'Update Harness to keep using this Swarm.';
 
+  /// Told when only what machines report moved (a heartbeat): the controller's
+  /// own listeners hear nothing of it. Whatever shows a machine's readings
+  /// listens to this too.
+  Listenable get machinesChanged => _machinesChanged;
+  final _machinesChanged = ValueNotifier<int>(0);
+
   /// The Swarm's parts as last read: what the next read asks changes for, and what [snapshot] is built from.
   SuperTabParts? _parts;
 
@@ -455,6 +462,11 @@ class SuperTabController extends ChangeNotifier {
       if (_toldTimes.length > _kToldTimes) _toldTimes.remove(_toldTimes.first);
     }
     if (main) {
+      // A wait for a machine's report may be the slow one: this one is not.
+      if (!_toldMain) {
+        _toldRead?.cancel();
+        _toldRead = null;
+      }
       _toldMain = true;
     } else {
       _toldMachine = true;
@@ -474,7 +486,7 @@ class SuperTabController extends ChangeNotifier {
     final last = _lastFullRead;
     final wait = last == null
         ? Duration.zero
-        : _readGap - clock.now().difference(last);
+        : _toldGap - clock.now().difference(last);
     if (wait <= Duration.zero) {
       unawaited(refresh());
       return;
@@ -511,9 +523,14 @@ class SuperTabController extends ChangeNotifier {
     return pollInterval;
   }
 
+  /// How long what the reader was told waits since the last read. A change
+  /// to the Swarm: [_readGap], on screen or off. A machine's report alone says
+  /// nothing a Swarm not on screen shows: its slow pace ([_every]).
+  Duration get _toldGap => _toldMain || _every < _readGap ? _readGap : _every;
+
   bool get _gapPassed {
     final last = _lastFullRead;
-    return last == null || clock.now().difference(last) >= _readGap;
+    return last == null || clock.now().difference(last) >= _toldGap;
   }
 
   /// Whether this poll reads. Always, unless the server pushes: then only when
@@ -583,6 +600,8 @@ class SuperTabController extends ChangeNotifier {
   set away(bool value) {
     if (_away == value) return;
     _away = value;
+    // The machines list's clock runs only while it shows.
+    if (!_disposed) _machinesChanged.value++;
     if (_startedAt == null || _disposed) return;
     if (!_policy.pausesAway) {
       // Going away slows the poll; coming back reads at once unless a poll
@@ -3136,16 +3155,20 @@ class SuperTabController extends ChangeNotifier {
   Future<void> _read() async {
     // An adapting read that changes nothing redraws nothing: on a phone each
     // redraw of the whole tab is a long frame, every poll.
-    final quiet = _policy.adapts && snapshot != null;
+    // So does a read for a machine's report alone (a heartbeat every 15 s per
+    // machine): if it brings more, the state moving says so below.
+    final beat = _toldMachine && !_toldMain;
+    final quiet = (_policy.adapts || beat) && snapshot != null;
     final serial = ++_readSerial;
-    final before = _shown;
+    var before = _shown;
     var stateChanged = false;
     loading = snapshot == null;
     if (!quiet) _changed();
     _lastFullRead = clock.now();
     // Taken as the read starts: a push heard while it is out reads once more,
     // on the next allowed read, unless it repeats a time already told.
-    final told = _toldMain || _toldMachine;
+    // A machine's report says nothing of any conversation: no messages for it.
+    final told = _toldMain;
     _toldMain = _toldMachine = false;
     final took = Stopwatch()..start();
     // The open conversation's messages, asked for beside the state
@@ -3189,7 +3212,16 @@ class SuperTabController extends ChangeNotifier {
       // A part or a value worked out at read time (an agent seen down, a
       // limit that ran out) changed: the snapshot is built again. The first
       // read over a saved view wins, whatever it saved.
-      final moved = read.changed || _showingSaved || snapshot == null;
+      // Only what a machine reports moved: the machines are new and nothing
+      // else is, so only what shows them hears of it.
+      final machinesOnly =
+          read.machinesOnly && !_showingSaved && snapshot != null;
+      final moved =
+          !machinesOnly && (read.changed || _showingSaved || snapshot == null);
+      if (machinesOnly) {
+        snapshot!.replaceMachines(parts.machines);
+        _machinesChanged.value++;
+      }
       if (moved) {
         // A closed group named by the saved selection is read by id: a first
         // load has only the active groups.
@@ -3198,6 +3230,7 @@ class SuperTabController extends ChangeNotifier {
           if (_disposed || accessRevoked) return;
         }
         final raw = parts.state;
+        if (beat) stateChanged = true;
         if (_policy.adapts) {
           stateChanged = true;
           // A read mark moving is the page around the view: no new copy kept.
@@ -3267,8 +3300,24 @@ class SuperTabController extends ChangeNotifier {
       }
       // A first open draws its sidebar now, not once its chat answers.
       if (stateReads == 1) _changed();
+      _watchMachineSilence();
       final sidebarMs = took.elapsedMilliseconds;
+      final changedAtBefore = lastChangedAt;
       lastChangedAt = parts.lastChangedAt;
+      // A machine's report moves the newest change, and no conversation or
+      // anything else that is shown.
+      if (machinesOnly) {
+        _messagesAt.updateAll(
+          (_, at) => at == changedAtBefore ? lastChangedAt : at,
+        );
+        before = (
+          lastChangedAt: lastChangedAt,
+          error: before.error,
+          failing: before.failing,
+          revoked: before.revoked,
+          loading: before.loading,
+        );
+      }
       // Every state read, a quiet one too: a count a failed read left open is
       // finished; one that is known reads nothing.
       _dropLeft();
@@ -3280,7 +3329,7 @@ class SuperTabController extends ChangeNotifier {
       if (early != null ||
           !_messagesCurrent(selectedId) ||
           read.full ||
-          read.changed) {
+          (read.changed && !machinesOnly)) {
         await (selectedId == earlyId && messagesRead != null
             ? messagesRead
             : _readMessages(
@@ -3330,10 +3379,53 @@ class SuperTabController extends ChangeNotifier {
     }
   }
 
+  /// The machines whose last report is too old to call them online, as last
+  /// worked out. A machine going silent sends nothing, and another's heartbeat
+  /// no longer redraws: everything that reads a machine's age (agent marks,
+  /// the terminal's notice) redraws when this set changes, which is rare.
+  Set<String>? _silentMachines;
+  Timer? _silenceWatch;
+
+  void _watchMachineSilence() {
+    _silenceWatch?.cancel();
+    final rows = snapshot?.machines;
+    if (_disposed || rows == null || _startedAt == null) return;
+    final now = clock.now();
+    final silent = <String>{};
+    DateTime? next;
+    for (final m in rows) {
+      final observation = m['observation'];
+      final at = observation is Map ? observation['receivedAt'] : null;
+      final passes = at is num
+          ? DateTime.fromMillisecondsSinceEpoch(at.toInt())
+                .add(kSuperTabMachineOfflineAfter)
+          : null;
+      if (passes == null || !passes.isAfter(now)) {
+        silent.add(m['machineId'] as String);
+      } else if (next == null || passes.isBefore(next)) {
+        next = passes;
+      }
+    }
+    final before = _silentMachines;
+    _silentMachines = silent;
+    if (before != null && !setEquals(before, silent)) _changed();
+    if (next != null) {
+      _silenceWatch = Timer(next.difference(now), _watchMachineSilence);
+    }
+  }
+
   /// One read of the Swarm's parts: changes since the cursor once a first load
   /// is held, else a first load. A reload answer, or a change read refused (the
   /// Swarm or the reader's access moved), reads in full at once.
-  Future<({bool full, bool changed, bool marksOnly, Set<String> removed})>
+  Future<
+    ({
+      bool full,
+      bool changed,
+      bool machinesOnly,
+      bool marksOnly,
+      Set<String> removed,
+    })
+  >
   _readParts() async {
     final held = _parts;
     if (held != null) {
@@ -3355,6 +3447,7 @@ class SuperTabController extends ChangeNotifier {
           return (
             full: false,
             changed: change.changed || refreshed,
+            machinesOnly: change.machinesOnly && !refreshed,
             marksOnly: change.readMarksOnly && !refreshed,
             removed: change.removedGroups,
           );
@@ -3372,6 +3465,7 @@ class SuperTabController extends ChangeNotifier {
     return (
       full: true,
       changed: true,
+      machinesOnly: false,
       marksOnly: false,
       removed: const <String>{},
     );
@@ -4569,6 +4663,8 @@ class SuperTabController extends ChangeNotifier {
     // Closing the Swarm is no Undo: the held marks go before anything stops.
     _markAll?._commit();
     _disposed = true;
+    _machinesChanged.dispose();
+    _silenceWatch?.cancel();
     for (final then in _onDispose) {
       then();
     }

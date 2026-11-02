@@ -512,10 +512,7 @@ class SuperTabSnapshot {
           : Map.unmodifiable(superTabMap(row['project'])),
       people = superTabUsernames(_list(row['people'], SuperTabPerson.fromJson)),
       agents = _list(row['agents'], SuperTabAgent.fromJson),
-      machines = _list(
-        row['machines'] ?? const [],
-        (m) => Map<String, dynamic>.unmodifiable(m),
-      ),
+      _machines = _machineRows(row['machines'] ?? const []),
       // The Product Managers chat is gone (Dee, 2026-10-31): an older server
       // still sends it, by its kind or the id the head names, and no screen
       // may list or open it.
@@ -610,7 +607,17 @@ class SuperTabSnapshot {
   late final List<SuperTabAgent> teamAgents = List.unmodifiable(
     agents.where((a) => !a.isBuddy),
   );
-  final List<Map<String, dynamic>> machines;
+  List<Map<String, dynamic>> get machines => _machines;
+  List<Map<String, dynamic>> _machines;
+
+  static List<Map<String, dynamic>> _machineRows(Object? rows) =>
+      _list(rows, (m) => Map<String, dynamic>.unmodifiable(m));
+
+  /// A machine's report arrived and nothing else moved: only the machines are
+  /// new, so nothing worked out from the rest of the Swarm is done again
+  /// (`SuperTabController.machinesChanged` says so).
+  void replaceMachines(List<Map<String, dynamic>> rows) =>
+      _machines = _machineRows(rows);
   final List<SuperTabConversation> conversations;
   late final List<SuperTabProject> projects;
   final List<Map<String, dynamic>> invitations;
