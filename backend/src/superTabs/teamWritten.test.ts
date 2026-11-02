@@ -208,6 +208,32 @@ describe('a task a Team agent worked on', () => {
     expect(f.state.conversations.find(c => c.id === task)!.teamWritten).toBe(true)
   })
 
+  it('does not mark a clean task when a Team agent with a step on it joins its chat: it reads or tests, and a push of its own shows in GitHub', () => {
+    const f = swarm(), task = f.group(), builder = f.member('main-builder', 'mac'), tester = f.member('team-tester', 'mac-team')
+    f.run({ type: 'work.assign', conversationId: task, agentId: builder })
+    f.run({ type: 'work.assign', conversationId: f.group({ reviewOf: task, step: 'Test' }), agentId: tester })
+    const stored = f.state.conversations.find(c => c.id === task)!
+    // Named after leaving the task's chat, and posting there itself: each joins it again.
+    stored.agentIds = stored.agentIds.filter(id => id !== tester)
+    const named = f.run({ type: 'message.send', conversationId: task, text: 'Please test again.', replyTo: null, recipientIds: [tester] }, { kind: 'agent', agentId: builder, machineOwnerId: 'owner' })
+    expect(f.state.conversations.find(c => c.id === task)!.teamWritten).toBeUndefined()
+    expect(named.messages.some(m => m.text === TEAM_WRITTEN_STOP)).toBe(false)
+    const again = f.state.conversations.find(c => c.id === task)!
+    again.agentIds = again.agentIds.filter(id => id !== tester)
+    f.run({ type: 'message.send', conversationId: task, text: 'Testing now.', replyTo: null, recipientIds: [] }, { kind: 'agent', agentId: tester, machineOwnerId: 'owner' })
+    expect(f.state.conversations.find(c => c.id === task)!.teamWritten).toBeUndefined()
+  })
+
+  it('still marks a task when a Team agent with a step on it is assigned the task itself', () => {
+    const f = swarm(), task = f.group(), tester = f.member('team-tester', 'mac-team')
+    f.run({ type: 'work.assign', conversationId: f.group({ reviewOf: task, step: 'Test' }), agentId: tester })
+    f.state.conversations.find(c => c.id === task)!.assignment = null
+    const free = f.state.conversations.find(c => c.reviewOf === task)!
+    free.assignment!.status = 'done'
+    f.run({ type: 'work.assign', conversationId: task, agentId: tester })
+    expect(f.state.conversations.find(c => c.id === task)!.teamWritten).toBe(true)
+  })
+
   it('marks a clean task when another agent names a Team agent into it', () => {
     const f = swarm(), task = f.group(), builder = f.member('main-builder', 'mac')
     f.run({ type: 'work.assign', conversationId: task, agentId: builder })

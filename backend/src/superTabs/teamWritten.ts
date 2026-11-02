@@ -53,6 +53,10 @@ export function failTeamWritten(details?: Record<string, unknown>): never {
   return fail(TEAM_WRITTEN_WORK, TEAM_WRITTEN_REASON, 403, details)
 }
 
+/** Whether [worker] has a step of [group], assigned now or before: it reads or tests that task, and a push of its own shows in GitHub. */
+export const hasStep = (state: SuperTabState, group: Conversation, worker: Agent): boolean =>
+  state.conversations.some(c => c.reviewOf === group.id && (c.assignment?.agentId === worker.id || c.agentIds.includes(worker.id)))
+
 /** Refuses an agent naming a main-account member of Team-written work in a post: how a re-test or re-check is asked for. */
 export function requireNameable(state: SuperTabState, group: Conversation, sender: Agent, named: Agent): void {
   if (coordinates(state, group, sender) || named.id === sender.id) return
