@@ -11,6 +11,7 @@ import 'package:harness_mobile/shared/widgets/touch_target.dart';
 
 import 'swarm_chat_manage.dart';
 import 'swarm_chat_notify.dart';
+import 'swarm_buddy.dart' show swarmIsOldBuddyChat;
 import 'swarm_reader.dart';
 
 /// The chat menu's Notifications rows (the desktop's chat menu, Slack's
@@ -100,7 +101,10 @@ Future<void> showSwarmNotifySheet(
   try {
     await showPhoneSheet(
       context,
-      title: reader.snapshot?.conversation(chatId)?.title ?? '',
+      // An old Buddy chat's stored title is only the Buddy's default name.
+      title: swarmIsOldBuddyChat(reader, chatId)
+          ? 'Old chat'
+          : reader.snapshot?.conversation(chatId)?.title ?? '',
       onShown: (route) {
         sheet = route;
         onShown?.call(route);
