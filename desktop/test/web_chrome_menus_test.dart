@@ -15,6 +15,7 @@ import 'package:harness/widgets/workspace_account_button.dart';
 
 import 'support/capture.dart';
 import 'support/real_fonts.dart';
+import 'support/super_tab_phone.dart';
 import 'swarm_state_test.dart' show createApp;
 
 /// The web bar after Huy's ask (2026-11-02): no left menu; the avatar's account
@@ -356,6 +357,44 @@ void main() {
           },
         );
       }
+    }
+
+    // Huy, 2026-11-02: each row was even on its own, but not with the other.
+    for (final width in [360.0, 390.0]) {
+      testWidgets('the Swarm header under it shares its edges at $width', (
+        tester,
+      ) async {
+        final size = Size(width, 740);
+        final app = await _mount(tester, size);
+        final name = tester.getRect(
+          find
+              .descendant(
+                of: find.byKey(const ValueKey('web-tab-switcher')),
+                matching: find.byType(Text),
+              )
+              .first,
+        );
+        final avatar = tester.getRect(
+          find
+              .descendant(of: _avatar, matching: find.byType(AccountAvatar))
+              .first,
+        );
+        await _done(tester, app);
+
+        final (_, controller) = await mountPhoneSuperTab(tester, size);
+        Rect icon(String tooltip) => tester.getRect(
+          find
+              .descendant(
+                of: find.byTooltip(tooltip),
+                matching: find.byType(Icon),
+              )
+              .first,
+        );
+        expect(icon('Conversations').left, name.left);
+        expect(icon('Members and machines').center.dx, avatar.center.dx);
+        expect(tester.takeException(), isNull);
+        await unmountPhoneSuperTab(tester, controller);
+      });
     }
 
     testWidgets('Machines and Models stay in the phone footer\'s menu', (

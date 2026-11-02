@@ -2285,7 +2285,11 @@ class _SuperTabViewState extends State<SuperTabView>
   Widget _header(SuperTabConversation? group, bool narrow, bool showRoster) =>
       Container(
         constraints: const BoxConstraints(minHeight: 52),
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
+        // A phone's rows line up (Huy, 2026-11-02): the sidebar icon starts at
+        // the top bar's edge, and the people icon sits under its avatar.
+        padding: _phone
+            ? kPhoneBarRowPadding
+            : const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
         decoration: BoxDecoration(
           border: Border(bottom: BorderSide(color: DesktopChrome.rim)),
         ),

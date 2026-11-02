@@ -2,23 +2,15 @@
 // The small WebSocket and fetch every Store package reaches the daemon with, against raw frames on a real Unix socket.
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
 import { DaemonWebSocket, daemonFetch, daemonSocketPath, socketIsPrivate } from './local-daemon.mjs'
-
-const madeFolders = []
-/** Short enough to hold a socket, and removed with the rest when this file ends. */
-function tempFolder(prefix) {
-  const folder = mkdtempSync(join('/tmp', prefix))
-  madeFolders.push(folder)
-  return folder
-}
-after(() => { for (const folder of madeFolders) rmSync(folder, { recursive: true, force: true }) })
+import { removeTempFolders, tempFolder } from './test-folders.mjs'
 
 const closers = []
-after(async () => { for (const close of closers) await close() })
+after(async () => { try { for (const close of closers) await close() } finally { removeTempFolders() } })
 const PORT = 4242
 
 /** A daemon on a private socket: `upgrade(socket, unmaskedFramesSeen)`, and `rest` for plain requests. */

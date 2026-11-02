@@ -1,20 +1,14 @@
 // node --test store/tools/local-credential.test.mjs
 import assert from 'node:assert/strict'
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:net'
 import { after, test } from 'node:test'
 import { daemonBridge, localCredentialHeaders } from './local-credential.mjs'
+import { removeTempFolders, tempFolder } from './test-folders.mjs'
 
-const madeFolders = []
-/** Short enough to hold a socket, and removed with the rest when this file ends. */
-function tempFolder(prefix) {
-  const folder = mkdtempSync(join('/tmp', prefix))
-  madeFolders.push(folder)
-  return folder
-}
-after(() => { for (const folder of madeFolders) rmSync(folder, { recursive: true, force: true }) })
+after(removeTempFolders)
 
 // A folder too long for a socket has one under the home folder: only a home too long as well is left on the port.
 process.env.HOME = `/${'h'.repeat(120)}`
@@ -23,7 +17,7 @@ const CREDENTIAL = `test-local-credential-${'a'.repeat(21)}` // the CLI's shape:
 
 /** A data folder as the CLI leaves it: 0700, holding a 0600 `hook-credential` (or none). */
 function dataDir({ credential = CREDENTIAL, mode = 0o600, folderMode = 0o700 } = {}) {
-  const dir = join(mkdtempSync(join(tmpdir(), 'store-tools-credential-')), 'data-'.padEnd(120, 'x'))
+  const dir = join(tempFolder('store-tools-credential-'), 'data-'.padEnd(120, 'x'))
   mkdirSync(dir, { mode: 0o700 })
   if (credential !== null) { writeFileSync(join(dir, 'hook-credential'), `${credential}\n`, { mode: 0o600 }); chmodSync(join(dir, 'hook-credential'), mode) }
   chmodSync(dir, folderMode)
