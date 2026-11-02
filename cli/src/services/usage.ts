@@ -8,7 +8,9 @@ import type { CorePorts } from '../core/api.js'
  * the socket's switch as it was (docs/design/2026-10-06-core-boundary-next.md, step 4).
  */
 import type { CoreApi, ServiceRequests } from '../core/api.js'
-import { readAccountUsage, type AccountUsageReading } from '../lib/accountUsage.js'
+import { readAccountUsage, type AccountUsageDeps, type AccountUsageReading } from '../lib/accountUsage.js'
+import { listClaudeProfiles, profileId } from '../lib/claudeProfiles.js'
+import { listCodexProfiles } from '../lib/codexProfiles.js'
 import { internalOnThrow } from './requestErrors.js'
 
 /** The request usage answers for the apps, declared in core/api.ts for the core to route. */
@@ -16,18 +18,43 @@ export { USAGE_REQUESTS } from '../core/api.js'
 
 export interface UsageDeps {
   /** The vendors' answers. Injected so a spec reads no real home, Keychain or network. */
-  read: () => Promise<AccountUsageReading[]>
+  read: (profile?: Pick<AccountUsageDeps, 'claudeHome' | 'codexHome' | 'only'>) => Promise<AccountUsageReading[]>
 }
 
-export function startUsage(_core: CoreApi, deps: UsageDeps = { read: readAccountUsage }): ServiceRequests {
+/** The reader's arguments for one profile the machine knows, or null for an id it does not. */
+function profileHome(core: CoreApi, engine: unknown, id: unknown): Pick<AccountUsageDeps, 'claudeHome' | 'codexHome' | 'only'> | null {
+  if (engine !== 'claude' && engine !== 'codex') return null
+  if (id === 'default') return { only: engine }
+  const machineId = core.daemon.machineId()
+  if (engine === 'claude') {
+    const found = listClaudeProfiles([], { machineId }).find((p) => p.id === id)
+    return found ? { claudeHome: found.path } : null
+  }
+  const found = listCodexProfiles().find((p) => profileId(machineId, 'codex', p.path) === id)
+  return found ? { codexHome: found.path } : null
+}
+
+export function startUsage(core: CoreApi, deps: UsageDeps = { read: readAccountUsage }): ServiceRequests {
   return {
     // Two vendor round trips (up to 8s each, lib/accountUsage.ts). Answered when they settle, never in the
     // connection's line: it is asked on connect beside the requests the terminal needs, and with no
     // network it held them past the app's timeout while it was the socket's.
-    usage_read: internalOnThrow('usage_read', () => deps.read().then(
-      (providers) => ({ providers }),
-      () => ({ error: 'USAGE_READ_FAILED' }),
-    )),
+    // With a profile it answers for that one account only, and only to the machine's owner: the
+    // default reading is already open to guests, a second account's is not.
+    usage_read: internalOnThrow('usage_read', (payload, asker) => {
+      const wanted = (payload as { profile?: { engine?: unknown; id?: unknown } } | undefined)?.profile
+      let home: Pick<AccountUsageDeps, 'claudeHome' | 'codexHome' | 'only'> | undefined
+      if (wanted) {
+        if (!asker.owner) return { error: 'OWNER_REQUIRED' }
+        const found = profileHome(core, wanted.engine, wanted.id)
+        if (!found) return { error: 'PROFILE_UNKNOWN' }
+        home = found
+      }
+      return deps.read(home).then(
+        (providers) => ({ providers }),
+        () => ({ error: 'USAGE_READ_FAILED' }),
+      )
+    }),
   }
 }
 
