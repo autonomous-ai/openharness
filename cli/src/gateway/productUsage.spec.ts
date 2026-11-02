@@ -710,6 +710,45 @@ describe('when reports go', () => {
     expect(reads.filter(time => time > refused)).toEqual([refused + 60_000])
   })
 
+  // The choice made on this computer (Settings here, through the core's proxy) is read at once, not at the next hourly read.
+  it('reads a choice made on this computer at once, and stops counting if it is off', async () => {
+    start(() => 0.5)
+    await usage.sync(false)
+    const reads: number[] = []
+    request.mockImplementation(async (method: string, _path: string, body?: unknown) => {
+      if (method === 'GET') { reads.push(Date.now()); return { status: 200, body: { data: { enabled: false, revision: 1 } } } }
+      posts.push(Date.now()); sent.push(structuredClone(body))
+      return { status: 200, body: { data: { accepted: true } } }
+    })
+    await usage.choiceChanged()
+    expect(reads).toEqual([T0])
+    usage.counter('search_requests')
+    await vi.advanceTimersByTimeAsync(600_000)
+    expect(posts).toEqual([])
+  })
+
+  it('reads a choice made on this computer after a report already on its way, never instead of reading', async () => {
+    start(() => 0.5)
+    await usage.sync(false); usage.counter('search_requests')
+    const reads: number[] = []
+    let release = (): void => {}
+    const held = new Promise<void>(resolve => { release = resolve })
+    request.mockImplementation(async (method: string, _path: string, body?: unknown) => {
+      if (method === 'GET') { reads.push(Date.now()); return { status: 200, body: { data: { enabled: false, revision: 1 } } } }
+      posts.push(Date.now()); sent.push(structuredClone(body))
+      await held
+      return { status: 200, body: { data: { accepted: true } } }
+    })
+    await vi.advanceTimersByTimeAsync(35_000)
+    expect(posts).toEqual([at(35_000)])
+    const changed = usage.choiceChanged()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(reads).toEqual([])
+    release()
+    await changed
+    expect(reads).toHaveLength(1)
+  })
+
   it('reports go every 5 minutes', async () => {
     start(() => 0.5)
     await usage.sync(false)
