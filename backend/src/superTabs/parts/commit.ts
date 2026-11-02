@@ -132,7 +132,7 @@ export function capReleased(state: SuperTabState): void {
  *  that machine's host needs to hear about. */
 const withoutReading = (data: unknown) => {
   const machine = data as MachineData | undefined
-  return machine && { ...machine, contribution: machine.contribution && { ...machine.contribution, observation: undefined, lent: undefined } }
+  return machine && { ...machine, contribution: machine.contribution && { ...machine.contribution, observation: undefined, lent: undefined, lentDays: undefined } }
 }
 
 /**

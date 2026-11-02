@@ -8,6 +8,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/section_scaffold.dart';
 import '../widgets/finger_target.dart';
 import 'settings_section.dart';
+import '../widgets/laid_out_list.dart';
 
 /// The settings list: the way back, a field that narrows the list to what you
 /// type, then one row per screen with the open one highlighted.
@@ -193,7 +194,7 @@ class _SettingsNavState extends State<SettingsNav> {
   Widget _navList() {
     final visible = _visible;
     if (visible.isEmpty) return const _NoMatches();
-    return ListView(
+    return LaidOutListView(
       padding: const EdgeInsets.only(bottom: 10),
       children: [
         for (final group in visible) ...[

@@ -40,6 +40,7 @@ import 'usage_panels.dart';
 import 'usage_header.dart';
 import 'usage_provider_pane.dart';
 import 'usage_subscriptions.dart';
+import '../../widgets/laid_out_list.dart';
 
 /// What the overview opens on — the last 30 days, which is what Orca's default
 /// range shows and therefore what a figure here can be compared against.
@@ -157,7 +158,7 @@ class _UsageSectionState extends State<UsageSection> {
   }
 
   Widget _body(BuildContext context) {
-    return ListView(
+    return LaidOutListView(
       padding: EdgeInsets.zero,
       children: [
         StatsSummaryCards(summary: _stats.summary),

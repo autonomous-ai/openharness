@@ -42,6 +42,7 @@ import 'store_search.dart';
 import 'store_sessions.dart';
 import 'store_showcase.dart';
 import 'store_viewers.dart';
+import '../widgets/laid_out_list.dart';
 
 /// The Harness Store, the content of its tab: every harness the registry
 /// knows and every built-in engine, as a shelf of cards; one becomes its page
@@ -723,7 +724,7 @@ class _StoreNav extends StatelessWidget {
       child: Column(
         children: [
           Expanded(
-            child: ListView(
+            child: LaidOutListView(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 22),
               children: [
                 for (final choice in of(_ShelfKind.browse))
