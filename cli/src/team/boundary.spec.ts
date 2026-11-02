@@ -21,6 +21,11 @@ import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
+import { env } from '../config/env.js'
+import { startHookServer, type HookServerHandlers } from '../hookServer.js'
+import { bridgeKey } from '../lib/connectors/agents.js'
+import { createBridge } from '../lib/connectors/bridge.js'
+import { Store } from '../lib/connectors/store.js'
 import { SENTINEL_NAME } from './layout.js'
 import { realPrivacyDeps, runPrivacyCheck } from './privacy.js'
 import { buildLinuxSetupScript, buildSetupScript, type SetupScriptInput } from './script.js'
@@ -293,6 +298,59 @@ describe('the privacy check, on the real file system', () => {
     restored(fixture, 0o755)
     expect(JSON.stringify(result)).not.toContain(fixture.home)
   })
+})
+
+/**
+ * Audit H1 against a real other account and the real lookup: `nobody`, with a secret it heard. On a Mac with no passwordless
+ * sudo, this does not run; there the refusal is tested with a stand-in (hookServer.spec.ts, connectors.spec.ts).
+ */
+describe.runIf(sudoNobody)('a secret another account heard opens nothing, as nobody', () => {
+  /** One request as `nobody`: its status and body, from the real Node client. */
+  const askAsNobody = (url: string, init: { method?: string; headers?: Record<string, string>; body?: string }): { status: number; text: string } => {
+    const script = `fetch(${JSON.stringify(url)}, ${JSON.stringify(init)}).then(async r => console.log(JSON.stringify({ status: r.status, text: await r.text() })), e => { console.error(e); process.exit(9) })`
+    const quoted = (word: string) => `'${word.replace(/'/g, `'\\''`)}'`
+    const run = asNobody(`${quoted(process.execPath)} -e ${quoted(script)}`)
+    expect(run.status, run.output).toBe(0)
+    return JSON.parse(run.output.trim().split('\n').at(-1)!) as { status: number; text: string }
+  }
+
+  it('the daemon refuses the credential and the hook token from nobody, and takes them from this account', async () => {
+    const started = await startHookServer(0, { onRegistered: () => {}, onSessionEnd: () => {}, onStatus: async () => ({ secretDetail: 'x' }) } as unknown as HookServerHandlers)
+    try {
+      const credential = readFileSync(join(env.ADAPTER_DATA_DIR, 'hook-credential'), 'utf8').trim()
+      const hookToken = readFileSync(join(env.ADAPTER_DATA_DIR, 'hook-token'), 'utf8').trim()
+      const base = `http://127.0.0.1:${started.port}`
+      expect(askAsNobody(`${base}/api/machines`, { headers: { 'X-Harness-Local': credential } }).status).toBe(401)
+      expect(askAsNobody(`${base}/api/status`, { headers: { 'X-Harness-Local': credential } }).text).not.toContain('secretDetail')
+      expect(askAsNobody(`${base}/api/hook/session-end`, { method: 'POST', headers: { 'x-harness-hook-token': hookToken }, body: '{}' }).status).toBe(401)
+      expect(await (await fetch(`${base}/api/status`, { headers: { 'X-Harness-Local': credential } })).text()).toContain('secretDetail')
+      expect((await fetch(`${base}/api/hook/session-end`, { method: 'POST', headers: { 'x-harness-hook-token': hookToken }, body: '{}' })).status).not.toBe(401)
+    } finally {
+      started.server.closeAllConnections()
+      await new Promise<void>((resolve) => { started.server.close(() => resolve()) })
+      await started.localSocket?.close()
+    }
+  }, 60_000)
+
+  it('the bridge answers nobody with the right key as it answers an unknown key', async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'hb-')))
+    const vault = new Store(root, {})
+    const key = bridgeKey(vault)
+    const bridge = createBridge(vault, { key: () => key })
+    await new Promise<void>((resolve) => { bridge.listen(0, '127.0.0.1', resolve) })
+    try {
+      const base = `http://127.0.0.1:${(bridge.address() as AddressInfo).port}`
+      const heard = askAsNobody(`${base}/${key}/linear/mcp`, { method: 'POST', body: '{}' })
+      const unknown = askAsNobody(`${base}/wrong/linear/mcp`, { method: 'POST', body: '{}' })
+      expect(heard).toEqual(unknown)
+      const mine = await fetch(`${base}/${key}/linear/mcp`, { method: 'POST', body: '{}' })
+      expect(await mine.text()).not.toBe(unknown.text)
+    } finally {
+      bridge.closeAllConnections()
+      await new Promise<void>((resolve) => { bridge.close(() => resolve()) })
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 60_000)
 })
 
 /** A hole the audit found (finding H1), now closed: the real hook, with a made-up credential, against a plain listener on the port. Its other cases are in localCredential.spec.ts. */

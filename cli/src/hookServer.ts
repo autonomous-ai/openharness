@@ -491,8 +491,10 @@ export function startHookServer(
       // An engine hook's token, which opens these hook routes and nothing else (lib/hookAuth.ts). The credential
       // is still taken here: an engine's loaded plugin keeps the copy it started with until its pane restarts. A
       // guest's harness will carry a token scoped to its own agent (docs/plans/2026-10-19-guest-machine-sharing-plan.md).
+      // Over TCP either may have been heard by another account that held this port during a restart (audit H1), which
+      // could then forge session ends or turn stops here, so it counts only from this one. Asked only once it matched.
       const suppliedHookToken = req.headers['x-harness-hook-token']
-      const hookOk = trustedLocal || hookCredentialMatches(hookToken, suppliedHookToken) || hookCredentialMatches(hookCredential, suppliedHookToken)
+      const hookOk = trustedLocal || ((hookCredentialMatches(hookToken, suppliedHookToken) || hookCredentialMatches(hookCredential, suppliedHookToken)) && await peerAccount(req.socket))
       // The loopback port takes any local OS user's process, so over TCP every route but the few below
       // wants the daemon's local credential (lib/localCredential.ts): the 0600 file only this OS user can
       // read. Over the daemon's Unix socket the filesystem already said who this is. Over TCP the credential may have

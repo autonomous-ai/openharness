@@ -22,7 +22,7 @@ export function procNetOwner(table: string, peerPort: number, ownPort: number): 
   const hex = (port: number) => port.toString(16).toUpperCase().padStart(4, '0')
   for (const line of table.split('\n').slice(1)) {
     const fields = line.trim().split(/\s+/)
-    if (fields[1]?.endsWith(`:${hex(peerPort)}`) && fields[2]?.endsWith(`:${hex(ownPort)}`)) {
+    if (fields[1] === `0100007F:${hex(peerPort)}` && fields[2] === `0100007F:${hex(ownPort)}`) {
       const uid = Number(fields[7])
       return Number.isInteger(uid) ? uid : null
     }
@@ -52,10 +52,49 @@ async function ask(socket: Socket, platform: NodeJS.Platform): Promise<boolean> 
   const peerPort = socket.remotePort, ownPort = socket.localPort
   const uid = process.getuid?.()
   if (uid === undefined || !peerPort || !ownPort) return false
+  // Both lookups below name 127.0.0.1 at both ends, which is what a client dialling this listener uses. All of 127/8 is
+  // loopback, so another account can call from 127.0.0.2 on the same port number as a connection of this account's, and
+  // would be read as that connection. Only an exact pair of addresses makes the pair of ports name one connection.
+  if (socket.remoteAddress !== '127.0.0.1' || socket.localAddress !== '127.0.0.1') return false
   if (platform === 'linux') {
     try { return procNetOwner(await readFile('/proc/net/tcp', 'utf8'), peerPort, ownPort) === uid } catch { return false }
   }
   return lsof(peerPort, ownPort, uid)
+}
+
+/** Linux: the owner of the listener on loopback [port] in /proc/net/tcp, or null when none is listening. */
+export function procNetListener(table: string, port: number): number | null {
+  const hex = port.toString(16).toUpperCase().padStart(4, '0')
+  for (const line of table.split('\n').slice(1)) {
+    const fields = line.trim().split(/\s+/)
+    if (fields[3] === '0A' && (fields[1] === `0100007F:${hex}` || fields[1] === `00000000:${hex}`)) {
+      const uid = Number(fields[7])
+      return Number.isInteger(uid) ? uid : null
+    }
+  }
+  return null
+}
+
+/**
+ * Whether the process listening on loopback [port] runs as this account: null when that cannot be said (a listener gone
+ * by now, a lookup that failed, Windows). macOS shows an account only its own sockets, so a port that is taken but not
+ * among them is another account's.
+ */
+export async function portHolderIsThisAccount(port: number, platform: NodeJS.Platform = process.platform): Promise<boolean | null> {
+  const uid = process.getuid?.()
+  if (platform === 'win32' || uid === undefined) return null
+  if (platform === 'linux') {
+    try {
+      const owner = procNetListener(await readFile('/proc/net/tcp', 'utf8'), port)
+      return owner === null ? null : owner === uid
+    } catch { return null }
+  }
+  return new Promise((resolve) => {
+    execFile('/usr/sbin/lsof', ['-nP', '-a', '-u', String(uid), `-iTCP:${port}`, '-sTCP:LISTEN', '-Fn'], { timeout: LSOF_MS }, (error, stdout) => {
+      if (error && typeof error.code !== 'number') { resolve(null); return }
+      resolve(/^n/m.test(stdout ?? ''))
+    })
+  })
 }
 
 const answers = new WeakMap<Socket, Promise<boolean>>()

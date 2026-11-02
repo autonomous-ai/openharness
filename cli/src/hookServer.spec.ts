@@ -1192,7 +1192,7 @@ describe('audit H1: what a secret heard on the daemon\'s port can do', () => {
     } finally { await close() }
   })
 
-  it('the hook token opens the hook routes and nothing else, from any account', async () => {
+  it('the hook token opens the hook routes and nothing else', async () => {
     const { port, close } = await serve(async () => true)
     try {
       const token = hookToken()
@@ -1207,8 +1207,18 @@ describe('audit H1: what a secret heard on the daemon\'s port can do', () => {
     } finally { await close() }
   })
 
-  it('an engine plugin loaded before the hook token keeps reporting with the credential', async () => {
+  it('a hook token or credential opens no hook route for a caller of another account', async () => {
     const { port, close } = await serve(async () => false)
+    try {
+      for (const secret of [hookToken(), credential()]) {
+        expect((await call(port, '/api/hook/session-start', { 'x-harness-hook-token': secret }, 'POST')).status).toBe(401)
+        expect((await call(port, '/api/hook/session-end', { 'x-harness-hook-token': secret }, 'POST')).status).toBe(401)
+      }
+    } finally { await close() }
+  })
+
+  it('an engine plugin loaded before the hook token keeps reporting with the credential', async () => {
+    const { port, close } = await serve(async () => true)
     try {
       expect((await call(port, '/api/hook/session-start', { 'x-harness-hook-token': credential() }, 'POST')).status).not.toBe(401)
     } finally { await close() }

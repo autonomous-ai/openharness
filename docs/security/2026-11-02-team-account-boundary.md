@@ -62,9 +62,9 @@ them open. Same for the bridge's key.
 
 **Fixed (task #2016):** on macOS and Linux, hooks, the CLI and Desktop use only the socket while one can exist. Hooks have their own
 token that opens the hook routes alone. A credential or bridge key over TCP counts only from a process of this OS account
-(`lib/peerAccount.ts`). The bridge moves off a port another process holds and tells agents. No second account was used to test this: the refusal
-is proved with a stand-in for the lookup, and the lookup against this account. **Still open:** an MCP client sends its tool calls to
-whoever holds its bridge address until it restarts; an engine plugin's session-start and hook token reach whoever holds the daemon's port, which lets them forge
+(`lib/peerAccount.ts`). The bridge moves off a port another account holds and tells agents. The refusal is tested against a real other account (`nobody`) on CI's Linux; on macOS only
+with a stand-in for the lookup. No real Team account or reboot was tried. **Still open:** an MCP client sends its tool calls to
+whoever holds its bridge address, who can answer them falsely; an engine plugin's session-start and hook token reach whoever holds the daemon's port, which lets them forge
 hook events; and Store agents, companions and old clients still send the credential over TCP, where it opens nothing for another account.
 
 ### H2. A Team agent's branch runs with the owner's rights (High)

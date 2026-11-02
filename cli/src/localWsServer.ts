@@ -363,11 +363,15 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
       return
     }
     // A credential another account heard while it held this port during a restart (audit H1) must open nothing.
+    // Nothing else listens on this socket until the upgrade: a client's reset while the lookup runs would be uncaught.
+    const ignoreReset = (): void => {}
+    socket.on('error', ignoreReset)
     void (options.peerAccount ?? peerIsThisAccount)(req.socket).then((mine) => {
+      socket.off('error', ignoreReset)
       if (socket.destroyed) return
       if (!mine) { rejectUpgrade(socket, 401, 'Unauthorized'); return }
       wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req))
-    }, () => { rejectUpgrade(socket, 401, 'Unauthorized') })
+    }, () => { socket.off('error', ignoreReset); rejectUpgrade(socket, 401, 'Unauthorized') })
   }
   const servers = [server, ...(options.localSocketServer ? [options.localSocketServer] : [])]
   for (const each of servers) each.on('upgrade', onUpgrade)

@@ -142,7 +142,7 @@ describe('the connectors service', () => {
     saveBridgePort(vault, taken)
     const said = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
-      startConnectors(fakeCore(), { vault, env: free, offered: async () => ({}), retryMs: 5 })
+      startConnectors(fakeCore(), { vault, env: free, offered: async () => ({}), retryMs: 5, holderIsMine: async () => false })
       let moved = taken
       for (let n = 0; n < 200 && moved === taken; n++) {
         await new Promise(resolve => setTimeout(resolve, 10))
@@ -152,9 +152,47 @@ describe('the connectors service', () => {
       expect(said.mock.calls.flat().join(' ')).toContain(`bridge port ${taken} is not available`)
       expect(said.mock.calls.flat().join(' ')).toContain(`the bridge moved to port ${moved}`)
       expect(await fetch(`http://127.0.0.1:${moved}/x/linear/mcp`, { method: 'POST', body: '{}' }).then(answer => answer.status)).toBe(404)
+      // Once the holder lets go, agents still on the old address recover: the bridge answers there too.
+      await new Promise<void>(resolve => holder.close(() => resolve()))
+      let status = 0
+      for (let n = 0; n < 200 && !status; n++) {
+        await new Promise(resolve => setTimeout(resolve, 10))
+        status = await fetch(`http://127.0.0.1:${taken}/x/linear/mcp`, { method: 'POST', body: '{}' }).then(answer => answer.status, () => 0)
+      }
+      expect(status).toBe(404)
     } finally {
       said.mockRestore()
+      holder.close()
+    }
+  })
+
+  it.each([
+    ['its own account holds the port, by the real lookup', undefined],
+    ['nobody can say who holds it', async () => null],
+  ])('never moves when %s', async (_name, holderIsMine) => {
+    const holder = createServer()
+    await new Promise<void>(resolve => holder.listen(0, '127.0.0.1', resolve))
+    const taken = (holder.address() as { port: number }).port
+    const { HARNESS_CONNECTIONS_PORT: _named, ...free } = env
+    const vault = new Store(join(home, 'store'), free)
+    saveBridgePort(vault, taken)
+    const said = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      startConnectors(fakeCore(), { vault, env: free, offered: async () => ({}), retryMs: 5, ...(holderIsMine ? { holderIsMine } : {}) })
+      // Well past the tries before it asks, with time for the lookup.
+      await new Promise(resolve => setTimeout(resolve, 400))
+      expect(bridgePort(free, new Store(join(home, 'store'), free))).toBe(taken)
+      expect(said.mock.calls.flat().join(' ')).not.toContain('moved')
       await new Promise<void>(resolve => holder.close(() => resolve()))
+      let status = 0
+      for (let n = 0; n < 200 && !status; n++) {
+        await new Promise(resolve => setTimeout(resolve, 10))
+        status = await fetch(`http://127.0.0.1:${taken}/x/linear/mcp`, { method: 'POST', body: '{}' }).then(answer => answer.status, () => 0)
+      }
+      expect(status).toBe(404)
+    } finally {
+      said.mockRestore()
+      holder.close()
     }
   })
 
@@ -166,7 +204,7 @@ describe('the connectors service', () => {
     saveBridgePort(vault, (holder.address() as { port: number }).port)
     const said = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
-      startConnectors(fakeCore(), { vault, env: free, offered: async () => ({}), retryMs: 5 })
+      startConnectors(fakeCore(), { vault, env: free, offered: async () => ({}), retryMs: 5, holderIsMine: async () => false })
       vi.spyOn(vault, 'file').mockImplementation(() => { throw new Error('disk full') })
       for (let n = 0; n < 200 && !said.mock.calls.flat().join(' ').includes('could not save'); n++) await new Promise(resolve => setTimeout(resolve, 10))
       expect(said.mock.calls.flat().join(' ')).toContain("could not save the bridge's new port: disk full")
