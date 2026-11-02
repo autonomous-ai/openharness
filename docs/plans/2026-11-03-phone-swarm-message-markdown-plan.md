@@ -103,7 +103,7 @@ Web links and `#42` render as phone link text and open their destination when ta
 
 - [x] **Step 1: Add a screenshot test** for a long report containing headings, emphasis, a list, a quote, a table, a web link, `#N`, and a code block, following `swarm_project_c_shots_test.dart`'s environment-selected output convention.
 - [x] **Step 2: Capture the screenshot and inspect that it shows a readable long report.**
-- [ ] **Step 3: Attach the screenshot in the PR and commit the screenshot test.**
+- [x] **Step 3: Attach the screenshot in the PR and commit the screenshot test.**
 
 ## Validation
 
