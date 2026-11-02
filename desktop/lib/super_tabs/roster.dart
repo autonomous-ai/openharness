@@ -377,6 +377,14 @@ class _SuperTabRosterState extends State<SuperTabRoster>
       glance.line,
       if (status != glance.label) status,
       if (info.lastActive case final at?) 'Last active ${relativeAgo(at, now)}',
+      // What its line said before it was one line (Dee, 2026-10-30): the task
+      // and how long since its last progress.
+      if (state.work case final work?)
+        [
+          work.group.title,
+          if (work.progressAt case final at?)
+            superTabAgentAge(now.difference(at)),
+        ].join(' · '),
     ].join('\n');
     void open() => unawaited(_card(agent));
     final theme = terminalThemeFor(
