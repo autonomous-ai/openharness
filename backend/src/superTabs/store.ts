@@ -28,7 +28,8 @@ import { logger } from '../utils/logger.js'
 import { retryTransient } from './retry.js'
 import { recordReload } from './retryStats.js'
 import { buddyChatId, swarmBuddyChatId, type ChosenBuddyName } from './buddies.js'
-import { buddyPerson, canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, onTeamAccount, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility } from './projects.js'
+import { cleanPullRequestLinks } from './cards.js'
+import { buddyPerson, canReadAgent, canReadGroup, groupRepositoryUrl, canWatchAgent, groupProject, ledProject, onTeamAccount, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { SESSION_ENDED_KIND, sessionContext, sessionReadsRow, type ContextRow } from './buddySessions.js'
 import { isBuddy, isBuddyChat, isBuddyReader, refuseBuddyRouting, routingRow } from './buddies.js'
@@ -1467,10 +1468,12 @@ export class SuperTabStore {
       // An agent-only notice changes nothing people see: no link, no unread mark, no project report.
       const shown = effects.messages.filter(message => !agentOnly(message.source, message.recipients))
       for (const group of effects.state.conversations) {
+        const repositoryUrl = groupRepositoryUrl(effects.state, group)
         appendPullRequestUrls(group, [
           ...shown.filter(message => message.conversationId === group.id).map(message => message.text),
           ...group.checks.map(check => check.evidence), group.assignment?.result,
-        ])
+        ], repositoryUrl)
+        cleanPullRequestLinks(group, repositoryUrl)
       }
       if (command.type === 'agent.rebind') {
         const target = agent(effects.state, command.agentId)

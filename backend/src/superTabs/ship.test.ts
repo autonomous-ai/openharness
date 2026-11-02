@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
-import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
+import { createSuperTab, pullRequestLinks, type Actor, type AgentConfiguration } from './model.js'
 import { SHIP_KIND } from './ship.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'dee@example.com' }
@@ -22,14 +22,17 @@ function fixture() {
   const group = (title = 'Avatars', extra: Record<string, unknown> = {}) => run({ type: 'conversation.create', title, brief: 'Add avatars.',
     checks: [{ description: 'Tests pass', independent: false }], ...extra } as Command).result.conversationId as string
   /** Passes the task's first check as [passer] (its worker by default), then marks it Done as its worker. */
-  const finish = (id: string, worker: string, result = `Merged ${PR}`, passer = worker) => {
+  const finish = (id: string, worker: string, result = `Merged ${PR}`, passer = worker, merged = true) => {
     const work = state.conversations.find(c => c.id === id)!
     const assignment = work.assignment!.id
     run({ type: 'work.check', conversationId: id, assignmentId: assignment, checkId: work.checks[0]!.id, passed: true, evidence: 'npm test: 12 passed' }, as(passer))
+    // Shipped says merged: the Lead records each merge before the work is Done, unless a test wants it open.
+    if (merged) for (const url of pullRequestLinks(result)) run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: url }, owner)
     return run({ type: 'work.status', conversationId: id, assignmentId: assignment, status: 'done', result }, as(worker))
   }
   const ships = (effects: ReturnType<typeof run>) => effects.messages.filter(m => m.source?.kind === SHIP_KIND)
-  return { run, add, as, group, finish, ships, lead, get state() { return state } }
+  const merge = (id: string, url: string) => run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: url }, owner)
+  return { run, add, as, group, finish, merge, ships, lead, get state() { return state } }
 }
 
 describe('the ship moment', () => {
@@ -119,5 +122,55 @@ describe('the ship moment', () => {
     const done = f.run({ type: 'work.status', conversationId: id, assignmentId: work.assignment!.id, status: 'done', result: `Merged ${PR}` })
     expect(f.ships(done)).toEqual([])
     expect(JSON.stringify(done.messages.filter(m => m.conversationId !== id))).not.toContain('Secret plan')
+  })
+
+  describe('only once the pull requests are merged', () => {
+    const OTHER = 'https://github.com/example/app/pull/8'
+    const assigned = (title = 'Avatars') => {
+      const f = fixture(), id = f.group(title), builder = f.add('Kai', id)
+      f.run({ type: 'work.assign', conversationId: id, agentId: builder }, owner)
+      return { f, id, builder, group: () => f.state.conversations.find(c => c.id === id)! }
+    }
+
+    it('says nothing when the work is Done with its pull request open, and posts the line once at the merge', () => {
+      const { f, id, builder, group } = assigned()
+      const done = f.finish(id, builder, `Ready: ${PR}`, builder, false)
+      expect(f.ships(done)).toEqual([])
+      expect(group().assignment!.status).toBe('done')
+      const merged = f.merge(id, PR)
+      const [line, ...more] = f.ships(merged)
+      expect(more).toEqual([])
+      expect(line!.text).toBe(`🎉 Shipped: Avatars, requested by dee, built by Kai. ${PR}`)
+      expect(line!.source).toMatchObject({ kind: SHIP_KIND, conversationId: id, pullRequests: [PR] })
+      expect(f.ships(f.merge(id, PR))).toEqual([])
+    })
+
+    it('posts at Done when the merge was recorded first, once', () => {
+      const { f, id, builder } = assigned()
+      expect(f.ships(f.merge(id, PR))).toEqual([])
+      const work = f.state.conversations.find(c => c.id === id)!
+      f.run({ type: 'work.check', conversationId: id, assignmentId: work.assignment!.id, checkId: work.checks[0]!.id, passed: true, evidence: 'ok' }, f.as(builder))
+      expect(f.ships(f.run({ type: 'work.status', conversationId: id, assignmentId: work.assignment!.id, status: 'done', result: `Merged ${PR}` }, f.as(builder)))).toHaveLength(1)
+    })
+
+    it('waits for the last of several pull requests', () => {
+      const { f, id, builder } = assigned()
+      f.merge(id, PR)
+      expect(f.ships(f.finish(id, builder, `${PR} and ${OTHER}`, builder, false))).toEqual([])
+      expect(f.ships(f.merge(id, OTHER))).toHaveLength(1)
+    })
+
+    it('does not announce again work that was Done before pull requests had to be merged', () => {
+      const { f, id, builder, group } = assigned()
+      f.finish(id, builder, `Merged ${PR}`, builder, false)
+      // Work Done under the old rule: the line was posted at Done, so nothing is waiting.
+      delete group().ledger!.shipWaiting
+      expect(f.ships(f.merge(id, PR))).toEqual([])
+    })
+
+    it('does not post for a Done that is not Done: the merge of work still in progress', () => {
+      const { f, id } = assigned()
+      expect(f.ships(f.merge(id, PR))).toEqual([])
+    })
   })
 })

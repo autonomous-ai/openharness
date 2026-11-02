@@ -1,6 +1,7 @@
 import { isLeads, stableId, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { agentDisplayName } from './agentNames.js'
 import { groupProject } from './projects.js'
+import { pullRequestCard } from './cards.js'
 
 /** The source of the celebration row Desktop draws with confetti. */
 export const SHIP_KIND = 'ship'
@@ -10,13 +11,22 @@ const AGENT_KEY = 'agent:'
 /** When the group first shipped, as the leaderboard records it (leaderboard/record.ts `recordStatus`: once, on the first Done). */
 export const shippedAt = (group: Conversation): number | undefined => group.ledger?.shippedAt
 
-/** Work just became Done. When it links a pull request, the project chat gets one line naming who asked, who built it and
- *  who reviewed it ("Done with a linked PR" is shipped: Leads mark Done after the merge). A private conversation is never
- *  celebrated: its title, words and link are its own. No agent is woken by it. A group is one request: only its first ship is
- *  celebrated, not a later attempt's Done (the caller checks `shippedAt` from before the command). */
+/** Every pull request the group links has a recorded merge (cards.ts recordCardMerged). A person reads "Shipped" as merged. */
+export const allMerged = (group: Conversation): boolean =>
+  !!group.pullRequestUrls?.length && group.pullRequestUrls.every(url => pullRequestCard(group, url)?.mergedAt !== undefined)
+
+/** Whether [before], the group as it was before the command, may still be celebrated: not yet, and not already shipped by an
+ *  earlier Done (the old line was posted at Done, before any merge). A group is one request: later attempts celebrate nothing. */
+export const celebrable = (before: Conversation): boolean =>
+  before.ledger?.shipPostedAt == null && (before.ledger?.shippedAt == null || before.ledger.mergedAt != null)
+
+/** Work is Done and every pull request it links has merged. The project chat gets one line naming who asked, who built it and
+ *  who reviewed it. Done with a pull request still open posts nothing: the caller marks the group waiting, and the last
+ *  recorded merge posts it. A private conversation is never celebrated: its title, words and link are its own. No agent is
+ *  woken by it. */
 export function shipNotice(state: SuperTabState, group: Conversation, author: Author, operationId: string): MessageDraft | null {
   const pullRequests = group.pullRequestUrls ?? []
-  if (!pullRequests.length || group.audience || group.reviewOf || isLeads(group) || !group.assignment) return null
+  if (!allMerged(group) || group.audience || group.reviewOf || isLeads(group) || !group.assignment) return null
   const project = groupProject(state, group)
   const agentName = (id: string) => agentDisplayName(state.agents, id) ?? state.agents.find(a => a.id === id)?.name
   const builderIds = [group.assignment.agentId].filter(id => agentName(id))

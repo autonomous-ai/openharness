@@ -370,13 +370,31 @@ export interface TaskLiveness {
   personId?: string
 }
 
-/** The GitHub pull request links in [text], each once, in order. */
-export const pullRequestLinks = (text: string): string[] => [...new Set([...text.matchAll(/https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\/pull\/([1-9][0-9]*)\b/g)]
-  .filter(match => Number(match[1]) <= Number.MAX_SAFE_INTEGER).map(match => match[0]))]
+/** The GitHub repository a project's address names (https, ssh or scp form), or null for another host or a malformed address. */
+export function githubRepository(repositoryUrl: string | null | undefined): { owner: string; repo: string } | null {
+  const match = repositoryUrl?.match(/^(?:https?:\/\/|ssh:\/\/git@|git@)github\.com[/:]([A-Za-z0-9_-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/)
+  return match ? { owner: match[1]!, repo: match[2]! } : null
+}
 
-export function appendPullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>): void {
-  const urls = new Set(group.pullRequestUrls ?? [])
-  for (const text of texts) if (text) for (const url of pullRequestLinks(text)) urls.add(url)
+/** [url] (or "owner/repo" form) as the project's own pull request: the same number in the project's repository when only the
+ *  owner differs, null when it belongs to another repository. Without a known GitHub repository nothing can be judged. */
+export function projectPullRequestUrl(url: string, repositoryUrl: string | null | undefined): string | null {
+  const own = githubRepository(repositoryUrl)
+  if (!own) return url
+  const match = url.match(/^https:\/\/github\.com\/([A-Za-z0-9_-]+)\/([A-Za-z0-9_.-]+)\/pull\/([1-9][0-9]*)$/)
+  if (!match) return null
+  return match[2]!.toLowerCase() === own.repo.toLowerCase() ? `https://github.com/${own.owner}/${own.repo}/pull/${match[3]}` : null
+}
+
+/** The GitHub pull request links in [text], each once, in order. With the project's [repositoryUrl], each is that repository's
+ *  (the owner corrected) and a link into another repository is left out, so one pull request is one link. */
+export const pullRequestLinks = (text: string, repositoryUrl?: string | null): string[] => [...new Set([...text.matchAll(/https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\/pull\/([1-9][0-9]*)\b/g)]
+  .filter(match => Number(match[1]) <= Number.MAX_SAFE_INTEGER).flatMap(match => projectPullRequestUrl(match[0], repositoryUrl) ?? []))]
+
+/** Adds the pull request links of [texts] to [group] and corrects the ones it holds, by the project's [repositoryUrl]. */
+export function appendPullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>, repositoryUrl?: string | null): void {
+  const urls = new Set((group.pullRequestUrls ?? []).flatMap(url => projectPullRequestUrl(url, repositoryUrl) ?? []))
+  for (const text of texts) if (text) for (const url of pullRequestLinks(text, repositoryUrl)) urls.add(url)
   group.pullRequestUrls = [...urls]
 }
 export interface Invitation {

@@ -177,6 +177,7 @@ describe('work the PM opens from a Buddy\'s proposal without naming anyone (grou
       .toEqual([expect.objectContaining({ conversationId: group, recipients: ['buddy'], source: { kind: 'agent-only' } })])
     const assignmentId = find().assignment!.id
     for (const check of find().checks) f.run({ type: 'work.check', conversationId: group, assignmentId, checkId: check.id, passed: true, evidence: 'ok' })
+    f.run({ type: 'conversation.merged', conversationId: group, pullRequestUrl: 'https://github.com/o/r/pull/7' }, agentActor(worker))
     const done = f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'done', result: 'Merged https://github.com/o/r/pull/7' },
       agentActor(worker)).messages.find(m => m.source?.kind === SHIP_KIND)!
     expect(done).toMatchObject({ conversationId: f.app.conversationId, source: { requesterId: 'peer' }, buddyRecipients: ['buddy'] })

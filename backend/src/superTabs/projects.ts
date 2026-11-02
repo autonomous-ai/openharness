@@ -110,6 +110,10 @@ export function groupProject(state: SuperTabState, group: Conversation): SwarmPr
   return projectOf(state, group.projectId ?? 'lead')
 }
 
+/** The repository address of the project [group] belongs to (null when it has none or the group has no project); never throws. */
+export const groupRepositoryUrl = (state: SuperTabState, group: Conversation): string | null =>
+  projectsOf(state).find(p => p.id === (group.projectId ?? 'lead'))?.repository?.repositoryUrl ?? null
+
 /** The project a start works in: a project session's own, none for a Swarm-wide Buddy's (Dee, 10-31), else its conversation's. */
 export function startProject(state: SuperTabState, request: Pick<AgentStartRequest, 'conversationId' | 'buddySession'>): SwarmProject | undefined {
   if (request.buddySession?.projectId) return projectOf(state, request.buddySession.projectId)

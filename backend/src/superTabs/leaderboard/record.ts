@@ -49,6 +49,11 @@ export interface GroupLedger {
   shippedAt?: number
   /** The earliest merge the Lead recorded (recordMerged); once there is one, it is the ship time. */
   mergedAt?: number
+  /** The project chat's Shipped line was posted (ship.ts): once per group, only when the work is Done and its pull requests merged. */
+  shipPostedAt?: number
+  /** Done while a linked pull request was still open: the line waits for the last merge (ship.ts). Absent on work done before
+   *  this existed, which is never announced again. */
+  shipWaiting?: true
   /** When the first follow-up fix of its merged PR merged, within FIX_WINDOW_MS of its merge (recordFix): it needed a fix
    *  after merge (evidence routing, Ken 2026-10-29). */
   fixedAfterMergeAt?: number
