@@ -67,6 +67,19 @@ void main() {
       );
     });
 
+    testWidgets('a private project with mentions keeps its number and lock on '
+        'one line, and its row its height', (tester) async {
+      final server = swarm()..followedThreads = null;
+      (server.state['projects'] as List).first['visibility'] = 'private';
+      server.tag('message-1');
+      await showView(tester, server);
+      final number = tester.getCenter(_key('super-mentions-lead'));
+      final lock = tester.getCenter(find.byIcon(AppIcons.lock).first);
+      expect((number.dy - lock.dy).abs(), lessThan(2));
+      expect(lock.dx, greaterThan(number.dx));
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets('Activity and Buddy sit as far apart as project rows', (
       tester,
     ) async {
@@ -221,6 +234,65 @@ void main() {
       final close = tester.getTopRight(_key('super-task-panel-close')).dx;
       expect(tester.getTopRight(box).dx, lessThan(close));
       expect(900 - tester.getBottomLeft(box).dy, greaterThanOrEqualTo(16));
+    });
+  });
+
+  group("a thread's pane", () {
+    testWidgets("its header's rule meets the chat's", (tester) async {
+      final server = swarm()..threads = true;
+      server.messages.add(_said(1, 'A plain message.'));
+      final c = await showView(tester, server);
+      c.openThread('said-1');
+      await tester.pumpAndSettle();
+      final close = _key('super-thread-close');
+      final rule = find.descendant(
+        of: find.ancestor(of: close, matching: find.byType(Column)).first,
+        matching: find.byType(Divider),
+      );
+      expect(tester.getTopLeft(rule.first).dy, 51);
+      await tester.pump(const Duration(milliseconds: 300));
+    });
+  });
+
+  group('Manage, Models', () {
+    Map<String, dynamic> board(String project) => {
+      'projectId': project,
+      'week': 1,
+      'period': {'name': '7d', 'start': 1, 'end': 2},
+      'allProjects': true,
+      'people': <Object>[],
+      'waiting': {'total': 0, 'people': <Object>[]},
+      'byModel': [
+        {
+          'engine': 'claude',
+          'model': 'claude-opus-5-5',
+          'effort': 'high',
+          'points': 1,
+          'rank': 1,
+          'attempts': 1,
+          'shipped': {'count': 1},
+          'firstReview': {'reviewed': 1, 'passed': 1},
+          'reviews': 1,
+        },
+      ],
+    };
+
+    testWidgets('lists its models when the open chat is the one Buddy, which '
+        'belongs to no project', (tester) async {
+      final server = swarm()
+        ..leaderboard = board('lead')
+        ..followedThreads = null;
+      server.state['swarmBuddy'] = true;
+      final c = await showView(tester, server);
+      await tester.tap(_key('super-swarm-buddy'));
+      await tester.pumpAndSettle();
+      expect(c.selected?.isSwarmBuddyChat, isTrue);
+      await tester.tap(_key('super-manage'));
+      await tester.pumpAndSettle();
+      await tester.tap(_key('super-manage-tab-models'));
+      await tester.pumpAndSettle();
+      expect(find.text('100%'), findsOneWidget);
+      await tester.pump(const Duration(milliseconds: 300));
     });
   });
 
