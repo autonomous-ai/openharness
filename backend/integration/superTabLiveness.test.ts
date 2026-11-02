@@ -2398,6 +2398,21 @@ describe('a session reopened after its agent was removed', () => {
     expect(after.removedSessions ?? []).toEqual([])
   })
 
+  // Security review 1 of #2601: the record every Swarm registering this session writes (sessionScope.ts bindSession).
+  it.each([
+    ['withdrawn from this Swarm', (tab: string) => ({ releasedTabIds: [tab] })],
+    ['being stopped', () => ({ stopReleaseId: 'release-1' })],
+    ['tied to another private project', () => ({ privateScope: 'another-scope' })],
+  ])('stays out of a session %s, and its record goes', async (_, fields) => {
+    const f = await removed()
+    const row = await db.superTab.findUniqueOrThrow({ where: { id: f.tab }, select: { autonomousEnv: true } })
+    const scope = stableId('swarm-session', row.autonomousEnv, host.sub, f.idle)
+    await db.superTabSessionScope.upsert({ where: { id: scope }, create: { id: scope, scopeIds: [], ...fields(f.tab) }, update: fields(f.tab) })
+    await resume(f)
+    expect((await state(f)).agents.map(a => a.id)).not.toContain(f.idle)
+    expect((await machinePart(f, 'test-host')).removedSessions ?? []).toEqual([])
+  })
+
   it('goes after 30 days, and with its machine', async () => {
     const f = await removed()
     f.clock.now += 31 * 24 * 60 * MINUTE
