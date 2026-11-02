@@ -445,6 +445,13 @@ describe('what the windows say, reaching the dial', () => {
       void port
     })
 
+    it('follows the tier another of the person\'s machines decided: a Swarm agent there is silent on this dial', async () => {
+      const { port } = start({ decideTier: null })
+      seen.fleet!.events!({ machineId: 'mac-mini', kind: 'summary', agentId: 'far-pm', text: 'done', recap: 'Planned.', tier: 'silent' })
+      await vi.waitFor(() => expect(calls('summary')).toEqual([['far-pm', 'Planned.', 'done', 'silent', undefined, false]]))
+      void port
+    })
+
     it('still decides a remote card that came without a tier, and never throws', async () => {
       const { port } = start({ decideTier: null })
       expect(() => seen.fleet!.events!({ machineId: 'mac-mini', kind: 'summary', agentId: 'far', text: 'done', recap: '' })).not.toThrow()
