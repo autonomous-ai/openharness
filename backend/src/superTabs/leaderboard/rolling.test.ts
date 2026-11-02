@@ -181,10 +181,19 @@ describe('the week finer rows began', () => {
     // Thursday of the week of 2026-11-02, with Monday's and Tuesday's work recorded by week only.
     const now = Date.UTC(2026, 10, 5, 12), week = Date.UTC(2026, 10, 2)
     const pool = { lent: [{ week, busyMs: 8 * HOUR }] }, ledger = { reviews: [{ week, ...opus, count: 3 }] }
-    expect(lentIn(pool, periodSpans('24h', now, reach).current, now)).toBe(0)
-    expect(lentIn(pool, periodSpans('7d', now, reach).current, now)).toBe(8 * HOUR)
+    expect(lentIn(pool, periodSpans('24h', now).current, now, reach)).toBe(0)
+    expect(lentIn(pool, periodSpans('7d', now).current, now, reach)).toBe(8 * HOUR)
     expect(reviewsIn(ledger, periodSpans('24h', now).current)).toEqual([])
     expect(reviewsIn(ledger, periodSpans('7d', now).current)).toMatchObject([{ count: 3 }])
+  })
+})
+
+describe('a week that just ended', () => {
+  it('is no lump in Last 24h: read on the Monday after, its unsplit part sits mid-week', () => {
+    const now = Date.UTC(2026, 10, 2, 6), last = Date.UTC(2026, 9, 26)
+    const pool = { lent: [{ week: last, busyMs: 30 * HOUR }] }
+    expect(lentIn(pool, periodSpans('24h', now).current, now, reach)).toBe(0)
+    expect(lentIn(pool, periodSpans('7d', now).current, now, reach)).toBe(30 * HOUR)
   })
 })
 
