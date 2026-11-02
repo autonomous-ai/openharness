@@ -23,8 +23,14 @@ export const DIGEST_KINDS: ReadonlySet<unknown> = new Set(['work-stalled', 'work
 /** Whether a message to a coordinator waits for the digest: a routine notice, or a `work.status` row saying Done. Needs a human
  *  and Blocked go at once; so does a status row written before rows said their status. */
 export function gatheredNotice(source: unknown): boolean {
+  const row = source as { kind?: unknown } | null | undefined
+  return DIGEST_KINDS.has(row?.kind) || doneRow(source)
+}
+
+/** A `work.status` row saying Done: the one notice that outlives its sender (store.ts releasableNotices). */
+export function doneRow(source: unknown): boolean {
   const row = source as { kind?: unknown; status?: unknown } | null | undefined
-  return DIGEST_KINDS.has(row?.kind) || (row?.kind === 'system' && row.status === 'done')
+  return row?.kind === 'system' && row.status === 'done'
 }
 
 /** Whether the oldest gathered delivery has waited long enough. */
@@ -47,7 +53,8 @@ function taskName(state: SuperTabState, group: Conversation | undefined): string
  *  write a line of its own. [text] is null for a message that could not be read, which its ids still name. */
 export function noticeLine(state: SuperTabState, delivery: Pick<SuperTabDelivery, 'conversationId' | 'messageId'>, text: string | null): string {
   const group = state.conversations.find(c => c.id === delivery.conversationId)
-  const name = taskName(state, group)
+  // A step with no step name goes by its raw title, which may hold a newline (review of #2560).
+  const name = taskName(state, group).replace(/\s+/g, ' ')
   const ids = ` (message ${delivery.messageId} in ${delivery.conversationId})`
   // A status row is its label, a blank line and its result (commands.ts work.status).
   const body = (text ?? '').trim().replace(/\s*\n\s*\n\s*/, ' — ').replace(/\s+/g, ' ')

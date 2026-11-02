@@ -24,7 +24,10 @@ These keep to the design's goals ("nothing lost", no notice held forever):
 4. **A merged update request already stored.** `writeMessages` keeps a stored message of the same id and source, which would lose the
    lines, and fails on a different source, which would stop every poll. An update request whose id is already stored is not merged.
 5. **Gathered rows carry the store's clock.** `createdAt` is set from `this.now()`, the time the release and the backstop measure from.
-6. **Paused Swarm.** Delivery is not paused by a pause, so a digest still goes out: it stands for deliveries that would have gone.
+6. **A Done outlives its sender (review).** Done is how the coordinator hears, once, and its agent may be stopped within the 5 minutes.
+   A sender's removal leaves gathered rows to the digest. A Done whose sender alone fails the checks is named by its label and ids,
+   with no result; a routine notice is cancelled. Past the 30 minutes no host could be handed it, so it ends there.
+7. **Paused Swarm.** Delivery is not paused by a pause, so a digest still goes out: it stands for deliveries that would have gone.
 
 ## Steps (test first)
 

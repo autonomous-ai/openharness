@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
@@ -14,6 +14,7 @@ import { settleStuckDeliveries } from '../src/superTabs/deliverySettle.js'
 import { compactDeliveries } from '../src/superTabs/deliveryCompaction.js'
 import { revokeNativeContexts } from '../src/superTabs/native.js'
 import { stableId, type MessageDraft, type SuperTabState } from '../src/superTabs/model.js'
+import { logger } from '../src/utils/logger.js'
 
 // Ken, 2026-11-02 (docs/plans/2026-11-02-pm-notice-digest-design.md): the server's routine notices to a project's coordinator
 // go in one message at most every 5 minutes; what someone waits on still goes at once. A fresh loopback replica set, created here.
@@ -268,6 +269,36 @@ describe('the coordinator\'s poll releases what was gathered', () => {
     for (const id of ids) expect(`${first!.text}\n${second.text}`.split(`message ${id} `)).toHaveLength(2)
   })
 
+  it('says how many more wait when rows of its page were cancelled', async () => {
+    const f = await swarm()
+    const ids: string[] = []
+    for (let i = 0; i < 60; i++) { ids.push(await f.write({ kind: 'idle' }, f.lead, 'lead', `Notice ${i}.`)); f.clock.now += 1 }
+    for (const id of ids.slice(0, 5)) await db.superTabDelivery.update({ where: { id: stableId(id, f.lead) }, data: { membershipGeneration: 'an earlier agent' } })
+    f.clock.now += DUE
+    await f.poll()
+    const [first] = await digests(f.tab)
+    expect(first!.source).toMatchObject({ count: 45 })
+    expect(first!.text).toContain('And 10 more')
+  })
+
+  it('logs each release with the rows it cancelled, a release of cancels alone too', async () => {
+    const f = await swarm()
+    const gone = await f.write({ kind: 'idle' }, f.lead)
+    await db.superTabDelivery.update({ where: { id: stableId(gone, f.lead) }, data: { membershipGeneration: 'an earlier agent' } })
+    const logged = vi.spyOn(logger, 'info')
+    f.clock.now += DUE
+    await f.poll()
+    expect(logged).toHaveBeenCalledWith('[swarm-deliveries] notice digest', expect.objectContaining({ tabId: f.tab, count: 0, cancelled: 1 }))
+    logged.mockClear()
+    await f.write({ kind: 'idle' }, f.lead)
+    const other = await f.write({ kind: 'idle' }, f.lead)
+    await db.superTabDelivery.update({ where: { id: stableId(other, f.lead) }, data: { authorGeneration: 'an earlier sender' } })
+    f.clock.now += DUE
+    await f.poll()
+    expect(logged).toHaveBeenCalledWith('[swarm-deliveries] notice digest', expect.objectContaining({ tabId: f.tab, count: 1, cancelled: 1 }))
+    logged.mockRestore()
+  })
+
   it('names a message that cannot be read by its id alone, and digests it', async () => {
     const f = await swarm()
     const id = await f.write({ kind: 'idle' }, f.lead)
@@ -445,12 +476,54 @@ describe('a gathered row never outlives its reason', () => {
     expect((await deliveryOf(id, f.worker)).status).toBe('cancelled')
   })
 
-  it('its sender being removed cancels it', async () => {
+  it('its sender being removed cancels a routine notice, at digest time', async () => {
     const f = await swarm()
     await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Moved' })
     const id = await f.write({ kind: 'idle' }, f.lead)
     await f.execute({ type: 'agent.remove', agentId: f.worker })
+    f.clock.now += DUE
+    await f.poll()
     expect((await deliveryOf(id, f.lead)).status).toBe('cancelled')
+    expect(await digests(f.tab)).toEqual([])
+  })
+
+  // Done is how the PM hears, once (project instructions): an agent stopped inside the 5 minutes must not take it along (review of #2560).
+  it('its sender being removed keeps a Done, named by its label and ids, with no result', async () => {
+    const f = await swarm()
+    await f.status('done', 'PR 2515 and a private result')
+    const done = await statusRow(f.tab, f.group, 'Done')
+    await f.execute({ type: 'agent.remove', agentId: f.worker })
+    expect((await deliveryOf(done.id, f.lead)).status).toBe('gathered')
+    // The settle pass, which runs inside those 5 minutes too, leaves it for the digest.
+    await settleStuckDeliveries(db, f.timed, f.clock.now)
+    expect((await deliveryOf(done.id, f.lead)).status).toBe('gathered')
+    f.clock.now += DUE
+    await f.poll()
+    expect((await deliveryOf(done.id, f.lead)).status).toBe('digested')
+    const [digest] = await digests(f.tab)
+    expect(digest!.text).toContain(`"Ship the parser": Done (message ${done.id} in ${f.group})`)
+    expect(digest!.text).not.toContain('private result')
+  })
+
+  it('a Done whose recipient no longer holds is cancelled, whatever its sender', async () => {
+    const f = await swarm()
+    await f.status('done', 'PR 1')
+    const done = await statusRow(f.tab, f.group, 'Done')
+    await db.superTabDelivery.update({ where: { id: stableId(done.id, f.lead) }, data: { membershipGeneration: 'an earlier agent', authorGeneration: 'an earlier sender' } })
+    f.clock.now += DUE
+    await f.poll()
+    expect((await deliveryOf(done.id, f.lead)).status).toBe('cancelled')
+    expect(await digests(f.tab)).toEqual([])
+  })
+
+  it('a Done past the 30 minutes with its sender gone ends there: no host could be handed it', async () => {
+    const f = await swarm()
+    await f.status('done', 'PR 1')
+    const done = await statusRow(f.tab, f.group, 'Done')
+    await f.execute({ type: 'agent.remove', agentId: f.worker })
+    f.clock.now += 30 * MINUTE + 1_000
+    await settleStuckDeliveries(db, f.timed, f.clock.now)
+    expect((await deliveryOf(done.id, f.lead)).status).toBe('cancelled')
   })
 
   it('a revoked native context cancels it', async () => {
