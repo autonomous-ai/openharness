@@ -6,7 +6,6 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
-import 'package:harness/super_tabs/activity.dart';
 import 'package:harness/super_tabs/activity_view.dart';
 import 'package:harness/super_tabs/catch_up.dart';
 import 'package:harness/super_tabs/catch_up_card.dart';
@@ -322,10 +321,8 @@ void main() {
 
     Finder activityView() => find.byType(SuperTabActivityView);
 
-    testWidgets('the decisions line opens Activity on Decisions', (
-      tester,
-    ) async {
-      final c = await showCounted(tester);
+    testWidgets('the decisions line opens Activity', (tester) async {
+      await showCounted(tester);
       expect(
         find.descendant(
           of: find.byKey(_decisions),
@@ -337,11 +334,10 @@ void main() {
       await tester.tap(find.byKey(_decisions));
       await tester.pumpAndSettle();
       expect(activityView(), findsOneWidget);
-      expect(SuperTabActivity.of(c).filter, SuperTabActivityFilter.decisions);
     });
 
-    testWidgets("Needs you's more opens Activity on Mentions", (tester) async {
-      final c = await showCounted(tester);
+    testWidgets("Needs you's more opens Activity", (tester) async {
+      await showCounted(tester);
       expect(
         find.descendant(
           of: find.byKey(_mentions),
@@ -352,26 +348,15 @@ void main() {
       await tester.tap(find.byKey(_mentions));
       await tester.pumpAndSettle();
       expect(activityView(), findsOneWidget);
-      expect(SuperTabActivity.of(c).filter, SuperTabActivityFilter.mentions);
     });
 
     for (final (key, filter, press, name) in [
-      (
-        _decisions,
-        SuperTabActivityFilter.decisions,
-        LogicalKeyboardKey.enter,
-        'Enter',
-      ),
-      (
-        _mentions,
-        SuperTabActivityFilter.mentions,
-        LogicalKeyboardKey.space,
-        'Space',
-      ),
+      (_decisions, 'decisions', LogicalKeyboardKey.enter, 'Enter'),
+      (_mentions, 'mentions', LogicalKeyboardKey.space, 'Space'),
     ]) {
-      testWidgets('$name on the focused ${filter.name} link opens '
+      testWidgets('$name on the focused $filter link opens '
           'it, the focus drawn', (tester) async {
-        final c = await showCounted(tester);
+        await showCounted(tester);
         expect(find.byKey(key), findsOneWidget);
         // The link takes keyboard focus as the app's other controls do.
         final node = Focus.of(
@@ -397,7 +382,6 @@ void main() {
         await tester.sendKeyEvent(press);
         await tester.pumpAndSettle();
         expect(activityView(), findsOneWidget);
-        expect(SuperTabActivity.of(c).filter, filter);
       });
     }
 

@@ -1,8 +1,6 @@
 import 'package:clock/clock.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/activity.dart';
-import 'package:harness/super_tabs/controller.dart';
-import 'package:harness/super_tabs/model.dart';
 
 import 'support/super_tab_fixture.dart';
 

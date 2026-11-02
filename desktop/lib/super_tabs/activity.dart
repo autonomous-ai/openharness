@@ -62,7 +62,6 @@ class SuperTabActivity extends ChangeNotifier {
     controller.onDispose(dispose);
     mentions.addListener(notifyListeners);
     decisions.addListener(notifyListeners);
-    attention.addListener(notifyListeners);
   }
 
   @visibleForTesting
@@ -242,7 +241,6 @@ class SuperTabActivity extends ChangeNotifier {
     controller.removeListener(notifyListeners);
     mentions.removeListener(notifyListeners);
     decisions.removeListener(notifyListeners);
-    attention.removeListener(notifyListeners);
     super.dispose();
   }
 }

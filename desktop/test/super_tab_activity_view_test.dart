@@ -4,10 +4,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/activity.dart';
 import 'package:harness/super_tabs/activity_view.dart';
-import 'package:harness/super_tabs/controller.dart';
 
 import 'super_tab_activity_lists_test.dart'
-    show finish, load, swarm, unreadThread, wait;
+    show finish, load, swarm, unreadThread;
 import 'support/super_tab_fixture.dart';
 
 final _now = DateTime(2026, 11, 2, 20, 30);

@@ -175,7 +175,8 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
-    listenable: _activity,
+    // The threads are read only while this view shows them.
+    listenable: Listenable.merge([_activity, _activity.attention]),
     builder: (context, _) {
       grid.AppTheme.watch(context);
       final a = _activity;

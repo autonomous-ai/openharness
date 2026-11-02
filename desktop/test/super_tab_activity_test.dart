@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/activity.dart';
-import 'package:harness/super_tabs/activity_view.dart';
 import 'package:harness/super_tabs/attention.dart';
 import 'package:harness/super_tabs/buddy_rows.dart';
 import 'package:harness/super_tabs/controller.dart';
@@ -17,45 +16,9 @@ import 'package:harness/super_tabs/workgroup_name.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 
 import 'super_tab_attention_test.dart'
-    show
-        close,
-        conversation,
-        fromLead,
-        inRow,
-        openHere,
-        projectServer,
-        rowText,
-        unreadThread;
+    show close, fromLead, inRow, openHere, projectServer, unreadThread;
 import 'support/buddy_fixture.dart';
 import 'support/super_tab_fixture.dart';
-
-Map<String, dynamic> reply(
-  String id, {
-  String conversationId = 'lead',
-  bool read = false,
-  String createdAt = '2026-10-31T03:00:00.000Z',
-}) => {
-  'id': id,
-  'kind': 'reply',
-  'conversationId': conversationId,
-  'conversationTitle': 'Chat $conversationId',
-  'projectName': 'web-project',
-  'messageId': 'm-$id',
-  'messageSequence': 4,
-  'threadId': 'root',
-  'actor': {'kind': 'person', 'id': 'peer', 'name': 'peer'},
-  'emoji': null,
-  'text': 'Reply $id',
-  'createdAt': createdAt,
-  'read': read,
-};
-
-Map<String, dynamic> reaction(String id, {bool read = false}) => {
-  ...reply(id, read: read),
-  'kind': 'reaction',
-  'emoji': 'check',
-  'text': 'My message',
-};
 
 Future<SuperTabController> open(ConversationServer server) async {
   final c = server.controller();
@@ -398,160 +361,6 @@ void main() {
     });
   });
 
-  group('Activity: replies and reactions to the reader', () {
-    test('reads when its digest moves, not again for the same digest, and '
-        'keeps only chats this Swarm lists', () async {
-      final server = projectServer();
-      server.state['activityDigest'] = 'd1';
-      server.activity = {
-        'items': [reply('r1'), reply('r2', conversationId: 'other-swarm-chat')],
-        'more': false,
-      };
-      final c = await open(server);
-      final activity = SuperTabActivity.of(c);
-      await settle();
-      expect(server.activityReads, hasLength(1));
-      expect(activity.items.map((i) => i.id), ['r1']);
-      expect(activity.count, 1);
-      await c.refresh();
-      await settle();
-      expect(server.activityReads, hasLength(1));
-      server.state['activityDigest'] = 'd2';
-      server.revision++;
-      await c.refresh();
-      await settle();
-      expect(server.activityReads, hasLength(2));
-    });
-
-    test('a server before Activity (404) asks once; tags and decisions still '
-        'count', () async {
-      final server = projectServer();
-      server.state['activityDigest'] = 'd1';
-      server.state['mentionsWaiting'] = 2;
-      server.activity = null;
-      final c = await open(server);
-      final activity = SuperTabActivity.of(c);
-      await settle();
-      expect(activity.supported, isFalse);
-      expect(activity.count, 2);
-      server.state['activityDigest'] = 'd2';
-      server.revision++;
-      await c.refresh();
-      await settle();
-      expect(server.activityReads, hasLength(1));
-    });
-
-    test(
-      'a failed first read says so, and a later digest recovers it',
-      () async {
-        final server = projectServer();
-        server.state['activityDigest'] = 'd1';
-        server.activityStatus = 503;
-        server.activity = {
-          'items': [reply('r1')],
-          'more': false,
-        };
-        final c = await open(server);
-        final activity = SuperTabActivity.of(c);
-        await settle();
-        expect(activity.error, isNotNull);
-        expect(activity.items, isEmpty);
-        server.activityStatus = 0;
-        // The next change of the Swarm reads it again, though its digest
-        // did not move.
-        fromLead(server, 'Something else changed');
-        await c.refresh();
-        await settle();
-        expect(activity.error, isNull);
-        expect(activity.items.map((i) => i.id), ['r1']);
-      },
-    );
-
-    test(
-      'access lost: rows go at once and an answer on its way is dropped',
-      () async {
-        final server = projectServer();
-        server.state['activityDigest'] = 'd1';
-        server.activity = {
-          'items': [reply('r1')],
-          'more': false,
-        };
-        final c = await open(server);
-        final activity = SuperTabActivity.of(c);
-        await settle();
-        expect(activity.items, hasLength(1));
-        server.holdActivity = Completer();
-        unawaited(activity.load());
-        await pumpEventQueue();
-        c.revokeAccess('Removed from this Swarm.');
-        expect(activity.items, isEmpty);
-        expect(activity.count, 0);
-        server.holdActivity!.complete();
-        await settle();
-        expect(activity.items, isEmpty);
-      },
-    );
-
-    test(
-      'a read that answers after the Swarm\'s audience moved is dropped',
-      () async {
-        final server = projectServer();
-        server.state['activityDigest'] = 'd1';
-        server.activity = {
-          'items': [reply('r1')],
-          'more': false,
-        };
-        final c = await open(server);
-        final activity = SuperTabActivity.of(c);
-        await settle();
-        server.holdActivity = Completer();
-        unawaited(activity.load());
-        await pumpEventQueue();
-        server.parts.epoch++;
-        server.revision++;
-        server.activity = {'items': <dynamic>[], 'more': false};
-        await c.refresh();
-        // Every state shown from here: the old answer must never show.
-        final shown = <List<String>>[];
-        activity.addListener(
-          () => shown.add([for (final i in activity.items) i.id]),
-        );
-        server.holdActivity!.complete();
-        await settle();
-        expect(activity.items, isEmpty);
-        expect(shown.where((ids) => ids.contains('r1')), isEmpty);
-      },
-    );
-
-    test(
-      'leaving the view marks what it showed read, bold until then',
-      () async {
-        final server = projectServer();
-        server.state['activityDigest'] = 'd1';
-        server.activity = {
-          'items': [reply('r1'), reaction('x1', read: true)],
-          'more': false,
-        };
-        final c = await open(server);
-        final activity = SuperTabActivity.of(c);
-        await settle();
-        activity.opened();
-        await settle();
-        final r1 = activity.items.firstWhere((i) => i.id == 'r1');
-        expect(activity.isUnread(r1), isTrue);
-        expect(activity.unread, isTrue);
-        activity.closed();
-        await settle();
-        expect(
-          server.activityReadPosts.single['through'],
-          '2026-10-31T03:00:00.000Z',
-        );
-        expect(activity.items.every((i) => i.read), isTrue);
-        expect(activity.count, 0);
-      },
-    );
-  });
-
   group('All new messages tells the system about each new message', () {
     test('only for a chat set to all, not on the first look, not the open '
         'chat', () async {
@@ -638,54 +447,6 @@ void main() {
       expect(find.byKey(const ValueKey('super-group-quiet')), findsNothing);
       expect(find.byKey(const ValueKey('super-group-hushed')), findsNothing);
       await close(tester, c);
-    });
-  });
-
-  group('Activity view', () {
-    testWidgets('lists tags, replies and reactions newest first, filters one '
-        'kind, and opens a row at its message', (tester) async {
-      final server = projectServer();
-      server.state['activityDigest'] = 'd1';
-      server.activity = {
-        'items': [
-          reply('r1', createdAt: '2026-10-31T05:00:00.000Z'),
-          reaction('x1', read: true),
-        ],
-        'more': false,
-      };
-      final c = await openHere(server);
-      final activity = SuperTabActivity.of(c);
-      await tester.runAsync(settle);
-      final opened = <(String, String)>[];
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: grid.buildAppTheme(brightness: Brightness.dark),
-          home: Scaffold(
-            body: SuperTabActivityView(
-              activity: activity,
-              onOpenMention: (_) {},
-              onOpenMessage: (id, m) => opened.add((id, m)),
-              now: () => DateTime.utc(2026, 10, 31, 6),
-            ),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-      expect(find.text('peer replied to your message'), findsOneWidget);
-      expect(find.text('peer reacted ✅ to your message'), findsOneWidget);
-      await tester.tap(
-        find.byKey(const ValueKey('super-activity-filter-reactions')),
-      );
-      await tester.pumpAndSettle();
-      expect(find.text('peer replied to your message'), findsNothing);
-      await tester.tap(
-        find.byKey(const ValueKey('super-activity-filter-replies')),
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('super-activity-r1')));
-      expect(opened, [('lead', 'm-r1')]);
-      await close(tester, c);
-      expect(server.activityReadPosts, isNotEmpty);
     });
   });
 

@@ -1,7 +1,5 @@
 import 'dart:async';
-import 'dart:math';
 
-import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart';
 
 import 'controller.dart';
@@ -50,33 +48,11 @@ class SuperTabFollowedThread {
 
 /// What needs the reader in one Swarm, the way Slack shows it: which
 /// conversations hold a tag of them (the red number), and which threads they
-/// follow have replies they have not read (the Threads row and view). Tags and
+/// follow have replies they have not read (Activity's New replies). Tags and
 /// decisions come from [SuperTabMentions] and [SuperTabDecisions]; threads
 /// from the server's followed-threads read, read again when the Swarm moves,
-/// at most every [quietGap] (every [openGap] while the Threads view is open).
+/// at most every [quietGap] (every [openGap] while Activity is open).
 /// One per controller.
-/// One of the reader's replies on a Threads card ([SuperTabAttention.ownReplies]).
-class SuperTabOwnReply {
-  const SuperTabOwnReply(this.text, this.at, {this.outgoing});
-  final String text;
-
-  /// What its row says: a reply of files alone has no text of its own.
-  String get shownText => text.isEmpty ? 'Files' : text;
-
-  /// When it was seen on its way this visit; null for one that failed earlier.
-  final DateTime? at;
-
-  /// Where it stands while the transcript does not hold it; null once it does.
-  final SuperTabOutgoing? outgoing;
-
-  /// On its way, nothing back from the server yet.
-  bool get sending => outgoing?.state == SuperTabOutgoingState.sending;
-
-  /// The server took it.
-  bool get sent =>
-      outgoing == null || outgoing!.state == SuperTabOutgoingState.confirmed;
-}
-
 class SuperTabAttention extends ChangeNotifier {
   SuperTabAttention._(this.controller, {DateTime Function()? now})
     : mentions = SuperTabMentions.of(controller),
@@ -124,25 +100,10 @@ class SuperTabAttention extends ChangeNotifier {
   /// The server stopped short of everything (its bounds).
   bool more = false;
 
-  /// Threads shown as new in this visit of the Threads view: they stay new
+  /// Threads shown as new in this visit of Activity: they stay new
   /// until the view is left, though opening them marked them read.
   final Set<String> _newThisVisit = {};
   bool _open = false;
-
-  /// New replies under each unread thread's root, read when the view showed
-  /// it; by [SuperTabFollowedThread.key].
-  final Map<String, List<SuperTabMessage>> newReplies = {};
-  final Set<String> _readingReplies = {};
-
-  /// The replies seen on their way from this view this visit, by thread and
-  /// then by receipt: what [ownReplies] still shows, as sent, once the
-  /// transcript holds them and they leave [SuperTabController.outgoing].
-  final Map<String, Map<String, ({String text, DateTime at})>> _ownThisVisit =
-      {};
-
-  /// Threads whose replies failed to read this visit: not asked again until
-  /// the next one, so a failing read is not repeated on every redraw.
-  final Set<String> _repliesFailed = {};
 
   /// Threads whose Follow is being sent.
   final Set<String> following = {};
@@ -198,11 +159,11 @@ class SuperTabAttention extends ChangeNotifier {
   /// answered, past any read mark.
   static const _unknown = 1 << 52;
 
-  /// The Threads row's number: tags of the reader inside threads they have
+  /// The number of tags of the reader inside threads they have
   /// not read past, in chats this Swarm still lists for them. A muted chat's
   /// threads never count, as its main stream does not ([mentionsIn]).
   ///
-  /// Only threads the Threads view lists count ([unread] and [read]): the
+  /// Only threads Activity lists count ([unread] and [read]): the
   /// number promises something to open there. A tag in a thread the server
   /// left out (older than its bounds, unfollowed, a root the reader cannot
   /// read) stays in Activity, and counts nothing here. None until the list
@@ -274,9 +235,6 @@ class SuperTabAttention extends ChangeNotifier {
     _trailing = null;
     _newThisVisit.clear();
     _counts.clear();
-    newReplies.clear();
-    _ownThisVisit.clear();
-    _repliesFailed.clear();
     if (!_disposed) notifyListeners();
   }
 
@@ -287,17 +245,12 @@ class SuperTabAttention extends ChangeNotifier {
     more = false;
     _newThisVisit.clear();
     _counts.clear();
-    newReplies.clear();
-    _ownThisVisit.clear();
-    _readingReplies.clear();
-    _repliesFailed.clear();
     _trailing?.cancel();
     _trailing = null;
   }
 
   void _changed() {
     if (_disposed) return;
-    if (_open) _noteOwnReplies();
     if (controller.accessRevoked) {
       if (loaded || unread.isNotEmpty || read.isNotEmpty) {
         _clear();
@@ -332,7 +285,7 @@ class SuperTabAttention extends ChangeNotifier {
       if (_lastRead case final last?) last.add(_open ? openGap : quietGap),
     ].fold<DateTime?>(null, (a, b) => a == null || b.isAfter(a) ? b : a);
     if (until != null && now.isBefore(until)) {
-      // Only while something shows it (the sidebar, the Threads view).
+      // Only while something shows it (the sidebar, Activity).
       if (!hasListeners) return;
       _trailing ??= Timer(until.difference(now), () {
         _trailing = null;
@@ -423,126 +376,6 @@ class SuperTabAttention extends ChangeNotifier {
       error = 'Could not load threads.';
       notifyListeners();
     }
-  }
-
-  /// Reads the replies of [thread] the reader has not read, to show under its
-  /// root, then marks the thread read: opening the view reads what it shows.
-  Future<void> showReplies(SuperTabFollowedThread thread) async {
-    if (_disposed ||
-        controller.accessRevoked ||
-        newReplies.containsKey(thread.key) ||
-        _repliesFailed.contains(thread.key) ||
-        !_readingReplies.add(thread.key)) {
-      return;
-    }
-    final epoch = controller.visibilityEpoch;
-    final seen = controller.threadReadMark(thread.rootId);
-    try {
-      final answer = await controller.request(
-        'GET',
-        '$_path/conversations/${Uri.encodeComponent(thread.conversationId)}'
-            '/messages?thread=${Uri.encodeQueryComponent(thread.rootId)}',
-      );
-      if (_disposed ||
-          controller.accessRevoked ||
-          controller.visibilityEpoch != epoch ||
-          !_readingReplies.contains(thread.key)) {
-        return;
-      }
-      final replies = [
-        for (final row in answer['messages'] as List? ?? const [])
-          if (SuperTabMessage.fromJson(superTabMap(row)) case final m
-              when m.conversationId == thread.conversationId &&
-                  m.thread == thread.rootId &&
-                  m.threadReply &&
-                  m.sequence > seen)
-            m,
-      ]..sort(superTabMessageOrder);
-      newReplies[thread.key] = replies.length > 5
-          ? replies.sublist(replies.length - 5)
-          : replies;
-      final through = max(
-        thread.lastReplySequence,
-        replies.lastOrNull?.sequence ?? 0,
-      );
-      controller.markThreadRead(thread.conversationId, thread.rootId, through);
-      notifyListeners();
-    } catch (_) {
-      // The thread stays unread and its root shows; the next visit tries again.
-      _repliesFailed.add(thread.key);
-    } finally {
-      _readingReplies.remove(thread.key);
-    }
-  }
-
-  /// Whether [message] is a reply to [thread].
-  static bool _repliesTo(
-    SuperTabOutgoing message,
-    SuperTabFollowedThread thread,
-  ) => message.replyTo == thread.rootId || message.thread == thread.rootId;
-
-  /// Whether [message] failed: refused, or sent with no answer. Never called
-  /// sent; a Retry brings it back on its way.
-  static bool _failed(SuperTabOutgoing message) =>
-      message.state == SuperTabOutgoingState.refused ||
-      message.state == SuperTabOutgoingState.unconfirmed;
-
-  /// Notes the replies on their way from each thread listed, on every change
-  /// of the controller and not only when a frame draws: a send can go from on
-  /// its way to read back between two frames.
-  void _noteOwnReplies() {
-    final threads = [...unread, ...read];
-    for (final conversationId in {for (final t in threads) t.conversationId}) {
-      final rows = controller.outgoing(conversationId);
-      if (rows.isEmpty) continue;
-      for (final thread in threads) {
-        if (thread.conversationId != conversationId) continue;
-        for (final message in rows) {
-          final operationId = message.operationId;
-          if (operationId == null || !_repliesTo(message, thread)) continue;
-          final kept = _ownThisVisit[thread.key] ??= {};
-          if (_failed(message)) {
-            kept.remove(operationId);
-          } else if (message.state == SuperTabOutgoingState.sending) {
-            // First seen on its way only: a sent reply stays in that list
-            // until its chat's transcript loads, and one from an earlier visit
-            // must not come back as new (review of #2555).
-            kept.putIfAbsent(
-              operationId,
-              () => (text: message.text, at: clock.now()),
-            );
-          }
-        }
-      }
-    }
-  }
-
-  /// The reader's own replies to [thread] that its card shows beside
-  /// [newReplies], oldest first: on their way, failed, or sent during this
-  /// visit (Scholes, 2026-11-02: a reply showed only after an agent answered,
-  /// so it looked unsent). One [newReplies] already holds is not shown twice.
-  List<SuperTabOwnReply> ownReplies(SuperTabFollowedThread thread) {
-    final rows = [
-      for (final message in controller.outgoing(thread.conversationId))
-        if (_repliesTo(message, thread)) message,
-    ];
-    final live = {for (final m in rows) ?m.operationId: m};
-    final read = {for (final m in newReplies[thread.key] ?? const []) m.id};
-    return [
-      for (final MapEntry(key: operationId, :value)
-          in (_ownThisVisit[thread.key] ?? const {}).entries)
-        if (!read.contains(
-          superTabMessageId(
-            tabId: controller.tabId,
-            accountId: controller.accountId,
-            operationId: operationId,
-          ),
-        ))
-          SuperTabOwnReply(value.text, value.at, outgoing: live[operationId]),
-      for (final message in rows)
-        if (_failed(message))
-          SuperTabOwnReply(message.text, null, outgoing: message),
-    ];
   }
 
   /// Follows (true) or unfollows (false) [thread] on every device of the
