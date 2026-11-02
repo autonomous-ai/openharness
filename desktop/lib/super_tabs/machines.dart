@@ -2386,7 +2386,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         : null;
     if (widget.manage) {
       return ListView(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+        padding: const EdgeInsets.symmetric(
+          horizontal: grid.AppDesktop.groupGap,
+          vertical: grid.AppDesktop.controlGap,
+        ),
         children: [
           // Only a Swarm that can't be read is news, as under the old heading.
           if (c.backendUnreachable)
@@ -2401,7 +2404,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             ),
           if (_ids.isEmpty)
             Padding(
-              padding: const EdgeInsets.all(8),
+              padding: const EdgeInsets.all(grid.AppDesktop.controlGap),
               child: Text(
                 "Add a machine for this Swarm's agents to use.",
                 style: DesktopChrome.metadata(),
@@ -2828,7 +2831,9 @@ class _MachineLine extends StatelessWidget {
           if (words) ...[
             if (owner != null)
               Padding(
-                padding: const EdgeInsets.only(left: 12),
+                padding: const EdgeInsets.only(
+                  left: grid.AppDesktop.controlGap,
+                ),
                 child: Text(
                   owner.username,
                   maxLines: 1,
@@ -2837,7 +2842,9 @@ class _MachineLine extends StatelessWidget {
                 ),
               ),
             Padding(
-              padding: const EdgeInsets.only(left: 12, right: 8),
+              padding: const EdgeInsets.symmetric(
+                horizontal: grid.AppDesktop.controlGap,
+              ),
               child: Text(switch (view.status) {
                 SuperTabMachineStatus.live => 'online',
                 final status => superTabMachineStateLabel(status).toLowerCase(),

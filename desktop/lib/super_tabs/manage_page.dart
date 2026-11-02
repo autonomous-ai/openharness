@@ -77,7 +77,10 @@ class SuperTabManageTabs extends StatelessWidget {
     }
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
+      padding: const EdgeInsets.symmetric(
+        horizontal: grid.AppDesktop.groupGap,
+        vertical: grid.AppDesktop.controlGap,
+      ),
       child: Wrap(
         children: [
           tab(SuperTabManageTab.machines, 'Machines'),
@@ -191,7 +194,10 @@ class _ManageModels extends StatelessWidget {
         ?.projectFor(controller.selectedId)
         ?.id;
     return ListView(
-      padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+      padding: const EdgeInsets.symmetric(
+        horizontal: grid.AppDesktop.groupGap,
+        vertical: grid.AppDesktop.controlGap,
+      ),
       children: [
         if (board case final board?)
           LeaderboardModelsSection(
@@ -325,7 +331,10 @@ class _ManageSwarmState extends State<_ManageSwarm> {
     final deleted = _deleted;
     final blocked = _leaveBlocked;
     return ListView(
-      padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+      padding: const EdgeInsets.symmetric(
+        horizontal: grid.AppDesktop.groupGap,
+        vertical: grid.AppDesktop.controlGap,
+      ),
       children: [
         _fact('Name', _value(snapshot.name)),
         if (owner != null) _fact('Owner', _value(owner.username)),
@@ -333,7 +342,7 @@ class _ManageSwarmState extends State<_ManageSwarm> {
           'People',
           _value('${snapshot.people.length}'),
           action: Padding(
-            padding: const EdgeInsets.only(left: 12),
+            padding: const EdgeInsets.only(left: grid.AppDesktop.controlGap),
             child: TextButton(
               key: const ValueKey('super-manage-people'),
               onPressed: () => showSuperTabSharing(context, c),
@@ -374,7 +383,9 @@ class _ManageSwarmState extends State<_ManageSwarm> {
                           : 'Deleted · ${restoreTimeLeft(swarm.purgeAt, DateTime.now())}',
                     ),
                     action: Padding(
-                      padding: const EdgeInsets.only(left: 12),
+                      padding: const EdgeInsets.only(
+                        left: grid.AppDesktop.controlGap,
+                      ),
                       child: TextButton(
                         key: ValueKey('super-manage-restore-${swarm.id}'),
                         onPressed: deleted.restoring(swarm.id)

@@ -272,7 +272,10 @@ void main() {
             if (c.unreadShown(c.snapshot!.conversation(id)!)) id,
         ];
         expect(order, isNot(contains('roster')));
+        // A click on the open project folds it (no chevron): open it again.
         await tester.tap(find.byKey(const ValueKey('super-group-lead')));
+        await tester.pumpAndSettle();
+        c.toggleProject('lead');
         await tester.pumpAndSettle();
         await _keys(tester, [
           LogicalKeyboardKey.altLeft,

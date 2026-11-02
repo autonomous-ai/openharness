@@ -329,7 +329,10 @@ class ProjectSidebar extends StatelessWidget {
                             (project != null &&
                                     !_paneCovered &&
                                     controller.selectedId == group.id
-                                ? () => controller.toggleProject(project.id)
+                                ? () {
+                                    controller.toggleProject(project.id);
+                                    onSelect(group.id);
+                                  }
                                 : () => onSelect(group.id)),
                   hoverColor: Colors.transparent,
                   focusColor: grid.AppSurface.hoverFill,
@@ -987,7 +990,9 @@ class ProjectSidebar extends StatelessWidget {
           // At the foot, however long the list (Quiet Swarm, screen 1).
           if (onManage != null)
             Padding(
-              padding: const EdgeInsets.fromLTRB(8, 0, 8, 6),
+              padding: const EdgeInsets.symmetric(
+                horizontal: grid.AppDesktop.controlGap,
+              ),
               child: _navigationRow(
                 key: 'super-manage',
                 label: 'Manage',
