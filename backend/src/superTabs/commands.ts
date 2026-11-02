@@ -169,7 +169,9 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('project.role.remove'), projectId: id, roleId }).strict(),
   z.object({ type: z.literal('project.roles.reset'), projectId: id, roles: roleSet }).strict(),
   // `audience`: a private conversation that only these people and the project's Lead read (projects.ts canReadGroup).
-  z.object({ type: z.literal('conversation.create'), projectId: id.optional(), title, brief: z.string().trim().max(8000).optional(), task: task.optional(), reviewOf: id.optional(), checks: z.array(check).max(40),
+  z.object({ type: z.literal('conversation.create'), projectId: id.optional(), title, brief: z.string().trim().max(8000).optional(), task: task.optional(), reviewOf: id.optional(),
+    // A step of the task `reviewOf` names (task steps design): its name as the instructions give it, free text in any language.
+    step: z.string().trim().min(1).max(40).optional(), checks: z.array(check).max(40),
     audience: z.object({ personIds: z.array(id).max(200) }).strict().optional(), requesterId: id.optional(),
     // The Buddy's proposal message in the project chat the group comes from (Lead, 2026-10-29): the Buddy earns when it ships.
     proposalMessageId: id.optional() }).strict()
@@ -1690,6 +1692,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       requirable(command.task)
       if (command.audience) pmChatClosed()
       const leadId = conversation(state, project.leadConversationId).leadId
+      if (command.step && !command.reviewOf) fail('INVALID_REQUEST', 'A step belongs to a task: name the task with reviewOf.', 400)
       if (command.reviewOf) {
         // A task links to another task of its own project, a linked one included, and to nothing else: the project chat, a
         // Buddy chat, a private chat, the Leads conversation and other projects' tasks read as missing, archived or not, so the
@@ -1698,6 +1701,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         if (!reviewed || isLeads(reviewed) || reviewed.kind || reviewed.audience || reviewed.id === project.leadConversationId
           || groupProject(state, reviewed).id !== project.id) fail('NOT_FOUND', 'This conversation is unavailable.', 404)
         open(state, reviewed.id)
+        // One level: a step's own work is a task's step, never a task with steps of its own (task steps design).
+        if (command.step && reviewed.step) fail('STEP_OF_STEP', 'A step belongs to a task, not to another step.', 400)
       }
       // Who asked: the person named, else the one a Buddy's proposal was sent for, else a person opening it themselves.
       const proposal = command.proposalMessageId ? proposalOf(state, project, context.proposal) : undefined
@@ -1708,9 +1713,15 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // The agent that opens a task is in it, so an Engineer that opens its own review can post there and pass its checks.
       const creator = actor.kind === 'agent' && actor.agentId !== leadId ? [actor.agentId] : []
       for (const id of creator) teamJoin(project, id)
+      // A step's opener is in its task too: the task's chat is where the step's work is talked over (task steps design).
+      if (command.step && command.reviewOf) {
+        const owning = conversation(state, command.reviewOf)
+        for (const id of creator) if (!owning.agentIds.includes(id)) owning.agentIds.push(id)
+      }
       state.conversations.push({ id: operationId, ...(state.projects ? { projectId: project.id } : {}),
         number, title: command.title, leadId, agentIds: [...leadId ? [leadId] : [], ...creator],
         archived: false, brief, ...(command.task ? { task: command.task } : {}), ...(command.reviewOf ? { reviewOf: command.reviewOf } : {}),
+        ...(command.step ? { step: command.step } : {}),
         assignment: null, lastMessageSequence: 0,
         checks: storedChecks(command.checks, operationId),
       })

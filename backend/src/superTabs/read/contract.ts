@@ -128,6 +128,8 @@ interface ReadMeta {
 export interface FirstLoad extends ReadMeta {
   tabId: string
   githubApp?: true
+  /** This backend opens a task's steps (`conversation.create` with `step`, task steps design); absent on an older one. */
+  steps?: true
   head: LivePart<HeadView>
   members: LivePart<MemberView>[]
   agents: LivePart<AgentView>[]
