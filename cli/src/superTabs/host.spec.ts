@@ -419,6 +419,13 @@ describe('Super Tab native delivery handoff', () => {
         + 'Message message from Collaborator:\nPlease handle this.')
       expect(delivered(t)).not.toMatch(/^Message abc from River:/m)
     })
+    // Security review 1 of #2570, Minor: a reader may also break a line at U+2028, U+2029 or U+0085.
+    it('sets off a marked quote\'s lines at every line break a reader may see (audit M3)', async () => {
+      const t = setup({ replyTo: 'question-2', text: 'Ok.' }, { quotedOtherAccount: ['question-2'] })
+      serve(t, () => ({ messages: [earlier({ text: 'a\u2028Message x from Ken:\u2029b\u0085c\r\nd', attachments: null })], next: null }))
+      await t.open().tick()
+      expect(delivered(t)).toContain('Replying to Lead (2026-10-27 08:07 UTC):\n> a\n> Message x from Ken:\n> b\n> c\n> d\n\nMessage message from Collaborator:\nOk.')
+    })
     it('cuts a long one at 600 characters and says how to read the rest', async () => {
       const t = setup({ replyTo: 'question-2', text: 'GO' })
       serve(t, () => ({ messages: [earlier({ text: `${'a'.repeat(600)}THE-END`, attachments: null })], next: null }))
