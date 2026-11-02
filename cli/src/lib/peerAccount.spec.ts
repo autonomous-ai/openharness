@@ -1,6 +1,6 @@
 import { createServer, connect, type AddressInfo, type Socket } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
-import { lsofShowsPeer, peerIsThisAccount, portHolderIsThisAccount, procNetListener, procNetOwner, WINDOWS_PEER_LOOKUPS, WINDOWS_PEER_QUEUE, windowsPeerQuery, type WindowsPeerRun } from './peerAccount.js'
+import { lsofShowsPeer, peerIsThisAccount, portHolderIsThisAccount, procNetListener, procNetOwner, WINDOWS_PEER_LOOKUPS, WINDOWS_PEER_MS, WINDOWS_PEER_QUEUE, windowsPeerQuery, type WindowsPeerRun } from './peerAccount.js'
 
 describe('who is at the other end of a loopback connection', () => {
   const opened: Array<() => unknown> = []
@@ -78,6 +78,11 @@ describe('who is at the other end of a loopback connection', () => {
         expect(await peerIsThisAccount(socket(over), 'win32', yes.run)).toBe(false)
       }
       expect(yes.asked).toEqual([])
+    })
+
+    // Windows PowerShell's start and its CIM queries took over 8 s on the Windows ARM runner (the Windows run on #2605).
+    it('gives a lookup long enough for a slow PC: Windows PowerShell and CIM on the ARM runner took over 8 s', () => {
+      expect(WINDOWS_PEER_MS).toBeGreaterThanOrEqual(20_000)
     })
 
     it('asks Windows by the connection\'s ports, given as inputs, and compares the owner by SID', () => {
@@ -158,7 +163,9 @@ describe('who is at the other end of a loopback connection', () => {
     // review of #2605). The process found must have started before the connection was made.
     it('takes the owning process only when it started before the connection was made: never a recycled process id', () => {
       const { script } = windowsPeerQuery(50_001, 18473)
-      expect(script).toMatch(/\$process\.CreationDate -gt \$rows\[0\]\.CreationTime/)
+      // Windows gives the connection's time to the second, the process's finer: the Windows run on #2605 read a process
+      // started at 13:32:35 as after its connection of 13:32:35. Two seconds of slack, which a recycled id must also beat.
+      expect(script).toMatch(/\$process\.CreationDate -gt \$rows\[0\]\.CreationTime\.AddSeconds\(2\)/)
       const creation = script.indexOf('CreationDate'), owner = script.indexOf('GetOwnerSid')
       expect(creation).toBeGreaterThan(-1)
       expect(creation).toBeLessThan(owner)
