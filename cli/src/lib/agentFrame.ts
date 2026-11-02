@@ -86,6 +86,8 @@ export type AgentFrame = {
   selectedModel: string | null
   grid: GridFrameBlock | null
   codexHome: string | null
+  /** The Claude profile folder (CLAUDE_CONFIG_DIR) this agent launched against; absent or null for the default account. */
+  claudeHome?: string | null
   /** The workspace as its SCM describes it, with `kind` (`git`, or `none` for a folder no SCM claims);
    *  every other field is exactly what `agentProject` reports (scm/types.ts). */
   project: ScmDescription | null
@@ -257,6 +259,7 @@ export async function agentFrame(
     // engine's own login. Codex only; null is a real answer ("uses ~/.codex") for the same reason
     // `grid: null` is above.
     codexHome: s.codexHome ?? null,
+    claudeHome: s.claudeHome ?? null,
     project,
     gitContext,
     // All five are real answers when null, for the reason the module doc gives: a frame that omits

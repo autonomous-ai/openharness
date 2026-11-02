@@ -370,7 +370,7 @@ export function launchClaudeConfigDir(environment: NodeJS.ProcessEnv = launchEnv
 export function launchHomeOf(home: LaunchHome, profile: string | null | undefined, environment: NodeJS.ProcessEnv = launchEnvironment()): string {
   if ('setting' in home) return launchHome(home.setting, profile, environment)
   const personal = launchPersonalHome(environment)
-  return movedHome(environment[home.variable]) || (home.otherwise === 'home' ? personal : join(personal, home.otherwise.folder))
+  return movedHome(profile || environment[home.variable]) || (home.otherwise === 'home' ? personal : join(personal, home.otherwise.folder))
 }
 
 /** The person's home folder for a launch made now: the HOME its shell sets, else this process's. */
