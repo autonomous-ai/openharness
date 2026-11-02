@@ -43,11 +43,11 @@ The server's task message has source kind `task-line`, with `taskId`, `state` (`
 **Interfaces:**
 - Produces: `SuperTabTaskLine(message, readerId, onOpen)` and `SuperTabProposalLine(message, owner, onOpen)`; `SuperTabMessage.taskLine`.
 
-- [ ] **Step 1: Write the failing tests:** each state draws its mark and word on one row; `waiting` says Answer only to the person asked; clicking opens the task; a proposal is one row that opens.
-- [ ] **Step 2: Run to verify they fail.** Run: `flutter test test/super_tab_task_line_test.dart`. Expected: FAIL.
-- [ ] **Step 3: Implement** both rows, and use them in the chat's message builder.
-- [ ] **Step 4: Run to verify they pass.**
-- [ ] **Step 5: Commit.**
+- [x] **Step 1: Write the failing tests:** each state draws its mark and word on one row; `waiting` says Answer only to the person asked; clicking opens the task; a proposal is one row that opens.
+- [x] **Step 2: Run to verify they fail.** Run: `flutter test test/super_tab_task_line_test.dart`. Expected: FAIL.
+- [x] **Step 3: Implement** both rows, and use them in the chat's message builder.
+- [x] **Step 4: Run to verify they pass.**
+- [x] **Step 5: Commit.**
 
 ### Task 2: Nothing stacked over the chat
 
@@ -55,11 +55,11 @@ The server's task message has source kind `task-line`, with `taskId`, `state` (`
 - Modify: `desktop/lib/super_tabs/view.dart`; `project_status_card.dart`, `catch_up_card.dart`, `ship_row.dart`
 - Test: `desktop/test/super_tab_quiet_chat_test.dart`
 
-- [ ] **Step 1: Write the failing tests:** no Status card, While you were away or Shipped card in a project's chat; the New line stays; `work-stalled`, `work-lost`, `idle` and the other PM notices never show.
-- [ ] **Step 2: Run to verify they fail.**
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run to verify they pass.**
-- [ ] **Step 5: Commit.**
+- [x] **Step 1: Write the failing tests:** no Status card, While you were away or Shipped card in a project's chat; the New line stays; `work-stalled`, `work-lost`, `idle` and the other PM notices never show.
+- [x] **Step 2: Run to verify they fail.**
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Run to verify they pass.**
+- [x] **Step 5: Commit.**
 
 ### Task 3: The header and project menu
 
@@ -67,15 +67,15 @@ The server's task message has source kind `task-line`, with `taskId`, `state` (`
 - Modify: `desktop/lib/super_tabs/view.dart`, `desktop/lib/super_tabs/project_options.dart`
 - Test: `desktop/test/super_tab_project_menu_test.dart`
 
-- [ ] **Step 1: Write the failing tests:** a project's header is `# name ▾`, Members and the terminal; the menu holds Status, Pull requests, Instructions, Sharing, Notifications, then Project settings…; Status opens the report with its time; Project settings… holds rename, switch PM, archived and delete; another conversation's header is unchanged.
-- [ ] **Step 2: Run to verify they fail.**
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run to verify they pass.**
-- [ ] **Step 5: Commit, then push.**
+- [x] **Step 1: Write the failing tests:** a project's header is `# name ▾`, Members and the terminal; the menu holds Status, Pull requests, Instructions, Sharing, Notifications, then Project settings…; Status opens the report with its time; Project settings… holds rename, switch PM, archived and delete; another conversation's header is unchanged.
+- [x] **Step 2: Run to verify they fail.**
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Run to verify they pass.**
+- [x] **Step 5: Commit, then push.**
 
 ### Task 4: Screenshots
 
-- [ ] **Step 1:** Render screens 1, 2, 3, 9 and 9b from a browser build on made-up data, and put them in the PR.
+- [x] **Step 1:** Render screens 1, 2, 3, 9 and 9b from a browser build on made-up data, and put them in the PR.
 
 ## Design
 
