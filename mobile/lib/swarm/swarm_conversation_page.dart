@@ -25,6 +25,7 @@ import 'swarm_post_line.dart';
 import 'swarm_attach.dart';
 import 'swarm_buddy.dart';
 import 'swarm_buddy_chat.dart';
+import 'swarm_session_widgets.dart';
 import 'swarm_buddy_tab.dart'
     show SwarmBuddyDot, SwarmBuddyMark, swarmBuddyMark;
 import 'swarm_chat_menu.dart';
@@ -179,6 +180,9 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
 
   /// What the last pick left out, or why it could not pick, over the files.
   final _attachNote = ValueNotifier<String?>(null);
+
+  /// Why New session is greyed, once it is tapped (a phone has no hover).
+  final _sessionNote = ValueNotifier<String?>(null);
 
   /// A picker is up: one at a time.
   bool _picking = false;
@@ -706,6 +710,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     _text.dispose();
     _focus.dispose();
     _attachNote.dispose();
+    _sessionNote.dispose();
     _scroll.dispose();
     super.dispose();
   }
@@ -827,6 +832,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   void _send(SwarmConversation c) {
     _target = null;
     _attachNote.value = null;
+    _sessionNote.value = null;
     if (_scroll.hasClients && _scroll.offset > 0) _toFoot();
     unawaited(_post(c));
   }
@@ -836,8 +842,13 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// typed; a post refused or not confirmed keeps it up, to send again.
   Future<void> _post(SwarmConversation c) async {
     final sent = await c.send();
+    final started = c.takeStartedSession();
     if (sent && mounted && _conversation == c && c.draft.isEmpty) {
       _focus.unfocus();
+    }
+    // A message that started a session opens its thread: it answers there.
+    if (sent && started != null && mounted && _conversation == c) {
+      _openThread(c, started);
     }
   }
 
@@ -2193,6 +2204,34 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                 style: AppType.caption(color: AppPalette.textSecondary),
               ),
             ),
+          ValueListenableBuilder(
+            valueListenable: _sessionNote,
+            builder: (context, note, _) => note == null || talking
+                ? const SizedBox.shrink()
+                : Padding(
+                    padding: const EdgeInsets.fromLTRB(
+                      AppSpace.xs,
+                      0,
+                      AppSpace.xs,
+                      AppSpace.s,
+                    ),
+                    child: Text(
+                      note,
+                      key: const ValueKey('swarm-session-note'),
+                      style: AppType.caption(color: tty.yellow),
+                    ),
+                  ),
+          ),
+          // Where a session works is the Swarm's one Buddy chat's to pick;
+          // a project's own Buddy chat sends no project.
+          if (c.newSession &&
+              !talking &&
+              c.conversation?.isSwarmBuddyChat == true)
+            SwarmSessionProjectRow(
+              key: const ValueKey('swarm-session-project'),
+              chat: c,
+              onTap: () => unawaited(showSwarmSessionProjects(context, c)),
+            ),
           Flexible(
             child: SwarmComposerCard(
               focus: _focus,
@@ -2229,7 +2268,30 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                               _focus.requestFocus();
                             },
                           ),
-                        const Spacer(),
+                        // The rest of the row: the chip takes what its label
+                        // needs, and gives up letters only when the row is full.
+                        Expanded(
+                          child: c.offersSessions
+                              ? Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(
+                                      left: AppSpace.xs,
+                                    ),
+                                    child: SwarmNewSessionChip(
+                                      on: c.newSession,
+                                      blocked: c.sessionBlocked,
+                                      onChanged: (on) {
+                                        _sessionNote.value = null;
+                                        c.newSession = on;
+                                      },
+                                      onBlocked: () =>
+                                          _sessionNote.value = c.sessionBlocked,
+                                    ),
+                                  ),
+                                )
+                              : const SizedBox.shrink(),
+                        ),
                         if (voice != null) SwarmVoiceMic(voice: voice),
                         SwarmRoundButton(
                           key: const ValueKey('swarm-send'),
