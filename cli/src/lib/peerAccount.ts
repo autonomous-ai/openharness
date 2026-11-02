@@ -168,9 +168,14 @@ export function windowsListenerQuery(port: number): { script: string; inputs: Re
       "if ($rows.Count -eq 0) { 'none'; exit 0 }",
       '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
       'foreach ($row in $rows) {',
+      // The lookup's own process, or one it started, never holds the port: it could have taken a freed id (as windowsPeerQuery).
+      '  if ($row.OwningProcess -eq $PID) { continue }',
       '  $process = Get-CimInstance Win32_Process -Filter ("ProcessId = " + [int]$row.OwningProcess)',
-      // Windows gives a socket's time to the second and a process's finer: two seconds of slack, as in windowsPeerQuery.
-      '  if (-not $process -or -not $process.CreationDate -or -not $row.CreationTime -or $process.CreationDate -gt $row.CreationTime.AddSeconds(2)) { continue }',
+      '  if (-not $process -or -not $process.CreationDate -or -not $row.CreationTime) { continue }',
+      // Windows gives a socket's time to the second and a process's finer: the process's is cut to the second and compared with
+      // no slack, as in windowsPeerQuery.
+      '  $started = $process.CreationDate.AddTicks(-($process.CreationDate.Ticks % [TimeSpan]::TicksPerSecond))',
+      '  if ($started -gt $row.CreationTime) { continue }',
       '  $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid',
       "  if ($owner.ReturnValue -eq 0 -and $owner.Sid -and $owner.Sid -eq $me) { 'yes'; exit 0 }",
       '}',
