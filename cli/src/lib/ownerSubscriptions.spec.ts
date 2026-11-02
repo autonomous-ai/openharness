@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -9,6 +9,20 @@ import {
   type KeychainWriter,
   type OwnerSubscriptionDeps,
 } from './ownerSubscriptions.js'
+
+// The `security` tool: a Keychain with the owner's item and a stale one under another account, each found by its -a.
+const security = vi.hoisted(() => ({ calls: [] as string[][], stdin: [] as string[] }))
+vi.mock('node:child_process', () => ({
+  execFile: (_command: string, args: string[], _options: unknown, done: (error: Error | null, out?: { stdout: string; stderr: string }) => void) => {
+    security.calls.push(args)
+    const account = args[args.indexOf('-a') + 1]
+    // Without -a the first match is the stale item.
+    const stdout = account === 'owner1' ? JSON.stringify({ claudeAiOauth: { accessToken: 'old', refreshToken: 'r-old', expiresAt: 1 } })
+      : '    "acct"<blob>="stale"\n'
+    done(null, { stdout, stderr: '' })
+  },
+  spawn: () => ({ on: (event: string, cb: (code: number) => void) => { if (event === 'close') setTimeout(cb, 0, 0) }, stdin: { end: (text: string) => { security.stdin.push(text) } } }),
+}))
 
 let home: string
 beforeEach(() => { home = mkdtempSync(join(tmpdir(), 'owner-subscriptions-')) })
@@ -95,6 +109,19 @@ describe('refreshing Claude', () => {
     expect(k.writes[0]!.account).toBe('owner')
     // The refresh token is kept when the vendor does not rotate it.
     expect(JSON.parse(k.writes[0]!.secret).claudeAiOauth).toMatchObject({ accessToken: 'new', refreshToken: 'r-old', subscriptionType: 'max' })
+  })
+
+  it('writes the refreshed sign-in to the very Keychain item it read (same service and account), never a stale one', async () => {
+    process.env.USER = 'owner1'
+    security.calls.length = 0; security.stdin.length = 0
+    const vendor = tokenEndpoint({ access_token: 'new', refresh_token: 'r-new', expires_in: 60 })
+    const owner = createOwnerSubscriptions({ home, platform: 'darwin', now: () => NOW, lockDir: join(home, 'locks'), fetchImpl: vendor.fetchImpl })
+    expect(await owner.refresh('claude', await owner.read('claude'))).toMatchObject({ accessToken: 'new' })
+    const read = security.calls.find((args) => args.includes('-w'))!
+    const readItem = [read[read.indexOf('-s') + 1], read[read.indexOf('-a') + 1]]
+    const written = /-s "([^"]*)" -a "([^"]*)"/.exec(security.stdin.join(''))!
+    expect([written[1], written[2]]).toEqual(readItem)
+    expect(readItem).toEqual(['Claude Code-credentials', 'owner1'])
   })
 
   it('refreshes once when several requests find the token expired at the same time', async () => {

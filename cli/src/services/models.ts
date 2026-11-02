@@ -19,7 +19,8 @@ import { installedDsh } from '../dsh/installed.js'
 import { ApiConnections, apiConnectionsRequest } from '../lib/apiConnections.js'
 import { apiModelsRequest, apiTargetAnswer, refreshApiFor, rememberSavedApis } from '../lib/apiModels.js'
 import { appEngineOps, scanAppModels } from '../lib/appModels.js'
-import { linkCodexProfile, listCodexProfiles } from '../lib/codexProfiles.js'
+import { linkClaudeProfile, listClaudeProfiles, profileId, offerAccount } from '../lib/claudeProfiles.js'
+import { defaultCodexHome, linkCodexProfile, listCodexProfiles } from '../lib/codexProfiles.js'
 import { createGridAccess, gridNamesLocal, reconcileGridAttach } from '../lib/gridAttach.js'
 import { deriveHarnessGridName, resetGridDeriveMemo, signedInGridEmail } from '../lib/gridDerive.js'
 import { ensureHarnessGrid } from '../lib/gridEnsure.js'
@@ -527,22 +528,54 @@ export function launchTargetRequests(core: CoreApi, onRemove: (connectionId: str
     // Which CODEX_HOME folders THIS machine can offer — answered here, on the machine in question, for
     // the same reason `engines_probe` is: a Codex profile is a folder on disk, and a folder on a Mac means
     // nothing on the Docker rig it was asked about instead.
-    codex_profiles_list: internalOnThrow('codex_profiles_list', (payload) => {
+    codex_profiles_list: internalOnThrow('codex_profiles_list', (payload, asker) => {
+      if (!asker.owner) return { error: 'OWNER_REQUIRED' }
       const observed = Array.isArray(payload.observedPaths)
         ? payload.observedPaths.filter((p): p is string => typeof p === 'string')
         : []
       try {
-        return { profiles: listCodexProfiles(observed) }
+        const machineId = core.daemon.machineId(), defaultHome = defaultCodexHome()
+        // Each account's one id (the default's is shared with the machine report); the default is marked, as Claude's is.
+        return { profiles: listCodexProfiles(observed).map((p) => p.path === defaultHome
+          ? { ...p, id: profileId(machineId, 'codex', 'default'), default: true } : { ...p, id: profileId(machineId, 'codex', p.path) }) }
       } catch {
         return { error: 'CODEX_PROFILES_FAILED' }
       }
     }),
 
-    codex_profile_link: internalOnThrow('codex_profile_link', (payload) => {
+    codex_profile_link: internalOnThrow('codex_profile_link', (payload, asker) => {
+      if (!asker.owner) return { error: 'OWNER_REQUIRED' }
       const path = typeof payload.path === 'string' ? payload.path : ''
       const result = linkCodexProfile(path)
       if ('error' in result) return { error: result.error }
       return { profile: result }
+    }),
+
+    // The Claude counterpart: CLAUDE_CONFIG_DIR folders, with the ids and labels the Swarm switch picks from.
+    // Paths and account names are the owner's alone, so a guest gets nothing.
+    claude_profiles_list: internalOnThrow('claude_profiles_list', (payload, asker) => {
+      if (!asker.owner) return { error: 'OWNER_REQUIRED' }
+      const observed = Array.isArray(payload.observedPaths)
+        ? payload.observedPaths.filter((p): p is string => typeof p === 'string')
+        : []
+      try {
+        return { profiles: listClaudeProfiles(observed, { machineId: core.daemon.machineId() }) }
+      } catch {
+        return { error: 'CLAUDE_PROFILES_FAILED' }
+      }
+    }),
+
+    claude_profile_link: internalOnThrow('claude_profile_link', (payload, asker) => {
+      if (!asker.owner) return { error: 'OWNER_REQUIRED' }
+      return linkClaudeProfile(typeof payload.path === 'string' ? payload.path : '', core.daemon.machineId())
+    }),
+
+    // The owner's own choice to offer an account to the Swarm, or to take it back (lib/accountOffers.ts). Like the requests above it
+    // is theirs alone, and not sealed for the relay: Desktop asks this computer's own daemon.
+    swarm_account_offer: internalOnThrow('swarm_account_offer', (payload, asker) => {
+      if (!asker.owner) return { error: 'OWNER_REQUIRED' }
+      if (typeof payload.offered !== 'boolean') return { error: 'INVALID_OFFER' }
+      return offerAccount(String(payload.engine), typeof payload.path === 'string' ? payload.path : '', payload.offered)
     }),
   }
 }
