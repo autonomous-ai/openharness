@@ -69,6 +69,8 @@ describe('the built-in template', () => {
     // A Yes to a nightly routing proposal is a line the PM writes into Routing (project instructions, phase 4, decision 21).
     const pm = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('### PM'), INSTRUCTIONS_TEMPLATE.indexOf('### Engineer'))
     expect(pm).toContain('nightly routing proposal')
+    // Ken, 2026-11-02: a PM copied old workflow lines into a brief; the workflow lives in the instructions only.
+    expect(pm).toContain('It copies no workflow into a brief')
     expect(pm).toContain('- When the project owner answers Yes to a nightly routing proposal, writes its line into Routing, naming the owner as who asked.')
     expect(Buffer.byteLength(INSTRUCTIONS_TEMPLATE)).toBeLessThan(16_384)
   })
