@@ -411,6 +411,11 @@ void main() {
         tester.getTopLeft(f.row(4)).dy,
         lessThan(tester.getTopLeft(idle).dy),
       );
+      // Its title lines up with the other headings'.
+      expect(
+        tester.getTopLeft(find.text('Idle (2)')).dx,
+        tester.getTopLeft(find.text('Agents')).dx,
+      );
       await tester.tap(find.text('Idle (2)'));
       await tester.pumpAndSettle();
       expect(f.row(0), findsOneWidget);
