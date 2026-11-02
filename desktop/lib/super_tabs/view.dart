@@ -1582,8 +1582,6 @@ class _SuperTabViewState extends State<SuperTabView>
   Widget _sidebar() => ProjectSidebar(
     controller: c,
     app: widget.app,
-    board: _board,
-    onAddAgent: widget.onAddAgent,
     onNewProject: widget.onNewProject,
     onNewSwarm: widget.onNewSwarm,
     devicesSelected: _devicesVisible,
@@ -1591,33 +1589,9 @@ class _SuperTabViewState extends State<SuperTabView>
     attention: SuperTabAttention.of(c),
     activity: SuperTabActivity.of(c),
     threadsSelected: _threadsVisible,
-    onThreads: () {
-      _closeSidebar();
-      setState(() {
-        _showThreads = true;
-        _showNotifications = false;
-        _showPullRequests = false;
-      });
-      widget.onCloseTerminal?.call();
-    },
     // Activity on every platform (Lead, 10-31): the Mac's menu bar and Dock
     // still say what waits, and the sidebar lists it as Slack does.
     onNotifications: _openActivity,
-    onOpenAgent: (agent) {
-      _closeSidebar();
-      setState(() {
-        _showPullRequests = false;
-        _showNotifications = _showThreads = false;
-      });
-      (widget.onChooseAgentTerminal ?? widget.onOpenTerminal)(agent);
-    },
-    onYourDevices: widget.app?.devicesEnabled != true
-        ? null
-        : () {
-            _closeSidebar();
-            setState(() => _showNotifications = _showThreads = false);
-            widget.app!.openDevices();
-          },
     needsHuman: (group) => _needsHuman(group).length,
     onSelect: (id) {
       setState(() => _showNotifications = _showThreads = false);
