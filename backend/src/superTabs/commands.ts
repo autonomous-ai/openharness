@@ -1,3 +1,4 @@
+import { markTeamWritten, requireTeamWrittenAccount, requireTeamWrittenMachine, TEAM_WRITTEN_REASON, teamWrittenTask } from './teamWritten.js'
 import { admitMachineStart, BUDDY_WINDOWS_REFUSAL, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, machineSlots, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { keepUsernames, setUsername, swarmUsernames } from './usernames.js'
@@ -796,9 +797,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   }
   /** An agent added to a task may work on it, so one added by a post or by opening it takes that project's work only where
    *  conversation.agent would add it (machines.ts teamWorkCheck; spec, "Kept as access"). */
-  const teamJoin = (project: SwarmProject, agentId: string) => {
+  const teamJoin = (project: SwarmProject, agentId: string, group?: Conversation) => {
     const member = agent(state, agentId)
     requireTeamWork(state, member.machineId, member.contributorId, project, context.now, context.teamMachines, context.otherWorkspaceMachines)
+    // A named agent or a poster joins a task as an assignment would: Team-written code stays in a Team account (audit H2).
+    if (group) requireTeamWrittenAccount(state, group, member)
   }
   /** A session already in the Swarm that a person's agent.add names joins [group] as conversation.agent adds one (security
    *  review S2): a Buddy stays in its own chat; it is of the group's project; a stopping one joins nowhere; a teammate's agent
@@ -809,6 +812,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     sameProject(state, group, member)
     if (member.workDecision === 'stop') fail('STOP_REQUESTED', 'This agent is stopping. Wait for its execution host.')
     requireTeamWork(state, member.machineId, member.contributorId, groupProject(state, group), context.now, context.teamMachines, context.otherWorkspaceMachines)
+    requireTeamWrittenAccount(state, group, member)
+    markTeamWritten(state, group, member)
   }
   /** The project chat is the people's and is never archived: its work, name and records are its coordinator's or a person's,
    *  as its members are (conversation.agent, joinsProject; security review L2). A task's are any agent's of its project. */
@@ -956,7 +961,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     // A new agent never starts on a Buddy-only machine; an agent its person added there runs as one on a machine outside the Swarm.
     if (!member && state.machines?.some(m => m.machineId === candidate.machineId && m.buddyOnly)) return { code: 'NOT_SWARM_MACHINE' as const, reason: NOT_SWARM_MACHINE }
     // A new agent on a Mac for a teammate's project runs in the Mac's Harness Team account (machines.ts teamStartRequest).
-    const machineId = member?.machineId ?? teamMachineFor(state, candidate.machineId, project, context.teamAccountsIdle, context.teamMachines)
+    const group = conversation(state, conversationId), written = teamWrittenTask(state, group)
+    const machineId = member?.machineId ?? teamMachineFor(state, candidate.machineId, project, context.teamAccountsIdle, context.teamMachines, written)
+    // Team-written code takes a Team account only (audit H2). Its own check below says nothing for the owner's own account.
+    if (written && !(member ? onTeamAccount(state, member) : teamAccountPool(state.machines?.find(m => m.machineId === machineId)))
+      && !(member && ledProject(state, member.id)?.id === project.id)) return { code: 'TEAM_WRITTEN_WORK' as const, reason: TEAM_WRITTEN_REASON }
     const contributor = member?.contributorId ?? state.machines?.find(m => m.machineId === machineId)?.contributorId ?? starter
     return teamWorkCheck(state, machineId, contributor, project, context.now, context.teamMachines, context.otherWorkspaceMachines)
   }
@@ -1739,7 +1748,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       state.groupCounter = number
       // The agent that opens a task is in it, so an Engineer that opens its own review can post there and pass its checks.
       const creator = actor.kind === 'agent' && actor.agentId !== leadId ? [actor.agentId] : []
-      for (const id of creator) teamJoin(project, id)
+      for (const id of creator) teamJoin(project, id, command.reviewOf ? conversation(state, command.reviewOf) : undefined)
       // A step's opener is in its task too: the task's chat is where the step's work is talked over (task steps design).
       if (command.step && command.reviewOf) {
         const owning = conversation(state, command.reviewOf)
@@ -1748,6 +1757,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       state.conversations.push({ id: operationId, ...(state.projects ? { projectId: project.id } : {}),
         number, title: command.title, leadId, agentIds: [...leadId ? [leadId] : [], ...creator],
         archived: false, brief, ...(command.task ? { task: command.task } : {}), ...(command.reviewOf ? { reviewOf: command.reviewOf } : {}),
+        // A Team agent's own task is Team-written from its first line, and a step keeps its task's mark (teamWritten.ts, audit H2).
+        ...((command.reviewOf ? teamWrittenTask(state, conversation(state, command.reviewOf)) : creator.some(id => onTeamAccount(state, agent(state, id)))) ? { teamWritten: true as const } : {}),
         ...(command.step ? { step: command.step } : {}),
         assignment: null, lastMessageSequence: 0,
         checks: storedChecks(command.checks, operationId),
@@ -1947,7 +1958,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       // A teammate's project started on a Mac runs in that Mac's Harness Team account, never as its owner (machines.ts). A start
       // that names no model runs its engine's own: role defaults live in the project's instructions now.
-      const request = teamStartRequest(state, named, home, context.teamAccountsIdle, context.teamMachines)
+      // So does a start for code a Team agent wrote, whoever's project it is, with its project settings off (audit H2).
+      const startGroup = conversation(state, command.request.conversationId), written = teamWrittenTask(state, startGroup)
+      const moved = teamStartRequest(state, named, home, context.teamAccountsIdle, context.teamMachines, written)
+      if (written) requireTeamWrittenMachine(state, startGroup, moved.machineId)
+      const request: AgentStartRequest = written ? { ...moved, projectSettings: 'off' } : moved
       const pool = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)
       // Off the Machines list, a teammate's project never runs: nothing there shows a privacy check (machines.ts).
       if (!pool) requireTeamWork(state, request.machineId, grant.contributorId, home, context.now, context.teamMachines, context.otherWorkspaceMachines)
@@ -2426,6 +2441,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         // An agent added to a task may work on it, so a teammate's agent is added only where it may take that project's work,
         // as an assignment checks (machines.ts teamWorkCheck).
         requireTeamWork(state, member.machineId, member.contributorId, groupProject(state, group), context.now, context.teamMachines, context.otherWorkspaceMachines)
+        requireTeamWrittenAccount(state, group, member)
+        markTeamWritten(state, group, member)
         if (!group.agentIds.includes(command.agentId)) group.agentIds.push(command.agentId)
         // Added to a task, it is reused, as an assignment reuses a worker: its finished-work mark goes.
         delete member.workDecision
@@ -2499,7 +2516,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     case 'message.send': {
       const joining = actor.kind === 'agent' && !state.conversations.find(c => c.id === command.conversationId)?.agentIds.includes(actor.agentId)
       const group = postable(state, actor, command.conversationId)
-      if (joining) teamJoin(groupProject(state, group), actor.agentId)
+      if (joining) teamJoin(groupProject(state, group), actor.agentId, group)
       const ids = [...new Set(command.attachmentIds ?? [])]
       const attachments = ids.map(id => context.attachments?.find(a => a.id === id) ?? fail('ATTACHMENT_UNAVAILABLE', 'Upload this file again before sending it.', 400))
       if (!command.text && !attachments.length) fail('TEXT_REQUIRED', 'Write a message or attach a file.', 400)
@@ -2574,7 +2591,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         // (joinsProject). A person's message adds nobody: a person adds an agent to a task with conversation.agent.
         if (!group.agentIds.includes(id)) {
           if (actor.kind !== 'agent' || !joinsProject(state, group, id)) fail('INVALID_RECIPIENT', 'Choose an agent in this conversation.', 400)
-          teamJoin(groupProject(state, group), id)
+          teamJoin(groupProject(state, group), id, group)
           group.agentIds.push(id)
         }
       }
@@ -2740,6 +2757,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const home = groupProject(state, group)
       // A teammate's agent on a personal machine keeps what it has; it takes no new task for another person's project.
       requireTeamWork(state, worker.machineId, worker.contributorId, home, context.now, context.teamMachines, context.otherWorkspaceMachines)
+      // Team-written code runs only in a Team account, and a Team agent's work marks the task (teamWritten.ts, audit H2).
+      requireTeamWrittenAccount(state, group, worker)
+      markTeamWritten(state, group, worker)
       if (worker.workDecision === 'stop') fail('STOP_REQUESTED', 'This worker is stopping. Wait for its execution host.')
       if (state.conversations.some(c => activeWork(c) && c.assignment?.agentId === worker.id)) fail('AGENT_BUSY', 'This agent already owns an active assignment.')
       // An older client assigns in a custom role: kept for older readers, and the role name it means for a worker without
