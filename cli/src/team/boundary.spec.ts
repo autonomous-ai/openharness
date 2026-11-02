@@ -9,9 +9,9 @@
  * Two ways to be the other account:
  * - As `nobody`, through `sudo -n`, where that needs no password: CI's Linux, where it may not be missing.
  * - Everywhere else (a shared Mac has no passwordless sudo, and its accounts are not ours to change): as this user, with the
- *   fixture's owner bits set to what the group and other bits say. The kernel then answers this user as it answers an account
- *   that is neither the owner nor, for that matter, kept out by anything but those bits. A Team account on a Mac is in the
- *   owner's group (staff), so both count.
+ *   fixture's owner bits set to what the group and other bits say. A Team account on a Mac is in the owner's group (staff), so
+ *   both count. At the mode setup gives, that is mode 000, so these runs show only that 000 refuses. What guards the home on
+ *   such a machine is the check that no group or other bit is set, on every line of the script that changes it.
  */
 import { spawn, spawnSync } from 'node:child_process'
 import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
@@ -32,19 +32,23 @@ const SETUP: SetupScriptInput = {
   ownerCli: '/Users/owner-placeholder/.harness/cli/cli.js', mintEnv: {}, signIn: 'missing',
 }
 
-/** What the script's own step 3 does to the owner's home, as a mode; it throws on a step it does not know, or none. */
+/** A line of a script that changes who may enter the owner's home, indented or wrapped in anything, by variable or by its path. */
+const changesOwnerHome = (line: string): boolean => !line.trimStart().startsWith('#')
+  && /\b(chmod|chown|chgrp|setfacl)\b/.test(line)
+  && (line.includes('OWNER_HOME') || new RegExp(`${SETUP.ownerHome}(?![\\w./-])`).test(line))
+
+/**
+ * What the script does to the owner's home, as a mode. Every line of it counts, not only step 3's: a later `chmod 755`, or an ACL
+ * for the Team account, would reopen the home after that step closed it. It throws on a line it cannot read, or more than the one.
+ */
 function ownerHomeMode(script: string): number {
-  const lines = script.split('\n')
-  const start = lines.findIndex(line => line.startsWith('# 3. '))
-  const end = lines.findIndex(line => line.startsWith('# 4. '))
-  expect(start, 'step 3, the owner\'s home').toBeGreaterThan(-1)
-  const step = lines.slice(start, end).filter(line => /^(chmod|setfacl)\b.*"\$OWNER_HOME"$/.test(line))
-  expect(step, 'the line of step 3 that closes the owner\'s home').toHaveLength(1)
-  const line = step[0]!
-  const chmod = /^chmod (\d{3}) /.exec(line)
+  const step = script.split('\n').filter(changesOwnerHome)
+  expect(step, 'the one line that closes the owner\'s home, and no other that changes it').toHaveLength(1)
+  const line = step[0]!.trim()
+  const chmod = /^chmod (\d{3}) "\$OWNER_HOME"$/.exec(line)
   if (chmod) return Number.parseInt(chmod[1]!, 8)
-  const acl = /^setfacl -n -m u::([rwx-]{3}),g::([rwx-]{3}),o::([rwx-]{3}) /.exec(line)
-  if (!acl) throw new Error(`step 3 closes the owner's home in a way this spec cannot read: ${line}`)
+  const acl = /^setfacl -n -m u::([rwx-]{3}),g::([rwx-]{3}),o::([rwx-]{3}) "\$OWNER_HOME"$/.exec(line)
+  if (!acl) throw new Error(`this line changes the owner's home in a way this spec cannot read: ${line}`)
   const bits = (word: string) => (word[0] === 'r' ? 4 : 0) + (word[1] === 'w' ? 2 : 0) + (word[2] === 'x' ? 1 : 0)
   return bits(acl[1]!) * 0o100 + bits(acl[2]!) * 0o10 + bits(acl[3]!)
 }
@@ -96,7 +100,7 @@ function ownerHome(parent: string): Fixture {
   return fixture
 }
 
-/** Every path in the home with its contents and mode: what no refused write may change. */
+/** Every path in the home with its contents: what no refused write may change. */
 function snapshot(fixture: Fixture): Record<string, string> {
   const seen: Record<string, string> = {}
   const walk = (path: string): void => {
@@ -177,10 +181,22 @@ describe('an agent in the Team account, in the owner\'s home', () => {
     const script = build(SETUP)
     // Not a loosening of 700: any group or other bit would let the other account back in.
     expect(ownerHomeMode(script) & 0o077).toBe(0)
-    const closes = script.split('\n').findIndex(line => /^(chmod|setfacl)\b.*"\$OWNER_HOME"$/.test(line))
+    const closes = script.split('\n').findIndex(changesOwnerHome)
     const starts = script.split('\n').findIndex(line => /launchctl bootstrap system|systemctl enable --now/.test(line))
     expect(closes, name).toBeGreaterThan(-1)
     expect(closes, name).toBeLessThan(starts)
+  })
+
+  it.each([
+    ['a later chmod', 'chmod 755 "$OWNER_HOME"'],
+    ['an indented chmod', '  chmod 755 "$OWNER_HOME"'],
+    ['an ACL for the Team account', 'chmod +a "$TEAM allow list,search,read" "$OWNER_HOME"'],
+    ['a chmod by its path', `/bin/chmod 755 ${SETUP.ownerHome}`],
+    ['a change of group', 'chgrp staff "$OWNER_HOME"'],
+    ['a recursive ACL as the owner', 'as_owner setfacl -R -m u:harnessteam:rX "$OWNER_HOME"'],
+  ])('a script is refused when %s reopens the home after it closed', (_name, line) => {
+    const script = `${buildSetupScript(SETUP)}\n${line}\n`
+    expect(() => ownerHomeMode(script)).toThrow()
   })
 
   it('is let in before setup closes it: the attempts below are not refused for some other reason', () => {
