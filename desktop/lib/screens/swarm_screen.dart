@@ -1016,6 +1016,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _unregisterModels?.call();
     _modelsOverlay?.remove();
     _modelsOverlay?.dispose();
+    // Cleared, or the open titlebar dropdown below removes it a second time.
+    _modelsOverlay = null;
     _onboarding.removeListener(_onboardingChanged);
     if (widget.onboarding == null) _onboarding.dispose();
     app.modelManager.removeListener(_modelManagerChanged);
