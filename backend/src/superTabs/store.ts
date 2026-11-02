@@ -16,6 +16,7 @@ import { redactCredentials } from './credentials.js'
 import type { AvatarUpload } from './profile.js'
 import { reactionCounts, type ReactionTarget } from './reactions.js'
 import { agentOpenDeliveries, compactedDelivery, deliveredCopies, messagesById, messagesPast, OPEN_DELIVERY, type MessageEdge, pageDeliveries, pageReactions, pageThreads, refreshReplies, type PageDelivery } from './pageReads.js'
+import { deliveriesByMessage } from './read/pageDeliveries.js'
 import { restoreDelivery } from './deliveryCompaction.js'
 import { threadSummaries } from './threads.js'
 import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, directUploads, errorCode, HOURLY_UPLOAD_BYTES, HOURLY_UPLOADS, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, MAX_FORM_ATTACHMENT_BYTES, objectKeyFor, peekType, PENDING_UPLOAD_PURPOSE, publicUrl, TOO_LARGE_MESSAGE, trimPrefix, typeFromHead, UPLOAD_LINK_MS,
@@ -2475,8 +2476,9 @@ export class SuperTabStore {
     const context = own && !own.projectId && !forward && cursor.before === undefined && !cursor.messageId ? await this.sessionExcerpt(tx, tabId, conversationId, own.from, m => rowRead(m) && sessionReadsRow(undefined, group, state)(m)) : undefined
     // Only the rows this reader is shown get file links, each signed afresh for this read (fileLinks.ts).
     const linked = await this.linked(tabId, shown)
+    const byMessage = deliveriesByMessage(deliveries)
     return { messages: linked.map(m => ({ ...m, mentions: m.mentions ?? [], reactions: reactions.get(m.id) ?? [],
-      deliveries: deliveries.filter(d => d.messageId === m.id && shownTo(m, d)).sort(receiptOrder(m)) })), next, threads, ...(context ? { context } : {}),
+      deliveries: (byMessage.get(m.id) ?? []).filter(d => shownTo(m, d)).sort(receiptOrder(m)) })), next, threads, ...(context ? { context } : {}),
       // A poll for new messages learns here that a reaction changed on a message it already shows (reactions.ts).
       reactionSeq: group.reactionSeq ?? 0 }
   }

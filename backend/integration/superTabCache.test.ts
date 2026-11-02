@@ -339,6 +339,60 @@ describe('named light conversations', () => {
   })
 })
 
+describe('loadDelta', () => {
+  /** A group renamed, another removed and a machine's own reading, all after `since`. */
+  async function changes(tabId: string, web: string, removed: string) {
+    const since = Date.now()
+    await new Promise(resolve => setTimeout(resolve, 5))
+    await swarmTransaction(db, async tx => {
+      const loaded = await parts.loadActive(tx, tabId, { groupIds: [web, removed] })
+      const group = loaded.groups.find(g => g.key === web)!, gone = loaded.groups.find(g => g.key === removed)!
+      const machine = (await parts.loadMachines(tx, tabId))[0]!
+      const t = Date.now()
+      await guardedWrite(tx, tabId, { op: 'update', kind: 'group', key: web, seen: group.version, data: { ...group.data!, title: 'Web 2' } }, t)
+      await guardedWrite(tx, tabId, { op: 'remove', kind: 'group', key: removed, seen: gone.version, data: gone.data }, t)
+      await guardedWrite(tx, tabId, { op: 'update', kind: 'machine', key: machine.key, seen: machine.version, data: machine.data }, t)
+    })
+    return since
+  }
+
+  it('returns only what changed after since, tombstones and readings included', async () => {
+    const { tabId, web, done } = await privateScene()
+    const since = await changes(tabId, web, done)
+    const delta = await parts.loadDelta(db, tabId, since, parts.PART_KINDS)
+    const machine = (await parts.loadMachines(db, tabId))[0]!
+    expect(delta.parts.map(p => `${p.kind}:${p.key}`).sort()).toEqual([`group:${done}`, `group:${web}`, `machine:${machine.key}`].sort())
+    expect(delta.parts.find(p => p.key === done)!.deleted).toBe(true)
+    expect(delta.parts.find(p => p.kind === 'machine')!.readAt).toBeGreaterThan(since)
+    expect(delta.head).toBeNull()
+    expect((await parts.loadDelta(db, tabId, Date.now() + 1_000, parts.PART_KINDS)).parts).toEqual([])
+  })
+
+  it('carries the head columns when the head changed', async () => {
+    const { tabId } = await privateScene()
+    const since = Date.now()
+    await new Promise(resolve => setTimeout(resolve, 5))
+    await swarmTransaction(db, async tx => {
+      const head = (await parts.loadActive(tx, tabId)).head
+      const row = await tx.swarmHead.findUniqueOrThrow({ where: { id: `${tabId}:head` } })
+      await guardedWrite(tx, tabId, { op: 'update', kind: 'head', key: 'head', seen: head.version, data: { ...head.data!, name: 'Renamed' },
+        head: { groupCounter: row.groupCounter + 1, visibilityEpoch: row.visibilityEpoch, sequenceBase: row.sequenceBase } }, Date.now())
+    })
+    const row = await db.swarmHead.findUniqueOrThrow({ where: { id: `${tabId}:head` } })
+    const delta = await parts.loadDelta(db, tabId, since, parts.PART_KINDS)
+    expect(delta.head).toEqual({ groupCounter: row.groupCounter, visibilityEpoch: row.visibilityEpoch, sequenceBase: row.sequenceBase })
+    expect(delta.parts.find(p => p.kind === 'head')!.data).toMatchObject({ name: 'Renamed' })
+  })
+
+  it('reads only the kinds asked', async () => {
+    const { tabId, web, done } = await privateScene()
+    const since = await changes(tabId, web, done)
+    const read = await partReads(() => parts.loadDelta(db, tabId, since, ['machine']))
+    expect(Object.keys(read.byCollection)).toEqual(['SwarmMachine'])
+    expect(read.value.parts.map(p => p.kind)).toEqual(['machine'])
+  })
+})
+
 describe('the change feed', () => {
   it('gives what loadChanged gives for any cursor, and serves a later cursor at the same stamp from memory', async () => {
     const { tabId, web } = await privateScene()
