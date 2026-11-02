@@ -40,10 +40,18 @@ export function endSteps(state: SuperTabState, task: Conversation, reason: strin
  *  its verdict, and one asleep under a done task was not loaded when that task was archived later, so it stayed open in an
  *  archived task (final review, minor 5). */
 export const stepSleeps = (task: { archived: boolean; dormant: boolean } | null): boolean => !task || task.archived
-/** The task's owner for [step]: the agent assigned its task while that work is open, else null (the coordinator's then). */
+/** The agent that owns [task]: its assignee while that agent is in the Swarm, its own work done or not, else null (the
+ *  coordinator's then). Ken, 2026-11-02: a Builder set its task done before its Tester's verdict, and the verdict reached
+ *  the PM; the verdict is still the Builder's to act on. */
+export function ownerOf(state: SuperTabState, task: Conversation): string | null {
+  const agentId = task.assignment?.agentId
+  return agentId && state.agents.some(a => a.id === agentId) ? agentId : null
+}
+
+/** The task's owner for [step] (ownerOf its task), or null. */
 export function taskOwner(state: SuperTabState, step: Conversation): string | null {
   const task = isStep(step) ? state.conversations.find(c => c.id === step.reviewOf) : undefined
-  return task && activeWork(task) ? task.assignment!.agentId : null
+  return task ? ownerOf(state, task) : null
 }
 
 /** Whether [agentId] holds an open step of task [taskId]. */
