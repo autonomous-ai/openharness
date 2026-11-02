@@ -329,10 +329,7 @@ class ProjectSidebar extends StatelessWidget {
                             (project != null &&
                                     !_paneCovered &&
                                     controller.selectedId == group.id
-                                ? () {
-                                    controller.toggleProject(project.id);
-                                    onSelect(group.id);
-                                  }
+                                ? () => controller.toggleProject(project.id)
                                 : () => onSelect(group.id)),
                   hoverColor: Colors.transparent,
                   focusColor: grid.AppSurface.hoverFill,

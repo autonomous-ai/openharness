@@ -1601,12 +1601,9 @@ class _SuperTabViewState extends State<SuperTabView>
     onNotifications: _openActivity,
     needsHuman: (group) => _needsHuman(group).length,
     onSelect: (id) {
-      // A second click on the open project shows its workgroups: a narrow
-      // window's sidebar stays for them.
-      final moved = id != c.selectedId || _listViewHoldsThePane;
       setState(() => _showNotifications = _showThreads = _showManage = false);
       c.select(id);
-      if (moved || !_sidebarOpen) _closeSidebar();
+      _closeSidebar();
     },
     onOpenBuddyChat: (projectId) => unawaited(_openBuddyChat(projectId)),
   );

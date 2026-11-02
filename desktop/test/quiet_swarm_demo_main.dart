@@ -276,7 +276,7 @@ Future<void> main() async {
       await _pressWhenThere('super-swarm-switcher');
     case '10' || '10b' || '10c':
       await _pressWhenThere('super-manage');
-      await Future<void>.delayed(const Duration(milliseconds: 300));
+      await Future<void>.delayed(const Duration(seconds: 1));
       if (screen == '10b') {
         await _pressWhenThere('super-manage-tab-models');
         await Future<void>.delayed(const Duration(seconds: 3));
