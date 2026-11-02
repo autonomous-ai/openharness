@@ -1,3 +1,5 @@
+import { HARNESS_CO_AUTHOR } from './app.js'
+
 /** Who a Swarm agent's commits and pull requests say the work is for, and which agent and machine did it. The machine
  *  writes the trailers into each commit message (cli/src/superTabs/githubTools.ts); the line opens the pull request body. */
 export interface Attribution {
@@ -18,7 +20,7 @@ export function attribution(input: { requester: { name: string | null; email: st
   const machine = input.machineName ? plain(input.machineName) || null : null
   return {
     requestedBy: { name, email }, agent, machine,
-    trailers: [`Co-authored-by: ${name} <${email}>`, `Harness-Agent: ${agent}`, ...(machine ? [`Harness-Machine: ${machine}`] : [])],
+    trailers: [`Co-authored-by: ${name} <${email}>`, HARNESS_CO_AUTHOR, `Harness-Agent: ${agent}`, ...(machine ? [`Harness-Machine: ${machine}`] : [])],
     pullRequestLine: `Requested by ${name} (${email}) through Harness.`,
   }
 }

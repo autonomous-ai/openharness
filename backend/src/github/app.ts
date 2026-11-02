@@ -55,7 +55,9 @@ export function readPrivateKey(value: string): KeyObject {
 /** Both empty: the feature is off. One without the other, or a value that cannot be right, stops the backend at startup
  *  rather than failing the first agent that asks. */
 /** The name a Harness GitHub App's commits carry, whatever the app is called on GitHub (cli/src/lib/swarmGitHub.ts accepts it). */
-export const COMMIT_NAME = 'Harness'
+export const COMMIT_IDENTITY: CommitIdentity = { name: 'Harness by Autonomous', email: 'noreply@autonomous.ai' }
+/** The line a commit, or the merge helper's squash message, names Harness by (attribution.ts; scripts/merge-validated-pr.py). */
+export const HARNESS_CO_AUTHOR = `Co-authored-by: ${COMMIT_IDENTITY.name} <${COMMIT_IDENTITY.email}>`
 
 export function githubAppConfig(env: { GITHUB_APP_ID: string; GITHUB_APP_PRIVATE_KEY: string; GITHUB_APP_SLUG: string }): GitHubAppConfig | null {
   const appId = env.GITHUB_APP_ID.trim(), key = env.GITHUB_APP_PRIVATE_KEY.trim(), slug = env.GITHUB_APP_SLUG.trim()
@@ -102,7 +104,6 @@ export const CI_READS_PER_HOUR = 3
 export const SERVER_PROCESSES_MAX = 8
 export const CI_STALE_MS = 5 * 60_000
 const CI_WAITING = new Set(['queued', 'waiting', 'requested', 'pending'])
-const IDENTITY_RETRY_MS = 10 * 60_000
 
 /** A git author and committer. */
 export interface CommitIdentity { name: string; email: string }
@@ -119,8 +120,8 @@ export class GitHubApp {
   private readonly now: () => number
   private readonly apiUrl: string
   private signed: { jwt: string; until: number } | null = null
-  /** The app's commit identity once read; a failed read is asked again after [IDENTITY_RETRY_MS]. */
-  private identity: { value: CommitIdentity | null; until: number } | null = null
+  /** The app's name, from its configuration or GitHub's answer (botLogin). */
+  private slug: string | null
   private readonly installations = new Map<string, { id: number | null; until: number }>()
   private readonly branches = new Map<string, { value: DefaultBranch; until: number }>()
   /** A repository's name now, by the name asked for (lower case): null when it was not renamed. */
@@ -138,6 +139,7 @@ export class GitHubApp {
     this.fetch = options.fetch ?? fetch
     this.now = options.now ?? Date.now
     this.apiUrl = (options.apiUrl ?? 'https://api.github.com').replace(/\/$/, '')
+    this.slug = config.slug
   }
 
   /** Where an owner installs the app, when its URL name is configured. */
@@ -146,39 +148,24 @@ export class GitHubApp {
   }
 
   /**
-   * Who the app's commits are by: "Harness", at its bot account's address (`<id>+<slug>[bot]@users.noreply.github.com`),
-   * so a commit made with the app's token shows the app, not the made-up address of the machine account that ran git. A Harness
-   * Team account has no git identity of its own, so its commits read "Harness Team <harnessteam@<host>.local>", unverified and
-   * linked to nobody (PR #1934, 2026-10-28). Read once and kept; null while GitHub cannot say, asked again ten minutes later.
-   * [token]: a token to ask with. Asked without one, from a server's shared address, GitHub's limit for unsigned
-   * requests could refuse it, and a Team account's commits stayed the machine's (PR #1948): the token just issued is used.
+   * Who the app's commits are by, as Claude's are by its own line (Dee, task #2136). A Harness Team account has no git identity
+   * of its own, so its commits would read "Harness Team <harnessteam@<host>.local>" (PR #1934). No GitHub account owns this
+   * address, so GitHub links these commits to nobody: telling a Team agent's commits apart rests on who pushed (pushOrigin.ts).
    */
-  async commitIdentity(token?: string): Promise<CommitIdentity | null> {
-    if (this.identity && (this.identity.value || this.identity.until > this.now())) return this.identity.value
-    let value: CommitIdentity | null = null
+  commitIdentity(): CommitIdentity { return COMMIT_IDENTITY }
+
+  /** The app's bot account's login, which GitHub's activity log names as the actor of every push with the app's token: from its
+   *  configured name, else GitHub's answer, remembered. Null while GitHub cannot say. Never read from a commit. */
+  async botLogin(): Promise<string | null> {
+    if (this.slug) return `${this.slug}[bot]`
     try {
-      let slug = this.config.slug
-      if (!slug) {
-        const app = await this.call('GET', '/app', `Bearer ${this.jwt()}`)
-        const named = (app.body as { slug?: unknown }).slug
-        slug = app.status === 200 && typeof named === 'string' && /^[a-z0-9-]{1,100}$/.test(named) ? named : null
-      }
-      if (slug) {
-        const login = `${slug}[bot]`
-        // The app's own JWT is not accepted here; any installation token is, and the bot's id is no secret.
-        const user = await this.call('GET', `/users/${encodeURIComponent(login)}`, token ? `Bearer ${token}` : null)
-        const id = (user.body as { id?: unknown }).id
-        if (user.status === 200 && typeof id === 'number' && Number.isSafeInteger(id) && id > 0) {
-          // Shown as "Harness" (2026-11-02: no "harness-for-autonomous[bot]"); the bot's noreply address is what links the
-          // commit to the app's account on GitHub.
-          value = { name: COMMIT_NAME, email: `${id}+${login}@users.noreply.github.com` }
-        } else console.warn(`[github] the app's bot account ${login} was not read: HTTP ${user.status}`)
-      }
+      const app = await this.call('GET', '/app', `Bearer ${this.jwt()}`)
+      const named = (app.body as { slug?: unknown }).slug
+      if (app.status === 200 && typeof named === 'string' && /^[a-z0-9-]{1,100}$/.test(named)) this.slug = named
     } catch (error) {
       if (!(error instanceof GitHubAppError)) throw error
     }
-    this.identity = { value, until: this.now() + IDENTITY_RETRY_MS }
-    return value
+    return this.slug ? `${this.slug}[bot]` : null
   }
 
   /** The app's own JWT (RS256, ten minutes at most): issued a minute back against clock drift, valid nine minutes, and
@@ -403,9 +390,7 @@ export class GitHubApp {
       if (known && known.until > this.now()) return known.origin
       // The same read of the pull request decides the head and the answer, so a push in between cannot file it under another commit.
       const read: GitHubRead = path => path === pullPath ? Promise.resolve(pull) : call(path)
-      const identity = await this.commitIdentity(token)
-      const bot = /\+([^@]+\[bot\])@/.exec(identity?.email ?? '')?.[1] ?? null
-      const origin = await readPushOrigin(read, name, number, bot)
+      const origin = await readPushOrigin(read, name, number, await this.botLogin())
       if (key) {
         if (this.pushOrigins.size >= PUSH_ORIGINS_KEPT) this.pushOrigins.delete(this.pushOrigins.keys().next().value!)
         // An answer for a head holds for good. An `unknown` is asked again a minute later, so retries cost no more than that.
