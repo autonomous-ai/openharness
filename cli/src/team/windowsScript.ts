@@ -86,7 +86,7 @@ const PRELUDE = [
   "$ErrorActionPreference = 'Stop'",
   "$ProgressPreference = 'SilentlyContinue'",
   '[Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)',
-  // LF alone: the owner's side matches the last line with ./script.ts TEAM_COMPUTER_LINE, whose `$` stops before a CR.
+  // LF alone: the owner's side splits this output into lines at LF, and a CR would stay in what it prints.
   'function say([string]$m) { [Console]::Out.Write("harness: $m`n") }',
   'function die([string]$m, [int]$code = 1) { Clear-Stage; [Console]::Error.Write("harness: $m`n"); exit $code }',
   '$script:RT = $null',
@@ -711,7 +711,6 @@ export function buildWindowsRemoveScript(input: RemoveScriptInput): string {
     `$STATUS_DIR = ${ps(WINDOWS_TEAM_STATUS_DIR)}`,
     `$TASK_PATH = ${ps(WINDOWS_TEAM_TASK_PATH)}`,
     `$TASK_NAME = ${ps(WINDOWS_TEAM_TASK_NAME)}`,
-    `$COMPUTER_ID = ${ps(paths.computerId)}`,
     `$PROFILE_LIST = ${ps('HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList')}`,
     `$SESSION_MANAGER = ${ps('HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager')}`,
     '$account = Get-LocalUser -Name $TEAM -ErrorAction SilentlyContinue',
@@ -727,15 +726,6 @@ export function buildWindowsRemoveScript(input: RemoveScriptInput): string {
     '    if ($mapped) { die "$TEAM_HOME belongs to another account; nothing was removed" 4 }',
     '    $teamSid = $teamProfile[0].SID',
     '  }',
-    '}',
-    // Read by the administrator only from a plain file the team account owns, never through a link, and only in the
-    // form a computer id has.
-    '$computer = $null',
-    "$idDir = Item-At (Join-Path $TEAM_HOME '.harness')",
-    '$idFile = Item-At $COMPUTER_ID',
-    'if ($teamSid -and $idDir -and $idFile -and -not ($idDir.Attributes -band $REPARSE) -and -not ($idFile.Attributes -band $REPARSE) -and -not $idFile.PSIsContainer -and $idFile.Length -le 1024 -and (Owner-Of $COMPUTER_ID) -eq $teamSid) {',
-    '  $line = @(Get-Content -LiteralPath $COMPUTER_ID -TotalCount 1)',
-    "  if ($line.Count -eq 1 -and $line[0] -cmatch '^[A-Za-z0-9_-]{1,128}$') { $computer = $line[0] }",
     '}',
     '',
     '# 1. The team daemon\'s task stops and is disabled, so it starts nothing while the account goes.',
@@ -816,7 +806,6 @@ export function buildWindowsRemoveScript(input: RemoveScriptInput): string {
     '  $others = @(Get-ChildItem -LiteralPath $SHARED -Force | Where-Object { $_.FullName -ne $SHARED_MARK })',
     '  if ($others.Count -eq 0) { [IO.File]::Delete($SHARED_MARK); [IO.Directory]::Delete($SHARED) }',
     '}',
-    'if ($computer) { say "team computer $computer" }',
     'say "removed the Harness Team account, its profile and its daemon\'s task"',
     'Clear-Stage',
     'exit 0',
