@@ -19,7 +19,8 @@
 import type { PrismaClient } from '@prisma/client'
 import { logger } from '../../utils/logger.js'
 import { stableId, type Author, type SuperTabState } from '../model.js'
-import { seedThreadMark } from '../readMarks.js'
+import { seedThreadMark, writeReadMark } from '../readMarks.js'
+import { markActivityChatRead } from '../activity.js'
 import { readBy } from '../parts/indexed.js'
 import { BEHIND_THREADS, groupBy, isReply, MEMBER_SCAN, newestInThreads, readable, row, SCAN_FIELDS, UNREAD_SCAN, type Row } from './inbox.js'
 
@@ -34,6 +35,17 @@ export interface SeedInput { tabId: string; state: SuperTabState; personId: stri
 
 /** A row is a thread reply: the root is another row. */
 const REPLY = { $and: [{ $ne: [{ $ifNull: ['$thread', null] }, null] }, { $ne: ['$thread', '$_id'] }] }
+
+/** Moves the person's mark of a chat forward to `next`, as a read or their own message does: threads it passes keep what they had
+ *  (above), and the replies also in the chat that it passes are read in Activity too (activity.ts). The mark as stored. */
+export async function moveChatMark(db: PrismaClient, input: Omit<SeedInput, 'old'>): Promise<number> {
+  const { tabId, personId, conversationId, now } = input
+  const held = await db.superTabReadMark.findUnique({ where: { id: stableId(tabId, conversationId, personId) }, select: { sequence: true } })
+  const safe = await seedThreadMarks(db, { ...input, old: held?.sequence ?? 0 })
+  const stored = await writeReadMark(db, { tabId, personId, conversationId, sequence: safe, now })
+  await markActivityChatRead(db, { tabId, personId, conversationId, sequence: stored, now })
+  return stored
+}
 
 /** Marks the threads described above and answers the safe next chat mark. */
 export async function seedThreadMarks(db: PrismaClient, input: SeedInput): Promise<number> {
