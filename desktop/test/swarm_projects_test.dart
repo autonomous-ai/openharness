@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_icons.dart';
+import 'package:harness/super_tabs/activity.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/super_tabs/section_heading.dart';
 import 'package:harness/super_tabs/controller.dart';
@@ -206,34 +207,40 @@ void main() {
     await unmount(tester, c);
   });
 
-  testWidgets('a collapsed project keeps its workgroup attention visible', (
-    tester,
-  ) async {
-    final server = projectsServer(), c = server.controller();
-    server.state['agents'] = [
-      {
-        'id': 'worker',
-        'name': 'Builder',
-        'machineId': 'm',
-        'harnessId': 'native',
-        'contributorId': 'owner',
-        'configuration': {'engine': 'codex'},
-      },
-    ];
-    final group = (server.state['conversations'] as List)[1] as Map;
-    group['agentIds'] = ['worker'];
-    group['assignment'] = {'status': 'needs_human', 'agentId': 'worker'};
-    await mount(tester, c);
-    expect(find.byKey(const ValueKey('super-group-offline')), findsNothing);
-    expect(
-      find.descendant(
-        of: find.byKey(const ValueKey('super-group-lead')),
-        matching: find.byTooltip('Needs a human'),
-      ),
-      findsOneWidget,
-    );
-    await unmount(tester, c);
-  });
+  // Quiet Swarm polish: a project's row says only what opening it shows, and Activity holds what needs you.
+  testWidgets(
+    'a collapsed project\'s waiting workgroup is held by Activity, not by a mark on its row',
+    (tester) async {
+      final server = projectsServer(), c = server.controller();
+      server.state['agents'] = [
+        {
+          'id': 'worker',
+          'name': 'Builder',
+          'machineId': 'm',
+          'harnessId': 'native',
+          'contributorId': 'owner',
+          'configuration': {'engine': 'codex'},
+        },
+      ];
+      final group = (server.state['conversations'] as List)[1] as Map;
+      group['agentIds'] = ['worker'];
+      group['assignment'] = {'status': 'needs_human', 'agentId': 'worker'};
+      await mount(tester, c);
+      expect(find.byKey(const ValueKey('super-group-offline')), findsNothing);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('super-group-lead')),
+          matching: find.byTooltip('Needs a human'),
+        ),
+        findsNothing,
+      );
+      expect(
+        SuperTabActivity.of(c).needsYou.map((need) => need.conversationId),
+        contains('offline'),
+      );
+      await unmount(tester, c);
+    },
+  );
 
   testWidgets(
     'the project menu has no update cadence: progress lives in the status card',

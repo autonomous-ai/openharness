@@ -60,7 +60,6 @@ void main() {
       final c = await f.app.superTabs.open(tabId);
       await c.refresh();
       c.select('mobile-lead');
-      c.selectDevices();
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
@@ -76,9 +75,12 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(c.devicesSelected, isTrue);
       expect(c.selectedId, 'mobile-lead');
+      // Members opens from a chat (Quiet Swarm) and stays open over Devices.
       await openSuperTabMembers(tester);
+      c.selectDevices();
+      await tester.pumpAndSettle();
+      expect(c.devicesSelected, isTrue);
       await tester.tap(find.byKey(const ValueKey('super-member-nova')));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Open terminal'));

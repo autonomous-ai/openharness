@@ -14,6 +14,7 @@ import 'controller.dart';
 import 'dialog_scope.dart';
 import 'leaderboard/models_section.dart';
 import 'leaderboard/reader.dart';
+import 'message_row.dart' show SuperTabMessageRow;
 import 'local_models.dart';
 import 'machines.dart';
 import 'model.dart';
@@ -177,6 +178,9 @@ class _FootAction extends StatelessWidget {
   );
 }
 
+/// What a model's row keeps inside its own edges.
+const _modelRowInset = 12.0;
+
 class _ManageModels extends StatelessWidget {
   const _ManageModels({
     required this.controller,
@@ -191,35 +195,37 @@ class _ManageModels extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final projectId = controller.snapshot
-        ?.projectFor(controller.selectedId)
-        ?.id;
     return LaidOutListView(
+      // A model's row has its own 12 inside: its mark starts under the heading.
       padding: const EdgeInsets.symmetric(
-        horizontal: grid.AppDesktop.groupGap,
+        horizontal: SuperTabMessageRow.horizontalInset - _modelRowInset,
         vertical: grid.AppDesktop.controlGap,
       ),
       children: [
         if (board case final board?)
           LeaderboardModelsSection(
             board: board,
-            projectId: projectId,
+            // Whichever project the board asked about: Models is the Swarm's.
+            projectId: board.projectId,
             collapsed: false,
             now: now,
             heading: false,
           ),
         const SizedBox(height: 8),
-        _FootAction(
-          label: 'Your models…',
-          actionKey: const ValueKey('super-local-models'),
-          onPressed: controller.snapshot == null
-              ? null
-              : () => showSwarmLocalModels(
-                  context,
-                  controller,
-                  app: app,
-                  now: now,
-                ),
+        Padding(
+          padding: const EdgeInsets.only(right: _modelRowInset),
+          child: _FootAction(
+            label: 'Your models…',
+            actionKey: const ValueKey('super-local-models'),
+            onPressed: controller.snapshot == null
+                ? null
+                : () => showSwarmLocalModels(
+                    context,
+                    controller,
+                    app: app,
+                    now: now,
+                  ),
+          ),
         ),
       ],
     );
@@ -333,7 +339,7 @@ class _ManageSwarmState extends State<_ManageSwarm> {
     final blocked = _leaveBlocked;
     return LaidOutListView(
       padding: const EdgeInsets.symmetric(
-        horizontal: grid.AppDesktop.groupGap,
+        horizontal: SuperTabMessageRow.horizontalInset,
         vertical: grid.AppDesktop.controlGap,
       ),
       children: [

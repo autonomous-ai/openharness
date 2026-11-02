@@ -1168,8 +1168,18 @@ class SuperTabController extends ChangeNotifier {
   List<SuperTabAgent> terminalAgents(String conversationId) {
     if (accessRevoked || devicesSelected) return const [];
     final id = _terminals[conversationId];
+    if (id == null) return const [];
+    // An agent asked for by name, as its card's Open terminal asks: an older
+    // one a project chat still holds is not among the panes the chat opens.
+    final group = snapshot?.conversation(conversationId);
+    if (id != '*' && group?.agentIds.contains(id) == true) {
+      final panes = snapshot!.paneAgentIds(conversationId);
+      if (!panes.contains(id)) {
+        return snapshot!.agents.where((agent) => agent.id == id).toList();
+      }
+    }
     final panes = snapshot?.paneAgentIds(conversationId) ?? const <String>[];
-    if (id == null || panes.isEmpty) return const [];
+    if (panes.isEmpty) return const [];
     return snapshot!.agents.where((agent) => panes.contains(agent.id)).toList();
   }
 
