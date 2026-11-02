@@ -91,6 +91,45 @@ void main() {
       restored.dispose();
     },
   );
+  // Ken, 2026-11-02: a Reviewer stored in the project chat next to the PM
+  // opened a second terminal there. The project chat shows its coordinator's
+  // terminal alone, whoever else an older Swarm still holds there; a task
+  // shows every member's.
+  test(
+    'opens only the coordinator\'s pane on the project chat, even with older members',
+    () async {
+      final server = ConversationServer();
+      server.state['agents'] = [
+        for (final id in ['a', 'b'])
+          {
+            'id': id,
+            'name': id,
+            'machineId': 'm',
+            'harnessId': 'native-$id',
+            'contributorId': 'owner',
+            'configuration': {'engine': 'codex'},
+          },
+      ];
+      final chats = server.state['conversations'] as List;
+      chats[0]['agentIds'] = ['b', 'a'];
+      chats[0]['leadId'] = 'a';
+      chats[1]['agentIds'] = ['a', 'b'];
+      final c = server.controller();
+      await c.refresh();
+      expect(c.snapshot!.paneAgentIds('lead'), ['a']);
+      c.selectGroupTerminals('lead');
+      expect(c.terminalAgents('lead').map((a) => a.id), ['a']);
+      c.selectGroupTerminals('offline');
+      expect(c.snapshot!.paneAgentIds('offline'), ['a', 'b']);
+      expect(c.terminalAgents('offline').map((a) => a.id), ['a', 'b']);
+      // No coordinator there: no pane at all.
+      chats[0]['leadId'] = null;
+      await c.refresh();
+      expect(c.snapshot!.paneAgentIds('lead'), isEmpty);
+      expect(c.terminalAgents('lead'), isEmpty);
+      c.dispose();
+    },
+  );
   test('terminal selections survive reopening and cannot cross accounts or group membership', () async {
     final server = ConversationServer();
     server.state['agents'] = [
