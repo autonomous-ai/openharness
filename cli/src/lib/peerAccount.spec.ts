@@ -314,6 +314,24 @@ describe('who is at the other end of a loopback connection', () => {
       }
     })
 
+    // #2608's listener check asks through the same default with its own inputs: the helper only knows a connection, and
+    // running it with none would fail with no answer, and the bridge would never move off a held port (Reed's review of #2647).
+    it('sends a question the helper does not know to PowerShell, without running the helper or warning', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const ps = powershell('none')
+        let ran = 0
+        const helper: WindowsNativeRun = async () => { ran++; return { status: 0, stdout: 'yes' } }
+        const other = { HARNESS_LISTEN_PORT: '51794' }
+        expect(await nativeFirst(helper, ps.run)('another script', other)).toEqual({ status: 0, stdout: 'none' })
+        expect(ran).toBe(0)
+        expect(ps.calls).toEqual([{ script: 'another script', inputs: other }])
+        expect(warn).not.toHaveBeenCalled()
+      } finally {
+        warn.mockRestore()
+      }
+    })
+
     it('says no without PowerShell for a helper that hangs, crashes or says anything else', async () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       try {
