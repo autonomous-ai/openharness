@@ -1449,6 +1449,7 @@ export class CableSession {
         if (this.swarmBuddy && CARD_ID.test(tab) && (side === 'pm' || side === 'buddy')) {
           this.host.swarmCardSide?.(tab, side)
           this.followSide(tab, side)
+          if (side === 'buddy') this.queued(() => this.readSharedBuddyNotices(tab)).catch((err) => this.log(`cable: Buddy notices not cleared (${(err as Error).message})`))
         }
         return
       }
@@ -2915,6 +2916,23 @@ export class CableSession {
     for (const key of [...this.notices.keys()]) if (!live.has(key)) this.notices.delete(key)
   }
 
+  /**
+   * The dial showed the Buddy side of a Swarm. The reader's one Swarm Buddy speaks on every card, so one word badged them
+   * all, and the dial clears only the Lead it shows (review of #2500): the others' badges for the same chat are read here,
+   * so seeing the Buddy once is reading it once. A chat only one Lead's notice names (an older Swarm's own) is left alone.
+   */
+  private async readSharedBuddyNotices(tab: string): Promise<void> {
+    const leads = this.host.swarmCards?.()?.find((c) => c.id === tab)?.leads.slice(0, SWARM_LEADS_MAX) ?? []
+    for (const lead of leads) {
+      const notice = lead.buddyNotice
+      if (!notice || leads.filter((l) => l.buddyNotice?.chatId === notice.chatId).length < 2) continue
+      const held = this.notices.get(`${tab}:${lead.id}:buddy`)
+      if (!held?.open || held.id !== notice.id) continue
+      held.open = false
+      await this.send({ t: 'supertab.notice.read', tab, lead: lead.id, chatId: notice.chatId })
+    }
+  }
+
   /** One alert of a Lead (held at `key`): sent once when it is new, unless replayed or read on the desktop (`openChat`, the
    *  conversation the window has open in that Swarm); read on the dial once the desktop opens the chat of one it was sent. */
   private async pushNotice(key: string, tab: string, lead: string, notice: LeadNotice | undefined, replay: boolean, openChat: string | undefined): Promise<void> {
@@ -3044,10 +3062,18 @@ export class CableSession {
    * guessed; a Buddy side where the reader has no Buddy opens nothing, so no Buddy chat is made from a swipe.
    */
   private followSide(tab: string, side: CardSide): void {
-    const [focusedTab, projectId] = this.focusedKey.split('/')
-    if (focusedTab !== tab || !projectId) return
+    const [focusedTab, focusedProject] = this.focusedKey.split('/')
+    if (focusedTab !== tab) return
     const card = this.host.swarmCards?.()?.find((c) => c.id === tab)
-    if (!card?.leads.some((l) => l.projectId === projectId)) return
+    // The window is on the Swarm's one Buddy chat, which names no project (# buddy): the Buddy side is already open, and the
+    // PM side opens the Lead chat of the project the dial has open, else its first, so the dial is not stranded on # buddy
+    // (review of #2500). The Buddy side there asks for nothing.
+    let projectId = focusedProject
+    if (!projectId && side === 'pm' && card) {
+      const shown = this.openLead?.tabId === tab ? card.leads.find((l) => l.id === this.openLead?.leadId) : undefined
+      projectId = (shown ?? card.leads[0])?.projectId
+    }
+    if (!projectId || !card?.leads.some((l) => l.projectId === projectId)) return
     if (side === 'buddy' && !this.buddyIn(card, projectId)) return
     this.openSwarmChat(tab, projectId, side)
   }
