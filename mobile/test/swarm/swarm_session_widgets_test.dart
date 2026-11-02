@@ -156,6 +156,18 @@ void main() {
       expect(label.didExceedMaxLines, isFalse);
     });
 
+    testWidgets('the chip sits right after Tag, not in the middle of the '
+        'row', (tester) async {
+      await pump(tester, sessionBackend());
+      // Room to spare beside + and Tag: the chip is not centred in it.
+      tester.view.physicalSize = const Size(2100, 2532);
+      await tester.pumpAndSettle();
+      final tag = tester.getTopRight(key('swarm-tag'));
+      // Its label, past the chip's own icon and padding.
+      final label = tester.getTopLeft(find.text('New session'));
+      expect(label.dx - tag.dx, lessThan(60));
+    });
+
     testWidgets('a chat that cannot start one says why when the chip is '
         'tapped, and sends plain', (tester) async {
       final fake = sessionBackend(engine: 'codex');
