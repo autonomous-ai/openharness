@@ -271,8 +271,9 @@ class LeaderboardPersonWeek extends StatelessWidget {
   });
   final SuperTabPersonScore score;
 
-  /// Whether it says the points first; a card that shows them in its
-  /// heading leaves them out.
+  /// Whether it says the points first; a card that shows them and the
+  /// three numbers in its heading leaves them out, and from a server without
+  /// details shows nothing more.
   final bool summary;
 
   @override
@@ -286,14 +287,15 @@ class LeaderboardPersonWeek extends StatelessWidget {
     }
     String median(int? ms, String what) =>
         ms == null ? '' : ' · median ${leaderboardDuration(ms)}$what';
+    // A card says the points and the three numbers itself.
+    if (!summary) return const SizedBox.shrink();
     final rows = [
-      if (summary)
-        (
-          'Points',
-          score.medal == null
-              ? '${score.points} ${score.spanName}'
-              : '${score.points} ${score.spanName} · place ${score.rank}',
-        ),
+      (
+        'Points',
+        score.medal == null
+            ? '${score.points} ${score.spanName}'
+            : '${score.points} ${score.spanName} · place ${score.rank}',
+      ),
       (
         'Shipped',
         score.shipped == 0
