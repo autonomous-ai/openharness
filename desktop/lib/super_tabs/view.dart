@@ -249,7 +249,11 @@ class _SuperTabViewState extends State<SuperTabView>
             snapshot!.conversation(project!.leadConversationId)?.leadId ==
                 message.authorId
         ? '$name (${snapshot.roleOf(message.authorId)?.badge ?? 'PM'}) → you'
-        : name;
+        : switch (c.stepNameOf(message)) {
+            // A step's row in its task's chat names its step (task steps design).
+            final String step => '$name · $step',
+            null => name,
+          };
   }
 
   @override
@@ -1948,7 +1952,7 @@ class _SuperTabViewState extends State<SuperTabView>
   /// The messages [id]'s list shows, in order.
   /// A thread reply shows in its thread, and here only when also sent.
   List<SuperTabMessage> _shownMessages(String id) {
-    final messages = c.messages(id);
+    final messages = c.taskMessages(id);
     final answered = answeredPromptAlerts(
       messages,
       (agentId) => c.snapshot?.agent(agentId),

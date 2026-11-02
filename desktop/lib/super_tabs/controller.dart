@@ -22,6 +22,7 @@ import 'parts.dart';
 import 'read_marks.dart';
 import 'reading.dart';
 import 'linked_tasks.dart';
+import 'task_steps.dart';
 
 /// A messages read started beside a state read, and what it asked for.
 typedef _EarlyRead = ({String query, Future<Map<String, dynamic>> page});
@@ -1743,6 +1744,28 @@ class SuperTabController extends ChangeNotifier {
 
   static bool _listed(SuperTabMessage m) =>
       m.source['kind'] != 'update-request';
+
+  /// [id]'s messages with its steps' rows merged in by time (task steps
+  /// design): each step keeps its own conversation, shown inside its task.
+  List<SuperTabMessage> taskMessages(String id) {
+    final state = snapshot;
+    final task = state?.conversation(id);
+    final steps = state == null || task == null
+        ? const <SuperTabConversation>[]
+        : superTabStepsOf(state, task);
+    if (steps.isEmpty) return messages(id);
+    return List.unmodifiable(
+      superTabMergeSteps(messages(id), {
+        for (final step in steps) step.id: messages(step.id),
+      }),
+    );
+  }
+
+  /// The name of the step [message] was written in; null for a task's own.
+  String? stepNameOf(SuperTabMessage message) {
+    final group = snapshot?.conversation(message.conversationId);
+    return group != null && superTabIsStep(group) ? group.step : null;
+  }
 
   /// [group]'s linked tasks with their checks' results ([superTabLinkedLine]);
   /// null without any.
@@ -3614,13 +3637,30 @@ class SuperTabController extends ChangeNotifier {
     bool older = false,
     bool light = false,
     _EarlyRead? early,
-  }) => _reading[(id, older)] ??=
-      _loadMessages(id, older: older, light: light, early: early).whenComplete(
-        () {
+  }) {
+    final read = _reading[(id, older)] ??=
+        _loadMessages(
+          id,
+          older: older,
+          light: light,
+          early: early,
+        ).whenComplete(() {
           // A block: whenComplete would wait on the removed future, itself.
           _reading.remove((id, older));
-        },
-      );
+        });
+    // The open task's steps are read with it: its chat shows their rows.
+    if (!older && id == selectedId) _readSteps(id, light: light);
+    return read;
+  }
+
+  void _readSteps(String id, {required bool light}) {
+    final state = snapshot;
+    final task = state?.conversation(id);
+    if (state == null || task == null) return;
+    for (final step in superTabStepsOf(state, task)) {
+      unawaited(_readMessages(step.id, light: light));
+    }
+  }
 
   Future<void> _loadMessages(
     String id, {

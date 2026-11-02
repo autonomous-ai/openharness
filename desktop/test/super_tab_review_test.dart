@@ -317,4 +317,32 @@ void main() {
     expect(listed, contains('old'));
     expect(listed, isNot(contains('copy')));
   });
+
+  // Task steps design: a task's chat shows its steps' rows by time, each
+  // with its step's name beside the author.
+  testWidgets("a task's chat shows its steps' rows with the step's name", (
+    tester,
+  ) async {
+    final server = groupServer(
+      linked: [
+        {
+          ...conversationFixture('design', 'Design'),
+          'number': 31,
+          'reviewOf': 'offline',
+          'step': 'Design',
+          'agentIds': ['reviewer'],
+        },
+      ],
+      messages: [('builder', 'Draft is up')],
+    );
+    server.append('Two findings on the draft', conversationId: 'design');
+    server.messages.last['author'] = {
+      'kind': 'agent',
+      'id': 'reviewer',
+      'name': 'Nova',
+    };
+    await showView(tester, server);
+    expect(find.textContaining('Two findings on the draft'), findsOneWidget);
+    expect(find.textContaining('Nova · Design'), findsOneWidget);
+  });
 }
