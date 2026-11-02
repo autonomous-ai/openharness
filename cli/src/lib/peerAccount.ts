@@ -137,16 +137,28 @@ export function windowsPeerQuery(peerPort: number, ownPort: number): { script: s
   }
 }
 
+/**
+ * How many lookups run at once. Each is a PowerShell in this account for up to WINDOWS_PEER_MS, and whoever heard the
+ * hook token could open connections without end (Luna's review of #2605): one past these is no. The callers that still
+ * show a secret over TCP are few (old clients, the plugins, the bridge), and a refused one tries again.
+ */
+export const WINDOWS_PEER_LOOKUPS = 4
+let windowsLookups = 0
+
 async function askWindows(socket: Socket, run: WindowsPeerRun): Promise<boolean> {
   const peerPort = socket.remotePort, ownPort = socket.localPort
   // As on Linux and macOS: only an exact pair of addresses makes the pair of ports name one connection.
   if (!peerPort || !ownPort || socket.remoteAddress !== '127.0.0.1' || socket.localAddress !== '127.0.0.1') return false
+  if (windowsLookups >= WINDOWS_PEER_LOOKUPS) return false
   const query = windowsPeerQuery(peerPort, ownPort)
+  windowsLookups++
   try {
     const result = await run(query.script, query.inputs)
     return result.status === 0 && result.stdout.trim() === 'yes'
   } catch {
     return false
+  } finally {
+    windowsLookups--
   }
 }
 
