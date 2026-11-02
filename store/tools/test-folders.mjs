@@ -8,9 +8,8 @@ const MAX_ROOT_BYTES = 60
 
 const made = new Set()
 
-/** A new folder for this spec file, removed by [removeTempFolders]. */
-export function tempFolder(prefix) {
-  const root = Buffer.byteLength(tmpdir()) <= MAX_ROOT_BYTES ? tmpdir() : '/tmp'
+/** A new folder for this spec file, under [root], removed by [removeTempFolders]. */
+export function tempFolder(prefix, root = Buffer.byteLength(tmpdir()) <= MAX_ROOT_BYTES ? tmpdir() : '/tmp') {
   const dir = mkdtempSync(join(root, prefix))
   made.add(dir)
   return dir
