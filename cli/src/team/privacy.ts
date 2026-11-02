@@ -277,6 +277,11 @@ export function readTeamStatus(path: string, read: (path: string) => string = (a
   if (privacy) status.privacy = privacy
   const engines = enginesOf(value.engines)
   if (engines) status.engines = engines
+  const purges = value.purges as Record<string, unknown> | undefined
+  if (purges && typeof purges === 'object' && Number.isSafeInteger(purges.pending) && (purges.pending as number) >= 0
+    && typeof purges.unreadable === 'boolean' && typeof purges.at === 'number' && Number.isFinite(purges.at)) {
+    status.purges = { pending: purges.pending as number, unreadable: purges.unreadable, at: purges.at }
+  }
   return status
 }
 
