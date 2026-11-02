@@ -468,7 +468,9 @@ void _controllerTests() {
       final view = savedWithChats(server, ids);
       fakeAsync((async) {
         final c = _controller(_Reads(server), reading: SuperTabReading.desktop)
-          ..drawSaved(view);
+          ..drawSaved(view)
+          ..start();
+        async.flushMicrotasks();
         expect(
           (c.savedView!['chats'] as List).map((chat) => (chat as Map)['id']),
           ['chat-2', 'chat-1', 'chat-0'],
