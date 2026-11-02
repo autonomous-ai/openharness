@@ -1,4 +1,5 @@
 import 'package:clock/clock.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -214,6 +215,30 @@ void main() {
         expect(left(find.text(heading)), marks.single, reason: heading);
       }
     });
+  });
+
+  testWidgets('a New replies row offers Unfollow on hover, nothing at rest', (
+    tester,
+  ) async {
+    final server = full();
+    final activity = await loaded(tester, server);
+    await show(tester, activity);
+    final row = find.byKey(
+      const ValueKey('super-activity-row-thread:offline/message-1'),
+    );
+    expect(find.text('Unfollow'), findsNothing);
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.moveTo(tester.getCenter(row));
+    await tester.pumpAndSettle();
+    expect(find.text('Unfollow'), findsOneWidget);
+    await tester.runAsync(() async {
+      await tester.tap(find.text('Unfollow'));
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    });
+    await tester.pumpAndSettle();
+    expect(server.followPosts.single['follow'], false);
+    expect(server.followPosts.single['root'], 'message-1');
   });
 
   testWidgets('a row opens where it is: agent, tag, thread and done task', (

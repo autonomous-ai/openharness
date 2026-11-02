@@ -34,8 +34,9 @@ Map<String, dynamic> _group(ConversationServer server, String id) =>
         .cast<Map<String, dynamic>>()
         .firstWhere((g) => g['id'] == id);
 
-/// The task in `offline` waiting on the reader, as its agent asked.
-void wait(ConversationServer server) {
+/// The task in `offline` waiting on its requester, the default reader.
+void wait(ConversationServer server, {String requester = 'owner'}) {
+  _group(server, 'offline')['requesterId'] = requester;
   _group(server, 'offline')['assignment'] = {
     'id': 'a1',
     'agentId': 'kestrel',
@@ -69,8 +70,11 @@ Map<String, dynamic> unreadThread(String root, {String text = 'Root text'}) => {
   'follow': null,
 };
 
-Future<SuperTabActivity> load(ConversationServer server) async {
-  final c = server.controller();
+Future<SuperTabActivity> load(
+  ConversationServer server, {
+  String account = 'owner',
+}) async {
+  final c = server.controller(account: account);
   addTearDown(() async {
     await c.flush();
     c.dispose();
@@ -146,6 +150,57 @@ void main() {
         };
         final working = await load(server);
         expect(working.needsYou, isEmpty);
+      },
+    );
+  });
+
+  group('what is for this reader', () {
+    ConversationServer twoPeople() {
+      final server = swarm()..followedThreads = null;
+      (server.state['people'] as List).add({
+        'id': 'peer',
+        'email': 'peer@example.com',
+        'role': 'collaborator',
+      });
+      return server;
+    }
+
+    test('a task waiting on nobody named is for its requester alone', () async {
+      final server = twoPeople();
+      wait(server, requester: 'peer');
+      final other = await load(server);
+      expect(other.needsYou, isEmpty);
+      expect(other.count, 0);
+      expect(other.unread, isFalse);
+      final requester = await load(server, account: 'peer');
+      expect(
+        [for (final n in requester.needsYou) n.kind],
+        [SuperTabNeedKind.agent],
+      );
+      expect(requester.count, 1);
+    });
+
+    test('a task asked of one person is for that person alone', () async {
+      final server = twoPeople();
+      wait(server, requester: 'owner');
+      _group(server, 'offline')['assignment']['askedOf'] = 'peer';
+      expect((await load(server)).count, 0);
+      expect((await load(server, account: 'peer')).count, 1);
+    });
+
+    test(
+      'a tag in a thread the reader does not follow is still Needs you',
+      () async {
+        final server = swarm();
+        server.tag('message-2', threadId: 'message-1', messageSequence: 2);
+        server.followedThreads = {'unread': [], 'read': [], 'more': false};
+        final activity = await load(server);
+        expect(
+          [for (final n in activity.needsYou) n.kind],
+          [SuperTabNeedKind.mention],
+        );
+        expect(activity.count, 1);
+        expect(activity.newReplies, isEmpty);
       },
     );
   });
