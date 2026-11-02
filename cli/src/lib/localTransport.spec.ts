@@ -129,12 +129,14 @@ describe('openLocalWs: a WebSocket to the daemon on Windows opens the pipe and n
     served.server.on('upgrade', (req: IncomingMessage, socket, head) => {
       trusted = isTrustedLocal(req)
       wss.once('headers', (headers) => { headers.push(`${PIPE_PROOF_HEADER}: ${pipeProofOf(req)}`) })
-      wss.handleUpgrade(req, socket, head, (ws) => ws.close())
+      // Only the client closes, and the server's end is told nothing it could fail on: both closing at once wrote a close
+      // frame to a socket already gone, an EPIPE with no listener (CI on #2605).
+      wss.handleUpgrade(req, socket, head, (ws) => { ws.on('error', () => {}) })
     })
     let connected = false
     const socket = openLocalWs<WebSocket>('/nowhere', 4242, () => { connected = true; throw new Error('connect was called') }, 'win32', () => ({ pipe, token }))
     await new Promise<void>((resolve, reject) => { socket.on('open', () => resolve()); socket.on('error', reject) })
-    socket.close()
+    await new Promise<void>((resolve) => { socket.once('close', () => resolve()); socket.close() })
     expect(trusted).toBe(true)
     expect(connected).toBe(false)
   })
