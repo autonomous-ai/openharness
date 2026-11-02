@@ -103,10 +103,9 @@ async function ownerWithoutEmail() {
   await db.user.update({ where: { id: owner.sub }, data: { email: '' } })
   onTestFinished(async () => { await db.user.update({ where: { id: owner.sub }, data: { email: owner.email } }) })
 }
-/** The team account switched on for this test, in the Swarms of [owners] or everyone's. */
-function teamAccounts(owners = '') {
+/** The team account switched on for this test, in every Swarm. */
+function teamAccounts() {
   vi.stubEnv('SWARM_TEAM_ACCOUNT_REQUIRED', '1')
-  vi.stubEnv('SWARM_TEAM_ACCOUNT_OWNERS', owners)
   onTestFinished(() => { vi.unstubAllEnvs() })
 }
 /** A tab whose project is on [repositoryUrl], with a Builder on the host's machine working on a task. */
@@ -344,13 +343,16 @@ describe('a queued start\'s preparation token', () => {
   })
 
   // Rolled out with the team account (machines.ts teamAccountRequired), so a bug in it cannot stop anyone else's Swarm.
-  it('asks no approval in a Swarm the team account is not tried in, or with the switch off', async () => {
-    teamAccounts('someone@example.com')
+  // Every Swarm alike (2026-11-02): an owner list left in a deployment (SWARM_TEAM_ACCOUNT_OWNERS, read 10-27 to 11-02) no
+  // longer exempts a Swarm from approving its repositories.
+  it('asks approval in any Swarm with the switch on, whatever SWARM_TEAM_ACCOUNT_OWNERS says, and none with it off', async () => {
+    teamAccounts()
+    vi.stubEnv('SWARM_TEAM_ACCOUNT_OWNERS', 'someone@example.com')
     const env = await fresh({ approveAll: false })
     const { tab, startId } = await queued(env)
     const status = await env.app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/projects/lead/github`, headers: { authorization: `Bearer ${owner.sub}` } })
-    expect(status.json().data).toMatchObject({ state: 'covered', repository: 'example/app' })
-    expect((await prepare(env, tab, startId)).json().data).toMatchObject({ github: true, token: 'ghs_fixture_1' })
+    expect(status.json().data).toMatchObject({ state: 'not-approved', repository: 'example/app' })
+    expect((await prepare(env, tab, startId)).statusCode).toBe(403)
     vi.unstubAllEnvs()
     const off = await queued(env)
     expect((await prepare(env, off.tab, off.startId)).json().data).toMatchObject({ github: true })
