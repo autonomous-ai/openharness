@@ -34,23 +34,6 @@ typedef SwarmThreadRow = Widget Function(
   required VoidCallback onTap,
 });
 
-/// Where a thread opens: on one of its messages, or at its first unread
-/// reply — the newest when all are read. Activity, a link and a tag open a
-/// thread this way, so the person does not scroll to find what they came for.
-class SwarmThreadFocus {
-  const SwarmThreadFocus.message(String this.messageId);
-  const SwarmThreadFocus.firstUnread() : messageId = null;
-
-  /// The message to land on; null for the first unread reply.
-  final String? messageId;
-
-  bool get firstUnread => messageId == null;
-
-  /// How many pages of earlier replies are read to find [messageId], as many
-  /// as the chat reads back to a quoted message.
-  static const maxEarlierPages = 50;
-}
-
 /// Draws the person's reply on its way: "Sending…", then "Not sent · Retry"
 typedef SwarmThreadPending = Widget Function(
   SwarmThread thread,
@@ -133,7 +116,7 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
 
   /// The thread's read mark as it was when the page opened, before showing
   /// the thread moves it: the first unread reply is the first after it.
-  late final int _readThrough = _markAtOpen();
+  late final int _readThrough = widget.focus?.after ?? _markAtOpen();
 
   int _markAtOpen() {
     final chat = widget.chat, reader = chat.reader;

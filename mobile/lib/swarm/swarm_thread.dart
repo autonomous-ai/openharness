@@ -10,6 +10,28 @@ import 'swarm_reader.dart';
 import 'swarm_request.dart';
 import 'swarm_uploads.dart';
 
+/// Where a thread opens: on one of its messages, or at its first unread
+/// reply — the newest when all are read. Activity, a link and a tag open a
+/// thread this way, so the person does not scroll to find what they came for.
+class SwarmThreadFocus {
+  const SwarmThreadFocus.message(String this.messageId) : after = null;
+  const SwarmThreadFocus.firstUnread({this.after}) : messageId = null;
+
+  /// The message to land on; null for the first unread reply.
+  final String? messageId;
+
+  /// For the first unread reply: the sequence the thread was read through
+  /// when the person asked, which opening it may since have moved. Null reads
+  /// the thread's mark as the page opens.
+  final int? after;
+
+  bool get firstUnread => messageId == null;
+
+  /// How many pages of earlier replies are read to find [messageId], as many
+  /// as the chat reads back to a quoted message.
+  static const maxEarlierPages = 50;
+}
+
 /// One thread of a chat on the phone: its root, its replies and the reply
 /// box — the desktop's thread panel (`SuperTabThreadPanel`) and what its
 /// controller does for it (`loadThread`, `sendThreadReply`).
