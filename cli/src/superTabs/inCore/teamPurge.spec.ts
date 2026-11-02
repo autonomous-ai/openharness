@@ -711,6 +711,8 @@ describe('isPmCodexHome', () => {
     const home = 'C:\\Users\\harnessteam', homes = `${home}\\.harness-pm-homes`
     for (const codexHome of [homes, `${homes}\\codex`, `${homes}\\super-start-1`, `${homes}\\super-start-1\\codex\\sessions`,
       `${homes}\\super-start-1\\other`, `${home}\\.harness-pm-homes-old\\super-start-1\\codex`, `${homes}\\..\\x\\codex`,
+      // Windows drops a name's trailing spaces and dots: `.. ` is `..`, and purge deletes the parent, the whole Team home.
+      `${homes}\\.. \\codex`, `${homes}\\. \\codex`, `${homes}\\super-start-1.\\codex`, `${homes}\\a b\\codex`,
       'C:\\Users\\owner\\.harness-pm-homes\\super-start-1\\codex', 'D:\\.harness-pm-homes\\super-start-1\\codex', '']) {
       expect(isPmCodexHome(home, codexHome, win32), codexHome).toBe(false)
     }

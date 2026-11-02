@@ -26,11 +26,14 @@ export function isTeamDaemon(deps: { configExists?: () => boolean; config?: () =
 
 /** Where a Team daemon runs each Codex Product Manager in an engine home of its own, deleted whole when the Swarm ends it. */
 export const PM_HOMES = '.harness-pm-homes'
+/** A start's id as it may name its PM home: letters, digits, `_` and `-` only, so never `..`, nor a name Windows would cut a
+ *  trailing space or dot off (inCore/teamPurge.ts isPmCodexHome). */
+export const PM_START_ID = /^[A-Za-z0-9_-]{1,160}$/
 
 /** The engine home a Product Manager's start [creationId] runs in on a Team daemon: its own, for Codex (security re-check 2
  *  of #2089, the Lead's option A). Null for Claude Code, whose transcripts core reads only from the shared home (its files
  *  are scrubbed instead, inCore/teamApps.ts scrubClaudeSession), and anywhere but a Team daemon. */
 export function pmEngineHome(engine: string, creationId: string, team: boolean, home: string): string | null {
-  if (!team || engine !== 'codex' || !/^[A-Za-z0-9_-]{1,160}$/.test(creationId)) return null
+  if (!team || engine !== 'codex' || !PM_START_ID.test(creationId)) return null
   return join(home, PM_HOMES, creationId, 'codex')
 }

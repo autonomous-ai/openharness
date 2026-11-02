@@ -30,12 +30,19 @@ const script = buildWindowsSetupScript(input)
 // File and folder rights, as an access mask holds them (winnt.h).
 const RIGHT = {
   readOrList: 0x1, writeOrAddFile: 0x2, appendOrAddFolder: 0x4, writeEa: 0x10, deleteChild: 0x40, writeAttributes: 0x100,
-  delete: 0x10000, writeDac: 0x40000, writeOwner: 0x80000,
+  delete: 0x10000, writeDac: 0x40000, writeOwner: 0x80000, genericAll: 0x10000000, genericWrite: 0x40000000,
 } as const
 /** Every right that changes a folder, a file in it, or who may: what "read only" must hold none of. */
 const CHANGES = RIGHT.writeOrAddFile | RIGHT.appendOrAddFolder | RIGHT.writeEa | RIGHT.deleteChild | RIGHT.writeAttributes
-  | RIGHT.delete | RIGHT.writeDac | RIGHT.writeOwner
+  | RIGHT.delete | RIGHT.writeDac | RIGHT.writeOwner | RIGHT.genericAll | RIGHT.genericWrite
 const FULL = 0x1f01ff
+
+/** A mask as the script writes one: `FA`, or a number in hex. Any other name throws rather than read as no rights. */
+function maskOf(mask: string): number {
+  if (mask === 'FA') return FULL
+  if (/^0x[0-9a-f]{1,8}$/i.test(mask)) return Number(mask)
+  throw new Error(`a mask this decoder cannot read: ${mask}`)
+}
 
 interface Ace { sid: string; mask: number; onFolder: boolean; onChildren: boolean }
 
@@ -47,7 +54,7 @@ function dacl(sddl: string): { protected: boolean; aces: Ace[] } {
     const [type, flags, mask, , , sid] = match[1]!.split(';')
     if (type !== 'A') throw new Error(`not an allow ACE: ${match[0]}`)
     const inherits = /OI|CI/.test(flags!)
-    return { sid: sid!, mask: mask === 'FA' ? FULL : Number(mask), onFolder: !flags!.includes('IO'), onChildren: inherits }
+    return { sid: sid!, mask: maskOf(mask!), onFolder: !flags!.includes('IO'), onChildren: inherits }
   })
   return { protected: body[1]!.includes('P'), aces }
 }
@@ -64,6 +71,14 @@ const OWNER = '$OWNER_SID', TEAM = '$teamSid', SYSTEM = 'SY', ADMINS = 'BA'
 const ONLY = (aces: Ace[]) => [...new Set(aces.map((ace) => ace.sid))].sort()
 const rights = (aces: Ace[], sid: string, where: 'folder' | 'children'): number =>
   aces.filter((ace) => ace.sid === sid && (where === 'folder' ? ace.onFolder : ace.onChildren)).reduce((all, ace) => all | ace.mask, 0)
+
+describe('the decoder these tests read the ACLs with', () => {
+  // Number('GW') is NaN, and NaN & anything is 0: a named mask read as no rights at all (security review 1 of #2568).
+  it('refuses a mask it cannot read, and counts generic write and generic all as changes', () => {
+    for (const named of ['GW', 'GA', 'FW', 'RC']) expect(() => dacl(`D:P(A;;${named};;;BU)`), named).toThrow()
+    for (const generic of ['0x40000000', '0x10000000']) expect(dacl(`D:P(A;;${generic};;;BU)`).aces[0]!.mask & CHANGES, generic).not.toBe(0)
+  })
+})
 
 describe('the folders the Windows setup script makes, by what each account may do there', () => {
   it('the sign-in handover: the owner adds the code, the team account reads and deletes it, nobody else sees it', () => {

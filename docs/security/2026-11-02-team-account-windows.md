@@ -8,7 +8,8 @@ text and values the code produces. Nothing on a real account, permission or file
 
 ## Answer
 
-**The folders hold; the daemon's port does not.** The ACLs setup writes keep the Team account out of the owner's profile.
+**The folders hold; the daemon's port does not.** Ports were covered only in part: the Team daemon's own port and the pty
+host's hello were not read. The ACLs setup writes keep the Team account out of the owner's profile.
 Other accounts can't read the sign-in code or the relay's token, and the daemon's pipe proves both ends. But on Windows the owner's
 local credential still goes over TCP to whoever holds the daemon's port, and the daemon accepts it from any account (W1).
 The Team account's daemon starts at boot, before the owner signs in. Purge was written for POSIX paths. It never deleted a
@@ -20,7 +21,7 @@ Codex Product Manager's own home on Windows (W2, fixed in this pull request), an
 | W2 | **High** | Purge left a Codex Product Manager's whole home on Windows, and could take every PM's home on any platform | **Fixed here**, test first |
 | W3 | Medium | Purge can't scrub a Claude Code Product Manager on Windows: the account stays held, its memory stays | Read in code, fix requested |
 | W4 | Medium | The Team account can stall the owner's read of its status file | Read in code, fix requested |
-| W5 | Low | The elevated scripts walk and delete folders the Team account can write | Read in code, fix requested |
+| W5 | Medium | The elevated scripts walk and delete folders the Team account can write | Read in code, fix requested |
 | W6 | Low | Setup closes the profile folder itself, not what inside it lets others in | Read in code, noted |
 | W7 | Low | The elevated setup prints what the Team account wrote to the administrator's console as it is | Read in code, fix requested |
 
@@ -34,9 +35,11 @@ The macOS findings that don't depend on the platform apply here unchanged: H2 (a
 This is the macOS H1 again, but on Windows nothing of the #2016 fix applies:
 
 - **Hooks send it over TCP.** `cli/hook/notify.mjs:321` `hookRoute`: on Windows every engine hook posts to
-  `127.0.0.1:<port>` with the full `hook-credential`, not the hook-only token. Hooks fire at every session start and prompt.
+  `127.0.0.1:<port>` with the full `hook-credential`, not the hook-only token. Hooks fire at every session start and prompt,
+  and the request carries the owner's prompt too (as `notify.mjs`'s own comment on `hookRoute` says): the holder reads it.
 - **CLI clients add it to TCP requests.** `lib/localCredential.ts:35` `localCredentialHeaders` returns the credential on Windows
-  whatever the path (on macOS and Linux only when no socket can exist). Which callers speak TCP on Windows was not traced.
+  whatever the path (on macOS and Linux only when no socket can exist). Which of its callers speak TCP on Windows is under
+  "Not verified".
 - **The daemon accepts it from any account.** `lib/peerAccount.ts:112` `peerIsThisAccount` answers yes on Windows without
   asking. `hookServer.ts:496-500` then lets the holder use the whole local API, the owner's shell included.
 - **No race is needed after a reboot.** The Team daemon's task starts at boot (`team/windowsScript.ts:649`, `BootTrigger`). The
@@ -65,11 +68,14 @@ Purge answered `ok`, and the PM's Codex history, sessions and sign-in stayed in 
 sweep doesn't look there.
 
 The same check also matched a home one level under the PM homes folder. Purge deletes the home's parent, so that would have deleted
-every PM's home. Only the daemon writes the record, so this needs a bad record.
+every PM's home. It also took any id, and Windows drops a name's trailing spaces and dots: an id of `.. ` is `..`, and the parent
+deleted is the whole Team home (security review 1 of this pull request). Only the daemon writes the record, in the Team account's
+data folder, so this needs a bad record, or a Team agent that writes it.
 
-**Fixed:** `isPmCodexHome` accepts exactly `<home>\.harness-pm-homes\<id>\codex`, checked with the platform's own path rules.
+**Fixed:** `isPmCodexHome` accepts exactly `<home>\.harness-pm-homes\<id>\codex`, checked with the platform's own path rules,
+and the id by `pmEngineHome`'s own rule (`PM_START_ID`: letters, digits, `_` and `-`).
 Tests: `teamPurge.spec.ts`, "isPmCodexHome" (with `path.win32`), and "of a Codex session whose home is not one of
-pmEngineHome's". Both fail on `main`. PR #2559 adds the same `/` check in a second place and needs the same helper.
+pmEngineHome's". Both fail on `main`; the `.. ` case fails without the id rule. PR #2559 adds the same `/` check in a second place and needs the same helper.
 
 ### W3. Purge can't scrub a Claude Code Product Manager on Windows (Medium)
 
@@ -99,7 +105,7 @@ Not tried: no Windows machine.
 **Fix:** read the status off the daemon's main thread with a deadline, in a worker or a child process. Or ask the Team daemon
 for it over a connection with a timeout.
 
-### W5. The elevated scripts walk folders the Team account can write (Low)
+### W5. The elevated scripts walk folders the Team account can write (Medium)
 
 `Remove-Tree` (`windowsScript.ts:104-114`) checks that a folder is not a link, then lists it and deletes by path. Removal runs it,
 as an administrator, on the Status folder (`:799`, which the Team account may write) and on what is left of its profile
@@ -109,12 +115,14 @@ delete files elsewhere.
 Removal stops the Team account's processes once (`:739-744`). A process still running then holds the profile, and removal stops
 before deleting anything (`:761-764`). Only a process that starts between that check and the account's deletion (`:771`) could
 race this. That means a new sign-in of the account, such as a task it registered itself. Tasks the Team account registered are
-not removed with it.
+not removed with it. So a Team agent could register a repeating task long before any removal and aim at that window, rather than
+count on luck. Whether a standard account can register a task that runs while it is not signed in (an S4U task; setup gives it
+the batch logon right) is under "Not verified": rated Medium until it is (security review 1 of this pull request).
 
 On a repair, `Set-Folder` sets an inheritable ACL on the existing Status folder (`:128-130`), and Windows propagates it into the
 Team account's files there. Whether that propagation follows a link the account planted was not checked.
 
-**If a way is found to keep a Team process running past that check, this is High:** deleting as an administrator can be turned
+**If such a task can be registered, this is High:** deleting as an administrator can be turned
 into taking the computer. **Fix:** first rename the folder inside the administrators-only parent, and take the Team account's
 access off it on the open handle, without propagation. Then delete by handle, refusing reparse points. Also remove the Team
 account's own scheduled tasks.
@@ -165,5 +173,9 @@ as `privacy.ts` `statusText` does.
   Code's Windows paths (W3). The SDDL tests check what setup asks Windows for, not what Windows did.
 - Whether another standard account can read a Team or owner process's command line on Windows (macOS M2). Windows normally
   needs a right on the process that it doesn't give across accounts. Not checked.
-- The Team daemon's own loopback port (18493) and the pty host's hello were not reviewed beyond what the macOS audit says.
+- Ports were covered only in part: the Team daemon's own loopback port (18493) and the pty host's hello were not read beyond
+  what the macOS audit says.
+- Which callers of `localCredentialHeaders` speak TCP on Windows (W1): `cli.ts`, `remoteCommand.ts`, `superTabs/attach.ts`,
+  `devices/client.ts`, `agentClient/settings.ts`, `lib/daemonEndpoint.ts`, `lib/autonomous-device/addonCommand.ts`. Not traced.
+- Whether a standard account can register a scheduled task for itself that runs while it is not signed in (W5).
 - The integration suite was not run: this change touches no backend code.

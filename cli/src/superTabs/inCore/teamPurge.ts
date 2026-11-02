@@ -17,7 +17,7 @@ import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, ren
 import { readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, sep, type PlatformPath } from 'node:path'
 import { createInterface } from 'node:readline'
-import { PM_HOMES } from '../teamDaemon.js'
+import { PM_HOMES, PM_START_ID } from '../teamDaemon.js'
 
 /** What a purge needs of a session, kept until it finishes. `pastes`: the paste cache files its history lines kept. */
 export interface PurgeTarget {
@@ -111,7 +111,9 @@ export function isPmCodexHome(home: string, codexHome: string, paths: Pick<Platf
   const inside = paths.relative(paths.join(home, PM_HOMES), codexHome)
   if (paths.isAbsolute(inside)) return false
   const [id, last, ...more] = inside.split(paths.sep)
-  return !!id && id !== '..' && id !== '.' && last === 'codex' && more.length === 0
+  // pmEngineHome's own rule for the id: `.. ` passed a check for `..`, and Windows reads it as `..`, the whole Team home
+  // (security review 1 of #2568).
+  return !!id && PM_START_ID.test(id) && last === 'codex' && more.length === 0
 }
 
 const claudeSlug = (cwd: string) => cwd.replace(/[^A-Za-z0-9]/g, '-')
