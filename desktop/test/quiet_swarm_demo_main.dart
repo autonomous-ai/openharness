@@ -16,6 +16,7 @@ import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/pane_layout_store.dart';
 import 'package:harness/web/shell/web_chrome.dart';
+import 'package:harness/widgets/workspace_account_button.dart';
 
 import 'support/humans_fixture.dart';
 import 'support/super_tab_fixture.dart';
@@ -56,6 +57,7 @@ ConversationServer _swarm(String id, String name) {
     ..['name'] = name
     ..['ownerId'] = 'ken15'
     ..['swarmBuddy'] = true
+    ..['mentionsWaiting'] = id == 'autonomous-ai' ? 3 : 0
     ..['people'] = [
       for (final person in _people)
         {
@@ -81,7 +83,8 @@ ConversationServer _swarm(String id, String name) {
           'maxAgents': 4,
           'scope': 'swarm',
           'observation': {
-            'receivedAt': online ? now : now - 3600000,
+            // Ahead, so that time passing in the browser leaves it online.
+            'receivedAt': online ? now + 3600000 : now - 3600000,
             'resources': {'cpuPercent': 20},
           },
         },
@@ -103,6 +106,14 @@ ConversationServer _swarm(String id, String name) {
     ..append('Prod DB profile: five slow reads to fix.')
     ..append('Three fixes are on main.')
     ..append('ok i like a. let\'s make it perfect.');
+  const said = ['ken15', 'ken15', 'diego'];
+  for (var i = 0; i < said.length; i++) {
+    server.messages[i]['author'] = {
+      'kind': 'person',
+      'id': said[i],
+      'name': said[i],
+    };
+  }
   server.leaderboard = {
     ...humansSwarm().leaderboard!,
     'byModel': [
@@ -146,7 +157,16 @@ class _DemoApi extends ApiClient {
       return _ok({
         'tabs': [
           for (final id in servers.keys)
-            {'id': id, 'name': servers[id]!.state['name'], 'ownerId': 'ken15'},
+            {
+              'id': id,
+              'name': servers[id]!.state['name'],
+              'ownerId': 'ken15',
+              // Something in hardware needs the reader: its tab is bold.
+              if (id == 'hardware') ...{
+                'mentionsWaiting': 2,
+                'mentionsDigest': 'demo',
+              },
+            },
         ],
         'next': null,
       });
@@ -169,6 +189,11 @@ bool _press(String key) {
     final widget = element.widget;
     if (widget.key == ValueKey(key) && widget is InkWell) {
       widget.onTap?.call();
+      done = true;
+      return;
+    }
+    if (widget.key == ValueKey(key) && widget is WorkspaceAvatarButton) {
+      widget.onPressed?.call();
       done = true;
       return;
     }
@@ -224,7 +249,10 @@ Future<void> main() async {
       home: SwarmScreen(
         notifier: app,
         nativeTabs: false,
-        chrome: webWorkspaceChrome(app),
+        // Screen 12 is a Desktop's narrow window, not the web on a phone.
+        chrome: Uri.base.queryParameters['screen'] == '12'
+            ? null
+            : webWorkspaceChrome(app),
       ),
     ),
   );
@@ -242,12 +270,17 @@ Future<void> main() async {
   final screen = Uri.base.queryParameters['screen'] ?? '1';
   await Future<void>.delayed(const Duration(seconds: 2));
   switch (screen) {
+    case '0m':
+      await _pressWhenThere('swarm-account-button');
     case '8':
       await _pressWhenThere('super-swarm-switcher');
     case '10' || '10b' || '10c':
       await _pressWhenThere('super-manage');
       await Future<void>.delayed(const Duration(milliseconds: 300));
-      if (screen == '10b') await _pressWhenThere('super-manage-tab-models');
+      if (screen == '10b') {
+        await _pressWhenThere('super-manage-tab-models');
+        await Future<void>.delayed(const Duration(seconds: 3));
+      }
       if (screen == '10c') await _pressWhenThere('super-manage-tab-swarm');
   }
 }

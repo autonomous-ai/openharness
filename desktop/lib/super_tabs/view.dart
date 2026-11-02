@@ -2409,7 +2409,7 @@ class _SuperTabViewState extends State<SuperTabView>
               fingerTarget(
                 enabled: _phone,
                 AppIconButton(
-                  icon: AppIcons.columns2,
+                  icon: AppIcons.menu,
                   tooltip: 'Conversations',
                   onPressed: () => setState(() => _sidebarOpen = !_sidebarOpen),
                 ),

@@ -2841,21 +2841,22 @@ class _MachineLine extends StatelessWidget {
               key: ValueKey('super-machine-more-${view.id}'),
               onOpen: open,
             ),
-          SizedBox(
-            width: 32,
-            child: Center(
-              child: KeyedSubtree(
-                key: ValueKey(
-                  'super-machine-state-${view.id}-${view.status.name}',
-                ),
-                child: SuperTabMachineDot(
-                  status: view.status,
-                  readingAt: view.readingAt,
-                  arrived: view.arrived,
+          if (!words)
+            SizedBox(
+              width: 32,
+              child: Center(
+                child: KeyedSubtree(
+                  key: ValueKey(
+                    'super-machine-state-${view.id}-${view.status.name}',
+                  ),
+                  child: SuperTabMachineDot(
+                    status: view.status,
+                    readingAt: view.readingAt,
+                    arrived: view.arrived,
+                  ),
                 ),
               ),
             ),
-          ),
         ],
       ),
     );

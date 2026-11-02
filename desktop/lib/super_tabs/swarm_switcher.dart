@@ -457,7 +457,11 @@ class _SwarmSwitcherState extends State<SwarmSwitcher> {
                 controller: _menu,
                 consumeOutsideTap: true,
                 alignmentOffset: const Offset(0, grid.AppControl.menuGap),
-                style: grid.AppMenu.style(minWidth: width, maxWidth: width),
+                style: grid.AppMenu.style(
+                  minWidth: width,
+                  maxWidth: width,
+                  maxHeight: 480,
+                ),
                 onOpen: () {
                   if (_tab case final tab?) personal.clearError(tab);
                 },
