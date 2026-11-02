@@ -1,6 +1,6 @@
 import { join as hookPath } from 'node:path'
 import { env as hookEnvironment } from '../../config/env.js'
-import { PLUGIN_FETCH } from '../kit/nativePlugin.js'
+import { PLUGIN_FETCH } from '../kit/pluginFetch.js'
 /**
  * What the core knows of Kilo without loading its code: declared data, read by the kit
  * (docs/design/2026-10-08-other-engines-out-of-core.md). It imports nothing.

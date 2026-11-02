@@ -1,6 +1,6 @@
 import { join as hookPath, dirname as hookParent } from 'node:path'
 import { env as hookEnvironment } from '../../config/env.js'
-import { PLUGIN_FETCH } from '../kit/nativePlugin.js'
+import { PLUGIN_FETCH } from '../kit/pluginFetch.js'
 /**
  * What the core knows of OpenCode without loading its code: declared data, read in line where a launch is built
  * (docs/design/2026-10-08-other-engines-out-of-core.md). It imports nothing of OpenCode's code.

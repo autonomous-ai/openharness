@@ -465,12 +465,15 @@ describe('the daemon\'s control calls, through the CLI', () => {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     const PORT = String((server.address() as AddressInfo).port)
 
-    // A data folder too long to hold a socket: the one case on the port. With a socket, see lib/daemonEndpoint.spec.ts.
+    // A data folder too long to hold a socket and a home too long as well: the one case on the port. With a socket, see
+    // lib/daemonEndpoint.spec.ts.
     const ADAPTER_DATA_DIR = join(root, 'd'.repeat(100))
-    const status = await runAsync(root, ['remote-password', 'status', '--json'], { PORT, ADAPTER_DATA_DIR })
+    const HOME = join(root, 'h'.repeat(100))
+    mkdirSync(HOME, { recursive: true })
+    const status = await runAsync(root, ['remote-password', 'status', '--json'], { PORT, ADAPTER_DATA_DIR, HOME })
     expect(status.status, status.stderr).toBe(0)
     expect(JSON.parse(status.stdout)).toEqual({ hasPassword: true, fingerprint: 'fp-1', setAt: 7 })
-    const sync = await runAsync(root, ['group', 'sync'], { PORT, ADAPTER_DATA_DIR })
+    const sync = await runAsync(root, ['group', 'sync'], { PORT, ADAPTER_DATA_DIR, HOME })
     expect(sync.status, sync.stderr).toBe(0)
     expect(sync.stdout).toContain('Comparing with every reachable member now.')
     expect(got).toEqual(['GET /api/remote-password/status local=1', 'POST /api/group/sync local=1'])
