@@ -107,10 +107,11 @@ export async function portHolderIsThisAccount(port: number, platform: NodeJS.Pla
 }
 
 /**
- * Windows PowerShell's start and its CIM queries: about a second on a quiet PC, over 8 s on the Windows ARM runner (the
- * Windows run on #2605), so a slow or busy PC is given 20 s. A lookup past that is no for its connection.
+ * Windows PowerShell's start and its CIM queries: about a second on x64, 20 to 25 s on the Windows ARM runner (the
+ * Windows runs on #2605), so a slow or busy PC is given 45 s. A lookup past that is no for its connection. A native lookup
+ * in harness-pty, in milliseconds, is its own task.
  */
-export const WINDOWS_PEER_MS = 20_000
+export const WINDOWS_PEER_MS = 45_000
 
 /** How the daemon runs [windowsPeerQuery]: Windows PowerShell, off its event loop. Tests give their own. */
 export type WindowsPeerRun = (script: string, inputs: Record<string, string>) => Promise<{ status: number | null; stdout: string }>
