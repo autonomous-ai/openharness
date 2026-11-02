@@ -837,7 +837,7 @@ export class CommanderMirror {
           if (!decide) tell(null)
           // Not news (a sub-agent's, a replay, a turn waiting on an answer): silent, and nobody is asked.
           else if (!notification) tell('silent')
-          // The recap first, as the dial's decision always read it (services/devices.ts): Jev keeps 600 characters.
+          // The recap first, as the dial's decision always read it (services/devices.ts).
           else this.tellOnceDecided(decide, ac, { sessionId, recap: recap || body, durationS, stats }, tell)
         } else {
           this.opts.changed?.(sessionId)

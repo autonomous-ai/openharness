@@ -47,6 +47,13 @@ The tier is decided once for the dial, the Harness Pro, and apps listening over 
 `turn_summary`). So a harness agent's finished turn now alerts on all of them, and a Swarm agent's turn is silent on
 all of them. The Desktop window on the same computer reads no tier, so it is unchanged.
 
+## Known limits
+
+- A Swarm agent started without its Swarm skill has no `swarmSkill` on its row, so its turns alert like a harness
+  agent's (`superTabs/start.ts` sets the role only with a skill mode).
+- A card from an older remote daemon that sends no tier is decided here; a Swarm agent there that is not on a Team
+  machine alerts, because this machine cannot read its row.
+
 ## Non-goals
 
 - Swarm chat notices on the dial (cards), and making device counts match the apps (the attention-summary work).

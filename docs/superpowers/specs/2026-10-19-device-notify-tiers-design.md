@@ -1,5 +1,7 @@
 # Device notifications: fewer, and each one worth it
 
+> Superseded on 2026-11-02 by `docs/superpowers/specs/2026-11-02-device-notify-no-jev-design.md`: device tiers no longer ask Jev, and `HARNESS_NOTIFY_SMART` is gone.
+
 Date: 2026-10-19. Status: the direction was approved in brainstorming (a hybrid of rules and Jev). This spec is waiting for review.
 
 ## Problem

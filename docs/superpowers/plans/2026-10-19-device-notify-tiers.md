@@ -1,5 +1,7 @@
 # Device Notification Tiers Implementation Plan
 
+> Superseded on 2026-11-02 by `docs/superpowers/specs/2026-11-02-device-notify-no-jev-design.md`: device tiers no longer ask Jev, and `HARNESS_NOTIFY_SMART` is gone.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** The round dial and the Pro notify only when it is worth it:
