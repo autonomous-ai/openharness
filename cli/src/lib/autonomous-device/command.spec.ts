@@ -1,6 +1,10 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest'
 import { Readable } from 'node:stream'
 import { runAutonomousDeviceCommand } from './command.js'
+
+// A folder too long for a socket now has one under the home folder: only a home too long as well is left on the port.
+beforeEach(() => { vi.stubEnv('HOME', `/${'h'.repeat(120)}`) })
+afterEach(() => { vi.unstubAllEnvs() })
 // Too long to hold a socket, so these calls reach the stubbed fetch rather than one.
 const UNUSED = `/unused-${'x'.repeat(100)}`
 vi.mock('../hookAuth.js', () => ({ readHookCredential: () => 'hook-test-credential' }))

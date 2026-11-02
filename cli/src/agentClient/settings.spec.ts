@@ -1,9 +1,13 @@
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 import { loadOrCreateHookCredential } from '../lib/hookAuth.js'
 import { settingsCommand, SETTINGS_SIGNED_OUT, SETTINGS_USAGE } from './settings.js'
+
+// A folder too long for a socket now has one under the home folder: only a home too long as well is left on the port.
+beforeEach(() => { vi.stubEnv('HOME', `/${'h'.repeat(120)}`) })
+afterEach(() => { vi.unstubAllEnvs() })
 
 /** This computer's daemon as `harness settings` meets it: its answers to `/api/agent-settings`, and what was asked. */
 function daemon(answer: (method: string, body: unknown) => { status: number; body: unknown } | Error, env: NodeJS.ProcessEnv = {}) {

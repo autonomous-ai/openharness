@@ -8,6 +8,9 @@ import { harnessExecute, localCredentialHeaders } from '../lib/harness.mjs';
 import { daemonWake } from '../lib/wake.mjs';
 import { fakeBridge } from './fakes.mjs';
 
+// A folder too long for a socket has one under the home folder: only a home too long as well is left on the port.
+process.env.HOME = `/${'h'.repeat(120)}`;
+
 const CREDENTIAL = `test-local-credential-${'a'.repeat(21)}`; // the CLI's shape: 43 base64url characters
 const machine = { id:'rig', name:'GPU rig', transport:'harness', machineId:'machine-123' };
 

@@ -5,7 +5,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:f
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { connectSocket, openDaemon, whereFor, type ClientSocket } from './daemon.js'
 import { saveDaemonPort } from '../lib/daemonEndpoint.js'
 import { WebSocketServer } from 'ws'
@@ -14,6 +14,10 @@ import { attachLocalWsServer } from '../localWsServer.js'
 import { localSocketPath } from '../lib/localSocket.js'
 import { NOT_RUNNING, SANDBOXED } from '../lib/unreachable.js'
 import { newPipePath } from '../lib/windows/pipeAuth.js'
+
+// A folder too long for a socket now has one under the home folder: only a home too long as well is left on the port.
+beforeEach(() => { vi.stubEnv('HOME', `/${'h'.repeat(120)}`) })
+afterEach(() => { vi.unstubAllEnvs() })
 
 /** A real named pipe on Windows; a short Unix socket with the same auth name elsewhere. */
 function pipeFixture(): { path: string; close: () => void } {

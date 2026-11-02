@@ -7,6 +7,9 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { closeSessions, listHarnesses, listMachines, localCredentialHeaders } from '../lib/daemon.mjs';
 
+// A folder too long for a socket has one under the home folder: only a home too long as well is left on the port.
+process.env.HOME = `/${'h'.repeat(120)}`
+
 const CREDENTIAL = `test-local-credential-${'a'.repeat(21)}`; // the CLI's shape: 43 base64url characters
 
 /** A data folder as the CLI leaves it, too long to hold a socket: the one case on TCP, with the credential: 0700, holding a 0600 `hook-credential` (or none). */

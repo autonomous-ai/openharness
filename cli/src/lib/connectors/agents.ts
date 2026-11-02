@@ -17,6 +17,7 @@ import { managedNodePath } from '../nodeRuntime.js'
 import { MCP_SHIM_SOURCE } from './mcpShimSource.js'
 import { CODE, locked, writePrivate, type Store } from './store.js'
 import { transport } from './rest.js'
+import { socketPathIn } from '../localSocket.js'
 
 const validPort = (port: unknown): port is number => typeof port === 'number' && Number.isInteger(port) && port >= 0 && port < 65536
 
@@ -104,14 +105,9 @@ export function bridgeUrl(key: string, code: string, port = bridgePort()): strin
   return `http://127.0.0.1:${port}/${key}/${code}/mcp`
 }
 
-/** sockaddr_un has 104 bytes on macOS and the socket is staged under a name no longer (lib/localSocket.ts). */
-const MAX_SOCKET_PATH_BYTES = 96
-
-/** The bridge's 0600 socket for MCP clients, in the vault's private folder, or null where there is none. */
+/** The bridge's 0600 socket for MCP clients, in the vault's private folder or its short one, or null where there is none. */
 export function bridgeSocketPath(vault: Store, platform: NodeJS.Platform = process.platform): string | null {
-  if (platform === 'win32') return null
-  const path = join(vault.root, 'bridge.sock')
-  return Buffer.byteLength(path) <= MAX_SOCKET_PATH_BYTES ? path : null
+  return platform === 'win32' ? null : socketPathIn(vault.root, 'bridge.sock')
 }
 
 /** How an MCP client reaches one connection. */
