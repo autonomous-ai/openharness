@@ -773,15 +773,18 @@ describe('a review task while its build is back with the Engineer', () => {
     expect(await f.task()).toMatchObject({ status: 'lost', lost: { reason: 'no progress for 5 minutes' } })
   })
 
-  it('still loses it to time once its build is cancelled after its verdict', async () => {
+  // Task steps design (#2511): a review is a step of its build, and a task that ends cancels its open steps with its reason,
+  // so a cancelled build no longer leaves its review to be lost by time later.
+  it('is cancelled with its build, and is never lost by time after', async () => {
     const f = await reviewing()
     await f.requestChanges()
     await f.minutes(10)
     await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Not needed' })
+    expect(await f.task()).toMatchObject({ status: 'cancelled', result: 'Ship the parser was cancelled.' })
     await f.minutes(20, { heartbeats: false })
-    expect(await f.task()).toMatchObject({ status: 'working' })
     await f.reviewerReport(f.waitFrom + 30 * MINUTE + 1)
-    expect(await f.task()).toMatchObject({ status: 'lost', lost: { reason: 'no progress for 30 minutes' } })
+    expect(await f.task()).toMatchObject({ status: 'cancelled', result: 'Ship the parser was cancelled.' })
+    expect(await f.lost()).toEqual([])
   })
 })
 

@@ -2872,6 +2872,19 @@ describe('machine.remove', () => {
         requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } } as never]
   }
 
+  // The phone and the web offer Pause/Resume only to the person who lent the machine; the server holds the same line.
+  it('lets only the contributor pause or resume a machine', () => {
+    const f = fixture()
+    f.invite()
+    contribute(f, 'owner')
+    expect(() => f.run({ type: 'machine.pause', machineId: 'host', paused: true }, peer)).toThrow(expect.objectContaining({ code: 'OWNER_REQUIRED', status: 403 }))
+    expect(f.state.machines![0]!.paused).toBe(false)
+    f.run({ type: 'machine.pause', machineId: 'host', paused: true })
+    expect(f.state.machines![0]!.paused).toBe(true)
+    expect(() => f.run({ type: 'machine.pause', machineId: 'host', paused: false }, peer)).toThrow(expect.objectContaining({ code: 'OWNER_REQUIRED' }))
+    expect(f.state.machines![0]!.paused).toBe(true)
+  })
+
   it('takes the machine out with the Swarm\'s agents on it, and tells each group whose task needs a new worker', () => {
     const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group(), worker = f.add('worker', 'owner', group)
     f.state.agents.find(a => a.id === lead)!.machineId = 'elsewhere'
