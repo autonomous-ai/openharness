@@ -5,7 +5,7 @@ import { dirname, join, win32 } from 'node:path'
 import { PM_HOMES } from '../teamDaemon.js'
 import { describe, expect, it, vi } from 'vitest'
 import { createSwarmAgents } from './agents.js'
-import { OWN_LEFT, SHARED_LEFT, SWEEP_LEFT, UNREADABLE_DETAIL, createConfidentialPurge, ownHomeFolder, purgeRecord, recordsOtherFolder, rewriteIfUnchanged, scrubClaudeSession, sweepForSession, type PurgeTarget } from './teamPurge.js'
+import { OWN_LEFT, SHARED_LEFT, SWEEP_LEFT, UNREADABLE_DETAIL, createConfidentialPurge, isPmCodexHome, ownHomeFolder, purgeRecord, recordsOtherFolder, rewriteIfUnchanged, scrubClaudeSession, sweepForSession, type PurgeTarget } from './teamPurge.js'
 
 /** A folder that goes between the sweep's listing of its parent and its own read: removed just before that read. */
 const vanish = vi.hoisted(() => ({ path: '' }))
@@ -526,6 +526,31 @@ describe('the purge of a confidential session the Swarm ended', () => {
     expect(ownHomeFolder('/Users/team/.harness-pm-homes', null)).toBeNull()
   })
 
+  // Windows drops a name's trailing spaces and dots: `.. ` is `..`, and this path's folder is then the whole Team home, which
+  // purge deletes. The rule pmEngineHome names a home by (teamDaemon.ts PM_START_ID), as isPmCodexHome holds it to (#2568).
+  it('takes only a start id pmEngineHome could have made: never `.. `, nor a name Windows would cut, nor a separator inside it', () => {
+    const win = 'C:\\Users\\team\\.harness-pm-homes', posix = '/Users/team/.harness-pm-homes'
+    for (const id of ['.. ', '. ', '.', '..', 'super-start.', 'super-start ', 'a b', 'a.b', '..\u00a0', 'caf\u00e9', 'x'.repeat(161)]) {
+      expect(ownHomeFolder(win, `${win}\\${id}\\codex`), `win ${id}`).toBeNull()
+      expect(ownHomeFolder(posix, `${posix}/${id}/codex`), `posix ${id}`).toBeNull()
+    }
+    for (const path of [`${win}\\a\\b\\codex`, `${win}/.. /codex`, `${win}\\.. /codex`, `${win}/..\\codex`]) expect(ownHomeFolder(win, path), path).toBeNull()
+    expect(ownHomeFolder(posix, `${posix}/a\\b/codex`)).toBeNull()
+    expect(ownHomeFolder(win, `${win}\\super-start_1\\codex`)).toBe(`${win}\\super-start_1`)
+    expect(ownHomeFolder(win, `${win}/super-start_1/codex`)).toBe(`${win}/super-start_1`)
+    expect(ownHomeFolder(posix, `${posix}/${'x'.repeat(160)}/codex`)).toBe(`${posix}/${'x'.repeat(160)}`)
+  })
+
+  it('a session\'s `.. ` home is left alone, the Team home with it, confidential or not', async () => {
+    const { home } = teamHome()
+    const s = service(home)
+    writeFileSync(join(home, 'keep.txt'), 'kept')
+    const purge = createConfidentialPurge({ confidential: () => false, home, record: purgeRecord(join(dir(), 'purges.json')), purge: s.purge,
+      session: () => ({ agentId: 'r', sessionId: 's', registeredAt: 1, engine: 'codex', cwd: CWD, codexHome: join(home, PM_HOMES, '.. ', 'codex') }) })
+    expect(await purge('r')).toEqual({ skipped: true })
+    expect(readFileSync(join(home, 'keep.txt'), 'utf8')).toBe('kept')
+  })
+
   it('removes Team-written work\'s own Codex home when the agent ends, confidential or not, and nothing else (audit H2)', async () => {
     const { home } = teamHome()
     const s = service(home), own = join(home, PM_HOMES, 'super-start', 'codex'), other = join(home, 'elsewhere', 'codex')
@@ -624,6 +649,16 @@ describe('the purge of a confidential session the Swarm ended', () => {
     const ended = createConfidentialPurge({ confidential: () => true, home, session: s.session, purge: s.purge, record: s.record })
     expect(await ended('pm')).toEqual({ ok: true })
     expect(existsSync(join(home, '.harness-pm-homes', 'super-start-1'))).toBe(false)
+  })
+
+  it('of a Codex session whose home is not one of pmEngineHome\'s, leaves every Product Manager\'s home', async () => {
+    // One level under the PM homes folder, its parent is that folder: a purge of it took every other PM's home with it.
+    const home = dir(), other = join(home, '.harness-pm-homes', 'super-start-2', 'codex')
+    mkdirSync(other, { recursive: true })
+    const s = service(home, join(home, '.harness-pm-homes', 'codex'))
+    const ended = createConfidentialPurge({ confidential: () => true, home, session: s.session, purge: s.purge, record: s.record })
+    expect(await ended('pm')).toEqual({ ok: true })
+    expect(existsSync(other)).toBe(true)
   })
 
   it('leaves any other session alone; a refused review or delete stops it, the session kept in its record', async () => {
@@ -745,6 +780,26 @@ describe('the record of purges still to finish', () => {
     expect(warn.mock.calls.map(([line]) => String(line))).toEqual([said(aside), said(aside), said(`${aside}, ${aside}.1`),
       said([aside, ...Array.from({ length: 10 }, (_, i) => `${aside}.${i + 1}`)].join(', '))])
     warn.mockRestore()
+  })
+})
+
+// Windows audit (task #2022): the check looked for `${homes}/`, and Windows' paths have `\`, so a purged Codex Product
+// Manager's own home stayed in the Team account for its next agent to read.
+describe('isPmCodexHome', () => {
+  it('is the home pmEngineHome makes, by Windows\' separators as well as this platform\'s', () => {
+    expect(isPmCodexHome('C:\\Users\\harnessteam', 'C:\\Users\\harnessteam\\.harness-pm-homes\\super-start-1\\codex', win32)).toBe(true)
+    expect(isPmCodexHome('/Users/harnessteam', '/Users/harnessteam/.harness-pm-homes/super-start-1/codex')).toBe(true)
+  })
+
+  it('is nothing else: not the PM homes folder or one level under it, a sibling folder, a way out, or another home', () => {
+    const home = 'C:\\Users\\harnessteam', homes = `${home}\\.harness-pm-homes`
+    for (const codexHome of [homes, `${homes}\\codex`, `${homes}\\super-start-1`, `${homes}\\super-start-1\\codex\\sessions`,
+      `${homes}\\super-start-1\\other`, `${home}\\.harness-pm-homes-old\\super-start-1\\codex`, `${homes}\\..\\x\\codex`,
+      // Windows drops a name's trailing spaces and dots: `.. ` is `..`, and purge deletes the parent, the whole Team home.
+      `${homes}\\.. \\codex`, `${homes}\\. \\codex`, `${homes}\\super-start-1.\\codex`, `${homes}\\a b\\codex`,
+      'C:\\Users\\owner\\.harness-pm-homes\\super-start-1\\codex', 'D:\\.harness-pm-homes\\super-start-1\\codex', '']) {
+      expect(isPmCodexHome(home, codexHome, win32), codexHome).toBe(false)
+    }
   })
 })
 
