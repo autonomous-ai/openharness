@@ -40,6 +40,7 @@ import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema,
 import { switchExpired } from './tidy.js'
 import { BUILT_IN_ROLE_DEFAULTS, agentProjectId, audienceOf, canReadProject, deleteProject, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, requestedByLine, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
 import { recordClosing } from './closedAgents.js'
+import { actorName, memberChanges, memberRowText } from './memberRows.js'
 import { BUDDY_SESSION_CAPABILITY, chatOwner, endSessionEntry, entryProject, liveSessions, mainBuddyOf, MAX_SESSION_WAITING, requireChatOwner, SESSION_ENDED_KIND, sessionAgentsOf, sessionOf, setSessions, type SessionEndReason } from './buddySessions.js'
 import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, isSwarmBuddy, isSwarmBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, openBuddyChat, openSwarmBuddyChat, PM_LINE_KIND, PROPOSAL_ASK_MS, PROPOSAL_SENT_KIND, proposalSentText, proposalText, renameBuddy, requireBuddyCommand, swarmBuddyChatId } from './buddies.js'
 import { BUDDY_OWN_MACHINE_REFUSAL, CODEX_BUDDY_REFUSAL } from './buddyContract.js'
@@ -2387,9 +2388,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         message(group.id, joined.text, [], null, joined.source)
       }
       // A Buddy always starts on a Swarm machine: its chat hears once it settles, as the Lead does for a worker.
-      else if (!start.request.buddyOf) message(group.id, start.poolGeneration
-        ? `${start.request.name} joined. Preparing its model.`
-        : `${start.request.name} joined. Ready for an assignment.`, [], null, bookkeeping(group.id, SYSTEM_ROW))
+      // Naming who started it, as any agent added to a chat is named with who added it (#2207).
+      else if (!start.request.buddyOf) {
+        const starter = actorName(state, start.actorKey)
+        const joined = starter ? `${starter} added ${start.request.name}.` : `${start.request.name} joined.`
+        message(group.id, `${joined} ${start.poolGeneration ? 'Preparing its model.' : 'Ready for an assignment.'}`, [], null, bookkeeping(group.id, SYSTEM_ROW))
+      }
       break
     }
     case 'agent.configuration': {
@@ -3196,6 +3200,15 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   markConfidential(state)
   assignAgentDisplayNames(state.agents)
   keepUsernames(original, state)
+  // Every agent added to or removed from a chat leaves a row there naming who did it (Ken, #2207), for the chat's readers and
+  // waking nobody. A start's own line names its starter (agent.started).
+  if (command.type !== 'agent.started') {
+    const by = { id: actor.kind === 'agent' ? actor.agentId : actor.userId, name: actorName(state, actorKey(actor)) ?? who }
+    for (const { group, agent: member, added } of memberChanges(original, state)) {
+      effects.messages.push({ id: stableId(operationId, 'member', group.id, member.id), conversationId: group.id, author: sender,
+        text: memberRowText(by, { id: member.id, name: member.displayName ?? member.name }, added), replyTo: null, recipients: [], source: SYSTEM_ROW })
+    }
+  }
   // The size limit is per stored part now (parts/commit.ts PART_LIMIT_BYTES); a Swarm as a whole has none.
   // Every row this command writes, whatever its words came from: an older message resent, a rule written before this check.
   for (const draft of effects.messages) {

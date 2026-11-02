@@ -267,7 +267,8 @@ describe('a step the PM opened', () => {
     f.run({ type: 'work.assign', conversationId: id, agentId: rev }, f.as(f.lead))
     expect(f.group(id).agentIds).not.toContain(f.dev)
     const messages = f.run({ type: 'work.status', conversationId: id, assignmentId: f.group(id).assignment!.id, status: 'done', result: 'Passed' } as Command, f.as(rev)).messages
-    expect(messages.filter(m => m.conversationId === id).map(m => m.recipients)).toEqual([[f.dev]])
+    // Its Done, then the row that says the owner joined to hear it (#2207).
+    expect(messages.filter(m => m.conversationId === id).map(m => m.recipients)).toEqual([[f.dev], []])
     expect(f.group(id).agentIds).toContain(f.dev)
   })
 })
@@ -301,13 +302,13 @@ describe('a linked task opened without a step name', () => {
   it('tells the task\'s owner its Ready and Done, and its unnamed posts', () => {
     const { f, id, tester } = linked()
     const done = f.run({ type: 'work.status', conversationId: id, assignmentId: f.group(id).assignment!.id, status: 'done', result: 'Passed' } as Command, f.as(tester)).messages
-    expect(done.filter(m => m.conversationId === id).map(m => m.recipients)).toEqual([[f.dev]])
+    expect(done.filter(m => m.conversationId === id).map(m => m.recipients)).toEqual([[f.dev], []])
     expect(f.group(f.task).agentIds).toContain(tester)
   })
   it('an unnamed post from its agent reaches the owner', () => {
     const { f, id, tester } = linked()
     const posted = f.run({ type: 'message.send', conversationId: id, text: 'Starting on the simulator.', replyTo: null, recipientIds: [] } as Command, f.as(tester)).messages
-    expect(posted.map(m => m.recipients)).toEqual([[f.dev]])
+    expect(posted.map(m => m.recipients)).toEqual([[f.dev], []])
   })
   it('closes with its task, not on its own clock', () => {
     const { f, id, tester } = linked()

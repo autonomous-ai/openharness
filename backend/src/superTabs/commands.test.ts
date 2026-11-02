@@ -259,7 +259,8 @@ describe('Super Tab collaboration policy', () => {
     const result = f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'lead',
       name: 'Lead', configuration: config, lead: true, initialMessage: 'Discuss the architecture.' }, owner,
     { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } })
-    expect(result.messages).toEqual([expect.objectContaining({ text: 'Discuss the architecture.', recipients: [], author: expect.objectContaining({ kind: 'person', id: 'owner' }) })])
+    expect(result.messages).toEqual([expect.objectContaining({ text: 'Discuss the architecture.', recipients: [], author: expect.objectContaining({ kind: 'person', id: 'owner' }) }),
+      expect.objectContaining({ text: `owner added ${f.state.agents[0]!.displayName}.`, recipients: [], source: { kind: 'system' } })])
     expect(f.state.conversations[0]!.leadId).toBe(result.result.agentId)
   })
   it('keeps adding an agent separate from creating conversations and assigning work', () => {
@@ -1052,7 +1053,8 @@ describe('agent bookkeeping in the chats people read', () => {
     }
     // No agent but its coordinator starts into the project chat (#2207); its coordinator's lines are lead.start's (leadStart.test).
     expect(() => lines('lead', 'in-lead')).toThrow(expect.objectContaining({ code: 'PROJECT_CHAT_COORDINATOR_ONLY' }))
-    expect(lines(group, 'in-task')).toEqual([['Builder joined. Preparing its model.', true], ['Builder is ready for an assignment.', true]])
+    const pm = f.state.agents.find(a => a.id === lead)!.displayName
+    expect(lines(group, 'in-task')).toEqual([[`${pm} added Builder. Preparing its model.`, true], ['Builder is ready for an assignment.', true]])
   })
 })
 
@@ -1456,9 +1458,10 @@ it('says in the project chat when a Product Manager on its person\'s own Mac cou
       { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
     return effects.messages.filter(m => m.conversationId === 'lead').map(m => m.text)
   }
+  // Each after the row naming who added it (#2207).
   expect(join({ launchRefused: { model: 'opus', effort: 'xhigh' } })).toEqual(
-    ['Product Manager started. It asked for opus at xhigh and runs its engine\u2019s own model there: this machine could not launch it with them.'])
-  expect(join({})).toEqual([])
+    ['Product Manager started. It asked for opus at xhigh and runs its engine\u2019s own model there: this machine could not launch it with them.', expect.stringMatching(/^owner added \S+\.$/)])
+  expect(join({})).toEqual([expect.stringMatching(/^owner added \S+\.$/)])
   // Only a Product Manager's start says it.
   expect(join({ launchRefused: { model: 'opus', effort: 'xhigh' } }, false)).not.toContainEqual(expect.stringContaining('could not launch'))
   expect(commandSchema.safeParse({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'pm', name: 'Lead', configuration: config, lead: true,
@@ -2907,8 +2910,10 @@ describe('the owner\'s rules, after review', () => {
     expect(f.run({ type: 'conversation.agent', conversationId: 'lead', agentId: f.worker, present: true, lead: false }, f.leadActor).result.warnings).toBeUndefined()
     const byHand = f.run({ type: 'conversation.agent', conversationId: group, agentId: f.worker, present: true, lead: true })
     expect(byHand.result.warnings).toBeUndefined()
-    expect(byHand.messages).toEqual([])
-    expect(f.run({ type: 'conversation.agent', conversationId: 'lead', agentId: f.worker, present: false, lead: false }, f.leadActor).messages).toEqual([])
+    // Only the row naming who added it (#2207).
+    expect(byHand.messages.map(m => m.text)).toEqual(['owner added worker.'])
+    expect(f.run({ type: 'conversation.agent', conversationId: 'lead', agentId: f.worker, present: false, lead: false }, f.leadActor).messages.map(m => m.text))
+      .toEqual([`${f.state.agents.find(a => a.id === f.lead)!.displayName} removed worker.`])
   })
   it('takes the owner\'s opt-out from grid models first into the instructions, and refuses no start', () => {
     const f = routed(), task = f.group()

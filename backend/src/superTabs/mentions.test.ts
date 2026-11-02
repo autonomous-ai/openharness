@@ -32,10 +32,10 @@ function fixture() {
   // A conversation only `peer` reads: their chat with their Buddy.
   const pmChat = run({ type: 'buddy.chat', projectId: app.projectId }, peer).result.conversationId as string
   const send = (conversationId: string, mentions: string[], actor: Actor = owner) => run({ type: 'message.send', conversationId,
-    text: 'Please look.', replyTo: null, recipientIds: [], mentions }, actor).messages.at(-1)!
+    text: 'Please look.', replyTo: null, recipientIds: [], mentions }, actor).messages.find(m => !m.source)!
   /** A post that tags only by what its text says, as people type in chat. */
   const say = (conversationId: string, text: string, actor: Actor = owner, mentions?: string[]) => run({ type: 'message.send', conversationId,
-    text, replyTo: null, recipientIds: [], ...(mentions ? { mentions } : {}) }, actor).messages.at(-1)!
+    text, replyTo: null, recipientIds: [], ...(mentions ? { mentions } : {}) }, actor).messages.find(m => !m.source)!
   return { run, send, say, app, lead, worker, group, pmChat, get state() { return state } }
 }
 
