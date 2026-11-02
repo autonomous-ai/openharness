@@ -16,7 +16,7 @@
 import { buddyTmpFolder, realOfFolder } from '../../lib/agentTmp.js'
 import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync, type Dirent } from 'node:fs'
 import { readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
-import { basename, dirname, join } from 'node:path'
+import nodePath, { basename, dirname, join, type PlatformPath } from 'node:path'
 import { createInterface } from 'node:readline'
 import { PM_HOMES } from '../teamDaemon.js'
 
@@ -102,8 +102,30 @@ const listed = (dir: string) => readdir(dir).catch((error: NodeJS.ErrnoException
 /** Claude Code's folder name for a project folder: every character but a letter or digit made a dash. */
 const claudeSlug = (cwd: string) => cwd.replace(/[^A-Za-z0-9]/g, '-')
 const SESSION = /^[A-Za-z0-9_-]{1,160}$/
-/** Its folder, when it names one that is no root: an empty or root key would match every other session's. */
-const folderOf = (target: PurgeTarget) => target.cwd && target.cwd.startsWith('/') && target.cwd.length > 1 ? target.cwd : null
+/** What purge asks of a platform's paths: the host's, or `path.win32` in a test. */
+type FolderPaths = Pick<PlatformPath, 'isAbsolute' | 'normalize' | 'parse' | 'sep'>
+const onWindows = (paths: FolderPaths) => paths.sep === '\\'
+/** [path] as it compares. On Windows any separator names the same folder, in any case, as Claude Code compares them there. Its
+ *  forms differ too: a config key has `/` (2.1.316's `U3`), history and transcripts `\` (Windows audit W3). */
+const folderKey = (path: string, paths: FolderPaths) =>
+  onWindows(paths) ? paths.normalize(path).replaceAll('\\', '/').replace(/\/+$/, '').toLowerCase() : path
+/** Whether [cwd], as its key, is [key] or inside it: past a separator, so `C:\a\b-evil` is not inside `C:\a\b`. */
+const inFolder = (cwd: string, key: string, paths: FolderPaths) => {
+  const candidate = folderKey(cwd, paths)
+  return candidate === key || candidate.startsWith(`${key}/`)
+}
+/** [text] of a file, as folder keys read in it: JSON doubles a `\`. */
+const foldedText = (text: string, paths: FolderPaths) =>
+  onWindows(paths) ? text.replaceAll('\\\\', '/').replaceAll('\\', '/').toLowerCase() : text
+/** Its folder, when it names one that is no root: an empty or root key would match every other session's. On Windows a folder
+ *  has a drive or a share: `\Users` and `/Users` are relative to whichever drive is current, so which folder they name is not known. */
+function folderOf(target: PurgeTarget, paths: FolderPaths): string | null {
+  const cwd = target.cwd
+  if (!cwd || !paths.isAbsolute(cwd) || (onWindows(paths) && !/^([A-Za-z]:[\\/]|[\\/]{2}[^\\/]+[\\/]+[^\\/]+)/.test(cwd))) return null
+  const bare = (path: string) => path.replace(/[\\/]+$/, '')
+  const normal = paths.normalize(cwd)
+  return bare(normal) === bare(paths.parse(normal).root) ? null : cwd
+}
 
 /**
  * Rewrites [path] through [transform], unless it changed while being rewritten: another agent of the account may write the
@@ -132,15 +154,17 @@ export async function rewriteIfUnchanged(path: string, transform: (text: string)
 }
 
 /** [config] (Claude Code's `.claude.json`, or a backup of it) without [folder]: its project entry and its repository paths. */
-function withoutFolder(text: string, folder: string): string {
+function withoutFolder(text: string, folder: string, paths: FolderPaths): string {
   let config: { projects?: Record<string, unknown>; githubRepoPaths?: Record<string, unknown> }
   try { config = JSON.parse(text) } catch { return text }
   if (!config || typeof config !== 'object') return text
   let changed = false
-  if (config.projects && folder in config.projects) { delete config.projects[folder]; changed = true }
-  for (const [repository, paths] of Object.entries(config.githubRepoPaths ?? {})) {
-    if (!Array.isArray(paths) || !paths.includes(folder)) continue
-    const kept = paths.filter(path => path !== folder)
+  const key = folderKey(folder, paths)
+  const same = (path: unknown) => typeof path === 'string' && folderKey(path, paths) === key
+  for (const name of Object.keys(config.projects ?? {})) if (same(name)) { delete config.projects![name]; changed = true }
+  for (const [repository, listed] of Object.entries(config.githubRepoPaths ?? {})) {
+    if (!Array.isArray(listed) || !listed.some(same)) continue
+    const kept = listed.filter(path => !same(path))
     if (kept.length) config.githubRepoPaths![repository] = kept
     else delete config.githubRepoPaths![repository]
     changed = true
@@ -151,14 +175,15 @@ function withoutFolder(text: string, folder: string): string {
 /** Whether the transcript [file] records a working folder other than [folder] or one inside it: Claude Code writes the cwd
  *  on every turn, and its folder name makes every '/' and '.' a dash, so a removed worktree `<worktrees>/old/notes` shares its
  *  transcript folder with an unrelated `~/harnesses/worktrees-old/notes` (security review 2 of #2375). */
-export async function recordsOtherFolder(file: string, folder: string): Promise<boolean> {
+export async function recordsOtherFolder(file: string, folder: string, paths: FolderPaths = nodePath): Promise<boolean> {
+  const key = folderKey(folder, paths)
   const lines = createInterface({ input: createReadStream(file, 'utf8'), crlfDelay: Infinity })
   try {
     for await (const line of lines) {
       if (!line.includes('"cwd"')) continue
       let cwd: unknown
       try { cwd = (JSON.parse(line) as { cwd?: unknown }).cwd } catch { continue }
-      if (typeof cwd === 'string' && cwd !== folder && !cwd.startsWith(`${folder}/`)) return true
+      if (typeof cwd === 'string' && !inFolder(cwd, key, paths)) return true
     }
     return false
   } finally { lines.close() }
@@ -166,15 +191,15 @@ export async function recordsOtherFolder(file: string, folder: string): Promise<
 
 /** Whether the transcript [file] records [folder] or a folder inside it as its working folder (`own`), and another (`other`);
  *  `unread` when it could not be read, whose error would name its path (review of #2389). */
-async function foldersOf(file: string, folder: string): Promise<{ own: boolean; other: boolean; unread?: true }> {
-  const found = { own: false, other: false }
+async function foldersOf(file: string, folder: string, paths: FolderPaths): Promise<{ own: boolean; other: boolean; unread?: true }> {
+  const found = { own: false, other: false }, key = folderKey(folder, paths)
   const lines = createInterface({ input: createReadStream(file, 'utf8'), crlfDelay: Infinity })
   try {
     for await (const line of lines) {
       if (!line.includes('"cwd"')) continue
       let cwd: unknown
       try { cwd = (JSON.parse(line) as { cwd?: unknown } | null)?.cwd } catch { continue }
-      if (typeof cwd === 'string') found[cwd === folder || cwd.startsWith(`${folder}/`) ? 'own' : 'other'] = true
+      if (typeof cwd === 'string') found[inFolder(cwd, key, paths) ? 'own' : 'other'] = true
     }
   } catch { return { own: false, other: false, unread: true } } finally { lines.close() }
   return found
@@ -187,7 +212,7 @@ async function foldersOf(file: string, folder: string): Promise<{ own: boolean; 
  * and 2 of #2385: a Bash append, a subagent, a transcript Claude Code pruned, `Notes.md` on a Mac), and the Team purge's
  * sweep holds the account while one is there. A transcript that records no folder, or both, stays too, for the sweep to refuse.
  */
-async function removeTranscripts(dir: string, folder: string, told?: (what: ScrubTold) => void): Promise<void> {
+async function removeTranscripts(dir: string, folder: string, paths: FolderPaths, told?: (what: ScrubTold) => void): Promise<void> {
   // Only a folder that is not there is empty. One that cannot be listed stays whole, and its caller is told, by that word
   // alone: read as empty it went whole, its error's path into the log, or another folder's transcripts unread on a passing
   // error such as too many open files (security reviews 1 and 2 of 58b035e). The Team purge's sweep then holds the account;
@@ -196,7 +221,7 @@ async function removeTranscripts(dir: string, folder: string, told?: (what: Scru
   if (!names) { told?.('unread'); return }
   const transcripts = new Map<string, Awaited<ReturnType<typeof foldersOf>>>()
   for (const name of names.filter(name => name.endsWith('.jsonl'))) {
-    transcripts.set(name, await foldersOf(join(dir, name), folder))
+    transcripts.set(name, await foldersOf(join(dir, name), folder, paths))
   }
   // One that could not be read may be another folder's: it and the folder stay, and its caller is told.
   const values = [...transcripts.values()]
@@ -214,14 +239,14 @@ async function removeTranscripts(dir: string, folder: string, told?: (what: Scru
  *  would name another folder's file (security review 1 of #2385). Null when it holds only transcripts that record other
  *  folders and never [folder], their own folders, and an empty memory folder or none; anything else, a memory file above all,
  *  or the folder itself once no other folder's transcript is left, fails it, closed. */
-async function leftInSharedFolder(dir: string, folder: string): Promise<string | null> {
+async function leftInSharedFolder(dir: string, folder: string, paths: FolderPaths): Promise<string | null> {
   // One that cannot be listed holds it by its kind; one gone since its parent was listed holds nothing.
   let entries: Dirent[]
   try { entries = (await readdir(dir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name)) } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'ENOENT' ? null : SHARED_LEFT.unreadFolder
   }
   const read = new Map<string, Awaited<ReturnType<typeof foldersOf>>>()
-  for (const entry of entries.filter(entry => entry.isFile() && entry.name.endsWith('.jsonl'))) read.set(entry.name, await foldersOf(join(dir, entry.name), folder))
+  for (const entry of entries.filter(entry => entry.isFile() && entry.name.endsWith('.jsonl'))) read.set(entry.name, await foldersOf(join(dir, entry.name), folder, paths))
   // Said to be shared only when another folder's transcript is there (re-check 2 of 68ec6f0).
   const kinds = [...read.values()].some(transcript => transcript.other) ? SHARED_LEFT : OWN_LEFT
   const transcripts = new Set<string>()
@@ -277,6 +302,18 @@ export const SWEEP_LEFT = {
   unlistedFolder: `a folder in the Team account's Claude Code or Codex home that ${makeReadable('search the Team account\'s Claude Code and Codex homes for folders it can\'t read')}`,
 }
 
+/** The names in [projects] Claude Code uses for [folder]. On Windows that is by any case, as `c:\a` and `C:\a` are one folder there
+ *  and their names differ only by it. Elsewhere it is the one name, listed or not, for the caller to find what is there. */
+async function transcriptFolders(projects: string, folder: string, paths: FolderPaths): Promise<string[]> {
+  const slug = claudeSlug(folderOnDisk(folder, paths))
+  if (!onWindows(paths)) return [slug]
+  const names = await listed(projects)
+  // A listing that failed names only what the slug says: the removal reports it, unread, by its kind.
+  return names ? names.filter(name => name.toLowerCase() === slug.toLowerCase()) : [slug]
+}
+/** [folder] as Claude Code names its project folder from it, by its working folder: no `..` and no trailing separator. */
+const folderOnDisk = (folder: string, paths: FolderPaths) => onWindows(paths) ? paths.normalize(folder).replace(/[\\/]+$/, '') : folder
+
 /**
  * Removes from the Team user's shared Claude Code home ([home]/.claude, [home]/.claude.json and its backups) what Claude
  * Code keeps of the session: its prompt history lines and the pastes they kept ([pastes] from an earlier attempt too), its
@@ -288,9 +325,10 @@ export const SWEEP_LEFT = {
  * history named, for the record.
  */
 export async function scrubClaudeSession(home: string, target: PurgeTarget, pastes: readonly string[] = [],
-  onPastes?: (pastes: string[]) => void, told?: (what: ScrubTold) => void): Promise<string[]> {
+  onPastes?: (pastes: string[]) => void, told?: (what: ScrubTold) => void, paths: FolderPaths = nodePath): Promise<string[]> {
   const sessionId = target.sessionId && SESSION.test(target.sessionId) ? target.sessionId : null
-  const folder = folderOf(target)
+  const folder = folderOf(target, paths)
+  const key = folder && folderKey(folder, paths)
   if (!sessionId && !folder) return []
   const claude = join(home, '.claude'), history = join(claude, 'history.jsonl')
   /** Its history's lines kept, and the pastes its own lines named. */
@@ -299,8 +337,8 @@ export async function scrubClaudeSession(home: string, target: PurgeTarget, past
     const kept = text.split('\n').filter(line => {
       if (!line.trim()) return false
       let row: { sessionId?: unknown; project?: unknown; pastedContents?: Record<string, { contentHash?: unknown } | null> }
-      try { row = JSON.parse(line) } catch { return !(sessionId && line.includes(sessionId)) && !(folder && line.includes(folder)) }
-      const ours = (!!sessionId && row.sessionId === sessionId) || (!!folder && row.project === folder)
+      try { row = JSON.parse(line) } catch { return !(sessionId && line.includes(sessionId)) && !(key && foldedText(line, paths).includes(key)) }
+      const ours = (!!sessionId && row.sessionId === sessionId) || (!!key && typeof row.project === 'string' && folderKey(row.project, paths) === key)
       if (ours) for (const paste of Object.values(row.pastedContents ?? {})) if (typeof paste?.contentHash === 'string' && SESSION.test(paste.contentHash)) named.push(paste.contentHash)
       return !ours
     })
@@ -316,7 +354,7 @@ export async function scrubClaudeSession(home: string, target: PurgeTarget, past
     return kept.length ? `${kept.join('\n')}\n` : ''
   })
   for (const hash of new Set([...pastes, ...found])) if (SESSION.test(hash)) await rm(join(claude, 'paste-cache', `${hash}.txt`), { force: true })
-  if (folder) await removeTranscripts(join(claude, 'projects', claudeSlug(folder)), folder, told)
+  if (folder) for (const name of await transcriptFolders(join(claude, 'projects'), folder, paths)) await removeTranscripts(join(claude, 'projects', name), folder, paths, told)
   // Its private temporary folder beside a Team account: command output from its person's private work (lib/agentTmp.ts). A plain
   // session shares its Buddy's folder, and this one's TMPDIR with it, so the whole folder goes only once that folder has; the
   // sweep takes what a tool left meanwhile (review of #2563).
@@ -334,10 +372,10 @@ export async function scrubClaudeSession(home: string, target: PurgeTarget, past
     for (const name of todos ?? []) if (name.startsWith(`${sessionId}-agent-`)) await rm(join(claude, 'todos', name), { force: true })
   }
   if (folder) {
-    await rewriteIfUnchanged(join(home, '.claude.json'), text => withoutFolder(text, folder))
+    await rewriteIfUnchanged(join(home, '.claude.json'), text => withoutFolder(text, folder, paths))
     const backups = await listed(join(claude, 'backups'))
     if (!backups) told?.('unreadBackups')
-    for (const name of backups ?? []) await rewriteIfUnchanged(join(claude, 'backups', name), text => withoutFolder(text, folder))
+    for (const name of backups ?? []) await rewriteIfUnchanged(join(claude, 'backups', name), text => withoutFolder(text, folder, paths))
   }
   return [...new Set(found)]
 }
@@ -349,12 +387,12 @@ export async function scrubClaudeSession(home: string, target: PurgeTarget, past
  * transcripts: another agent that read the Product Manager's status names both there, and is not its to delete. Its transcript
  * folder, when another folder's transcripts share it, only by the working folders they record.
  */
-export async function sweepForSession(home: string, target: PurgeTarget, pastes: readonly string[]): Promise<string | null> {
+export async function sweepForSession(home: string, target: PurgeTarget, pastes: readonly string[], paths: FolderPaths = nodePath): Promise<string | null> {
   const sessionId = target.sessionId && SESSION.test(target.sessionId) ? target.sessionId : null
-  const folder = folderOf(target)
+  const folder = folderOf(target, paths), key = folder && folderKey(folder, paths)
   const claude = join(home, '.claude'), codex = join(home, '.codex')
-  const quoted = [...sessionId ? [`"${sessionId}"`] : [], ...folder ? [`"${folder}"`, `"${folder}/`] : []]
-  const names = (path: string) => quoted.some(q => path.includes(q))
+  const names = (text: string) => (!!sessionId && text.includes(`"${sessionId}"`))
+    || (!!key && [`"${key}"`, `"${key}/`].some(quoted => foldedText(text, paths).includes(quoted)))
   // Only what is not there is empty: anything else that cannot be read holds the account, by its kind. Read as empty, an
   // unreadable projects folder let the account go with the session's transcript in it (re-checks 1 and 2 of 68ec6f0).
   const gone = (error: NodeJS.ErrnoException) => error.code === 'ENOENT'
@@ -371,20 +409,21 @@ export async function sweepForSession(home: string, target: PurgeTarget, pastes:
     for (const config of [join(home, '.claude.json'), ...backups.map(name => join(claude, 'backups', name))]) {
       const text = await read(config)
       if (text === null) return SWEEP_LEFT.unreadFile
-      if (text.includes(`"${folder}"`)) return SWEEP_LEFT.config
+      if (foldedText(text, paths).includes(`"${key}"`)) return SWEEP_LEFT.config
     }
   }
-  const slug = folder ? claudeSlug(folder) : null, projects = join(claude, 'projects')
+  const slug = folder ? claudeSlug(folderOnDisk(folder, paths)) : null, projects = join(claude, 'projects')
+  const isSlug = (name: string) => slug !== null && (onWindows(paths) ? name.toLowerCase() === slug.toLowerCase() : name === slug)
   const walk = async (path: string, named: string): Promise<string | null> => {
     let entries: Dirent[]
     try { entries = await readdir(path, { withFileTypes: true }) } catch (error) { return gone(error as NodeJS.ErrnoException) ? null : SWEEP_LEFT.unlistedFolder }
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
       const child = join(path, entry.name)
       if (sessionId && entry.name.includes(sessionId)) return named
-      if (entry.name === slug) {
+      if (isSlug(entry.name)) {
         // Its transcript folder outlives the scrub when another folder's transcripts share it ('/' and '.' both become '-'),
         // and its name alone held the account for good (follow-up to security review 2 of #2375).
-        const left = path === projects && entry.isDirectory() ? await leftInSharedFolder(child, folder!) : named
+        const left = path === projects && entry.isDirectory() ? await leftInSharedFolder(child, folder!, paths) : named
         if (left) return left
       }
       if (entry.isDirectory()) { const found = await walk(child, named); if (found) return found }
@@ -420,6 +459,8 @@ export function createConfidentialPurge(deps: {
   /** The Team user's home. */
   home: string
   record: PurgeRecord
+  /** The platform's paths; a test's `path.win32`. */
+  paths?: FolderPaths
 }): (agentId: string) => Promise<Record<string, unknown>> {
   return async agentId => {
     // With its record unreadable, which purges are still to finish is not known: none is answered, not even a 'skipped' for a
@@ -453,9 +494,9 @@ export function createConfidentialPurge(deps: {
         const pastes = [...new Set([...target!.pastes ?? [], ...found])]
         if (pastes.length !== (target!.pastes ?? []).length) { target = { ...target!, pastes }; deps.record.put(target) }
       }
-      keep(await scrubClaudeSession(deps.home, target, target.pastes, keep))
+      keep(await scrubClaudeSession(deps.home, target, target.pastes, keep, undefined, deps.paths))
     }
-    const left = await sweepForSession(deps.home, target, target.pastes ?? [])
+    const left = await sweepForSession(deps.home, target, target.pastes ?? [], deps.paths)
     if (left) return { error: 'SCRUB_INCOMPLETE', detail: `Something still names the session: ${left}` }
     deps.record.drop(agentId)
     return { ok: true }

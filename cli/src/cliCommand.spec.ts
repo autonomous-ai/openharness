@@ -310,6 +310,60 @@ describe('start --repair beside a running daemon', () => {
   }, ONE_RUN_TEST_MS)
 })
 
+describe('start --help', () => {
+  it.each(['--help', '-h'])('%s prints the start options and starts, stops and writes nothing', async (flag) => {
+    const root = freshRoot()
+    seedSession(root)
+    const daemon = seedRunningDaemon(root)
+    const port = await daemonStatusServer(root, 'm_other')
+
+    const result = await runAsync(root, ['start', flag], { PORT: String(port) })
+
+    expect(result.timedOut).toBe(false)
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('Usage: harness start')
+    expect(result.stdout).toContain('--restart')
+    expect(result.stdout).not.toContain('machine running')
+    expect(result.stdout).not.toContain('already running')
+    expect(alive(daemon.pid)).toBe(true)
+    expect(readFileSync(join(root, 'data', 'adapter.pid'), 'utf8').trim()).toBe(String(daemon.pid))
+  }, ONE_RUN_TEST_MS)
+})
+
+describe('start beside a running daemon it has no sign-in to judge by', () => {
+  // A run under another HOME has no session there: its identity is a fresh computer id, which always differs from
+  // the daemon's. That used to read as "another account" and stop the daemon.
+  it('says it runs and exits, leaving the daemon up', async () => {
+    const root = freshRoot()                           // signed out
+    const daemon = seedRunningDaemon(root)
+    const port = await daemonStatusServer(root, 'm_account')
+
+    const result = await runAsync(root, ['start'], { PORT: String(port) })
+
+    expect(result.status).toBe(1)
+    expect(result.stdout + result.stderr).toContain(`machine already running (pid ${daemon.pid}) as another account`)
+    expect(result.stdout + result.stderr).toContain('harness start --restart')
+    expect(alive(daemon.pid)).toBe(true)
+    expect(existsSync(join(root, 'data', 'adapter.pid'))).toBe(true)
+  }, ONE_RUN_TEST_MS)
+
+  it('--restart stops it and starts over, as asked', async () => {
+    const root = freshRoot()
+    const daemon = seedRunningDaemon(root)
+    const port = await daemonStatusServer(root, 'm_account')
+
+    const result = await runAsync(root, ['start', '--restart'], { PORT: String(port) })
+
+    // As the test above it: after the stop the start goes on to boot inline, which refuses to displace this
+    // fixture's live private socket, so no daemon comes up.
+    expect(result.timedOut).toBe(false)
+    expect(result.status).toBe(1)
+    expect(result.stdout).toContain(`machine running (pid ${daemon.pid}) — restarting it (--restart)`)
+    await daemon.exited
+    expect(existsSync(join(root, 'data', 'adapter.pid'))).toBe(false)
+  }, ONE_RUN_TEST_MS)
+})
+
 describe('start beside a daemon that serves another account', () => {
   // A forced login stops the daemon and waits for the browser, and a start that landed in that window
   // used to bring a daemon up on the OLD session (closed under the spawn lock now — loginForceRace.spec.ts).
