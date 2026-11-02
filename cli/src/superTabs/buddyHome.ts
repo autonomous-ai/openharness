@@ -99,6 +99,13 @@ export async function prepareBuddyHome(home: string, projects: readonly BuddyPro
   return { ready, missing }
 }
 
+/** The folder of project [id] in a one Buddy's [home], when its code is there: where a file for that project's PM may come from,
+ *  so no file of another project in the same home goes with it. */
+export function buddyProjectFolder(home: string, id: string): string | null {
+  const row = listed(home).find(r => r.id === id)
+  return row ? join(home, 'projects', row.dir) : null
+}
+
 /** Takes out of [home] each worktree whose project is not in [readable] (ids): its person lost it, or it was deleted. */
 export async function pruneBuddyHome(home: string, readable: ReadonlySet<string>): Promise<string[]> {
   const rows = listed(home)

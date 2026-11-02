@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { Readable } from 'node:stream'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
@@ -139,6 +140,107 @@ describe('one Buddy chat per person per Swarm', () => {
   })
 })
 
+describe('the one Buddy sends a proposal to a project its person reads (Scholes, 11-02)', () => {
+  const propose = (f: Swarm, chat: string, ownerMessageId: string, projectId: string | undefined, as: string, extra: Record<string, unknown> = {}, user = peer) =>
+    f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId, ...(projectId ? { projectId } : {}), goal: 'Offline sync', scope: 'Web only', priority: 'normal', ...extra } as Command, user, as)
+  const ask = async (f: Swarm, chat: string, text = 'Send it to the web PM') => String((await send(f, chat, text)).result.messageId)
+  const upload = async (f: Swarm, chat: string, name: string, as?: string) =>
+    (await f.store.upload(peer, f.tab, chat, { name, mime: 'text/plain', body: Readable.from([Buffer.from(name)]) }, as)).attachment.id
+
+  it('reaches the named project\'s PM alone, with its person as requester and its one Buddy credited', async () => {
+    const f = await swarm()
+    const { chat, main } = await buddy(f)
+    const sent = String((await propose(f, chat, await ask(f, chat), f.web.projectId, main)).result.messageId)
+    const row = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, id: sent } })
+    expect(row).toMatchObject({ conversationId: f.web.conversationId, recipientIds: [f.pms.web], source: { kind: 'buddy-proposal', personId: peer.sub } })
+    expect(await db.superTabDelivery.count({ where: { tabId: f.tab, messageId: sent, agentId: f.pms.web } })).toBe(1)
+    expect(row.text).toBe('Proposal from peer\'s Buddy, on peer\'s behalf.\n\nGoal: Offline sync\nScope: Web only\nPriority: normal')
+    for (const elsewhere of ['lead', f.secret.conversationId]) expect(await texts(f, elsewhere, owner)).not.toContain(row.text)
+    const group = String((await f.execute({ type: 'conversation.create', title: 'Offline sync', brief: '', checks: [], proposalMessageId: sent }, owner, f.pms.web)).result.conversationId)
+    expect((await f.store.read(owner, f.tab)).state.conversations.find(c => c.id === group)?.requesterId).toBe(peer.sub)
+    expect((await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: group } })).data).toMatchObject({ ledger: { proposal: { buddyId: main } } })
+  })
+
+  it('reaches a project chat gone quiet', async () => {
+    const f = await swarm()
+    const { chat, main } = await buddy(f)
+    await db.swarmGroup.updateMany({ where: { tabId: f.tab, key: f.web.conversationId }, data: { dormant: true } })
+    const sent = String((await propose(f, chat, await ask(f, chat), f.web.projectId, main)).result.messageId)
+    expect(await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, id: sent } })).toMatchObject({ conversationId: f.web.conversationId })
+  })
+
+  it('is refused a project its person cannot read, in the words a made-up id gets, and sends nothing', async () => {
+    const f = await swarm()
+    const { chat, main } = await buddy(f)
+    const before = await texts(f, f.secret.conversationId, owner)
+    const unknown = await propose(f, chat, await ask(f, chat), 'made-up-project', main).catch(e => e as { code: string; message: string })
+    expect(unknown).toMatchObject({ code: 'NOT_FOUND' })
+    // Its person loses the project while its Buddy is running: the very next proposal is refused the same way.
+    await f.execute({ type: 'project.sharing', projectId: f.secret.projectId, visibility: 'private', memberIds: [owner.sub] })
+    const refused = await propose(f, chat, await ask(f, chat), f.secret.projectId, main).catch(e => e as { code: string; message: string })
+    expect(refused).toMatchObject({ code: unknown.code, message: (unknown as { message: string }).message })
+    expect(await texts(f, f.secret.conversationId, owner)).toEqual(before)
+    // That ask was not spent: the same message may still go to a project they read.
+    const stillAsk = await ask(f, chat)
+    await expect(propose(f, chat, stillAsk, f.web.projectId, main)).resolves.toBeDefined()
+  })
+
+  it('refuses a project session that names another project, and another person\'s Buddy or chat', async () => {
+    const f = await swarm()
+    const { chat, main } = await buddy(f)
+    const { thread, agentId } = await projectSession(f, chat, f.web.projectId)
+    const inThread = String((await send(f, chat, 'Send it', { replyTo: thread })).result.messageId)
+    await expect(propose(f, chat, inThread, f.secret.projectId, agentId)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await expect(propose(f, chat, inThread, f.web.projectId, agentId)).resolves.toBeDefined()
+    // The owner's own chat, named by peer's Buddy; and peer's Buddy for a message the owner wrote.
+    const theirs = String((await f.execute({ type: 'buddy.chat' }, owner)).result.conversationId)
+    const theirAsk = String((await send(f, theirs, 'Send it', {}, owner)).result.messageId)
+    await expect(propose(f, theirs, theirAsk, f.web.projectId, main)).rejects.toMatchObject({ code: 'BUDDY_FORBIDDEN' })
+    await expect(propose(f, chat, theirAsk, f.web.projectId, main)).rejects.toMatchObject({ code: 'PROPOSAL_UNASKED' })
+    // A PM is no Buddy, and a person sends no proposal themselves.
+    await expect(propose(f, chat, await ask(f, chat), f.web.projectId, f.pms.web, {}, owner)).rejects.toBeDefined()
+    await expect(f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: await ask(f, chat), projectId: f.web.projectId, goal: 'G', scope: 'S', priority: 'normal' }, peer))
+      .rejects.toMatchObject({ code: 'BUDDY_ONLY' })
+  })
+
+  it('sends one proposal for one message, whichever project it names: never to two', async () => {
+    const f = await swarm()
+    const { chat, main } = await buddy(f)
+    const message = await ask(f, chat)
+    await propose(f, chat, message, f.web.projectId, main)
+    const before = await texts(f, f.secret.conversationId, owner)
+    await expect(propose(f, chat, message, f.secret.projectId, main)).rejects.toMatchObject({ code: 'PROPOSAL_SENT' })
+    expect(await texts(f, f.secret.conversationId, owner)).toEqual(before)
+  })
+
+  it('never answers an old ask, or a message that went to a session of another project', async () => {
+    const f = await swarm()
+    const { chat, main } = await buddy(f)
+    const old = await ask(f, chat, 'An old idea')
+    const { thread } = await projectSession(f, chat, f.secret.projectId, 'Secret plan')
+    const inSession = String((await send(f, chat, 'Send it', { replyTo: thread })).result.messageId)
+    for (const message of [thread, inSession]) await expect(propose(f, chat, message, f.web.projectId, main)).rejects.toMatchObject({ code: 'PROPOSAL_UNASKED' })
+    await ask(f, chat, 'A newer message')
+    f.clock.now += 61 * 60_000
+    await expect(propose(f, chat, old, f.web.projectId, main)).rejects.toMatchObject({ code: 'PROPOSAL_STALE' })
+  })
+
+  it('carries its own upload and a file its person sent in the main chat, never one sent in a session\'s thread', async () => {
+    const f = await swarm()
+    const { chat, main } = await buddy(f)
+    const plan = await upload(f, chat, 'plan.md', main)
+    const log = await upload(f, chat, 'main.log')
+    await send(f, chat, 'Here is the log', { attachmentIds: [log] })
+    const { thread } = await projectSession(f, chat, f.secret.projectId, 'Secret plan')
+    const secretFile = await upload(f, chat, 'secret.log')
+    await send(f, chat, 'A secret file', { replyTo: thread, attachmentIds: [secretFile] })
+    await expect(propose(f, chat, await ask(f, chat), f.web.projectId, main, { attachmentIds: [secretFile] })).rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' })
+    const sent = String((await propose(f, chat, await ask(f, chat), f.web.projectId, main, { attachmentIds: [plan, log] })).result.messageId)
+    const read = (await f.store.messages(owner, f.tab, f.web.conversationId, {})).messages.find(m => m.id === sent)
+    expect(read?.attachments?.map(a => a.name).sort()).toEqual(['main.log', 'plan.md'])
+  })
+})
+
 describe('the main Buddy', () => {
   it('reads every project its person reads, and no project they do not', async () => {
     const f = await swarm()
@@ -164,8 +266,9 @@ describe('the main Buddy', () => {
     await expect(send(f, f.web.conversationId, 'A reply', { replyTo: pmLine }, peer, main)).rejects.toMatchObject({ code: 'BUDDY_FORBIDDEN' })
     await expect(f.execute({ type: 'message.react', conversationId: f.web.conversationId, messageId: pmLine, emoji: 'eyes', on: true }, peer, main))
       .rejects.toMatchObject({ code: 'BUDDY_FORBIDDEN' })
+    // A proposal names its project: without one it goes nowhere.
     await expect(f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, goal: 'G', scope: 'S', priority: 'normal' }, peer, main))
-      .rejects.toMatchObject({ code: 'BUDDY_PROPOSE_SESSION' })
+      .rejects.toMatchObject({ code: 'BUDDY_PROPOSE_PROJECT' })
     await expect(f.execute({ type: 'conversation.create', projectId: f.web.projectId, title: 'T', brief: '', checks: [] }, peer, main))
       .rejects.toMatchObject({ code: 'BUDDY_FORBIDDEN' })
     expect(await texts(f, f.web.conversationId, owner)).not.toContain('A post')
@@ -317,14 +420,24 @@ describe('a project session', () => {
     expect((await buddyRows(f, peer, f.web.projectId)).map(r => r.agentId)).toEqual([main])
   })
 
-  it('a plain New session reads like the main Buddy and proposes nothing', async () => {
+  it('a plain New session reads like the main Buddy and proposes as it does, for its person\'s message in its thread', async () => {
     const f = await swarm()
-    const { chat } = await buddy(f)
+    const { chat, main } = await buddy(f)
     const { thread, agentId } = await projectSession(f, chat, undefined, 'Measure prod CPU')
     expect(await texts(f, f.web.conversationId, peer, agentId)).toBeDefined()
     const ask = String((await send(f, chat, 'Send it', { replyTo: thread })).result.messageId)
     await expect(f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, goal: 'G', scope: 'S', priority: 'normal' }, peer, agentId))
-      .rejects.toMatchObject({ code: 'BUDDY_PROPOSE_SESSION' })
+      .rejects.toMatchObject({ code: 'BUDDY_PROPOSE_PROJECT' })
+    const mainAsk = String((await send(f, chat, 'Send it from the main chat')).result.messageId)
+    await expect(f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: mainAsk, projectId: f.web.projectId, goal: 'G', scope: 'S', priority: 'normal' }, peer, agentId))
+      .rejects.toMatchObject({ code: 'PROPOSAL_UNASKED' })
+    const sent = String((await f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, projectId: f.web.projectId, goal: 'G', scope: 'S', priority: 'normal' }, peer, agentId)).result.messageId)
+    expect(await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, id: sent } })).toMatchObject({ conversationId: f.web.conversationId, recipientIds: [f.pms.web] })
+    // Credited to the person's one Buddy, as a project session's is: a session ends.
+    const group = String((await f.execute({ type: 'conversation.create', title: 'From the session', brief: '', checks: [], proposalMessageId: sent }, owner, f.pms.web)).result.conversationId)
+    const row = (await f.store.read(owner, f.tab)).state.conversations.find(c => c.id === group)
+    expect(row?.requesterId).toBe(peer.sub)
+    expect((await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: group } })).data).toMatchObject({ ledger: { proposal: { buddyId: main } } })
   })
 
   it('cannot be started in a project its person does not read', async () => {
