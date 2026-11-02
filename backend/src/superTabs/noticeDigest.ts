@@ -30,10 +30,13 @@ const GATHERED_ALERTS: ReadonlySet<unknown> = new Set(['limit', 'model'])
  *  task's owner, who acts on it, hears it at once), the coordinator's own skills notice (`message.send` `notice: "skills"`), or a
  *  usage-limit or failing-model alert. Needs a human, a task's Stuck, any other agent-only row (a decision answered) and a prompt
  *  alert go at once; so does a status row written before rows said their status. */
-export function gatheredNotice(source: unknown, group?: Pick<Conversation, 'reviewOf'>): boolean {
+/** [othersTold]: the message also goes to someone besides this coordinator. A step's Stuck is gathered only then: its task's
+ *  owner acts on it, and with no owner told (no assignment, its agent gone) the coordinator is the one who must hear it now
+ *  (review of the more-kinds branch). */
+export function gatheredNotice(source: unknown, group?: Pick<Conversation, 'reviewOf'>, othersTold = true): boolean {
   const row = source as { kind?: unknown; status?: unknown; notice?: unknown; alert?: unknown } | null | undefined
   return DIGEST_KINDS.has(row?.kind) || doneRow(source)
-    || (row?.kind === 'system' && row.status === 'blocked' && !!group?.reviewOf)
+    || (row?.kind === 'system' && row.status === 'blocked' && !!group?.reviewOf && othersTold)
     || (row?.kind === 'agent-only' && row.notice === 'skills')
     || (row?.kind === 'terminal-alert' && GATHERED_ALERTS.has(row.alert))
 }

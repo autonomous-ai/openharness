@@ -2512,7 +2512,7 @@ export class SuperTabStore {
         const group = conversation(state, message.conversationId)
         // Written as ever, so its readers see the message at once; only its coordinator's delivery waits for the digest (noticeDigest.ts).
         // At the store's time, which the release and the settle pass measure from. No host lists it, so none is told.
-        const gathered = gatheredNotice(message.source, group) && !!ledProject(state, recipient)
+        const gathered = gatheredNotice(message.source, group, message.recipients.some(other => other !== recipient)) && !!ledProject(state, recipient)
         deliveries.push({ id: stableId(message.id, recipient), tabId,
           conversationId: message.conversationId, messageId: message.id, agentId: recipient, machineId: target.machineId,
           machineOwnerId: target.machineOwnerId,

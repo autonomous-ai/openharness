@@ -25,6 +25,8 @@ describe('what is gathered', () => {
     expect(gatheredNotice({ kind: 'system', status: 'blocked' }, task)).toBe(false)
     expect(gatheredNotice({ kind: 'system', status: 'blocked' })).toBe(false)
     expect(gatheredNotice({ kind: 'system', status: 'needs_human' }, step)).toBe(false)
+    // With nobody else told, the coordinator must hear it at once.
+    expect(gatheredNotice({ kind: 'system', status: 'blocked' }, step, false)).toBe(false)
   })
   it('the coordinator\'s own skills notice, and no other agent-only row', () => {
     expect(gatheredNotice({ kind: 'agent-only', notice: 'skills' })).toBe(true)
