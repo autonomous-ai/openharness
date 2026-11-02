@@ -20,6 +20,7 @@ import { holdReason } from '../superTabs/holdReason.js'
 import { GitHubAppError } from '../github/app.js'
 import { projectGitHubAccess } from '../github/projectAccess.js'
 import { projectCiLoad } from '../github/ciLoad.js'
+import { projectBranchOrigin, projectPushOrigin } from '../github/pushOrigin.js'
 import { githubSignIn, PrismaApprovals, readState, signState, stateSecret, type Approvals, type GitHubSignIn } from '../github/approvals.js'
 import type { GitHubRepository } from '../github/repository.js'
 import { githubRepository } from '../github/repository.js'
@@ -238,6 +239,7 @@ async function productionStore(github: GitHubTokens | null): Promise<SuperTabSto
       workStarted: (tabId, started) => { void github?.resume(tabId, started).catch(error => logger.warn('[github] resume failed', { tabId, error: String(error) })) },
       // A team account has no git login of its own: without the app it takes no teammates' work.
       teamAccountsIdle: !github,
+      ...(github ? { pushOrigin: projectPushOrigin(github.app), branchPushOrigin: projectBranchOrigin(github.app) } : {}),
       // Every server answers the quiet delivery poll from any server's full one, and tells the agent's machine of new work
       // through whichever server holds its daemon socket (stability roadmap 2.4). Both only ever drop, never fail, on Redis.
       polls: redisPollMemory(bus.pub),
@@ -524,7 +526,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
       const issued = await github.issue({ tabId: grant.tabId, agentId: grant.agentId, assignmentId: grant.assignmentId, repository })
       // A Harness Team account has no git identity of its own: its commits are the app's, as its pull requests are
       // (github/app.ts commitIdentity). A person's machine keeps its owner's, as before.
-      const commitAs = isTeamSession(req.user) ? await github.app.commitIdentity(issued.token) : null
+      const commitAs = isTeamSession(req.user) ? github.app.commitIdentity() : null
       return { ...issued, ...attribution(grant), ...(commitAs ? { commitAs } : {}) }
     }))
   app.post<{ Params: z.infer<typeof tabParams>; Body: z.infer<typeof operation> }>('/api/super-tabs/:tabId/commands',

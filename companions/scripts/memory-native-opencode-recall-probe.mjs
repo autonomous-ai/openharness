@@ -103,8 +103,8 @@ try {
   const plugin = join(directory, 'recall.mjs')
   await writeFile(plugin, `const hookToken = () => 'synthetic-hook-token';
   export const Fixture = async ({client}) => {
-    ${opencodeMemoryPluginSource(server.address().port)}
-    ${opencodeRecallPluginSource(server.address().port)}
+    ${opencodeMemoryPluginSource(server.address().port, null)}
+    ${opencodeRecallPluginSource(server.address().port, null)}
     const post = async (route, body) => {
       const response = await fetch(${JSON.stringify(url)} + route, { method: 'POST', signal: AbortSignal.timeout(400),
         headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })

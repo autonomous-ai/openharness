@@ -77,7 +77,7 @@ export const PERMISSION_MODES: Readonly<Partial<Record<AgentEngine, Readonly<Rec
 
 /** Modes a relaunch never trades for the engine's own default when the engine on disk lacks their flag: a Buddy's, whose
  *  default would let it act with its person's own credentials (security review 1 of #2087). The relaunch is held. */
-const KEPT_PERMISSION_MODES: ReadonlySet<string> = new Set(['readOnlyAsk', 'buddy'])
+const KEPT_PERMISSION_MODES: ReadonlySet<string> = new Set(['readOnlyAsk', 'buddy', 'teamWritten'])
 
 /** The argv of [mode] for [engine], or null when the engine has no such mode. */
 export function permissionModeFlags(engine: AgentEngine, mode: string): readonly string[] | null {
@@ -87,7 +87,7 @@ export function permissionModeFlags(engine: AgentEngine, mode: string): readonly
 
 /** Whether [mode] lets the agent act without stopping to ask — what `bypassPermission` records. */
 export function permissionModeApproves(mode: string): boolean {
-  return mode === 'auto' || mode === 'full'
+  return mode === 'auto' || mode === 'full' || mode === 'teamWritten'
 }
 
 /**

@@ -160,6 +160,7 @@ class SuperTabAgent {
       profileId = row['profileId'] as String?,
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       downSince = DateTime.tryParse(row['downSince'] as String? ?? ''),
+      workDecision = row['workDecision'] as String?,
       confidential = row['confidential'] == true,
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
   final String id, projectId, name, machineId, harnessId, contributorId;
@@ -186,6 +187,13 @@ class SuperTabAgent {
   /// Since when its machine has reported its session gone, or its host confirmed a stop (backend machines.ts). Null
   /// while it runs.
   final DateTime? downSince;
+
+  /// What its coordinator or a person chose for it once its work ended: `keep` or `stop`; `awaiting` while nobody has.
+  final String? workDecision;
+
+  /// Its session is closed on its machine and someone chose to keep the agent: the backend removes every other closed
+  /// agent from the list (backend closedAgents.ts), so this one is shown as closed, never as Idle.
+  bool get keptClosed => workDecision == 'keep' && downSince != null;
 
   /// The account whose computer runs it; a contributor may run agents on a computer another account shared with them.
   final String machineOwnerId;
@@ -504,10 +512,7 @@ class SuperTabSnapshot {
           : Map.unmodifiable(superTabMap(row['project'])),
       people = superTabUsernames(_list(row['people'], SuperTabPerson.fromJson)),
       agents = _list(row['agents'], SuperTabAgent.fromJson),
-      machines = _list(
-        row['machines'] ?? const [],
-        (m) => Map<String, dynamic>.unmodifiable(m),
-      ),
+      _machines = _machineRows(row['machines'] ?? const []),
       // The Product Managers chat is gone (Dee, 2026-10-31): an older server
       // still sends it, by its kind or the id the head names, and no screen
       // may list or open it.
@@ -532,6 +537,10 @@ class SuperTabSnapshot {
       }),
       localModels = SuperTabLocalModels.read(row['localModels']),
       teamAccounts = row['teamAccounts'] != false,
+      removedMachines = [
+        for (final id in row['removedMachines'] as List? ?? const [])
+          if (id is String) id,
+      ],
       threadSessions = row['threadSessions'] == true,
       sessionsFromChat = row['sessionsFromChat'] == true,
       swarmBuddy = row['swarmBuddy'] == true,
@@ -602,7 +611,17 @@ class SuperTabSnapshot {
   late final List<SuperTabAgent> teamAgents = List.unmodifiable(
     agents.where((a) => !a.isBuddy),
   );
-  final List<Map<String, dynamic>> machines;
+  List<Map<String, dynamic>> get machines => _machines;
+  List<Map<String, dynamic>> _machines;
+
+  static List<Map<String, dynamic>> _machineRows(Object? rows) =>
+      _list(rows, (m) => Map<String, dynamic>.unmodifiable(m));
+
+  /// A machine's report arrived and nothing else moved: only the machines are
+  /// new, so nothing worked out from the rest of the Swarm is done again
+  /// (`SuperTabController.machinesChanged` says so).
+  void replaceMachines(List<Map<String, dynamic>> rows) =>
+      _machines = _machineRows(rows);
   final List<SuperTabConversation> conversations;
   late final List<SuperTabProject> projects;
   final List<Map<String, dynamic>> invitations;
@@ -619,6 +638,11 @@ class SuperTabSnapshot {
   /// Whether this Swarm's server uses Harness Team accounts: false only where
   /// it says it does not try them yet (backend read/contract.ts `teamAccounts`).
   final bool teamAccounts;
+
+  /// The reader's own machines they took out of this Swarm: an automatic add
+  /// leaves them out (backend model.ts removedMachines). Empty from an older
+  /// backend.
+  final List<String> removedMachines;
 
   /// Whether this Swarm's server takes a thread reply's New session: true only
   /// where it says so (backend read/contract.ts `threadSessions`); an older
@@ -1212,6 +1236,10 @@ class SuperTabMessage {
 
   /// The line the server writes in a thread when its session ends.
   bool get sessionEnded => source['kind'] == 'buddy-session-ended';
+
+  /// A task's own message, the server keeps current as the task moves (Quiet
+  /// Swarm 2/6): its text is the task's name.
+  bool get isTaskLine => source['kind'] == 'task-line';
 
   /// Why its session ended, for [sessionEnded] rows: `ended`, `idle`,
   /// `stopped` or `failed`.

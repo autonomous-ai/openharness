@@ -79,6 +79,43 @@ Future<void> _showProjectDetails(
   ),
 );
 
+/// The project menu's Project settings… (Quiet Swarm, screen 9): the rows the
+/// reader may use, each closing the dialog and then doing its work.
+Future<void> showProjectSettings(
+  BuildContext context,
+  SuperTabController c,
+  SuperTabProject project,
+  List<(String, VoidCallback)> rows, {
+  double rowHeight = 32,
+}) => showAppDialog<void>(
+  context: context,
+  builder: (context) => SuperTabDialogScope(
+    controller: c,
+    projectId: project.id,
+    requireWrite: false,
+    child: SuperTabDetailDialog(
+      title: 'Project settings',
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final (label, action) in rows)
+            InkWell(
+              onTap: () {
+                Navigator.of(context).pop();
+                action();
+              },
+              child: Container(
+                constraints: BoxConstraints(minHeight: rowHeight),
+                alignment: Alignment.centerLeft,
+                child: Text(label, style: DesktopChrome.control()),
+              ),
+            ),
+        ],
+      ),
+    ),
+  ),
+);
+
 Future<void> showProjectAction(
   BuildContext context,
   SuperTabController c,

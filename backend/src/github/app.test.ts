@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { ACTIONS_READ_PERMISSIONS, CI_LOAD_TTL_MS, CI_MAX_CALLS, CI_MAX_RUNS, CI_READS_PER_HOUR, CI_STALE_MS, SERVER_PROCESSES_MAX, cacheSecret, githubAppConfig, GitHubAppError, PULL_READ_PERMISSIONS, readPrivateKey, TOKEN_PERMISSIONS } from './app.js'
 import { FAKE_API, fakeApp, fakeGitHub, throwawayKey } from './fakeGitHub.js'
 import { githubRepository } from './repository.js'
+import { GitHubApp, HARNESS_CO_AUTHOR } from './app.js'
 
 const key = throwawayKey()
 const repo = githubRepository('https://github.com/acme/app')!
@@ -150,35 +151,25 @@ describe('installation tokens', () => {
     expect(app.notInstalled(repo).message).toBe('The Harness GitHub App is not installed on acme/app. Ask an owner of acme to install it.')
   })
 
-  // A Harness Team account's commits are the app's (PR #1934): its bot account, as GitHub names it.
-  it('names the app\'s bot account as its commit identity, reading the bot\'s id once', async () => {
+  // Dee, task #2136: a commit reads as Claude's line does, and asks GitHub nothing.
+  it('names Harness by Autonomous as its commit identity, with no call to GitHub', () => {
     const { app, github } = setup()
-    expect(await app.commitIdentity()).toEqual({ name: 'Harness', email: '4242+harness-fixture[bot]@users.noreply.github.com' })
-    expect(await app.commitIdentity()).toEqual({ name: 'Harness', email: '4242+harness-fixture[bot]@users.noreply.github.com' })
-    const asked = github.calls.filter(c => c.path.startsWith('/users/'))
-    expect(asked).toEqual([expect.objectContaining({ method: 'GET', path: '/users/harness-fixture%5Bbot%5D', auth: '' })])
-    // With no app name configured, the app's own answer names it.
-    // With a token, asked with it: unsigned requests from a server's shared address can be refused (PR #1948).
-    const signed = setup()
-    await signed.app.commitIdentity('ghs_issued')
-    expect(signed.github.calls.find(c => c.path.startsWith('/users/'))?.auth).toBe('Bearer ghs_issued')
-    const unnamed = setup({ slug: null })
-    expect(await unnamed.app.commitIdentity()).toMatchObject({ name: 'Harness', email: '4242+harness-fixture[bot]@users.noreply.github.com' })
-    expect(unnamed.github.calls.map(c => c.path)).toEqual(['/app', '/users/harness-fixture%5Bbot%5D'])
+    expect(app.commitIdentity()).toEqual({ name: 'Harness by Autonomous', email: 'noreply@autonomous.ai' })
+    expect(HARNESS_CO_AUTHOR).toBe('Co-authored-by: Harness by Autonomous <noreply@autonomous.ai>')
+    expect(github.calls).toEqual([])
   })
 
-  it('has no commit identity while GitHub cannot say, and asks again ten minutes later', async () => {
-    const { app, github, time } = setup()
-    github.control.botId = null
-    expect(await app.commitIdentity()).toBeNull()
-    github.control.botId = 4242
-    expect(await app.commitIdentity()).toBeNull()
-    time.advance(10 * 60_000)
-    github.control.down = true
-    expect(await app.commitIdentity()).toBeNull()
-    github.control.down = false
-    time.advance(10 * 60_000)
-    expect(await app.commitIdentity()).toMatchObject({ email: '4242+harness-fixture[bot]@users.noreply.github.com' })
+  // A wrong name asks the log for a bot that never pushed: an empty answer that would read as clean (review 1 of #2600).
+  it('takes its bot login from GitHub\'s answer, never its configured name, once, and says null while GitHub cannot say', async () => {
+    const { app, github } = setup({ slug: 'a-wrong-name' })
+    expect(await app.botLogin()).toBe('harness-fixture[bot]')
+    expect(await app.botLogin()).toBe('harness-fixture[bot]')
+    expect(github.calls.map(c => c.path)).toEqual(['/app'])
+    const down = setup({ slug: 'harness-fixture' })
+    down.github.control.down = true
+    expect(await down.app.botLogin()).toBeNull()
+    down.github.control.down = false
+    expect(await down.app.botLogin()).toBe('harness-fixture[bot]')
   })
 
   it('revokes a token with the token itself, takes one already ended as done, and reports any other failure', async () => {
@@ -412,5 +403,59 @@ describe('the CI load', () => {
     // The fresh one stays beside the new one; the 199 expired ones are gone.
     expect([...(app as unknown as { ciLoads: Map<string, unknown> }).ciLoads.keys()]).toEqual(['acme/app', 'acme/fresh'])
     expect([...(app as unknown as { ciReads: Map<string, unknown> }).ciReads.keys()]).toEqual(['acme/app', 'acme/fresh'])
+  })
+})
+
+describe('who pushed a pull request, through the app', () => {
+  const head = 'head-sha'
+  const fixture = (first = { after: head, actor: { login: 'ken', type: 'User' }, timestamp: '2026-11-02T08:00:00Z' }) => {
+    const { privateKey, publicKey } = throwawayKey()
+    let now = Date.parse('2026-11-02T09:00:00Z')
+    const github = fakeGitHub({ publicKey, appId: '7', now: () => now })
+    github.installed.set('acme/app', 1)
+    const paths: string[] = []
+    let activity: 'answer' | 'fail' = 'answer'
+    const sha = head
+    const fetch: typeof github.fetch = async (input, init) => {
+      const url = new URL(String(input))
+      if (!/\/repos\/acme\/app\/pulls|\/activity$/.test(url.pathname)) return github.fetch(input, init)
+      paths.push(url.pathname + url.search)
+      const json = (body: unknown, headers: Record<string, string> = {}) => new Response(JSON.stringify(body), { status: 200, headers })
+      if (url.pathname.endsWith('/commits')) return json([{ sha: head, commit: { author: { email: 'k@example.com' }, committer: { email: 'k@example.com' } } }])
+      if (url.pathname.endsWith('/activity')) {
+        if (activity === 'fail') return new Response('{}', { status: 502 })
+        if (url.searchParams.get('actor')) return json([])
+        return url.searchParams.get('after') ? json([first]) : json([], { link: `<https://api.github.com/repositories/1/activity?ref=fix&per_page=100&after=abc>; rel="next"` })
+      }
+      return json({ head: { sha, ref: 'fix', repo: { full_name: 'acme/app' } }, created_at: '2026-11-02T07:00:00Z' })
+    }
+    const app = new GitHubApp({ appId: '7', privateKey, slug: 'harness-fixture' }, { fetch, apiUrl: FAKE_API, now: () => now })
+    return { app, paths, fail: (down: boolean) => { activity = down ? 'fail' : 'answer' }, pass: (ms: number) => { now += ms } }
+  }
+  const repository = githubRepository('https://github.com/acme/app')!
+
+  it('asks for its own bot by login, follows the log\'s next link, and reads the pull request once, so a push in between files nothing under another commit', async () => {
+    const f = fixture()
+    expect(await f.app.pushOrigin(repository, 7)).toBe('clean')
+    expect(f.paths.filter(p => /\/pulls\/7$/.test(p))).toHaveLength(1)
+    expect(f.paths.some(p => p.includes(`actor=${encodeURIComponent('harness-fixture[bot]')}`))).toBe(true)
+    expect(f.paths.some(p => p.includes('after=abc'))).toBe(true)
+  })
+
+  it('keeps an answer for a head, and asks again after a minute when GitHub could not say', async () => {
+    const f = fixture()
+    f.fail(true)
+    expect(await f.app.pushOrigin(repository, 7)).toBe('unknown')
+    const logReads = () => f.paths.filter(p => p.includes('/activity')).length, once = logReads()
+    expect(await f.app.pushOrigin(repository, 7)).toBe('unknown')
+    expect(logReads()).toBe(once)
+    f.pass(61_000)
+    f.fail(false)
+    expect(await f.app.pushOrigin(repository, 7)).toBe('clean')
+    expect(logReads()).toBeGreaterThan(once)
+    const settled = logReads()
+    f.pass(3_600_000)
+    expect(await f.app.pushOrigin(repository, 7)).toBe('clean')
+    expect(logReads()).toBe(settled)
   })
 })

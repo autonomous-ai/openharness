@@ -260,7 +260,7 @@ export function observedPrivacy(previous: StoredPrivacy | undefined, reported: M
   return { ...reported, seenAt: same ? previous.seenAt : now }
 }
 
-export type TeamWorkCode = 'MACHINE_OFFLINE' | 'TEAM_ACCOUNT_REQUIRED' | 'PRIVACY_UNCHECKED' | 'PRIVACY_CHECK_FAILED' | 'PRIVACY_CHECK_STALE'
+export type TeamWorkCode = 'TEAM_WRITTEN_WORK' | 'MACHINE_OFFLINE' | 'TEAM_ACCOUNT_REQUIRED' | 'PRIVACY_UNCHECKED' | 'PRIVACY_CHECK_FAILED' | 'PRIVACY_CHECK_STALE'
   | 'MACHINE_IN_OTHER_WORKSPACE' | 'NOT_SWARM_MACHINE'
 export interface TeamWorkRefusal { code: TeamWorkCode; reason: string }
 /** Refusals that hold until a person acts on the machine; a stale check or an offline machine may pass again by itself. */
@@ -400,11 +400,12 @@ export function productManagerOn(state: SuperTabState, machineId: string): strin
 
 /** Where a new agent for [project] runs when a start names [machineId]: the Mac's team account when the project is not
  *  its contributor's own and the Mac has one in this Swarm, else the machine named. */
-export function teamMachineFor(state: SuperTabState, machineId: string, project: SwarmProject, idle = false, live?: readonly string[]): string {
+export function teamMachineFor(state: SuperTabState, machineId: string, project: SwarmProject, idle = false, live?: readonly string[], teamWritten = false): string {
   // With no GitHub App on this server a team account cannot fetch or push, so the work stays on the Mac, as before.
   if (idle) return machineId
   const pool = state.machines?.find(m => m.machineId === machineId)
-  if (!pool || project.ownerId === pool.contributorId) return machineId
+  // [teamWritten]: code a Team agent wrote takes the Team account even in its owner's own project (teamWritten.ts, audit H2).
+  if (!pool || (!teamWritten && project.ownerId === pool.contributorId)) return machineId
   return teamPoolOf(state, pool, live)?.machineId ?? machineId
 }
 
@@ -446,8 +447,8 @@ export function buddyProjectsOn(state: SuperTabState, pool: ContributedMachine, 
  * stay with the owner's daemon, and a Mac without a team account here refuses it as before (teamWorkCheck).
  */
 export function teamStartRequest(state: SuperTabState, request: AgentStartRequest, project: SwarmProject, idle = false,
-  live?: readonly string[]): AgentStartRequest {
-  const machineId = teamMachineFor(state, request.machineId, project, idle, live)
+  live?: readonly string[], teamWritten = false): AgentStartRequest {
+  const machineId = teamMachineFor(state, request.machineId, project, idle, live, teamWritten)
   if (machineId === request.machineId) return request
   const pool = state.machines!.find(m => m.machineId === request.machineId)!, team = state.machines!.find(m => m.machineId === machineId)!
   return { ...request, machineId, cwd: request.cwd === projectFolder(pool, project) ? projectFolder(team, project) : request.cwd }
@@ -502,6 +503,7 @@ export function dropIdleBuddyMachines(state: SuperTabState, now: number): void {
       machineOwnerId: pool.contributorId, requestedAt: new Date(now).toISOString(), buddyOnly: true })
     state.harnessReservations = state.harnessReservations?.filter(r => r.machineId !== pool.machineId)
     state.releasedHarnesses = state.releasedHarnesses?.filter(r => r.machineId !== pool.machineId)
+    state.removedSessions = state.removedSessions?.filter(r => r.machineId !== pool.machineId)
   }
 }
 

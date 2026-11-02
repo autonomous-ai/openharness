@@ -280,7 +280,7 @@ void main() {
   testWidgets('an older Swarm shows no Instructions', (tester) async {
     final (server, controller) = await mount(tester, instructions: false);
     await openMenu(tester);
-    expect(menuItem('Project details'), findsOneWidget);
+    expect(menuItem('Project settings…'), findsOneWidget);
     expect(menuItem('Instructions'), findsNothing);
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();

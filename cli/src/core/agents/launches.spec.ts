@@ -1127,6 +1127,11 @@ describe('agent_resume and agent_restart', () => {
     expect(vi.mocked(resume!).mock.calls).toEqual([['a1'], ['a1', 'plan']])
   })
 
+  it('refuse a resume that would trade Team-written work\'s mode for another: its project settings stay off (audit H2)', async () => {
+    const run = setup({ byAgent: (id: string) => id === 'written' ? { ...session('written'), permissionMode: 'teamWritten' } : undefined })
+    expect(await run.relaunch('agent_resume', { agentId: 'written', permissionMode: 'full' })).toStrictEqual({ error: 'INVALID_PERMISSION_MODE' })
+  })
+
   it('refuse a request with no agent, on a machine that cannot relaunch, and a permission mode a restart has no use for', async () => {
     const { relaunch, restart } = setup()
     expect(await relaunch('agent_restart', {})).toStrictEqual({ error: 'MISSING_AGENT_ID' })

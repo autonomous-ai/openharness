@@ -3,10 +3,14 @@ import type { AddressInfo } from 'node:net'
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { env } from '../config/env.js'
 import { startHookServer, type HookServerHandlers } from '../hookServer.js'
 import { machineId } from './harnessLocal.js'
+
+// A folder too long for a socket now has one under the home folder: only a home too long as well is left on the port.
+beforeEach(() => { vi.stubEnv('HOME', `/${'h'.repeat(120)}`) })
+afterEach(() => { vi.unstubAllEnvs() })
 
 // The e2e reads the daemon it drives through the daemon's own local API, which since guest machine sharing
 // (bc7f56ff9) answers the full /api/status only to a caller that shows the local credential. grid-dev's run

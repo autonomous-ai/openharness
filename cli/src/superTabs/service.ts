@@ -23,9 +23,9 @@ import { teamEngineReporter, type TeamEngineReporter } from '../team/engines.js'
 import { AUTO_SETUP_REASONS, realTeamAutoSetup, type AutoSetupReason, type TeamAutoSetup } from '../team/autoSetup.js'
 import { openDaemon } from '../agentClient/daemon.js'
 import { readTeamConfig } from '../team/config.js'
-import { realTeamRelayPublisher, type TeamRelayPublisher } from '../team/relay.js'
+import { realTeamRelayPublisher, TEAM_RELAY_GRANT_FILE, type TeamRelayPublisher } from '../team/relay.js'
 import { readLastTry, refreshCreationId, refreshTeamAccount, teamRefreshFile, writeLastTry, type TeamRefreshDeps } from '../team/refresh.js'
-import { readTeamStatus } from '../team/privacy.js'
+import { readTeamStatusOffThread } from '../team/privacy.js'
 import { ensureTeamTmux, TMUX_MANIFEST_URL, tmuxRunsAt, untarGz, type TeamTmuxDeps, type TeamTmuxOutcome } from '../team/tmux.js'
 import { downloadVerified } from '../lib/selfUpdate.js'
 import { managedTmuxPath, tmuxInstallDirectories } from '../lib/tmuxOnPath.js'
@@ -363,8 +363,10 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   // On the Mac's owner's daemon, while a Harness Team account exists here: the owner's subscriptions for it, through a
   // relay of its own (team/relay.ts). Kept through a lost backend connection, which running agents do not need.
   const relay = (options.teamRelay ?? (() => realTeamRelayPublisher(
-    () => startSubscriptionRelay({ owner: createOwnerSubscriptions(), log: line => console.log(`[team] relay · ${line}`) }),
+    port => startSubscriptionRelay({ owner: createOwnerSubscriptions(), log: line => console.log(`[team] relay · ${line}`), ...(port ? { port } : {}) }),
     () => readTeamConfig(), options.team ?? (() => readAuthSession()?.kind === 'team'), line => console.log(`[team] ${line}`),
+    // In the owner's closed home: a running Team agent's relay outlives this daemon (task #2125).
+    join(core.dataDir, TEAM_RELAY_GRANT_FILE),
     // A team account still on a build that cannot use the relay is updated from here (team/refresh.ts).
     (publishedAt) => refreshTeamAccount(realTeamRefreshDeps(core, publishedAt)))))()
   let autoSetup: Promise<Pick<TeamAutoSetup, 'offer' | 'decline'> & Partial<Pick<TeamAutoSetup, 'status'>>> | null = null
@@ -880,7 +882,8 @@ function realTeamRefreshDeps(core: CoreApi, publishedAt: number | null): TeamRef
   const file = teamRefreshFile(core.dataDir)
   return {
     config: () => readTeamConfig(),
-    status: readTeamStatus,
+    // Never on this thread on Windows: the Team account can hold its file's open for as long as it likes (audit W4).
+    status: (path) => readTeamStatusOffThread(path),
     publishedAt: () => publishedAt,
     machines: async () => {
       const reply = await core.account.backend('GET', '/api/machines')
