@@ -2710,25 +2710,34 @@ class SuperTabController extends ChangeNotifier {
         (held.first.sequence <= readMark(group.id) || !hasOlder(group.id));
   }
 
+  /// The reader's Buddy chats that count toward the Swarm badge: the one
+  /// Buddy's chat where the Swarm gives one Buddy for the whole Swarm (its
+  /// older project Buddy chats are copies of its lines, so they never count
+  /// twice), else each project's.
+  Iterable<SuperTabConversation> get _countedBuddyChats sync* {
+    if (oneBuddy) {
+      if (buddyChat(kSwarmBuddyKey) case final chat?) yield chat;
+      return;
+    }
+    for (final project in snapshot?.projects ?? const <SuperTabProject>[]) {
+      if (buddyChat(project.id) case final chat?) yield chat;
+    }
+  }
+
   /// The unread messages in the reader's own Buddy chats, the PM's private
   /// lines among them, for the Swarm badge.
   int get buddyUnread => [
-    for (final project in snapshot?.projects ?? const <SuperTabProject>[])
+    for (final chat in _countedBuddyChats)
       // A muted chat never counts (Slack).
-      if (buddyChat(project.id) case final chat?
-          when notifyOf(chat.id) != SuperTabNotify.muted)
-        unreadCount(chat),
+      if (notifyOf(chat.id) != SuperTabNotify.muted) unreadCount(chat),
   ].fold(0, (a, b) => a + b);
 
   /// Reads each Buddy chat whose count is still open ([_countOpen]), page by
   /// page, so the count is exact up to [kCountCap]; nothing once every chat's
   /// count is known.
   void _readUnreadBuddyChats() {
-    for (final project in snapshot?.projects ?? const <SuperTabProject>[]) {
-      final chat = buddyChat(project.id);
-      if (chat == null || !_countOpen(chat) || !_counting.add(chat.id)) {
-        continue;
-      }
+    for (final chat in _countedBuddyChats) {
+      if (!_countOpen(chat) || !_counting.add(chat.id)) continue;
       unawaited(
         _countChat(chat.id).whenComplete(() {
           _counting.remove(chat.id);
