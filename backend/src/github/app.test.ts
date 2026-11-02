@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { ACTIONS_READ_PERMISSIONS, CI_LOAD_TTL_MS, CI_MAX_CALLS, CI_MAX_RUNS, CI_READS_PER_HOUR, CI_STALE_MS, SERVER_PROCESSES_MAX, cacheSecret, githubAppConfig, GitHubAppError, PULL_READ_PERMISSIONS, readPrivateKey, TOKEN_PERMISSIONS } from './app.js'
 import { FAKE_API, fakeApp, fakeGitHub, throwawayKey } from './fakeGitHub.js'
 import { githubRepository } from './repository.js'
-import { GitHubApp } from './app.js'
+import { GitHubApp, HARNESS_CO_AUTHOR } from './app.js'
 
 const key = throwawayKey()
 const repo = githubRepository('https://github.com/acme/app')!
@@ -151,35 +151,27 @@ describe('installation tokens', () => {
     expect(app.notInstalled(repo).message).toBe('The Harness GitHub App is not installed on acme/app. Ask an owner of acme to install it.')
   })
 
-  // A Harness Team account's commits are the app's (PR #1934): its bot account, as GitHub names it.
-  it('names the app\'s bot account as its commit identity, reading the bot\'s id once', async () => {
+  // Dee, task #2136: a commit reads as Claude's line does, and asks GitHub nothing.
+  it('names Harness by Autonomous as its commit identity, with no call to GitHub', () => {
     const { app, github } = setup()
-    expect(await app.commitIdentity()).toEqual({ name: 'Harness', email: '4242+harness-fixture[bot]@users.noreply.github.com' })
-    expect(await app.commitIdentity()).toEqual({ name: 'Harness', email: '4242+harness-fixture[bot]@users.noreply.github.com' })
-    const asked = github.calls.filter(c => c.path.startsWith('/users/'))
-    expect(asked).toEqual([expect.objectContaining({ method: 'GET', path: '/users/harness-fixture%5Bbot%5D', auth: '' })])
-    // With no app name configured, the app's own answer names it.
-    // With a token, asked with it: unsigned requests from a server's shared address can be refused (PR #1948).
-    const signed = setup()
-    await signed.app.commitIdentity('ghs_issued')
-    expect(signed.github.calls.find(c => c.path.startsWith('/users/'))?.auth).toBe('Bearer ghs_issued')
-    const unnamed = setup({ slug: null })
-    expect(await unnamed.app.commitIdentity()).toMatchObject({ name: 'Harness', email: '4242+harness-fixture[bot]@users.noreply.github.com' })
-    expect(unnamed.github.calls.map(c => c.path)).toEqual(['/app', '/users/harness-fixture%5Bbot%5D'])
+    expect(app.commitIdentity()).toEqual({ name: 'Harness by Autonomous', email: 'noreply@autonomous.ai' })
+    expect(HARNESS_CO_AUTHOR).toBe('Co-authored-by: Harness by Autonomous <noreply@autonomous.ai>')
+    expect(github.calls).toEqual([])
   })
 
-  it('has no commit identity while GitHub cannot say, and asks again ten minutes later', async () => {
-    const { app, github, time } = setup()
-    github.control.botId = null
-    expect(await app.commitIdentity()).toBeNull()
-    github.control.botId = 4242
-    expect(await app.commitIdentity()).toBeNull()
-    time.advance(10 * 60_000)
-    github.control.down = true
-    expect(await app.commitIdentity()).toBeNull()
-    github.control.down = false
-    time.advance(10 * 60_000)
-    expect(await app.commitIdentity()).toMatchObject({ email: '4242+harness-fixture[bot]@users.noreply.github.com' })
+  it('knows its own bot login from its name, or GitHub\'s answer with none, and says null while GitHub cannot say', async () => {
+    const { app, github } = setup()
+    expect(await app.botLogin()).toBe('harness-fixture[bot]')
+    expect(github.calls).toEqual([])
+    const unnamed = setup({ slug: null })
+    expect(await unnamed.app.botLogin()).toBe('harness-fixture[bot]')
+    expect(await unnamed.app.botLogin()).toBe('harness-fixture[bot]')
+    expect(unnamed.github.calls.map(c => c.path)).toEqual(['/app'])
+    const down = setup({ slug: null })
+    down.github.control.down = true
+    expect(await down.app.botLogin()).toBeNull()
+    down.github.control.down = false
+    expect(await down.app.botLogin()).toBe('harness-fixture[bot]')
   })
 
   it('revokes a token with the token itself, takes one already ended as done, and reports any other failure', async () => {
