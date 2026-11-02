@@ -136,3 +136,11 @@ if (-not @($mine | Where-Object { $_.ProcessName -eq 'node' }).Count) { Fail "no
 $slow = @($mine | Where-Object { "$($_.PriorityClass)" -ne 'Normal' })
 if ($slow.Count) { Fail "not at normal priority: $(($slow | ForEach-Object { "$($_.ProcessName) $($_.Id) $($_.PriorityClass)" }) -join ', ')" }
 Write-Host "ok   priority Normal for $($mine.Count) process(es): $(($mine | ForEach-Object { "$($_.ProcessName) $($_.Id)" }) -join ', ')"
+# The Store packages against this daemon (task #2161, audit W1): each reaches it over its named pipe with the pipe auth, and
+# never its TCP port, which the Team account's daemon can hold from boot. From a checkout, which has them beside this script.
+$storePipe = Join-Path $PSScriptRoot '..\..\..\store\tools\windows-ci\store-pipe.mjs'
+if (Test-Path -LiteralPath $storePipe) {
+  & node $storePipe
+  if ($LASTEXITCODE -ne 0) { Fail "a Store package did not reach the daemon over its pipe ($storePipe printed why above)" }
+  Write-Host "ok   the Store packages reach the daemon over its pipe"
+} else { Write-Host "skip the Store packages: no checkout of store\ beside this script" }

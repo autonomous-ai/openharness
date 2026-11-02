@@ -267,9 +267,12 @@ class _SuperTabViewState extends State<SuperTabView>
     _composer.addListener(_composerMoved);
     c.addListener(_changed);
     c.buddyChatOpener = _openBuddyChat;
+    SuperTabChatNotices.of(c).chatShown = _chatShown;
     _registerDial();
     _changed();
   }
+
+  bool _chatShown() => _chatIsVisible;
 
   @override
   void didChangeDependencies() {
@@ -288,6 +291,10 @@ class _SuperTabViewState extends State<SuperTabView>
   @override
   void didUpdateWidget(SuperTabView oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != c) {
+      _noticesLeave(oldWidget.controller);
+      SuperTabChatNotices.of(c).chatShown = _chatShown;
+    }
     if (oldWidget.controller != c || oldWidget.app != widget.app) {
       _dial.cancel();
       _registerDial();
@@ -756,8 +763,14 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
+  void _noticesLeave(SuperTabController controller) {
+    final notices = SuperTabChatNotices.of(controller);
+    if (notices.chatShown == _chatShown) notices.chatShown = null;
+  }
+
   @override
   void dispose() {
+    _noticesLeave(c);
     WidgetsBinding.instance.removeObserver(this);
     _board.dispose();
     _facts.dispose();

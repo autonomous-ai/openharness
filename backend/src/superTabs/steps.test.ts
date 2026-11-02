@@ -4,7 +4,7 @@
  * readers show it inside its task. No step name means anything to the server.
  */
 import { describe, expect, it } from 'vitest'
-import { applyCommand, type Command, type CommandContext } from './commands.js'
+import { applyCommand, PAIR_CHAIN_LIMIT, type Command, type CommandContext } from './commands.js'
 import { agent, createSuperTab, type Actor, type AgentConfiguration } from './model.js'
 import { extracted } from './parts/write.js'
 import { stepEndedRows, stepSleeps } from './steps.js'
@@ -223,6 +223,34 @@ describe('who hears a step', () => {
     const { f, id, post } = reviewing()
     expect(to(post(id), id)).toEqual([[f.dev]])
     expect(to(post(f.task), f.task)).toEqual([[f.dev]])
+  })
+
+  // Diego, 2026-11-02: "Fixed in abc123, please re-check" from the Engineer woke the PM and the Reviewer never heard it.
+  it('the owner\'s unnamed post in its active step reaches the step\'s agent only', () => {
+    const { f, id, rev, post } = reviewing()
+    expect(to(post(id, f.dev), id)).toEqual([[rev]])
+  })
+
+  it('the owner\'s post in its step naming the coordinator still reaches the coordinator', () => {
+    const { f, id } = reviewing()
+    const named = f.run({ type: 'message.send', conversationId: id, text: 'Need a ruling.', replyTo: null, recipientIds: [f.lead] } as Command, f.as(f.dev)).messages
+    expect(to(named, id)).toEqual([[f.lead]])
+  })
+
+  // Cleo's review of #2635: nothing is dropped. Where the owner's post does not go to the step's agent, it falls back as before.
+  it('the owner\'s unnamed post after the pair\'s loop guard stops still reaches the coordinator', () => {
+    const { f, id, rev } = reviewing()
+    const recent = Array.from({ length: PAIR_CHAIN_LIMIT }, (_, i) => ({ author: { kind: 'agent', id: i % 2 ? rev : f.dev } as never, recipients: [i % 2 ? f.dev : rev] }))
+    const sent = f.run({ type: 'message.send', conversationId: id, text: 'Fixed, please re-check.', replyTo: null, recipientIds: [] } as Command, f.as(f.dev), { recent }).messages
+    expect(to(sent, id)).toEqual([[f.lead]])
+  })
+
+  it('the owner\'s unnamed reply to someone else in its step still reaches the coordinator', () => {
+    const { f, id } = reviewing()
+    const asked = f.run({ type: 'message.send', conversationId: id, text: 'Status?', replyTo: null, recipientIds: [f.dev] } as Command, f.as(f.lead)).messages[0]!
+    const answer = f.run({ type: 'message.send', conversationId: id, text: 'Almost.', replyTo: asked.id, recipientIds: [] } as Command, f.as(f.dev),
+      { reply: { id: asked.id, conversationId: id, author: asked.author, createdAt: 0 } }).messages
+    expect(to(answer, id)).toEqual([[f.lead]])
   })
 
   it('an agent with no open step in the task still reaches the coordinator', () => {
