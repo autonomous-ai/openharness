@@ -103,6 +103,28 @@ describe('who is at the other end of a loopback connection', () => {
       expect(await peerIsThisAccount(socket({ remotePort: 51_101 }), 'win32', answering('yes').run)).toBe(true)
     })
 
+    // A keep-alive client (an MCP client on the bridge) asks again on the same connection: a no for being busy must not
+    // stick to it, and is not "another account" (Luna's review of #2605).
+    it('keeps no busy refusal on the connection: the same socket is asked again once a slot frees', async () => {
+      const finish: Array<() => void> = []
+      const slow: WindowsPeerRun = () => new Promise((resolve) => { finish.push(() => resolve({ status: 0, stdout: 'yes' })) })
+      const pending = Array.from({ length: WINDOWS_PEER_LOOKUPS }, (_, i) => peerIsThisAccount(socket({ remotePort: 52_000 + i }), 'win32', slow))
+      const caller = socket({ remotePort: 52_100 })
+      const warned: string[] = []
+      const warn = console.warn
+      console.warn = (line: string) => { warned.push(line) }
+      try {
+        expect(await peerIsThisAccount(caller, 'win32', slow)).toBe(false)
+      } finally {
+        console.warn = warn
+      }
+      expect(warned.join('\n')).toMatch(/busy/)
+      expect(warned.join('\n')).not.toMatch(/not this account/)
+      for (const done of finish.splice(0)) done()
+      await Promise.all(pending)
+      expect(await peerIsThisAccount(caller, 'win32', answering('yes').run)).toBe(true)
+    })
+
     // Windows keeps naming a socket's creator after it exits when a child inherited the handle, and the id can go to one of
     // the owner's processes since: an account that heard the credential could wait for that and be read as the owner (Luna's
     // review of #2605). The process found must have started before the connection was made.
