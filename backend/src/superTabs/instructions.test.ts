@@ -83,6 +83,12 @@ describe('the built-in template', () => {
     expect(pm).toContain('- When the project owner answers Yes to a nightly routing proposal, writes its line into Routing, naming the owner as who asked.')
     expect(Buffer.byteLength(INSTRUCTIONS_TEMPLATE)).toBeLessThan(16_384)
   })
+  it('keeps a Reviewer or Tester working on its step while the Engineer fixes findings: blocked is for a person', () => {
+    // Ken, 2026-11-02: 47 of a day's "Stuck" statuses reached the PM from Reviewers waiting on the Engineer's fixes.
+    const workflow = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Workflow'), INSTRUCTIONS_TEMPLATE.indexOf('## Routing'))
+    expect(workflow).toContain('While the Engineer fixes them, the Reviewer or Tester stays Working on its step')
+    expect(workflow).toContain('blocked and needs_human are only for something a person must do.')
+  })
   it('routes by each account\'s weekly quota left per day until its reset, which the route\'s order does not rank by', () => {
     // Ken, 2026-11-02: in a week of the autonomous.ai Swarm the PM took the route's first candidate 7% of the time, work piled
     // onto one machine, accounts sat at 0% for days while others reset with 95% unused.

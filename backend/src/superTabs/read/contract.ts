@@ -24,7 +24,7 @@ export type GroupChange = LivePart<GroupView> | Tombstone | DormantStub
 /** The head as a reader sees it: no sharing, overlap alerts, retired number or parked groups; projects, rules and
  *  invitations filtered (invitations only for the Swarm owner). */
 export type HeadView = Pick<SuperTabState, 'version' | 'id' | 'name' | 'project' | 'projects' | 'leadsConversationId' | 'ownerId'
-  | 'environment' | 'routingPolicy' | 'rules' | 'paused' | 'invitations' | 'localModels' | 'workspaceId' | 'workspaceVisibility' | 'buddies'>
+  | 'environment' | 'routingPolicy' | 'rules' | 'paused' | 'invitations' | 'localModels' | 'workspaceId' | 'workspaceVisibility' | 'buddies' | 'removedMachines'>
 /** A member's avatar says only `{ kind: 'upload' }` for an upload: its link comes signed in `derived.avatars`. */
 export type MemberView = Omit<Person, 'avatar'> & { avatar?: import('../profile.js').AvatarView }
 /** The stored agent. Time-based and cross-part values (`downSince`, `limitedUntil`, an awaiting decision, the custom
@@ -34,7 +34,10 @@ export type AgentView = Omit<Agent, 'downNamed' | 'downSince' | 'limitedUntil' |
 export interface Audience { people: Array<{ id: string; generation: string }> }
 /** A conversation with its own message counter (`lastMessageSequence` and message sequences compare within one group).
  *  `dormant` is set only on a dormant group fetched on demand; `audience` only on a private conversation. */
-export type GroupView = Omit<Conversation, 'messageSeq' | 'reportSeq' | 'dormant' | 'lastActivityAt' | 'audience' | 'ledger' | 'proposals'>
+export type GroupView = Omit<Conversation, 'messageSeq' | 'reportSeq' | 'dormant' | 'lastActivityAt' | 'audience' | 'ledger' | 'proposals'> & {
+  /** When it shipped (ms): its first Done; absent until it has. Nothing else of its ledger is sent. */
+  shippedAt?: number
+}
   & { messageSeq: number; dormant?: true; audience?: Audience
     /** A Buddy chat's owner, in place of its audience (read/views.ts groupView). */
     buddyOwnerId?: string }

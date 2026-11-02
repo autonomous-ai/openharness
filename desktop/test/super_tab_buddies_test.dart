@@ -10,7 +10,6 @@ import 'package:harness/widgets/harness_activity_mark.dart';
 import 'package:harness/super_tabs/buddies.dart' show kBuddyEngineRefusals;
 import 'package:harness/super_tabs/buddy_machines.dart' show kBuddyNoMachine;
 import 'package:harness/super_tabs/controller.dart';
-import 'package:harness/super_tabs/decisions_view.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/buddy_fixture.dart';
@@ -1490,7 +1489,7 @@ void main() {
       });
 
       testWidgets(
-        'Notifications keep Decisions, for anyone with or without a Buddy',
+        'Activity keeps Needs you, for anyone with or without a Buddy',
         (tester) async {
           final server = buddySwarm();
           server.ask(['Ship it?']);
@@ -1498,13 +1497,7 @@ void main() {
           await tester.tap(find.byKey(const ValueKey('super-activity')));
           await tester.pumpAndSettle();
 
-          expect(
-            find.descendant(
-              of: find.byType(SuperTabDecisionList),
-              matching: find.text('Decisions'),
-            ),
-            findsOneWidget,
-          );
+          expect(find.text('Needs you'), findsOneWidget);
           expect(find.text('Ship it?'), findsOneWidget);
           await close(tester, c);
         },
@@ -1532,7 +1525,7 @@ void main() {
 
           expect(find.textContaining('Chat with PM'), findsNothing);
           await tester.tap(
-            find.byKey(const ValueKey('super-mention-mention-1')),
+            find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
           );
           await tester.pumpAndSettle();
 
@@ -1545,7 +1538,7 @@ void main() {
 
     group('a proposal in the project chat', () {
       testWidgets(
-        "is labelled from the server's tag, with whose behalf it is on",
+        "opens labelled from the server's tag, with whose behalf it is on",
         (tester) async {
           final server = buddySwarm();
           giveBuddy(server);
@@ -1559,16 +1552,22 @@ void main() {
               'ownerMessageId': 'message-1',
             },
           );
+          // The server gives a top-level message itself as its thread.
+          final proposal = server.messages.last;
+          proposal['thread'] = proposal['id'];
           // A Buddy's ordinary message carries no label, whatever it says.
           buddyReply(server, 'lead', 'Proposal · on ken.tran\'s behalf');
           final c = await show(tester, server);
           await c.select('lead');
           await tester.pumpAndSettle();
 
+          // In the chat it is one line; opened, it reads whole, labelled.
           expect(
             find.byKey(const ValueKey('super-proposal-label')),
-            findsOneWidget,
+            findsNothing,
           );
+          await tester.tap(find.textContaining('Proposal from'));
+          await tester.pumpAndSettle();
           expect(
             find.descendant(
               of: find.byKey(const ValueKey('super-proposal-label')),

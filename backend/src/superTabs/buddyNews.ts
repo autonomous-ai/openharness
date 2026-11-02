@@ -54,6 +54,15 @@ export function assignedNotice(state: SuperTabState, group: Conversation, author
     text: `News for your owner: #${group.number} "${group.title}", which they requested, is assigned and ${group.assignment.status}.` }
 }
 
+/** Work [group]'s requester asked for just shipped: the news the Shipped line brought their Buddy, now that the task's line
+ *  says it (taskLine.ts), as one line for their Buddy alone inside the task, like the assignment's. */
+export function shippedNotice(state: SuperTabState, group: Conversation, author: Author, operationId: string): MessageDraft | null {
+  const buddy = group.requesterId ? listeningBuddy(state, group.requesterId, group) : undefined
+  if (!buddy) return null
+  return { id: stableId(operationId, 'buddy-news', 'shipped'), conversationId: group.id, author, replyTo: null, recipients: [buddy.id], source: AGENT_ONLY,
+    text: `News for your owner: #${group.number} "${group.title}", which they requested, shipped.` }
+}
+
 /** The Buddies [messages] bring news to outside their own chat: what they were told relied on their person still reading
  *  there, so a write that sends news guards on those people and Buddies (parts/touches.ts). */
 export function buddiesHearing(state: SuperTabState, messages: readonly MessageDraft[]): Agent[] {

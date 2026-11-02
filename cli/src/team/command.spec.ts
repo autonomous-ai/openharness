@@ -627,6 +627,46 @@ describe('internal verbs', () => {
     expect(unsafe.status.get(STATUS)?.signIn).toMatchObject({ state: 'failed', detail: 'not this account\'s private file' })
   })
 
+  // Echo, reviewing #2637: the Team side of a lookup that outlives its sign-in.
+  describe('a Team machine lookup that outlives its sign-in', () => {
+    const start = async (startedUnder: string | undefined, meanwhile: Partial<AuthSession>) => {
+      const f = inTeam({ takeHandoff: () => null })
+      f.setSession({ ...computer, kind: 'team', refreshToken: 'htr_first', machineId: undefined, signInEpoch: startedUnder })
+      const answer = f.post.getMockImplementation()!
+      f.post.mockImplementation(async (path: string, body: unknown, headers?: Record<string, string>) => {
+        if (path === '/api/machines/resolve-computer') f.setSession({ ...f.session()!, ...meanwhile })
+        return answer(path, body, headers)
+      })
+      expect(await teamCommand(['__start', '/Users/harnessteam/.harness/team-handoff'], f.deps)).toBe(0)
+      return f
+    }
+    const SWITCHED = { refreshToken: 'htr_other_owner', signInEpoch: 'adopted:team:next@2' }
+
+    it('an owner switch while it is out: the old answer writes nothing and claims nothing', async () => {
+      const f = await start('adopted:team:first@1', SWITCHED)
+      expect(f.session()).toMatchObject(SWITCHED)
+      expect(f.session()?.machineId).toBeUndefined()
+      expect(f.out.join('\n')).not.toContain('runs as machine')
+    })
+
+    it('a switch away from a Team sign-in from before epochs: dropped too', async () => {
+      const f = await start(undefined, SWITCHED)
+      expect(f.session()?.machineId).toBeUndefined()
+      expect(f.out.join('\n')).not.toContain('runs as machine')
+    })
+
+    it('the same sign-in, refreshed while it is out: the answer is kept', async () => {
+      const f = await start('adopted:team:first@1', { accessToken: 'hna_refreshed' })
+      expect(f.session()).toMatchObject({ machineId: 'm-team', accessToken: 'hna_refreshed', signInEpoch: 'adopted:team:first@1' })
+      expect(f.out.join('\n')).toContain('runs as machine m-team')
+    })
+
+    it('a sign-in from before epochs, only given one meanwhile: the answer is kept', async () => {
+      const f = await start(undefined, { signInEpoch: 'adopted:abc@1' })
+      expect(f.session()).toMatchObject({ machineId: 'm-team', signInEpoch: 'adopted:abc@1' })
+    })
+  })
+
   it('__start records the machine of a team sign-in that has none, once, and starts the daemon when it cannot', async () => {
     // A team account set up before this: signed in, but its daemon ran as its computer id (third VM run).
     const older = inTeam({ takeHandoff: () => null })

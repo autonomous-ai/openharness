@@ -1737,6 +1737,10 @@ export class SuperTabStore {
       }
       await recordEvidence(tx, tabId, original, effects.state, context.now)
       await this.writeMessages(tx, tabId, effects.state, effects.messages, sequences)
+      // A task's line takes its new words in place, keeping its id, place and author (taskLine.ts).
+      for (const edit of effects.edits ?? []) {
+        await tx.superTabMessage.updateMany({ where: { tabId, conversationId: edit.conversationId, id: edit.id }, data: { text: edit.text, source: json(edit.source) } })
+      }
       if (effects.lateDeliveries?.length) await this.writeLateDeliveries(tx, tabId, effects.state, effects.lateDeliveries)
       if (command.type === 'message.send' && actor.kind === 'person') await resolveByReply(tx, tabId, command.conversationId, actor.userId, context.now)
       if (command.type === 'work.assign') await resolveWhenWorked(tx, tabId, command.conversationId, context.now)

@@ -33,7 +33,8 @@ import { fixedOriginal, LEDGER_WEEKS, PULL_REQUEST_URL, recordAsked, recordFix, 
   recordReportedModel, recordVerdict } from './leaderboard/record.js'
 import { WEEK_MS } from './leaderboard/week.js'
 import { react, reactionSchema, type ReactionTarget } from './reactions.js'
-import { shipNotice, shippedAt } from './ship.js'
+import { shippedAt } from './ship.js'
+import { syncTaskLines } from './taskLine.js'
 import { assignedNotice, tellBuddies } from './buddyNews.js'
 import { bindPullRequestCards, bindTaskCard, pullRequestCard, recordCardMerged } from './cards.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
@@ -132,9 +133,14 @@ const task = z.object({
     .refine(r => r.focus !== undefined || r.reviews !== undefined, 'Give the review a focus or a number of reviews.').optional(),
 }).strict()
 
+/** The machines a Swarm remembers its people took out. */
+const MAX_REMOVED_MACHINES = 64
+
 export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('machine.contribute'), machineId: id, name: title, cwd: path, scope: z.literal('swarm').optional(), engines: z.array(swarmEngine).min(1).max(2), maxAgents,
-    ifMissing: z.literal(true).optional(), teamAccountOnly: z.literal(true).optional() }).strict(),
+    ifMissing: z.literal(true).optional(), teamAccountOnly: z.literal(true).optional(),
+    // With ifMissing: not if its person took it out (Swarm removedMachines). A Personal Swarm's own sync sends it (#2181).
+    unlessRemoved: z.literal(true).optional() }).strict(),
   z.object({ type: z.literal('machine.pause'), machineId: id, paused: z.boolean() }).strict(),
   z.object({ type: z.literal('machine.engineResume'), machineId: id, engine: z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/), askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('machine.remove'), machineId: id }).strict(),
@@ -711,7 +717,19 @@ function open(state: SuperTabState, conversationId: string) {
 }
 
 /** Pure policy/state transition. The store commits its state, messages and delivery records in one transaction. */
+/** One command, then each task's line brought up to date (taskLine.ts), whichever way the command returned. */
 export function applyCommand(original: SuperTabState, actor: Actor, input: Command, context: CommandContext): CommandEffects {
+  const effects = applyCommandOnce(original, actor, input, context)
+  // Who moved the task, for a line its project's coordinator cannot sign and for the Buddy's news; nobody when the actor is
+  // no longer a member (a command that removed them).
+  let sender: Author | undefined
+  try { sender = author(effects.state, actor) } catch { sender = undefined }
+  syncTaskLines(original, effects, input.type === 'work.status' ? input.conversationId : undefined, sender,
+    stableId(original.id, actorKey(actor), context.operationId))
+  return effects
+}
+
+function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command, context: CommandContext): CommandEffects {
   // A credential someone pasted, or an agent echoed from its terminal, is gone before anything is stored or delivered
   // (Oct 2026: a Harness access token in a shared Lead chat). The sender's result says what went.
   const removed: CredentialKind[] = []
@@ -1638,6 +1656,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         if (actor.userId !== state.ownerId && !mac) fail('OWNER_REQUIRED', 'Only the Swarm owner adds a machine automatically.', 403)
         // A Buddy-only record is not the machine in the Swarm: it becomes an ordinary one below.
         if (cleaning || state.machines.some(m => m.machineId === command.machineId && !m.buddyOnly)) break
+        if (command.unlessRemoved && state.removedMachines?.some(r => r.machineId === command.machineId)) break
+      }
+      // Added again: no longer one its person took out.
+      if (state.removedMachines) {
+        state.removedMachines = state.removedMachines.filter(r => r.machineId !== command.machineId)
+        if (!state.removedMachines.length) delete state.removedMachines
       }
       if (cleaning) fail('MACHINE_CLEANING', 'This machine is still cleaning up after its removal. Add it again once that finishes.')
       if (!state.machines.some(m => m.machineId === command.machineId) && state.machines.length >= 32) fail('MACHINES_FULL', 'A Super Tab can have up to 32 contributed machines.')
@@ -1713,6 +1737,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       for (const team of moving) removeMachine(team.machineId, team, [], machine => `${who} removed ${machine} from the Swarm`)
       if (pool) result.removalId = operationId
       result.removedAgents = [...removed]
+      // So a Personal Swarm's sync, on any computer, never adds it back by itself (#2181). What deletes it: adding it again, the
+      // Swarm's deletion, and the cap (the oldest goes: that one could come back once).
+      if (pool) {
+        state.removedMachines = [...(state.removedMachines ?? []).filter(r => r.machineId !== command.machineId),
+          { machineId: command.machineId, contributorId: pool.contributorId }].slice(-MAX_REMOVED_MACHINES)
+      }
       break
     }
     case 'localModels.set': {
@@ -2705,7 +2735,14 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         && stepOwner && stepOwner !== actor.agentId ? stepOwner
         : actor.kind === 'agent' && activeWork(group) && group.assignment?.agentId === actor.agentId
         && group.leadId && group.leadId !== actor.agentId && group.agentIds.includes(group.leadId) ? group.leadId : null
-      const agentRecipient = leadToWorker ?? workerToLead
+      // The task's owner talks to its step's agent the same way (Diego, 2026-11-02: an Engineer's "fixed, please re-check" in its
+      // Review step woke the PM and the Reviewer never heard it). Its unnamed post there reaches that agent alone, never the
+      // coordinator. A reply to someone else, or a post leadWorkerBounced holds back, falls back to the coordinator as before:
+      // nothing is dropped.
+      const ownerToStepAgent = actor.kind === 'agent' && isStep(group) && assigned && assigned !== actor.agentId
+        && taskOwner(state, group) === actor.agentId && group.agentIds.includes(assigned) && (!context.reply || replyAgent === assigned)
+        && !leadWorkerBounced(context.recent, actor.agentId, assigned) ? assigned : null
+      const agentRecipient = leadToWorker ?? workerToLead ?? ownerToStepAgent
       // Any other agent's unnamed post in the group reaches its Lead: an agent whose task here was lost, moved or cancelled has
       // its status and results refused, so its posts are all the Lead hears from it. They reached no one until 10-29, when a
       // moved prod-watch agent's "the backend worker is down" alarm and its answers to the Lead's questions had no delivery,
@@ -2721,7 +2758,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const stepTold = actor.kind === 'agent' && isStep(group) && actor.agentId !== group.leadId ? taskOwner(state, group) : null
       const ownerInStep = actor.kind === 'agent' && stepTold && stepTold !== actor.agentId ? stepTold : null
       const memberToLead = actor.kind === 'agent' && !command.agentOnly && !addressed.length && assigned !== actor.agentId && (ownerHere ?? ownerInStep) ? [(ownerHere ?? ownerInStep)!]
-        : actor.kind === 'agent' && !command.agentOnly && !addressed.length && assigned !== actor.agentId && group.leadId
+        : actor.kind === 'agent' && !command.agentOnly && !addressed.length && assigned !== actor.agentId && !ownerToStepAgent && group.leadId
         && group.leadId !== actor.agentId && group.agentIds.includes(group.leadId) ? [group.leadId] : []
       // Buddy thread sessions (buddySessions.ts): a session thread's replies reach its session alone and stay in its thread; the
       // main Buddy hears the rest. Decided here from the thread, so every client, an old one or the phone, is routed alike.
@@ -3047,11 +3084,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         if (short) effects.messages.push({ id: stableId(operationId, 'review-capacity', short.source.engine), conversationId: short.conversationId, author: sender,
           text: short.text, replyTo: null, recipients: coordinator ? [coordinator] : [], source: short.source,
           ...(!coordinator && short.mentions.length ? { mentions: short.mentions } : {}) })
-        // Shipped before this command: the leaderboard marks this Done as shipped just above (recordStatus).
+        // The task's line says it shipped (taskLine.ts), in place of the Shipped line; its links are kept as that line's were.
         if (command.status === 'done' && shippedAt(conversation(original, group.id)) == null) {
           appendPullRequestUrls(group, [command.result, ...group.checks.map(check => check.evidence)])
-          const shipped = shipNotice(state, group, sender, operationId)
-          if (shipped) effects.messages.push(shipped)
         }
       }
       if (actor.kind === 'agent') renewOwnTask(state, group, actor.agentId, context.now)

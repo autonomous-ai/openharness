@@ -298,6 +298,18 @@ describe('DeviceFleet', () => {
   })
 
 
+  // #2648's review (Orion): the emit dropped the tier the other machine's recaps decided, so the dial decided again here
+  // with no agent list for that machine, and a Swarm agent on another of the person's Macs alerted.
+  it('carries the tier the other machine decided on its summary card, and only a real one', () => {
+    const { fleet, say } = make()
+    const seen: FleetEvent[] = []
+    fleet.onEvent((e) => seen.push(e))
+    say({ type: 'commander_event', machineId: 'm1', agentId: 'a1', payload: { kind: 'summary', recap: 'Built.', text: 'done', tier: 'silent' } })
+    say({ type: 'commander_event', machineId: 'm1', agentId: 'a1', payload: { kind: 'summary', recap: 'Built.', text: 'done', tier: 'loud' } })
+    say({ type: 'commander_event', machineId: 'm1', agentId: 'a1', payload: { kind: 'processing', text: 'go', tier: 'alert' } })
+    expect(seen.map((e) => (e as { tier?: string }).tier)).toEqual(['silent', undefined, undefined])
+  })
+
   it('ignores card kinds the dial has no use for', () => {
     const { fleet, say } = make()
     const seen: FleetEvent[] = []

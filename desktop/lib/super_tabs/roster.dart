@@ -16,6 +16,7 @@ import '../terminal/terminal_theme_store.dart';
 import '../widgets/browser_menu_guard.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/harness_activity_mark.dart';
+import 'visible_tick.dart';
 import 'agent_details.dart';
 import 'agent_mark.dart';
 import 'controller.dart';
@@ -74,7 +75,8 @@ class SuperTabRoster extends StatefulWidget {
   State<SuperTabRoster> createState() => _SuperTabRosterState();
 }
 
-class _SuperTabRosterState extends State<SuperTabRoster> {
+class _SuperTabRosterState extends State<SuperTabRoster>
+    with WidgetsBindingObserver, VisibleTick<SuperTabRoster> {
   /// One per agent menu open now, each keeping the browser's menu off.
   final _menuHolds = <Object>{};
 
@@ -91,10 +93,6 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     accountId: c.accountId,
     tabId: c.tabId,
   );
-
-  /// One tick for the whole list, so ages and leases stay true on a quiet
-  /// Swarm (review of #2281); a change in the Swarm rebuilds it anyway.
-  Timer? _tick;
 
   /// The project the list is narrowed to now, so its loss is told from the
   /// person simply opening another project's chat.
@@ -139,17 +137,15 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     scheduleMicrotask(() {
       if (mounted) _followScope();
     });
-    _tick = Timer.periodic(
-      const Duration(seconds: 30),
-      (_) => mounted ? setState(() {}) : null,
-    );
+    // One tick for the whole list while on screen, so ages and leases stay true on a quiet Swarm (review of #2281); a change in
+    // the Swarm rebuilds it anyway.
+    visibleTick(const Duration(seconds: 30));
   }
 
   @override
   void dispose() {
     _menuHolds.forEach(BrowserMenuGuard.release);
     _menuHolds.clear();
-    _tick?.cancel();
     c.removeListener(_scopeMoved);
     _choice.removeListener(_scopeMoved);
     _ownBoard?.dispose();

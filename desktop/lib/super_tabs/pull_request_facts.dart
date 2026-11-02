@@ -52,6 +52,10 @@ class SuperTabPullRequestFacts extends ChangeNotifier {
     _schedule();
   }
 
+  /// What is being watched now.
+  @visibleForTesting
+  Iterable<String> get watching => _watchers.keys;
+
   void unwatch(Iterable<String> urls) {
     for (final url in urls) {
       final count = (_watchers[url] ?? 0) - 1;

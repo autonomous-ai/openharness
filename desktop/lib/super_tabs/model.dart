@@ -340,6 +340,12 @@ class SuperTabConversation {
       task = row['task'] is Map
           ? SuperTabTask.fromJson(superTabMap(row['task']))
           : null,
+      requesterId = row['requesterId'] as String?,
+      shippedAt = row['shippedAt'] is num
+          ? DateTime.fromMillisecondsSinceEpoch(
+              (row['shippedAt'] as num).toInt(),
+            )
+          : null,
       lastMessageSequence = (row['lastMessageSequence'] as num?)?.toInt() ?? 0,
       lastMainSequence = (row['lastMainSequence'] as num?)?.toInt(),
       reactionSeq = (row['reactionSeq'] as num?)?.toInt() ?? 0,
@@ -421,6 +427,14 @@ class SuperTabConversation {
   /// pages also say: a move asks for the page shown again. Absent, as before
   /// the first reaction, it is 0, the pages' own value then.
   final int reactionSeq;
+
+  /// The person who asked for this task; null on a conversation that is no
+  /// task, and from a server that does not say.
+  final String? requesterId;
+
+  /// When it shipped (its first Done); null until it has, and from a server
+  /// that does not say.
+  final DateTime? shippedAt;
   final Map<String, dynamic>? assignment;
 
   /// Whether its task waits on purpose or is stuck, as the server last found
@@ -543,6 +557,10 @@ class SuperTabSnapshot {
       }),
       localModels = SuperTabLocalModels.read(row['localModels']),
       teamAccounts = row['teamAccounts'] != false,
+      removedMachines = [
+        for (final id in row['removedMachines'] as List? ?? const [])
+          if (id is String) id,
+      ],
       threadSessions = row['threadSessions'] == true,
       sessionsFromChat = row['sessionsFromChat'] == true,
       swarmBuddy = row['swarmBuddy'] == true,
@@ -640,6 +658,11 @@ class SuperTabSnapshot {
   /// Whether this Swarm's server uses Harness Team accounts: false only where
   /// it says it does not try them yet (backend read/contract.ts `teamAccounts`).
   final bool teamAccounts;
+
+  /// The reader's own machines they took out of this Swarm: an automatic add
+  /// leaves them out (backend model.ts removedMachines). Empty from an older
+  /// backend.
+  final List<String> removedMachines;
 
   /// Whether this Swarm's server takes a thread reply's New session: true only
   /// where it says so (backend read/contract.ts `threadSessions`); an older
@@ -1233,6 +1256,10 @@ class SuperTabMessage {
 
   /// The line the server writes in a thread when its session ends.
   bool get sessionEnded => source['kind'] == 'buddy-session-ended';
+
+  /// A task's own message, the server keeps current as the task moves (Quiet
+  /// Swarm 2/6): its text is the task's name.
+  bool get isTaskLine => source['kind'] == 'task-line';
 
   /// Why its session ended, for [sessionEnded] rows: `ended`, `idle`,
   /// `stopped` or `failed`.
