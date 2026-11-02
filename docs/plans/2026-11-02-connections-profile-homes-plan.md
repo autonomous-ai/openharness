@@ -14,7 +14,12 @@
 - **Kept current.** `projections.json` records the names Harness wrote per agent name, so the profile agents are recorded under
   their own names. `sync` (daemon start, connect, disconnect, renewal, `harness connections sync`) also applies every recorded
   profile home, so a later connection reaches and a disconnected one leaves a running profile's config.
-- **Removed with the profile.** A recorded home whose folder is gone is dropped from `projections.json`; a home with no wanted
+- **Only the profile's own home.** A Claude folder is validated by `claudeHomeOffered` where the launch is asked for; a Codex folder
+  must be one of this machine's Codex profiles (`listCodexProfiles`, read at most every 30 s), so the folder a native launch picks
+  for itself is not one. The default home is recognised by real path. A config that is a link leaving the folder is not written.
+- **One bad home.** Each agent is updated on its own: a failure is logged and the others, and the record of what was written, go on.
+  A launch waits 3 s for the vault's lock, not 35 s; a timeout is logged and the launch goes on.
+- **Removed with the profile.** A recorded home whose folder is gone, or is no longer a Codex profile (its entries are taken out first), is dropped from `projections.json`; a home with no wanted
   connections has Harness's entries removed, like the default homes. Only recorded names are changed or removed.
 
 ## Design rules

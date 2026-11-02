@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { managedNodePath } from '../nodeRuntime.js'
 import { FakeGateway, FakeService } from '../../testing/connectorServers.js'
-import { bridgeKey, harnessKey, sync, syncProfileHome } from './agents.js'
+import { bridgeKey, harnessKey, resetProfileCache, sync, syncProfileHome } from './agents.js'
 import { createBridge } from './bridge.js'
 import { CATALOG, services } from './catalog.js'
 import { addApiKey, addCustom, cards, customCode, disconnect, finish, Flows, signInFor } from './connect.js'
@@ -304,6 +304,7 @@ describe('agent configs', () => {
 
   describe('under a profile home', () => {
     const shim = (code: string) => [join(vault.root, 'mcp-shim.mjs'), '--socket', join(vault.root, 'bridge.sock'), code]
+    beforeEach(() => resetProfileCache())
     const connect = (...codes: string[]) => { for (const code of codes) vault.save(code, { access_token: 'secret-' + code, source: 'dcr', mcp_entry: { url: `https://mcp.${code}.example/mcp`, headers: {} } }) }
 
     it('gives an agent on a Claude profile the shim in the profile\'s .claude.json, and the default home as it was', () => {
@@ -333,6 +334,7 @@ describe('agent configs', () => {
       const claude = join(home, '.claude-work'), codex = join(home, 'codex-work'), gone = join(home, '.claude-gone')
       for (const folder of [claude, codex, gone]) mkdirSync(folder)
       for (const folder of [claude, gone]) writeFileSync(join(folder, '.claude.json'), '{}')
+      writeFileSync(join(codex, 'config.toml'), '')
       expect(syncProfileHome(vault, 'claude', claude, env)).toEqual([]) // Nothing connected yet: the home is only recorded.
       syncProfileHome(vault, 'codex', codex, env)
       syncProfileHome(vault, 'claude', gone, env)
@@ -349,6 +351,68 @@ describe('agent configs', () => {
       sync(vault, env)
       expect(JSON.parse(readFileSync(join(claude, '.claude.json'), 'utf8')).mcpServers).toBeUndefined()
       expect(readFileSync(join(codex, 'config.toml'), 'utf8')).toBe('')
+    })
+
+    it('writes into a Codex folder only when this machine lists it as a profile', () => {
+      const unlisted = join(home, 'elsewhere')
+      mkdirSync(unlisted)
+      connect('linear')
+      expect(syncProfileHome(vault, 'codex', unlisted, env)).toEqual([])
+      expect(existsSync(join(unlisted, 'config.toml'))).toBe(false)
+      expect(Object.keys(vault.file('projections.json'))).toEqual([])
+      // The folder a native launch picked is not a profile either.
+      expect(syncProfileHome(vault, 'codex', join(home, 'not-yet-made'), env)).toEqual([])
+      expect(existsSync(join(home, 'not-yet-made'))).toBe(false)
+    })
+
+    it('never writes through a link that leaves the profile, nor treats a link to the default home as a profile', () => {
+      const profile = join(home, '.claude-work'), outside = join(home, 'dotfiles', 'claude.json')
+      mkdirSync(profile)
+      mkdirSync(join(home, 'dotfiles'))
+      writeFileSync(outside, '{"mine":true}')
+      symlinkSync(outside, join(profile, '.claude.json'))
+      connect('linear')
+      expect(syncProfileHome(vault, 'claude', profile, env)).toEqual([])
+      expect(readFileSync(outside, 'utf8')).toBe('{"mine":true}')
+      const codex = join(home, 'codex-work')
+      mkdirSync(codex)
+      writeFileSync(join(home, 'dotfiles', 'config.toml'), 'model = "x"\n')
+      symlinkSync(join(home, 'dotfiles', 'config.toml'), join(codex, 'config.toml'))
+      expect(syncProfileHome(vault, 'codex', codex, env)).toEqual([])
+      expect(readFileSync(join(home, 'dotfiles', 'config.toml'), 'utf8')).toBe('model = "x"\n')
+      const alias = join(home, 'alias')
+      symlinkSync(home, alias)
+      expect(syncProfileHome(vault, 'claude', alias, env)).toEqual([])
+      expect(existsSync(join(home, '.claude.json'))).toBe(false)
+    })
+
+    it('keeps one home that cannot be written from stopping the others, and records what was written', () => {
+      if (process.getuid?.() === 0) return // root writes anywhere
+      const locked = join(home, '.claude-locked'), open = join(home, '.claude-open')
+      for (const folder of [locked, open]) { mkdirSync(folder); writeFileSync(join(folder, '.claude.json'), '{}') }
+      syncProfileHome(vault, 'claude', locked, env)
+      syncProfileHome(vault, 'claude', open, env)
+      chmodSync(locked, 0o500)
+      closers.push(() => chmodSync(locked, 0o700))
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      connect('linear')
+      const changed = sync(vault, env)
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(`claude:${locked}`))
+      warn.mockRestore()
+      expect(changed[`claude:${open}`]).toEqual(['linear'])
+      expect(vault.file('projections.json')[`claude:${open}`]).toEqual(['linear'])
+      expect(JSON.parse(readFileSync(join(open, '.claude.json'), 'utf8')).mcpServers.linear).toBeDefined()
+      chmodSync(locked, 0o700)
+    })
+
+    it('takes its entries out of a Codex folder this machine no longer lists, and forgets it', () => {
+      const folder = join(home, 'once-a-profile')
+      mkdirSync(folder)
+      writeFileSync(join(folder, 'config.toml'), 'model = "x"\n\n[mcp_servers.linear]\ncommand = "node"\nargs = []\n')
+      writePrivate(join(vault.root, 'projections.json'), { [`codex:${folder}`]: ['linear'] })
+      sync(vault, env)
+      expect(readFileSync(join(folder, 'config.toml'), 'utf8')).toBe('model = "x"\n')
+      expect(Object.keys(vault.file('projections.json'))).not.toContain(`codex:${folder}`)
     })
 
     it('leaves the default home\'s own file and a path that is not absolute to the default agent', () => {
