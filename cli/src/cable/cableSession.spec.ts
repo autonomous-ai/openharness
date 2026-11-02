@@ -4668,7 +4668,7 @@ describe('swarm cards', () => {
 
     // Review of #2500: with the window on # buddy (the Swarm's one Buddy chat, no project) the PM side had no project to open.
     it('a swipe back to the PM side from the Swarm\'s Buddy chat, which names no project, opens the Lead chat of the project the dial has open, else the first', async () => {
-      const state = { cards: [card('st1', [withBuddy({ buddy: mine }), lead(2, { buddies: true, buddy: mine, chat: pmChat, sideChat: pmChat })])], open: { superTabId: 'st1', projectId: '', fromDevice: false } }
+      const state = { cards: [card('st1', [withBuddy({ buddy: mine }), lead(2, { buddies: true, buddy: mine, chat: pmChat, sideChat: pmChat })])], open: { superTabId: 'st1', projectId: '', conversationId: 'pm1', fromDevice: false } }
       const host = cardHost(state)
       const { session, port } = await connect(host)
       try {
@@ -4681,7 +4681,7 @@ describe('swarm cards', () => {
         expect(vi.mocked(host.superTabSelected!).mock.calls).toEqual([['st1', 'proj1', 'pm']])
       } finally { await session.stop() }
       // The dial has the second project open: that one.
-      const second = cardHost({ cards: state.cards, open: { superTabId: 'st1', projectId: '', fromDevice: false } })
+      const second = cardHost({ cards: state.cards, open: { superTabId: 'st1', projectId: '', conversationId: 'pm1', fromDevice: false } })
       const again = await connect(second)
       try {
         again.port.say(BUDDY)
@@ -4690,6 +4690,21 @@ describe('swarm cards', () => {
         again.port.say({ t: 'supertab.side', tab: 'st1', side: 'pm' }); await settle()
         expect(vi.mocked(second.superTabSelected!).mock.calls).toEqual([['st1', 'proj2', 'pm']])
       } finally { await again.session.stop() }
+    })
+
+    // Second review of #2500: a DM or Chat with PM names no project either, but is not the Buddy chat: the swipe opens nothing.
+    it('a swipe to the PM side from a chat with no project that is not the reader\'s Buddy chat (a DM, Chat with PM) opens nothing', async () => {
+      for (const conversationId of ['dm1', undefined]) {
+        const cards = [card('st1', [withBuddy({ buddy: mine }), lead(2, { buddies: true, buddy: mine, chat: pmChat, sideChat: pmChat })])]
+        const host = cardHost({ cards, open: { superTabId: 'st1', projectId: '', ...(conversationId ? { conversationId } : {}), fromDevice: false } })
+        const { session, port } = await connect(host)
+        try {
+          port.say(BUDDY)
+          await vi.waitFor(() => expect(ofType(port, 'supertab.focus')).toHaveLength(1), NEXT_TICKS)
+          port.say({ t: 'supertab.side', tab: 'st1', side: 'pm' }); await settle()
+          expect(host.superTabSelected).not.toHaveBeenCalled()
+        } finally { await session.stop() }
+      }
     })
 
     it('the swipe follows the project the dial last picked in that Swarm', async () => {

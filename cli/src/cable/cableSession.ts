@@ -3067,9 +3067,13 @@ export class CableSession {
     const card = this.host.swarmCards?.()?.find((c) => c.id === tab)
     // The window is on the Swarm's one Buddy chat, which names no project (# buddy): the Buddy side is already open, and the
     // PM side opens the Lead chat of the project the dial has open, else its first, so the dial is not stranded on # buddy
-    // (review of #2500). The Buddy side there asks for nothing.
+    // (review of #2500). The Buddy side there asks for nothing. Only that chat: a DM or Chat with PM names no project either,
+    // and a swipe from one of them opens nothing, as before (second review of #2500).
     let projectId = focusedProject
-    if (!projectId && side === 'pm' && card) {
+    const window = this.host.activeSwarmProject?.()
+    const onBuddy = window?.superTabId === tab && window.conversationId !== undefined
+      && card?.leads.some((l) => l.buddies === true && l.buddy?.chatId === window.conversationId) === true
+    if (!projectId && side === 'pm' && card && onBuddy) {
       const shown = this.openLead?.tabId === tab ? card.leads.find((l) => l.id === this.openLead?.leadId) : undefined
       projectId = (shown ?? card.leads[0])?.projectId
     }
