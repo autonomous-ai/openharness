@@ -89,8 +89,8 @@ function parse(raw: string): AuthSession | null {
  *  made (ms) — the device key log lets a sign-in start its file over only shortly after it was made. */
 export const newSignInEpoch = (now = Date.now()): string => `${randomBytes(16).toString('hex')}@${now}`
 
-/** How a `signInEpoch` given to a session from before epochs existed starts: nobody saw that sign-in
- *  being made here, so the device key log may take its file over for it but never starts one over. */
+/** How a `signInEpoch` given to a session from before epochs existed starts, and a Team sign-in's ([teamSignInEpoch]): nobody
+ *  saw that sign-in made by hand here, so the device key log may take its file over for it but never starts one over. */
 export const ADOPTED_SIGN_IN = 'adopted:'
 
 /** A Team sign-in's epoch, made as it signs in. Adopted, so the device key log treats it as it always has (a Team session was
