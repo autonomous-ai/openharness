@@ -7,8 +7,8 @@
  *
  * Two labels: `label` is for the machine's owner (may be an email); `reportLabel` is what leaves the
  * machine, so it comes from the folder alone and never names a person. `offered` marks what the owner put on the Swarm: the
- * default account, linked folders and the ones Harness itself made under `~/.harness/claude-profiles`; the rest is discovered
- * and stays the owner's own to pick in Change agent.
+ * default account and what they offered by name (lib/accountOffers.ts); every other folder, linked or made by Add Claude account
+ * included, stays the owner's own to pick in Change agent.
  */
 
 import { createHash, randomUUID } from 'crypto'
@@ -16,7 +16,8 @@ import { closeSync, constants, fchmodSync, fsyncSync, openSync, readdirSync, rea
 import { homedir } from 'os'
 import { basename, join, resolve, sep } from 'path'
 import { env } from '../config/env.js'
-import { defaultCodexHome, listCodexProfiles } from './codexProfiles.js'
+import { offeredFolders, recordOffer } from './accountOffers.js'
+import { defaultCodexHome, listCodexProfiles, resolveCodexProfilePath } from './codexProfiles.js'
 import { hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirectory } from './secureState.js'
 
 export interface ClaudeProfile {
@@ -130,7 +131,7 @@ export function linkClaudeProfile(path: string, machineId: string): { profile: C
   const linked = readLinkedPaths()
   linked.add(path)
   writeLinkedPaths(linked)
-  return { profile: profileFor(machineId, path, resolved, homedir(), true) }
+  return { profile: profileFor(machineId, path, resolved, homedir(), offeredFolders('claude').has(resolved)) }
 }
 
 function holdsProfile(folder: string): boolean {
@@ -175,7 +176,7 @@ export function listClaudeProfiles(
 ): ClaudeProfile[] {
   const home = options.home ?? homedir()
   const linkedPaths = readLinkedPaths()
-  const linked = new Set([...linkedPaths].flatMap((p) => { const r = resolveFolder(p); return typeof r === 'string' ? [r] : [] }))
+  const offered = offeredFolders('claude')
   const candidates = new Set<string>([...linkedPaths, ...observedPaths, ...discover(home, options.environment ?? process.env)])
   const defaultPath = resolveFolder(home)
   const defaultProfile = profileFor(options.machineId, home, typeof defaultPath === 'string' ? defaultPath : home, home, true, true)
@@ -184,11 +185,33 @@ export function listClaudeProfiles(
     const resolved = resolveFolder(candidate)
     // De-duplicated by the real folder; the path kept is the first one given.
     if (typeof resolved === 'string' && resolved !== (typeof defaultPath === 'string' ? defaultPath : home) && !profiles.has(resolved)) {
-      profiles.set(resolved, profileFor(options.machineId, candidate, resolved, home, linked.has(resolved) || candidate.startsWith(harnessFolder(home))))
+      profiles.set(resolved, profileFor(options.machineId, candidate, resolved, home, offered.has(resolved)))
     }
   }
   const others = [...profiles.values()].sort((a, b) => a.label.toLowerCase().localeCompare(b.label.toLowerCase()) || a.path.localeCompare(b.path))
   return [defaultProfile, ...others]
+}
+
+/**
+ * The owner's choice for one account: offered, other people's PMs on this machine can run on it and spend it; withdrawn, the next
+ * report drops it and a switch on its way finds it gone (`profileHome` with offeredOnly). A PM already running on it stays until
+ * someone moves it. A folder that is gone can still be withdrawn.
+ */
+export function offerAccount(
+  engine: string, path: string, offered: boolean, options: { home?: string; environment?: Record<string, string | undefined> } = {},
+): { offered: boolean } | { error: 'INVALID_ENGINE' | 'INVALID_PATH' | 'NOT_FOUND' | 'DEFAULT_ACCOUNT' | 'TOO_MANY' } {
+  if (engine !== 'claude' && engine !== 'codex') return { error: 'INVALID_ENGINE' }
+  if (!path.startsWith('/') || path.length > 4096 || CONTROL_CHARS_RE.test(path)) return { error: 'INVALID_PATH' }
+  const home = options.home ?? homedir()
+  const found = engine === 'claude' ? resolveFolder(path) : (() => { const r = resolveCodexProfilePath(path); return 'error' in r ? r : r.path })()
+  if (typeof found !== 'string') {
+    if (offered || found.error === 'INVALID_PATH') return found
+    recordOffer(engine, path, false)
+    return { offered: false }
+  }
+  const defaultFolder = engine === 'claude' ? resolveFolder(home) : defaultCodexHome(home, options.environment ?? process.env)
+  if (found === defaultFolder) return { error: 'DEFAULT_ACCOUNT' }
+  return recordOffer(engine, found, offered) ? { offered } : { error: 'TOO_MANY' }
 }
 
 /** What leaves the machine for a Codex folder: its name, and never one holding an '@' (an email). */

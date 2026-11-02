@@ -79,7 +79,8 @@ describe('codexProfiles', () => {
     const folder = join(home, '.codex-linked')
     mkdirSync(folder)
     linkCodexProfile(folder)
-    expect(listCodexProfiles([], emptyDiscovery)).toEqual([{ path: folder, label: '.codex-linked', offered: true }])
+    // A link is a folder this machine knows (New Harness makes them): it is not an offer to the Swarm.
+    expect(listCodexProfiles([], emptyDiscovery)).toEqual([{ path: folder, label: '.codex-linked', offered: false }])
   })
 
   it('listCodexProfiles drops a linked folder that has since vanished', async () => {
@@ -113,6 +114,7 @@ describe('codexProfiles', () => {
     mkdirSync(folder)
     writeFileSync(join(folder, 'auth.json'), '{}')
     linkCodexProfile(folder)
+    // The default account: offered with no offer of its own.
     expect(listCodexProfiles([folder], { home, environment: {} })).toEqual([{ path: folder, label: '.codex', offered: true }])
   })
 

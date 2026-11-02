@@ -19,7 +19,7 @@ import { installedDsh } from '../dsh/installed.js'
 import { ApiConnections, apiConnectionsRequest } from '../lib/apiConnections.js'
 import { apiModelsRequest, apiTargetAnswer, refreshApiFor, rememberSavedApis } from '../lib/apiModels.js'
 import { appEngineOps, scanAppModels } from '../lib/appModels.js'
-import { linkClaudeProfile, listClaudeProfiles, profileId } from '../lib/claudeProfiles.js'
+import { linkClaudeProfile, listClaudeProfiles, profileId, offerAccount } from '../lib/claudeProfiles.js'
 import { defaultCodexHome, linkCodexProfile, listCodexProfiles } from '../lib/codexProfiles.js'
 import { createGridAccess, gridNamesLocal, reconcileGridAttach } from '../lib/gridAttach.js'
 import { deriveHarnessGridName, resetGridDeriveMemo, signedInGridEmail } from '../lib/gridDerive.js'
@@ -568,6 +568,14 @@ export function launchTargetRequests(core: CoreApi, onRemove: (connectionId: str
     claude_profile_link: internalOnThrow('claude_profile_link', (payload, asker) => {
       if (!asker.owner) return { error: 'OWNER_REQUIRED' }
       return linkClaudeProfile(typeof payload.path === 'string' ? payload.path : '', core.daemon.machineId())
+    }),
+
+    // The owner's own choice to offer an account to the Swarm, or to take it back (lib/accountOffers.ts). Like the requests above it
+    // is theirs alone, and not sealed for the relay: Desktop asks this computer's own daemon.
+    swarm_account_offer: internalOnThrow('swarm_account_offer', (payload, asker) => {
+      if (!asker.owner) return { error: 'OWNER_REQUIRED' }
+      if (typeof payload.offered !== 'boolean') return { error: 'INVALID_OFFER' }
+      return offerAccount(String(payload.engine), typeof payload.path === 'string' ? payload.path : '', payload.offered)
     }),
   }
 }

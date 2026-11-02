@@ -79,9 +79,10 @@ action, from the project's menu or from the limit line, whoever owns that machin
   - Local label (the owner's own windows): the account's `displayName`, else the folder name. Reported label (leaves the
     machine): from the folder only, never a name or email: the folder name, `Orca <first 4 of the uuid>` for Orca's `home`,
     `Claude <n>` for Harness's own folders.
-  - **Offered** (owner's consent, Diego 11-02): a row is `offered` when it is the default account, a folder the owner linked,
-    or a Harness-made folder. Only offered accounts are reported to the Swarm (see 5); the rest stay visible to the owner's
-    own Change agent, and using one there links it.
+  - **Offered** (owner's consent; both security reviews of #2528): a row is `offered` when it is the default account or the
+    owner offered it by name (`swarm_account_offer {engine, path, offered}`, `lib/accountOffers.ts`). Linking a folder, Add
+    Claude account and using an account in Change agent never offer it. Only offered accounts are reported to the Swarm (see 5).
+    A withdraw drops it from the next report, and a switch on its way finds it gone; a PM already on it stays until moved.
 - RPCs `claude_profiles_list {observedPaths}` and `claude_profile_link {path}` sit beside the Codex pair in
   `services/models.ts` `launchTargetRequests` and in `core/api.ts` `MODELS_REQUESTS`. They stay off the E2EE type lists
   (`lib/e2ee/core.ts` is pinned by the interop keystone and is not edited for this work), so they serve the machine's own
@@ -137,8 +138,9 @@ action, from the project's menu or from the limit line, whoever owns that machin
   `CLAUDE_CONFIG_DIR` under `~/.harness/claude-profiles/<n>` (the next free `n`, one add at a time) and says "Run /login,
   then pick it again". The CLI finds that folder by itself once Claude has created it.
 - Change agent asks for accounts only on this computer's own panes (the list RPCs are local only). A Swarm Buddy's pane offers
-  no engine or account change ("A Buddy keeps its engine for now"). Rows not offered to the Swarm say "Not offered to the Swarm
-  yet"; picking one links it first.
+  no engine or account change ("A Buddy keeps its engine for now"). Rows not offered to the Swarm say "Not offered to the Swarm";
+  picking one runs this pane on it and offers nothing. "Swarm accounts…" opens the one place to offer or withdraw, which says who
+  can then spend the account.
 
 ### 5. The machine reports its profiles (CLI → backend)
 

@@ -100,6 +100,7 @@ vi.mock('../lib/apiModels.js', () => ({
 vi.mock('../lib/claudeProfiles.js', async (importOriginal) => ({
   profileId: (await importOriginal<typeof import('../lib/claudeProfiles.js')>()).profileId,
   listClaudeProfiles: vi.fn((observed: string[]) => observed.map((path) => ({ id: 'p', path, label: 'Claude', reportLabel: 'Claude' }))),
+  offerAccount: vi.fn((_engine: string, path: string, offered: boolean) => (path ? { offered } : { error: 'INVALID_PATH' })),
   linkClaudeProfile: vi.fn((path: string) => (path ? { profile: { id: 'p', path, label: 'Linked', reportLabel: 'Linked' } } : { error: 'INVALID_PATH' })),
 }))
 vi.mock('../lib/codexProfiles.js', () => ({
@@ -969,9 +970,17 @@ describe('the models service', () => {
         log.mockRestore()
       })
 
+      it('swarm_account_offer: takes the owner\'s explicit choice, and nothing less', async () => {
+        const { ask } = setup()
+        expect(await ask('swarm_account_offer', { engine: 'claude', path: '/p', offered: true })).toEqual({ offered: true })
+        expect(await ask('swarm_account_offer', { engine: 'codex', path: '/p', offered: false })).toEqual({ offered: false })
+        expect(await ask('swarm_account_offer', { engine: 'claude', path: '/p' })).toEqual({ error: 'INVALID_OFFER' })
+        expect(await ask('swarm_account_offer', { engine: 'claude', path: 42, offered: true })).toEqual({ error: 'INVALID_PATH' })
+      })
+
       it('the Claude and Codex profile requests answer OWNER_REQUIRED to a guest', async () => {
         const { requests } = setup()
-        for (const type of ['claude_profiles_list', 'claude_profile_link', 'codex_profiles_list', 'codex_profile_link']) {
+        for (const type of ['claude_profiles_list', 'claude_profile_link', 'codex_profiles_list', 'codex_profile_link', 'swarm_account_offer']) {
           expect(await requests[type]!({ path: '/x' }, { local: false, owner: false })).toEqual({ error: 'OWNER_REQUIRED' })
         }
       })
