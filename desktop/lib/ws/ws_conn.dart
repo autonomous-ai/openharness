@@ -155,6 +155,25 @@ class WsRequestFailure implements Exception {
 
 /// One SSO-authenticated, machine-scoped connection to `/api/web-ws`.
 class WsConn {
+  /// Above this a frame decodes in an isolate: an answer of hundreds of KB took the UI thread long enough to drop frames
+  /// (Quiet Swarm, Speed). Below it, an isolate costs more than the decode.
+  static const largeFrameChars = 64 * 1024;
+
+  /// How a large frame decodes; tests hold it to see the order.
+  @visibleForTesting
+  static Future<Object?> Function(String raw) decodeLargeFrame = decodeInIsolate;
+
+  /// The decoded frame, or null for what will not parse. `compute` hands the result back without a copy, and runs inline on the web.
+  static Future<Object?> decodeInIsolate(String raw) => compute(_decodeOrNull, raw);
+
+  static Object? _decodeOrNull(String raw) {
+    try {
+      return jsonDecode(raw);
+    } catch (_) {
+      return null;
+    }
+  }
+
   final String wsBaseUrl;
   final String autonomousEnv;
   final String machineId;
@@ -605,7 +624,38 @@ class WsConn {
     }
   }
 
+  /// Frames behind a large one wait for it, whatever their kind, so nothing overtakes it.
+  Future<void> _decodeTail = Future<void>.value();
+  int _decoding = 0;
+
   void _onRaw(dynamic raw) {
+    if (_decoding == 0 && !(raw is String && raw.length >= largeFrameChars)) {
+      _handleRaw(raw);
+      return;
+    }
+    _decoding++;
+    _decodeTail = _decodeTail
+        .then((_) async {
+          if (raw is String && raw.length >= largeFrameChars) {
+            Object? decoded;
+            try {
+              decoded = await decodeLargeFrame(raw);
+            } catch (_) {
+              // No isolate to be had: as it always was, on this thread.
+              decoded = _decodeOrNull(raw);
+            }
+            if (decoded is Map<String, dynamic>) _handleMessage(decoded);
+          } else {
+            _handleRaw(raw);
+          }
+        })
+        .catchError((Object _) {
+          // Keep the queue alive: one frame that fails is dropped, as a bad frame always was.
+        })
+        .whenComplete(() => _decoding--);
+  }
+
+  void _handleRaw(dynamic raw) {
     final codec = _codec;
     if (raw is List<int>) {
       final bytes = Uint8List.fromList(raw);
@@ -627,6 +677,11 @@ class WsConn {
     } catch (_) {
       return;
     }
+    _handleMessage(message);
+  }
+
+  void _handleMessage(Map<String, dynamic> message) {
+    final codec = _codec;
     if (message['type'] == 'machine_select_error') _selectRefused(message);
     if (codec != null) {
       _inboundTail = _inboundTail
