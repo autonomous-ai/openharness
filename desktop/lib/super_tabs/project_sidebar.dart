@@ -66,7 +66,6 @@ class ProjectSidebar extends StatelessWidget {
     this.notificationsSelected = false,
     this.attention,
     this.activity,
-    this.threadsSelected = false,
     this.onOpenBuddyChat,
   });
   final SuperTabController controller;
@@ -99,16 +98,10 @@ class ProjectSidebar extends StatelessWidget {
   /// it rows carry no number.
   final SuperTabAttention? attention;
 
-  /// Whether the Threads view holds the main pane.
-  final bool threadsSelected;
-
-  /// Whether a row other than a conversation (Manage, devices, Notifications,
-  /// Threads) holds the main pane.
+  /// Whether a row other than a conversation (Manage, devices, Notifications)
+  /// holds the main pane.
   bool get _paneCovered =>
-      manageSelected ||
-      devicesSelected ||
-      notificationsSelected ||
-      threadsSelected;
+      manageSelected || devicesSelected || notificationsSelected;
 
   /// Opens the reader's Buddy chat in a project, by project id; the
   /// controller's [SuperTabController.openBuddyChat] when not given.

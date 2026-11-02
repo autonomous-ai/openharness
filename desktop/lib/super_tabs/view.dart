@@ -1594,7 +1594,6 @@ class _SuperTabViewState extends State<SuperTabView>
     notificationsSelected: _notificationsVisible,
     attention: SuperTabAttention.of(c),
     activity: SuperTabActivity.of(c),
-    threadsSelected: _threadsVisible,
     onManage: _openManage,
     manageSelected: _manageOpen,
     // Activity on every platform (Lead, 10-31): the Mac's menu bar and Dock
