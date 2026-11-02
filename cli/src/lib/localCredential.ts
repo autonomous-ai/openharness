@@ -14,8 +14,9 @@ import { unixSocketPath } from './localSocket.js'
  * can only set that one.
  *
  * Reaching a port proves nothing: another account can bind it while the daemon restarts, and would hear the credential
- * (audit H1). So where the socket can exist, nothing here adds the credential to a TCP request, and clients use the
- * socket (lib/localTransport.ts). The daemon also refuses it from another account (lib/peerAccount.ts), for old clients.
+ * (audit H1). So where the socket or, on Windows, the pipe can exist, nothing here adds the credential to a TCP request,
+ * and clients use them (lib/localTransport.ts). The daemon also refuses it from another account (lib/peerAccount.ts), for
+ * old clients.
  */
 export const LOCAL_CREDENTIAL_HEADER = 'X-Harness-Local'
 
@@ -28,11 +29,13 @@ export function readLocalCredential(dataDir: string): string | null {
 }
 
 /**
- * The headers a client adds to a loopback TCP request: none when it cannot read the credential, and none on macOS and
- * Linux unless the data folder's path is too long to hold the socket, the one case with no way but TCP.
+ * The headers a client adds to a loopback TCP request: none when it cannot read the credential, none on Windows, and none
+ * on macOS and Linux unless the data folder's path is too long to hold the socket, the one case with no way but TCP.
+ * Windows clients reach the daemon over its proven pipe (lib/localTransport.ts): the Team account's daemon starts at boot,
+ * before the owner's, and can hold the port from then on (audit W1, docs/security/2026-11-02-team-account-windows.md).
  */
 export function localCredentialHeaders(dataDir: string, platform: NodeJS.Platform = process.platform): Record<string, string> {
-  if (platform !== 'win32' && unixSocketPath(dataDir, 65_535, platform)) return {}
+  if (platform === 'win32' || unixSocketPath(dataDir, 65_535, platform)) return {}
   const credential = readLocalCredential(dataDir)
   return credential ? { [LOCAL_CREDENTIAL_HEADER]: credential } : {}
 }

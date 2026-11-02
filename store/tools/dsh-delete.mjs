@@ -1,11 +1,10 @@
 // Delete an agent over the daemon's WebSocket. Usage: node dsh-delete.mjs <agentId>
 import ws_ from '../../cli/node_modules/ws/index.js'
 const { WebSocket } = ws_
-import { CREDENTIAL_REFUSED, daemonBridge } from './local-credential.mjs'
+import { CREDENTIAL_REFUSED, openDaemonBridge } from './local-credential.mjs'
 const [agentId] = process.argv.slice(2)
 const machineId = process.argv[3] ?? (() => { console.error('usage: node dsh-delete.mjs <agentId> <machineId>'); process.exit(2) })()
-const { url, headers } = daemonBridge()
-const ws = new WebSocket(url, { headers })
+const ws = openDaemonBridge(WebSocket)
 ws.on('unexpected-response', (_req, res) => { console.error(res.statusCode === 401 ? CREDENTIAL_REFUSED : `Unexpected server response: ${res.statusCode}`); process.exit(1) })
 ws.on('open', () => {
   ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))

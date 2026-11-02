@@ -9,14 +9,15 @@ text and values the code produces. Nothing on a real account, permission or file
 ## Answer
 
 **The folders hold; the daemon's port does not.** Ports were covered only in part: the Team daemon's own port was not read. The ACLs setup writes keep the Team account out of the owner's profile.
-Other accounts can't read the sign-in code or the relay's token, and the daemon's pipe proves both ends. But on Windows the owner's
-local credential still goes over TCP to whoever holds the daemon's port, and the daemon accepts it from any account (W1).
+Other accounts can't read the sign-in code or the relay's token, and the daemon's pipe proves both ends. On Windows the owner's
+local credential went over TCP to whoever holds the daemon's port, and the daemon accepted it from any account (W1, fixed in
+task #2095; the connectors bridge's port is still open, its own task, so Team accounts on Windows are not closed yet).
 The Team account's daemon starts at boot, before the owner signs in. Purge was written for POSIX paths. It never deleted a
 Codex Product Manager's own home on Windows (W2, fixed in this pull request), and it can't finish a Claude Code one there (W3).
 
 | ID | Rating | Finding | Status |
 |---|---|---|---|
-| W1 | **High** | The owner's local credential goes to whoever holds the daemon's port, and opens the daemon from any account | Read in code, pinned by a test; fix requested |
+| W1 | **High** | The owner's local credential goes to whoever holds the daemon's port, and opens the daemon from any account | **Fixed** in task #2095 for every client, test first. The Store add-ons over the pipe (task #2161): fixed, and run on real Windows x64 and Arm against the installed daemon (Windows workflow run 41464966703). The connectors bridge is still open (own task) |
 | W2 | **High** | Purge left a Codex Product Manager's whole home on Windows, and could take every PM's home on any platform | **Fixed here**, test first |
 | W3 | Medium | Purge can't scrub a Claude Code Product Manager on Windows: the account stays held, its memory stays | Read in code, fix requested |
 | W4 | Medium | The Team account can stall the owner's read of its status file | Read in code, fix requested |
@@ -52,12 +53,48 @@ This is the macOS H1 again, but on Windows nothing of the #2016 fix applies:
   The messages RPC uses only the pipe (`messages/rpc.ts:20-25`). The pipe proves both ends without sending the token
   (`lib/windows/pipeAuth.ts`).
 
-**Proof:** `cli/src/team/windowsBoundary.spec.ts`, "W1, still open": on Windows a client puts the credential on a TCP request,
-and the daemon counts it from a caller it never looked up. Closing the hole turns these red. Not tried on Windows.
+**Proof:** `cli/src/team/windowsBoundary.spec.ts`, "W1" (named "W1, still open" until the fix): on Windows a client put the credential on a TCP request,
+and the daemon counted it from a caller it never looked up. Not tried on Windows.
 
 **Fix:** on Windows, send hooks and every CLI request over the daemon's proven pipe, and never the credential over TCP. Until then,
 make the daemon refuse the credential over TCP from another account. Windows can say who owns a loopback connection
 (`GetExtendedTcpTable` gives the owning process, whose token names its account).
+
+**Fixed (task #2095).** All three parts, each test first; the W1 tests above are turned around:
+- The daemon asks Windows who owns the calling end of a TCP connection that showed a valid secret (`lib/peerAccount.ts`
+  `windowsPeerQuery`: `Get-NetTCPConnection`, then the process's owner SID against this account's). Anything but a clear yes is
+  no. This alone makes a credential heard on the port useless to another account, from an old client or plugin too.
+  It takes only a process that started before the connection was made, compared in whole seconds (the connection's time comes
+  only to the second), never the lookup's own process, and never a PowerShell or console host the daemon started (another
+  lookup running at once). A process id taken within the connection's own second by some other process of the owner's is
+  still open until the native lookup. At most four
+  lookups run at once and up to 32 wait their turn; one past those is no for now, and is asked again on its next request. A
+  lookup that times out (45 s: about a second on x64, 20 to 25 s on the Windows ARM runner) stays no for that connection; a
+  native lookup in harness-pty is its own task.
+- Hooks post over the daemon's pipe (`hook/notify.mjs` `windowsDaemonPipe`), proving the token without sending it, and take an
+  answer only with the daemon's proof. With no live pipe they post nothing, as on macOS with no socket.
+- CLI clients never put the credential on TCP (`localCredentialHeaders` gives nothing on Windows). Their fetch helper and their
+  WebSockets go over the pipe (`lib/localTransport.ts` `daemonFetch`, `openLocalWs`), and with no pipe they say Harness is not
+  running.
+- The Store add-ons (Harness Monitor, Machine Monitor, Memories, Autonomous Grid) and the Store's dev tools sent the credential to
+  `127.0.0.1:18473` on Windows, the default port the Team daemon takes at boot. Task #2095 stopped that; task #2161 makes them work again:
+  their one shared transport (`lib/localDaemon.mjs`, a copy of `store/tools/local-daemon.mjs`) reaches the daemon over its pipe as
+  the hook does, with the pipe auth and the daemon's proof before any answer or WebSocket open, and with no live pipe says Harness
+  is not running. Their `localCredentialHeaders` give nothing on Windows and their 401 probe never runs there
+  (`store/tools/windows-pipe.test.mjs`, run on Windows by the Windows workflow, with `store/tools/windows-ci/store-pipe.mjs`
+  against the installed daemon).
+- Still open, rated Medium, its own task: the connectors bridge. Its default port (51793) is the same for every account, the Team
+  daemon also starts connectors, and on Windows `portHolderIsThisAccount` answers null, so the owner's bridge never moves off a
+  held port (`services/connectors.ts`). Whoever holds it from boot reads every tool call of the owner's agents and can answer them
+  falsely, and Harness's own `bridgeRoute` trusts those answers too. The key opens nothing from another account now. macOS has the
+  stdio shim and the move-off (#2558, #2550); Windows has neither. The fix is the shim and Harness's route over the proven pipe;
+  a Windows listener-owner lookup, so the bridge moves off a held port, is a cheap first step.
+- Still open: the OpenCode, Kilo, Pi and Amp plugins (`engines/kit/pluginFetch.ts`) have no socket on Windows and post to the
+  port with the hook-only token and the session's details. The token opens nothing from another account now, but whoever holds
+  the port hears both, and each new connection costs the daemon's one-second lookup. They need the pipe too, a separate task.
+- A recorded daemon pid that another account runs now is no daemon to the hook and the CLI's WebSockets (EPERM), so a pipe made
+  under a dead daemon's name is never dialled for it. A pid this account's own process took since is still dialled; then only the
+  pipe's proof refuses the answer, after the request was sent. That needs the pid reused by chance, not by choice.
 
 ### W2. Purge left a Codex Product Manager's home on Windows (High, fixed here)
 
@@ -176,7 +213,7 @@ as `privacy.ts` `statusText` does.
   needs a right on the process that it doesn't give across accounts. Not checked.
 - Ports were covered only in part: the Team daemon's own loopback port (18493) was not read beyond what the macOS audit says.
   The terminal host's pipe was read (under "What holds", security review 2 of this pull request); nothing about it ran on Windows.
-- Which callers of `localCredentialHeaders` speak TCP on Windows (W1): `cli.ts`, `remoteCommand.ts`, `superTabs/attach.ts`,
-  `devices/client.ts`, `agentClient/settings.ts`, `lib/daemonEndpoint.ts`, `lib/autonomous-device/addonCommand.ts`. Not traced.
+- Which callers of `localCredentialHeaders` speak TCP on Windows (W1): the CLI's were traced and moved to the pipe in task #2095;
+  the Store add-ons' own copies send nothing to the port on Windows, and reach the daemon over its pipe since task #2161.
 - Whether a standard account can register a scheduled task for itself that runs while it is not signed in (W5).
 - The integration suite was not run: this change touches no backend code.
