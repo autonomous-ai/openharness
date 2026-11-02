@@ -40,6 +40,13 @@ Future<void> main() async {
         : scenario,
   );
   if (scenario == 'activity') _activity(server);
+  if (scenario == 'caught-up') {
+    server.followedThreads = {
+      'unread': <dynamic>[],
+      'read': <dynamic>[],
+      'more': false,
+    };
+  }
   final controller = server.controller(
     account: scenario == 'viewer' ? 'viewer' : 'owner',
   );

@@ -157,7 +157,7 @@ class SuperTabAttention extends ChangeNotifier {
 
   /// A tag from a server that does not say where it is: it counts until
   /// answered, past any read mark.
-  static const _unknown = 1 << 52;
+  static const _unknown = 9007199254740991;
 
   /// The number of tags of the reader inside threads they have
   /// not read past, in chats this Swarm still lists for them. A muted chat's

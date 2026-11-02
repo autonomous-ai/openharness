@@ -127,6 +127,10 @@ class SuperTabActivity extends ChangeNotifier {
     ];
   }
 
+  /// A tag from a server that does not say where it is: it counts until
+  /// answered, past any read mark. Not `1 << 52`: a shift is 32 bits on the web.
+  static const _unknown = 9007199254740991;
+
   /// The tags that need the reader: in a chat's own stream and not read past.
   /// A tag the reader has read stops needing them (the number clears by
   /// reading), and one in a reply that lives only in its thread belongs to
@@ -163,7 +167,7 @@ class SuperTabActivity extends ChangeNotifier {
   /// counts it (attention.dart).
   bool mentionUnread(SuperTabMention mention) =>
       mention.resolvedBy == null &&
-      (mention.messageSequence ?? (1 << 52)) >
+      (mention.messageSequence ?? _unknown) >
           (mention.threadId == null
               ? controller.readMark(mention.conversationId)
               : controller.threadReadMark(mention.threadId!));
