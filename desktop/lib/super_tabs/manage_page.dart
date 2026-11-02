@@ -192,35 +192,37 @@ class _ManageModels extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final projectId = controller.snapshot
-        ?.projectFor(controller.selectedId)
-        ?.id;
     return LaidOutListView(
+      // A model's row has its own 12 inside: its mark starts under the heading.
       padding: const EdgeInsets.symmetric(
-        horizontal: SuperTabMessageRow.horizontalInset,
+        horizontal: SuperTabMessageRow.horizontalInset - 12,
         vertical: grid.AppDesktop.controlGap,
       ),
       children: [
         if (board case final board?)
           LeaderboardModelsSection(
             board: board,
-            projectId: projectId,
+            // Whichever project the board asked about: Models is the Swarm's.
+            projectId: board.projectId,
             collapsed: false,
             now: now,
             heading: false,
           ),
         const SizedBox(height: 8),
-        _FootAction(
-          label: 'Your models…',
-          actionKey: const ValueKey('super-local-models'),
-          onPressed: controller.snapshot == null
-              ? null
-              : () => showSwarmLocalModels(
-                  context,
-                  controller,
-                  app: app,
-                  now: now,
-                ),
+        Padding(
+          padding: const EdgeInsets.only(right: 12),
+          child: _FootAction(
+            label: 'Your models…',
+            actionKey: const ValueKey('super-local-models'),
+            onPressed: controller.snapshot == null
+                ? null
+                : () => showSwarmLocalModels(
+                    context,
+                    controller,
+                    app: app,
+                    now: now,
+                  ),
+          ),
         ),
       ],
     );
