@@ -43,6 +43,7 @@ def main():
         fixture("welcome", "HN_WELCOME_TEST_BINARY", "HN_WELCOME_TEST_PORT", 19787),
         fixture("welcome-composer", "HN_WELCOME_TEST_BINARY", "HN_WELCOME_TEST_PORT", 19788),
         fixture("session-picker", "HN_SESSION_TEST_BINARY", "HN_SESSION_TEST_PORT", 19929),
+        fixture("harness-list", "HN_HARNESS_LIST_BINARY", "HN_HARNESS_LIST_PORT", 19785),
         {"name": "shell-integration", "cwd": "tui", "timeout_seconds": 120,
          "argv": [sys.executable, "-u", "tests/shell-integration.py"]},
         {"name": "composer-machine", "cwd": "tui", "timeout_seconds": 120,
