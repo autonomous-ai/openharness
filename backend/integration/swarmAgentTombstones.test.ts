@@ -140,10 +140,10 @@ describe('the hourly purge of agent tombstones', () => {
     expect(found, JSON.stringify(plan(found))).toHaveLength(1)
     expect(found[0]!.planSummary, JSON.stringify(plan(found))).toMatch(/IXSCAN \{ purgeAt: 1 \}/)
     expect(found[0]!.docsExamined, JSON.stringify(plan(found))).toBe(9)
+    // One read per Swarm with due tombstones, of its open conversations only.
     const groups = reads(entries, 'SwarmGroup', ['agentIds'])
-    expect(groups, JSON.stringify(plan(groups))).toHaveLength(1)
-    expect(groups[0]!.command?.hint, JSON.stringify(plan(groups))).toEqual({ tabId: 1, dormant: 1, changedAt: 1 })
+    expect(groups.map(e => e.command?.hint), JSON.stringify(plan(groups))).toEqual([{ tabId: 1, dormant: 1, changedAt: 1 }, { tabId: 1, dormant: 1, changedAt: 1 }])
     const starts = reads(entries, 'SwarmStart', ['agentId'])
-    expect(starts[0]!.planSummary, JSON.stringify(plan(starts))).toMatch(/IXSCAN \{ tabId: 1, agentId: 1 \}/)
+    expect(starts.map(e => e.planSummary), JSON.stringify(plan(starts))).toEqual(['IXSCAN { tabId: 1, agentId: 1 }', 'IXSCAN { tabId: 1, agentId: 1 }'])
   })
 })
