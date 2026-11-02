@@ -368,6 +368,8 @@ void main() {
       expect(jsonDecode(store.values[key]!), {
         'pins': [swarmHomeProjectKey(tab, 'p1')],
         'swarm': tab,
+        // Home showing one Swarm counts as using it, for the Buddy tab.
+        'buddySwarm': tab,
       });
     });
 

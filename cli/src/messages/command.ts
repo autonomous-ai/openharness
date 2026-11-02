@@ -26,7 +26,7 @@ export const SEND_USAGE = `harness send — message your teammates in this tab
                                         with other accounts, their accounts, machines, projects and
                                         branches, the leader and how tasks go through GitHub
   harness send <name>[,<name>] "text"   message one or more teammates
-  harness send <name> --text-file PATH  a longer message, from a file in the temporary folder (/tmp)
+  harness send <name> --text-file PATH  a longer message, from a file in the temporary folder
   harness send <name> --fyi "text"      news no one must act on now: it arrives at their next tool call
                                         and never starts a turn of theirs
 
@@ -51,7 +51,7 @@ export function readMessageFile(path: string, folders: readonly string[] = [tmpd
   const allowed = folders.flatMap((folder) => { try { return [realpathSync(folder)] } catch { return [] } })
   const stat = statSync(real)
   if (!allowed.some((folder) => real.startsWith(folder + sep)) || !stat.isFile() || stat.nlink !== 1) {
-    throw new MessageError('TEXT_FILE', `Write the message to a file in the temporary folder (/tmp) first; ${path} is not one.`)
+    throw new MessageError('TEXT_FILE', `Write the message to a file in the temporary folder (${folders[0]}) first; ${path} is not one.`)
   }
   return readFileSync(real, 'utf8')
 }

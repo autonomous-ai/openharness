@@ -803,6 +803,13 @@ export class SuperTabStore {
       const chat = projectsOf(state).find(p => p.id === projectId)?.leadConversationId
       if (chat) groupIds.push(chat)
     }
+    // A proposal posts in the chat of the project it goes to, even quiet: the one a Swarm-wide Buddy names, else its session's.
+    if (command.type === 'buddy.propose') {
+      const self = asAgentId ? state.agents.find(a => a.id === asAgentId) : undefined
+      const projectId = command.projectId ?? (self ? agentProjectId(state, self) : undefined)
+      const chat = projectsOf(state).find(p => p.id === projectId)?.leadConversationId
+      if (chat) groupIds.push(chat)
+    }
     // Any agent of a project tells a person in that project's Buddy chat (commands.ts person.tell), loaded even when quiet.
     if (command.type === 'person.tell' && asAgentId) {
       const self = state.agents.find(a => a.id === asAgentId)
@@ -1355,14 +1362,16 @@ export class SuperTabStore {
         // The thread's root says whose proposal the reply answers (buddyNews.ts): the reply itself, or one more read by id.
         const root = reply?.thread && reply.thread !== reply.id
           ? await tx.superTabMessage.findFirst({ where: { id: reply.thread, tabId, conversationId: command.conversationId }, select: { source: true } }) : reply
-        // In a Buddy chat: whether the thread ever had a session (buddySessions.ts), by the thread index, one row at most.
+        // In a Buddy chat: whether the thread ever had a session (buddySessions.ts), by the thread index, one row at most: its
+        // latest, whose project a session reopened there keeps.
         const buddyChat = original.conversations.find(c => c.id === command.conversationId)
-        const sessionThread = reply?.thread && buddyChat && isBuddyChat(buddyChat)
-          ? !!await tx.superTabMessage.findFirst({ where: { tabId, conversationId: command.conversationId, thread: reply.thread, buddySession: true }, select: { id: true } })
-          : false
+        const sessionRow = reply?.thread && buddyChat && isBuddyChat(buddyChat)
+          ? await tx.superTabMessage.findFirst({ where: { tabId, conversationId: command.conversationId, thread: reply.thread, buddySession: true },
+            orderBy: [{ sequence: 'desc' }, { id: 'desc' }], select: { buddyProject: true } })
+          : null
         if (reply) context.reply = { id: reply.id, conversationId: reply.conversationId, author: reply.author as unknown as Author, createdAt: reply.createdAt.getTime(),
           thread: reply.thread, threadSource: (root?.source ?? null) as Record<string, unknown> | null,
-          ...(agentOnly(reply.source, reply.recipientIds) ? { agentOnly: true } : {}), ...(sessionThread ? { sessionThread: true as const } : {}) }
+          ...(agentOnly(reply.source, reply.recipientIds) ? { agentOnly: true } : {}), ...(sessionRow ? { sessionThread: true as const, ...(sessionRow.buddyProject ? { sessionProject: sessionRow.buddyProject } : {}) } : {}) }
       }
       if (command.type === 'message.send' && actor.kind === 'person') context.openTags = await openTags(tx, tabId, command.conversationId, actor.userId, context.now)
       // A stale save is refused with the stored text, to merge (instructions.ts); an older client's rule.set appends to it
@@ -1392,7 +1401,7 @@ export class SuperTabStore {
         const ownerId = (asked?.author as unknown as Author | undefined)?.id
         const newest = recent.find(m => !m.source && (m.author as unknown as Author).kind === 'person' && (m.author as unknown as Author).id === ownerId)
         if (asked) context.proposalAsk = { id: asked.id, conversationId: asked.conversationId, author: asked.author as unknown as Author,
-          source: !!asked.source, createdAt: asked.createdAt.getTime(), thread: asked.thread, ...(newest ? { newestOwnerMessageId: newest.id } : {}) }
+          source: !!asked.source, session: !!asked.buddySession, createdAt: asked.createdAt.getTime(), thread: asked.thread, ...(newest ? { newestOwnerMessageId: newest.id } : {}) }
       }
       if (command.type === 'message.send' && actor.kind === 'agent') {
         const recent = await tx.superTabMessage.findMany({ where: { tabId, conversationId: command.conversationId },
@@ -1993,6 +2002,10 @@ export class SuperTabStore {
       const inThread = new Set((await messagesById(tx, state.id, command.conversationId, handed.map(r => r.usedBy!)))
         .filter(m => m.id === thread || m.thread === thread).map(m => m.id))
       handed = handed.filter(r => inThread.has(r.usedBy!))
+    } else if (handed.length && self.buddyScope === 'swarm') {
+      // The main Buddy never hears a session's thread, and a file sent there is that session's project's: never another's.
+      const heard = new Set((await messagesById(tx, state.id, command.conversationId, handed.map(r => r.usedBy!))).filter(m => !m.buddySession).map(m => m.id))
+      handed = handed.filter(r => heard.has(r.usedBy!))
     }
     return { attachments: [...own, ...handed].map(row => ({ id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey) })),
       claimed: own.map(r => r.id), proposed: handed.map(r => r.id) }

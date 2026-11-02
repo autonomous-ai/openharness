@@ -19,6 +19,7 @@ import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../usage/models_menu_controller.dart';
 import '../widgets/browser_menu_guard.dart';
+import '../widgets/finger_target.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
 import '../widgets/harness_activity_mark.dart';
@@ -1884,24 +1885,38 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             ),
           ),
         ),
-        if (expanded) ...[
-          if (view.agents.isNotEmpty) _agentCount(view),
-          _MachineReadings(view: view),
-          if (view.agents.isEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(36, 4, 32, 8),
-              child: Text(
-                view.status == SuperTabMachineStatus.offline
-                    ? 'Offline'
-                    : view.status == SuperTabMachineStatus.unknown
-                    ? "Can't reach Harness"
-                    : view.status == SuperTabMachineStatus.refreshing
-                    ? 'Refreshing…'
-                    : 'No agents yet',
-                style: DesktopChrome.metadata(),
+        // The rest of the machine belongs to its menu too: a right-click on its readings is not the browser's.
+        if (expanded)
+          BrowserMenuOff(
+            active: true,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onSecondaryTapUp: (event) =>
+                  unawaited(_menu(view, event.globalPosition)),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (view.agents.isNotEmpty) _agentCount(view),
+                  _MachineReadings(view: view),
+                  if (view.agents.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(36, 4, 32, 8),
+                      child: Text(
+                        view.status == SuperTabMachineStatus.offline
+                            ? 'Offline'
+                            : view.status == SuperTabMachineStatus.unknown
+                            ? "Can't reach Harness"
+                            : view.status == SuperTabMachineStatus.refreshing
+                            ? 'Refreshing…'
+                            : 'No agents yet',
+                        style: DesktopChrome.metadata(),
+                      ),
+                    ),
+                ],
               ),
             ),
-        ],
+          ),
       ],
     );
   }
@@ -2193,6 +2208,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         // Only a Swarm that can't be read is news; a live one says nothing.
         trailing: c.backendUnreachable
             ? SuperTabMachinesPill(
+                connecting: c.stillConnecting,
                 reconnectingFor: failingSince == null
                     ? Duration.zero
                     : widget.now().difference(failingSince),
@@ -2650,28 +2666,38 @@ class _MachineMoreState extends State<_MachineMore> {
 
   @override
   Widget build(BuildContext context) {
-    final shown = _focused || _open || _RowHover.of(context);
+    // A touch screen has nothing to hover (Huy, 2026-11-02): the ⋯ stays, a finger's size.
+    final touch = BrowserMenuGuard.onTouchScreen;
+    final shown = touch || _focused || _open || _RowHover.of(context);
+    final extent = touch ? kFingerTarget : _MachineMore.width;
+    final button = AppIconButton(
+      icon: AppIcons.ellipsis,
+      tooltip: 'More',
+      size: 16,
+      onPressed: () => unawaited(_press()),
+    );
     return Focus(
       canRequestFocus: false,
       skipTraversal: true,
       onFocusChange: (focused) => setState(() => _focused = focused),
       child: SizedBox(
-        width: shown ? _MachineMore.width : 0,
-        height: _MachineMore.width,
+        width: shown ? extent : 0,
+        height: extent,
         child: OverflowBox(
           alignment: Alignment.centerRight,
-          minWidth: _MachineMore.width,
-          maxWidth: _MachineMore.width,
+          minWidth: extent,
+          maxWidth: extent,
           child: Opacity(
             opacity: shown ? 1 : 0,
             child: IgnorePointer(
               ignoring: !shown,
-              child: AppIconButton(
-                icon: AppIcons.ellipsis,
-                tooltip: 'More',
-                size: 16,
-                onPressed: () => unawaited(_press()),
-              ),
+              child: touch
+                  ? GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => unawaited(_press()),
+                      child: Center(child: button),
+                    )
+                  : button,
             ),
           ),
         ),

@@ -53,6 +53,7 @@ class SuperTabMessageRow extends StatefulWidget {
     this.threadUnread = false,
     this.onOpenThread,
     this.threadTrailing,
+    this.threadEnd,
     this.member,
     this.link,
     this.linkTarget,
@@ -75,6 +76,9 @@ class SuperTabMessageRow extends StatefulWidget {
 
   /// Ends the thread line: the mark of a thread's own Buddy session.
   final Widget? threadTrailing;
+
+  /// After [threadTrailing], outside the thread's link: End session.
+  final Widget? threadEnd;
 
   /// Who a thread's reply author is in the Swarm now, for the faces on its
   /// reply line; without it each shows the face its recorded name gives.
@@ -541,6 +545,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                   onOpen: open,
                                   member: widget.member,
                                   trailing: widget.threadTrailing,
+                                  end: widget.threadEnd,
                                 ),
                               ...widget.receipts,
                             ],
@@ -774,12 +779,16 @@ class SuperTabThreadLine extends StatelessWidget {
     required this.onOpen,
     this.member,
     this.trailing,
+    this.end,
   });
 
   final SuperTabThread thread;
 
   /// Drawn after the line's link, outside it: a thread session's mark.
   final Widget? trailing;
+
+  /// Drawn last, outside the line's link: End session.
+  final Widget? end;
   final bool unread;
   final VoidCallback onOpen;
 
@@ -813,13 +822,14 @@ class SuperTabThreadLine extends StatelessWidget {
     grid.AppTheme.watch(context);
     // A session's thread with no reply yet: its mark is the line, and opens it.
     if (thread.replies == 0 && trailing != null) {
+      final open = SuperTabLink(
+        label: 'Open thread',
+        onTap: onOpen,
+        child: trailing!,
+      );
       return Padding(
         padding: const EdgeInsets.only(top: grid.AppDesktop.menuInset),
-        child: SuperTabLink(
-          label: 'Open thread',
-          onTap: onOpen,
-          child: trailing!,
-        ),
+        child: end == null ? open : _wrapped([open, _dot, end!]),
       );
     }
     final count = thread.replies == 1 ? '1 reply' : '${thread.replies} replies';
@@ -855,7 +865,16 @@ class SuperTabThreadLine extends StatelessWidget {
       padding: const EdgeInsets.only(top: grid.AppDesktop.menuInset),
       child: trailing == null
           ? link
-          : Row(mainAxisSize: MainAxisSize.min, children: [link, trailing!]),
+          : _wrapped([link, trailing!, if (end != null) ...[_dot, end!]]),
     );
   }
+
+  Widget get _dot =>
+      ExcludeSemantics(child: Text(' · ', style: DesktopChrome.metadata()));
+
+  /// On one line while it fits, and on two in a narrow chat.
+  Widget _wrapped(List<Widget> children) => Wrap(
+    crossAxisAlignment: WrapCrossAlignment.center,
+    children: children,
+  );
 }

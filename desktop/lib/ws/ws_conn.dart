@@ -44,6 +44,25 @@ Duration reconnectDelay(int attempt, Random random) {
   );
 }
 
+/// How many times a Desktop connection that has never been up retries quickly while it opens
+/// ([firstConnectRetryDelay]). It says connecting through them: nothing has been lost yet, and
+/// `reconnecting` is what marks a machine offline. Few, because each can cost the daemon a backend
+/// dial, and only once per connection: the socket that fails at once for good goes on to the backoff.
+const firstConnectRetries = 3;
+
+/// The wait before the [attempt]th retry of a first connect, of [firstConnectRetries]. Opening used
+/// to spend these tries on the backoff's 0.5 to 7 s, on top of the 1 and 2 s the daemon itself holds a
+/// failed machine for (a retry inside that hold is answered from its memory, without a dial).
+Duration firstConnectRetryDelay(int attempt) => attempt <= 1
+    ? const Duration(milliseconds: 500)
+    : const Duration(seconds: 1);
+
+/// How long a Desktop connection that has never been up goes on saying connecting, past its quick
+/// tries. `reconnecting` marks a machine offline, and a daemon just started has its backend some
+/// seconds later (6 s on 10-30): those seconds are not a computer that is off. As long as the
+/// daemon's own wait for one dial. A relay that says the machine is off is believed at once ([_park]).
+const firstConnectWindow = Duration(seconds: 15);
+
 /// How long a connection has to stay up before its next drop starts the backoff over. Resetting it
 /// the moment a socket was up made a socket the backend dropped right after its handshake redial
 /// every second, for good: about 54 dials a minute from one browser tab (prod, 2026-10-28).
@@ -197,6 +216,9 @@ class WsConn {
   @visibleForTesting
   final CloudSocketFactory? cloudSocket;
 
+  /// [firstConnectWindow]; a test's own.
+  final Duration firstConnectFor;
+
   /// The reconnect jitter's source. Null is a fresh [Random].
   final Random _random;
 
@@ -220,6 +242,12 @@ class WsConn {
   bool _connecting = false;
   bool _ready = false;
   int _attempt = 0;
+
+  /// Has been up at least once. Until then, a Desktop connection is still on its first connect.
+  bool _everReady = false;
+
+  /// From the first dial to the first time up, for the log: what opening the app waited for.
+  Stopwatch? _firstConnect;
   Timer? _reconnectTimer;
   Timer? _stableTimer;
   Timer? _observerHandshakeTimer;
@@ -359,6 +387,7 @@ class WsConn {
     this.transportPlugins,
     this.cloudSocket,
     Random? random,
+    @visibleForTesting this.firstConnectFor = firstConnectWindow,
   }) : _random = random ?? Random();
 
   /// The socket to dial, decided afresh on every connect: whether the file is
@@ -416,10 +445,10 @@ class WsConn {
       throw StateError('The local daemon pipe is unavailable');
     }
     final transport =
-        localTransport ??
-        LocalDaemonTransport(
-          credential: kUnderTest ? null : readDaemonCredential,
-        );
+        localTransport ?? LocalDaemonTransport.detect(uri);
+    if (!transport.portAllowed) {
+      throw StateError('The local daemon socket is unavailable');
+    }
     return IOWebSocketChannel.connect(uri, headers: transport.tcpHeaders());
   }
 
@@ -433,8 +462,9 @@ class WsConn {
     }
     _connecting = true;
     _ready = false;
+    _firstConnect ??= Stopwatch()..start();
     onStatus(
-      _attempt == 0
+      _attempt == 0 || _saysConnecting
           ? ConnectionStatus.connecting
           : ConnectionStatus.reconnecting,
     );
@@ -634,6 +664,15 @@ class WsConn {
     _observerHandshakeTimer?.cancel();
     _parkedRechecks = 0;
     _ready = true;
+    if (!_everReady) {
+      _everReady = true;
+      // The short id and the times only: what a person's opening really took, on their own Mac.
+      appLog.debug(
+        'ws',
+        'first connect ${machineId.length > 8 ? machineId.substring(0, 8) : machineId} '
+            'in ${_firstConnect?.elapsedMilliseconds ?? 0} ms, $_attempt retries',
+      );
+    }
     _refreshedToken = null;
     _stableTimer?.cancel();
     _stableTimer = Timer(connectionStableAfter, () => _attempt = 0);
@@ -1202,12 +1241,38 @@ class WsConn {
     }
   }
 
+  /// A Desktop connection that has not been up yet, within its quick retries. A browser's sockets
+  /// each reach the backend itself, so it keeps the plain backoff.
+  bool get _onFirstConnect =>
+      isLocal && !_everReady && _attempt <= firstConnectRetries;
+
+  /// Nothing has been lost yet: its quick tries, or the seconds of [firstConnectFor].
+  bool get _saysConnecting =>
+      _onFirstConnect ||
+      (isLocal &&
+          !_everReady &&
+          (_firstConnect?.elapsed ?? Duration.zero) < firstConnectFor);
+
   void _scheduleReconnect() {
     if (_closing) return;
     _attempt++;
-    onStatus(ConnectionStatus.reconnecting);
+    onStatus(
+      _saysConnecting
+          ? ConnectionStatus.connecting
+          : ConnectionStatus.reconnecting,
+    );
     _reconnectTimer?.cancel();
-    final delay = fixedReconnectDelay ?? reconnectDelay(_attempt, _random);
+    final delay =
+        fixedReconnectDelay ??
+        (_onFirstConnect
+            ? firstConnectRetryDelay(_attempt)
+            // The backoff starts from its beginning once the quick tries are spent.
+            : reconnectDelay(
+                isLocal && !_everReady
+                    ? _attempt - firstConnectRetries
+                    : _attempt,
+                _random,
+              ));
     _reconnectTimer = Timer(delay, connect);
   }
 

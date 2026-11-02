@@ -697,7 +697,7 @@ void main() {
         request.response.statusCode = HttpStatus.serviceUnavailable;
         await request.response.close();
       });
-      var reconnecting = 0;
+      var dials = 0;
       conn = WsConn(
         wsBaseUrl: 'wss://unused.example',
         autonomousEnv: 'prod',
@@ -706,7 +706,10 @@ void main() {
         onAuthFailure: (_) {},
         onEvent: (_) {},
         onStatus: (status) {
-          if (status == ConnectionStatus.reconnecting) reconnecting++;
+          if (status == ConnectionStatus.reconnecting ||
+              status == ConnectionStatus.connecting) {
+            dials++;
+          }
         },
         transportKind: WsTransportKind.localPlaintext,
         allowLocalTcpFixture: true,
@@ -716,7 +719,7 @@ void main() {
       await conn!.connect();
       await Future<void>.delayed(const Duration(milliseconds: 650));
       expect(
-        reconnecting,
+        dials,
         greaterThanOrEqualTo(4),
         reason: 'backoff would allow one',
       );
@@ -747,7 +750,11 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 250));
     expect(failures, hasLength(1));
     expect(failures.single, startsWith('4403:'));
-    expect(statuses, contains(ConnectionStatus.reconnecting));
+    // Dialled again, on its first connect's quick tries (test/first_connect_test.dart).
+    expect(
+      statuses.where((status) => status == ConnectionStatus.connecting),
+      hasLength(greaterThan(1)),
+    );
     expect(conn!.isClosed, isFalse);
   });
 
