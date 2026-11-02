@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart';
@@ -26,8 +25,8 @@ typedef PersonalMachineRow = ({
 /// while Personal is theirs alone, as [PersonalProjects.eligible] says. Each is
 /// added as Add machine adds it, one at a time. This computer has its own path
 /// (`PersonalSwarm.show`). An offline machine cannot be set up, so it waits
-/// here until it is online. One the person removed stays out: every machine
-/// seen in the Swarm is remembered, and one remembered and gone was removed.
+/// here until it is online. One the person removed stays out, on every
+/// computer: the server keeps that (backend commands.ts machine.remove).
 /// Draws nothing itself: where the rows show is the list's (machines.dart).
 class PersonalMachines extends ChangeNotifier {
   PersonalMachines._(this.app);
@@ -40,12 +39,6 @@ class PersonalMachines extends ChangeNotifier {
   /// The longest wait before a failed machine is asked again.
   static const maxRetryWait = Duration(minutes: 5);
 
-  /// The machines seen in an account's Personal Swarm:
-  /// `super_tab.machines.<account>` (account_keys.dart sweeps it).
-  static String storageKey(String account) => 'super_tab.machines.$account';
-
-  final _seen = <String, Set<String>>{};
-  final _loads = <String, Future<bool>>{};
   final _syncing = <String>{};
   final _again = <String>{};
   final _failures = <String, int>{};
@@ -69,16 +62,16 @@ class PersonalMachines extends ChangeNotifier {
         !m.needsLink,
   );
 
+  /// One the person took out: the server's record, on every computer.
   bool _left(SuperTabController c, String machineId) =>
-      _seen[c.accountId]?.any((id) => sameMachineId(id, machineId)) ?? false;
+      (c.snapshot?.removedMachines ?? const <String>[]).any(
+        (id) => sameMachineId(id, machineId),
+      );
 
   /// What the list shows: the person's own machines still to join. Nothing
-  /// while Personal is not theirs alone, or their memory of it is not read yet.
+  /// while Personal is not known to be theirs alone.
   List<PersonalMachineRow> waiting(SuperTabController c) {
-    if (!PersonalProjects.of(app).eligible(c) ||
-        !_seen.containsKey(c.accountId)) {
-      return const [];
-    }
+    if (!_mayAdd(c)) return const [];
     return [
       for (final m in _own)
         if (!_inSwarm(c, m.machine.machineId) && !_left(c, m.machine.machineId))
@@ -98,63 +91,29 @@ class PersonalMachines extends ChangeNotifier {
   String _key(SuperTabController c, String machineId) =>
       '${c.accountId}/${c.tabId}/$machineId';
 
-  /// Reads what this computer remembers; false when it cannot, and then nothing
-  /// is added: a machine the person removed could come back.
-  Future<bool> _load(String account) => _loads[account] ??= () async {
-    try {
-      final text = await app.superTabs.storage.read(storageKey(account));
-      final saved = text == null ? const [] : jsonDecode(text) as List;
-      _seen[account] = {
-        ...?_seen[account],
-        for (final id in saved)
-          if (id is String) id,
-      };
-      return true;
-    } catch (_) {
-      unawaited(_loads.remove(account));
-      return false;
-    }
-  }();
-
-  void _remember(SuperTabController c) {
-    final account = c.accountId;
-    final seen = _seen[account];
-    if (seen == null) return;
-    final before = seen.length;
-    for (final m in c.snapshot?.machines ?? const <Map<String, dynamic>>[]) {
-      if (m['machineId'] case final String id) seen.add(id);
-    }
-    if (seen.length == before) return;
-    unawaited(
-      app.superTabs.storage
-          .write(storageKey(account), jsonEncode([...seen]..sort()))
-          .catchError((Object _) {}),
-    );
-  }
+  /// Personal, its alone-ness read from the server: a saved view may be from
+  /// before someone joined.
+  bool _mayAdd(SuperTabController c) =>
+      PersonalProjects.of(app).eligible(c) && !c.showingSaved;
 
   /// Adds what can be added now, one at a time; a call during one runs it again
   /// after. Run when Personal changes, so an offline machine joins soon after
   /// it comes online, and a failed one once its wait is over.
   Future<void> sync(SuperTabController c) async {
-    final projects = PersonalProjects.of(app);
-    if (!projects.eligible(c)) return;
+    if (!_mayAdd(c)) return;
     final account = c.accountId, scope = '$account/${c.tabId}';
     if (!_syncing.add(scope)) {
       _again.add(scope);
       return;
     }
     bool alive() =>
-        projects.eligible(c) &&
-        _syncing.contains(scope) &&
-        c.accountId == account;
+        _mayAdd(c) && _syncing.contains(scope) && c.accountId == account;
     try {
-      if (!await _load(account)) return;
       notifyListeners();
       do {
         _again.remove(scope);
         final tried = <String>{};
         while (alive()) {
-          _remember(c);
           final next = _own.where((m) {
             final id = m.machine.machineId;
             final retryAt = _retryAt[_key(c, id)];
@@ -191,16 +150,19 @@ class PersonalMachines extends ChangeNotifier {
         machineId,
         setupId: 'personal-machine-$machineId',
         alive: alive,
-        // As Add machine: where the Swarm runs teammates' work through Team
-        // accounts, a machine is never lent under its owner's own login.
-        teamAccountOnly: c.snapshot?.teamAccounts ?? false,
+        // If someone joins Personal later, teammates' work still never runs
+        // on these under their owner's login.
+        teamAccountOnly: true,
+        // Only what is missing, and never one the person took out: the server
+        // decides, whatever this computer's read was.
+        ifMissing: true,
+        unlessRemoved: true,
         offerTeamAccount: false,
       );
       if (added == null) return;
       _failures.remove(key);
       _retryAt.remove(key);
       _reasons.remove(key);
-      _remember(c);
     } catch (failure) {
       if (!alive()) return;
       final count = _failures[key] = (_failures[key] ?? 0) + 1;

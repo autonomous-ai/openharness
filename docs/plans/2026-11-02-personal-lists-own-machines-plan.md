@@ -22,7 +22,7 @@
 
 ## Review Focus
 
-- A person removes a machine from Personal: it must not come back by itself. Every machine this sync has seen in the Swarm is remembered per account, and a remembered one not in the Swarm is left out.
+- A person removes a machine from Personal: it must not come back by itself, on any computer. The server records the removal (Task 3).
 - Someone else joins Personal: nothing more is added, and the offline rows go.
 - Access lost or sign-out during an add: its answer changes nothing, and the next account's machines are never read under the last one's list.
 - A machine becoming shared or a Team account between the read and the add: the list is read afresh before each add; the server refuses anyone but the owner.
@@ -30,13 +30,13 @@
 
 ## Design
 
-- **Growth:** one remembered id per machine per account, in `super_tab.machines.<account>`, swept with the account's other keys. Bounded by machines linked; a Swarm holds at most 32.
-- **Concurrency:** one sync per account and Swarm; a change during one runs it again. `machine.contribute` is one operation per setup id, so another computer's sync adding the same machine ends in one record.
+- **Growth:** one record per machine taken out, in the Swarm's head, at most 64. What deletes it: adding the machine again, the Swarm's deletion, and the cap (the oldest goes; that machine could come back once).
+- **Concurrency:** one sync per account and Swarm; a change during one runs it again. `ifMissing` makes another computer's sync of the same machine a no-op, never a replaced row. `unlessRemoved` is judged by the server inside the command, so a read that is behind cannot bring back a removed machine.
 - **Read cost:** no new server read: machines come from what the app already reads, the Swarm from its snapshot. One set of prepare, read and contribute per machine, once.
 - **Scale (10x):** up to the 32 machines the server allows. What warns first: `MACHINES_FULL`, shown on the row.
-- **Compatibility:** old and new clients: an older client only adds its own computer, as now. No server change.
-- **Migration + rollback:** none. Machines added stay in the Swarm after a rollback, and can be removed one by one.
-- **Audience:** the server enforces ownership (`OWNER_REQUIRED`), and the client's filter keeps a shared or Team machine from being asked at all. Offline rows are the person's alone, drawn on their own client from their own list.
+- **Compatibility:** an older client only adds its own computer, as now. A new client on an older backend: its strict schema refuses `unlessRemoved`, so rows read Couldn't add until the backend is released. Release the backend first.
+- **Migration + rollback:** none: a new optional field. Machines added stay in the Swarm after a rollback, and can be removed one by one; records are ignored by an older backend. A machine removed before this ships has no record: it comes back once.
+- **Audience:** the server enforces ownership (`OWNER_REQUIRED`), and the client's filter keeps a shared or Team machine from being asked at all. Offline rows are the person's alone, drawn on their own client from their own list. A reader gets only the ids of their own removed machines (`visibleState`).
 - **Identity:** the person's own sign-in; never a Team session.
 - **Failure:** shown on the machine's row, and tried again after a wait. Nothing is dropped silently.
 - **Platforms:** Desktop and web share this code; on the web there is no local machine, so all machines come by this path. Mobile unchanged.
@@ -71,3 +71,16 @@
 - [ ] **Step 1: Commit the failing tests:** an offline machine shows a row reading Offline; online, it is added and the row is gone; a failure shows on its row; no row with someone else in the Swarm.
 - [ ] **Step 2: Watch them fail.**
 - [ ] **Step 3: Commit the code. Mark the pull request ready, and message Luna and Cleo in their steps.**
+
+### Task 3 (from the security reviews): the removal is the server's
+
+**Files:**
+- Modify: `backend/src/superTabs/commands.ts`, `model.ts`, `read/views.ts`, `read/contract.ts`; `desktop/lib/super_tabs/personal_machines.dart`, `model.dart`, `machines.dart`
+- Create: `backend/integration/superTabMachineRemovals.test.ts`
+- Test: `desktop/test/super_tab_swarm_switcher_test.dart`
+
+**Interfaces:**
+- Produces: state `removedMachines: {machineId, contributorId}[]`, a reader's own ids in their view; `machine.contribute`'s `unlessRemoved: true`, with `ifMissing`.
+
+- [x] **Failing server tests, then the record.** A machine taken out stays out of an automatic add, on any computer; added by hand it returns and the record goes; another person's record is not read; `ifMissing` alone is unchanged, for a Lead's host; at most 64.
+- [x] **Failing client tests, then the sync reads the record** in place of its own memory, sends `ifMissing` and `unlessRemoved`, always `teamAccountOnly`, and adds nothing while a saved view shows.

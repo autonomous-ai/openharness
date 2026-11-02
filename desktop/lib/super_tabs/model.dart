@@ -540,6 +540,10 @@ class SuperTabSnapshot {
       }),
       localModels = SuperTabLocalModels.read(row['localModels']),
       teamAccounts = row['teamAccounts'] != false,
+      removedMachines = [
+        for (final id in row['removedMachines'] as List? ?? const [])
+          if (id is String) id,
+      ],
       threadSessions = row['threadSessions'] == true,
       sessionsFromChat = row['sessionsFromChat'] == true,
       swarmBuddy = row['swarmBuddy'] == true,
@@ -627,6 +631,11 @@ class SuperTabSnapshot {
   /// Whether this Swarm's server uses Harness Team accounts: false only where
   /// it says it does not try them yet (backend read/contract.ts `teamAccounts`).
   final bool teamAccounts;
+
+  /// The reader's own machines they took out of this Swarm: an automatic add
+  /// leaves them out (backend model.ts removedMachines). Empty from an older
+  /// backend.
+  final List<String> removedMachines;
 
   /// Whether this Swarm's server takes a thread reply's New session: true only
   /// where it says so (backend read/contract.ts `threadSessions`); an older

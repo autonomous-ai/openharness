@@ -357,6 +357,8 @@ Future<bool> _sendContribution(
   required bool Function() alive,
   bool teamAccountOnly = false,
   bool offerTeamAccount = true,
+  bool ifMissing = false,
+  bool unlessRemoved = false,
 }) async {
   // An earlier lost reply leaves an uncertain attempt holding its own
   // receipt, and only one action may be in flight: check that one first, then
@@ -383,6 +385,8 @@ Future<bool> _sendContribution(
     'engines': engines,
     'maxAgents': maxAgents,
     if (teamAccountOnly) 'teamAccountOnly': true,
+    if (ifMissing) 'ifMissing': true,
+    if (unlessRemoved) 'unlessRemoved': true,
   });
   if (result == null) {
     throw SuperTabFailure(
@@ -418,6 +422,8 @@ Future<String?> contributeComputer(
   required bool Function() alive,
   bool teamAccountOnly = false,
   bool offerTeamAccount = true,
+  bool ifMissing = false,
+  bool unlessRemoved = false,
   Future<MachineResources?> Function(String machineId)? readResources,
 }) async {
   final prepared = await _prepareContribution(
@@ -450,6 +456,8 @@ Future<String?> contributeComputer(
     alive: alive,
     teamAccountOnly: teamAccountOnly,
     offerTeamAccount: offerTeamAccount,
+    ifMissing: ifMissing,
+    unlessRemoved: unlessRemoved,
   );
   return added ? machineId : null;
 }
