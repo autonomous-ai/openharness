@@ -9,8 +9,8 @@ import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../..
 import { agentOnly, author, fail, groupForBuddy, isLeads, seenMachineIds, stableId, SuperTabError, visibleState, type Actor, type AgentStart, type SuperTabState } from '../model.js'
 import { mentionsDigest, swarmsWithTags, waitingMentions, waitingTagConversations } from '../mentions.js'
 import { decisionsWaiting } from '../decisions.js'
-import { readMarks, readThreadMarks, writeReadMark, writeThreadFollow, writeThreadMark } from '../readMarks.js'
-import { activityDigest, listActivity, markActivityChatRead, markActivityRead, markActivityThreadRead, type ActivityItem } from '../activity.js'
+import { readMarks, readThreadMarks, writeThreadFollow, writeThreadMark } from '../readMarks.js'
+import { activityDigest, listActivity, markActivityRead, markActivityThreadRead, type ActivityItem } from '../activity.js'
 import { readChatSettings, writeChatSetting, type NotifyLevel } from '../chatSettings.js'
 import { deliveredCopies } from '../pageReads.js'
 import { readBy } from '../parts/indexed.js'
@@ -36,7 +36,7 @@ import { cursorFor, readCursor } from './cursor.js'
 import { changesFor } from './changes.js'
 import { envelope, groupView, readerView, seenIn, type ReaderView } from './views.js'
 import { decodeDormantPage, encodeDormantPage } from './dormantPage.js'
-import { seedThreadMarks } from './threadMarkSeeds.js'
+import { moveChatMark } from './threadMarkSeeds.js'
 import { memberSwarms } from '../swarmRows.js'
 
 type LoadOptions = NonNullable<Parameters<typeof parts.loadActive>[2]>
@@ -233,12 +233,7 @@ export class SwarmReads {
     if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const { group, state } = await this.readGroup(user, tabId, conversationId)
     const next = Math.min(sequence, group.data!.lastMessageSequence), now = this.now()
-    const held = await this.db.superTabReadMark.findUnique({ where: { id: stableId(tabId, conversationId, user.sub) }, select: { sequence: true } })
-    const safe = await seedThreadMarks(this.db, { tabId, state, personId: user.sub, conversationId, old: held?.sequence ?? 0, next, now })
-    const stored = await writeReadMark(this.db, { tabId, personId: user.sub, conversationId, sequence: safe, now })
-    // The replies also in the chat that the mark passes are read in Activity too (activity.ts).
-    await markActivityChatRead(this.db, { tabId, personId: user.sub, conversationId, sequence: stored, now })
-    return { sequence: stored }
+    return { sequence: await moveChatMark(this.db, { tabId, state, personId: user.sub, conversationId, next, now }) }
   }
 
   /** Moves the person's mark of thread `threadId` in a conversation they can read forward, never past the conversation's

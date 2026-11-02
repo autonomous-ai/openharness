@@ -44,6 +44,7 @@ import { confidentialSessions, otherRegistrations, recordConfidential } from './
 import { answersRequest, dirtyGroups, noteWorkChanges, projectUpdateRequest, UNANSWERED_REQUEST_MS } from './projectUpdates.js'
 import { cloneData } from './cloneData.js'
 import { digestDue, digestMessageId, digestOf, digestRequest, digestSince } from './digest.js'
+import { moveChatMark } from './read/threadMarkSeeds.js'
 import { closedAgents, nextRemovalAt, removeClosedAgents, reopened, restoreRefusal, restoreSessions } from './closedAgents.js'
 import { sessionRows } from './memberRows.js'
 import { judgedMachines, loseTasks, nextLossAt, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
@@ -1751,6 +1752,14 @@ export class SuperTabStore {
       if (ledId && leadAt(effects.state) !== undefined && leadAt(effects.state) !== leadAt(original)) await dropHeldTags(tx, tabId, ledId, context.now)
       await writeMentions(tx, tabId, effects.state, effects.messages, context.now)
       await writeReplyActivity(tx, tabId, effects.messages, sequences, context.now)
+      // Their own message leaves the chat read for them on every app, in the same commit its read answers from (task #2265). A reply
+      // only in a thread is not in the chat, and a Team session has no marks (read/service.ts markRead).
+      if (command.type === 'message.send' && actor.kind === 'person' && !isTeamSession(user)) {
+        const own = effects.messages.filter(m => m.conversationId === command.conversationId && m.author.kind === 'person'
+          && m.author.id === actor.userId && (!m.thread || m.thread === m.id || m.alsoInChat))
+        const next = Math.max(0, ...own.map(m => sequences.get(m.id) ?? 0))
+        if (next) await moveChatMark(tx as unknown as PrismaClient, { tabId, state: effects.state, personId: actor.userId, conversationId: command.conversationId, next, now: context.now })
+      }
       if (command.type === 'mention.done') await markDone(tx, tabId, command.mentionId, context.mention!.personId, context.now)
       if (command.type === 'message.react') await this.writeReaction(tx, tabId, actor, command, context.now)
       if (context.avatarUpload) {
