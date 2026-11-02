@@ -244,6 +244,8 @@ export async function repairSwarmCloneTrust(core: CoreApi, row: Json, profile?: 
     const profiles = new Set(known?.codexHome ? [known.codexHome] : [])
     for (const agent of agents) {
       if (agent.engine !== 'codex' || !agent.codexHome || !agent.cwd) continue
+      // Team-written work's own home stays one that trusts no project (engines/codex/launch.ts, audit H2).
+      if (agent.permissionMode === 'teamWritten') continue
       const cwd = await realpath(agent.cwd).catch(() => null)
       if (cwd && paths.some(path => within(path, cwd))) profiles.add(agent.codexHome)
     }

@@ -411,7 +411,12 @@ export function createConfidentialPurge(deps: {
     const session = deps.session(agentId)
     let target = deps.record.get(agentId)
     if (!target) {
-      if (!session || !deps.confidential(agentId)) return { skipped: true }
+      // Team-written Codex work has an engine home of its own too (superTabs/start.ts): it goes with the agent, confidential or not.
+      if (session && !deps.confidential(agentId)) {
+        if (session.codexHome?.startsWith(`${join(deps.home, PM_HOMES)}/`)) await rm(dirname(session.codexHome), { recursive: true, force: true })
+        return { skipped: true }
+      }
+      if (!session) return { skipped: true }
       target = { agentId: session.agentId, sessionId: session.sessionId ?? null, cwd: session.cwd, engine: session.engine, codexHome: session.codexHome ?? null }
       deps.record.put(target)
     }
