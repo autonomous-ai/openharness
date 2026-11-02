@@ -36,6 +36,9 @@ describe('the built-in template', () => {
   // groups to hold, batch and triage work. Agents forgot which task they were on (agent context design, section 3).
   it('the template workflow has one task per request, steps, and the context tools', () => {
     expect(TEMPLATE_WORKFLOW).toContain('1. One request is one task.')
+    // Ken, 2026-11-02: the PM sets the task's team once, then stays out of it until the Engineer reports.
+    expect(TEMPLATE_WORKFLOW).toContain('names its Reviewer, and its Tester when the change needs one')
+    expect(TEMPLATE_WORKFLOW).toContain('assigns them to the Reviewer and the Tester the task names')
     expect(TEMPLATE_WORKFLOW).toContain('The PM opens no task to hold, batch, triage or list work')
     expect(TEMPLATE_WORKFLOW).toContain('adds a review step to its task')
     expect(TEMPLATE_WORKFLOW).toContain('it adds no new step for a second round')
