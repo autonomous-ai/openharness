@@ -3419,19 +3419,22 @@ class _SwarmScreenState extends State<SwarmScreen> {
           else
             KeyedSubtree(
               key: _accountButtonKey,
-              child: fingerTarget(
-                enabled: compact,
-                WorkspaceAvatarButton(
-                  key: const ValueKey('swarm-account-button'),
-                  initial: _accountInitial,
-                  tooltip: _accountTooltip,
-                  onPressed: _shortcutsEnabled
-                      ? () => unawaited(_showAccountMenu())
-                      : null,
-                ),
-              ),
+              child: compact
+                  ? phoneBarCell(_avatarButton(size: kPhoneBarIcon))
+                  : _avatarButton(),
             ),
         ];
+
+  Widget _avatarButton({double size = WorkspaceAvatarButton.diameter}) =>
+      WorkspaceAvatarButton(
+        key: const ValueKey('swarm-account-button'),
+        initial: _accountInitial,
+        tooltip: _accountTooltip,
+        size: size,
+        onPressed: _shortcutsEnabled
+            ? () => unawaited(_showAccountMenu())
+            : null,
+      );
 
   double _accountControlWidth(BuildContext context) => !_accountControlShown
       ? 0
@@ -9359,15 +9362,17 @@ class _SwarmScreenState extends State<SwarmScreen> {
     builder: (context, emphasized) => SizedBox(
       width: workspaceBarCellSizeOf(context).width * 4,
       height: workspaceBarControlHeight(context),
-      child: Icon(
-        AppIcons.search,
-        size: 16,
-        color: theme.foreground.withValues(
-          alpha: !_shortcutsEnabled
-              ? .28
-              : emphasized
-              ? 1
-              : .75,
+      child: Center(
+        child: Icon(
+          AppIcons.search,
+          size: workspaceIsCompact(context) ? kPhoneBarIcon : 16,
+          color: theme.foreground.withValues(
+            alpha: !_shortcutsEnabled
+                ? .28
+                : emphasized
+                ? 1
+                : .75,
+          ),
         ),
       ),
     ),
@@ -9429,38 +9434,44 @@ class _SwarmScreenState extends State<SwarmScreen> {
         );
 
   /// A compact host uses a tab switcher instead of the tab list.
-  Widget _compactTabStrip(WorkspaceChrome chrome, TerminalTheme theme) =>
-      Builder(
-        builder: (context) {
-          final cell = workspaceBarCellSizeOf(context);
-          return Material(
-            key: const ValueKey('workspace-tab-bar'),
-            color: grid.AppPalette.swarmTabBar,
-            // A phone's bar: every control a finger's size, its icon as it
-            // was, so the bar is at least that tall too.
-            child: SizedBox(
-              height: math.max(
-                kFingerTarget,
-                math.max(_tabBarHeight, cell.height * 2),
+  Widget _compactTabStrip(
+    WorkspaceChrome chrome,
+    TerminalTheme theme,
+  ) => Builder(
+    builder: (context) {
+      final cell = workspaceBarCellSizeOf(context);
+      return Material(
+        key: const ValueKey('workspace-tab-bar'),
+        color: grid.AppPalette.swarmTabBar,
+        // A phone's bar: every control a finger's size, its icon as it
+        // was, so the bar is at least that tall too.
+        child: SizedBox(
+          height: math.max(
+            kFingerTarget,
+            math.max(_tabBarHeight, cell.height * 2),
+          ),
+          // What is drawn starts and ends [kPhoneBarGutter] from the screen's
+          // edges: the switcher pads its text by a cell, an icon's square
+          // pads its icon by the rest of the finger's width.
+          child: Row(
+            children: [
+              SizedBox(width: math.max(0, kPhoneBarGutter - cell.width)),
+              Expanded(child: chrome.compactTabs!(context, _workspaceCommands)),
+              phoneBarCell(_searchButton(theme)),
+              phoneBarCell(_notificationsButton(theme)),
+              if (kIsWeb && _slotShown) phoneBarCell(_daemonTabButton()),
+              ..._accountControl(compact: true),
+              SizedBox(
+                width: _accountControlShown && app.isGuest
+                    ? cell.width
+                    : kPhoneBarGutter - (kFingerTarget - kPhoneBarIcon) / 2,
               ),
-              child: Row(
-                children: [
-                  SizedBox(width: cell.width),
-                  Expanded(
-                    child: chrome.compactTabs!(context, _workspaceCommands),
-                  ),
-                  fingerTarget(enabled: true, _searchButton(theme)),
-                  fingerTarget(enabled: true, _notificationsButton(theme)),
-                  if (kIsWeb && _slotShown)
-                    fingerTarget(enabled: true, _daemonTabButton()),
-                  ..._accountControl(compact: true),
-                  SizedBox(width: cell.width),
-                ],
-              ),
-            ),
-          );
-        },
+            ],
+          ),
+        ),
       );
+    },
+  );
 
   Widget _statusToolIcon(
     String id,
