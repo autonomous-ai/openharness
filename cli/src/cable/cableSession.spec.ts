@@ -4745,6 +4745,34 @@ describe('swarm cards', () => {
       } finally { await session.stop() }
     })
 
+    // Diego, 11-02: with one Buddy per Swarm every card of the Swarm carries the same Buddy session, so the tap found two
+    // claims and opened a terminal tile of its own (whose close stops the Buddy) instead of the Buddy chat.
+    it('a tap on the Swarm\'s one Buddy, which every card carries, opens its chat in the project the dial is on, else the first', async () => {
+      const shared = () => [withBuddy({ local: 'h-lead1', buddy: mine }), lead(2, { chat: pmChat, sideChat: pmChat, buddies: true, local: 'h-lead2', buddy: mine })]
+      const host = cardHost({ cards: [card('st1', shared())] })
+      const { session, port } = await connect(host)
+      try {
+        port.say(BUDDY)
+        await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+        port.say({ t: 'agent.open', agentId: 'h-buddy' }); await settle()
+        // The dial is now on project 1; a pick of project 2 moves it, and the Buddy opens there.
+        port.say({ t: 'supertab.select', tab: 'st1', lead: 'lead2' }); await settle()
+        port.say({ t: 'agent.open', agentId: 'h-buddy' }); await settle()
+        expect(vi.mocked(host.superTabSelected!).mock.calls).toEqual([['st1', 'proj1', 'buddy'], ['st1', 'proj2'], ['st1', 'proj2', 'buddy']])
+        expect(host.openAgent).not.toHaveBeenCalled()
+      } finally { await session.stop() }
+      // The same Buddy session on the cards of two Swarms is still no one Swarm's.
+      const two = cardHost({ cards: [card('st1', shared()), card('st2', [lead(7, { buddies: true, buddy: mine })])] })
+      const second = await connect(two)
+      try {
+        second.port.say(BUDDY)
+        await vi.waitFor(() => expect(ofType(second.port, 'supertab')).toHaveLength(2))
+        second.port.say({ t: 'agent.open', agentId: 'h-buddy' }); await settle()
+        expect(two.superTabSelected).not.toHaveBeenCalled()
+        expect(vi.mocked(two.openAgent).mock.calls).toEqual([['h-buddy', undefined]])
+      } finally { await second.session.stop() }
+    })
+
     it('a tap on the Buddy or a Lead opens its Swarm chat from any round dial, older ones too', async () => {
       // A round dial from before swarmBuddy, and one from before the Swarm cards altogether (the core may still hold cards
       // another device asked for): the tap is a round dial's, whatever its swipes can do (PM ruling, 10-30).

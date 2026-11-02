@@ -3068,7 +3068,15 @@ export class CableSession {
         if (lead.buddies && lead.buddy?.local === agentId) found.push({ tab: card.id, projectId: lead.projectId, chat: 'buddy' })
       }
     }
-    return found.length === 1 ? found[0] : null
+    if (found.length === 1) return found[0]
+    // The reader's one Swarm Buddy is every project's Buddy, so its session is on each card of its Swarm: a tap on it opens
+    // the chat in the project the dial is on, else the first. Two sessions of different Swarms, or a Lead beside it, stay
+    // ambiguous, as before.
+    const [first] = found
+    if (first?.chat === 'buddy' && found.every((f) => f.chat === 'buddy' && f.tab === first.tab)) {
+      return found.find((f) => `${f.tab}/${f.projectId}` === this.focusedKey) ?? first
+    }
+    return null
   }
 
   // ── swarms ────────────────────────────────────────────────────────────────────────────────────────
