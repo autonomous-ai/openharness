@@ -170,7 +170,12 @@ void main() {
         find.descendant(of: row, matching: find.text('Design Team')),
         findsOneWidget,
       );
-      expect(tester.getSize(row).height, lessThan(64), reason: 'one line');
+      double y(Finder f) => tester.getCenter(f).dy;
+      final line = y(
+        find.descendant(of: row, matching: find.text('Design Team')),
+      );
+      expect(y(key('swarm-invitation-later-i1')), line, reason: 'one line');
+      expect(y(key('swarm-invitation-join-i1')), line, reason: 'one line');
       await tester.tap(key('swarm-invitation-join-i1'));
       await tester.pumpAndSettle();
       expect(fake.commands.last, {'type': 'invite.accept', 'inviteId': 'i1'});
