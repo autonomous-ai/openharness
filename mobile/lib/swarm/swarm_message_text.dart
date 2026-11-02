@@ -6,7 +6,9 @@ import 'package:markdown/markdown.dart' as md;
 import 'package:url_launcher/url_launcher.dart';
 
 import 'package:harness_mobile/phone/tty.dart';
+import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/shared/theme/app_type.dart';
 
 import 'swarm_message_style.dart';
 
@@ -62,8 +64,8 @@ class SwarmMessageText extends StatelessWidget {
                     color: AppPalette.accentOnSurface,
                     decoration: TextDecoration.underline,
                   ),
-                  h1: heading.copyWith(fontSize: 19),
-                  h2: heading.copyWith(fontSize: 18),
+                  h1: AppType.title(),
+                  h2: AppType.heading(),
                   h3: heading,
                   h4: heading,
                   h5: heading,
@@ -77,8 +79,8 @@ class SwarmMessageText extends StatelessWidget {
                   listBullet: body,
                   blockquote: body.copyWith(color: AppPalette.textSecondary),
                   blockquotePadding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 4,
+                    horizontal: AppSpace.m,
+                    vertical: AppSpace.xs,
                   ),
                   blockquoteDecoration: BoxDecoration(
                     border: Border(
@@ -90,10 +92,14 @@ class SwarmMessageText extends StatelessWidget {
                   tableBody: body,
                   tableBorder: TableBorder.all(color: AppPalette.divider),
                   tableCellsPadding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 6,
+                    horizontal: AppSpace.s,
+                    vertical: AppSpace.xs,
                   ),
                 ),
+            imageBuilder: (uri, title, alt) => Text(
+              alt?.isNotEmpty == true ? 'Image: $alt' : 'Image',
+              style: AppType.caption(color: AppPalette.textSecondary),
+            ),
             onTapLink: (_, href, _) {
               final number = href?.startsWith('workgroup:') == true
                   ? int.tryParse(href!.substring(10))

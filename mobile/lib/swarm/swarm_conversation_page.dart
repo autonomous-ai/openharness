@@ -58,6 +58,10 @@ import 'swarm_unread_line.dart';
 import 'swarm_voice.dart';
 import 'team_glance.dart';
 
+final _conversationReferencePattern = RegExp(
+  r'(?<![\w/])#([1-9][0-9]*)(?!\w)',
+);
+
 /// Opens [conversationId] of Swarm [swarmId] over the current page: a
 /// project's own chat as its project ([SwarmOpenedChat]).
 void openSwarmConversation(
@@ -1828,10 +1832,20 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
           final card = snapshot == null || group == null
               ? null
               : SwarmCardFacts.of(snapshot, group, m.id);
+          final references = _numberedConversations(c);
+          final referenceNumbers = _conversationReferencePattern
+              .allMatches(m.text)
+              .map((match) => int.tryParse(match[1]!));
+          final referenceInputs = [
+            for (final number in referenceNumbers)
+              if (number != null && references[number] case final id?)
+                '$number:$id',
+          ].join(',');
           return _row(
             key,
             (
               m,
+              referenceInputs,
               // Drop a cached opener when access to its target changes.
               snapshot?.conversation(
                 m.source['taskId'] is String
@@ -1877,7 +1891,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               taggedAddresses: tagged,
               readerId: c.reader.accountId,
               onOpenTask: _taskOpener(c, m),
-              references: _numberedConversations(c),
+              references: references,
               onOpenConversation: (id) => _openNumberedConversation(c, id),
               grouped: grouped,
               lit: lit,
