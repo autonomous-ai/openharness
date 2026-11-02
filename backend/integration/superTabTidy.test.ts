@@ -100,11 +100,12 @@ describe('an agent left idle', () => {
     await f.timed.deliveries(host, f.tab, f.lead)
     expect(await f.lines()).toEqual([])
     f.clock.now += MINUTE + 1_000
-    const inbox = await f.timed.deliveries(host, f.tab, f.lead)
+    await f.timed.deliveries(host, f.tab, f.lead)
     const lines = await f.lines()
     expect(lines).toEqual([expect.objectContaining({ conversationId: 'lead', recipientIds: [f.lead], text: 'Worker has had no open task for 15 minutes.',
       source: { kind: 'idle', agentId: f.worker } })])
-    expect(inbox.map(d => d.messageId)).toContain(lines[0]!.id)
+    // It waits for the coordinator's next digest (noticeDigest.ts).
+    expect((await db.superTabDelivery.findMany({ where: { tabId: f.tab, messageId: lines[0]!.id } })).map(d => d.status)).toEqual(['gathered'])
     const member = await f.member()
     expect(member.workDecision).toBe('awaiting')
     expect(member.releaseId).toBeUndefined()
