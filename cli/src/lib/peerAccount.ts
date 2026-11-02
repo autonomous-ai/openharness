@@ -162,7 +162,8 @@ export function windowsListenerQuery(port: number): { script: string; inputs: Re
       '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
       'foreach ($row in $rows) {',
       '  $process = Get-CimInstance Win32_Process -Filter ("ProcessId = " + [int]$row.OwningProcess)',
-      '  if (-not $process -or -not $process.CreationDate -or -not $row.CreationTime -or $process.CreationDate -gt $row.CreationTime) { continue }',
+      // Windows gives a socket's time to the second and a process's finer: two seconds of slack, as in windowsPeerQuery.
+      '  if (-not $process -or -not $process.CreationDate -or -not $row.CreationTime -or $process.CreationDate -gt $row.CreationTime.AddSeconds(2)) { continue }',
       '  $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid',
       "  if ($owner.ReturnValue -eq 0 -and $owner.Sid -and $owner.Sid -eq $me) { 'yes'; exit 0 }",
       '}',
