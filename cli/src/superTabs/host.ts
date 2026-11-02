@@ -9,7 +9,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
 import { readdir, readFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, normalize, relative, sep } from 'node:path'
-import { BUDDY_HOME_MANIFEST, BUDDY_HOMES, pruneBuddyHome, removeBuddyHome } from './buddyHome.js'
+import { BUDDY_HOME_MANIFEST, BUDDY_HOMES, pruneBuddyHome, refreshBuddyHomeIfDue, removeBuddyHome } from './buddyHome.js'
 import type { BackendNotice, CoreApi, TurnDelivery } from '../core/api.js'
 import { shellQuote } from '../orchestrator/prompts.js'
 import { agentCommandPrefix, fullCommandPrefix } from './shortCommand.js'
@@ -1782,7 +1782,8 @@ export class SuperTabHost {
   }
 
   /** Takes out of a person's one Buddy's folder each project worktree whose project its person no longer reads, as the Swarm
-   *  says to the Buddy now. Nothing for any other Buddy: its folder is one project's worktree. */
+   *  says to the Buddy now, then brings the rest to their default branches when that is due. Nothing for any other Buddy: its
+   *  folder is one project's worktree. */
   private async pruneBuddyFolder(entry: Entry): Promise<void> {
     const cwd = this.core.agents.byAgent(entry.harnessId)?.cwd
     if (!cwd || !existsSync(join(cwd, BUDDY_HOME_MANIFEST))) return
@@ -1792,6 +1793,8 @@ export class SuperTabHost {
     const readable = new Set((Array.isArray(state.projects) ? state.projects.map(object) : []).flatMap(p => identifier(p.id) ? [p.id] : []))
     const gone = await pruneBuddyHome(cwd, readable)
     if (gone.length) this.log(`Took ${gone.length} project folder(s) out of Buddy ${entry.harnessId.slice(0, 8)}'s folder: its person no longer reads them.`)
+    // After the check above, whose failed read throws: new code of a project reaches only a person who still reads it.
+    await refreshBuddyHomeIfDue(cwd)
   }
 
   /** A delivery's files, downloaded off the poll loop. A pass waits only on the downloads it starts, all together for at most

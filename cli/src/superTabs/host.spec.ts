@@ -4,6 +4,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, 
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { prepareSwarmSkill } from '../lib/swarmSkills.js'
+import { BUDDY_COPIES_FILE, BUDDY_HOME_MANIFEST } from './buddyHome.js'
 import { allowBuddyReads, buddyAccountFile, buddyApprovalsOf, buddyGuardSource, buddyLaunchFile, buddyReadsOf, buddyWideOf, forgetBuddyReads } from '../lib/buddyGuard.js'
 import { env } from '../config/env.js'
 import { PASTE_DROPS_DIR } from '../lib/pasteDropFiles.js'
@@ -1619,6 +1620,36 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
   // its person's files but never wide reads, which could reach another project's clone in their home.
   const swarmChat = { ...buddyChat, kind: 'swarm-buddy', projectId: undefined }
   const swarmBuddy = { ...buddyAgent, projectId: undefined, buddyScope: 'swarm' }
+  // Scholes, 11-02. At a delivery, as only then does anything read the copies; after the access check, so a person who lost a
+  // project gets none of its new code.
+  describe('its project copies at a delivery', () => {
+    const copies = (host: ReturnType<typeof buddyOn>['t']) => join(String(vi.mocked(host.core.agents.byAgent).getMockImplementation()?.('harness' as never)?.cwd), BUDDY_COPIES_FILE)
+    const withHome = (t: ReturnType<typeof buddyOn>['t']) => {
+      mkdirSync(join(dirname(copies(t)), 'projects'))
+      writeFileSync(join(dirname(copies(t)), BUDDY_HOME_MANIFEST), '[]\n')
+    }
+    it('refreshes them when due, before the Buddy hears the message', async () => {
+      const { host, t, delivered } = buddyOn({}, { agents: [swarmBuddy], conversations: [swarmChat] })
+      withHome(t)
+      vi.mocked(t.core.turns.deliver).mockImplementation((_harness, text) => { delivered.push({ text: String(text), list: existsSync(copies(t)) }) })
+      await host.tick()
+      expect(delivered).toEqual([expect.objectContaining({ list: true })])
+    })
+    it('refreshes nothing when the access read is refused, and delivers nothing', async () => {
+      const { host, t, delivered, refuse } = buddyOn({}, { agents: [swarmBuddy], conversations: [swarmChat] })
+      withHome(t)
+      refuse(true)
+      await host.tick()
+      expect(existsSync(copies(t))).toBe(false)
+      expect(delivered).toEqual([])
+    })
+    it('refreshes nothing for a Buddy of one project, whose folder is its worktree', async () => {
+      const { host, t } = buddyOn()
+      withHome(t)
+      await host.tick()
+      expect(existsSync(copies(t))).toBe(false)
+    })
+  })
   it('grants its person\'s one Buddy in their one chat, wide reads included', async () => {
     const { host, shot, delivered } = buddyOn({}, { agents: [swarmBuddy], conversations: [swarmChat] })
     await host.tick()
