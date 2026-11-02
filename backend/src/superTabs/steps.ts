@@ -5,12 +5,17 @@
  */
 import { activeWork, finishWorker, type Conversation, type SuperTabState } from './model.js'
 
-/** Whether [group] is a step of a task (an older linked group, with no name, is not). */
-export const isStep = (group: Pick<Conversation, 'step' | 'reviewOf'>): boolean => !!group.step && !!group.reviewOf
+/** Whether [group] is a step of a task: any linked group, named or not. Ken, 2026-11-02: a PM that opened "Test: PR #2514"
+ *  the old way, a minute after saving the steps workflow, still heard every Tester post; what reaches the PM must not rest on
+ *  an agent remembering the workflow. */
+export const isStep = (group: Pick<Conversation, 'reviewOf'>): boolean => !!group.reviewOf
+
+/** A step's name: the one it was opened with, else its title (a linked group opened without one). */
+export const stepName = (group: Pick<Conversation, 'step' | 'title'>): string => group.step ?? group.title
 
 /** The steps of task [taskId], in creation order. */
 export const stepsOf = (state: SuperTabState, taskId: string): Conversation[] =>
-  state.conversations.filter(c => c.reviewOf === taskId && !!c.step)
+  state.conversations.filter(c => c.reviewOf === taskId)
 
 /** Ends [task]'s steps with it, in the same write. An open one is cancelled with [reason] as its result and its agent
  *  freed; it stays unarchived, as an archived conversation takes no delivery (store.ts deliveryAllowed) and its agent is

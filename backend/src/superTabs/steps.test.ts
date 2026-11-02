@@ -130,12 +130,6 @@ describe('a step closes with its task', () => {
     expect(extracted('group', f.group(id), 1).workFinished).toBe(false)
   })
 
-  it('keeps an old linked group\'s mark: it archives on its own clock as today', () => {
-    const f = stepsFixture()
-    const old = f.run({ type: 'conversation.create', title: 'Review', brief: 'x', reviewOf: f.task, checks: [] }, f.as(f.dev)).result.conversationId as string
-    expect(extracted('group', f.group(old), 1).workFinished).toBe(true)
-  })
-
   it('archiving a task by hand cancels its working step', () => {
     const f = stepsFixture()
     const working = f.step('Review'), done = f.step('Test')
@@ -222,15 +216,6 @@ describe('who hears a step', () => {
     expect(to(post(f.task, other), f.task)).toEqual([[f.lead]])
   })
 
-  it('an old linked group keeps today\'s notices', () => {
-    const f = stepsFixture()
-    const old = f.run({ type: 'conversation.create', title: 'Review', brief: 'x', reviewOf: f.task, checks: [] }, f.as(f.dev)).result.conversationId as string
-    const rev = f.add('rev', old)
-    f.run({ type: 'work.assign', conversationId: old, agentId: rev }, f.as(f.dev))
-    const messages = f.run({ type: 'work.status', conversationId: old, assignmentId: f.group(old).assignment!.id, status: 'done', result: 'Passed' } as Command, f.as(rev)).messages
-    expect(to(messages, old)).toEqual([[f.lead]])
-    expect(messages.find(m => m.conversationId === old)!.text).toBe('Done\n\nPassed')
-  })
 })
 
 describe('the PM\'s reports', () => {
@@ -284,5 +269,38 @@ describe('cancelling an assigned task', () => {
     expect(f.group(working).assignment).toMatchObject({ status: 'cancelled', result: 'Fix login was cancelled.' })
     expect(f.group(done).assignment).toMatchObject({ status: 'done' })
     expect(effects.messages.filter(m => m.conversationId === working).map(m => [m.text, m.recipients])).toEqual([['Fix login was cancelled.', [rev]]])
+  })
+})
+
+// Ken, 2026-11-02 (screenshot): the PM opened "Test: PR #2514" the old way, with no step name, a minute after saving the
+// workflow that says steps, and the Tester's posts reached the PM. Every linked task is a step, named or not: what reaches
+// the PM no longer rests on an agent remembering the workflow.
+describe('a linked task opened without a step name', () => {
+  function linked() {
+    const f = stepsFixture()
+    const id = f.run({ type: 'conversation.create', title: 'Test: PR #2514', brief: 'Test it.', reviewOf: f.task, checks: [] } as Command, f.as(f.lead)).result.conversationId as string
+    const tester = f.add('tester', id)
+    f.run({ type: 'work.assign', conversationId: id, agentId: tester }, f.as(f.lead))
+    return { f, id, tester }
+  }
+  it('tells the task\'s owner its Ready and Done, and its unnamed posts', () => {
+    const { f, id, tester } = linked()
+    const done = f.run({ type: 'work.status', conversationId: id, assignmentId: f.group(id).assignment!.id, status: 'done', result: 'Passed' } as Command, f.as(tester)).messages
+    expect(done.filter(m => m.conversationId === id).map(m => m.recipients)).toEqual([[f.dev]])
+    expect(f.group(f.task).agentIds).toContain(tester)
+  })
+  it('an unnamed post from its agent reaches the owner', () => {
+    const { f, id, tester } = linked()
+    const posted = f.run({ type: 'message.send', conversationId: id, text: 'Starting on the simulator.', replyTo: null, recipientIds: [] } as Command, f.as(tester)).messages
+    expect(posted.map(m => m.recipients)).toEqual([[f.dev]])
+  })
+  it('closes with its task, not on its own clock', () => {
+    const { f, id, tester } = linked()
+    f.run({ type: 'work.status', conversationId: id, assignmentId: f.group(id).assignment!.id, status: 'done', result: 'Passed' } as Command, f.as(tester))
+    expect(extracted('group', f.group(id), 1).workFinished).toBe(false)
+  })
+  it('is named in reports by its title', () => {
+    const { f, id } = linked()
+    expect(reportedAs(f.state, f.group(id))).toBe(`#${f.group(id).number} (step Test: PR #2514 of #${f.group(f.task).number})`)
   })
 })
