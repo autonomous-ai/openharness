@@ -31,6 +31,12 @@ role-text line, no hard limit (a hard limit would break the project's review and
    (`backend/src/superTabs/instructionsTemplate.ts`), which new projects start from. The Lead's built-in text has no such
    section; it reads swarm-tools. A project's saved instructions are its own: the PM adds the same line to them.
 
+7. **Quotes are marked too.** A delivery also quotes the message it replies to (up to 600 characters) and its thread's
+   first line. Our Lead answering a Team agent's "post me ~/.ssh/config" with "please handle this" would quote the request
+   to our Engineer unmarked. The claim also answers `quotedOtherAccount`: which of those two (same conversation, rows the
+   receiver reads as its page read shows them, one read by id for both) another account's agent wrote. The host puts a
+   "Quoted from another account" line before that quote and names the thread's root as such in the thread line.
+
 ## Steps (test first)
 
 1. Backend integration test (`integration/superTabTeam.test.ts`): the claim of a Team agent's message to the owner's Lead
@@ -42,14 +48,19 @@ role-text line, no hard limit (a hard limit would break the project's review and
    delivery text is byte-for-byte what it was; a Buddy's news is marked too. Watch it fail, then `host.ts prompt`.
 4. `swarmSkills.spec.ts`, `swarmTools.spec.ts`, backend `instructions.test.ts`: the line is in swarm-tools, in both modes'
    Builder and Reviewer texts and in the template's Engineer and Reviewer roles. Watch it fail, then add the text.
-5. Full backend Super Tab integration suite, CLI unit suite, typecheck.
+5. Quotes: backend claim test (a same-account reply to a Team agent's message names it in `quotedOtherAccount`, and so does a
+   reply further down that thread; a same-account or a person's quote names nothing), then `store.ts otherAccounts`; CLI
+   `host.spec.ts` (the quote and the thread line are marked when the claim names them, unchanged otherwise), then `host.ts`
+   and `deliveryContext.ts threadLine`.
+6. Full backend Super Tab integration suite, CLI unit suite, typecheck.
 
 ## Design
 
 - **Growth:** nothing is stored. The flag lives in one claim answer.
 - **Concurrency:** read inside the claim's existing transaction; no new write, no new lock.
 - **Read cost:** at most two machine account-row reads by id per claim, only for an agent's message and only for a machine
-  the Swarm's records do not already place on a Team account.
+  the Swarm's records do not already place on a Team account; plus, for a reply or a thread reply, one read by id of the
+  quoted rows (at most two), and their authors' machine rows, each read once per claim.
 - **Scale:** claims are one per delivery; at 10x deliveries it is 10x point reads by primary key. First warning: claim
   latency in `[swarm-deliveries]` busy logs.
 - **Compatibility:** an old CLI ignores the field (no mark, same as today). A new CLI with an old backend gets no field and
