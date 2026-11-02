@@ -210,12 +210,31 @@ void main() {
     expect(chat(r, leadChat), (bold: false, tags: 0));
   });
 
+  test('a project counts only tags opening its chat clears, while task tags stay on their own row', () async {
+    final r = await rig(tags: [
+      mentionRow('project-tag', conversationId: leadChat, messageSequence: 4),
+      mentionRow('task-tag', messageSequence: 4),
+    ]);
+    await moveOn(r, {
+      leadChat: groupData(leadChat, title: 'Mobile', lastMessageSequence: 4),
+      'g1': groupData('g1', title: 'Fix login', lastMessageSequence: 4),
+    });
+    expect(swarmProjectNews(r.reader, r.asks)[project]?.tags, 1);
+    expect(chat(r, 'g1'), (bold: true, tags: 1));
+
+    r.reader.readMarks!.markRead(leadChat, 4);
+    await settle();
+    expect(swarmProjectNews(r.reader, r.asks)[project], (bold: true, tags: 0));
+    expect(chat(r, 'g1'), (bold: true, tags: 1));
+    expect(r.asks.mentions, hasLength(2), reason: 'Activity retains waiting tags');
+  });
+
   test('a project is bold while its project chat or open work is unread, '
-      'and counts every tag waiting in it', () async {
+      'without counting tags in task chats', () async {
     final r = await rig(tags: [mentionRow('t1'), mentionRow('t2')]);
 
     expect(swarmProjectNews(r.reader, r.asks), {
-      project: (bold: true, tags: 2),
+      project: (bold: true, tags: 0),
     });
 
     final quiet = await rig();
@@ -291,7 +310,7 @@ void main() {
 
       expect(chat(r, 'g1'), (bold: true, tags: 1));
       expect(swarmProjectNews(r.reader, r.asks), {
-        project: (bold: true, tags: 1),
+        project: (bold: true, tags: 0),
       });
 
       r.reader.readMarks!.markRead('g1', 4);
@@ -307,7 +326,7 @@ void main() {
 
       expect(chat(r, 'g1'), (bold: true, tags: 1));
       expect(swarmProjectNews(r.reader, r.asks), {
-        project: (bold: true, tags: 1),
+        project: (bold: true, tags: 0),
       });
 
       // The person reads the chat as far as the first read had marked it.
@@ -393,7 +412,7 @@ void main() {
       expect(swarmProjectNews(r.reader, r.asks), isEmpty);
     });
 
-    test('a tag in a reply also sent to the chat counts in the chat and its '
+    test('a tag in a reply also sent to a task chat counts there, not on its '
         'project', () async {
       // The server names no thread for a reply also in the chat
       // (backend mentions.ts threadsOf).
@@ -404,7 +423,7 @@ void main() {
 
       expect(chat(r, 'g1'), (bold: true, tags: 1));
       expect(swarmProjectNews(r.reader, r.asks), {
-        project: (bold: true, tags: 1),
+        project: (bold: true, tags: 0),
       });
     });
 
@@ -424,7 +443,7 @@ void main() {
       expect(chat(r, 'g1'), (bold: false, tags: 0));
       expect(chat(r, 'g2'), (bold: true, tags: 1));
       expect(swarmProjectNews(r.reader, r.asks), {
-        project: (bold: true, tags: 1),
+        project: (bold: true, tags: 0),
       });
       expect(r.asks.mentions, hasLength(2));
     });
@@ -498,7 +517,7 @@ void main() {
 
         expect(chat(r, 'g1'), (bold: true, tags: 1));
         expect(swarmProjectNews(r.reader, r.asks), {
-          project: (bold: true, tags: 1),
+          project: (bold: true, tags: 0),
         });
       },
     );
