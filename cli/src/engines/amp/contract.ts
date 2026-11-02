@@ -1,5 +1,6 @@
 import { join as hookPath } from 'node:path'
 import { env as hookEnvironment } from '../../config/env.js'
+import { PLUGIN_FETCH } from '../kit/nativePlugin.js'
 /**
  * What the core knows of Amp without loading its code: declared data, read by the kit
  * (docs/design/2026-10-08-other-engines-out-of-core.md). It imports no Amp interpreter.
@@ -28,7 +29,9 @@ const SESSIONS_DIR = `,
 JSON.stringify(hookEnvironment.AMP_SESSIONS_DIR),
 `
 
-export default function (amp: any) {
+`,
+...PLUGIN_FETCH,
+`export default function (amp: any) {
   const pane = process.env.TMUX_PANE
   if (!pane) return
 
@@ -73,7 +76,7 @@ export default function (amp: any) {
 { argument: 'credential' },
 `, 'utf8').trim()
       if (!token) return
-      const res = await fetch('http://127.0.0.1:`,
+      const res = await harnessFetch('http://127.0.0.1:`,
 { argument: 'port' },
 `/api/hook/session-start', {
         method: 'POST',

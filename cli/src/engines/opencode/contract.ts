@@ -1,5 +1,6 @@
 import { join as hookPath, dirname as hookParent } from 'node:path'
 import { env as hookEnvironment } from '../../config/env.js'
+import { PLUGIN_FETCH } from '../kit/nativePlugin.js'
 /**
  * What the core knows of OpenCode without loading its code: declared data, read in line where a launch is built
  * (docs/design/2026-10-08-other-engines-out-of-core.md). It imports nothing of OpenCode's code.
@@ -66,7 +67,9 @@ import { readFileSync } from "node:fs"
 const hookToken = () => { try { return readFileSync(`,
 { argument: 'credential' },
 `, "utf8").trim() } catch { return "" } }
-export const MachineRegister = async ({ directory, worktree, project, client }) => {
+`,
+...PLUGIN_FETCH,
+`export const MachineRegister = async ({ directory, worktree, project, client }) => {
   const seen = new Set()
   const post = async (sessionID) => {
     const pane = process.env.TMUX_PANE
@@ -76,7 +79,7 @@ export const MachineRegister = async ({ directory, worktree, project, client }) 
     if ((!pane && !ptyPane) || !token || !sessionID || seen.has(sessionID)) return
     seen.add(sessionID)
     try {
-      await fetch("http://127.0.0.1:`,
+      await harnessFetch("http://127.0.0.1:`,
 { argument: 'port' },
 `/api/hook/session-start", {
         method: "POST",
@@ -136,7 +139,9 @@ import { readFileSync } from "node:fs"
 const hookToken = () => { try { return readFileSync(`,
 { argument: 'credential' },
 `, "utf8").trim() } catch { return "" } }
-export default {
+`,
+...PLUGIN_FETCH,
+`export default {
   id: "harness-session-register",
   setup(ctx) {
     const pane = process.env.TMUX_PANE
@@ -154,7 +159,7 @@ export default {
         try { info = await (ctx.data && ctx.data.session && ctx.data.session.get ? ctx.data.session.get(sessionID) : undefined) } catch {}
         if (info && info.parentID) { posted.add(sessionID); return } // a sub-agent's — shown under its parent's Task card
         const cwd = (info && info.location && info.location.directory) || (ctx.location && ctx.location.directory) || process.cwd()
-        const res = await fetch("http://127.0.0.1:`,
+        const res = await harnessFetch("http://127.0.0.1:`,
 { argument: 'port' },
 `/api/hook/session-start", {
           method: "POST",
