@@ -689,7 +689,7 @@ void main() {
     });
 
     testWidgets(
-      'tapping the line lists every agent, Working, Waiting, then Idle, with name, role and status',
+      'tapping the line lists every agent, Working, Waiting, Idle, then Kept (closed), with name, role and status',
       (tester) async {
         final f = SuperTabLaunchFixture();
         f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
@@ -708,15 +708,24 @@ void main() {
           agent('dev', 'Nova'),
           agent('rev', 'Sage'),
           agent('idle', 'Iris'),
+          // Closed on its machine and kept by someone: not Idle (Huy, 2026-11-02).
+          agent('kept', 'Kai')
+            ..['workDecision'] = 'keep'
+            ..['downSince'] = DateTime.now().toUtc().toIso8601String()
+            ..['configuration'] = {
+              'engine': 'claude',
+              'model': 'opus',
+              'effort': 'high',
+            },
         ];
         (server.state['agents'] as List)[2]['role'] = 'reviewer';
         (server.state['conversations'] as List)[0]
           ..['leadId'] = 'pm'
-          ..['agentIds'] = ['pm', 'dev', 'rev', 'idle']
+          ..['agentIds'] = ['pm', 'dev', 'rev', 'idle', 'kept']
           ..['assignment'] = {'agentId': 'rev', 'status': 'needs_human'};
         f.app.machineStates['m']!
           ..agents = [
-            for (final id in ['pm', 'dev', 'rev', 'idle'])
+            for (final id in ['pm', 'dev', 'rev', 'idle', 'kept'])
               Agent.fromJson({
                 'id': 'native-$id',
                 'name': id,
@@ -744,7 +753,7 @@ void main() {
         expect(
           find.descendant(
             of: line,
-            matching: find.text('4 agents · 2 working'),
+            matching: find.text('5 agents · 2 working'),
           ),
           findsOneWidget,
         );
@@ -757,7 +766,7 @@ void main() {
         expect(list, findsOneWidget);
         double top(Finder finder) => tester.getTopLeft(finder).dy;
         final headings = [
-          for (final group in ['Working', 'Waiting', 'Idle'])
+          for (final group in ['Working', 'Waiting', 'Idle', 'Kept (closed)'])
             find.descendant(of: list, matching: find.text(group)),
         ];
         for (final heading in headings) {
@@ -774,6 +783,8 @@ void main() {
           row('rev'),
           headings[2],
           row('idle'),
+          headings[3],
+          row('kept'),
         ];
         for (var i = 1; i < order.length; i++) {
           expect(top(order[i]), greaterThan(top(order[i - 1])));
@@ -805,6 +816,18 @@ void main() {
           );
         }
         expect(find.descendant(of: list, matching: agentAvatar), findsNothing);
+        // Hovering the kept, closed agent reads as its line does, the mockup Huy approved: status, machine, model, effort.
+        Finder tip(String id) => find.ancestor(
+          of: row(id),
+          matching: find.byWidgetPredicate(
+            (w) =>
+                w is Tooltip &&
+                (w.message ?? '').startsWith('Kept (closed) · ') &&
+                (w.message ?? '').endsWith(' · Opus · high'),
+          ),
+        );
+        expect(tip('kept'), findsOneWidget);
+        expect(tip('idle'), findsNothing);
 
         await tester.tap(row('rev'));
         await tester.pump();

@@ -2069,18 +2069,23 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     );
   }
 
-  /// [view]'s agents under Working, Waiting and Idle, each by name; a group with none is left out.
+  /// [view]'s agents under Working, Waiting, Idle and Kept (closed), each by name; a group with none is left out.
   List<Widget> _agentGroups(_MachineView view) {
     final groups = <String, List<(SuperTabAgent, HarnessActivity)>>{
       'Working': [],
       'Waiting': [],
       'Idle': [],
+      'Kept (closed)': [],
     };
     for (final agent in view.agents) {
       final activity = _activity(view, agent);
       groups[switch (activity) {
             HarnessActivity.working || HarnessActivity.starting => 'Working',
             HarnessActivity.needsInput || HarnessActivity.failed => 'Waiting',
+            // A kept agent whose session is closed on a machine that is
+            // there: the Swarm removes the others, so this one says so.
+            _ when agent.keptClosed && activity != HarnessActivity.offline =>
+              'Kept (closed)',
             _ => 'Idle',
           }]!
           .add((agent, activity));
