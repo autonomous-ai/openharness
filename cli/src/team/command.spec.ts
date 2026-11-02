@@ -239,6 +239,29 @@ describe('harness team status', () => {
     }
   })
 
+  // Task #2264: an account held by data not deleted yet said so nowhere a person looks.
+  it('says when the data of ended sessions is not deleted yet, and nothing when none is waiting', async () => {
+    const said = async (purges?: { pending: number; unreadable: boolean; at: number }) => {
+      const f = fake({ readConfig: () => config, accountExists: vi.fn(async () => true) })
+      f.status.set(STATUS, { version: 1, ...(purges ? { purges } : {}) })
+      await teamCommand(['status'], f.deps)
+      return f.out.join('\n')
+    }
+    const two = await said({ pending: 2, unreadable: false, at: 1_000_000 - 60_000 })
+    expect(two).toContain('purges      ◍ 2 ended sessions\' data not deleted yet (checked 60s ago)')
+    expect(two).toContain('this account takes no other project\'s work until it has')
+    expect(await said({ pending: 1, unreadable: false, at: 1_000_000 })).toContain('◍ 1 ended session\'s data not deleted yet')
+    const unreadable = await said({ pending: 0, unreadable: true, at: 1_000_000 })
+    expect(unreadable).toContain('purges      ✗ the record of what is still to delete can\'t be read')
+    expect(unreadable).toContain('the Team daemon\'s log says where it was kept')
+    expect(await said({ pending: 0, unreadable: false, at: 1_000_000 })).not.toContain('purges  ')
+    expect(await said()).not.toContain('purges  ')
+    const json = fake({ readConfig: () => config, accountExists: vi.fn(async () => true) })
+    json.status.set(STATUS, { version: 1, purges: { pending: 2, unreadable: false, at: 5 } })
+    await teamCommand(['status', '--json'], json.deps)
+    expect(JSON.parse(json.out[0]!).purges).toEqual({ pending: 2, unreadable: false, at: 5 })
+  })
+
   it('says whether the team account\'s engines are installed and signed in, and exactly how to sign them in', async () => {
     const f = fake({ readConfig: () => config, accountExists: vi.fn(async () => true) })
     f.status.set(STATUS, { version: 1, engines: { checkedAt: 1_000_000 - 60_000, claude: { installed: true, signedIn: false }, codex: { installed: false, signedIn: null } } })
