@@ -654,6 +654,47 @@ void main() {
       },
     );
 
+    // Review of #2646: a chat's top is its main stream, and agents answer in threads.
+    test(
+      'a teammate\'s thread reply before their own message tells nothing',
+      () async {
+        final (c, server, told) = await chatSetToAll();
+        fromLead(server, 'In a thread', conversationId: 'offline');
+        server.messages.last['thread'] = 'a-root';
+        server.append('From my phone', conversationId: 'offline');
+        await c.refresh();
+        await settle();
+        expect(told, isEmpty);
+      },
+    );
+
+    test('a page with more behind it is unsure, so it tells', () async {
+      final server = projectServer();
+      final c = SuperTabController(
+        tabId: 'tab',
+        accountId: 'owner',
+        save: server.save,
+        request: (method, path, {body}) async {
+          final answer = await server.request(method, path, body: body);
+          return path.contains('offline/messages?after=')
+              ? {
+                  ...answer,
+                  'next': {'sequence': 1, 'id': 'more'},
+                }
+              : answer;
+        },
+      );
+      addTearDown(c.dispose);
+      await c.refresh();
+      final told = <int>[];
+      SuperTabChatNotices.of(c).onMessage = (_, s) => told.add(s);
+      await c.setNotify('offline', SuperTabNotify.all);
+      server.append('From my phone', conversationId: 'offline');
+      await c.refresh();
+      await settle();
+      expect(told, hasLength(1));
+    });
+
     test('a teammate\'s message still does', () async {
       final (c, server, told) = await chatSetToAll();
       fromLead(server, 'From the Lead', conversationId: 'offline');
