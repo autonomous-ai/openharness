@@ -80,9 +80,9 @@ describe('who is at the other end of a loopback connection', () => {
       expect(yes.asked).toEqual([])
     })
 
-    // Windows PowerShell's start and its CIM queries took over 8 s on the Windows ARM runner (the Windows run on #2605).
-    it('gives a lookup long enough for a slow PC: Windows PowerShell and CIM on the ARM runner took over 8 s', () => {
-      expect(WINDOWS_PEER_MS).toBeGreaterThanOrEqual(20_000)
+    // Windows PowerShell's start and its CIM queries took 20 to 25 s on the Windows ARM runner (the Windows runs on #2605).
+    it('gives a lookup long enough for a slow PC: Windows PowerShell and CIM on the ARM runner took 20 to 25 s', () => {
+      expect(WINDOWS_PEER_MS).toBeGreaterThanOrEqual(45_000)
     })
 
     it('asks Windows by the connection\'s ports, given as inputs, and compares the owner by SID', () => {
@@ -126,7 +126,7 @@ describe('who is at the other end of a loopback connection', () => {
     })
 
     // Whoever heard the hook token could open connections without end, each a PowerShell in the owner's account for up to
-    // 8 s (Luna's review of #2605): past the running ones and a bounded queue, the answer is no, without asking.
+    // 45 s (Luna's review of #2605): past the running ones and a bounded queue, the answer is no, without asking.
     it('answers no, without asking, once the running lookups and the queue are full', async () => {
       const slow = held()
       const pending = Array.from({ length: WINDOWS_PEER_LOOKUPS + WINDOWS_PEER_QUEUE }, (_, i) => peerIsThisAccount(socket({ remotePort: 51_100 + i }), 'win32', slow.run))

@@ -66,7 +66,8 @@ make the daemon refuse the credential over TCP from another account. Windows can
   no. This alone makes a credential heard on the port useless to another account, from an old client or plugin too.
   It takes only a process that started before the connection was made, so a recycled process id never counts. At most four
   lookups run at once and up to 32 wait their turn; one past those is no for now, and is asked again on its next request. A
-  lookup that times out stays no for that connection.
+  lookup that times out (45 s: about a second on x64, 20 to 25 s on the Windows ARM runner) stays no for that connection; a
+  native lookup in harness-pty is its own task.
 - Hooks post over the daemon's pipe (`hook/notify.mjs` `windowsDaemonPipe`), proving the token without sending it, and take an
   answer only with the daemon's proof. With no live pipe they post nothing, as on macOS with no socket.
 - CLI clients never put the credential on TCP (`localCredentialHeaders` gives nothing on Windows). Their fetch helper and their
