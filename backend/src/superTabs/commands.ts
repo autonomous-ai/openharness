@@ -2707,10 +2707,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         && group.leadId && group.leadId !== actor.agentId && group.agentIds.includes(group.leadId) ? group.leadId : null
       // The task's owner talks to its step's agent the same way (Diego, 2026-11-02: an Engineer's "fixed, please re-check" in its
       // Review step woke the PM and the Reviewer never heard it). Its unnamed post there reaches that agent alone, never the
-      // coordinator, even when leadWorkerBounced holds the delivery back.
-      const ownerInOwnStep = actor.kind === 'agent' && isStep(group) && assigned && assigned !== actor.agentId
-        && taskOwner(state, group) === actor.agentId && group.agentIds.includes(assigned)
-      const ownerToStepAgent = ownerInOwnStep && (!context.reply || replyAgent === assigned)
+      // coordinator. A reply to someone else, or a post leadWorkerBounced holds back, falls back to the coordinator as before:
+      // nothing is dropped.
+      const ownerToStepAgent = actor.kind === 'agent' && isStep(group) && assigned && assigned !== actor.agentId
+        && taskOwner(state, group) === actor.agentId && group.agentIds.includes(assigned) && (!context.reply || replyAgent === assigned)
         && !leadWorkerBounced(context.recent, actor.agentId, assigned) ? assigned : null
       const agentRecipient = leadToWorker ?? workerToLead ?? ownerToStepAgent
       // Any other agent's unnamed post in the group reaches its Lead: an agent whose task here was lost, moved or cancelled has
@@ -2728,7 +2728,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const stepTold = actor.kind === 'agent' && isStep(group) && actor.agentId !== group.leadId ? taskOwner(state, group) : null
       const ownerInStep = actor.kind === 'agent' && stepTold && stepTold !== actor.agentId ? stepTold : null
       const memberToLead = actor.kind === 'agent' && !command.agentOnly && !addressed.length && assigned !== actor.agentId && (ownerHere ?? ownerInStep) ? [(ownerHere ?? ownerInStep)!]
-        : actor.kind === 'agent' && !command.agentOnly && !addressed.length && assigned !== actor.agentId && !ownerInOwnStep && group.leadId
+        : actor.kind === 'agent' && !command.agentOnly && !addressed.length && assigned !== actor.agentId && !ownerToStepAgent && group.leadId
         && group.leadId !== actor.agentId && group.agentIds.includes(group.leadId) ? [group.leadId] : []
       // Buddy thread sessions (buddySessions.ts): a session thread's replies reach its session alone and stay in its thread; the
       // main Buddy hears the rest. Decided here from the thread, so every client, an old one or the phone, is routed alike.
