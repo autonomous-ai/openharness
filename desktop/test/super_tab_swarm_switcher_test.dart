@@ -996,11 +996,11 @@ void main() {
       'one at a time: the next is not set up until the last is in',
       () async {
         final (app, backend) = await _twoTabs();
-        _ownMachine(app, 'rig');
-        _ownMachine(app, 'lamp');
-        await PersonalSwarm.of(app).show(app.activeSwarmId);
+            await PersonalSwarm.of(app).show(app.activeSwarmId);
         await _settle();
         final c = await app.superTabs.open(PersonalSwarm.of(app).id!);
+      _ownMachine(app, 'rig');
+      _ownMachine(app, 'lamp');
         final hold = backend.holdPrepare = Completer<void>();
         final running = PersonalMachines.of(app).sync(c);
         await _settle();
@@ -1100,11 +1100,11 @@ void main() {
       'a failure says so on its row, waits, and does not hold the next back',
       () async {
         final (app, backend) = await _twoTabs();
-        _ownMachine(app, 'rig');
-        _ownMachine(app, 'lamp');
-        await PersonalSwarm.of(app).show(app.activeSwarmId);
+            await PersonalSwarm.of(app).show(app.activeSwarmId);
         await _settle();
         final c = await app.superTabs.open(PersonalSwarm.of(app).id!);
+      _ownMachine(app, 'rig');
+      _ownMachine(app, 'lamp');
         backend.failPrepareOn = 'rig';
         await PersonalMachines.of(app).sync(c);
         await _settle();
@@ -1128,10 +1128,10 @@ void main() {
 
     test('another account\'s list is never read under the last one: sign-out ends the sync', () async {
       final (app, backend) = await _twoTabs();
-      _ownMachine(app, 'rig');
       await PersonalSwarm.of(app).show(app.activeSwarmId);
       await _settle();
       final c = await app.superTabs.open(PersonalSwarm.of(app).id!);
+      _ownMachine(app, 'rig');
       final hold = backend.holdPrepare = Completer<void>();
       final before = added(backend, c.tabId);
       final running = PersonalMachines.of(app).sync(c);
