@@ -76,7 +76,8 @@ void main() {
         snapshot,
         snapshot.conversation('offline')!,
       ).map((g) => g.id),
-      ['s1', 's2'],
+      // The unnamed linked 'old' (#20) is a step too, first by number.
+      ['old', 's1', 's2'],
     );
   });
 

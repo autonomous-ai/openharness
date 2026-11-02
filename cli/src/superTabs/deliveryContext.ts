@@ -4,7 +4,7 @@
  * conversation id, so agents and the PM lost track of which task a message was about and who else had answered in its
  * thread. Each line is left out when it does not apply or cannot be read; the delivery always goes.
  */
-import { isCoordinator, isStep, openWorkOf, projectOpenWork } from './agentContext.js'
+import { isCoordinator, isStep, openWorkOf, projectOpenWork, stepName } from './agentContext.js'
 
 type Json = Record<string, unknown>
 const object = (value: unknown): Json => value && typeof value === 'object' && !Array.isArray(value) ? value as Json : {}
@@ -28,7 +28,7 @@ export function placeLine(state: Json, groupId: string): string {
   const title = JSON.stringify(String(group.title ?? ''))
   // A step is said as its task and its name (task steps design).
   const task = isStep(group) ? list(state.conversations).find(c => c.id === group.reviewOf) : undefined
-  if (task) return `In ${taskWords(task)}, step ${JSON.stringify(String(group.step))} ${at}`
+  if (task) return `In ${taskWords(task)}, step ${JSON.stringify(stepName(group))} ${at}`
   if (group.reviewOf || typeof group.number !== 'number') return `In ${title} ${at}`
   return `In ${taskWords(group)} ${at}`
 }

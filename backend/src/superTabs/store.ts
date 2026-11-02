@@ -1500,7 +1500,7 @@ export class SuperTabStore {
           && !!effects.state.conversations.find(c => c.id === command.conversationId)?.archived
       // A task's finished steps archive with it (steps.ts endSteps): their deliveries end too (final review, finding 2).
       const archivedSteps = unreadable && command.type !== 'conversation.agent' ? effects.state.conversations.filter(c => c.reviewOf === command.conversationId
-        && c.step && c.archived && !original.conversations.find(o => o.id === c.id)?.archived).map(c => c.id) : []
+        && c.archived && !original.conversations.find(o => o.id === c.id)?.archived).map(c => c.id) : []
       // One plain match per conversation: an `in` on this hot collection is sent as $expr, which no index bounds (hotFilters).
       for (const conversationId of unreadable ? [command.conversationId, ...archivedSteps] : []) {
         await tx.superTabDelivery.updateMany({ where: { tabId, conversationId, status: { in: ['queued', 'claimed', 'uncertain'] },

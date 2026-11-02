@@ -10,7 +10,7 @@ import { backend, swarmRoleFor, hostJournalFile, identifier, object, SuperTabHos
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads, type SwarmRead } from './swarmReads.js'
 import { within } from './wire.js'
-import { isCoordinator, isStep, mineText, taskText } from './agentContext.js'
+import { isCoordinator, isStep, mineText, taskText, unknownAgents } from './agentContext.js'
 import { machineChoices } from '../lib/newCommand.js'
 import { wireRole } from '../lib/swarmSkills.js'
 import { START_REQUIREMENTS } from './capacity.js'
@@ -661,7 +661,17 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           const group = active ?? await readGroupAsAgent(core, path, id, identity)
           if (!group) return { error: 'NOT_FOUND', detail: 'No such task, or this agent cannot read it.', status: 404 }
           const tried = await within(backend(core, 'GET', `${path}/conversations/${encodeURIComponent(id)}/attempts?${identity}`))
-          return { ok: true, value: { text: taskText(group, read.state, Array.isArray(tried) ? list(tried) : null, read.groupChangedAt, Date.now()) } }
+          const attempts = Array.isArray(tried) ? list(tried) : null
+          // An agent stopped since is named as it signed its rows in the task's chat: one read, only when one is unknown.
+          const names = new Map<string, string>()
+          if (unknownAgents(group, read.state, attempts).length) {
+            const page = await within(backend(core, 'GET', `${path}/conversations/${encodeURIComponent(id)}/messages?${identity}`))
+            for (const row of list(object(page).messages)) {
+              const author = object(row.author)
+              if (author.kind === 'agent' && typeof author.id === 'string' && typeof author.name === 'string') names.set(author.id, author.name)
+            }
+          }
+          return { ok: true, value: { text: taskText(group, read.state, attempts, read.groupChangedAt, Date.now(), names) } }
         }
         // The jobs running and waiting on a project's GitHub Actions, counts only, for the route's machine-fit plug-in
         // (machineFit.ts; backend github/ciLoad.ts). The server reads it through its GitHub App, never this machine's login.
