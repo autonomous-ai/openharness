@@ -842,11 +842,12 @@ class SuperTabSnapshot {
   /// Whether more than one person can start work here: teammates' agents are a question only then.
   bool get hasTeammates => people.where((p) => p.role != 'viewer').length > 1;
 
-  // Resolve the person shown in chat from the same identity as the roster.
-  // Recorded labels remain the fallback for agents no longer in the Swarm.
+  // Resolve people shown in chat from the same identity as the roster.
+  // Recorded labels remain the fallback when a person or agent has left.
   String authorName(SuperTabMessage message) => message.fromAgent
       ? agentName(message.authorId, fallback: message.authorName)
-      : superTabPersonName(message.authorName);
+      : people.where((p) => p.id == message.authorId).firstOrNull?.username ??
+            superTabPersonName(message.authorName);
 }
 
 /// The Swarm's Local models add-on (docs/plans/2026-10-23-swarm-local-models.md): its grid, whether it is on, and what the
