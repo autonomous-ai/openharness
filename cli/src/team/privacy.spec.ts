@@ -152,6 +152,21 @@ describe('status file', () => {
     expect(statSync(file).mode & 0o777).toBe(0o644)
   })
 
+  // Task #2264: every report rewrites the file from what it read, so one that dropped this would forget it.
+  it('keeps the purges still to finish across another report, and drops a malformed count', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'team-status-'))
+    cleanup.push(dir)
+    const file = join(dir, 'Team', 'status.json')
+    writeTeamStatus(file, { purges: { pending: 2, unreadable: false, at: 5 } })
+    writeTeamStatus(file, { signIn: { state: 'signed-in', at: 1 } })
+    expect(readTeamStatus(file)?.purges).toEqual({ pending: 2, unreadable: false, at: 5 })
+    for (const purges of [{ pending: -1, unreadable: false, at: 5 }, { pending: 1.5, unreadable: false, at: 5 }, { pending: 1, unreadable: 'no', at: 5 }, { pending: 1, unreadable: false }, 'two']) {
+      expect(readTeamStatus('/x', () => JSON.stringify({ version: 1, purges }))).toEqual({ version: 1 })
+    }
+    // Only its count: a field the daemon never writes doesn't reach the owner's screen.
+    expect(readTeamStatus('/x', () => JSON.stringify({ version: 1, purges: { pending: 1, unreadable: false, at: 5, agent: 'pm' } }))?.purges).toEqual({ pending: 1, unreadable: false, at: 5 })
+  })
+
   it('drops what it does not recognise', () => {
     expect(readTeamStatus('/x', () => 'not json')).toBeNull()
     expect(readTeamStatus('/x', () => '{"version":2}')).toBeNull()
