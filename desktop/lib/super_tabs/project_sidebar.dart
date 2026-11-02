@@ -24,6 +24,7 @@ import 'leaderboard/reader.dart';
 import 'local_models.dart';
 import 'buddies.dart';
 import 'machines.dart';
+import 'linked_tasks.dart';
 import 'model.dart';
 import 'buddy_rows.dart';
 import 'section_heading.dart';
@@ -733,10 +734,9 @@ class ProjectSidebar extends StatelessWidget {
     const key = SuperTabController.kSwarmBuddyKey;
     final chat = controller.buddyChat(key);
     if (chat == null && !controller.canWrite) return null;
-    // The unread filter keeps it only with something unread, or open.
-    if (controller.unreadOnly && (chat == null || !_keptByFilter(chat))) {
-      return null;
-    }
+    // The unread filter never hides it: it is the person's one Buddy, pinned
+    // like a personal chat, and bold only while it has something unread
+    // (Tony, 11-02: it vanished from the latest Desktop under the filter).
     final agent = controller.buddy(key);
     final busy = controller.saving || controller.hasPendingAction;
     return _drawRow(
@@ -1255,15 +1255,18 @@ List<SuperTabConversation> superTabOpenWorkgroups(
   SuperTabProject project, [
   List<SuperTabConversation>? conversations,
 ]) {
-  final groups = (conversations ?? controller.projectConversations(project.id))
-      .where(
-        (g) =>
-            g.id != project.leadConversationId &&
-            !g.isBuddyChat &&
-            !controller.hiddenByBuddies(g) &&
-            !g.closed,
-      )
-      .toList();
+  final groups =
+      superTabListedWork(
+            conversations ?? controller.projectConversations(project.id),
+          )
+          .where(
+            (g) =>
+                g.id != project.leadConversationId &&
+                !g.isBuddyChat &&
+                !controller.hiddenByBuddies(g) &&
+                !g.closed,
+          )
+          .toList();
   // A stable sort keeps the backend's order among unnumbered ones.
   mergeSort(
     groups,

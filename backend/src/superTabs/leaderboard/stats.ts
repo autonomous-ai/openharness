@@ -6,7 +6,7 @@
  */
 import type { ContributedMachine } from '../machines.js'
 import { isLeads, type Agent, type Conversation, type SuperTabState } from '../model.js'
-import { isBuddy } from '../buddies.js'
+import { isBuddy, isSwarmBuddy } from '../buddies.js'
 import { agentProjectId, canReadProject, projectOf } from '../projects.js'
 import { firstAssignedAt, waitedOn, waitsNow, type RanOn, type Unblock } from './record.js'
 import { lentIn, periodSpans, reviewsIn, weekSpan, within, type PeriodName, type Span } from './rolling.js'
@@ -114,7 +114,7 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
     people,
     waiting: waitingNow(state, shared),
     models: { thisWeek: modelShare(requests, current), lastWeek: previous && modelShare(requests, previous) },
-    agents: agentScores(state, projectIds, shippedNow),
+    agents: agentScores(state, projectIds, shippedNow, visibleMachines),
     byModel: modelScores(requests, shippedNow, current),
     recentModels: recentModels(requests.filter(g => (g.projectId ?? 'lead') === projectId), now),
   }
@@ -142,13 +142,28 @@ function recentModels(requests: Conversation[], now: number): RecentModel[] {
  *  Buddy by the groups opened from its proposals. One credited this week stays listed after it was removed or replaced,
  *  as "Former PM" or "Former Buddy" once the Swarm no longer has it (full review of #2097). Builders and Reviewers are
  *  counted by model instead (modelScores). */
-function agentScores(state: SuperTabState, projectIds: ReadonlySet<string>, shippedThisWeek: Conversation[]): AgentScore[] {
-  const leads = new Set([...projectIds].map(id => projectOf(state, id).leadConversationId))
+function agentScores(state: SuperTabState, projectIds: ReadonlySet<string>, shippedThisWeek: Conversation[], visibleMachines: readonly ContributedMachine[]): AgentScore[] {
+  const projects = [...projectIds].map(id => projectOf(state, id))
+  // A person's one Buddy belongs to no project (Dee, 10-31): it is listed for each project summed that its person reads, and in none else,
+  // so a private project never shows a Buddy, name or Mac of someone outside it. Its sessions are never rows of their own.
+  const listedHere = (a: Agent): boolean => {
+    if (!isBuddy(a) || a.buddySession) return false
+    if (!isSwarmBuddy(a)) return projectIds.has(agentProjectId(state, a) ?? '')
+    const owner = state.people.find(p => p.id === a.buddyOf!.personId && p.generation === a.buddyOf!.generation)
+    return !!owner && projects.some(project => canReadProject(state, { kind: 'person', userId: owner.id, email: owner.email }, project))
+  }
+  // A proposal recorded before the credit moved to the one Buddy names its session: the person's one Buddy earns it.
+  const creditee = (agentId: string): string => {
+    const a = state.agents.find(agent => agent.id === agentId)
+    if (!a?.buddySession || !a.buddyOf) return agentId
+    return state.agents.find(m => isSwarmBuddy(m) && !m.buddySession && listedHere(m)
+      && m.buddyOf!.personId === a.buddyOf!.personId && m.buddyOf!.generation === a.buddyOf!.generation)?.id ?? agentId
+  }
+  const leads = new Set(projects.map(project => project.leadConversationId))
   const pmIds = new Set(state.conversations.filter(c => leads.has(c.id)).map(c => c.leadId))
-  const inScope = (a: Agent) => projectIds.has(agentProjectId(state, a) ?? '')
   const shipped = new Map<string, { kind: 'pm' | 'buddy'; count: number }>()
   for (const a of state.agents) {
-    if (pmIds.has(a.id) || (isBuddy(a) && inScope(a))) shipped.set(a.id, { kind: isBuddy(a) ? 'buddy' : 'pm', count: 0 })
+    if (pmIds.has(a.id) || listedHere(a)) shipped.set(a.id, { kind: isBuddy(a) ? 'buddy' : 'pm', count: 0 })
   }
   const credit = (agentId: string, kind: 'pm' | 'buddy') => {
     const entry = shipped.get(agentId) ?? { kind, count: 0 }
@@ -159,14 +174,16 @@ function agentScores(state: SuperTabState, projectIds: ReadonlySet<string>, ship
     // The lead recorded when it shipped; a request shipped before that was recorded, its lead now.
     const ledBy = g.ledger?.shippedLeadId !== undefined ? g.ledger.shippedLeadId : g.leadId
     if (ledBy) credit(ledBy, 'pm')
-    if (g.ledger?.proposal) credit(g.ledger.proposal.buddyId, 'buddy')
+    if (g.ledger?.proposal) credit(creditee(g.ledger.proposal.buddyId), 'buddy')
   }
   const scored = [...shipped].map(([agentId, { kind, count }]) => {
     // Who it is now only while it is this project's: an agent id stays the same when its terminal is added again
     // elsewhere, and a private project's names and owners are not this board's to show (review of #2128).
-    const a = state.agents.find(agent => agent.id === agentId && inScope(agent))
+    const a = state.agents.find(agent => agent.id === agentId && (listedHere(agent) || (!isBuddy(agent) && projectIds.has(agentProjectId(state, agent) ?? ''))))
+    // Its Mac only to a reader who sees that Mac: the one Buddy's is its person's, not the project's.
+    const machineId = a && (!isSwarmBuddy(a) || visibleMachines.some(m => m.machineId === a.machineId)) ? a.machineId : ''
     return { agentId, displayName: a ? a.displayName ?? a.name : kind === 'pm' ? 'Former PM' : 'Former Buddy', kind,
-      personId: a?.buddyOf?.personId ?? null, machineId: a?.machineId ?? '', points: count * SHIPPED_POINTS, shipped: count }
+      personId: a?.buddyOf?.personId ?? null, machineId, points: count * SHIPPED_POINTS, shipped: count }
   }).sort((a, b) => b.points - a.points || (a.kind === b.kind ? a.displayName.localeCompare(b.displayName) : a.kind === 'pm' ? -1 : 1))
   return scored.map(entry => ({ ...entry, rank: 1 + scored.filter(other => other.points > entry.points).length }))
 }

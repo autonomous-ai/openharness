@@ -263,29 +263,15 @@ const PRIVACY_ITEMS: Record<string, string> = {
 const ONLY_OWN = 'so it runs only its owner\'s projects'
 
 /**
- * Whether a teammate's work needs a Harness Team account on every machine of [state]'s Swarm
- * (`SWARM_TEAM_ACCOUNT_REQUIRED=1`). Until the CLI that makes team accounts is released, it does not: a machine without
- * one takes a teammate's work as it did before team accounts, while a machine with one already follows the rule.
+ * Whether a teammate's work needs a Harness Team account on every machine of a Swarm (`SWARM_TEAM_ACCOUNT_REQUIRED=1`).
+ * Without it, a machine without one takes a teammate's work as it did before team accounts, while a machine with one
+ * already follows the rule. Read on every call, so a test can set it.
  *
- * `SWARM_TEAM_ACCOUNT_OWNERS`, comma-separated emails, holds the switch to the Swarms those people own, so it can be tried
- * on production with one's own Swarm first and no other Swarm changes (2026-10-27). Empty, it is every Swarm's. Both are
- * read on every call, so a test can set them.
+ * Every Swarm alike (2026-11-02). It was held to the Swarms of the owners `SWARM_TEAM_ACCOUNT_OWNERS` listed while the
+ * feature was tried on production (2026-10-27 to 11-02); that variable is no longer read.
  */
-export function teamAccountRequired(state?: Pick<SuperTabState, 'ownerId' | 'people'>): boolean {
-  return process.env.SWARM_TEAM_ACCOUNT_REQUIRED === '1' && teamAccountSwarm(state)
-}
-
-/**
- * Whether Harness Team accounts take part in [state]'s Swarm at all: they join it where their Mac was added (hostRows.ts)
- * and teammates' work goes to them (teamMachineFor). With `SWARM_TEAM_ACCOUNT_OWNERS` set, only the Swarms those people
- * own, so a bug in the team account cannot reach anyone else's Swarm while it is tried out (2026-10-28): elsewhere a Mac
- * runs teammates' work itself, as before team accounts. Empty, every Swarm.
- */
-export function teamAccountSwarm(state?: Pick<SuperTabState, 'ownerId' | 'people'>): boolean {
-  const owners = (process.env.SWARM_TEAM_ACCOUNT_OWNERS ?? '').split(',').map(email => email.trim().toLowerCase()).filter(Boolean)
-  if (!owners.length) return true
-  const owner = state?.people.find(person => person.id === state.ownerId)?.email.toLowerCase()
-  return !!owner && owners.includes(owner)
+export function teamAccountRequired(): boolean {
+  return process.env.SWARM_TEAM_ACCOUNT_REQUIRED === '1'
 }
 
 /** Why this contributed machine may not run a teammate's project now, or null when it may. `teamRow`: its account row
@@ -338,10 +324,10 @@ export function teamWorkCheck(state: SuperTabState, machineId: string, contribut
   if (project.ownerId === contributorId) return null
   if (!pool) {
     // Off the Machines list nothing reports a team account (store.ts teamMachines), so this is the switch alone.
-    if (!teamAccountRequired(state)) return null
+    if (!teamAccountRequired()) return null
     return { code: 'TEAM_ACCOUNT_REQUIRED', reason: `This machine is not a Team machine of this Swarm, ${ONLY_OWN}.` }
   }
-  return teamWorkRefusal(pool, now, teamMachines.includes(machineId), teamAccountRequired(state), otherWorkspaceMachines.includes(machineId))
+  return teamWorkRefusal(pool, now, teamMachines.includes(machineId), teamAccountRequired(), otherWorkspaceMachines.includes(machineId))
 }
 
 // ── One machine: a Mac and its Harness Team account ─────────────────────────────────────────────────────────────────
@@ -371,9 +357,9 @@ export function teamPoolOf(state: SuperTabState, pool: ContributedMachine, live?
  */
 export function machineTeamWork(state: SuperTabState, pool: ContributedMachine, now: number, teamMachines: readonly string[],
   otherWorkspaceMachines: readonly string[] = []): TeamWorkRefusal | null {
-  const team = !pool.hostMachineId && teamAccountSwarm(state) ? teamPoolOf(state, pool, teamMachines) : undefined
+  const team = !pool.hostMachineId ? teamPoolOf(state, pool, teamMachines) : undefined
   const subject = team ?? pool
-  return teamWorkRefusal(subject, now, teamMachines.includes(subject.machineId), teamAccountRequired(state), otherWorkspaceMachines.includes(subject.machineId))
+  return teamWorkRefusal(subject, now, teamMachines.includes(subject.machineId), teamAccountRequired(), otherWorkspaceMachines.includes(subject.machineId))
 }
 
 /** The projects with work on [machineId]: its agents' and its pending starts'. */
@@ -400,7 +386,7 @@ export function productManagerOn(state: SuperTabState, machineId: string): strin
  *  its contributor's own and the Mac has one in this Swarm, else the machine named. */
 export function teamMachineFor(state: SuperTabState, machineId: string, project: SwarmProject, idle = false, live?: readonly string[]): string {
   // With no GitHub App on this server a team account cannot fetch or push, so the work stays on the Mac, as before.
-  if (idle || !teamAccountSwarm(state)) return machineId
+  if (idle) return machineId
   const pool = state.machines?.find(m => m.machineId === machineId)
   if (!pool || project.ownerId === pool.contributorId) return machineId
   return teamPoolOf(state, pool, live)?.machineId ?? machineId

@@ -1043,9 +1043,8 @@ describe('where a Buddy runs (Ken\'s ruling, 10-28)', () => {
 
   it('stays in its owner\'s own account for a teammate\'s project, even where teammates\' work needs a Team account', () => {
     const f = fresh()
-    const saved = { required: process.env.SWARM_TEAM_ACCOUNT_REQUIRED, owners: process.env.SWARM_TEAM_ACCOUNT_OWNERS }
+    const saved = { required: process.env.SWARM_TEAM_ACCOUNT_REQUIRED }
     process.env.SWARM_TEAM_ACCOUNT_REQUIRED = '1'
-    delete process.env.SWARM_TEAM_ACCOUNT_OWNERS
     try {
       machine(f, 'peer-team', 'peer')
       Object.assign(f.state.machines!.find(m => m.machineId === 'peer-team')!, { hostMachineId: 'peer-mac' })
@@ -1054,7 +1053,6 @@ describe('where a Buddy runs (Ken\'s ruling, 10-28)', () => {
       expect(f.state.starts!.find(s => s.id === start)!.request.machineId).toBe('peer-mac')
     } finally {
       if (saved.required === undefined) delete process.env.SWARM_TEAM_ACCOUNT_REQUIRED; else process.env.SWARM_TEAM_ACCOUNT_REQUIRED = saved.required
-      if (saved.owners !== undefined) process.env.SWARM_TEAM_ACCOUNT_OWNERS = saved.owners
     }
   })
 })

@@ -1953,7 +1953,8 @@ describe('role kinds decide nothing', () => {
     const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: builder }).result.assignmentId as string
     const status = (actor: Actor, status: 'review' | 'working') =>
       f.run({ type: 'work.status', conversationId: group, assignmentId, status, result: status === 'review' ? 'Head abc123' : null }, actor).messages[0]!.recipients
-    expect(status(as(builder), 'review')).toEqual([lead])
+    // Its own Ready wakes nobody, the coordinator included (Ken, 2026-11-02): it names whom it hands to.
+    expect(status(as(builder), 'review')).toEqual([])
     status(as(builder), 'working')
     // The coordinator's change reaches the task's agent alone, never the Reviewer.
     expect(status(coordinator, 'review')).toEqual([builder])

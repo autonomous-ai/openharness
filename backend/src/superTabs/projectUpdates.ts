@@ -58,6 +58,14 @@ const throughOf = (groups: Conversation[]) => Object.fromEntries(groups.map(g =>
  *  could not go quiet for two days (prod, 2026-10-28). One not yet received (its host offline) holds them as before. */
 export const UNANSWERED_REQUEST_MS = 2 * 60 * 60_000
 
+/** How a report names [group]: its number (its title when it has none); a step also names its task (task steps design), and
+ *  keeps its own number, which is the conversation whose messages the report asks the coordinator to read. */
+export function reportedAs(state: SuperTabState, group: Conversation): string {
+  const name = (g: Conversation) => g.number !== undefined ? `#${g.number}` : JSON.stringify(g.title)
+  const task = group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : undefined
+  return task ? `${name(group)} (step ${group.step ?? group.title} of ${name(task)})` : name(group)
+}
+
 export function projectUpdateRequest(state: SuperTabState, target: Agent, now: number): MessageDraft | null {
   // An older Swarm without stored projects is one synthesized project. It keeps no report progress (noteWorkChanges),
   // so its Lead is woken only for lost work (liveness.ts), which replaced the wake-up for workers down two hours.
@@ -73,7 +81,7 @@ export function projectUpdateRequest(state: SuperTabState, target: Agent, now: n
   if (!reports) return null
   const through = throughOf(dirty)
   const id = stableId('project-update', state.id, project.id, JSON.stringify(through))
-  const after = (g: Conversation) => `${g.number !== undefined ? `#${g.number}` : JSON.stringify(g.title)} after ${progress!.summarized[g.id] ?? progress!.summarizedFloor}`
+  const after = (g: Conversation) => `${reportedAs(state, g)} after ${progress!.summarized[g.id] ?? progress!.summarizedFloor}`
   const text = `Work changed in project ${JSON.stringify(project.name)}. ` +
     `Read the new messages of these workgroups: ${dirty.map(after).join(', ')}; inspect their current work. ` +
     'Then keep the project\'s status card current: one short line per active task saying where it is, what changed, and what it waits on; ' +

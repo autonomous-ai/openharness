@@ -43,11 +43,10 @@ can push to it approved it, for that project or for every project of the Swarm:
   `GITHUB_REPOSITORY_NOT_APPROVED`. The status says `not-approved`, with the buttons, until then.
 - The signed state names the person, Swarm, project, repository and scope, lasts ten minutes, and is signed with a key
   derived from the app's private key. The callback trusts nothing else.
-- **Rollout:** approvals are rolled out with the team account (`SWARM_TEAM_ACCOUNT_REQUIRED=1`, held to the Swarms of
-  `SWARM_TEAM_ACCOUNT_OWNERS`). Every other Swarm gets tokens as before and reads `covered`, so a bug here cannot stop
-  anyone else's Swarm. The same owner list keeps Harness Team accounts out of other Swarms altogether: they do not join
-  them, teammates' work there stays on the Mac, and their reads say `teamAccounts: false`, so neither the Mac's daemon nor
-  Desktop offers the team account (and macOS's administrator prompt) on joining or adding a Mac to one.
+- **Rollout:** approvals are rolled out with the team account (`SWARM_TEAM_ACCOUNT_REQUIRED=1`). From 2026-10-28 to 11-02
+  both were held to the Swarms of `SWARM_TEAM_ACCOUNT_OWNERS`: every other Swarm got tokens as before, read `covered`, kept
+  Harness Team accounts out, and its reads said `teamAccounts: false`. Since 2026-11-02 every Swarm takes part: the owner
+  list is no longer read, and `teamAccounts: false` is no longer sent.
 
 ## Build
 

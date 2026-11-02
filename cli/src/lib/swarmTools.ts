@@ -15,7 +15,9 @@ Every command starts \`harness super-tab --tab TAB\` (your tab id is in your lau
 
 ## Read
 - \`status [--archived [PAGE]]\`: the shared roster and work: people, projects, agents (id, name, machine, state), conversations, tasks. Agent ids for \`--to\` come from here.
-- \`messages GROUP [--before SEQUENCE MESSAGE_ID]\`: recent messages of a conversation, thread replies included; each names the thread (the root message) it answers in. \`--before\` pages back from the cursor the last page named.
+- \`mine\`: what you work on, one line per task: its number, title, conversation id, status, when it last changed, its last result and pull requests, and the open tasks linked to it. A project's coordinator gets every open task of its project instead.
+- \`task GROUP\`: one task: its project, status, assignee, pull requests, brief, checks (passed, by whom, or failed with the evidence's first line), attempts newest first, and linked tasks. It reads a finished task too.
+- \`messages GROUP [--before SEQUENCE MESSAGE_ID]\`: recent messages of a conversation, thread replies included; each names the thread (the root message) it answers in. \`--before\` pages back from the cursor the last page named. \`messages GROUP --thread ROOT\` reads one thread whole: its root and every reply.
 - \`message GROUP MESSAGE_ID\`: one exact message, such as an earlier question or result a reply refers to.
 - \`instructions [PROJECT]\`: your project's instructions and the coordinator's notes, printed whole. Read them when you start and when told they changed. Without PROJECT, the project you work in. INSTRUCTIONS_UNAVAILABLE saying the Swarm has no project instructions yet is an older Swarm: work by the swarm skill Harness gave you at start (your role file) then. The same code saying to try again is a passing failure: run \`instructions\` again in a moment.
 - \`decisions [--answered]\`: decisions asked of people, still open, or with \`--answered\` those answered, each with its choice and note.
@@ -96,7 +98,8 @@ Swarm and machine settings (each refused unless you may change that setting; a p
   - Start only on the Swarm's listed machines; to use another, a person adds it first. \`resume START_ID\` finishes a pending start without creating another agent; repeat \`start\` with the same id after an interruption. Two failed starts in a row suspend the engine on that machine; the route says so.
   - A start that fails is reported (\`START_FAILED\`, with why) and moved nowhere: you decide what next, and the project's coordinator is told too.
   - Starts can be refused when too many starts are pending.
-- A review group is a group created with \`reviewOf\` naming the group it reviews. A \`review\` status tells only the reviewed group's coordinator: when the work is ready for review, name the reviewing agent with \`--to\` in your post.
+- Add a step to a task: create a conversation with \`reviewOf\` set to the task and \`step\` set to the step's name from your project's instructions, then assign it. A step's status reaches the task's assignee.
+- Any group created with \`reviewOf\` is a step of that task, with or without a \`step\` name: its status and its posts that name no one reach the task's assignee. A \`review\` status wakes nobody by itself: when the work is ready for review, name the reviewing agent with \`--to\` in your post.
 
 ## Requests, tasks and cards
 - A group opened for a person's request, asked in the chat or proposed by their Buddy, names them as requester (\`requesterId\`, or \`conversation.requester\` later). It records only that they asked, never what they wrote.

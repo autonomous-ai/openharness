@@ -38,6 +38,9 @@ void main() {
   late List<String> uploads;
   late String language;
 
+  /// Who is signed in, in the last [pump].
+  late ValueNotifier<String?> account;
+
   setUp(() {
     dictation = FakeDictation();
     recorder = FakeVoiceRecorder();
@@ -77,7 +80,7 @@ void main() {
   Future<void> pump(WidgetTester tester, {bool reduceMotion = false}) async {
     final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
       ..value = {PhoneExperiment.swarm};
-    final account = ValueNotifier<String?>(me);
+    account = ValueNotifier<String?>(me);
     final host = SwarmHost(
       accountId: () => account.value,
       account: account,
@@ -306,8 +309,8 @@ void main() {
     atRest();
   });
 
-  testWidgets('no Send, +, Tag or X during a take; they come back after '
-      'Stop', (tester) async {
+  testWidgets("only the row's Send during a take: no composer Send, +, Tag "
+      'or X; they come back after Stop', (tester) async {
     await pump(tester);
     await tester.enterText(find.byType(TextField), 'Draft');
     await tester.pump();
@@ -322,11 +325,13 @@ void main() {
     expect(key('swarm-voice-cancel'), findsOneWidget);
     expect(key('swarm-voice-wave'), findsOneWidget);
     expect(key('swarm-voice-stop'), findsOneWidget);
+    expect(key('swarm-voice-send'), findsOneWidget);
 
     await say(tester, 'ship it');
     await stop(tester);
     await tester.pumpAndSettle();
     atRest();
+    expect(key('swarm-voice-send'), findsNothing);
     expect(key('swarm-attach'), findsOneWidget);
     expect(key('swarm-tag'), findsOneWidget);
     expect(key('swarm-field-clear'), findsOneWidget);
@@ -335,6 +340,168 @@ void main() {
       isNotNull,
       reason: 'Send is live again',
     );
+  });
+
+  // Tony, 11-01: Send right of stop ends the take and posts the box, the last
+  // words included. With the recognizer the words are in the box as they are
+  // said: Send is off while it is empty.
+  group("the voice row's Send", () {
+    Future<void> rowSend(WidgetTester tester) async {
+      await tester.tap(key('swarm-voice-send'));
+      await frames(tester);
+    }
+
+    SwarmRoundButton sendButton(WidgetTester tester) =>
+        tester.widget<SwarmRoundButton>(key('swarm-voice-send'));
+
+    testWidgets('off while the box is empty, on once it has words', (
+      tester,
+    ) async {
+      await pump(tester);
+      await tapMic(tester);
+      expect(sendButton(tester).onTap, isNull, reason: 'empty box');
+      await rowSend(tester);
+      expect(dictation.stops, 0, reason: 'an off Send ends nothing');
+      expect(dictation.listening, isTrue);
+
+      await say(tester, 'ship');
+      expect(sendButton(tester).onTap, isNotNull);
+
+      await tester.enterText(find.byType(TextField), ' ');
+      await tester.pump();
+      expect(sendButton(tester).onTap, isNull, reason: 'only a space');
+      expect(fake.commands, isEmpty);
+    });
+
+    testWidgets('one tap ends the take and posts the box with its last '
+        'words, once', (tester) async {
+      await pump(tester);
+      await tester.enterText(find.byType(TextField), 'Nova:');
+      await tester.pump();
+      await tapMic(tester);
+      await say(tester, 'ship the');
+
+      dictation.lastWords = 'ship the fix today';
+      await rowSend(tester);
+      await tester.pumpAndSettle();
+
+      expect(dictation.stops, 1);
+      expect(fake.commands.single['text'], 'Nova: ship the fix today');
+      expect(box(tester), isEmpty);
+      expect(key('swarm-voice-note'), findsNothing);
+      atRest();
+    });
+
+    testWidgets('waits for the last words no longer than about two seconds, '
+        'then posts what the box holds', (tester) async {
+      await pump(tester);
+      await tapMic(tester);
+      await say(tester, 'ship it');
+
+      dictation.stopsSilently = true;
+      await rowSend(tester);
+      expect(key('swarm-voice-sending'), findsOneWidget);
+      await tester.pump(const Duration(milliseconds: 1900));
+      expect(fake.commands, isEmpty, reason: 'still waiting for its words');
+
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pumpAndSettle();
+      expect(fake.commands.single['text'], 'ship it');
+      expect(dictation.cancels, 1, reason: 'the microphone released');
+      atRest();
+    });
+
+    testWidgets('a double tap posts once', (tester) async {
+      await pump(tester);
+      await tapMic(tester);
+      await say(tester, 'just once');
+
+      dictation.stopsSilently = true;
+      final at = tester.getCenter(key('swarm-voice-send'));
+      for (var i = 0; i < 2; i++) {
+        await tester.tapAt(at);
+        await tester.pump(const Duration(milliseconds: 40));
+      }
+      expect(dictation.stops, 1);
+      dictation.end(SwarmDictationEnd.done);
+      await tester.pump();
+      await tester.tapAt(at);
+      await tester.pumpAndSettle();
+
+      expect(fake.commands, hasLength(1));
+      expect(fake.commands.single['text'], 'just once');
+    });
+
+    testWidgets('while it ends the row takes no tap: cancel does not take '
+        'the words back', (tester) async {
+      await pump(tester);
+      await tapMic(tester);
+      await say(tester, 'keep these');
+
+      dictation.stopsSilently = true;
+      await rowSend(tester);
+      expect(sendButton(tester).onTap, isNull);
+      await cancel(tester);
+      expect(box(tester), 'keep these');
+
+      dictation.end(SwarmDictationEnd.done);
+      await tester.pumpAndSettle();
+      expect(fake.commands.single['text'], 'keep these');
+    });
+
+    testWidgets('a box emptied before the take ended posts nothing and says '
+        'one line', (tester) async {
+      await pump(tester);
+      await tapMic(tester);
+      await say(tester, 'oops');
+
+      dictation.stopsSilently = true;
+      await rowSend(tester);
+      await tester.enterText(find.byType(TextField), '');
+      await tester.pump();
+      dictation.end(SwarmDictationEnd.done);
+      await tester.pumpAndSettle();
+
+      expect(fake.commands, isEmpty);
+      expect(find.text(SwarmVoice.nothingSent), findsOneWidget);
+    });
+
+    testWidgets('the app leaving while the take ends posts nothing; the words '
+        'stay in the box', (tester) async {
+      await pump(tester);
+      await tapMic(tester);
+      await say(tester, 'not yet');
+
+      dictation.stopsSilently = true;
+      await rowSend(tester);
+      await lifecycle(tester, [AppLifecycleState.inactive]);
+      await lifecycle(tester, [AppLifecycleState.resumed]);
+      dictation.end(SwarmDictationEnd.done);
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pumpAndSettle();
+
+      expect(fake.commands, isEmpty);
+      expect(box(tester), 'not yet');
+      expect(find.text(SwarmVoice.nothingSent), findsNothing);
+    });
+
+    testWidgets('signed out while the take ends: nothing is posted', (
+      tester,
+    ) async {
+      await pump(tester);
+      await tapMic(tester);
+      await say(tester, 'after sign out');
+
+      dictation.stopsSilently = true;
+      await rowSend(tester);
+      account.value = null;
+      await frames(tester);
+      dictation.end(SwarmDictationEnd.done);
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pumpAndSettle();
+
+      expect(fake.commands, isEmpty);
+    });
   });
 
   testWidgets('the @ picker hides during a take and comes back after Cancel', (

@@ -72,11 +72,14 @@ async function revokeQuietly(token: string, revoke = revokeGitHubToken): Promise
 export async function prepareSwarmStart(core: CoreApi, row: Json, start: Json,
   deps: { backend: Backend; team: boolean; prepare?: typeof prepareProjectFolder; fetch?: typeof fetchDefaultBranch; revoke?: (token: string) => Promise<void> }):
   Promise<{ requester: string } | null> {
+  const request = object(start.request)
+  // A person's one Buddy has no project: its launch makes its folder from the checkouts already here and fetches nothing
+  // (buddyHome.ts). Asking for a token anyway was refused with a 404, which failed every such start (2026-11-02).
+  if (request.buddyScope === 'swarm') return null
   const github = await startGitHub(core, row, start, deps)
   const gitEnv = github ? swarmGitPrepareEnv(github.token) : undefined
   try {
     if (object(row.machine).scope === 'swarm') await prepareSwarmProject(core, row, start, deps.prepare, gitEnv)
-    const request = object(start.request)
     if (gitEnv && request.worktree === true && typeof request.cwd === 'string' && isAbsolute(request.cwd)) {
       await (deps.fetch ?? fetchDefaultBranch)(resolve(request.cwd), gitEnv)
     }
@@ -100,8 +103,10 @@ export async function prepareSwarmProject(core: CoreApi, row: Json, start: Json,
   const pool = object(row.machine)
   if (pool.scope !== 'swarm' || start.dispatched) return
   const request = object(start.request)
+  // A project session of a person's one Buddy chat names its project: that chat is in no project's list (backend hostRows.ts).
+  const session = object(request.buddySession).projectId
   const project = (Array.isArray(row.projects) ? row.projects.map(object) : [])
-    .find(p => Array.isArray(p.conversationIds) && p.conversationIds.includes(request.conversationId))
+    .find(p => session ? p.id === session : Array.isArray(p.conversationIds) && p.conversationIds.includes(request.conversationId))
   if (!project || !identifier(project.id) || !identifier(row.tabId)) throw new Error('This start has no authorized project.')
   const repository = object(project.repository)
   const expectedRoot = swarmCloneRoot(core.dataDir, row.tabId, pool.cwd)

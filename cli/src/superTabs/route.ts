@@ -18,7 +18,7 @@ export type Size = 'small' | 'medium' | 'large'
  * whatever their strength (owner, 2026-10-23: a Builder on a named API model was ranked below Opus and never offered). */
 /** `needs.heavy`: the work runs a heavy build or end-to-end tests on its machine, so it needs more free memory and disk than a
  * start (machineFit.ts). `needs.ci`: the CI jobs the work starts at once, and how many of them on macOS runners, held against
- * the account's running-jobs limit. Both are left out when not given, so a request without them answers as before. */
+ * the account's running-jobs limit; a need above that limit counts as the limit and the route says so (machineFit.ts). Both are left out when not given, so a request without them answers as before. */
 export type HeavyWork = 'build' | 'e2e'
 export interface Needs { tools: string[]; devices: string[]; cwd?: string; heavy?: HeavyWork[]; ci?: { jobs: number; macos: number } }
 export interface Assessment { difficulty: Level; risk: Level; size: Size; why: string; kind?: string; local?: boolean; model?: string; needs: Needs }

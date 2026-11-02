@@ -9,6 +9,7 @@ import {
   type Actor, type AgentConfiguration, type AgentStart, type AgentStartRequest, type BuddySessionEntry, type WorkTask, type Agent, type Author, type Check, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
 import { jobKindOf } from './evidence/jobKind.js'
+import { endSteps, holdsStepOf, isStep, taskOwner } from './steps.js'
 import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSaveSchema } from './routingPolicy.js'
 import { askedInSchema, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema } from './rules.js'
@@ -169,7 +170,10 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('project.role.remove'), projectId: id, roleId }).strict(),
   z.object({ type: z.literal('project.roles.reset'), projectId: id, roles: roleSet }).strict(),
   // `audience`: a private conversation that only these people and the project's Lead read (projects.ts canReadGroup).
-  z.object({ type: z.literal('conversation.create'), projectId: id.optional(), title, brief: z.string().trim().max(8000).optional(), task: task.optional(), reviewOf: id.optional(), checks: z.array(check).max(40),
+  z.object({ type: z.literal('conversation.create'), projectId: id.optional(), title, brief: z.string().trim().max(8000).optional(), task: task.optional(), reviewOf: id.optional(),
+    // A step of the task `reviewOf` names (task steps design): its name as the instructions give it, free text in any language.
+    // No line break or control character: the name is printed in agents' terminals (final review, minor 10).
+    step: z.string().trim().min(1).max(40).regex(/^[^\u0000-\u001f\u007f]+$/, 'A step name is one line of text.').optional(), checks: z.array(check).max(40),
     audience: z.object({ personIds: z.array(id).max(200) }).strict().optional(), requesterId: id.optional(),
     // The Buddy's proposal message in the project chat the group comes from (Lead, 2026-10-29): the Buddy earns when it ships.
     proposalMessageId: id.optional() }).strict()
@@ -647,7 +651,16 @@ function proposalOf(state: SuperTabState, project: SwarmProject, proposal: Comma
   }
   // The person it was sent for, as buddy.propose recorded them: the Swarm writes this source, never a sender.
   const personId = typeof proposal.source.personId === 'string' ? proposal.source.personId : undefined
-  return { buddyId: author.id, messageId: proposal.id, ...personId ? { personId } : {} }
+  // Credited to the person's one Buddy, not to the thread session that wrote it: a session ends (after 30 idle minutes, often
+  // before the PM opens the group), and its row then showed as an unnamed "Former Buddy" with no person (Diego, 11-02). The
+  // person is the session's owner, else (the author gone) the one the Swarm recorded the proposal for, at their current
+  // membership. Without a one Buddy (removed since), the author keeps it.
+  const gone = !buddy ? state.people.find(p => p.id === personId) : undefined
+  const owner = buddy?.buddyOf ?? (gone ? { personId: gone.id, generation: gone.generation } : undefined)
+  const main = owner && !(buddy && isSwarmBuddy(buddy))
+    ? state.agents.find(a => isSwarmBuddy(a) && !a.buddySession && a.buddyOf!.personId === owner.personId && a.buddyOf!.generation === owner.generation)
+    : undefined
+  return { buddyId: main?.id ?? author.id, messageId: proposal.id, ...personId ? { personId } : {} }
 }
 /** The person a proposal was sent for, while they are still in the Swarm and read [project]; otherwise nobody, so a person
  *  who left or lost the project is never credited and opening the group still works (the PM is told to name someone). */
@@ -825,6 +838,22 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   /** Any other row the system writes in the actor's name. Without a source, a notice written as the owner read as the owner
    * asking, and a Lead could quote it to change rules (review of #1594). Only `message.send` and an initial message stay plain. */
   const SYSTEM_ROW = { kind: 'system' }
+  /** [agentId] as a member of [group] who may be told there: joined when it is not one yet and may join; else null. */
+  const reachable = (group: Conversation, agentId: string | null): string | null => {
+    if (!agentId || group.agentIds.includes(agentId)) return agentId
+    if (!joinsProject(state, group, agentId)) return null
+    group.agentIds.push(agentId)
+    return agentId
+  }
+  /** A task ended: its open steps are cancelled and their agents told why, in each step (task steps design); with
+   *  [archive], its finished steps archive with it. */
+  const endStepsOf = (task: Conversation, reason: string, archive: boolean) => {
+    // A row of its own in each step, as the command's own row may be in the task: one id per row.
+    for (const step of endSteps(state, task, reason, archive)) {
+      effects.messages.push({ id: stableId(operationId, 'step-ended', step.id), conversationId: step.id, author: sender, text: reason,
+        replyTo: null, recipients: [step.assignment!.agentId], source: SYSTEM_ROW })
+    }
+  }
   /** Agent bookkeeping, a routing line or an agent joined or ready: no one's in the project chat, which carries only what
    *  people read or decide on (the Lead's ruling, 2026-10-29); a task's chat keeps it as its record. */
   const bookkeeping = (conversationId: string, source: Record<string, unknown>) =>
@@ -1690,6 +1719,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       requirable(command.task)
       if (command.audience) pmChatClosed()
       const leadId = conversation(state, project.leadConversationId).leadId
+      if (command.step && !command.reviewOf) fail('INVALID_REQUEST', 'A step belongs to a task: name the task with reviewOf.', 400)
       if (command.reviewOf) {
         // A task links to another task of its own project, a linked one included, and to nothing else: the project chat, a
         // Buddy chat, a private chat, the Leads conversation and other projects' tasks read as missing, archived or not, so the
@@ -1698,6 +1728,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         if (!reviewed || isLeads(reviewed) || reviewed.kind || reviewed.audience || reviewed.id === project.leadConversationId
           || groupProject(state, reviewed).id !== project.id) fail('NOT_FOUND', 'This conversation is unavailable.', 404)
         open(state, reviewed.id)
+        // One level: a step's own work is a task's step, never a task with steps of its own (task steps design).
+        if (command.step && isStep(reviewed)) fail('STEP_OF_STEP', 'A step belongs to a task, not to another step.', 400)
       }
       // Who asked: the person named, else the one a Buddy's proposal was sent for, else a person opening it themselves.
       const proposal = command.proposalMessageId ? proposalOf(state, project, context.proposal) : undefined
@@ -1708,9 +1740,15 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // The agent that opens a task is in it, so an Engineer that opens its own review can post there and pass its checks.
       const creator = actor.kind === 'agent' && actor.agentId !== leadId ? [actor.agentId] : []
       for (const id of creator) teamJoin(project, id)
+      // A step's opener is in its task too: the task's chat is where the step's work is talked over (task steps design).
+      if (command.step && command.reviewOf) {
+        const owning = conversation(state, command.reviewOf)
+        for (const id of creator) if (!owning.agentIds.includes(id)) owning.agentIds.push(id)
+      }
       state.conversations.push({ id: operationId, ...(state.projects ? { projectId: project.id } : {}),
         number, title: command.title, leadId, agentIds: [...leadId ? [leadId] : [], ...creator],
         archived: false, brief, ...(command.task ? { task: command.task } : {}), ...(command.reviewOf ? { reviewOf: command.reviewOf } : {}),
+        ...(command.step ? { step: command.step } : {}),
         assignment: null, lastMessageSequence: 0,
         checks: storedChecks(command.checks, operationId),
       })
@@ -1796,6 +1834,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (group.id === groupProject(state, group).leadConversationId) fail('LEAD_CONVERSATION', 'The Lead conversation stays available.')
       if (command.archived && activeWork(group)) fail('WORK_ACTIVE', 'Resolve the active assignment before archiving this conversation.')
       group.archived = command.archived
+      if (command.archived) endStepsOf(group, `${group.title} was archived.`, true)
       // Archived by hand, it leaves the active set until it is reopened (spec, Archive), once its reports are acknowledged:
       // until then the sweep leaves it in the active set, where the report check sees it (design section 3.6).
       if (command.archived && !dirtyGroups(state, groupProject(state, group)).includes(group)) group.dormant = true
@@ -2491,7 +2530,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const leadToWorker = actor.kind === 'agent' && actor.agentId === group.leadId && assigned && assigned !== group.leadId
         && group.agentIds.includes(assigned) && (!context.reply || replyAgent === assigned)
         && !leadWorkerBounced(context.recent, group.leadId, assigned) ? assigned : null
+      // A step's agent tells its task's owner, as its status does (task steps design); with no owner, the coordinator.
+      const stepOwner = actor.kind === 'agent' && isStep(group) ? taskOwner(state, group) : null
       const workerToLead = actor.kind === 'agent' && activeWork(group) && group.assignment?.agentId === actor.agentId
+        && stepOwner && stepOwner !== actor.agentId ? stepOwner
+        : actor.kind === 'agent' && activeWork(group) && group.assignment?.agentId === actor.agentId
         && group.leadId && group.leadId !== actor.agentId && group.agentIds.includes(group.leadId) ? group.leadId : null
       const agentRecipient = leadToWorker ?? workerToLead
       // Any other agent's unnamed post in the group reaches its Lead: an agent whose task here was lost, moved or cancelled has
@@ -2501,7 +2544,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // A post that names its agents reaches only them: copying every one to the Lead filled its terminal (Ken, 10-30: 198 of
       // the 486 messages it got in a day were such copies). The assigned worker keeps its own rule above; a note to itself
       // stays its own.
-      const memberToLead = actor.kind === 'agent' && !command.agentOnly && !addressed.length && assigned !== actor.agentId && group.leadId
+      // In a task, an agent holding one of its open steps reaches the task's owner instead (task steps design).
+      const ownerHere = actor.kind === 'agent' && assigned && assigned !== actor.agentId && holdsStepOf(state, group.id, actor.agentId) ? assigned : null
+      const memberToLead = actor.kind === 'agent' && !command.agentOnly && !addressed.length && assigned !== actor.agentId && ownerHere ? [ownerHere]
+        : actor.kind === 'agent' && !command.agentOnly && !addressed.length && assigned !== actor.agentId && group.leadId
         && group.leadId !== actor.agentId && group.agentIds.includes(group.leadId) ? [group.leadId] : []
       // Buddy thread sessions (buddySessions.ts): a session thread's replies reach its session alone and stay in its thread; the
       // main Buddy hears the rest. Decided here from the thread, so every client, an old one or the phone, is routed alike.
@@ -2703,6 +2749,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // Any assignment, an agent's or a person's, takes a worker that lost its task back into routing (model.ts lostTask).
       delete worker.lostTask
       if (!group.agentIds.includes(worker.id)) group.agentIds.push(worker.id)
+      // A step's agent works in its task's chat, where its owner and the other steps' agents are (task steps design).
+      const owning = isStep(group) ? state.conversations.find(c => c.id === group.reviewOf) : undefined
+      if (owning && !owning.agentIds.includes(worker.id) && joinsProject(state, owning, worker.id)) owning.agentIds.push(worker.id)
       rememberAttempt(group)
       group.assignment = { id: operationId, agentId: worker.id, status: 'working', configuration: structuredClone(worker.configuration),
         execution: { machineId: worker.machineId, harnessId: worker.harnessId, machineOwnerId: worker.machineOwnerId }, result: null }
@@ -2770,14 +2819,27 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // Finished work shows the worker recovered from a task it lost before.
       if (command.status === 'done') delete state.agents.find(a => a.id === assignment.agentId)?.lostTask
       if (changed) {
-        const label = STATUS_LABELS[command.status]
+        // A step's Ready is its own hand-over, whatever its instructions call it (task steps design): not "for review".
+        const label = isStep(group) && command.status === 'review' ? 'Ready' : STATUS_LABELS[command.status]
         const lead = group.leadId
         const own = actor.kind === 'agent' && actor.agentId === assignment.agentId
+        // A step's progress is its task owner's to act on (Ken, 2026-11-02: the PM's terminal got a message every few
+        // seconds from builders and reviewers). Ready and Done go to the owner, else the coordinator; what needs a person or
+        // is stuck goes to both.
+        // The owner is told in the step, so it is one of the step's members: a delivery reaches members only (store.ts
+        // deliveryAllowed; final review, finding 1: a step the PM opened had no owner in it). One that may not join is
+        // not the owner here, and the coordinator hears instead.
+        const owner = isStep(group) ? reachable(group, taskOwner(state, group)) : null
+        const stepTold = !isStep(group) || !own ? null
+          : ['review', 'done'].includes(command.status) ? [owner ?? lead]
+            : ['needs_human', 'blocked'].includes(command.status) ? [lead, owner] : []
         // Its own agent's change reaches the coordinator when the work waits on someone or is done: stuck is the coordinator's
         // to hear as a human decision is. Anyone else's changes that agent's work, so it reaches the agent (unless its host
         // confirmed it stopped) and the coordinator (final review). Nobody else is woken by role: the agent whose work is
         // ready names who reviews it (project instructions, phase 4).
-        const told = own ? (lead && ['needs_human', 'blocked', 'review', 'done'].includes(command.status) ? [lead] : [])
+        const told = stepTold ? stepTold.filter((id): id is string => !!id)
+          // Its own Ready wakes nobody (Ken, 2026-11-02: every hand-over reached the PM): it names whom it hands to.
+          : own ? (lead && ['needs_human', 'blocked', 'done'].includes(command.status) ? [lead] : [])
           : [...command.status === 'stopped' ? [] : [assignment.agentId], ...lead ? [lead] : []]
         const recipients = [...new Set(told)].filter(id => actor.kind !== 'agent' || id !== actor.agentId)
         const asked = !command.ask ? '' : effects.result.notAsked ? `\n\n${effects.result.notAsked}` : `\n\nAsked ${person(state, command.ask.personId).email}.`
@@ -2826,6 +2888,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         message(group.id, `${who} cancelled this task: ${command.reason.replace(/[.\s]+$/, '')}.`, [], null, SYSTEM_ROW)
         // Its line is a report the coordinator acknowledges first, so the sweep puts it to sleep later (sweeps.ts), as for any archive.
         group.archived = true
+        endStepsOf(group, `${group.title} was archived.`, true)
         break
       }
       if (!assignment || assignment.id !== command.assignmentId) fail('STALE_ASSIGNMENT', 'This is no longer the active assignment.')
@@ -2840,6 +2903,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       assignment.status = 'cancelled'
       assignment.result = command.reason
       if (!lost) finishWorker(state, assignment.agentId)
+      // Its steps' work ends with it; finished ones stay until it archives (task steps design; final review, finding 2).
+      endStepsOf(group, `${group.title} was cancelled.`, false)
       message(group.id, `${who} cancelled this task: ${command.reason.replace(/[.\s]+$/, '')}.${gone ? '' : ' Stop working on it.'}`,
         // Telling its agent to stop is the agent's alone; people read the cancel and its reason on the task itself.
         gone ? [] : [assignment.agentId], null, gone ? SYSTEM_ROW : forRecipients(SYSTEM_ROW))

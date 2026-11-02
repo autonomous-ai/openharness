@@ -1513,3 +1513,157 @@ describe('finishing your own work', () => {
     expect(posts(t)).toEqual([{ ...status('done'), tokens: opus }, status('done')])
   })
 })
+
+// Agent context design, section 1 (Ken, 2026-11-02: agents forgot their task; the PM read the whole Swarm for progress).
+describe('mine and task', () => {
+  const ok = (data: unknown) => ({ status: 200, body: { success: true, data } })
+  const withState = (t: ReturnType<typeof setup>, conversations: Array<Record<string, unknown>>, groupRead?: (path: string) => unknown) => {
+    const state = { agents: [{ ...t.agent, name: 'Dev1' }], conversations }
+    vi.mocked(t.core.account.backend).mockImplementation(async (_method, path) => {
+      if (path.includes('/attempts')) return ok([]) as never
+      if (path.startsWith('/api/super-tabs/tab/groups/') && groupRead) return groupRead(path) as never
+      return ok(swarmData(t.agent, path, state)) as never
+    })
+  }
+  it('mine answers its text', async () => {
+    const t = setup()
+    withState(t, [{ id: 'g12', number: 12, title: 'Fix login', archived: false, checks: [], assignment: { agentId: t.agentId, status: 'working', result: null } }])
+    const answer = await t.ask({ action: 'mine', tabId: 'tab', harnessId: 'native' }, owner) as { value: { text: string } }
+    expect(answer.value.text).toMatch(/^#12 Fix login \(conversation g12\) — working/)
+  })
+  it('task reads a dormant group from the group read', async () => {
+    const t = setup()
+    const dormant = { id: 'g9', number: 9, title: 'Old fix', archived: true, dormant: true, checks: [], brief: 'Goal:\nOld.', assignment: { agentId: t.agentId, status: 'done', result: 'Merged' } }
+    withState(t, [], path => path.startsWith('/api/super-tabs/tab/groups/g9?') ? ok({ group: { key: 'g9', version: 1, changedAt: 1, data: dormant } }) : ok({}))
+    const answer = await t.ask({ action: 'task', tabId: 'tab', harnessId: 'native', conversationId: 'g9' }, owner) as { value: { text: string } }
+    expect(answer.value.text.split('\n')[0]).toBe('#9 Old fix (conversation g9)')
+    expect(answer.value.text).toContain('- Dev1, done (current): Merged')
+  })
+  it('task names a stopped assignee from the task\'s messages', async () => {
+    const t = setup()
+    const group = { id: 'g9', number: 9, title: 'Fix', archived: false, checks: [], assignment: { agentId: 'gone', status: 'done', result: null } }
+    withState(t, [group])
+    const answer = vi.mocked(t.core.account.backend).getMockImplementation()!
+    vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => path.includes('/conversations/g9/messages')
+      ? ok({ messages: [{ id: 'm', conversationId: 'g9', author: { kind: 'agent', id: 'gone', name: 'Avery' }, text: 'Done' }], next: null }) as never
+      : answer(method, path, body))
+    const result = await t.ask({ action: 'task', tabId: 'tab', harnessId: 'native', conversationId: 'g9' }, owner) as { value: { text: string } }
+    expect(result.value.text).toContain('Assignee: Avery')
+  })
+  it('task of a group it cannot read answers NOT_FOUND', async () => {
+    const t = setup()
+    withState(t, [], () => ({ status: 404, body: { success: false, error: { code: 'NOT_FOUND', message: 'This conversation is unavailable.' } } }))
+    expect(await t.ask({ action: 'task', tabId: 'tab', harnessId: 'native', conversationId: 'g404' }, owner)).toMatchObject({ error: 'NOT_FOUND' })
+  })
+  it('help names mine and task', async () => {
+    const t = setup()
+    const answer = await t.ask({ action: 'help', tabId: 'tab', harnessId: 'native' }, owner) as { help: Record<string, unknown> }
+    expect(answer.help.mine).toEqual(expect.stringContaining('mine'))
+    expect(answer.help.task).toEqual(expect.stringContaining('task GROUP'))
+  })
+})
+
+describe('status with steps', () => {
+  it('prints a task\'s steps under it, not as rows', async () => {
+    const t = setup()
+    const conversations = [{ id: 'g1835', number: 1835, title: 'Fix login', archived: false, checks: [] },
+      { id: 'g1918', number: 1918, title: 'Review', reviewOf: 'g1835', step: 'Review', archived: false, checks: [] },
+      { id: 'g9', number: 9, title: 'Old review', reviewOf: 'g1835', archived: false, checks: [] }]
+    vi.mocked(t.core.account.backend).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true,
+      data: swarmData(t.agent, path, { agents: [t.agent], conversations }) } }) as never)
+    const answer = await t.ask({ action: 'status', tabId: 'tab', harnessId: 'native' }, owner) as { value: { state: { conversations: Array<Record<string, unknown>> } } }
+    const rows = answer.value.state.conversations
+    // Every linked group is a step, named or not (Ken, 2026-11-02).
+    expect(rows.map(c => c.id)).toEqual(['g1835'])
+    expect((rows[0]!.steps as Array<Record<string, unknown>>).map(s => s.id)).toEqual(['g1918', 'g9'])
+  })
+})
+
+// Task steps design: a task's chat shows its steps' rows by time, and a step is opened only on a backend that has steps.
+describe('a task\'s steps in messages and commands', () => {
+  const ok = (data: unknown) => ({ status: 200, body: { success: true, data } })
+  const row = (id: string, conversationId: string, createdAt: string) => ({ id, conversationId, createdAt, text: id, author: { name: 'A' } })
+  const conversations = [{ id: 'g1835', number: 1835, title: 'Fix login', archived: false, checks: [] },
+    { id: 'g1918', number: 1918, title: 'Review', reviewOf: 'g1835', step: 'Thiết kế "v2"', archived: false, checks: [] },
+    { id: 'g1919', number: 1919, title: 'Test', reviewOf: 'g1835', step: 'Test', archived: false, checks: [] }]
+  function wired(t: ReturnType<typeof setup>, options: { steps?: boolean; failing?: string } = {}) {
+    const sent: Array<Record<string, unknown>> = []
+    vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => {
+      const read = /\/conversations\/(g\d+)\/messages\?/.exec(path)
+      if (read) {
+        if (read[1] === options.failing) return { status: 403, body: { success: false, error: { code: 'FORBIDDEN', message: 'No' } } } as never
+        const rows = { g1835: [row('t1', 'g1835', '2026-11-02T09:00:00Z'), row('t2', 'g1835', '2026-11-02T09:10:00Z')],
+          g1918: [row('s1', 'g1918', '2026-11-02T09:05:00Z')], g1919: [row('u1', 'g1919', '2026-11-02T09:15:00Z')] }[read[1]!] ?? []
+        return ok({ messages: rows, next: null, threads: [] }) as never
+      }
+      if (method === 'POST' && path.endsWith('/commands')) { sent.push(object(body)); return ok({ revision: 1, result: {} }) as never }
+      const data = swarmData(t.agent, path, { agents: [t.agent], conversations })
+      return ok(options.steps && /\/parts/.test(path) ? { ...object(data), steps: true } : data) as never
+    })
+    return sent
+  }
+  it('messages of a task merges its steps\' rows by time and tags them', async () => {
+    const t = setup(); wired(t, { steps: true })
+    const answer = await t.ask({ action: 'messages', tabId: 'tab', harnessId: 'native', conversationId: 'g1835' }, owner) as { value: { messages: Array<Record<string, unknown>> } }
+    expect(answer.value.messages.map(m => [m.id, m.step ?? null])).toEqual([['t1', null], ['s1', 'Thiết kế "v2"'], ['t2', null], ['u1', 'Test']])
+  })
+  it('an unreadable step leaves the task\'s rows and says which step is missing', async () => {
+    const t = setup(); wired(t, { steps: true, failing: 'g1919' })
+    const answer = await t.ask({ action: 'messages', tabId: 'tab', harnessId: 'native', conversationId: 'g1835' }, owner) as { value: { messages: Array<Record<string, unknown>>; stepsMissing: string[] } }
+    expect(answer.value.messages.map(m => m.id)).toEqual(['t1', 's1', 't2'])
+    expect(answer.value.stepsMissing).toEqual(['Test'])
+  })
+  // Final review, minor 6: an archived task keeps its steps' rows, archived with it.
+  it('messages of an archived task still merges its archived steps', async () => {
+    const t = setup()
+    const archived = conversations.map(c => ({ ...c, archived: true }))
+    vi.mocked(t.core.account.backend).mockImplementation(async (_method, path) => {
+      const read = /\/conversations\/(g\d+)\/messages\?/.exec(path)
+      if (read) return ok({ messages: read[1] === 'g1918' ? [row('s1', 'g1918', '2026-11-02T09:05:00Z')] : [], next: null, threads: [] }) as never
+      return ok(swarmData(t.agent, path, { agents: [t.agent], conversations: archived })) as never
+    })
+    const answer = await t.ask({ action: 'messages', tabId: 'tab', harnessId: 'native', conversationId: 'g1835' }, owner) as { value: { messages: Array<Record<string, unknown>> } }
+    expect(answer.value.messages.map(m => m.id)).toEqual(['s1'])
+  })
+  it('messages of a step reads the step alone', async () => {
+    const t = setup(); wired(t, { steps: true })
+    const answer = await t.ask({ action: 'messages', tabId: 'tab', harnessId: 'native', conversationId: 'g1918' }, owner) as { value: { messages: Array<Record<string, unknown>> } }
+    expect(answer.value.messages.map(m => m.id)).toEqual(['s1'])
+  })
+  it('step is dropped for a backend without steps', async () => {
+    const t = setup(); const sent = wired(t, { steps: false })
+    await t.ask({ action: 'command', tabId: 'tab', harnessId: 'native', operationId: 'op-1',
+      command: { type: 'conversation.create', title: 'Review', reviewOf: 'g1835', step: 'Review', checks: [] } }, owner)
+    expect(object(sent[0]!.command)).toMatchObject({ type: 'conversation.create', reviewOf: 'g1835' })
+    expect(object(sent[0]!.command)).not.toHaveProperty('step')
+  })
+  // Final review, minor 7: the flag is read at the first load, so a backend rolled back since refuses `step`; the command is
+  // sent once more without it, and the step opens as a plain linked task.
+  it('sends it again without step when the backend refuses the field', async () => {
+    const t = setup(); const sent = wired(t, { steps: true })
+    const answer = vi.mocked(t.core.account.backend).getMockImplementation()!
+    vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => method === 'POST' && path.endsWith('/commands')
+      && 'step' in object(object(body).command)
+      ? { status: 400, body: { success: false, error: { code: 'VALIDATION_ERROR', message: 'Unrecognized key: "step"' } } } as never
+      : answer(method, path, body))
+    const result = await t.ask({ action: 'command', tabId: 'tab', harnessId: 'native', operationId: 'op-1',
+      command: { type: 'conversation.create', title: 'Review', reviewOf: 'g1835', step: 'Review', checks: [] } }, owner)
+    expect(result).toMatchObject({ ok: true })
+    expect(sent).toHaveLength(1)
+    expect(object(sent[0]!.command)).not.toHaveProperty('step')
+  })
+  it('step is sent to a backend that has steps', async () => {
+    const t = setup(); const sent = wired(t, { steps: true })
+    await t.ask({ action: 'command', tabId: 'tab', harnessId: 'native', operationId: 'op-1',
+      command: { type: 'conversation.create', title: 'Review', reviewOf: 'g1835', step: 'Review', checks: [] } }, owner)
+    expect(object(sent[0]!.command)).toMatchObject({ step: 'Review' })
+  })
+})
+
+it('help shows a step\'s example with neutral words', async () => {
+  const t = setup()
+  const answer = await t.ask({ action: 'help', tabId: 'tab', harnessId: 'native' }, owner) as { help: { commands: Array<Record<string, unknown>> } }
+  const step = answer.help.commands.find(c => c.type === 'conversation.create' && 'step' in c)!
+  expect(step).toMatchObject({ reviewOf: 'GROUP', step: 'STEP_NAME' })
+  expect(JSON.stringify(answer.help.commands)).not.toContain('Review: Outcome')
+})

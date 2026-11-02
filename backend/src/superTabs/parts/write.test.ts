@@ -39,9 +39,10 @@ describe('the finished-work mark a conversation write stores', () => {
     for (const status of ['working', 'review', 'lost', 'stopped', null]) expect(extracted('group', group(status), 1).workFinished).toBe(false)
   })
 
-  it('is set on a review while no Reviewer works on it, so the pass can close it once its pull requests are (tidy.ts)', () => {
-    const review = (status: string | null) => ({ ...group(status), reviewOf: 'built' })
-    for (const status of [null, 'lost', 'stopped', 'done', 'cancelled']) expect(extracted('group', review(status), 1).workFinished).toBe(true)
-    for (const status of ['working', 'review', 'needs_human', 'blocked']) expect(extracted('group', review(status), 1).workFinished).toBe(false)
+  // Every linked group is a step, which closes with its task, never on its own clock (task steps design; Ken, 2026-11-02).
+  // A row written before keeps the mark it had until it is written again, and the pass still closes those as before.
+  it('is never set on a linked group: it closes with its task', () => {
+    const linked = (status: string | null) => ({ ...group(status), reviewOf: 'built' })
+    for (const status of [null, 'lost', 'stopped', 'done', 'cancelled', 'working', 'review']) expect(extracted('group', linked(status), 1).workFinished).toBe(false)
   })
 })

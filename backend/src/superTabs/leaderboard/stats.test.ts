@@ -465,6 +465,66 @@ describe('Agents: the permanent agents, the PM and Buddies, by name like people 
     expect(of(view, 'sparky')).toMatchObject({ points: 3, shipped: 1 })
     expect(of(view, 'river')).toMatchObject({ points: 0, shipped: 0, rank: 2 })
   })
+
+  describe('a person\'s one Swarm Buddy (Diego, 2026-11-02)', () => {
+    /** Dee's one Buddy: Swarm-wide, in no project, on her Mac; and a project session of it. */
+    function oneBuddy(state: SuperTabState) {
+      agents(state)
+      state.agents = state.agents.filter(a => a.id !== 'sparky')
+      const base = state.agents.find(a => a.id === 'river')!
+      const dee = { personId: 'dee', generation: 'g' }
+      state.agents.push({ ...base, id: 'main', name: 'main', displayName: 'Sparky', projectId: undefined, buddyOf: dee, buddyScope: 'swarm',
+        machineOwnerId: 'dee', contributorId: 'dee', machineId: 'mac-dee' },
+      { ...base, id: 'session', name: 'session', displayName: 'Session', projectId: 'lead', buddyOf: dee, buddyScope: undefined,
+        buddySession: { thread: 't', from: 1, projectId: 'lead' }, machineId: 'mac-dee' })
+      return state
+    }
+    const ledger = (buddyId: string) => ({ askedAt: WEEK, shippedAt: WEEK + HOUR, proposal: { buddyId, messageId: 'm1' } })
+    const buddies = (view: ReturnType<typeof board>) => view.agents.filter(a => a.kind === 'buddy')
+
+    it('lists it in every project its person reads, with its name and person, and never its sessions', () => {
+      const view = board(oneBuddy(swarm()), [], WEEK, NOW, [machine('dee', [], 'mac-dee')])
+      expect(buddies(view).map(a => [a.agentId, a.displayName, a.personId, a.machineId])).toEqual([['main', 'Sparky', 'dee', 'mac-dee']])
+    })
+
+    it('credits a proposal its session recorded to the one Buddy, with its own, and shows no Former Buddy', () => {
+      const view = board(oneBuddy(swarm()), [shipped('dee', WEEK, WEEK + HOUR, { ledger: ledger('session') }),
+        shipped('dee', WEEK, WEEK + HOUR, { ledger: ledger('main') })])
+      expect(buddies(view).map(a => [a.agentId, a.displayName, a.personId, a.shipped, a.points])).toEqual([['main', 'Sparky', 'dee', 2, 6]])
+    })
+
+    it('shows a session that ended before this change as Former Buddy, with no person', () => {
+      const view = board(oneBuddy(swarm()), [shipped('dee', WEEK, WEEK + HOUR, { ledger: ledger('ended-session') })])
+      expect(of(view, 'ended-session')).toMatchObject({ displayName: 'Former Buddy', personId: null, machineId: '', shipped: 1 })
+    })
+
+    it('shows only a Former Buddy, with no name, person or Mac, in a private project its person does not read', () => {
+      const state = oneBuddy(swarm())
+      state.projects![0] = { ...state.projects![0]!, visibility: 'private', members: [{ id: 'tony', generation: 'g' }] }
+      const view = board(state, [shipped('tony', WEEK, WEEK + HOUR, { ledger: ledger('main') })])
+      expect(buddies(view).map(a => [a.agentId, a.displayName, a.personId, a.machineId])).toEqual([['main', 'Former Buddy', null, '']])
+      expect(JSON.stringify(view)).not.toMatch(/Sparky|mac-dee/)
+    })
+
+    it('shows a Buddy whose person left or was re-invited (another generation) as Former Buddy', () => {
+      const state = oneBuddy(swarm())
+      state.people.find(p => p.id === 'dee')!.generation = 'g2'
+      const view = board(state, [shipped('tony', WEEK, WEEK + HOUR, { ledger: ledger('main') })])
+      expect(buddies(view).map(a => [a.agentId, a.displayName, a.personId])).toEqual([['main', 'Former Buddy', null]])
+    })
+
+    it('names its Mac only when the reader sees that Mac', () => {
+      const view = board(oneBuddy(swarm()), [], WEEK, NOW, [])
+      expect(buddies(view).map(a => [a.displayName, a.machineId])).toEqual([['Sparky', '']])
+    })
+
+    it('does not list another project\'s old-style Buddy, nor one with the same name elsewhere', () => {
+      const state = oneBuddy(swarm())
+      const base = state.agents.find(a => a.id === 'river')!
+      state.agents.push({ ...base, id: 'web-buddy', name: 'web-buddy', displayName: 'Sparky', projectId: 'web', buddyOf: { personId: 'tony', generation: 'g' } })
+      expect(buddies(board(state, [])).map(a => a.agentId)).toEqual(['main'])
+    })
+  })
 })
 
 describe('Models, last 7 days: each model\'s tasks over a rolling week, for the sidebar (Dee, 2026-10-30)', () => {

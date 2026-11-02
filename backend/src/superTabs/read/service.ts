@@ -99,7 +99,8 @@ export class SwarmReads {
       const read = await this.load(tx, cached, user, tabId, asAgentId, t0, { includeRecentStarts: true })
       const { parts: loaded, view, lastChangedAt } = read
       return { format: READ_FORMAT, tabId, cursor: cursorFor(t0, loaded.visibilityEpoch), serverTime: t0, lastChangedAt, epoch: loaded.visibilityEpoch,
-        ...(this.options.githubApp ? { githubApp: true as const } : {}), ...view.parts,
+        // This backend opens steps (task steps design): a newer CLI sends `step` only to a backend that says so.
+        ...(this.options.githubApp ? { githubApp: true as const } : {}), steps: true as const, ...view.parts,
         derived: { ...await this.withAvatars(view, t0), ...readableMarks(read, await this.marksOf(tx, tabId, read.actor),
           await this.threadMarksOf(tx, tabId, read.actor), await this.settingsOf(tx, tabId, read.actor)) } }
     })
