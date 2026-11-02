@@ -4,7 +4,7 @@
  * the machine owner), so #2493's guards (leadSwitch.ts) apply unchanged: prepare the handoff, close with the change id, create
  * the new session with that id as its creation id, complete the handoff. Success is the PM rebinding to the new session.
  */
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -14,6 +14,7 @@ import type { AgentEngine } from '../engines/types.js'
 import { asRecord, jwtClaims, parseJson, readClaudeStored, readText, stringField, type CredentialReadDeps } from '../lib/agentCredentials.js'
 import { handoffBaseName } from '../lib/agentHandoff.js'
 import { profileHome } from '../lib/claudeProfiles.js'
+import { defaultCodexHome } from '../lib/codexProfiles.js'
 import { permissionModeApproves, permissionModeFlags } from '../lib/engineLaunch.js'
 import { parseSwarmSkill, wireRole } from '../lib/swarmSkills.js'
 import { leadSwitchOf, leadSwitching, SWITCH_ADOPT_MS, switchWithin } from './leadSwitch.js'
@@ -29,13 +30,15 @@ const LATE = 'the new session did not start in time'
 const SIGNED_OUT = 'that account is signed out'
 /** How long a claim or a result that failed waits before it is tried again (the host polls every second). */
 const RETRY_MS = 10_000
+/** What Claude Code signs in with when its default account stores no token of its own. */
+const CLAUDE_KEY_VARIABLES = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN']
 const LABELS: Record<string, string> = { claude: 'Claude', codex: 'Codex' }
 
 /** The row of a PM of this machine, as the host reads it (cli read/hostRows.ts). */
 export interface SwitchRow {
   tabId: string
   /** The conversation the PM leads and the name of its role, as the host row has them (backend read/hostRows.ts). */
-  leadsConversationId?: unknown
+  ledConversationId?: unknown
   roleName?: unknown
   agent: { id: string; harnessId: string; switchRequest?: { id?: unknown; engine?: unknown; profileId?: unknown; model?: unknown; effort?: unknown } }
 }
@@ -46,28 +49,40 @@ export interface LeadSwitchDeps {
   team: () => boolean
   /** The Team user's home, under which a Codex PM keeps an engine home of its own (teamDaemon.ts pmEngineHome). */
   home: () => string
-  /** Whether the account in a profile folder holds a usable sign-in. */
+  /** Whether the account (a profile folder, or 'default') holds a usable sign-in. */
   signedIn: (engine: string, home: string) => Promise<boolean>
   /** Where the default [signedIn] reads from (the Keychain on macOS, the folder's files elsewhere); injected by specs. */
   credentials?: CredentialReadDeps
   log: (message: string) => void
 }
-interface Run { switchId: string; harnessId: string; changeId: string; busy: boolean; closed: boolean; retryAt?: number; outcome?: { ok: boolean; error?: string } }
+interface Run { switchId: string; harnessId: string; changeId: string; busy: boolean; closed: boolean; retryAt?: number; outcome?: { ok: boolean; error?: string; down?: boolean }
+  /** Why the new session did not start. Reported only once the old PM is back: a late start can still land the switch. */
+  failed?: string }
 
-/** A sign-in the folder holds: a token that is not past its expiry, or one that Claude Code / Codex can renew with its refresh
- *  token. Missing, or expired with no refresh token, is signed out. Reads only; nothing is renewed or sent anywhere. */
-export async function profileSignedIn(engine: string, home: string, now: number, read: CredentialReadDeps = {}): Promise<boolean> {
+/** A sign-in the account holds: a token that is not past its expiry, or one that Claude Code / Codex can renew with its refresh
+ *  token, or for the default account a key its engine reads instead. Missing, or expired with no refresh token, is signed out.
+ *  Reads only; nothing is renewed or sent anywhere. */
+export async function profileSignedIn(engine: string, home: string, now: number, read: CredentialReadDeps = {}, environment: NodeJS.ProcessEnv = process.env): Promise<boolean> {
+  const isDefault = home === 'default'
   if (engine === 'claude') {
-    const oauth = asRecord(asRecord(parseJson((await readClaudeStored({ ...read, configDir: home }))?.raw ?? null))?.claudeAiOauth)
+    if (isDefault && CLAUDE_KEY_VARIABLES.some(name => environment[name])) return true
+    const configDir = isDefault ? environment.CLAUDE_CONFIG_DIR || undefined : home
+    const oauth = asRecord(asRecord(parseJson((await readClaudeStored({ ...read, ...(configDir ? { configDir } : {}) }))?.raw ?? null))?.claudeAiOauth)
     if (!oauth || !stringField(oauth.accessToken)) return false
     return typeof oauth.expiresAt !== 'number' || oauth.expiresAt > now || !!stringField(oauth.refreshToken)
   }
-  const tokens = asRecord(asRecord(parseJson(await readText(join(home, 'auth.json'))))?.tokens)
+  const auth = asRecord(parseJson(await readText(join(isDefault ? defaultCodexHome(read.home ?? homedir(), environment) : home, 'auth.json'))))
+  if (stringField(auth?.OPENAI_API_KEY)) return true
+  const tokens = asRecord(auth?.tokens)
   const token = stringField(tokens?.access_token)
   if (!token) return false
   const exp = jwtClaims(token)?.exp
   return typeof exp !== 'number' || exp * 1000 > now || !!stringField(tokens?.refresh_token)
 }
+
+/** A request's one change id, so a record of #2493 (which holds only this) tells which switch it belongs to, and a create repeated
+ *  after a restart is the same creation. Not a secret: closing a PM takes this machine's own handoff receipt as well. */
+export const switchChangeId = (switchId: string) => createHash('sha256').update(`pm-switch:${switchId}`).digest('hex').slice(0, 32)
 
 const operationId = (kind: string, switchId: string) => `switch-${kind}-${createHash('sha256').update(switchId).digest('hex').slice(0, 32)}`
 
@@ -94,14 +109,14 @@ export class LeadSwitchRequests {
     if (now < (this.claimRetryAt.get(switchId) ?? 0)) return
     // A switch of this PM that #2493 recorded (leadSwitch.ts) is under way, or was before this host restarted: followed, never
     // started again. It ends by the rebind, by the old PM's return past its hold, or by the Swarm's lease.
-    const recorded = leadSwitchOf(this.core.dataDir, agent.harnessId)
-    if (switchWithin(recorded, now, SWITCH_ADOPT_MS)) {
-      const adopted: Run = { switchId, harnessId: agent.harnessId, changeId: recorded.changeId, busy: false, closed: true }
+    // Only this request's own record: an earlier switch's, inside its window, must not answer a new request without trying it.
+    const changeId = switchChangeId(switchId), recorded = leadSwitchOf(this.core.dataDir, agent.harnessId)
+    if (recorded?.changeId === changeId && switchWithin(recorded, now, SWITCH_ADOPT_MS)) {
+      const adopted: Run = { switchId, harnessId: agent.harnessId, changeId, busy: false, closed: true }
       this.runs.set(agent.id, adopted)
       await this.follow(tabId, agent, adopted)
       return
     }
-    const changeId = randomBytes(16).toString('hex')
     if (leadSwitching(this.core.dataDir, agent.harnessId, changeId, now)) return
     // Held before the claim is awaited, so a poll that comes while it is in flight starts nothing.
     const created: Run = { switchId, harnessId: agent.harnessId, changeId, busy: true, closed: false }
@@ -111,7 +126,8 @@ export class LeadSwitchRequests {
     } catch { this.runs.delete(agent.id); this.claimRetryAt.set(switchId, now + RETRY_MS); return }
     try { created.outcome = await this.carryOut(row, created, request) } catch (error) {
       this.deps.log(`PM switch failed: ${error instanceof Error ? error.name : typeof error}`)
-      created.outcome = { ok: false, error: created.closed ? NO_START : NO_HANDOFF }
+      if (created.closed) created.failed = NO_START
+      else created.outcome = { ok: false, error: NO_HANDOFF }
     } finally { created.busy = false }
     if (created.outcome) await this.report(tabId, agent.id, created)
   }
@@ -126,9 +142,10 @@ export class LeadSwitchRequests {
     const old = this.core.agents.byAgent(run.harnessId)
     // The PM comes back as a Swarm PM, from what it was started as: with no saved role or no conversation to rebuild its prompt
     // from, it would come back role-less, with no Swarm skill and the machine owner's own GitHub login.
-    const skill = parseSwarmSkill(old?.swarmSkill), conversation = row.leadsConversationId
+    const skill = parseSwarmSkill(old?.swarmSkill), conversation = row.ledConversationId
     if (!old?.cwd || !skill || !identifier(conversation)) return { ok: false, error: NO_HANDOFF }
-    if (home !== 'default' && !await this.deps.signedIn(engine, home)) return { ok: false, error: SIGNED_OUT }
+    // The default account too; a Team daemon's is signed in through its owner's relay (team/relay.ts), which this cannot read.
+    if (!team && !await this.deps.signedIn(engine, home)) return { ok: false, error: SIGNED_OUT }
     const daemon = await this.deps.open({ dataDir: this.core.dataDir, port: this.core.daemon.port, machineId: this.machineId })
     try {
       const { changeId } = run, agentId = run.harnessId
@@ -159,31 +176,39 @@ export class LeadSwitchRequests {
         delete payload.model; delete payload.effort
         created = await daemon.request('agent_create', payload, 30_000)
       }
-      const replacementId = created.error ? '' : String(object(created.agent).id ?? created.agentId ?? '')
-      if (!replacementId) return { ok: false, error: NO_START }
+      if (created.error) { run.failed = NO_START; return undefined }
+      // A create that is held has no session yet, and can still start inside the hold: follow() waits for the rebind.
+      const replacementId = String(object(created.agent).id ?? created.agentId ?? '')
+      if (!replacementId) return undefined
       // The rebind below needs the receipt too, which the daemon already holds; a refusal here does not undo the new session.
       await daemon.request('agent_handoff_complete', { agentId, replacementId, changeId, targetEngine: engine }, 30_000).catch(() => null)
       return undefined
     } finally { daemon.close() }
   }
 
-  /** The request was carried out: done once the PM is bound to the new session, failed once #2493's rollback has reopened the old one.
-   *  (A request the Swarm's own tidy pass cleared reads as done too; its result is then refused as stale, which is harmless.) */
+  /** The request was carried out: done once the PM is bound to the new session. Failed only once the hold has ended and #2493's
+   *  rollback has reopened the old one, so the chat's line is true when it is read; `down` when it has not reopened in the whole
+   *  adoption window. (A request the Swarm's own tidy pass cleared reads as done too; its result is then refused as stale, which
+   *  is harmless.) */
   private async follow(tabId: string, agent: SwitchRow['agent'], run: Run): Promise<void> {
-    if (run.retryAt && this.deps.now() < run.retryAt) return
+    const now = this.deps.now()
+    if (run.retryAt && now < run.retryAt) return
     if (!run.outcome) {
+      const record = leadSwitchOf(this.core.dataDir, run.harnessId)
       if (agent.harnessId !== run.harnessId || !agent.switchRequest) run.outcome = { ok: true }
-      else if (this.core.agents.byAgent(run.harnessId) && !switchWithin(leadSwitchOf(this.core.dataDir, run.harnessId), this.deps.now())) {
-        run.outcome = { ok: false, error: LATE }
+      else if (!switchWithin(record, now)) {
+        const error = run.failed ?? LATE
+        if (this.core.agents.byAgent(run.harnessId)) run.outcome = { ok: false, error }
+        else if (!switchWithin(record, now, SWITCH_ADOPT_MS)) run.outcome = { ok: false, error, down: true }
       }
     }
     if (run.outcome) await this.report(tabId, agent.id, run)
   }
 
   private async report(tabId: string, agentId: string, run: Run): Promise<void> {
-    const { ok, error } = run.outcome!
+    const { ok, error, down } = run.outcome!
     try {
-      await this.post(tabId, agentId, operationId('result', run.switchId), { type: 'agent.switchResult', agentId, switchId: run.switchId, ok, ...(error ? { error } : {}) })
+      await this.post(tabId, agentId, operationId('result', run.switchId), { type: 'agent.switchResult', agentId, switchId: run.switchId, ok, ...(error ? { error } : {}), ...(down ? { down } : {}) })
     } catch (failure) {
       // A settled id is done; any other failure is tried again, not on every poll.
       if (object(failure).code !== 'STALE_SWITCH') { run.retryAt = this.deps.now() + RETRY_MS; return }

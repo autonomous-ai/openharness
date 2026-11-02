@@ -5,17 +5,25 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { Daemon } from '../agentClient/daemon.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { LeadSwitchRequests, profileSignedIn, type SwitchRow } from './leadSwitchRequest.js'
+import { FIXTURE, readFixture } from './fixtures/read/index.js'
+import { LeadSwitchRequests, profileSignedIn, switchChangeId, type SwitchRow } from './leadSwitchRequest.js'
 
 const request = { id: 'sw1', engine: 'claude', profileId: 'p1' }
-const row = (over: Record<string, unknown> = {}, top: Record<string, unknown> = {}): SwitchRow => ({ tabId: 'tab', leadsConversationId: 'conv1', roleName: 'Product Manager',
+const row = (over: Record<string, unknown> = {}, top: Record<string, unknown> = {}): SwitchRow => ({ tabId: 'tab', ledConversationId: 'conv1', roleName: 'Product Manager',
   agent: { id: 'a1', harnessId: 'h1', switchRequest: request, ...over }, ...top })
 const NOW = 1_800_000_000_000
 const PM = { agentId: 'h1', engine: 'codex', cwd: '/work', permissionMode: 'ask', bypassPermission: false, defaultName: 'PM', startedBy: 'agent',
   swarmSkill: { role: 'coordinator', key: 'swarm-lead', mode: 'orchestration', github: true } }
 
+function writeRecord(dataDir: string, changeId: string, at: number) {
+  const dir = join(dataDir, 'super-tabs', 'lead-switch')
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  writeFileSync(join(dir, `${createHash('sha256').update('h1').digest('hex')}.json`), JSON.stringify({ version: 1, agentId: 'h1', changeId, targetEngine: 'claude', at }), { mode: 0o600 })
+}
+
 function setup(options: { claim?: boolean; home?: string | null; team?: boolean; refuse?: string; live?: boolean; resultStale?: boolean; old?: Record<string, unknown>; signedIn?: boolean;
-  claimGate?: Promise<void>; claimFails?: boolean } = {}) {
+  claimGate?: Promise<void>; claimFails?: boolean; createTimesOut?: boolean; createHeld?: boolean; noRecord?: boolean } = {}) {
+  const clock = { now: NOW }
   const dataDir = mkdtempSync(join(tmpdir(), 'lead-switch-'))
   const calls: Array<[string, Record<string, unknown>]> = []
   const posted: Array<Record<string, unknown>> = []
@@ -37,16 +45,23 @@ function setup(options: { claim?: boolean; home?: string | null; team?: boolean;
     if (type === 'agent_handoff_prepare') {
       return { agentId: 'h1', file: `.harness/handoff/h1-${payload.changeId}.md`, gitRepo: true, cwd: '/work', degraded: [] }
     }
-    if (type === 'agent_close') { live = false; return { closed: true } }
+    if (type === 'agent_close') {
+      live = false
+      // What the real close does once its stop went through (leadSwitch.ts leadSwitchEnded): the hold starts.
+      if (!options.noRecord) writeRecord(dataDir, String(payload.changeId), clock.now)
+      return { closed: true }
+    }
+    if (type === 'agent_create' && options.createTimesOut) throw new Error('timed out')
+    if (type === 'agent_create' && options.createHeld) return { creationId: payload.creationId, state: 'pending' }
     if (type === 'agent_create') return options.refuse ? { error: options.refuse } : { agent: { id: 'h2' } }
     return {}
   }) }
   const core = fakeCore({ dataDir, account: { backend },
     agents: { byAgent: vi.fn((id: string) => id === 'h1' && live ? { ...PM, ...options.old } as never : undefined) } })
   const profiles = vi.fn(() => options.home === undefined ? '/home/p1' : options.home)
-  const switches = new LeadSwitchRequests(core, 'm1', { now: () => NOW, home: () => home, signedIn: async () => options.signedIn !== false,
+  const switches = new LeadSwitchRequests(core, 'm1', { now: () => clock.now, home: () => home, signedIn: async () => options.signedIn !== false,
     open: async () => daemon, profiles: profiles as never, team: () => options.team === true })
-  return { switches, calls, posted, daemon, profiles, operationIds, home, dataDir }
+  return { switches, calls, posted, daemon, profiles, operationIds, home, dataDir, clock, reopen: () => { live = true } }
 }
 
 describe('a PM host carrying out a switch the Swarm asked for', () => {
@@ -85,7 +100,7 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
   })
 
   it('refuses before closing a PM that has no Swarm skill or no conversation to rebuild its prompt from', async () => {
-    for (const [t, r] of [[setup({ old: { swarmSkill: undefined } }), row()], [setup(), row({}, { leadsConversationId: undefined })]] as const) {
+    for (const [t, r] of [[setup({ old: { swarmSkill: undefined } }), row()], [setup(), row({}, { ledConversationId: undefined })]] as const) {
       await t.switches.serve(r)
       expect(t.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: false, error: 'the handoff could not be prepared' })
       expect(t.calls).toEqual([])
@@ -156,12 +171,7 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
   })
 
   describe('after a restart of the host in the middle of a switch', () => {
-    const record = (t: ReturnType<typeof setup>, at: number) => {
-      const dir = join(t.dataDir, 'super-tabs', 'lead-switch')
-      mkdirSync(dir, { recursive: true, mode: 0o700 })
-      writeFileSync(join(dir, `${createHash('sha256').update('h1').digest('hex')}.json`),
-        JSON.stringify({ version: 1, agentId: 'h1', changeId: 'a'.repeat(32), targetEngine: 'claude', at }), { mode: 0o600 })
-    }
+    const record = (t: ReturnType<typeof setup>, at: number) => writeRecord(t.dataDir, switchChangeId('sw1'), at)
     it('does not claim or run again, and reports ok when the rebind lands', async () => {
       const t = setup({ live: false })
       record(t, NOW - 4 * 60_000)
@@ -195,11 +205,68 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
     expect(t.posted.at(-1)).toEqual({ type: 'agent.switchResult', agentId: 'a1', switchId: 'sw1', ok: true })
   })
 
-  it('reports ok:false and leaves the old PM to the keep-alive when the create is refused', async () => {
-    const t = setup({ refuse: 'SPAWN_LIMIT' })
+  describe('a switch that failed after closing the PM', () => {
+    const HOLD = 3 * 60_000
+    const failure = { type: 'agent.switchResult', agentId: 'a1', switchId: 'sw1', ok: false, error: 'the new session could not start' }
+    const results = (t: ReturnType<typeof setup>) => t.posted.filter(c => c.type === 'agent.switchResult')
+
+    it('says nothing while the old PM is still closed, and reports once it is back past its hold', async () => {
+      const t = setup({ refuse: 'SPAWN_LIMIT' })
+      await t.switches.serve(row())
+      expect(t.calls.map(c => c[0])).toEqual(['agent_handoff_prepare', 'agent_close', 'agent_create'])
+      expect(results(t)).toEqual([])
+      t.clock.now += HOLD + 1000
+      await t.switches.serve(row())
+      expect(results(t)).toEqual([])
+      t.reopen()
+      await t.switches.serve(row())
+      expect(results(t)).toEqual([failure])
+    })
+
+    it('says the PM has not come back when it never reopened', async () => {
+      const t = setup({ refuse: 'SPAWN_LIMIT' })
+      await t.switches.serve(row())
+      t.clock.now += 10 * 60_000 + 1000
+      await t.switches.serve(row())
+      expect(results(t)).toEqual([{ ...failure, down: true }])
+    })
+
+    for (const [name, option] of [['times out', { createTimesOut: true }], ['is held', { createHeld: true }]] as const) {
+      it(`a create that ${name} can still start: no failure line, and the rebind reports ok`, async () => {
+        const t = setup(option)
+        await t.switches.serve(row())
+        expect(results(t)).toEqual([])
+        t.clock.now += 2 * 60_000
+        await t.switches.serve({ tabId: 'tab', agent: { id: 'a1', harnessId: 'h2' } })
+        expect(results(t)).toEqual([{ type: 'agent.switchResult', agentId: 'a1', switchId: 'sw1', ok: true }])
+      })
+    }
+
+    it('a new switch right after a failed one is carried out, not read as the old one', async () => {
+      const t = setup()
+      writeRecord(t.dataDir, switchChangeId('earlier'), NOW - 4 * 60_000)
+      await t.switches.serve(row())
+      expect(t.posted[0]).toMatchObject({ type: 'agent.switchClaim', switchId: 'sw1' })
+      expect(t.calls.map(c => c[0])).toContain('agent_close')
+      expect(t.calls[1][1]).toMatchObject({ changeId: switchChangeId('sw1') })
+    })
+  })
+
+  it('rebuilds the prompt from the chat the backend\'s own host row names', async () => {
+    const t = setup()
+    const real = readFixture<{ tabs: Array<{ roster: Array<Record<string, unknown>> }> }>('host-full').tabs[0].roster.find(r => r.lead === true)!
+    await t.switches.serve({ ...real, tabId: 'tab', agent: { id: 'a1', harnessId: 'h1', switchRequest: request } } as unknown as SwitchRow)
+    expect(String(t.calls.find(c => c[0] === 'agent_create')![1].prompt)).toContain(`conversation is ${FIXTURE.leadGroup}`)
+  })
+
+  it('refuses a signed-out default account before closing the PM, outside Team only', async () => {
+    const t = setup({ home: 'default', signedIn: false })
     await t.switches.serve(row())
-    expect(t.posted.at(-1)).toEqual({ type: 'agent.switchResult', agentId: 'a1', switchId: 'sw1', ok: false, error: 'the new session could not start' })
-    expect(t.calls.map(c => c[0])).toEqual(['agent_handoff_prepare', 'agent_close', 'agent_create'])
+    expect(t.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: false, error: 'that account is signed out' })
+    expect(t.calls).toEqual([])
+    const team = setup({ home: 'default', signedIn: false, team: true })
+    await team.switches.serve(row())
+    expect(team.calls.map(c => c[0])).toContain('agent_close')
   })
 
   it('refuses a signed-out account without closing the PM', async () => {
@@ -247,6 +314,19 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
 })
 
 describe('whether a profile folder holds a sign-in', () => {
+  it('reads the default account where its engine keeps it', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'lead-switch-default-'))
+    const keychain = (raw: string | null) => ({ home, platform: 'linux' as const, readKeychain: async () => raw })
+    const good = JSON.stringify({ claudeAiOauth: { accessToken: 't', expiresAt: NOW + 1000 } })
+    expect(await profileSignedIn('claude', 'default', NOW, keychain(null), {})).toBe(false)
+    expect(await profileSignedIn('claude', 'default', NOW, keychain(good), {})).toBe(true)
+    expect(await profileSignedIn('claude', 'default', NOW, keychain(null), { ANTHROPIC_API_KEY: 'k' })).toBe(true)
+    expect(await profileSignedIn('codex', 'default', NOW, { home }, {})).toBe(false)
+    mkdirSync(join(home, '.codex'))
+    writeFileSync(join(home, '.codex', 'auth.json'), JSON.stringify({ OPENAI_API_KEY: 'k' }))
+    expect(await profileSignedIn('codex', 'default', NOW, { home }, {})).toBe(true)
+  })
+
   const folder = () => mkdtempSync(join(tmpdir(), 'profile-signed-in-'))
   const claude = (oauth: unknown) => ({ platform: 'linux' as const, readKeychain: async () => JSON.stringify({ claudeAiOauth: oauth }) })
   const jwt = (claims: Record<string, unknown>) => ['e30', Buffer.from(JSON.stringify(claims)).toString('base64url'), 'sig'].join('.')
