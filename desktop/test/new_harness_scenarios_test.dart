@@ -1373,7 +1373,6 @@ void main() {
       expect(scenario.box.busy, isTrue);
       git.complete({
         'isGit': true,
-        'branch': 'trunk',
         'branches': [
           {'ref': 'refs/heads/trunk', 'name': 'trunk'},
         ],
