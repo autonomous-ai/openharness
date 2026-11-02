@@ -239,6 +239,14 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(SuperTabTaskPanel), findsOneWidget);
     expect(find.text('Ready: PR #2605.'), findsOneWidget);
+    // Headed as the line reads, with its mark (screen 3).
+    expect(
+      find.descendant(
+        of: find.byType(SuperTabTaskPanel),
+        matching: find.byIcon(AppIcons.circleDot),
+      ),
+      findsOneWidget,
+    );
     // The project stays open beside it.
     expect(c.selectedId, 'lead');
     await tester.tap(find.byKey(const ValueKey('super-task-panel-close')));
