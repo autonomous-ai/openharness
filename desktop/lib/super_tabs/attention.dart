@@ -60,6 +60,9 @@ class SuperTabOwnReply {
   const SuperTabOwnReply(this.text, this.at, {this.outgoing});
   final String text;
 
+  /// What its row says: a reply of files alone has no text of its own.
+  String get shownText => text.isEmpty ? 'Files' : text;
+
   /// When it was seen on its way this visit; null for one that failed earlier.
   final DateTime? at;
 
@@ -500,7 +503,10 @@ class SuperTabAttention extends ChangeNotifier {
           final kept = _ownThisVisit[thread.key] ??= {};
           if (_failed(message)) {
             kept.remove(operationId);
-          } else {
+          } else if (message.state == SuperTabOutgoingState.sending) {
+            // First seen on its way only: a sent reply stays in that list
+            // until its chat's transcript loads, and one from an earlier visit
+            // must not come back as new (review of #2555).
             kept.putIfAbsent(
               operationId,
               () => (text: message.text, at: clock.now()),

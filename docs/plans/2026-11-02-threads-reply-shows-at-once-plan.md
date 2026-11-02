@@ -11,14 +11,17 @@ when it first showed, so the reader's own reply appeared only on a later visit, 
   `SuperTabController.outgoing`, and those sent during this visit, which it notes on every controller change, because a
   send can go from on its way to read back between two frames.
 - The card shows each under its replies: Sending…, then Sent, or the thread pane's Not sent with Retry and Delete.
-- A failed reply keeps its text in that row. Text whose files fail to upload stays in the box, as today.
+- Only a reply first seen on its way is noted: a sent one stays in `outgoing` until its chat's transcript loads, and one
+  from an earlier visit must not come back as new (review).
+- A reply of files alone says Files.
+- A failed reply keeps its whole text in that row. Text whose files fail to upload stays in the box, as today.
 - A reply the card already read back is not shown twice (the same message id).
 - A sent one shows only while the card is new; one on its way or failed shows on any card.
 
 ## Tests (each fails on main)
 
 In `desktop/test/super_tab_attention_test.dart`: shows at once and stays after an answer, failed then Retry, failed then
-Delete, and not shown twice.
+Delete, not shown twice, not back as new on a later visit, and a failed reply's whole text.
 
 ## Design
 

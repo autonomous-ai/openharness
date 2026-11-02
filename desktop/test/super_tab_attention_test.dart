@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -995,6 +996,83 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('On it'), findsNothing);
       expect(find.text('Sent'), findsNothing);
+      await close(tester, c);
+    });
+
+    // Review of #2555: a sent reply stays in the controller's list until its
+    // chat's transcript loads, and must not come back as new on a later visit.
+    testWidgets('a reply from an earlier visit does not come back as new', (
+      tester,
+    ) async {
+      // A chat that is not open: its transcript never loads here.
+      final server = projectServer();
+      fromLead(server, 'Root', conversationId: 'offline');
+      fromLead(server, 'Fresh reply', conversationId: 'offline');
+      server.messages.last['thread'] = 'message-1';
+      conversation(server, 'offline')['lastMainSequence'] = 1;
+      Map<String, dynamic> listed(int lastReply) => {
+        'unread': [
+          unreadThread(
+            'message-1',
+            lastReply,
+            conversationId: 'offline',
+            text: 'Root',
+          ),
+        ],
+        'read': const [],
+        'more': false,
+      };
+      server.followedThreads = listed(2);
+      final c = await openHere(server);
+      final attention = SuperTabAttention.of(c);
+      await attention.load();
+      await tester.binding.setSurfaceSize(const Size(700, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: Scaffold(
+            body: SuperTabThreadsView(attention: attention, onOpen: (_, _) {}),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      const reply = ValueKey('super-thread-reply-offline/message-1');
+      const ownHere = ValueKey('super-thread-own-reply-offline/message-1');
+      await tester.enterText(find.byKey(reply), 'On it');
+      await tester.pump();
+      await tester.tap(
+        find.byKey(const ValueKey('super-thread-send-offline/message-1')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(ownHere), findsOneWidget);
+      // Still in the list: this chat's transcript has not loaded.
+      expect(c.outgoing('offline').where((m) => m.text == 'On it'), isNotEmpty);
+      attention.closed();
+      server.followedThreads = listed(9);
+      attention.opened();
+      await attention.load();
+      await tester.pumpAndSettle();
+      expect(attention.isNew(attention.shown.single), isTrue);
+      expect(find.byKey(ownHere), findsNothing);
+      await close(tester, c);
+    });
+
+    test('a reply with only files says so', () {
+      expect(const SuperTabOwnReply('', null).shownText, 'Files');
+      expect(const SuperTabOwnReply('On it', null).shownText, 'On it');
+    });
+
+    testWidgets('failed: its whole text shows, not cut short', (tester) async {
+      final (server, c, _) = await shown(tester);
+      server.refuse = {'code': 'SWARM_BUSY', 'message': 'Busy, try again.'};
+      final long = List.generate(9, (i) => 'line $i').join('\n');
+      await tester.enterText(find.byKey(field), long);
+      await tester.pump();
+      await tester.tap(find.byKey(send));
+      await tester.pumpAndSettle();
+      final row = tester.renderObject<RenderParagraph>(inOwn(find.text(long)));
+      expect(row.didExceedMaxLines, isFalse);
       await close(tester, c);
     });
 

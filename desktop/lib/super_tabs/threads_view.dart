@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
 import 'attention.dart';
+import 'composer_newline.dart' show kComposerMaxLength;
 import 'composer_tags.dart';
 import '../shared/theme/app_icons.dart';
 import 'controller.dart';
@@ -448,10 +449,11 @@ class _ThreadCardState extends State<_ThreadCard> {
         children: [
           _message(
             {'kind': 'person', 'id': _c.accountId},
-            reply.text,
+            reply.shownText,
             at: reply.at,
             strong: !reply.sending,
-            lines: 4,
+            // A failed one whole: this row is all that is left of its text.
+            lines: reply.sent || reply.sending ? 4 : kComposerMaxLength,
           ),
           Padding(
             padding: const EdgeInsets.only(left: _indent),
