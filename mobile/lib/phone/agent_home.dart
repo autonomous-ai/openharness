@@ -500,7 +500,12 @@ class _AgentHomeState extends State<AgentHome>
     // what it has rather than blanking.
     final requested = _requestedAgent;
     if (requested != null) {
-      final picked = _entryFor(entries, requested);
+      // ⚠️ **Listed but not verified yet is taken too — see [_pendingEntryFor].** A computer just
+      // set up from this phone has its OpenCode listed, but nobody has looked at its pane, so it
+      // reads unopenable until something attaches it — and the screen kept the pane of another
+      // computer, forever, while waiting for that. The pager built for it attaches it.
+      final picked =
+          _entryFor(entries, requested) ?? _pendingEntryFor(entries, requested);
       if (picked != null) return picked;
     }
     // The onboarding's computer, joined: the session used on it last — the one in focus there,
