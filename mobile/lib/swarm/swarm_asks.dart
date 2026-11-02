@@ -115,6 +115,10 @@ class SwarmAsks extends ChangeNotifier {
       !(reader.snapshot == null && reader.error != null) &&
       _settled != reader.generation;
 
+  /// The last read of what waits failed: a list empty now says nothing. Tried
+  /// again each time the Swarm is read.
+  bool get readFailed => _failed;
+
   /// The [SwarmReader.generation] whose asks were read, or need none.
   int _settled = -1;
 

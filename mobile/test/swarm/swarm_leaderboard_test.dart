@@ -171,10 +171,115 @@ void main() {
 
       await read.refresh();
 
-      expect(fake.paths, [path]);
+      expect(fake.paths, ['$path&period=7d']);
       expect(read.loading, isFalse);
       expect(read.board!.people.first.personId, 'diego');
       expect(read.week, isNull);
+    });
+
+    group('the rolling periods', () {
+      Map<String, dynamic> period(String name, {int shipped = 19}) => {
+        ...leaderboardData(shipped: shipped),
+        'period': {'name': name, 'start': 1, 'end': 2},
+      };
+      const older = SuperTabFailure(
+        'VALIDATION',
+        'Unrecognized key',
+        statusCode: 400,
+      );
+
+      test('reads Last 7d first, and another period by name', () async {
+        final fake = FakeSwarm()
+          ..routes['$path&period=7d'] = ((_) => period('7d'))
+          ..routes['$path&period=30d'] = (_) => period('30d', shipped: 40);
+        final read = reader(fake);
+        await read.refresh();
+        expect(read.period, '7d');
+        expect(read.board!.period, '7d');
+
+        final told = <SwarmLeaderboard?>[];
+        read.addListener(() => told.add(read.board));
+        final shown = read.showPeriod('30d');
+        expect(read.board, isNull, reason: "another period's numbers");
+        await shown;
+        expect(told.first, isNull);
+        expect(fake.paths.last, '$path&period=30d');
+        expect(read.board!.shipped, 40);
+      });
+
+      test(
+        'a server before periods keeps the weeks, after one refusal',
+        () async {
+          final fake = FakeSwarm()
+            ..routes['$path&period=7d'] = ((_) => throw older)
+            ..routes[path] = (_) => leaderboardData();
+          final read = reader(fake);
+          await read.refresh();
+          expect(read.period, isNull);
+          expect(read.error, isNull);
+          expect(read.board!.shipped, isNot(0));
+          await read.refresh();
+          expect(fake.paths, ['$path&period=7d', path, path]);
+        },
+      );
+
+      test('a failed first read leaves the periods on, and recovers', () async {
+        var fail = true;
+        final fake = FakeSwarm()
+          ..routes[path] = (_) => fail
+              ? throw const SuperTabFailure('OFFLINE', 'No computer answered.')
+              : period('7d');
+        final read = reader(fake);
+        await read.refresh();
+        expect(read.period, '7d');
+        expect(read.error, 'No computer answered.');
+        fail = false;
+        await read.refresh();
+        expect(read.period, '7d');
+        expect(read.board!.period, '7d');
+        expect(read.error, isNull);
+      });
+
+      test('an answer for the period left behind is not shown, a refusal '
+          'included', () async {
+        final slow = Completer<Object?>(), refused = Completer<Object?>();
+        final fake = FakeSwarm()
+          ..routes['$path&period=7d'] = ((_) => slow.future)
+          ..routes['$path&period=24h'] = ((_) => refused.future)
+          ..routes['$path&period=30d'] = (_) => period('30d', shipped: 40);
+        final read = reader(fake);
+        final first = read.refresh();
+        final second = read.showPeriod('24h');
+        await read.showPeriod('30d');
+        slow.complete(period('7d', shipped: 1));
+        refused.completeError(older);
+        await first;
+        await second;
+        expect(read.board!.shipped, 40);
+        expect(read.period, '30d', reason: 'a stale refusal changes nothing');
+      });
+
+      test('says the period in words, and no comparison for Last 30d', () {
+        final week = SwarmLeaderboard.fromJson(period('7d'));
+        final score = week.people.first;
+        expect(score.spanName, 'in the last 7 days');
+        expect(score.earlierName, 'the 7 days before');
+        expect(swarmPersonWeek(score).first.$2, contains('in the last 7 days'));
+        expect(swarmPeriodEarlier('24h'), 'the 24 hours before');
+        expect(swarmPeriodEarlier('30d'), isNull);
+        final old = SwarmLeaderboard.fromJson(leaderboardData()).people.first;
+        expect(old.spanName, 'this week');
+      });
+
+      test('says a trend against the time before', () {
+        final score = SwarmLeaderboard.fromJson({
+          ...period('24h'),
+          'people': [
+            {'personId': 'a', 'points': 9, 'rank': 1, 'prevWeekPoints': 4},
+          ],
+        }).people.first;
+        expect(swarmTrend(score), 'up 5 from the 24 hours before');
+      });
     });
 
     test('another week clears the board until its own read lands', () async {
@@ -199,11 +304,13 @@ void main() {
 
     test('an answer for the week left behind is not shown', () async {
       final slow = Completer<Object?>();
+      var reads = 0;
       final fake = FakeSwarm()
-        ..routes[path] = ((_) => slow.future)
+        ..routes[path] = ((_) => reads++ == 0 ? leaderboardData() : slow.future)
         ..routes['$path&week=$lastWeek'] = (_) =>
             leaderboardData(week: lastWeek, shipped: 11);
       final read = reader(fake);
+      await read.refresh();
       final first = read.refresh();
 
       await read.showWeek(lastWeek);

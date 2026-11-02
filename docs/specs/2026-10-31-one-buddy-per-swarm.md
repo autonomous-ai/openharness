@@ -88,6 +88,9 @@ choice, as when they post in a project chat themselves.
   repository folder, so they run in project sessions; the main Buddy reads files with Read, Grep and Glob.
 - Before each delivery, the host compares the folder with the projects its person reads now and removes a worktree that
   is no longer listed, so a lost project's code leaves the folder before the Buddy's next turn.
+- Each worktree follows its project's default branch (Scholes, 11-02): at every start, and at a delivery when the last pass
+  was an hour ago, the worktree fetches that one branch and moves when it has no changes. `project-copies.txt` in the home
+  folder says which revision each copy is at and whether it may be behind. A copy that cannot move stays as it is.
 - A project session runs in a worktree of its project's checkout, exactly as today's Buddy does.
 
 **Staying within one context in a Swarm with many projects** (River, 10-31). The main Buddy reads on demand and preloads

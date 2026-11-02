@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../core/dsh_catalog.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import 'store_host.dart';
+import '../widgets/laid_out_list.dart';
 
 /// Shared packages are inspected here, separately from browsing harnesses.
 class StoreViewers extends StatelessWidget {
@@ -24,7 +25,7 @@ class StoreViewers extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
+    return LaidOutListView(
       key: const ValueKey('store-viewers'),
       padding: const EdgeInsets.all(28),
       children: [

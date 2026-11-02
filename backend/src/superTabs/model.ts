@@ -630,13 +630,31 @@ export const actorKey = (actor: Actor): string => actor.kind === 'person' ? `per
 export const activeWork = (group: Conversation): boolean => !!group.assignment &&
   !['done', 'stopped', 'cancelled', 'lost'].includes(group.assignment.status)
 
-/** Old states derive the finished-work mark from their closed assignments; new states persist it on the worker. */
-export function awaitingWorkers(state: SuperTabState, projectId: string): Agent[] {
-  return state.agents.filter(a => {
-    if (state.conversations.some(c => c.leadId === a.id)
-      || state.conversations.some(c => activeWork(c) && c.assignment?.agentId === a.id)) return false
+/** What awaitingWorkers reads of the conversations, from one pass over them: the agents leading any conversation, those with
+ *  active work, and each agent's assigned groups (not lost) in conversation order. Scanning every conversation per agent and
+ *  project was 2.6 M calls in the 2026-11-02 prod profiles (12 profiles), on every read. Built per call or per caller's loop
+ *  over projects, never kept on the state, since a command changes it. */
+export interface WorkerIndex { leaders: ReadonlySet<string>; working: ReadonlySet<string>; groupsByAgent: ReadonlyMap<string, Conversation[]> }
+export function workerIndex(state: SuperTabState): WorkerIndex {
+  const leaders = new Set<string>(), working = new Set<string>(), groupsByAgent = new Map<string, Conversation[]>()
+  for (const c of state.conversations) {
+    if (c.leadId !== null) leaders.add(c.leadId)
+    if (!c.assignment) continue
+    if (activeWork(c)) working.add(c.assignment.agentId)
     // A lost task's agent did not finish it, even once the task is cancelled: it may be gone.
-    const groups = state.conversations.filter(c => c.assignment?.agentId === a.id && !c.assignment.lost)
+    if (c.assignment.lost) continue
+    const groups = groupsByAgent.get(c.assignment.agentId)
+    if (groups) groups.push(c)
+    else groupsByAgent.set(c.assignment.agentId, [c])
+  }
+  return { leaders, working, groupsByAgent }
+}
+
+/** Old states derive the finished-work mark from their closed assignments; new states persist it on the worker. */
+export function awaitingWorkers(state: SuperTabState, projectId: string, index = workerIndex(state)): Agent[] {
+  return state.agents.filter(a => {
+    if (index.leaders.has(a.id) || index.working.has(a.id)) return false
+    const groups = index.groupsByAgent.get(a.id) ?? []
     return (a.projectId ?? groups.map(c => groupProject(state, c).id)[0] ?? 'lead') === projectId &&
       (a.workDecision === 'awaiting' || (!a.workDecision && groups.some(c => !activeWork(c))))
   })
@@ -767,6 +785,8 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   // A Buddy-only machine is no machine of the Swarm to anyone, its own person included (machines.ts buddyOnly): their Buddy
   // shows as a Buddy, and their machine stays theirs. Machines, status and the leaderboard's lent hours all read this.
   if (visible.machines) visible.machines = visible.machines.filter(m => !m.buddyOnly)
+  // Rows by day and project that only the leaderboard read uses, and it takes them from the Swarm itself.
+  for (const pool of visible.machines ?? []) delete pool.lentDays
   // Nor its id, which a Buddy's row carries (machineHiddenFrom).
   visible.agents = visible.agents.map(a => machineHiddenFrom(state, actor, a) ? agentWithoutMachine(a) : a)
   // The removed Leads conversation reaches nobody (leadsRemoved), its id included.
@@ -840,7 +860,9 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     for (const start of visible.starts ?? []) if (startPreparing(state, start, now)) start.preparing = true
     visible.invitations = visible.invitations.filter(i => visible.conversations.some(c => c.id === i.conversationId))
   }
-  for (const project of projectsOf(visible)) for (const target of awaitingWorkers(visible, project.id)) target.workDecision = 'awaiting'
+  // One index for every project: the loop sets only workDecision, which the index does not hold.
+  const workers = workerIndex(visible)
+  for (const project of projectsOf(visible)) for (const target of awaitingWorkers(visible, project.id, workers)) target.workDecision = 'awaiting'
   for (const project of visible.projects ?? []) project.skillSet = skillSetOf(project)
   // An uploaded avatar's stored key stays on the server; readers get a link with each parts read (avatarLinks.ts).
   // Each person as the Swarm names them (usernames.ts), their default included.

@@ -4,12 +4,18 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, 
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { prepareSwarmSkill } from '../lib/swarmSkills.js'
+import { BUDDY_COPIES_FILE, BUDDY_HOME_MANIFEST, buddyHomeRefreshing, refreshBuddyHome, stopBuddyHomeRefresh } from './buddyHome.js'
 import { allowBuddyReads, buddyAccountFile, buddyApprovalsOf, buddyGuardSource, buddyLaunchFile, buddyReadsOf, buddyWideOf, forgetBuddyReads } from '../lib/buddyGuard.js'
 import { env } from '../config/env.js'
 import { PASTE_DROPS_DIR } from '../lib/pasteDropFiles.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // The real lists cleanup, which one test makes throw what it never throws today: an error that is not its own.
+// The real folder code, with the calls the delivery loop makes held open by the tests that need a pass to be running.
+vi.mock('./buddyHome.js', async original => {
+  const real = await original<typeof import('./buddyHome.js')>()
+  return { ...real, refreshBuddyHome: vi.fn(real.refreshBuddyHome), buddyHomeRefreshing: vi.fn(real.buddyHomeRefreshing), stopBuddyHomeRefresh: vi.fn(real.stopBuddyHomeRefresh) }
+})
 vi.mock('../lib/buddyGuard.js', async original => {
   const actual = await original<typeof import('../lib/buddyGuard.js')>()
   return { ...actual, forgetBuddyReads: vi.fn(actual.forgetBuddyReads) }
@@ -1489,6 +1495,36 @@ describe('Super Tab attachments in delivered input', () => {
     const delivered = () => vi.mocked(t.core.turns.deliver).mock.calls.map(c => `${String(c[0])}: ${String(c[1]).match(/(The model\.|Hello\.|Next\.)/)?.[0]}`)
     return { delivered }
   }
+  // Review of #2524: this loop hands every agent on the machine its input.
+  it('a Buddy\'s project copies moving hold its messages, in order, and no other agent\'s', async () => {
+    const t = setup(), folder = realpathSync(mkdtempSync(join(tmpdir(), 'buddy-copies-'))); roots.push(folder)
+    mkdirSync(join(folder, 'projects'))
+    writeFileSync(join(folder, BUDDY_HOME_MANIFEST), '[]\n')
+    const { delivered } = swarmOf(t, [{ id: 'a', deliveries: [{ id: 'first', text: 'The model.' }, { id: 'second', text: 'Next.' }] }, { id: 'z', deliveries: [{ id: 'plain', text: 'Hello.' }] }])
+    const answer = vi.mocked(t.call).getMockImplementation()!
+    vi.mocked(t.call).mockImplementation(async (method, path, body) => path.includes('asAgentId=')
+      ? { status: 200, body: { success: true, data: swarmReply(path, { conversations: [{ id: 'lead' }], agents: [{ id: 'a', buddyScope: 'swarm' }] }) } } : answer(method, path, body))
+    vi.mocked(t.core.agents.byAgent).mockImplementation(((id: string) => ({ agentId: id, cwd: folder, ...id === 'harness-a' ? { swarmSkill: { role: 'buddy', key: 'k' } } : {} })) as never)
+    let open = () => {}
+    const pass = new Promise<void>(resolve => { open = resolve })
+    vi.mocked(refreshBuddyHome).mockReturnValueOnce(pass)
+    vi.mocked(buddyHomeRefreshing).mockImplementation(() => vi.mocked(refreshBuddyHome).mock.calls.length ? pass : undefined)
+    let now = 1_000_000
+    const host = t.open({ now: () => now })
+    await host.tick()
+    expect(delivered()).toEqual(['harness-z: Hello.'])
+    // The first tried at 1, 3 and 7 s, then backing off to 15 s. At 12 s the wait is over, and the second still stays behind it.
+    for (const at of [1_000, 3_000, 7_000, 12_000]) {
+      now = 1_000_000 + at
+      await host.tick()
+      expect(delivered()).toEqual(['harness-z: Hello.'])
+    }
+    vi.mocked(buddyHomeRefreshing).mockReset()
+    open()
+    writeFileSync(join(folder, BUDDY_COPIES_FILE), 'fresh')
+    await vi.waitFor(async () => { now += 60_000; await host.tick(); expect(delivered().filter(line => line.startsWith('harness-a'))).toEqual(['harness-a: The model.', 'harness-a: Next.']) })
+    vi.mocked(refreshBuddyHome).mockReset()
+  })
   /** A download that ends when [finish] is called, for messages with files. */
   function slowFiles() {
     let finish!: () => void
@@ -1568,7 +1604,7 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
   beforeEach(() => rmSync(buddyReadsOf(key).file, { force: true }))
 
   /** A Buddy's delivery of [message] from its chat, its Swarm read as it holds [agents] and [conversations]. */
-  function buddyOn(message: Record<string, unknown> = {}, read: { agents?: unknown[]; conversations?: unknown[] } = {}, claim: Record<string, unknown> = {}) {
+  function buddyOn(message: Record<string, unknown> = {}, read: { agents?: unknown[]; conversations?: unknown[] } = {}, claim: Record<string, unknown> = {}, options: SuperTabHostOptions = {}) {
     const t = setup({ conversationId: 'chat', text: `Have a look: ${LINK}?v=2`, author: person, attachments: [picture], ...message }, claim)
     t.row.agent.id = AGENT
     t.from(String(message.conversationId ?? 'chat'))
@@ -1596,7 +1632,7 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
       ? { text: `Attached files:\n- ${shot} (sent as "screen.png", 3 B)`, complete: true, paths: [shot] } : { text: '', complete: true, paths: [] })
     const delivered: { text: string; list: unknown }[] = []
     vi.mocked(t.core.turns.deliver).mockImplementation((_harness, text) => { delivered.push({ text: String(text), list: listed() }) })
-    const host = t.open({ attachedFiles })
+    const host = t.open({ attachedFiles, ...options })
     return { t, host, shot, state, reads, delivered, refuse: (value: boolean) => { refuse = value } }
   }
 
@@ -1619,6 +1655,108 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
   // its person's files but never wide reads, which could reach another project's clone in their home.
   const swarmChat = { ...buddyChat, kind: 'swarm-buddy', projectId: undefined }
   const swarmBuddy = { ...buddyAgent, projectId: undefined, buddyScope: 'swarm' }
+  // Scholes, 11-02. At a delivery, as only then does anything read the copies; after the access check, so a person who lost a
+  // project gets none of its new code; and never holding the loop that serves every agent on the machine (review of #2524).
+  describe('its project copies at a delivery', () => {
+    const folderOf = (t: ReturnType<typeof buddyOn>['t']) => String(vi.mocked(t.core.agents.byAgent).getMockImplementation()?.('harness' as never)?.cwd)
+    const withHome = (t: ReturnType<typeof buddyOn>['t'], rows: unknown[] = []) => {
+      mkdirSync(join(folderOf(t), 'projects'))
+      writeFileSync(join(folderOf(t), BUDDY_HOME_MANIFEST), `${JSON.stringify(rows)}\n`)
+    }
+    const swarm = () => buddyOn({}, { agents: [swarmBuddy], conversations: [swarmChat] })
+    const deferred = () => { let open = () => {}; const done = new Promise<void>(resolve => { open = resolve }); return { done, open } }
+    afterEach(() => { vi.mocked(refreshBuddyHome).mockReset(); vi.mocked(buddyHomeRefreshing).mockReset() })
+
+    it('holds only this Buddy\'s message while a due pass runs, and delivers it when the pass ends', async () => {
+      const { host, t, delivered } = swarm(), pass = deferred()
+      withHome(t)
+      vi.mocked(refreshBuddyHome).mockReturnValue(pass.done)
+      // Back while the pass still runs: the loop was not held.
+      await host.tick()
+      expect(refreshBuddyHome).toHaveBeenCalledWith(folderOf(t))
+      expect(delivered).toEqual([])
+      pass.open()
+      await vi.waitFor(() => expect(delivered).toHaveLength(1))
+    })
+    it('delivers once its wait is over, with the pass still running', async () => {
+      let now = 1_000_000
+      const { host, t, delivered } = buddyOn({}, { agents: [swarmBuddy], conversations: [swarmChat] }, {}, { now: () => now }), pass = deferred()
+      withHome(t)
+      vi.mocked(refreshBuddyHome).mockReturnValue(pass.done)
+      vi.mocked(buddyHomeRefreshing).mockImplementation(() => vi.mocked(refreshBuddyHome).mock.calls.length ? pass.done : undefined)
+      await host.tick()
+      expect(delivered).toEqual([])
+      now += 11 * 60_000
+      await host.tick()
+      expect(delivered).toHaveLength(1)
+      pass.open()
+    })
+    it('stops a running pass for a project just lost, waits for it, and prunes before the Buddy hears the message', async () => {
+      let now = 1_000_000
+      const { host, t, delivered } = buddyOn({}, { agents: [swarmBuddy], conversations: [swarmChat] }, {}, { now: () => now }), pass = deferred(), folder = () => join(folderOf(t), 'projects', 'Secret')
+      withHome(t, [{ id: 'secret', name: 'Secret', dir: 'Secret' }])
+      mkdirSync(folder())
+      vi.mocked(buddyHomeRefreshing).mockReturnValue(pass.done)
+      const heard: boolean[] = []
+      vi.mocked(t.core.turns.deliver).mockImplementation(() => { heard.push(existsSync(folder())) })
+      await host.tick()
+      expect(stopBuddyHomeRefresh).toHaveBeenCalledWith(folderOf(t))
+      expect(heard).toEqual([])
+      expect(existsSync(folder())).toBe(true)
+      vi.mocked(buddyHomeRefreshing).mockReturnValue(undefined)
+      vi.mocked(refreshBuddyHome).mockResolvedValue(undefined)
+      pass.open()
+      // Its wake-up may land in a pass already running; the host's own timer then tries again, as this does.
+      await vi.waitFor(async () => { now += 60_000; await host.tick(); expect(heard).toEqual([false]) })
+      expect(delivered).toEqual([])
+    })
+    it('delivers after a pass that could not write its file, instead of starting another for ever', async () => {
+      let now = 1_000_000
+      const { host, t, delivered } = buddyOn({}, { agents: [swarmBuddy], conversations: [swarmChat] }, {}, { now: () => now })
+      withHome(t)
+      vi.mocked(refreshBuddyHome).mockResolvedValue(undefined)
+      await vi.waitFor(async () => { now += 60_000; await host.tick(); expect(delivered).toHaveLength(1) })
+      expect(refreshBuddyHome).toHaveBeenCalledTimes(1)
+      expect(existsSync(join(folderOf(t), BUDDY_COPIES_FILE))).toBe(false)
+    })
+    it('writes the copies file again at once after a project leaves, not an hour on (security review 2 of #2524)', async () => {
+      let now = 1_000_000
+      const { host, t, delivered } = buddyOn({}, { agents: [swarmBuddy], conversations: [swarmChat] }, {}, { now: () => now }), pass = deferred()
+      withHome(t)
+      vi.mocked(refreshBuddyHome).mockReturnValueOnce(pass.done).mockResolvedValue(undefined)
+      await host.tick()
+      expect(refreshBuddyHome).toHaveBeenCalledTimes(1)
+      // Lost during that pass's hold: the message tried again prunes it, within the hour.
+      writeFileSync(join(folderOf(t), BUDDY_HOME_MANIFEST), `${JSON.stringify([{ id: 'secret', name: 'Secret', dir: 'Secret' }])}\n`)
+      pass.open()
+      await vi.waitFor(async () => { now += 1_000; await host.tick(); expect(delivered).toHaveLength(1) })
+      expect(refreshBuddyHome).toHaveBeenCalledTimes(2)
+    })
+    it('starts no pass when the access read is refused, and delivers nothing', async () => {
+      // From an agent, with nothing attached: no earlier read refuses it first, so this one is what stops it.
+      const { host, t, delivered, refuse } = buddyOn({ author: { kind: 'agent', id: 'lead-agent', name: 'PM', membershipGeneration: 'g' }, attachments: [], text: 'news' },
+        { agents: [swarmBuddy], conversations: [swarmChat] })
+      withHome(t)
+      refuse(true)
+      await host.tick()
+      expect(refreshBuddyHome).not.toHaveBeenCalled()
+      expect(delivered).toEqual([])
+    })
+    it('starts no pass for a Buddy of one project, whose folder is its worktree', async () => {
+      const { host, t } = buddyOn()
+      withHome(t)
+      await host.tick()
+      expect(refreshBuddyHome).not.toHaveBeenCalled()
+    })
+    it('starts no pass an hour has not passed for', async () => {
+      const { host, t, delivered } = swarm()
+      withHome(t)
+      writeFileSync(join(folderOf(t), BUDDY_COPIES_FILE), 'fresh')
+      await host.tick()
+      expect(refreshBuddyHome).not.toHaveBeenCalled()
+      expect(delivered).toHaveLength(1)
+    })
+  })
   it('grants its person\'s one Buddy in their one chat, wide reads included', async () => {
     const { host, shot, delivered } = buddyOn({}, { agents: [swarmBuddy], conversations: [swarmChat] })
     await host.tick()

@@ -304,13 +304,20 @@ included, filters the recent projects as before.
 - A terminal takes no project, so it clones nothing: a link shows a disabled **A terminal
   can't clone**, and changing to Terminal with a clone chosen asks for a folder or an agent.
 - While it clones the line reads **Cloning owner/repo…**. A checkout of that
-  repository already in the projects folder is used, not cloned, and the line
+  repository already in the projects folder (`~/harnesses`, or `~/projects` on Harness
+  OS, under any spelling of its name) is used, not cloned, and the line
   stays **Starting harness…**, as it does when the computer cannot say. A clone refused
   access tries the other transport, then up to three `~/.ssh/config` aliases
-  leading to github.com. It moves on only after a refusal, never after a network
-  failure or a timeout. Through an alias, the workspace says **Cloned via
-  \<alias\>** once. Refused everywhere: **No access to owner/repo on \<computer\>**,
-  with the task and choices kept.
+  leading to github.com. It moves on after a refusal or a host key ssh will not
+  trust, never after a network failure or a timeout. Through an alias, the workspace
+  says **Cloned via \<alias\>** once. Refused everywhere: **No access to owner/repo on
+  \<computer\>**, with the task and choices kept. When an untrusted host key was among
+  the failures, the line names the key and `ssh -T git@github.com` instead: GitHub
+  was not asked, and that key may have changed.
+- A remote path ending in a hidden folder is asked about by its own path, because
+  its parent's listing leaves it out; there it shows **Open**.
+- An alias `ssh -G` cannot read stays offered, and its launch says so; only an
+  answered host other than github.com is refused in the row.
 
 ## Regression coverage
 

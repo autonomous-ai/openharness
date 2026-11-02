@@ -46,6 +46,8 @@ export interface ContributedMachine {
   buddyOnly?: true
   /** Agent-time Swarm agents here spent on other people's tasks, by leaderboard week, kept by its readings (leaderboard/lent.ts). */
   lent?: import('./leaderboard/lent.js').LentWeek[]
+  /** The same by day, for the board's rolling periods. Only the leaderboard read gets it (model.ts visibleState). */
+  lentDays?: import('./leaderboard/lent.js').LentDay[]
   /** Per engine, its failed starts here in a row, until one runs or they suspend it (engineHealth.ts). */
   engineFailures?: Record<string, number>
   /** Per engine, a suspension after failed starts: when, and whether its reading already said signed in with quota then. */

@@ -236,6 +236,7 @@ export async function prepareProjectFolder(
     let attempts = options.cloneFallback ? cloneAttempts(repository, []) : [repository.url]
     let aliasesRead = !options.cloneFallback
     let used = repository.url
+    let hostKeyFailure: RepositoryHostKeyError | undefined
     for (let index = 0; ; index++) {
       used = attempts[index]!
       if (staging) await rm(staging, { force: true, recursive: true }).catch(() => {})
@@ -246,10 +247,13 @@ export async function prepareProjectFolder(
         break
       } catch (error) {
         logAttempt(repository.owner, repository.name, used, error instanceof ProjectFolderError ? error instanceof RepositoryAccessError ? 'refused' : error.code : 'failed')
-        // Only a refusal is worth another way in: a network failure or a timeout would fail every one of them.
-        if (!(error instanceof RepositoryAccessError)) throw error
+        // Only a refusal or an untrusted host key is worth another way in: a network failure or a timeout would fail every
+        // one of them. An alias may carry its own HostKeyAlias, and https never looks at ssh's keys.
+        if (error instanceof RepositoryHostKeyError) hostKeyFailure ??= error
+        else if (!(error instanceof RepositoryAccessError)) throw error
         if (!aliasesRead) { aliasesRead = true; attempts = cloneAttempts(repository, await (options.githubAliases ?? githubAliases)()) }
-        if (index === attempts.length - 1) throw error
+        // What the person can act on: a machine that may have access once it trusts the key has not been refused.
+        if (index === attempts.length - 1) throw hostKeyFailure ?? error
       }
     }
     const checkout = join(staging, 'checkout')
@@ -316,8 +320,16 @@ function cloneRepository(url: string, destination: string, gitEnv?: NodeJS.Proce
  *  stays CLONE_FAILED for the apps; a caller that knows another way in can tell the two apart. */
 export class RepositoryAccessError extends ProjectFolderError {}
 
+/** CLONE_FAILED because ssh stopped before GitHub was asked: this machine does not trust the host key it was shown. Not a
+ *  refusal, so the apps never call it "No access", and it may mean the key changed. Another way in checks its own key. */
+export class RepositoryHostKeyError extends ProjectFolderError {}
+
 /** What git's diagnostic of a failed clone becomes. A private GitHub repository answers "not found" without access. */
 export function cloneFailure(diagnostic: string): ProjectFolderError {
+  // First: ssh's warning about a changed key also says "Password authentication is disabled".
+  if (/host key verification failed/i.test(diagnostic)) {
+    return new RepositoryHostKeyError('CLONE_FAILED', "The selected machine doesn't trust GitHub's SSH host key. Check it by connecting once with ssh -T git@github.com, then retry.")
+  }
   return /authentication|permission denied|could not read username|repository not found/i.test(diagnostic)
     ? new RepositoryAccessError('CLONE_FAILED', 'Could not access this repository. Check the URL and GitHub access on the selected machine.')
     : new ProjectFolderError('CLONE_FAILED', 'Could not clone the repository. Check the URL and connection, then retry.')

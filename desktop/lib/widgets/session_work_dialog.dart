@@ -11,6 +11,7 @@ import '../core/models.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/pull_request_icon.dart';
 import 'desktop_chrome.dart';
+import 'laid_out_list.dart';
 
 /// Inspection only. This surface never sends terminal input or mutates a checkout.
 class SessionWorkDialog extends StatefulWidget {
@@ -312,7 +313,7 @@ class _SessionWorkDialogState extends State<SessionWorkDialog> {
                                   ),
                                 ),
                               )
-                            : ListView.builder(
+                            : LaidOutListView.builder(
                                 key: ValueKey(
                                   _branches
                                       ? 'git-branches-list'

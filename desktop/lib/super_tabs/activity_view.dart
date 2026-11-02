@@ -11,6 +11,7 @@ import 'machine_status.dart' show superTabAgo;
 import 'notifications.dart';
 import 'profile_model.dart';
 import 'section_heading.dart';
+import '../widgets/laid_out_list.dart';
 
 /// Slack's Activity, where Notifications was (Lead, 10-31): decisions asked
 /// of the reader first, then one list, newest first, of their tags, the
@@ -348,7 +349,7 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
           ? const <_Entry>[]
           : _entries();
       final error = a.error ?? a.mentions.error;
-      return ListView(
+      return LaidOutListView(
         key: const ValueKey('super-activity-list'),
         padding: const EdgeInsets.only(bottom: grid.AppDesktop.groupGap),
         children: [

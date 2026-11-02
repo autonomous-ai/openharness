@@ -1166,6 +1166,60 @@ void main() {
     },
   );
 
+  testWidgets('the workspace goes cleanly with the Models controls open', (
+    tester,
+  ) async {
+    const channel = MethodChannel('harness/swarm_tabs');
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      channel,
+      (call) async => null,
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        channel,
+        null,
+      ),
+    );
+    final app = createApp();
+    final projects = SwarmProjectStore();
+    await app.modelManager.refresh();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SwarmScreen(
+          notifier: app,
+          nativeTabs: true,
+          projectStore: projects,
+        ),
+      ),
+    );
+    await tester.pump();
+    final reply = Completer<void>();
+    tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+      channel.name,
+      const StandardMethodCodec().encodeMethodCall(
+        const MethodCall('modelControls'),
+      ),
+      (_) => reply.complete(),
+    );
+    for (var frame = 0; frame < 5 && !reply.isCompleted; frame++) {
+      await tester.pump();
+    }
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byType(ModelsPanel), findsOneWidget);
+
+    // A sign-out or a lost session: the page stays, the workspace goes.
+    await tester.pumpWidget(
+      const MaterialApp(home: Scaffold(body: Text('Sign in'))),
+    );
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    expect(find.byType(ModelsPanel), findsNothing);
+    expect(find.text('Sign in'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+    projects.dispose();
+    app.dispose();
+  });
+
   testWidgets('the pane × is full ink at rest, as the tab ×', (tester) async {
     final app = createApp();
     addTearDown(app.dispose);

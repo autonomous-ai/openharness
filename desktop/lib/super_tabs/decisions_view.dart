@@ -7,6 +7,7 @@ import '../widgets/desktop_chrome.dart';
 import 'decisions.dart';
 import 'model.dart';
 import 'section_heading.dart';
+import '../widgets/laid_out_list.dart';
 
 /// The reader's decisions in the Notifications pane: what is open first, one
 /// batch per ask, then the last few answered.
@@ -92,7 +93,7 @@ class SuperTabDecisionsPanel extends StatelessWidget {
       final folded = shown.isEmpty;
       return ConstrainedBox(
         constraints: const BoxConstraints(maxHeight: 320),
-        child: ListView(
+        child: LaidOutListView(
           key: const ValueKey('super-pm-decisions'),
           shrinkWrap: true,
           padding: EdgeInsets.only(bottom: folded ? 0 : 8),

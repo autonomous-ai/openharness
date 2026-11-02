@@ -464,6 +464,13 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
     ),
   );
 
+  void _openStatusSheet() => _openSheet(
+    (_) => SwarmProjectStatusSheet(
+      swarmId: widget.swarmId,
+      projectId: widget.projectId,
+    ),
+  );
+
   void _openTeamSheet() => _openSheet(
     (_) => SwarmProjectTeamSheet(
       swarmId: widget.swarmId,
@@ -543,6 +550,7 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
             _ProjectMenu(
               reader: reader,
               projectId: project.id,
+              onStatus: _openStatusSheet,
               onLeaderboard: _openLeaderboardSheet,
               onTeam: _openTeamSheet,
               onNotifications:
@@ -651,6 +659,9 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
         if (reader != null && snapshot != null && project != null) {
           final chat = snapshot.conversation(project.leadConversationId);
           final asks = session.inbox.asks(widget.swarmId);
+          // A project the person no longer reads (made private to others)
+          // keeps no sheet of its own, Status's text and decisions with it.
+          if (!swarmReadsProject(reader, project)) _closeSheet();
           return _Frame(
             top: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -672,16 +683,6 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
                         _messageId = _threadId = null;
                       }),
                     ),
-                  ),
-                // Over the chat, outside it: it never moves the composer.
-                if (_tab == SwarmProjectTab.chat)
-                  SwarmProjectStatusCard(
-                    session: session,
-                    reader: reader,
-                    swarmId: widget.swarmId,
-                    projectId: project.id,
-                    // Read here, above the Scaffold that takes it away.
-                    typing: MediaQuery.viewInsetsOf(context).bottom > 0,
                   ),
               ],
             ),
@@ -777,7 +778,8 @@ SuperTabAgent? swarmProjectPm(SuperTabSnapshot? snapshot, String projectId) {
 /// ⋮ at the end of a Swarm Home C project's header: a small menu, on the
 /// design system's menu surface (the theme's), of Open terminal first for
 /// someone who may write (Tony, 11-01: the PM's terminal on this phone, by
-/// the Buddy row's rule and words, [swarmTerminalAction]), its Leaderboard,
+/// the Buddy row's rule and words, [swarmTerminalAction]), its Status
+/// ([SwarmProjectStatusSheet]; the chat shows no box of it), its Leaderboard,
 /// its Team and its project chat's Notifications ([showSwarmNotifySheet]),
 /// while that chat is read. It goes with the header: losing the project
 /// closes it. Open terminal follows the Swarm and the phone's computers
@@ -786,6 +788,7 @@ class _ProjectMenu extends StatelessWidget {
   const _ProjectMenu({
     required this.reader,
     required this.projectId,
+    required this.onStatus,
     required this.onLeaderboard,
     required this.onTeam,
     this.onNotifications,
@@ -793,7 +796,7 @@ class _ProjectMenu extends StatelessWidget {
 
   final SwarmReader reader;
   final String projectId;
-  final VoidCallback onLeaderboard, onTeam;
+  final VoidCallback onStatus, onLeaderboard, onTeam;
   final VoidCallback? onNotifications;
 
   @override
@@ -850,6 +853,7 @@ class _ProjectMenu extends StatelessWidget {
             terminal.enabled ? terminal.onTap : null,
             value: terminal.value,
           ),
+        row('swarm-project-menu-status', 'Status', onStatus),
         row('swarm-project-menu-leaderboard', 'Leaderboard', onLeaderboard),
         row('swarm-project-menu-team', 'Team', onTeam),
         if (onNotifications case final onTap?)
