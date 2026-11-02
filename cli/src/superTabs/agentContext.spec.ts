@@ -187,3 +187,13 @@ describe('the default project', () => {
     expect(mineText(state, changed({}), 'pm', NOW)).toBe('#1 Fix login (conversation g1) — Dev1, review\n1 open task.')
   })
 })
+
+// E2E 2026-11-02: after the PM stopped the Engineer, task GROUP printed its raw id where it had said "Engineer".
+describe('a stopped agent', () => {
+  it('task names it from the names it was given', () => {
+    const group = task('g1', 1, 'Fix', 'gone', 'done', { checks: [{ id: 'c', description: 'Tests pass', independent: false, evidence: 'ok', passedBy: 'agent:gone' }] })
+    const text = taskText(group, swarm([group]), [], changed({}), NOW, new Map([['gone', 'Avery']]))
+    expect(text).toContain('Assignee: Avery')
+    expect(text).toContain('✓ Tests pass — by Avery')
+  })
+})

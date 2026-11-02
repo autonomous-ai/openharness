@@ -1539,6 +1539,17 @@ describe('mine and task', () => {
     expect(answer.value.text.split('\n')[0]).toBe('#9 Old fix (conversation g9)')
     expect(answer.value.text).toContain('- Dev1, done (current): Merged')
   })
+  it('task names a stopped assignee from the task\'s messages', async () => {
+    const t = setup()
+    const group = { id: 'g9', number: 9, title: 'Fix', archived: false, checks: [], assignment: { agentId: 'gone', status: 'done', result: null } }
+    withState(t, [group])
+    const answer = vi.mocked(t.core.account.backend).getMockImplementation()!
+    vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => path.includes('/conversations/g9/messages')
+      ? ok({ messages: [{ id: 'm', conversationId: 'g9', author: { kind: 'agent', id: 'gone', name: 'Avery' }, text: 'Done' }], next: null }) as never
+      : answer(method, path, body))
+    const result = await t.ask({ action: 'task', tabId: 'tab', harnessId: 'native', conversationId: 'g9' }, owner) as { value: { text: string } }
+    expect(result.value.text).toContain('Assignee: Avery')
+  })
   it('task of a group it cannot read answers NOT_FOUND', async () => {
     const t = setup()
     withState(t, [], () => ({ status: 404, body: { success: false, error: { code: 'NOT_FOUND', message: 'This conversation is unavailable.' } } }))

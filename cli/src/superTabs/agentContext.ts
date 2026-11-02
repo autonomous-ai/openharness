@@ -172,9 +172,21 @@ function attemptLine(state: Json, attempt: Json, current: boolean): string {
     + (result ? `: ${firstLine(result, RESULT_MAX)}` : '')
 }
 
+/** The agent ids [group] and [attempts] name that the Swarm read does not list: agents stopped since. */
+export function unknownAgents(group: Json, state: Json, attempts: Json[] | null): string[] {
+  const listed = new Set(list(state.agents).map(a => a.id))
+  const ids = [object(group.assignment).agentId, ...(attempts ?? []).map(a => a.agentId),
+    ...list(group.checks).map(c => typeof c.passedBy === 'string' && c.passedBy.startsWith('agent:') ? c.passedBy.slice(6) : null)]
+  return [...new Set(ids.filter((id): id is string => typeof id === 'string' && !listed.has(id)))]
+}
+
 /** One task: what it is, its checks, its attempts (the current one, then [attempts] as the backend's attempts read gives
  *  them, newest first; null when that read failed), its linked tasks and how to read its conversation. */
-export function taskText(asked: Json, state: Json, attempts: Json[] | null, groupChangedAt: ReadonlyMap<string, number>, now: number): string {
+export function taskText(asked: Json, read: Json, attempts: Json[] | null, groupChangedAt: ReadonlyMap<string, number>, now: number,
+  knownNames: ReadonlyMap<string, string> = new Map()): string {
+  // An agent stopped since is no longer in the Swarm read: [knownNames] names it (E2E 2026-11-02: a raw id was printed).
+  const listed = new Set(list(read.agents).map(a => a.id))
+  const state: Json = { ...read, agents: [...list(read.agents), ...[...knownNames].filter(([id]) => !listed.has(id)).map(([id, name]) => ({ id, name }))] }
   // A step is read as its task, with the step marked (task steps design); a step whose task is not in the read reads alone.
   const owning = isStep(asked) ? list(state.conversations).find(c => c.id === asked.reviewOf) : undefined
   const group = owning ?? asked
