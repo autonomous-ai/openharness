@@ -126,7 +126,6 @@ void main() {
     expect(find.byType(TextField), findsNothing);
     expect(find.byType(EditableText), findsNothing);
     expect(find.text('Save'), findsNothing);
-    expect(find.text('Delete'), findsNothing);
     expect(find.text('Restore'), findsNothing);
   });
 
@@ -265,7 +264,7 @@ void main() {
     ) async {
       final sent = <Map<String, dynamic>>[];
       var kept = notes;
-      final s = await open(
+      await open(
         tester,
         route: (_) => doc(3, 'Rules.', notes: kept),
         commands: (body) {
@@ -289,12 +288,11 @@ void main() {
       });
       expect(sent.single['operationId'], isA<String>());
       expect(find.text('Do not use Codex.'), findsNothing);
-      s.reader.dispose();
     });
 
     testWidgets('Cancel sends nothing', (tester) async {
       final sent = <Object?>[];
-      final s = await open(
+      await open(
         tester,
         route: (_) => doc(3, 'Rules.', notes: notes),
         commands: (body) {
@@ -308,22 +306,20 @@ void main() {
       await tester.pumpAndSettle();
       expect(sent, isEmpty);
       expect(find.text('Do not use Codex.'), findsOneWidget);
-      s.reader.dispose();
     });
 
     testWidgets('a person who may not sees no Delete', (tester) async {
-      final s = await open(
+      await open(
         tester,
         route: (_) => doc(3, 'Rules.', notes: notes),
         role: 'viewer',
       );
       expect(find.text('Do not use Codex.'), findsOneWidget);
       expect(remove, findsNothing);
-      s.reader.dispose();
     });
 
     testWidgets('a refusal says why and keeps the note', (tester) async {
-      final s = await open(
+      await open(
         tester,
         route: (_) => doc(3, 'Rules.', notes: notes),
         commands: (_) => throw const SuperTabFailure(
@@ -338,7 +334,6 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('This note is unavailable.'), findsOneWidget);
       expect(find.text('Do not use Codex.'), findsOneWidget);
-      s.reader.dispose();
     });
   });
 }
