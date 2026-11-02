@@ -83,7 +83,11 @@ void main() {
     await daemon.stop();
   });
 
-  WsConn local(List<ConnectionStatus> statuses, {String machineId = 'm1'}) {
+  WsConn local(
+    List<ConnectionStatus> statuses, {
+    String machineId = 'm1',
+    Duration firstConnectFor = firstConnectWindow,
+  }) {
     final conn = WsConn(
       wsBaseUrl: 'wss://unused.example',
       autonomousEnv: 'prod',
@@ -93,6 +97,7 @@ void main() {
       onEvent: (_) {},
       onStatus: statuses.add,
       random: _LongestWait(),
+      firstConnectFor: firstConnectFor,
       transportKind: WsTransportKind.localPlaintext,
       allowLocalTcpFixture: true,
       localWsUri: Uri.parse(
@@ -145,16 +150,25 @@ void main() {
     expect(clock.elapsed, lessThan(const Duration(milliseconds: 900)));
   });
 
+  test('past the quick tries it still says connecting within the window, and backs off from the start', () async {
+    daemon.failSelects = firstConnectRetries + 1;
+    final statuses = <ConnectionStatus>[];
+    final conn = local(statuses);
+    await conn.connect();
+    await untilReady(conn, const Duration(seconds: 10));
+    expect(statuses, isNot(contains(ConnectionStatus.reconnecting)));
+    expect(daemon.selects, firstConnectRetries + 2);
+  });
+
   test(
-    'past the quick tries it says reconnecting and backs off from the start',
+    'past the window it says reconnecting, which reads as offline',
     () async {
       daemon.failSelects = firstConnectRetries + 1;
       final statuses = <ConnectionStatus>[];
-      final conn = local(statuses);
+      final conn = local(statuses, firstConnectFor: Duration.zero);
       await conn.connect();
       await untilReady(conn, const Duration(seconds: 10));
       expect(statuses, contains(ConnectionStatus.reconnecting));
-      expect(daemon.selects, firstConnectRetries + 2);
     },
   );
 

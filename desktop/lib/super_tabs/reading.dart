@@ -70,8 +70,8 @@ class SuperTabReading {
   /// [firstReadRetryDelays], within [connectGrace]. Its reads go through this
   /// computer's daemon, which may still be starting while the app opens: such a
   /// read used to wait for the next poll, 15 s for a Swarm not on screen, with the
-  /// heading saying Reconnecting. The grace then covers any such failure, and no
-  /// longer "no machine connected", which here is a settled answer.
+  /// heading saying Reconnecting. The grace then covers any such failure, but not
+  /// a settled one ([SuperTabFailure.settled]).
   final bool retriesFirstRead;
 
   /// The waits between tries of a first read ([retriesFirstRead]).

@@ -223,6 +223,46 @@ void main() {
   );
 
   test(
+    'a read before this computer has its row waits, with no error shown',
+    () {
+      fakeAsync((async) {
+        final daemon = _Daemon(ConversationServer())
+          ..failure = const SuperTabFailure(
+            'MACHINE_UNAVAILABLE',
+            'Connect one of your machines to open Swarm.',
+          );
+        final c = _controller(daemon)..start();
+        final errors = <String?>[];
+        c.addListener(() => errors.add(c.error));
+        async.flushMicrotasks();
+        expect(c.error, isNull);
+        expect(c.loading, isTrue);
+        expect(c.stillConnecting, isTrue);
+        daemon.failure = null;
+        async.elapse(const Duration(milliseconds: 500));
+        expect(c.snapshot, isNotNull);
+        expect(errors.whereType<String>(), isEmpty);
+        c.dispose();
+      });
+    },
+  );
+
+  test('a computer that never gets its row says so once the grace ends', () {
+    fakeAsync((async) {
+      final daemon = _Daemon(ConversationServer())
+        ..failure = const SuperTabFailure(
+          'MACHINE_UNAVAILABLE',
+          'Connect one of your machines to open Swarm.',
+        );
+      final c = _controller(daemon)..start();
+      async.elapse(const Duration(seconds: 11));
+      expect(c.error, 'Connect one of your machines to open Swarm.');
+      expect(c.loading, isFalse);
+      c.dispose();
+    });
+  });
+
+  test(
     'a Team computer is told at once: its refusal is no passing failure',
     () {
       fakeAsync((async) {
@@ -230,6 +270,7 @@ void main() {
           ..failure = const SuperTabFailure(
             'MACHINE_UNAVAILABLE',
             'This computer runs Swarm agents for a Harness Team account.',
+            settled: true,
           );
         final c = _controller(daemon)..start();
         async.flushMicrotasks();

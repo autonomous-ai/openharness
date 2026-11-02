@@ -57,6 +57,12 @@ Duration firstConnectRetryDelay(int attempt) => attempt <= 1
     ? const Duration(milliseconds: 500)
     : const Duration(seconds: 1);
 
+/// How long a Desktop connection that has never been up goes on saying connecting, past its quick
+/// tries. `reconnecting` marks a machine offline, and a daemon just started has its backend some
+/// seconds later (6 s on 10-30): those seconds are not a computer that is off. As long as the
+/// daemon's own wait for one dial. A relay that says the machine is off is believed at once ([_park]).
+const firstConnectWindow = Duration(seconds: 15);
+
 /// How long a connection has to stay up before its next drop starts the backoff over. Resetting it
 /// the moment a socket was up made a socket the backend dropped right after its handshake redial
 /// every second, for good: about 54 dials a minute from one browser tab (prod, 2026-10-28).
@@ -209,6 +215,9 @@ class WsConn {
   /// Opens the backend socket. Null dials a real one; tests pass a fake.
   @visibleForTesting
   final CloudSocketFactory? cloudSocket;
+
+  /// [firstConnectWindow]; a test's own.
+  final Duration firstConnectFor;
 
   /// The reconnect jitter's source. Null is a fresh [Random].
   final Random _random;
@@ -378,6 +387,7 @@ class WsConn {
     this.transportPlugins,
     this.cloudSocket,
     Random? random,
+    @visibleForTesting this.firstConnectFor = firstConnectWindow,
   }) : _random = random ?? Random();
 
   /// The socket to dial, decided afresh on every connect: whether the file is
@@ -454,7 +464,7 @@ class WsConn {
     _ready = false;
     _firstConnect ??= Stopwatch()..start();
     onStatus(
-      _attempt == 0 || _onFirstConnect
+      _attempt == 0 || _saysConnecting
           ? ConnectionStatus.connecting
           : ConnectionStatus.reconnecting,
     );
@@ -1236,11 +1246,18 @@ class WsConn {
   bool get _onFirstConnect =>
       isLocal && !_everReady && _attempt <= firstConnectRetries;
 
+  /// Nothing has been lost yet: its quick tries, or the seconds of [firstConnectFor].
+  bool get _saysConnecting =>
+      _onFirstConnect ||
+      (isLocal &&
+          !_everReady &&
+          (_firstConnect?.elapsed ?? Duration.zero) < firstConnectFor);
+
   void _scheduleReconnect() {
     if (_closing) return;
     _attempt++;
     onStatus(
-      _onFirstConnect
+      _saysConnecting
           ? ConnectionStatus.connecting
           : ConnectionStatus.reconnecting,
     );

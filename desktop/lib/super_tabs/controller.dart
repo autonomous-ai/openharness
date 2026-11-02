@@ -76,9 +76,18 @@ const superTabRefusedAsSent = "The server couldn't take this message.";
 final _schemaWords = RegExp(r'Unrecognized key|^command(\.\w+)*: ');
 
 class SuperTabFailure implements Exception {
-  const SuperTabFailure(this.code, this.message, {this.statusCode = 0});
+  const SuperTabFailure(
+    this.code,
+    this.message, {
+    this.statusCode = 0,
+    this.settled = false,
+  });
   final String code, message;
   final int statusCode;
+
+  /// No wait changes this answer, whatever its code ([SuperTabReading.retriesFirstRead]): a Team
+  /// computer that may not speak as the person, beside a computer that is only still starting.
+  final bool settled;
   @override
   String toString() => message;
 }
@@ -3518,13 +3527,12 @@ class SuperTabController extends ChangeNotifier {
   bool _graceCovers(Object failure) {
     final code = failure is SuperTabFailure ? failure.code : null;
     if (!_policy.retriesFirstRead) return code == 'MACHINE_UNAVAILABLE';
-    if (code == 'MACHINE_UNAVAILABLE' || _isUpdateRequired(failure)) {
-      return false;
-    }
-    // In passing: no answer at all, or a 5xx. A refusal (401, 403, 404) is the server's word.
+    if (_isUpdateRequired(failure)) return false;
+    // In passing: no answer at all, a 5xx, or a read before this computer has its row, which a
+    // Swarm restored at launch can make. A refusal (401, 403, 404) is the server's word.
     return failure is! SuperTabFailure ||
-        failure.statusCode == 0 ||
-        failure.statusCode >= 500;
+        (!failure.settled &&
+            (failure.statusCode == 0 || failure.statusCode >= 500));
   }
 
   /// Bounded by [SuperTabReading.firstReadRetryDelays]; the grace's end then says what failed.

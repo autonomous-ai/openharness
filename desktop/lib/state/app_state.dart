@@ -1968,6 +1968,7 @@ class AppNotifier extends ChangeNotifier {
           throw const SuperTabFailure(
             'MACHINE_UNAVAILABLE',
             teamComputerSwarmMessage,
+            settled: true,
           );
         }
         throw const SuperTabFailure(
