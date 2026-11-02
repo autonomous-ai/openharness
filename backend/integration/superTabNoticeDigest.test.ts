@@ -746,6 +746,19 @@ describe('a step\'s Stuck, skills notices and quiet alerts', () => {
     expect((await deliveryOf(row.id, f.worker)).status).toBe('queued')
   })
 
+  it('a step\'s Stuck goes at once to the coordinator when no owner of its task is told (review of the more-kinds branch)', async () => {
+    const f = await swarm()
+    const orphan = String((await f.execute({ type: 'conversation.create', title: 'Nobody holds this', brief: 'Unassigned', checks: [] })).result.conversationId)
+    const step = String((await f.execute({ type: 'conversation.create', title: 'Review: Nobody holds this', brief: 'Review it', checks: [],
+      reviewOf: orphan })).result.conversationId)
+    const reviewer = await f.add(step, 'test-host', 'Reviewer')
+    const assignmentId = String((await f.execute({ type: 'work.assign', conversationId: step, agentId: reviewer })).result.assignmentId)
+    await f.execute({ type: 'work.status', conversationId: step, assignmentId, status: 'blocked', result: 'Needs the owner\'s account' }, host, reviewer)
+    const row = await statusRow(f.tab, step, 'Stuck')
+    expect(row.recipientIds).toEqual([f.lead])
+    expect((await deliveryOf(row.id, f.lead)).status).toBe('queued')
+  })
+
   it('a step\'s Needs a human goes at once to the coordinator', async () => {
     const f = await swarm()
     const s = await stepOf(f)
