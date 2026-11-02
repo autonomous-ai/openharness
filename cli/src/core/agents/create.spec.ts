@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { installedDsh } from '../../dsh/installed.js'
-import { agentTmpEnv } from '../../lib/agentTmp.js'
+import { agentTmpEnv, buddyTmpEnv } from '../../lib/agentTmp.js'
 import { dshPinnedPermissionMode } from '../../dsh/manifest.js'
 import { incompatibleHarnessEngine } from '../../dsh/compatibility.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
@@ -78,6 +78,9 @@ const { preTrustClaudeProject, preTrustCodexProject, acceptFullMode } = trust
 vi.mock('../../engines/launchPrep.js', () => ({ acceptFullMode: trust.acceptFullMode, folderTrust: (engine: string, profile?: string | null) => engine === 'claude'
     ? { trusts: (path: string) => trust.claudeTrusts(path), record: (path: string) => trust.preTrustClaudeProject(path) }
     : engine === 'codex' ? { trusts: (path: string) => trust.codexTrusts(path, profile), record: (path: string) => trust.preTrustCodexProject(path, profile) } : null }))
+// The connections an agent on a profile home is given (lib/connectors/agents.ts): never written into a real folder here.
+const syncProfileHome = vi.hoisted(() => vi.fn((_vault: unknown, _engine: string, _home: string): string[] => []))
+vi.mock('../../lib/connectors/agents.js', () => ({ syncProfileHome }))
 vi.mock('../../lib/createAgentPane.js', () => ({ createAndRegisterPane: vi.fn() }))
 // The Harness GitHub App's launch writes files in the daemon's folder (lib/swarmGitHub.ts): never this machine's here.
 vi.mock('../../lib/swarmGitHub.js', () => ({ swarmGitHubLaunch: vi.fn(() => null) }))
@@ -257,6 +260,17 @@ describe('creating an agent', () => {
     expect(await setup().create(request({ dsh: 'blender', swarmRole: 'agent' }))).toMatchObject({ ok: true })
     expect(agentTmpEnv).toHaveBeenLastCalledWith('claude', 'agent')
     expect(vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].env).toMatchObject({ HARNESS_DSH: 'blender', TMPDIR: '/data/agent-tmp' })
+  })
+
+  // A Buddy's folder of its own, named for the folder it runs in, and never the owner's agents' shared one.
+  it('gives a Buddy its own private temporary folder, and the launch\'s own variables win', async () => {
+    vi.mocked(installedDsh).mockReturnValueOnce(installed() as never).mockReturnValueOnce(installed() as never)
+    vi.mocked(buddyTmpEnv).mockReturnValueOnce({ TMPDIR: '/data-buddy-tmp/one', CLAUDE_CODE_TMPDIR: '/data-buddy-tmp/one', HARNESS_DSH: 'mine' })
+    const calls = vi.mocked(agentTmpEnv).mock.calls.length
+    expect(await setup().create(request({ dsh: 'blender', swarmRole: 'buddy' }))).toMatchObject({ ok: true })
+    expect(buddyTmpEnv).toHaveBeenLastCalledWith('claude', expect.any(String))
+    expect(vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].env).toMatchObject({ TMPDIR: '/data-buddy-tmp/one', CLAUDE_CODE_TMPDIR: '/data-buddy-tmp/one', HARNESS_DSH: 'blender' })
+    expect(vi.mocked(agentTmpEnv).mock.calls.length).toBe(calls)
   })
 
   it('keeps a selected Store harness when attaching a Swarm skill', async () => {
@@ -556,6 +570,23 @@ describe('creating an agent', () => {
     expect(createAndRegisterPane).not.toHaveBeenCalled()
     expect(await create(input)).toMatchObject({ ok: true })
     expect(createAndRegisterPane).toHaveBeenCalledTimes(1)
+  })
+
+  it('gives an agent on a Claude or Codex profile home the connections there, and one on the default home none', async () => {
+    const { create } = setup()
+    expect(await create(request({ engine: 'claude', claudeHome: '/profiles/claude-work' }))).toMatchObject({ ok: true })
+    expect(await create(request({ engine: 'codex', codexHome: '/profiles/codex-work' }))).toMatchObject({ ok: true })
+    expect(syncProfileHome.mock.calls.map(([, engine, home]) => [engine, home])).toEqual([['claude', '/profiles/claude-work'], ['codex', '/profiles/codex-work']])
+    syncProfileHome.mockClear()
+    expect(await create(request({ engine: 'claude' }))).toMatchObject({ ok: true })
+    expect(await create(request({ engine: 'codex' }))).toMatchObject({ ok: true })
+    expect(await create(request({ engine: 'opencode', claudeHome: '/profiles/claude-work' }))).toMatchObject({ ok: true })
+    expect(syncProfileHome).not.toHaveBeenCalled()
+  })
+
+  it('still launches when the connections cannot be written into a profile home', async () => {
+    syncProfileHome.mockImplementationOnce(() => { throw new Error('read-only') })
+    expect(await setup().create(request({ engine: 'claude', claudeHome: '/profiles/claude-work' }))).toMatchObject({ ok: true })
   })
 
   it('reaches the existing first-install pane route when OpenCode is absent', async () => {

@@ -89,13 +89,20 @@ falls back to a port, so whoever holds a port hears no tool call:
 
 Where no socket can be (Windows, or a folder too long for one), the entry is still the address
 `http://127.0.0.1:51793/<capability>/<code>/mcp`. The port also stays for clients already running on it until they
-restart, and for Harness's own cloud agents.
+restart: its old key lasts a day from the first start with a socket, then goes (`retireBridgeKey`). Harness's own cloud agents use
+the socket too, with Harness's key, which that listener alone accepts where a socket can be.
 
 Only names recorded in `projections.json` are changed or removed; a server the person added keeps its
 name and contents, a config that is not plain JSON is left alone, and a symlinked config is written
 through its link. The daemon writes the entries again as it starts, so an agent installed after a
 service was connected gets it too. An agent reads its MCP servers when it starts: one already running
 sees a new connection after it is restarted.
+
+An agent started under a Claude profile (`CLAUDE_CONFIG_DIR`) or a Codex profile (`CODEX_HOME`), such as a switched PM, reads that
+folder's `.claude.json` or `config.toml`, not the default's. Launching it writes the same entries there (`syncProfileHome`) and
+records the folder in `projections.json` as `claude:<folder>` / `codex:<folder>`; every later sync keeps it current, and a folder
+that is gone is forgotten. Only a Codex folder this machine lists as a profile is written, never through a link that leaves the folder,
+and a home that cannot be written is logged without stopping the others.
 
 The bridge (`bridge.ts`) checks the capability, refuses browser requests (any `Origin`), renews a token
 within five minutes of expiry, forwards the MCP request with the stored headers and streams the answer,

@@ -54,7 +54,13 @@ export interface TeamRelayPublisherDeps {
   user(): string
   /** Whether this daemon runs team work only: it never publishes. */
   team(): boolean
-  startRelay(): Promise<SubscriptionRelay>
+  /** [port]: where to listen, to come back where running agents expect it; EADDRINUSE if taken. */
+  startRelay(port?: number): Promise<SubscriptionRelay>
+  /** The grant this daemon's previous run kept (readRememberedGrant). A running agent still holds it. Absent: none is kept. */
+  remembered?(): RememberedGrant | null
+  remember?(grant: RememberedGrant): void
+  forget?(): void
+  wait?(ms: number): Promise<void>
   publish(config: TeamConfig, grant: TeamRelayGrant): Promise<void>
   /** Whether the published file is still there (someone may have removed the folder). */
   published(config: TeamConfig): boolean
@@ -69,6 +75,38 @@ export interface TeamRelayPublisherDeps {
 
 /** How often the owner's daemon looks again: a team account set up later gets its relay within this long. */
 export const TEAM_RELAY_CHECK_MS = 60_000
+/** How long a kept token lives: one heard once would otherwise spend the owner's subscription until the account is removed
+ *  (security review 1 of #2587). A restart past this strands running agents, at most once a month. */
+export const TEAM_RELAY_TOKEN_MS = 30 * 86_400_000
+/** The grant, and when it was minted, as this daemon keeps it. The team account reads only the grant. */
+export interface RememberedGrant extends TeamRelayGrant { mintedAt: number }
+/** The kept grant's name in the owner's data folder. */
+export const TEAM_RELAY_GRANT_FILE = 'team-relay-grant.json'
+const PORT_TRIES = 10
+const PORT_WAIT_MS = 1_000
+
+/** The grant its previous run left, for this daemon's next start: null unless it is a plain file of this user's, closed to
+ *  everyone else, naming a loopback address and a token of the shape this relay mints. Windows has no mode to check: the
+ *  owner's data folder is closed by its ACL. */
+export function readRememberedGrant(file: string): RememberedGrant | null {
+  try {
+    const info = lstatSync(file)
+    if (!info.isFile()) return null
+    if (process.platform !== 'win32' && (info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0)) return null
+    const value = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+    if (typeof value.url !== 'string' || !RELAY_URL.test(value.url) || typeof value.token !== 'string' || !TOKEN.test(value.token)) return null
+    const port = Number(value.url.slice(value.url.lastIndexOf(':') + 1))
+    if (!(port >= 1 && port <= 65535) || typeof value.mintedAt !== 'number' || !Number.isFinite(value.mintedAt)) return null
+    return { url: value.url, token: value.token, mintedAt: value.mintedAt }
+  } catch { return null }
+}
+
+export function writeRememberedGrant(file: string, grant: RememberedGrant): void {
+  const next = `${file}.${process.pid}.tmp`
+  rmSync(next, { force: true })
+  writeFileSync(next, `${JSON.stringify(grant)}\n`, { mode: 0o600, flag: 'wx' })
+  renameSync(next, file)
+}
 
 export class TeamRelayPublisher {
   private timer: ReturnType<typeof setInterval> | null = null
@@ -96,16 +134,54 @@ export class TeamRelayPublisher {
     if (this.deps.team()) return
     const config = this.deps.config()
     // Only the Mac's owner's daemon holds the owner's sign-ins: another account's daemon on this Mac publishes nothing.
-    if (!config || config.owner !== this.deps.user()) { await this.close(); return }
+    if (!config || config.owner !== this.deps.user()) { await this.close(); this.deps.forget?.(); return }
     if (this.grant && this.owner === config.owner && this.deps.published(config)) return
-    this.relay ??= this.deps.startRelay()
+    this.relay ??= this.openRelay()
     // A relay that could not start is started again on the next pass.
     const relay = await this.relay.catch((error: unknown) => { this.relay = null; throw error })
-    this.grant ??= { url: relay.url, token: relay.mintToken(TEAM_RELAY_GUEST) }
+    if (!this.grant) {
+      this.grant = { url: relay.url, token: relay.mintToken(TEAM_RELAY_GUEST) }
+      try { this.deps.remember?.({ ...this.grant, mintedAt: (this.deps.now ?? Date.now)() }) } catch (error) {
+        this.deps.log(`team relay: could not keep its address for the next restart: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
     await this.deps.publish(config, this.grant)
     this.publishedAt = (this.deps.now ?? Date.now)()
     this.owner = config.owner
     this.deps.log('team relay: the Harness Team account uses this Mac\'s subscriptions')
+  }
+
+  /**
+   * The relay, where running agents expect it (task #2125): they keep the address and token they launched with, so a relay on a
+   * new port with a new token strands every one of them. The old daemon may still be closing, so a taken port is tried for ten
+   * seconds. Held for good, it gives way to a new port and a new token, so what the port's holder heard is dead. Running agents still
+   * send their requests to that holder until they restart, as they did to any old port before this.
+   */
+  private async openRelay(): Promise<SubscriptionRelay> {
+    const kept = this.deps.remembered?.()
+    const age = kept ? (this.deps.now ?? Date.now)() - kept.mintedAt : 0
+    if (kept && (age < 0 || age > TEAM_RELAY_TOKEN_MS)) this.deps.log('team relay: its token reached its age, so it has a new one, and running agents need a restart')
+    else if (kept) {
+      const port = Number(new URL(kept.url).port)
+      for (let attempt = 1; attempt <= PORT_TRIES; attempt++) {
+        try {
+          const relay = await this.deps.startRelay(port)
+          relay.adoptToken(TEAM_RELAY_GUEST, kept.token)
+          this.grant = { url: kept.url, token: kept.token }
+          return relay
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EADDRINUSE') {
+            this.deps.log(`team relay: could not listen on its kept port: ${error instanceof Error ? error.message : String(error)}`)
+            break
+          }
+          if (attempt === PORT_TRIES) this.deps.log(`team relay: port ${port} stayed taken, so running agents keep sending their requests to whatever holds it until they restart`)
+          else await (this.deps.wait ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))))(PORT_WAIT_MS)
+        }
+      }
+    }
+    // Dropped first: a save that fails next must never bring this token back on this port at the next start.
+    if (kept) this.deps.forget?.()
+    return this.deps.startRelay(undefined)
   }
 
   private async close(): Promise<void> {
@@ -244,8 +320,8 @@ export const teamRelayPublished = (config: TeamConfig, exists: (path: string) =>
   try { lstatSync(path); return true } catch { return false }
 }, platform: NodeJS.Platform = 'darwin') => exists(teamRelayFile(config.owner, platform))
 
-export function realTeamRelayPublisher(startRelay: () => Promise<SubscriptionRelay>, config: () => TeamConfig | null,
-  team: () => boolean, log: (line: string) => void, afterPass?: (publishedAt: number | null) => Promise<void>): TeamRelayPublisher {
+export function realTeamRelayPublisher(startRelay: (port?: number) => Promise<SubscriptionRelay>, config: () => TeamConfig | null,
+  team: () => boolean, log: (line: string) => void, grantFile: string, afterPass?: (publishedAt: number | null) => Promise<void>): TeamRelayPublisher {
   return new TeamRelayPublisher({
     ...(afterPass ? { afterPass } : {}),
     // Tests inject a publisher: a test never reads this Mac's own team account, starts a relay on the owner's sign-ins,
@@ -257,6 +333,9 @@ export function realTeamRelayPublisher(startRelay: () => Promise<SubscriptionRel
       : publishTeamRelay(c, grant, process.getuid?.() ?? -1, grantFor(process.platform), teamRelayDir(c.owner, process.platform)),
     published: (c) => teamRelayPublished(c, undefined, process.platform),
     withdraw: (owner) => withdrawTeamRelay(owner, process.platform),
+    remembered: () => readRememberedGrant(grantFile),
+    remember: (grant) => writeRememberedGrant(grantFile, grant),
+    forget: () => rmSync(grantFile, { force: true }),
   })
 }
 

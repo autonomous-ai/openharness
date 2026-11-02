@@ -16,7 +16,7 @@
 import type { Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import type { CoreApi, ServiceRequests } from '../core/api.js'
-import { bridgePort, bridgeSocketPath, saveBridgePort, sync } from '../lib/connectors/agents.js'
+import { bridgePort, bridgeSocketPath, retireBridgeKey, rotateHarnessKey, saveBridgePort, sync } from '../lib/connectors/agents.js'
 import { portHolderIsThisAccount } from '../lib/peerAccount.js'
 import { createBridge, serveBridgeSocket } from '../lib/connectors/bridge.js'
 import { services, type GatewayRow } from '../lib/connectors/catalog.js'
@@ -103,7 +103,12 @@ export function startConnectors(core: CoreApi, overrides: Partial<ConnectorsDeps
   }
   const { vault } = deps
   const flows = new Flows(vault, env)
-  const bridgeKeys = { key: () => String(vault.file('bridge.json').key ?? ''), harnessKey: () => String(vault.file('harness-key.json').key ?? '') }
+  const socket = bridgeSocketPath(vault)
+  // Where a socket can be, the port takes neither key for long: Harness's own goes over the socket, and the agents' retires (agents.ts).
+  if (socket) { try { rotateHarnessKey(vault) } catch (error) { console.warn(`[connections] could not replace Harness's key: ${(error as Error).message}`) } }
+  const bridgeKeys = socket
+    ? { key: () => { try { return retireBridgeKey(vault) } catch { return '' } } }
+    : { key: () => String(vault.file('bridge.json').key ?? ''), harnessKey: () => String(vault.file('harness-key.json').key ?? '') }
   const bridge = createBridge(vault, bridgeKeys)
   bridge.unref()
   // A port a test or HARNESS_CONNECTIONS_PORT names stays that port.
@@ -119,8 +124,9 @@ export function startConnectors(core: CoreApi, overrides: Partial<ConnectorsDeps
       listen(old, from, deps.retryMs)
     },
   } : undefined)
-  const socket = bridgeSocketPath(vault)
   if (socket) listenSocket(vault, socket, deps.retryMs)
+  // Stamped now, not at a client's first call: the day counts from this start.
+  if (socket) { try { retireBridgeKey(vault) } catch { /* The next request tries again. */ } }
   try { sync(vault, env) } catch { /* A config that cannot be written now is written at the next connect. */ }
 
   // Connections the same on every computer of the account: read now, at each `connectors_changed`, and

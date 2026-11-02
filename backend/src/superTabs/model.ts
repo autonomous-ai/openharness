@@ -139,6 +139,8 @@ export interface AgentStartRequest {
   cwd: string
   worktree: boolean
   branchRef?: string
+  /** Stamped by the server for Team-written code (teamWritten.ts): the agent reads no project settings and its folder gets no trust. */
+  projectSettings?: 'off'
   permissionMode?: string
   codexHome?: string
   gridModel?: string
@@ -300,6 +302,9 @@ export interface Conversation {
   task?: WorkTask
   /** A review group names the group whose work it reviews; only a Reviewer is assigned it, and a Reviewer nothing else. */
   reviewOf?: string
+  /** A Harness Team agent worked on this task, or GitHub shows the app's bot pushed to its branch: its code runs only in a
+   *  Team account (teamWritten.ts, audit H2). Set once and never cleared. */
+  teamWritten?: true
   /** A step of the task `reviewOf` names (task steps design, 2026-11-02): its name as the instructions give it, in any
    *  language. Readers show it inside its task, never as a task of its own. Absent on a linked group opened before steps. */
   step?: string
@@ -540,6 +545,8 @@ export const NOTICE_READERS = {
   'update-request': 'recipients', 'digest-request': 'recipients', overlap: 'recipients',
   // Two agents that may be talking in a loop, told to the coordinator (commands.ts pairLoop, project instructions phase 1).
   'pair-loop': 'recipients',
+  // The server's routine notices to the coordinator, gathered into one message (noticeDigest.ts).
+  'notice-digest': 'recipients',
   // Each its own case in commands.ts, decided by the row (forRecipients): statuses, briefs, merges, starts, removals.
   system: 'people',
   // A save of the project's instructions, with its summary: the team sees it without opening the document (instructions.ts).

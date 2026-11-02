@@ -1,9 +1,11 @@
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { buddyTmpFolder, buddyTmpParent } from '../../lib/agentTmp.js'
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { PM_HOMES } from '../teamDaemon.js'
 import { describe, expect, it, vi } from 'vitest'
 import { createSwarmAgents } from './agents.js'
-import { OWN_LEFT, SHARED_LEFT, SWEEP_LEFT, UNREADABLE_DETAIL, createConfidentialPurge, purgeRecord, recordsOtherFolder, rewriteIfUnchanged, scrubClaudeSession, sweepForSession, type PurgeTarget } from './teamPurge.js'
+import { OWN_LEFT, SHARED_LEFT, SWEEP_LEFT, UNREADABLE_DETAIL, createConfidentialPurge, ownHomeFolder, purgeRecord, recordsOtherFolder, rewriteIfUnchanged, scrubClaudeSession, sweepForSession, type PurgeTarget } from './teamPurge.js'
 
 /** A folder that goes between the sweep's listing of its parent and its own read: removed just before that read. */
 const vanish = vi.hoisted(() => ({ path: '' }))
@@ -71,6 +73,39 @@ const transcript = (cwd: string | null, ...lines: string[]) => [JSON.stringify({
 const call = (cwd: string, name: string, input: Record<string, string>) => JSON.stringify({ type: 'assistant', cwd, message: { content: [{ type: 'tool_use', name, input }] } })
 /** What a failed sweep of a shared transcript folder answers. */
 const left = (kind: keyof typeof SHARED_LEFT) => SHARED_LEFT[kind]
+
+describe('a Buddy\'s private temporary folder when its session ends', () => {
+  // A plain session of the one Buddy chat shares its folder with the main Buddy and closes itself when idle (review of #2563).
+  const claudeFiles = (temp: string, folder: string, session: string) =>
+    join(temp, `claude-${process.getuid?.() ?? 0}`, realpathSync(folder).replace(/[^A-Za-z0-9]/g, '-'), session)
+
+  it('keeps it while its Buddy folder is there, another session may run in it, and removes only this session\'s output', async () => {
+    const home = dir(), folder = join(dir(), 'buddy-one')
+    mkdirSync(folder)
+    const temp = buddyTmpFolder(folder), SESSION = '11111111-1111-4111-8111-111111111111', OTHER = '22222222-2222-4222-8222-222222222222'
+    for (const session of [SESSION, OTHER]) { mkdirSync(claudeFiles(temp, folder, session), { recursive: true }); writeFileSync(join(claudeFiles(temp, folder, session), 'output'), 'private') }
+    writeFileSync(join(temp, 'a-tool'), 'x')
+    await scrubClaudeSession(home, target({ sessionId: SESSION, cwd: folder }))
+    expect(existsSync(claudeFiles(temp, folder, SESSION))).toBe(false)
+    expect(existsSync(claudeFiles(temp, folder, OTHER))).toBe(true)
+    expect(existsSync(join(temp, 'a-tool'))).toBe(true)
+    await scrubClaudeSession(home, target({ sessionId: null, cwd: folder }))
+    expect(existsSync(temp)).toBe(true)
+    rmSync(buddyTmpParent(), { recursive: true, force: true })
+  })
+
+  it('goes whole once its Buddy folder is gone, and another Buddy\'s stays', async () => {
+    const home = dir(), folder = join(dir(), 'buddy-one'), other = join(dir(), 'buddy-two')
+    mkdirSync(folder); mkdirSync(other)
+    const mine = buddyTmpFolder(folder), theirs = buddyTmpFolder(other)
+    for (const at of [mine, theirs]) { mkdirSync(at, { recursive: true }); writeFileSync(join(at, 'output'), 'private') }
+    rmSync(folder, { recursive: true })
+    await scrubClaudeSession(home, target({ sessionId: null, cwd: folder }))
+    expect(existsSync(mine)).toBe(false)
+    expect(existsSync(theirs)).toBe(true)
+    rmSync(buddyTmpParent(), { recursive: true, force: true })
+  })
+})
 
 describe('scrubbing a Claude Code session from the Team user\'s shared home', () => {
   // Security review 2 of #2375: Claude Code's transcript folder name makes every '/' and '.' a dash, so a removed worktree
@@ -477,6 +512,30 @@ describe('the purge of a confidential session the Swarm ended', () => {
     const record = purgeRecord(join(home, 'super-tabs', 'team-purges.json'))
     return { purge, session, record, calls }
   }
+
+  it('finds an agent\'s own engine home on either separator, and nothing outside it (audit H2, Windows pass)', () => {
+    expect(ownHomeFolder('/Users/team/.harness-pm-homes', '/Users/team/.harness-pm-homes/super-start/codex')).toBe('/Users/team/.harness-pm-homes/super-start')
+    expect(ownHomeFolder('C:\\Users\\team\\.harness-pm-homes', 'C:\\Users\\team\\.harness-pm-homes\\super-start\\codex')).toBe('C:\\Users\\team\\.harness-pm-homes\\super-start')
+    for (const [homes, path] of [
+      ['/Users/team/.harness-pm-homes', '/Users/team/.harness-pm-homes-other/x/codex'],
+      ['/Users/team/.harness-pm-homes', '/Users/team/.harness-pm-homes/codex'],
+      ['/Users/team/.harness-pm-homes', '/Users/team/.harness-pm-homes/../x/codex'],
+      ['C:\\Users\\team\\.harness-pm-homes', 'C:\\Users\\team\\.harness-pm-homes\\..\\x\\codex'],
+      ['/Users/team/.harness-pm-homes', '/Users/team/.codex'],
+    ] as const) expect(ownHomeFolder(homes, path), path).toBeNull()
+    expect(ownHomeFolder('/Users/team/.harness-pm-homes', null)).toBeNull()
+  })
+
+  it('removes Team-written work\'s own Codex home when the agent ends, confidential or not, and nothing else (audit H2)', async () => {
+    const { home } = teamHome()
+    const s = service(home), own = join(home, PM_HOMES, 'super-start', 'codex'), other = join(home, 'elsewhere', 'codex')
+    mkdirSync(own, { recursive: true }); mkdirSync(other, { recursive: true })
+    const session = (codexHome: string) => () => ({ agentId: 'r', sessionId: 's', registeredAt: 1, engine: 'codex', cwd: CWD, codexHome })
+    expect(await createConfidentialPurge({ confidential: () => false, home, session: session(other), purge: s.purge, record: s.record })('r')).toEqual({ skipped: true })
+    expect(existsSync(other)).toBe(true)
+    expect(await createConfidentialPurge({ confidential: () => false, home, session: session(own), purge: s.purge, record: s.record })('r')).toEqual({ skipped: true })
+    expect(existsSync(dirname(own))).toBe(false)
+  })
 
   it('deletes through the reviewed purge, scrubs, sweeps, and keeps the session in its record until the sweep passes', async () => {
     const { home, claude } = teamHome()

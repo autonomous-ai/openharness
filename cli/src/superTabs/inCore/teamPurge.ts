@@ -13,6 +13,7 @@
  * reviewed purge drops the session from the stopped catalog, so a retry after a failed sweep had nothing left to scrub from.
  * Everything here reads and writes asynchronously: a Team home holds gigabytes of transcripts, and this runs in the core.
  */
+import { buddyTmpFolder, realOfFolder } from '../../lib/agentTmp.js'
 import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync, type Dirent } from 'node:fs'
 import { readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
@@ -316,6 +317,14 @@ export async function scrubClaudeSession(home: string, target: PurgeTarget, past
   })
   for (const hash of new Set([...pastes, ...found])) if (SESSION.test(hash)) await rm(join(claude, 'paste-cache', `${hash}.txt`), { force: true })
   if (folder) await removeTranscripts(join(claude, 'projects', claudeSlug(folder)), folder, told)
+  // Its private temporary folder beside a Team account: command output from its person's private work (lib/agentTmp.ts). A plain
+  // session shares its Buddy's folder, and this one's TMPDIR with it, so the whole folder goes only once that folder has; the
+  // sweep takes what a tool left meanwhile (review of #2563).
+  if (folder) {
+    const temp = buddyTmpFolder(folder)
+    if (!existsSync(folder)) await rm(temp, { recursive: true, force: true })
+    else if (sessionId) await rm(join(temp, `claude-${process.getuid?.() ?? 0}`, claudeSlug(realOfFolder(folder)), sessionId), { recursive: true, force: true })
+  }
   if (sessionId) {
     for (const sub of ['file-history', 'session-env']) await rm(join(claude, sub, sessionId), { recursive: true, force: true })
     await rm(join(claude, 'debug', `${sessionId}.txt`), { force: true })
@@ -391,6 +400,15 @@ export const PURGE_RECORD_UNREADABLE = 'PURGE_RECORD_UNREADABLE'
 export const UNREADABLE_DETAIL = "This machine's record of purges still to finish could not be read and was kept aside, as the daemon's log says at "
   + "each start. The account stays held until its owner clears it as #2142's risk note says, by file names only."
 
+/** The folder of an agent's own engine home `<homes>/<creation>/codex`, to delete whole; null for any other path. Either separator,
+ *  as a Windows path has `\\` (Windows pass, task #2022), and never a path that climbs out. */
+export function ownHomeFolder(homes: string, codexHome: string | null | undefined): string | null {
+  if (!codexHome || !codexHome.startsWith(homes)) return null
+  const [first, creation, name, ...rest] = codexHome.slice(homes.length).split(/[\\/]/)
+  if (first !== '' || !creation || creation === '.' || creation === '..' || name !== 'codex' || rest.length) return null
+  return codexHome.slice(0, homes.length + 1 + creation.length)
+}
+
 /**
  * The purge of [agentId]'s data, once the Swarm ended it for good, when it was confidential: kept in [record] before the
  * first deletion and dropped once the sweep finds nothing. A retry finishes from the record, the session gone or not.
@@ -411,7 +429,13 @@ export function createConfidentialPurge(deps: {
     const session = deps.session(agentId)
     let target = deps.record.get(agentId)
     if (!target) {
-      if (!session || !deps.confidential(agentId)) return { skipped: true }
+      // Team-written Codex work has an engine home of its own too (superTabs/start.ts): it goes with the agent, confidential or not.
+      if (session && !deps.confidential(agentId)) {
+        const own = ownHomeFolder(join(deps.home, PM_HOMES), session.codexHome)
+        if (own) await rm(own, { recursive: true, force: true })
+        return { skipped: true }
+      }
+      if (!session) return { skipped: true }
       target = { agentId: session.agentId, sessionId: session.sessionId ?? null, cwd: session.cwd, engine: session.engine, codexHome: session.codexHome ?? null }
       deps.record.put(target)
     }

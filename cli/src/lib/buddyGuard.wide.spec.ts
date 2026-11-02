@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { ENGINES } from '../engines/types.js'
 import { basename, dirname, join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { buddyTmpParent } from './agentTmp.js'
 import { BUDDY_ENGINE_HOMES, markBuddyNarrow, allowBuddyReads, engineHomesOutsideDefaults, buddyApprovalsOf, buddyGuardSource, buddyLaunchWide, buddySandboxSettings, buddyWideOf, grantBuddyWide, hasBuddyApprovals,
   judgeBuddyApprovals, recordBuddyApprovals, revokeBuddyWide, writeBuddyAccount } from './buddyGuard.js'
 
@@ -77,6 +78,67 @@ function answer(tool: string, input: Record<string, unknown>, guard = script): {
 }
 const decide = (tool: string, input: Record<string, unknown>, guard = script) => answer(tool, input, guard).permissionDecision
 const bash = (command: string, guard = script) => decide('Bash', { command, description: 'x' }, guard)
+
+describe('its private temporary folder, beside a Team account', () => {
+  const tmpParent = buddyTmpParent(dataDir), own = join(tmpParent, 'own-buddy'), theirs = join(tmpParent, 'other-buddy')
+  const ownGuard = join(parent, 'buddy-guard-own-tmp.mjs'), ownNarrow = join(parent, 'buddy-guard-own-tmp-narrow.mjs')
+  mkdirSync(own, { recursive: true }); mkdirSync(theirs, { recursive: true }); mkdirSync(join(dataDir, 'agent-tmp'), { recursive: true })
+  const realOwn = realpathSync(own)
+  writeFileSync(join(own, 'output.txt'), 'mine'); writeFileSync(join(own, '.env'), 'SECRET=1'); writeFileSync(join(theirs, 'output.txt'), 'theirs')
+  writeFileSync(join(dataDir, 'agent-tmp', 'output.txt'), 'an agent\'s'); writeFileSync(join(dataDir, 'lists.json'), '{}')
+  symlinkSync(join(home, '.ssh', 'id_ed25519'), join(own, 'key-link')); symlinkSync(join(theirs, 'output.txt'), join(own, 'their-link'))
+  writeFileSync(ownGuard, buddyGuardSource(root, reads, wide, realOwn)); writeFileSync(ownNarrow, buddyGuardSource(root, reads, null, realOwn))
+
+  it.each([['wide', ownGuard], ['narrow', ownNarrow]])('%s: reads its own folder with Read, LS, Grep and Glob', (_, guard) => {
+    expect(decide('Read', { file_path: join(realOwn, 'output.txt') }, guard)).toBe('allow')
+    expect(decide('LS', { path: realOwn }, guard)).toBe('allow')
+    expect(decide('Grep', { pattern: 'x', path: join(realOwn, 'output.txt') }, guard)).toBe('allow')
+    // Content search takes one file: a folder could hold a secret's name that Read refuses.
+    expect(decide('Grep', { pattern: 'x', path: realOwn }, guard)).toBe('deny')
+    expect(decide('Glob', { pattern: '*', path: realOwn }, guard)).toBe('allow')
+  })
+
+  it.each([['wide', ownGuard], ['narrow', ownNarrow]])('%s: still refuses every other agent\'s and the data folder', (_, guard) => {
+    for (const path of [join(theirs, 'output.txt'), join(dataDir, 'agent-tmp', 'output.txt'), join(dataDir, 'lists.json'), join(tmpClaude, 'output.txt')]) {
+      expect(decide('Read', { file_path: path }, guard), path).toBe('deny')
+    }
+    for (const path of [theirs, tmpParent, join(dataDir, 'agent-tmp'), dataDir]) {
+      expect(decide('LS', { path }, guard), path).toBe('deny')
+      expect(decide('Grep', { pattern: 'x', path }, guard), path).toBe('deny')
+      expect(decide('Glob', { pattern: '*', path }, guard), path).toBe('deny')
+    }
+  })
+
+  it.each([['wide', ownGuard], ['narrow', ownNarrow]])('%s: refuses a link out, a .. out and a secret\'s name inside it', (_, guard) => {
+    for (const path of [join(realOwn, 'key-link'), join(realOwn, 'their-link'), `${realOwn}/../other-buddy/output.txt`, join(realOwn, '.env')]) {
+      expect(decide('Read', { file_path: path }, guard), path).toBe('deny')
+    }
+  })
+
+  it('never lets it write there, by a tool or by the shell', () => {
+    expect(decide('Write', { file_path: join(realOwn, 'x'), content: 'x' }, ownGuard)).toBe('deny')
+    expect(decide('Edit', { file_path: join(realOwn, 'output.txt'), old_string: 'm', new_string: 'n' }, ownGuard)).toBe('deny')
+    expect(bash(`cat ${join(realOwn, 'output.txt')} > ${join(realOwn, 'x')}`, ownGuard)).toBe('deny')
+    expect(bash(`rm ${join(realOwn, 'output.txt')}`, ownGuard)).toBe('deny')
+  })
+
+  it('without one, as on a computer with no Team account, the folder stays closed', () => {
+    expect(decide('Read', { file_path: join(realOwn, 'output.txt') })).toBe('deny')
+    expect(decide('Read', { file_path: join(realOwn, 'output.txt') }, narrow)).toBe('deny')
+  })
+
+  it('closes every Buddy\'s folder to a wide Buddy, and its sandbox opens only its own', () => {
+    expect(wide.denied).toContain(tmpParent)
+    const closed = buddySandboxSettings(root, wide) as { filesystem: Record<string, string[] | undefined> }
+    expect(closed.filesystem.allowWrite).toEqual([])
+    expect(closed.filesystem.allowRead ?? []).toEqual([])
+    const open = buddySandboxSettings(root, wide, realOwn) as { filesystem: Record<string, string[]> }
+    expect(open.filesystem.allowWrite).toEqual([realOwn])
+    expect(open.filesystem.allowRead).toEqual([realOwn])
+    expect(open.filesystem.denyRead).toContain(tmpParent)
+    expect(open.filesystem.denyWrite).toContain(root)
+  })
+})
 
 describe('wide mode: reading outside the folder', () => {
   it('reads a file outside the folder only in wide mode', () => {
