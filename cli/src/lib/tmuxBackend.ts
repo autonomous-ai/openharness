@@ -1,7 +1,6 @@
-import { execFile } from 'node:child_process'
-import { shellSingleQuote } from './shellQuote.js'
+import { execFile, type ExecFileException } from 'node:child_process'
 import { heldPaneFormat } from './nativePaneHold.js'
-import { patientExec } from './patientExec.js'
+import { patientDeadline, patientExec, type ExecDone } from './patientExec.js'
 import type { TerminalBackend, TerminalBackendPrepared } from './terminalBackend.js'
 import type { AgentEngine } from '../engines/types.js'
 import {
@@ -111,6 +110,51 @@ export function unsetServerEnvArgs(names: readonly string[]): string[] {
   return names.flatMap((name, i) => [...(i ? [';'] : []), 'set-environment', '-g', '-u', name])
 }
 
+/**
+ * [word] as one word of tmux's command syntax, the one `source-file` and `if-shell` parse: single-quoted,
+ * each `'` closed, given in double quotes and reopened. A newline or carriage return goes as a double-quoted
+ * escape: measured on tmux 3.7, a raw newline inside single quotes lost the next line when it began with `#`.
+ */
+export function tmuxWord(word: string): string {
+  return `'${word.replace(/'/g, `'"'"'`).replace(/\n/g, `'"\\n"'`).replace(/\r/g, `'"\\r"'`)}'`
+}
+
+/** The tmux command list [args] (`;` separating its commands, as on a command line) as a `source-file` script. */
+export function tmuxScript(args: readonly string[]): string {
+  return `${args.map((word) => word === ';' ? ';' : tmuxWord(word)).join(' ')}\n`
+}
+
+/**
+ * The command line that runs a script given on stdin. `source-file` alone does not start a server ("no server
+ * running"), so `start-server` comes first; a server it starts takes this as its title, with no value in it.
+ */
+export const SCRIPT_ON_STDIN = ['start-server', ';', 'source-file', '-'] as const
+
+/**
+ * Run the tmux command list [args] with none of its words on a command line: every account on the machine
+ * reads every process's command line (`ps -axww`). `new-session -e KEY=VALUE` as argv showed a Team
+ * account's relay token to every account on the Mac Studio for as long as the tmux server it started lived,
+ * since a server keeps that command line as its title (audit M2, docs/security/2026-11-02-team-account-boundary.md);
+ * and with a server running, the short-lived client still showed it to a loop of `ps`. The list goes on stdin,
+ * which only its own account can read, and touches no disk, so a crash leaves nothing behind. `source-file -` is
+ * tmux 3.1. The deadline is patientExec's, for the same held-loop reason; tmux answers exactly as on argv: a
+ * failing command stops the rest of the list, with its message on stderr.
+ */
+function runScript(args: readonly string[], timeout: number, done: ExecDone): void {
+  let finished = false
+  let cancel = (): void => {}
+  // A child this kills for its deadline is reported `killed`, which `create` reads as a timeout.
+  const child = execFile('tmux', [...SCRIPT_ON_STDIN], { encoding: 'utf8' }, (error: ExecFileException | null, stdout: string, stderr: string) => {
+    finished = true
+    cancel()
+    done(error, stdout ?? '', stderr ?? '')
+  })
+  // A tmux that cannot be started (ENOENT) closes its stdin; the error is the callback's to report, not a throw.
+  child.stdin?.on('error', () => {})
+  child.stdin?.end(tmuxScript(args))
+  if (!finished) cancel = patientDeadline(timeout, () => child.kill('SIGTERM'))
+}
+
 export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
   readonly name = 'tmux' as const
   readonly instanceId = 'tmux:default'
@@ -187,8 +231,9 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     this.observeMachineName()
     const features = await this.features()
     const variables = Object.entries(request.env ?? {})
-    // `-e` (tmux 3.2+) puts these in the SESSION environment rather than the launch argv, so a grid
-    // relay key never lands in `ps` output for the life of the agent. Callers refuse a grid or a
+    // `-e` (tmux 3.2+) puts these in the SESSION environment rather than the engine's argv, and a list
+    // that carries them goes to tmux on stdin (`runScript`), never on tmux's own command line: either
+    // would put a grid relay key in `ps` output. Callers refuse a grid or a
     // harness on an older tmux by name (`capabilities().sessionEnv`); whatever else reaches here with
     // variables on one is refused here, saying why, rather than handed to tmux to answer with its
     // usage text — and never moved into the argv, where a secret would show.
@@ -231,11 +276,9 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     const result = await inTmuxRoom('notify', () => new Promise<{ error: ExecError | null; stdout: string; stderr: string }>((resolve) => {
       if (request.current?.() === false) { resolve({ error: Object.assign(new Error('The harness changed before pane dispatch'), { code: 'HARNESS_CANCELLED' }), stdout: '', stderr: '' }); return }
       request.onDispatch?.()
-      run('tmux', args, { timeout: 5_000 }, (error, stdout, stderr) => resolve({
-        error: error as ExecError | null,
-        stdout,
-        stderr,
-      }))
+      const done: ExecDone = (error, stdout, stderr) => resolve({ error: error as ExecError | null, stdout, stderr })
+      if (variables.length) runScript(args, 5_000, done)
+      else run('tmux', args, { timeout: 5_000 }, done)
     }), features)
     if (result.error) {
       if (result.error.code === 'HARNESS_CANCELLED') return terminalActionNotStarted(result.error.message)
@@ -283,7 +326,8 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
    * a dead pane and no engine.
    */
   async respawnRefusal(request: Pick<TerminalRespawnRequest, 'env'>): Promise<string | null> {
-    // `respawn-pane -e` is tmux 3.0; refused before, for the reason `create` gives.
+    // `respawn-pane -e` is tmux 3.0, and the stdin its list goes on (`runScript`) 3.1; refused before, for
+    // the reason `create` gives.
     return Object.keys(request.env ?? {}).length && !(await this.features()).respawnEnv ? tmuxTooOldForEnv(TMUX_FEATURE_MIN.respawnEnv, 'a respawned pane') : null
   }
 
@@ -309,15 +353,18 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     if (request.expectedHeldToken && !/^[a-f0-9-]{36}$/.test(request.expectedHeldToken)) return terminalActionNotStarted('invalid waiting pane identity')
     const command = request.expectedHeldToken
       ? ['if-shell', '-F', '-t', runtime.paneId, heldPaneFormat(request.expectedHeldToken),
-        commands.map(parts => parts.map(shellSingleQuote).join(' ')).join('; '), 'display-message -p adoption-mismatch']
+        commands.map(parts => parts.map(tmuxWord).join(' ')).join('; '), 'display-message -p adoption-mismatch']
       : commands.flatMap((parts, index) => index ? [';', ...parts] : parts)
     const result = await new Promise<{ error: NodeJS.ErrnoException | null; stderr: string }>((resolve) => {
       if (request.current?.() === false) { resolve({ error: Object.assign(new Error('The harness changed before pane dispatch'), { code: 'HARNESS_CANCELLED' }), stderr: '' }); return }
       request.onDispatch?.()
-      run('tmux', command, { timeout: 5_000 }, (error, stdout, stderr) => resolve({
+      const done: ExecDone = (error, stdout, stderr) => resolve({
         error: stdout.trim() === 'adoption-mismatch' ? Object.assign(new Error('The waiting pane changed'), { code: 'HARNESS_CANCELLED' }) : error as NodeJS.ErrnoException | null,
         stderr,
-      }))
+      })
+      // With variables, on stdin, never on tmux's command line (`runScript`, as in `create`).
+      if (variables.length) runScript(command, 5_000, done)
+      else run('tmux', command, { timeout: 5_000 }, done)
     })
     if (!result.error) return TERMINAL_ACTION_SUCCEEDED
     if (result.error.code === 'HARNESS_CANCELLED') return terminalActionNotStarted(result.error.message)
