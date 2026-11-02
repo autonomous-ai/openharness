@@ -174,7 +174,7 @@ void main() {
     });
 
     testWidgets(
-      'names each state in a word: waiting, lost, down, limited, stuck, in review',
+      'names each state in a word: waiting, lost, down, kept (closed), limited, stuck, in review',
       (tester) async {
         final until = DateTime.now().add(const Duration(hours: 2)).toLocal();
         String two(int n) => n.toString().padLeft(2, '0');
@@ -195,6 +195,15 @@ void main() {
             ),
             _agent('Moss', 'm1'),
             _agent('Teal', 'm1'),
+            // Closed on its machine, and someone chose to keep it: not Idle, not Down.
+            _agent(
+              'Moth',
+              'm2',
+              extra: {
+                'downSince': DateTime.now().toUtc().toIso8601String(),
+                'workDecision': 'keep',
+              },
+            ),
           ],
           tasks: [
             _task('Wren', 'needs_human'),
@@ -228,6 +237,10 @@ void main() {
         expect(tip, contains('Lost "Task of Lark"'));
         expect(
           _line('Kite', 'Down · MacBook Pro · Opus · high'),
+          findsOneWidget,
+        );
+        expect(
+          _line('Moth', 'Kept (closed) · MacBook Pro · Opus · high'),
           findsOneWidget,
         );
         expect(

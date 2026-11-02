@@ -56,6 +56,8 @@ SuperTabAgentGlance superTabAgentGlance(
   String two(int n) => n.toString().padLeft(2, '0');
   final label = switch (null) {
     _ when work == 'lost' => 'Lost',
+    _ when agent.keptClosed && activity != HarnessActivity.offline =>
+      'Kept (closed)',
     _
         when agent.downSince != null ||
             activity == HarnessActivity.offline ||
