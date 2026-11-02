@@ -354,6 +354,10 @@ describe('start beside a running daemon it has no sign-in to judge by', () => {
 
     const result = await runAsync(root, ['start', '--restart'], { PORT: String(port) })
 
+    // As the test above it: after the stop the start goes on to boot inline, which refuses to displace this
+    // fixture's live private socket, so no daemon comes up.
+    expect(result.timedOut).toBe(false)
+    expect(result.status).toBe(1)
     expect(result.stdout).toContain(`machine running (pid ${daemon.pid}) — restarting it (--restart)`)
     await daemon.exited
     expect(existsSync(join(root, 'data', 'adapter.pid'))).toBe(false)

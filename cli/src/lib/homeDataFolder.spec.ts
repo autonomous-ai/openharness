@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { inheritedAccountDataFolder } from './homeDataFolder.js'
 
@@ -27,6 +30,20 @@ describe('an ADAPTER_DATA_DIR inherited from the account under another HOME', ()
   })
 })
 
+describe('real locations', () => {
+  it('a HOME that links to the account home is the account home, and a deliberate folder there stays', () => {
+    const base = mkdtempSync(join(tmpdir(), 'home-data-folder-'))
+    try {
+      const account = join(base, 'account')
+      mkdirSync(join(account, '.harness', 'cli', 'data'), { recursive: true })
+      const link = join(base, 'link')
+      symlinkSync(account, link)
+      expect(inheritedAccountDataFolder({ HOME: link, ADAPTER_DATA_DIR: join(account, '.harness', 'cli', 'data') }, account, 'darwin')).toBe(false)
+      expect(inheritedAccountDataFolder({ HOME: join(base, 'other'), ADAPTER_DATA_DIR: join(link, '.harness', 'cli', 'data') }, account, 'darwin')).toBe(true)
+    } finally { rmSync(base, { recursive: true, force: true }) }
+  })
+})
+
 describe('config/startHome', () => {
   const saved = { argv: process.argv, data: process.env.ADAPTER_DATA_DIR, home: process.env.HOME }
   afterEach(() => {
@@ -51,7 +68,14 @@ describe('config/startHome', () => {
     expect(await load('start')).toBeUndefined()
   })
 
-  it('no other command is changed by it', async () => {
-    expect(await load('status')).toBe(REAL_DATA)
+  it.each(['stop', 'logout', 'update', 'reset'])('%s follows HOME too, and says it dropped the variable', async (command) => {
+    const said = vi.spyOn(console, 'error').mockImplementation(() => {})
+    expect(await load(command)).toBeUndefined()
+    expect(said).toHaveBeenCalledWith(expect.stringContaining('ignoring ADAPTER_DATA_DIR='))
+    said.mockRestore()
+  })
+
+  it('a command an agent reaches its own daemon with keeps the variable', async () => {
+    expect(await load('super-tab')).toBe(REAL_DATA)
   })
 })
