@@ -5,6 +5,7 @@ import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
+import 'support/super_tab_members.dart';
 
 /// Switch PM (spec 2026-11-02-pm-switch-engine-account-design.md, section 8):
 /// who is offered it, what its dialog lists and what Confirm sends.
@@ -301,7 +302,9 @@ void main() {
       },
     );
     await mount(tester, server, 'owner');
-    expect(find.textContaining('Switching…'), findsWidgets);
+    await openSuperTabMembers(tester);
+    // The row's state word (Quiet Swarm).
+    expect(find.text('switching…'), findsWidgets);
     await finish(tester);
   });
 }

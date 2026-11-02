@@ -8,6 +8,7 @@ import 'package:harness/super_tabs/view.dart';
 
 import 'support/humans_fixture.dart';
 import 'support/super_tab_fixture.dart';
+import 'support/super_tab_members.dart';
 
 /// One member list, one row shape (Dee, 2026-10-29): Humans under a heading
 /// that carries the week, each with their points, then the Agents with their
@@ -41,6 +42,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    await openSuperTabMembers(tester);
     return controller;
   }
 
@@ -54,28 +56,19 @@ void main() {
   Finder rank(String id) => find.byKey(ValueKey('super-member-rank-$id'));
   Finder points(String id) => find.byKey(ValueKey('super-member-points-$id'));
 
-  testWidgets('shows Humans under a heading with the week, and no list pills', (
+  testWidgets('shows People under a heading, with no week and no list pills', (
     tester,
   ) async {
     final controller = await show(tester, membersSwarm());
     for (final pill in ['humans', 'agents', 'models']) {
       expect(find.byKey(ValueKey('leaderboard-tab-$pill')), findsNothing);
     }
-    expect(find.text('Humans'), findsOneWidget);
-    expect(find.text('People'), findsNothing);
-    final week = find.byKey(const ValueKey('leaderboard-week'));
-    expect(week, findsOneWidget);
-    // The week sits on the Humans heading's line, at its trailing edge.
-    expect(
-      (tester.getCenter(week).dy - tester.getCenter(find.text('Humans')).dy)
-          .abs(),
-      lessThan(8),
-    );
-    expect(
-      tester.getCenter(week).dx,
-      greaterThan(tester.getCenter(find.text('Humans')).dx),
-    );
-    // Humans first, then the Agents below them.
+    expect(find.text('People'), findsOneWidget);
+    expect(find.text('Humans'), findsNothing);
+    // The last 7 days, on hover: no week or period menu (Quiet Swarm).
+    expect(find.byKey(const ValueKey('leaderboard-week')), findsNothing);
+    expect(find.byKey(const ValueKey('leaderboard-period')), findsNothing);
+    // People first, then the Agents below them.
     expect(find.byKey(const ValueKey('super-person-peer')), findsOneWidget);
     expect(
       tester.getTopLeft(member('lead-agent')).dy,
@@ -87,7 +80,7 @@ void main() {
   });
 
   testWidgets(
-    'gives an agent the board scores no rank and no points, and keeps its status line',
+    'gives an agent the board scores no rank and no points, and keeps its state word',
     (tester) async {
       final semantics = tester.ensureSemantics();
       final controller = await show(tester, membersSwarm());
@@ -97,9 +90,9 @@ void main() {
       expect(find.bySemanticsLabel(RegExp(r'\b212 points')), findsNothing);
       // Nor does anyone carry a rank column.
       expect(find.byKey(const ValueKey('leaderboard-rank-peer')), findsNothing);
-      // Today's one status line stays under the name.
+      // Its state word stays on its one line (Quiet Swarm).
       expect(
-        find.byKey(const ValueKey('super-member-line-lead-agent')),
+        find.byKey(const ValueKey('super-member-word-lead-agent')),
         findsOneWidget,
       );
       semantics.dispose();
@@ -155,7 +148,7 @@ void main() {
       findsNothing,
     );
     expect(
-      find.byKey(const ValueKey('super-member-line-luna')),
+      find.byKey(const ValueKey('super-member-word-luna')),
       findsOneWidget,
     );
     // A Buddy is not in the Agents list, so its score shows nowhere.
@@ -246,6 +239,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    await openSuperTabMembers(tester);
     expect(tester.takeException(), isNull);
     for (final number in ['21', '87%']) {
       expect(find.text(number), findsOneWidget, reason: number);

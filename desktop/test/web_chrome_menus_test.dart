@@ -391,7 +391,7 @@ void main() {
               .first,
         );
         expect(icon('Conversations').left, name.left);
-        expect(icon('Members and machines').center.dx, avatar.center.dx);
+        expect(icon('Members').center.dx, avatar.center.dx);
         expect(tester.takeException(), isNull);
         await unmountPhoneSuperTab(tester, controller);
       });
