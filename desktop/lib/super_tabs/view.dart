@@ -2351,10 +2351,13 @@ class _SuperTabViewState extends State<SuperTabView>
     setState(() => _showPullRequests = true);
   }
 
-  /// Members takes the right side from an open thread, as in Slack.
+  /// Members takes the right side from an open thread or task, as in Slack.
   void _toggleRoster() {
     if (!_rosterOpen) c.closeThread();
-    setState(() => _rosterOpen = !_rosterOpen);
+    setState(() {
+      if (!_rosterOpen) _openedTask = null;
+      _rosterOpen = !_rosterOpen;
+    });
   }
 
   /// On a phone, the view ⋮ opened in place of the chat, which the bar has no
