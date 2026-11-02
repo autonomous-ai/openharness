@@ -19,7 +19,7 @@ import { guardedWrite } from '../src/superTabs/parts/write.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import { buddyChatId } from '../src/superTabs/buddies.js'
-import { INBOX_READS, INBOX_WINDOW_MS, LATEST_CHATS, MAX_THREADS, newestInThreads, perRange, PREVIEW_CHARS, resetInboxReads, THREAD_CHATS } from '../src/superTabs/read/inbox.js'
+import { INBOX_READS, INBOX_WINDOW_MS, LATEST_CHATS, MAX_THREADS, newestInThreads, perRange, PREVIEW_CHARS, resetInboxReads, SCAN_FIELDS, THREAD_CHATS } from '../src/superTabs/read/inbox.js'
 import { SEED_SCAN } from '../src/superTabs/read/threadMarkSeeds.js'
 import { stableId, type Author, type Conversation, type SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
@@ -27,7 +27,6 @@ import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor,
 import { PROFILE_STAGES, profileEntry, type ProfileEntry } from './bench/profile.js'
 import { filterOf, profiled } from './plans.test-support.js'
 import { listNamedIndexes } from '../src/superTabs/parts/indexed.js'
-import { SCAN_FIELDS } from '../src/superTabs/read/inbox.js'
 import type { Prisma } from '@prisma/client'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
@@ -780,6 +779,26 @@ describe('reading many thread ranges at once', () => {
     const named = await newestInThreads(db, f.tabId, f.ranges({ $lte: f.top }), 5, peer.sub)
     const texts = await db.superTabMessage.findMany({ where: { id: { in: named.map(m => m.id) } }, select: { text: true } })
     expect(texts.map(m => m.text).sort()).toEqual(['Tagged', 'Tagged late', 'Theirs there'].sort())
+  }, 60_000)
+
+  it('cuts a thread to its limit in a batch under its cap, in the hinted read: a tag past the limit does not count', async () => {
+    const f = await threads()
+    await listNamedIndexes(db)
+    // The tag and the 6 rows after it: 7 rows, limit 5, and with four ranges that hold nothing the batch's cap is 7.
+    const tagged = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tabId, text: 'Tagged early' } })
+    const [long, ...others] = f.ranges({ $gt: f.top })
+    const ranges = [{ ...long!, sequence: { $gte: tagged.sequence, $lte: tagged.sequence + 6 } }, ...others.map(r => ({ ...r, sequence: { $gt: 1_000_000 } }))]
+    let plain: Awaited<ReturnType<typeof newestInThreads>> = []
+    const entries = await profiled(db, async () => { plain = await newestInThreads(db, f.tabId, ranges, 5) })
+    const reads = entries.filter(e => e.ns.endsWith('.SuperTabMessage') && e.op !== 'getmore')
+    expect(reads).toHaveLength(1)
+    expect(reads[0]!.command?.hint).toEqual({ tabId: 1, conversationId: 1, thread: 1, sequence: 1 })
+    expect(plain.map(m => m.sequence)).toEqual([6, 5, 4, 3, 2].map(i => tagged.sequence + i))
+    expect(plain).toEqual(await oneByOne(f.tabId, ranges, 5))
+    expect(await newestInThreads(db, f.tabId, ranges, 5, peer.sub)).toEqual([])
+    expect(await oneByOne(f.tabId, ranges, 5, peer.sub)).toEqual([])
+    // A wider limit reaches the tag, so what cut it above is the limit.
+    expect((await newestInThreads(db, f.tabId, ranges, 7, peer.sub)).map(m => m.id)).toEqual([tagged.id])
   }, 60_000)
 
   it('answers nothing for no ranges, and a range with no rows is simply absent', async () => {

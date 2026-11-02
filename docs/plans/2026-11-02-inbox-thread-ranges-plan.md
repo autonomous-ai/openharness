@@ -33,8 +33,8 @@ A hint on the aggregate reaches only its first pipeline, never a `$unionWith` br
 
 - **Growth:** nothing is stored.
 - **Concurrency:** N/A because these are reads, outside any transaction, as before.
-- **Read cost:** one aggregate per 100 ranges, as today. It reads each thread's rows in its range, up to `TOGETHER_ROWS` for the batch, and then keeps each thread's newest rows. Only a batch over the cap pays again, and then reads at most 1.25 times what the union alone can read.
-- **Scale:** at 10x thread length, more batches pass the cap and take the union, which costs what it costs today. The fallback log line is the metric that warns first.
+- **Read cost:** one aggregate per 100 ranges, as today. It reads each thread's rows in its range, up to a cap for the batch of a quarter of what its ranges' limits allow (at least one limit), and then keeps each thread's newest rows. Only a batch over the cap pays again: at most 1.25 times what the union alone can read for 4 or more ranges, and up to twice for fewer.
+- **Scale:** at 10x thread length, more batches pass the cap and take the union, which costs what it costs today. The fallback log line (info level, one per batch) is the first sign, as a rate in the logs; nothing alerts on it.
 - **Compatibility:** N/A because no client or stored shape changes; the answers are the same rows in the same order.
 - **Migration and rollback:** none; reverting restores the union.
 - **Audience:** unchanged. Every row still goes through `readable`, and the caller has checked the person reads the chats.

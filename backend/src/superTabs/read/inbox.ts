@@ -159,7 +159,7 @@ export interface ThreadRange { conversationId: string; thread: string; sequence:
  * Each range's newest `limit` rows, newest first, range by range, as `perRange` of each thread's own pipeline answers, or only those
  * of them `namedBy` wrote or is tagged in. Ken's production profile (task #2148): a union plans every branch, racing the sequence
  * index against the thread index, and a hint reaches only its first pipeline. So each batch is one read, hinted to the thread index:
- * nothing to race and one plan, about 100 ms of planning down to 3 for 100 ranges. It reads every row of a range, not only its newest,
+ * nothing to race and one plan, about 200 ms of planning down to 3 for 100 ranges. It reads every row of a range, not only its newest,
  * so past a cap of a quarter of what the ranges' limits allow, a batch of long threads takes the union instead, which bounds each one.
  */
 export async function newestInThreads(db: PrismaClient, tabId: string, ranges: ThreadRange[], limit: number, namedBy?: string): Promise<Row[]> {
