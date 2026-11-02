@@ -254,4 +254,67 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('This task has no description yet.'), findsOneWidget);
   });
+
+  // Task steps design (Ken, 2026-11-02: one pull request showed as three tasks). A step sits on its task's row, by its own
+  // name and agent; a linked task from before steps reads as before.
+  test("a task's steps line names each step and its agent", () {
+    final server = groupServer(
+      linked: [
+        {
+          ...conversationFixture('copy', 'Copy'),
+          'number': 30,
+          'reviewOf': 'offline',
+          'step': 'Copy',
+          'assignment': {'id': 'w1', 'agentId': 'builder', 'status': 'done'},
+        },
+        {
+          ...conversationFixture('design', 'Thiết kế "v2"'),
+          'number': 31,
+          'reviewOf': 'offline',
+          'step': 'Thiết kế "v2"',
+          'assignment': {
+            'id': 'w2',
+            'agentId': 'reviewer',
+            'status': 'working',
+          },
+        },
+        {
+          ...conversationFixture('old', 'Review PR 12'),
+          'number': 20,
+          'reviewOf': 'offline',
+        },
+      ],
+    );
+    final snapshot = SuperTabSnapshot.fromJson(server.state);
+    expect(snapshot.conversation('copy')!.step, 'Copy');
+    expect(superTabIsStep(snapshot.conversation('copy')!), isTrue);
+    expect(superTabIsStep(snapshot.conversation('old')!), isFalse);
+    expect(
+      superTabLinkedLine(snapshot, snapshot.conversation('offline')!),
+      '#20 Review PR 12: not started · Copy (Atlas): done · '
+      'Thiết kế "v2" (Nova): working',
+    );
+  });
+
+  test('the sidebar lists no step as a task of its own', () {
+    final server = groupServer(
+      linked: [
+        {
+          ...conversationFixture('copy', 'Copy'),
+          'number': 30,
+          'reviewOf': 'offline',
+          'step': 'Copy',
+        },
+        {
+          ...conversationFixture('old', 'Review PR 12'),
+          'number': 20,
+          'reviewOf': 'offline',
+        },
+      ],
+    );
+    final snapshot = SuperTabSnapshot.fromJson(server.state);
+    final listed = superTabListedWork(snapshot.conversations).map((g) => g.id);
+    expect(listed, contains('old'));
+    expect(listed, isNot(contains('copy')));
+  });
 }
