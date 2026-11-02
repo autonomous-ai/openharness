@@ -172,7 +172,8 @@ describe('the harness shares list on a Swarm-sized database', () => {
     for (const read of reads) {
       expect(read.plans.filter(p => p.startsWith('COLLSCAN')), read.collection).toEqual([])
       // Prisma's `in` is planned as one index scan per value (an OR of N branches), each read planned anew: one $in scan instead.
-      expect(read.plans.filter(p => p.includes('}, IXSCAN')), read.collection).toEqual([])
+      // The same index twice is the null bounds Mongo splits an `$expr` equality with null into (revokedAt: null), not a branch per value.
+      expect(read.plans.filter(p => new Set(p.split(/(?<=\}), (?=IXSCAN)/)).size > 1), read.collection).toEqual([])
       expect(read.docsExamined, read.collection).toBeLessThanOrEqual(read.returned + 2)
       // Keys too: an agent read by key that walks the (tabId, key) index costs every other Swarm in production.
       expect(read.keysExamined, read.collection).toBeLessThanOrEqual(read.returned + 10)
