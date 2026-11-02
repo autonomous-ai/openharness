@@ -159,15 +159,13 @@ describe('installation tokens', () => {
     expect(github.calls).toEqual([])
   })
 
-  it('knows its own bot login from its name, or GitHub\'s answer with none, and says null while GitHub cannot say', async () => {
-    const { app, github } = setup()
+  // A wrong name asks the log for a bot that never pushed: an empty answer that would read as clean (review 1 of #2600).
+  it('takes its bot login from GitHub\'s answer, never its configured name, once, and says null while GitHub cannot say', async () => {
+    const { app, github } = setup({ slug: 'a-wrong-name' })
     expect(await app.botLogin()).toBe('harness-fixture[bot]')
-    expect(github.calls).toEqual([])
-    const unnamed = setup({ slug: null })
-    expect(await unnamed.app.botLogin()).toBe('harness-fixture[bot]')
-    expect(await unnamed.app.botLogin()).toBe('harness-fixture[bot]')
-    expect(unnamed.github.calls.map(c => c.path)).toEqual(['/app'])
-    const down = setup({ slug: null })
+    expect(await app.botLogin()).toBe('harness-fixture[bot]')
+    expect(github.calls.map(c => c.path)).toEqual(['/app'])
+    const down = setup({ slug: 'harness-fixture' })
     down.github.control.down = true
     expect(await down.app.botLogin()).toBeNull()
     down.github.control.down = false
