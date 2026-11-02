@@ -16,6 +16,7 @@ import { label } from './catalog.js'
 import { bearer, needsRefresh, refreshable, type Store, type Token } from './store.js'
 import { refresh } from './renew.js'
 import { answer as answerRest, transport } from './rest.js'
+import { peerIsThisAccount, type PeerAccount } from '../peerAccount.js'
 
 /** Headers an MCP client sends that the service must see. Authorization never comes from the agent. */
 const FORWARD = ['accept', 'content-type', 'mcp-session-id', 'mcp-protocol-version', 'last-event-id']
@@ -50,6 +51,8 @@ export interface BridgeOptions {
   /** Harness's own capability (agents.ts harnessKey), never in an agent's configuration: only it lists the
    *  connections or calls a key-only connection's API. Absent, those two addresses answer nothing. */
   harnessKey?: () => string
+  /** Whether a caller runs as this OS account (lib/peerAccount.ts). A test's stand-in for another account. */
+  peerAccount?: PeerAccount
 }
 
 type Target = { kind: 'mcp'; code: string } | { kind: 'api'; code: string; path: string } | { kind: 'list' }
@@ -150,7 +153,12 @@ export function createBridge(vault: Store, options: BridgeOptions): Server {
       fail(response, 403, 'Forbidden.'); return
     }
     const address = target(request.url ?? '/')
-    if (!address) { fail(response, 404, 'Unknown connection address. Run harness connections sync.'); return }
+    // An MCP client can only speak HTTP to the address in its configuration, so it cannot check who holds this port,
+    // and another account that took it during a restart hears the key (audit H1). A key heard must open nothing. Answered
+    // as an unknown key is, so the answer does not say the key was right.
+    if (!address || !await (options.peerAccount ?? peerIsThisAccount)(request.socket)) {
+      fail(response, 404, 'Unknown connection address. Run harness connections sync.'); return
+    }
     if (address.kind === 'list') { list(response); return }
     const code = address.code
     if (request.headers['transfer-encoding'] && !request.headers['content-length']) { fail(response, 411, 'Send the request with a Content-Length.'); return }
