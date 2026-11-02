@@ -8,7 +8,7 @@
  * goes to a port another account can hold. The port stays for clients still running on it, Windows, and a folder too long for
  * a socket.
  *
- * Two more addresses serve Harness's own cloud agents (services/cloud.ts), which hold no credential either:
+ * Two more addresses serve Harness's own cloud agents (services/cloud.ts), over the socket where one can be, which hold no credential either:
  * - `/<key>/connections`: what is connected, by address and with no secret, so the service finds the
  *   connection that signs in Fo or Devin by where it points rather than by what the person named it;
  * - `/<key>/<code>/api/<path>`: one request to a key-only connection's own API (`api_entry`), with its key.
@@ -73,12 +73,15 @@ export function createBridge(vault: Store, options: BridgeOptions): Server {
   return createServer(bridgeHandler(vault, options))
 }
 
-/** The bridge for MCP clients on its 0600 socket: their MCP servers only, as an agent's key reaches (no Harness key here). */
+/** The bridge on its 0600 socket: for MCP clients, their MCP servers only, as an agent's key reaches; for Harness's own key, what it reaches. */
 export async function serveBridgeSocket(vault: Store, path: string): Promise<LocalSocketServer> {
   // The socket's privacy rests on this folder too, which may be older than this code.
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
   chmodSync(dirname(path), 0o700)
-  const listening = await listenLocalSocket(bridgeHandler(vault, { key: () => SOCKET_KEY, socket: true }), path)
+  const listening = await listenLocalSocket(bridgeHandler(vault, { key: () => SOCKET_KEY,
+    // Harness's own calls (cloud/bridge.ts) come here too: its key never crosses the port where this socket can be.
+    // An unreadable key refuses Harness's calls only: agents' MCP calls never needed this file.
+    harnessKey: () => { try { return String(vault.file('harness-key.json').key ?? '') } catch { return '' } }, socket: true }), path)
   listening.server.unref()
   return listening
 }
@@ -184,7 +187,7 @@ function bridgeHandler(vault: Store, options: BridgeOptions): RequestListener {
     // as an unknown key is, so the answer does not say the key was right.
     // On the 0600 socket the filesystem has already said who the caller is, and a socket's peer has no port to look up.
     if (!address || (!options.socket && !await (options.peerAccount ?? peerIsThisAccount)(request.socket))) {
-      fail(response, 404, 'Unknown connection address. Run harness connections sync.'); return
+      fail(response, 404, 'Unknown connection address. Restart this agent, or run harness connections sync.'); return
     }
     if (address.kind === 'list') { list(response); return }
     const code = address.code

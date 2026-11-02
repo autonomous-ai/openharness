@@ -34,6 +34,8 @@ import { agentLaunchArgs, joinedInstructions } from '../../lib/agentAttribution.
 import { machineMcpLaunchArgs } from '../../lib/machineMcp.js'
 import { writeGridConfigDir } from '../../lib/gridConfigDir.js'
 import { describeGridLaunch, gridConfigHandOff, gridConflictingEnvToClear, type GridLaunchAnswer, type GridLaunchMachine, type GridLaunchRequest, type GridWebSearchStatus } from '../../lib/gridLaunchWire.js'
+import { syncProfileHome } from '../../lib/connectors/agents.js'
+import { Store as ConnectionsVault } from '../../lib/connectors/store.js'
 import { profileEnvironment } from '../../lib/engineHomes.js'
 import { DEFAULT_HARNESS_PERMISSION, freshHarnessEnvironment } from '../../lib/harnessDefaults.js'
 import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
@@ -151,7 +153,7 @@ export function createAgentCreator({
     // Never from a relayed request, which could name any repository here. Codex's trust also sets defaults for the
     // person's own sessions in that folder, so it stays theirs to give.
     const trustSwarmFolder = !trustEmptyProject && context?.local === true && !dsh && engine === 'claude' && !!input.swarmRole
-      && permissionMode === 'full' && await swarmFolder(cwd)
+      && (permissionMode === 'full' || permissionMode === 'teamWritten') && await swarmFolder(cwd)
     if (!authority.current()) return stale()
     // A harness can pin its permission mode (`dshPinnedPermissionMode`): the Grid harness starts model
     // servers, which Codex's sandbox would start without a GPU. Pinned before anything reads the mode,
@@ -319,7 +321,7 @@ export function createAgentCreator({
     // The Swarm starts its agents in full mode, so a machine that never accepted full mode's warning stops each one there
     // before its first turn (Claude Code's "Yes, I accept", the Mac Studio, 2026-10-26). The Swarm's owner chose that mode
     // for it; recorded the way the engine records the person's own yes, in the home this launch reads.
-    if (input.swarmRole && permissionMode === 'full') {
+    if (input.swarmRole && (permissionMode === 'full' || permissionMode === 'teamWritten')) {
       try { acceptFullMode(engine, native ? { ...native.environment, ...gridLaunch?.env, ...dshEnv } : undefined) }
       catch (error) { console.warn(`[agent] full mode acceptance · ${error instanceof Error ? error.message : error}`) }
     }
@@ -351,6 +353,12 @@ export function createAgentCreator({
     // Idempotent, so paying this on every create against an already-set-up profile is free.
     if (!native && codexHome && !hooksDisabled && !await engineHooks.codex.installIn(hookPort, codexHome)) return {
       ok: false, error: 'NATIVE_LAUNCH_HELD', detail: 'Waiting to confirm Codex’s hooks in the selected profile.', unavailable: 'native',
+    }
+    // An agent on a profile home reads that home's MCP config, not the default's: it gets the connections there too.
+    const profileHome = engine === 'claude' ? claudeHome : engine === 'codex' ? codexHome : null
+    if (profileHome && (engine === 'claude' || engine === 'codex')) {
+      try { syncProfileHome(new ConnectionsVault(), engine, profileHome) }
+      catch (error) { console.warn(`[agent] connections for ${profileHome} · ${error instanceof Error ? error.message : error}`) }
     }
     // OpenCode may have upgraded from 1.x to 2.x while this daemon was running. Its new TUI must
     // not discover our old server plugin; the cached version probe changes with the executable.

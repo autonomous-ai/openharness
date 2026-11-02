@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { BUDDY_SESSION_ENGINE, HEAVY_NOT_RECORDED, HEAVY_REFUSED, inspectCapacity, MODEL_REPORT_WAIT_MS, startAgent } from './start.js'
 import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
 import { readCapacityDisk } from './disk.js'
 import { SuperTabHostError } from './wire.js'
+import { PM_HOMES } from './teamDaemon.js'
 const teamDaemon = vi.hoisted(() => ({ value: false, relayed: true, offered: null as null | { slugs: string[]; listed: string[] } }))
 vi.mock('./teamDaemon.js', async (original) => ({ ...await original<object>(), isTeamDaemon: () => teamDaemon.value }))
 vi.mock('../team/relay.js', async (original) => ({ ...await original<object>(), teamRelayed: () => teamDaemon.relayed, offeredCodexModels: async () => teamDaemon.offered }))
@@ -91,6 +92,42 @@ describe('Swarm permission mode', () => {
       const argv = buildEngineCommandArgv(engine, { permissionMode: String(payload.permissionMode) })
       expect(argv).toContain(engine === 'claude' ? '--dangerously-skip-permissions' : '--dangerously-bypass-approvals-and-sandbox')
     }
+  })
+
+  // Audit H2: the launch line that keeps a branch's own settings out. Tried with the real binaries, planted settings.json,
+  // settings.local.json and .mcp.json ran without these flags and not with them (Claude Code 2.1.316, 2026-11-02).
+  it('starts Team-written Claude Code work with project settings off, in a Team account', async () => {
+    teamDaemon.value = true
+    try {
+      const f = fixture()
+      Object.assign(f.start.request, { engine: 'claude', projectSettings: 'off' })
+      expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ ok: true })
+      const payload = f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!
+      expect(payload).toMatchObject({ permissionMode: 'teamWritten', bypassPermission: true })
+      expect(buildEngineCommandArgv('claude', { permissionMode: 'teamWritten' })).toEqual(expect.arrayContaining(['--dangerously-skip-permissions', '--setting-sources', 'user', '--strict-mcp-config']))
+    } finally { teamDaemon.value = false }
+  })
+
+  // A Codex worktree takes its main repository's trust, and `-c` does not turn it off. An engine home of its own does (0.165.0, tried).
+  it('starts Team-written Codex work in an engine home of its own, which trusts no project', async () => {
+    teamDaemon.value = true
+    try {
+      const f = fixture()
+      Object.assign(f.start.request, { engine: 'codex', projectSettings: 'off' })
+      expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ ok: true })
+      const payload = f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!
+      expect(payload).toMatchObject({ permissionMode: 'teamWritten', bypassPermission: true })
+      expect(String(payload.codexHome)).toContain(`/${PM_HOMES}/`)
+      rmSync(dirname(String(payload.codexHome)), { recursive: true, force: true })
+    } finally { teamDaemon.value = false }
+  })
+
+  it.each(['claude', 'codex'] as const)('refuses Team-written %s work in the main account, before anything is created', async engine => {
+    const f = fixture()
+    Object.assign(f.start.request, { engine, projectSettings: 'off' })
+    expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ error: 'START_FAILED' })
+    expect(f.request.mock.calls.some(c => c[0] === 'agent_create')).toBe(false)
+    expect(f.start.error).toContain('Team account')
   })
 
   it.each(['opencode', 'kilo'])('fails a pending legacy %s Swarm start before native creation', async engine => {

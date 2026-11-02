@@ -15,7 +15,7 @@ Team agent the owner's full rights (H1, H2), and files and command lines the own
 | ID | Rating | Finding | Status |
 |---|---|---|---|
 | H1 | **High** | The owner's local credential goes to whoever holds the daemon's port | Fixed for hooks, the CLI and Desktop (task #2016); what stays open is under its fix |
-| H2 | **High** | A Team agent's branch runs with the owner's rights when an owner's agent builds it | Read in code, fix requested |
+| H2 | **High** | A Team agent's branch runs with the owner's rights when an owner's agent builds it | Proved with the real engines; fixed for assigned work (#2025), and what stays open is listed under H2 |
 | M1 | **Medium** | The owner's files in the shared `/tmp` are readable, and can be planted | Seen on the Mac Studio, fix requested |
 | M2 | **Medium** | Tokens on tmux's command line show in `ps` to every account | Seen on the Mac Studio, fix requested |
 | M3 | **Medium** | A Team agent's chat message reaches the owner's agents, which act with the owner's rights | Read in code, decision requested |
@@ -76,6 +76,28 @@ without permission prompts, so nothing stops to ask. This was not tried. M3 is t
 
 **Fix:** build and run a branch that a Team agent wrote only in a Team account or a sandbox, never in the main account, and read it
 there with its project settings off. Until then, route those Reviewers and Testers to Team accounts.
+
+**Status (task #2025, `docs/plans/2026-11-02-team-written-branch-plan.md`):** the attack was then tried with Claude Code 2.1.316 on a
+fixture: planted `settings.json`, `settings.local.json` and `.mcp.json` all ran in a trusted folder. The fix:
+
+- The server refuses a main-account agent for a task a Team agent worked on, and for any pull request GitHub's activity log shows the
+  app's bot pushed to. If GitHub can't say, or a review names no pull request, the main account is refused too.
+- A new mark tells every main-account member of the task and its steps to stop, and another agent's post can't name them.
+- These agents start with project settings off, and a daemon in the main account refuses such a start.
+
+**Still open:**
+- a main-account agent that checks out a branch outside the workflow, for example when a chat message asks it to (M3);
+- a push between the check and the fetch;
+- a rebase or cherry-pick of a Team agent's commits by a person or an owner's agent, whose push GitHub shows as a person's;
+- pushes more than a week before the pull request and its oldest commit;
+- the default branch, which reads clean because it is protected;
+- the PM, which builds batch branches in the main account. The batch and `make merge-pr` must run from a default-branch checkout.
+
+The server decides who gets work and cannot stop a shell. Closing the first two takes a sandbox for every main-account agent, or a
+repository rule that keeps the app's bot to its own branch prefix.
+
+Work that needs the owner's tools or devices has no home once its task is marked: it is reviewed in a Team account, merged, and then
+checked on the owner's device, unless the owners decide otherwise.
 
 ### M1. The owner's files in the shared `/tmp` are readable, and can be planted (Medium)
 

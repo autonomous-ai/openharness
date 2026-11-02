@@ -1,10 +1,11 @@
 import { buddyTmpFolder, buddyTmpParent } from '../../lib/agentTmp.js'
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, win32 } from 'node:path'
+import { dirname, join, win32 } from 'node:path'
+import { PM_HOMES } from '../teamDaemon.js'
 import { describe, expect, it, vi } from 'vitest'
 import { createSwarmAgents } from './agents.js'
-import { OWN_LEFT, SHARED_LEFT, SWEEP_LEFT, UNREADABLE_DETAIL, createConfidentialPurge, purgeRecord, recordsOtherFolder, rewriteIfUnchanged, scrubClaudeSession, sweepForSession, type PurgeTarget } from './teamPurge.js'
+import { OWN_LEFT, SHARED_LEFT, SWEEP_LEFT, UNREADABLE_DETAIL, createConfidentialPurge, ownHomeFolder, purgeRecord, recordsOtherFolder, rewriteIfUnchanged, scrubClaudeSession, sweepForSession, type PurgeTarget } from './teamPurge.js'
 
 /** A folder that goes between the sweep's listing of its parent and its own read: removed just before that read. */
 const vanish = vi.hoisted(() => ({ path: '' }))
@@ -511,6 +512,30 @@ describe('the purge of a confidential session the Swarm ended', () => {
     const record = purgeRecord(join(home, 'super-tabs', 'team-purges.json'))
     return { purge, session, record, calls }
   }
+
+  it('finds an agent\'s own engine home on either separator, and nothing outside it (audit H2, Windows pass)', () => {
+    expect(ownHomeFolder('/Users/team/.harness-pm-homes', '/Users/team/.harness-pm-homes/super-start/codex')).toBe('/Users/team/.harness-pm-homes/super-start')
+    expect(ownHomeFolder('C:\\Users\\team\\.harness-pm-homes', 'C:\\Users\\team\\.harness-pm-homes\\super-start\\codex')).toBe('C:\\Users\\team\\.harness-pm-homes\\super-start')
+    for (const [homes, path] of [
+      ['/Users/team/.harness-pm-homes', '/Users/team/.harness-pm-homes-other/x/codex'],
+      ['/Users/team/.harness-pm-homes', '/Users/team/.harness-pm-homes/codex'],
+      ['/Users/team/.harness-pm-homes', '/Users/team/.harness-pm-homes/../x/codex'],
+      ['C:\\Users\\team\\.harness-pm-homes', 'C:\\Users\\team\\.harness-pm-homes\\..\\x\\codex'],
+      ['/Users/team/.harness-pm-homes', '/Users/team/.codex'],
+    ] as const) expect(ownHomeFolder(homes, path), path).toBeNull()
+    expect(ownHomeFolder('/Users/team/.harness-pm-homes', null)).toBeNull()
+  })
+
+  it('removes Team-written work\'s own Codex home when the agent ends, confidential or not, and nothing else (audit H2)', async () => {
+    const { home } = teamHome()
+    const s = service(home), own = join(home, PM_HOMES, 'super-start', 'codex'), other = join(home, 'elsewhere', 'codex')
+    mkdirSync(own, { recursive: true }); mkdirSync(other, { recursive: true })
+    const session = (codexHome: string) => () => ({ agentId: 'r', sessionId: 's', registeredAt: 1, engine: 'codex', cwd: CWD, codexHome })
+    expect(await createConfidentialPurge({ confidential: () => false, home, session: session(other), purge: s.purge, record: s.record })('r')).toEqual({ skipped: true })
+    expect(existsSync(other)).toBe(true)
+    expect(await createConfidentialPurge({ confidential: () => false, home, session: session(own), purge: s.purge, record: s.record })('r')).toEqual({ skipped: true })
+    expect(existsSync(dirname(own))).toBe(false)
+  })
 
   it('deletes through the reviewed purge, scrubs, sweeps, and keeps the session in its record until the sweep passes', async () => {
     const { home, claude } = teamHome()

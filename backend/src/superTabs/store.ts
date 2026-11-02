@@ -7,6 +7,8 @@ import { isDeepStrictEqual } from 'node:util'
 import type { Machine, Prisma, PrismaClient, SuperTabDelivery, SuperTabMessage } from '@prisma/client'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { machineAlive } from '../lib/prisma.js'
+import { pullRequestsIn, type PushOrigin } from '../github/pushOrigin.js'
+import { githubRepository } from '../github/repository.js'
 import { isTeamSession, teamMachine, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
@@ -61,6 +63,7 @@ import { WORKSPACE_LABEL, type WorkspaceRole } from './workspaces.js'
 import { STATUS_LABELS,
   activeWork, actorKey, agent, agentOnly, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
   SuperTabError, isLeads, knownKind, parkLaterConversations, type Actor, type Agent, type Assignment, type Author, type CommandEffects, type Conversation, type MessageDraft, type Person, type SuperTabState,
+  pullRequestLinks,
 } from './model.js'
 import { QUIET_CLAIM, type HoldReason } from './holdReason.js'
 import { stuck } from './deliverySettle.js'
@@ -297,6 +300,10 @@ export interface SuperTabStoreHooks {
   /** Tasks newly in progress, or in progress again under the same id (resumed after a usage limit): GitHub tokens forget
    *  that such a task ended (github/tokens.ts resume). */
   workStarted?: (tabId: string, started: WorkHold[]) => void
+  /** Who pushed these pull requests of a project's repository (github/pushOrigin.ts): the worst of their answers. Absent with no GitHub App. */
+  pushOrigin?: (repositoryUrl: string | null, pullRequestUrls: string[]) => Promise<PushOrigin>
+  /** The same for a branch a start names: its open pull request's answer, clean for the default branch, unknown with no pull request. */
+  branchPushOrigin?: (repositoryUrl: string | null, branch: string) => Promise<PushOrigin>
   /** No Harness GitHub App on this server: a Mac's Harness Team account joins no Swarm and takes no teammates' work, since
    *  it has no git login to fetch or push with (commands.ts `teamAccountsIdle`). */
   teamAccountsIdle?: boolean
@@ -1194,6 +1201,12 @@ export class SuperTabStore {
       return done
     } catch (error) {
       if (input.command?.type === 'message.send' && input.command.newSession && error instanceof SuperTabError) logger.info('Buddy session refused', { tabId, code: error.code })
+      // A refusal for a bot's push rolled its mark back. The mark stays, so a post or a join that reads no GitHub is refused next (review 1 of #2559).
+      const pushedOn = input.command && 'conversationId' in input.command ? input.command.conversationId : undefined
+      if (error instanceof SuperTabError && error.details?.pushed === true && typeof pushedOn === 'string') {
+        await this.executeOnce(user, tabId, { operationId: `team-written-${stableId(input.operationId, pushedOn)}`, command: { type: 'work.teamWritten', conversationId: pushedOn } }, asAgentId, hostMachineId)
+          .catch(failure => logger.warn('Team-written mark failed', { tabId, error: String(failure) }))
+      }
       // A queued start its machine will not take for good — no Harness Team account, or one that is not private — fails
       // with that reason instead of waiting there: its host would otherwise try to launch it on every pass, and it would
       // hold a slot. A stale check or an offline machine may pass again by itself, so that start keeps waiting.
@@ -1214,9 +1227,56 @@ export class SuperTabStore {
     }
   }
 
+  /**
+   * Who pushed the pull requests of the task a work.assign or a Ready for review is about (github/pushOrigin.ts, audit H2).
+   * Read outside the command's transaction, as GitHub may take seconds, so it can only ever add a mark. Undefined when there is
+   * nothing to read, or this reader cannot read that task: the command then refuses as it would.
+   */
+  private async pushOriginFor(user: AuthUser, tabId: string, command: unknown): Promise<PushOrigin | undefined> {
+    const hook = this.hooks.pushOrigin
+    const asked = command as { type?: unknown; conversationId?: unknown; status?: unknown; result?: unknown; present?: unknown; projectId?: unknown; branchRef?: unknown;
+      request?: { branchRef?: unknown; conversationId?: unknown } } | null
+    if (!asked) return undefined
+    // A start that names a branch: a person or the PM can name any branch, whoever pushed it.
+    const ref = asked.type === 'agent.start' ? asked.request?.branchRef : asked.type === 'lead.start' ? asked.branchRef : undefined
+    try {
+      if (typeof ref === 'string' && this.hooks.branchPushOrigin) {
+        const branch = ref.replace(/^refs\/(heads|remotes\/origin)\//, '')
+        const repositoryUrl = await transaction(this.db, async tx => {
+          const { state } = await this.load(tx, user, tabId, namedFor(command as Command))
+          if (asked.type === 'lead.start') return projectsOf(state).find(p => p.id === asked.projectId)?.repository?.repositoryUrl ?? null
+          const group = state.conversations.find(c => c.id === asked.request?.conversationId)
+          return group ? groupProject(state, group).repository?.repositoryUrl ?? null : undefined
+        })
+        return repositoryUrl === undefined ? undefined : await this.hooks.branchPushOrigin(repositoryUrl, branch)
+      }
+      const reads = asked.type === 'work.assign' || asked.type === 'work.teamWritten' || (asked.type === 'conversation.agent' && asked.present === true) || (asked.type === 'work.status' && asked.status === 'review')
+      if (!hook || typeof asked.conversationId !== 'string' || !reads) return undefined
+      const facts = await transaction(this.db, async tx => {
+        const { state } = await this.load(tx, user, tabId, namedFor(command as Command))
+        const group = state.conversations.find(c => c.id === asked.conversationId)
+        if (!group) return null
+        const task = group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : undefined
+        const repositoryUrl = groupProject(state, group).repository?.repositoryUrl ?? null
+        const urls = [...group.pullRequestUrls ?? [], ...task?.pullRequestUrls ?? [],
+          ...[group.brief, group.title, task?.brief, task?.title, typeof asked.result === 'string' ? asked.result : ''].flatMap(text => text ? pullRequestsIn(text, repositoryUrl) : [])]
+        return { repositoryUrl, urls: [...new Set(urls)], step: !!group.reviewOf }
+      })
+      if (!facts) return undefined
+      if (facts.urls.length) return await hook(facts.repositoryUrl, facts.urls)
+      // A step reads or runs a branch, and with no pull request named nothing shows whose. It may name one in a sentence no read
+      // can parse, and then its agent runs `gh pr checkout` itself (security review 2 of #2559).
+      return facts.step && facts.repositoryUrl && githubRepository(facts.repositoryUrl) ? 'unknown' : undefined
+    } catch (error) {
+      if (error instanceof SuperTabError) return undefined
+      return 'unknown'
+    }
+  }
+
   private async executeOnce(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
     workspaceLeave = false) {
     const { operationId, command } = operationSchema.parse(input)
+    const pushOrigin = await this.pushOriginFor(user, tabId, command)
     let ended: WorkHold[] = [], started: WorkHold[] = []
     const done = await transaction(this.db, async tx => {
       // A retried attempt starts again: only the attempt that commits says which tasks ended or started.
@@ -1449,6 +1509,7 @@ export class SuperTabStore {
         context.otherWorkspaceMachines = await this.otherWorkspaceMachines(tx, original)
         if (this.hooks.teamAccountsIdle) context.teamAccountsIdle = true
       }
+      if (pushOrigin) context.pushOrigin = pushOrigin
       if (command.type === 'agent.screen' || command.type === 'agent.input') {
         // A machine that is gone or no longer shared refuses at once instead of leaving the request to time out.
         await this.agentGrant(tx, original, agent(original, command.agentId))
@@ -3486,9 +3547,10 @@ export class SuperTabStore {
 
   /** Archives a finished group whose pull requests `checked` were all read merged or closed (archive.ts), only if it still
    *  qualifies inside this write: no message and no pull request linked since the read. A decision still waiting there
-   *  closes as withdrawn (decisions.ts withdrawIn), and its waiting deliveries end, as a person's archive ends them. With
-   *  `reviewOf`, the group the pass read as the one it reviews, a review nobody is reviewing closes the same way once those
-   *  of the work it reviews are too (tidy.ts reviewClosable). True when it archived. */
+   *  closes as withdrawn (decisions.ts withdrawIn), and its waiting deliveries end, as a person's archive ends them. A step
+   *  needs `reviewOf`, the group the pass read as its task, which this write reads again: it stays open unless that task is
+   *  done or cancelled and that task's pull requests are settled too. A review nobody is reviewing closes the same way
+   *  (tidy.ts reviewClosable). True when it archived. */
   async archiveFinished(tabId: string, groupId: string, checked: Readonly<Record<string, 'merged' | 'closed'>>, reviewOf?: string): Promise<boolean> {
     return transaction(this.db, async tx => {
       const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
@@ -3498,7 +3560,8 @@ export class SuperTabStore {
       const now = this.now()
       if (!group) return false
       const read = (urls: readonly string[]) => urls.every(url => checked[url] === 'merged' || checked[url] === 'closed')
-      const finished = archivable(state, group, now) && read(group.pullRequestUrls ?? [])
+      // A step's task's pull requests count too: it may yet be handed back while one is open, and need its step again.
+      const finished = archivable(state, group, now) && read(reviewPullRequests(state, group))
       // Only the group it reviews as the pass read it: one this write did not load would hide its open pull requests.
       const review = !finished && !!reviewOf && group.reviewOf === reviewOf && reviewClosable(state, group, now) && read(reviewPullRequests(state, group))
       if (!finished && !review) return false
@@ -3517,7 +3580,8 @@ export class SuperTabStore {
       // A review's close also writes the work it reviews (review of #2322): a Ready for review committed since the load linked
       // a new pull request and saw this review still open, so it opened none. The touch makes one of the two writes retry,
       // and the retry sees the other: this one declines (a pull request not read), or that one opens a new review.
-      await this.save(tx, loaded, state, clock.next(), review ? [{ kind: 'group', key: group.reviewOf! }] : [])
+      // A finished step's too: its task handed on again since the load must not lose the step it will need.
+      await this.save(tx, loaded, state, clock.next(), group.reviewOf ? [{ kind: 'group', key: group.reviewOf }] : [])
       await this.writeMessages(tx, tabId, state, rows, sequences)
       return true
     })
