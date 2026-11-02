@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 
 import 'controller.dart';
 import 'decisions.dart';
@@ -420,10 +421,19 @@ class SuperTabChatNotices {
       _seen[group.id] = top;
       if (before == null || top <= before) continue;
       if (controller.notifyOf(group.id) != SuperTabNotify.all) continue;
-      if (controller.selectedId == group.id) continue;
+      if (controller.selectedId == group.id && _appInFront && !controller.away) {
+        continue;
+      }
       if (top <= controller.readMark(group.id)) continue;
       onMessage?.call(group, top);
     }
+  }
+
+  /// The open chat is news only while nobody can be reading it: as for the chat's own read mark,
+  /// the app counts as in front only while resumed.
+  static bool get _appInFront {
+    final state = WidgetsBinding.instance.lifecycleState;
+    return state == null || state == AppLifecycleState.resumed;
   }
 
   void _dispose() {
