@@ -254,6 +254,58 @@ void main() {
     expect(find.byType(SuperTabTaskPanel), findsNothing);
   });
 
+  testWidgets('the panel shows what the chat would: steps, not hidden rows', (
+    tester,
+  ) async {
+    final server = serverWith([taskRow('review')]);
+    (server.state['conversations'] as List).add({
+      ...conversationFixture('step-1', 'Review'),
+      'projectId': 'lead',
+      'reviewOf': 'group-1',
+      'step': 'Review',
+      'number': 7,
+      'lastMessageSequence': 1,
+    });
+    Map<String, dynamic> inTask(
+      String id,
+      String conversation,
+      int sequence,
+      String text, {
+      Map<String, Object?> source = const {},
+      String? thread,
+    }) => {
+      'id': id,
+      'conversationId': conversation,
+      'sequence': sequence,
+      'thread': thread ?? id,
+      'text': text,
+      'createdAt': at.toIso8601String(),
+      'author': {'kind': 'agent', 'id': 'kai', 'name': 'Kai'},
+      'source': source,
+    };
+    server.messages.addAll([
+      inTask('t1', 'group-1', 1, 'Ready: PR #2605.'),
+      inTask(
+        't2',
+        'group-1',
+        2,
+        'Kai has gone quiet.',
+        source: {'kind': 'work-stalled'},
+      ),
+      inTask('t3', 'group-1', 3, 'A reply in a thread.', thread: 't1'),
+      inTask('v1', 'step-1', 1, 'With fixes: one Important.'),
+    ]);
+    final c = await showView(tester, server);
+    await c.loadMessages('lead');
+    await tester.pumpAndSettle();
+    await tester.tap(line);
+    await tester.pumpAndSettle();
+    expect(find.text('Ready: PR #2605.'), findsOneWidget);
+    expect(find.text('With fixes: one Important.'), findsOneWidget);
+    expect(find.text('Kai has gone quiet.'), findsNothing);
+    expect(find.text('A reply in a thread.'), findsNothing);
+  });
+
   testWidgets('a task the reader\'s read does not hold opens nothing', (
     tester,
   ) async {
