@@ -115,7 +115,7 @@ const runWindowsPeer: WindowsPeerRun = (script, inputs) => runPowershellAsync(sc
 
 /**
  * Windows: whether the client end of the connection 127.0.0.1:[peerPort] → 127.0.0.1:[ownPort] belongs to a process of
- * this account. Prints `yes` or `no`. Windows lists the client's end with its own port as the local one. The owner is
+ * this account. Prints `yes`, or `no: <why>` for the daemon's log. Windows lists the client's end with its own port as the local one. The owner is
  * compared by SID, never by name; a process of another account, one whose owner Windows will not give, one gone, one
  * that started after the connection was made (an id reused since its creator exited), or more than one row (which cannot
  * be told apart) is `no`. The ports are inputs, never in the script's text.
@@ -124,14 +124,14 @@ export function windowsPeerQuery(peerPort: number, ownPort: number): { script: s
   return {
     script: [
       '$rows = @(Get-NetTCPConnection -State Established -LocalAddress 127.0.0.1 -LocalPort ([int]$env:HARNESS_PEER_PORT) -RemoteAddress 127.0.0.1 -RemotePort ([int]$env:HARNESS_OWN_PORT) -ErrorAction SilentlyContinue)',
-      "if ($rows.Count -ne 1) { 'no'; exit 0 }",
+      "if ($rows.Count -ne 1) { 'no: ' + $rows.Count + ' connections match'; exit 0 }",
       '$process = Get-CimInstance Win32_Process -Filter ("ProcessId = " + [int]$rows[0].OwningProcess)',
-      "if (-not $process) { 'no'; exit 0 }",
+      "if (-not $process) { 'no: its process is gone'; exit 0 }",
       // Windows keeps naming a socket's creator after it exits when a child inherited the handle, and the id may have gone
       // to another process since: only one that started before the connection was made can be its owner.
-      "if (-not $process.CreationDate -or -not $rows[0].CreationTime -or $process.CreationDate -gt $rows[0].CreationTime) { 'no'; exit 0 }",
+      "if (-not $process.CreationDate -or -not $rows[0].CreationTime -or $process.CreationDate -gt $rows[0].CreationTime) { 'no: its process started ' + [string]$process.CreationDate + ', the connection ' + [string]$rows[0].CreationTime; exit 0 }",
       '$owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid',
-      "if ($owner.ReturnValue -eq 0 -and $owner.Sid -and $owner.Sid -eq [Security.Principal.WindowsIdentity]::GetCurrent().User.Value) { 'yes' } else { 'no' }",
+      "if ($owner.ReturnValue -eq 0 -and $owner.Sid -and $owner.Sid -eq [Security.Principal.WindowsIdentity]::GetCurrent().User.Value) { 'yes' } else { 'no: its owner is ' + $owner.Sid + ' (' + $owner.ReturnValue + ')' }",
     ].join('\n'),
     inputs: { HARNESS_PEER_PORT: String(peerPort), HARNESS_OWN_PORT: String(ownPort) },
   }
@@ -149,8 +149,8 @@ export const WINDOWS_PEER_QUEUE = 32
 let windowsLookups = 0
 const waiting: Array<() => void> = []
 
-/** A Windows answer: yes, no, or not asked: too many lookups were running and waiting, or the lookup never finished. */
-type WindowsAnswer = boolean | 'busy' | 'timeout'
+/** A Windows answer: yes, no and why, or not asked: too many lookups were running and waiting, or the lookup never finished. */
+type WindowsAnswer = boolean | 'busy' | 'timeout' | { no: string }
 
 async function askWindows(socket: Socket, run: WindowsPeerRun): Promise<WindowsAnswer> {
   const peerPort = socket.remotePort, ownPort = socket.localPort
@@ -168,7 +168,10 @@ async function askWindows(socket: Socket, run: WindowsPeerRun): Promise<WindowsA
     const result = await run(query.script, query.inputs)
     // runPowershellAsync gives a null status to a script it ended at its limit, or one that never started.
     if (result.status === null) return 'timeout'
-    return result.status === 0 && result.stdout.trim() === 'yes'
+    const said = result.stdout.trim()
+    if (result.status === 0 && said === 'yes') return true
+    // Only the script's own reason is logged: one line, bounded.
+    return /^no: [^\r\n]{1,200}$/.test(said) ? { no: said.slice(4) } : false
   } catch {
     return false
   } finally {
@@ -191,7 +194,8 @@ export function peerIsThisAccount(socket: Socket, platform: NodeJS.Platform = pr
     const asked: Promise<WindowsAnswer> = platform === 'win32' ? askWindows(socket, run) : ask(socket, platform)
     answer = asked.then((result) => {
       const why = result === 'busy' ? 'busy, too many lookups are running; asked again on its next request'
-        : result === 'timeout' ? 'Windows did not say who the caller is in time' : 'the caller is not this account'
+        : result === 'timeout' ? 'Windows did not say who the caller is in time'
+        : typeof result === 'object' ? `the caller is not this account (${result.no})` : 'the caller is not this account'
       if (result !== true) console.warn(`[peer] refused a valid secret on 127.0.0.1:${socket.localPort}: ${why}`)
       if (result === 'busy') answers.delete(socket)
       return result === true

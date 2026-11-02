@@ -5,10 +5,20 @@
 import { spawn } from 'node:child_process'
 import { connect, createServer, type AddressInfo, type Socket } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
-import { peerIsThisAccount } from '../peerAccount.js'
+import { peerIsThisAccount, windowsPeerQuery } from '../peerAccount.js'
+import { runPowershellAsync } from './powershell.js'
 
 const WINDOWS = process.platform === 'win32'
 const cleanup: Array<() => void> = []
+
+/** What Windows answered for [socket], word for word: the message of a failed case, so one run says which check refused. */
+async function asked(socket: Socket): Promise<string> {
+  const query = windowsPeerQuery(socket.remotePort!, socket.localPort!)
+  const row = '$r = @(Get-NetTCPConnection -State Established -LocalPort ([int]$env:HARNESS_PEER_PORT) -ErrorAction SilentlyContinue); $r | Format-List LocalAddress,LocalPort,RemoteAddress,RemotePort,OwningProcess,CreationTime | Out-String; foreach ($x in $r) { (Get-CimInstance Win32_Process -Filter ("ProcessId = " + [int]$x.OwningProcess)) | Format-List ProcessId,Name,CreationDate | Out-String }; "pid $PID current $([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)"'
+  const answer = await runPowershellAsync(query.script, query.inputs, 30_000)
+  const facts = await runPowershellAsync(row, query.inputs, 30_000)
+  return `query: ${answer.status} ${answer.stdout.trim()} ${answer.stderr.trim()}\nfacts: ${facts.stdout.trim()} ${facts.stderr.trim()}\ntest pid ${process.pid}`
+}
 afterEach(() => { for (const close of cleanup.splice(0)) close() })
 
 describe.runIf(WINDOWS)('who is calling, asked of Windows', () => {
@@ -21,7 +31,7 @@ describe.runIf(WINDOWS)('who is calling, asked of Windows', () => {
     cleanup.push(() => client.destroy())
     const socket = await accepted
     cleanup.push(() => socket.destroy())
-    expect(await peerIsThisAccount(socket, 'win32')).toBe(true)
+    if (!await peerIsThisAccount(socket, 'win32')) expect.fail(await asked(socket))
 
     const accepted2 = new Promise<Socket>((resolve) => { server.once('connection', resolve) })
     const gone = connect((server.address() as AddressInfo).port, '127.0.0.1')
@@ -43,6 +53,6 @@ describe.runIf(WINDOWS)('who is calling, asked of Windows', () => {
     cleanup.push(() => child.kill())
     const socket = await accepted
     cleanup.push(() => socket.destroy())
-    expect(await peerIsThisAccount(socket, 'win32')).toBe(true)
+    if (!await peerIsThisAccount(socket, 'win32')) expect.fail(await asked(socket))
   }, 30_000)
 })
