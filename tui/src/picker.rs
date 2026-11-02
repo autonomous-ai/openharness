@@ -392,11 +392,11 @@ impl Picker {
         // the machines answer the new one (no row blinking out on every key).
         let found_now = !self.said_query.is_empty() && !query.trim().is_empty()
             && (self.said_query == query || query.starts_with(&self.said_query) || self.said_query.starts_with(query));
-        // Old harnesses fold under their folder's `▸ N older` while browsing; a search goes through
+        // Old harnesses fold behind their folder's `▸ N older` while browsing; a search goes through
         // all of them, with no such row in its results.
         let browsing = query.trim().is_empty();
         let folded = |r: &Row| browsing && r.older.as_ref().is_some_and(|k| !self.unfolded.contains(k));
-        let spent = |r: &Row| r.id.strip_prefix(crate::modal::OLDER_ROW).is_some_and(|k| !browsing || self.unfolded.contains(k));
+        let spent = |r: &Row| !browsing && r.id.starts_with(crate::modal::OLDER_ROW);
         let offered = |r: &Row| !folded(r) && !spent(r) && (!r.id.starts_with("external:") || self.catalog_ids.contains(&r.id) || (found_now && self.said.contains(&r.id)));
         if query.trim().is_empty() {
             self.visible = self.rows.iter().enumerate().filter(|(_, r)| !self.excluded.contains(&r.id) && offered(r)).map(|(i, _)| (i, Vec::new())).collect();

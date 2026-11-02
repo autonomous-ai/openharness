@@ -824,8 +824,11 @@ fn list_layout(picker: &Picker, bottom_up: bool) -> (Vec<Option<usize>>, Vec<(us
                     if !lines.is_empty() { lines.push(None) }
                     if let Some(s) = section { titles.push((lines.len(), s.to_string(), TitleKind::Section)); lines.push(None) }
                 }
-                titles.push((lines.len(), title.to_string(), if section.is_some() { TitleKind::Under } else { TitleKind::Plain }));
-                lines.push(None);
+                // (A folder with old harnesses folded away: its heading is that row, `▸ N older` on it.)
+                if !row.id.starts_with(crate::modal::OLDER_ROW) {
+                    titles.push((lines.len(), title.to_string(), if section.is_some() { TitleKind::Under } else { TitleKind::Plain }));
+                    lines.push(None);
+                }
             }
             (last, last_section) = (group, section);
             lines.push(Some(vi));
@@ -887,15 +890,16 @@ impl PanelList<'_> {
         if picker.marked.contains(&row.id) { put(buf, r.x + 1, y, 1, "•", if here { c.selected } else { c.accent }); }
         let mut at = r.x + 2;
         for span in &row.lead {
-            // (A mark keeps its colour on the cursor's row, and its tile if it has one.)
-            let s = if here { let s = style.patch(Style::default().fg(span.style.fg.unwrap_or(Color::Reset))); match span.style.bg { Some(tile) => s.bg(tile), None => s } } else { c.base.patch(span.style) };
+            let s = if here { style.patch(Style::default().fg(span.style.fg.unwrap_or(Color::Reset))) } else { c.base.patch(span.style) };
             at += put(buf, at, y, r.right().saturating_sub(at), &span.content, s);
         }
         // The right column as the row has it for this width (its short form in a narrow list:
         // a harness's age, not its project and machine), and never more than a third of the
         // row — so it can not run off the panel or over the name. (Half, in a list that asks: the
         // Models view's size, speed and word, side by side as the desktop's rows have them.)
-        let right_text = row.right_at(r.width as usize);
+        // (A folder's `▸ N older`, opened: what the same key does now.)
+        let opened = row.id.strip_prefix(crate::modal::OLDER_ROW).is_some_and(|k| picker.unfolded.contains(k));
+        let right_text = if opened { "▾ hide older" } else { row.right_at(r.width as usize) };
         let right_w = (right_text.width() as u16).min(if picker.right_half { r.width / 2 } else { r.width / 3 });
         // (The last column is the scroll mark's, with a blank before it.)
         let end = r.right().saturating_sub(if right_w > 0 { right_w + 3 } else { 2 });
@@ -1826,6 +1830,28 @@ mod tests {
         let row = |y: u16| (r.x..r.right()).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>().replace('│', "").trim_end().to_string();
         let rows: Vec<String> = (r.y + 3..r.y + 6).map(row).collect();
         assert_eq!(rows, ["  ›•alpha", "    beta", "    alpine"]);
+    }
+
+    /// A folder with old harnesses folded away has its heading as a row: nothing titled over it, and
+    /// it says `▾ hide older` once opened.
+    #[test]
+    fn a_folders_older_button_is_its_heading() {
+        use crate::picker::Row;
+        let mut p = Picker::new("harnesses", "");
+        let mut button = Row::new(format!("{}k", modal::OLDER_ROW), "webapp").group("webapp").right("▸ 2 older");
+        button.section = Some("studio".into());
+        let mut live = Row::new("a", "alpha").group("webapp");
+        live.section = Some("studio".into());
+        let mut old = Row::new("b", "beta").group("webapp");
+        old.section = Some("studio".into());
+        old.older = Some("k".into());
+        p.set_rows(vec![button, live, old]);
+        let (lines, titles) = list_layout(&p, false);
+        assert_eq!(lines, [None, Some(0), Some(1)], "the machine, the button, the row; beta folded");
+        assert_eq!(titles.iter().map(|t| t.1.as_str()).collect::<Vec<_>>(), ["studio"]);
+        p.unfolded.insert("k".into());
+        p.refilter();
+        assert_eq!(list_layout(&p, false).0, [None, Some(0), Some(1), Some(2)], "still the button, then beta");
     }
 
     /// A machine's heading, its folders level with it under it, a blank line only between machines:

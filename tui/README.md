@@ -455,8 +455,9 @@ pane counts as done and unread (`✓`) until you go to that pane.
   marks it read (`M-M` every row shown), `M-s` sends it a message, `M-r` restarts it, `M-1…9` /
   `M-a` answer it; Enter adds marked rows as panes, while `C-t` opens a window each. The list stays
   ranked while it is open. The list reads newest first, each machine with its folders under it.
-  A harness untouched for over 7 days, with nothing going on and not on screen, folds under its
-  folder's `▸ N older` (Enter shows them; a search always finds them). The keys line shows the main
+  A harness untouched for over 7 days, with nothing going on and not on screen, folds away behind
+  the `▸ N older` on its folder's heading (Enter or a click shows or hides them; a search always
+  finds them). The keys line shows the main
   keys; `?` lists them all. The preview adds its final message whole, what it was last asked, its plan (its to-do list,
   `✓` done, `▸` doing), the sub-agents it has running, and what it has used (`1.2M tokens · +340
   −52 · 1 PR`).

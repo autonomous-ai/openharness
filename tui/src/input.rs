@@ -3082,10 +3082,13 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
             if let Some(msg) = crate::settings::set_key(app, knob, value) { picker.say(msg) }
             return keep(app, kind, picker);
         }
-        // `▸ N older`: Enter unfolds them where it stands; no other key means anything on it.
+        // A folder's `▸ N older`: Enter or a click shows them, and hides them again; no other key
+        // means anything on it.
         PickerKind::Open { .. } if id.as_deref().is_some_and(|i| i.starts_with(modal::OLDER_ROW)) => {
             if choice == Choice::Enter {
-                if let Some(key) = id.as_deref().and_then(|i| i.strip_prefix(modal::OLDER_ROW)) { picker.unfolded.insert(key.to_string()); }
+                if let Some(key) = id.as_deref().and_then(|i| i.strip_prefix(modal::OLDER_ROW)) {
+                    if !picker.unfolded.remove(key) { picker.unfolded.insert(key.to_string()); }
+                }
                 picker.refilter();
             }
             keep(app, kind, picker)
