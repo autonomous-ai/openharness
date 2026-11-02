@@ -23,12 +23,43 @@ class SuperTabLeaderboardReader extends ChangeNotifier {
   String? error;
   String? _projectId;
   int? _week;
+  String _period = leaderboardDefaultPeriod;
+  bool _weeksOnly = false;
+  bool _allProjects = true;
   int _read = 0;
   Timer? _timer;
   bool _disposed = false;
 
   /// The Monday 00:00 UTC of the week shown; null for this week.
   int? get week => _week;
+
+  /// The rolling period shown; null while the server only sums weeks (a
+  /// server before periods), which keeps the week menu. Told once per reader:
+  /// a server that is upgraded later is seen on the next launch.
+  String? get period => _weeksOnly ? null : _period;
+
+  /// Sums every project the reader may read, or only the one shown: the
+  /// roster's scope, All projects by default. A server before periods sums
+  /// only the one shown.
+  Future<void> showAllProjects(bool allProjects) {
+    if (allProjects == _allProjects) return Future.value();
+    _allProjects = allProjects;
+    // Whole-Swarm numbers under one project's name would mislead, and its
+    // list of people would say who is in the project.
+    board = null;
+    _notify();
+    return refresh();
+  }
+
+  /// Shows another rolling period.
+  Future<void> showPeriod(String period) {
+    if (period == _period) return Future.value();
+    _period = period;
+    // Another period's numbers under this one's name would mislead.
+    board = null;
+    _notify();
+    return refresh();
+  }
 
   /// Shows another week, null for this one.
   Future<void> showWeek(int? week) {
@@ -71,19 +102,31 @@ class SuperTabLeaderboardReader extends ChangeNotifier {
   Future<void> refresh() async {
     final projectId = _projectId;
     if (projectId == null || _disposed) return;
-    final read = ++_read, week = _week;
+    final read = ++_read, week = _week, period = this.period;
+    final allProjects = _allProjects;
     try {
       final answer = await request(
         'GET',
         '/api/super-tabs/${Uri.encodeComponent(tabId)}/leaderboard'
             '?projectId=${Uri.encodeQueryComponent(projectId)}'
-            '${week == null ? '' : '&week=$week'}',
+            '${period != null
+                ? '&period=$period${allProjects ? '&scope=all' : ''}'
+                : week == null
+                ? ''
+                : '&week=$week'}',
       );
       if (read != _read) return;
       board = SuperTabLeaderboard.fromJson(answer);
+      if (board!.period == null) _weeksOnly = true;
       error = null;
     } on SuperTabFailure catch (failure) {
       if (read != _read) return;
+      // A server before periods refuses the question, and only that one: any
+      // other failure, however early, leaves the periods on for the next read.
+      if (failure.statusCode == 400 && period != null) {
+        _weeksOnly = true;
+        return refresh();
+      }
       // A server from before the leaderboard has none: Humans just list names.
       // A project the reader may no longer read is forgotten alike, its
       // numbers and the server's words about it.

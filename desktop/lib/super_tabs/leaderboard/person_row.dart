@@ -277,8 +277,8 @@ class LeaderboardPersonWeek extends StatelessWidget {
       (
         'Points',
         score.medal == null
-            ? '${score.points} this week'
-            : '${score.points} this week · place ${score.rank}',
+            ? '${score.points} ${score.spanName}'
+            : '${score.points} ${score.spanName} · place ${score.rank}',
       ),
       (
         'Shipped',
@@ -439,8 +439,8 @@ class _LeaderboardPersonDetailsState extends State<_LeaderboardPersonDetails> {
       children: [
         Text(
           [
-            '${plural(score.points, 'point')} this week',
-            if (before != null) '$before last week',
+            '${plural(score.points, 'point')} ${score.spanName}',
+            if (before != null) '$before ${score.earlierName}',
           ].join(' · '),
           style: quiet,
         ),

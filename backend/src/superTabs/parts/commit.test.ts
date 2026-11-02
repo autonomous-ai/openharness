@@ -52,6 +52,9 @@ describe('what a write tells host reads (review round 1)', () => {
     }
     expect(hostMarker('machine', machine({}, reading(1)), lent(15_000, reading(2)), none, 9)).toEqual({})
     expect(hostMarker('machine', lent(15_000), lent(30_000), none, 9)).toEqual({})
+    // The daily rows move with every reading too.
+    const days = (busyMs: number) => { const part = machine(); return { ...part, contribution: { ...part.contribution, lentDays: [{ day: 0, busyMs }] } } }
+    expect(hostMarker('machine', days(1), days(2), none, 9)).toEqual({})
   })
 
   it('moves it for a change to the machine\'s settings or ledger, and when the part is added or removed', () => {

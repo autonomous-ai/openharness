@@ -8,6 +8,7 @@ import '../../theme/app_theme.dart';
 import '../finder_models.dart';
 import '../finder_tabs.dart';
 import 'finder_click.dart';
+import '../../widgets/laid_out_list.dart';
 
 /// The open tabs, as Orca's tab bar draws them: a preview tab in italics
 /// (the next single click replaces it), a dot for unsaved edits that turns
@@ -24,7 +25,7 @@ class FinderTabBar extends StatelessWidget {
     grid.AppTheme.watch(context);
     return SizedBox(
       height: 32,
-      child: ListView(
+      child: LaidOutListView(
         scrollDirection: Axis.horizontal,
         children: [
           for (final tab in tabs.tabs)

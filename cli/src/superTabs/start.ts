@@ -10,7 +10,7 @@ import { permissionModeFlags } from '../lib/engineLaunch.js'
 import type { AgentEngine } from '../engines/types.js'
 import { isSwarmSkillMode, swarmSkillUse, wireRole, type SwarmSkillMode } from '../lib/swarmSkills.js'
 import { isTeamDaemon, pmEngineHome } from './teamDaemon.js'
-import { BUDDY_HOMES, buddyProjectsOf, prepareBuddyHome, trustBuddyHome } from './buddyHome.js'
+import { BUDDY_COPIES_FILE, BUDDY_HOMES, buddyProjectsOf, prepareBuddyHome, trustBuddyHome } from './buddyHome.js'
 import { markBuddyNarrow } from '../lib/buddyGuard.js'
 import { projectsRoot } from '../lib/projectFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
@@ -89,7 +89,7 @@ function buddySessionPrompt(tabId: string, chat: string, thread: string, mode: S
  *  reads, each project's code in its own folder under projects/, and writes only in its person's chat. Names only, never a
  *  message's text: a start record is listed in the Lead's status. */
 function swarmBuddyPrompt(tabId: string, chat: string, home: { ready: string[]; missing: string[] }, mode: SwarmSkillMode | null): string {
-  const code = home.ready.length ? `Each project's code is in its own folder under projects/ (${home.ready.join(', ')}).` : 'No project\'s code is on this machine.'
+  const code = home.ready.length ? `Each project's code is in its own folder under projects/ (${home.ready.join(', ')}). Each copy follows its project's default branch, moved at your start and at most hourly after that. ${BUDDY_COPIES_FILE} in your folder says which revision each copy is at: read it before saying what the code does or does not have. Say your copy is behind only when that file says it may be; otherwise, what is not in the copy is not on the default branch yet.` : 'No project\'s code is on this machine.'
   const none = home.missing.length ? ` Not on this machine: ${home.missing.join(', ')}; you still read their chats and tasks.` : ''
   return `You are a person's one Buddy in a shared Super Tab, for every project they read. ${mode ? `${swarmSkillUse({ role: 'buddy' }, mode)} ` : ''}Run harness super-tab --tab ${tabId} status until this harness appears in the roster: it lists your owner's projects, one line each, and the newest tasks; status --project NAME reads one project's tasks. ${code}${none} Your chat with your owner is conversation ${chat}: read it with harness super-tab --tab ${tabId} messages ${chat}, and reply there with harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID. When your owner asks you to send something to a project's PM, send their proposal yourself, naming that project; if it is unclear which project, ask them first. Then greet your owner there and ask what they have in mind. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
 }

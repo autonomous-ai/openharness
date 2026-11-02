@@ -293,11 +293,18 @@ void main() {
       Set<String> broken = const {},
       Map<String, String> hosts = const {'gh-work': 'github.com'},
       List<String> aliases = const ['gh-work'],
+      Set<String> untrusted = const {},
     }) => RepositoryClone(
       sshHosts: _FakeSshHosts(hosts, aliases),
       startProcess: (arguments, environment) {
         final url = arguments[2];
         tried.add(url);
+        if (untrusted.contains(url)) {
+          return Process.start('sh', [
+            '-c',
+            'echo "Host key verification failed." >&2; exit 128',
+          ]);
+        }
         if (refused.contains(url) || broken.contains(url)) {
           final message = refused.contains(url)
               ? 'fatal: could not read Username for https://github.com'
@@ -349,6 +356,61 @@ void main() {
       await clone.run(GitHubRepository.parse('owner/project')!, parent.path);
       expect(tried.last, 'git@gh-work:owner/project.git');
       expect(clone.clonedVia, 'gh-work');
+    });
+
+    test('an untrusted host key still lets an alias try', () async {
+      final clone = cloner(
+        refused: {'https://github.com/owner/project.git'},
+        untrusted: {'git@github.com:owner/project.git'},
+      );
+      await clone.run(GitHubRepository.parse('owner/project')!, parent.path);
+      expect(tried.last, 'git@gh-work:owner/project.git');
+      expect(clone.clonedVia, 'gh-work');
+    });
+
+    test('an untrusted host key is named when nothing got in', () async {
+      final clone = cloner(
+        refused: {
+          'https://github.com/owner/project.git',
+          'git@gh-work:owner/project.git',
+        },
+        untrusted: {'git@github.com:owner/project.git'},
+      );
+      await expectLater(
+        clone.run(GitHubRepository.parse('owner/project')!, parent.path),
+        throwsA(
+          isA<RepositoryCloneException>()
+              .having(
+                (e) => e,
+                'not a refusal',
+                isNot(isA<RepositoryAccessDenied>()),
+              )
+              .having(
+                (e) => e.message,
+                'message',
+                contains('ssh -T git@github.com'),
+              ),
+        ),
+      );
+      expect(tried, hasLength(3));
+    });
+
+    test('an alias ssh cannot read is not called another host', () async {
+      final clone = cloner(hosts: const {}, aliases: const []);
+      await expectLater(
+        clone.run(
+          GitHubRepository.parse('git@gh-work:owner/project')!,
+          parent.path,
+        ),
+        throwsA(
+          isA<RepositoryCloneException>().having(
+            (e) => e.message,
+            'message',
+            'Could not read gh-work from ssh on this computer. Check that ssh works, then retry.',
+          ),
+        ),
+      );
+      expect(tried, isEmpty);
     });
 
     test('a network failure stops at once', () async {

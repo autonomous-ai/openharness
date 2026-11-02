@@ -20,6 +20,7 @@ import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/widgets/app_icon_button.dart';
+import 'package:harness/widgets/browser_menu_guard.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/widgets/engine_identity.dart';
 
@@ -1538,6 +1539,42 @@ void main() {
       },
     );
 
+    testWidgets(
+      'a Swarm-wide Buddy has no project: its name is listed alone and Remove still asks',
+      (tester) async {
+        final server = _RemovalServer();
+        server.state['machines'] = [machine('owner')];
+        server.preview = {
+          'blockedBy': null,
+          'agents': [
+            {'id': 'a1', 'name': 'Wren', 'projectName': ''},
+          ],
+          'soleSourceProjects': <Object>[],
+        };
+        final c = server.controller();
+        await c.refresh();
+        await mount(tester, c);
+        await tester.tap(
+          find.byKey(const ValueKey('super-machine-studio')),
+          buttons: kSecondaryMouseButton,
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.byKey(const ValueKey('super-machine-menu-remove')),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Remove Studio from this Swarm?'), findsOneWidget);
+        expect(find.text('Wren'), findsOneWidget);
+        expect(find.textContaining('Wren ·'), findsNothing);
+        expect(find.text('Could not check this machine.'), findsNothing);
+        await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+        await tester.pumpAndSettle();
+        await tester.pumpWidget(const SizedBox());
+        await c.flush();
+        c.dispose();
+      },
+    );
+
     testWidgets('a right-click offers it to whoever may remove the machine', (
       tester,
     ) async {
@@ -1562,6 +1599,63 @@ void main() {
       await c.flush();
       c.dispose();
     });
+
+    testWidgets(
+      'a long press opens the same menu, Details and Remove, not the details',
+      (tester) async {
+        final server = _RemovalServer();
+        server.state['machines'] = [machine('owner')];
+        final c = server.controller();
+        await c.refresh();
+        await mount(tester, c);
+        await tester.longPress(
+          find.byKey(const ValueKey('super-machine-studio')),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Details'), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('super-machine-menu-remove')),
+          findsOneWidget,
+        );
+        expect(find.byType(SuperTabMachineDetails), findsNothing);
+        await tester.tap(find.text('Details'));
+        await tester.pumpAndSettle();
+        expect(find.byType(SuperTabMachineDetails), findsOneWidget);
+        await tester.pumpWidget(const SizedBox());
+        await c.flush();
+        c.dispose();
+      },
+    );
+
+    testWidgets(
+      'in a browser, pointing at a machine row switches the browser menu off',
+      (tester) async {
+        final told = <bool>[];
+        BrowserMenuGuard.debugWeb = true;
+        BrowserMenuGuard.debugSink = (off) async => told.add(off);
+        addTearDown(BrowserMenuGuard.debugReset);
+        final server = _RemovalServer();
+        server.state['machines'] = [machine('owner')];
+        final c = server.controller();
+        await c.refresh();
+        await mount(tester, c);
+        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+        await mouse.addPointer(location: const Offset(900, 700));
+        await tester.pump();
+        expect(told, isEmpty);
+        await mouse.moveTo(
+          tester.getCenter(find.byKey(const ValueKey('super-machine-studio'))),
+        );
+        await tester.pump();
+        expect(told, [true]);
+        await mouse.moveTo(const Offset(900, 700));
+        await tester.pump();
+        expect(told, [true, false]);
+        await tester.pumpWidget(const SizedBox());
+        await c.flush();
+        c.dispose();
+      },
+    );
 
     testWidgets('machine with a Product Manager cannot be removed', (
       tester,

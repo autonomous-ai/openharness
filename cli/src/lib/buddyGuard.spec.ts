@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { inspect } from 'node:util'
 import { basename, dirname, join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { BUDDY_HOMES } from '../superTabs/buddyHome.js'
+import { BUDDY_COPIES_FILE, BUDDY_HOMES } from '../superTabs/buddyHome.js'
 import { allowBuddyReads, artifactLinks, buddyGuardCommand, buddyGuardSource, buddyReadsOf, forgetBuddyReads, grantBuddyWide, recordBuddyApprovals,
   SentListsError } from './buddyGuard.js'
 
@@ -402,6 +402,10 @@ describe('a Buddy\'s guard (Ken, 10-29: reads without a prompt, refuses everythi
     const working = spawnSync('/bin/sh', ['-c', buddyGuardCommand(process.execPath, script)],
       { input: JSON.stringify({ tool_name: 'Read', tool_input: { file_path: join(root, 'a.txt') } }), encoding: 'utf8' })
     expect([working.status, JSON.parse(working.stdout).hookSpecificOutput.permissionDecision]).toEqual([0, 'allow'])
+    // What its prompt tells a person's one Buddy to read about its project copies (superTabs/buddyHome.ts): a name the guard allows.
+    const copies = spawnSync('/bin/sh', ['-c', buddyGuardCommand(process.execPath, script)],
+      { input: JSON.stringify({ tool_name: 'Read', tool_input: { file_path: join(root, BUDDY_COPIES_FILE) } }), encoding: 'utf8' })
+    expect(JSON.parse(copies.stdout).hookSpecificOutput.permissionDecision).toBe('allow')
   })
 })
 

@@ -12,6 +12,7 @@ import 'task_step.dart';
 import 'shared_tab_placement.dart' show plainSharedText, shortSharedText;
 import 'shared_tabs.dart';
 import 'shared_tabs_model.dart';
+import '../widgets/laid_out_list.dart';
 
 /// One line for why a tab's tasks could not be read (1c spec, Errors).
 String sharedTasksErrorText(String code) => switch (code) {
@@ -90,7 +91,7 @@ class SharedTabTasksState extends State<SharedTabTasks> {
             semanticsLabel: 'Loading tasks',
           );
         }
-        return ListView(
+        return LaidOutListView(
           key: const ValueKey('shared-tasks'),
           shrinkWrap: true,
           padding: EdgeInsets.zero,

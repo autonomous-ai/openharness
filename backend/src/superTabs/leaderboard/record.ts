@@ -4,6 +4,7 @@
  */
 import { isLeads, type Actor, type Agent, type AgentConfiguration, type Assignment, type Author, type Check, type Conversation, type SuperTabState, type WorkStatus } from '../model.js'
 import { groupProject, ledProject } from '../projects.js'
+import { HOUR_MS } from './rolling.js'
 import { WEEK_MS, weekStart } from './week.js'
 import { agentTarget } from '../rules.js'
 import type { UnblockKind } from './contract.js'
@@ -38,6 +39,8 @@ export interface RanOn { engine: string; model: string | null; effort?: string; 
  *  model's points (Lead, 2026-10-29). Counted, not listed, so no cap ever drops an earned point (review of #2097). A
  *  person's verdict is no model's. */
 export interface ReviewCount extends RanOn { week: number; count: number }
+/** The same verdicts by hour, for the rolling periods (rolling.ts): one row per hour and model that had one. */
+export interface ReviewHour extends RanOn { hour: number; count: number }
 /** A group's leaderboard bookkeeping; readers never get it whole (read/views.ts groupView). */
 export interface GroupLedger {
   askedAt?: number
@@ -68,6 +71,8 @@ export interface GroupLedger {
   shippedLeadId?: string | null
   /** Review verdicts by week and model, for the last LEDGER_WEEKS weeks, oldest first. */
   reviews?: ReviewCount[]
+  /** The same by hour, for the last LEDGER_WEEKS weeks. */
+  reviewHours?: ReviewHour[]
   /** The Buddy's proposal the group was opened from: the Buddy earns when it ships (Lead, 2026-10-29). */
   proposal?: { buddyId: string; messageId: string }
 }
@@ -300,6 +305,12 @@ export function recordVerdict(state: SuperTabState, group: Conversation, check: 
   if (same) same.count++
   else kept.push({ week, ...on, count: 1 })
   ledger.reviews = kept
+  const hour = Math.floor(now / HOUR_MS) * HOUR_MS
+  const hours = (ledger.reviewHours ?? []).filter(r => now - r.hour < LEDGER_WEEKS * WEEK_MS)
+  const sameHour = hours.find(r => r.hour === hour && r.engine === on.engine && r.model === on.model && r.effort === on.effort && r.grid === on.grid)
+  if (sameHour) sameHour.count++
+  else hours.push({ hour, ...on, count: 1 })
+  ledger.reviewHours = hours
 }
 
 /** A group opened from a Buddy's proposal remembers it, for the Buddy's points when it ships. */
