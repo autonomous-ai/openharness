@@ -23,7 +23,6 @@ class SuperTabNeed {
     this.at,
     this.decision,
     this.mention,
-    this.unread = true,
   });
   final SuperTabNeedKind kind;
 
@@ -37,9 +36,6 @@ class SuperTabNeed {
   final DateTime? at;
   final SuperTabDecision? decision;
   final SuperTabMention? mention;
-
-  /// Bold: a tag the reader has already read past is shown plain.
-  final bool unread;
 }
 
 /// The reader's Activity in one Swarm: the one place for everything new for
@@ -122,7 +118,6 @@ class SuperTabActivity extends ChangeNotifier {
           conversationId: m.conversationId,
           at: m.createdAt,
           mention: m,
-          unread: mentionUnread(m),
         ),
     ];
   }
@@ -131,12 +126,20 @@ class SuperTabActivity extends ChangeNotifier {
   /// answered, past any read mark. Not `1 << 52`: a shift is 32 bits on the web.
   static const _unknown = 9007199254740991;
 
-  /// The tags that need the reader: in a chat's own stream and not read past.
-  /// A tag the reader has read stops needing them (the number clears by
-  /// reading), and one in a reply that lives only in its thread belongs to
-  /// New replies, where the thread is.
-  Iterable<SuperTabMention> get _tags =>
-      mentions.waiting.where((m) => m.threadId == null && mentionUnread(m));
+  /// The tags that need the reader: not read past (the number clears by
+  /// reading). One in a thread that New replies lists is shown there instead;
+  /// a tag in a thread the reader does not follow still needs them.
+  Iterable<SuperTabMention> get _tags {
+    final listed = {
+      for (final t in newReplies) '${t.conversationId}/${t.rootId}',
+    };
+    return mentions.waiting.where(
+      (m) =>
+          mentionUnread(m) &&
+          (m.threadId == null ||
+              !listed.contains('${m.conversationId}/${m.threadId}')),
+    );
+  }
 
   /// A task whose agent waits on the reader (it needs a decision, or is
   /// stuck) and has not already asked it as a decision.
@@ -154,8 +157,11 @@ class SuperTabActivity extends ChangeNotifier {
         snapshot.agent(work['agentId'] as String? ?? '') == null) {
       return false;
     }
-    final asked = work['askedOf'];
-    return asked == null || asked == controller.accountId;
+    // Whoever it asked, else whoever asked for the task, else the Swarm's
+    // owner: a task waiting on nobody named is for no other reader.
+    final forThem =
+        work['askedOf'] as String? ?? group.requesterId ?? snapshot.ownerId;
+    return forThem == controller.accountId;
   }
 
   String _agentName(SuperTabSnapshot snapshot, String agentId) {

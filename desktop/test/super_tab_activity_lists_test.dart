@@ -330,7 +330,12 @@ void main() {
       'a tag in a thread-only reply is a new reply, not Needs you',
       () async {
         final server = swarm();
-        server.tag('message-2', threadId: 'message-1', messageSequence: 2);
+        server.tag(
+          'message-2',
+          conversationId: 'offline',
+          threadId: 'message-1',
+          messageSequence: 2,
+        );
         server.followedThreads = {
           'unread': [unreadThread('message-1')],
           'read': [],

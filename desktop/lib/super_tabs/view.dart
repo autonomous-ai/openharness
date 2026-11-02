@@ -1666,14 +1666,14 @@ class _SuperTabViewState extends State<SuperTabView>
 
   /// Opens [root]'s thread in its chat from Activity's New replies.
   void _openThreadFromList(String conversationId, String root) {
-    _openConversation(conversationId);
-    c.openThread(root);
+    if (_openConversation(conversationId)) c.openThread(root);
   }
 
-  /// Opens chat [conversationId] from a row of Activity.
-  void _openConversation(String conversationId) {
+  /// Opens chat [conversationId] from a row of Activity; false when it is
+  /// gone or the reader's access is.
+  bool _openConversation(String conversationId) {
     if (c.accessRevoked || c.snapshot?.conversation(conversationId) == null) {
-      return;
+      return false;
     }
     widget.onCloseTerminal?.call();
     _closeSidebar();
@@ -1682,6 +1682,7 @@ class _SuperTabViewState extends State<SuperTabView>
       _showPullRequests = false;
     });
     c.select(conversationId);
+    return true;
   }
 
   /// [messageId] of [id], read from the pages held, then what arrived after

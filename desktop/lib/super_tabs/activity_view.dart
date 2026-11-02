@@ -84,14 +84,15 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
     return superTabAgoShort(now.difference(local));
   }
 
+  /// Starts where a row's mark does: the row's own two insets.
   Widget _heading(String title) => Padding(
     padding: const EdgeInsets.fromLTRB(
-      grid.AppDesktop.groupGap,
+      grid.AppDesktop.controlGap + grid.AppDesktop.groupGap,
       grid.AppDesktop.groupGap,
       grid.AppDesktop.groupGap,
       grid.AppDesktop.menuInset,
     ),
-    child: SuperTabSectionHeading(title, endInset: 0),
+    child: SuperTabSectionHeading(title, startInset: 0, endInset: 0),
   );
 
   Widget _empty(String text) => Padding(
@@ -115,7 +116,7 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
         _ => '◐',
       },
       title: need.title,
-      unread: need.unread,
+      unread: true,
       trailing: switch (need.kind) {
         SuperTabNeedKind.decision => 'Answer',
         SuperTabNeedKind.agent => 'Open',
@@ -157,9 +158,15 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
     final text = thread.rootText.replaceAll(RegExp(r'\s+'), ' ').trim();
     return _Row(
       key: ValueKey('super-activity-row-thread:${thread.key}'),
+      mark: '↳',
       title: text.isEmpty ? 'Thread' : text,
       unread: true,
       trailing: '${_activity.attention.newCount(thread)} new',
+      hoverAction: (
+        label: 'Unfollow',
+        busy: _activity.attention.following.contains(thread.key),
+        run: () => unawaited(_activity.attention.setFollow(thread, false)),
+      ),
       onTap: () => widget.onOpenThread(thread.conversationId, thread.rootId),
     );
   }
@@ -242,7 +249,7 @@ class _Row extends StatefulWidget {
     required this.onTap,
     this.hoverAction,
   });
-  final String? mark, title0 = null;
+  final String? mark;
   final String title;
   final bool unread;
   final String trailing;
@@ -288,11 +295,11 @@ class _RowState extends State<_Row> {
                 ),
                 child: Row(
                   children: [
-                    if (widget.mark != null)
-                      SizedBox(
-                        width: 20,
-                        child: Text(widget.mark!, style: style),
-                      ),
+                    // Every row has the slot, so every title starts in one column.
+                    SizedBox(
+                      width: 20,
+                      child: Text(widget.mark ?? '', style: style),
+                    ),
                     Expanded(
                       child: Text(
                         widget.title,
