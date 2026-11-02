@@ -1,6 +1,9 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/super_tabs/leaderboard/reader.dart';
 import 'package:harness/super_tabs/visible_tick.dart';
+
+import 'support/super_tab_fixture.dart';
 
 // Task #2195: nothing redraws on a timer while it's off screen.
 
@@ -83,6 +86,25 @@ void main() {
     await tester.pump();
     expect(changes.last, isTrue);
     expect(builds, isNotEmpty);
+  });
+
+  test('a project board reads nothing while its Swarm is away, and goes on when it returns', () async {
+    final server = ConversationServer()..leaderboard = {'people': const <Object>[]};
+    final c = server.controller();
+    addTearDown(c.dispose);
+    await c.refresh();
+    final board = SuperTabProjectBoard(c, every: const Duration(milliseconds: 5));
+    addTearDown(board.dispose);
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    expect(server.leaderboardReads, isNotEmpty);
+    c.away = true;
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    final read = server.leaderboardReads.length;
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(server.leaderboardReads, hasLength(read));
+    c.away = false;
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(server.leaderboardReads.length, greaterThan(read));
   });
 
   testWidgets('leaves no timer behind when it goes', (tester) async {
