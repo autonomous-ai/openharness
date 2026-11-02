@@ -3,8 +3,10 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:f
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { dirname, join } from 'node:path'
-import { bridgeKey, bridgeSocketPath, harnessKey, retireBridgeKey, rotateHarnessKey, KEY_GRACE_MS } from '../lib/connectors/agents.js'
-import { serveBridgeSocket } from '../lib/connectors/bridge.js'
+import { randomBytes } from 'node:crypto'
+import { bridgeKey, bridgePipeRecord, bridgeSocketPath, harnessKey, retireBridgeKey, rotateHarnessKey, KEY_GRACE_MS } from '../lib/connectors/agents.js'
+import { serveBridgePipe, serveBridgeSocket } from '../lib/connectors/bridge.js'
+import { writePrivate } from '../lib/connectors/store.js'
 import type { LocalSocketServer } from '../lib/localSocket.js'
 import { Store } from '../lib/connectors/store.js'
 import { fakeCore } from '../testing/fakeCore.js'
@@ -233,3 +235,62 @@ describe('the keys that crossed the port', () => {
     expect(vault.file('bridge.json').keyRetiresAt).toBeUndefined()
   })
 })
+
+// Task #2162 (Reed's review of #2605): on Windows Harness's own route went to the port, which the Team account can hold from boot,
+// and took its answers. It goes over the bridge's pipe, which proves itself (serveBridgePipe). A socket named as a pipe stands for it.
+describe('Harness\'s own route on Windows: the bridge\'s pipe', () => {
+  const pipePath = (): string => {
+    mkdirSync(join(home, 'p'), { recursive: true })
+    return join(home, 'p', `harness-${randomBytes(16).toString('hex')}`)
+  }
+
+  it('list, API and MCP calls all go over the pipe; a holder of the port hears nothing', async () => {
+    const hold = await holder()
+    vi.stubEnv('HARNESS_CONNECTIONS_PORT', String(hold.port))
+    closers.push(() => vi.unstubAllEnvs())
+    const api = await service((url) => ({ body: JSON.stringify({ url }) }))
+    const mcp = await service((_url, body) => {
+      const message = JSON.parse(body) as { id?: number; method: string }
+      return { body: JSON.stringify({ jsonrpc: '2.0', id: message.id, result: message.method === 'tools/list' ? { tools: [{ name: 'a' }] } : { protocolVersion: '2025-06-18' } }) }
+    })
+    vault.save('devin', { access_token: 't', source: 'custom', transport: 'none', api_entry: { origin: api } } as never)
+    vault.save('fo', { access_token: 't', source: 'dcr', mcp_entry: { url: `${mcp}/mcp`, headers: {} } })
+    const listening = await serveBridgePipe(vault, pipePath())
+    closers.push(() => listening.close())
+    const route = bridgeRoute(vault, 'win32')
+    expect(route.base).toMatch(/^http:\/\/connections\.invalid\//)
+    const bridge = connectionsBridge(() => route)
+    expect((await bridge.connections()).map(c => c.code).sort()).toEqual(['devin', 'fo'])
+    expect((await bridge.api('devin', 'GET', '/v3/self')).status).toBe(200)
+    const client = new McpClient(bridge.mcpUrl('fo'), 'Fo', bridge.fetch)
+    expect((await client.tools()).map(t => t.name)).toEqual(['a'])
+    expect(hold.heard).toEqual([])
+  })
+
+  it('with no live pipe says Connections is not running, and sends nothing to the port', async () => {
+    const hold = await holder()
+    vi.stubEnv('HARNESS_CONNECTIONS_PORT', String(hold.port))
+    closers.push(() => vi.unstubAllEnvs())
+    await expect(connectionsBridge(() => bridgeRoute(vault, 'win32')).connections()).rejects.toThrow()
+    const listening = await serveBridgePipe(vault, pipePath())
+    await listening.close()
+    // The record outlives a bridge that stopped; its process must still run for it to be dialled.
+    writePrivate(bridgePipeRecord(vault), { ...vault.file('bridge-pipe.json'), pid: 2 ** 22 + 1 })
+    await expect(connectionsBridge(() => bridgeRoute(vault, 'win32')).connections()).rejects.toThrow()
+    expect(hold.heard).toEqual([])
+  })
+
+  it('takes no answer that does not prove the token: a pipe made under the bridge\'s name lists nothing for Harness', async () => {
+    const path = pipePath(), heard: string[] = []
+    const squatter = createServer((request, response) => {
+      heard.push(request.url ?? '')
+      response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ connections: [{ code: 'fake' }] }))
+    })
+    await new Promise<void>(ready => squatter.listen(path, ready))
+    closers.push(() => new Promise(done => { squatter.closeAllConnections(); squatter.close(done) }))
+    writePrivate(bridgePipeRecord(vault), { pipe: path, pid: process.pid, token: randomBytes(32).toString('hex') })
+    await expect(connectionsBridge(() => bridgeRoute(vault, 'win32')).connections()).rejects.toThrow()
+    expect(heard).toHaveLength(1)
+  })
+})
+

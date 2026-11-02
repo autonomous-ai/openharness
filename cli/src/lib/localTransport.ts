@@ -118,6 +118,16 @@ export function fetchOverSocket(socketPath: string): typeof fetch {
   }
 }
 
+/** `fetch` that sends every request over the pipe [target] names at the time, whatever host its address names: it proves the pipe's
+ *  token and takes only an answer that proves it back. With no pipe it fails as `fetch` does for a daemon that is not there. */
+export function fetchOverPipe(target: () => PipeTarget | null): typeof fetch {
+  return async (input, init) => {
+    const pipe = target()
+    if (!pipe) throw notThere()
+    return overSocket(pipe.pipe, new Request(input, init), pipe)
+  }
+}
+
 /**
  * `fetch` for the daemon on [port] of [dataDir]: a request to its loopback address goes over its socket where it can
  * have one, and on Windows over its pipe ([pipe], `daemonPipe` by default) or nowhere. Any other address, such as a

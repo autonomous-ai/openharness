@@ -7,6 +7,8 @@
  *   account reads the code or the relay's token.
  * - The owner's local credential over TCP on Windows (finding W1, fixed): no client puts it on a TCP request, and the daemon
  *   counts it from no other account.
+ * - The connectors bridge's port on Windows (task #2162, from Reed's review of W1): another account holding it is told apart
+ *   from this account's own listener, so the bridge moves off it.
  */
 import { mkdtempSync } from 'node:fs'
 import type { Socket } from 'node:net'
@@ -15,7 +17,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { loadOrCreateHookCredential } from '../lib/hookAuth.js'
 import { localCredentialHeaders } from '../lib/localCredential.js'
-import { peerIsThisAccount } from '../lib/peerAccount.js'
+import { peerIsThisAccount, portHolderIsThisAccount } from '../lib/peerAccount.js'
 import { buildWindowsSetupScript, type WindowsSetupScriptInput } from './windowsScript.js'
 
 const OWNER_HOME = 'C:\\Users\\owner-placeholder'
@@ -134,5 +136,14 @@ describe('W1: the owner\'s local credential never goes over TCP on Windows', () 
   it('the daemon counts it only from this account: Windows is asked who is calling, and another account is refused', async () => {
     const stranger = { remoteAddress: '127.0.0.1', remotePort: 50_001, localAddress: '127.0.0.1', localPort: 18473 } as Socket
     await expect(peerIsThisAccount(stranger, 'win32', async () => ({ status: 0, stdout: 'no\r\n' }))).resolves.toBe(false)
+  })
+})
+
+describe('the connectors bridge\'s port on Windows (task #2162)', () => {
+  // Windows answered null, so the bridge never moved: the Team account, holding 51793 from boot, kept hearing the owner's
+  // agents' tool calls and could answer them falsely. Now Windows is asked whose the listener is.
+  it('another account holding the bridge\'s port is told apart from this account\'s own, so the bridge moves off it', async () => {
+    await expect(portHolderIsThisAccount(51793, 'win32', async () => ({ status: 0, stdout: 'no\r\n' }))).resolves.toBe(false)
+    await expect(portHolderIsThisAccount(51793, 'win32', async () => ({ status: 0, stdout: 'yes\r\n' }))).resolves.toBe(true)
   })
 })
