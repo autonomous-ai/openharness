@@ -80,7 +80,8 @@ export async function serveBridgeSocket(vault: Store, path: string): Promise<Loc
   chmodSync(dirname(path), 0o700)
   const listening = await listenLocalSocket(bridgeHandler(vault, { key: () => SOCKET_KEY,
     // Harness's own calls (cloud/bridge.ts) come here too: its key never crosses the port where this socket can be.
-    harnessKey: () => String(vault.file('harness-key.json').key ?? ''), socket: true }), path)
+    // An unreadable key refuses Harness's calls only: agents' MCP calls never needed this file.
+    harnessKey: () => { try { return String(vault.file('harness-key.json').key ?? '') } catch { return '' } }, socket: true }), path)
   listening.server.unref()
   return listening
 }

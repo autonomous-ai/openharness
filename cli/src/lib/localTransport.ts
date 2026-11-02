@@ -8,9 +8,9 @@
  * The folder's mode is the guarantee here, as for every client of this socket (lib/localSocket.ts): nobody else can
  * have put a socket in it.
  */
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, lstatSync, readdirSync } from 'node:fs'
 import { request } from 'node:http'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { Readable } from 'node:stream'
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web'
 import { readDaemonRecord } from './daemonRecord.js'
@@ -68,9 +68,23 @@ async function overSocket(socketPath: string, input: Request): Promise<Response>
   })
 }
 
-/** `fetch` that sends every request over the Unix socket at [socketPath], whatever host its address names. */
+/** Whether [path] is what the daemon makes: a socket of this account's, owner only, in a real folder nobody else can write to. */
+export function socketIsPrivate(path: string): boolean {
+  const uid = process.getuid?.()
+  try {
+    const folder = lstatSync(dirname(path)), file = lstatSync(path)
+    return folder.isDirectory() && (folder.mode & 0o022) === 0 && file.isSocket() && (file.mode & 0o077) === 0
+      && (uid === undefined || (folder.uid === uid && file.uid === uid))
+  } catch { return false }
+}
+
+/** `fetch` that sends every request over the private Unix socket at [socketPath], whatever host its address names, and fails as `fetch` does
+ *  when the socket is missing or not private: what is sent can carry a key. */
 export function fetchOverSocket(socketPath: string): typeof fetch {
-  return (input, init) => overSocket(socketPath, new Request(input, init))
+  return async (input, init) => {
+    if (!socketIsPrivate(socketPath)) throw new TypeError('fetch failed', { cause: new Error('The socket is missing or not private.') })
+    return overSocket(socketPath, new Request(input, init))
+  }
 }
 
 /**

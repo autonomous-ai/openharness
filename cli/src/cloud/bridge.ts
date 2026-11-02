@@ -27,12 +27,13 @@ export interface BridgeRoute { base: string; fetch: typeof fetch }
 /**
  * Through Harness's own key (agents.ts `harnessKey`), never the one in the agents' configurations, and over the bridge's 0600 socket
  * where it can have one: whoever holds a port hears what is sent to it (audit H1). With the socket gone Connections is down, and
- * nothing goes to the port. The address's host is then only a name.
+ * nothing goes to the port. The address's host is then only a name, one that resolves nowhere (RFC 6761), so the key cannot leave if the
+ * address ever reached plain `fetch`.
  */
 export function bridgeRoute(vault: Store = new Store()): BridgeRoute {
   const socket = bridgeSocketPath(vault)
   return socket
-    ? { base: `http://connections/${harnessKey(vault)}`, fetch: fetchOverSocket(socket) }
+    ? { base: `http://connections.invalid/${harnessKey(vault)}`, fetch: fetchOverSocket(socket) }
     : { base: `http://127.0.0.1:${bridgePort(process.env, vault)}/${harnessKey(vault)}`, fetch: (input, init) => fetch(input, init) }
 }
 

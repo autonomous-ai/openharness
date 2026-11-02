@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync } from 'node:fs'
+import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
@@ -9,6 +9,7 @@ import type { LocalSocketServer } from '../lib/localSocket.js'
 import { Store } from '../lib/connectors/store.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { startConnectors } from '../services/connectors.js'
+import { fetchOverSocket, socketIsPrivate } from '../lib/localTransport.js'
 import { bridgeRoute, connectionsBridge } from './bridge.js'
 import { McpClient } from './mcp.js'
 
@@ -45,6 +46,8 @@ async function service(respond: (url: string, body: string) => { status?: number
   closers.push(() => new Promise(done => { server.closeAllConnections(); server.close(done) }))
   return `http://127.0.0.1:${(server.address() as AddressInfo).port}`
 }
+
+const bridgeRoute2 = (): { fetch: typeof fetch } => ({ fetch: fetchOverSocket(bridgeSocketPath(vault)!) })
 
 const onSocket = async (): Promise<LocalSocketServer> => {
   const listening = await serveBridgeSocket(vault, bridgeSocketPath(vault)!)
@@ -88,6 +91,39 @@ describe('cloud agents and the bridge', () => {
     expect((await over(`http://bridge/${key}/connections`)).status).toBe(200)
     expect((await over('http://bridge/local/connections')).status).toBe(404)
     expect((await over('http://bridge/wrong-key/connections')).status).toBe(404)
+  })
+
+  it('a socket that is not private is not used: Harness\'s key reaches nothing, and the port is not tried', async () => {
+    const hold = await holder()
+    vi.stubEnv('HARNESS_CONNECTIONS_PORT', String(hold.port))
+    closers.push(() => vi.unstubAllEnvs())
+    const listening = await onSocket()
+    const bridge = connectionsBridge(() => bridgeRoute(vault))
+    expect(await bridge.connections()).toEqual([])
+    chmodSync(listening.path, 0o666)
+    await expect(bridge.connections()).rejects.toThrow()
+    chmodSync(listening.path, 0o600)
+    // Reading Harness's key tightens the vault's folder, so the route heals this one by itself; the check still says so while it is open.
+    chmodSync(vault.root, 0o777)
+    expect(socketIsPrivate(listening.path)).toBe(false)
+    chmodSync(vault.root, 0o700)
+    expect(socketIsPrivate(listening.path)).toBe(true)
+    expect(hold.heard).toEqual([])
+  })
+
+  it('names a host that resolves nowhere, so the key cannot leave if the address ever reached plain fetch', () => {
+    expect(new URL(bridgeRoute(vault).base).hostname).toMatch(/\.invalid$/)
+  })
+
+  it('an unreadable Harness key refuses Harness\'s calls, and agents\' MCP calls still work', async () => {
+    const fake = await service((_url, body) => ({ body: JSON.stringify({ jsonrpc: '2.0', id: (JSON.parse(body) as { id?: number }).id, result: {} }) }))
+    vault.save('linear', { access_token: 't', source: 'dcr', mcp_entry: { url: `${fake}/mcp`, headers: {} } })
+    harnessKey(vault)
+    await onSocket()
+    writeFileSync(join(vault.root, 'harness-key.json'), 'not json', { mode: 0o600 })
+    const { fetch: over } = bridgeRoute2()
+    const answer = await over('http://bridge/local/linear/mcp', { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) })
+    expect(answer.status).toBe(200)
   })
 
   it('where no socket can be, the route is the port, as before', () => {
