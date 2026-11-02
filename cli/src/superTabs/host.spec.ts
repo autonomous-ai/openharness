@@ -782,6 +782,18 @@ describe('Super Tab native delivery handoff', () => {
       expect(prompt).toContain('Message message from Collaborator')
       expect(prompt).not.toContain('You are assigned')
     })
+    // Final review, finding 3: a delivery never waits on its context; a read that hangs leaves its lines out.
+    it('a delivery whose context read hangs still goes, without its lines', async () => {
+      const { t } = wired({ thread: 'root', replyTo: 'm2' })
+      const original = vi.mocked(t.call).getMockImplementation()!
+      const hangs = (path: string) => /messageId=root$/.test(path) || /\/api\/super-tabs\/tab\/(parts|changes)/.test(path)
+      vi.mocked(t.call).mockImplementation(async (method, path, body) => hangs(path) ? new Promise(() => {}) as never : original(method, path, body))
+      await t.open({ contextWaitMs: 20 }).tick()
+      const prompt = vi.mocked(t.core.turns.deliver).mock.calls[0]![1] as string
+      expect(prompt).toContain('Message message from Collaborator')
+      expect(prompt).not.toContain('You are assigned')
+      expect(prompt).not.toContain('In a thread')
+    })
     it('a reply to the root needs no extra read', async () => {
       const { t, reads } = wired({ thread: 'root', replyTo: 'root' }, { root: page([ROOT], [{ id: 'root', replies: 3, authors: [{ name: 'Dev1' }, { name: 'Rev1' }] }]) })
       const prompt = await delivered(t)

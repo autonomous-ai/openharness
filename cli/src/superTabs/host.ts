@@ -39,7 +39,7 @@ const readCommand = (entry: Entry, prefix: string, group: string, id: string, bu
   `${agentCommandOf(entry, prefix, buddy)} message ${shellQuote(group)} ${shellQuote(id)}`
 export { backend, identifier, object, SuperTabHostError } from './wire.js'
 import { leadSwitchOf, SWITCH_ADOPT_MS, switchWithin, type LeadSwitch } from './leadSwitch.js'
-import { backend, ENDED_WORK, identifier, object, SuperTabHostError } from './wire.js'
+import { backend, ENDED_WORK, identifier, object, SuperTabHostError, within } from './wire.js'
 import { parseSwarmSkill, recordSwarmSkillNotice, refreshSwarmSkill, wireRole, type CustomSwarmRole, type SkillRefresh, type SwarmSkill, type SwarmSkillGrant,
   type SwarmSkillMode } from '../lib/swarmSkills.js'
 import { recordProjectSkillsNotice, refreshProjectSkills } from '../lib/swarmInstructionsSkill.js'
@@ -145,6 +145,8 @@ export interface SuperTabHostOptions {
   attachedFiles?: typeof attachedFiles
   /** How long a pass waits on the downloads it starts (DOWNLOAD_WAIT_MS), for a spec. */
   downloadWaitMs?: number
+  /** How long a delivery waits on each read for its context lines (CONTEXT_WAIT_MS), for a spec. */
+  contextWaitMs?: number
   prepareContribution?: typeof prepareContribution
   /** This Mac's Harness Team account preparing its workspace through the relay (contribution.ts), for a spec. */
   prepareTeam?: (core: CoreApi, input: { tabId: string; machineId: string }) => Promise<Record<string, unknown>>
@@ -272,6 +274,8 @@ const DELIVERY_RETRY_MS = 1_000
  *  in the same pass; a larger one downloads on in the background while its delivery is withheld (FilesDownloading), and no
  *  later pass waits on it at all: once in, it starts a pass of its own. */
 const DOWNLOAD_WAIT_MS = 2_000
+/** How long a delivery waits on each read for its context lines: they are pointers, never worth holding a message for. */
+const CONTEXT_WAIT_MS = 3_000
 /** A delivery whose files are still downloading. Tried again like any withheld one (at most DELIVERY_RETRY_MAX_MS apart), and
  *  each try claims it again with the same claim id: that writes the delivery, so the backend never takes the claim for one
  *  nobody holds (backend deliverySettle.ts CLAIM_QUIET_MS, 10 minutes). Said once, not as a failure. */
@@ -402,6 +406,7 @@ export class SuperTabHost {
   /** The files those downloads are fetching, so two deliveries of one file download it once at a time (attachments.ts). */
   private readonly inFlight: FilesInFlight = new Map()
   private readonly downloadWaitMs: number
+  private readonly contextWaitMs: number
   /** This pass's one wait on the downloads it starts (DOWNLOAD_WAIT_MS), shared by all of them; null until one starts. */
   private passWait: Promise<null> | null = null
   /** Each delivery's quote of the message it replies to ('' when none is shown), read once like its files. A failed read is
@@ -504,6 +509,7 @@ export class SuperTabHost {
     this.observers = options.observers ?? publishObservers
     this.attachedFiles = options.attachedFiles ?? attachedFiles
     this.downloadWaitMs = options.downloadWaitMs ?? DOWNLOAD_WAIT_MS
+    this.contextWaitMs = options.contextWaitMs ?? CONTEXT_WAIT_MS
     this.prepareContribution = options.prepareContribution ?? prepareContribution
     this.machineDeps = options.machines ?? {}
     this.prepareTeam = options.prepareTeam ?? ((core, input) => prepareTeamContribution(core, input))
@@ -1943,8 +1949,13 @@ export class SuperTabHost {
     if (object(message.source).kind === 'agent-only' || this.isBuddy(entry)) return ''
     const group = String(message.conversationId)
     const lines: string[] = []
+    const wait = this.contextWaitMs
     try {
-      const { state } = await this.sources.reads.read(entry.tabId, entry.agentId)
+      // Bounded: a delivery never waits on its context (final review, finding 3). A read that does not answer in time
+      // leaves its lines out, and the read goes on for the next delivery.
+      const read = await within(this.sources.reads.read(entry.tabId, entry.agentId), wait)
+      if (!read) throw new Error(`no answer in ${wait} ms`)
+      const { state } = read
       lines.push(placeLine(state, group))
       const work = workLine(state, entry.agentId)
       if (work) lines.push(work)
@@ -1953,10 +1964,7 @@ export class SuperTabHost {
     }
     const root = message.thread
     if (identifier(root) && root !== message.id) {
-      const thread = await this.threadOf(entry, group, root).catch(error => {
-        this.log(`thread ${root} for delivery ${entry.deliveryId} unreadable: ${error instanceof Error ? error.message : String(error)}`)
-        return null
-      })
+      const thread = await within(this.threadOf(entry, group, root), wait)
       if (thread && (thread.replies === null || thread.replies > 1)) {
         lines.push(threadLine(thread.root, thread.replies, thread.authors,
           `${agentCommandOf(entry, prefix)} messages ${shellQuote(group)} --thread ${shellQuote(root)}`))
