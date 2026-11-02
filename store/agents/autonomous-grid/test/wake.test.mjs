@@ -64,6 +64,8 @@ async function listen(t, base) {
 }
 
 /** A viewer on a workspace looking at [grid], asleep, a fake `grid` it reads with, and a fake bridge. */
+// Too long a path to hold a socket: the fake bridge here is on TCP.
+const NO_SOCKET = join(tmpdir(), 'grid-wake-'.padEnd(120, 'x'));
 async function setup(t, respond, { grid = 'test-grid', verbs = verbsFor(grid, 'asleep'), bridgeUrl, giveUpMs = 5000, intervalMs = 50 } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'grid-wake-')), log = join(dir, 'calls.log');
   const binary = await fakeGrid(dir, 'grid', { verbs }, log);
@@ -71,7 +73,7 @@ async function setup(t, respond, { grid = 'test-grid', verbs = verbsFor(grid, 'a
   await atomicJson(join(workspace, 'grid-fleet.json'), { ...config, grid, machines:[{ ...config.machines[0], gridBinary:binary }] });
   const bridge = await fakeBridge(respond);
   const viewer = createViewer({ workspace, intervalMs, wakeOptions:{
-    env:{ HARNESS_GRID_BRIDGE_URL:bridgeUrl || bridge.url }, discover:async () => [{ machineId:'another', current:false }, { machineId:MACHINE, current:true }], pollMs:10, giveUpMs,
+    env:{ HARNESS_GRID_BRIDGE_URL:bridgeUrl || bridge.url, ADAPTER_DATA_DIR:NO_SOCKET }, discover:async () => [{ machineId:'another', current:false }, { machineId:MACHINE, current:true }], pollMs:10, giveUpMs,
   } });
   // One hook, in this order (hooks run first-in-first-out, and a failed one skips the rest): a viewer
   // left polling keeps the test process alive, and writes into the workspace being removed.
@@ -181,7 +183,7 @@ test('a bridge that is not there, or a daemon too old for the wake, is said plai
   });
   await t.test('a controller reached over SSH, or a computer Harness cannot name, has no daemon to ask', async t => {
     const bridge = await fakeBridge(daemon()); t.after(() => bridge.close());
-    const options = { grid:'test-grid', env:{ HARNESS_GRID_BRIDGE_URL:bridge.url }, pollMs:10, giveUpMs:300 };
+    const options = { grid:'test-grid', env:{ HARNESS_GRID_BRIDGE_URL:bridge.url, ADAPTER_DATA_DIR:NO_SOCKET }, pollMs:10, giveUpMs:300 };
     const ssh = await daemonWake({ ...options, controller:{ id:'rig', name:'Rig', transport:'ssh', host:'rig.example' } });
     assert.equal(ssh.state, 'failed'); assert.match(ssh.message, /^Couldn't start it from here/);
     const unnamed = await daemonWake({ ...options, controller:{ id:'local', name:'This machine', transport:'local' }, discover:async () => { throw new Error('harness: not found'); } });

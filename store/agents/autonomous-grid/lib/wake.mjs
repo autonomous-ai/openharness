@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { bridgeUrl, CREDENTIAL_REFUSED, credentialRefused, discoverMachines, localCredentialHeaders } from './harness.mjs';
+import { DaemonWebSocket } from './localDaemon.mjs';
 
 /**
  * The viewer's "Wake now": the one thing in this package that may start a sleeping grid, and only on a
@@ -63,14 +64,14 @@ function ending(section) {
  * message is what the page says. Never throws.
  */
 export async function daemonWake({ controller, grid, signal, discover = discoverMachines, env = process.env,
-  WebSocketImpl = globalThis.WebSocket, pollMs = WAKE_POLL_MS, giveUpMs = WAKE_GIVE_UP_MS }) {
+  WebSocketImpl = DaemonWebSocket, pollMs = WAKE_POLL_MS, giveUpMs = WAKE_GIVE_UP_MS }) {
   const failed = message => ({ state: 'failed', message });
   let machineId;
   try { machineId = await controllerMachineId(controller, discover); } catch { return failed(UNREACHABLE); }
   if (!machineId) return failed(controller?.transport === 'local' ? UNREACHABLE : WAKE_FAILED);
   if (!WebSocketImpl || signal?.aborted) return failed(UNREACHABLE);
   let socket, url, headers;
-  try { url = bridgeUrl(env); headers = localCredentialHeaders(env); socket = new WebSocketImpl(url, { headers }); } catch { return failed(UNREACHABLE); }
+  try { url = bridgeUrl(env); headers = localCredentialHeaders(env); socket = new WebSocketImpl(url, { headers, env }); } catch { return failed(UNREACHABLE); }
   return await new Promise(resolve => {
     // The section that answered `waking`: who every later sentence is about.
     let done = false, waking = null, requestId = null, next;
@@ -96,7 +97,7 @@ export async function daemonWake({ controller, grid, signal, discover = discover
     socket.addEventListener('open', () => { opened = true; socket.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1, relayIsolation: true } })); });
     socket.addEventListener('error', () => {
       if (opened) { lost(); return; }
-      refusal = credentialRefused(url, headers).then(refused => (refused ? settle(failed(CREDENTIAL_REFUSED)) : lost()));
+      refusal = credentialRefused(url, headers, env).then(refused => (refused ? settle(failed(CREDENTIAL_REFUSED)) : lost()));
     });
     socket.addEventListener('close', () => { if (!refusal) lost(); });
     socket.addEventListener('message', event => {
