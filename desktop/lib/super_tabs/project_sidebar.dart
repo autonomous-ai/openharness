@@ -24,6 +24,7 @@ import 'leaderboard/reader.dart';
 import 'local_models.dart';
 import 'buddies.dart';
 import 'machines.dart';
+import 'linked_tasks.dart';
 import 'model.dart';
 import 'buddy_rows.dart';
 import 'section_heading.dart';
@@ -1254,15 +1255,18 @@ List<SuperTabConversation> superTabOpenWorkgroups(
   SuperTabProject project, [
   List<SuperTabConversation>? conversations,
 ]) {
-  final groups = (conversations ?? controller.projectConversations(project.id))
-      .where(
-        (g) =>
-            g.id != project.leadConversationId &&
-            !g.isBuddyChat &&
-            !controller.hiddenByBuddies(g) &&
-            !g.closed,
-      )
-      .toList();
+  final groups =
+      superTabListedWork(
+            conversations ?? controller.projectConversations(project.id),
+          )
+          .where(
+            (g) =>
+                g.id != project.leadConversationId &&
+                !g.isBuddyChat &&
+                !controller.hiddenByBuddies(g) &&
+                !g.closed,
+          )
+          .toList();
   // A stable sort keeps the backend's order among unnumbered ones.
   mergeSort(
     groups,

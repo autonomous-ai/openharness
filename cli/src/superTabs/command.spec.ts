@@ -902,3 +902,17 @@ it('parses status --project NAME, alone or with --archived, and refuses it witho
     expect(() => parseSuperTabArgs([...prefix, ...argv], where)).toThrow('harness super-tab')
   }
 })
+
+// Agent context design, section 1: an agent's own work, and one task.
+it('parses mine and task GROUP', () => {
+  expect(parseSuperTabArgs([...prefix, 'mine'], where).payload).toMatchObject({ action: 'mine' })
+  expect(parseSuperTabArgs([...prefix, 'task', 'g12'], where).payload).toMatchObject({ action: 'task', conversationId: 'g12' })
+  for (const argv of [[...prefix, 'task'], [...prefix, 'mine', 'extra'], [...prefix, 'task', 'g12', 'extra']]) expect(() => parseSuperTabArgs(argv, where)).toThrow('harness super-tab')
+})
+it('prints mine and task as text', async () => {
+  const request = vi.fn(async () => ({ ok: true, value: { text: '#12 Fix login (conversation g12) — working' } }))
+  const print = vi.fn()
+  const deps = { where: () => where, pane: undefined, open: async () => ({ request, close: vi.fn(), machineId: 'machine' }), print }
+  expect(await superTabCommand([...prefix, 'mine'], deps as never)).toBe(0)
+  expect(print).toHaveBeenCalledWith('#12 Fix login (conversation g12) — working')
+})

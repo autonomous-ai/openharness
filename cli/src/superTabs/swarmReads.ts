@@ -13,7 +13,7 @@ type Json = Record<string, unknown>
 /** A Swarm as `GET /api/super-tabs/:id` gave it: its state in the old shape, `lastChangedAt` in place of `revision`. */
 /** `teamAccounts`: whether Harness Team accounts are used in this Swarm; false only where its server says they are not tried
  *  yet, so an older server's Swarm reads true. */
-export interface SwarmRead { state: Json; lastChangedAt: number | null; githubApp: boolean; teamAccounts: boolean
+export interface SwarmRead { state: Json; lastChangedAt: number | null; githubApp: boolean; steps?: boolean; teamAccounts: boolean
   /** When each active group last changed, from its part: what a Buddy's summary marks as new since its last read. */
   groupChangedAt: ReadonlyMap<string, number> }
 
@@ -65,6 +65,6 @@ export class SwarmReads {
       this.held.delete(oldest)
     }
     const groupChangedAt = new Map([...store.parts.get('group')?.values() ?? []].map(part => [part.key, part.changedAt]))
-    return { state: reassemble(store), lastChangedAt: store.lastChangedAt, githubApp: store.githubApp, teamAccounts: store.derived.teamAccounts !== false, groupChangedAt }
+    return { state: reassemble(store), lastChangedAt: store.lastChangedAt, githubApp: store.githubApp, steps: store.steps === true, teamAccounts: store.derived.teamAccounts !== false, groupChangedAt }
   }
 }

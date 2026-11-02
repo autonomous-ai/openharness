@@ -10,6 +10,7 @@ import { backend, swarmRoleFor, hostJournalFile, identifier, object, SuperTabHos
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads, type SwarmRead } from './swarmReads.js'
 import { within } from './wire.js'
+import { isCoordinator, isStep, mineText, taskText } from './agentContext.js'
 import { machineChoices } from '../lib/newCommand.js'
 import { wireRole } from '../lib/swarmSkills.js'
 import { START_REQUIREMENTS } from './capacity.js'
@@ -67,6 +68,8 @@ async function finishingWith(core: CoreApi, command: Record<string, unknown>, ha
  *  is the project's instructions', never this help's. */
 const HELP = {
   status: 'Read the shared tab roster and work: people, projects, agents, conversations and their tasks. How the project routes work is in its instructions (instructions). The PM\'s status also lists otherProjectsWork: the active work of the Swarm\'s other projects (group, project, title, owned code, status, agent, PR), read only.',
+  mine: 'mine: what you work on, one line per task (number, title, conversation id, status, when it changed, last result, pull requests) with the open tasks linked to it. A project\'s coordinator gets every open task of its project instead.',
+  task: 'task GROUP: one task, active or finished: project, status, assignee, pull requests, brief, checks, attempts newest first, and linked tasks.',
   messages: 'messages GROUP: read recent messages in a conversation, thread replies included: each names its thread, the root message it answers there. A post with --reply-to lands in that message\'s thread. messages GROUP --thread ROOT reads one thread, its root and replies; a Buddy\'s thread session also gets there, as context, the main-chat messages it started from.',
   message: 'message GROUP MESSAGE_ID: read one exact message, including an earlier question or result referenced by a reply.',
   instructions: 'instructions [PROJECT]: print your project\'s instructions (its roles, workflow and routing) and the coordinator\'s notes, each with its id. Work by them; ask the coordinator, or a person, to change them.',
@@ -101,7 +104,8 @@ const HELP = {
     { type: 'message.send', conversationId: 'GROUP', text: 'A message addressed to an agent', replyTo: null, recipientIds: ['AGENT'] },
     { type: 'conversation.create', title: 'Outcome', task: { goal: 'An independently assignable result', changes: 'What changes', constraints: 'What must stay true', owns: ['Paths or code areas'],
       review: { focus: 'Optional: what every review of it checks first, such as the most-likely-wrong list (up to 2,000 characters)', reviews: 2 } }, checks: [{ description: 'Observable acceptance evidence', independent: false }] },
-    { type: 'conversation.create', title: 'Review: Outcome', reviewOf: 'GROUP', task: { goal: 'A verdict on the linked group\'s revision', changes: 'None: read only', constraints: 'The linked group\'s constraints', owns: ['The linked group\'s owned code, read only'] }, checks: [{ description: 'Verdict with the reviewed revision', independent: false }] },
+    // A step of a task (task steps design): its name is the one the project's instructions give.
+    { type: 'conversation.create', title: 'STEP_NAME', reviewOf: 'GROUP', step: 'STEP_NAME', task: { goal: 'What this step delivers for the task', changes: 'What it changes, or None', constraints: 'The task\'s constraints', owns: ['What it works on'] }, checks: [{ description: 'Its verdict, with evidence', independent: false }] },
     { type: 'conversation.agent', conversationId: 'GROUP', agentId: 'AGENT', present: true, lead: false },
     { type: 'work.define', conversationId: 'GROUP', task: { goal: 'What to deliver', changes: 'What changes', constraints: 'What must stay true', owns: ['Paths or code areas'] }, checks: [{ description: 'Observable acceptance evidence', independent: false }] },
     { type: 'work.cancel', conversationId: 'GROUP', assignmentId: 'current', reason: 'Why the task is cancelled, in one short sentence' },
@@ -128,6 +132,26 @@ const HELP = {
 }
 
 const list = (value: unknown) => Array.isArray(value) ? value.map(object) : []
+/** [page] of a task with its [steps]' newest rows merged in by time, each tagged `step: <name>`; a step whose read fails is
+ *  named in `stepsMissing`, and the task's rows still come back. */
+async function withSteps(page: unknown, steps: Array<Record<string, unknown>>, read: (step: Record<string, unknown>) => Promise<unknown>): Promise<Record<string, unknown>> {
+  const answers = await Promise.all(steps.map(step => read(step).then(answer => ({ step, rows: list(object(answer).messages) }), () => ({ step, rows: null }))))
+  const at = (row: Record<string, unknown>) => String(row.createdAt ?? '')
+  const rows: Array<Record<string, unknown>> = [...list(object(page).messages),
+    ...answers.flatMap(({ step, rows }) => (rows ?? []).map(row => ({ ...row, step: step.step } as Record<string, unknown>)))]
+  rows.sort((a, b) => at(a) === at(b) ? String(a.id).localeCompare(String(b.id)) : at(a) < at(b) ? -1 : 1)
+  const missing = answers.filter(a => !a.rows).map(a => String(a.step.step))
+  return { ...object(page), messages: rows, ...(missing.length ? { stepsMissing: missing } : {}) }
+}
+
+/** One group by id as [identity] reads it, active or dormant (design 4.5); null when it is not there or not this agent's
+ *  to read (403 or 404), so the answer never tells which. */
+async function readGroupAsAgent(core: CoreApi, path: string, id: string, identity: string): Promise<Record<string, unknown> | null> {
+  const answer = await backend(core, 'GET', `${path}/groups/${encodeURIComponent(id)}?${identity}`)
+    .catch(error => { if (error instanceof SuperTabHostError && [403, 404].includes(error.status)) return null; throw error })
+  const group = object(object(answer).group).data
+  return group && typeof group === 'object' ? object(group) : null
+}
 /** A Swarm read as `GET /api/super-tabs/:id` answered it, `lastChangedAt` in place of `revision` (design 2026-10-26 5.3). */
 const answerOf = (read: SwarmRead) => ({ lastChangedAt: read.lastChangedAt, state: read.state, ...(read.githubApp ? { githubApp: true } : {}) })
 const OFF_ROSTER = 'This agent is not on this machine\'s Swarm roster right now. That can mean this machine has no access to it, or its billing does not allow it. Check how this machine is shared.'
@@ -138,19 +162,21 @@ const OTHER_WORK_FIELDS = ['conversationId', 'projectName', 'title', 'owns', 'st
 /** How old a host form a one-off question about this machine's Swarms may take: the host reads one every second. */
 const POOLS_FRESH_MS = 5_000
 
-/** A project's Lead is its Lead conversation's, as the backend reads it; a Swarm from before projects has one, 'lead'. */
-function isLead(state: Record<string, unknown>, agentId: string): boolean {
-  const leads = Array.isArray(state.projects) ? list(state.projects).map(p => p.leadConversationId) : ['lead']
-  return list(state.conversations).some(c => leads.includes(c.id) && c.leadId === agentId)
-}
 
 /** Leads see each other's work (spec 2026-10-23): a Lead reads other projects' active work in the backend's fields alone;
  *  any other agent reads none of it. Nobody reads the Leads conversation, removed on 10-31, even from an older server
  *  that still sends it. */
 function statusView(answer: Record<string, unknown>, agentId: string): Record<string, unknown> {
   const { otherProjectsWork, leadsConversationId, ...state } = object(answer.state)
-  const conversations = list(state.conversations).filter(c => c.kind !== 'leads' && (leadsConversationId == null || c.id !== leadsConversationId))
-  if (isLead(state, agentId)) {
+  const shown = list(state.conversations).filter(c => c.kind !== 'leads' && (leadsConversationId == null || c.id !== leadsConversationId))
+  // A task's steps are printed under it, not as rows of their own (task steps design); one whose task is not here stays a row.
+  const ids = new Set(shown.map(c => c.id))
+  const nested = (c: Record<string, unknown>) => isStep(c) && ids.has(c.reviewOf)
+  const conversations = shown.filter(c => !nested(c)).map(c => {
+    const steps = shown.filter(s => nested(s) && s.reviewOf === c.id)
+    return steps.length ? { ...c, steps } : c
+  })
+  if (isCoordinator(state, agentId)) {
     return { ...answer, state: { ...state, conversations,
       ...(Array.isArray(otherProjectsWork) ? { otherProjectsWork: list(otherProjectsWork).map(work =>
         Object.fromEntries(OTHER_WORK_FIELDS.filter(key => key in work).map(key => [key, work[key]]))) } : {}) } }
@@ -601,8 +627,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         if (payload.action === 'routeHistory') {
           // The one group by id, active or dormant (design 4.5): a group that left the active set still has its history, and
           // a group this agent cannot read answers 403 or 404, before any history is read (review round 1).
-          const group = identifier(payload.conversationId) ? object(object(await backend(core, 'GET', `${path}/groups/${encodeURIComponent(String(payload.conversationId))}?${identity}`)
-            .catch(error => { if (error instanceof SuperTabHostError && [403, 404].includes(error.status)) return null; throw error })).group).data : null
+          const group = identifier(payload.conversationId) ? await readGroupAsAgent(core, path, String(payload.conversationId), identity) : null
           if (!group) return { error: 'NOT_FOUND', detail: 'No such group, or this agent cannot read it.', status: 404 }
           const [logged, tried] = await Promise.all([
             within(backend(core, 'GET', `${path}/route-decisions?${identity}`)),
@@ -622,6 +647,21 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           // Every attempt the group had, also the ones `work.define` took out of the state; the server already cut the results.
           const attempts = Array.isArray(tried) ? tried.slice(0, 50).map(object).map(a => ({ id: a.id, agentId: a.agentId, status: a.status, result: typeof a.result === 'string' ? a.result.slice(0, 500) : null, createdAt: a.createdAt ?? null })) : null
           return { ok: true, value: { ...(decisions ? { decisions } : { decisionsUnreadable: true }), ...(attempts ? { attempts } : { attemptsUnreadable: true }) } }
+        }
+        // What this agent works on, and one task (agent context design, section 1). Both read the Swarm read `status` makes;
+        // a task that left the active set (finished and quiet for a day, or archived) is read by id, as routeHistory reads it.
+        if (payload.action === 'mine') {
+          const read = await swarm()
+          return { ok: true, value: { text: mineText(read.state, read.groupChangedAt, agentId, Date.now()) } }
+        }
+        if (payload.action === 'task' && identifier(payload.conversationId)) {
+          const id = String(payload.conversationId)
+          const read = await swarm()
+          const active = list(read.state.conversations).find(c => c.id === id)
+          const group = active ?? await readGroupAsAgent(core, path, id, identity)
+          if (!group) return { error: 'NOT_FOUND', detail: 'No such task, or this agent cannot read it.', status: 404 }
+          const tried = await within(backend(core, 'GET', `${path}/conversations/${encodeURIComponent(id)}/attempts?${identity}`))
+          return { ok: true, value: { text: taskText(group, read.state, Array.isArray(tried) ? list(tried) : null, read.groupChangedAt, Date.now()) } }
         }
         // The jobs running and waiting on a project's GitHub Actions, counts only, for the route's machine-fit plug-in
         // (machineFit.ts; backend github/ciLoad.ts). The server reads it through its GitHub App, never this machine's login.
@@ -670,6 +710,17 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           if (payload.thread !== undefined && !identifier(payload.thread)) return { error: 'INVALID_REQUEST' }
           const thread = payload.thread !== undefined ? `&thread=${payload.thread}` : ''
           const page = await backend(core, 'GET', `${path}/conversations/${encodeURIComponent(String(payload.conversationId))}/messages?${identity}${before}${thread}`)
+          // A task's newest page shows its steps' rows by time, each tagged with its step (task steps design): the step's own
+          // conversation keeps its brief and work rows, and the talk is in the task. Older pages and threads are the task's.
+          if (!paged && !thread) {
+            const read = await swarm().catch(() => null)
+            // An archived task keeps the steps archived with it, and their rows (final review, minor 6).
+            const task = read ? list(read.state.conversations).find(c => c.id === payload.conversationId) : undefined
+            const steps = read ? list(read.state.conversations).filter(c => isStep(c) && c.reviewOf === payload.conversationId
+              && (task?.archived === true || c.archived !== true)) : []
+            if (steps.length) return { ok: true, value: markAnswered(await withSteps(page, steps, step =>
+              backend(core, 'GET', `${path}/conversations/${encodeURIComponent(String(step.id))}/messages?${identity}`)), [], agentId) }
+          }
           return { ok: true, value: markAnswered(page, [], agentId) }
         }
         if (payload.action === 'message' && identifier(payload.conversationId) && identifier(payload.messageId)) {
@@ -687,7 +738,10 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         if (payload.action === 'command' && identifier(payload.operationId) && payload.command && typeof payload.command === 'object' && !Array.isArray(payload.command)) {
           const asked = object(payload.command)
           // `current` (or no id) names the group's active assignment for the agent (superTabs/assignmentIds.ts).
-          const filled = wantsCurrent(asked) ? withCurrentAssignment(asked, (await swarm()).state, agentId) : asked
+          const current = wantsCurrent(asked) ? withCurrentAssignment(asked, (await swarm()).state, agentId) : asked
+          // An older backend refuses an unknown field: there a step opens as a plain linked task (task steps design).
+          const filled = current.type === 'conversation.create' && 'step' in current && !(await swarm()).steps
+            ? Object.fromEntries(Object.entries(current).filter(([key]) => key !== 'step')) : current
           const command = await finishingWith(core, await mentionCommand(taskCommand(filled), async () => (await swarm()).state), String(agent.harnessId))
           const send = (command: Record<string, unknown>) => backend(core, 'POST', `${path}/commands`,
             { operationId: payload.operationId, command, asAgentId: agentId })
@@ -697,6 +751,13 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
             if (error instanceof SuperTabHostError && error.code === 'STALE_ASSIGNMENT' && ASSIGNMENT_COMMANDS.has(String(command.type))) {
               const hint = await swarm().then(read => staleAssignmentHint(command, read.state, agentId), () => '')
               throw new SuperTabHostError(error.code, `${error.message}${hint ? ` ${hint}` : ''}`, error.status)
+            }
+            // A backend rolled back since this machine's first load (which said `steps: true`) refuses the field: the step
+            // opens as a plain linked task (final review, minor 7). Only that refusal: a bad name is refused by name.
+            if ('step' in command && command.type === 'conversation.create' && error instanceof SuperTabHostError && error.status === 400
+              && error.code === 'VALIDATION_ERROR' && /Unrecognized key[^"]*"step"/.test(error.message)) {
+              const { step: _step, ...plain } = command
+              return { ok: true, operationId: payload.operationId, value: await send(plain) }
             }
             // A backend from before cost records refuses the totals; the status itself still goes.
             if (command.tokens && error instanceof SuperTabHostError && error.status === 400 && error.code === 'VALIDATION_ERROR' && /"tokens"|'tokens'/.test(error.message)) {

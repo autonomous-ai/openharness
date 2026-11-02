@@ -47,8 +47,13 @@ describe('status from parts', () => {
 })
 
 describe('what each action reads of the Swarm', () => {
+  // Task steps design: a task's newest page shows its steps' rows, so it reads the Swarm, by what changed, to find them.
+  it('reads the Swarm once for a conversation\'s newest messages, to find its steps', async () => {
+    const s = swarm()
+    expect(await s.ask({ action: 'messages', tabId: T, agentId: FIXTURE.builderId, conversationId: FIXTURE.workGroup }, owner)).not.toHaveProperty('error')
+    expect(s.reads()).toEqual([`/api/super-tabs/${T}/parts?asAgentId=${FIXTURE.builderId}`])
+  })
   it.each([
-    ['messages', { conversationId: FIXTURE.workGroup }],
     ['message', { conversationId: FIXTURE.workGroup, messageId: 'f00000000000000000000001' }],
     ['terminalResult', { terminalRequestId: 'r1' }],
     ['startStatus', { startId: FIXTURE.startId }],
