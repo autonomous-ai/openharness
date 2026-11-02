@@ -297,6 +297,9 @@ class _SwarmNewMessageSheetState extends State<SwarmNewMessageSheet>
               selection: TextSelection.collapsed(offset: text.length),
             );
           },
+          post: () {
+            if (mounted && _canSend) unawaited(_send());
+          },
         )..addListener(_redraw);
       }
     }
@@ -703,8 +706,8 @@ class _SwarmNewMessageSheetState extends State<SwarmNewMessageSheet>
   /// Why the last Send did not go, what the last pick left out, what the mic
   /// could not hear, then the card ([SwarmComposerCard]): the files going,
   /// the field and its X, then +, the mic and Send — or, while a take is
-  /// under way, the voice row ([SwarmVoiceRow]). No Tag: New message has no
-  /// @ picker.
+  /// under way, the voice row ([SwarmVoiceRow]) and its Send, for the chat
+  /// picked. No Tag: New message has no @ picker.
   Widget _composer(Tty tty, SwarmNewMessageChat? picked) {
     final canSend = _canSend;
     final locked = _locked;
@@ -767,7 +770,10 @@ class _SwarmNewMessageSheetState extends State<SwarmNewMessageSheet>
                 ),
               ),
               toolbar: talking
-                  ? SwarmVoiceRow(voice: voice!)
+                  ? SwarmVoiceRow(
+                      voice: voice!,
+                      canPost: _picked != null && !_closing && !locked,
+                    )
                   : Row(
                       children: [
                         if (swarmSendsFiles)
