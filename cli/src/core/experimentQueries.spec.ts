@@ -297,6 +297,25 @@ it('exposes identity-bound close only to the Swarm service and validates its nat
   expect(await answerExperimentQuery(fakeCore(), allowed, 'superTabs', 'close_swarm', payload)).toEqual({ error: 'UNSUPPORTED' })
 })
 
+it('asks the core about the agents it is given, keeping only the first 64 ids that are strings, to the Swarm service alone', async () => {
+  const activity = vi.fn(async (ids: string[]) => Object.fromEntries(ids.map(id => [id, 'working' as const])))
+  const core = fakeCore({ agents: { activity } } as never)
+  const allowed = new Set(['superTabs', 'orchestrator'])
+  expect(await answerExperimentQuery(core, allowed, 'superTabs', 'activity', { agentIds: ['a', 4, null, 'b'] })).toEqual({ activity: { a: 'working', b: 'working' } })
+  expect(activity).toHaveBeenLastCalledWith(['a', 'b'])
+  const many = Array.from({ length: 70 }, (_, i) => `agent-${i}`)
+  await answerExperimentQuery(core, allowed, 'superTabs', 'activity', { agentIds: many })
+  expect(activity).toHaveBeenLastCalledWith(many.slice(0, 64))
+  // Without a list of ids, the core is asked about none rather than failing.
+  for (const payload of [{}, { agentIds: 'a' }, { agentIds: { 0: 'a' } }]) {
+    expect(await answerExperimentQuery(core, allowed, 'superTabs', 'activity', payload)).toEqual({ activity: {} })
+    expect(activity).toHaveBeenLastCalledWith([])
+  }
+  activity.mockClear()
+  expect(await answerExperimentQuery(core, allowed, 'orchestrator', 'activity', { agentIds: ['a'] })).toEqual({ error: 'NOT_SUPER_TABS' })
+  expect(activity).not.toHaveBeenCalled()
+})
+
 it('lets only the Swarm service reopen a Lead or close a member, by a valid agent id', async () => {
   const keepLeadAlive = vi.fn(async () => ({ ok: true as const })), closeMember = vi.fn(async () => ({ closed: true as const }))
   const core = fakeCore({ agents: { keepLeadAlive, closeMember } })
