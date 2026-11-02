@@ -27,6 +27,7 @@ function setup(over: Partial<RecapDeps> = {}) {
     live: () => [live, bare, { agentId: 'a3', sessionId: '' } as RegisteredSession],
     sessionTurnOpen: vi.fn((sessionId: string) => sessionId === 's1'),
     orchestratorRoleOf: vi.fn(() => null),
+    quietOnDevices: vi.fn(() => false),
     ...over,
   }
   const recaps = createRecaps(deps)
@@ -58,6 +59,19 @@ describe('recaps, as the core keeps them', () => {
     const { deps, recaps } = setup()
     vi.mocked(deps.orchestratorRoleOf).mockImplementationOnce(() => { throw new Error('ENOSPC: no space left on device, mkdir') })
     expect(recaps.isSubagentSession('s1')).toBe(false)
+  })
+
+  // #2540's review: the recaps in the edge host have no agent list, so whether a session's turns are quiet on the devices
+  // goes with the session. The core only carries the fact; who says it (the Swarm, through its door) is outside the core.
+  it('says a session is quiet on devices when it is told so, and says nothing of it otherwise', () => {
+    const quietOnDevices = vi.fn((row: RegisteredSession) => row.agentId === 'a1')
+    const { recaps, port } = setup({ quietOnDevices })
+    recaps.mirror.ingest([started], 's1')
+    recaps.mirror.ingest([started], 's2')
+    recaps.mirror.ingest([started], 'unbound')
+    expect(port.lifecycle.mock.calls.map(([event]) => (event as { session: { quietOnDevices?: boolean } }).session.quietOnDevices))
+      .toEqual([true, undefined, undefined])
+    expect(quietOnDevices.mock.calls.map(([row]) => row.agentId)).toEqual(['a1', 'a2'])
   })
 
   it('tells the recaps each batch, addressed as the core knows the session, and whether it is a sub-agent\'s only where a turn ends', () => {

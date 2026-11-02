@@ -57,7 +57,6 @@ import 'decisions_view.dart';
 import 'route_row.dart';
 import 'terminal_row.dart';
 import 'thread_panel.dart';
-import 'threads_view.dart';
 import 'work_details.dart';
 import 'manage_page.dart';
 import 'project_sidebar.dart';
@@ -154,9 +153,6 @@ class _SuperTabViewState extends State<SuperTabView>
   bool _showPullRequests = false;
 
   bool _showNotifications = false;
-
-  /// The Threads view holds the main pane (threads_view.dart).
-  bool _showThreads = false;
 
   /// Manage holds the main pane; [_manageTab] is which of its pages, but for
   /// Devices, which is the pane the view holds for it ([_devicesVisible]).
@@ -487,7 +483,6 @@ class _SuperTabViewState extends State<SuperTabView>
         _terminalsVisible ||
         _showPullRequests ||
         _showNotifications ||
-        _showThreads ||
         _showManage) {
       return false;
     }
@@ -716,7 +711,7 @@ class _SuperTabViewState extends State<SuperTabView>
       if (group == null || !c.unreadShown(group)) continue;
       widget.onCloseTerminal?.call();
       setState(() {
-        _showNotifications = _showThreads = _showManage = false;
+        _showNotifications = _showManage = false;
         _showPullRequests = false;
       });
       unawaited(c.select(group.id));
@@ -1613,7 +1608,7 @@ class _SuperTabViewState extends State<SuperTabView>
     onNotifications: _openActivity,
     needsHuman: (group) => _needsHuman(group).length,
     onSelect: (id) {
-      setState(() => _showNotifications = _showThreads = _showManage = false);
+      setState(() => _showNotifications = _showManage = false);
       c.select(id);
       _closeSidebar();
     },
@@ -1626,7 +1621,7 @@ class _SuperTabViewState extends State<SuperTabView>
   /// ([SuperTabController.buddyChatOpener]).
   Future<bool> _openBuddyChat(String projectId) {
     setState(() {
-      _showNotifications = _showThreads = _showManage = false;
+      _showNotifications = _showManage = false;
       _showPullRequests = false;
     });
     widget.onCloseTerminal?.call();
@@ -1643,7 +1638,6 @@ class _SuperTabViewState extends State<SuperTabView>
     widget.onCloseTerminal?.call();
     setState(() {
       _showNotifications = true;
-      _showThreads = false;
       _showManage = false;
       _showPullRequests = false;
     });
@@ -1654,21 +1648,14 @@ class _SuperTabViewState extends State<SuperTabView>
     if (mention != null) unawaited(_openMention(mention));
   }
 
-  /// Shows Activity in the main pane, as its sidebar row does; with [filter],
-  /// on that list. [from] is the controller the
-  /// asking widget was built for: a press arriving once the view has moved to
-  /// another Swarm opens nothing.
-  void _openActivity({
-    SuperTabActivityFilter? filter,
-    SuperTabController? from,
-  }) {
+  /// Shows Activity in the main pane, as its sidebar row does. [from] is the
+  /// controller the asking widget was built for: a press arriving once the
+  /// view has moved to another Swarm opens nothing.
+  void _openActivity({SuperTabController? from}) {
     if (!mounted || (from != null && from != c)) return;
-    // Its row asks for no list: All, whichever one was showing.
-    SuperTabActivity.of(c).setFilter(filter ?? SuperTabActivityFilter.all);
     _closeSidebar();
     setState(() {
       _showNotifications = true;
-      _showThreads = false;
       _showManage = false;
       _showPullRequests = false;
     });
@@ -1678,14 +1665,12 @@ class _SuperTabViewState extends State<SuperTabView>
   bool get _notificationsVisible =>
       _showNotifications && !_devicesVisible && !c.accessRevoked;
 
-  /// Notifications, Threads or Manage holds the main pane, with no chat header.
-  bool get _listViewHoldsThePane =>
-      _notificationsVisible || _threadsVisible || _manageVisible;
+  /// Activity or Manage holds the main pane, with no chat header.
+  bool get _listViewHoldsThePane => _notificationsVisible || _manageVisible;
 
   bool get _manageVisible =>
       _showManage &&
       !_showNotifications &&
-      !_showThreads &&
       !_devicesVisible &&
       !c.accessRevoked;
 
@@ -1700,7 +1685,7 @@ class _SuperTabViewState extends State<SuperTabView>
     _closeSidebar();
     setState(() {
       _showManage = true;
-      _showNotifications = _showThreads = _showPullRequests = false;
+      _showNotifications = _showPullRequests = false;
       if (_manageTab == SuperTabManageTab.devices && !_hasDevices) {
         _manageTab = SuperTabManageTab.machines;
       }
@@ -1720,25 +1705,25 @@ class _SuperTabViewState extends State<SuperTabView>
     }
   }
 
-  bool get _threadsVisible =>
-      _showThreads &&
-      !_showNotifications &&
-      !_devicesVisible &&
-      !c.accessRevoked;
-
-  /// Opens [root]'s thread in its chat from the Threads view.
+  /// Opens [root]'s thread in its chat from Activity's New replies.
   void _openThreadFromList(String conversationId, String root) {
+    if (_openConversation(conversationId)) c.openThread(root);
+  }
+
+  /// Opens chat [conversationId] from a row of Activity; false when it is
+  /// gone or the reader's access is.
+  bool _openConversation(String conversationId) {
     if (c.accessRevoked || c.snapshot?.conversation(conversationId) == null) {
-      return;
+      return false;
     }
     widget.onCloseTerminal?.call();
     _closeSidebar();
     setState(() {
-      _showThreads = _showNotifications = _showManage = false;
+      _showNotifications = _showManage = false;
       _showPullRequests = false;
     });
     c.select(conversationId);
-    c.openThread(root);
+    return true;
   }
 
   /// [messageId] of [id], read from the pages held, then what arrived after
@@ -1812,7 +1797,7 @@ class _SuperTabViewState extends State<SuperTabView>
     }
     final shownBy = _rowShowing(id, messageId) ?? messageId;
     setState(() {
-      _showNotifications = _showThreads = _showManage = false;
+      _showNotifications = _showManage = false;
       _showPullRequests = false;
       _back = null;
       _target = shownBy;
@@ -2240,8 +2225,6 @@ class _SuperTabViewState extends State<SuperTabView>
         ? 'Manage'
         : _notificationsVisible
         ? 'Activity'
-        : _threadsVisible
-        ? 'Threads'
         : group == null
         ? c.snapshot?.projects.isEmpty == true
               ? c.snapshot!.name
@@ -2261,8 +2244,7 @@ class _SuperTabViewState extends State<SuperTabView>
     if (group != null &&
         c.snapshot!.isProjectLead(group.id) &&
         !_devicesVisible &&
-        !_notificationsVisible &&
-        !_threadsVisible) {
+        !_notificationsVisible) {
       return _projectMenu(group, name, style);
     }
     return Text(
@@ -4383,11 +4365,9 @@ class _SuperTabViewState extends State<SuperTabView>
                         index: _devicesVisible
                             ? 1
                             : _manageVisible
-                            ? 5
+                            ? 4
                             : _notificationsVisible
                             ? 3
-                            : _threadsVisible
-                            ? 4
                             : c.snapshot?.projects.isEmpty == true
                             ? 0
                             : _terminalsVisible
@@ -4410,15 +4390,8 @@ class _SuperTabViewState extends State<SuperTabView>
                                   activity: SuperTabActivity.of(c),
                                   onOpenMention: (mention) =>
                                       unawaited(_openMention(mention)),
-                                  onOpenMessage: (id, messageId) =>
-                                      unawaited(_openMessage(id, messageId)),
-                                )
-                              : const SizedBox.shrink(),
-                          _threadsVisible
-                              ? SuperTabThreadsView(
-                                  attention: SuperTabAttention.of(c),
-                                  onOpen: _openThreadFromList,
-                                  machineName: widget.machineName,
+                                  onOpenThread: _openThreadFromList,
+                                  onOpenConversation: _openConversation,
                                 )
                               : const SizedBox.shrink(),
                           _manageVisible

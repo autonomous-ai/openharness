@@ -5,7 +5,6 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:flutter/services.dart';
-import 'package:harness/super_tabs/activity.dart';
 import 'package:harness/super_tabs/attention.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
@@ -207,7 +206,6 @@ Future<(SuperTabController, GlobalKey)> _show(
   await attention.mentions.load();
   await attention.decisions.load();
   await attention.load();
-  await SuperTabActivity.of(c).load();
   await c.select(selected);
   if (!c.expandedProjects.contains('lead')) c.toggleProject('lead');
   final picture = GlobalKey();

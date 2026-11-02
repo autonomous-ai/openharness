@@ -103,8 +103,9 @@ export function createRecaps(core: CoreApi, options: RecapsOptions = {}): Recaps
     decideTier: async (turn) => {
       if (!watchers.device && !watchers.remote) return null
       const session = sessions.get(turn.sessionId)
-      // A Swarm agent tells its news through the Swarm's chat cards, so its turn is silent on the devices.
-      const swarm = !!(session && core.agents.byAgent(session.agentId)?.swarmSkill)
+      // A Swarm agent tells its news through the Swarm's chat cards, so its turn is silent on the devices. The core says so
+      // with the session: in the edge host this core API has no agent list to look it up in (#2540's review).
+      const swarm = session?.quietOnDevices === true
       const decision = await tierOf({ agent: session?.name ?? '', engine: session?.engine ?? '', recap: turn.recap,
         durationS: turn.durationS, stats: turn.stats, subagent: false, onScreen: false, failed: false, swarm })
       return decision.tier

@@ -79,7 +79,8 @@ Future<void> closeSwarm(WidgetTester tester, SuperTabController c) async {
 
 void main() {
   // Slack's Activity takes Notifications' place on every platform (Lead,
-  // 10-31): on a Mac too, beside the menu bar and the Dock. The rest moved
+  // 10-31), and takes in Threads: on a Mac too, beside the menu bar and the
+  // Dock. The rest moved
   // into Manage, at the foot (Quiet Swarm, screen 1).
   for (final platform in [TargetPlatform.macOS, TargetPlatform.linux]) {
     testWidgets('the top reads Activity with its count, and Manage is at the '
