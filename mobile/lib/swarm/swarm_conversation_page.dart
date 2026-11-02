@@ -1838,8 +1838,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               .map((match) => int.tryParse(match[1]!));
           final referenceInputs = [
             for (final number in referenceNumbers)
-              if (number != null && references[number] case final id?)
-                '$number:$id',
+              if (number != null)
+                if (references[number] case final String id) '$number:$id',
           ].join(',');
           return _row(
             key,
