@@ -472,7 +472,7 @@ export class SuperTabHost {
   /** Per tab and project (instructionsKey), the instructions text last read, its revision, and that revision's summary and
    *  save time once a history read answered (`failedSince`: when it first failed): read again only when the roster's
    *  revision moves, and dropped once no roster row names the project. */
-  private readonly instructionTexts = new Map<string, { revision: number; text: string
+  private readonly instructionTexts = new Map<string, { revision: number; hash: string | null; text: string
     history: { summary: string | null; savedAt: number | null } | null; failedSince?: number }>()
   private skillsRunning: Promise<void> | null = null
   private missing = new Map<string, number>()
@@ -1433,7 +1433,9 @@ export class SuperTabHost {
     const key = instructionsKey(target.tabId, doc.projectId, buddy ? target.agent.id : undefined)
     const path = `/api/super-tabs/${target.tabId}/projects/${doc.projectId}/instructions`, as = `asAgentId=${target.agent.id}`
     let held = this.instructionTexts.get(key)
-    if (held?.revision !== doc.revision) {
+    // The hash as well as the revision: a project with nothing saved stays at revision 0 while the template it reads changes
+    // with backend builds (2026-11-02: running agents kept the old routing after #2495 until their daemon restarted).
+    if (held?.revision !== doc.revision || held.hash !== doc.hash) {
       const answer = object(await backend(this.core, 'GET', `${path}?${as}`))
       // A newer roster's refresh reads its own revision: this one installs and says nothing.
       if (!current()) { this.skillChecks.delete(harnessId); return }
@@ -1441,7 +1443,7 @@ export class SuperTabHost {
         throw new Error(`The project's instructions read back are not revision ${doc.revision}, which this machine was told to install. Trying again later.`)
       }
       // A Buddy reads no history: it names who asked for what. Revision 0 is the built-in template: nothing was saved.
-      held = { revision: doc.revision, text: answer.text, history: buddy || !doc.revision ? { summary: null, savedAt: null } : null }
+      held = { revision: doc.revision, hash: doc.hash, text: answer.text, history: buddy || !doc.revision ? { summary: null, savedAt: null } : null }
       this.instructionTexts.set(key, held)
     }
     // Task 4's review: a failed history read kept for the revision's life left every notice without its summary and gave each

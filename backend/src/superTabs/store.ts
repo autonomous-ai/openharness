@@ -2069,7 +2069,7 @@ export class SuperTabStore {
       if (revision && stored?.revision !== revision) fail('INSTRUCTIONS_UNAVAILABLE', 'This project\'s instructions cannot be read now. Try again in a moment.', 503)
       const notes = buddy ? undefined : liveNotes(await readNotes(tx, tabId, projectId), this.now())
         .map(n => ({ id: n.id, text: n.text, askedBy: n.askedBy, at: new Date(n.at), expiresAt: n.expiresAt === null ? null : new Date(n.expiresAt) }))
-      return { projectId, revision, hash: stored?.hash ?? null, text: stored?.text ?? INSTRUCTIONS_TEMPLATE, template: !stored,
+      return { projectId, revision, hash: stored ? stored.hash : FIRST_INSTRUCTIONS.instructionsHash, text: stored?.text ?? INSTRUCTIONS_TEMPLATE, template: !stored,
         coordinatorName: coordinatorNameOf(project), notesRevision: project.notesRevision ?? 0, ...(notes ? { notes } : {}) }
     })
   }

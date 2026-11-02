@@ -3258,10 +3258,34 @@ describe('project instructions from the roster', () => {
     return { t, sent, reads, pass, holdNext, file, roleFiles, launched, folder, agents,
       save: (summary: string, text: string, at = LONG_AGO) => { const revision = saves.length + 1; saves.push({ revision, hash: `hash-${revision}`, summary, text, at }); return revision },
       move: (revision: number) => { doc = { projectId: 'app', revision, hash: `hash-${revision}`, coordinatorName: 'Product Manager' } },
+      /** The project on the built-in template (nothing saved: revision 0) whose text is [text], as a backend build serves it. */
+      template: (hash: string, text: string) => { saves.length = 0; saves.push({ revision: 0, hash, summary: '', text, at: LONG_AGO })
+        doc = { projectId: 'app', revision: 0, hash, coordinatorName: 'Product Manager' } },
       setDoc: (next: typeof doc) => { doc = next }, setLag: (revision: number | undefined) => { lag = revision }, setHistory: (served: boolean) => { history = served } }
   }
   const instructionsRead = (agentId: string) => `/api/super-tabs/tab/projects/app/instructions?asAgentId=${agentId}`
   const historyRead = (agentId: string) => `/api/super-tabs/tab/projects/app/instructions/revisions?asAgentId=${agentId}`
+
+  // 2026-11-02, the rollout of #2495: a project with nothing saved stays at revision 0, so the text read once was kept until
+  // the daemon restarted. The template's hash moves with each backend build that changes it.
+  it('reads a changed template again at revision 0', async () => {
+    const f = docFixture()
+    f.template('template-1', 'Template one.\n')
+    const host = await f.pass()
+    expect(readFileSync(f.file('tester'), 'utf8')).toContain('Template one.')
+    f.template('template-2', 'Template two.\n')
+    await f.pass(host, 120_000)
+    expect(f.reads.filter(path => path === instructionsRead('a-tester'))).toHaveLength(2)
+    expect(readFileSync(f.file('tester'), 'utf8')).toContain('Template two.')
+  })
+
+  it('does not read the template again while its hash stays', async () => {
+    const f = docFixture()
+    f.template('template-1', 'Template one.\n')
+    const host = await f.pass()
+    for (let i = 1; i <= 3; i++) await f.pass(host, i * 120_000)
+    expect(f.reads.filter(path => path === instructionsRead('a-tester'))).toHaveLength(1)
+  })
 
   it('installs a Tester\'s instructions from the roster and tells it nothing at first', async () => {
     const f = docFixture()

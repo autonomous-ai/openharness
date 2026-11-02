@@ -4,6 +4,8 @@ import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
 import { appendRouting, instructionsHash, legacyRoleName, MAX_INSTRUCTIONS_BYTES, roleNameOf, routingSummary, summarySchema } from './instructions.js'
 import type { SwarmProject } from './projects.js'
 import { INSTRUCTIONS_TEMPLATE, TEMPLATE_WORKFLOW } from './instructionsTemplate.js'
+import { hostTab } from './read/hostRows.js'
+import { FIRST_INSTRUCTIONS } from './instructions.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -283,5 +285,21 @@ describe('role names and the coordinator\'s name', () => {
     expect(() => f.run(rename('Boss'), peer)).toThrow(expect.objectContaining({ code: 'PROJECT_OWNER_REQUIRED' }))
     expect(() => f.run(rename('Boss'), as(engineer))).toThrow(expect.objectContaining({ code: 'COORDINATOR_REQUIRED' }))
     expect(() => f.run(rename('x'.repeat(41)))).toThrow()
+  })
+})
+
+// 2026-11-02, the rollout of #2495: running agents kept the template they first read, because a project with no saved
+// document stays at revision 0 and the host's hash was null, so nothing told the daemon the template had moved.
+describe('a project on the template', () => {
+  it('names the template\'s hash to its host', async () => {
+    const f = fixture()
+    const agentId = f.add('worker-1')
+    // A project from before project instructions: nothing saved, so it reads the template.
+    for (const project of f.state.projects ?? []) { delete project.instructionsRevision; delete project.instructionsHash }
+    const lookups = { people: [], confidential: new Set<string>(), agentGrant: async () => {}, teams: [], githubApp: false }
+    const user = { sub: 'host-owner', email: 'host@example.com', role: 'user', autonomousEnv: 'test' } as never
+    const rows = await hostTab('tab', f.state, 'host', user, null, lookups as never)
+    const row = rows.roster.find(r => (r as { agent?: { id: string } }).agent?.id === agentId) as { instructions?: { revision: number; hash: string | null } }
+    expect(row.instructions).toMatchObject({ revision: 0, hash: FIRST_INSTRUCTIONS.instructionsHash })
   })
 })
