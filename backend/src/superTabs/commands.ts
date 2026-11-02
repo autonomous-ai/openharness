@@ -9,7 +9,7 @@ import {
   type Actor, type AgentConfiguration, type AgentStart, type AgentStartRequest, type BuddySessionEntry, type WorkTask, type Agent, type Author, type Check, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
 import { jobKindOf } from './evidence/jobKind.js'
-import { closeSteps, holdsStepOf, isStep, taskOwner } from './steps.js'
+import { endSteps, holdsStepOf, isStep, taskOwner } from './steps.js'
 import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSaveSchema } from './routingPolicy.js'
 import { askedInSchema, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema } from './rules.js'
@@ -828,10 +828,21 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   /** Any other row the system writes in the actor's name. Without a source, a notice written as the owner read as the owner
    * asking, and a Lead could quote it to change rules (review of #1594). Only `message.send` and an initial message stay plain. */
   const SYSTEM_ROW = { kind: 'system' }
-  /** A task archived: its steps archive with it, an open one cancelled, and that step's agent is told why (task steps design). */
-  const closeStepsOf = (task: Conversation) => {
-    const reason = `${task.title} was archived.`
-    for (const step of closeSteps(state, task, reason)) message(step.id, reason, [step.assignment!.agentId], null, SYSTEM_ROW)
+  /** [agentId] as a member of [group] who may be told there: joined when it is not one yet and may join; else null. */
+  const reachable = (group: Conversation, agentId: string | null): string | null => {
+    if (!agentId || group.agentIds.includes(agentId)) return agentId
+    if (!joinsProject(state, group, agentId)) return null
+    group.agentIds.push(agentId)
+    return agentId
+  }
+  /** A task ended: its open steps are cancelled and their agents told why, in each step (task steps design); with
+   *  [archive], its finished steps archive with it. */
+  const endStepsOf = (task: Conversation, reason: string, archive: boolean) => {
+    // A row of its own in each step, as the command's own row may be in the task: one id per row.
+    for (const step of endSteps(state, task, reason, archive)) {
+      effects.messages.push({ id: stableId(operationId, 'step-ended', step.id), conversationId: step.id, author: sender, text: reason,
+        replyTo: null, recipients: [step.assignment!.agentId], source: SYSTEM_ROW })
+    }
   }
   /** Agent bookkeeping, a routing line or an agent joined or ready: no one's in the project chat, which carries only what
    *  people read or decide on (the Lead's ruling, 2026-10-29); a task's chat keeps it as its record. */
@@ -1813,7 +1824,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (group.id === groupProject(state, group).leadConversationId) fail('LEAD_CONVERSATION', 'The Lead conversation stays available.')
       if (command.archived && activeWork(group)) fail('WORK_ACTIVE', 'Resolve the active assignment before archiving this conversation.')
       group.archived = command.archived
-      if (command.archived) closeStepsOf(group)
+      if (command.archived) endStepsOf(group, `${group.title} was archived.`, true)
       // Archived by hand, it leaves the active set until it is reopened (spec, Archive), once its reports are acknowledged:
       // until then the sweep leaves it in the active set, where the report check sees it (design section 3.6).
       if (command.archived && !dirtyGroups(state, groupProject(state, group)).includes(group)) group.dormant = true
@@ -2805,7 +2816,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         // A step's progress is its task owner's to act on (Ken, 2026-11-02: the PM's terminal got a message every few
         // seconds from builders and reviewers). Ready and Done go to the owner, else the coordinator; what needs a person or
         // is stuck goes to both.
-        const owner = isStep(group) ? taskOwner(state, group) : null
+        // The owner is told in the step, so it is one of the step's members: a delivery reaches members only (store.ts
+        // deliveryAllowed; final review, finding 1: a step the PM opened had no owner in it). One that may not join is
+        // not the owner here, and the coordinator hears instead.
+        const owner = isStep(group) ? reachable(group, taskOwner(state, group)) : null
         const stepTold = !isStep(group) || !own ? null
           : ['review', 'done'].includes(command.status) ? [owner ?? lead]
             : ['needs_human', 'blocked'].includes(command.status) ? [lead, owner] : []
@@ -2864,7 +2878,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         message(group.id, `${who} cancelled this task: ${command.reason.replace(/[.\s]+$/, '')}.`, [], null, SYSTEM_ROW)
         // Its line is a report the coordinator acknowledges first, so the sweep puts it to sleep later (sweeps.ts), as for any archive.
         group.archived = true
-        closeStepsOf(group)
+        endStepsOf(group, `${group.title} was archived.`, true)
         break
       }
       if (!assignment || assignment.id !== command.assignmentId) fail('STALE_ASSIGNMENT', 'This is no longer the active assignment.')
@@ -2879,6 +2893,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       assignment.status = 'cancelled'
       assignment.result = command.reason
       if (!lost) finishWorker(state, assignment.agentId)
+      // Its steps' work ends with it; finished ones stay until it archives (task steps design; final review, finding 2).
+      endStepsOf(group, `${group.title} was cancelled.`, false)
       message(group.id, `${who} cancelled this task: ${command.reason.replace(/[.\s]+$/, '')}.${gone ? '' : ' Stop working on it.'}`,
         // Telling its agent to stop is the agent's alone; people read the cancel and its reason on the task itself.
         gone ? [] : [assignment.agentId], null, gone ? SYSTEM_ROW : forRecipients(SYSTEM_ROW))

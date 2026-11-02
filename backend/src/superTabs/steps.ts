@@ -12,10 +12,12 @@ export const isStep = (group: Pick<Conversation, 'step' | 'reviewOf'>): boolean 
 export const stepsOf = (state: SuperTabState, taskId: string): Conversation[] =>
   state.conversations.filter(c => c.reviewOf === taskId && !!c.step)
 
-/** Archives every step of [task] with it, in the same write. An open one is cancelled first, with [reason] as its result,
- *  and its agent freed; those are returned so the caller tells their agents. Without this a `done` step with no pull
- *  request of its own was archived within one archive pass (`settled([])`), and a second round on it failed ARCHIVED. */
-export function closeSteps(state: SuperTabState, task: Conversation, reason: string): Conversation[] {
+/** Ends [task]'s steps with it, in the same write. An open one is cancelled with [reason] as its result and its agent
+ *  freed; it stays unarchived, as an archived conversation takes no delivery (store.ts deliveryAllowed) and its agent is
+ *  told there, and it sleeps with its task. With [archive], a finished one is archived with its task: without that, a
+ *  `done` step with no pull request of its own was archived within one archive pass (`settled([])`), and a second round on
+ *  it failed ARCHIVED. Returns the cancelled ones, whose agents the caller tells. */
+export function endSteps(state: SuperTabState, task: Conversation, reason: string, archive: boolean): Conversation[] {
   const cancelled: Conversation[] = []
   for (const step of stepsOf(state, task.id)) {
     if (step.archived) continue
@@ -23,8 +25,7 @@ export function closeSteps(state: SuperTabState, task: Conversation, reason: str
       Object.assign(step.assignment!, { status: 'cancelled', result: reason })
       finishWorker(state, step.assignment!.agentId)
       cancelled.push(step)
-    }
-    step.archived = true
+    } else if (archive) step.archived = true
   }
   return cancelled
 }

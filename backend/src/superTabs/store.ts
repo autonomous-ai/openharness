@@ -47,7 +47,7 @@ import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './part
 import { memberSwarms } from './swarmRows.js'
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { loadDeliveryParts, ms } from './parts/light.js'
-import { closeSteps } from './steps.js'
+import { endSteps } from './steps.js'
 import { guardedWrite, partId } from './parts/write.js'
 import { retryable } from './retry.js'
 import { touchesFor } from './parts/touches.js'
@@ -1498,8 +1498,12 @@ export class SuperTabStore {
         // A task cancelled with no assignment archives (commands.ts work.cancel).
         || command.type === 'work.cancel' && !original.conversations.find(c => c.id === command.conversationId)?.archived
           && !!effects.state.conversations.find(c => c.id === command.conversationId)?.archived
-      if (unreadable) {
-        await tx.superTabDelivery.updateMany({ where: { tabId, conversationId: command.conversationId, status: { in: ['queued', 'claimed', 'uncertain'] },
+      // A task's finished steps archive with it (steps.ts endSteps): their deliveries end too (final review, finding 2).
+      const archivedSteps = unreadable && command.type !== 'conversation.agent' ? effects.state.conversations.filter(c => c.reviewOf === command.conversationId
+        && c.step && c.archived && !original.conversations.find(o => o.id === c.id)?.archived).map(c => c.id) : []
+      // One plain match per conversation: an `in` on this hot collection is sent as $expr, which no index bounds (hotFilters).
+      for (const conversationId of unreadable ? [command.conversationId, ...archivedSteps] : []) {
+        await tx.superTabDelivery.updateMany({ where: { tabId, conversationId, status: { in: ['queued', 'claimed', 'uncertain'] },
           ...(command.type === 'conversation.agent' ? { agentId: command.agentId } : {}) },
           data: { status: 'cancelled', holdReason: null, holdSince: null } })
       }
@@ -3407,7 +3411,7 @@ export class SuperTabStore {
       group.archived = true
       // Its steps archive with it (task steps design): its work is done or cancelled and its pull requests settled, so a
       // step still open there has nothing left to check.
-      closeSteps(state, group, `${group.title} was archived.`)
+      endSteps(state, group, `${group.title} was archived.`, true)
       const line = finished ? archiveLine(state, group, now) : reviewCloseLine(state, group, checked, now), rows = line ? [line] : []
       const sequences = numberMessages(state, rows, now)
       if (!dirtyGroups(state, groupProject(state, group)).includes(group)) group.dormant = true

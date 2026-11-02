@@ -138,7 +138,9 @@ describe('a step closes with its task', () => {
     finishStep(f, done, tester)
     f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'done', result: 'Merged' } as Command, f.as(f.dev))
     const effects = f.run({ type: 'conversation.archive', conversationId: f.task, archived: true } as Command)
-    expect(f.group(working)).toMatchObject({ archived: true, assignment: { status: 'cancelled', result: 'Fix login was archived.' } })
+    // Final review, finding 2: an archived conversation takes no delivery, so a cancelled step stays open until it sleeps
+    // with its task, and its agent is told there.
+    expect(f.group(working)).toMatchObject({ archived: false, assignment: { status: 'cancelled', result: 'Fix login was archived.' } })
     expect(f.group(done)).toMatchObject({ archived: true, assignment: { status: 'done' } })
     expect(effects.messages.filter(m => m.conversationId === working).map(m => [m.text, m.recipients])).toEqual([['Fix login was archived.', [rev]]])
   })
@@ -243,5 +245,35 @@ describe('an agent\'s own Ready', () => {
     const f = stepsFixture()
     const messages = f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'done', result: 'Merged' } as Command, f.as(f.dev)).messages
     expect(messages.filter(m => m.conversationId === f.task && m.text.startsWith('Done')).map(m => m.recipients)).toEqual([[f.lead]])
+  })
+})
+
+// Final review, finding 1: a step the PM opened has no owner in it, so a Ready or Done told to the owner was never
+// delivered (store.ts deliveryAllowed reads membership). The owner joins the step when it is told.
+describe('a step the PM opened', () => {
+  it('its Done reaches the owner, who joins the step', () => {
+    const f = stepsFixture()
+    const id = f.step('Review', f.as(f.lead))
+    const rev = f.add('rev', id)
+    f.run({ type: 'work.assign', conversationId: id, agentId: rev }, f.as(f.lead))
+    expect(f.group(id).agentIds).not.toContain(f.dev)
+    const messages = f.run({ type: 'work.status', conversationId: id, assignmentId: f.group(id).assignment!.id, status: 'done', result: 'Passed' } as Command, f.as(rev)).messages
+    expect(messages.filter(m => m.conversationId === id).map(m => m.recipients)).toEqual([[f.dev]])
+    expect(f.group(id).agentIds).toContain(f.dev)
+  })
+})
+
+describe('cancelling an assigned task', () => {
+  it('cancels its open steps and tells their agents, leaving finished ones', () => {
+    const f = stepsFixture()
+    const working = f.step('Review'), done = f.step('Test')
+    const rev = f.add('rev', working), tester = f.add('tester', done)
+    f.run({ type: 'work.assign', conversationId: working, agentId: rev }, f.as(f.dev))
+    f.run({ type: 'work.assign', conversationId: done, agentId: tester }, f.as(f.dev))
+    f.run({ type: 'work.status', conversationId: done, assignmentId: f.group(done).assignment!.id, status: 'done', result: 'Passed' } as Command, f.as(tester))
+    const effects = f.run({ type: 'work.cancel', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, reason: 'Not needed' } as Command, f.as(f.lead))
+    expect(f.group(working).assignment).toMatchObject({ status: 'cancelled', result: 'Fix login was cancelled.' })
+    expect(f.group(done).assignment).toMatchObject({ status: 'done' })
+    expect(effects.messages.filter(m => m.conversationId === working).map(m => [m.text, m.recipients])).toEqual([['Fix login was cancelled.', [rev]]])
   })
 })
