@@ -54,7 +54,7 @@ describe('sign-in epoch', () => {
     }))))
     const manager = new AuthSessionManager('https://api.example.test')
     await manager.accessToken()
-    manager.updateMachineId('machine-2')
+    await manager.updateMachineId('machine-2', epoch)
     expect(readAuthSession()).toMatchObject({ accessToken: 'refreshed-access', machineId: 'machine-2', signInEpoch: epoch, signInAcct: 'acct-1' })
     expect(newSignInEpoch()).not.toBe(epoch)
   })
@@ -177,7 +177,7 @@ describe('AuthSessionManager', () => {
   it('keeps a team sign-in\'s kind, and reads no other', async () => {
     writeAuthSession({ ...baseSession(), kind: 'team' })
     expect(readAuthSession()?.kind).toBe('team')
-    new AuthSessionManager('http://backend.invalid').updateMachineId('machine-2')
+    new AuthSessionManager('http://backend.invalid').updateMachineId('machine-2', undefined)
     expect(readAuthSession()).toMatchObject({ kind: 'team', machineId: 'machine-2' })
     await writeFile(AUTH_SESSION_FILE, JSON.stringify({ ...baseSession(), kind: 'admin' }))
     expect(readAuthSession()).not.toHaveProperty('kind')
