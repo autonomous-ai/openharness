@@ -97,6 +97,11 @@ through its link. The daemon writes the entries again as it starts, so an agent 
 service was connected gets it too. An agent reads its MCP servers when it starts: one already running
 sees a new connection after it is restarted.
 
+An agent started under a Claude profile (`CLAUDE_CONFIG_DIR`) or a Codex profile (`CODEX_HOME`), such as a switched PM, reads that
+folder's `.claude.json` or `config.toml`, not the default's. Launching it writes the same entries there (`syncProfileHome`) and
+records the folder in `projections.json` as `claude:<folder>` / `codex:<folder>`; every later sync keeps it current, and a folder
+that is gone is forgotten.
+
 The bridge (`bridge.ts`) checks the capability, refuses browser requests (any `Origin`), renews a token
 within five minutes of expiry, forwards the MCP request with the stored headers and streams the answer,
 event streams included. A token the service rejects is renewed once; a revoked grant marks the

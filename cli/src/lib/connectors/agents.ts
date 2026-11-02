@@ -11,7 +11,7 @@
 import { randomBytes } from 'node:crypto'
 import { existsSync, readFileSync, realpathSync, renameSync, writeFileSync, mkdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { delimiter, dirname, join } from 'node:path'
+import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path'
 import { managedNodePath } from '../nodeRuntime.js'
 import { MCP_SHIM_SOURCE } from './mcpShimSource.js'
 import { CODE, locked, writePrivate, type Store } from './store.js'
@@ -126,9 +126,10 @@ export interface Agent {
 
 class JsonAgent implements Agent {
   constructor(readonly name: string, private readonly binary: string, private readonly path: string,
-    private readonly env: NodeJS.ProcessEnv, private readonly key: string, private readonly entry: (reach: McpEntry) => Record<string, unknown>) {}
+    private readonly env: NodeJS.ProcessEnv, private readonly key: string, private readonly entry: (reach: McpEntry) => Record<string, unknown>,
+    private readonly profile = false) {}
 
-  installed(): boolean { return existsSync(this.path) || onPath(this.binary, this.env) }
+  installed(): boolean { return this.profile || existsSync(this.path) || onPath(this.binary, this.env) }
 
   apply(wanted: Record<string, McpEntry>, owned: string[]): string[] {
     let data: Record<string, unknown> = {}
@@ -155,10 +156,9 @@ class JsonAgent implements Agent {
 
 /** Codex's config.toml, edited as text: Harness's tables are removed whole and written again at the end. */
 class CodexAgent implements Agent {
-  readonly name = 'codex'
-  constructor(private readonly path: string, private readonly env: NodeJS.ProcessEnv) {}
+  constructor(private readonly path: string, private readonly env: NodeJS.ProcessEnv, readonly name = 'codex', private readonly profile = false) {}
 
-  installed(): boolean { return existsSync(this.path) || onPath('codex', this.env) }
+  installed(): boolean { return this.profile || existsSync(this.path) || onPath('codex', this.env) }
 
   private static header(name: string): RegExp {
     const escaped = name.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&')
@@ -192,19 +192,55 @@ class CodexAgent implements Agent {
   }
 }
 
+const claudeEntry = (reach: McpEntry): Record<string, unknown> =>
+  'url' in reach ? { type: 'http', url: reach.url } : { type: 'stdio', command: reach.command, args: reach.args }
+
+const claudeFile = (env: NodeJS.ProcessEnv): string => join(env.CLAUDE_CONFIG_DIR || home(env), '.claude.json')
+const codexFile = (env: NodeJS.ProcessEnv): string => join(env.CODEX_HOME || join(home(env), '.codex'), 'config.toml')
+
 export function agents(env: NodeJS.ProcessEnv = process.env): Agent[] {
   const config = env.XDG_CONFIG_HOME || join(home(env), '.config')
   return [
-    new JsonAgent('claude', 'claude', join(env.CLAUDE_CONFIG_DIR || home(env), '.claude.json'), env, 'mcpServers',
-      reach => 'url' in reach ? { type: 'http', url: reach.url } : { type: 'stdio', command: reach.command, args: reach.args }),
-    new CodexAgent(join(env.CODEX_HOME || join(home(env), '.codex'), 'config.toml'), env),
+    new JsonAgent('claude', 'claude', claudeFile(env), env, 'mcpServers', claudeEntry),
+    new CodexAgent(codexFile(env), env),
     new JsonAgent('opencode', 'opencode', join(config, 'opencode', 'opencode.json'), env, 'mcp',
       reach => 'url' in reach ? { type: 'remote', url: reach.url, enabled: true } : { type: 'local', command: [reach.command, ...reach.args], enabled: true }),
   ]
 }
 
-/** Give every installed agent exactly the connections that have MCP tools (their own, or REST served as MCP). */
-export function sync(vault: Store, env: NodeJS.ProcessEnv = process.env, list: Agent[] = agents(env)): Record<string, string[]> {
+/**
+ * The agent for a Claude profile (CLAUDE_CONFIG_DIR) or Codex profile (CODEX_HOME) folder: the default homes' entries, in the
+ * profile's own files. Its name carries the folder, so projections.json records what Harness wrote there apart from the default
+ * home; an agent runs under the folder, so the engine counts as installed. Null for the default home's own file (the default agent has it) and for a folder that is not an absolute path.
+ */
+function profileAgent(engine: 'claude' | 'codex', folder: string, env: NodeJS.ProcessEnv): Agent | null {
+  if (!isAbsolute(folder)) return null
+  const name = `${engine}:${folder}`
+  if (engine === 'claude') {
+    const path = join(folder, '.claude.json')
+    return resolve(path) === resolve(claudeFile(env)) ? null : new JsonAgent(name, 'claude', path, env, 'mcpServers', claudeEntry, true)
+  }
+  const path = join(folder, 'config.toml')
+  return resolve(path) === resolve(codexFile(env)) ? null : new CodexAgent(path, env, name, true)
+}
+
+/** The profile homes Harness has written entries into, from projections.json: [folder, agent] by recorded name. */
+function recordedProfiles(record: Record<string, unknown>, env: NodeJS.ProcessEnv): { gone: string[]; agents: Agent[] } {
+  const found: { gone: string[]; agents: Agent[] } = { gone: [], agents: [] }
+  for (const key of Object.keys(record)) {
+    const match = /^(claude|codex):(.+)$/.exec(key)
+    if (!match) continue
+    const agent = existsSync(match[2]) ? profileAgent(match[1] as 'claude' | 'codex', match[2], env) : null
+    if (agent) found.agents.push(agent)
+    else found.gone.push(key) // A profile folder that is gone took its entries with it.
+  }
+  return found
+}
+
+/** Give the agents in [list] exactly the connections that have MCP tools (their own, or REST served as MCP). */
+function project(
+  vault: Store, env: NodeJS.ProcessEnv, list: (record: Record<string, unknown>) => { agents: Agent[]; gone?: string[]; remember?: string[] },
+): Record<string, string[]> {
   const codes = Object.entries(vault.tokens()).filter(([code, token]) => transport(token) !== 'none' && CODE.test(code)).map(([code]) => code)
   const socket = bridgeSocketPath(vault)
   const shim = codes.length && socket ? writeShim(vault) : ''
@@ -214,14 +250,39 @@ export function sync(vault: Store, env: NodeJS.ProcessEnv = process.env, list: A
     : { url: bridgeUrl(key, code, bridgePort(env, vault)) }]))
   return locked(vault.root, () => {
     const record = vault.file('projections.json') as Record<string, unknown>
+    const { agents: targets, gone = [], remember = [] } = list(record)
     const changed: Record<string, string[]> = {}
-    for (const agent of list) {
+    for (const agent of targets) {
       const raw = record[agent.name]
       const owned = Array.isArray(raw) ? raw.filter((name): name is string => typeof name === 'string' && CODE.test(name)) : []
       if ((!owned.length && !codes.length) || !agent.installed()) continue
       changed[agent.name] = agent.apply(wanted, owned)
     }
-    writePrivate(join(vault.root, 'projections.json'), { ...record, ...changed })
+    const kept = Object.fromEntries(Object.entries(record).filter(([name]) => !gone.includes(name)))
+    // A profile home with nothing to write yet is still recorded, so a connection made later reaches it.
+    for (const name of remember) if (!(name in changed) && !(name in kept)) kept[name] = []
+    writePrivate(join(vault.root, 'projections.json'), { ...kept, ...changed })
     return changed
   })
+}
+
+/**
+ * Give every installed agent exactly the connections that have MCP tools, in its default home and in each profile home an agent
+ * was launched under (syncProfileHome), so a connection made or removed later reaches a running profile's config too.
+ */
+export function sync(vault: Store, env: NodeJS.ProcessEnv = process.env, list?: Agent[]): Record<string, string[]> {
+  return project(vault, env, record => {
+    if (list) return { agents: list }
+    const profiles = recordedProfiles(record, env)
+    return { agents: [...agents(env), ...profiles.agents], gone: profiles.gone }
+  })
+}
+
+/**
+ * Give the agent about to run under [folder] (its Claude profile or Codex profile) the same entries the default home has. The
+ * folder is one the launch already validated; a profile that is the default home's own file changes nothing here.
+ */
+export function syncProfileHome(vault: Store, engine: 'claude' | 'codex', folder: string, env: NodeJS.ProcessEnv = process.env): string[] {
+  const agent = profileAgent(engine, folder, env)
+  return agent ? project(vault, env, () => ({ agents: [agent], remember: [agent.name] }))[agent.name] ?? [] : []
 }
