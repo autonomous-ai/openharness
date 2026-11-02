@@ -190,7 +190,7 @@ void main() {
         );
         expect(
           rowText(tester, 'super-group-lead', 'web-project').style?.fontWeight,
-          FontWeight.w700,
+          FontWeight.w600,
         );
         c.toggleUnreadOnly();
         await tester.pumpAndSettle();
