@@ -836,6 +836,8 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
     if (ids == null || _disposed) return false;
     final body = _compose(ids);
     if (body == null) return false;
+    final startsSession = newSession;
+    final root = _replyingTo?.thread ?? _replyingTo?.id;
     final post = SwarmPost(
       body: body,
       messageId: superTabMessageId(
@@ -862,7 +864,21 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
       files.remove(file);
     }
     error = null;
-    return _answered(post, await _outbox.add(post));
+    final taken = _answered(post, await _outbox.add(post));
+    // Its thread opens beside the chat: the session answers there. A
+    // top-level message is its own thread's root.
+    if (taken && startsSession) _startedRoot = root ?? post.messageId;
+    return taken;
+  }
+
+  String? _startedRoot;
+
+  /// The thread whose session the last post started, once the backend took
+  /// it; read once.
+  String? takeStartedSession() {
+    final root = _startedRoot;
+    _startedRoot = null;
+    return root;
   }
 
   /// Sends [post], not confirmed, again under its own operation id: the

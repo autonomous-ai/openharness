@@ -20,6 +20,7 @@ import 'swarm_message_row.dart';
 import 'swarm_outbox.dart';
 import 'swarm_paste.dart';
 import 'swarm_session.dart';
+import 'swarm_session_widgets.dart';
 import 'swarm_thread.dart';
 import 'swarm_voice.dart';
 
@@ -297,6 +298,10 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _header(context, tty),
+            ListenableBuilder(
+              listenable: _thread,
+              builder: (context, _) => SwarmThreadSessionLine(thread: _thread),
+            ),
             Expanded(
               child: Stack(
                 children: [
@@ -606,6 +611,7 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
                 style: AppType.caption(color: AppPalette.textSecondary),
               ),
             ),
+          if (t.offersSessions && !talking) SwarmNewSessionCheck(thread: t),
           SwarmComposerCard(
             focus: _focus,
             chips: t.files.files.isEmpty ? null : SwarmOutgoingChips(box: t),
