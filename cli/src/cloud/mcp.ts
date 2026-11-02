@@ -28,11 +28,11 @@ export class McpClient {
   private ready: Promise<void> | null = null
   private next = 1
 
-  constructor(private readonly url: string, private readonly name: string) {}
+  constructor(private readonly url: string, private readonly name: string, private readonly send: typeof fetch = (input, init) => fetch(input, init)) {}
 
   private async post(message: Record<string, unknown>, timeoutMs: number, signal?: AbortSignal): Promise<{ status: number; type: string; body: string; session: string | null }> {
     const timeout = AbortSignal.timeout(timeoutMs)
-    const answer = await fetch(this.url, {
+    const answer = await this.send(this.url, {
       method: 'POST',
       headers: {
         accept: 'application/json, text/event-stream', 'content-type': 'application/json', 'mcp-protocol-version': PROTOCOL,

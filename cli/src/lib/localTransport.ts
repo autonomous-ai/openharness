@@ -68,6 +68,11 @@ async function overSocket(socketPath: string, input: Request): Promise<Response>
   })
 }
 
+/** `fetch` that sends every request over the Unix socket at [socketPath], whatever host its address names. */
+export function fetchOverSocket(socketPath: string): typeof fetch {
+  return (input, init) => overSocket(socketPath, new Request(input, init))
+}
+
 /**
  * `fetch` for the daemon on [port] of [dataDir]: a request to its loopback address goes over its socket where it can
  * have one. Any other address, such as a storage link, is the ordinary [base].

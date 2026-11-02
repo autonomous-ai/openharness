@@ -97,7 +97,7 @@ export function startCloudService(options: CloudServiceOptions) {
     fo: options.adapters?.fo ?? foAdapter(async () => {
       const url = bridge.mcpUrl(await codeFor('fo')())
       let client = mcpClients.get(url)
-      if (!client) { client = new McpClient(url, CLOUD_AGENTS.fo.name); mcpClients.set(url, client) }
+      if (!client) { client = new McpClient(url, CLOUD_AGENTS.fo.name, bridge.fetch); mcpClients.set(url, client) }
       return client
     }),
     'devin-cloud': options.adapters?.['devin-cloud'] ?? devinAdapter(bridge, codeFor('devin-cloud')),
