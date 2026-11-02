@@ -161,10 +161,12 @@ class WsConn {
 
   /// How a large frame decodes; tests hold it to see the order.
   @visibleForTesting
-  static Future<Object?> Function(String raw) decodeLargeFrame = decodeInIsolate;
+  static Future<Object?> Function(String raw) decodeLargeFrame =
+      decodeInIsolate;
 
   /// The decoded frame, or null for what will not parse. `compute` hands the result back without a copy, and runs inline on the web.
-  static Future<Object?> decodeInIsolate(String raw) => compute(_decodeOrNull, raw);
+  static Future<Object?> decodeInIsolate(String raw) =>
+      compute(_decodeOrNull, raw);
 
   static Object? _decodeOrNull(String raw) {
     try {
@@ -463,8 +465,7 @@ class WsConn {
     if (Platform.isWindows && !(kUnderTest && allowLocalTcpFixture)) {
       throw StateError('The local daemon pipe is unavailable');
     }
-    final transport =
-        localTransport ?? LocalDaemonTransport.detect(uri);
+    final transport = localTransport ?? LocalDaemonTransport.detect(uri);
     if (!transport.portAllowed) {
       throw StateError('The local daemon socket is unavailable');
     }
@@ -629,13 +630,18 @@ class WsConn {
   int _decoding = 0;
 
   void _onRaw(dynamic raw) {
+    // A frame belongs to the connection it came on, sealed or not, whenever its turn comes: once
+    // that connection has gone, it reaches nothing, and its seal is never read afresh.
+    final channel = _channel, codec = _codec;
     if (_decoding == 0 && !(raw is String && raw.length >= largeFrameChars)) {
-      _handleRaw(raw);
+      _handleRaw(raw, codec);
       return;
     }
     _decoding++;
     _decodeTail = _decodeTail
         .then((_) async {
+          bool gone() => _closing || !identical(_channel, channel);
+          if (gone()) return;
           if (raw is String && raw.length >= largeFrameChars) {
             Object? decoded;
             try {
@@ -644,9 +650,10 @@ class WsConn {
               // No isolate to be had: as it always was, on this thread.
               decoded = _decodeOrNull(raw);
             }
-            if (decoded is Map<String, dynamic>) _handleMessage(decoded);
+            if (gone()) return;
+            if (decoded is Map<String, dynamic>) _handleMessage(decoded, codec);
           } else {
-            _handleRaw(raw);
+            _handleRaw(raw, codec);
           }
         })
         .catchError((Object _) {
@@ -655,8 +662,7 @@ class WsConn {
         .whenComplete(() => _decoding--);
   }
 
-  void _handleRaw(dynamic raw) {
-    final codec = _codec;
+  void _handleRaw(dynamic raw, RelayCodec? codec) {
     if (raw is List<int>) {
       final bytes = Uint8List.fromList(raw);
       _inboundTail = _inboundTail
@@ -677,11 +683,10 @@ class WsConn {
     } catch (_) {
       return;
     }
-    _handleMessage(message);
+    _handleMessage(message, codec);
   }
 
-  void _handleMessage(Map<String, dynamic> message) {
-    final codec = _codec;
+  void _handleMessage(Map<String, dynamic> message, RelayCodec? codec) {
     if (message['type'] == 'machine_select_error') _selectRefused(message);
     if (codec != null) {
       _inboundTail = _inboundTail
