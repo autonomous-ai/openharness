@@ -3002,7 +3002,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       return 'Open Folder…';
     }
     final folder = option.project?.folder;
-    if (box.field == NewHarnessField.projectMenu && folder != null) {
+    if (box.field == NewHarnessField.projectMenu &&
+        folder != null &&
+        option.id != NewHarnessController.pasteOpenId) {
       return folder
               .split(RegExp(r'[/\\]'))
               .where((part) => part.isNotEmpty)
@@ -3067,12 +3069,12 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   Widget _desktopOption(NewHarnessOption option) {
     final title = _desktopOptionTitle(option);
     final highlighted = identical(option, box.selected);
-    final ink = highlighted
-        ? DesktopChrome.onSelection
-        : DesktopChrome.foreground;
-    final muted = highlighted
-        ? DesktopChrome.selectionDetail
-        : DesktopChrome.muted;
+    // A refused paste is the answer to what was typed, not a choice: its two
+    // lines say why, and it keeps a quiet fill instead of the selection's.
+    final refused = option.id == NewHarnessController.pasteInvalidId;
+    final active = highlighted && !refused;
+    final ink = active ? DesktopChrome.onSelection : DesktopChrome.foreground;
+    final muted = active ? DesktopChrome.selectionDetail : DesktopChrome.muted;
     final titleStyle = DesktopChrome.text(
       size: _desktopTitleSize,
       color: option.enabled ? ink : muted,
@@ -3086,7 +3088,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
               : box.app.stateOf(option.id)?.isOffline == true
               ? 'Offline'
               : null
-        : !option.enabled
+        : !option.enabled && !refused
         ? option.why
         : null;
     return Semantics(
@@ -3103,8 +3105,10 @@ class NewHarnessFormState extends State<NewHarnessForm> {
           if (!option.enabled) option.why else ?note,
         ].join('\n'),
         child: Material(
-          color: highlighted
+          color: active
               ? DesktopChrome.activeSelection
+              : highlighted
+              ? DesktopChrome.foreground.withValues(alpha: .06)
               : Colors.transparent,
           borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
           child: InkWell(

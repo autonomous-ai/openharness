@@ -159,7 +159,7 @@ void main() {
     expect(find.text('app · PR #7'), findsOneWidget);
     expect(find.text('Open'), findsOneWidget);
     expect(find.text('12 checks passed'), findsOneWidget);
-    expect(find.text('#14 Review avatars: passed'), findsOneWidget);
+    expect(find.text('Review avatars: passed'), findsOneWidget);
     // The reviewer's `Ready: yes` in the chat is not read.
     expect(find.textContaining('Reviewer: '), findsNothing);
   });
@@ -198,7 +198,7 @@ void main() {
     expect(find.text('Working'), findsOneWidget);
     expect(find.text('1 of 2 checks passed'), findsOneWidget);
     expect(find.text('Round avatars'), findsOneWidget);
-    expect(find.text('#14 Review avatars: passed'), findsOneWidget);
+    expect(find.text('Review avatars: passed'), findsOneWidget);
     expect(find.textContaining('Reviewer: '), findsNothing);
   });
 
@@ -389,7 +389,7 @@ void main() {
       final facts = SuperTabPullRequestFacts(null);
       addTearDown(facts.dispose);
       await show(tester, server, facts, 'message-1');
-      expect(find.text('#13 Review: Avatars: done'), findsOneWidget);
+      expect(find.text('Review: Avatars (Ivy): done'), findsOneWidget);
       expect(find.textContaining('050bab807'), findsNothing);
     },
   );

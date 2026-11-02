@@ -71,7 +71,8 @@ class _CompactApp extends AppNotifier {
     bool refresh = false,
   }) async => {
     'isGit': true,
-    'branch': missingMain ? 'feature' : 'main',
+    // Detached: a current branch would itself be where new work starts.
+    'branch': missingMain ? null : 'main',
     'branches': [
       if (!missingMain) {'ref': 'refs/heads/main', 'name': 'main'},
       {'ref': 'refs/heads/feature', 'name': 'feature'},

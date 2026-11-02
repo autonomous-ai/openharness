@@ -19,9 +19,6 @@ describe('placeLine', () => {
   it('names a task by its number and title', () => {
     expect(placeLine(state, 'g12')).toBe('In task #12 "Fix login" (conversation g12).')
   })
-  it('names a linked task by its title', () => {
-    expect(placeLine(state, 'g13')).toBe('In "Review: Fix login" (conversation g13).')
-  })
   it('names the project chat', () => {
     expect(placeLine(state, 'lead-app')).toBe('In the project chat of App (conversation lead-app).')
   })
@@ -43,7 +40,8 @@ describe('workLine', () => {
     expect(workLine(many, 'dev1')).toBe('You are assigned task #12 "Fix login" (working), task #14 "Docs" (review) and task #20 "T20" (working). And 2 more: mine.')
   })
   it('gives the coordinator its project\'s open tasks', () => {
-    expect(workLine(state, 'pm')).toBe('Open tasks in your project: 3; mine lists them.')
+    // g12 and g14: the linked g13 is a step of g12, not a task of its own.
+    expect(workLine(state, 'pm')).toBe('Open tasks in your project: 2; mine lists them.')
   })
   it('says nothing for an agent with none', () => {
     expect(workLine(state, 'nobody')).toBeNull()
@@ -75,5 +73,11 @@ describe('steps', () => {
   })
   it('names a step the agent holds by its task', () => {
     expect(workLine(stepped, 'rev')).toBe('You are assigned task #12 "Fix login", step "Thiết kế \\"v2\\"" (working).')
+  })
+})
+
+describe('a linked task with no step name', () => {
+  it('is said as its task and its title', () => {
+    expect(placeLine(state, 'g13')).toBe('In task #12 "Fix login", step "Review: Fix login" (conversation g13).')
   })
 })

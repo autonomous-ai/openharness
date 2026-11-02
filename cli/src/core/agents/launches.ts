@@ -29,7 +29,7 @@ import {
 import { parseGridLaunchOverride, type GridLaunchOverride } from '../../lib/gridLaunchWire.js'
 import { parseLaunchModel } from '../../lib/launchModel.js'
 import { parseNewAgentModel, type NewAgentModel } from '../../lib/newAgentModel.js'
-import { parseProjectFolder, prepareProjectFolder, projectsRoot, ProjectFolderError, type ProjectFolder } from '../../lib/projectFolder.js'
+import { parseProjectFolder, prepareProjectFolder, projectsRoot, ProjectFolderError, RepositoryAccessError, type ProjectFolder } from '../../lib/projectFolder.js'
 import type { ScmLaunchRecord } from '../../scm/types.js'
 import { parentAgentIdOf, type RegisteredSession } from '../../lib/registry.js'
 import { roleFromWire, wireRole } from '../../lib/savedSkill.js'
@@ -107,17 +107,25 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     /** A new project's folder, which this made empty: removed again if nothing starts in it. */
     let made: string | undefined
     let scmLaunchRecord: ScmLaunchRecord | null = null
+    /** The SSH alias a clone got in through, which the apps tell the person: it is the account later pushes go as. */
+    let clonedVia: { alias: string } | undefined
     if (projectFolder) {
       try {
         preparedFolder = await prepareProjectFolder(projectFolder, { label: (dsh ? installedDsh(dsh)?.manifest.name : null) ?? engineLabel(input.engine),
-          onPrepared: prepared => { scmLaunchRecord = prepared.scmLaunchRecord } })
+          onPrepared: prepared => { scmLaunchRecord = prepared.scmLaunchRecord },
+          // The person's own start may try every way this computer reaches GitHub. A Swarm agent's repository was cloned
+          // by its start (superTabs/projectFolder.ts), which keeps to one address per transport and never an alias.
+          ...(projectFolder.source === 'remote' ? { cloneFallback: !input.swarmRole,
+            onCloned: (clone: { alias?: string }) => { if (clone.alias) clonedVia = { alias: clone.alias } } } : {}) })
         if (projectFolder.source === 'new') made = preparedFolder
       }
       catch (error) {
         return { state: 'failed', error: error instanceof ProjectFolderError ? error.code : 'PROJECT_PREPARATION_FAILED',
           detail: error instanceof ProjectFolderError ? error.message : 'Could not prepare the project folder.',
           // The folder a typed name found already there: the apps offer to start in it, and `harness new` names it.
-          ...(error instanceof ProjectFolderError && error.folder ? { existingFolder: error.folder } : {}) }
+          ...(error instanceof ProjectFolderError && error.folder ? { existingFolder: error.folder } : {}),
+          // GitHub refused every way in: the apps say "No access" in their own words rather than git's.
+          ...(error instanceof RepositoryAccessError ? { access: 'denied' as const } : {}) }
       }
       // Only a folder this daemon just made EMPTY is one the engine need not ask about. A clone or
       // the person's own repo is theirs to answer for (engines/kit/folderTrust.ts); a worktree gets only
@@ -167,7 +175,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       } catch (error) { console.warn(`[agent] pre-trust ${input.cwd} · ${error instanceof Error ? error.message : error}`) }
     }
     const result = await invoke(preparedFolder ? { ...input, cwd: preparedFolder, scmLaunchRecord } : input)
-    if (result.ok) return { state: 'created', agentId: result.session.agentId }
+    if (result.ok) return { state: 'created', agentId: result.session.agentId, ...(clonedVia ? { clonedVia } : {}) }
     // tmux may have executed before a timeout; registration cleanup is best-effort.
     // Neither can prove that no process started, so never encourage another launch.
     if (result.error === 'SPAWN_FAILED' || result.error === 'REGISTRATION_FAILED') return { state: 'unconfirmed' }
@@ -259,7 +267,8 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     if (status.state === 'created') {
       const session = byAgent(status.agentId)
       return session
-        ? { state: 'created', agent: await toProject(session), ...(status.level ? { level: status.level } : {}), ...(status.resumed !== undefined ? { resumed: status.resumed } : {}) }
+        ? { state: 'created', agent: await toProject(session), ...(status.level ? { level: status.level } : {}), ...(status.resumed !== undefined ? { resumed: status.resumed } : {}),
+          ...(status.clonedVia ? { clonedVia: status.clonedVia } : {}) }
         : { state: 'unavailable', createdAgentId: status.agentId }
     }
     // A recorded refusal is a completed outcome. Keep it separate from transport/dispatch errors
@@ -267,7 +276,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     if (status.state === 'failed') {
       return { state: 'failed', ...(status.preparedFolder ? { preparedFolder: status.preparedFolder } : {}), failure: { code: status.error,
         ...(status.reason ? { reason: status.reason } : {}), ...(status.detail ? { detail: status.detail } : {}),
-        ...(status.existingFolder ? { existingFolder: status.existingFolder } : {}) } }
+        ...(status.existingFolder ? { existingFolder: status.existingFolder } : {}), ...(status.access ? { access: status.access } : {}) } }
     }
     return status
   }

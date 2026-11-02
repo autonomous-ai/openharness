@@ -259,7 +259,7 @@ void main() {
     },
   );
 
-  test('desktop does not substitute a remote or different branch for missing local main', () async {
+  test('desktop does not substitute a remote or different branch for a default that is not local', () async {
     final fixture = _Fixture();
     await fixture.app.agentPreference.remember('codex', worktree: false);
     final connection = fixture.connections.putIfAbsent(
@@ -281,7 +281,7 @@ void main() {
     await _settle();
     expect(box.branchRef, isNull);
     expect(box.requiredChoice?.field, NewHarnessField.branch);
-    expect(box.branchLabel, 'main · unavailable');
+    expect(box.branchLabel, 'default · unavailable');
     box.toggleWorktree();
     expect(box.branchRef, 'refs/remotes/origin/main');
   });
