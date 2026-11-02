@@ -308,7 +308,12 @@ class _SuperTabRosterState extends State<SuperTabRoster>
         headerActions: [
           if (score != null)
             Tooltip(
-              message: 'Points ${score.spanName}',
+              // The period, and the one before rather than a difference.
+              message: [
+                'Points ${score.spanName}',
+                if (score.prevWeekPoints case final before?)
+                  '$before ${score.earlierName}',
+              ].join(' · '),
               child: Text(
                 plural(score.points, 'point'),
                 style: leaderboardPointsStyle(),
