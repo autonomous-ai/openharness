@@ -505,6 +505,7 @@ void main() {
       WidgetTester tester,
       int agents, {
       int buddies = 0,
+      Duration age = Duration.zero,
     }) async {
       final server = ConversationServer();
       server.state['agents'] = [
@@ -530,7 +531,8 @@ void main() {
           'name': 'Studio Mac',
           'contributorId': 'owner',
           'observation': {
-            'receivedAt': DateTime.now().millisecondsSinceEpoch,
+            'receivedAt':
+                DateTime.now().millisecondsSinceEpoch - age.inMilliseconds,
             'resources': {'cpuPercent': 12},
           },
         },
@@ -575,12 +577,45 @@ void main() {
       await unmount(tester, c);
     });
 
+    testWidgets(
+      'an offline machine keeps its total and says nothing is running, in the muted ink',
+      (tester) async {
+        final c = await mount(tester, 34, age: const Duration(minutes: 10));
+        final text = find.descendant(
+          of: line,
+          matching: find.text('34 agents · none running, machine offline'),
+        );
+        expect(text, findsOneWidget);
+        expect(
+          tester.widget<Text>(text).style?.color,
+          DesktopChrome.control(color: DesktopChrome.muted).color,
+        );
+        expect(find.textContaining('working'), findsNothing);
+        await unmount(tester, c);
+      },
+    );
+
+    testWidgets(
+      'one agent on an offline machine reads "1 agent · none running"',
+      (tester) async {
+        final c = await mount(tester, 1, age: const Duration(minutes: 10));
+        expect(
+          find.descendant(
+            of: line,
+            matching: find.text('1 agent · none running, machine offline'),
+          ),
+          findsOneWidget,
+        );
+        await unmount(tester, c);
+      },
+    );
+
     testWidgets('one: "1 agent" with a chevron, no avatar and no agent row', (
       tester,
     ) async {
       final c = await mount(tester, 1);
       expect(
-        find.descendant(of: line, matching: find.text('1 agent')),
+        find.descendant(of: line, matching: find.text('1 agent · 0 working')),
         findsOneWidget,
       );
       expect(
@@ -602,7 +637,10 @@ void main() {
       (tester) async {
         final c = await mount(tester, 2, buddies: 3);
         expect(
-          find.descendant(of: line, matching: find.text('2 agents')),
+          find.descendant(
+            of: line,
+            matching: find.text('2 agents · 0 working'),
+          ),
           findsOneWidget,
         );
         await tester.tap(line);
@@ -629,7 +667,7 @@ void main() {
       final c = await mount(tester, 20);
       expect(line, findsOneWidget);
       expect(
-        find.descendant(of: line, matching: find.text('20 agents')),
+        find.descendant(of: line, matching: find.text('20 agents · 0 working')),
         findsOneWidget,
       );
       for (var i = 0; i < 20; i++) {
@@ -704,7 +742,10 @@ void main() {
         );
         await tester.pump();
         expect(
-          find.descendant(of: line, matching: find.text('4 agents')),
+          find.descendant(
+            of: line,
+            matching: find.text('4 agents · 2 working'),
+          ),
           findsOneWidget,
         );
         expect(find.text('Nova'), findsNothing);

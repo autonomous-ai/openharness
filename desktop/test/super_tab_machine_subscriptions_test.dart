@@ -33,6 +33,7 @@ Map<String, dynamic> _pool(
   List<String> engines = const ['claude', 'codex'],
   List<Map<String, dynamic>> quotas = const [],
   Map<String, String>? reasons,
+  Map<String, bool>? installed,
   String? host,
   int age = 0,
 }) => {
@@ -48,6 +49,13 @@ Map<String, dynamic> _pool(
     'receivedAt': DateTime.now().millisecondsSinceEpoch - age,
     'quotas': quotas,
     'quotaReasons': ?reasons,
+    if (installed != null)
+      'readiness': {
+        'engines': [
+          for (final e in installed.entries)
+            {'engine': e.key, 'installed': e.value, 'signedIn': e.value},
+        ],
+      },
   },
   'hostMachineId': ?host,
   'teamWork': {'allowed': true},
@@ -267,6 +275,65 @@ void main() {
         find.text('No Claude or Codex allowance reported for this machine'),
         findsOneWidget,
       );
+      await _unmount(tester, c);
+    },
+  );
+
+  testWidgets(
+    'an offline machine with no Claude or Codex reading says it is not read yet, with offline beside the heading',
+    (tester) async {
+      final c = await _mount(tester, [
+        _pool('m', engines: ['opencode'], age: _offlineAge),
+      ]);
+      expect(find.textContaining('Subscriptions · offline'), findsOneWidget);
+      expect(
+        find.text('Not read yet. Shows when the machine is back online'),
+        findsOneWidget,
+      );
+      expect(
+        find.text('No Claude or Codex allowance reported for this machine'),
+        findsNothing,
+      );
+      await _unmount(tester, c);
+    },
+  );
+
+  testWidgets(
+    'a machine whose list still names a retired engine shows its Claude and Codex cards from what is installed',
+    (tester) async {
+      final c = await _mount(tester, [
+        _pool(
+          'm',
+          engines: ['opencode'],
+          installed: {'claude': true, 'codex': true, 'opencode': true},
+          age: _offlineAge,
+        ),
+        _pool(
+          'half',
+          engines: ['opencode'],
+          installed: {'claude': true, 'codex': false},
+        ),
+        _pool(
+          'live',
+          engines: ['opencode'],
+          installed: {'claude': true, 'codex': true},
+          quotas: [_quota('claude', used: 38)],
+        ),
+      ]);
+      expect(_card('m', 'claude'), findsOneWidget);
+      expect(_card('m', 'codex'), findsOneWidget);
+      const unread = 'Not read yet. Shows when the machine is back online';
+      expect(_inCard('m', 'claude', unread), findsOneWidget);
+      expect(
+        find.text('No Claude or Codex allowance reported for this machine'),
+        findsNothing,
+      );
+      // Only what is installed: Codex is not on this one.
+      expect(_card('half', 'claude'), findsOneWidget);
+      expect(_card('half', 'codex'), findsNothing);
+      // A reading it did send still shows, beside the installed engine that sent none.
+      expect(_figure(tester, 'live', 'claude'), '62%');
+      expect(_card('live', 'codex'), findsOneWidget);
       await _unmount(tester, c);
     },
   );
