@@ -54,9 +54,39 @@ describe('sign-in epoch', () => {
     }))))
     const manager = new AuthSessionManager('https://api.example.test')
     await manager.accessToken()
-    manager.updateMachineId('machine-2')
+    await manager.updateMachineId('machine-2', epoch)
     expect(readAuthSession()).toMatchObject({ accessToken: 'refreshed-access', machineId: 'machine-2', signInEpoch: epoch, signInAcct: 'acct-1' })
     expect(newSignInEpoch()).not.toBe(epoch)
+  })
+
+  describe('a machine id found under one sign-in', () => {
+    const manager = () => new AuthSessionManager('https://api.example.test')
+
+    it('is written into that sign-in, refreshed or not', async () => {
+      writeAuthSession({ ...baseSession(), signInEpoch: 'first@1' })
+      await manager().updateMachineId('machine-2', 'first@1')
+      expect(readAuthSession()).toMatchObject({ machineId: 'machine-2', signInEpoch: 'first@1' })
+    })
+
+    it('is dropped by a new sign-in', async () => {
+      writeAuthSession({ ...baseSession(), machineId: 'machine-new', signInEpoch: 'next@2' })
+      await manager().updateMachineId('machine-old', 'first@1')
+      expect(readAuthSession()).toMatchObject({ machineId: 'machine-new', signInEpoch: 'next@2' })
+    })
+
+    it('is dropped by a new sign-in when the lookup started with no epoch', async () => {
+      writeAuthSession({ ...baseSession(), machineId: 'machine-new', signInEpoch: 'next@2' })
+      await manager().updateMachineId('machine-old', undefined)
+      expect(readAuthSession()).toMatchObject({ machineId: 'machine-new' })
+    })
+
+    it('is kept when the session from before epochs was only given one meanwhile', async () => {
+      const { signInEpoch: _none, ...old } = { ...baseSession(), signInEpoch: undefined }
+      writeAuthSession(old)
+      await ensureSignInEpoch()
+      await manager().updateMachineId('machine-2', undefined)
+      expect(readAuthSession()).toMatchObject({ machineId: 'machine-2' })
+    })
   })
 
   it('gives a session from before epochs an adopted one, once, keeping its tokens', async () => {
@@ -147,7 +177,7 @@ describe('AuthSessionManager', () => {
   it('keeps a team sign-in\'s kind, and reads no other', async () => {
     writeAuthSession({ ...baseSession(), kind: 'team' })
     expect(readAuthSession()?.kind).toBe('team')
-    new AuthSessionManager('http://backend.invalid').updateMachineId('machine-2')
+    new AuthSessionManager('http://backend.invalid').updateMachineId('machine-2', undefined)
     expect(readAuthSession()).toMatchObject({ kind: 'team', machineId: 'machine-2' })
     await writeFile(AUTH_SESSION_FILE, JSON.stringify({ ...baseSession(), kind: 'admin' }))
     expect(readAuthSession()).not.toHaveProperty('kind')
