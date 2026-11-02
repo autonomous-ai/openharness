@@ -100,9 +100,9 @@ function keepRecord(state: SuperTabState, target: Agent, now: number): void {
     leadOf: state.conversations.filter(group => group.leadId === target.id).map(group => group.id), removedAt: now }]
 }
 
-/** This machine's records of sessions [running] lists again, for the report to read their groups before restoring them. */
-export const reopened = (state: SuperTabState, machineId: string, running: readonly string[]): RemovedSession[] =>
-  (state.removedSessions ?? []).filter(r => r.machineId === machineId && running.includes(r.harnessId))
+/** This machine's unexpired records of sessions [running] lists again, for the report to read their groups before restoring them. */
+export const reopened = (state: SuperTabState, machineId: string, running: readonly string[], now: number): RemovedSession[] =>
+  (state.removedSessions ?? []).filter(r => r.machineId === machineId && running.includes(r.harnessId) && now - r.removedAt < REMOVED_KEEP_MS)
 
 /** What a restore's rules read outside the Swarm's state: sessions registered in another Swarm by now, and the machines
  *  commands.ts agent.add's team rules read (store.ts teamMachines, otherWorkspaceMachines). */

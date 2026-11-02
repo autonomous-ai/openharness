@@ -569,6 +569,11 @@ function releaseHarness(state: SuperTabState, machineId: string, harnessId: stri
   }
 }
 
+function dropRemovedRecord(state: SuperTabState, machineId: string, harnessId: string): void {
+  state.removedSessions = state.removedSessions?.filter(r => r.machineId !== machineId || r.harnessId !== harnessId)
+  if (!state.removedSessions?.length) delete state.removedSessions
+}
+
 function dropClosing(state: SuperTabState, keep: (request: NonNullable<SuperTabState['closingSessions']>[number]) => boolean): void {
   state.closingSessions = state.closingSessions?.filter(keep)
   if (!state.closingSessions?.length) delete state.closingSessions
@@ -1210,6 +1215,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
 
   /** Deleting its project is the only removal that takes a Lead. `close: false` when its host already closed the session. */
   const removeAgent = (target: Agent, { lead = false, close = true } = {}) => {
+    // A person's removal stands: a record of this session must not bring it back when it reopens (closedAgents.ts).
+    dropRemovedRecord(state, target.machineId, target.harnessId)
     // A Buddy chat's record of its sessions (buddySessions.ts): a session leaves it, and a main Buddy takes its sessions with it.
     for (const chat of state.conversations.filter(c => isBuddyChat(c) && c.agentIds.includes(target.id))) {
       if (target.buddySession) setSessions(chat, (chat.buddySessions ?? []).filter(e => e.agentId !== target.id))
@@ -1969,6 +1976,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         fail('TEAM_ACCOUNT_HELD', 'This session held people\'s private chats and is being deleted from this machine\'s Harness Team account, so it cannot be added back.', 403)
       }
       if (!existing) reserveHarnessSlot(state, command.machineId, command.harnessId, operationId)
+      // Added back by hand: what they chose now stands over what its removal kept.
+      dropRemovedRecord(state, command.machineId, command.harnessId)
       // Added back before its host closed it: the session stays open.
       if (!existing) dropClosing(state, c => c.machineId !== command.machineId || c.harnessId !== command.harnessId)
       if (!existing) state.agents.push({ id: agentId, machineId: command.machineId, harnessId: command.harnessId,

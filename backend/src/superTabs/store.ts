@@ -2929,7 +2929,7 @@ export class SuperTabStore {
       // Agents this reading shows closed leave with their groups' membership, so every group they are in is read, quiet ones too.
       const closed = closedAgents(loaded.state, machineId, observation, this.now()).map(a => a.id)
       // Sessions it shows open again come back with their groups (closedAgents.ts restoreSessions), so those are read too.
-      const back = reopened(loaded.state, machineId, observation.runningHarnessIds)
+      const back = reopened(loaded.state, machineId, observation.runningHarnessIds, this.now())
       if (closed.length || back.length) {
         const more = [...closed.length ? await loadGroups(tx, tabId, 'agents', { agentIds: { $in: closed } }) : [],
           ...back.length ? await loadGroups(tx, tabId, 'key', { key: { $in: back.flatMap(r => [...r.groupIds, ...r.leadOf]) } }) : []]
