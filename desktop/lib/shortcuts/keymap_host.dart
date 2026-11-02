@@ -135,17 +135,24 @@ class _KeymapHostState extends State<KeymapHost> with WidgetsBindingObserver {
       _notifyPending();
       return KeyEventResult.ignored;
     }
-    final value = context
-        .findAncestorStateOfType<EditableTextState>()
-        ?.widget
-        .controller
-        .value;
+    final editable = context.findAncestorStateOfType<EditableTextState>();
+    final value = editable?.widget.controller.value;
+    final composing =
+        region?.composing?.call() == true ||
+        (value != null &&
+            value.composing.isValid &&
+            !value.composing.isCollapsed);
     // A caret in a text field owns the standard editing keys: ⌘← is the line
-    // start there, not "focus the pane to the left". Menus built on a field
-    // (the picker, the project menu) keep their own keys. A chord already
-    // under way finishes first.
+    // start there, not "focus the pane to the left". Not so for text that only
+    // reads (selectable text is a read-only field: no caret to move), for text
+    // being composed (the IME owns the keys; Ctrl+K would cut into it), for the
+    // menus built on a field (the picker, the project menu, which keep their
+    // own keys), nor mid-chord (a chord already under way finishes first).
     final contextKind = region?.contextKind ?? KeymapContext.workspace;
-    if (value != null &&
+    if (editable != null &&
+        value != null &&
+        !editable.widget.readOnly &&
+        !composing &&
         !_dispatch.hasPending &&
         contextKind != KeymapContext.picker &&
         contextKind != KeymapContext.project) {
@@ -163,11 +170,6 @@ class _KeymapHostState extends State<KeymapHost> with WidgetsBindingObserver {
         return KeyEventResult.ignored;
       }
     }
-    final composing =
-        region?.composing?.call() == true ||
-        (value != null &&
-            value.composing.isValid &&
-            !value.composing.isCollapsed);
     final stroke = keyStrokeForEvent(event);
     final aliasesBlocked =
         region?.contextKind == KeymapContext.terminal &&

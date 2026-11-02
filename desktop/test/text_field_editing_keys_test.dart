@@ -410,6 +410,110 @@ void main() {
     }, variant: mac);
   });
 
+  group('where the field does not own the keys', () {
+    Future<(MemoryKeymap, List<String>)> host(
+      WidgetTester tester,
+      Widget field, {
+      String? bindings,
+      KeymapContext? region,
+      Map<String, VoidCallback>? local,
+    }) async {
+      final map = MemoryKeymap();
+      if (bindings != null) map.apply(bindings);
+      final ran = <String>[];
+      Widget child = Material(child: field);
+      if (region != null) {
+        child = KeymapRegion(contextKind: region, actions: local, child: child);
+      }
+      await tester.pumpWidget(
+        MaterialApp(
+          home: KeymapProvider(
+            keymap: map,
+            child: KeymapHost(
+              keymap: map,
+              enabled: () => true,
+              actions: {
+                'pane.focus_left': () => ran.add('pane.focus_left'),
+                'pane.zoom': () => ran.add('pane.zoom'),
+              },
+              child: child,
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      addTearDown(map.dispose);
+      return (map, ran);
+    }
+
+    testWidgets('read-only text keeps the pane keys', (tester) async {
+      // Selectable text is a read-only field: it has no caret to move, so ⌘←
+      // is still "focus the pane to the left" and Ctrl+K is still the app's.
+      final (_, ran) = await host(
+        tester,
+        const SelectableText(text, autofocus: true),
+        bindings: '{"bindings":[{"keys":"ctrl+k","command":"pane.zoom"}]}',
+      );
+      await key(tester, LogicalKeyboardKey.arrowLeft, cmd: true);
+      await key(tester, LogicalKeyboardKey.keyK, ctrl: true);
+      expect(ran, ['pane.focus_left', 'pane.zoom']);
+    }, variant: mac);
+
+    testWidgets('Ctrl+K does not cut into text being composed', (tester) async {
+      final controller = TextEditingController.fromValue(
+        const TextEditingValue(
+          text: 'hello world',
+          selection: TextSelection.collapsed(offset: 5),
+          composing: TextRange(start: 0, end: 5),
+        ),
+      );
+      addTearDown(controller.dispose);
+      await host(tester, TextField(controller: controller, autofocus: true));
+      await key(tester, LogicalKeyboardKey.keyK, ctrl: true);
+      expect(controller.text, 'hello world');
+    }, variant: mac);
+
+    for (final kind in [KeymapContext.picker, KeymapContext.project]) {
+      testWidgets('a ${kind.name} search field keeps Ctrl+K as "previous"', (
+        tester,
+      ) async {
+        final controller = TextEditingController(text: 'draft');
+        addTearDown(controller.dispose);
+        var previous = 0;
+        await host(
+          tester,
+          TextField(controller: controller, autofocus: true),
+          region: kind,
+          local: {'picker.previous': () => previous++},
+        );
+        await key(tester, LogicalKeyboardKey.keyK, ctrl: true);
+        expect(previous, 1);
+        expect(controller.text, 'draft');
+      }, variant: mac);
+    }
+
+    testWidgets('a chord under way finishes on an editing key', (tester) async {
+      final controller = TextEditingController(text: text);
+      addTearDown(controller.dispose);
+      final (_, ran) = await host(
+        tester,
+        TextField(controller: controller, autofocus: true),
+        bindings: '{"bindings":[{"keys":"cmd+alt+shift+y alt+left","command":"pane.zoom"}]}',
+      );
+      controller.selection = const TextSelection.collapsed(offset: 17);
+      await key(
+        tester,
+        LogicalKeyboardKey.keyY,
+        cmd: true,
+        alt: true,
+        shift: true,
+      );
+      await key(tester, LogicalKeyboardKey.arrowLeft, alt: true);
+      expect(ran, ['pane.zoom']);
+      expect(controller.selection, caret(17), reason: 'the caret stayed');
+    }, variant: mac);
+  });
+
   testWidgets('pane and tab keys work with focus outside a text field', (
     tester,
   ) async {
