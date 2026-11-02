@@ -1,6 +1,6 @@
 /**
  * Connected services, given to each agent as an MCP server on the local bridge. Agent configs hold only the command of a stdio
- * shim to the bridge's 0600 socket (mcpShimSource.ts), or where no socket can be (Windows, a folder too long for one) a 127.0.0.1
+ * shim to the bridge's 0600 socket or, on Windows, its proven pipe (mcpShimSource.ts), or where neither can be (a folder too long for a socket) a 127.0.0.1
  * address with this user's capability in it; the bridge adds the credential to each request (Grid's design). A renewed token
  * needs no config change, and an agent already running keeps working.
  *
@@ -342,13 +342,16 @@ function recordedProfiles(record: Record<string, unknown>, env: NodeJS.ProcessEn
 type Targets = { agents: Agent[]; gone?: string[]; release?: Agent[]; remember?: string[] }
 
 /** Give the agents in [list] exactly the connections that have MCP tools (their own, or REST served as MCP). */
-function project(vault: Store, env: NodeJS.ProcessEnv, list: (record: Record<string, unknown>) => Targets, waitMs?: number): Record<string, string[]> {
+function project(vault: Store, env: NodeJS.ProcessEnv, list: (record: Record<string, unknown>) => Targets, waitMs?: number,
+  platform: NodeJS.Platform = process.platform): Record<string, string[]> {
   const codes = Object.entries(vault.tokens()).filter(([code, token]) => transport(token) !== 'none' && CODE.test(code)).map(([code]) => code)
-  const socket = bridgeSocketPath(vault)
-  const shim = codes.length && socket ? writeShim(vault) : ''
-  const key = codes.length && !socket ? bridgeKey(vault) : ''
-  const wanted = Object.fromEntries(codes.map((code): [string, McpEntry] => [code, socket
-    ? { command: managedNodePath(), args: [shim, '--socket', socket, code] }
+  // On Windows the bridge's pipe, named in its record (task #2162); elsewhere its socket; the port only where neither can be.
+  const socket = bridgeSocketPath(vault, platform)
+  const local: string[] | null = socket ? ['--socket', socket] : platform === 'win32' ? ['--pipe', bridgePipeRecord(vault)] : null
+  const shim = codes.length && local ? writeShim(vault) : ''
+  const key = codes.length && !local ? bridgeKey(vault) : ''
+  const wanted = Object.fromEntries(codes.map((code): [string, McpEntry] => [code, local
+    ? { command: managedNodePath(), args: [shim, ...local, code] }
     : { url: bridgeUrl(key, code, bridgePort(env, vault)) }]))
   return locked(vault.root, () => {
     const record = vault.file('projections.json') as Record<string, unknown>
@@ -380,12 +383,12 @@ function project(vault: Store, env: NodeJS.ProcessEnv, list: (record: Record<str
  * Give every installed agent exactly the connections that have MCP tools, in its default home and in each profile home an agent
  * was launched under (syncProfileHome), so a connection made or removed later reaches a running profile's config too.
  */
-export function sync(vault: Store, env: NodeJS.ProcessEnv = process.env, list?: Agent[]): Record<string, string[]> {
+export function sync(vault: Store, env: NodeJS.ProcessEnv = process.env, list?: Agent[], platform: NodeJS.Platform = process.platform): Record<string, string[]> {
   return project(vault, env, record => {
     if (list) return { agents: list }
     const profiles = recordedProfiles(record, env)
     return { agents: [...agents(env), ...profiles.agents], gone: profiles.gone, release: profiles.release }
-  })
+  }, undefined, platform)
 }
 
 /**
