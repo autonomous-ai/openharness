@@ -20,6 +20,24 @@ describe('what is gathered', () => {
   it.each(['pair-loop', 'terminal-alert', 'buddy-proposal', 'update-request', 'digest-request', 'agent-only', 'system', 'instructions', 'notice-digest', 'from-a-newer-server'])('not %s', kind => {
     expect(gatheredNotice({ kind })).toBe(false)
   })
+  it('a step\'s Stuck, never a task\'s, and Needs a human nowhere', () => {
+    expect(gatheredNotice({ kind: 'system', status: 'blocked' }, step)).toBe(true)
+    expect(gatheredNotice({ kind: 'system', status: 'blocked' }, task)).toBe(false)
+    expect(gatheredNotice({ kind: 'system', status: 'blocked' })).toBe(false)
+    expect(gatheredNotice({ kind: 'system', status: 'needs_human' }, step)).toBe(false)
+  })
+  it('the coordinator\'s own skills notice, and no other agent-only row', () => {
+    expect(gatheredNotice({ kind: 'agent-only', notice: 'skills' })).toBe(true)
+    expect(gatheredNotice({ kind: 'agent-only' })).toBe(false)
+    expect(gatheredNotice({ kind: 'agent-only', decisionId: 'd1' })).toBe(false)
+    expect(gatheredNotice({ kind: 'agent-only', notice: 'other' })).toBe(false)
+  })
+  it('a usage limit or a failing model, never an agent waiting at a prompt', () => {
+    expect(gatheredNotice({ kind: 'terminal-alert', alert: 'limit' })).toBe(true)
+    expect(gatheredNotice({ kind: 'terminal-alert', alert: 'model' })).toBe(true)
+    expect(gatheredNotice({ kind: 'terminal-alert', alert: 'prompt' })).toBe(false)
+    expect(gatheredNotice({ kind: 'terminal-alert' })).toBe(false)
+  })
   it('not a row with no source: a post', () => {
     for (const source of [undefined, null]) expect(gatheredNotice(source)).toBe(false)
     expect(gatheredNotice({ status: 'done' })).toBe(false)
