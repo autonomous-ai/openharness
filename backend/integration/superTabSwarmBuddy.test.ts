@@ -161,6 +161,25 @@ describe('the one Buddy sends a proposal to a project its person reads (Scholes,
     expect((await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: group } })).data).toMatchObject({ ledger: { proposal: { buddyId: main } } })
   })
 
+  it('tells its person in their chat, in the Swarm\'s own words, waking nobody; a refused send says nothing', async () => {
+    const f = await swarm()
+    const { chat, main } = await buddy(f)
+    const line = 'Your Buddy sent this to the Web PM for you.\n\nGoal: Offline sync\nScope: Web only'
+    await expect(propose(f, chat, await ask(f, chat), 'made-up-project', main)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    expect(await texts(f, chat, peer)).not.toContain(line)
+    const sent = String((await propose(f, chat, await ask(f, chat), f.web.projectId, main)).result.messageId)
+    expect(await texts(f, chat, peer)).toContain(line)
+    const row = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, conversationId: chat, text: line } })
+    expect(row).toMatchObject({ recipientIds: [], source: { kind: 'buddy-proposal-sent', projectId: f.web.projectId } })
+    expect(row.id).not.toBe(sent)
+    expect(await db.superTabDelivery.count({ where: { tabId: f.tab, messageId: row.id } })).toBe(0)
+    // It is not its person's word: a Swarm line never asks for the next proposal.
+    await expect(propose(f, chat, row.id, f.web.projectId, main)).rejects.toMatchObject({ code: 'PROPOSAL_UNASKED' })
+    // Only its person reads it.
+    await expect(f.store.messages(owner, f.tab, chat, {})).rejects.toThrow(UNAVAILABLE)
+    expect((await texts(f, f.web.conversationId, owner)).join()).not.toContain(line)
+  })
+
   it('reaches a project chat gone quiet', async () => {
     const f = await swarm()
     const { chat, main } = await buddy(f)

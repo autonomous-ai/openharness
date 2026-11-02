@@ -518,7 +518,7 @@ export const NOTICE_READERS = {
   instructions: 'people',
   // A member removed one of the coordinator's notes: told to the coordinator alone (instructions.ts).
   'note-removed': 'recipients',
-  'project-report': 'people', route: 'people', 'route-override': 'people', 'buddy-proposal': 'people', 'buddy-session-ended': 'people',
+  'project-report': 'people', route: 'people', 'route-override': 'people', 'buddy-proposal': 'people', 'buddy-proposal-sent': 'people', 'buddy-session-ended': 'people',
   'decision-delegated': 'people', 'machine-removed': 'people', 'machine-left': 'people', ship: 'people',
   // A project PM's private line in a person's one Buddy chat, marked with its project (commands.ts person.tell): its person
   // reads it, as they read the line in their older project chat.

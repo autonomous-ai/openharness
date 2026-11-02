@@ -108,7 +108,8 @@ Enforced by the server, not by the Buddy's good behaviour:
 - `buddy.propose` from the main Buddy or a plain session (Scholes, 11-02; it was refused until then, and people relayed its
   proposals by hand): names a `projectId` its person reads now, or is refused like one that does not exist; one owner's
   message, in its chat and not in a session's thread, sends one proposal; files its person sent outside a session's thread,
-  or, by its CLI, only from that project's folder. From a project session: its project's PM only; `ownerMessageId` must be its person's
+  or, by its CLI, only from that project's folder. The server writes a line in its person's chat for each one it sends,
+  waking nobody, so they hear of it whatever the Buddy says. From a project session: its project's PM only; `ownerMessageId` must be its person's
   message **in its own thread**; files only from its own worktree or sent by its person **in that thread**.
 - A project session's reads are checked as its person's, limited to *X*: the project chat, *X*'s workgroups, its own
   thread. Every other id (another project's group, a message in the main chat, another session's thread, a private chat,
@@ -119,7 +120,8 @@ Enforced by the server, not by the Buddy's good behaviour:
 - No wide mode for project sessions: wide mode reads the person's home, which may hold another project's clone. Ruling.
   Why: there is no reliable list of every clone on a machine. Cost if wrong: a project session can't read prod logs or
   CI itself; the person asks the main Buddy and pastes what matters into the thread.
-- Proposal text and files are still checked by the guard's secret and "summaries only" checks.
+- Proposal text and files are still checked by the guard's secret check, and a main Buddy's, plain session's or wide Buddy's
+  by its "summaries only" check too.
 - News (replies to the person's proposals, tags, shipped work) goes to the main Buddy, which posts only in the person's
   own chat.
 - The PM's private lines (`person.tell`, delegated decisions) go to the one chat, marked with their project:
