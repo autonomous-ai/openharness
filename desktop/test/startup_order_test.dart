@@ -252,6 +252,9 @@ void main() {
       app.startupTimings.keys,
       containsAll(<String>['signed-in check', 'tools', 'saved tabs', 'daemon']),
     );
+    expect(startupLogLine(app.startupTimings), contains('daemon after '));
+    expect(startupLogLine(app.startupTimings), isNot(contains(r'\$')));
+    expect(startupLogLine({'daemon': 12}), 'daemon after 12 ms');
   });
 }
 

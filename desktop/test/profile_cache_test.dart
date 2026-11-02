@@ -29,6 +29,15 @@ class _Memory implements LocalKeyValueStore {
   Future<void> delete(String key) async => values.remove(key);
 }
 
+class _SlowWrites extends _Memory {
+  final release = Completer<void>();
+  @override
+  Future<void> write(String key, String value) async {
+    await release.future;
+    await super.write(key, value);
+  }
+}
+
 class _Api extends ApiClient {
   _Api() : super(config: AppConfig.dev, session: AuthSession());
   final profiles = <Completer<Map<String, dynamic>?>>[];
@@ -48,8 +57,13 @@ class _Api extends ApiClient {
 class _Cli extends CliLogin {
   _Cli(this.status);
   CliAuthStatus status;
+  bool fails = false;
   @override
-  Future<CliAuthStatus> checkStatus() async => status;
+  Future<CliAuthStatus> checkStatus() async {
+    if (fails) throw CliNotAvailableException('no CLI');
+    return status;
+  }
+
   @override
   Future<void> login({
     void Function(String url)? onAuthorizeUrl,
@@ -124,20 +138,18 @@ void main() {
   final apps = <_App>[];
   final apis = <_Api>[];
 
-  Future<({_App app, _Api api})> open(
+  Future<({_App app, _Api api, _Cli cli})> open(
     String? machine, {
     bool loggedIn = true,
   }) async {
     final api = _Api();
-    final app = _App(
-      _Cli(CliAuthStatus(loggedIn: loggedIn, machineId: machine)),
-      storage,
-    )..api = api;
+    final cli = _Cli(CliAuthStatus(loggedIn: loggedIn, machineId: machine));
+    final app = _App(cli, storage)..api = api;
     apps.add(app);
     apis.add(api);
     await app.bootstrap();
     await _ticks();
-    return (app: app, api: api);
+    return (app: app, api: api, cli: cli);
   }
 
   setUp(() => storage = _Memory());
@@ -203,17 +215,54 @@ void main() {
     expect(storage.values, isNot(contains(ProfileCache.key)));
   });
 
-  test(
-    'if the server names another account, it wins, and the old one is not kept',
-    () async {
-      await signedInBefore('machine-a', 'ada');
-      final again = await open('machine-a');
-      again.api.profiles.single.complete(_me('grace'));
-      await _ticks();
-      expect(again.app.currentUser?.id, 'grace');
-      expect((await ProfileCache(storage).read('machine-a'))?.id, 'grace');
-    },
-  );
+  // Security review of #2617: someone signs in as another account in a terminal while the answer is on its way.
+  test('if the server names another account, it wins, and nothing is kept under the old machine', () async {
+    await signedInBefore('machine-a', 'ada');
+    final again = await open('machine-a');
+    again.api.profiles.single.complete(_me('grace'));
+    await _ticks();
+    expect(again.app.currentUser?.id, 'grace');
+    expect(storage.values, isNot(contains(ProfileCache.key)));
+    final later = await open('machine-a');
+    expect(later.app.atDaemon, isNull);
+  });
+
+  test('a first record waits for the CLI to name the same machine still: a sign-in meanwhile keeps nothing', () async {
+    final first = await open('machine-a');
+    first.cli.status = const CliAuthStatus(loggedIn: true, machineId: 'machine-b');
+    first.api.profiles.single.complete(_me('grace'));
+    await _ticks();
+    expect(first.app.currentUser?.id, 'grace');
+    expect(storage.values, isNot(contains(ProfileCache.key)));
+  });
+
+  test('a first record is not kept when the CLI cannot say', () async {
+    final first = await open('machine-a');
+    first.cli.fails = true;
+    first.api.profiles.single.complete(_me('ada'));
+    await _ticks();
+    expect(storage.values, isNot(contains(ProfileCache.key)));
+  });
+
+  test('a kept profile is asked about again when the backend returns, until one answer has come', () async {
+    await signedInBefore('machine-a', 'ada');
+    final again = await open('machine-a');
+    expect(again.app.currentUser?.id, 'ada');
+    again.api.profiles.single.completeError(StateError('backend down'));
+    await _ticks();
+    expect(again.app.currentUser?.id, 'ada');
+    again.app.noteBackendOnlineForTest(false);
+    again.app.noteBackendOnlineForTest(true);
+    await _ticks();
+    expect(again.api.profiles, hasLength(2));
+    again.api.profiles.last.complete(_me('grace'));
+    await _ticks();
+    expect(again.app.currentUser?.id, 'grace');
+    again.app.noteBackendOnlineForTest(false);
+    again.app.noteBackendOnlineForTest(true);
+    await _ticks();
+    expect(again.api.profiles, hasLength(2));
+  });
 
   test('a signed-out computer shows nobody and removes it', () async {
     await signedInBefore('machine-a', 'ada');
@@ -230,6 +279,16 @@ void main() {
     again.api.profiles.single.complete(_me('ada'));
     await _ticks();
     expect(storage.values, isNot(contains(ProfileCache.key)));
+  });
+
+  test('a sign-out during a write leaves nothing: the store takes them in order', () async {
+    final slow = _SlowWrites();
+    final cache = ProfileCache(slow);
+    final write = cache.write('machine-a', const CurrentUserProfile(id: 'ada', email: 'a@example.invalid'));
+    final clear = cache.clear();
+    slow.release.complete();
+    await Future.wait([write, clear]);
+    expect(slow.values, isEmpty);
   });
 
   group('what is kept on disk', () {
