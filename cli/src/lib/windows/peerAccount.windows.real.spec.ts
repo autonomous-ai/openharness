@@ -1,6 +1,7 @@
 // The daemon's question of who is calling over loopback TCP (lib/peerAccount.ts, audit W1), asked of real Windows: a
 // connection this process made is this account's. Windows only; the Windows workflow runs it with src/lib/windows.
-// Another account's connection cannot be made from one account's test run; that answer is pinned by the unit spec.
+// Another account's connection cannot be made from one account's test run; that answer is pinned by the unit spec. The yes
+// below also shows Windows gives both times the check compares: the process started before its connection was made.
 import { connect, createServer, type AddressInfo, type Socket } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 import { peerIsThisAccount } from '../peerAccount.js'

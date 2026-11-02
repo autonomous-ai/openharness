@@ -116,8 +116,9 @@ const runWindowsPeer: WindowsPeerRun = (script, inputs) => runPowershellAsync(sc
 /**
  * Windows: whether the client end of the connection 127.0.0.1:[peerPort] → 127.0.0.1:[ownPort] belongs to a process of
  * this account. Prints `yes` or `no`. Windows lists the client's end with its own port as the local one. The owner is
- * compared by SID, never by name; a process of another account, one whose owner Windows will not give, one gone, or
- * more than one row (which cannot be told apart) is `no`. The ports are inputs, never in the script's text.
+ * compared by SID, never by name; a process of another account, one whose owner Windows will not give, one gone, one
+ * that started after the connection was made (an id reused since its creator exited), or more than one row (which cannot
+ * be told apart) is `no`. The ports are inputs, never in the script's text.
  */
 export function windowsPeerQuery(peerPort: number, ownPort: number): { script: string; inputs: Record<string, string> } {
   return {
@@ -126,6 +127,9 @@ export function windowsPeerQuery(peerPort: number, ownPort: number): { script: s
       "if ($rows.Count -ne 1) { 'no'; exit 0 }",
       '$process = Get-CimInstance Win32_Process -Filter ("ProcessId = " + [int]$rows[0].OwningProcess)',
       "if (-not $process) { 'no'; exit 0 }",
+      // Windows keeps naming a socket's creator after it exits when a child inherited the handle, and the id may have gone
+      // to another process since: only one that started before the connection was made can be its owner.
+      "if (-not $process.CreationDate -or -not $rows[0].CreationTime -or $process.CreationDate -gt $rows[0].CreationTime) { 'no'; exit 0 }",
       '$owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid',
       "if ($owner.ReturnValue -eq 0 -and $owner.Sid -and $owner.Sid -eq [Security.Principal.WindowsIdentity]::GetCurrent().User.Value) { 'yes' } else { 'no' }",
     ].join('\n'),
