@@ -194,6 +194,13 @@ export const PROPOSAL_ASK_MS = 60 * 60_000
 /** The files one proposal may carry: its plan, spec, log or screenshot, each held to a chat file's own limits. */
 export const MAX_PROPOSAL_ATTACHMENTS = 5
 
+/** The line in a person's own chat that their one Buddy sent a proposal (security review of #2530): any newest message of theirs
+ *  unlocks one send and the server cannot read intent, and this Buddy reads every project, so a line planted in one could send
+ *  into another. Written by the server and waking nobody, so they hear of it whatever the Buddy says. */
+export const PROPOSAL_SENT_KIND = 'buddy-proposal-sent'
+export const proposalSentText = (project: string, proposal: { goal: string; scope: string }): string =>
+  `Your Buddy sent this to the ${project} PM for you.\n\nGoal: ${proposal.goal}\nScope: ${proposal.scope}`
+
 /** Written by the server, never the Buddy: who it is for and on whose behalf, then the three parts the PM needs. */
 export function proposalText(owner: string, proposal: { goal: string; scope: string; priority: string }): string {
   return `Proposal from ${owner}'s Buddy, on ${owner}'s behalf.\n\nGoal: ${proposal.goal}\nScope: ${proposal.scope}\nPriority: ${proposal.priority}`

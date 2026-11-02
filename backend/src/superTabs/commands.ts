@@ -37,7 +37,7 @@ import { bindPullRequestCards, bindTaskCard, pullRequestCard, recordCardMerged }
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
 import { BUILT_IN_ROLE_DEFAULTS, agentProjectId, audienceOf, canReadProject, deleteProject, isConfidential, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, requestedByLine, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
 import { BUDDY_SESSION_CAPABILITY, chatOwner, endSessionEntry, entryProject, liveSessions, mainBuddyOf, MAX_SESSION_WAITING, requireChatOwner, SESSION_ENDED_KIND, sessionAgentsOf, sessionOf, setSessions, type SessionEndReason } from './buddySessions.js'
-import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, isSwarmBuddy, isSwarmBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, openBuddyChat, openSwarmBuddyChat, PM_LINE_KIND, PROPOSAL_ASK_MS, proposalText, renameBuddy, requireBuddyCommand, swarmBuddyChatId } from './buddies.js'
+import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, isSwarmBuddy, isSwarmBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, openBuddyChat, openSwarmBuddyChat, PM_LINE_KIND, PROPOSAL_ASK_MS, PROPOSAL_SENT_KIND, proposalSentText, proposalText, renameBuddy, requireBuddyCommand, swarmBuddyChatId } from './buddies.js'
 import { BUDDY_OWN_MACHINE_REFUSAL, CODEX_BUDDY_REFUSAL } from './buddyContract.js'
 import { launchRefusedLine, leadJoined, leadStartFailed, leadStarting, placeLead } from './leadStart.js'
 import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, FIRST_SUMMARY, instructionsHash, instructionsTextSchema, legacyRoleName, liveNotes, MAX_NOTES, noteTextSchema, roleNameSchema, summarySchema, type PmNote } from './instructions.js'
@@ -194,7 +194,9 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('agent.start'), request: startRequestSchema, routeDecisionId: id.optional(), overrideReason: reason.optional() }).strict(),
   // A Buddy's proposal for its owner, posted in its project's chat: `conversationId` is its own chat, and `ownerMessageId` its
   // owner's message there asking for it. Its files are its own uploads in that chat, or files its owner sent there (store.ts proposable).
-  z.object({ type: z.literal('buddy.propose'), conversationId: id, ownerMessageId: id, goal: z.string().trim().min(1).max(2000),
+  // `projectId` is the project a person's one Buddy sends to (authorizeCommandAccess reads it as its person would); a project
+  // session or a project chat's Buddy has its own project, and naming another reads as a project that does not exist.
+  z.object({ type: z.literal('buddy.propose'), conversationId: id, ownerMessageId: id, projectId: id.optional(), goal: z.string().trim().min(1).max(2000),
     scope: z.string().trim().min(1).max(4000), priority: z.enum(['low', 'normal', 'high']),
     attachmentIds: z.array(id).max(MAX_PROPOSAL_ATTACHMENTS, `Attach at most ${MAX_PROPOSAL_ATTACHMENTS} files to a proposal.`).optional() }).strict(),
   // Without `projectId`, the person's one Buddy (Dee, 10-31); an older app names a project, and removes that same one Buddy.
@@ -389,6 +391,8 @@ export interface CommandContext {
   proposal?: { id: string; conversationId: string; author: Author; source: Record<string, unknown> | null }
   /** The message a Buddy's proposal names as its owner's request, loaded from this tab by the store. */
   proposalAsk?: { id: string; conversationId: string; author: Author; source: boolean; createdAt: number
+    /** Whether it went to a thread session, which the main Buddy never hears: the main Buddy proposes for none of those. */
+    session?: boolean
     /** The thread it is in: a thread session proposes only for its person's message in its own thread. */
     thread?: string | null
     /** The owner's newest message in that chat, which may always be named. */
@@ -659,7 +663,7 @@ function proposalOf(state: SuperTabState, project: SwarmProject, proposal: Comma
   // membership. Without a one Buddy (removed since), the author keeps it.
   const gone = !buddy ? state.people.find(p => p.id === personId) : undefined
   const owner = buddy?.buddyOf ?? (gone ? { personId: gone.id, generation: gone.generation } : undefined)
-  const main = owner && !(buddy && isSwarmBuddy(buddy))
+  const main = owner && !(buddy && isSwarmBuddy(buddy) && !buddy.buddySession)
     ? state.agents.find(a => isSwarmBuddy(a) && !a.buddySession && a.buddyOf!.personId === owner.personId && a.buddyOf!.generation === owner.generation)
     : undefined
   return { buddyId: main?.id ?? author.id, messageId: proposal.id, ...personId ? { personId } : {} }
@@ -1981,8 +1985,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     case 'buddy.propose': {
       const self = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId && isBuddy(a)) : undefined
       if (!self) fail('BUDDY_ONLY', 'Only a Buddy sends a proposal, for its owner.', 403)
-      // A Swarm-wide Buddy reads every project its person reads, so it writes into none (spec: Guard): a project session does.
-      if (isSwarmBuddy(self)) fail('BUDDY_PROPOSE_SESSION', 'Start a New session in that project to send it to its PM.', 403)
+      // A Swarm-wide Buddy has no project of its own, so its person's ask names one (Scholes, 11-02): they had to relay its
+      // proposals by hand. authorizeCommandAccess and readProject below hold it to what its person reads now.
+      if (isSwarmBuddy(self) && !command.projectId) fail('BUDDY_PROPOSE_PROJECT', 'Name the project to send this to, from your status. If it is unclear which, ask your owner.', 400)
       const owner = state.people.find(p => p.id === self.buddyOf!.personId && p.generation === self.buddyOf!.generation)
         ?? fail('BUDDY_OWNER_GONE', 'Your owner left this Swarm.', 403)
       const chat = conversation(state, command.conversationId)
@@ -1991,7 +1996,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (self.buddySession && context.proposalAsk && context.proposalAsk.id !== self.buddySession.thread && context.proposalAsk.thread !== self.buddySession.thread) {
         fail('PROPOSAL_UNASKED', 'Send a proposal only when your owner asks for it in your thread: name their message there.', 403)
       }
-      // Its owner said to send it: their own message in its chat, never a row the system wrote, and each one asks once.
+      // The main Buddy never hears a session's thread (routeBuddySession), and that thread is another project's talk.
+      if (!self.buddySession && context.proposalAsk?.session) {
+        fail('PROPOSAL_UNASKED', 'Send a proposal only when your owner asks for it: name your owner\'s message in your chat that asked.', 403)
+      }
+      // Its owner said to send it: their own message in its chat, never a row the system wrote, and each one asks once: one
+      // ask reaches one project's PM, whichever projects its Buddy reads.
       const ask = context.proposalAsk
       if (!ask || ask.id !== command.ownerMessageId || ask.conversationId !== chat.id || ask.source || ask.author.kind !== 'person'
         || ask.author.id !== owner.id || ask.author.membershipGeneration !== owner.generation) {
@@ -2005,10 +2015,14 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const attachments = [...new Set(command.attachmentIds ?? [])]
         .map(id => context.attachments?.find(a => a.id === id) ?? fail('ATTACHMENT_UNAVAILABLE', 'Upload this file again before sending it.', 400))
       chat.proposals = [...chat.proposals ?? [], command.ownerMessageId].slice(-MAX_PROPOSAL_ASKS)
-      const project = projectOf(state, agentProjectId(state, self)), home = conversation(state, project.leadConversationId)
+      const project = readProject(state, actor, command.projectId ?? agentProjectId(state, self)), home = conversation(state, project.leadConversationId)
       const name = owner.email.split('@')[0]!
       message(home.id, proposalText(name, command), home.leadId && home.agentIds.includes(home.leadId) ? [home.leadId] : [], null,
         { kind: 'buddy-proposal', personId: owner.id, ownerMessageId: command.ownerMessageId }, attachments)
+      // Its own id: this command's id is the proposal's, and a second row with it rolls the command back. Marked with its project,
+      // so it goes from view as a PM's line does when its person loses that project (buddySessions.ts lostProjectRow).
+      if (isSwarmBuddy(self)) effects.messages.push({ id: stableId('proposal-sent', operationId), conversationId: chat.id, author: sender,
+        text: proposalSentText(project.name, command), replyTo: null, recipients: [], source: { kind: PROPOSAL_SENT_KIND, projectId: project.id }, buddyProject: project.id })
       break
     }
     case 'buddy.remove': {

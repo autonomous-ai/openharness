@@ -216,17 +216,8 @@ void main() {
       ),
       isFalse,
     );
-    for (var wait = 0; wait < 50; wait++) {
-      if (pooled.stateOf(mid)!.connectionStatus ==
-          ConnectionStatus.reconnecting) {
-        break;
-      }
-      await Future<void>.delayed(const Duration(milliseconds: 100));
-    }
-    expect(
-      pooled.stateOf(mid)!.connectionStatus,
-      ConnectionStatus.reconnecting,
-    );
+    // A first connect redials saying connecting (test/first_connect_test.dart).
+    expect(pooled.stateOf(mid)!.connectionStatus, ConnectionStatus.connecting);
     // Connect again, mid-redial: the socket is closed and replaced.
     expect(
       await pooled.connectTrusted(

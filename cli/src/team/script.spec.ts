@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
-  REMOVE_REFUSED, SENTINEL_TEXT, TEAM_COMPUTER_LINE, TEAM_COPY, TEAM_ENGINES_INSTALL, TEAM_JOB_WRAPPER, TEAM_PASSWORD, WRITE_PRIVATE, WRITE_PUBLIC,
+  REMOVE_REFUSED, SENTINEL_TEXT, TEAM_COPY, TEAM_ENGINES_INSTALL, TEAM_JOB_WRAPPER, TEAM_PASSWORD, WRITE_PRIVATE, WRITE_PUBLIC,
   LINUX_NO_SYSTEMD, LINUX_NO_TMUX, LINUX_ROOT_CHECKS, TEAM_SYSTEM_PATH, buildLinuxRemoveScript, buildLinuxSetupScript, buildRemoveScript, buildSetupScript, sh, teamLaunchdPlist,
   teamSystemdUnit, type SetupScriptInput,
 } from './script.js'
@@ -356,7 +356,6 @@ describe('remove script', () => {
     const script = buildRemoveScript(removeInput)
     parses(script)
     // Where every daemon keeps its computer id (config/env.ts): the product root, not the data folder.
-    expect(script).toContain("COMPUTER_ID='/Users/harnessteam/.harness/computer-id'")
     const order = [
       'launchctl bootout "system/$LABEL"', 'dscl . -delete "/Users/$TEAM"', 'pkill -KILL -u "$team_uid"', 'rm -f "$PLIST"',
       'rm -rf "$TEAM_HOME" "$STATUS_DIR"', 'rm -f "$CONFIG" "$SENTINEL"', 'rmdir "$SHARED"',
@@ -392,7 +391,7 @@ describe('remove script', () => {
       SHARED: join(root, 'Application Support', 'Harness'), SENTINEL: join(root, 'Users', 'owner', '.harness-team-privacy'),
     }
     const paths = { ...p, CONFIG: join(p.SHARED, 'team.json'), STATUS_DIR: join(p.SHARED, 'Team'),
-      SHARED_MARK: join(p.SHARED, '.made-by-harness-team-setup'), COMPUTER_ID: join(p.TEAM_HOME, '.harness', 'computer-id'),
+      SHARED_MARK: join(p.SHARED, '.made-by-harness-team-setup'),
       DELETED_HOME: `${p.TEAM_HOME} (Deleted)` }
     // Users & Groups, told to keep the home folder of an account it deletes, renames it.
     mkdirSync(over.keptHome ? join(paths.DELETED_HOME, '.harness') : join(p.TEAM_HOME, '.harness', 'cli', 'data'), { recursive: true })
@@ -400,7 +399,7 @@ describe('remove script', () => {
     mkdirSync(join(root, 'LaunchDaemons'))
     mkdirSync(paths.STATUS_DIR, { recursive: true })
     mkdirSync(join(root, 'Users', 'owner'))
-    writeFileSync(over.keptHome ? join(paths.DELETED_HOME, '.harness', 'computer-id') : paths.COMPUTER_ID, 'team-computer-1\n')
+    writeFileSync(over.keptHome ? join(paths.DELETED_HOME, '.harness', 'left') : join(p.TEAM_HOME, '.harness', 'left'), 'x')
     writeFileSync(p.PLIST, '<plist/>')
     writeFileSync(paths.CONFIG, '{}')
     writeFileSync(join(paths.STATUS_DIR, 'status.json'), '{}')
@@ -459,11 +458,10 @@ describe('remove script', () => {
     return { result, calls, paths, state, gone: (path: string) => !existsSync(path) }
   }
 
-  it('removes the account, its daemon and everything setup made, and names its computer for the owner to take off', () => {
+  it('removes the account, its daemon and everything setup made', () => {
     const s = sandbox()
     expect(s.result.stderr).toBe('')
     expect(s.result.status).toBe(0)
-    expect(TEAM_COMPUTER_LINE.exec(s.result.stdout)?.[1]).toBe('team-computer-1')
     expect(s.result.stdout).toContain('harness: removed the Harness Team account, its home folder and its daemon')
     for (const path of [s.paths.TEAM_HOME, s.paths.PLIST, s.paths.CONFIG, s.paths.STATUS_DIR, s.paths.SENTINEL, s.paths.SHARED]) expect(s.gone(path), path).toBe(true)
     const deleted = s.calls.indexOf('dscl . -delete /Users/harnessteam')
@@ -471,7 +469,6 @@ describe('remove script', () => {
     expect(s.calls.indexOf('pkill -KILL -u 600')).toBeGreaterThan(deleted)
     expect(s.calls.some((c) => c.startsWith('launchctl bootstrap'))).toBe(false)
     // Its computer id was read as the team account, not by root.
-    expect(s.calls).toContain(`sudo -n -u harnessteam cat ${s.paths.COMPUTER_ID}`)
   })
 
   it('when macOS refuses the deletion, changes nothing and starts the team daemon again', () => {
@@ -479,14 +476,13 @@ describe('remove script', () => {
     expect(s.result.status).toBe(REMOVE_REFUSED)
     expect(s.result.stderr).toBe('harness: could not delete the account harnessteam: macOS did not allow it (eDSPermissionError). '
       + 'Nothing was removed: the Harness Team account and its daemon run as before\n')
-    for (const path of [s.paths.TEAM_HOME, s.paths.PLIST, s.paths.CONFIG, s.paths.STATUS_DIR, s.paths.SENTINEL, s.paths.SHARED_MARK, s.paths.COMPUTER_ID]) {
+    for (const path of [s.paths.TEAM_HOME, s.paths.PLIST, s.paths.CONFIG, s.paths.STATUS_DIR, s.paths.SENTINEL, s.paths.SHARED_MARK]) {
       expect(s.gone(path), path).toBe(false)
     }
     expect(s.calls).toContain(`launchctl bootstrap system ${s.paths.PLIST}`)
     expect(existsSync(join(s.state, 'loaded'))).toBe(true)
     expect(existsSync(join(s.state, 'account'))).toBe(true)
     expect(s.calls.some((c) => c.startsWith('pkill'))).toBe(false)
-    expect(s.result.stdout).not.toMatch(TEAM_COMPUTER_LINE)
   })
 
   it('says so when the team daemon does not start again after a refusal', () => {
@@ -502,25 +498,23 @@ describe('remove script', () => {
     expect(s.calls.some((c) => c.startsWith('dscl . -delete'))).toBe(false)
     expect(s.calls).toContain('pkill -KILL -u 600')
     for (const path of [s.paths.TEAM_HOME, s.paths.PLIST, s.paths.CONFIG, s.paths.SHARED]) expect(s.gone(path), path).toBe(true)
-    // Its computer id, from the home it left, owned by its old id.
-    expect(TEAM_COMPUTER_LINE.exec(s.result.stdout)?.[1]).toBe('team-computer-1')
   })
 
-  it('never reads a computer id through a link, or from a file its old id does not own', () => {
-    const script = buildRemoveScript(removeInput)
-    expect(script).toContain('[ ! -L "$left" ] && [ ! -L "$left/.harness" ] && [ ! -L "$f" ] && [ -f "$f" ] || continue')
-    expect(script).toContain('[ "$(stat -f %u "$f")" = "$team_uid" ] || continue')
+  // Audit L3: as root, this read a file the Team account wrote, to name a machine for the owner's sign-in to delete.
+  it('reads nothing the team account wrote to name its computer: the backend knows which is this Mac\'s', () => {
+    for (const script of [buildRemoveScript(removeInput), buildLinuxRemoveScript({ user: 'harnessteam', home: '/home/harnessteam', ownerHome: '/home/owner-placeholder', owner: 'owner-placeholder' })]) {
+      expect(script).not.toContain('computer-id')
+      expect(script).not.toContain('COMPUTER_ID')
+      expect(script).not.toContain('team computer')
+    }
   })
 
-  it('also removes the home folder Users & Groups kept, renamed, when the account was deleted there, and names its computer', () => {
+  it('also removes the home folder Users & Groups kept, renamed, when the account was deleted there', () => {
     const s = sandbox({ account: false, keptHome: true })
     expect(s.result.status).toBe(0)
     expect(s.gone(s.paths.DELETED_HOME)).toBe(true)
     expect(s.gone(s.paths.TEAM_HOME)).toBe(true)
     expect(s.calls).toContain('pkill -KILL -u 600')
-    // Read from the home it left, after its processes were stopped.
-    expect(TEAM_COMPUTER_LINE.exec(s.result.stdout)?.[1]).toBe('team-computer-1')
-    expect(s.calls.indexOf(`head -n 1 ${s.paths.DELETED_HOME}/.harness/computer-id`)).toBeGreaterThan(s.calls.indexOf('pkill -KILL -u 600'))
     expect(buildRemoveScript(removeInput)).toContain("DELETED_HOME='/Users/harnessteam (Deleted)'")
   })
 
@@ -793,7 +787,6 @@ describe('Linux', () => {
     it('parses, names every value single-quoted, and stops the daemon and its processes before it deletes the user', () => {
       const script = buildLinuxRemoveScript(linuxRemove)
       parses(script)
-      expect(script).toContain("COMPUTER_ID='/home/harnessteam/.harness/computer-id'")
       expect(script).toContain("RELAY_DIR='/var/lib/harness/team-relay-owner-placeholder'")
       expect(script).toContain(`SENTINEL='${LINUX_OWNER_HOME}/.harness-team-privacy'`)
       const order = [
@@ -821,12 +814,6 @@ describe('Linux', () => {
       expect(() => buildLinuxRemoveScript({ ...linuxRemove, user: 'root' })).toThrow()
       expect(() => buildLinuxRemoveScript({ ...linuxRemove, owner: 'a;b' })).toThrow()
       expect(() => buildLinuxRemoveScript({ user: 'harnessteam', home: '/home/harnessteam', ownerHome: LINUX_OWNER_HOME })).toThrow()
-    })
-
-    it('names its computer for the owner to take off, as the macOS removal does', () => {
-      const script = buildLinuxRemoveScript(linuxRemove)
-      expect(script).toContain('[ -z "$computer" ] || say "team computer $computer"')
-      expect(script).toContain('computer=$(runuser -u "$TEAM" -- cat "$COMPUTER_ID" 2>/dev/null | head -n 1) || computer=')
     })
   })
 })

@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/swarm_devices_page.dart';
+import 'package:harness_mobile/swarm/swarm_machine_menu.dart';
 import 'package:harness_mobile/swarm/swarm_machines.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
@@ -63,6 +66,8 @@ void main() {
     WidgetTester tester, {
     List<Map<String, dynamic>>? machines,
     List<Map<String, dynamic>>? agents,
+    String role = 'owner',
+    void Function(FakeSwarm fake)? routes,
   }) async {
     tester.view.physicalSize = const Size(1170, 2532);
     tester.view.devicePixelRatio = 3;
@@ -77,9 +82,12 @@ void main() {
     final rows = machines ?? [machinePool('mac-1', 'Tony’s Mac')];
     fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
       ...firstLoad(agents: agents),
+      'members': [part(me, 1, person(me, role: role))],
       'machines': [for (final m in rows) part(m['machineId'] as String, 1, m)],
     };
     fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
+    fake.routes['/api/super-tabs/$tab/commands'] = (_) => {'result': {}};
+    routes?.call(fake);
     final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
       ..value = {PhoneExperiment.swarm};
     final account = ValueNotifier<String?>(me);
@@ -119,7 +127,7 @@ void main() {
   );
 
   testWidgets(
-    'tap shows capacity, allowance reset and running agents, without management',
+    'tap shows capacity, allowance reset and running agents, without Remove or Configure',
     (tester) async {
       await open(tester);
       await tester.tap(key('swarm-machine-$tab-mac-1'));
@@ -145,7 +153,8 @@ void main() {
         ),
         findsOneWidget,
       );
-      for (final text in ['Remove', 'Configure', 'Pause']) {
+      // Management lives in the long-press menu; Details holds only Pause/Resume, for who lent the machine.
+      for (final text in ['Remove', 'Remove from Swarm', 'Configure']) {
         expect(find.text(text), findsNothing);
       }
     },
@@ -367,6 +376,375 @@ void main() {
         matching: find.byIcon(LucideIcons.laptop300),
       ),
       findsOneWidget,
+    );
+  });
+
+  group('long-press menu (Huy, 11-02)', () {
+    // No Product Manager on the machine, which would hold Remove back.
+    final plain = [agent('agent-builder', displayName: 'Nova')];
+
+    Future<void> press(WidgetTester tester, [String id = 'mac-1']) async {
+      await tester.longPress(key('swarm-machine-$tab-$id'));
+      await tester.pumpAndSettle();
+    }
+
+    Map<String, dynamic> preview({
+      List<Map<String, dynamic>> agents = const [],
+      List<Map<String, dynamic>> projects = const [],
+      Map<String, dynamic>? blockedBy,
+    }) => {
+      'blockedBy': blockedBy,
+      'agents': agents,
+      'soleSourceProjects': projects,
+    };
+
+    int removalReads() => fake.calls
+        .where((c) => c.path.endsWith('/machines/mac-1/removal'))
+        .length;
+
+    testWidgets(
+      'the person who lent a machine sees Details, Pause and Remove',
+      (tester) async {
+        await open(tester, agents: plain);
+        await press(tester);
+        expect(find.text('Details'), findsOneWidget);
+        expect(find.text('Pause new work'), findsOneWidget);
+        expect(find.text('Remove from Swarm'), findsOneWidget);
+        expect(find.byType(SwarmMachineSheet), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'a machine that runs a Product Manager holds Remove back, and says so briefly',
+      (tester) async {
+        await open(tester);
+        await press(tester);
+        expect(find.text('Has a Product Manager'), findsOneWidget);
+        await tester.tap(find.text('Remove from Swarm'));
+        await tester.pumpAndSettle();
+        expect(fake.calls.where((c) => c.path.endsWith('/removal')), isEmpty);
+        expect(fake.commands, isEmpty);
+        expect(find.text('Pause new work'), findsOneWidget);
+      },
+    );
+
+    testWidgets('someone else’s machine offers Details alone', (tester) async {
+      await open(
+        tester,
+        agents: plain,
+        machines: [machinePool('mac-1', 'Dee’s Mac', owner: 'person-dee')],
+      );
+      await press(tester);
+      expect(find.text('Details'), findsOneWidget);
+      expect(find.text('Pause new work'), findsNothing);
+      expect(find.text('Remove from Swarm'), findsNothing);
+      await tester.tap(find.text('Details'));
+      await tester.pumpAndSettle();
+      expect(find.byType(SwarmMachineSheet), findsOneWidget);
+      expect(key('swarm-machine-pause'), findsNothing);
+    });
+
+    testWidgets(
+      'a reader who may not write cannot remove, but still pauses their own',
+      (tester) async {
+        await open(tester, agents: plain, role: 'viewer');
+        await press(tester);
+        expect(find.text('Pause new work'), findsOneWidget);
+        expect(find.text('Remove from Swarm'), findsNothing);
+      },
+    );
+
+    testWidgets('a machine being removed offers neither Pause nor Remove', (
+      tester,
+    ) async {
+      await open(
+        tester,
+        agents: plain,
+        machines: [
+          {
+            ...machinePool('mac-1', 'Tony’s Mac'),
+            'removal': {'state': 'cleaning'},
+          },
+        ],
+      );
+      await press(tester);
+      expect(find.text('Details'), findsOneWidget);
+      expect(find.text('Pause new work'), findsNothing);
+      expect(find.text('Remove from Swarm'), findsNothing);
+    });
+
+    testWidgets(
+      'Pause new work sends machine.pause; a paused machine offers Resume',
+      (tester) async {
+        await open(tester, agents: plain);
+        await press(tester);
+        await tester.tap(find.text('Pause new work'));
+        await tester.pumpAndSettle();
+        expect(fake.commands, [
+          {'type': 'machine.pause', 'machineId': 'mac-1', 'paused': true},
+        ]);
+        await tester.pumpWidget(const SizedBox());
+        await open(
+          tester,
+          machines: [
+            {...machinePool('mac-1', 'Tony’s Mac'), 'paused': true},
+          ],
+        );
+        await press(tester);
+        expect(find.text('Resume new work'), findsOneWidget);
+        await tester.tap(find.text('Resume new work'));
+        await tester.pumpAndSettle();
+        expect(fake.commands.last['paused'], isFalse);
+      },
+    );
+
+    testWidgets(
+      'Details carries Pause/Resume for the lender and sends the same command',
+      (tester) async {
+        await open(tester, agents: plain);
+        await tester.tap(key('swarm-machine-$tab-mac-1'));
+        await tester.pumpAndSettle();
+        await tester.dragUntilVisible(
+          key('swarm-machine-pause'),
+          find.byType(SingleChildScrollView).last,
+          const Offset(0, -200),
+        );
+        await tester.tap(key('swarm-machine-pause'));
+        await tester.pumpAndSettle();
+        expect(fake.commands, [
+          {'type': 'machine.pause', 'machineId': 'mac-1', 'paused': true},
+        ]);
+      },
+    );
+
+    testWidgets('a refused pause says why and changes nothing', (tester) async {
+      await open(
+        tester,
+        agents: plain,
+        routes: (f) => f.routes['/api/super-tabs/$tab/commands'] = (_) =>
+            throw SuperTabFailure(
+              'OWNER_REQUIRED',
+              'Only its contributor can change this machine.',
+              statusCode: 403,
+            ),
+      );
+      await press(tester);
+      await tester.tap(find.text('Pause new work'));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Only its contributor can change this machine.'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets(
+      'Remove asks with what stops and is deleted, then sends machine.remove',
+      (tester) async {
+        await open(
+          tester,
+          agents: plain,
+          routes: (f) =>
+              f.routes['/api/super-tabs/$tab/machines/mac-1/removal'] = (_) =>
+                  preview(
+                    agents: [
+                      {
+                        'name': 'Nova',
+                        'projectName': 'Mobile',
+                        'task': 'Fix sync',
+                      },
+                    ],
+                    projects: [
+                      {'name': 'Beacon'},
+                    ],
+                  ),
+        );
+        await press(tester);
+        await tester.tap(find.text('Remove from Swarm'));
+        await tester.pumpAndSettle();
+        expect(find.text('Remove Tony’s Mac from this Swarm?'), findsOneWidget);
+        expect(find.textContaining('Nova · Mobile'), findsOneWidget);
+        expect(
+          find.textContaining('“Fix sync” loses its agent'),
+          findsOneWidget,
+        );
+        expect(find.textContaining('Beacon'), findsOneWidget);
+        expect(
+          find.textContaining('Swarm folders on this machine will be deleted'),
+          findsOneWidget,
+        );
+        expect(fake.commands, isEmpty);
+        await tester.tap(
+          find.widgetWithText(FilledButton, 'Remove from Swarm'),
+        );
+        await tester.pumpAndSettle();
+        expect(fake.commands, [
+          {'type': 'machine.remove', 'machineId': 'mac-1'},
+        ]);
+      },
+    );
+
+    testWidgets(
+      'a Buddy with no project is listed by its name alone, and Remove still works',
+      (tester) async {
+        await open(
+          tester,
+          agents: plain,
+          routes: (f) =>
+              f.routes['/api/super-tabs/$tab/machines/mac-1/removal'] = (_) =>
+                  preview(
+                    agents: [
+                      {'name': 'Wren', 'projectName': ''},
+                    ],
+                  ),
+        );
+        await press(tester);
+        await tester.tap(find.text('Remove from Swarm'));
+        await tester.pumpAndSettle();
+        expect(find.textContaining('from this Swarm?'), findsOneWidget);
+        expect(find.text('Could not check this machine.'), findsNothing);
+        expect(find.textContaining('Wren'), findsOneWidget);
+        expect(find.textContaining('Wren ·'), findsNothing);
+        await tester.tap(
+          find.widgetWithText(FilledButton, 'Remove from Swarm'),
+        );
+        await tester.pumpAndSettle();
+        expect(fake.commands, [
+          {'type': 'machine.remove', 'machineId': 'mac-1'},
+        ]);
+      },
+    );
+
+    testWidgets('cancelling the question sends nothing', (tester) async {
+      await open(
+        tester,
+        agents: plain,
+        routes: (f) =>
+            f.routes['/api/super-tabs/$tab/machines/mac-1/removal'] = (_) =>
+                preview(),
+      );
+      await press(tester);
+      await tester.tap(find.text('Remove from Swarm'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(fake.commands, isEmpty);
+    });
+
+    testWidgets(
+      'a Product Manager on the machine blocks it, with no question',
+      (tester) async {
+        await open(
+          tester,
+          agents: plain,
+          routes: (f) =>
+              f.routes['/api/super-tabs/$tab/machines/mac-1/removal'] = (_) =>
+                  preview(
+                    blockedBy: {'projectId': project, 'projectName': 'Mobile'},
+                  ),
+        );
+        await press(tester);
+        await tester.tap(find.text('Remove from Swarm'));
+        await tester.pumpAndSettle();
+        expect(find.textContaining('Delete the project first'), findsOneWidget);
+        expect(
+          find.textContaining('Remove Tony’s Mac from this Swarm?'),
+          findsNothing,
+        );
+        expect(fake.commands, isEmpty);
+      },
+    );
+
+    testWidgets(
+      'a failed read of what would happen shows no question and sends nothing, and retries later',
+      (tester) async {
+        var fail = true;
+        await open(
+          tester,
+          agents: plain,
+          routes: (f) =>
+              f.routes['/api/super-tabs/$tab/machines/mac-1/removal'] = (_) =>
+                  fail ? throw StateError('socket') : preview(),
+        );
+        await press(tester);
+        await tester.tap(find.text('Remove from Swarm'));
+        await tester.pumpAndSettle();
+        expect(find.text('Could not check this machine.'), findsOneWidget);
+        expect(find.textContaining('from this Swarm?'), findsNothing);
+        expect(fake.commands, isEmpty);
+        fail = false;
+        await tester.pump(const Duration(seconds: 5));
+        await press(tester);
+        await tester.tap(find.text('Remove from Swarm'));
+        await tester.pumpAndSettle();
+        expect(find.textContaining('from this Swarm?'), findsOneWidget);
+        expect(removalReads(), 2);
+      },
+    );
+
+    testWidgets(
+      'access ending while the question is being read shows and sends nothing',
+      (tester) async {
+        final gate = Completer<Map<String, dynamic>>();
+        await open(
+          tester,
+          agents: plain,
+          routes: (f) =>
+              f.routes['/api/super-tabs/$tab/machines/mac-1/removal'] = (_) =>
+                  gate.future,
+        );
+        await press(tester);
+        await tester.tap(find.text('Remove from Swarm'));
+        await tester.pump();
+        host.session!.inbox.reader(tab)!.revoke();
+        gate.complete(preview());
+        await tester.pumpAndSettle();
+        expect(find.textContaining('from this Swarm?'), findsNothing);
+        expect(fake.commands, isEmpty);
+      },
+    );
+
+    testWidgets('access ending while the question is open sends nothing', (
+      tester,
+    ) async {
+      await open(
+        tester,
+        agents: plain,
+        routes: (f) =>
+            f.routes['/api/super-tabs/$tab/machines/mac-1/removal'] = (_) =>
+                preview(),
+      );
+      await press(tester);
+      await tester.tap(find.text('Remove from Swarm'));
+      await tester.pumpAndSettle();
+      host.session!.inbox.reader(tab)!.revoke();
+      await tester.pump();
+      await tester.tap(find.widgetWithText(FilledButton, 'Remove from Swarm'));
+      await tester.pumpAndSettle();
+      expect(fake.commands, isEmpty);
+    });
+
+    testWidgets('the menu closes when access ends under it', (tester) async {
+      await open(tester, agents: plain);
+      await press(tester);
+      expect(find.text('Pause new work'), findsOneWidget);
+      // The sheet's title beside the row's own name.
+      expect(find.text('Tony’s Mac'), findsNWidgets(2));
+      host.session!.inbox.reader(tab)!.revoke();
+      await tester.pumpAndSettle();
+      expect(find.text('Pause new work'), findsNothing);
+      expect(find.text('Details'), findsNothing);
+      // The sheet itself is gone, not just emptied.
+      expect(find.text('Tony’s Mac'), findsNothing);
+    });
+
+    testWidgets(
+      'a machine lost from the Swarm closes its menu, and an id from elsewhere offers nothing',
+      (tester) async {
+        await open(tester, agents: plain);
+        final reader = host.session!.inbox.reader(tab)!;
+        expect(swarmMachineRights(reader, 'someone-elses-machine'), isNull);
+        expect(swarmMachineRights(reader, 'mac-1'), isNotNull);
+      },
     );
   });
 }

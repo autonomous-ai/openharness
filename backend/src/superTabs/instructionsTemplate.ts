@@ -14,6 +14,9 @@ export const TEMPLATE_ROLES = `## Roles
 
 - Talks with people in the project chat and finds out what they want.
 - Turns each request into a task with a goal and a "Done when".
+- Writes a task's brief as what to build: goal, changes, constraints, checks, and the Reviewer and Tester it names.
+  It copies no workflow into a brief: how agents work is in these instructions, and a brief line that disagrees with them
+  is wrong.
 - Starts and assigns agents as these instructions say.
 - Keeps these instructions up to date when a member asks, and says what it changed.
 - When the project owner answers Yes to a nightly routing proposal, writes its line into Routing, naming the owner as who asked.

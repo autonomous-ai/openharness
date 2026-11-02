@@ -1,15 +1,17 @@
+import { randomUUID } from 'node:crypto'
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
+import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ExecFileException } from 'node:child_process'
-import { TmuxBackend, clearEnvArgs, serverVariables, unsetServerEnvArgs } from './tmuxBackend.js'
+import { execFile, type ExecFileException } from 'node:child_process'
+import { TmuxBackend, clearEnvArgs, serverVariables, tmuxScript, tmuxWord, unsetServerEnvArgs } from './tmuxBackend.js'
 import { clearPaneRemainOnExit, forgetTmuxServer } from './tmux.js'
 import { tmuxControlGate } from './tmuxControlGate.js'
-import { assumeTmuxVersion, resetTmuxVersionCache } from './tmuxVersion.js'
+import { assumeTmuxVersion, resetTmuxVersionCache, tmuxFeatures } from './tmuxVersion.js'
 import { isHarnessdVariable } from './harnessdEnv.js'
 import { resolveBinaryOnPath } from './binaryOnPath.js'
-import { isolatedTmux } from '../testing/isolatedTmux.js'
+import { isolatedTmux, type IsolatedTmux } from '../testing/isolatedTmux.js'
 import { DEFAULT_HOST_THEME } from './hostTheme.js'
 
 /**
@@ -37,7 +39,8 @@ vi.mock('./patientExec.js', async (importOriginal) => {
       }
     })
   }
-  return { ...actual, patientExec }
+  // The same for a list given on stdin (`runScript`), which arms the deadline itself.
+  return { ...actual, patientExec, patientDeadline: () => () => {} }
 })
 
 /** Until no tmux or `ps` call is running, the ones a scan left going in the background included. */
@@ -383,6 +386,11 @@ exit 1
     expect(created.state).not.toBe('succeeded')
     if (created.state === 'succeeded') return
     expect(created.reason).toBe('tmux is unavailable')
+    // The same with variables, whose list goes on stdin: a pipe to no process is not a throw.
+    expect(await new TmuxBackend().create({ label: 'harness-test', env: { K: 'v' } }))
+      .toMatchObject({ state: 'failed', dispatch: 'not_started', reason: 'tmux is unavailable' })
+    expect(await new TmuxBackend().respawn({ backend: 'tmux', paneId: '%9' }, { env: { K: 'v' }, command: ['claude'] }))
+      .toMatchObject({ state: 'failed', dispatch: 'not_started', reason: 'tmux is unavailable' })
   })
 
   it('re-arms remain-on-exit on an already-live pane for holdOpen', async () => {
@@ -520,19 +528,8 @@ printf '%s\\n' "$*" >> "$TMUX_BACKEND_CALLS"
       'display-message -t %7 -- Build status: Ready; touch /tmp/must-not-run',
     )
   })
-  it('hands the session its own environment, before the command it launches', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'tmux-backend-env-'))
-    dirs.push(dir)
-    const calls = join(dir, 'calls')
-    const tmux = join(dir, 'tmux')
-    writeFileSync(tmux, `#!/bin/sh
-printf '%s\\n' "$*" >> "$TMUX_BACKEND_CALLS"
-printf '%%42\\n'
-`)
-    chmodSync(tmux, 0o700)
-    process.env.PATH = `${dir}${delimiter}${originalPath ?? ''}`
-    process.env.TMUX_BACKEND_CALLS = calls
-
+  it('hands the session its own environment, before the command it launches, with no value on a command line', async () => {
+    const tmux = scriptTmux()
     const created = await new TmuxBackend(undefined, () => 'daemon-a').create({
       cwd: '/tmp/work',
       label: 'harness-test',
@@ -542,42 +539,85 @@ printf '%%42\\n'
       command: ['/bin/zsh', '-lic', 'exec "$@"', 'harness-engine', 'claude'],
     })
 
-    expect(created.state).toBe('succeeded')
+    expect(created).toEqual({ state: 'succeeded', dispatch: 'executed', runtime: { backend: 'tmux', paneId: '%42' } })
+    // Audit M2: tmux's own command line names no value. A server it starts keeps it as its title, which
+    // every account on the machine reads; the list goes on stdin.
+    expect(tmux.calls()[0]).toBe('start-server ; source-file -')
+    expect(tmux.calls().join('\n')).not.toContain('gridkey-abc123')
     // Order is load-bearing: everything after the first non-flag argument is the session's
     // shell-command, so an `-e` placed after `command` would be handed to the engine instead of tmux.
-    expect(readFileSync(calls, 'utf8').trim().split('\n')[0]).toBe(
-      'new-session -d -P -F #{pane_id} -c /tmp/work -s harness-test'
-      + ' -e ANTHROPIC_BASE_URL=https://relay.example/relay -e ANTHROPIC_AUTH_TOKEN=gridkey-abc123'
-      + ' /bin/zsh -lic exec "$@" harness-engine claude ; set-option -p remain-on-exit on'
-      + ' ; set-option destroy-unattached off ; set-option -p window-style bg=#181818,fg=#f5f5f5 ; set-option -p @harness_daemon daemon-a',
-    )
+    expect(tmux.stdin()).toBe(tmuxScript([
+      'new-session', '-d', '-P', '-F', '#{pane_id}', '-c', '/tmp/work', '-s', 'harness-test',
+      '-e', 'ANTHROPIC_BASE_URL=https://relay.example/relay', '-e', 'ANTHROPIC_AUTH_TOKEN=gridkey-abc123',
+      '/bin/zsh', '-lic', 'exec "$@"', 'harness-engine', 'claude',
+      // Each option names the new session: from `source-file`, an untargeted one went to another session's pane.
+      ';', 'set-option', '-p', '-t', '=harness-test:', 'remain-on-exit', 'on', ';', 'set-option', '-t', '=harness-test:', 'destroy-unattached', 'off',
+      ';', 'set-option', '-p', '-t', '=harness-test:', 'window-style', 'bg=#181818,fg=#f5f5f5',
+      ';', 'set-option', '-p', '-t', '=harness-test:', '@harness_daemon', 'daemon-a',
+    ]))
   })
-  it('respawns a pane in place with a new environment, keeping the pane id', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'tmux-backend-respawn-'))
-    dirs.push(dir)
-    const calls = join(dir, 'calls')
-    const tmux = join(dir, 'tmux')
-    writeFileSync(tmux, `#!/bin/sh
-printf '%s\\n' "$*" >> "$TMUX_BACKEND_CALLS"
-`)
-    chmodSync(tmux, 0o700)
-    process.env.PATH = `${dir}${delimiter}${originalPath ?? ''}`
-    process.env.TMUX_BACKEND_CALLS = calls
 
+  it.each([
+    ['no name', undefined],
+    ['a name tmux would read as a window', 'harness:test'],
+    ['a name tmux would read as a pane', 'harness.test'],
+  ])('refuses a create with variables and %s, asking tmux nothing, rather than set options on a pane it cannot name', async (_, label) => {
+    const tmux = scriptTmux()
+    const created = await new TmuxBackend().create({ label, env: { K: 'v' }, command: ['claude'] })
+    expect(created).toMatchObject({ state: 'failed', dispatch: 'not_started' })
+    expect(tmux.calls()).toEqual([])
+  })
+
+  it('takes the pane id from the first line, before the ~/.tmux.conf errors a server it started prints on stdin', async () => {
+    scriptTmux(`printf '%%7\\n/home/someone/.tmux.conf:1: invalid option: bogus\\n'`)
+    expect(await new TmuxBackend().create({ label: 'harness-test', env: { K: 'v' }, command: ['claude'] }))
+      .toEqual({ state: 'succeeded', dispatch: 'executed', runtime: { backend: 'tmux', paneId: '%7' } })
+  })
+
+  it('keeps a create with no variables on the command line it always had', async () => {
+    const tmux = scriptTmux()
+    await new TmuxBackend(undefined, () => 'daemon-a').create({ label: 'harness-test', command: ['claude'] })
+    expect(tmux.calls()[0]).toBe('new-session -d -P -F #{pane_id} -s harness-test claude ; set-option -p remain-on-exit on'
+      + ' ; set-option destroy-unattached off ; set-option -p window-style bg=#181818,fg=#f5f5f5 ; set-option -p @harness_daemon daemon-a')
+    expect(tmux.stdin()).toBe('')
+  })
+
+  it('says why tmux refused a create given on stdin', async () => {
+    scriptTmux(`printf 'duplicate session: harness-test\\n' >&2; exit 1`)
+    const refused = await new TmuxBackend().create({ label: 'harness-test', env: { K: 'v' }, command: ['claude'] })
+    expect(refused).toMatchObject({ state: 'unknown', dispatch: 'possibly_executed', reason: 'tmux session creation did not complete: duplicate session: harness-test' })
+  })
+
+  it('respawns a pane in place with a new environment, keeping the pane id, with no value on a command line', async () => {
+    const tmux = scriptTmux()
     const moved = await new TmuxBackend().respawn({ backend: 'tmux', paneId: '%42' }, {
       cwd: '/tmp/work',
-      env: { ANTHROPIC_BASE_URL: 'https://relay.example/relay', ANTHROPIC_MODEL: 'GLM-4.7-Flash' },
+      env: { ANTHROPIC_BASE_URL: 'https://relay.example/relay', ANTHROPIC_AUTH_TOKEN: 'gridkey-abc123' },
       command: ['/bin/zsh', '-lic', 'exec "$@"', 'harness-engine', 'claude', '--resume', 'sess-1'],
     })
 
     expect(moved).toEqual({ state: 'succeeded', dispatch: 'executed' })
+    expect(tmux.calls()).toEqual(['start-server ; source-file -'])
     // `remain-on-exit` is chained BEFORE the respawn, not after: an engine handed a rejected key can
     // exit before a follow-up call lands, taking its own error message down with it.
-    expect(readFileSync(calls, 'utf8').trim()).toBe(
-      'set-option -p -t %42 remain-on-exit on ; set-option -p -t %42 @harness_engine_exit  ; respawn-pane -k -c /tmp/work'
-      + ' -e ANTHROPIC_BASE_URL=https://relay.example/relay -e ANTHROPIC_MODEL=GLM-4.7-Flash'
-      + ' -t %42 /bin/zsh -lic exec "$@" harness-engine claude --resume sess-1',
-    )
+    expect(tmux.stdin()).toBe(tmuxScript([
+      'set-option', '-p', '-t', '%42', 'remain-on-exit', 'on', ';', 'set-option', '-p', '-t', '%42', '@harness_engine_exit', '',
+      ';', 'respawn-pane', '-k', '-c', '/tmp/work',
+      '-e', 'ANTHROPIC_BASE_URL=https://relay.example/relay', '-e', 'ANTHROPIC_AUTH_TOKEN=gridkey-abc123',
+      '-t', '%42', '/bin/zsh', '-lic', 'exec "$@"', 'harness-engine', 'claude', '--resume', 'sess-1',
+    ]))
+  })
+
+  it('respawns a waiting pane with its variables on stdin too, and still hears a changed pane', async () => {
+    const token = '0b4f6a8e-6d0c-4bd1-9a51-6c1a3b0f2e77'
+    const tmux = scriptTmux(`printf 'adoption-mismatch\\n'`)
+    const moved = await new TmuxBackend().respawn({ backend: 'tmux', paneId: '%42' }, {
+      env: { ANTHROPIC_AUTH_TOKEN: 'gridkey-abc123' }, command: ['claude'], expectedHeldToken: token,
+    })
+    expect(moved).toMatchObject({ state: 'failed', dispatch: 'not_started', reason: 'The waiting pane changed' })
+    expect(tmux.calls()).toEqual(['start-server ; source-file -'])
+    // The if-shell's own command list is one word of the script, quoted twice over.
+    expect(tmux.stdin()).toContain(tmuxWord(`'respawn-pane' '-k' '-e' 'ANTHROPIC_AUTH_TOKEN=gridkey-abc123' '-t' '%42' 'claude'`).slice(1, -1))
   })
 
   it('never reports a failed respawn as untouched, because -k already killed the old process', async () => {
@@ -599,6 +639,29 @@ exit 1
 })
 
 /** A fake tmux on PATH that records every call, prints [listing] for `list-panes` and `%42` otherwise. */
+/**
+ * A tmux that records each command line, and what it was given on stdin for `source-file -` (read only then:
+ * nothing else writes to a call's stdin, so reading it would wait for ever); then runs [script], or answers
+ * as `new-session -P` does.
+ */
+function scriptTmux(script = `printf '%%42\\n'`): { calls: () => string[]; stdin: () => string } {
+  const dir = mkdtempSync(join(tmpdir(), 'tmux-backend-script-'))
+  dirs.push(dir)
+  const calls = join(dir, 'calls')
+  const stdin = `${calls}.stdin`
+  writeFileSync(join(dir, 'tmux'), `#!/bin/sh
+printf '%s\\n' "$*" >> "$TMUX_BACKEND_CALLS"
+case "$*" in *'source-file -') cat >> "$TMUX_BACKEND_CALLS.stdin" ;; esac
+${script}
+`, { mode: 0o700 })
+  process.env.PATH = `${dir}${delimiter}${originalPath ?? ''}`
+  process.env.TMUX_BACKEND_CALLS = calls
+  return {
+    calls: () => existsSync(calls) ? readFileSync(calls, 'utf8').trim().split('\n') : [],
+    stdin: () => existsSync(stdin) ? readFileSync(stdin, 'utf8') : '',
+  }
+}
+
 function recordingTmux(listing = '', sessionId = '%42'): () => string[] {
   const dir = mkdtempSync(join(tmpdir(), 'tmux-backend-old-'))
   dirs.push(dir)
@@ -728,23 +791,27 @@ describe('TmuxBackend with variables on a tmux that cannot take them', () => {
     expect(calls()).toEqual([])
   })
 
-  it('refuses a respawn below 3.0, saying why, and asks tmux nothing', async () => {
-    assumeTmuxVersion({ major: 2, minor: 9 })
+  // `respawn-pane -e` is 3.0, but its list goes on stdin (`source-file -`, 3.1): on 3.0 the value would be on
+  // tmux's command line, so it is refused instead (audit M2).
+  it('refuses a respawn below 3.1, saying why, and asks tmux nothing', async () => {
+    assumeTmuxVersion({ major: 3, minor: 0 })
     const calls = recordingTmux()
     // Asked before a restart stops anything, with the same answer.
-    expect(await new TmuxBackend().respawnRefusal({ env })).toContain('older than 3.0')
+    expect(await new TmuxBackend().respawnRefusal({ env })).toContain('older than 3.1')
     expect(await new TmuxBackend().respawnRefusal({})).toBeNull()
     const moved = await new TmuxBackend().respawn({ backend: 'tmux', paneId: '%9' }, { env, command: ['codex'] })
     expect(moved).toMatchObject({ state: 'failed', dispatch: 'not_started' })
-    expect(moved.state !== 'succeeded' && moved.reason).toContain('older than 3.0')
+    expect(moved.state !== 'succeeded' && moved.reason).toContain('older than 3.1')
     expect(calls()).toEqual([])
   })
 
-  it('respawns with them from 3.0, where respawn-pane takes -e', async () => {
-    assumeTmuxVersion({ major: 3, minor: 0 })
-    const calls = recordingTmux()
+  it('respawns with them from 3.1, on stdin', async () => {
+    assumeTmuxVersion({ major: 3, minor: 1 })
+    const tmux = scriptTmux()
     await new TmuxBackend(undefined, () => 'daemon-a').respawn({ backend: 'tmux', paneId: '%9' }, { env, command: ['codex'] })
-    expect(calls()).toEqual(['set-option -p -t %9 remain-on-exit on ; set-option -p -t %9 @harness_engine_exit  ; respawn-pane -k -e CODEX_HOME=/work/profile -t %9 codex'])
+    expect(tmux.calls()).toEqual(['start-server ; source-file -'])
+    expect(tmux.stdin()).toBe(tmuxScript(['set-option', '-p', '-t', '%9', 'remain-on-exit', 'on', ';', 'set-option', '-p', '-t', '%9',
+      '@harness_engine_exit', '', ';', 'respawn-pane', '-k', '-e', 'CODEX_HOME=/work/profile', '-t', '%9', 'codex']))
   })
 })
 
@@ -915,5 +982,124 @@ exit 0
     expect(await new TmuxBackend().capabilities()).toEqual({ sessionEnv: false })
     assumeTmuxVersion({ major: 3, minor: 2 })
     expect(await new TmuxBackend().capabilities()).toEqual({ sessionEnv: true })
+  })
+})
+
+// Audit M2 (docs/security/2026-11-02-team-account-boundary.md): every account on a machine reads every process's
+// command line, so a list with values goes to tmux on stdin, in tmux's own command syntax.
+describe('a tmux command list given on stdin', () => {
+  it('quotes each word whole, and keeps `;` the separator it is on a command line', () => {
+    expect(tmuxScript(['set-option', '-g', '@x', 'a b', ';', 'display-message', ''])).toBe(`'set-option' '-g' '@x' 'a b' ; 'display-message' ''\n`)
+    expect(tmuxWord(`it's`)).toBe(`'it'"'"'s'`)
+  })
+
+  it('gives a newline or carriage return as an escape, never raw inside quotes', () => {
+    // A raw newline in single quotes lost the next line when it began with `#` (tmux 3.7).
+    expect(tmuxWord('a\n# b\r')).toBe(`'a'"\\n"'# b'"\\r"''`)
+    expect(tmuxScript(['x\ny'])).not.toMatch(/\n./)
+  })
+})
+
+describe.skipIf(!resolveBinaryOnPath('tmux'))('session variables on a real tmux server (audit M2)', () => {
+  const exec = promisify(execFile)
+  const token = `m2-fixture-token-${randomUUID()}`
+  // Every character tmux's command syntax treats specially, a line that would read as a comment or a
+  // directive, and a non-ASCII one: the engine must get the exact value.
+  const tricky = `a'b"c $HOME ~ #{pane_id} ; { } \\ \n# next\n%if 1\r\t✓ ${token}`
+  let tmux: IsolatedTmux
+
+  beforeEach(async (context) => {
+    // This machine's real tmux, not the newest the specs above assume.
+    resetTmuxVersionCache()
+    // `new-session -e` is 3.2: older servers are refused before tmux is asked (above).
+    if (!(await tmuxFeatures()).sessionEnv) context.skip()
+    tmux = await isolatedTmux()
+    tmux.env.HOME = tmux.root
+    // The backend's own bare `tmux` reaches this private server and no other, with no ~/.tmux.conf.
+    vi.stubEnv('HOME', tmux.root)
+    vi.stubEnv('ZDOTDIR', tmux.root)
+    vi.stubEnv('TMUX', undefined)
+    vi.stubEnv('TMUX_PANE', undefined)
+    vi.stubEnv('TMUX_TMPDIR', tmux.root)
+  })
+
+  afterEach(async () => {
+    await tmux?.close()
+    vi.unstubAllEnvs()
+  })
+
+  /**
+   * The command lines on this machine, as any other account reads them, that show [value]. Only those: a
+   * failure must not print the rest, which may hold other accounts' own secrets.
+   */
+  const showing = async (value: string): Promise<string[]> =>
+    (await exec('ps', ['-A', '-ww', '-o', 'args='], { maxBuffer: 64 * 1024 * 1024 })).stdout.split('\n').filter((line) => line.includes(value))
+
+  /** What [file] holds once a pane's command has written it. */
+  const written = async (file: string): Promise<string> => {
+    await vi.waitFor(() => expect(existsSync(file)).toBe(true), { timeout: 10_000 })
+    return readFileSync(file, 'utf8')
+  }
+
+  it('starts the server with no value in its title, and the engine gets each value exactly', async () => {
+    // No server yet: the create starts it, and a server keeps the command line that started it for its life.
+    await expect(tmux.run('list-sessions')).rejects.toThrow()
+    const out = join(tmux.root, 'env.out')
+    const created = await new TmuxBackend(undefined, () => 'daemon-a', () => {}).create({
+      label: 'harness-m2-create',
+      env: { M2_TOKEN: token, M2_TRICKY: tricky },
+      command: ['/bin/sh', '-c', `printf '%s|%s' "$M2_TOKEN" "$M2_TRICKY" > '${out}.tmp' && mv '${out}.tmp' '${out}'; exec sleep 300`],
+    })
+    expect(created.state).toBe('succeeded')
+    expect(await written(out)).toBe(`${token}|${tricky}`)
+    expect(await tmux.run('show-environment', '-t', 'harness-m2-create', 'M2_TOKEN')).toBe(`M2_TOKEN=${token}`)
+    expect(await showing(token)).toEqual([])
+  })
+
+  it('gives its options to the new session, never to another already on the server', async () => {
+    // A person's own session, or another daemon's, with its own pane options.
+    await tmux.run('new-session', '-d', '-s', 'theirs', '/bin/sleep', '300')
+    await tmux.run('set-option', '-p', '-t', '=theirs:', '@harness_daemon', 'someone-else')
+    const created = await new TmuxBackend(undefined, () => 'daemon-a', () => {}).create({
+      label: 'harness-m2-second', env: { M2_TOKEN: token }, command: ['/bin/sleep', '300'],
+    })
+    if (created.state !== 'succeeded') throw new Error(created.reason)
+    const option = (target: string, name: string, scope = '-p') => tmux.run('show-options', '-v', scope, '-t', target, name)
+    expect(await option('=theirs:', '@harness_daemon')).toBe('someone-else')
+    expect(await option('=theirs:', 'remain-on-exit')).not.toBe('on')
+    expect(await option(created.runtime.paneId, '@harness_daemon')).toBe('daemon-a')
+    expect(await option(created.runtime.paneId, 'remain-on-exit')).toBe('on')
+    expect(await option('=harness-m2-second:', 'destroy-unattached', '-q')).toBe('off')
+    expect(await showing(token)).toEqual([])
+  })
+
+  it('starts a server whose ~/.tmux.conf has an error and ends unattached sessions, and the agent stays', async () => {
+    writeFileSync(join(tmux.root, '.tmux.conf'), 'set -g fixture-no-such-option on\nset -g destroy-unattached on\n')
+    const created = await new TmuxBackend(undefined, () => 'daemon-a', () => {}).create({
+      label: 'harness-m2-conf', env: { M2_TOKEN: token }, command: ['/bin/sleep', '300'],
+    })
+    expect(created).toMatchObject({ state: 'succeeded' })
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(await tmux.run('list-sessions', '-F', '#{session_name}')).toBe('harness-m2-conf')
+  })
+
+  it('respawns a pane, and a waiting one, with no value on any command line', async () => {
+    const held = randomUUID()
+    const created = await new TmuxBackend(undefined, () => 'daemon-a', () => {}).create({
+      label: 'harness-m2-respawn', command: ['/bin/sh', '-c', 'exec sleep 300', 'harness-held', held],
+    })
+    if (created.state !== 'succeeded') throw new Error(created.reason)
+    const backend = new TmuxBackend(undefined, () => 'daemon-a', () => {})
+    const launch = (out: string) => ['/bin/sh', '-c', `printf '%s' "$M2_TRICKY" > '${out}.tmp' && mv '${out}.tmp' '${out}'; exec sleep 300`]
+    // The waiting pane's own check runs inside tmux, and its command list is quoted inside the script.
+    const first = join(tmux.root, 'held.out')
+    expect(await backend.respawn(created.runtime, { env: { M2_TRICKY: tricky }, command: launch(first), expectedHeldToken: held }))
+      .toEqual({ state: 'succeeded', dispatch: 'executed' })
+    expect(await written(first)).toBe(tricky)
+    const second = join(tmux.root, 'plain.out')
+    expect(await backend.respawn(created.runtime, { env: { M2_TRICKY: tricky }, command: launch(second) }))
+      .toEqual({ state: 'succeeded', dispatch: 'executed' })
+    expect(await written(second)).toBe(tricky)
+    expect(await showing(token)).toEqual([])
   })
 })

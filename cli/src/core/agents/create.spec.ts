@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { installedDsh } from '../../dsh/installed.js'
+import { agentTmpEnv } from '../../lib/agentTmp.js'
 import { dshPinnedPermissionMode } from '../../dsh/manifest.js'
 import { incompatibleHarnessEngine } from '../../dsh/compatibility.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
@@ -243,6 +244,19 @@ describe('creating an agent', () => {
     expect(await setup().create(request({ swarmRole: 'coordinator', permissionMode: 'full' }))).toMatchObject({ ok: true })
     expect(console.warn).toHaveBeenCalledWith('[agent] full mode acceptance · settings locked')
     expect(console.warn).toHaveBeenCalledWith('[agent] full mode acceptance · worse')
+  })
+
+  // Audit M1: beside a Team account, the owner's agents get a private temporary folder, and the launch's own variables win.
+  it('asks for the private temporary folder with the agent\'s role, and lets the launch\'s own variables win', async () => {
+    vi.mocked(agentTmpEnv).mockReturnValueOnce({ TMPDIR: '/data/agent-tmp' })
+    expect(await setup().create(request({}))).toMatchObject({ ok: true })
+    expect(agentTmpEnv).toHaveBeenLastCalledWith('claude', undefined)
+    expect(vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].env).toMatchObject({ TMPDIR: '/data/agent-tmp' })
+    vi.mocked(agentTmpEnv).mockReturnValueOnce({ HARNESS_DSH: 'mine', TMPDIR: '/data/agent-tmp' })
+    vi.mocked(installedDsh).mockReturnValueOnce(installed() as never).mockReturnValueOnce(installed() as never)
+    expect(await setup().create(request({ dsh: 'blender', swarmRole: 'agent' }))).toMatchObject({ ok: true })
+    expect(agentTmpEnv).toHaveBeenLastCalledWith('claude', 'agent')
+    expect(vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].env).toMatchObject({ HARNESS_DSH: 'blender', TMPDIR: '/data/agent-tmp' })
   })
 
   it('keeps a selected Store harness when attaching a Swarm skill', async () => {

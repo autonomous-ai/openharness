@@ -23,6 +23,7 @@ import {
   windowsStartTaskScript, windowsUserSid, writeWindowsHandoff, type PowershellQuery,
 } from './windowsTeam.js'
 import { readTeamConfig } from './config.js'
+import { agentTmpState } from '../lib/agentTmp.js'
 import { realPrivacyDeps, readTeamStatus, runPrivacyCheck, writeTeamStatus } from './privacy.js'
 import { takeHandoffFile } from './handoff.js'
 import { checkTeamEngines, realEngineCheckDeps } from './engines.js'
@@ -112,6 +113,7 @@ export function teamCommandDeps(options: {
     readStatus: (path) => readTeamStatus(path),
     writeStatus: writeTeamStatus,
     accountExists: teamAccountExists(runner),
+    agentTmp: () => agentTmpState(),
     jobState: async (label) => {
       // Windows: Task Scheduler, the one task setup registers (./windowsTeam.ts), whatever the label says.
       if (process.platform === 'win32') return parseWindowsJobState(powershell(windowsJobStateScript()))
