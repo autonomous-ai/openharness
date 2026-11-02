@@ -92,10 +92,15 @@ class SuperTabMachines extends StatefulWidget {
     this.onToggleCollapsed,
     this.onOpenAgent,
     this.ticks,
+    this.manage = false,
   });
   final SuperTabController controller;
   final AppNotifier? app;
   final bool embedded;
+
+  /// Manage › Machines: one line per machine with its owner and status, and
+  /// Add machine at the foot, with no heading of its own (Quiet Swarm, screen 10).
+  final bool manage;
 
   /// Runs the one-second clock; by default everywhere but under `flutter test`.
   @visibleForTesting
@@ -1967,6 +1972,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                   expanded: expanded,
                   child: _MachineLine(
                     view: view,
+                    words: widget.manage,
                     onMore: BrowserMenuGuard.inBrowser
                         ? (at) => _menu(view, at)
                         : null,
@@ -2368,19 +2374,37 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   @override
   Widget build(BuildContext context) {
     final failingSince = c.backendUnreachable ? c.unreachableSince : null;
+    final add = c.canWrite && widget.app != null
+        ? () => unawaited(
+            showAddComputers(
+              context,
+              c,
+              widget.app!,
+              readResources: widget.readLocal,
+            ),
+          )
+        : null;
+    if (widget.manage) {
+      return ListView(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+        children: [
+          ..._machines(),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              key: const ValueKey('super-manage-add-machine'),
+              onPressed: add,
+              child: const Text('Add machine'),
+            ),
+          ),
+        ],
+      );
+    }
     final children = [
       SuperTabSectionHeading(
         'Machines',
-        onAdd: c.canWrite && widget.app != null
-            ? () => unawaited(
-                showAddComputers(
-                  context,
-                  c,
-                  widget.app!,
-                  readResources: widget.readLocal,
-                ),
-              )
-            : null,
+        onAdd: add,
         addTooltip: 'Add machine',
         // Only a Swarm that can't be read is news; a live one says nothing.
         trailing: c.backendUnreachable
@@ -2673,9 +2697,17 @@ const _noQuotaLeft = 'No quota left until it resets.';
 
 /// The same leading icon/name and trailing status column as projects.
 class _MachineLine extends StatelessWidget {
-  const _MachineLine({required this.view, this.onSetUpTeam, this.onMore});
+  const _MachineLine({
+    required this.view,
+    this.onSetUpTeam,
+    this.onMore,
+    this.words = false,
+  });
 
   final _MachineView view;
+
+  /// Its owner and status in words (Manage), not their marks.
+  final bool words;
 
   /// In a browser, opens the machine's menu at a point until it closes: the ⋯ that needs no right-click.
   final Future<void> Function(Offset at)? onMore;
@@ -2773,7 +2805,25 @@ class _MachineLine extends StatelessWidget {
               ),
             ),
           ),
-          if (owner != null)
+          if (words) ...[
+            if (owner != null)
+              Padding(
+                padding: const EdgeInsets.only(left: 12),
+                child: Text(
+                  owner.username,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: DesktopChrome.metadata(),
+                ),
+              ),
+            Padding(
+              padding: const EdgeInsets.only(left: 12, right: 8),
+              child: Text(switch (view.status) {
+                SuperTabMachineStatus.live => 'online',
+                final status => superTabMachineStateLabel(status).toLowerCase(),
+              }, style: DesktopChrome.metadata()),
+            ),
+          ] else if (owner != null)
             Padding(
               padding: const EdgeInsets.only(left: 6),
               child: Tooltip(

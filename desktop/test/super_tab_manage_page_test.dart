@@ -3,7 +3,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/controller.dart';
-import 'package:harness/super_tabs/leaderboard/project_board.dart';
 import 'package:harness/super_tabs/manage_page.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -39,7 +38,7 @@ void main() {
       },
     ];
     setUp?.call(server);
-    final c = server.controller(accountId: account);
+    final c = server.controller(account: account);
     await c.refresh();
     final AppNotifier app = createApp();
     addTearDown(app.dispose);
@@ -63,7 +62,6 @@ void main() {
                     controller: c,
                     app: app,
                     tab: current,
-                    board: SuperTabProjectBoard(c),
                     onAddAgent: (_) {},
                   ),
                 ),
@@ -145,10 +143,7 @@ void main() {
       expect(find.text('Name'), findsOneWidget);
       expect(find.text('Owner'), findsOneWidget);
       expect(find.text('People'), findsOneWidget);
-      expect(
-        find.text('${s.c.snapshot!.people.length}'),
-        findsOneWidget,
-      );
+      expect(find.text('${s.c.snapshot!.people.length}'), findsOneWidget);
       expect(find.text('Manage people'), findsOneWidget);
     });
 
