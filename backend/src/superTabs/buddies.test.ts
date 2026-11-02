@@ -659,7 +659,10 @@ describe('a Swarm-wide Buddy', () => {
     const named = { type: 'buddy.propose', conversationId: chat, ownerMessageId: 'ask', projectId: f.web.projectId, goal: 'Sync edits made offline', scope: 'Desktop drafts only', priority: 'high' } as const
     expect(() => f.run({ ...named, projectId: 'made-up' }, self, { proposalAsk: ask } as never)).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
     expect(() => f.run(named, self, { proposalAsk: { ...ask, session: true } } as never)).toThrow(expect.objectContaining({ code: 'PROPOSAL_UNASKED' }))
-    expect(f.run(named, self, { proposalAsk: ask } as never).messages.at(-1)).toMatchObject({ conversationId: f.web.conversationId, source: { kind: 'buddy-proposal', personId: 'peer' } })
+    const rows = f.run(named, self, { proposalAsk: ask } as never).messages
+    expect(rows.at(-2)).toMatchObject({ conversationId: f.web.conversationId, source: { kind: 'buddy-proposal', personId: 'peer' } })
+    expect(rows.at(-1)).toMatchObject({ conversationId: chat, recipients: [], source: { kind: 'buddy-proposal-sent', projectId: f.web.projectId } })
+    expect(rows.at(-1)!.id).not.toBe(rows.at(-2)!.id)
   })
 })
 
