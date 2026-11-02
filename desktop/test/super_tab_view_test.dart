@@ -537,8 +537,9 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(member);
       await tester.pumpAndSettle();
-      expect(find.byType(AlertDialog), findsOneWidget);
-      await tester.tap(find.widgetWithText(FilledButton, 'Open terminal'));
+      // The agent's card (Quiet Swarm).
+      expect(find.byKey(const ValueKey('super-agent-card')), findsOneWidget);
+      await tester.tap(find.text('Open terminal'));
       await tester.pumpAndSettle();
       expect(target?.id, 'agent-0');
       expect(find.byType(Dialog), findsNothing);

@@ -381,6 +381,15 @@ void main() {
       await f.close(tester);
     });
 
+    test('the state word is short: a reason or a time is on hover', () {
+      expect(superTabMemberWord('Waiting'), 'waiting');
+      expect(superTabMemberWord('Waiting on others'), 'in review');
+      expect(superTabMemberWord('Limited until 09:05'), 'limited');
+      expect(superTabMemberWord('Kept (closed)'), 'kept');
+      expect(superTabMemberWord('Switching…'), 'switching…');
+      expect(superTabMemberWord('Lost'), 'lost');
+    });
+
     testWidgets('waiting first, then working; idle folds under Idle (N)', (
       tester,
     ) async {

@@ -301,7 +301,8 @@ void main() {
     );
     await mount(tester, server, 'owner');
     await openSuperTabMembers(tester);
-    expect(find.textContaining('Switching…'), findsWidgets);
+    // The row's state word (Quiet Swarm).
+    expect(find.text('switching…'), findsWidgets);
     await finish(tester);
   });
 }

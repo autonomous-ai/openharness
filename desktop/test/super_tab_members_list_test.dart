@@ -80,7 +80,7 @@ void main() {
   });
 
   testWidgets(
-    'gives an agent the board scores no rank and no points, and keeps its status line',
+    'gives an agent the board scores no rank and no points, and keeps its state word',
     (tester) async {
       final semantics = tester.ensureSemantics();
       final controller = await show(tester, membersSwarm());
@@ -90,9 +90,9 @@ void main() {
       expect(find.bySemanticsLabel(RegExp(r'\b212 points')), findsNothing);
       // Nor does anyone carry a rank column.
       expect(find.byKey(const ValueKey('leaderboard-rank-peer')), findsNothing);
-      // Today's one status line stays under the name.
+      // Its state word stays on its one line (Quiet Swarm).
       expect(
-        find.byKey(const ValueKey('super-member-line-lead-agent')),
+        find.byKey(const ValueKey('super-member-word-lead-agent')),
         findsOneWidget,
       );
       semantics.dispose();
@@ -148,7 +148,7 @@ void main() {
       findsNothing,
     );
     expect(
-      find.byKey(const ValueKey('super-member-line-luna')),
+      find.byKey(const ValueKey('super-member-word-luna')),
       findsOneWidget,
     );
     // A Buddy is not in the Agents list, so its score shows nowhere.

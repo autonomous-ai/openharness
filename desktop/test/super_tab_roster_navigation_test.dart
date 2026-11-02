@@ -80,7 +80,7 @@ void main() {
       await openSuperTabMembers(tester);
       await tester.tap(find.byKey(const ValueKey('super-member-nova')));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(FilledButton, 'Open terminal'));
+      await tester.tap(find.text('Open terminal'));
       await tester.pumpAndSettle();
       await tester.tap(
         find.byKey(const ValueKey('super-agent-group-mobile-work')),
