@@ -261,7 +261,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
 
   /// Message #N links use the conversation numbers from this snapshot.
   SuperTabSnapshot? _referencesFrom;
-  int? _referencesChangedAt;
   Map<int, String> _referencesByNumber = const {};
 
   /// Swarm Home C's New messages line: the message it sits above once
@@ -639,6 +638,9 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   void _see() {
     final session = _session, c = _conversation;
     if (session == null || c == null) return;
+    // Numbered references come from this reader's snapshot, which may change
+    // while a message row stays cached.
+    _referencesFrom = null;
     _syncSteps(c);
     if (_ownerUnknown && c.reader.snapshot != null) {
       _ownerUnknown = false;
@@ -940,13 +942,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
 
   Map<int, String> _numberedConversations(SwarmConversation c) {
     final snapshot = c.reader.snapshot;
-    final changedAt = c.reader.lastChangedAt;
-    if (identical(snapshot, _referencesFrom) &&
-        changedAt == _referencesChangedAt) {
-      return _referencesByNumber;
-    }
+    if (identical(snapshot, _referencesFrom)) return _referencesByNumber;
     _referencesFrom = snapshot;
-    _referencesChangedAt = changedAt;
     _referencesByNumber = {
       for (final conversation
           in snapshot?.conversations ?? const <SuperTabConversation>[])
