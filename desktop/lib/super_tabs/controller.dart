@@ -2261,7 +2261,8 @@ class SuperTabController extends ChangeNotifier {
         : shown;
     final rows = [for (final message in page) ?_rows[id]?[message.id]];
     return {
-      if (_savedChatsOf(id) case final chats when chats.isNotEmpty) 'chats': chats,
+      if (_savedChatsOf(id) case final chats when chats.isNotEmpty)
+        'chats': chats,
       'format': superTabReadFormat,
       'savedAt': readAt.millisecondsSinceEpoch,
       'lastChangedAt': lastChangedAt,
@@ -2290,11 +2291,21 @@ class SuperTabController extends ChangeNotifier {
     for (final id in _recentChats) {
       if (chats.length == _savedChats) break;
       final shown = _messages[id];
-      if (id == open || shown == null || shown.isEmpty || snapshot?.conversation(id) == null) continue;
-      final page = shown.length > _savedChatRows ? shown.sublist(shown.length - _savedChatRows) : shown;
+      if (id == open ||
+          shown == null ||
+          shown.isEmpty ||
+          snapshot?.conversation(id) == null)
+        continue;
+      final page = shown.length > _savedChatRows
+          ? shown.sublist(shown.length - _savedChatRows)
+          : shown;
       final rows = [for (final message in page) ?_rows[id]?[message.id]];
       if (rows.isNotEmpty) {
-        chats.add({'id': id, 'messages': rows, 'next': SuperTabPage.of(page.first).toJson()});
+        chats.add({
+          'id': id,
+          'messages': rows,
+          'next': SuperTabPage.of(page.first).toJson(),
+        });
       }
     }
     return chats;
@@ -2304,14 +2315,18 @@ class SuperTabController extends ChangeNotifier {
   /// skipped. Each one's first read takes the latest page whole, as the saved page may be short of what came since.
   void _drawSavedChats(Object? chats, SuperTabSnapshot saved, String open) {
     if (chats is! List) return;
-    for (final chat in chats) {
+    // Saved newest first, and each one drawn goes to the front.
+    for (final chat in chats.reversed) {
       try {
         final map = superTabMap(chat);
         final id = map['id'] as String;
         if (id == open || saved.conversation(id) == null) continue;
-        final rows = [for (final row in map['messages'] as List) superTabMap(row)];
+        final rows = [
+          for (final row in map['messages'] as List) superTabMap(row),
+        ];
         final messages = rows.map(SuperTabMessage.fromJson).toList();
-        if (messages.isEmpty || messages.any((m) => m.conversationId != id)) continue;
+        if (messages.isEmpty || messages.any((m) => m.conversationId != id))
+          continue;
         _messages[id] = messages..sort(superTabMessageOrder);
         _keepRows(id, rows);
         _before[id] = SuperTabPage.read(map['next']);

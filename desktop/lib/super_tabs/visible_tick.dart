@@ -2,9 +2,11 @@ import 'dart:async';
 
 import 'package:flutter/widgets.dart';
 
-/// A panel's timer that runs only while the panel is on screen: its subtree not muted (`Offstage`, a tab that isn't showing) and
-/// the app not hidden. Coming back redraws at once, so an age is never stale on screen (Quiet Swarm, Speed). On a phone or a Mac
-/// behind other windows that is nothing to redraw and nothing to read.
+/// A panel's timer that runs only while the panel is on screen: its subtree not muted by
+/// [TickerMode] and the app not hidden. [Offstage] and [IndexedStack] don't mute anything, so what
+/// hides a panel with one also needs a [TickerMode] ([SuperTabPages]). Coming back redraws at once,
+/// so an age is never stale on screen (Quiet Swarm 6/6). Behind other windows that is nothing to
+/// redraw and nothing to read.
 mixin VisibleTick<T extends StatefulWidget>
     on State<T>, WidgetsBindingObserver {
   Duration? _every;
@@ -66,7 +68,7 @@ mixin VisibleTick<T extends StatefulWidget>
   void didChangeDependencies() {
     super.didChangeDependencies();
     _observe();
-    final enabled = TickerMode.of(context);
+    final enabled = TickerMode.valuesOf(context).enabled;
     _settle(() => enabled && _appShown);
   }
 
@@ -74,7 +76,7 @@ mixin VisibleTick<T extends StatefulWidget>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _appShown = _shows(state);
     if (!mounted) return;
-    final enabled = TickerMode.of(context);
+    final enabled = TickerMode.valuesOf(context).enabled;
     _settle(() => enabled && _appShown);
   }
 
@@ -95,6 +97,11 @@ class SuperTabPages extends StatelessWidget {
   final List<Widget> children;
 
   @override
-  Widget build(BuildContext context) =>
-      IndexedStack(index: index, children: children);
+  Widget build(BuildContext context) => IndexedStack(
+    index: index,
+    children: [
+      for (var i = 0; i < children.length; i++)
+        TickerMode(enabled: i == index, child: children[i]),
+    ],
+  );
 }
