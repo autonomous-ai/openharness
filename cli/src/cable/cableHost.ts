@@ -158,6 +158,15 @@ const RELEASE_KEEP_MS = 30 * 60_000
 const LANE_RETRY_MS = 1_000
 const LANE_RETRY_MAX_MS = 30_000
 
+/** How a pick of a machine ended: `code` is the daemon's, `message` is shown to a person (CableHost.selectMachine). */
+type MachinePick = { ok: true } | { ok: false; code: string; message: string }
+
+/** A pick on its way; `replaced` when it took over from another still running. */
+interface PendingPick { machineId: string; replaced: boolean; done: Promise<MachinePick> }
+
+/** A pick's end that says no about that machine and nothing about the lane (deviceFleet.ts select and codeFor). */
+const REFUSALS = new Set(['NEEDS_LINK', 'UNKNOWN_MACHINE', 'NOT_YOURS', 'BILLING'])
+
 export class DaemonCableHost implements CableHost {
   /**
    * This host's own router: over the bare fleet it is given (its tests), or over none, for this computer
@@ -175,10 +184,13 @@ export class DaemonCableHost implements CableHost {
    */
   private selected = ''
   /**
-   * The remote machine a select is on its way to, until it settles. The announce on plug-in names it rather than
-   * `selected`: announcing the older machine would replace the newer choice at the lane (deviceLink.ts select).
+   * The newest pick still on its way to a remote machine, until it settles. Only it may move `selected`: a pick waiting on
+   * a slow machine lands up to 15 s later, by when the person may be elsewhere (Diego's Buddy, 11-02). Which pick it is, not
+   * just which machine: going away and back to one machine looks the same by name, and the first landing says nothing of
+   * the last. The announce on plug-in names it rather than `selected`: announcing the older machine would replace the newer
+   * choice at the lane (deviceLink.ts select).
    */
-  private selecting = ''
+  private pending: PendingPick | null = null
 
   /** Counts plug-ins: a lane open that lands after an unplug or a replug belongs to an older one and does nothing. */
   private plugIn = 0
@@ -248,10 +260,15 @@ export class DaemonCableHost implements CableHost {
     return this.viaFleet((r) => r.listMachines())
   }
 
-  async selectMachine(machineId: string): Promise<{ ok: true } | { ok: false; code: string; message: string }> {
+  /** The machine the newest pick is still on its way to, or '' when none is. */
+  pendingPick(): string {
+    return this.pending?.machineId ?? ''
+  }
+
+  async selectMachine(machineId: string): Promise<MachinePick> {
     if (machineId === this.localId()) {
       this.selected = machineId
-      this.selecting = ''
+      this.pending = null
       // Let go of the REMOTE machine after a linger, keeping the socket — then announce where the dial
       // actually is. `activeMachineId` on the account is then true for this machine too, instead of
       // silently going stale on whatever was selected last.
@@ -262,14 +279,44 @@ export class DaemonCableHost implements CableHost {
     if (!this.viaFleet((r) => r.hasLane())) {
       return { ok: false, code: 'UNAVAILABLE', message: 'Sign in on this computer to reach other machines' }
     }
-    this.selecting = machineId
+    // A second pick of the machine already on its way shares its one answer, as the lane's select does. Each caller may be
+    // the only one left to tell the dial: an app follow's answer is dropped once a newer focus arrives (reviews of #2504).
+    if (this.pending?.machineId === machineId) return this.pending.done
+    // Set before the select starts, so a fleet call that fails at once still finds it and clears it.
+    const entry: PendingPick = { machineId, replaced: this.pending !== null, done: null as unknown as Promise<MachinePick> }
+    this.pending = entry
+    entry.done = this.pickMachine(entry)
+    return entry.done
+  }
+
+  private async pickMachine(entry: PendingPick): Promise<MachinePick> {
+    const { machineId } = entry
     let selected: Awaited<ReturnType<FleetRouting['select']>>
+    let newest = false
     try {
       selected = await this.viaFleet((r) => r.select(machineId))
     } finally {
-      if (this.selecting === machineId) this.selecting = ''
+      newest = this.pending === entry
+      if (newest) this.pending = null
     }
-    if (!selected.ok) return selected
+    if (!newest) {
+      // Replaced, however it ended: a machine the person left failing late is no news to them. A newer pick of this same
+      // machine (away and back) speaks for this one too: the dial waits on that machine, and an error would end its wait.
+      if (this.pending?.machineId === machineId) return this.pending.done
+      if (this.selected === machineId) return { ok: true }
+      return { ok: false, code: 'SUPERSEDED', message: 'Another machine was chosen' }
+    }
+    if (!selected.ok) {
+      // The lane may still be where the pick this one replaced took it: the fleet refuses an unlinked machine before asking
+      // the lane, so the dial stayed here while the backend and any reconnect stayed on the machine the person left (reviews
+      // of #2504). Said again now, as picking this machine again would not: it is already selected. Only for a refusal, and
+      // only with a pick replaced: that one was still running, so the lane is up. Any other failure may be the lane's end (a
+      // revoke, a 4403, an unplug), and telling it anything would dial straight back past what it decided.
+      if (entry.replaced && REFUSALS.has(selected.code)) {
+        void this.announceSelection().catch((err) => this.wiring.log(`cable: could not announce (${(err as Error).message})`))
+      }
+      return selected
+    }
     this.selected = machineId
     return { ok: true }
   }
@@ -355,7 +402,7 @@ export class DaemonCableHost implements CableHost {
    */
   private async announceSelection(): Promise<void> {
     if (!this.viaFleet((r) => r.hasLane())) return
-    const machineId = this.selecting || this.selectedMachine()
+    const machineId = this.pendingPick() || this.selectedMachine()
     if (isPlaceholder(machineId)) return
     const selected = await this.viaFleet((r) => r.select(machineId))
     // Never fatal. The local machine in particular must stay usable with no backend at all — it is the
