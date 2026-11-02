@@ -153,11 +153,62 @@ describe('the ship moment', () => {
       expect(f.ships(f.run({ type: 'work.status', conversationId: id, assignmentId: work.assignment!.id, status: 'done', result: `Merged ${PR}` }, f.as(builder)))).toHaveLength(1)
     })
 
-    it('waits for the last of several pull requests', () => {
+    it('waits for the last of several pull requests, whether or not each has a card', () => {
       const { f, id, builder } = assigned()
-      f.merge(id, PR)
       expect(f.ships(f.finish(id, builder, `${PR} and ${OTHER}`, builder, false))).toEqual([])
+      expect(f.ships(f.merge(id, PR))).toEqual([])
       expect(f.ships(f.merge(id, OTHER))).toHaveLength(1)
+    })
+
+    it('records a merge by link, for a pull request that has no card, and the later merge ships', () => {
+      const { f, id, builder, group } = assigned()
+      const work = group()
+      // Both links come from a check's evidence: no main-chat row names them, so neither has a card.
+      f.run({ type: 'work.check', conversationId: id, assignmentId: work.assignment!.id, checkId: work.checks[0]!.id, passed: true,
+        evidence: `Delivered ${PR} and ${OTHER}` }, f.as(builder))
+      const done = (result: string) => f.run({ type: 'work.status', conversationId: id, assignmentId: work.assignment!.id, status: 'done', result }, f.as(builder))
+      expect(f.ships(done('Done, see the checks.'))).toEqual([])
+      expect(group().cards?.pullRequests ?? []).toEqual([])
+      f.merge(id, PR)
+      expect(f.ships(f.merge(id, OTHER))).toHaveLength(1)
+    })
+
+    it('counts only the pull requests the Done result names: one merely mentioned or closed never blocks', () => {
+      const { f, id, builder } = assigned()
+      f.run({ type: 'message.send', conversationId: id, text: `Superseded ${OTHER}, closed unmerged`, replyTo: null, recipientIds: [] })
+      expect(f.ships(f.finish(id, builder, `Ready: ${PR}`, builder, false))).toEqual([])
+      const [line] = f.ships(f.merge(id, PR))
+      expect(line!.source).toMatchObject({ pullRequests: [PR] })
+    })
+
+    it('ships on the merge when the Done named no pull request', () => {
+      const { f, id, builder } = assigned()
+      expect(f.ships(f.finish(id, builder, 'Done, nothing named.', builder, false))).toEqual([])
+      expect(f.ships(f.merge(id, PR))).toHaveLength(1)
+    })
+
+    it('posts once for work Done, reassigned, merged and Done again, and not at a repeated merge record', () => {
+      const { f, id, builder } = assigned()
+      expect(f.ships(f.finish(id, builder, `Ready: ${PR}`, builder, false))).toEqual([])
+      const again = f.add('Ivy', id)
+      f.run({ type: 'agent.release', agentId: builder, decision: 'keep' }, f.as(f.lead))
+      f.run({ type: 'work.assign', conversationId: id, agentId: again }, owner)
+      expect(f.ships(f.merge(id, PR))).toEqual([])
+      expect(f.ships(f.finish(id, again, `Merged ${PR}`, again))).toHaveLength(1)
+      expect(f.ships(f.merge(id, PR))).toEqual([])
+    })
+
+    it('does not post a second time when work Done under the old rule is merged and Done again', () => {
+      const { f, id, builder, group } = assigned()
+      f.finish(id, builder, `Merged ${PR}`, builder, false)
+      // A group from before this rule: its line was posted at that Done, so it is neither waiting nor marked.
+      delete group().ledger!.shipWaiting
+      delete group().ledger!.shipsAfterMerge
+      f.merge(id, PR)
+      const again = f.add('Ivy', id)
+      f.run({ type: 'agent.release', agentId: builder, decision: 'keep' }, f.as(f.lead))
+      f.run({ type: 'work.assign', conversationId: id, agentId: again }, owner)
+      expect(f.ships(f.finish(id, again, `Merged ${PR}`))).toEqual([])
     })
 
     it('does not announce again work that was Done before pull requests had to be merged', () => {

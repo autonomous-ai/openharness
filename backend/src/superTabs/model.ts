@@ -376,18 +376,20 @@ export function githubRepository(repositoryUrl: string | null | undefined): { ow
   return match ? { owner: match[1]!, repo: match[2]! } : null
 }
 
-/** [url] (or "owner/repo" form) as the project's own pull request: the same number in the project's repository when only the
- *  owner differs, null when it belongs to another repository. Without a known GitHub repository nothing can be judged. */
+/** [url] as the project's own pull request, in the project's spelling of owner and repository (GitHub names are not case
+ *  sensitive); null when it belongs to any other repository, whatever its name, since an owner is never guessed. Without a
+ *  known GitHub repository nothing can be judged. */
 export function projectPullRequestUrl(url: string, repositoryUrl: string | null | undefined): string | null {
   const own = githubRepository(repositoryUrl)
   if (!own) return url
   const match = url.match(/^https:\/\/github\.com\/([A-Za-z0-9_-]+)\/([A-Za-z0-9_.-]+)\/pull\/([1-9][0-9]*)$/)
   if (!match) return null
-  return match[2]!.toLowerCase() === own.repo.toLowerCase() ? `https://github.com/${own.owner}/${own.repo}/pull/${match[3]}` : null
+  return match[1]!.toLowerCase() === own.owner.toLowerCase() && match[2]!.toLowerCase() === own.repo.toLowerCase()
+    ? `https://github.com/${own.owner}/${own.repo}/pull/${match[3]}` : null
 }
 
 /** The GitHub pull request links in [text], each once, in order. With the project's [repositoryUrl], each is that repository's
- *  (the owner corrected) and a link into another repository is left out, so one pull request is one link. */
+ *  (in the project's spelling) and a link into any other repository is left out, so one pull request is one link. */
 export const pullRequestLinks = (text: string, repositoryUrl?: string | null): string[] => [...new Set([...text.matchAll(/https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\/pull\/([1-9][0-9]*)\b/g)]
   .filter(match => Number(match[1]) <= Number.MAX_SAFE_INTEGER).flatMap(match => projectPullRequestUrl(match[0], repositoryUrl) ?? []))]
 

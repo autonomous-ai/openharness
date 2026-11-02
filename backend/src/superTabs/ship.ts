@@ -1,7 +1,6 @@
 import { isLeads, stableId, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { agentDisplayName } from './agentNames.js'
 import { groupProject } from './projects.js'
-import { pullRequestCard } from './cards.js'
 
 /** The source of the celebration row Desktop draws with confetti. */
 export const SHIP_KIND = 'ship'
@@ -11,22 +10,32 @@ const AGENT_KEY = 'agent:'
 /** When the group first shipped, as the leaderboard records it (leaderboard/record.ts `recordStatus`: once, on the first Done). */
 export const shippedAt = (group: Conversation): number | undefined => group.ledger?.shippedAt
 
-/** Every pull request the group links has a recorded merge (cards.ts recordCardMerged). A person reads "Shipped" as merged. */
-export const allMerged = (group: Conversation): boolean =>
-  !!group.pullRequestUrls?.length && group.pullRequestUrls.every(url => pullRequestCard(group, url)?.mergedAt !== undefined)
+/** The pull requests whose merge was recorded on [group]: by link, or on a card (cards.ts) for merges recorded before links. */
+export const mergedPullRequests = (group: Conversation): string[] =>
+  [...new Set([...group.ledger?.mergedUrls ?? [], ...group.cards?.pullRequests?.flatMap(card => card.mergedAt === undefined ? [] : [card.url]) ?? []])]
 
-/** Whether [before], the group as it was before the command, may still be celebrated: not yet, and not already shipped by an
- *  earlier Done (the old line was posted at Done, before any merge). A group is one request: later attempts celebrate nothing. */
-export const celebrable = (before: Conversation): boolean =>
-  before.ledger?.shipPostedAt == null && (before.ledger?.shippedAt == null || before.ledger.mergedAt != null)
+/** The pull requests a Done delivers: those it names (its result's, else its checks'), plus every merge recorded on the group.
+ *  A link merely mentioned in the chat or the brief, or a pull request closed unmerged, is no part of it. */
+export function deliveredPullRequests(group: Conversation, named: string[]): string[] {
+  return [...new Set([...mergedPullRequests(group), ...named])]
+}
 
-/** Work is Done and every pull request it links has merged. The project chat gets one line naming who asked, who built it and
- *  who reviewed it. Done with a pull request still open posts nothing: the caller marks the group waiting, and the last
- *  recorded merge posts it. A private conversation is never celebrated: its title, words and link are its own. No agent is
- *  woken by it. */
-export function shipNotice(state: SuperTabState, group: Conversation, author: Author, operationId: string): MessageDraft | null {
-  const pullRequests = group.pullRequestUrls ?? []
-  if (!allMerged(group) || group.audience || group.reviewOf || isLeads(group) || !group.assignment) return null
+/** Whether [before], the group as it was before the command, may still be celebrated: its line has not been posted. A group
+ *  from before Shipped waited for the merge keeps the old guard: it was announced at its first ship, so it is only if it
+ *  is waiting (Done since) or nothing shipped it yet. */
+export const celebrable = (before: Conversation): boolean => {
+  const ledger = before.ledger
+  return ledger?.shipPostedAt == null && (!!ledger?.shipsAfterMerge || ledger?.shipWaiting !== undefined || ledger?.shippedAt == null)
+}
+
+/** Work is Done and every pull request it delivered has merged (and at least one). The project chat gets one line naming who
+ *  asked, who built it and who reviewed it. A Done with one still open posts nothing: the caller keeps the group waiting
+ *  with the pull requests it named, and the merge that completes them posts it. A private conversation is never celebrated:
+ *  its title, words and link are its own. No agent is woken by it. */
+export function shipNotice(state: SuperTabState, group: Conversation, author: Author, operationId: string, named: string[]): MessageDraft | null {
+  const merged = new Set(mergedPullRequests(group))
+  const pullRequests = deliveredPullRequests(group, named)
+  if (!pullRequests.length || !pullRequests.every(url => merged.has(url)) || group.audience || group.reviewOf || isLeads(group) || !group.assignment) return null
   const project = groupProject(state, group)
   const agentName = (id: string) => agentDisplayName(state.agents, id) ?? state.agents.find(a => a.id === id)?.name
   const builderIds = [group.assignment.agentId].filter(id => agentName(id))

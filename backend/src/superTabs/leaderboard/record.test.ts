@@ -57,7 +57,7 @@ describe('who asked for a group', () => {
     f.at(5_000)
     const id = f.create()
     expect(f.group(id).requesterId).toBe('owner')
-    expect(f.group(id).ledger).toEqual({ askedAt: 5_000 })
+    expect(f.group(id).ledger).toEqual({ askedAt: 5_000, shipsAfterMerge: true })
   })
 
   it('records the person a Lead names when it opens a group for them', () => {
@@ -72,7 +72,7 @@ describe('who asked for a group', () => {
     const f = fixture(), lead = f.add('lead', 'lead', true)
     const id = f.create(f.asAgent(lead))
     expect(f.group(id).requesterId).toBeUndefined()
-    expect(f.group(id).ledger).toEqual({ askedAt: 1_000 })
+    expect(f.group(id).ledger).toEqual({ askedAt: 1_000, shipsAfterMerge: true })
   })
 
   it('tells a Lead that opens a build group for nobody to name who asked; never for a named requester, a person or a review', () => {
@@ -1083,7 +1083,7 @@ describe('a group opened from a Buddy\'s proposal (Lead, 2026-10-29: the Buddy e
     f.at(5_000)
     const { buddy, proposal } = proposed(f)
     const id = createFrom(f, proposal)
-    expect(f.group(id).ledger).toEqual({ askedAt: 5_000, proposal: { buddyId: buddy, messageId: 'm-proposal' } })
+    expect(f.group(id).ledger).toEqual({ askedAt: 5_000, shipsAfterMerge: true, proposal: { buddyId: buddy, messageId: 'm-proposal' } })
   })
 
   it('is requested by the person the proposal was sent for when a Lead names nobody, and by the one it names otherwise', () => {

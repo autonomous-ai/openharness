@@ -51,9 +51,14 @@ export interface GroupLedger {
   mergedAt?: number
   /** The project chat's Shipped line was posted (ship.ts): once per group, only when the work is Done and its pull requests merged. */
   shipPostedAt?: number
-  /** Done while a linked pull request was still open: the line waits for the last merge (ship.ts). Absent on work done before
-   *  this existed, which is never announced again. */
-  shipWaiting?: true
+  /** Opened under the rule that Shipped waits for the merge (ship.ts celebrable). A group from before it kept the old guard: it
+   *  is announced only if nothing shipped it before, so work already announced never is again. */
+  shipsAfterMerge?: true
+  /** The pull requests whose merge the Lead recorded on this group, by link: a merge needs no card to count (ship.ts). */
+  mergedUrls?: string[]
+  /** Done before its pull requests merged: the pull requests its Done named, whose last merge posts the line (ship.ts). Cleared
+   *  when the line posts. Absent on work done before this existed, which is never announced again. */
+  shipWaiting?: string[]
   /** When the first follow-up fix of its merged PR merged, within FIX_WINDOW_MS of its merge (recordFix): it needed a fix
    *  after merge (evidence routing, Ken 2026-10-29). */
   fixedAfterMergeAt?: number
@@ -93,7 +98,7 @@ export const MAX_UNBLOCKS = 200
 export function recordAsked(group: Conversation, requesterId: string | undefined, now: number): void {
   if (group.audience) return
   if (requesterId) group.requesterId = requesterId
-  group.ledger = { askedAt: now }
+  group.ledger = { askedAt: now, shipsAfterMerge: true }
 }
 
 /** A status change opens, closes or ships: needs_human starts a wait (again, when the agent asks anew after an answer), naming

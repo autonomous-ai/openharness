@@ -4,7 +4,7 @@ import { keepUsernames, setUsername, swarmUsernames, usernameOf } from './userna
 import { z } from 'zod'
 import { tokensByModelSchema } from './costs/tokens.js'
 import {
-  activeWork, actorKey, agent, appendPullRequestUrls, author, githubRepository, projectPullRequestUrl, conversation, crossProjectActive, fail, isLeads, person, stableId, numberConversations, nextConversationNumber, renderWorkTask,
+  activeWork, actorKey, agent, appendPullRequestUrls, author, githubRepository, projectPullRequestUrl, pullRequestLinks, conversation, crossProjectActive, fail, isLeads, person, stableId, numberConversations, nextConversationNumber, renderWorkTask,
   finishWorker, seenMachineIds, SuperTabError, swarmGridName, visibleState, AGENT_ONLY, STATUS_LABELS, forRecipients,
   type Actor, type AgentConfiguration, type AgentStart, type AgentStartRequest, type BuddySessionEntry, type WorkTask, type Agent, type Author, type Check, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
@@ -31,7 +31,7 @@ import { fixedOriginal, LEDGER_WEEKS, PULL_REQUEST_URL, recordAsked, recordFix, 
   recordReportedModel, recordVerdict } from './leaderboard/record.js'
 import { WEEK_MS } from './leaderboard/week.js'
 import { react, reactionSchema, type ReactionTarget } from './reactions.js'
-import { allMerged, celebrable, shipNotice } from './ship.js'
+import { celebrable, shipNotice } from './ship.js'
 import { assignedNotice, tellBuddies } from './buddyNews.js'
 import { bindPullRequestCards, bindTaskCard, pullRequestCard, recordCardMerged } from './cards.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
@@ -1864,7 +1864,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // One refusal for every link it cannot take, so a link never tells what another project or a private chat holds.
       const original = command.fixes === undefined ? undefined : fixedOriginal(state, group, command.fixes, mergedAt)
         ?? fail('FIX_LINK', 'No merged pull request in this project matches that link within the last 14 days.', 400)
-      // Only the project's own pull requests are recorded: the owner of a link is corrected, another repository's is refused.
+      // Only the project's own pull requests are recorded: a link into any other repository, another owner's included, is refused.
       const repositoryUrl = groupRepositoryUrl(state, group), own = githubRepository(repositoryUrl)
       const pullRequestUrl = projectPullRequestUrl(command.pullRequestUrl, repositoryUrl)
         ?? fail('PULL_REQUEST_REPOSITORY', `This pull request is not in the project's repository (${own!.owner}/${own!.repo}).`, 400)
@@ -1883,12 +1883,16 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         else bindPullRequestCards(group, posted, repositoryUrl)
       }
       recordCardMerged(group, pullRequestUrl, mergedAt)
-      // Done earlier while this was open: the last merge is when it shipped (ship.ts).
-      if (group.ledger?.shipWaiting && group.assignment?.status === 'done' && allMerged(group)) {
-        const shipped = shipNotice(state, group, sender, operationId)
-        if (shipped) effects.messages.push(shipped)
-        delete group.ledger.shipWaiting
-        if (shipped) group.ledger.shipPostedAt = context.now
+      // The merge counts by its link, whether or not a card names it (ship.ts mergedPullRequests).
+      group.ledger!.mergedUrls = [...new Set([...group.ledger!.mergedUrls ?? [], pullRequestUrl])]
+      // Done earlier while this was open: the last merge is when it shipped (ship.ts). The line posts once: waiting ends with it.
+      if (group.ledger!.shipWaiting && group.assignment?.status === 'done') {
+        const shipped = shipNotice(state, group, sender, operationId, group.ledger!.shipWaiting)
+        if (shipped) {
+          effects.messages.push(shipped)
+          group.ledger!.shipPostedAt = context.now
+          delete group.ledger!.shipWaiting
+        }
       }
       break
     }
@@ -2994,12 +2998,19 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         // Celebrated once, and only when the pull requests it links have merged; Done with one still open waits for its merge
         // (ship.ts). The group as it was before this command says whether the leaderboard already shipped it (recordStatus).
         if (command.status === 'done' && celebrable(conversation(original, group.id))) {
-          appendPullRequestUrls(group, [command.result, ...group.checks.map(check => check.evidence)], groupRepositoryUrl(state, group))
-          const shipped = shipNotice(state, group, sender, operationId)
+          const repositoryUrl = groupRepositoryUrl(state, group)
+          appendPullRequestUrls(group, [command.result, ...group.checks.map(check => check.evidence)], repositoryUrl)
+          // What this Done delivers: the pull requests its result names, else its checks' evidence, plus the group's earlier
+          // waiting; a link only mentioned elsewhere in the task is no part of it (ship.ts deliveredPullRequests).
+          const named = pullRequestLinks(command.result ?? '', repositoryUrl)
+          const awaited = [...new Set([...group.ledger!.shipWaiting ?? [],
+            ...named.length ? named : group.checks.flatMap(check => pullRequestLinks(check.evidence ?? '', repositoryUrl))])]
+          const shipped = shipNotice(state, group, sender, operationId, awaited)
           if (shipped) {
             effects.messages.push(shipped)
             group.ledger!.shipPostedAt = context.now
-          } else if (group.pullRequestUrls?.length) group.ledger!.shipWaiting = true
+            delete group.ledger!.shipWaiting
+          } else group.ledger!.shipWaiting = awaited
         }
       }
       if (actor.kind === 'agent') renewOwnTask(state, group, actor.agentId, context.now)

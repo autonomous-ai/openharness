@@ -30,8 +30,8 @@ describe('a project\'s pull request links', () => {
     expect(githubRepository(null)).toBeNull()
   })
 
-  it('corrects the owner, keeps the project\'s own link, and drops another repository\'s', () => {
-    expect(projectPullRequestUrl(WRONG_OWNER, REPO)).toBe(RIGHT)
+  it('keeps the project\'s own link in its spelling, and drops any other repository\'s, another owner\'s included', () => {
+    expect(projectPullRequestUrl(WRONG_OWNER, REPO)).toBeNull()
     expect(projectPullRequestUrl('https://github.com/AUTONOMOUS-AI/OpenHarness/pull/1', REPO)).toBe(RIGHT)
     expect(projectPullRequestUrl(RIGHT, REPO)).toBe(RIGHT)
     expect(projectPullRequestUrl('https://github.com/autonomous-ai/other/pull/1', REPO)).toBeNull()
@@ -40,33 +40,40 @@ describe('a project\'s pull request links', () => {
   })
 
   it('finds one link per pull request in text', () => {
-    expect(pullRequestLinks(`${WRONG_OWNER} ${RIGHT} https://github.com/autonomous-ai/other/pull/1`, REPO)).toEqual([RIGHT])
+    expect(pullRequestLinks(`${WRONG_OWNER} ${RIGHT} https://github.com/autonomous-ai/other/pull/1 https://github.com/AUTONOMOUS-AI/OpenHarness/pull/1`, REPO)).toEqual([RIGHT])
     expect(pullRequestLinks(`${WRONG_OWNER} ${RIGHT}`)).toEqual([WRONG_OWNER, RIGHT])
   })
 
-  it('cleans a group\'s record: the two owners of one pull request become one entry, another repository goes', () => {
+  it('cleans a group\'s record: the other owner\'s link goes and the right one stays, as does another repository\'s removal', () => {
     const group = { pullRequestUrls: [WRONG_OWNER, RIGHT, 'https://github.com/autonomous-ai/other/pull/9'],
-      cards: { pullRequests: [{ url: WRONG_OWNER, messageId: 'm1' }, { url: RIGHT, messageId: 'm2', mergedAt: 5 }, { url: 'https://github.com/o/other/pull/9', messageId: 'm3' }] } } as unknown as Conversation
+      ledger: { mergedUrls: [WRONG_OWNER, RIGHT], shipWaiting: [WRONG_OWNER, 'https://github.com/AUTONOMOUS-AI/openharness/pull/1'] },
+      cards: { pullRequests: [{ url: WRONG_OWNER, messageId: 'm1' }, { url: RIGHT, messageId: 'm2', mergedAt: 5 },
+        { url: 'https://github.com/AUTONOMOUS-AI/openharness/pull/1', messageId: 'm4', mergedAt: 3 }, { url: 'https://github.com/o/other/pull/9', messageId: 'm3' }] } } as unknown as Conversation
     cleanPullRequestLinks(group, REPO)
     expect(group.pullRequestUrls).toEqual([RIGHT])
-    expect(group.cards!.pullRequests).toEqual([{ url: RIGHT, messageId: 'm1', mergedAt: 5 }])
+    expect(group.ledger).toEqual({ mergedUrls: [RIGHT], shipWaiting: [RIGHT] })
+    expect(group.cards!.pullRequests).toEqual([{ url: RIGHT, messageId: 'm2', mergedAt: 3 }])
     cleanPullRequestLinks(group, null)
     expect(group.pullRequestUrls).toEqual([RIGHT])
   })
 
-  it('binds one card per pull request whichever owner a message names', () => {
+  it('binds one card per pull request, and none for another owner\'s', () => {
     const group = { pullRequestUrls: [] } as unknown as Conversation
     bindPullRequestCards(group, { id: 'm1', conversationId: 'g', author: {} as never, text: `Opened ${WRONG_OWNER}`, replyTo: null, recipients: [] }, REPO)
+    expect(group.cards).toBeUndefined()
     bindPullRequestCards(group, { id: 'm2', conversationId: 'g', author: {} as never, text: `Again ${RIGHT}`, replyTo: null, recipients: [] }, REPO)
-    expect(group.cards!.pullRequests).toEqual([{ url: RIGHT, messageId: 'm1' }])
-    expect(pullRequestCard(group, RIGHT)?.messageId).toBe('m1')
+    bindPullRequestCards(group, { id: 'm3', conversationId: 'g', author: {} as never, text: `Spelled https://github.com/Autonomous-AI/OpenHarness/pull/1`, replyTo: null, recipients: [] }, REPO)
+    expect(group.cards!.pullRequests).toEqual([{ url: RIGHT, messageId: 'm2' }])
+    expect(pullRequestCard(group, RIGHT)?.messageId).toBe('m2')
   })
 
-  it('records a merge of a link with the wrong owner under the project\'s repository', () => {
+  it('records a merge of a link in the project\'s spelling, and refuses another owner\'s', () => {
     const f = fixture()
-    f.run({ type: 'conversation.merged', conversationId: f.id, pullRequestUrl: WRONG_OWNER })
+    expect(() => f.run({ type: 'conversation.merged', conversationId: f.id, pullRequestUrl: WRONG_OWNER })).toThrow(/not in the project's repository/)
+    f.run({ type: 'conversation.merged', conversationId: f.id, pullRequestUrl: 'https://github.com/Autonomous-AI/OpenHarness/pull/1' })
     f.run({ type: 'conversation.merged', conversationId: f.id, pullRequestUrl: RIGHT })
     expect(f.group().pullRequestUrls).toEqual([RIGHT])
+    expect(f.group().ledger!.mergedUrls).toEqual([RIGHT])
     expect(f.group().cards!.pullRequests).toEqual([expect.objectContaining({ url: RIGHT, mergedAt: 1000 })])
   })
 
