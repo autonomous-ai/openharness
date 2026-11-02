@@ -723,8 +723,7 @@ class _SuperTabRosterState extends State<SuperTabRoster>
         ]),
         builder: (context, _) => LaidOutListView(
           key: PageStorageKey('super-tab-resources-${c.tabId}'),
-          // Its close sits level with the chat header's buttons.
-          padding: const EdgeInsets.only(top: 10, bottom: 12),
+          padding: const EdgeInsets.symmetric(vertical: 12),
           children: _members(),
         ),
       ),
