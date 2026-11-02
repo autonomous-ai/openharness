@@ -250,8 +250,10 @@ void main() {
           .ancestor(of: notifications, matching: find.byType(Material))
           .first;
       final menuRect = tester.getRect(menuPanel);
-      expect(menuRect.contains(notificationsRect.topLeft), isTrue);
-      expect(menuRect.contains(notificationsRect.bottomRight), isTrue);
+      expect(notificationsRect.left, greaterThanOrEqualTo(menuRect.left));
+      expect(notificationsRect.top, greaterThanOrEqualTo(menuRect.top));
+      expect(notificationsRect.right, lessThanOrEqualTo(menuRect.right));
+      expect(notificationsRect.bottom, lessThanOrEqualTo(menuRect.bottom));
       await tester.tap(notifications);
       await tester.pumpAndSettle();
       expect(ticked(tester), 'Mentions only');
