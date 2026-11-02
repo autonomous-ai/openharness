@@ -57,11 +57,14 @@ export const TEMPLATE_WORKFLOW = `## Workflow
 
 export const TEMPLATE_ROUTING = `## Routing
 
-- Engineers run on Claude Opus at high effort or Codex GPT-6 Astra at xhigh, whichever has quota at the better price. No
-  engine is preferred. No Engineer runs on Claude Sonnet or Claude Haiku (Ken and Dee, 2026-10-30).
+- Small work (a small feature, a fix, docs, tests) runs on
+  Claude Sonnet at high effort or Codex GPT-6.1 Sol at high effort, whichever has quota at the better price.
+- Big, hard or risky work runs on Claude Opus at high effort or Codex GPT-6 Astra at xhigh, whichever has quota at the
+  better price. No engine is preferred.
+- No agent runs below high effort, and none on Claude Haiku.
 - Reviewers run on a model at least as strong as the Engineer's, on either engine, never on a model of the Swarm's grid.
-- Low-risk docs, tests and fixtures go to a model on the Swarm's grid first. After a failed review they move to Opus or
-  Astra.
+- Low-risk docs, tests and fixtures go to a model on the Swarm's grid first. After a failed review they move to Sonnet or
+  Sol, and after a second to Opus or Astra.
 - A Tester runs on a machine that has what the change needs: a Mac for Desktop, the machine the device is plugged into for
   firmware. The machine comes before the model. A mid-strength model is enough for most testing.`
 

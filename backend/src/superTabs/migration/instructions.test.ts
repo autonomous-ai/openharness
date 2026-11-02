@@ -32,10 +32,22 @@ describe('the document the migration writes', () => {
     expect(text).toContain('- Builder runs on Codex gpt-6-astra at xhigh effort unless its start names another.')
   })
 
+  // Ken, 2026-11-02 turned Sonnet on at high effort in the default table. A policy saved before kept the old default
+  // row (Sonnet medium, off): that is the old default, not the owner's choice, and says nothing.
+  it('reads a policy saved with the old default Sonnet row as no difference', () => {
+    const policy: RoutingPolicy = { ...DEFAULT_ROUTING_POLICY,
+      models: [...DEFAULT_ROUTING_POLICY.models.filter(m => m.model !== 'sonnet'),
+        { engine: 'claude', model: 'sonnet', effort: 'medium', quality: 2, cost: 2, enabled: false }] }
+    const { text } = documentFor({ project, roleTexts: {}, rules: [], policy })
+    expect(text.slice(INSTRUCTIONS_TEMPLATE.trimEnd().length)).not.toContain('sonnet')
+  })
+
   it('adds the project\'s rules in the owner\'s words, and the policy\'s notes and differences as plain lines, under Routing', () => {
     const policy: RoutingPolicy = { ...DEFAULT_ROUTING_POLICY,
-      models: [...DEFAULT_ROUTING_POLICY.models.filter(m => !(m.engine === 'claude' && m.model === 'haiku'))
-        .map(m => m.model === 'sonnet' ? { ...m, enabled: true } : m.model === 'opus' && m.effort === 'high' ? { ...m, cost: 5 } : m),
+      // Saved before 2026-11-02: Sonnet's row was medium effort, which this owner had turned on; no Sonnet high row.
+      models: [...DEFAULT_ROUTING_POLICY.models.filter(m => !(m.engine === 'claude' && (m.model === 'haiku' || m.model === 'sonnet')))
+        .map(m => m.model === 'opus' && m.effort === 'high' ? { ...m, cost: 5 } : m),
+      { engine: 'claude', model: 'sonnet', effort: 'medium', quality: 2, cost: 2, enabled: true },
       { engine: 'codex', model: 'gpt-7', effort: 'high', quality: 2, cost: 9, enabled: true }],
       floor: { low: 1, medium: 3, high: 3 }, quotaReserve: 20, notes: 'Keep Opus for hard work.',
       localModels: { quality: 2, enabled: false, models: [{ model: 'kimi k3', quality: 3 }] },
@@ -48,6 +60,8 @@ describe('the document the migration writes', () => {
     expect(added).not.toContain('Another project')
     expect(added).toContain('- Routing notes: Keep Opus for hard work.')
     expect(added).toContain('- Claude sonnet at medium effort is on.')
+    // The Sonnet high row came after the policy was saved: its absence is no choice of the owner's.
+    expect(added).not.toContain('sonnet at high effort')
     expect(added).toContain('- Claude haiku at auto effort is not offered.')
     expect(added).toContain('- Claude opus at high effort counts as strength 3 of 3 at cost 5.')
     expect(added).toContain('- Codex gpt-7 at high effort is offered at strength 2 of 3, cost 9.')

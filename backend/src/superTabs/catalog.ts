@@ -18,7 +18,7 @@ export interface CatalogModel { engine: 'claude' | 'codex'; model: string; effor
  *  `strength` (the CLI's route, superTabs/route.ts gridStrength). */
 export interface CatalogGrid { strength: number; models: ReadonlyArray<{ model: string; strength: number }> }
 
-const NOT_OFFERED = 'Not offered by default: no Engineer runs on Claude Sonnet or Claude Haiku (Ken and Dee, 2026-10-30).'
+const NOT_OFFERED = 'Not offered by default: no agent runs on Claude Haiku, and none below high effort (Ken, 2026-11-02).'
 
 export const MODEL_CATALOG: { models: readonly CatalogModel[]; grid: CatalogGrid } = {
   models: [
@@ -30,10 +30,12 @@ export const MODEL_CATALOG: { models: readonly CatalogModel[]; grid: CatalogGrid
     // Codex's own default model, named: GPT-6.1 Sol scores 58.18 on Terminal-Bench 4.0 in Codex (benchmarkPriors/data.ts) and
     // costs Sonnet's API rate (costs/prices.ts).
     { engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', strength: 3, cost: 2, offered: true },
-    // Builders run on Opus high or Astra xhigh (the owners' standing decision). Its API rate is five times Sol's and 2.5
+    // Big builds run on Opus high or Astra xhigh (the owners' standing decision). Its API rate is five times Sol's and 2.5
     // times Opus's, so it costs 5, after Opus at xhigh: at equal strength the route keeps choosing Opus high first.
     { engine: 'codex', model: 'gpt-6-astra', effort: 'xhigh', strength: 3, cost: 5, offered: true },
-    { engine: 'claude', model: 'sonnet', effort: 'medium', strength: 2, cost: 2, offered: false, note: NOT_OFFERED },
+    // Small work (a small feature, a fix, docs, tests) runs on Sonnet or Sol, at high effort, nothing below it (Ken,
+    // 2026-11-02; 2026-10-30 had turned Sonnet off). Big or risky work stays on Opus or Astra.
+    { engine: 'claude', model: 'sonnet', effort: 'high', strength: 2, cost: 2, offered: true },
     { engine: 'claude', model: 'haiku', effort: 'auto', strength: 1, cost: 1, offered: false, note: NOT_OFFERED },
   ],
   // Grid models are free but weaker. Kimi K3 and DeepSeek v4.1 do Sonnet's work (Ken, 2026-10-29); any other counts 1.

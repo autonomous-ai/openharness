@@ -36,7 +36,10 @@ describe('the built-in template', () => {
     }
     expect(INSTRUCTIONS_TEMPLATE).toContain('Review and test run in parallel')
     expect(INSTRUCTIONS_TEMPLATE).toContain('Does not read the code')
-    expect(INSTRUCTIONS_TEMPLATE).toContain('No Engineer runs on Claude Sonnet or Claude Haiku')
+    // Ken, 2026-11-02: small work on Sonnet or Sol, big work on Opus or Astra, nothing below high effort.
+    expect(INSTRUCTIONS_TEMPLATE).toContain('Claude Sonnet at high effort or Codex GPT-6.1 Sol at high effort')
+    expect(INSTRUCTIONS_TEMPLATE).toContain('No agent runs below high effort, and none on Claude Haiku.')
+    expect(INSTRUCTIONS_TEMPLATE).not.toContain('No Engineer runs on Claude Sonnet')
     expect(INSTRUCTIONS_TEMPLATE).toMatch(/Low-risk docs, tests and fixtures go to a model on the Swarm's grid first/)
     expect(INSTRUCTIONS_TEMPLATE).toContain('Does not write the code itself')
     // A Yes to a nightly routing proposal is a line the PM writes into Routing (project instructions, phase 4, decision 21).
