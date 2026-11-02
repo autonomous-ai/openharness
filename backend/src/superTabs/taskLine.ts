@@ -26,9 +26,8 @@ const MOVING: ReadonlySet<WorkStatus> = new Set(['working', 'blocked', 'reconcil
 
 /** A task of a project with work of its own: never a step, the project chat, a Buddy chat, the Leads chat, or a private
  *  conversation (chat only: it holds no work, and its words are its own). */
-function lined(state: SuperTabState, group: Conversation): boolean {
-  return !group.kind && !isLeads(group) && !isBuddyChat(group) && !isStep(group) && !group.audience
-    && !projectsOf(state).some(p => p.leadConversationId === group.id)
+function lined(chats: ReadonlySet<string>, group: Conversation): boolean {
+  return !group.kind && !isLeads(group) && !isBuddyChat(group) && !isStep(group) && !group.audience && !chats.has(group.id)
 }
 
 /** What [group]'s line shows now. [reported]: its agent sent a status in this command. */
@@ -70,8 +69,11 @@ function lineAuthor(state: SuperTabState, chat: Conversation, sender: Author | u
  *  A task that had work before lines gets its line at its next change; one that never changes again, none. */
 export function syncTaskLines(before: SuperTabState, effects: CommandEffects, reported: string | undefined, sender: Author | undefined, operationId: string): void {
   const state = effects.state
+  let earlier: Map<string, Conversation> | undefined
+  const was = (id: string) => (earlier ??= new Map(before.conversations.map(c => [c.id, c]))).get(id)
+  const chats = new Set(projectsOf(state).map(p => p.leadConversationId))
   for (const group of state.conversations) {
-    if (!group.assignment || !lined(state, group)) continue
+    if (!group.assignment || !lined(chats, group)) continue
     const line = group.cards?.line
     const now = drawn(group, line, reported === group.id)
     if (line) {
@@ -85,7 +87,7 @@ export function syncTaskLines(before: SuperTabState, effects: CommandEffects, re
       chat.reactionSeq = (chat.reactionSeq ?? 0) + 1
       group.cards = { ...group.cards, line: { messageId: line.messageId, conversationId: chat.id, ...now } }
     } else {
-      const previous = before.conversations.find(c => c.id === group.id)?.assignment
+      const previous = was(group.id)?.assignment
       if (previous && previous.id === group.assignment.id && previous.status === group.assignment.status && previous.askedOf === group.assignment.askedOf) continue
       const chat = state.conversations.find(c => c.id === groupProject(state, group).leadConversationId)
       const author = chat && lineAuthor(state, chat, sender)
@@ -96,7 +98,7 @@ export function syncTaskLines(before: SuperTabState, effects: CommandEffects, re
       group.cards = { ...group.cards, line: { messageId: message.id, conversationId: chat.id, ...now } }
     }
     // Only its first ship is news, as the Shipped line was: a request reopened and Done again tells nobody again.
-    if (now.state === 'shipped' && before.conversations.find(c => c.id === group.id)?.ledger?.shippedAt == null) {
+    if (now.state === 'shipped' && was(group.id)?.ledger?.shippedAt == null) {
       const news = sender && shippedNotice(state, group, sender, operationId)
       if (news) effects.messages.push(news)
     }
