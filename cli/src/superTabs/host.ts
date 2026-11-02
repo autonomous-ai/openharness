@@ -23,6 +23,8 @@ import { recordsOtherFolder, scrubClaudeSession, type PurgeTarget, type ScrubTol
 import { replacementObservations } from './replacements.js'
 import { TerminalHost } from './terminal.js'
 import { LimitResume } from './limitResume.js'
+import { LeadSwitchRequests, type SwitchRow } from './leadSwitchRequest.js'
+import { isTeamDaemon } from './teamDaemon.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
 import { placeLine, threadLine, workLine } from './deliveryContext.js'
@@ -437,6 +439,8 @@ export class SuperTabHost {
   private running: Promise<void> | null = null
   private stopsRunning: Promise<void> | null = null
   private readonly releases = new Set<string>()
+  /** The switches the Swarm asked of this machine's PMs (leadSwitchRequest.ts). */
+  private readonly leadSwitches: LeadSwitchRequests
   /** Eligibility and failures belong to this stop and native runtime; a new runtime or stop gets a fresh decision. */
   /** `failures` counts final answers toward the five tries; `waits` the transient ones behind the current backoff. */
   private readonly releaseAttempts = new Map<string, { signature: string; failures: number; waits: number; retryAt: number; closed?: true }>()
@@ -524,6 +528,7 @@ export class SuperTabHost {
     this.limitResume = new LimitResume(core, machineId, { now: this.now, log: this.log,
       owns: async (tabId, assignmentId, harnessId) => (await this.sources.feed.fresh()).assignments
         .some(a => a.tabId === tabId && a.assignmentId === assignmentId && a.harnessId === harnessId) })
+    this.leadSwitches = new LeadSwitchRequests(core, machineId, { now: this.now, log: this.log, team: isTeamDaemon })
     this.sources = options.sources ?? { feed: new HostFeed(core, machineId, { now: this.now }), reads: new SwarmReads(core) }
     this.journal = { version: 1, machineId, entries: {} }
     if (existsSync(this.file)) {
@@ -995,6 +1000,7 @@ export class SuperTabHost {
       if (row.lead === true) {
         leads.add(target.agent.harnessId)
         this.keepAlive(target.agent.harnessId)
+        void this.leadSwitches.serve(target as unknown as SwitchRow).catch(error => this.log(`PM switch: ${error instanceof Error ? error.name : typeof error}`))
       }
       // Never adopt another live session as a replacement for the recorded harness.
       if (!this.core.agents.byAgent(target.agent.harnessId) || !this.core.agents.terminalAvailable(target.agent.harnessId)) continue
