@@ -34,12 +34,13 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    addTearDown(() async {
-      await tester.pumpWidget(const SizedBox());
-      await controller.flush();
-      controller.dispose();
-    });
     return controller;
+  }
+
+  Future<void> unmount(WidgetTester tester, SuperTabController c) async {
+    await tester.pumpWidget(const SizedBox());
+    await c.flush();
+    c.dispose();
   }
 
   final members = find.byKey(const ValueKey('super-members-button'));
@@ -47,16 +48,17 @@ void main() {
 
   group('the right column', () {
     testWidgets('is closed at rest in a wide window', (tester) async {
-      await mountView(tester, ConversationServer());
+      final c = await mountView(tester, ConversationServer());
       expect(find.byType(SuperTabRoster), findsNothing);
       expect(members, findsOneWidget);
       expect(find.byTooltip('Members'), findsOneWidget);
+      await unmount(tester, c);
     });
 
     testWidgets('Members opens it beside the chat and its close shuts it', (
       tester,
     ) async {
-      await mountView(tester, ConversationServer());
+      final c = await mountView(tester, ConversationServer());
       await tester.tap(members);
       await tester.pumpAndSettle();
       final roster = find.byType(SuperTabRoster);
@@ -77,6 +79,7 @@ void main() {
       await tester.tap(members);
       await tester.pumpAndSettle();
       expect(roster, findsNothing);
+      await unmount(tester, c);
     });
 
     testWidgets('Members takes the right side from an open thread', (
@@ -99,12 +102,17 @@ void main() {
       controller.closeThread();
       await tester.pumpAndSettle();
       expect(find.byType(SuperTabRoster), findsNothing);
+      await unmount(tester, controller);
     });
 
     testWidgets('a narrow window opens it as a drawer with the same close', (
       tester,
     ) async {
-      await mountView(tester, ConversationServer(), size: const Size(900, 700));
+      final c = await mountView(
+        tester,
+        ConversationServer(),
+        size: const Size(900, 700),
+      );
       expect(find.byType(SuperTabRoster), findsNothing);
       await tester.tap(members);
       await tester.pumpAndSettle();
@@ -112,6 +120,7 @@ void main() {
       await tester.tap(close);
       await tester.pumpAndSettle();
       expect(find.byType(SuperTabRoster), findsNothing);
+      await unmount(tester, c);
     });
   });
 }
