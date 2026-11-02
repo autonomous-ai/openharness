@@ -123,23 +123,32 @@ void main() {
   });
 
   group('a read a heartbeat came with something else in', () {
-    void redraws(String what, void Function(_Rig r) change, {bool? messages}) {
-      test('$what: everything redraws, and the chat is read', () {
-        fakeAsync((async) {
-          final r = _Rig(async);
-          final before = r.c.snapshot;
-          change(r);
-          r.beat('m1');
-          async.elapse(const Duration(seconds: 3));
-          expect(r.told, greaterThan(0));
-          expect(identical(r.c.snapshot, before), isFalse);
-          expect(r.messages, greaterThan(0));
-          r.close();
-        });
-      });
+    // The chat is read only when its own counters move (spec
+    // 2026-11-02-poll-cost, Part 2): a machine's change redraws without it.
+    void redraws(
+      String what,
+      void Function(_Rig r) change, {
+      bool messages = false,
+    }) {
+      test(
+        '$what: everything redraws, and the chat is ${messages ? '' : 'not '}read',
+        () {
+          fakeAsync((async) {
+            final r = _Rig(async);
+            final before = r.c.snapshot;
+            change(r);
+            r.beat('m1');
+            async.elapse(const Duration(seconds: 3));
+            expect(r.told, greaterThan(0));
+            expect(identical(r.c.snapshot, before), isFalse);
+            expect(r.messages, messages ? greaterThan(0) : 0);
+            r.close();
+          });
+        },
+      );
     }
 
-    redraws('a new message', (r) => r.server.append('A reply'));
+    redraws('a new message', (r) => r.server.append('A reply'), messages: true);
     redraws('a renamed machine', (r) => r.machine('m2')['name'] = 'Studio');
     redraws('a paused machine', (r) => r.machine('m2')['paused'] = true);
     redraws(

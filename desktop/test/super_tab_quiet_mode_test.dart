@@ -105,8 +105,10 @@ void main() {
       });
     });
 
+    // Spec 2026-11-02-poll-cost, Part 2: its row alone, every 30 s, not the
+    // page every poll.
     test(
-      'keeps reading the messages while the own message awaits a receipt',
+      'reads only the own message, every 30 s, while it awaits a receipt',
       () {
         fakeAsync((async) {
           final server = ConversationServer()..append('Hi');
@@ -121,13 +123,15 @@ void main() {
           final c = _controller(reads)..start();
           async.flushMicrotasks();
           server.messages.last['deliveries'] = [delivery('answered')];
-          async.elapse(_poll);
+          reads.clear();
+          async.elapse(const Duration(seconds: 30));
           expect(
             c.messages('lead').single.deliveries.single['status'],
             'answered',
           );
+          expect(reads.messageReads, 1);
           reads.clear();
-          async.elapse(_poll);
+          async.elapse(const Duration(seconds: 30));
           expect(reads.messageReads, 0);
           c.dispose();
         });

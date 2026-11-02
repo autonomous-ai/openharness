@@ -712,6 +712,13 @@ export class RelayGateway implements GatewayPort {
       await this.core.disconnected(connId)
       return
     }
+    // A Lead's terminal request waits for an agent of this machine (spec 2026-11-02-poll-cost Part 4.2): the Swarm host picks
+    // it up now. A `__` frame, so a daemon from before it drops it below; one naming no agent is no request.
+    if (type === '__terminal_waiting') {
+      const p = (typeof frame.payload === 'object' && frame.payload !== null ? frame.payload : {}) as Record<string, unknown>
+      if (typeof p.tabId === 'string' && typeof p.agentId === 'string') this.core.notice({ type, tabId: p.tabId, agentId: p.agentId })
+      return
+    }
     // Other backend-hub internal control frames (__clients_dirty) — not for us; drop silently.
     if (type.startsWith('__')) return
 

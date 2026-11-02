@@ -26,6 +26,7 @@ function setup(options: { live?: string[]; screen?: (harnessId: string) => Super
   })
   const host = new TerminalHost(core, 'm1', { now: () => clock, log: vi.fn() })
   return { core, backend, sent, host,
+    now: () => clock,
     wait: (ms: number) => { clock += ms },
     request: (...rows: unknown[]) => { pending = rows },
     showing: (next: (harnessId: string) => SuperTabScreen) => { screen = next },
@@ -131,6 +132,59 @@ describe('a host serving its Lead\'s terminal requests', () => {
     t.wait(1_000)
     await t.host.tick([row()])
     expect(t.polls()).toBe(2)
+  })
+})
+
+// Spec 2026-11-02-poll-cost Part 4.2: every host of a Swarm agent asked every 3 s, almost always for nothing (prod 2026-11-02:
+// 305 a minute, each a transaction). A server that pushes deliveries also says when a terminal request waits for this
+// machine (`__terminal_waiting`); the backend still gives up on a pickup after 10 s, so the fallback stays under it.
+describe('terminal requests the server pushes', () => {
+  it('with the push lease, polls every 8 s and picks up at once on __terminal_waiting', async () => {
+    let pushing = true
+    const t = setup(), host = new TerminalHost(t.core, 'm1', { now: t.now, log: vi.fn(), pushes: () => pushing })
+    await host.tick([row()])
+    expect(t.polls()).toBe(1)
+    for (let second = 1; second < 8; second++) { t.wait(1_000); await host.tick([row()]) }
+    expect(t.polls()).toBe(1)
+    t.wait(1_000); await host.tick([row()])
+    expect(t.polls()).toBe(2)
+    // Told a request waits: answered now, before the backend's 10 s are out.
+    t.request(screenRequest())
+    t.wait(1_000)
+    await host.waiting()
+    expect(t.polls()).toBe(3)
+    expect(t.sent.map(s => s.body.command.type)).toEqual(['agent.screenResult'])
+    // The next fallback poll counts from that pickup.
+    for (let second = 1; second < 8; second++) { t.wait(1_000); await host.tick([row()]) }
+    expect(t.polls()).toBe(3)
+    t.wait(1_000); await host.tick([row()])
+    expect(t.polls()).toBe(4)
+    // The lease lapses: every 3 s again.
+    pushing = false
+    t.wait(3_000); await host.tick([row()])
+    expect(t.polls()).toBe(5)
+  })
+
+  it('without it, polls every 3 s', async () => {
+    const t = setup(), host = new TerminalHost(t.core, 'm1', { now: t.now, log: vi.fn(), pushes: () => false })
+    for (let second = 0; second < 9; second++) { await host.tick([row()]); t.wait(1_000) }
+    expect(t.polls()).toBe(3)
+  })
+
+  it('picks up nothing on a push before the host has read its roster, or with no Swarm agent here', async () => {
+    const t = setup(), host = new TerminalHost(t.core, 'm1', { now: t.now, log: vi.fn(), pushes: () => true })
+    await host.waiting()
+    await host.tick([])
+    await host.waiting()
+    expect(t.polls()).toBe(0)
+  })
+
+  it('picks up once more after a push that came during a pickup', async () => {
+    const t = setup(), host = new TerminalHost(t.core, 'm1', { now: t.now, log: vi.fn(), pushes: () => true })
+    const first = host.tick([row()])
+    const pushed = host.waiting()
+    await first; await pushed
+    await vi.waitFor(() => expect(t.polls()).toBe(2))
   })
 })
 

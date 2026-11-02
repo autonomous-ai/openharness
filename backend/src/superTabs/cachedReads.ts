@@ -7,10 +7,11 @@
 import type { Prisma, PrismaClient } from '@prisma/client'
 import { stableId, type AgentStart } from './model.js'
 import { CacheView } from './cache.js'
-import { baseRule, dormantAgentRule, dormantProjectRule, dormantRule, finishedStartsRule, groupRule, machinesRule } from './cachePatch.js'
+import { baseRule, dormantAgentRule, dormantProjectRule, dormantRule, feedRule, finishedStartsRule, groupRule, machinesRule } from './cachePatch.js'
 import * as store from './parts/index.js'
 import type { GroupData, Part, PartKind, SwarmParts, SwarmDelta } from './parts/index.js'
 import { retryTransient } from './retry.js'
+import { lightKeys, lightSelect, projectLightGroup, type LightOptions as SelectOptions } from './parts/lightSelect.js'
 import { retryStaleIndex } from './parts/indexed.js'
 
 type Db = Pick<PrismaClient, '$transaction'> & Prisma.TransactionClient
@@ -116,10 +117,39 @@ export async function readLight(db: Db, view: CacheView, tabId: string, opts: Om
   const name = `light:${JSON.stringify([opts.groups ?? 'active', !!opts.includeRecentStarts, ...(['groupIds', 'agentIds', 'projectIds'] as const)
     .map(key => [...opts[key] ?? []].sort())])}`
   const [light, machines] = await Promise.all([
-    view.get(tabId, name, 'main', () => retryTransient(() => retryStaleIndex(() => db.$transaction(tx => store.loadLight(tx, tabId, { ...opts, machines: false }))))),
+    // With a cache that patches, built from the entries it holds (deriveLight); otherwise, or for recent finished starts, which
+    // the base does not hold, read as before: a base dropped on every bump would cost more than this read.
+    view.get(tabId, name, 'main', () => view.patching && !opts.includeRecentStarts ? deriveLight(db, view, tabId, opts)
+      : retryTransient(() => retryStaleIndex(() => db.$transaction(tx => store.loadLight(tx, tabId, { ...opts, machines: false }))))),
     readMachines(db, view, tabId),
   ])
   return { ...light, machines }
+}
+
+/**
+ * `loadLight`'s selection built from entries the cache already holds and patches (spec 2026-11-02 poll cost, Part 1.2): the
+ * base's awake conversations, `light-group:{id}` for a named one the base lacks, and, for a machine's host state
+ * (`machineId`, read/host.ts hostParts), its agents' dormant conversations from `dormant:agent:{id}` plus its starts'
+ * conversations and their projects. Reads Mongo only for entries that miss.
+ */
+export async function deriveLight(db: Db, view: CacheView, tabId: string, opts: SelectOptions & { machineId?: string }): Promise<Omit<SwarmParts, 'machines'>> {
+  const [active] = await base(db, view, tabId)
+  const machineId = opts.machineId
+  const starts = machineId ? active.starts.filter(s => s.data!.request.machineId === machineId) : active.starts
+  const agentIds = machineId ? active.agents.filter(a => (a.data as { machineId?: string }).machineId === machineId).map(a => a.key) : opts.agentIds ?? []
+  const groupIds = machineId ? [...new Set(starts.map(s => s.data!.request.conversationId))] : opts.groupIds ?? []
+  const awake = active.groups.map(projectLightGroup)
+  const held = new Set(awake.map(g => g.key))
+  const named = lightKeys(active.head, active.starts, { ...opts, groupIds }).filter(id => !held.has(id))
+  const [byId, ...dormant] = await Promise.all([readLightGroups(db, view, tabId, named),
+    ...agentIds.map(id => view.get(tabId, `dormant:agent:${id}`, 'main',
+      () => store.loadGroups(db, tabId, 'agents', { agentIds: { $in: [id] }, dormant: true }), dormantAgentRule(id)))])
+  const candidates = new Map(awake.map(g => [g.key, g]))
+  for (const g of [...byId, ...dormant.flat().map(projectLightGroup)]) if (!candidates.has(g.key)) candidates.set(g.key, g)
+  // A machine's host state also lists every conversation of a project it has a start in (read/host.ts hostParts).
+  const projectIds = machineId ? [...new Set(groupIds.flatMap(id => { const g = candidates.get(id); return g ? [g.data!.projectId ?? 'lead'] : [] }))]
+    : opts.projectIds ?? []
+  return lightSelect({ ...active, groups: [...candidates.values()] }, { groups: opts.groups, groupIds, agentIds, projectIds })
 }
 
 /** Light conversations by id (parts/light.ts loadLightGroups), dormant ones too, in the order named: each held at the
@@ -163,6 +193,6 @@ export async function readChanged(db: Db, view: CacheView, tabId: string, since:
   const feed = await view.get(tabId, 'feed', 'all', async () => {
     const from = since - FEED_SLACK_MS
     return { from, parts: (await store.loadChanged(db, [tabId], new Date(from))).get(tabId) ?? [] }
-  })
+  }, feedRule)
   return since >= feed.from ? feed.parts.filter(p => Math.max(p.changedAt, p.readAt ?? 0) > since) : direct()
 }

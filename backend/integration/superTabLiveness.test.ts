@@ -1518,6 +1518,17 @@ describe('the delivery poll of an agent with a held delivery', () => {
     expect(rows.map(r => [r.id, r.status, r.holdReason])).toEqual([[row.id, 'claimed', 'team_waiting_user']])
   })
 
+  // Spec 2026-11-02 poll cost, Part 3.4: a host asks about its journal's entries; the answer is the delivery's own row.
+  it('answers a receipt from its row and the machine, loading no Swarm parts', async () => {
+    const counted = counting()
+    const f = await swarm({ client: counted.client })
+    const sent = await f.execute({ type: 'message.send', conversationId: f.group, text: 'Status?', replyTo: null, recipientIds: [f.worker] })
+    const row = (await f.timed.deliveries(host, f.tab, f.worker)).find(r => r.messageId === sent.result.messageId)!
+    counted.ops.length = 0
+    expect(await f.timed.deliveryReceipt(host, f.tab, f.worker, row.id)).toEqual({ id: row.id, status: 'queued' })
+    expect(counted.ops.filter(op => /^Swarm(Head|Member|Agent|Group|Machine|Start|Progress)\./.test(op))).toEqual([])
+  })
+
   it('answers a worker\'s held delivery from the same reads', async () => {
     const counted = counting()
     const f = await swarm({ client: counted.client })
@@ -1792,6 +1803,103 @@ describe('the push for a new delivery', () => {
     await f.timed.native.append(host, f.tab, contextId, { turnId: 'turn_2', kind: 'gap', previousEventId: typed.eventId, text: '',
       truncated: false, interrupted: false, gap: { incidentId: 'restart_1', reason: 'recording_restarted', detectedAt: f.clock.now + 1_000 } })
     expect(waiting).toEqual([{ machineId: 'lead-host', tabId: f.tab, agentId: f.lead }])
+  })
+
+  // Spec 2026-11-02 poll cost, Part 3.2: a held delivery is read only every 30 s, so ending it must say so at once.
+  // Final review, Important 4: a host holds a claimed delivery locally for 30 s before it says `hold`.
+  it('tells the machine when a claimed delivery, not yet held, is answered by its agent', async () => {
+    const { waiting, hooks } = announcing()
+    const f = await swarm({ hooks })
+    const sent = await f.execute({ type: 'message.send', conversationId: f.group, text: 'Status?', replyTo: null, recipientIds: [f.worker] })
+    const row = (await f.timed.deliveries(host, f.tab, f.worker)).find(r => r.messageId === sent.result.messageId)!
+    await f.timed.delivery(host, f.tab, f.worker, row.id, { type: 'claim', claimId: 'claim-1' })
+    waiting.length = 0
+    await f.execute({ type: 'message.send', conversationId: f.group, text: 'Done.', replyTo: sent.result.messageId as string, recipientIds: [] }, host, f.worker)
+    expect(waiting).toContainEqual({ machineId: 'test-host', tabId: f.tab, agentId: f.worker })
+  })
+
+  // Cleo, reviewing #2632: each agent reply answers a delivery, and each machine told reads that agent's list.
+  describe('ending deliveries tells only the machines holding what ended', () => {
+    const claimedFor = async (f: Awaited<ReturnType<typeof swarm>>, agentId: string, text: string, claimId: string) => {
+      const sent = await f.execute({ type: 'message.send', conversationId: f.group, text, replyTo: null, recipientIds: [agentId] })
+      const row = (await f.timed.deliveries(host, f.tab, agentId)).find(r => r.messageId === sent.result.messageId)!
+      await f.timed.delivery(host, f.tab, agentId, row.id, { type: 'claim', claimId })
+      return sent.result.messageId as string
+    }
+
+    it('an agent answering one delivery tells its own machine, not another agent\'s holding a claim', async () => {
+      const { waiting, hooks } = announcing()
+      const f = await swarm({ hooks })
+      const forWorker = await claimedFor(f, f.worker, 'For the worker', 'claim-worker')
+      await claimedFor(f, f.lead, 'For the lead', 'claim-lead')
+      waiting.length = 0
+      await f.execute({ type: 'message.send', conversationId: f.group, text: 'Done.', replyTo: forWorker, recipientIds: [] }, host, f.worker)
+      expect(waiting).toContainEqual({ machineId: 'test-host', tabId: f.tab, agentId: f.worker })
+      // The reply is itself a new delivery for the Lead, told once for it: not told again for the claim it holds.
+      expect(waiting.filter(w => w.agentId === f.lead)).toHaveLength(1)
+    })
+
+    /** A conversation with no task in it, so its agent may leave and it may be archived, with a claimed delivery of the worker's. */
+    const asideWithClaim = async (f: Awaited<ReturnType<typeof swarm>>) => {
+      const other = (await f.execute({ type: 'conversation.create', title: 'Aside', brief: 'On the side', checks: [] })).result.conversationId as string
+      await f.execute({ type: 'conversation.agent', conversationId: other, agentId: f.worker, present: true, lead: false })
+      const aside = await f.execute({ type: 'message.send', conversationId: other, text: 'Aside', replyTo: null, recipientIds: [f.worker] })
+      const row = (await f.timed.deliveries(host, f.tab, f.worker)).find(r => r.messageId === aside.result.messageId)!
+      await f.timed.delivery(host, f.tab, f.worker, row.id, { type: 'claim', claimId: 'claim-worker' })
+      return other
+    }
+
+    it('an agent leaving a conversation tells its machine, not another\'s', async () => {
+      const { waiting, hooks } = announcing()
+      const f = await swarm({ hooks })
+      const other = await asideWithClaim(f)
+      await claimedFor(f, f.lead, 'For the lead', 'claim-lead')
+      waiting.length = 0
+      await f.execute({ type: 'conversation.agent', conversationId: other, agentId: f.worker, present: false, lead: false })
+      expect(waiting).toContainEqual({ machineId: 'test-host', tabId: f.tab, agentId: f.worker })
+      expect(waiting).not.toContainEqual({ machineId: 'lead-host', tabId: f.tab, agentId: f.lead })
+    })
+
+    it('a conversation archived tells those holding its deliveries, not one holding another conversation\'s', async () => {
+      const { waiting, hooks } = announcing()
+      const f = await swarm({ hooks })
+      const other = await asideWithClaim(f)
+      await claimedFor(f, f.lead, 'For the lead', 'claim-lead')
+      waiting.length = 0
+      await f.execute({ type: 'conversation.archive', conversationId: other, archived: true })
+      expect(waiting).toContainEqual({ machineId: 'test-host', tabId: f.tab, agentId: f.worker })
+      expect(waiting).not.toContainEqual({ machineId: 'lead-host', tabId: f.tab, agentId: f.lead })
+    })
+
+    it('nothing ended tells nobody', async () => {
+      const { waiting, hooks } = announcing()
+      const f = await swarm({ hooks })
+      const other = (await f.execute({ type: 'conversation.create', title: 'Empty', brief: 'On the side', checks: [] })).result.conversationId as string
+      await f.execute({ type: 'conversation.agent', conversationId: other, agentId: f.worker, present: true, lead: false })
+      await claimedFor(f, f.lead, 'For the lead', 'claim-lead')
+      waiting.length = 0
+      await f.execute({ type: 'conversation.agent', conversationId: other, agentId: f.worker, present: false, lead: false })
+      expect(waiting).toEqual([])
+    })
+  })
+
+  it('tells the machine when a held delivery is answered by its agent', async () => {
+    const { waiting, hooks } = announcing()
+    const f = await swarm({ hooks })
+    const sent = await f.execute({ type: 'message.send', conversationId: f.group, text: 'Status?', replyTo: null, recipientIds: [f.worker] })
+    const row = (await f.timed.deliveries(host, f.tab, f.worker)).find(r => r.messageId === sent.result.messageId)!
+    await f.timed.delivery(host, f.tab, f.worker, row.id, { type: 'claim', claimId: 'claim-1' })
+    await f.timed.delivery(host, f.tab, f.worker, row.id, { type: 'hold', claimId: 'claim-1', reason: 'team_waiting_draft' })
+    waiting.length = 0
+    await f.execute({ type: 'message.send', conversationId: f.group, text: 'Done.', replyTo: sent.result.messageId as string, recipientIds: [] }, host, f.worker)
+    expect(waiting).toContainEqual({ machineId: 'test-host', tabId: f.tab, agentId: f.worker })
+  })
+
+  it('tells the machine when a terminal request waits for its agent', async () => {
+    const heard: Array<{ machineId: string; tabId: string; agentId: string }> = []
+    const f = await swarm({ hooks: { terminalWaiting: w => { heard.push(w) } } })
+    await f.execute({ type: 'agent.screen', agentId: f.worker, scrollback: 50 })
+    expect(heard).toEqual([{ machineId: 'test-host', tabId: f.tab, agentId: f.worker }])
   })
 
   it('announces the update request the Lead\'s own poll writes for it', async () => {
