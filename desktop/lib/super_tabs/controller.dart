@@ -249,6 +249,24 @@ class SuperTabController extends ChangeNotifier {
           if (key is String && value is num) _threadSeen[key] = value.toInt();
         }
       }
+      if (initial['threadDrafts'] case final Map saved) {
+        for (final MapEntry(key: root, value: draft) in saved.entries) {
+          if (root is! String || draft is! Map) continue;
+          final conversation = draft['conversationId'], text = draft['text'];
+          if (conversation is! String || text is! String || text.isEmpty) {
+            continue;
+          }
+          _threadDrafts[root] = text;
+          _threadDraftConversations[root] = conversation;
+          if (draft['mentions'] case final Map mentions) {
+            final tags = {
+              for (final MapEntry(:key, :value) in mentions.entries)
+                if (key is String && value is String) key: value,
+            };
+            if (tags.isNotEmpty) _threadMentions[(conversation, root)] = tags;
+          }
+        }
+      }
       final refused = initial['refused'];
       if (refused is Map) {
         for (final MapEntry(:key, :value) in refused.entries) {
@@ -700,6 +718,10 @@ class SuperTabController extends ChangeNotifier {
   /// Where each thread's earlier replies continue, while there are more.
   final _threadBefore = <String, Map<String, dynamic>>{};
   final _threadDrafts = <String, String>{};
+
+  /// Which conversation each draft in [_threadDrafts] is for, so what this
+  /// computer keeps of it goes when that conversation does.
+  final _threadDraftConversations = <String, String>{};
 
   /// The people and agents picked with `@` in each thread's reply box, by its
   /// conversation and root, as [_mentions] holds the chat's own.
@@ -1382,8 +1404,19 @@ class SuperTabController extends ChangeNotifier {
   }
 
   String threadDraft(String root) => _threadDrafts[root] ?? '';
-  void setThreadDraft(String root, String text) {
-    _threadDrafts[root] = text;
+  void setThreadDraft(String root, String text, {String? conversationId}) {
+    // Removed first, so the newest is last and the cap in [_localState] keeps it.
+    _threadDrafts.remove(root);
+    if (text.isEmpty) {
+      _threadDraftConversations.remove(root);
+    } else {
+      _threadDrafts[root] = text;
+      _threadDraftConversations[root] =
+          conversationId ??
+          (openedThread?.root == root ? openedThread!.conversationId : null) ??
+          _threadDraftConversations[root] ??
+          selectedId;
+    }
     // A tag the text no longer says is no longer picked.
     for (final MapEntry(key: thread, value: tags) in _threadMentions.entries) {
       if (thread.$2 == root) {
@@ -1391,6 +1424,7 @@ class SuperTabController extends ChangeNotifier {
       }
     }
     _threadMentions.removeWhere((_, tags) => tags.isEmpty);
+    _saveSoon();
   }
 
   /// The tags picked in the reply box of [root]'s thread in [conversationId].
@@ -1566,6 +1600,7 @@ class SuperTabController extends ChangeNotifier {
       // Only a draft still holding what went: more may have been typed since.
       if (_threadDrafts[open.root]?.trim() == text) {
         _threadDrafts.remove(open.root);
+        _threadDraftConversations.remove(open.root);
         _threadMentions.remove(thread);
       }
       onSending?.call();
@@ -1611,6 +1646,7 @@ class SuperTabController extends ChangeNotifier {
       }
     } else {
       _threadDrafts[root] = text;
+      _threadDraftConversations[root] = conversationId;
       if (refused.mentions.isNotEmpty) {
         _threadMentions[(conversationId, root)] = refused.mentions;
       }
@@ -2321,6 +2357,19 @@ class SuperTabController extends ChangeNotifier {
     'threadSeen': Map<String, int>.fromEntries(
       _threadSeen.entries.skip(max(0, _threadSeen.length - 500)),
     ),
+    // ponytail: the newest 500, as threadSeen.
+    if (_threadDrafts.isNotEmpty)
+      'threadDrafts': {
+        for (final MapEntry(key: root, value: text)
+            in _threadDrafts.entries.skip(max(0, _threadDrafts.length - 500)))
+          if (_threadDraftConversations[root] case final conversation?)
+            root: {
+              'conversationId': conversation,
+              'text': text,
+              if (_threadMentions[(conversation, root)] case final tags?)
+                'mentions': Map<String, String>.of(tags),
+            },
+      },
     if (_pending != null) 'pending': _pending,
     if (_sendOrder.isNotEmpty) 'sendOrder': List<String>.of(_sendOrder),
     if (_refused.isNotEmpty || _queuedSends.isNotEmpty)
@@ -3222,6 +3271,7 @@ class SuperTabController extends ChangeNotifier {
               ..._mentions.keys,
               ..._readAt.keys,
               ..._refused.keys,
+              ..._threadDraftConversations.values,
             ].any(removed.contains) ||
             expandedProjects.any(
               (id) => !next.projects.any((project) => project.id == id),
@@ -3233,6 +3283,12 @@ class SuperTabController extends ChangeNotifier {
         _forgetThreads(allowed.contains);
         _rows.removeWhere((id, _) => !allowed.contains(id));
         _drafts.removeWhere((id, _) => removed.contains(id));
+        _threadDrafts.removeWhere(
+          (root, _) => removed.contains(_threadDraftConversations[root]),
+        );
+        _threadDraftConversations.removeWhere(
+          (_, conversation) => removed.contains(conversation),
+        );
         _attachments.removeWhere((id, files) {
           if (allowed.contains(id)) return false;
           files.dispose();

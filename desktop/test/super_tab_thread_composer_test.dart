@@ -593,23 +593,26 @@ void main() {
       expect((await again(server)).threadDraft('message-1'), isEmpty);
     });
 
-    test('the newest 500 are kept, and writing in one again makes it newest', () async {
-      final server = threaded();
-      final c = server.controller();
-      await c.refresh();
-      for (var n = 0; n < 502; n++) {
-        c.setThreadDraft('root-$n', 'draft $n', conversationId: 'lead');
-      }
-      c.setThreadDraft('root-0', 'again', conversationId: 'lead');
-      await c.flush();
-      c.dispose();
-      final next = await again(server);
-      expect(next.threadDraft('root-0'), 'again');
-      expect(next.threadDraft('root-1'), isEmpty);
-      expect(next.threadDraft('root-2'), isEmpty);
-      expect(next.threadDraft('root-3'), 'draft 3');
-      expect(next.threadDraft('root-501'), 'draft 501');
-    });
+    test(
+      'the newest 500 are kept, and writing in one again makes it newest',
+      () async {
+        final server = threaded();
+        final c = server.controller();
+        await c.refresh();
+        for (var n = 0; n < 502; n++) {
+          c.setThreadDraft('root-$n', 'draft $n', conversationId: 'lead');
+        }
+        c.setThreadDraft('root-0', 'again', conversationId: 'lead');
+        await c.flush();
+        c.dispose();
+        final next = await again(server);
+        expect(next.threadDraft('root-0'), 'again');
+        expect(next.threadDraft('root-1'), isEmpty);
+        expect(next.threadDraft('root-2'), isEmpty);
+        expect(next.threadDraft('root-3'), 'draft 3');
+        expect(next.threadDraft('root-501'), 'draft 501');
+      },
+    );
 
     test('goes when its conversation goes for this reader', () async {
       final server = threaded();
@@ -641,25 +644,38 @@ void main() {
       expect(other.threadDraft('message-1'), isEmpty);
     });
 
-    test('state from an older client, or a malformed entry, loads with none', () {
-      final server = threaded();
-      for (final drafts in <Object?>[
-        null,
-        'nope',
-        {'a': 'not a map'},
-        {'b': {'conversationId': 1, 'text': 'x'}},
-        {'c': {'conversationId': 'lead', 'text': 2}},
-        {'d': {'conversationId': 'lead', 'text': 'kept', 'mentions': 'nope'}},
-      ]) {
-        final c = server.controller(
-          initial: {'tabId': 'tab', 'accountId': 'owner', 'threadDrafts': drafts},
-        );
-        addTearDown(c.dispose);
-        for (final root in ['a', 'b', 'c']) {
-          expect(c.threadDraft(root), isEmpty);
+    test(
+      'state from an older client, or a malformed entry, loads with none',
+      () {
+        final server = threaded();
+        for (final drafts in <Object?>[
+          null,
+          'nope',
+          {'a': 'not a map'},
+          {
+            'b': {'conversationId': 1, 'text': 'x'},
+          },
+          {
+            'c': {'conversationId': 'lead', 'text': 2},
+          },
+          {
+            'd': {'conversationId': 'lead', 'text': 'kept', 'mentions': 'nope'},
+          },
+        ]) {
+          final c = server.controller(
+            initial: {
+              'tabId': 'tab',
+              'accountId': 'owner',
+              'threadDrafts': drafts,
+            },
+          );
+          addTearDown(c.dispose);
+          for (final root in ['a', 'b', 'c']) {
+            expect(c.threadDraft(root), isEmpty);
+          }
         }
-      }
-    });
+      },
+    );
   });
 
   group('privacy and lifecycle', () {

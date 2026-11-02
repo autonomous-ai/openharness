@@ -278,7 +278,11 @@ class _ThreadCardState extends State<_ThreadCard> {
     if (at == null) return;
     final token = '@$name';
     final value = superTabInsertTag(_text.value, at, token);
-    _c.setThreadDraft(_thread.rootId, value.text);
+    _c.setThreadDraft(
+      _thread.rootId,
+      value.text,
+      conversationId: _thread.conversationId,
+    );
     _c.threadMention(id, token, to: _target);
     _text.value = value;
     _tagIndex.value = 0;
@@ -400,7 +404,11 @@ class _ThreadCardState extends State<_ThreadCard> {
   bool get _busy => _c.uploading || _c.saving;
 
   void _edited(String text) {
-    _c.setThreadDraft(_thread.rootId, text);
+    _c.setThreadDraft(
+      _thread.rootId,
+      text,
+      conversationId: _thread.conversationId,
+    );
     _tagIndex.value = 0;
     _tagDismissed.value = null;
     setState(() {});
@@ -412,7 +420,7 @@ class _ThreadCardState extends State<_ThreadCard> {
       return;
     }
     final root = _thread.rootId;
-    _c.setThreadDraft(root, _text.text);
+    _c.setThreadDraft(root, _text.text, conversationId: _thread.conversationId);
     await _c.sendThreadReply(
       to: _target,
       onSending: () {
