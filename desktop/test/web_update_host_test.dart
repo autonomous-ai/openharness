@@ -53,6 +53,31 @@ void main() {
     expect(reloads, 1);
   });
 
+  testWidgets('a page an old cache kept shows the bar at once: it need not '
+      'wait for an interval', (tester) async {
+    reloads = 0;
+    shown = StreamController<void>.broadcast();
+    addTearDown(shown.close);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: grid.buildAppTheme(brightness: Brightness.dark),
+        home: Scaffold(
+          body: WebUpdateHost(
+            // Its own build, older than what the host now serves.
+            readRunning: () async => '1.3.50',
+            readLatest: () async => '1.3.51',
+            reload: () => reloads++,
+            pageShown: shown.stream,
+            child: const Text('the app'),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    expect(bar, findsOneWidget);
+  });
+
   testWidgets('the page coming back to the front checks at once', (
     tester,
   ) async {
