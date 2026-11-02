@@ -217,6 +217,7 @@ export async function readTeamStatusOffThread(path: string, options: StatusReadO
     child.once('error', () => done(null))
     child.once('close', done)
     child.unref?.()
+    ;(child.stdout as (NodeJS.ReadableStream & { unref?: () => void }) | null)?.unref?.()
   })
   return text === null ? null : readTeamStatus(path, () => text)
 }

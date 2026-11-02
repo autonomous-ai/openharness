@@ -435,8 +435,8 @@ describe('what the elevated removal deletes of the Team account\'s', () => {
 
   it('deletes them once the account is gone, its own daemon\'s task apart', () => {
     const text = script()
-    expect(text).toContain('foreach ($own in @(Team-Tasks)) { Unregister-ScheduledTask -InputObject $own -Confirm:$false')
-    expect(text.indexOf('foreach ($own in @(Team-Tasks))')).toBeGreaterThan(text.indexOf('# 4. The account.'))
+    expect(text).toContain('Unregister-ScheduledTask -TaskPath $own.TaskPath -TaskName $own.TaskName -Confirm:$false')
+    expect(text.indexOf('foreach ($own in @($script:seenTasks')).toBeGreaterThan(text.indexOf('# 4. The account.'))
   })
 
   it('takes what a removal that stopped partway left renamed, by its own prefix alone', () => {
@@ -446,7 +446,34 @@ describe('what the elevated removal deletes of the Team account\'s', () => {
     expect(text).toContain('Remove-Renamed $SHARED')
   })
 
-  it('matches a task by the Team account alone, in any form Windows names it', () => {
-    expect(script()).toMatch(/\(\$user -split '\\\\'\)\[-1\] -eq \$TEAM -or \(\$teamSid -and \$user -eq \$teamSid\)/)
+  it('matches a task by the Team account alone: this computer\'s, never a same-named domain account', () => {
+    const text = script()
+    expect(text).toContain("$parts = $user -split '\\\\'")
+    expect(text).toContain('($teamSid -and $user -eq $teamSid) -or ($parts[-1] -eq $TEAM -and ($parts.Count -eq 1 -or $parts[0] -eq $env:COMPUTERNAME))')
+  })
+
+  // A Team process alive at the first look can register a task after it (security review of #2579).
+  it('looks for its tasks again after the processes stop, and stops what is still running before step 5', () => {
+    const text = script()
+    const kill = text.indexOf('foreach ($process in @(Team-Processes)) { Stop-Process')
+    const again = text.indexOf('Hold-Tasks', kill)
+    expect(again).toBeGreaterThan(kill)
+    expect(again).toBeLessThan(text.indexOf('# 3. The profile.'))
+    const fifth = text.indexOf('# 5. What it left')
+    const last = text.lastIndexOf('foreach ($process in @(Team-Processes)) { Stop-Process', fifth)
+    expect(last).toBeGreaterThan(text.indexOf('# 4. The account.'))
+  })
+
+  it('unregisters the tasks it found while the account was there, as the name may not match once it has gone', () => {
+    const text = script()
+    expect(text).toContain('foreach ($own in @($script:seenTasks + @(Team-Tasks)))')
+    expect(text).toContain('Get-ScheduledTask -TaskPath $own.TaskPath -TaskName $own.TaskName')
+  })
+
+  it('cleans what the Team account named before printing it', () => {
+    const text = script()
+    expect(text).toContain('function Clean-Line')
+    expect(text).toContain('Clean-Line $failed[0]')
+    expect(text).toContain('Clean-Line $_.TaskName')
   })
 })

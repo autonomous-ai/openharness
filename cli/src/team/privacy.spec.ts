@@ -415,6 +415,13 @@ describe.skipIf(process.platform === 'win32')('reading the status file in a chil
     expect(spawnChild.mock.calls[0][2]).toMatchObject({ windowsHide: true })
   })
 
+  it('lets go of the child\'s pipe too, which would otherwise hold the daemon\'s exit until the kill lands', async () => {
+    const fake = Object.assign(new EventEmitter(), { stdout: Object.assign(new EventEmitter(), { unref: vi.fn() }), kill: vi.fn(), unref: vi.fn() })
+    await readTeamStatusOffThread('/s', options({ spawn: vi.fn(() => fake) as unknown as typeof spawn, deadlineMs: 10 }))
+    expect(fake.unref).toHaveBeenCalled()
+    expect(fake.stdout.unref).toHaveBeenCalled()
+  })
+
   it.each([
     ['a file over the limit', (at: string) => writeFileSync(at, 'x'.repeat(64 * 1024 + 1))],
     ['a folder', (at: string) => mkdirSync(at)],

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { readTeamStatus, readTeamStatusOffThread } from './privacy.js'
-import { WINDOWS_CLEAN_LINE, buildWindowsRemoveScript, buildWindowsSetupScript, windowsRemoveHelperLines } from './windowsScript.js'
+import { buildWindowsRemoveScript, buildWindowsSetupScript, windowsRemoveHelperLines } from './windowsScript.js'
 
 /**
  * Audit W4, W5 and W7 on real Windows, in Windows PowerShell 5.1 as the elevated scripts run: the C# helper compiled by Add-Type,
@@ -17,7 +17,7 @@ describe.runIf(process.platform === 'win32')('the Team account\'s removal on Win
   let root: string, script: string
   const powershell = (body: string) => {
     writeFileSync(script, ['$ErrorActionPreference = \'Stop\'', "function Item-At([string]$path) { Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }",
-      '$TEAM = $env:USERNAME', '$teamSid = $null', "$TASK_PATH = '\\Harness\\'", "$TASK_NAME = 'not-this-one'", ...windowsRemoveHelperLines(), WINDOWS_CLEAN_LINE, 'Load-Helper', body].join('\r\n'))
+      '$TEAM = $env:USERNAME', '$teamSid = $null', "$TASK_PATH = '\\Harness\\'", "$TASK_NAME = 'not-this-one'", ...windowsRemoveHelperLines(), 'Load-Helper', body].join('\r\n'))
     const run = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script], { encoding: 'utf8' })
     if (run.status !== 0) throw new Error(`exit ${run.status}: ${run.stdout}\n${run.stderr}`)
     return run.stdout

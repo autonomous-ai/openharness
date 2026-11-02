@@ -826,6 +826,8 @@ public static class HarnessTeamRemove {
 
 /** The PowerShell around that helper, needing $REPARSE-free Item-At and a `die` from the prelude. Run for real on Windows in windowsTeamRemove.real.spec.ts. */
 export const windowsRemoveHelperLines = (): string[] => [
+  // What the Team account named reaches the administrator's console from here too (security review of #2579).
+  WINDOWS_CLEAN_LINE,
   `$HELPER = ${hereString(TEAM_REMOVE_HELPER)}`,
   'function Load-Helper { Add-Type -TypeDefinition $HELPER -Language CSharp -ErrorAction Stop }',
   'function Remove-Held([string]$path, $left = $null) {',
@@ -835,7 +837,7 @@ export const windowsRemoveHelperLines = (): string[] => [
   '  try { [IO.Directory]::Move($path, $moved); $at = $moved } catch { }',
   '  $failed = @([HarnessTeamRemove]::Delete($at))',
   '  if ($failed.Count -eq 0) { return }',
-  '  if ($null -eq $left) { throw "could not delete $($failed[0]) and $($failed.Count - 1) more" }',
+  '  if ($null -eq $left) { throw "could not delete $(Clean-Line $failed[0]) and $($failed.Count - 1) more" }',
   '  foreach ($one in $failed) { [void]$left.Add($one) }',
   '}',
   // A removal that stopped partway left its renamed folders: only this script makes those names, in folders others cannot write.
@@ -844,7 +846,8 @@ export const windowsRemoveHelperLines = (): string[] => [
   'function Team-Tasks {',
   '  @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {',
   '    $user = [string]$_.Principal.UserId',
-  "    $user -and ($_.TaskPath -ne $TASK_PATH -or $_.TaskName -ne $TASK_NAME) -and (($user -split '\\\\')[-1] -eq $TEAM -or ($teamSid -and $user -eq $teamSid))",
+  "    $parts = $user -split '\\\\'",
+  '    $user -and ($_.TaskPath -ne $TASK_PATH -or $_.TaskName -ne $TASK_NAME) -and (($teamSid -and $user -eq $teamSid) -or ($parts[-1] -eq $TEAM -and ($parts.Count -eq 1 -or $parts[0] -eq $env:COMPUTERNAME)))',
   '  })',
   '}',
 ]
@@ -897,9 +900,20 @@ export function buildWindowsRemoveScript(input: RemoveScriptInput): string {
     '  Stop-ScheduledTask -TaskPath $TASK_PATH -TaskName $TASK_NAME',
     '}',
     '',
-    '$teamTasks = @(Team-Tasks | Where-Object { $_.State -ne \'Disabled\' })',
-    'foreach ($own in $teamTasks) { Disable-ScheduledTask -InputObject $own -ErrorAction SilentlyContinue | Out-Null; Stop-ScheduledTask -InputObject $own -ErrorAction SilentlyContinue }',
-    'function Restore-Tasks { foreach ($own in $teamTasks) { Enable-ScheduledTask -InputObject $own -ErrorAction SilentlyContinue | Out-Null } }',
+    // Run again after the kill: a process alive at the first look can register a task before it dies (security review of #2579).
+    '$script:seenTasks = @()',
+    '$script:heldTasks = @()',
+    'function Hold-Tasks {',
+    '  foreach ($own in @(Team-Tasks)) {',
+    '    if ($script:seenTasks | Where-Object { $_.TaskPath -eq $own.TaskPath -and $_.TaskName -eq $own.TaskName }) { continue }',
+    '    $script:seenTasks += $own',
+    "    if ($own.State -ne 'Disabled') { $script:heldTasks += $own }",
+    '    Disable-ScheduledTask -InputObject $own -ErrorAction SilentlyContinue | Out-Null',
+    '    Stop-ScheduledTask -InputObject $own -ErrorAction SilentlyContinue',
+    '  }',
+    '}',
+    'function Restore-Tasks { foreach ($own in $script:heldTasks) { Enable-ScheduledTask -InputObject $own -ErrorAction SilentlyContinue | Out-Null } }',
+    'Hold-Tasks',
     '',
     '# 2. Every process running as the team account: its daemon, its terminal host, teammates\' agents.',
     'function Team-Processes {',
@@ -908,6 +922,8 @@ export function buildWindowsRemoveScript(input: RemoveScriptInput): string {
     '}',
     'foreach ($process in @(Team-Processes)) { Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue }',
     'Start-Sleep -Seconds 1',
+    'Hold-Tasks',
+    'foreach ($process in @(Team-Processes)) { Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue }',
     '',
     '# 3. The profile. When something of the account still runs and holds it, the task runs again and nothing was removed.',
     // Windows keeps a profile's registry loaded after its account's last process has gone, and for good: on
@@ -943,12 +959,16 @@ export function buildWindowsRemoveScript(input: RemoveScriptInput): string {
     '  say "deleted the account $TEAM"',
     '}',
     '',
+    // A task that started in the moment before the last look may have left a process with no account.
+    'foreach ($process in @(Team-Processes)) { Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue }',
+    '',
     '# 5. What it left: its task\'s definition, its batch logon right, a profile folder Windows did not take, what setup',
     '#    made and the sentinel.',
     'if ($task) { Unregister-ScheduledTask -TaskPath $TASK_PATH -TaskName $TASK_NAME -Confirm:$false }',
-    'foreach ($own in @(Team-Tasks)) { Unregister-ScheduledTask -InputObject $own -Confirm:$false -ErrorAction SilentlyContinue }',
-    '$stayed = @(Team-Tasks)',
-    'if ($stayed.Count -gt 0) { say "could not remove $($stayed.Count) task(s) the team account registered: $(($stayed | ForEach-Object { $_.TaskName }) -join \', \')" }',
+    // The ones found while the account was there too: its name may not match once it has gone.
+    'foreach ($own in @($script:seenTasks + @(Team-Tasks))) { Unregister-ScheduledTask -TaskPath $own.TaskPath -TaskName $own.TaskName -Confirm:$false -ErrorAction SilentlyContinue }',
+    '$stayed = @(@($script:seenTasks) + @(Team-Tasks) | Where-Object { $own = $_; Get-ScheduledTask -TaskPath $own.TaskPath -TaskName $own.TaskName -ErrorAction SilentlyContinue })',
+    'if ($stayed.Count -gt 0) { say "could not remove $($stayed.Count) task(s) the team account registered: $(($stayed | ForEach-Object { Clean-Line $_.TaskName }) -join \', \')" }',
     `if ($teamSid) { [void](New-Stage ${SDDL.private}); Set-BatchLogon $teamSid $false }`,
     "try { $scheduler = New-Object -ComObject Schedule.Service; $scheduler.Connect(); $scheduler.GetFolder('\\').DeleteFolder($TASK_PATH.Trim('\\'), 0) } catch { }",
     // A folder Windows left behind when it removed the profile record, which named this folder as the team account's.
