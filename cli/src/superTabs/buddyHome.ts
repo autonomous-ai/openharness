@@ -112,6 +112,13 @@ export async function prepareBuddyHome(home: string, projects: readonly BuddyPro
   return { ready, missing }
 }
 
+/** The folder of project [id] in a one Buddy's [home], when its code is there: where a file for that project's PM may come from,
+ *  so no file of another project in the same home goes with it. */
+export function buddyProjectFolder(home: string, id: string): string | null {
+  const row = listed(home).find(r => r.id === id)
+  return row ? join(home, 'projects', row.dir) : null
+}
+
 /** Where one copy stands after a pass, for the Buddy's file and the pass's one log line. */
 type CopyState = { name: string; revision: string | null; state: 'latest' | 'noRemote' | 'changed' | 'failed' }
 const refreshing = new Map<string, { stop: AbortController; done: Promise<void> }>()

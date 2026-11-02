@@ -302,6 +302,20 @@ void main() {
     },
   );
 
+  testWidgets(
+    'in a browser, the browser menu stays off while a machine\'s menu is open',
+    (tester) async {
+      BrowserMenuGuard.debugWeb = true;
+      BrowserMenuGuard.debugSink = (_) async {};
+      addTearDown(BrowserMenuGuard.debugReset);
+      await mount(tester);
+      await options(tester, 'local');
+      expect(BrowserMenuGuard.isOff, isTrue);
+      await tester.pumpWidget(const SizedBox());
+      expect(BrowserMenuGuard.isOff, isFalse);
+    },
+  );
+
   testWidgets('a full machine list stays quiet and reveals all setup steps', (
     tester,
   ) async {

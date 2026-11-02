@@ -961,6 +961,26 @@ void main() {
     },
   );
 
+  testWidgets(
+    'in a browser, an agent row keeps the browser menu off while its menu is open',
+    (tester) async {
+      final told = <bool>[];
+      BrowserMenuGuard.debugWeb = true;
+      BrowserMenuGuard.debugSink = (off) async => told.add(off);
+      addTearDown(BrowserMenuGuard.debugReset);
+      final f = await fixture(tester);
+      await f.show(tester);
+      await tester.tap(f.row(0), buttons: kSecondaryMouseButton);
+      await tester.pumpAndSettle();
+      expect(find.text('Details'), findsOneWidget);
+      expect(BrowserMenuGuard.isOff, isTrue);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(BrowserMenuGuard.isOff, isFalse);
+      await f.close(tester);
+    },
+  );
+
   testWidgets('project Product Manager cannot be removed from the roster', (
     tester,
   ) async {

@@ -14,6 +14,7 @@ import { realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { isAbsolute, relative } from 'node:path'
 import { env } from '../config/env.js'
+import { agentTmpRoot } from './agentTmp.js'
 
 /**
  * Whether `path` IS `root` or sits below it. Both are compared as text, so both must already be real
@@ -42,8 +43,10 @@ export async function withinRoots(target: string, roots: readonly string[]): Pro
 
 /**
  * Where agents drop the files they make. macOS gives each user a private `/var/folders/…` as
- * `tmpdir()`, but an agent told to "save it to /tmp" writes to `/tmp` itself, so both are roots.
+ * `tmpdir()`, but an agent told to "save it to /tmp" writes to `/tmp` itself, so both are roots. Beside a Team account the
+ * owner's agents have a private folder of their own (./agentTmp.ts), and the daemon's `tmpdir()` is not it.
  */
 export function tempRoots(): string[] {
-  return [tmpdir(), '/tmp']
+  const agents = agentTmpRoot()
+  return [tmpdir(), '/tmp', ...agents ? [agents] : []]
 }
