@@ -20,6 +20,7 @@ import 'swarm_message_row.dart';
 import 'swarm_outbox.dart';
 import 'swarm_paste.dart';
 import 'swarm_session.dart';
+import 'swarm_session_widgets.dart';
 import 'swarm_thread.dart';
 import 'swarm_voice.dart';
 
@@ -402,6 +403,10 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _header(context, tty),
+            ListenableBuilder(
+              listenable: _thread,
+              builder: (context, _) => SwarmThreadSessionLine(thread: _thread),
+            ),
             Expanded(
               child: Stack(
                 children: [
@@ -714,6 +719,7 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
                 style: AppType.caption(color: AppPalette.textSecondary),
               ),
             ),
+          if (t.offersSessions && !talking) SwarmNewSessionCheck(thread: t),
           SwarmComposerCard(
             focus: _focus,
             chips: t.files.files.isEmpty ? null : SwarmOutgoingChips(box: t),
@@ -742,13 +748,16 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
                               ? () => unawaited(_pickFiles())
                               : null,
                         ),
-                      Expanded(
-                        child: _AlsoSend(
-                          label: t.alsoSendLabel,
-                          value: t.alsoSend,
-                          onChanged: (on) => t.alsoSend = on,
-                        ),
-                      ),
+                      if (t.offersAlsoSend)
+                        Expanded(
+                          child: _AlsoSend(
+                            label: t.alsoSendLabel,
+                            value: t.alsoSend,
+                            onChanged: (on) => t.alsoSend = on,
+                          ),
+                        )
+                      else
+                        const Spacer(),
                       // The main chat's mic, beside Send as there.
                       if (voice != null) SwarmVoiceMic(voice: voice),
                       SwarmRoundButton(

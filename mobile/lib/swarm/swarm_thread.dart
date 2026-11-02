@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import 'model.dart';
+import 'swarm_buddy_sessions.dart';
 import 'swarm_conversation.dart';
 import 'swarm_outbox.dart';
 import 'swarm_outgoing_files.dart';
@@ -204,6 +205,90 @@ class SwarmThread extends ChangeNotifier implements SwarmFilesBox {
     _composer.changed();
   }
 
+  /// New session is chosen for the next reply (Desktop's thread composer).
+  bool _newSession = false;
+
+  /// The person's own Buddy chat, on a server that takes New session for a
+  /// reply — with a Buddy, or in a thread that had a session, whose reply
+  /// must start a new one.
+  bool get _sessionsPossible {
+    final group = chat.conversation;
+    return group != null &&
+        canPost &&
+        swarmOffersThreadSessions(reader, group, hadSession: _hadSession);
+  }
+
+  /// Whether the box shows New session: [_sessionsPossible], in a thread no
+  /// session answers now (Desktop's `_offersSession`). It may still show
+  /// disabled, saying why ([sessionBlocked]).
+  bool get offersSessions => _sessionsPossible && session == null;
+
+  /// Whether the box shows Also send: not in a session's thread, which stays
+  /// in the thread, nor for a reply that starts a session.
+  bool get offersAlsoSend => !newSession && session == null;
+
+  /// Why a session cannot start now; null when it can.
+  String? get sessionBlocked {
+    final group = chat.conversation;
+    return group == null || !_sessionsPossible
+        ? null
+        : swarmSessionBlocked(reader, group);
+  }
+
+  /// A reply from or to a thread session is in the thread.
+  bool get _hadSession => messages.any((m) => m.buddySession);
+
+  /// The live or starting session answering the thread; null when none does,
+  /// or in a chat that is not the person's own Buddy chat. Shown whether or
+  /// not New session is offered.
+  SuperTabBuddySession? get session {
+    final group = chat.conversation;
+    return group == null || !swarmOwnBuddyChat(reader, group)
+        ? null
+        : group.sessionFor(root);
+  }
+
+  /// The row saying the thread's last session ended (its ended line, else its
+  /// last session reply), while no session answers it: a plain reply would be
+  /// refused, so a new one must start.
+  SuperTabMessage? get sessionEndedRow {
+    final group = chat.conversation;
+    if (group == null || !swarmOwnBuddyChat(reader, group) || session != null) {
+      return null;
+    }
+    final rows = messages;
+    return rows.where((m) => m.sessionEnded).lastOrNull ??
+        rows.where((m) => m.buddySession).lastOrNull;
+  }
+
+  /// The thread's session ended: New session shows on and locked.
+  bool get sessionLocked => _sessionsPossible && sessionEndedRow != null;
+
+  /// Whether the next reply starts a session: locked, or chosen and not
+  /// blocked.
+  bool get newSession =>
+      offersSessions &&
+      (sessionLocked || (_newSession && sessionBlocked == null));
+  set newSession(bool value) {
+    if (_newSession == value) return;
+    _newSession = value;
+    _composer.changed();
+  }
+
+  /// Ends the thread's session ([SwarmConversation.endSession]).
+  Future<bool> endSession() async {
+    if (_disposed) return false;
+    final done = await chat.endSession(root);
+    if (_disposed) return done;
+    // Said where the person pressed it: this page shows the thread's error.
+    if (!done && chat.endRefusal != null) error = chat.endRefusal;
+    _tell();
+    return done;
+  }
+
+  /// An end is under way for the thread's session.
+  bool get endingSession => chat.endingSession(root);
+
   /// Where Also send puts a reply, as the desktop names the chat.
   String get alsoSendLabel {
     final group = chat.conversation;
@@ -246,7 +331,12 @@ class SwarmThread extends ChangeNotifier implements SwarmFilesBox {
       // the reply leaves them uploaded.
       if (failure.code.contains('ATTACHMENT')) _uploads.forget(post.files);
       _restore(post);
-      error = post.error;
+      if (swarmRefusedForSessions(post)) {
+        swarmSessionsRefused(reader);
+        error = swarmSessionsUnavailable;
+      } else {
+        error = post.error;
+      }
     },
   );
 
@@ -535,6 +625,7 @@ class SwarmThread extends ChangeNotifier implements SwarmFilesBox {
       return false;
     }
     final operationId = superTabOperationId();
+    final startsSession = newSession;
     final post = SwarmPost(
       body: {
         'operationId': operationId,
@@ -544,7 +635,9 @@ class SwarmThread extends ChangeNotifier implements SwarmFilesBox {
           'text': text,
           'replyTo': root,
           'recipientIds': const <String>[],
-          if (_alsoSend) 'alsoSend': true,
+          // A session's thread stays in the thread: never also sent.
+          if (_alsoSend && offersAlsoSend) 'alsoSend': true,
+          if (startsSession) 'newSession': true,
           if (ids.isNotEmpty) 'attachmentIds': ids,
           // As the desktop's: the server refuses it in an older Buddy chat.
           if (reader.snapshot?.swarmBuddy == true) 'oneBuddy': true,
@@ -556,11 +649,12 @@ class SwarmThread extends ChangeNotifier implements SwarmFilesBox {
         operationId: operationId,
       ),
       files: outgoing,
-      held: (draft: _draft, alsoSend: _alsoSend),
+      held: (draft: _draft, alsoSend: _alsoSend, newSession: _newSession),
     );
     _draft = '';
     chat.setThreadDraft(root, '');
     _alsoSend = false;
+    _newSession = false;
     // Only what goes with this reply: more may have been added meanwhile.
     for (final file in outgoing) {
       files.remove(file);
@@ -613,9 +707,13 @@ class SwarmThread extends ChangeNotifier implements SwarmFilesBox {
   /// typed or added since.
   void _restore(SwarmPost post) {
     final sent = post.held;
-    if (sent is! ({String draft, bool alsoSend})) return;
+    if (sent is! ({String draft, bool alsoSend, bool newSession})) return;
     draft = _draft.trim().isEmpty ? sent.draft : '${sent.draft}\n$_draft';
     _alsoSend = _alsoSend || sent.alsoSend;
+    // Refused for New session itself, it comes back as a plain reply.
+    if (!swarmRefusedForSessions(post)) {
+      _newSession = _newSession || sent.newSession;
+    }
     if (post.files.isNotEmpty) {
       final since = files.files;
       files
