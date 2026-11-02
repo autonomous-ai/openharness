@@ -65,7 +65,7 @@ import { QUIET_CLAIM, type HoldReason } from './holdReason.js'
 import { stuck } from './deliverySettle.js'
 import { agentDisplayName } from './agentNames.js'
 import { endedHolds, HOLDING, startedHolds, type WorkHold } from '../github/holds.js'
-import { accrueLent, addLent, lentAgents } from './leaderboard/lent.js'
+import { accrueLent, addLent, lentAgents, lentProjects } from './leaderboard/lent.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, TERMINAL_RECHECK_MS, type TerminalEffect } from './terminal.js'
 import { costRows, failedStarts, summarizeCosts } from './costs/read.js'
 import { APPROVE, approvedLine, localDate, MAX_PROPOSALS, proposalQuestion, proposalTitle, REASK_DAYS, reflectionMessageId, routingReflection, type Proposal, type ReflectionInput } from './costs/reflection.js'
@@ -2805,7 +2805,7 @@ export class SuperTabStore {
     const data = structuredClone(part.data), mine = data.contribution!
     const reading = storedObservation(mine, observation, { team: isTeamSession(user), now, preparable: id => record.preparable.includes(id) })
     if (!readingOnly(mine.observation, reading)) return null
-    addLent(mine, now, record.lentCount)
+    addLent(mine, now, record.lentCount, record.lentProjects)
     mine.observation = reading
     const suspended = JSON.stringify(mine.engineSuspensions)
     readingClearsSuspensions(mine, now)
@@ -2891,6 +2891,7 @@ export class SuperTabStore {
       // What the next reports of this machine need to skip the load, as this commit leaves the Swarm.
       const mine = state.machines?.find(m => m.machineId === machineId)
       return { ...written, ...mine ? { record: { lentCount: lentAgents(state, mine, mine.observation?.runningHarnessIds ?? []),
+        lentProjects: lentProjects(state, mine, mine.observation?.runningHarnessIds ?? []),
         removals: !!state.machines?.some(m => m.removal), deadline: Math.min(nextLossAt(state, machineId) ?? Infinity, now + DEADLINE_CAP_MS),
         team: teamByRecord(state, machineId), members: state.people.map(p => p.id),
         preparable: (state.starts ?? []).filter(s => preparableStart(s, machineId)).map(s => s.id), at: now } } : {} }
