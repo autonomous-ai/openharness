@@ -707,6 +707,88 @@ void main() {
         expect(server.threadMarkPosts, isNotEmpty);
       });
 
+      // A Swarm's view can be built while hidden: the canvas stays Offstage on a utility tab, and the app can start in the background.
+      Map<String, dynamic> savedOpen() => {
+        'tabId': 'tab',
+        'accountId': 'owner',
+        'selectedId': 'lead',
+        'openThread': {'conversationId': 'lead', 'root': 'message-1'},
+      };
+      Future<void> mountHidden(
+        WidgetTester tester,
+        SuperTabController c, {
+        required bool hidden,
+      }) async {
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: grid.buildAppTheme(brightness: Brightness.dark),
+            home: Scaffold(
+              body: TickerMode(
+                enabled: !hidden,
+                child: Offstage(
+                  offstage: hidden,
+                  child: SuperTabView(
+                    controller: c,
+                    onInvite: () {},
+                    onAddAgent: (_) {},
+                    onOpenTerminal: (_) {},
+                    machineName: (_) => 'Team Mac',
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+      }
+
+      testThread('a hidden pane marks nothing, and marks once it is shown', (
+        tester,
+      ) async {
+        await tester.binding.setSurfaceSize(const Size(1400, 900));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        final server = threaded();
+        final c = shown = server.controller(initial: savedOpen());
+        addTearDown(c.dispose);
+        await c.refresh();
+        await mountHidden(tester, c, hidden: true);
+        expect(
+          find.byKey(const ValueKey('super-thread-panel'), skipOffstage: false),
+          findsOneWidget,
+        );
+        expect(server.threadMarkPosts, isEmpty);
+        await mountHidden(tester, c, hidden: false);
+        expect(server.threadMarkPosts, isNotEmpty);
+      });
+
+      testThread(
+        'an app in the background marks nothing, and marks once it is back',
+        (tester) async {
+          await tester.binding.setSurfaceSize(const Size(1400, 900));
+          addTearDown(() => tester.binding.setSurfaceSize(null));
+          addTearDown(
+            () => tester.binding.handleAppLifecycleStateChanged(
+              AppLifecycleState.resumed,
+            ),
+          );
+          final server = threaded();
+          tester.binding.handleAppLifecycleStateChanged(
+            AppLifecycleState.paused,
+          );
+          final c = shown = server.controller(initial: savedOpen());
+          addTearDown(c.dispose);
+          await c.refresh();
+          await mountHidden(tester, c, hidden: false);
+          await tester.pump(const Duration(milliseconds: 50));
+          expect(server.threadMarkPosts, isEmpty);
+          tester.binding.handleAppLifecycleStateChanged(
+            AppLifecycleState.resumed,
+          );
+          await tester.pumpAndSettle();
+          expect(server.threadMarkPosts, isNotEmpty);
+        },
+      );
+
       testThread('the real pane says it is shown', (tester) async {
         final server = threaded();
         await show(
