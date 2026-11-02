@@ -129,6 +129,7 @@ class SwitchConnection extends MonitorConnection {
 /// A machine with two Claude accounts and two Codex ones, as the daemon would list them.
 class ProfileConnection extends SwitchConnection {
   final links = <String>[];
+  final requests = <String>[];
   final usageReads = <Map<String, dynamic>>[];
   final claudeRows = <Map<String, dynamic>>[
     {
@@ -151,6 +152,7 @@ class ProfileConnection extends SwitchConnection {
     Map<String, dynamic> payload = const {},
     Duration timeout = const Duration(seconds: 20),
   }) async {
+    requests.add(type);
     switch (type) {
       case 'claude_profiles_list':
         return {'profiles': claudeRows};
@@ -1405,6 +1407,7 @@ void main() {
     test('the picker lists one row per account with % left', () async {
       final connection = ProfileConnection();
       final app = fixture(connection, sourceEngine: 'claude');
+      app.stateOf('m')!.localOnly = true;
       addTearDown(app.dispose);
       final search = SwarmSearchController(app, []);
       addTearDown(search.dispose);
@@ -1447,6 +1450,7 @@ void main() {
     test('a same-engine change to another account closes and creates with claudeHome', () async {
       final connection = ProfileConnection();
       final app = fixture(connection, sourceEngine: 'claude');
+      app.stateOf('m')!.localOnly = true;
       addTearDown(app.dispose);
       await app.addAgentToSwarm('m', 'a0');
       expect(
@@ -1469,6 +1473,7 @@ void main() {
     test('picking the current engine and account does nothing', () async {
       final connection = ProfileConnection();
       final app = fixture(connection, sourceEngine: 'claude');
+      app.stateOf('m')!.localOnly = true;
       addTearDown(app.dispose);
       await app.addAgentToSwarm('m', 'a0');
       expect(
@@ -1482,6 +1487,7 @@ void main() {
     test('the default account passes no claudeHome', () async {
       final connection = ProfileConnection();
       final app = fixture(connection, sourceEngine: 'codex');
+      app.stateOf('m')!.localOnly = true;
       addTearDown(app.dispose);
       await app.addAgentToSwarm('m', 'a0');
       expect(
@@ -1494,6 +1500,7 @@ void main() {
     test('a Codex account passes codexHome', () async {
       final connection = ProfileConnection();
       final app = fixture(connection, sourceEngine: 'claude');
+      app.stateOf('m')!.localOnly = true;
       addTearDown(app.dispose);
       app.stateOf('m')!.engines.replace(const [
         EngineAvailability(
@@ -1518,6 +1525,7 @@ void main() {
       () async {
         final connection = ProfileConnection();
         final app = fixture(connection, sourceEngine: 'codex');
+        app.stateOf('m')!.localOnly = true;
         addTearDown(app.dispose);
         String? notice;
         app.agentChangeNotice = (m) => notice = m;
@@ -1531,6 +1539,57 @@ void main() {
         expect(notice, 'Run /login, then pick it again');
       },
     );
+    test(
+      'a remote machine is never asked for accounts and offers none',
+      () async {
+        final connection = ProfileConnection();
+        final app = fixture(connection, sourceEngine: 'claude');
+        addTearDown(app.dispose);
+        final search = SwarmSearchController(app, []);
+        addTearDown(search.dispose);
+        search.setQuery('&');
+        search.setAgentSelection('m', 'a0');
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        expect(
+          connection.requests.where((t) => t.endsWith('profiles_list')),
+          isEmpty,
+        );
+        expect(
+          search.rows.any((r) => r.agentProfile != null || r.addsClaudeAccount),
+          isFalse,
+        );
+        expect(await app.addClaudeAccount('m', 'a0'), isNotNull);
+      },
+    );
+
+    test('a Swarm Buddy keeps its engine: rows disabled, no change', () async {
+      final connection = ProfileConnection();
+      final app = fixture(connection, sourceEngine: 'claude');
+      app.stateOf('m')!.localOnly = true;
+      addTearDown(app.dispose);
+      app.buddyAgentsForTest.add(('m', 'a0'));
+      final search = SwarmSearchController(app, []);
+      addTearDown(search.dispose);
+      search.setQuery('&');
+      search.setAgentSelection('m', 'a0');
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(
+        search.rows.every(
+          (r) => r.detail == 'A Buddy keeps its engine for now',
+        ),
+        isTrue,
+      );
+      expect(search.canSubmit(search.rows.first), isFalse);
+      expect(
+        connection.requests.where((t) => t.endsWith('profiles_list')),
+        isEmpty,
+      );
+      expect(
+        await app.changeAgent('m', 'a0', 'codex'),
+        'A Buddy keeps its engine for now',
+      );
+      expect(connection.creations, isEmpty);
+    });
   });
 
   test('& searches all agents and only submits supported choices for its exact source', () {

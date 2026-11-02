@@ -747,6 +747,7 @@ typedef MachinesRequest = ({String? devicePub, bool phones});
 
 /// Change agent on a Swarm Buddy, which keeps running and so keeps its agent
 /// (hn's `BUDDY_KEEPS_ITS_AGENT`, word for word).
+const buddyKeepsItsEngine = 'A Buddy keeps its engine for now';
 const buddyKeepsItsAgent =
     'A Swarm Buddy keeps its agent. To use another agent, its person removes the Buddy and adds a new one.';
 
@@ -15217,6 +15218,8 @@ class AppNotifier extends ChangeNotifier {
     String engine,
   ) async {
     if (engine != 'claude' && engine != 'codex') return const [];
+    // Profile requests are not sealed for the relay, so only this computer's own daemon is asked.
+    if (stateOf(machineId)?.isLocalMachine != true) return const [];
     final observed = {
       for (final a in stateOf(machineId)?.agents ?? const <Agent>[])
         if (engine == 'claude' ? a.claudeHome : a.codexHome case final home?)
@@ -15269,6 +15272,9 @@ class AppNotifier extends ChangeNotifier {
   /// the picker lists it once the person has run /login there. A pane cannot be given an
   /// environment, so Claude is started with `claudeHome` instead of `CLAUDE_CONFIG_DIR`.
   Future<String?> addClaudeAccount(String machineId, String agentId) async {
+    if (stateOf(machineId)?.isLocalMachine != true) {
+      return 'A Claude account can be added on this computer only.';
+    }
     final source = stateOf(machineId)?.agents
         .where((a) => a.id == agentId)
         .firstOrNull;
@@ -17434,6 +17440,24 @@ class AppNotifier extends ChangeNotifier {
   /// top, which shows it as a snack bar; null when no screen is listening.
   void Function(String message)? agentChangeNotice;
 
+  /// Whether [agentId] is a Swarm Buddy, as any open Swarm's roster says. Its machine refuses to
+  /// stop it, so Change agent cannot switch it.
+  @visibleForTesting
+  final buddyAgentsForTest = <(String, String)>{};
+
+  bool isSwarmBuddy(String machineId, String agentId) =>
+      buddyAgentsForTest.contains((machineId, agentId)) ||
+      superTabs.loadedControllers.any(
+        (c) =>
+            c.snapshot?.agents.any(
+              (a) =>
+                  a.isBuddy &&
+                  a.machineId == machineId &&
+                  a.harnessId == agentId,
+            ) ==
+            true,
+      );
+
   List<String> agentSwitchEngines(String machineId, Agent source) {
     if (source.dsh == 'autonomous/pair') {
       return const ['opencode', 'codex', 'claude'];
@@ -17487,6 +17511,8 @@ class AppNotifier extends ChangeNotifier {
         'This agent is not supported by the installed harness.',
       );
     }
+    if (isSwarmBuddy(machineId, agentId))
+      return Future.value(buddyKeepsItsEngine);
     final key = (machineId, agentId);
     if (source.dsh == 'autonomous/pair' &&
         _agentChanges[key] == null &&
