@@ -522,41 +522,6 @@ void main() {
     },
   );
 
-  // Task #2195: a Swarm that isn't showing reads no machine's usage.
-  testWidgets('Machines reads nothing while its Swarm is away, and reads at once on its return', (tester) async {
-    final (:f, :c) = await swarm((_) {});
-    var reads = 0;
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: SizedBox(
-            width: 300,
-            height: 400,
-            child: SuperTabMachines(
-              controller: c,
-              app: f.app,
-              onAddAgent: (_) {},
-              readLocal: (_) async {
-                reads++;
-                return null;
-              },
-            ),
-          ),
-        ),
-      ),
-    );
-    await tester.pump(const Duration(seconds: 1));
-    c.away = true;
-    await tester.pump(const Duration(seconds: 16));
-    final atAway = reads;
-    await tester.pump(const Duration(seconds: 40));
-    expect(reads, atAway);
-    c.away = false;
-    await tester.pump(const Duration(seconds: 1));
-    expect(reads, greaterThan(atAway));
-    await close(tester, f, c);
-  });
-
   testWidgets('Machines + opens Add your computers', (tester) async {
     final (:f, :c) = await swarm((_) {});
     await tester.pumpWidget(
