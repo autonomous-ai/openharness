@@ -88,20 +88,21 @@ Web links and `#42` render as phone link text and open their destination when ta
 - [x] **Step 2: Run the focused widget tests on the unchanged implementation** and confirm web destinations and numbered task/PR routing fail.
 - [x] **Step 3: Implement validated web-link handling and snapshot-backed `#N` routing** without changing the message row's outer long-press behavior.
 - [x] **Step 4: Run the focused widget tests** and confirm expected destinations and no unintended reply tap.
-- [ ] **Step 5: Commit the failing tests, then commit the passing implementation.**
+- [x] **Step 5: Commit the failing tests, then commit the passing implementation.**
 
 ### Task 3: Capture the long agent report
 
 **Files:**
 - Test: `mobile/test/swarm/swarm_message_markdown_shots_test.dart`
-- Screenshot: `$SWARM_MESSAGE_MARKDOWN_SHOTS/swarm-message-markdown.png` (the repository's established environment-selected screenshot output pattern)
+- Screenshot: `mobile/test/swarm/screenshots/swarm-message-markdown-dark.png`
+- Screenshot: `mobile/test/swarm/screenshots/swarm-message-markdown-light.png`
 
 **Interfaces:**
 - Consumes: the production message row and deterministic fake message/conversation data.
 - Produces: a reviewable image of a long agent report with Markdown and links, included in the PR.
 
-- [ ] **Step 1: Add a screenshot test** for a long report containing headings, emphasis, a list, a quote, a table, a web link, `#N`, and a code block, following `swarm_project_c_shots_test.dart`'s environment-selected output convention.
-- [ ] **Step 2: Capture the screenshot and inspect that it shows a readable long report.**
+- [x] **Step 1: Add a screenshot test** for a long report containing headings, emphasis, a list, a quote, a table, a web link, `#N`, and a code block, following `swarm_project_c_shots_test.dart`'s environment-selected output convention.
+- [x] **Step 2: Capture the screenshot and inspect that it shows a readable long report.**
 - [ ] **Step 3: Attach the screenshot in the PR and commit the screenshot test.**
 
 ## Validation
