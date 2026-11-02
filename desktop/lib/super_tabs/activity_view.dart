@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
 import '../widgets/laid_out_list.dart';
@@ -78,8 +79,8 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
     if (local.year == now.year &&
         local.month == now.month &&
         local.day == now.day) {
-      String two(int n) => n.toString().padLeft(2, '0');
-      return '${two(local.hour)}:${two(local.minute)}';
+      return MaterialLocalizations.of(context)
+          .formatTimeOfDay(TimeOfDay.fromDateTime(local));
     }
     return superTabAgoShort(now.difference(local));
   }
@@ -111,10 +112,9 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
     final open = decision != null && _answering.contains(decision.id);
     final row = _Row(
       key: ValueKey('super-activity-row-${need.id}'),
-      mark: switch (need.kind) {
-        SuperTabNeedKind.mention => '@',
-        _ => '◐',
-      },
+      // The design's @: the icon set has none, and it adds none.
+      glyph: need.kind == SuperTabNeedKind.mention ? '@' : null,
+      mark: need.kind == SuperTabNeedKind.mention ? null : AppIcons.circleDot,
       title: need.title,
       unread: true,
       trailing: switch (need.kind) {
@@ -158,7 +158,7 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
     final text = thread.rootText.replaceAll(RegExp(r'\s+'), ' ').trim();
     return _Row(
       key: ValueKey('super-activity-row-thread:${thread.key}'),
-      mark: '↳',
+      mark: AppIcons.reply,
       title: text.isEmpty ? 'Thread' : text,
       unread: true,
       trailing: '${_activity.attention.newCount(thread)} new',
@@ -173,7 +173,7 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
 
   Widget _finished(SuperTabConversation group) => _Row(
     key: ValueKey('super-activity-row-done:${group.id}'),
-    mark: '✓',
+    mark: AppIcons.check,
     title: group.title,
     unread: false,
     trailing: _when(group.shippedAt!),
@@ -243,13 +243,15 @@ class _Row extends StatefulWidget {
   const _Row({
     super.key,
     this.mark,
+    this.glyph,
     required this.title,
     required this.unread,
     required this.trailing,
     required this.onTap,
     this.hoverAction,
   });
-  final String? mark;
+  final IconData? mark;
+  final String? glyph;
   final String title;
   final bool unread;
   final String trailing;
@@ -298,7 +300,16 @@ class _RowState extends State<_Row> {
                     // Every row has the slot, so every title starts in one column.
                     SizedBox(
                       width: 20,
-                      child: Text(widget.mark ?? '', style: style),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: widget.mark == null
+                            ? Text(widget.glyph ?? '', style: style)
+                            : Icon(
+                                widget.mark,
+                                size: AppIcons.inlineSize,
+                                color: style.color,
+                              ),
+                      ),
                     ),
                     Expanded(
                       child: Text(

@@ -79,6 +79,9 @@ int? _maxAgentSlots(MachineResources? resources) {
 int? _suggestedAgentSlots(MachineResources? resources) =>
     superTabSuggestedAgentSlots(resources);
 
+/// Where a machine's row starts in Manage, so its mark sits under the heading.
+const _manageRowStart = 12.0;
+
 class SuperTabMachines extends StatefulWidget {
   const SuperTabMachines({
     super.key,
@@ -906,7 +909,11 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     }
     _syncTick();
     _redrawMoved();
-    if (!c.away && _timer?.isActive != true && !_reading && widget.app?.foreground.value == true && (!kUnderTest || widget.readLocal != null)) {
+    if (!c.away &&
+        _timer?.isActive != true &&
+        !_reading &&
+        widget.app?.foreground.value == true &&
+        (!kUnderTest || widget.readLocal != null)) {
       unawaited(_refresh());
     }
   }
@@ -2390,9 +2397,13 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         : null;
     if (widget.manage) {
       return LaidOutListView(
-        padding: const EdgeInsets.symmetric(
-          horizontal: grid.AppDesktop.groupGap,
-          vertical: grid.AppDesktop.controlGap,
+        // A row's mark starts under Manage's heading, its words end at the
+        // page's edge (Swarm's and Models' 24).
+        padding: const EdgeInsets.fromLTRB(
+          _manageRowStart,
+          grid.AppDesktop.controlGap,
+          grid.AppDesktop.groupGap,
+          grid.AppDesktop.controlGap,
         ),
         children: [
           // Only a Swarm that can't be read is news, as under the old heading.
@@ -2419,10 +2430,13 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
           const SizedBox(height: 8),
           Align(
             alignment: Alignment.centerRight,
-            child: TextButton(
-              key: const ValueKey('super-manage-add-machine'),
-              onPressed: add,
-              child: const Text('Add machine'),
+            child: Padding(
+              padding: const EdgeInsets.only(right: grid.AppDesktop.controlGap),
+              child: TextButton(
+                key: const ValueKey('super-manage-add-machine'),
+                onPressed: add,
+                child: const Text('Add machine'),
+              ),
             ),
           ),
         ],

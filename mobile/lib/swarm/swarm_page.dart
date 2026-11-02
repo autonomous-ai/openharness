@@ -8,6 +8,7 @@ import 'package:harness_mobile/phone/out_of_sight.dart';
 import 'package:harness_mobile/phone/phone_navigation.dart';
 import 'package:harness_mobile/phone/phone_shell_scope.dart';
 import 'package:harness_mobile/phone/tty.dart';
+import 'package:harness_mobile/phone/tty_controls.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
@@ -219,7 +220,7 @@ class _SwarmPageState extends State<SwarmPage> {
         appLog.warn('swarm', 'Computers not looked for', error: failure);
       }
     }
-    await inbox.refresh();
+    await inbox.refreshAll();
   }
 
   /// Whether Home offers New message: a Swarm to post in may be there, or
@@ -654,9 +655,35 @@ class _SwarmPageState extends State<SwarmPage> {
             onTap: () => unawaited(_newProject(session, shown)),
           )
         : null;
+    final invited = inbox.invitations;
     return [
+      if (invited.isNotEmpty) ...[
+        SwarmCaption('Invitations', first: first),
+        SwarmGroup(
+          children: [
+            for (final invitation in invited)
+              SwarmInvitationRow(
+                key: ValueKey('swarm-invitation-${invitation.inviteId}'),
+                invitation: invitation,
+                joining: inbox.joining.contains(invitation.inviteId),
+                onJoin: () => unawaited(inbox.join(invitation)),
+                onLater: () => inbox.notNow(invitation),
+              ),
+          ],
+        ),
+        if (inbox.joinError case final error?)
+          Padding(
+            key: const ValueKey('swarm-invitation-error'),
+            padding: const EdgeInsets.only(top: AppSpace.s),
+            child: Text(
+              error,
+              style: Tty.of(context)
+                  .style(color: Tty.of(context).red, size: TtySize.meta),
+            ),
+          ),
+      ],
       if (lists.pinned.isNotEmpty) ...[
-        SwarmCaption('Pinned', first: first),
+        SwarmCaption('Pinned', first: first && invited.isEmpty),
         SwarmGroup(children: [for (final p in lists.pinned) row(p)]),
       ],
       if (lists.recent.isNotEmpty ||
@@ -665,7 +692,10 @@ class _SwarmPageState extends State<SwarmPage> {
           nothingListed ||
           mentionsFailed ||
           create != null) ...[
-        SwarmCaption('Projects', first: first && lists.pinned.isEmpty),
+        SwarmCaption(
+          'Projects',
+          first: first && invited.isEmpty && lists.pinned.isEmpty,
+        ),
         SwarmGroup(
           children: [
             if (empty) const SwarmRow(title: 'No project yet', onTap: null),
@@ -703,7 +733,10 @@ class _SwarmPageState extends State<SwarmPage> {
           ],
         ),
       ] else if (reading.isNotEmpty || failed.isNotEmpty)
-        SwarmCaption('Projects', first: first && lists.pinned.isEmpty),
+        SwarmCaption(
+          'Projects',
+          first: first && invited.isEmpty && lists.pinned.isEmpty,
+        ),
       // A Swarm still to be read has its skeleton below: one is enough.
       if (mentionsComing && reading.isEmpty) ...[
         const SizedBox(height: 8),
