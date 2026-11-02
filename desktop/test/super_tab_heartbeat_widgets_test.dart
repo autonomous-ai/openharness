@@ -4,7 +4,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/machines.dart';
-import 'package:harness/super_tabs/project_status_card.dart';
 import 'package:harness/super_tabs/reading.dart';
 import 'package:harness/super_tabs/roster.dart';
 import 'package:harness/super_tabs/view.dart';
@@ -86,10 +85,6 @@ class _Screen {
                         onAnswer: (_) {},
                       ),
                     ),
-                    SuperTabProjectStatusCard(
-                      controller: c,
-                      projectId: c.snapshot?.projects.firstOrNull?.id ?? 'p',
-                    ),
                     Expanded(
                       child: ValueListenableBuilder(
                         valueListenable: collapsed!,
@@ -138,7 +133,6 @@ class _Screen {
     for (final type in const [
       SuperTabView,
       SuperTabRoster,
-      SuperTabProjectStatusCard,
       SuperTabMachines,
     ]) {
       if (element.widget.runtimeType == type) bump(type);
@@ -147,7 +141,6 @@ class _Screen {
       final type = up.widget.runtimeType;
       if (type == SuperTabView ||
           type == SuperTabRoster ||
-          type == SuperTabProjectStatusCard ||
           type == SuperTabMachines) {
         bump(type);
         return false;
@@ -187,7 +180,6 @@ void main() {
         'roster list builds ${s.rosterBuilds}',
       );
       expect(s.rebuilt[SuperTabView] ?? 0, 0);
-      expect(s.rebuilt[SuperTabProjectStatusCard] ?? 0, 0);
       // Only its own 30-second clock, for ages and leases on a quiet Swarm.
       expect(s.rosterBuilds, lessThanOrEqualTo(2));
       await s.close();

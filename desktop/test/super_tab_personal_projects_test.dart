@@ -81,6 +81,10 @@ Future<SuperTabController> _personal(
   SuperTabLaunchFixture f, {
   List<String> people = const ['owner'],
 }) async {
+  // These panes are this computer's: Personal's sync of other machines has no part here.
+  for (final state in f.app.machineStates.values) {
+    state.localOnly = true;
+  }
   f.connection.server.state
     ..['name'] = 'Personal'
     ..['ownerId'] = 'owner'

@@ -16,7 +16,7 @@
  */
 import { constants, fstatSync, openSync, readSync, closeSync, unlinkSync } from 'node:fs'
 import { b64e, sign, utf8 } from '../lib/e2ee/core.js'
-import type { AuthSession } from '../lib/authSession.js'
+import { teamSignInEpoch, type AuthSession } from '../lib/authSession.js'
 import { HANDOFF_CODE } from './layout.js'
 import { TeamSignInError } from './signInError.js'
 
@@ -195,6 +195,7 @@ export function teamSession(tokens: TeamTokens, computerId: string, fallbackEnv:
     ...(tokens.expiresIn ? { expiresAt: now + tokens.expiresIn * 1000 } : {}),
     autonomousEnv: tokens.autonomousEnv ?? fallbackEnv,
     computerId,
+    signInEpoch: teamSignInEpoch(now),
     ...extra,
     kind: 'team',
     updatedAt: now,
