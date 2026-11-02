@@ -6,6 +6,7 @@
  */
 import type { PrismaClient } from '@prisma/client'
 import { groupsBy, readBy } from './parts/indexed.js'
+import { logger } from '../utils/logger.js'
 
 /** How long a tombstone kept because something open names it waits before it is checked again. */
 export const AGENT_RECHECK_MS = 86_400_000
@@ -31,7 +32,7 @@ async function namedAgents(db: PrismaClient, tabId: string, keys: string[]): Pro
 
 /**
  * Deletes agent tombstones past their purge time, in batches, by the purge index. One an open conversation or a live start
- * still names is compacted and checked again `AGENT_RECHECK_MS` later. Each write repeats the due match, so a tombstone an
+ * still names, or whose Swarm's floor could not be raised, is compacted and checked again `AGENT_RECHECK_MS` later. Each write repeats the due match, so a tombstone an
  * agent's return revived since the read stays; a return that read it before the delete fails its guard and runs again.
  */
 export async function purgeAgentTombstones(db: PrismaClient, now: number): Promise<{ purged: number; kept: number }> {
@@ -45,23 +46,33 @@ export async function purgeAgentTombstones(db: PrismaClient, now: number): Promi
     for (const row of rows) tabs.set(row.tabId, [...tabs.get(row.tabId) ?? [], row.key])
     const named = new Set<string>()
     for (const [tabId, keys] of tabs) for (const key of await namedAgents(db, tabId, keys)) named.add(`${tabId}\0${key}`)
-    const held = rows.filter(row => named.has(`${row.tabId}\0${row.key}`)).map(row => row._id)
-    const free = rows.filter(row => !named.has(`${row.tabId}\0${row.key}`)).map(row => row._id)
+    const held = new Set(rows.filter(row => named.has(`${row.tabId}\0${row.key}`)).map(row => row._id))
+    // The floor first: a deleted tombstone's version is never lost. A Swarm whose floor was not written (no head, a write
+    // error) keeps its tombstones, compacted, for the next check. A revival between the two writes continues from the
+    // tombstone, above the floor already.
+    const floors = new Map<string, number>()
+    for (const row of rows) if (!held.has(row._id)) floors.set(row.tabId, Math.max(floors.get(row.tabId) ?? 0, row.version))
+    const raised = new Set<string>()
+    for (const [tabId, version] of floors) {
+      const reply = await db.$runCommandRaw({ update: 'SwarmHead', updates: [{ q: { _id: `${tabId}:head` }, u: { $max: { agentFloor: version } } }] }) as
+        unknown as { n?: number; writeErrors?: unknown[] }
+      if (Number(reply.n ?? 0) === 1 && !reply.writeErrors?.length) raised.add(tabId)
+      else logger.warn('[swarm-sweeps] an agent floor was not written; its tombstones wait a day', { tabId })
+    }
+    const free = rows.filter(row => !held.has(row._id) && raised.has(row.tabId)).map(row => row._id)
+    const wait = rows.filter(row => !free.includes(row._id)).map(row => row._id)
+    const before = purged + kept
     if (free.length) {
-      // The floor first: a deleted tombstone's version is never lost. A revival between the two writes continues from the
-      // tombstone, above the floor already.
-      const floors = new Map<string, number>()
-      for (const row of rows) if (!named.has(`${row.tabId}\0${row.key}`)) floors.set(row.tabId, Math.max(floors.get(row.tabId) ?? 0, row.version))
-      await db.$runCommandRaw({ update: 'SwarmHead', updates: [...floors].map(([tabId, version]) => ({ q: { _id: `${tabId}:head` },
-        u: { $max: { agentFloor: version } } })) })
       const reply = await db.$runCommandRaw({ delete: 'SwarmAgent', deletes: [{ q: { _id: { $in: free }, ...due }, limit: 0 }] }) as unknown as { n?: number }
       purged += Number(reply.n ?? 0)
     }
-    if (held.length) {
-      const reply = await db.$runCommandRaw({ update: 'SwarmAgent', updates: [{ q: { _id: { $in: held }, ...due },
+    if (wait.length) {
+      const reply = await db.$runCommandRaw({ update: 'SwarmAgent', updates: [{ q: { _id: { $in: wait }, ...due },
         u: { $set: { data: {}, purgeAt: at(now + AGENT_RECHECK_MS) } }, multi: true }] }) as unknown as { nModified?: number }
       kept += Number(reply.nModified ?? 0)
     }
+    // A full batch that changed nothing (its writes refused) would be read again at once: stop until the next pass.
+    if (purged + kept === before) break
     if (rows.length < BATCH) break
   }
   return { purged, kept }
