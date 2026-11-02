@@ -7,7 +7,7 @@ import type { NativeLaunch, NativeLaunchResult, NativeLaunchSource } from '../..
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 11: docs/design/2026-10-03-harnessd.md).
  */
-import { agentTmpEnv } from '../../lib/agentTmp.js'
+import { agentTmpEnv, buddyTmpEnv } from '../../lib/agentTmp.js'
 import { realpathSync, statSync } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
@@ -34,6 +34,8 @@ import { agentLaunchArgs, joinedInstructions } from '../../lib/agentAttribution.
 import { machineMcpLaunchArgs } from '../../lib/machineMcp.js'
 import { writeGridConfigDir } from '../../lib/gridConfigDir.js'
 import { describeGridLaunch, gridConfigHandOff, gridConflictingEnvToClear, type GridLaunchAnswer, type GridLaunchMachine, type GridLaunchRequest, type GridWebSearchStatus } from '../../lib/gridLaunchWire.js'
+import { syncProfileHome } from '../../lib/connectors/agents.js'
+import { Store as ConnectionsVault } from '../../lib/connectors/store.js'
 import { profileEnvironment } from '../../lib/engineHomes.js'
 import { DEFAULT_HARNESS_PERMISSION, freshHarnessEnvironment } from '../../lib/harnessDefaults.js'
 import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
@@ -123,7 +125,7 @@ export function createAgentCreator({
     const stale = () => ({ ok: false as const, error: 'LAUNCH_AUTHORITY_CHANGED', unavailable: 'launch', detail: 'Waiting for the original launch request’s authority.' })
     if (!authority.current()) return stale()
     if (input.swarmRole && !swarmLaunch) return { ok: false, error: 'SWARM_SKILL_FAILED', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' }
-    let { engine, cwd, bypassPermission, permissionMode, grid, codexHome, dsh, prompt, name, agent, scmLaunchRecord, startedBy, parentAgentId, launchModel } = input
+    let { engine, cwd, bypassPermission, permissionMode, grid, codexHome, claudeHome, dsh, prompt, name, agent, scmLaunchRecord, startedBy, parentAgentId, launchModel } = input
     let createBackend = initialBackend
     if (!createBackend && recoverBackend) {
       createBackend = await recoverBackend()
@@ -151,7 +153,7 @@ export function createAgentCreator({
     // Never from a relayed request, which could name any repository here. Codex's trust also sets defaults for the
     // person's own sessions in that folder, so it stays theirs to give.
     const trustSwarmFolder = !trustEmptyProject && context?.local === true && !dsh && engine === 'claude' && !!input.swarmRole
-      && permissionMode === 'full' && await swarmFolder(cwd)
+      && (permissionMode === 'full' || permissionMode === 'teamWritten') && await swarmFolder(cwd)
     if (!authority.current()) return stale()
     // A harness can pin its permission mode (`dshPinnedPermissionMode`): the Grid harness starts model
     // servers, which Codex's sandbox would start without a GPU. Pinned before anything reads the mode,
@@ -262,7 +264,7 @@ export function createAgentCreator({
         if (emptyBefore && materialized.created.some((item) => item.startsWith('template'))) {
           try {
             // In the agent's own profile when it has one: that config.toml is the one a Codex agent reads.
-            folderTrust(engine, codexHome)?.record(cwd)
+            folderTrust(engine, engine === 'claude' ? claudeHome : codexHome)?.record(cwd)
           } catch (error) { console.warn(`[dsh] pre-trust ${cwd} · ${error instanceof Error ? error.message : error}`) }
         }
       } catch (error) {
@@ -319,7 +321,7 @@ export function createAgentCreator({
     // The Swarm starts its agents in full mode, so a machine that never accepted full mode's warning stops each one there
     // before its first turn (Claude Code's "Yes, I accept", the Mac Studio, 2026-10-26). The Swarm's owner chose that mode
     // for it; recorded the way the engine records the person's own yes, in the home this launch reads.
-    if (input.swarmRole && permissionMode === 'full') {
+    if (input.swarmRole && (permissionMode === 'full' || permissionMode === 'teamWritten')) {
       try { acceptFullMode(engine, native ? { ...native.environment, ...gridLaunch?.env, ...dshEnv } : undefined) }
       catch (error) { console.warn(`[agent] full mode acceptance · ${error instanceof Error ? error.message : error}`) }
     }
@@ -333,7 +335,7 @@ export function createAgentCreator({
         if ((empty || trustSwarmFolder) && workspaceIdentity() === originalWorkspace) {
           files.verify()
           const environment = native ? { ...native.environment, ...gridLaunch?.env, ...dshEnv } : undefined
-          const profile = engine === 'codex' && environment ? nativeHookLocations(environment).CODEX_HOME : codexHome
+          const profile = engine === 'codex' && environment ? nativeHookLocations(environment).CODEX_HOME : engine === 'claude' ? claudeHome : codexHome
           folderTrust(engine, profile, environment)?.record(cwd)
         }
       } catch (error) { console.warn(`[agent] pre-trust ${cwd} · ${error instanceof Error ? error.message : error}`) }
@@ -351,6 +353,12 @@ export function createAgentCreator({
     // Idempotent, so paying this on every create against an already-set-up profile is free.
     if (!native && codexHome && !hooksDisabled && !await engineHooks.codex.installIn(hookPort, codexHome)) return {
       ok: false, error: 'NATIVE_LAUNCH_HELD', detail: 'Waiting to confirm Codex’s hooks in the selected profile.', unavailable: 'native',
+    }
+    // An agent on a profile home reads that home's MCP config, not the default's: it gets the connections there too.
+    const profileHome = engine === 'claude' ? claudeHome : engine === 'codex' ? codexHome : null
+    if (profileHome && (engine === 'claude' || engine === 'codex')) {
+      try { syncProfileHome(new ConnectionsVault(), engine, profileHome) }
+      catch (error) { console.warn(`[agent] connections for ${profileHome} · ${error instanceof Error ? error.message : error}`) }
     }
     // OpenCode may have upgraded from 1.x to 2.x while this daemon was running. Its new TUI must
     // not discover our old server plugin; the cached version probe changes with the executable.
@@ -439,13 +447,14 @@ export function createAgentCreator({
       paneLaunch: windowsPaneLaunch(engine, { ...launchOptions, held: isWindowsHeldPane(argv) }),
       // Windows: the variables the argv's `/usr/bin/env` prefix carries elsewhere, last (engineLaunchEnv).
       // The private temporary folder first, so the launch's own variables win over it (lib/agentTmp.ts).
-      env: mergedLaunchEnv(mergedLaunchEnv(agentTmpEnv(engine, swarmSkill?.role), freshHarnessEnvironment(engine, mergedLaunchEnv(mergedLaunchEnv(gridLaunch?.env ?? mergedLaunchEnv(codexHome ? profileEnvironment(engine, codexHome) : undefined, relay?.env), dshEnv),
+      env: mergedLaunchEnv(mergedLaunchEnv(swarmSkill?.role === 'buddy' ? buddyTmpEnv(engine, cwd) : agentTmpEnv(engine, swarmSkill?.role), freshHarnessEnvironment(engine, mergedLaunchEnv(mergedLaunchEnv(gridLaunch?.env ?? mergedLaunchEnv(codexHome ? profileEnvironment(engine, codexHome) : undefined, relay?.env), dshEnv),
         mergedLaunchEnv(mergedLaunchEnv(scmLaunchEnv(scmLaunchRecord), swarmGitHub?.env), native?.environment)), !!grid,
         permissionMode ?? (bypassPermission ? DEFAULT_HARNESS_PERMISSION : 'ask'))), engineLaunchEnv(engine, native)),
       grid: grid ? { baseUrl: grid.baseUrl, model: grid.model ?? null } : null,
       gridLaunchRecord: grid && gridLaunch ? { override: grid, webSearch: gridLaunch.webSearch } : null,
       scmLaunchRecord: scmLaunchRecord ?? null,
       codexHome,
+      claudeHome,
       dsh,
       dshRuntime: dsh ? label : null,
       ...(swarmSkill ? { swarmSkill } : {}),

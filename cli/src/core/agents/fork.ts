@@ -196,6 +196,8 @@ export function createAgentForker({
       scmLaunchRecord: source.scmLaunch ?? null,
       codexHome: engine === 'codex' && built.overrides.native
         ? nativeHookLocations(built.overrides.native.environment).CODEX_HOME : source.codexHome ?? null,
+      // Its account, as its source's restart keeps it: on the row, or a restart of the fork runs on the default account.
+      claudeHome: source.claudeHome ?? null,
       dshRuntime: source.dsh ? label : null,
       dsh: source.dsh ?? null,
       agent: source.agent ?? null,

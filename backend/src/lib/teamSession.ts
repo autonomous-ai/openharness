@@ -131,6 +131,12 @@ export const TEAM_ROUTES: readonly TeamRoute[] = [
   { method: 'GET', url: '/api/super-tabs/:tabId/routing-policy', scope: 'agent' },
   { method: 'GET', url: '/api/super-tabs/:tabId/route-decisions', scope: 'agent' },
   { method: 'GET', url: '/api/super-tabs/:tabId/route-decisions/:decisionId', scope: 'agent' },
+  // Its project's instructions, which every agent works by: its launch line runs `instructions`, and the host installs each
+  // revision as the agent's swarm-instructions skill (superTabs/instructions.ts). Missing here until 2026-11-02, so a
+  // teammate's agent worked by its role file alone.
+  { method: 'GET', url: '/api/super-tabs/:tabId/projects/:projectId/instructions', scope: 'agent' },
+  { method: 'GET', url: '/api/super-tabs/:tabId/projects/:projectId/instructions/revisions', scope: 'agent' },
+  { method: 'GET', url: '/api/super-tabs/:tabId/projects/:projectId/instructions/revisions/:revision', scope: 'agent' },
   // The decisions its agent asked of people, and their answers (superTabs/decisions.ts).
   { method: 'GET', url: '/api/super-tabs/:tabId/decisions', scope: 'agent' },
   { method: 'GET', url: '/api/super-tabs/:tabId/conversations/:conversationId/messages', scope: 'agent' },

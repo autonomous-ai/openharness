@@ -113,6 +113,9 @@ export interface RestartAgentDeps {
    * ordering only, never allowed to fail the restart; implementations swallow their own errors.
    */
   stopConflictingJob?: () => Promise<void>
+  /** A [continueInFork] move, once the old writer is stopped: makes the fork ready for its destination and returns its
+   *  id, which the relaunch then resumes. A failure falls back to the plain fork: the conversation still continues. */
+  prepareFork?: () => Promise<string>
   buildArgv: (opts: RelaunchArgvOptions) => string[]
   /** Why the relaunch [buildArgv] would build is refused on this platform (a Windows batch-file engine whose arguments
    *  cmd.exe would read, lib/windows/launch.ts), asked before anything is stopped; null when it is not. */
@@ -174,9 +177,16 @@ export async function restartAgent(
   if (!current()) return changed
   if (resumeSessionId && deps.stopConflictingJob) await deps.stopConflictingJob()
   if (!current()) return changed
+  let preparedFork: string | null = null
+  if (resumeSessionId && session.continueInFork && deps.prepareFork) {
+    try { preparedFork = await deps.prepareFork() } catch (error) {
+      deps.log(`[restart] ${session.engine} could not prepare the move, continuing in a plain fork: ${error instanceof Error ? error.message : error}`)
+    }
+    if (!current()) return changed
+  }
   const spawnAndWait = async (withResume: boolean): Promise<ProcessIdentity | null> => {
     if (!current()) return null
-    const argv = deps.buildArgv({ bypassPermission, ...(withResume ? reopen(resumeSessionId) : {}) })
+    const argv = deps.buildArgv({ bypassPermission, ...(!withResume ? {} : preparedFork ? { resumeSessionId: preparedFork } : reopen(resumeSessionId)) })
     const spawned = await deps.respawn(argv)
     if (!current()) return null
     if (!spawned.ok) {

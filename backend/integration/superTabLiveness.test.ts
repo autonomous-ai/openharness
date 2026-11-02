@@ -81,11 +81,14 @@ async function swarm({ legacy = false, client = db, hooks, independent = false, 
   /** The member name people and the Lead read for an agent. */
   const name = async (agentId: string) => (await timed.read(owner, tab)).state.agents.find(a => a.id === agentId)!.displayName
   const assignment = async () => (await timed.read(owner, tab)).state.conversations.find(c => c.id === group)!.assignment!
-  /** What the Lead's host receives now (this poll is also the Lead's wake-up path), with each row's text. */
+  /** What the Lead's host receives now (this poll is also the Lead's wake-up path), with each row's text, and what it hears in a
+   *  digest (noticeDigest.ts): gathered for one, or named by one. Those of no digest of its own come first, in the order written. */
   const leadInbox = async () => {
     const rows = await timed.deliveries(host, tab, lead)
-    const messages = await db.superTabMessage.findMany({ where: { id: { in: rows.map(r => r.messageId) } } })
-    return rows.map(r => messages.find(m => m.id === r.messageId)!)
+    const digest = await db.superTabDelivery.findMany({ where: { tabId: tab, agentId: lead, status: { in: ['gathered', 'digested'] } }, orderBy: { createdAt: 'asc' } })
+    const ids = [...rows, ...digest].map(r => r.messageId)
+    const messages = await db.superTabMessage.findMany({ where: { id: { in: ids } } })
+    return ids.map(id => messages.find(m => m.id === id)!).filter(m => (m.source as { kind?: string } | null)?.kind !== 'notice-digest')
   }
   const lostRows = async () => (await db.superTabMessage.findMany({ where: { tabId: tab }, orderBy: { sequence: 'asc' } }))
     .filter(m => (m.source as { kind?: string } | null)?.kind === 'work-lost')
@@ -1088,7 +1091,8 @@ describe('a start that never runs', () => {
     f.clock.now = dispatched + 3 * MINUTE
     await f.leadInbox()
     expect((await f.timed.read(owner, f.tab)).state.starts!.find(s => s.id === startId)!.error).toBeNull()
-    f.clock.now = dispatched + 3 * MINUTE + 1
+    // Nothing open for its Lead, so its next full poll is the sweep's, 30 s on.
+    f.clock.now = dispatched + 3 * MINUTE + 30_001
     const told = (await f.leadInbox()).find(m => (m.source as { kind?: string }).kind === 'start-timeout')!
     // Every group member reads the notice, so it names no machine (review of #1847); the start's Lead reads which one.
     expect(told).toMatchObject({ conversationId: 'lead', text: 'Could not start Builder on fixture-model: its machine did not start it within 3 minutes.' })
@@ -1640,6 +1644,9 @@ describe('the delivery poll of an agent with a held delivery', () => {
     }
     f.clock.now += 6 * MINUTE
     const expectedIds = assignments.map(assignment => stableId(stableId('work-lost', assignment, String(f.clock.now)), 'lead'))
+    await f.timed.deliveries(host, f.tab, f.lead)
+    // Gathered for a digest; each goes on its own after the settle pass's 30 minutes, the ones these cases are about.
+    await db.superTabDelivery.updateMany({ where: { tabId: f.tab, agentId: f.lead, status: 'gathered' }, data: { status: 'queued' } })
     const first = (await f.timed.deliveries(host, f.tab, f.lead)).filter(row => expectedIds.includes(row.messageId))
     expect(first).toHaveLength(3)
     await f.timed.delivery(host, f.tab, f.lead, first[0]!.id, { type: 'claim', claimId: 'claim-1' })
@@ -1717,6 +1724,9 @@ describe('the push for a new delivery', () => {
     // Each loss notice is named by its task and the time of the loss (this poll).
     const expectedIds = assignments.map(assignment => stableId(stableId('work-lost', assignment, String(f.clock.now)), 'lead'))
     // One poll expires all three assignments and inserts their messages/deliveries together.
+    await f.timed.deliveries(host, f.tab, f.lead)
+    // Gathered for a digest; each goes on its own after the settle pass's 30 minutes, the ones these cases are about.
+    await db.superTabDelivery.updateMany({ where: { tabId: f.tab, agentId: f.lead, status: 'gathered' }, data: { status: 'queued' } })
     const first = (await f.timed.deliveries(host, f.tab, f.lead)).filter(row => expectedIds.includes(row.messageId))
     expect(first).toHaveLength(3)
     expect(new Set(first.map(row => row.messageId))).toEqual(new Set(expectedIds))
@@ -2006,5 +2016,48 @@ describe('the morning digest', () => {
     f.clock.now += 24 * 60 * 60_000
     await f.leadInbox()
     expect(await digests()).toHaveLength(2)
+  })
+
+  it('drops a PM switch nobody claimed on another machine\'s next report, with one line in the project chat', async () => {
+    const f = await swarm()
+    await f.observe('lead-host', [f.harness.lead], { capabilities: ['leadSwitch'] })
+    const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
+    await f.execute({ type: 'lead.switch', projectId, engine: 'codex', profileId: 'default' })
+    const pending = async () => (await f.timed.read(owner, f.tab)).state.agents.find(a => a.id === f.lead)!.switchRequest
+    expect(await pending()).toBeDefined()
+    const lines = async () => (await db.superTabMessage.findMany({ where: { tabId: f.tab } })).filter(m => (m.source as { kind?: string } | null)?.kind === 'switch')
+    f.clock.now += 2 * MINUTE + 1000
+    await f.observe('test-host', [f.harness.worker])
+    expect(await pending()).toBeUndefined()
+    expect((await lines()).map(m => m.text)).toEqual(["Couldn't switch the PM: its machine did not answer."])
+    f.clock.now += MINUTE
+    await f.observe('test-host', [f.harness.worker])
+    expect(await lines()).toHaveLength(1)
+  })
+
+  it('tells the machine owner in their quiet Buddy chat after a rebind, and never opens that chat twice', async () => {
+    const f = await swarm()
+    const WORK = 'a'.repeat(16)
+    const reading = { capabilities: ['leadSwitch'], profiles: [{ engine: 'codex' as const, id: WORK, label: 'Work', leftPercent: 80, resetsAt: null }] }
+    await f.observe('lead-host', [f.harness.lead], reading)
+    const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
+    const notices = async () => (await db.superTabMessage.findMany({ where: { tabId: f.tab } })).filter(m => (m.source as { kind?: string } | null)?.kind === 'pm-switch-notice')
+    /** What a real host sends: its claim, then the rebind, and only then the result. */
+    const move = async (previousHarnessId: string, harnessId: string) => {
+      const asked = await f.execute({ type: 'lead.switch', projectId, engine: 'codex', profileId: WORK })
+      const switchId = (await f.timed.read(owner, f.tab)).state.agents.find(a => a.id === f.lead)!.switchRequest!.id
+      expect(asked).toBeDefined()
+      await f.execute({ type: 'agent.switchClaim', agentId: f.lead, switchId }, host, f.lead)
+      await f.execute({ type: 'agent.rebind', agentId: f.lead, machineId: 'lead-host', projectId, previousHarnessId, harnessId, profileId: WORK, configuration: config }, host, f.lead)
+      await f.execute({ type: 'agent.switchResult', agentId: f.lead, switchId, ok: true }, host, f.lead)
+    }
+    await move(f.harness.lead, 'second-session')
+    const [first] = await notices()
+    expect(first!.text).toContain('your Codex account "Work"')
+    await db.swarmGroup.update({ where: { id: `${f.tab}:${first!.conversationId}` }, data: { dormant: true } })
+    await f.observe('lead-host', ['second-session'], reading)
+    await move('second-session', 'third-session')
+    expect((await notices()).map(m => m.conversationId)).toEqual([first!.conversationId, first!.conversationId])
+    expect(await db.swarmGroup.count({ where: { tabId: f.tab, key: first!.conversationId } })).toBe(1)
   })
 })

@@ -164,7 +164,11 @@ export function terminalAlert(state: SuperTabState, actor: Actor, sender: Author
   if (command.alert === 'limit') {
     const reset = command.resetAt && Date.parse(command.resetAt) > now ? Date.parse(command.resetAt) : now + LIMIT_FALLBACK_MS
     target.limitedUntil = source.limitedUntil = new Date(reset).toISOString()
-    text = `${nameOf(target)} hit a usage limit. Routing skips it until ${target.limitedUntil.slice(11, 16)} UTC.`
+    // The PM's line has no time: Desktop shows `limitedUntil` in the reader's local time, next to the line.
+    if (ledProject(state, target.id)) {
+      text = `${nameOf(target)} hit a usage limit.`
+      source.lead = true
+    } else text = `${nameOf(target)} hit a usage limit. Routing skips it until ${target.limitedUntil.slice(11, 16)} UTC.`
   }
   // Its engine has been retrying its model for 10 minutes (2026-10-24: a Builder on a small local model retried for an
   // hour while its Lead waited on it).

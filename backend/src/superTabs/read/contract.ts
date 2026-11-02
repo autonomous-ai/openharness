@@ -257,6 +257,8 @@ export interface HostAgentRow {
   lead: boolean
   /** New: lets the host decide what it may read without a full Swarm read. */
   leadsConversationId: string | null
+  /** The conversation this agent leads, when it is a project's Product Manager. */
+  ledConversationId: string | null
   stopRequested: boolean
   observers: Array<{ email: string; userId: string }>
   /** Its session is confidential in some Swarm: the host refuses every share of it, ordinary ones too (Critical 1). */

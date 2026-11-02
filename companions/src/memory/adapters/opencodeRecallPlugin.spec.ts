@@ -12,7 +12,7 @@ function fixture() {
   const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async url => new Response(JSON.stringify(
     String(url).endsWith('memory-context') ? { additionalContext: context, memoryReceiptId: receipt } : { recorded: true })))
   const health = vi.fn(async () => ({ data: { version: '1.18.34' } }))
-  const hooks = new Function('client', 'hookToken', `${opencodeRecallPluginSource(12345)};
+  const hooks = new Function('client', 'hookToken', `${opencodeRecallPluginSource(12345, null)};
     return { submitted: recallMessage, transform: recallTransform, compacting: recallCompacting, continuation: recallAutoContinue }`)(
     { _client: { get: health } }, () => token)
   const row = { info: { id: 'user-one', sessionID: 'native', role: 'user', agent: 'build' },

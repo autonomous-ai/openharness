@@ -135,10 +135,42 @@ void main() {
         '/srv/h/daemon-18474.sock',
       );
       expect(defaultDaemonSocketPath(18473, environment: {'HOME': '/Users/me'}, isWindows: true), isNull);
+      // Too long for a socket: under the home folder, by the folder's hash, the
+      // same hash as the CLI's (pinned for `/x` in cli localSocket.spec.ts).
+      expect(
+        defaultDaemonSocketPath(
+          18473,
+          environment: {'HOME': '/h', 'ADAPTER_DATA_DIR': '/${'x' * 100}'},
+          isWindows: false,
+        ),
+        matches(RegExp(r'^/h/\.harness/s/[0-9a-f]{16}/daemon-18473\.sock$')),
+      );
       expect(
         defaultDaemonSocketPath(18473, environment: {'HOME': '/${'x' * 100}'}, isWindows: false),
         isNull,
       );
+    });
+
+    test('a long folder\'s socket matches the CLI\'s hash', () {
+      // sha256('/' + 'x' * 100)[0..16], as cli/src/lib/localSocket.ts computes it.
+      expect(
+        defaultDaemonSocketPath(
+          1,
+          environment: {'HOME': '/h', 'ADAPTER_DATA_DIR': '/${'x' * 100}'},
+          isWindows: false,
+        ),
+        '/h/.harness/s/e50e7828cbafcbee/daemon-1.sock',
+      );
+    });
+
+    test('a long folder with no HOME still has a socket to fail on, so the port is not allowed', () {
+      final path = defaultDaemonSocketPath(
+        1,
+        environment: {'ADAPTER_DATA_DIR': '/${'x' * 100}'},
+        isWindows: false,
+      );
+      expect(path, isNotNull);
+      expect(File(path!).existsSync(), isFalse);
     });
 
     test('is never looked for under flutter test', () {

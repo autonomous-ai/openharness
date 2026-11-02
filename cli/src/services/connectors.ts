@@ -1,6 +1,6 @@
 /**
- * Connected services (lib/connectors): the MCP bridge every local agent's connector entries point at
- * (127.0.0.1:51793), and `connectors`, the desktop app's Connectors screen. Agents' entries are written
+ * Connected services (lib/connectors): the MCP bridge every local agent's connector entries reach, through a stdio shim to
+ * its 0600 socket (and on 127.0.0.1:51793 for clients still running on that address), and `connectors`, the desktop app's Connectors screen. Agents' entries are written
  * again as it starts, so an agent installed since a service was connected gets it too.
  *
  * `connectors` takes `{action}`: `list`, `connect` {connector}, `flow` {flow}, `disconnect` {connector},
@@ -16,9 +16,9 @@
 import type { Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import type { CoreApi, ServiceRequests } from '../core/api.js'
-import { bridgePort, saveBridgePort, sync } from '../lib/connectors/agents.js'
+import { bridgePort, bridgeSocketPath, retireBridgeKey, rotateHarnessKey, saveBridgePort, sync } from '../lib/connectors/agents.js'
 import { portHolderIsThisAccount } from '../lib/peerAccount.js'
-import { createBridge } from '../lib/connectors/bridge.js'
+import { createBridge, serveBridgeSocket } from '../lib/connectors/bridge.js'
 import { services, type GatewayRow } from '../lib/connectors/catalog.js'
 import { addApiKey, addCustom, cards, disconnect, Flows, signInFor } from '../lib/connectors/connect.js'
 import * as gateway from '../lib/connectors/gateway.js'
@@ -83,6 +83,15 @@ function listen(bridge: Server, port: number, retryMs: number, moving?: Moving):
   bridge.listen(port, '127.0.0.1')
 }
 
+/** The MCP clients' way in (lib/connectors/mcpShimSource.ts). While a live socket is there (a core handing over), try again.
+ *  Said once: its clients are told Harness is not running, though it is. */
+function listenSocket(vault: Store, path: string, retryMs: number, said = false): void {
+  serveBridgeSocket(vault, path).catch((error: unknown) => {
+    if (!said) console.warn(`[connectors] the bridge's socket is not listening (${path}), trying again: ${error instanceof Error ? error.message : String(error)}`)
+    setTimeout(() => listenSocket(vault, path, retryMs, true), retryMs).unref()
+  })
+}
+
 export function startConnectors(core: CoreApi, overrides: Partial<ConnectorsDeps> & { holderIsMine?: (port: number) => Promise<boolean | null> } = {}): ServiceRequests {
   const env = overrides.env ?? process.env
   const store = overrides.vault ?? new Store(undefined, env)
@@ -94,7 +103,12 @@ export function startConnectors(core: CoreApi, overrides: Partial<ConnectorsDeps
   }
   const { vault } = deps
   const flows = new Flows(vault, env)
-  const bridgeKeys = { key: () => String(vault.file('bridge.json').key ?? ''), harnessKey: () => String(vault.file('harness-key.json').key ?? '') }
+  const socket = bridgeSocketPath(vault)
+  // Where a socket can be, the port takes neither key for long: Harness's own goes over the socket, and the agents' retires (agents.ts).
+  if (socket) { try { rotateHarnessKey(vault) } catch (error) { console.warn(`[connections] could not replace Harness's key: ${(error as Error).message}`) } }
+  const bridgeKeys = socket
+    ? { key: () => { try { return retireBridgeKey(vault) } catch { return '' } } }
+    : { key: () => String(vault.file('bridge.json').key ?? ''), harnessKey: () => String(vault.file('harness-key.json').key ?? '') }
   const bridge = createBridge(vault, bridgeKeys)
   bridge.unref()
   // A port a test or HARNESS_CONNECTIONS_PORT names stays that port.
@@ -110,6 +124,9 @@ export function startConnectors(core: CoreApi, overrides: Partial<ConnectorsDeps
       listen(old, from, deps.retryMs)
     },
   } : undefined)
+  if (socket) listenSocket(vault, socket, deps.retryMs)
+  // Stamped now, not at a client's first call: the day counts from this start.
+  if (socket) { try { retireBridgeKey(vault) } catch { /* The next request tries again. */ } }
   try { sync(vault, env) } catch { /* A config that cannot be written now is written at the next connect. */ }
 
   // Connections the same on every computer of the account: read now, at each `connectors_changed`, and

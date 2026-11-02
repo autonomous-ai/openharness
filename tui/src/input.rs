@@ -816,7 +816,8 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
                 let mut recency: std::collections::HashMap<String,u64> = app.fleet.agents.values()
                     .map(|a| (format!("{}:{}",a.machine_id,a.id),a.recency())).collect();
                 // (One list by last activity: its harnesses not headed by where they work.)
-                for r in rows.iter_mut().filter(|r| recency.contains_key(&r.id)) { r.group = None }
+                rows.retain(|r| !r.id.starts_with(modal::OLDER_ROW));
+                for r in rows.iter_mut().filter(|r| recency.contains_key(&r.id)) { r.group = None; r.section = None; r.older = None }
                 for x in app.said.iter().chain(app.shell_context.catalog.iter()).filter_map(|s| s.external.as_ref()) {
                     let at = recency.entry(format!("external:{}:{}",x.machine,x.session_id)).or_default();
                     *at = (*at).max(x.last_at);
@@ -850,7 +851,8 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
             picker.catalog_ids = app.shell_context.catalog.iter().filter(|_| app.shell_context.sessions_machine.is_some()).map(|h| format!("external:{}:{}", h.machine, h.session_id)).collect();
             picker.set_rows(rows);
             picker.status = modal::open_status(app, *filter);
-            picker.hints = vec![("enter", "add pane"), ("C-t", "new window"), ("M-1..9", "answer"), ("M-m", "read"), ("C-v", "beside"), ("C-x", "below"), ("M-enter", "here"), ("M-a", "type an answer"), ("M-s", "message"), ("M-r", "restart"), ("tab", "mark"), ("C-/", "preview"), ("M-p", "pause")];
+            // (The main keys; `?` lists the rest, which all still work: modal::mode_rows.)
+            picker.hints = vec![("enter", "add pane"), ("C-t", "new window"), ("tab", "mark"), ("?", "all keys")];
             picker.empty = if app.fleet.agents.is_empty() { "no harnesses yet — C-b C makes one".into() } else { String::new() };
             if app.shell_context.sessions_machine.is_some() {
                 picker.hints = vec![("enter", "open"), ("C-t", "new window"), ("C-/", "preview"), ("esc", "cancel")];
@@ -3080,6 +3082,17 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
             if let Some(msg) = crate::settings::set_key(app, knob, value) { picker.say(msg) }
             return keep(app, kind, picker);
         }
+        // A folder's `▸ N older`: Enter or a click shows them, and hides them again; no other key
+        // means anything on it.
+        PickerKind::Open { .. } if id.as_deref().is_some_and(|i| i.starts_with(modal::OLDER_ROW)) => {
+            if choice == Choice::Enter {
+                if let Some(key) = id.as_deref().and_then(|i| i.strip_prefix(modal::OLDER_ROW)) {
+                    if !picker.unfolded.remove(key) { picker.unfolded.insert(key.to_string()); }
+                }
+                picker.refilter();
+            }
+            keep(app, kind, picker)
+        }
         PickerKind::Open { .. } if id.as_deref().map(|i| i.starts_with("session:")).unwrap_or(false) => {
             let sid = id.as_deref().and_then(|i| i.strip_prefix("session:")).and_then(|n| n.parse().ok()).unwrap_or(app.session_id);
             SPLIT.with(|s| s.set(None));
@@ -3799,7 +3812,9 @@ mod tests {
         fill(&app, &kind, &mut picker);
         // (Its harnesses: other tests' sessions can be listed after them.)
         let shown: Vec<(&str, &str)> = picker.rows.iter().filter(|r| !r.id.starts_with("session:")).map(|r| (r.group.as_deref().unwrap_or(""), r.label.as_str())).collect();
-        assert_eq!(shown, [("studio · webapp", "fix login"), ("studio · webapp", "release notes"), ("studio · api", "rate limit")]);
+        // (Their fixed dates are over a week old: each folder closes with its `▸ N older`.)
+        let shown: Vec<_> = shown.into_iter().filter(|(_, label)| !label.contains("older")).collect();
+        assert_eq!(shown, [("webapp", "fix login"), ("webapp", "release notes"), ("api", "rate limit")]);
     }
 
     /// What the person typed into hn's own box is marked as theirs, as the desktop's composer marks
