@@ -15,7 +15,8 @@ import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import { buddyChatId, openSwarmBuddyChat } from '../src/superTabs/buddies.js'
-import { ACTIVITY_EXPIRY_MS, ACTIVITY_READS, resetActivityReads, sweepActivity } from '../src/superTabs/activity.js'
+import { ACTIVITY_EXPIRY_MS, ACTIVITY_READS, resetActivityReads, sweepActivity, writeReplyActivity } from '../src/superTabs/activity.js'
+import { SESSION_ENDED_KIND } from '../src/superTabs/buddySessions.js'
 import { CHAT_SETTING_DEFAULT_KEEP_MS, sweepChatSettings } from '../src/superTabs/chatSettings.js'
 import type { Command, SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
@@ -252,6 +253,86 @@ describe('Activity: read state and its digest', () => {
     expect((await derived(s.tabId, owner)).activityDigest).toBe(before)
     expect((await call('POST', `/api/super-tabs/${s.tabId}/activity/read`, owner, { through: 'yesterday' })).status).toBe(400)
     expect((await call('POST', `/api/super-tabs/${s.tabId}/activity/read`, 'team', { through: item.createdAt })).status).toBe(403)
+  })
+
+  const markThread = (tabId: string, conversationId: string, threadId: string, sequence: number, as: AuthUser = owner) =>
+    call('POST', `/api/super-tabs/${tabId}/conversations/${conversationId}/threads/${threadId}/read`, as, { sequence })
+  const markChat = (tabId: string, conversationId: string, sequence: number, as: AuthUser = owner) =>
+    call('POST', `/api/super-tabs/${tabId}/conversations/${conversationId}/read`, as, { sequence })
+  const sequenceOf = async (id: string) => (await db.superTabMessage.findUniqueOrThrow({ where: { id } })).sequence
+  const sendAlso = async (tabId: string, conversationId: string, text: string, as: AuthUser, replyTo: string) =>
+    (await run(tabId, { type: 'message.send', conversationId, text, replyTo, recipientIds: [], alsoSend: true }, as)).result.messageId as string
+
+  it('marks the reply rows of a thread read, on every device, when the thread is read past them', async () => {
+    const s = await scene()
+    const before = (await derived(s.tabId, owner)).activityDigest
+    const root = await send(s.tabId, s.web, 'Owner root')
+    const first = await send(s.tabId, s.web, 'Worker answers', owner, root, s.worker)
+    const second = await send(s.tabId, s.web, 'Worker answers again', owner, root, s.worker)
+    expect((await items(s.tabId)).map(i => i.read)).toEqual([false, false])
+    expect((await derived(s.tabId, owner)).activityDigest).not.toBe(before)
+    // A mark short of the second reply clears only the first.
+    expect((await markThread(s.tabId, s.web, root, await sequenceOf(first))).status).toBe(200)
+    expect((await items(s.tabId)).map(i => [i.messageId, i.read])).toEqual([[second, false], [first, true]])
+    expect((await markThread(s.tabId, s.web, root, await sequenceOf(second))).status).toBe(200)
+    expect((await items(s.tabId)).map(i => i.read)).toEqual([true, true])
+    expect((await derived(s.tabId, owner)).activityDigest).toBe(before)
+    // An older mark afterwards moves nothing back.
+    await markThread(s.tabId, s.web, root, await sequenceOf(first))
+    expect((await items(s.tabId)).map(i => i.read)).toEqual([true, true])
+  })
+
+  it('leaves another person\'s rows, other threads\' rows and reactions unread when a thread is read', async () => {
+    const s = await scene()
+    const root = await send(s.tabId, s.web, 'Owner root')
+    const other = await send(s.tabId, s.web, 'Owner other root')
+    const peerRoot = await send(s.tabId, s.web, 'Peer root', peer)
+    await send(s.tabId, s.web, 'Answer to peer', owner, peerRoot)
+    await send(s.tabId, s.web, 'Answer', owner, root, s.worker)
+    await send(s.tabId, s.web, 'Answer elsewhere', owner, other, s.worker)
+    await react(s.tabId, s.web, root, true, peer)
+    const newest = await sequenceOf((await db.superTabMessage.findFirstOrThrow({ where: { tabId: s.tabId }, orderBy: { sequence: 'desc' } })).id)
+    await markThread(s.tabId, s.web, root, newest)
+    expect((await items(s.tabId)).map(i => [i.text, i.read])).toEqual([[null, false], ['Answer elsewhere', false], ['Answer', true]].map(([text, read]) =>
+      [text ?? 'Owner root', read]))
+    expect((await items(s.tabId, peer)).map(i => i.read)).toEqual([false])
+  })
+
+  it('marks a reply also sent to the chat read when the chat is read, and a thread-only reply not', async () => {
+    const s = await scene()
+    const root = await send(s.tabId, s.web, 'Owner root')
+    const only = await send(s.tabId, s.web, 'Only in the thread', peer, root)
+    const also = await sendAlso(s.tabId, s.web, 'Also in the chat', peer, root)
+    const newest = await sequenceOf(also)
+    expect((await markChat(s.tabId, s.web, newest)).status).toBe(200)
+    expect((await items(s.tabId)).map(i => [i.messageId, i.read])).toEqual([[also, true], [only, false]])
+    expect((await markThread(s.tabId, s.web, root, await sequenceOf(only))).status).toBe(200)
+    expect((await items(s.tabId)).map(i => i.read)).toEqual([true, true])
+  })
+
+  it('leaves a row written before rows kept a sequence unread by a read', async () => {
+    const s = await scene()
+    const root = await send(s.tabId, s.web, 'Owner root')
+    const reply = await send(s.tabId, s.web, 'Peer answers', peer, root)
+    await db.superTabActivity.updateMany({ where: { tabId: s.tabId }, data: { sequence: null, alsoInChat: null } })
+    await markThread(s.tabId, s.web, root, await sequenceOf(reply))
+    await markChat(s.tabId, s.web, await sequenceOf(reply))
+    expect((await items(s.tabId)).map(i => i.read)).toEqual([false])
+  })
+
+  it('writes no row for a Buddy session\'s ended line, and still one for its answers', async () => {
+    const s = await scene()
+    const root = await send(s.tabId, s.web, 'Owner root')
+    const rootRow = await db.superTabMessage.findUniqueOrThrow({ where: { id: root } })
+    const draft = (id: string, source?: Record<string, unknown>) => ({ id, conversationId: s.web, text: 'Reply', replyTo: root, recipients: [], thread: root,
+      author: { kind: 'agent' as const, id: s.worker, name: 'worker-harness', membershipGeneration: 'fixture' }, ...(source ? { source } : {}) })
+    const write = (...ids: [string, Record<string, unknown> | undefined][]) => db.$transaction(tx => writeReplyActivity(tx, s.tabId,
+      ids.map(([id, source]) => draft(id, source)), new Map(ids.map(([id], i) => [id, rootRow.sequence + 1 + i])), Date.now()))
+    await write(['ended-line', { kind: SESSION_ENDED_KIND, reason: 'done', thread: root }])
+    expect(await db.superTabActivity.count({ where: { tabId: s.tabId } })).toBe(0)
+    await write(['answer', undefined])
+    expect(await db.superTabActivity.findMany({ where: { tabId: s.tabId }, select: { messageId: true, sequence: true, alsoInChat: true } }))
+      .toEqual([{ messageId: 'answer', sequence: rootRow.sequence + 1, alsoInChat: null }])
   })
 
   it('is read at most ACTIVITY_READS times per window by one person', async () => {

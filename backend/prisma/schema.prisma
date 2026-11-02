@@ -1183,9 +1183,16 @@ model SuperTabActivity {
   createdAt      DateTime
   /// When the person saw it, on any device; unset while unread.
   readAt         DateTime?
+  /// A reply's message sequence in its chat, so reading its thread or chat past it marks the row read (activity.ts); unset on a
+  /// reaction and on a row written before it was kept, which only opening Activity reads.
+  sequence       Int?
+  /// A reply also shown in the chat's main stream: the chat mark reads it, as well as its thread's.
+  alsoInChat     Boolean?
 
   /// A person's rows, newest first: the list and the digest.
   @@index([tabId, personId, createdAt])
+  /// One thread's or chat's rows of a person, for the read marks that clear them (activity.ts markActivityThreadRead).
+  @@index([tabId, personId, conversationId, threadId])
   /// The sweep's rows past their expiry (activity.ts sweepActivity); no TTL option, which the app user cannot set (#2238).
   @@index([createdAt])
 }

@@ -629,7 +629,8 @@ describe('messages from an agent whose task moved', () => {
     await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
     const other = await f.add(f.group, 'test-host', f.harness.other, 'Other')
     const next = String((await f.execute({ type: 'work.assign', conversationId: f.group, agentId: other })).result.assignmentId)
-    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker, f.harness.other] })
+    // The first worker is back and running; only the second's session stopped.
+    await f.observe('test-host', [f.harness.worker], { stoppedHarnessIds: [f.harness.other] })
     expect(await f.assignment()).toMatchObject({ id: next, status: 'lost' })
     expect(await deliveredTo(await post(f, f.worker, 'Severe: the worker is down.'))).toEqual([f.lead])
     expect(await deliveredTo(await post(f, other, 'Lost my session.'))).toEqual([f.lead])
@@ -2059,5 +2060,160 @@ describe('the morning digest', () => {
     await move('second-session', 'third-session')
     expect((await notices()).map(m => m.conversationId)).toEqual([first!.conversationId, first!.conversationId])
     expect(await db.swarmGroup.count({ where: { tabId: f.tab, key: first!.conversationId } })).toBe(1)
+  })
+})
+
+// Huy, 2026-11-02: four agents closed on MacBookPro2021 sat under Idle for hours, each in the machine's stopped list. A
+// session closed on its machine is recorded as stopped and leaves the list; only a kept one stays, shown as closed.
+describe('an agent closed on its machine', () => {
+  const agents = async (f: Awaited<ReturnType<typeof swarm>>) => (await f.timed.read(owner, f.tab)).state.agents
+  const ids = async (f: Awaited<ReturnType<typeof swarm>>) => (await agents(f)).map(a => a.id)
+  type Fixture = Awaited<ReturnType<typeof swarm>>
+  /** Both machines report every 5 seconds for `seconds`; the worker host lists `running` and `stopped`. */
+  const reports = async (f: Fixture, seconds: number, running: string[], stopped: string[] = [], store?: SuperTabStore) => {
+    for (let t = 0; t < seconds; t += 5) {
+      f.clock.now += 5_000
+      await f.observe('lead-host', [f.harness.lead])
+      await f.observe('test-host', running, { stoppedHarnessIds: stopped }, store)
+    }
+  }
+  const closing = async (f: Fixture) => (await rosterRows(f.timed, host, 'test-host')).filter(r => r.tabId === f.tab && 'closeSession' in r)
+
+  it('leaves the list when its machine keeps reporting its session stopped, never on the first report', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const idle = await f.add(f.group, 'test-host', f.harness.other, 'Idle one')
+    expect(await ids(f)).toContain(idle)
+    await reports(f, 5, [f.harness.worker], [f.harness.other])
+    expect(await ids(f)).toContain(idle)
+    await reports(f, 20, [f.harness.worker], [f.harness.other])
+    expect(await ids(f)).toContain(idle)
+    await reports(f, 10, [f.harness.worker], [f.harness.other])
+    expect(await ids(f)).toEqual([f.lead, f.worker])
+    const group = (await f.timed.read(owner, f.tab)).state.conversations.find(c => c.id === f.group)!
+    expect(group.agentIds).not.toContain(idle)
+  })
+
+  it('has its host close the session it leaves (security reviews of #2569)', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const idle = await f.add(f.group, 'test-host', f.harness.other, 'Idle one')
+    await reports(f, 40, [f.harness.worker], [f.harness.other])
+    expect(await ids(f)).not.toContain(idle)
+    expect(await closing(f)).toEqual([expect.objectContaining({ agent: expect.objectContaining({ id: idle, harnessId: f.harness.other }) })])
+    await f.execute({ type: 'agent.sessionClosed', agentId: idle, harnessId: f.harness.other } as Command, host)
+    expect(await closing(f)).toEqual([])
+  })
+
+  it('keeps an agent whose task was just lost, tells its Lead, and removes it once the Lead cancels the task', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    f.clock.now += MINUTE
+    await f.observe('lead-host', [f.harness.lead])
+    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
+    expect(await f.assignment()).toMatchObject({ status: 'lost', lost: { reason: 'its session on Worker Mac stopped' } })
+    expect((await f.leadInbox()).some(m => (m.source as { kind?: string }).kind === 'work-lost')).toBe(true)
+    await reports(f, 60, [], [f.harness.worker])
+    expect(await ids(f)).toContain(f.worker)
+    await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Not needed' })
+    await reports(f, 10, [], [f.harness.worker])
+    expect(await ids(f)).toEqual([f.lead])
+  })
+
+  it('stays when it was kept, and shows as down; a coordinator or a running session stays too', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const kept = await f.add(f.group, 'test-host', f.harness.other, 'Kept one')
+    await f.execute({ type: 'agent.release', agentId: kept, decision: 'keep' })
+    await reports(f, 60, [f.harness.worker], [f.harness.other])
+    // The Lead's session is in its machine's stopped list; the worker's is running.
+    for (let i = 0; i < 12; i++) {
+      f.clock.now += 5_000
+      await f.observe('lead-host', [], { stoppedHarnessIds: [f.harness.lead] })
+      await f.observe('test-host', [f.harness.worker], { stoppedHarnessIds: [f.harness.other] })
+    }
+    expect((await ids(f)).sort()).toEqual([f.lead, f.worker, kept].sort())
+    expect((await agents(f)).find(a => a.id === kept)).toMatchObject({ workDecision: 'keep', downSince: expect.any(String) })
+  })
+
+  it('stays when its session is in both lists, as a host resuming it reports', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    await reports(f, 60, [f.harness.worker], [f.harness.worker])
+    expect(await ids(f)).toContain(f.worker)
+  })
+
+  it('stays when a stop was asked for: its host closes it and takes it out', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const idle = await f.add(f.group, 'test-host', f.harness.other, 'Idle one')
+    await f.execute({ type: 'agent.release', agentId: idle, decision: 'stop' })
+    await reports(f, 60, [f.harness.worker], [f.harness.other])
+    expect(await ids(f)).toContain(idle)
+    expect(await closing(f)).toEqual([])
+  })
+
+  it('stays when its host lists it stopped for a moment and then running again, as after a restart', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const idle = await f.add(f.group, 'test-host', f.harness.other, 'Idle one')
+    await reports(f, 25, [f.harness.worker], [f.harness.other])
+    await reports(f, 5, [f.harness.worker, f.harness.other])
+    await reports(f, 25, [f.harness.worker], [f.harness.other])
+    expect(await ids(f)).toContain(idle)
+  })
+
+  it('leaves after 15 minutes down while its machine keeps reporting without it, never on the first report after silence', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const idle = await f.add(f.group, 'test-host', f.harness.other, 'Idle one')
+    await f.observe('test-host', [f.harness.worker, f.harness.other])
+    // Down from here, in no stopped list: the host just does not list it. Reports come every 15 seconds.
+    const report = async (seconds = 15) => {
+      f.clock.now += seconds * 1000
+      await f.observe('lead-host', [f.harness.lead])
+      await f.observe('test-host', [f.harness.worker])
+    }
+    for (let i = 0; i < 24; i++) await report()
+    expect(await ids(f)).toContain(idle)
+    // Silent past 15 minutes, then back: not removed on the report that ends the silence, nor soon after.
+    await report(15 * 60)
+    await report()
+    expect(await ids(f)).toContain(idle)
+    // The full report that follows (at least every two minutes) removes it.
+    for (let i = 0; i < 10; i++) await report()
+    expect(await ids(f)).not.toContain(idle)
+    expect(await ids(f)).toContain(f.worker)
+    expect(await closing(f)).toHaveLength(1)
+  })
+
+  it('removes nobody by time while its machine lists no session running (a fault in its listing)', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const idle = await f.add(f.group, 'test-host', f.harness.other, 'Idle one')
+    await reports(f, 20 * 60, [])
+    expect(await ids(f)).toContain(idle)
+  })
+
+  it('does not lose an assignment that lands while it is being removed (the report retries against it)', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const idle = await f.add(f.group, 'test-host', f.harness.other, 'Idle one')
+    const second = String((await f.execute({ type: 'conversation.create', title: 'Second', brief: 'More', checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
+    await reports(f, 30, [f.harness.worker], [f.harness.other])
+    let raced = false
+    const racing = new SuperTabStore(beforeFirstWrite(db, async () => {
+      if (raced) return
+      raced = true
+      await f.execute({ type: 'work.assign', conversationId: second, agentId: idle })
+    }), () => f.clock.now)
+    await reports(f, 10, [f.harness.worker], [f.harness.other], racing)
+    expect(raced).toBe(true)
+    const state = (await f.timed.read(owner, f.tab)).state
+    const group = state.conversations.find(c => c.id === second)!
+    expect(group.assignment).toMatchObject({ agentId: idle })
+    expect(state.agents.map(a => a.id)).toContain(idle)
+    expect(group.agentIds).toContain(idle)
+    expect(await closing(f)).toEqual([])
   })
 })

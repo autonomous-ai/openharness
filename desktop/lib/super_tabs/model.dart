@@ -160,6 +160,7 @@ class SuperTabAgent {
       profileId = row['profileId'] as String?,
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       downSince = DateTime.tryParse(row['downSince'] as String? ?? ''),
+      workDecision = row['workDecision'] as String?,
       confidential = row['confidential'] == true,
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
   final String id, projectId, name, machineId, harnessId, contributorId;
@@ -186,6 +187,13 @@ class SuperTabAgent {
   /// Since when its machine has reported its session gone, or its host confirmed a stop (backend machines.ts). Null
   /// while it runs.
   final DateTime? downSince;
+
+  /// What its coordinator or a person chose for it once its work ended: `keep` or `stop`; `awaiting` while nobody has.
+  final String? workDecision;
+
+  /// Its session is closed on its machine and someone chose to keep the agent: the backend removes every other closed
+  /// agent from the list (backend closedAgents.ts), so this one is shown as closed, never as Idle.
+  bool get keptClosed => workDecision == 'keep' && downSince != null;
 
   /// The account whose computer runs it; a contributor may run agents on a computer another account shared with them.
   final String machineOwnerId;
