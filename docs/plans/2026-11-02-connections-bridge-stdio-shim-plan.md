@@ -21,11 +21,11 @@ security review made a condition of #2550.
 
 ## Design rules
 
-- Growth: N/A because nothing is stored; one socket file, replaced at each start and removed with the folder.
+- Growth: N/A because nothing grows: one socket file and one script, replaced at each start and removed with the folder.
 - Concurrency: requests run side by side as they do over HTTP; `initialize` and notifications go first and in order. The vault's
   own lock still guards its files. A second daemon on the vault finds a live socket and retries, as the port's listener does.
 - Read cost: N/A because each message is the one request it was before. Each client now holds one shim process open.
-- Scale: one node process per MCP server per running agent, about 50 MiB resident each (39 for a bare node, mostly shared), measured
+- Scale: one node process per MCP server per running agent, about 50 MiB resident each (39 for a bare node), measured
   2026-11-02. Process count warns first; 5 connections on 20 agents is 100 processes.
 - Compatibility: entries are rewritten at each daemon start. A running client keeps its old address until it restarts, and the port
   still answers it. A server's own unprompted stream (GET) is not relayed, so `*_changed` notifications are lost.
@@ -40,5 +40,5 @@ security review made a condition of #2550.
 ## Steps
 
 1. Spec: a holder of the old port hears nothing while a tool call works through the entry's shim; daemon down; socket boundaries.
-2. `mcpShim.ts`, the `connections mcp` verb, `serveBridgeSocket`, entries in `agents.ts`, the listener in `services/connectors.ts`.
+2. `mcpShimSource.ts`, written by `sync`, `serveBridgeSocket`, entries in `agents.ts`, the listener in `services/connectors.ts`.
 3. A real process check with a built CLI, Claude Code and Codex, in a throwaway home.
