@@ -43,12 +43,12 @@ async function swarm() {
   const listed = async (user = owner, machineId = 'rig') => !!(await store.read(user, tab)).state.machines?.some(m => m.machineId === machineId)
   /** What the person reads of the machines they took out, on a store with nothing in memory: as another computer's first read. */
   const removed = async (user = owner) => ((await new SuperTabStore(db).read(user, tab)).state as { removedMachines?: string[] }).removedMachines
-  const finish = async (machineId = 'rig') => {
-    const part = await db.swarmMachine.findFirstOrThrow({ where: { tabId: tab, key: machineId } })
-    const data = part.data as { contribution?: { removal?: { id: string } } }
-    if (data.contribution?.removal) await store.execute(owner, tab, { operationId: randomUUID(), command: { type: 'machine.cleaned', machineId, removalId: data.contribution.removal.id } as Command })
+  /** The machine is taken out, and its host has finished cleaning up after it. */
+  const removeAndClean = async (machineId = 'rig') => {
+    const removalId = String((await execute({ type: 'machine.remove', machineId })).result.removalId)
+    await execute({ type: 'machine.cleaned', machineId, removalId })
   }
-  return { store, tab, execute, listed, removed, finish }
+  return { store, tab, execute, listed, removed, removeAndClean }
 }
 
 describe('a machine its person took out of a Swarm', () => {
@@ -62,8 +62,7 @@ describe('a machine its person took out of a Swarm', () => {
   it('stays out of an automatic add, on any computer, and that add writes nothing', async () => {
     const f = await swarm()
     await f.execute({ type: 'machine.contribute', machineId: 'rig', ...add })
-    await f.execute({ type: 'machine.remove', machineId: 'rig' })
-    await f.finish()
+    await f.removeAndClean()
     expect(await f.listed()).toBe(false)
     await f.execute({ type: 'machine.contribute', machineId: 'rig', ...add, ifMissing: true, unlessRemoved: true } as Command)
     expect(await f.listed()).toBe(false)
@@ -73,8 +72,7 @@ describe('a machine its person took out of a Swarm', () => {
   it('comes back when its person adds it by hand, and the record goes', async () => {
     const f = await swarm()
     await f.execute({ type: 'machine.contribute', machineId: 'rig', ...add })
-    await f.execute({ type: 'machine.remove', machineId: 'rig' })
-    await f.finish()
+    await f.removeAndClean()
     await f.execute({ type: 'machine.contribute', machineId: 'rig', ...add })
     expect(await f.listed()).toBe(true)
     expect(await f.removed()).toBeUndefined()
@@ -97,8 +95,7 @@ describe('a machine its person took out of a Swarm', () => {
   it('an automatic add without unlessRemoved, as a Lead\'s host sends, is unchanged', async () => {
     const f = await swarm()
     await f.execute({ type: 'machine.contribute', machineId: 'rig', ...add })
-    await f.execute({ type: 'machine.remove', machineId: 'rig' })
-    await f.finish()
+    await f.removeAndClean()
     await f.execute({ type: 'machine.contribute', machineId: 'rig', ...add, ifMissing: true } as Command)
     expect(await f.listed()).toBe(true)
   })
