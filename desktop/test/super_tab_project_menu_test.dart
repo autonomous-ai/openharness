@@ -189,5 +189,7 @@ void main() {
     expect(find.byKey(const ValueKey('super-pull-requests')), findsOneWidget);
     expect(find.byKey(const ValueKey('super-group-options')), findsOneWidget);
     expect(menu, findsNothing);
+    await c.flush();
+    await tester.pump(const Duration(seconds: 5));
   });
 }

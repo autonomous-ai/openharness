@@ -63,6 +63,7 @@ import 'project_sidebar.dart';
 import 'buddy_sessions.dart';
 import 'swarm_switcher.dart' show fallBackToPersonal;
 import 'project_options.dart';
+import 'project_status.dart';
 import 'switch_pm.dart';
 import 'task_line.dart';
 import 'pane_layout.dart';
@@ -566,8 +567,8 @@ class _SuperTabViewState extends State<SuperTabView>
       arrived: (row) {
         // A link or tag opened since takes the reader to its message instead.
         if (request != _scrollRequest) return;
-        // The line itself, not its row: with the catch-up card under it the
-        // row can be taller than the view, and its top would go above it.
+        // The line itself, not its row, which can be taller than the view:
+        // its top would go above it.
         final line = _unread.key.currentContext;
         unawaited(
           Scrollable.ensureVisible(
@@ -1650,7 +1651,7 @@ class _SuperTabViewState extends State<SuperTabView>
   }
 
   /// Shows Activity in the main pane, as its sidebar row does; with [filter],
-  /// on that list (the catch-up card's counts). [from] is the controller the
+  /// on that list. [from] is the controller the
   /// asking widget was built for: a press arriving once the view has moved to
   /// another Swarm opens nothing.
   void _openActivity({
@@ -2202,6 +2203,13 @@ class _SuperTabViewState extends State<SuperTabView>
         ? 'Your Buddy'
         : '${_buddyName(group)} · Your Buddy';
     if (name == null) return SuperTabWorkgroupName(group!, style: style);
+    if (group != null &&
+        c.snapshot!.isProjectLead(group.id) &&
+        !_devicesVisible &&
+        !_notificationsVisible &&
+        !_threadsVisible) {
+      return _projectMenu(group, name, style);
+    }
     return Text(
       name,
       maxLines: 1,
@@ -2376,72 +2384,75 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
-  Widget _header(SuperTabConversation? group, bool narrow, bool showRoster) =>
-      Container(
-        constraints: const BoxConstraints(minHeight: 52),
-        // A phone's rows line up (Huy, 2026-11-02): the sidebar icon starts at
-        // the top bar's edge, and the people icon sits under its avatar.
-        padding: _phone
-            ? kPhoneBarRowPadding
-            : const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
-        decoration: BoxDecoration(
-          border: Border(bottom: BorderSide(color: DesktopChrome.rim)),
-        ),
-        child: Row(
-          children: [
-            if (narrow)
-              fingerTarget(
-                enabled: _phone,
-                AppIconButton(
-                  icon: AppIcons.columns2,
-                  tooltip: 'Conversations',
-                  onPressed: () => setState(() => _sidebarOpen = !_sidebarOpen),
-                ),
-              ),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // A view saved on this device, until the first read
-                    // replaces it ([SuperTabReading.drawsSaved]).
-                    if (c.showingSaved)
-                      Row(
-                        children: [
-                          Flexible(child: _title(group)),
-                          const SizedBox(width: 8),
-                          // Where the copy is; how long it stays and where
-                          // it is cleared, a hover or a long press away.
-                          Flexible(
-                            child: Tooltip(
-                              message:
-                                  'This browser keeps a copy of the Super '
-                                  'Tabs you open until you sign out. '
-                                  'Settings ▸ Account clears it now.',
-                              child: Text(
-                                'Saved in this browser · Updating…',
-                                key: const ValueKey('super-updating'),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: DesktopChrome.metadata(),
-                              ),
-                            ),
-                          ),
-                        ],
-                      )
-                    else
-                      _title(group),
-                    if (!_devicesVisible && !_listViewHoldsThePane)
-                      ?_subtitle(group),
-                  ],
-                ),
+  Widget _header(SuperTabConversation? group, bool narrow, bool showRoster) {
+    final isProject =
+        group != null && c.snapshot?.isProjectLead(group.id) == true;
+    return Container(
+      constraints: const BoxConstraints(minHeight: 52),
+      // A phone's rows line up (Huy, 2026-11-02): the sidebar icon starts at
+      // the top bar's edge, and the people icon sits under its avatar.
+      padding: _phone
+          ? kPhoneBarRowPadding
+          : const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: DesktopChrome.rim)),
+      ),
+      child: Row(
+        children: [
+          if (narrow)
+            fingerTarget(
+              enabled: _phone,
+              AppIconButton(
+                icon: AppIcons.columns2,
+                tooltip: 'Conversations',
+                onPressed: () => setState(() => _sidebarOpen = !_sidebarOpen),
               ),
             ),
-            if (group != null &&
-                !_devicesVisible &&
-                !_listViewHoldsThePane) ...[
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // A view saved on this device, until the first read
+                  // replaces it ([SuperTabReading.drawsSaved]).
+                  if (c.showingSaved)
+                    Row(
+                      children: [
+                        Flexible(child: _title(group)),
+                        const SizedBox(width: 8),
+                        // Where the copy is; how long it stays and where
+                        // it is cleared, a hover or a long press away.
+                        Flexible(
+                          child: Tooltip(
+                            message:
+                                'This browser keeps a copy of the Super '
+                                'Tabs you open until you sign out. '
+                                'Settings ▸ Account clears it now.',
+                            child: Text(
+                              'Saved in this browser · Updating…',
+                              key: const ValueKey('super-updating'),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: DesktopChrome.metadata(),
+                            ),
+                          ),
+                        ),
+                      ],
+                    )
+                  else
+                    _title(group),
+                  if (!_devicesVisible && !_listViewHoldsThePane)
+                    ?_subtitle(group),
+                ],
+              ),
+            ),
+          ),
+          if (group != null && !_devicesVisible && !_listViewHoldsThePane) ...[
+            // A project's chat is where its header rests: the button back
+            // to it shows only from another view (Quiet Swarm, screen 1).
+            if (!isProject || _terminalsVisible || _showPullRequests)
               fingerTarget(
                 enabled: _phone,
                 AppIconButton(
@@ -2463,8 +2474,10 @@ class _SuperTabViewState extends State<SuperTabView>
                   },
                 ),
               ),
-              if (!_menuNamesViews) ...[
-                const SizedBox(width: 4),
+            if (isProject || !_menuNamesViews) ...[
+              const SizedBox(width: 4),
+              fingerTarget(
+                enabled: _phone,
                 AppIconButton(
                   key: const ValueKey('super-terminals'),
                   icon: AppIcons.terminal,
@@ -2476,6 +2489,10 @@ class _SuperTabViewState extends State<SuperTabView>
                       : DesktopChrome.muted,
                   onPressed: _openTerminals(group),
                 ),
+              ),
+            ],
+            if (!isProject) ...[
+              if (!_menuNamesViews) ...[
                 const SizedBox(width: 4),
                 AppIconButton(
                   key: const ValueKey('super-pull-requests'),
@@ -2495,40 +2512,177 @@ class _SuperTabViewState extends State<SuperTabView>
                 _options(group, views: _menuNamesViews),
               ),
             ],
-            if (!showRoster)
-              fingerTarget(
-                enabled: _phone,
-                AppIconButton(
-                  icon: AppIcons.users,
-                  tooltip: 'Members and machines',
-                  selected: _rosterOpen,
-                  onPressed: _toggleRoster,
+          ],
+          if (!showRoster)
+            fingerTarget(
+              enabled: _phone,
+              AppIconButton(
+                icon: AppIcons.users,
+                tooltip: 'Members and machines',
+                selected: _rosterOpen,
+                onPressed: _toggleRoster,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// A menu's row, a finger's height on a phone.
+  Widget _menuItem(
+    String label,
+    VoidCallback? action, {
+    bool finger = false,
+    Widget? trailing,
+  }) => MenuItemButton(
+    style: ButtonStyle(
+      minimumSize: WidgetStatePropertyAll(
+        Size(208, finger ? kFingerTarget : 32),
+      ),
+      side: WidgetStatePropertyAll(BorderSide.none),
+      padding: WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 12)),
+      alignment: Alignment.centerLeft,
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    ),
+    trailingIcon: trailing,
+    onPressed: action,
+    child: Text(label),
+  );
+
+  /// The reader's own setting for a chat, kept on every device (Slack's channel
+  /// notifications); a viewer has one too.
+  Widget _notifyMenu(SuperTabConversation group) => SubmenuButton(
+    key: const ValueKey('super-notify-menu'),
+    menuChildren: [
+      for (final (level, label) in const [
+        (SuperTabNotify.all, 'All new messages'),
+        (SuperTabNotify.mentions, 'Mentions only'),
+        (SuperTabNotify.muted, 'Muted'),
+      ])
+        MenuItemButton(
+          key: ValueKey('super-notify-${level.name}'),
+          leadingIcon: SizedBox(
+            width: 16,
+            child: c.notifyOf(group.id) == level
+                ? const Icon(AppIcons.check, size: 14)
+                : null,
+          ),
+          onPressed: () => unawaited(_setNotify(group.id, level)),
+          child: Text(label),
+        ),
+    ],
+    child: const Text('Notifications'),
+  );
+
+  /// Until all of the project's closed groups are read, it may have archived
+  /// ones: the list reads them when it opens.
+  bool _mayHaveArchived(String projectId) =>
+      !c.dormantLoaded(projectId) ||
+      c.hasEarlierDormant(projectId) ||
+      c.snapshot?.conversations.any(
+            (g) => g.archived && g.projectId == projectId,
+          ) ==
+          true;
+
+  /// A project's chat header, `# name ▾`, which opens its menu (Quiet Swarm,
+  /// screen 9).
+  Widget _projectMenu(
+    SuperTabConversation group,
+    String name,
+    TextStyle style,
+  ) {
+    final project = c.snapshot!.projectFor(group.id)!;
+    final editable = c.canWrite && !c.saving && !c.hasPendingAction;
+    final owner = project.ownerId == c.accountId;
+    Widget item(String label, VoidCallback? action, {Widget? trailing}) =>
+        _menuItem(label, action, finger: _phone, trailing: trailing);
+    return MenuAnchor(
+      style: const MenuStyle(
+        minimumSize: WidgetStatePropertyAll(Size(220, 0)),
+        padding: WidgetStatePropertyAll(EdgeInsets.all(6)),
+      ),
+      menuChildren: [
+        item(
+          'Status',
+          project.status == null
+              ? null
+              : () => unawaited(
+                  showSuperTabProjectStatus(context, c, project.id),
+                ),
+          trailing: const Icon(AppIcons.chevronRight, size: 14),
+        ),
+        item('Pull requests', _openPullRequests),
+        // Every member reads the project's instructions; a backend without
+        // them sends no coordinatorName.
+        if (project.hasInstructions)
+          item('Instructions', () => _groupAction('instructions', group)),
+        if (editable && owner)
+          item('Sharing', () => _groupAction('sharing', group)),
+        _notifyMenu(group),
+        const Divider(height: 9),
+        item(
+          'Project settings…',
+          () => unawaited(_projectSettings(group, project)),
+        ),
+      ],
+      builder: (context, menu, _) => Tooltip(
+        message: 'Project options',
+        child: InkWell(
+          key: const ValueKey('super-project-menu'),
+          borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+          onTap: () => menu.isOpen ? menu.close() : menu.open(),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Flexible(
+                child: Text(
+                  name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: style,
                 ),
               ),
-          ],
+              const SizedBox(width: 4),
+              Icon(
+                AppIcons.chevronDown,
+                size: AppIcons.inlineSize,
+                color: DesktopChrome.muted,
+              ),
+            ],
+          ),
         ),
-      );
+      ),
+    );
+  }
+
+  Future<void> _projectSettings(
+    SuperTabConversation group,
+    SuperTabProject project,
+  ) {
+    final editable = c.canWrite && !c.saving && !c.hasPendingAction;
+    final owner = project.ownerId == c.accountId;
+    void act(String action) => unawaited(_groupAction(action, group));
+    return showProjectSettings(context, c, project, [
+      if (editable && owner) ('Rename project', () => act('rename')),
+      ('Project details', () => act('details')),
+      // While the PM has a switch under way, there is nothing to ask for.
+      if (editable &&
+          c.snapshot?.maySwitchLead(project.id, c.accountId) == true &&
+          c.snapshot?.leadOf(project.id)?.switchRequest == null)
+        ('Switch PM…', () => act('switch-pm')),
+      if (_mayHaveArchived(group.projectId))
+        ('Archived conversations', () => act('archived')),
+      if (editable && owner) ('Delete Project', () => act('delete')),
+    ], rowHeight: _phone ? kFingerTarget : 32);
+  }
 
   /// The group's ⋮ menu. With [views] (a phone) it opens on the views the
   /// header has no room for — the group's terminals and its pull requests —
   /// each a finger's height.
   Widget _options(SuperTabConversation group, {bool views = false}) {
-    final project = c.snapshot?.projectFor(group.id);
-    final isProject = c.snapshot?.isProjectLead(group.id) == true;
     final editable = c.canWrite && !c.saving && !c.hasPendingAction;
-    Widget item(String label, VoidCallback? action) => MenuItemButton(
-      style: ButtonStyle(
-        minimumSize: WidgetStatePropertyAll(
-          Size(208, views ? kFingerTarget : 32),
-        ),
-        side: WidgetStatePropertyAll(BorderSide.none),
-        padding: WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 12)),
-        alignment: Alignment.centerLeft,
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      ),
-      onPressed: action,
-      child: Text(label),
-    );
+    Widget item(String label, VoidCallback? action) =>
+        _menuItem(label, action, finger: views);
     return MenuAnchor(
       style: const MenuStyle(
         minimumSize: WidgetStatePropertyAll(Size(220, 0)),
@@ -2543,25 +2697,7 @@ class _SuperTabViewState extends State<SuperTabView>
           item('Pull requests', _openPullRequests),
           const Divider(height: 9),
         ],
-        if (isProject) ...[
-          if (editable && project?.ownerId == c.accountId)
-            item('Rename project', () => _groupAction('rename', group)),
-          item('Project details', () => _groupAction('details', group)),
-          if (editable && project?.ownerId == c.accountId)
-            item('Sharing', () => _groupAction('sharing', group)),
-          // Every member reads the project's instructions; a backend without
-          // them sends no coordinatorName.
-          if (project?.hasInstructions == true)
-            item('Instructions', () => _groupAction('instructions', group)),
-          // While the PM has a switch under way, there is nothing to ask for.
-          if (editable &&
-              project != null &&
-              c.snapshot?.maySwitchLead(project.id, c.accountId) == true &&
-              c.snapshot?.leadOf(project.id)?.switchRequest == null)
-            item('Switch PM…', () => _groupAction('switch-pm', group)),
-          if (editable && project?.ownerId == c.accountId)
-            item('Delete Project', () => _groupAction('delete', group)),
-        ] else if (_isBuddyChat(group)) ...[
+        if (_isBuddyChat(group)) ...[
           // A Buddy chat is the reader's own: the Buddy itself to name, any
           // time, and to remove. Nothing to archive, and no way to a Chat with
           // PM (Ken, 10-28).
@@ -2607,48 +2743,14 @@ class _SuperTabViewState extends State<SuperTabView>
             ),
           ],
         ],
-        // The reader's own setting for this chat, kept on every device
-        // (Slack's channel notifications); a viewer has one too.
-        SubmenuButton(
-          key: const ValueKey('super-notify-menu'),
-          menuChildren: [
-            for (final (level, label) in const [
-              (SuperTabNotify.all, 'All new messages'),
-              (SuperTabNotify.mentions, 'Mentions only'),
-              (SuperTabNotify.muted, 'Muted'),
-            ])
-              MenuItemButton(
-                key: ValueKey('super-notify-${level.name}'),
-                leadingIcon: SizedBox(
-                  width: 16,
-                  child: c.notifyOf(group.id) == level
-                      ? const Icon(AppIcons.check, size: 14)
-                      : null,
-                ),
-                onPressed: () => unawaited(_setNotify(group.id, level)),
-                child: Text(label),
-              ),
-          ],
-          child: const Text('Notifications'),
-        ),
-        // Until all of the project's closed groups are read, it may have
-        // archived ones: the list reads them when it opens.
-        if (!c.dormantLoaded(group.projectId) ||
-            c.hasEarlierDormant(group.projectId) ||
-            c.snapshot?.conversations.any(
-                  (g) => g.archived && g.projectId == group.projectId,
-                ) ==
-                true)
+        _notifyMenu(group),
+        if (_mayHaveArchived(group.projectId))
           item('Archived conversations', () => _groupAction('archived', group)),
       ],
       builder: (context, menu, _) => AppIconButton(
         key: const ValueKey('super-group-options'),
         icon: AppIcons.ellipsisVertical,
-        tooltip: isProject
-            ? 'Project options'
-            : _isBuddyChat(group)
-            ? 'Buddy options'
-            : 'Workgroup options',
+        tooltip: _isBuddyChat(group) ? 'Buddy options' : 'Workgroup options',
         onPressed: () => menu.isOpen ? menu.close() : menu.open(),
       ),
     );
