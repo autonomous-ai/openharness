@@ -6,7 +6,7 @@ import { keepUsernames, setUsername, swarmUsernames, usernameOf } from './userna
 import { z } from 'zod'
 import { tokensByModelSchema } from './costs/tokens.js'
 import {
-  activeWork, actorKey, agent, appendPullRequestUrls, author, githubRepository, projectPullRequestUrl, pullRequestLinks, conversation, crossProjectActive, fail, isLeads, person, stableId, numberConversations, nextConversationNumber, renderWorkTask,
+  activeWork, actorKey, agent, appendPullRequestUrls, author, githubRepository, listedPullRequestLinks, projectPullRequestUrl, conversation, crossProjectActive, fail, isLeads, person, stableId, numberConversations, nextConversationNumber, renderWorkTask,
   finishWorker, seenMachineIds, SuperTabError, swarmGridName, visibleState, AGENT_ONLY, STATUS_LABELS, forRecipients,
   type Actor, type AgentConfiguration, type AgentStart, type AgentStartRequest, type BuddySessionEntry, type WorkTask, type Agent, type Author, type Check, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
@@ -3067,11 +3067,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         if (command.status === 'done' && celebrable(conversation(original, group.id))) {
           const repositoryUrl = groupRepositoryUrl(state, group)
           appendPullRequestUrls(group, [command.result, ...group.checks.map(check => check.evidence)], repositoryUrl)
-          // What this Done delivers: the pull requests its result names, else its checks' evidence, plus the group's earlier
-          // waiting; a link only mentioned elsewhere in the task is no part of it (ship.ts deliveredPullRequests).
-          const named = pullRequestLinks(command.result ?? '', repositoryUrl)
-          const awaited = [...new Set([...group.ledger!.shipWaiting ?? [],
-            ...named.length ? named : group.checks.flatMap(check => pullRequestLinks(check.evidence ?? '', repositoryUrl))])]
+          // What this Done delivers: the pull requests its result lists, else its checks' evidence; a link only mentioned
+          // there or elsewhere in the task is no part of it (ship.ts deliveredPullRequests). A later Done replaces what an
+          // earlier one waited for; one that lists nothing keeps it.
+          const named = listedPullRequestLinks(command.result ?? '', repositoryUrl)
+          const listed = named.length ? named : [...new Set(group.checks.flatMap(check => listedPullRequestLinks(check.evidence ?? '', repositoryUrl)))]
+          const awaited = listed.length ? listed : group.ledger!.shipWaiting ?? []
           const shipped = shipNotice(state, group, sender, operationId, awaited)
           if (shipped) {
             effects.messages.push(shipped)

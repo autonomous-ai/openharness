@@ -398,6 +398,23 @@ export function projectPullRequestUrl(url: string, repositoryUrl: string | null 
 export const pullRequestLinks = (text: string, repositoryUrl?: string | null): string[] => [...new Set([...text.matchAll(/https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\/pull\/([1-9][0-9]*)\b/g)]
   .filter(match => Number(match[1]) <= Number.MAX_SAFE_INTEGER).flatMap(match => projectPullRequestUrl(match[0], repositoryUrl) ?? []))]
 
+/** The pull requests [text] lists as what it delivers: its first link, and each next one only when the two are joined by a
+ *  list separator (commas, "and", spaces). A link after other words ("builds on", "replaces", "see") is a mention, not
+ *  part of the delivery. */
+export function listedPullRequestLinks(text: string, repositoryUrl?: string | null): string[] {
+  const found = [...text.matchAll(/https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\/pull\/([1-9][0-9]*)\b/g)]
+    .filter(match => Number(match[1]) <= Number.MAX_SAFE_INTEGER)
+  const listed: string[] = []
+  let end = -1
+  for (const match of found) {
+    if (end >= 0 && !/^(?:[\s,;+&]|\band\b)*$/i.test(text.slice(end, match.index))) break
+    end = match.index! + match[0].length
+    const url = projectPullRequestUrl(match[0], repositoryUrl)
+    if (url) listed.push(url)
+  }
+  return [...new Set(listed)]
+}
+
 /** Adds the pull request links of [texts] to [group] and corrects the ones it holds, by the project's [repositoryUrl]. */
 export function appendPullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>, repositoryUrl?: string | null): void {
   const urls = new Set((group.pullRequestUrls ?? []).flatMap(url => projectPullRequestUrl(url, repositoryUrl) ?? []))
