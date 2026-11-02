@@ -244,7 +244,15 @@ void main() {
       await tester.tap(key('swarm-project-menu'));
       await tester.pumpAndSettle();
       expect(key('swarm-project-menu-terminal'), findsOneWidget);
-      await tester.tap(key('swarm-project-menu-notifications'));
+      final notifications = key('swarm-project-menu-notifications');
+      final notificationsRect = tester.getRect(notifications);
+      final menuPanel = find
+          .ancestor(of: notifications, matching: find.byType(Material))
+          .first;
+      final menuRect = tester.getRect(menuPanel);
+      expect(menuRect.contains(notificationsRect.topLeft), isTrue);
+      expect(menuRect.contains(notificationsRect.bottomRight), isTrue);
+      await tester.tap(notifications);
       await tester.pumpAndSettle();
       expect(ticked(tester), 'Mentions only');
       await tester.tap(find.text('Muted'));
