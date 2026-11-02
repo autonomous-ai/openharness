@@ -372,19 +372,16 @@ class _SuperTabRosterState extends State<SuperTabRoster>
     final (name: role, badge: _) =
         c.snapshot!.roleOf(agent.id) ?? (name: 'Engineer', badge: 'Dev');
     final status = info.status ?? 'Status unavailable';
+    // Who, then where and on what, then the task, then when (Dee,
+    // 2026-10-30); since the row is one line, how long since its last
+    // progress too, which its line said.
     final tooltip = [
       [name, role, ?project?.name, ?info.engine].join(' · '),
       glance.line,
       if (status != glance.label) status,
+      if (state.work?.progressAt case final at?)
+        'Last progress ${relativeAgo(at, now)}',
       if (info.lastActive case final at?) 'Last active ${relativeAgo(at, now)}',
-      // What its line said before it was one line (Dee, 2026-10-30): the task
-      // and how long since its last progress.
-      if (state.work case final work?)
-        [
-          work.group.title,
-          if (work.progressAt case final at?)
-            superTabAgentAge(now.difference(at)),
-        ].join(' · '),
     ].join('\n');
     void open() => unawaited(_card(agent));
     final theme = terminalThemeFor(
