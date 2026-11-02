@@ -589,6 +589,14 @@ describe('creating an agent', () => {
     expect(await setup().create(request({ engine: 'claude', claudeHome: '/profiles/claude-work' }))).toMatchObject({ ok: true })
   })
 
+  it('says what went wrong when that failure is not an Error, and still launches', async () => {
+    syncProfileHome.mockImplementationOnce(() => { throw 'plain reason' })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(await setup().create(request({ engine: 'claude', claudeHome: '/profiles/claude-work' }))).toMatchObject({ ok: true })
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('connections for /profiles/claude-work · plain reason'))
+    warn.mockRestore()
+  })
+
   it('reaches the existing first-install pane route when OpenCode is absent', async () => {
     vi.mocked(opencodeMajorVersion).mockResolvedValueOnce(null)
     const { create } = setup({ installOpencodePlugin })
