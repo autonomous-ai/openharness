@@ -30,10 +30,11 @@ export function endSteps(state: SuperTabState, task: Conversation, reason: strin
   return cancelled
 }
 
-/** Whether a step may sleep, given its task's row as the sweep read it (null: gone). A step sleeps with its task, never on
- *  its own clock: a dormant step drops out of the Swarm read, and its verdict with it. */
-export const stepSleeps = (task: { archived: boolean; dormant: boolean } | null): boolean => !task || task.archived || task.dormant
-
+/** Whether a step may sleep, given its task's row as the sweep read it (null: gone). A step sleeps once its task is
+ *  archived, never on its own clock nor with a task that is only dormant: a dormant step drops out of the Swarm read with
+ *  its verdict, and one asleep under a done task was not loaded when that task was archived later, so it stayed open in an
+ *  archived task (final review, minor 5). */
+export const stepSleeps = (task: { archived: boolean; dormant: boolean } | null): boolean => !task || task.archived
 /** The task's owner for [step]: the agent assigned its task while that work is open, else null (the coordinator's then). */
 export function taskOwner(state: SuperTabState, step: Conversation): string | null {
   const task = isStep(step) ? state.conversations.find(c => c.id === step.reviewOf) : undefined

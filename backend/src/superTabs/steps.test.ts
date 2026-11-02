@@ -161,11 +161,13 @@ describe('a step closes with its task', () => {
     expect(f.group(id).archived).toBe(true)
   })
 
-  it('sleeps only once its task is archived or dormant', () => {
+  // Final review, minor 5: a step that slept with a done but unarchived task was not loaded when that task was archived
+  // later, so it stayed open inside an archived task. It sleeps once its task is archived, when it was closed with it.
+  it('sleeps only once its task is archived', () => {
     expect(stepSleeps(null)).toBe(true)
     expect(stepSleeps({ archived: false, dormant: false })).toBe(false)
     expect(stepSleeps({ archived: true, dormant: false })).toBe(true)
-    expect(stepSleeps({ archived: false, dormant: true })).toBe(true)
+    expect(stepSleeps({ archived: false, dormant: true })).toBe(false)
   })
 })
 
