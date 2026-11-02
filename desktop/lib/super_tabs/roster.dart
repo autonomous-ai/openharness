@@ -75,6 +75,9 @@ class SuperTabRoster extends StatefulWidget {
 }
 
 class _SuperTabRosterState extends State<SuperTabRoster> {
+  /// One per agent menu open now, each keeping the browser's menu off.
+  final _menuHolds = <Object>{};
+
   SuperTabController get c => widget.controller;
 
   /// The board read here when the view shares none.
@@ -144,6 +147,8 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
 
   @override
   void dispose() {
+    _menuHolds.forEach(BrowserMenuGuard.release);
+    _menuHolds.clear();
     _tick?.cancel();
     c.removeListener(_scopeMoved);
     _choice.removeListener(_scopeMoved);
@@ -458,31 +463,41 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
         active: true,
         child: GestureDetector(
           onSecondaryTapUp: (event) async {
-            final choice = await showMenu<String>(
-              context: context,
-              position: RelativeRect.fromLTRB(
-                event.globalPosition.dx,
-                event.globalPosition.dy,
-                event.globalPosition.dx,
-                event.globalPosition.dy,
-              ),
-              items: [
-                const PopupMenuItem(value: 'details', child: Text('Details')),
-                if (_canRemove(c.snapshot?.agent(agent.id) ?? agent))
-                  PopupMenuItem(
-                    value: 'remove',
-                    enabled: _removeReason(agent) == null,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text('Remove from Swarm'),
-                        if (_removeReason(agent) case final reason?)
-                          Text(reason),
-                      ],
+            // Off until the menu closes: its barrier takes the pointer from the row.
+            final hold = Object();
+            _menuHolds.add(hold);
+            BrowserMenuGuard.hold(hold);
+            final String? choice;
+            try {
+              choice = await showMenu<String>(
+                context: context,
+                position: RelativeRect.fromLTRB(
+                  event.globalPosition.dx,
+                  event.globalPosition.dy,
+                  event.globalPosition.dx,
+                  event.globalPosition.dy,
+                ),
+                items: [
+                  const PopupMenuItem(value: 'details', child: Text('Details')),
+                  if (_canRemove(c.snapshot?.agent(agent.id) ?? agent))
+                    PopupMenuItem(
+                      value: 'remove',
+                      enabled: _removeReason(agent) == null,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Remove from Swarm'),
+                          if (_removeReason(agent) case final reason?)
+                            Text(reason),
+                        ],
+                      ),
                     ),
-                  ),
-              ],
-            );
+                ],
+              );
+            } finally {
+              _menuHolds.remove(hold);
+              BrowserMenuGuard.release(hold);
+            }
             if (choice == 'details' && mounted) await _details(agent);
             if (choice == 'remove' && mounted) {
               final current = c.snapshot?.agent(agent.id);
