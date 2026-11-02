@@ -158,6 +158,52 @@ describe('a team session hosting its own machine', () => {
   })
 })
 
+// Audit H2: Team-written code stays out of the main account, through the real store, and the mark survives a save and a load.
+describe('a task a Team agent worked on', () => {
+  const owners = async (tab: string, conversationId: string) => String((await run(tab, { type: 'agent.add', conversationId, machineId: 'owner-host',
+    harnessId: randomUUID(), name: 'Owner Reviewer', configuration: config, lead: false })).result.agentId)
+  const task = async (tab: string, title: string) => String((await run(tab, { type: 'conversation.create', projectId: 'lead', title, brief: 'Do it', checks: [] })).result.conversationId)
+  const step = async (tab: string, reviewOf: string) => String((await run(tab, { type: 'conversation.create', projectId: 'lead', title: 'Review', brief: 'Read it', reviewOf, step: 'Review', checks: [] })).result.conversationId)
+
+  it('keeps its mark through a save and a load, and refuses the main account\'s agent on its step', async () => {
+    const { tab, builder, teamGroup } = await fixture()
+    const free = await task(tab, 'Free')
+    const main = await owners(tab, free)
+    await run(tab, { type: 'work.assign', conversationId: teamGroup, agentId: builder })
+    expect((await storedState(tab)).conversations.find(c => c.id === teamGroup)?.teamWritten).toBe(true)
+    const review = await step(tab, teamGroup)
+    await expect(run(tab, { type: 'work.assign', conversationId: review, agentId: main })).rejects.toMatchObject({ code: 'TEAM_WRITTEN_WORK', status: 403 })
+    expect((await storedState(tab)).conversations.find(c => c.id === review)?.assignment ?? null).toBeNull()
+  })
+
+  it('takes GitHub\'s record through the store: a bot\'s push on a clean task\'s pull request marks it for good', async () => {
+    const { tab } = await fixture()
+    const clean = await task(tab, 'Owner work'), main = await owners(tab, clean), review = await step(tab, clean)
+    const read = vi.fn(async () => 'team' as const)
+    const asked = new SuperTabStore(db, Date.now, undefined, { pushOrigin: read })
+    const state = await storedState(tab)
+    state.conversations.find(c => c.id === clean)!.pullRequestUrls = ['https://github.com/acme/app/pull/7']
+    await saveState(tab, state)
+    await expect(asked.execute(owner, tab, { operationId: randomUUID(), command: { type: 'work.assign', conversationId: review, agentId: main } }))
+      .rejects.toMatchObject({ code: 'TEAM_WRITTEN_WORK' })
+    expect(read).toHaveBeenCalledWith(null, ['https://github.com/acme/app/pull/7'])
+  })
+
+  it('refuses the main account while GitHub cannot say, and takes it once GitHub answers clean', async () => {
+    const { tab } = await fixture()
+    const clean = await task(tab, 'Owner work'), main = await owners(tab, clean), review = await step(tab, clean)
+    const state = await storedState(tab)
+    state.conversations.find(c => c.id === clean)!.pullRequestUrls = ['https://github.com/acme/app/pull/8']
+    await saveState(tab, state)
+    const answer = vi.fn<() => Promise<'unknown' | 'clean'>>().mockResolvedValueOnce('unknown').mockResolvedValueOnce('clean')
+    const asked = new SuperTabStore(db, Date.now, undefined, { pushOrigin: answer })
+    const assign = () => asked.execute(owner, tab, { operationId: randomUUID(), command: { type: 'work.assign', conversationId: review, agentId: main } })
+    await expect(assign()).rejects.toMatchObject({ code: 'TEAM_WRITTEN_WORK' })
+    expect((await storedState(tab)).conversations.find(c => c.id === clean)?.teamWritten).toBeUndefined()
+    await expect(assign()).resolves.toBeTruthy()
+  })
+})
+
 describe('a team session speaking in a Swarm', () => {
   it('reads and posts as an agent on its own machine', async () => {
     const f = await fixture()
