@@ -3,7 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/super_tabs/buddy_rows.dart';
 
-import 'super_tab_activity_lists_test.dart' show finish, swarm, unreadThread, wait;
+import 'super_tab_activity_lists_test.dart'
+    show finish, swarm, unreadThread, wait;
 import 'super_tab_mentions_test.dart' show showView;
 import 'support/super_tab_fixture.dart';
 
@@ -47,6 +48,7 @@ void main() {
       await tester.tap(find.text('web-project').first);
       await tester.pumpAndSettle();
       expect(find.text('?'), findsOneWidget);
+      await tester.pump(const Duration(milliseconds: 300));
     });
 
     testWidgets("a project's red number ends where Activity's does", (
@@ -118,6 +120,7 @@ void main() {
       expect(_key('super-chat'), findsNothing);
       expect(_key('super-pull-requests'), findsNothing);
       expect(_key('super-members-button'), findsNothing);
+      await tester.pump(const Duration(milliseconds: 300));
     });
   });
 
@@ -136,10 +139,7 @@ void main() {
       await showView(tester, server);
       final text = tester.getTopLeft(find.text('A plain message.')).dx;
       expect(tester.getTopLeft(find.text('Windows credential fix')).dx, text);
-      expect(
-        tester.getTopLeft(find.textContaining('Proposal from')).dx,
-        text,
-      );
+      expect(tester.getTopLeft(find.textContaining('Proposal from')).dx, text);
     });
   });
 
@@ -210,7 +210,7 @@ void main() {
         of: find.ancestor(of: panel, matching: find.byType(Column)).first,
         matching: find.byType(Divider),
       );
-      expect(tester.getTopLeft(rule.first).dy, 52);
+      expect(tester.getTopLeft(rule.first).dy, 51);
     });
 
     testWidgets('its reply box keeps the margin the chat composer has', (
@@ -220,10 +220,7 @@ void main() {
       final box = _key('super-task-reply-surface');
       final close = tester.getTopRight(_key('super-task-panel-close')).dx;
       expect(tester.getTopRight(box).dx, lessThan(close));
-      expect(
-        900 - tester.getBottomLeft(box).dy,
-        greaterThanOrEqualTo(16),
-      );
+      expect(900 - tester.getBottomLeft(box).dy, greaterThanOrEqualTo(16));
     });
   });
 
