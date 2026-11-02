@@ -1430,6 +1430,23 @@ describe('contributed machine executor', () => {
     const after = async (f: ReturnType<typeof fixture>, ms: number) => { f.step(ms); await f.machine.tick() }
     const quiet = (f: ReturnType<typeof fixture>) => { f.pool.starts.length = 0 }
 
+    // Task #2131: a session whose agent left as closed comes back by this report. Only one the backend names, and only one running.
+    it('lists a recorded session that runs again, and no stopped, gone or unnamed one', async () => {
+      const f = fixture(); quiet(f)
+      Object.assign(f.pool, { removedHarnessIds: ['reopened', 'still-stopped', 'gone', 'not an id!'] })
+      vi.mocked(f.core.agents.byAgent).mockImplementation(id => ['running', 'reopened', 'still-stopped', 'unnamed'].includes(id) ? { agentId: id } as never : undefined)
+      vi.mocked(f.core.agents.stopped!).mockImplementation(async id => id === 'stopped' || id === 'still-stopped')
+      await f.machine.tick()
+      expect(lastBody(f)).toMatchObject({ runningHarnessIds: ['running', 'reopened'], stoppedHarnessIds: ['stopped'] })
+    })
+
+    it('reports nothing new from a backend that names no recorded session', async () => {
+      const f = fixture(); quiet(f)
+      vi.mocked(f.core.agents.byAgent).mockImplementation(id => ['running', 'reopened'].includes(id) ? { agentId: id } as never : undefined)
+      await f.machine.tick()
+      expect(lastBody(f).runningHarnessIds).toEqual(['running'])
+    })
+
     it('publishes at once when a harness starts or stops running', async () => {
       const f = fixture(); quiet(f)
       await f.machine.tick()
