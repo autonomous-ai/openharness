@@ -752,6 +752,8 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   // A Buddy-only machine is no machine of the Swarm to anyone, its own person included (machines.ts buddyOnly): their Buddy
   // shows as a Buddy, and their machine stays theirs. Machines, status and the leaderboard's lent hours all read this.
   if (visible.machines) visible.machines = visible.machines.filter(m => !m.buddyOnly)
+  // Up to 35 rows a machine that only the leaderboard read uses, and it takes them from the Swarm itself.
+  for (const pool of visible.machines ?? []) delete pool.lentDays
   // Nor its id, which a Buddy's row carries (machineHiddenFrom).
   visible.agents = visible.agents.map(a => machineHiddenFrom(state, actor, a) ? agentWithoutMachine(a) : a)
   // The removed Leads conversation reaches nobody (leadsRemoved), its id included.

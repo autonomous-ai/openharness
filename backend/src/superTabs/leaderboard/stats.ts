@@ -9,6 +9,7 @@ import { isLeads, type Conversation, type SuperTabState } from '../model.js'
 import { isBuddy } from '../buddies.js'
 import { agentProjectId, canReadProject, projectOf } from '../projects.js'
 import { firstAssignedAt, waitedOn, waitsNow, type RanOn, type Unblock } from './record.js'
+import { lentIn, periodSpans, reviewsIn, weekSpan, within, type PeriodName, type Span } from './rolling.js'
 import { DAY_MS, WEEK_MS } from './week.js'
 import type { AgentScore, Leaderboard, Medal, ModelScore, ModelShare, PersonDetails, PersonScore, RecentModel, WeekGoal } from './contract.js'
 
@@ -36,11 +37,13 @@ export interface LeaderboardInput {
   /** The Monday 00:00 UTC the week starts (week.ts). */
   week: number
   now: number
+  /** A rolling period ending now to sum instead of [week] (rolling.ts); [week] is then only the answer's label. */
+  period?: PeriodName
   /** People's profile names by id, read with the board (read.ts profileNames); absent ones go by their email. */
   names?: ReadonlyMap<string, string>
 }
 
-export function leaderboard({ state, groups, machines: visibleMachines, projectId, week, now, names }: LeaderboardInput): Leaderboard {
+export function leaderboard({ state, groups, machines: visibleMachines, projectId, week, now, period, names }: LeaderboardInput): Leaderboard {
   const project = projectOf(state, projectId)
   // The Lead conversation is where plans are approved: its answers count, though nothing there is a request that ships.
   const visible = groups.filter(g => !isLeads(g) && !g.audience && (g.projectId ?? 'lead') === projectId)
@@ -51,16 +54,16 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
   const shippedRequests = requests.filter(g => g.ledger?.shippedAt != null && (g.pullRequestUrls?.length ?? 0) > 0)
   const landed = shippedRequests.filter(g => g.requesterId)
   const players = state.people.filter(p => canReadProject(state, { kind: 'person', userId: p.id, email: p.email }, project))
-  const inWeek = (at: number, start = week) => at >= start && at < start + WEEK_MS
+  const { current, previous } = period ? periodSpans(period, now) : { current: weekSpan(week), previous: weekSpan(week - WEEK_MS) }
   // Each person's records, gathered once: the board scores every player three times (Diego's issue file, 2026-10-27).
   const landedBy = byKey(landed, g => g.requesterId!)
   const answersBy = byKey(visible.flatMap(group => (group.ledger?.unblocks ?? []).map(unblock => ({ ...unblock, group }))), u => u.personId)
   const machinesBy = byKey(visibleMachines, m => m.contributorId)
-  const score = (personId: string, start: number) => {
-    const shippedHere = (landedBy.get(personId) ?? []).filter(g => inWeek(g.ledger!.shippedAt!, start))
-    const answers = (answersBy.get(personId) ?? []).filter(u => inWeek(u.at, start))
+  const score = (personId: string, span: Span) => {
+    const shippedHere = (landedBy.get(personId) ?? []).filter(g => within(g.ledger!.shippedAt!, span))
+    const answers = (answersBy.get(personId) ?? []).filter(u => within(u.at, span))
     const machines = (machinesBy.get(personId) ?? [])
-      .map(m => ({ name: m.name, busyMs: m.lent?.find(l => l.week === start)?.busyMs ?? 0 })).filter(m => m.busyMs > 0)
+      .map(m => ({ name: m.name, busyMs: lentIn(m, span, now) })).filter(m => m.busyMs > 0)
     const freedMs = sum(answers.map(u => u.waitedMs)), lentMs = sum(machines.map(m => m.busyMs))
     const points = shippedHere.length * SHIPPED_POINTS + sum(answers.map(unblockPoints)) + Math.floor(lentMs / (LENT_HOURS_PER_POINT * HOUR_MS))
     const details: PersonDetails = {
@@ -79,27 +82,29 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
       details,
     }
   }
-  const goal = (start: number): WeekGoal => {
-    const shippedHere = landed.filter(g => inWeek(g.ledger!.shippedAt!, start))
-    return { shipped: shippedHere.length, points: sum(players.map(p => score(p.id, start).points)), medianAskToShipMs: median(askToShip(shippedHere)) }
+  const goal = (span: Span): WeekGoal => {
+    const shippedHere = landed.filter(g => within(g.ledger!.shippedAt!, span))
+    return { shipped: shippedHere.length, points: sum(players.map(p => score(p.id, span).points)), medianAskToShipMs: median(askToShip(shippedHere)) }
   }
-  const today = Math.floor(Math.min(now, week + WEEK_MS - 1) / DAY_MS)
+  const today = Math.floor(Math.min(now, current.end - 1) / DAY_MS)
   const scored = players.map(p => ({ personId: p.id, email: p.email, displayName: names?.get(p.id)?.trim() || p.email.split('@')[0]!,
-    ...score(p.id, week), prevWeekPoints: score(p.id, week - WEEK_MS).points,
+    ...score(p.id, current), prevWeekPoints: previous && score(p.id, previous).points,
     streakDays: streak(new Set((landedBy.get(p.id) ?? []).map(g => Math.floor(g.ledger!.shippedAt! / DAY_MS))), today) }))
     .sort((a, b) => b.points - a.points || a.email.localeCompare(b.email))
   const people: PersonScore[] = scored.map(({ email: _email, details, ...entry }) => {
     const rank = 1 + scored.filter(other => other.points > entry.points).length
     return { ...entry, rank, medal: entry.points > 0 ? MEDALS[rank - 1] ?? null : null, details }
   })
+  const shippedNow = shippedRequests.filter(g => within(g.ledger!.shippedAt!, current))
   return {
     projectId, week,
-    goal: { openRequests: requests.filter(open).length, thisWeek: goal(week), lastWeek: goal(week - WEEK_MS) },
+    ...period ? { period: { name: period, start: current.start, end: now } } : {},
+    goal: { openRequests: requests.filter(open).length, thisWeek: goal(current), lastWeek: previous && goal(previous) },
     people,
     waiting: waitingNow(state, shared),
-    models: { thisWeek: modelShare(requests, week), lastWeek: modelShare(requests, week - WEEK_MS) },
-    agents: agentScores(state, projectId, shippedRequests.filter(g => inWeek(g.ledger!.shippedAt!))),
-    byModel: modelScores(requests, shippedRequests.filter(g => inWeek(g.ledger!.shippedAt!)), inWeek),
+    models: { thisWeek: modelShare(requests, current), lastWeek: previous && modelShare(requests, previous) },
+    agents: agentScores(state, projectId, shippedNow),
+    byModel: modelScores(requests, shippedNow, current),
     recentModels: recentModels(requests, now),
   }
 }
@@ -155,7 +160,7 @@ function agentScores(state: SuperTabState, projectId: string, shippedThisWeek: C
 
 /** Every model that worked this week: its attempts, the requests they shipped, their first reviews, and the review
  *  verdicts it gave. A request ships on its last attempt before it shipped. */
-function modelScores(requests: Conversation[], shippedThisWeek: Conversation[], inWeek: (at: number) => boolean): ModelScore[] {
+function modelScores(requests: Conversation[], shippedThisWeek: Conversation[], span: Span): ModelScore[] {
   const rows = new Map<string, ModelScore & { attemptMs: number[]; requestMs: number[] }>()
   const row = (on: RanOn) => {
     const key = JSON.stringify([on.engine, on.model, on.effort ?? null])
@@ -179,14 +184,14 @@ function modelScores(requests: Conversation[], shippedThisWeek: Conversation[], 
   }
   for (const group of requests) {
     for (const run of group.ledger?.runs ?? []) {
-      if (!inWeek(run.at)) continue
+      if (!within(run.at, span)) continue
       const entry = row(run)
       entry.attempts++
       if (run.firstReview === undefined) continue
       entry.firstReview.reviewed++
       if (run.firstReview) entry.firstReview.passed++
     }
-    for (const counted of group.ledger?.reviews ?? []) if (inWeek(counted.week)) row(counted).reviews += counted.count
+    for (const counted of reviewsIn(group.ledger ?? {}, span)) row(counted).reviews += counted.count
   }
   const scored = [...rows.values()].map(({ attemptMs, requestMs, ...entry }) => ({ ...entry,
     points: entry.shipped.count * SHIPPED_POINTS + entry.reviews * REVIEW_POINTS,
@@ -200,9 +205,9 @@ const unblockPoints = (unblock: Unblock): number =>
   UNBLOCK_POINTS + Math.min(UNBLOCK_MAX_WAIT_POINTS, Math.floor(unblock.waitedMs / (UNBLOCK_HOURS_PER_POINT * HOUR_MS)))
 const newest = <T>(items: T[], at: (item: T) => number): T[] => [...items].sort((a, b) => at(b) - at(a)).slice(0, DETAILS_LIMIT)
 
-/** The attempts started in the week starting [start], by the kind of model they ran on. */
-function modelShare(requests: Conversation[], start: number): ModelShare {
-  const runs = requests.flatMap(g => g.ledger?.runs ?? []).filter(r => r.at >= start && r.at < start + WEEK_MS)
+/** The attempts started in [span], by the kind of model they ran on. */
+function modelShare(requests: Conversation[], span: Span): ModelShare {
+  const runs = requests.flatMap(g => g.ledger?.runs ?? []).filter(r => within(r.at, span))
   const reviewed = runs.filter(r => r.firstReview !== undefined)
   const count = (list: typeof runs, grid: boolean) => list.filter(r => !!r.grid === grid).length
   const passed = reviewed.filter(r => r.firstReview)

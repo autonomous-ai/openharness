@@ -26,6 +26,7 @@ import { workspacesRequired } from '../workspaceStore.js'
 import type { Leaderboard } from '../leaderboard/contract.js'
 import { profileNames, readableWeek, recentDormantGroups } from '../leaderboard/read.js'
 import { LEDGER_WEEKS } from '../leaderboard/record.js'
+import type { PeriodName } from '../leaderboard/rolling.js'
 import { leaderboard } from '../leaderboard/stats.js'
 import { WEEK_MS } from '../leaderboard/week.js'
 import { READ_FORMAT, SWARM_MIGRATING, type Changes, type Derived, type DormantGroups, type FirstLoad, type OneGroup, type SwarmList } from './contract.js'
@@ -319,7 +320,7 @@ export class SwarmReads {
 
   /** One project's leaderboard for a week (leaderboard/stats.ts), for the people who read the project. It sums only the
    *  groups the reader may read, dormant ones of the kept weeks included, and never a private conversation. */
-  async leaderboard(user: AuthUser, tabId: string, projectId: string, week?: number): Promise<Leaderboard> {
+  async leaderboard(user: AuthUser, tabId: string, projectId: string, week?: number, period?: PeriodName): Promise<Leaderboard> {
     if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const now = this.now(), start = readableWeek(week, now)
     return this.read(user, tabId, async (tx, cached) => {
@@ -329,7 +330,10 @@ export class SwarmReads {
       const dormant = await recentDormantGroups(tx, tabId, projectId, now - LEDGER_WEEKS * WEEK_MS)
       const groups = [...state.conversations.filter(g => !g.dormant), ...dormant].filter(g => !isLeads(g) && canReadGroup(state, actor, g))
       const names = await profileNames(tx, state.people.map(p => p.id))
-      return leaderboard({ state, groups, machines: visibleState(state, actor, now).machines ?? [], projectId, week: start, now, names })
+      // Which machines the reader sees, with the daily rows no other read carries.
+      const machines = (visibleState(state, actor, now).machines ?? [])
+        .map(m => ({ ...m, lentDays: state.machines?.find(own => own.machineId === m.machineId)?.lentDays }))
+      return leaderboard({ state, groups, machines, projectId, week: start, now, period, names })
     })
   }
 

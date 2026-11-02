@@ -8,11 +8,13 @@ import { MACHINE_FRESH_MS, type ContributedMachine } from '../machines.js'
 import type { SuperTabState } from '../model.js'
 import { ledProject } from '../projects.js'
 import { LEDGER_WEEKS } from './record.js'
-import { WEEK_MS, weekStart } from './week.js'
+import { DAY_MS, WEEK_MS, weekStart } from './week.js'
 
 /** `busyMs`: agent time spent on other people's tasks, the only time Lent counts (Dee, 2026-10-28). `agentMs`: online agent
  *  time, recorded before then and no longer counted or written. */
 export interface LentWeek { week: number; agentMs?: number; busyMs?: number }
+/** The same busy time by UTC day, for the rolling periods (rolling.ts). */
+export interface LentDay { day: number; busyMs: number }
 
 /** Credits the time since the machine's previous reading, at most one fresh reading's worth, to each Swarm agent that
  *  reading showed running and that is working on a task someone else asked for: one nobody named counts as someone else's.
@@ -44,4 +46,10 @@ export function addLent(pool: ContributedMachine, now: number, count: number): v
   const current = kept.find(l => l.week === week) ?? kept[kept.push({ week }) - 1]!
   current.busyMs = (current.busyMs ?? 0) + elapsed * count
   pool.lent = kept
+  // At most LEDGER_WEEKS * 7 rows a machine: they cover every kept week and Last 30d, and go as they age.
+  const today = Math.floor(now / DAY_MS) * DAY_MS
+  const days = (pool.lentDays ?? []).filter(d => now - d.day < LEDGER_WEEKS * WEEK_MS)
+  const day = days.find(d => d.day === today) ?? days[days.push({ day: today, busyMs: 0 }) - 1]!
+  day.busyMs += elapsed * count
+  pool.lentDays = days
 }
