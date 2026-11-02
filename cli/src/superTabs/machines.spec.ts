@@ -886,7 +886,7 @@ describe('contributed machine executor', () => {
           const ended = createConfidentialPurge({ confidential: () => true, home, record: purgeRecord(join(home, 'purges.json')), purge,
             session: agentId => ({ agentId, sessionId: 'session', registeredAt: 1, engine: 'codex', cwd: null, codexHome: own }) })
           const { f, fail } = failedLater(() => ({ error: REASON }))
-          f.core.agents.closeMember = createSwarmAgents({ byAgent: () => null, stoppedIds: () => ['launched'], purgeEnded: ended,
+          f.core.agents.closeMember = createSwarmAgents({ byAgent: () => null, stoppedIds: () => ['launched'], closeAgent: async () => ({ closed: true }), purgeEnded: ended,
             members: { leads: () => new Set(), harnesses: () => new Set() } } as never).closeMember as never
           f.start.mockResolvedValue(refusedStart as never)
           await f.machine.tick()
