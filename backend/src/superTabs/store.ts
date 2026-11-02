@@ -1719,7 +1719,7 @@ export class SuperTabStore {
       const leadAt = (state: SuperTabState) => state.conversations.find(c => c.id === ledId)?.leadAction?.at
       if (ledId && leadAt(effects.state) !== undefined && leadAt(effects.state) !== leadAt(original)) await dropHeldTags(tx, tabId, ledId, context.now)
       await writeMentions(tx, tabId, effects.state, effects.messages, context.now)
-      await writeReplyActivity(tx, tabId, effects.messages, context.now)
+      await writeReplyActivity(tx, tabId, effects.messages, sequences, context.now)
       if (command.type === 'mention.done') await markDone(tx, tabId, command.mentionId, context.mention!.personId, context.now)
       if (command.type === 'message.react') await this.writeReaction(tx, tabId, actor, command, context.now)
       if (context.avatarUpload) {
