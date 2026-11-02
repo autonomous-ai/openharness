@@ -342,8 +342,12 @@ void main() {
       c.draft = 'mine';
       inbox.kept.setDraft('other', 'x', null, 'stays');
       await inbox.kept.flush();
+      swarm.routes['/api/super-tabs/other/parts'] = (_) =>
+          firstLoad(tabId: 'other');
       swarm.routes['/api/super-tabs/list'] = (_) => {
-        'tabs': <Object>[],
+        'tabs': [
+          {'id': 'other', 'name': 'Other', 'ownerId': me},
+        ],
         'next': null,
       };
       await inbox.refresh();

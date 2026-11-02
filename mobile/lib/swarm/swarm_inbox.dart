@@ -103,6 +103,7 @@ class SwarmInbox extends ChangeNotifier {
        _home = homeCache == null
            ? null
            : SwarmHomeKeeper(homeCache, accountId, wait: homeWait) {
+    kept.addListener(_dropUnlisted);
     if (_home != null) unawaited(_restore());
   }
 
@@ -373,6 +374,8 @@ class SwarmInbox extends ChangeNotifier {
       }
       if (_disposed) return;
       if (!listEquals(listed, swarms)) swarms = listed;
+      _listedIds = {for (final swarm in listed) swarm.id};
+      _dropUnlisted();
       // What was read of them stays while they cannot be read again.
       if (invited != null && !listEquals(invited, invitations)) {
         invitations = invited;
@@ -546,6 +549,20 @@ class SwarmInbox extends ChangeNotifier {
   /// A Swarm off the list ([lost]), or the inbox closing: what a screen
   /// still holds of it is taken back ([SwarmReader.revoke]) before it is
   /// dropped.
+  /// The Swarms the last list that answered named; null before one has.
+  Set<String>? _listedIds;
+
+  /// A Swarm the account no longer has goes from what is kept, also one lost
+  /// while the app was closed, which has no reader to say so. Once what was
+  /// kept is back, and only from a list that answered.
+  void _dropUnlisted() {
+    final listed = _listedIds;
+    if (_disposed || listed == null || !kept.loaded) return;
+    for (final id in kept.tabs) {
+      if (!listed.contains(id)) kept.dropSwarm(id);
+    }
+  }
+
   /// How [_checkKept] follows each Swarm, by its id.
   final _keptWatches = <String, VoidCallback>{};
 
@@ -703,7 +720,9 @@ class SwarmInbox extends ChangeNotifier {
     for (final id in _readers.keys.toList()) {
       _drop(id, lost: false);
     }
-    kept.dispose();
+    kept
+      ..removeListener(_dropUnlisted)
+      ..dispose();
     super.dispose();
   }
 }

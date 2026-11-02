@@ -230,12 +230,15 @@ class SwarmKept extends ChangeNotifier {
         olderPosts[_at(tab, chat, raw['root'] as String?)] = raw;
       }
     }
-    older.removeWhere(
-      (at, row) => _touched.contains(at) || _dropped.any((gone) => gone(row)),
-    );
+    bool isDropped(Map<String, dynamic> row) =>
+        _dropped.any((gone) => gone(row));
+    final held = older.length + olderPosts.length;
+    older.removeWhere((at, row) => _touched.contains(at) || isDropped(row));
     olderPosts.removeWhere(
-      (at, row) => _touched.contains(at) || _dropped.any((gone) => gone(row)),
+      (at, row) => _touched.contains(at) || isDropped(row),
     );
+    // Something dropped before it was read: the file must lose it too.
+    final filtered = older.length + olderPosts.length < held;
     // Older first, then what this run has already changed.
     final drafts = {...older, ..._drafts};
     final posts = {...olderPosts, ..._posts};
@@ -246,7 +249,7 @@ class SwarmKept extends ChangeNotifier {
       ..clear()
       ..addAll(posts);
     _loaded = true;
-    if (_touched.isNotEmpty) _saveSoon();
+    if (_touched.isNotEmpty || filtered) _saveSoon(now: filtered);
     notifyListeners();
   }
 
@@ -332,6 +335,12 @@ class SwarmKept extends ChangeNotifier {
   Set<String> chats(String tab) => {
     for (final row in [..._drafts.values, ..._posts.values])
       if (row['tab'] == tab) row['chat'] as String,
+  };
+
+  /// The Swarms it holds something of.
+  Set<String> get tabs => {
+    for (final row in [..._drafts.values, ..._posts.values])
+      row['tab'] as String,
   };
 
   /// The person lost [chat]: nothing of it stays.
