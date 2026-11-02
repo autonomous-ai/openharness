@@ -133,6 +133,39 @@ test('close() gives up on a daemon that never answers it', async () => {
   assert.equal((await once(socket, 'close')).code, 1006)
 })
 
+test('a connection the caller gave up on stays given up: no open, nothing sent, and the daemon sees it go', async () => {
+  const dir = mkdtempSync(join('/tmp', 'ld-')); chmodSync(dir, 0o700)
+  const events = [], path = join(dir, `daemon-${PORT}.sock`)
+  const server = createServer()
+  const gone = new Promise(resolve => server.on('upgrade', (req, stream) => {
+    stream.on('error', () => {})
+    // An http server's sockets stay half open: the peer's going is an `end`, which only a reader sees.
+    stream.resume()
+    stream.on('end', () => resolve(true))
+    events.push('asked')
+    // Answers late, as a daemon busy with a machine does: the caller has given up by then.
+    setTimeout(() => {
+      if (stream.destroyed || !stream.writable) return
+      const accept = createHash('sha1').update(`${req.headers['sec-websocket-key']}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64')
+      stream.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`)
+    }, 150)
+  }))
+  await new Promise(ready => server.listen(path, ready))
+  chmodSync(path, 0o600)
+  closers.push(() => new Promise(done => { server.closeAllConnections(); server.close(() => done()) }))
+  const socket = open({ ADAPTER_DATA_DIR: dir })
+  socket.addEventListener('open', () => events.push('open'))
+  await eventually(() => events.includes('asked'))
+  const closed = once(socket, 'close')
+  socket.close()
+  assert.equal((await closed).code, 1006)
+  assert.equal(await Promise.race([gone, new Promise(r => setTimeout(() => r(false), 100))]), true, 'the request is cut, so nothing holds the process')
+  await new Promise(r => setTimeout(r, 250))
+  assert.deepEqual(events, ['asked'], 'no open after close')
+  assert.equal(socket.readyState, 3)
+  assert.throws(() => socket.send('late'))
+})
+
 test('fetch: a request and its body over the socket; the timeout reads as a timeout; nothing without the socket', async () => {
   const d = await daemon({ rest: (req, res) => {
     let raw = ''; req.on('data', c => { raw += c }); req.on('end', () => {

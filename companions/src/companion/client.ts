@@ -8,6 +8,8 @@
  * daemon refuses them (TOKEN_REQUIRED). The daemon decides everything; this file only asks.
  */
 import { randomUUID } from 'node:crypto'
+import { lstatSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { CONTROL_TOOLS } from './control.js'
 import { harnessPaneEnv } from '../shared/approval.js'
 import { presentedToken } from './token.js'
@@ -32,6 +34,8 @@ export interface PairClientDeps {
   /** The daemon's 0600 Unix socket (cli/src/lib/localSocket.ts `unixSocketPath`), null only where it can have none: Windows, or a data
    *  folder too long for one. Required, so no caller reaches TCP by forgetting: any account can hold that port (audit H1). */
   socketPath: string | null
+  /** Whether [socketPath] is the daemon's, by the rule every client uses; a test's stand-in. */
+  socketPrivate?: (path: string) => boolean
   /** The daemon's local credential, read by the caller from its data dir (`hook-credential`), shown only where there is no socket. */
   localCredential?: string | null
   env: NodeJS.ProcessEnv
@@ -39,11 +43,24 @@ export interface PairClientDeps {
   timeoutMs?: number
 }
 
+/** A socket of this account's, owner only, in a real folder nobody else can write to (store/tools/local-daemon.mjs, the same rule). */
+function socketIsPrivate(path: string): boolean {
+  const uid = process.getuid?.()
+  try {
+    const folder = lstatSync(dirname(path)), file = lstatSync(path)
+    return folder.isDirectory() && (folder.mode & 0o022) === 0 && file.isSocket() && (file.mode & 0o077) === 0
+      && (uid === undefined || (folder.uid === uid && file.uid === uid))
+  } catch {
+    return false
+  }
+}
+
 /** One `pair` request to this computer's daemon. Resolves its reply; rejects only when it cannot be asked. */
 export async function pairRequest(deps: PairClientDeps, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
   const machineId = await deps.machineId()
   if (!machineId) throw new Error('Harness is not running on this computer. Start it with `harness start`.')
   const token = presentedToken(deps.env, deps.tokenFile)
+  if (deps.socketPath && !(deps.socketPrivate ?? socketIsPrivate)(deps.socketPath)) throw new Error('Harness is not running on this computer, or its socket is not private. Start it with `harness start`.')
   return new Promise((resolve, reject) => {
     const socket = deps.socketPath
       ? deps.connect(`ws+unix://${deps.socketPath}:/api/local-ws`, {})

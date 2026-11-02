@@ -63,17 +63,19 @@ class SocketEvent extends Event {
 class UnixWebSocket extends EventTarget {
   static CONNECTING = 0; static OPEN = 1; static CLOSING = 2; static CLOSED = 3
   readyState = 0
-  #stream = null; #closed = false; #held = Buffer.alloc(0); #parts = []; #size = 0; #timer = null
+  #asked = null; #stream = null; #closed = false; #held = Buffer.alloc(0); #parts = []; #size = 0; #timer = null
 
   constructor(path, resource) {
     super()
     // Told after this returns, as a WebSocket always is: the caller adds its listeners first.
     if (!socketIsPrivate(path)) { queueMicrotask(() => this.#end(1006, new Error('The Harness socket is missing or not private.'))); return }
     const key = randomBytes(16).toString('base64')
-    const asked = request({ socketPath: path, path: resource, headers: { Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': key } })
+    const asked = this.#asked = request({ socketPath: path, path: resource, headers: { Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': key } })
     asked.on('error', (error) => this.#end(1006, error))
     asked.on('response', (answer) => { answer.resume(); this.#end(1006, new Error(`The daemon answered ${answer.statusCode}.`)) })
     asked.on('upgrade', (answer, stream, head) => {
+      // Given up on while it was on its way: the caller has been told, so it never comes back to life.
+      if (this.#closed) { stream.destroy(); return }
       const accept = createHash('sha1').update(key + WS_GUID).digest('base64')
       if (answer.headers['sec-websocket-accept'] !== accept) { stream.destroy(); this.#end(1006, new Error('The daemon answered no WebSocket.')); return }
       this.#stream = stream
@@ -107,6 +109,8 @@ class UnixWebSocket extends EventTarget {
     this.#closed = true
     this.readyState = 3
     clearTimeout(this.#timer)
+    // A request still waiting holds the process and could open after the caller was told it failed.
+    this.#asked?.destroy()
     this.#stream?.destroy()
     if (error) this.dispatchEvent(new SocketEvent('error', { error, message: error.message }))
     this.dispatchEvent(new SocketEvent('close', { code, reason: '', wasClean: code !== 1006 }))

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createServer } from 'node:net'
 import { test } from 'node:test'
 import { daemonBridge, localCredentialHeaders } from './local-credential.mjs'
 
@@ -36,11 +37,19 @@ test('on Windows the credential is read whatever mode the folder and file report
   assert.deepEqual(localCredentialHeaders({ ADAPTER_DATA_DIR: dataDir({ credential: 'too-short', mode: 0o666 }) }), {}, 'the value is still checked')
 })
 
-test('where a socket can be, a check opens it and shows nothing', () => {
+test('where a socket can be, a check opens it and shows nothing, and only if it is private', async (t) => {
   const short = mkdtempSync(join('/tmp', 'tools-'))
   writeFileSync(join(short, 'hook-credential'), `${CREDENTIAL}\n`, { mode: 0o600 })
   chmodSync(short, 0o700)
-  assert.deepEqual(localCredentialHeaders({ ADAPTER_DATA_DIR: short }), {})
-  assert.deepEqual(daemonBridge(18473, { ADAPTER_DATA_DIR: short }), { url: `ws+unix://${join(short, 'daemon-18473.sock')}:/api/local-ws`, headers: {} })
+  const env = { ADAPTER_DATA_DIR: short }, path = join(short, 'daemon-18473.sock')
+  assert.deepEqual(localCredentialHeaders(env), {})
+  assert.throws(() => daemonBridge(18473, env), /missing or not private/, 'no socket: the daemon is down, and the port is not tried')
+  const server = createServer()
+  await new Promise(ready => server.listen(path, ready))
+  t.after(() => server.close())
+  chmodSync(path, 0o600)
+  assert.deepEqual(daemonBridge(18473, env), { url: `ws+unix://${path}:/api/local-ws`, headers: {} })
+  chmodSync(path, 0o666)
+  assert.throws(() => daemonBridge(18473, env), /missing or not private/)
   assert.deepEqual(daemonBridge(18473, { ADAPTER_DATA_DIR: dataDir() }).headers, { 'X-Harness-Local': CREDENTIAL })
 })
