@@ -751,6 +751,7 @@ class SwarmIconButton extends StatelessWidget {
     required this.onPressed,
     this.size = 22,
     this.selected,
+    this.dot = false,
   });
 
   final IconData icon;
@@ -763,6 +764,10 @@ class SwarmIconButton extends StatelessWidget {
   /// A switch's state: on, it is tinted in the accent; null for a plain
   /// button.
   final bool? selected;
+
+  /// A dot in the accent at the glyph's corner: something is changed from its
+  /// default. Say what in [label], as a dot is not heard.
+  final bool dot;
 
   @override
   Widget build(BuildContext context) {
@@ -803,7 +808,27 @@ class SwarmIconButton extends StatelessWidget {
               ),
               child: SizedBox.square(
                 dimension: 36,
-                child: Icon(icon, size: size, color: color),
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Icon(icon, size: size, color: color),
+                    if (dot)
+                      PositionedDirectional(
+                        top: AppSpace.xs,
+                        end: AppSpace.xs,
+                        child: SizedBox.square(
+                          key: const ValueKey('swarm-icon-dot'),
+                          dimension: AppSpace.s,
+                          child: DecoratedBox(
+                            decoration: ShapeDecoration(
+                              color: AppPalette.swarmAccent,
+                              shape: const CircleBorder(),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
               ),
             ),
           ),
