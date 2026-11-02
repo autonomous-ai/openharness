@@ -882,6 +882,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                     required grouped,
                     required acting,
                     required lit,
+                    required followed,
                     required onTap,
                   }) => _threadRow(
                     c,
@@ -890,6 +891,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                     grouped: grouped,
                     acting: acting,
                     lit: lit,
+                    followed: followed,
                     onTap: onTap,
                   ),
               pending: (t, post) => _threadPending(c, t, post),
@@ -910,6 +912,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     required bool grouped,
     required bool acting,
     required bool lit,
+    required bool followed,
     required VoidCallback onTap,
   }) {
     final view = _view.value;
@@ -928,6 +931,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       readerId: c.reader.accountId,
       grouped: grouped,
       lit: lit,
+      followed: followed,
       quote: null,
       actions: acting,
       onTap: onTap,

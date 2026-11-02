@@ -31,6 +31,7 @@ typedef SwarmThreadRow = Widget Function(
   required bool grouped,
   required bool acting,
   required bool lit,
+  required bool followed,
   required VoidCallback onTap,
 });
 
@@ -523,6 +524,7 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
         grouped: grouped,
         acting: _acting == m.id,
         lit: _lit == m.id,
+        followed: _target == m.id,
         onTap: () => _toggleActions(m.id),
       );
       if (_acting == m.id) return KeyedSubtree(key: _actingKey, child: built);
