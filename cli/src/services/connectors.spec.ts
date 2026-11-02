@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { bridgeKey, bridgePort, saveBridgePort } from '../lib/connectors/agents.js'
+import { bridgeKey, bridgePort, bridgeSocketPath, saveBridgePort } from '../lib/connectors/agents.js'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { request as httpRequest } from 'node:http'
 import { connect, createServer } from 'node:net'
@@ -253,8 +253,12 @@ describe('the connectors service', () => {
     }
   })
 
-  // A vault folder too long for a socket: the port is the only way in, so its keys stay as they are and neither is replaced or retired.
-  describe('where the vault\'s folder is too long for a socket', () => {
+  // A vault folder and a home both too long for a socket, the one case left on TCP on a Mac or Linux, as every case is on Windows: the
+  // port is the only way in, so its keys stay as they are and neither is replaced or retired.
+  describe('where neither the vault\'s folder nor the home can hold a socket', () => {
+    beforeEach(() => { vi.stubEnv('HOME', `/${'h'.repeat(120)}`) })
+    afterEach(() => { vi.unstubAllEnvs() })
+
     const freePort = async () => {
       const server = createServer()
       await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
@@ -276,7 +280,11 @@ describe('the connectors service', () => {
       sent.once('error', reject)
       sent.end('{}')
     })
-    const longVault = () => new Store(join(home, 'v'.repeat(120)), env)
+    const longVault = () => {
+      const vault = new Store(join(home, 'v'.repeat(120)), env)
+      expect(bridgeSocketPath(vault)).toBeNull()
+      return vault
+    }
 
     it('answers both keys on the port, leaves them unchanged, and makes no socket', async () => {
       const vault = longVault(), port = await freePort()
