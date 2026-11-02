@@ -1,6 +1,6 @@
 import { createServer, connect, type AddressInfo, type Socket } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
-import { lsofShowsPeer, peerIsThisAccount, portHolderIsThisAccount, procNetListener, procNetOwner, WINDOWS_PEER_LOOKUPS, windowsPeerQuery, type WindowsPeerRun } from './peerAccount.js'
+import { lsofShowsPeer, peerIsThisAccount, portHolderIsThisAccount, procNetListener, procNetOwner, WINDOWS_PEER_LOOKUPS, windowsListenerQuery, windowsPeerQuery, type WindowsPeerRun } from './peerAccount.js'
 
 describe('who is at the other end of a loopback connection', () => {
   const opened: Array<() => unknown> = []
@@ -115,6 +115,45 @@ describe('who is at the other end of a loopback connection', () => {
     })
   })
 
+  // Reed's review of #2605: Windows answered null here, so the connectors bridge never moved off a port the Team account held
+  // from boot, and the owner's agents kept sending their tool calls to that account (task #2162).
+  describe('on Windows, who holds a listening port, by asking Windows', () => {
+    const answering = (stdout: string, status: number | null = 0) => {
+      const asked: Array<{ script: string; inputs: Record<string, string> }> = []
+      const run: WindowsPeerRun = async (script, inputs) => { asked.push({ script, inputs }); return { status, stdout } }
+      return { run, asked }
+    }
+
+    it('says no for another account\'s listener, yes for this account\'s, and nothing for a free port', async () => {
+      expect(await portHolderIsThisAccount(51793, 'win32', answering('no\r\n').run)).toBe(false)
+      expect(await portHolderIsThisAccount(51793, 'win32', answering('yes\r\n').run)).toBe(true)
+      expect(await portHolderIsThisAccount(51793, 'win32', answering('none\r\n').run)).toBeNull()
+    })
+
+    it('says nothing when the lookup fails, times out, throws or answers anything else', async () => {
+      for (const [stdout, status] of [['no', 1], ['yes', null], ['', 0], ['maybe', 0], ['yes\nno', 0]] as const) {
+        expect(await portHolderIsThisAccount(51793, 'win32', answering(stdout, status).run), `${stdout}/${status}`).toBeNull()
+      }
+      expect(await portHolderIsThisAccount(51793, 'win32', () => Promise.reject(new Error('no PowerShell')))).toBeNull()
+    })
+
+    it('passes the port as an input, never in the script\'s text', async () => {
+      const { run, asked } = answering('no')
+      await portHolderIsThisAccount(51794, 'win32', run)
+      expect(asked[0]!.inputs).toEqual({ HARNESS_LISTEN_PORT: '51794' })
+      expect(asked[0]!.script).not.toContain('51794')
+      expect(asked[0]!.script).toBe(windowsListenerQuery(51794).script)
+    })
+
+    it('counts a listener as this account\'s only by its process\'s SID, and only a process that started before it', () => {
+      const { script } = windowsListenerQuery(51793)
+      expect(script).toMatch(/Get-NetTCPConnection -State Listen -LocalPort \(\[int\]\$env:HARNESS_LISTEN_PORT\)/)
+      expect(script).toMatch(/GetOwnerSid/)
+      expect(script).toMatch(/WindowsIdentity\]::GetCurrent\(\)\.User\.Value/)
+      expect(script).toMatch(/CreationDate -gt \$row\.CreationTime/)
+    })
+  })
+
   it('reads the owner of the client end from /proc/net/tcp, not the server end', () => {
     const table = [
       '  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode',
@@ -132,7 +171,6 @@ describe('who is at the other end of a loopback connection', () => {
     opened.push(() => server.close())
     await new Promise<void>(resolve => { server.listen(0, '127.0.0.1', resolve) })
     expect(await portHolderIsThisAccount((server.address() as AddressInfo).port)).toBe(true)
-    expect(await portHolderIsThisAccount(1, 'win32')).toBeNull()
     const table = [
       '  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode',
       '   0: 0100007F:C94F 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1002        0 1',
