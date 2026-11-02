@@ -13,6 +13,11 @@ export const isStep = (group: Pick<Conversation, 'reviewOf'>): boolean => !!grou
 /** A step's name: the one it was opened with, else its title (a linked group opened without one). */
 export const stepName = (group: Pick<Conversation, 'step' | 'title'>): string => group.step ?? group.title
 
+/** Whether [step]'s task is done or cancelled, as far as [state] loaded it. Only then may the archive pass take a step: one
+ *  archived under an open task refuses the next round, and that re-check fails silently. A task not loaded has not ended. */
+export const taskEnded = (state: SuperTabState, step: Pick<Conversation, 'reviewOf'>): boolean =>
+  ['done', 'cancelled'].includes(state.conversations.find(c => c.id === step.reviewOf)?.assignment?.status ?? '')
+
 /** The steps of task [taskId], in creation order. */
 export const stepsOf = (state: SuperTabState, taskId: string): Conversation[] =>
   state.conversations.filter(c => c.reviewOf === taskId)

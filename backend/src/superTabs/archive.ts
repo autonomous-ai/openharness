@@ -10,8 +10,9 @@ import { logger } from '../utils/logger.js'
 // A finished group archives by itself (roadmap, December: nobody tidies a Swarm by hand): its task done or cancelled, quiet
 // for 30 minutes, no person's decision waiting there, and every pull request it links merged or closed. Only GitHub says
 // that, over the network, so this runs in the singleton worker and never inside a Swarm's write; the write itself checks
-// everything the Swarm knows again (store.ts archiveFinished). A review nobody is reviewing closes the same way once every
-// pull request of the work it reviews is merged or closed (tidy.ts reviewClosable).
+// everything the Swarm knows again (store.ts archiveFinished). A step (a linked group: a review, a test) archives with its
+// task, in the task's write (steps.ts endSteps), and never on its own clock while that task is open (task steps design): it
+// is taken here only once its task is done or cancelled and every pull request of both is merged or closed.
 
 export type PullRequestState = 'open' | 'merged' | 'closed' | null
 /** What a sweep asks GitHub: a pull request's state (null: it cannot say), and `done` once the sweep is over. */
@@ -51,20 +52,37 @@ export function appPullRequests(app: GitHubApp): PullRequests {
 }
 
 const BATCH = 500
+const ended = (group: Conversation): boolean => ['done', 'cancelled'].includes(group.assignment?.status ?? '')
 
-/** Marks every part written before the finished mark whose task is done or cancelled, and every open review written before
- *  reviews took the mark while nobody reviews them, so the pass finds it: run once by the worker at startup, as its other
- *  index work is. Every later write of a part sets the mark itself (parts/write.ts). */
+/**
+ * Run once by the worker at startup, as its other index work is, so the pass finds what it should. Marks every part written
+ * before the finished mark whose task is done or cancelled, a step not among them. A step's mark goes by its task, which an
+ * update of one document cannot read: any mark on an open step is taken back (an earlier release marked every step nobody
+ * held, so the pass archived it under an open task), and it is set again on those with nobody working whose task has ended.
+ * Every later write of a part sets the mark itself, and of a step clears it (parts/write.ts). Returns how many it marked.
+ */
 export async function markFinishedGroups(db: PrismaClient): Promise<number> {
-  const answer = await db.$runCommandRaw({ update: 'SwarmGroup', updates: [
-    { q: { workFinished: { $exists: false }, deleted: false, 'data.assignment.status': { $in: ['done', 'cancelled'] } }, u: { $set: { workFinished: true } }, multi: true },
-    // Open groups only (the mark's index leads with it and archived): the reviews waiting for a Reviewer on 2026-10-30.
-    // Measured on prod that day: about 290 index keys and documents examined, 1 ms; it marked 35. Remove it in the
-    // release after #2322's, once every part has been written or marked by it.
-    { q: { workFinished: { $in: [false, null] }, archived: false, deleted: false, 'data.reviewOf': { $type: 'string' },
-      $or: [{ 'data.assignment': null }, { 'data.assignment.status': { $in: ['done', 'stopped', 'cancelled', 'lost'] } }] }, u: { $set: { workFinished: true } }, multi: true },
+  const step = { $type: 'string' }
+  const modified = (answer: unknown) => Number((answer as { nModified?: number }).nModified ?? 0)
+  const written = modified(await db.$runCommandRaw({ update: 'SwarmGroup', updates: [
+    { q: { workFinished: { $exists: false }, deleted: false, 'data.reviewOf': { $not: step }, 'data.assignment.status': { $in: ['done', 'cancelled'] } }, u: { $set: { workFinished: true } }, multi: true },
+  ] }))
+  await db.$runCommandRaw({ update: 'SwarmGroup', updates: [
+    { q: { workFinished: true, archived: false, deleted: false, 'data.reviewOf': step }, u: { $set: { workFinished: false } }, multi: true },
   ] })
-  return Number((answer as { nModified?: number }).nModified ?? 0)
+  // Open groups only (the mark's index leads with it and archived), one indexed read of its task for each open step.
+  const rows = await db.swarmGroup.aggregateRaw({ pipeline: [
+    { $match: { workFinished: { $in: [false, null] }, archived: false, deleted: false, 'data.reviewOf': step,
+      $or: [{ 'data.assignment': null }, { 'data.assignment.status': { $in: ['done', 'stopped', 'cancelled', 'lost'] } }] } },
+    { $lookup: { from: 'SwarmGroup', let: { tabId: '$tabId', task: '$data.reviewOf' }, as: 'task', pipeline: [
+      { $match: { $expr: { $and: [{ $eq: ['$tabId', '$$tabId'] }, { $eq: ['$key', '$$task'] }] } } }, { $project: { status: '$data.assignment.status' } }] } },
+    { $match: { 'task.status': { $in: ['done', 'cancelled'] } } },
+    { $project: { _id: 1 } },
+  ] }) as unknown as Array<{ _id: string }>
+  if (!rows.length) return written
+  return written + modified(await db.$runCommandRaw({ update: 'SwarmGroup', updates: [
+    { q: { _id: { $in: rows.map(row => row._id) } }, u: { $set: { workFinished: true } }, multi: true },
+  ] }))
 }
 
 /** One pass: every unarchived group quiet for ARCHIVE_QUIET_MS whose task is done or cancelled (its finished mark), in a Swarm that keeps
@@ -101,8 +119,8 @@ export async function archiveFinishedGroups(db: PrismaClient, store: Pick<SuperT
         orderBy: [{ lastActivityAt: 'asc' }, { id: 'asc' }], take: BATCH, select: { id: true, tabId: true, key: true, lastActivityAt: true, data: true } })
       for (const row of rows) {
         const group = row.data as unknown as Conversation
-        const finished = ['done', 'cancelled'].includes(group.assignment?.status ?? ''), review = !!group.reviewOf && !activeWork(group)
-        if (group.audience || !(finished || review) || !await tidyOn(row.tabId)) continue
+        const finished = ended(group), step = !!group.reviewOf
+        if (group.audience || !(finished || (step && !activeWork(group))) || !await tidyOn(row.tabId)) continue
         const checked: Record<string, 'merged' | 'closed'> = {}
         // Stops at the first pull request still open, or that GitHub cannot read.
         const settled = async (urls: string[]) => {
@@ -114,11 +132,16 @@ export async function archiveFinishedGroups(db: PrismaClient, store: Pick<SuperT
           return true
         }
         const own = group.pullRequestUrls ?? []
-        if (finished && await settled(own) && await archive(row, checked)) { archived++; continue }
-        if (!review) continue
-        const reviewed = (await db.swarmGroup.findUnique({ where: { tabId_key: { tabId: row.tabId, key: group.reviewOf! } }, select: { data: true } }))?.data as unknown as Conversation | undefined
-        const urls = [...new Set([...own, ...reviewed?.pullRequestUrls ?? []])]
-        if (urls.length && await settled(urls) && await archive(row, checked, group.reviewOf)) archived++
+        if (!step) {
+          if (await settled(own) && await archive(row, checked)) archived++
+          continue
+        }
+        // A mark left by an earlier release, or a task handed on again since the mark: the task says, not the mark.
+        const task = (await db.swarmGroup.findUnique({ where: { tabId_key: { tabId: row.tabId, key: group.reviewOf! } }, select: { data: true } }))?.data as unknown as Conversation | undefined
+        if (!task || !ended(task)) continue
+        const urls = [...new Set([...own, ...task.pullRequestUrls ?? []])]
+        // A step nobody finished needs a pull request to say its work is settled (tidy.ts reviewClosable).
+        if ((finished || urls.length) && await settled(urls) && await archive(row, checked, group.reviewOf)) archived++
       }
       if (rows.length < BATCH) return archived
       after = { at: rows.at(-1)!.lastActivityAt, id: rows.at(-1)!.id }

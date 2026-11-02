@@ -153,7 +153,8 @@ describe('which finished groups archive', () => {
       review({ checks: [{ ...verdict, evidence: null, passedBy: null }] }),
       review({ id: 'r2', checks: [{ ...verdict, evidence: 'Ready: yes — revision abc', passedBy: 'agent:w' }] }),
       review({ id: 'r3', checks: [{ ...verdict, evidence: null, passedBy: null }], assignment: done({ status: 'cancelled' }) })] })
-    expect(state.conversations.slice(2).map(g => archivable(state, g, quiet))).toEqual([false, true, true])
+    // A step, with its task open: none, whatever its own verdict says (task steps design).
+    expect(state.conversations.slice(2).map(g => archivable(state, g, quiet))).toEqual([false, false, false])
     expect(state.conversations.slice(2).map(g => linkPending(state, g))).toEqual([true, false, false])
     // Once the reviewed work is done, its review is moot.
     state.conversations[1]!.assignment = done()
@@ -174,9 +175,9 @@ describe('which finished groups archive', () => {
 describe('which reviews nobody reviews may close', () => {
   const quiet = START + ARCHIVE_QUIET_MS
   const PR = 'https://github.com/acme/app/pull/2288', SECOND = 'https://github.com/acme/app/pull/2290'
-  /** Work still waiting for its review, linking [built], and its review with no Reviewer, linking [own]. */
-  const reviewState = (patch: Partial<Conversation> = {}, built: string[] = [PR], own: string[] = []) => swarm({ groups: [
-    group({ assignment: done({ status: 'review' }), pullRequestUrls: built }),
+  /** Work ended, linking [built], and its review with no Reviewer, linking [own]. */
+  const reviewState = (patch: Partial<Conversation> = {}, built: string[] = [PR], own: string[] = [], work: 'done' | 'cancelled' | 'review' | 'working' | 'stopped' | 'lost' = 'done') => swarm({ groups: [
+    group({ assignment: done({ status: work }), pullRequestUrls: built }),
     group({ id: 'r1', title: 'Review: Task', reviewOf: 'g1', assignment: null, pullRequestUrls: own, ...patch })] })
   const review = (state: SuperTabState) => state.conversations[2]!
 
@@ -186,6 +187,23 @@ describe('which reviews nobody reviews may close', () => {
       expect(reviewClosable(state, review(state), quiet)).toBe(true)
       expect(reviewClosable(state, review(state), quiet - 1)).toBe(false)
     }
+  })
+
+  it('is never one whose task is open or was lost: it stays with its task, and is not archived while the task may need it', () => {
+    for (const work of ['review', 'working', 'stopped', 'lost'] as const) {
+      const state = reviewState({}, [PR], [], work)
+      expect(reviewClosable(state, review(state), quiet)).toBe(false)
+    }
+    for (const work of ['done', 'cancelled'] as const) {
+      const state = reviewState({}, [PR], [], work)
+      expect(reviewClosable(state, review(state), quiet)).toBe(true)
+    }
+  })
+
+  it('is never one whose task this write did not load', () => {
+    const state = reviewState()
+    state.conversations.splice(1, 1)
+    expect(reviewClosable(state, state.conversations[1]!, quiet)).toBe(false)
   })
 
   it('is never one a Reviewer works on', () => {
