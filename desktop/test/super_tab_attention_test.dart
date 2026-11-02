@@ -127,7 +127,6 @@ Future<void> pumpSidebar(
   SuperTabController c,
   SuperTabAttention attention, {
   Brightness brightness = Brightness.dark,
-  bool threadsSelected = false,
 }) async {
   await tester.binding.setSurfaceSize(const Size(300, 900));
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -142,7 +141,6 @@ Future<void> pumpSidebar(
             needsHuman: (_) => 0,
             onSelect: c.select,
             attention: attention,
-            threadsSelected: threadsSelected,
           ),
         ),
       ),
@@ -226,7 +224,7 @@ void main() {
       });
 
       testWidgets('a tag in a reply that lives only in a thread counts on '
-          'Threads, not on the project row', (tester) async {
+          'its thread, not on the project row', (tester) async {
         final server = projectServer();
         server.followedThreads = {
           'unread': [unreadThread('message-1', 2, conversationId: 'lead')],
@@ -236,7 +234,7 @@ void main() {
         server.tag('message-1', threadId: 'message-1');
         final (c, attention) = await opened(server);
         await pumpSidebar(tester, c, attention);
-        expect(inRow('super-threads', find.text('1')), findsOneWidget);
+        expect(attention.threadMentions, 1);
         expect(
           inRow('super-group-lead', find.byType(SuperTabCountBadge)),
           findsNothing,
