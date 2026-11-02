@@ -45,7 +45,7 @@ import { actorLabel, memberChanges, memberRowText, quotedName } from './memberRo
 import { BUDDY_SESSION_CAPABILITY, chatOwner, endSessionEntry, entryProject, liveSessions, mainBuddyOf, MAX_SESSION_WAITING, requireChatOwner, SESSION_ENDED_KIND, sessionAgentsOf, sessionOf, setSessions, type SessionEndReason } from './buddySessions.js'
 import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, isSwarmBuddy, isSwarmBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, openBuddyChat, openSwarmBuddyChat, PM_LINE_KIND, PROPOSAL_ASK_MS, PROPOSAL_SENT_KIND, proposalSentText, proposalText, renameBuddy, requireBuddyCommand, swarmBuddyChatId } from './buddies.js'
 import { BUDDY_OWN_MACHINE_REFUSAL, CODEX_BUDDY_REFUSAL } from './buddyContract.js'
-import { launchRefusedLine, leadJoined, leadStartFailed, leadStarting, placeLead } from './leadStart.js'
+import { launchRefusedLine, leadJoined, leadOvertaken, leadStartFailed, leadStarting, placeLead } from './leadStart.js'
 import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, FIRST_SUMMARY, instructionsHash, instructionsTextSchema, legacyRoleName, liveNotes, MAX_NOTES, noteTextSchema, roleNameSchema, summarySchema, type PmNote } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 
@@ -2373,6 +2373,14 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const group = open(state, start.request.conversationId)
       const agentId = stableId(start.request.machineId, command.harnessId)
       if (state.agents.some(a => a.id === agentId)) fail('ALREADY_SHARED', 'This native harness is already in the tab.')
+      // Answered, not refused: a refusal would take the row with it. Its host closes the session (cli superTabs/start.ts).
+      const overtaken = start.request.leadFor ? leadOvertaken(state, start, group) : null
+      if (overtaken) {
+        start.error = overtaken.reason
+        result.refused = overtaken.reason
+        message(group.id, overtaken.text, [], null, overtaken.source)
+        break
+      }
       reserveHarnessSlot(state, start.request.machineId, command.harnessId, operationId)
       state.agents.push({ id: agentId, machineId: start.request.machineId, harnessId: command.harnessId,
         // A Swarm Buddy chat has no project: its main Buddy and plain sessions read every project their person reads, and a
