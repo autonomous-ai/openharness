@@ -10,7 +10,7 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 
-// Dee's Personal Swarm adds her own machines by itself (#2181). A machine she took out must stay out on every computer, so the
+// A Personal Swarm adds its person's own machines by itself (#2181). A machine they took out must stay out on every computer, so the
 // removal is the server's: a client's memory holds only on the computer that saw it (both security reviews of #2623).
 let replica: MongoMemoryReplSet
 let db: PrismaClient
