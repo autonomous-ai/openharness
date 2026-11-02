@@ -225,6 +225,18 @@ describe('who hears a step', () => {
     expect(to(post(f.task), f.task)).toEqual([[f.dev]])
   })
 
+  // Diego, 2026-11-02: "Fixed in abc123, please re-check" from the Engineer woke the PM and the Reviewer never heard it.
+  it('the owner\'s unnamed post in its active step reaches the step\'s agent only', () => {
+    const { f, id, rev, post } = reviewing()
+    expect(to(post(id, f.dev), id)).toEqual([[rev]])
+  })
+
+  it('the owner\'s post in its step naming the coordinator still reaches the coordinator', () => {
+    const { f, id } = reviewing()
+    const named = f.run({ type: 'message.send', conversationId: id, text: 'Need a ruling.', replyTo: null, recipientIds: [f.lead] } as Command, f.as(f.dev)).messages
+    expect(to(named, id)).toEqual([[f.lead]])
+  })
+
   it('an agent with no open step in the task still reaches the coordinator', () => {
     const { f, post } = reviewing()
     const other = f.add('other', f.task)
