@@ -1302,7 +1302,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     const affected = state.conversations.filter(group => group.agentIds.some(a => removed.has(a))
       || (group.leadId && removed.has(group.leadId)) || (group.assignment && removed.has(group.assignment.agentId)))
       .map(group => ({ group, names: members.filter(a => group.agentIds.includes(a.id) || group.leadId === a.id || group.assignment?.agentId === a.id)
-        .map(a => a.displayName ?? a.name), task: !!group.assignment && removed.has(group.assignment.agentId) && activeWork(group) }))
+        .map(a => quotedName(a.displayName ?? a.name)), task: !!group.assignment && removed.has(group.assignment.agentId) && activeWork(group) }))
     for (const target of members) removeAgent(target, { lead })
     if (pool) {
       // Paused, so routing in clients that do not know removals stops offering it too.
@@ -2606,7 +2606,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         const lead = group.leadId && group.agentIds.includes(group.leadId) ? group.leadId : null
         // One person can withdraw an agent from several groups. Each notice needs its own durable message ID.
         effects.messages.push({ id: stableId(operationId, 'agent-removed', group.id), conversationId: group.id,
-          author: sender, text: `${sender.name.split('@')[0]} removed ${target.displayName ?? target.name} from the Swarm.${task}`,
+          author: sender, text: `${sender.name.split('@')[0]} removed ${quotedName(target.displayName ?? target.name)} from the Swarm.${task}`,
           replyTo: null, recipients: lead ? [lead] : [], source: SYSTEM_ROW })
       }
       break
