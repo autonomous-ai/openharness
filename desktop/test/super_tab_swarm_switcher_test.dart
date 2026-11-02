@@ -1130,6 +1130,25 @@ void main() {
       expect(sent['teamAccountOnly'], isTrue);
     });
 
+    test('this computer stays out too once its person took it out, and its add asks the server so', () async {
+      final (app, backend) = await _twoTabs();
+      await PersonalSwarm.of(app).show(app.activeSwarmId);
+      await _settle();
+      final id = PersonalSwarm.of(app).id!;
+      final sent = backend.contributions(id).single;
+      expect(sent['ifMissing'], isTrue);
+      expect(sent['unlessRemoved'], isTrue);
+      // Taken out, on any computer: the next show adds it no more.
+      final server = backend.servers[id]!;
+      server.state['machines'] = <Map<String, dynamic>>[];
+      server.state['removedMachines'] = ['m'];
+      final c = await app.superTabs.open(id);
+      await c.refresh();
+      await PersonalSwarm.of(app).show(app.activeSwarmId);
+      await _settle();
+      expect(backend.contributions(id), hasLength(1));
+    });
+
     test('a machine its person took out stays out, on a computer that never saw it: the server says so', () async {
       final (app, backend, c) = await personal();
       backend.servers[c.tabId]!.state['removedMachines'] = ['rig'];
