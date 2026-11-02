@@ -13,6 +13,7 @@ import 'package:harness_mobile/shared/theme/app_theme.dart'
     show AppFont, AppPalette;
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
+import 'package:harness_mobile/swarm/swarm_home_list.dart';
 import 'package:harness_mobile/swarm/swarm_home_rows.dart';
 import 'package:harness_mobile/swarm/swarm_inbox.dart';
 import 'package:harness_mobile/swarm/swarm_leaderboard.dart';
@@ -28,6 +29,7 @@ import 'package:harness_mobile/swarm/swarm_row.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_start.dart';
 import 'package:harness_mobile/swarm/swarm_style.dart';
+import 'package:harness_mobile/swarm/team_glance.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import '../voice_fakes.dart';
@@ -886,8 +888,8 @@ void main() {
       expect(inside(publicRow, find.byType(SwarmAvatar)), findsNothing);
     });
 
-    testWidgets('a project the Lead tagged the person in is bold and bright '
-        'with @N filled; the rest are quiet; each has how many people read '
+    testWidgets('a project with a task-chat tag stays bold without a number; '
+        'the rest are quiet; each has how many people read '
         'it and when it last moved', (tester) async {
       final semantics = tester.ensureSemantics();
       await pump(tester, backend());
@@ -895,11 +897,8 @@ void main() {
       const mobileRow = 'swarm-project-$tab-$project';
       const webRow = 'swarm-project-$tab-$web';
       expect(weightOf(tester, mobileRow, 'Mobile'), AppFont.semibold);
-      final tags = tester.widget<SwarmTags>(
-        inside(mobileRow, find.byType(SwarmTags)),
-      );
-      expect((tags.count, tags.filled), (1, true));
-      expect(find.bySemanticsLabel(RegExp('1 mention')), findsOneWidget);
+      expect(inside(mobileRow, find.byType(SwarmTags)), findsNothing);
+      expect(find.bySemanticsLabel(RegExp('1 mention')), findsNothing);
       expect(weightOf(tester, webRow, 'Web'), isNot(AppFont.semibold));
       expect(inside(webRow, find.textContaining('@')), findsNothing);
       for (final row in [mobileRow, webRow]) {
@@ -1272,6 +1271,30 @@ void main() {
 
       await openNeeds(tester);
       expect(find.text('Nothing needs you.'), findsOneWidget);
+    });
+
+    testWidgets('a task-chat tag keeps its project under Mentions without a '
+        'project-chat count', (tester) async {
+      final fake = backend();
+      final load = fake.routes['/api/super-tabs/$tab/parts']!;
+      fake.routes['/api/super-tabs/$tab/parts'] = (body) async => {
+        ...await load(body) as Map<String, dynamic>,
+        'agents': <Object>[],
+      };
+      final host = await pump(tester, fake);
+      host.session!.home.setFilter(SwarmHomeFilter.mentions);
+      await tester.pumpAndSettle();
+
+      final row = key('swarm-project-$tab-$project');
+      expect(row, findsOneWidget);
+      expect(
+        inside('swarm-project-$tab-$project', find.byType(SwarmTags)),
+        findsNothing,
+      );
+      expect(
+        dotOf(tester, 'swarm-project-$tab-$project'),
+        swarmStateColor(SwarmAgentState.waiting),
+      );
     });
 
     testWidgets('back from a project, Home still has its title, and it opens '
@@ -2665,7 +2688,11 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(key('swarm-project-tags-loading'), findsNothing);
-      expect(inside(mobileRow, find.byType(SwarmTags)), findsOneWidget);
+      expect(
+        inside(mobileRow, find.byType(SwarmTags)),
+        findsNothing,
+        reason: "the tag is in a task chat, not the project chat",
+      );
       expect(inside(webRow, find.byType(SwarmTags)), findsNothing);
       expect(
         tester.getSize(key(mobileRow)).height,

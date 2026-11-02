@@ -585,11 +585,12 @@ class _SwarmPageState extends State<SwarmPage> {
           final news = swarmProjectNews(reader, inbox.asks(swarm.id));
           final activity = swarmProjectActivity(snapshot, reader.buddies);
           for (final project in snapshot.projects) {
+            final projectNews = news[project.id];
             final row = SwarmHomeProject(
               swarmId: swarm.id,
               project: project,
               active: activity[project.id],
-              news: news[project.id] ?? swarmNoNews,
+              news: projectNews ?? swarmNoProjectNews,
             );
             projects.add(row);
             glances[row.key] = swarmTeamGlance(snapshot, projectId: project.id);

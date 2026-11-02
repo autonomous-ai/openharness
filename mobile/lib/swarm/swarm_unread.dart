@@ -9,8 +9,17 @@ import 'swarm_reader.dart';
 /// of them at its trailing edge ([tags]).
 typedef SwarmRowNews = ({bool bold, int tags});
 
+/// Project-level chat counts, plus whether any open project chat has a tag
+/// waiting. The project number counts only what opening its own chat clears.
+typedef SwarmProjectNews = ({bool bold, int tags, bool hasWaitingTag});
+
 /// Nothing new.
 const SwarmRowNews swarmNoNews = (bold: false, tags: 0);
+const SwarmProjectNews swarmNoProjectNews = (
+  bold: false,
+  tags: 0,
+  hasWaitingTag: false,
+);
 
 /// [group]'s row: bold while it is unread ([SwarmReader.readMarks]) and not
 /// muted, or while something counts in it ([swarmChatCount]), with that count.
@@ -83,10 +92,11 @@ bool swarmUnreadShown(SwarmReader reader, SuperTabConversation group) =>
 /// project chat or any of its open work shows unread, as the desktop's
 /// sidebar reads a collapsed project — never for closed work, a private chat
 /// or the person's Buddy chat, which has a row of its own — or while tags
-/// count there, with the sum of those chats' counts ([swarmChatCount]). A tag
-/// counts only in a chat this Swarm lists, under that chat's own project.
+/// count there. Its number counts only its project chat ([swarmChatCount]),
+/// which opening the project reads. Task tags stay on their own rows and in
+/// Activity. A tag counts only in a listed chat under its own project.
 /// One pass over the Swarm's chats for every project.
-Map<String, SwarmRowNews> swarmProjectNews(
+Map<String, SwarmProjectNews> swarmProjectNews(
   SwarmReader reader,
   SwarmAsks? asks,
 ) {
@@ -102,6 +112,7 @@ Map<String, SwarmRowNews> swarmProjectNews(
   }
   final unread = <String>{};
   final tags = <String, int>{};
+  final hasWaitingTag = <String>{};
   for (final group in snapshot.conversations) {
     if (group.closed ||
         group.audience != null ||
@@ -118,10 +129,20 @@ Map<String, SwarmRowNews> swarmProjectNews(
       waiting[group.id] ?? const [],
       asked[group.id] ?? 0,
     );
-    if (count > 0) tags[projectId] = (tags[projectId] ?? 0) + count;
+    if (count > 0) {
+      unread.add(projectId);
+      hasWaitingTag.add(projectId);
+      if (group.id == snapshot.projectById(projectId)?.leadConversationId) {
+        tags[projectId] = count;
+      }
+    }
   }
   return {
     for (final id in {...unread, ...tags.keys})
-      id: (bold: true, tags: tags[id] ?? 0),
+      id: (
+        bold: true,
+        tags: tags[id] ?? 0,
+        hasWaitingTag: hasWaitingTag.contains(id),
+      ),
   };
 }
