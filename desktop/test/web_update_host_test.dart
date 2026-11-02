@@ -59,6 +59,8 @@ void main() {
     await mount(tester);
     latest = '1.3.52';
     shown.add(null);
+    // The page's event, the read, then the frame that draws it.
+    await tester.pump();
     await tester.pump();
     expect(bar, findsOneWidget);
   });
