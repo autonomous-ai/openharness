@@ -8,7 +8,6 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
-import 'package:harness/super_tabs/decisions_view.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/project_status_card.dart';
 import 'package:harness/super_tabs/view.dart';
@@ -302,13 +301,11 @@ void main() {
         await tester.pumpAndSettle();
         // The Activity page (Notifications' place), with the decision's own
         // option buttons.
-        expect(
-          find.descendant(
-            of: find.byType(SuperTabDecisionList),
-            matching: find.text('Decisions'),
-          ),
-          findsOneWidget,
+        expect(find.text('Needs you'), findsOneWidget);
+        await tester.tap(
+          find.byKey(const ValueKey('super-activity-row-decision:decision-1')),
         );
+        await tester.pumpAndSettle();
         expect(
           find.byKey(const ValueKey('super-decision-decision-1-0')),
           findsOneWidget,
