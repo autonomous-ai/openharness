@@ -152,29 +152,9 @@ const githubStartToken = z.object({ always: z.boolean().optional() }).strict()
  * owner-only) keep their own words: they tell nothing the caller cannot already see. Hosts read 403 and 404 alike as
  * access lost (cli superTabs/machines.ts, swarmReads.ts).
  */
-export const NOT_AVAILABLE_ROUTES: ReadonlySet<string> = new Set([
-  'GET /api/super-tabs/:tabId/parts', 'GET /api/super-tabs/:tabId/changes', 'GET /api/super-tabs/:tabId/inbox', 'GET /api/super-tabs/:tabId/threads',
-  'POST /api/super-tabs/:tabId/commands',
-  'GET /api/super-tabs/:tabId/mentions', 'GET /api/super-tabs/:tabId/decisions', 'GET /api/super-tabs/:tabId/leaderboard',
-  'GET /api/super-tabs/:tabId/sharing', 'POST /api/super-tabs/:tabId/sharing', 'GET /api/super-tabs/:tabId/routing-policy',
-  'GET /api/super-tabs/:tabId/groups', 'GET /api/super-tabs/:tabId/groups/:conversationId',
-  'POST /api/super-tabs/:tabId/join', 'POST /api/super-tabs/:tabId/join/preview', 'POST /api/super-tabs/:tabId/native',
-  'GET /api/super-tabs/:tabId/conversations/:conversationId/messages', 'GET /api/super-tabs/:tabId/conversations/:conversationId/catch-up',
-  'GET /api/super-tabs/:tabId/conversations/:conversationId/messages/:messageId/attachments/:attachmentId',
-  'POST /api/super-tabs/:tabId/conversations/:conversationId/read', 'POST /api/super-tabs/:tabId/conversations/:conversationId/threads/:threadId/follow',
-  'GET /api/super-tabs/:tabId/projects/:projectId/github', 'POST /api/super-tabs/:tabId/projects/:projectId/github/approve',
-  'GET /api/super-tabs/:tabId/projects/:projectId/ci-load',
-  'GET /api/super-tabs/:tabId/projects/:projectId/roles/:roleId', 'GET /api/super-tabs/:tabId/route-decisions/:decisionId',
-  'GET /api/super-tabs/:tabId/machines/:machineId/removal',
-  'POST /api/super-tabs/:tabId/attachments', 'POST /api/super-tabs/:tabId/avatars',
-  // Reached by any sign-in too (review of #2333): Workspace settings, costs, routing and the host's own reads.
-  'POST /api/super-tabs/:tabId/workspace-visibility', 'POST /api/super-tabs/:tabId/workspace-join', 'GET /api/super-tabs/:tabId/costs',
-  'GET /api/super-tabs/:tabId/route-decisions', 'GET /api/super-tabs/:tabId/starts/:startId',
-  'GET /api/super-tabs/:tabId/conversations/:conversationId/attempts', 'GET /api/super-tabs/:tabId/terminal/:requestId',
-  'GET /api/super-tabs/:tabId/agents/:agentId/deliveries', 'GET /api/super-tabs/:tabId/agents/:agentId/deliveries/:deliveryId',
-  'POST /api/super-tabs/:tabId/agents/:agentId/deliveries/:deliveryId',
-  'GET /api/super-tabs/:tabId/native/:contextId', 'POST /api/super-tabs/:tabId/native/:contextId', 'POST /api/super-tabs/:tabId/github-token',
-  'POST /api/super-tabs/:tabId/machines/:machineId', 'POST /api/super-tabs/:tabId/stopped',
+const NOT_AVAILABLE_EXEMPT_ROUTES: ReadonlyMap<string, string> = new Map([
+  // This retired endpoint never reads a Swarm: all callers must upgrade from full-state reads.
+  ['GET /api/super-tabs/:tabId', 'Always returns UPDATE_REQUIRED without looking up the Swarm.'],
 ])
 /** The one answer on those routes for anything the caller cannot reach. 404 with the code every client already
  *  reads as gone (Desktop and the phone: FORBIDDEN or NOT_FOUND; the CLI: 403 or 404). */
@@ -192,7 +172,7 @@ const readingsBody = z.object({ readings: z.array(z.object({ tabId: id, observat
   .refine(list => new Set(list.map(r => r.tabId)).size === list.length, 'Name each Swarm once.') }).strict()
 
 /** One reading's refusal in a batch, answered as the per-Swarm route answers it: a Swarm the caller cannot reach gets the one
- *  NOT_AVAILABLE answer (that route is in NOT_AVAILABLE_ROUTES), anything unexpected a 500 for that Swarm alone, logged. */
+ *  NOT_AVAILABLE answer (the default for per-Swarm routes), anything unexpected a 500 for that Swarm alone, logged. */
 export function readingError(tabId: string, error: unknown): { code: string; message: string; status: number } {
   if (error instanceof ZodError) return { code: 'VALIDATION_ERROR', message: error.issues[0]?.message ?? 'This reading is not valid.', status: 400 }
   if (error instanceof SuperTabError) {
@@ -208,7 +188,9 @@ async function respond(reply: FastifyReply, action: () => Promise<unknown>) {
   try { sendSuccess(reply, await action()) } catch (error) {
     if (error instanceof GitHubAppError) return sendError(reply, error.message, error.code, error.status, error.details)
     const { request } = reply
-    if (error instanceof SuperTabError && unreachable(error) && NOT_AVAILABLE_ROUTES.has(`${request.method} ${request.routeOptions.url}`)) {
+    if (error instanceof SuperTabError && unreachable(error)
+      && /^\/api\/super-tabs\/:tabId(?:\/|$)/.test(request.routeOptions.url ?? '')
+      && !NOT_AVAILABLE_EXEMPT_ROUTES.has(`${request.method} ${request.routeOptions.url}`)) {
       logger.warn('Swarm not available to the caller', { code: error.code, statusCode: error.status, reason: error.message,
         path: request.url, method: request.method })
       return sendError(reply, NOT_AVAILABLE.message, NOT_AVAILABLE.code, NOT_AVAILABLE.status)
