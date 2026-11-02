@@ -7,7 +7,6 @@ import '../core/models.dart' show sameMachineId;
 import '../state/app_state.dart';
 import 'controller.dart';
 import 'machines.dart' show contributeComputer;
-import 'model.dart';
 import 'personal_projects.dart' show PersonalProjects;
 
 /// A machine of the person's own not yet in their Personal Swarm: why, in one
