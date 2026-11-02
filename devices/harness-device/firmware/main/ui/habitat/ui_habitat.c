@@ -1393,11 +1393,12 @@ static void face_buddy_ring(ht_scene_t *f)
 {
     ht_ring_arc(f, 233 * 16, 233 * 16, 230 * 16, 3 * 16, 90, 180, color(mix_black(BUDDY_LILAC, 32)));
 }
-// The upper dot lit on the PM side, the lower one (lilac) on the Buddy side.
-static void face_buddy_dots(ht_scene_t *f, bool buddy)
+// The upper dot lit on the PM side, the lower one (lilac) on the Buddy side. [replied]: on the PM side, the Buddy has a word
+// not yet heard, so the lower dot takes its colour, at its own place and size.
+static void face_buddy_dots(ht_scene_t *f, bool buddy, bool replied)
 {
     face_buddy_disc(f, 442, 218, buddy ? 9 : 12, buddy ? 0x55565fu : 0xeaeaf0u);
-    face_buddy_disc(f, 442, 248, buddy ? 12 : 9, buddy ? BUDDY_LILAC : 0x55565fu);
+    face_buddy_disc(f, 442, 248, buddy ? 12 : 9, buddy || replied ? BUDDY_LILAC : 0x55565fu);
 }
 /*
  * Desktop's agent pattern (avatar_art.dart superTabAgentPattern; the daemon sends its 15 half bits and colour): mirrored on
@@ -1433,7 +1434,7 @@ static void render_buddy_empty(ht_scene_t *f, const ht_lead_t *l)
     focus_put(f, 63, 238, 340, &ht_lv_inter_28.base, color(0x8a8a99), BG, "No Buddy here yet", true);
     focus_put(f, 63, 280, 340, &ht_lv_inter_20.base, color(0x6b6d78), BG, "Add one in the Harness app.", true);
     face_buddy_ring(f);
-    face_buddy_dots(f, true);
+    face_buddy_dots(f, true, false);
     s.hits[s.hit_count++] = (hit_t){{83, 0, 300, 66}, A_AGENTS, 0, true};
 }
 /*
@@ -1519,13 +1520,12 @@ static void render_swarm_face(ht_scene_t *f)
         face_buddy_ring(f);
     }
     if (l->buddies) {
-        // The PM side's quiet badge for the Buddy's word: on the lower dot, and a line on the lower arc unless the bell or
-        // the face has it. Empty runs in their place otherwise, so the count never moves.
-        face_buddy_dots(f, buddy);
+        // The PM side's quiet sign of the Buddy's word: the lower dot's colour, and a line on the lower arc unless the bell or
+        // the face has it. Empty runs in their place, so the count never moves.
         bool heard = !buddy && swarm_heard_of(l->id) >= 0, lower = bell && !told;
+        face_buddy_dots(f, buddy, heard);
         for (int i = 0; i < f->count; i++) lower |= f->runs[i].arc == 2 && f->runs[i].text[0];
-        if (heard) { face_buddy_disc(f, 449, 241, 14, 0x000000u); face_buddy_disc(f, 449, 241, 10, BUDDY_LILAC); }
-        else { ht_box(f, 0, 0, 1, 1, 0, BG, BG); ht_box(f, 0, 0, 1, 1, 0, BG, BG); }
+        ht_box(f, 0, 0, 1, 1, 0, BG, BG); ht_box(f, 0, 0, 1, 1, 0, BG, BG);
         if (heard && !lower) ht_arc_status_face(f, color(BUDDY_LILAC), "Your Buddy replied", &ht_arc_inter_lower);
         else ht_text(f, 0, 0, 1, &ht_lv_inter_20.base, BG, BG, "");
     }

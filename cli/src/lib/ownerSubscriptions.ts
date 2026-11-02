@@ -15,15 +15,15 @@
  * ⚠️ Undocumented vendor contracts, see the constants below for what was verified and what is
  * assumed.
  */
-import { execFile, spawn } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { open, rename, stat, unlink, mkdir, writeFile } from 'node:fs/promises'
-import { homedir, userInfo } from 'node:os'
+import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { promisify } from 'node:util'
 import {
   asRecord,
-  CLAUDE_KEYCHAIN_SERVICE,
   claudeCredentialsPath,
+  claudeKeychainAccount,
+  claudeKeychainService,
   codexAuthPath,
   jwtClaims,
   parseJson,
@@ -32,8 +32,6 @@ import {
   stringField,
   type ClaudeCredentialSource,
 } from './agentCredentials.js'
-
-const execFileAsync = promisify(execFile)
 
 /**
  * Claude Code's OAuth refresh. **Verified** against the Claude Code 2.1.283 binary on the author's
@@ -149,7 +147,7 @@ export function createOwnerSubscriptions(deps: OwnerSubscriptionDeps = {}): Owne
     }
     const root = JSON.stringify({ ...stored.root, claudeAiOauth: oauth })
     if (stored.source === 'keychain') {
-      const account = (await keychain.account()) ?? userInfo().username
+      const account = (await keychain.account()) ?? claudeKeychainAccount()
       await keychain.write(account, root)
     } else {
       await writeKeepingMode(claudeCredentialsPath(home), root)
@@ -305,16 +303,8 @@ async function acquireLock(path: string): Promise<() => Promise<void>> {
  */
 export function securityKeychain(): KeychainWriter {
   return {
-    async account() {
-      try {
-        // Attributes only — no `-w`, so the secret is not printed.
-        const { stdout } = await execFileAsync('security', ['find-generic-password', '-s', CLAUDE_KEYCHAIN_SERVICE], { timeout: 5_000 })
-        const match = /"acct"<blob>="([^"]*)"/.exec(stdout)
-        return match?.[1] || null
-      } catch {
-        return null
-      }
-    },
+    // The item the read asks for (agentCredentials.ts readClaudeKeychain), so the write replaces that one and no other.
+    async account() { return claudeKeychainAccount() },
     write(account, secret) {
       return new Promise((resolve, reject) => {
         const child = spawn('security', ['-i'], { stdio: ['pipe', 'ignore', 'ignore'] })
@@ -324,7 +314,7 @@ export function securityKeychain(): KeychainWriter {
         child.on('close', (code) => code === 0
           ? resolve()
           : reject(new OwnerSubscriptionError('Could not save the refreshed sign-in to the Keychain.')))
-        child.stdin.end(`add-generic-password -U -s ${quoted(CLAUDE_KEYCHAIN_SERVICE)} -a ${quoted(account)} -X ${hex}\n`)
+        child.stdin.end(`add-generic-password -U -s ${quoted(claudeKeychainService())} -a ${quoted(account)} -X ${hex}\n`)
       })
     },
   }
