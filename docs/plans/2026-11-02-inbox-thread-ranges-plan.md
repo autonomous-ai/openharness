@@ -15,9 +15,10 @@
 | | Union of 100 (today) | One hinted `$or` |
 |---|---|---|
 | Plans rejected | 100, one per range | 0 |
-| Planning time in explain | about 100-200 ms | 3 ms |
-| Execution time in explain | 118 ms | 20 ms |
-| Rows answered | 1706 | 1706, the same rows |
+| Planning time in explain | 200 ms (Ken's slowest: 201 ms) | 3 ms |
+| Execution time in explain | 112 ms | 30 ms |
+| Median time on the primary, less the round trip | about 265 ms | about 55 ms |
+| Rows read, rows answered | 1706, 175 | 1706, 175, the same rows |
 
 A hint on the aggregate reaches only its first pipeline, never a `$unionWith` branch, so the union can't be hinted. Naming `thread` in the `$sort` changes nothing: the planner drops a field the filter fixes. The largest thread in production has 69 rows, so the limit of 100 per thread does not bind today.
 

@@ -25,7 +25,7 @@ import { stableId, type Author, type Conversation, type SuperTabState } from '..
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
 import { PROFILE_STAGES, profileEntry, type ProfileEntry } from './bench/profile.js'
-import { profiled } from './plans.test-support.js'
+import { filterOf, profiled } from './plans.test-support.js'
 import { listNamedIndexes } from '../src/superTabs/parts/indexed.js'
 import { SCAN_FIELDS } from '../src/superTabs/read/inbox.js'
 import type { Prisma } from '@prisma/client'
@@ -718,9 +718,10 @@ describe('what the inbox costs the database', () => {
       reads.map(r => `  ${r.ns.split('.').at(-1)} ${r.op} ${r.planSummary ?? ''} docs=${r.docsExamined ?? 0}`).join('\n'))
     // A fixed few reads whatever the chat count: the latest rows, the unread rows, their roots, the look-back for threads
     // whose newer rows do not show the person (the read marks are another collection, and the person's thread marks of the
-    // scanned chats one more indexed read). Nothing new to check for delivered copies here, so no read for them.
-    expect(messageReads.length).toBeLessThanOrEqual(4)
-    expect(reads.length).toBeLessThanOrEqual(7)
+    // scanned chats one more indexed read). Nothing new to check for delivered copies here, so no read for them. This scene's
+    // long threads pass the look-back's cap, so it reads a second time by union (inbox.ts newestInThreads, task #2148).
+    expect(messageReads.length).toBeLessThanOrEqual(5)
+    expect(reads.length).toBeLessThanOrEqual(8)
     expect(rows.filter(r => r.ns.endsWith('.SuperTabThreadMark') && r.op !== 'getmore')).toHaveLength(1)
     // Bounded by the caps, never by history: the long chat's rows are read only to its newest UNREAD_SCAN + 1, and each of its
     // threads the person is not in only to MEMBER_SCAN rows before the mark (not its 301).
@@ -784,7 +785,8 @@ describe('reading many thread ranges at once', () => {
   it('answers nothing for no ranges, and a range with no rows is simply absent', async () => {
     const f = await threads()
     expect(await newestInThreads(db, f.tabId, [], 5)).toEqual([])
-    expect(await newestInThreads(db, f.tabId, [{ conversationId: f.ranges({ $gt: 0 })[0]!.conversationId, thread: f.emptyRoot, sequence: { $gt: 0 } }], 5)).toEqual([])
+    const empty = [{ conversationId: f.ranges({ $gt: 0 })[0]!.conversationId, thread: f.emptyRoot, sequence: { $gt: f.top } }]
+    expect(await newestInThreads(db, f.tabId, empty, 5)).toEqual([])
   }, 60_000)
 
   it('reads a batch in one operation hinted to the thread index, with no union to plan', async () => {
@@ -795,8 +797,9 @@ describe('reading many thread ranges at once', () => {
     const reads = entries.filter(e => e.ns.endsWith('.SuperTabMessage') && e.op !== 'getmore')
     expect(reads).toHaveLength(1)
     expect(reads[0]!.command?.hint).toEqual({ tabId: 1, conversationId: 1, thread: 1, sequence: 1 })
-    expect(JSON.stringify(reads[0]!.command)).not.toContain('$unionWith')
-    expect(reads[0]!.planSummary).toContain('tabId_1_conversationId_1_thread_1_sequence_1')
+    // Every range is in its first filter (the profile keeps only that): nothing is left for a union to plan.
+    expect((filterOf(reads[0]!) as { $or: unknown[] }).$or).toHaveLength(5)
+    expect(reads[0]!.planSummary).toContain('thread: 1')
   }, 60_000)
 
   it('falls back to each thread\'s own limit when a batch has more rows than its cap, and reads no thread past it there', async () => {
@@ -804,7 +807,8 @@ describe('reading many thread ranges at once', () => {
     await listNamedIndexes(db)
     const entries = await profiled(db, () => newestInThreads(db, f.tabId, f.ranges({ $lte: f.top }), 1))
     const reads = entries.filter(e => e.ns.endsWith('.SuperTabMessage') && e.op !== 'getmore')
-    expect(reads.length).toBe(2)
-    expect(JSON.stringify(reads[1]!.command)).toContain('$unionWith')
+    expect(reads).toHaveLength(2)
+    expect(reads.filter(e => e.command?.hint)).toHaveLength(1)
+    expect(filterOf(reads.find(e => !e.command?.hint)!)).not.toHaveProperty('$or')
   }, 60_000)
 })
