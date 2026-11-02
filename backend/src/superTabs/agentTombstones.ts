@@ -59,3 +59,11 @@ export async function purgeAgentTombstones(db: PrismaClient, now: number): Promi
   }
   return { purged, kept }
 }
+
+/** Tombstones compacted for good before this purge (purge time null) get one now, so the next sweep purges them. Run once
+ *  by the worker at startup: one pass over the agents (about 1,300 in prod, 2026-11-02), as no index leads with `deleted`. */
+export async function requeueCompactedAgents(db: PrismaClient, now: number): Promise<number> {
+  const reply = await db.$runCommandRaw({ update: 'SwarmAgent', updates: [{ q: { deleted: true, purgeAt: null }, u: { $set: { purgeAt: at(now) } },
+    multi: true }] }) as unknown as { nModified?: number }
+  return Number(reply.nModified ?? 0)
+}

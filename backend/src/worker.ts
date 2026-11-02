@@ -18,6 +18,7 @@ import { startQueryStats } from './lib/queryStats.js'
 import { startRetryStats } from './superTabs/retryStats.js'
 import { releaseSchema } from './lib/db/schemaRelease.js'
 import { startSwarmSweeps } from './superTabs/sweeps.js'
+import { requeueCompactedAgents } from './superTabs/agentTombstones.js'
 import { startLegacyDrop } from './superTabs/migration/dropLegacyJob.js'
 import { startDeliverySettle } from './superTabs/deliverySettle.js'
 import { startDeliveryCompaction } from './superTabs/deliveryCompaction.js'
@@ -117,6 +118,9 @@ async function start(): Promise<void> {
   // Decisions still waiting in work that was over before #2454 closed them where work ends: they counted toward the open
   // limit and came back on a reopen (store.ts withdrawEndedDecisions). Remove in the release after the one that runs it.
   logger.info('[swarm-decisions] closed waiting decisions of finished work', { closed: await swarms.withdrawEndedDecisions() })
+  // Agent tombstones compacted for good before #2150 get a purge time, so the sweeps purge them (superTabs/agentTombstones.ts).
+  // Remove in the release after the one that runs it.
+  logger.info('[swarm-sweeps] queued compacted agent tombstones for purge', { queued: await requeueCompactedAgents(prisma, Date.now()) })
   stopSweeps = startSwarmSweeps(prisma, undefined, () => swarms.workspaces.finishRemovals())
   // The dead old state of migrated Swarms goes by itself, a few at a time (superTabs/migration/dropLegacyJob.ts).
   stopLegacyDrop = startLegacyDrop(prisma)
