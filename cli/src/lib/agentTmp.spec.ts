@@ -99,61 +99,74 @@ describe('the folder itself', () => {
 describe('what deletes it', () => {
   const DAY = 24 * 60 * 60_000
   const NOW = Date.now()
-  const old = (path: string) => { const at = new Date(NOW - 8 * DAY); utimesSync(path, at, at) }
+  // ctime cannot be set, so an idle file is one the sweep sees from 8 days on, and a recent one has its mtime set to that day.
+  const LATER = NOW + 8 * DAY
+  const recentThen = (path: string) => { const at = new Date(LATER); utimesSync(path, at, at) }
 
   it('deletes what nothing has changed in for 7 days, and keeps anything with a recent file inside', async () => {
     const folder = scratch()
-    writeFileSync(join(folder, 'stale.log'), 'x'); old(join(folder, 'stale.log'))
+    writeFileSync(join(folder, 'stale.log'), 'x')
     mkdirSync(join(folder, 'stale-dir/inner'), { recursive: true })
-    writeFileSync(join(folder, 'stale-dir/inner/a'), 'x'); old(join(folder, 'stale-dir/inner/a')); old(join(folder, 'stale-dir/inner')); old(join(folder, 'stale-dir'))
-    writeFileSync(join(folder, 'fresh.log'), 'x')
+    writeFileSync(join(folder, 'stale-dir/inner/a'), 'x')
+    writeFileSync(join(folder, 'fresh.log'), 'x'); recentThen(join(folder, 'fresh.log'))
     mkdirSync(join(folder, 'in-use/inner'), { recursive: true })
-    writeFileSync(join(folder, 'in-use/inner/recent'), 'x'); old(join(folder, 'in-use/inner')); old(join(folder, 'in-use'))
-    expect(await sweepAgentTmp(folder, NOW)).toBe(2)
+    writeFileSync(join(folder, 'in-use/inner/recent'), 'x'); recentThen(join(folder, 'in-use/inner/recent'))
+    expect(await sweepAgentTmp(folder, LATER)).toBe(2)
     expect(existsSync(join(folder, 'stale.log'))).toBe(false)
     expect(existsSync(join(folder, 'stale-dir'))).toBe(false)
     expect(existsSync(join(folder, 'fresh.log'))).toBe(true)
     expect(existsSync(join(folder, 'in-use/inner/recent'))).toBe(true)
   })
 
+  it('keeps what was just unpacked with an old mtime, as tar, cp -p and rsync -t leave it', async () => {
+    const folder = scratch()
+    mkdirSync(join(folder, 'tool'))
+    writeFileSync(join(folder, 'tool/bin'), 'x')
+    writeFileSync(join(folder, 'loose'), 'x')
+    const long = new Date(NOW - 400 * DAY)
+    for (const path of ['tool/bin', 'tool', 'loose']) utimesSync(join(folder, path), long, long)
+    expect(await sweepAgentTmp(folder, NOW)).toBe(0)
+    expect(existsSync(join(folder, 'tool/bin'))).toBe(true)
+    expect(existsSync(join(folder, 'loose'))).toBe(true)
+  })
+
   it('deletes a link, never what it points at', async () => {
     const folder = scratch(), target = scratch()
     writeFileSync(join(target, 'kept'), 'x')
     symlinkSync(target, join(folder, 'link'))
-    const at = new Date(NOW - 8 * DAY)
-    const { lutimesSync } = await import('node:fs')
-    lutimesSync(join(folder, 'link'), at, at)
-    expect(await sweepAgentTmp(folder, NOW)).toBe(1)
+    expect(await sweepAgentTmp(folder, LATER)).toBe(1)
+    expect(existsSync(join(folder, 'link'))).toBe(false)
     expect(existsSync(join(target, 'kept'))).toBe(true)
   })
 
   it('deletes nothing through a link in the folder\'s place', async () => {
     const target = scratch(), folder = join(scratch(), 'agent-tmp')
-    writeFileSync(join(target, 'kept'), 'x'); old(join(target, 'kept'))
+    writeFileSync(join(target, 'kept'), 'x')
     symlinkSync(target, folder)
-    expect(await sweepAgentTmp(folder, NOW)).toBe(0)
+    expect(await sweepAgentTmp(folder, LATER)).toBe(0)
     expect(existsSync(join(target, 'kept'))).toBe(true)
   })
 
   it('still sweeps once the Team account is gone', async () => {
     const data = scratch(), folder = agentTmpFolder(data)
     mkdirSync(folder, { mode: 0o700 })
-    writeFileSync(join(folder, 'stale'), 'x'); old(join(folder, 'stale'))
-    expect(agentTmpEnv('claude', undefined, deps(data, { config: () => null, now: () => NOW }))).toEqual({})
+    writeFileSync(join(folder, 'stale'), 'x')
+    expect(agentTmpEnv('claude', undefined, deps(data, { config: () => null, now: () => LATER }))).toEqual({})
     await vi.waitFor(() => expect(existsSync(join(folder, 'stale'))).toBe(false))
   })
 
   it('sweeps from a launch at most once a day', async () => {
     const data = scratch(), folder = agentTmpFolder(data)
-    let now = NOW
+    let now = LATER - DAY - 1
     const d = deps(data, { now: () => now })
     agentTmpEnv('claude', undefined, d)
-    await vi.waitFor(() => expect(existsSync(folder)).toBe(true))
-    writeFileSync(join(folder, 'stale'), 'x'); old(join(folder, 'stale'))
+    writeFileSync(join(folder, 'stale'), 'x')
+    // The day's sweep already ran: this launch starts none, though the file's 7 days are nearly up.
+    now = LATER - DAY / 2
     agentTmpEnv('claude', undefined, d)
     await new Promise(resolve => setTimeout(resolve, 50))
     expect(existsSync(join(folder, 'stale'))).toBe(true)
-    now += DAY + 1
+    now = LATER
     agentTmpEnv('claude', undefined, d)
     await vi.waitFor(() => expect(existsSync(join(folder, 'stale'))).toBe(false))
   })

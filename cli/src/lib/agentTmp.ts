@@ -59,11 +59,13 @@ export function prepareAgentTmp(folder: string, uid: number | undefined = proces
   } catch { return false }
 }
 
-/** Whether anything at [path] changed since [cutoff]. Stops at the first that did. What cannot be read counts as changed. */
+/** Whether anything at [path] changed since [cutoff]. Stops at the first that did. What cannot be read counts as changed. The
+ *  newer of the two times: `tar`, `cp -p` and `rsync -t` keep an old mtime, so a tool unpacked a minute ago looked 7 days idle
+ *  by mtime alone (review of #2546). */
 async function changedSince(path: string, cutoff: number): Promise<boolean> {
   try {
     const stat = await lstat(path)
-    if (stat.mtimeMs >= cutoff) return true
+    if (Math.max(stat.mtimeMs, stat.ctimeMs) >= cutoff) return true
     if (!stat.isDirectory()) return false
     for (const name of await readdir(path)) if (await changedSince(join(path, name), cutoff)) return true
     return false

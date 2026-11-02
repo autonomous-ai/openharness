@@ -12,7 +12,7 @@ cannot hang the owner's processes or write to the owner's terminal; `team remove
   a Team account: nobody else is on that one, and it should not change.
 - **Where.** `<data folder>/agent-tmp`, mode 0700. Inside the data folder because a wide Buddy's guard already closes that
   folder, so it cannot read other agents' temporary files (`lib/buddyGuard.ts`).
-- **Buddy keeps the system's folder.** The same guard would refuse it writes in the new one.
+- **Buddy keeps the system's folder.** The same guard would refuse it writes in the new one, and that folder is `/tmp` where the daemon has no `TMPDIR`. This gap stays open: closing it means changing the guard, which is its own task.
 - **How it reaches an agent.** The pane's environment, in the two places every launch passes: `core/agents/create.ts` and
   `lib/launchOverrides.ts` (relaunch, resume, fork, swap). The launch's own variables win over it.
 - **Read paths.** `lib/pathContainment.ts` `tempRoots` adds the folder, or an agent's file there could no longer be previewed.
@@ -25,7 +25,7 @@ cannot hang the owner's processes or write to the owner's terminal; `team remove
 
 ## Design
 
-- **Growth:** at most once a day, on an agent's launch, a top-level entry with nothing changed in 7 days is deleted; a link
+- **Growth:** at most once a day, on an agent's launch, a top-level entry with nothing changed in 7 days (by the newer of mtime and ctime) is deleted; a link
   is deleted, never followed. `/tmp` itself is never touched.
 - **Concurrency:** one folder per daemon, created idempotently. A sweep races only with files older than 7 days.
 - **Read cost:** one small root-owned config read per launch; the sweep stops walking a tree at its first recent file.
@@ -47,4 +47,4 @@ cannot hang the owner's processes or write to the owner's terminal; `team remove
    computer's own machine, no machine id here. Drop the id reading from the three removal scripts.
 4. `lib/agentTmp.ts`: the folder, who gets it and the sweep. Tests: real modes, a link in its place, another owner, the sweep.
 5. Wire it into `create.ts`, `launchOverrides.ts`, `tempRoots`, and `team status` (with `--json`).
-6. Tell the agents: one line in the skills' "Shared machines and secrets"; the message-file text names `$TMPDIR`.
+6. Tell the agents: one line in the skills' "Shared machines and secrets", with `mktemp -d`, which works whether or not `TMPDIR` is set; the message-file error names the actual folder.
