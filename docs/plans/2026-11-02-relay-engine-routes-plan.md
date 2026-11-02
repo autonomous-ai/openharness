@@ -41,7 +41,7 @@ Not here: a per-launch token (M2's task; `mintToken` already gives each launch i
 - failure: a refused call answers 404/405 with a relay error body and an owner-log line.
 - platforms: macOS and Linux, wherever the daemon runs the relay.
 
-## Tests (each fails on main)
+## Tests (each fails on main, except the first, which keeps the engines working)
 
 - An engine path passes for each listed route.
 - An account path (`/claude/v1/organizations/...`, `/codex/accounts/...`, `/claude/api/oauth/...`) is 404 and never reaches
