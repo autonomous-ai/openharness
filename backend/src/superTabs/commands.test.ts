@@ -3,7 +3,8 @@ import { storeOldLeads } from './leads.test-support.js'
 import { applyCommand, commandSchema, LOOP_NOTICE_AT, PAIR_CHAIN_LIMIT, swarmGridName, withoutCredentials, type Command, type CommandContext } from './commands.js'
 import { CREDENTIAL_MARKER, type CredentialKind } from './credentials.js'
 import { sweepLiveness } from './liveness.js'
-import { hostLocalGrid, machineSlots, removalPreview, swarmGridRow } from './machines.js'
+import { SWITCH_UNCLAIMED_MS } from './tidy.js'
+import { defaultProfileId, hostLocalGrid, machineSlots, removalPreview, swarmGridRow } from './machines.js'
 import { activeWork, agentOnly, agentRole, createSuperTab, visibleState, type Actor, type AgentConfiguration } from './model.js'
 import type { RouteDecision } from './routeRecord.js'
 import { startFinished } from './parts/write.js'
@@ -4558,5 +4559,276 @@ describe('the state a command works on', () => {
     expect(() => applyCommand({ ...richSwarm().state, stray: new Map() } as never, richOwner,
       { type: 'message.send', conversationId: 'lead', text: 'hi', replyTo: null, recipientIds: [] }, { now: NOW, operationId: 'op' }))
       .toThrow(/cannot copy a Map at stray/)
+  })
+})
+
+describe('lead.switch', () => {
+  const WORK = 'a'.repeat(16)
+  const setup = (capabilities: string[] | undefined = ['leadSwitch'], contributorId = 'owner') => {
+    const f = fixture()
+    f.invite()
+    const pm = f.add('pm', contributorId, 'lead', true)
+    const team = { sessionKind: 'team' as const, privacy: { mode: 'dedicated' as const, seenAt: 1000 } }
+    f.state.machines = [{ machineId: 'host', name: 'Studio', contributorId, membershipGeneration: f.state.people.find(p => p.id === contributorId)!.generation,
+      generation: 'g1', cwd: '/repo', engines: ['claude', 'codex'], maxAgents: 2, paused: false, observation: { generation: 'g1', receivedAt: 1000, ...team,
+        ...(capabilities ? { capabilities } : {}),
+        profiles: [{ engine: 'codex', id: WORK, label: 'Work', leftPercent: 80, resetsAt: null }],
+        resources: { cpuPercent: null, memoryTotalBytes: null, memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null,
+          deviceType: null, chip: null, os: null, gpuPercent: null }, tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [] } }]
+    const agent = () => f.state.agents.find(a => a.id === pm)!
+    const as: Actor = { kind: 'agent', agentId: pm, machineOwnerId: 'host-owner' }
+    const sid = () => agent().switchRequest!.id
+    const request = { type: 'lead.switch', projectId: 'lead', engine: 'codex', profileId: WORK } as const
+    return { f, pm, agent, as, request, sid }
+  }
+  const code = (run: () => unknown) => { try { run() } catch (error) { return (error as { code?: string }).code } }
+
+  it('lets the project owner and the PM machine\'s owner switch, and refuses a member', () => {
+    const mine = setup()
+    mine.f.run(mine.request)
+    expect(mine.agent().switchRequest).toMatchObject({ engine: 'codex', profileId: WORK, requestedBy: 'owner' })
+    const theirs = setup(['leadSwitch'], 'peer')
+    theirs.agent().machineOwnerId = 'peer'
+    theirs.f.run(theirs.request, peer)
+    expect(theirs.agent().switchRequest).toMatchObject({ requestedBy: 'peer' })
+    const other = setup()
+    expect(code(() => other.f.run(other.request, peer))).toBe('PROJECT_OWNER_REQUIRED')
+  })
+
+  it('refuses NO_LEAD, MACHINE_OFFLINE, HOST_OUTDATED, LEAD_SWITCHING, PROFILE_UNKNOWN and ENGINE_NOT_OFFERED', () => {
+    const none = fixture()
+    expect(code(() => none.run({ type: 'lead.switch', projectId: 'lead', engine: 'codex', profileId: 'default' }))).toBe('NO_LEAD')
+    const offline = setup()
+    expect(code(() => offline.f.run(offline.request, owner, { now: 1000 + 60_000 }))).toBe('MACHINE_OFFLINE')
+    const old = setup([])
+    expect(code(() => old.f.run(old.request))).toBe('HOST_OUTDATED')
+    const twice = setup()
+    twice.f.run(twice.request)
+    expect(code(() => twice.f.run({ ...twice.request, profileId: 'default' }))).toBe('LEAD_SWITCHING')
+    const unknown = setup()
+    expect(code(() => unknown.f.run({ ...unknown.request, profileId: 'b'.repeat(16) }))).toBe('PROFILE_UNKNOWN')
+    expect(code(() => unknown.f.run({ ...unknown.request, engine: 'claude', profileId: WORK }))).toBe('PROFILE_UNKNOWN')
+    unknown.f.run({ ...unknown.request, profileId: 'default' })
+    const missing = setup()
+    missing.f.state.machines![0]!.engines = ['claude']
+    expect(code(() => missing.f.run(missing.request))).toBe('ENGINE_NOT_OFFERED')
+  })
+
+  it('works while the Swarm is paused', () => {
+    const s = setup()
+    s.f.state.paused = true
+    s.f.run(s.request)
+    expect(s.agent().switchRequest).toBeDefined()
+  })
+
+  it('lets only the PM itself claim, with a 15 minute lease', () => {
+    const s = setup()
+    s.f.run(s.request)
+    const claim = { type: 'agent.switchClaim', agentId: s.pm, switchId: s.sid() } as const
+    expect(code(() => s.f.run(claim))).toBe('STALE_SWITCH')
+    expect(code(() => s.f.run({ ...claim, switchId: 'other' }, s.as))).toBe('STALE_SWITCH')
+    const claimed = s.f.run(claim, s.as)
+    expect(claimed.result).toMatchObject({ expiresAt: 1000 + 15 * 60_000 })
+    expect(s.agent().switchRequest!.claimedUntil).toBe(new Date(1000 + 15 * 60_000).toISOString())
+  })
+
+  it('writes the result in the PM chat and clears the request', () => {
+    const s = setup()
+    s.f.run(s.request)
+    const done = s.f.run({ type: 'agent.switchResult', agentId: s.pm, switchId: s.sid(), ok: true }, s.as)
+    expect(done.messages).toMatchObject([{ conversationId: 'lead', recipients: [], text: 'PM moved to Codex · Work.' }])
+    expect(s.agent().switchRequest).toBeUndefined()
+    expect(s.agent().profileId).toBe(WORK)
+    const plain = setup()
+    plain.f.run({ ...plain.request, profileId: 'default' })
+    expect(plain.f.run({ type: 'agent.switchResult', agentId: plain.pm, switchId: plain.sid(), ok: true }, plain.as).messages[0]!.text).toBe('PM moved to Codex.')
+    const bad = setup()
+    bad.f.run(bad.request)
+    expect(code(() => bad.f.run({ type: 'agent.switchResult', agentId: bad.pm, switchId: 'nope', ok: true }, bad.as))).toBe('STALE_SWITCH')
+    const failed = bad.f.run({ type: 'agent.switchResult', agentId: bad.pm, switchId: bad.sid(), ok: false, error: 'no sign-in' }, bad.as)
+    expect(failed.messages[0]!.text).toBe('Couldn\'t switch the PM: no sign-in. It is back on Codex.')
+    expect(bad.agent().switchRequest).toBeUndefined()
+    expect(bad.agent().profileId).toBeUndefined()
+  })
+
+  it('refuses a borrower of a lent machine, and lets the machine\'s lender and a Team account\'s owner switch', () => {
+    // Tony (peer) borrowed Ken's Mac: the pool's contributor is Tony, the machine's owner is Ken.
+    const lent = setup(['leadSwitch'], 'peer')
+    lent.agent().machineOwnerId = 'ken'
+    expect(code(() => lent.f.run(lent.request, peer))).toBe('PROJECT_OWNER_REQUIRED')
+    const lender = setup(['leadSwitch'], 'peer')
+    lender.agent().machineOwnerId = 'peer'
+    lender.f.run(lender.request, peer)
+    expect(lender.agent().switchRequest).toMatchObject({ requestedBy: 'peer' })
+    const team = setup(['leadSwitch'], 'peer')
+    team.f.state.machines![0]!.observation!.sessionKind = 'team'
+    team.agent().machineOwnerId = 'peer'
+    team.f.run(team.request, peer)
+    expect(team.agent().switchRequest).toBeDefined()
+  })
+
+  it('tells the machine owner, in their Buddy chat, when another person moves the PM onto one of their other accounts', () => {
+    const lent = () => { const s = setup(['leadSwitch'], 'peer'); s.agent().machineOwnerId = 'peer'; return s }
+    const done = (s: ReturnType<typeof setup>) => s.f.run({ type: 'agent.switchResult', agentId: s.pm, switchId: s.sid(), ok: true }, { ...s.as, machineOwnerId: 'peer' })
+    const s = lent()
+    s.f.run(s.request)
+    const told = done(s).messages.filter(m => (m.source as { kind?: string } | undefined)?.kind === 'pm-switch-notice')
+    expect(told).toEqual([expect.objectContaining({ conversationId: s.f.state.conversations.find(c => c.kind === 'swarm-buddy')!.id,
+      text: 'owner moved the PM of Pilot on Studio to your Codex account "Work".', source: { kind: 'pm-switch-notice', machineId: 'host' } })])
+    const def = lent()
+    def.f.run({ ...def.request, profileId: 'default' })
+    expect(done(def).messages).toHaveLength(1)
+    const own = lent()
+    own.f.run(own.request, peer)
+    expect(done(own).messages).toHaveLength(1)
+  })
+
+  it('serves a machine\'s accounts only to its owner and the owners of projects whose PM runs there', () => {
+    const s = setup(['leadSwitch'], 'peer')
+    s.agent().machineOwnerId = 'peer'
+    s.f.state.people.push({ id: 'third', email: 'third@example.com', role: 'member', generation: 'g' } as never)
+    const read = (actor: Actor) => visibleState(s.f.state, actor, 1000).machines?.[0]?.observation?.profiles
+    expect(read(owner)).toHaveLength(1)
+    expect(read(peer)).toHaveLength(1)
+    expect(read({ kind: 'person', userId: 'third', email: 'third@example.com' })).toBeUndefined()
+    expect(read({ ...s.as, machineOwnerId: 'peer' })).toBeUndefined()
+  })
+
+  it('drops a request nobody claimed on any machine\'s report, and refuses a late claim', () => {
+    const s = setup()
+    s.f.run(s.request)
+    const claim = { type: 'agent.switchClaim', agentId: s.pm, switchId: s.sid() } as const
+    expect(code(() => s.f.run(claim, s.as, { now: 1000 + SWITCH_UNCLAIMED_MS }))).toBe('STALE_SWITCH')
+    const swept = sweepLiveness(s.f.state, 1000 + SWITCH_UNCLAIMED_MS)
+    expect(swept).toMatchObject([{ text: "Couldn't switch the PM: its machine did not answer." }])
+    expect(s.agent().switchRequest).toBeUndefined()
+  })
+
+  it('does not extend a claim\'s lease by claiming again', () => {
+    const s = setup()
+    s.f.run(s.request)
+    const claim = { type: 'agent.switchClaim', agentId: s.pm, switchId: s.sid() } as const
+    s.f.run(claim, s.as)
+    const again = s.f.run(claim, s.as, { now: 1000 + 10 * 60_000 })
+    expect(again.result).toMatchObject({ expiresAt: 1000 + 15 * 60_000 })
+    expect(s.agent().switchRequest!.claimedUntil).toBe(new Date(1000 + 15 * 60_000).toISOString())
+  })
+
+  it('agent.rebind that keeps the account leaves the limit mark, one that moves it clears it', () => {
+    const s = setup()
+    s.agent().limitedUntil = new Date(5_000_000).toISOString()
+    s.agent().alerting = ['limit', 'prompt']
+    s.f.run(s.request)
+    const rebind = (patch: object, from: string, to: string) => s.f.run({ type: 'agent.rebind', agentId: s.pm, machineId: 'host', projectId: 'lead',
+      previousHarnessId: from, harnessId: to, configuration: config, ...patch } as never, s.as)
+    // Same engine (codex), no profile: the limited account stays, though a request for another one was pending.
+    rebind({}, 'pm', 'pm-2')
+    expect(s.agent()).toMatchObject({ alerting: ['limit', 'prompt'], limitedUntil: new Date(5_000_000).toISOString() })
+    expect(s.agent().switchRequest).toBeUndefined()
+    // Same engine, another account reported: the mark goes.
+    rebind({ profileId: WORK }, 'pm-2', 'pm-3')
+    expect(s.agent()).toMatchObject({ alerting: ['prompt'], limitedUntil: null, profileId: WORK })
+    // Another engine without a profile: back to the default account.
+    rebind({ configuration: { ...config, engine: 'claude' } }, 'pm-3', 'pm-4')
+    expect(s.agent().profileId).toBeUndefined()
+    // Same engine, no profile: kept.
+    s.agent().profileId = WORK
+    rebind({ configuration: { ...config, engine: 'claude' } }, 'pm-4', 'pm-5')
+    expect(s.agent().profileId).toBe(WORK)
+  })
+
+  it('names the default account by one id: a rebind that keeps it never clears the limit', () => {
+    const s = setup()
+    const DEFAULT = defaultProfileId('host', 'codex')
+    s.agent().limitedUntil = new Date(5_000_000).toISOString()
+    s.agent().alerting = ['limit']
+    const rebind = (profileId: string, from: string, to: string) => s.f.run({ type: 'agent.rebind', agentId: s.pm, machineId: 'host', projectId: 'lead',
+      previousHarnessId: from, harnessId: to, configuration: config, profileId } as never, s.as)
+    rebind(DEFAULT, 'pm', 'pm-2')
+    expect(s.agent()).toMatchObject({ alerting: ['limit'], limitedUntil: new Date(5_000_000).toISOString() })
+    expect(s.agent().profileId).toBeUndefined()
+    rebind('default', 'pm-2', 'pm-3')
+    expect(s.agent().limitedUntil).toBe(new Date(5_000_000).toISOString())
+    // A legacy stored hex default counts as the default too.
+    s.agent().profileId = DEFAULT
+    rebind('default', 'pm-3', 'pm-4')
+    expect(s.agent().limitedUntil).toBe(new Date(5_000_000).toISOString())
+    expect(s.agent().profileId).toBeUndefined()
+    // The Claude default is not the Codex default.
+    rebind(defaultProfileId('host', 'claude'), 'pm-4', 'pm-5')
+    expect(s.agent()).toMatchObject({ limitedUntil: null, profileId: defaultProfileId('host', 'claude') })
+  })
+
+  it('stores a literal default switch as the default account\'s id, and reports it with no label', () => {
+    const s = setup()
+    s.f.run({ ...s.request, profileId: 'default' })
+    expect(s.agent().switchRequest!.profileId).toBe(defaultProfileId('host', 'codex'))
+    const done = s.f.run({ type: 'agent.switchResult', agentId: s.pm, switchId: s.sid(), ok: true }, s.as)
+    expect(done.messages[0]!.text).toBe('PM moved to Codex.')
+    expect(s.agent().profileId).toBeUndefined()
+    const hex = setup()
+    hex.f.run({ ...hex.request, profileId: defaultProfileId('host', 'codex') })
+    expect(hex.agent().switchRequest!.profileId).toBe(defaultProfileId('host', 'codex'))
+    const other = setup()
+    expect(code(() => other.f.run({ ...other.request, profileId: defaultProfileId('host', 'claude') }))).toBe('PROFILE_UNKNOWN')
+  })
+
+  it('writes one line per switch: a late or repeated result writes nothing', () => {
+    const s = setup()
+    s.f.run(s.request)
+    const switchId = s.sid()
+    const result = { type: 'agent.switchResult', agentId: s.pm, switchId, ok: true } as const
+    // The sweep gave up on it first: the host's late result is stale.
+    const late = setup()
+    late.f.run(late.request)
+    const lateId = late.sid()
+    sweepLiveness(late.f.state, 1000 + SWITCH_UNCLAIMED_MS)
+    expect(code(() => late.f.run({ ...result, switchId: lateId }, late.as))).toBe('STALE_SWITCH')
+    // The rebind landed it: the result still tells the chat once, and a retry with a new operation id does not.
+    s.f.run({ type: 'agent.rebind', agentId: s.pm, machineId: 'host', projectId: 'lead', previousHarnessId: 'pm', harnessId: 'pm-2',
+      configuration: { ...config, engine: 'claude' } }, s.as)
+    expect(s.f.run(result, s.as).messages[0]!.text).toBe('PM moved to Claude.')
+    expect(code(() => s.f.run(result, s.as))).toBe('STALE_SWITCH')
+    // A made-up id with nothing pending is refused too.
+    expect(code(() => s.f.run({ ...result, switchId: 'made-up' }, s.as))).toBe('STALE_SWITCH')
+  })
+
+  it('tells the machine owner after a real switch, where the rebind lands before the result', () => {
+    const s = setup(['leadSwitch'], 'peer')
+    s.agent().machineOwnerId = 'peer'
+    s.f.run(s.request)
+    const switchId = s.sid(), requester = s.agent().switchRequest!.requestedBy
+    s.f.run({ type: 'agent.rebind', agentId: s.pm, machineId: 'host', projectId: 'lead', previousHarnessId: 'pm', harnessId: 'pm-2', profileId: WORK,
+      configuration: { ...config, engine: 'codex' } }, { ...s.as, machineOwnerId: 'peer' })
+    expect(s.agent().switchRequest).toBeUndefined()
+    expect(s.agent().switchLanded).toEqual({ id: switchId, requestedBy: requester })
+    const done = s.f.run({ type: 'agent.switchResult', agentId: s.pm, switchId, ok: true }, { ...s.as, machineOwnerId: 'peer' })
+    expect(done.messages.filter(m => (m.source as { kind?: string } | undefined)?.kind === 'pm-switch-notice')).toEqual([expect.objectContaining({
+      text: 'owner moved the PM of Pilot on Studio to your Codex account "Work".' })])
+    expect(s.agent().switchLanded).toBeUndefined()
+  })
+
+  it('never says a landed switch failed: a rebind that beat a failure report wins', () => {
+    const s = setup()
+    s.f.run(s.request)
+    const switchId = s.sid()
+    s.f.run({ type: 'agent.rebind', agentId: s.pm, machineId: 'host', projectId: 'lead', previousHarnessId: 'pm', harnessId: 'pm-2', profileId: WORK,
+      configuration: { ...config, engine: 'codex' } }, s.as)
+    const done = s.f.run({ type: 'agent.switchResult', agentId: s.pm, switchId, ok: false, error: 'the new session did not start in time' }, s.as)
+    expect(done.messages[0]!.text).toBe('PM moved to Codex · Work.')
+  })
+
+  it('says a PM that has not come back is not back', () => {
+    const s = setup()
+    s.f.run(s.request)
+    const failed = s.f.run({ type: 'agent.switchResult', agentId: s.pm, switchId: s.sid(), ok: false, error: 'the new session could not start', down: true }, s.as)
+    expect(failed.messages[0]!.text).toBe("Couldn't switch the PM: the new session could not start. It has not come back on Codex yet; its machine keeps trying.")
+  })
+
+  it('writes the host\'s error as one clean line', () => {
+    const s = setup()
+    s.f.run(s.request)
+    const failed = s.f.run({ type: 'agent.switchResult', agentId: s.pm, switchId: s.sid(), ok: false, error: 'signed out.\nplease\tretry.. ' }, s.as)
+    expect(failed.messages[0]!.text).toBe("Couldn't switch the PM: signed out. please retry. It is back on Codex.")
   })
 })

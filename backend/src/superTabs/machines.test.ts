@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createSuperTab, SuperTabError, type AgentStart, type AgentStartRequest, type SuperTabState } from './model.js'
-import { admitMachineStart, machineSlots, machineObservationSchema, preparableStart, readingOnly, servedLocalModels, storedObservation, type ContributedMachine,
+import { admitMachineStart, defaultProfileId, machineSlots, machineObservationSchema, preparableStart, readingOnly, servedLocalModels, storedObservation, type ContributedMachine,
   type MachineObservation } from './machines.js'
 
 const NOW = 1_000_000
@@ -202,6 +202,33 @@ it('keeps durable release receipts authoritative over stale observations and ret
   expect(machineSlots(f.state, pool)).toBe(1)
 })
 
+describe('reported engine profiles', () => {
+  const { receivedAt: _receivedAt, ...sent } = observation
+  const profile = { engine: 'claude', id: '0123456789abcdef', label: 'Work', leftPercent: 40, resetsAt: '2026-11-02T10:00:00.000Z' }
+  const ok = (profiles: unknown) => machineObservationSchema.safeParse({ ...sent, profiles }).success
+
+  it('accepts up to 16 profiles and refuses a 17th', () => {
+    expect(ok(Array(16).fill(profile))).toBe(true)
+    expect(ok(Array(17).fill(profile))).toBe(false)
+    expect(ok([{ ...profile, leftPercent: null, resetsAt: null }])).toBe(true)
+  })
+  it('refuses a label with @, and any other malformed profile', () => {
+    expect(ok([{ ...profile, label: 'me@x.com' }])).toBe(false)
+    expect(ok([{ ...profile, label: '' }])).toBe(false)
+    expect(ok([{ ...profile, id: 'ABC' }])).toBe(false)
+    expect(ok([{ ...profile, engine: 'gemini' }])).toBe(false)
+    expect(ok([{ ...profile, leftPercent: 101 }])).toBe(false)
+    expect(ok([{ ...profile, extra: 1 }])).toBe(false)
+  })
+  it('keeps profiles of contributed engines only', () => {
+    const pool: ContributedMachine = { machineId: 'host', name: 'Mac', contributorId: 'owner', membershipGeneration: 'tab', generation: 'g1',
+      cwd: '/x', engines: ['claude'], maxAgents: 2, paused: false }
+    const kept = storedObservation(pool, { ...sent, profiles: [profile, { ...profile, engine: 'codex' }] } as MachineObservation,
+      { team: false, now: NOW, preparable: () => true })
+    expect(kept.profiles).toEqual([profile])
+  })
+})
+
 describe('a machine\'s reading as a report stores it (DB 2.5)', () => {
   const { receivedAt: _receivedAt, ...sent } = observation
   const pool = (extra: Partial<ContributedMachine> = {}): ContributedMachine => ({ machineId: 'host', name: 'Mac', contributorId: 'owner',
@@ -260,4 +287,8 @@ describe('a machine\'s reading as a report stores it (DB 2.5)', () => {
     const team = storedObservation(pool(), reading({ harnessProgress: { a: 5 }, preparingStartIds: ['s1'] }), { team: true, now: NOW + 15_000, preparable: () => true })
     expect(readingOnly(before, team)).toBe(false)
   })
+})
+
+it('names the default account the same way the CLI and Desktop do', () => {
+  expect(defaultProfileId('m', 'claude')).toBe('71dc90339553114c')
 })

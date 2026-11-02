@@ -2007,4 +2007,47 @@ describe('the morning digest', () => {
     await f.leadInbox()
     expect(await digests()).toHaveLength(2)
   })
+
+  it('drops a PM switch nobody claimed on another machine\'s next report, with one line in the project chat', async () => {
+    const f = await swarm()
+    await f.observe('lead-host', [f.harness.lead], { capabilities: ['leadSwitch'] })
+    const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
+    await f.execute({ type: 'lead.switch', projectId, engine: 'codex', profileId: 'default' })
+    const pending = async () => (await f.timed.read(owner, f.tab)).state.agents.find(a => a.id === f.lead)!.switchRequest
+    expect(await pending()).toBeDefined()
+    const lines = async () => (await db.superTabMessage.findMany({ where: { tabId: f.tab } })).filter(m => (m.source as { kind?: string } | null)?.kind === 'switch')
+    f.clock.now += 2 * MINUTE + 1000
+    await f.observe('test-host', [f.harness.worker])
+    expect(await pending()).toBeUndefined()
+    expect((await lines()).map(m => m.text)).toEqual(["Couldn't switch the PM: its machine did not answer."])
+    f.clock.now += MINUTE
+    await f.observe('test-host', [f.harness.worker])
+    expect(await lines()).toHaveLength(1)
+  })
+
+  it('tells the machine owner in their quiet Buddy chat after a rebind, and never opens that chat twice', async () => {
+    const f = await swarm()
+    const WORK = 'a'.repeat(16)
+    const reading = { capabilities: ['leadSwitch'], profiles: [{ engine: 'codex' as const, id: WORK, label: 'Work', leftPercent: 80, resetsAt: null }] }
+    await f.observe('lead-host', [f.harness.lead], reading)
+    const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
+    const notices = async () => (await db.superTabMessage.findMany({ where: { tabId: f.tab } })).filter(m => (m.source as { kind?: string } | null)?.kind === 'pm-switch-notice')
+    /** What a real host sends: its claim, then the rebind, and only then the result. */
+    const move = async (previousHarnessId: string, harnessId: string) => {
+      const asked = await f.execute({ type: 'lead.switch', projectId, engine: 'codex', profileId: WORK })
+      const switchId = (await f.timed.read(owner, f.tab)).state.agents.find(a => a.id === f.lead)!.switchRequest!.id
+      expect(asked).toBeDefined()
+      await f.execute({ type: 'agent.switchClaim', agentId: f.lead, switchId }, host, f.lead)
+      await f.execute({ type: 'agent.rebind', agentId: f.lead, machineId: 'lead-host', projectId, previousHarnessId, harnessId, profileId: WORK, configuration: config }, host, f.lead)
+      await f.execute({ type: 'agent.switchResult', agentId: f.lead, switchId, ok: true }, host, f.lead)
+    }
+    await move(f.harness.lead, 'second-session')
+    const [first] = await notices()
+    expect(first!.text).toContain('your Codex account "Work"')
+    await db.swarmGroup.update({ where: { id: `${f.tab}:${first!.conversationId}` }, data: { dormant: true } })
+    await f.observe('lead-host', ['second-session'], reading)
+    await move('second-session', 'third-session')
+    expect((await notices()).map(m => m.conversationId)).toEqual([first!.conversationId, first!.conversationId])
+    expect(await db.swarmGroup.count({ where: { tabId: f.tab, key: first!.conversationId } })).toBe(1)
+  })
 })
