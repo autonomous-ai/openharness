@@ -260,7 +260,7 @@ void main() {
     expect(find.byType(SuperTabTaskPanel), findsNothing);
   });
 
-  testWidgets('the panel shows what the chat would: steps, not hidden rows', (
+  testWidgets('the panel shows the whole conversation, without hidden rows', (
     tester,
   ) async {
     final server = serverWith([taskRow('review')]);
@@ -270,7 +270,7 @@ void main() {
       'reviewOf': 'group-1',
       'step': 'Review',
       'number': 7,
-      'lastMessageSequence': 1,
+      'lastMessageSequence': 2,
     });
     Map<String, dynamic> inTask(
       String id,
@@ -299,7 +299,8 @@ void main() {
         source: {'kind': 'work-stalled'},
       ),
       inTask('t3', 'group-1', 3, 'A reply in a thread.', thread: 't1'),
-      inTask('v1', 'step-1', 1, 'With fixes: one Important.'),
+      inTask('v1', 'step-1', 1, 'Please review.'),
+      inTask('v2', 'step-1', 2, 'With fixes: one Important.', thread: 'v1'),
     ]);
     final c = await showView(tester, server);
     await c.loadMessages('lead');
@@ -309,7 +310,8 @@ void main() {
     expect(find.text('Ready: PR #2605.'), findsOneWidget);
     expect(find.text('With fixes: one Important.'), findsOneWidget);
     expect(find.text('Kai has gone quiet.'), findsNothing);
-    expect(find.text('A reply in a thread.'), findsNothing);
+    // Agents answer with replies: a verdict is one (screen 3 lists them all).
+    expect(find.text('A reply in a thread.'), findsOneWidget);
   });
 
   testWidgets('a thread opened takes the task panel\'s place for good', (
