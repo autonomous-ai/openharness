@@ -538,6 +538,13 @@ void main() {
 
   // Diego: a reply being written was gone after switching Swarms or quitting, while the main chat's draft came back.
   group('a reply being written survives the Swarm being let go', () {
+    // A save is on a timer: on a busy machine it comes later, never sooner.
+    Future<void> savedSoon(bool Function() done) async {
+      for (var n = 0; n < 200 && !done(); n++) {
+        await Future<void>.delayed(const Duration(milliseconds: 25));
+      }
+    }
+
     Future<SuperTabController> again(ConversationServer server) async {
       final next = server.controller(account: 'owner', initial: server.saved);
       addTearDown(next.dispose);
@@ -565,7 +572,7 @@ void main() {
       addTearDown(c.dispose);
       await c.refresh();
       c.setThreadDraft('message-1', 'typing', conversationId: 'lead');
-      await Future<void>.delayed(const Duration(milliseconds: 300));
+      await savedSoon(() => jsonEncode(server.saved).contains('typing'));
       expect(jsonEncode(server.saved), contains('typing'));
     });
 
@@ -773,7 +780,7 @@ void main() {
           );
           final server = threaded();
           tester.binding.handleAppLifecycleStateChanged(
-            AppLifecycleState.paused,
+            AppLifecycleState.inactive,
           );
           final c = shown = server.controller(initial: savedOpen());
           addTearDown(c.dispose);
@@ -824,10 +831,10 @@ void main() {
       addTearDown(c.dispose);
       await c.refresh();
       c.openThread('message-1');
-      await Future<void>.delayed(const Duration(milliseconds: 300));
+      await savedSoon(() => server.saved?['openThread'] != null);
       expect(server.saved!['openThread'], isNotNull);
       c.closeThread();
-      await Future<void>.delayed(const Duration(milliseconds: 300));
+      await savedSoon(() => server.saved!['openThread'] == null);
       expect(server.saved!['openThread'], isNull);
     });
 
