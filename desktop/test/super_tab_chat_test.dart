@@ -132,6 +132,25 @@ void main() {
     }
   });
 
+  testWidgets('a chat behind the terminals runs no timers until it returns', (
+    tester,
+  ) async {
+    final server = ConversationServer()..append('Hello');
+    final c = server.controller();
+    addTearDown(c.dispose);
+    await c.refresh();
+    bool chatTicks() => TickerMode.valuesOf(
+      tester.element(find.text('Hello', skipOffstage: false)),
+    ).enabled;
+    await showReadView(tester, c);
+    expect(chatTicks(), isTrue);
+    await showReadView(tester, c, terminals: true);
+    expect(chatTicks(), isFalse);
+    await showReadView(tester, c);
+    expect(chatTicks(), isTrue);
+    await closeReadView(tester, c);
+  });
+
   testWidgets('returning from terminals reads the already loaded transcript', (
     tester,
   ) async {
@@ -177,7 +196,9 @@ void main() {
     (tester) async {
       final server = ConversationServer()..append('First update');
       final c = await show(tester, server);
-      await tester.tap(find.byKey(const ValueKey('super-pull-requests')));
+      await tester.tap(find.byTooltip('Project options'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(MenuItemButton, 'Pull requests'));
       await tester.pumpAndSettle();
       server.append('The review is ready.');
       await c.refresh();
@@ -214,7 +235,9 @@ void main() {
   ) async {
     final server = ConversationServer()..append('Visible update');
     final c = await show(tester, server);
-    await tester.tap(find.byKey(const ValueKey('super-pull-requests')));
+    await tester.tap(find.byTooltip('Project options'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(MenuItemButton, 'Pull requests'));
     await tester.pumpAndSettle();
     server.append('Not yet fetched');
     c.snapshot = SuperTabSnapshot.fromJson(server.state);
@@ -598,7 +621,9 @@ void main() {
       expect(scroll().offset, reading);
       expect(find.text('2 new messages'), findsOneWidget);
       expect(c.unread(c.selected!), isTrue);
-      await tester.tap(find.byKey(const ValueKey('super-pull-requests')));
+      await tester.tap(find.byTooltip('Project options'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(MenuItemButton, 'Pull requests'));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('super-chat')));
       await tester.pumpAndSettle();

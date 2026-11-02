@@ -458,6 +458,9 @@ export interface SuperTabState {
     buddyOnly?: true }>
   /** Removed machines whose host still has to clean up (machines.ts expireRemovals), listed only to that host. */
   machineCleanups?: import('./machines.js').MachineCleanup[]
+  /** The machines their person took out of this Swarm, so a sync that adds machines by itself leaves them out; a reader gets only
+   *  the ids of their own (visibleState). */
+  removedMachines?: Array<{ machineId: string; contributorId: string }>
   /** Conversations of a kind a later release added, set aside unchanged by a release that does not know it (parkLaterConversations). */
   parkedConversations?: Conversation[]
   /** The Local models add-on (docs/plans/2026-10-23-swarm-local-models.md): off until the owner turns it on, and only
@@ -805,6 +808,10 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   // A Buddy-only machine is no machine of the Swarm to anyone, its own person included (machines.ts buddyOnly): their Buddy
   // shows as a Buddy, and their machine stays theirs. Machines, status and the leaderboard's lent hours all read this.
   if (visible.machines) visible.machines = visible.machines.filter(m => !m.buddyOnly)
+  // A machine taken out says who owned it: a reader gets the ids of their own, which is all their sync asks.
+  const ownRemoved = actor.kind === 'person' ? (visible.removedMachines ?? []).filter(r => r.contributorId === actor.userId).map(r => r.machineId) : []
+  if (ownRemoved.length) (visible as { removedMachines?: unknown }).removedMachines = ownRemoved
+  else delete visible.removedMachines
   // Rows by day and project that only the leaderboard read uses, and it takes them from the Swarm itself.
   for (const pool of visible.machines ?? []) delete pool.lentDays
   // Nor its id, which a Buddy's row carries (machineHiddenFrom).

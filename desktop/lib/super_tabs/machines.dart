@@ -40,6 +40,7 @@ import 'machine_icon.dart';
 import 'machine_status.dart';
 import 'model.dart';
 import 'join_machine.dart' show superTabSuggestedAgentSlots;
+import 'personal_machine_rows.dart';
 import 'team_account_setup.dart';
 import 'section_heading.dart';
 import '../widgets/laid_out_list.dart';
@@ -363,6 +364,8 @@ Future<bool> _sendContribution(
   required bool Function() alive,
   bool teamAccountOnly = false,
   bool offerTeamAccount = true,
+  bool ifMissing = false,
+  bool unlessRemoved = false,
 }) async {
   // An earlier lost reply leaves an uncertain attempt holding its own
   // receipt, and only one action may be in flight: check that one first, then
@@ -389,6 +392,8 @@ Future<bool> _sendContribution(
     'engines': engines,
     'maxAgents': maxAgents,
     if (teamAccountOnly) 'teamAccountOnly': true,
+    if (ifMissing) 'ifMissing': true,
+    if (unlessRemoved) 'unlessRemoved': true,
   });
   if (result == null) {
     throw SuperTabFailure(
@@ -424,6 +429,8 @@ Future<String?> contributeComputer(
   required bool Function() alive,
   bool teamAccountOnly = false,
   bool offerTeamAccount = true,
+  bool ifMissing = false,
+  bool unlessRemoved = false,
   Future<MachineResources?> Function(String machineId)? readResources,
 }) async {
   final prepared = await _prepareContribution(
@@ -456,6 +463,8 @@ Future<String?> contributeComputer(
     alive: alive,
     teamAccountOnly: teamAccountOnly,
     offerTeamAccount: offerTeamAccount,
+    ifMissing: ifMissing,
+    unlessRemoved: unlessRemoved,
   );
   return added ? machineId : null;
 }
@@ -892,6 +901,9 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     }
     _syncTick();
     _redrawMoved();
+    if (!c.away && _timer?.isActive != true && !_reading && widget.app?.foreground.value == true && (!kUnderTest || widget.readLocal != null)) {
+      unawaited(_refresh());
+    }
   }
 
   /// Redraws what no longer says what it drew, and nothing else.
@@ -1011,7 +1023,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       await _readTeamSetup();
     } finally {
       _reading = false;
-      if (mounted && widget.app?.foreground.value == true) {
+      // A Swarm that isn't showing reads nothing; coming back reads at once ([_machinesMoved]).
+      if (mounted && !c.away && widget.app?.foreground.value == true) {
         _timer = Timer(const Duration(seconds: 15), _refresh);
       }
     }
@@ -2401,6 +2414,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             mainAxisSize: MainAxisSize.min,
             children: _machines(),
           ),
+        if (widget.app case final app?)
+          PersonalMachineRows(controller: c, app: app),
       ],
     ];
     return widget.embedded
