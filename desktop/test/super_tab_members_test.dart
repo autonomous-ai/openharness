@@ -340,7 +340,7 @@ void main() {
       tester,
     ) async {
       final f = await agents(tester);
-      await f.show(tester);
+      await f.show(tester, unfold: false);
       expect(f.inRow(1, find.text('Sage')), findsOneWidget);
       expect(tester.widget<Text>(word(1)).data, 'working');
       expect(tester.widget<Text>(word(3)).data, 'waiting');
@@ -379,7 +379,7 @@ void main() {
       tester,
     ) async {
       final f = await agents(tester);
-      await f.show(tester);
+      await f.show(tester, unfold: false);
       // Atlas and Nova hold no task: folded.
       expect(f.row(0), findsNothing);
       expect(f.row(2), findsNothing);
@@ -413,7 +413,7 @@ void main() {
 
     testWidgets('a click opens the agent card, not the task', (tester) async {
       final f = await agents(tester);
-      await f.show(tester);
+      await f.show(tester, unfold: false);
       await tester.tap(f.row(1));
       await tester.pumpAndSettle();
       expect(f.answered, isNull);
@@ -431,9 +431,12 @@ void main() {
       final at = DateTime.now()
           .subtract(const Duration(minutes: 4, seconds: 10))
           .millisecondsSinceEpoch;
-      (build['assignment'] as Map)['progressAt'] = at;
+      build['assignment'] = <String, Object>{
+        ...(build['assignment'] as Map).cast<String, Object>(),
+        'progressAt': at,
+      };
       await f.controller.refresh();
-      await f.show(tester);
+      await f.show(tester, unfold: false);
       final hover = tester
           .widgetList<Tooltip>(
             find.ancestor(of: f.row(1), matching: find.byType(Tooltip)),
@@ -448,7 +451,7 @@ void main() {
       tester,
     ) async {
       final f = await agents(tester);
-      await f.show(tester);
+      await f.show(tester, unfold: false);
       await tester.tap(f.row(1), buttons: kSecondaryMouseButton);
       await tester.pumpAndSettle();
       expect(find.text('Details'), findsOneWidget);
@@ -487,7 +490,7 @@ void main() {
     testWidgets('the agent card: role, task, model · effort · machine, '
         'Open terminal and Details…', (tester) async {
       final f = await juno(tester);
-      await f.show(tester);
+      await f.show(tester, unfold: false);
       await tester.tap(f.row(1));
       await tester.pumpAndSettle();
       expect(card, findsOneWidget);
@@ -524,7 +527,7 @@ void main() {
 
     testWidgets("the card's task opens its conversation", (tester) async {
       final f = await juno(tester);
-      await f.show(tester);
+      await f.show(tester, unfold: false);
       await tester.tap(f.row(1));
       await tester.pumpAndSettle();
       await tester.tap(task);
@@ -536,7 +539,7 @@ void main() {
 
     testWidgets('Details… opens the full details', (tester) async {
       final f = await juno(tester);
-      await f.show(tester);
+      await f.show(tester, unfold: false);
       await tester.tap(f.row(1));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Details…'));
@@ -552,7 +555,7 @@ void main() {
       final f = await juno(tester);
       f.server.state['machines'] = <Object>[];
       await f.controller.refresh();
-      await f.show(tester, nativeState: false);
+      await f.show(tester, nativeState: false, unfold: false);
       await tester.tap(find.text('Idle (3)'));
       await tester.pumpAndSettle();
       await tester.tap(f.row(3));
@@ -569,7 +572,7 @@ void main() {
       final f = await people(tester);
       // A dialog's width, beside the column.
       await tester.binding.setSurfaceSize(const Size(900, 760));
-      await f.show(tester);
+      await f.show(tester, unfold: false);
       await tester.tap(person('owner'));
       await tester.pumpAndSettle();
       final dialog = find.byType(Dialog);
@@ -600,7 +603,7 @@ void main() {
       final f = await people(tester);
       // A dialog's width, beside the column.
       await tester.binding.setSurfaceSize(const Size(900, 760));
-      await f.show(tester);
+      await f.show(tester, unfold: false);
       await tester.tap(person('tony'));
       await tester.pumpAndSettle();
       final dialog = find.byType(Dialog);
