@@ -93,6 +93,23 @@ void main() {
     expect(semantics.label, 'Reload');
     handle.dispose();
   });
+
+  testWidgets('Reload sits as far from the right edge as the text does from '
+      'the left', (tester) async {
+    await mount(tester);
+    latest = '1.3.52';
+    await watcher.check();
+    await tester.pump();
+    final left =
+        tester
+            .getTopLeft(find.text('A new version of Harness is ready.'))
+            .dx -
+        tester.getTopLeft(bar()).dx;
+    final right =
+        tester.getTopRight(bar()).dx -
+        tester.getTopRight(find.byKey(const ValueKey('web-update-reload'))).dx;
+    expect(right, left);
+  });
 }
 
 class _Counter extends StatefulWidget {
