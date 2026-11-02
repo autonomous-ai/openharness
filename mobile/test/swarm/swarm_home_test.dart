@@ -1355,11 +1355,13 @@ void main() {
       };
       fake.routes['/api/super-tabs/$tab/groups?dormant=1&projectId=$project'] =
           (_) => {
-            'groups': [oldChat()],
+            'groups': [part('g-archived', 2, oldChat())],
             'next': null,
           };
-      fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
-          changes(cursor: 'c3', groups: [part('g-archived', 3, oldChat())]);
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+        cursor: 'c3',
+        groups: archived ? [] : [part('g-archived', 3, oldChat())],
+      );
       fake.routes['/api/super-tabs/$tab/commands'] = (body) {
         final command = body?['command'] as Map<String, dynamic>;
         if (command['type'] == 'conversation.archive') {

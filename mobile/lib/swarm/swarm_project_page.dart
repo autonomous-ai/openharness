@@ -453,6 +453,14 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
     ),
   );
 
+  void _openWork() => unawaited(
+    showSwarmProjectSheet(
+      context,
+      swarmId: widget.swarmId,
+      projectId: widget.projectId,
+    ),
+  );
+
   void _open(String conversationId) =>
       openSwarmConversation(context, widget.swarmId, conversationId);
 
@@ -567,6 +575,7 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
               projectId: project.id,
               onStatus: _openStatusSheet,
               onLeaderboard: _openLeaderboardSheet,
+              onWork: _openWork,
               onTeam: _openTeamSheet,
               onNotifications:
                   snapshot.conversation(project.leadConversationId) == null
@@ -806,13 +815,14 @@ class _ProjectMenu extends StatelessWidget {
     required this.projectId,
     required this.onStatus,
     required this.onLeaderboard,
+    required this.onWork,
     required this.onTeam,
     this.onNotifications,
   });
 
   final SwarmReader reader;
   final String projectId;
-  final VoidCallback onStatus, onLeaderboard, onTeam;
+  final VoidCallback onStatus, onLeaderboard, onWork, onTeam;
   final VoidCallback? onNotifications;
 
   @override
@@ -871,6 +881,7 @@ class _ProjectMenu extends StatelessWidget {
           ),
         row('swarm-project-menu-status', 'Status', onStatus),
         row('swarm-project-menu-leaderboard', 'Leaderboard', onLeaderboard),
+        row('swarm-project-menu-work', 'Work', onWork),
         row('swarm-project-menu-team', 'Team', onTeam),
         if (onNotifications case final onTap?)
           row('swarm-project-menu-notifications', 'Notifications', onTap),
