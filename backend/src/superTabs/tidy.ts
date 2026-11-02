@@ -1,4 +1,4 @@
-import { onlyStepsHeld } from './steps.js'
+import { isStep, onlyStepsHeld, taskEnded } from './steps.js'
 import { isBuddy } from './buddies.js'
 import { agentDisplayName } from './agentNames.js'
 import { activeWork, stableId, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
@@ -110,12 +110,13 @@ export const linkPending = (state: SuperTabState, linked: Conversation): boolean
 export const ARCHIVE_QUIET_MS = 30 * 60_000
 
 /** Whether a group may archive by itself, as far as the Swarm alone can tell: its task done or cancelled, quiet for
- *  ARCHIVE_QUIET_MS, not a linked task still owing its verdict (linkPending), and not a Lead conversation, a
- *  private chat with people or the Leads conversation. Its pull requests and decisions are checked by the caller (archive.ts). */
+ *  ARCHIVE_QUIET_MS, not a linked task still owing its verdict (linkPending), not a step whose task is still open
+ *  (steps.ts taskEnded), and not a Lead conversation, a private chat with people or the Leads conversation. Its pull requests and decisions are checked by the caller (archive.ts). */
 export function archivable(state: SuperTabState, group: Conversation, now: number): boolean {
   if (state.tidy === false || group.archived || group.kind || group.audience) return false
   if (projectsOf(state).some(p => p.leadConversationId === group.id)) return false
   if (!['done', 'cancelled'].includes(group.assignment?.status ?? '') || linkPending(state, group)) return false
+  if (isStep(group) && !taskEnded(state, group)) return false
   const last = time(group.lastActivityAt)
   return last !== undefined && now - last >= ARCHIVE_QUIET_MS
 }
@@ -149,11 +150,12 @@ export function reviewPullRequests(state: SuperTabState, review: Conversation): 
   return [...new Set([...review.pullRequestUrls ?? [], ...reviewed?.pullRequestUrls ?? []])]
 }
 
-/** Whether an unattended review may close by itself, as far as the Swarm alone can tell: it links, or the work it reviews
- *  links, a pull request, and it has been quiet for ARCHIVE_QUIET_MS. That each of those pull requests is merged or
+/** Whether an unattended review may close by itself, as far as the Swarm alone can tell: the work it reviews is done or
+ *  cancelled, it links, or that work links, a pull request, and it has been quiet for ARCHIVE_QUIET_MS. That each of those pull requests is merged or
  *  closed, and that no decision waits there, the caller checks (archive.ts, store.ts archiveFinished). */
 export function reviewClosable(state: SuperTabState, review: Conversation, now: number): boolean {
   if (state.tidy === false || review.archived || review.kind || review.audience || !unattendedReview(review)) return false
+  if (!taskEnded(state, review)) return false
   if (projectsOf(state).some(p => p.leadConversationId === review.id)) return false
   if (!reviewPullRequests(state, review).length) return false
   const last = time(review.lastActivityAt)

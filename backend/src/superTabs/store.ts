@@ -3547,9 +3547,10 @@ export class SuperTabStore {
 
   /** Archives a finished group whose pull requests `checked` were all read merged or closed (archive.ts), only if it still
    *  qualifies inside this write: no message and no pull request linked since the read. A decision still waiting there
-   *  closes as withdrawn (decisions.ts withdrawIn), and its waiting deliveries end, as a person's archive ends them. With
-   *  `reviewOf`, the group the pass read as the one it reviews, a review nobody is reviewing closes the same way once those
-   *  of the work it reviews are too (tidy.ts reviewClosable). True when it archived. */
+   *  closes as withdrawn (decisions.ts withdrawIn), and its waiting deliveries end, as a person's archive ends them. A step
+   *  needs `reviewOf`, the group the pass read as its task, which this write reads again: it stays open unless that task is
+   *  done or cancelled and that task's pull requests are settled too. A review nobody is reviewing closes the same way
+   *  (tidy.ts reviewClosable). True when it archived. */
   async archiveFinished(tabId: string, groupId: string, checked: Readonly<Record<string, 'merged' | 'closed'>>, reviewOf?: string): Promise<boolean> {
     return transaction(this.db, async tx => {
       const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
@@ -3559,7 +3560,8 @@ export class SuperTabStore {
       const now = this.now()
       if (!group) return false
       const read = (urls: readonly string[]) => urls.every(url => checked[url] === 'merged' || checked[url] === 'closed')
-      const finished = archivable(state, group, now) && read(group.pullRequestUrls ?? [])
+      // A step's task's pull requests count too: it may yet be handed back while one is open, and need its step again.
+      const finished = archivable(state, group, now) && read(reviewPullRequests(state, group))
       // Only the group it reviews as the pass read it: one this write did not load would hide its open pull requests.
       const review = !finished && !!reviewOf && group.reviewOf === reviewOf && reviewClosable(state, group, now) && read(reviewPullRequests(state, group))
       if (!finished && !review) return false
@@ -3578,7 +3580,8 @@ export class SuperTabStore {
       // A review's close also writes the work it reviews (review of #2322): a Ready for review committed since the load linked
       // a new pull request and saw this review still open, so it opened none. The touch makes one of the two writes retry,
       // and the retry sees the other: this one declines (a pull request not read), or that one opens a new review.
-      await this.save(tx, loaded, state, clock.next(), review ? [{ kind: 'group', key: group.reviewOf! }] : [])
+      // A finished step's too: its task handed on again since the load must not lose the step it will need.
+      await this.save(tx, loaded, state, clock.next(), group.reviewOf ? [{ kind: 'group', key: group.reviewOf }] : [])
       await this.writeMessages(tx, tabId, state, rows, sequences)
       return true
     })
