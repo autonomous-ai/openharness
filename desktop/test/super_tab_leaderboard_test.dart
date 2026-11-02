@@ -303,7 +303,13 @@ void main() {
             isTrue,
             reason: "another period's numbers never wear this one's name",
           );
-          await reader.showAllProjects(false);
+          final narrowed = reader.showAllProjects(false);
+          expect(
+            reader.board,
+            isNull,
+            reason: 'whole-Swarm numbers under one project',
+          );
+          await narrowed;
           expect(reader.board?.allProjects, isFalse);
           expect(paths, [
             '/api/super-tabs/t/leaderboard?projectId=lead&period=7d&scope=all',

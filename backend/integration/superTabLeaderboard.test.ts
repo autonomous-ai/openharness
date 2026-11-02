@@ -209,6 +209,20 @@ describe('the leaderboard read', () => {
       expect(one.body.data).not.toHaveProperty('allProjects')
     })
 
+    it('All projects names a private project\'s PM only to who reads that project', async () => {
+      const s = await scene(state => {
+        const project = state.projects!.find(p => p.name === 'Secret')!
+        const lead = state.conversations.find(c => c.id === project.leadConversationId)!
+        const pm = { ...state.agents[0]!, id: 'secret-pm', harnessId: 'secret-pm-harness', name: 'Secret PM', displayName: 'Secret PM' }
+        state.agents.push(pm)
+        lead.leadId = pm.id
+        lead.agentIds = [pm.id]
+      })
+      const url = `/api/super-tabs/${s.tabId}/leaderboard?projectId=lead&period=7d&scope=all`
+      expect(JSON.stringify((await get(url, owner)).body.data.agents)).toContain('Secret PM')
+      expect(JSON.stringify((await get(url, outsider)).body.data)).not.toContain('Secret PM')
+    })
+
     it('reads All projects\' dormant groups too, and refuses it for a week', async () => {
       const s = await scene(state => {
         const secret = state.conversations.find(c => c.title === 'Hidden')!
