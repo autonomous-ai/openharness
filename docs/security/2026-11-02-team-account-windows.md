@@ -9,14 +9,15 @@ text and values the code produces. Nothing on a real account, permission or file
 ## Answer
 
 **The folders hold; the daemon's port does not.** Ports were covered only in part: the Team daemon's own port was not read. The ACLs setup writes keep the Team account out of the owner's profile.
-Other accounts can't read the sign-in code or the relay's token, and the daemon's pipe proves both ends. But on Windows the owner's
-local credential still goes over TCP to whoever holds the daemon's port, and the daemon accepts it from any account (W1).
+Other accounts can't read the sign-in code or the relay's token, and the daemon's pipe proves both ends. On Windows the owner's
+local credential went over TCP to whoever holds the daemon's port, and the daemon accepted it from any account (W1, fixed in
+task #2095).
 The Team account's daemon starts at boot, before the owner signs in. Purge was written for POSIX paths. It never deleted a
 Codex Product Manager's own home on Windows (W2, fixed in this pull request), and it can't finish a Claude Code one there (W3).
 
 | ID | Rating | Finding | Status |
 |---|---|---|---|
-| W1 | **High** | The owner's local credential goes to whoever holds the daemon's port, and opens the daemon from any account | Read in code, pinned by a test; fix requested |
+| W1 | **High** | The owner's local credential goes to whoever holds the daemon's port, and opens the daemon from any account | **Fixed** in task #2095, test first; not yet run on Windows |
 | W2 | **High** | Purge left a Codex Product Manager's whole home on Windows, and could take every PM's home on any platform | **Fixed here**, test first |
 | W3 | Medium | Purge can't scrub a Claude Code Product Manager on Windows: the account stays held, its memory stays | Read in code, fix requested |
 | W4 | Medium | The Team account can stall the owner's read of its status file | Read in code, fix requested |
@@ -52,12 +53,25 @@ This is the macOS H1 again, but on Windows nothing of the #2016 fix applies:
   The messages RPC uses only the pipe (`messages/rpc.ts:20-25`). The pipe proves both ends without sending the token
   (`lib/windows/pipeAuth.ts`).
 
-**Proof:** `cli/src/team/windowsBoundary.spec.ts`, "W1, still open": on Windows a client puts the credential on a TCP request,
-and the daemon counts it from a caller it never looked up. Closing the hole turns these red. Not tried on Windows.
+**Proof:** `cli/src/team/windowsBoundary.spec.ts`, "W1" (named "W1, still open" until the fix): on Windows a client put the credential on a TCP request,
+and the daemon counted it from a caller it never looked up. Not tried on Windows.
 
 **Fix:** on Windows, send hooks and every CLI request over the daemon's proven pipe, and never the credential over TCP. Until then,
 make the daemon refuse the credential over TCP from another account. Windows can say who owns a loopback connection
 (`GetExtendedTcpTable` gives the owning process, whose token names its account).
+
+**Fixed (task #2095).** All three parts, each test first; the W1 tests above are turned around:
+- The daemon asks Windows who owns the calling end of a TCP connection that showed a valid secret (`lib/peerAccount.ts`
+  `windowsPeerQuery`: `Get-NetTCPConnection`, then the process's owner SID against this account's). Anything but a clear yes is
+  no. This alone makes a credential heard on the port useless to another account, from an old client or plugin too.
+- Hooks post over the daemon's pipe (`hook/notify.mjs` `windowsDaemonPipe`), proving the token without sending it, and take an
+  answer only with the daemon's proof. With no live pipe they post nothing, as on macOS with no socket.
+- CLI clients never put the credential on TCP (`localCredentialHeaders` gives nothing on Windows). Their fetch helper and their
+  WebSockets go over the pipe (`lib/localTransport.ts` `daemonFetch`, `openLocalWs`), and with no pipe they say Harness is not
+  running.
+- Still open: the connectors bridge's MCP clients can only dial its HTTP address, so whoever holds the bridge's port still hears
+  its key and the tool calls (as on macOS). The key opens nothing from another account now. Closing it needs a local transport for
+  MCP clients that proves the daemon, a separate task.
 
 ### W2. Purge left a Codex Product Manager's home on Windows (High, fixed here)
 
@@ -175,7 +189,6 @@ as `privacy.ts` `statusText` does.
   needs a right on the process that it doesn't give across accounts. Not checked.
 - Ports were covered only in part: the Team daemon's own loopback port (18493) was not read beyond what the macOS audit says.
   The terminal host's pipe was read (under "What holds", security review 2 of this pull request); nothing about it ran on Windows.
-- Which callers of `localCredentialHeaders` speak TCP on Windows (W1): `cli.ts`, `remoteCommand.ts`, `superTabs/attach.ts`,
-  `devices/client.ts`, `agentClient/settings.ts`, `lib/daemonEndpoint.ts`, `lib/autonomous-device/addonCommand.ts`. Not traced.
+- Which callers of `localCredentialHeaders` speak TCP on Windows (W1): traced and moved to the pipe in task #2095.
 - Whether a standard account can register a scheduled task for itself that runs while it is not signed in (W5).
 - The integration suite was not run: this change touches no backend code.
