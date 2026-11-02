@@ -418,4 +418,42 @@ void main() {
     await Future<void>.delayed(Duration.zero);
     expect(stepReads(), first + 1);
   });
+
+  // Final review, finding 4: the New messages line is placed by the task's
+  // own sequences; a step's row, numbered in its own conversation, is not
+  // where it goes.
+  testWidgets("a task's New messages line ignores its steps' sequences", (
+    tester,
+  ) async {
+    final server = groupServer(
+      linked: [
+        {
+          ...conversationFixture('design', 'Design'),
+          'number': 31,
+          'reviewOf': 'offline',
+          'step': 'Design',
+        },
+      ],
+      messages: [for (var i = 1; i <= 6; i++) ('builder', 'Line $i')],
+    );
+    final read =
+        (server.messages.where((m) => m['text'] == 'Line 4').single['sequence']
+            as int);
+    server.markReadElsewhere('offline', read);
+    server.append('Early step row', conversationId: 'design');
+    server.messages.last
+      ..['sequence'] = 999
+      ..['createdAt'] = '2026-10-17T23:00:00Z';
+    await showView(tester, server);
+    const line = ValueKey('super-new-messages-line');
+    expect(find.byKey(line), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.byKey(line)).dy,
+      greaterThan(tester.getTopLeft(find.textContaining('Line 4')).dy),
+    );
+    expect(
+      tester.getTopLeft(find.byKey(line)).dy,
+      lessThan(tester.getTopLeft(find.textContaining('Line 5')).dy),
+    );
+  });
 }
