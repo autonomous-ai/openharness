@@ -14,6 +14,7 @@ import 'controller.dart';
 import 'dialog_scope.dart';
 import 'leaderboard/models_section.dart';
 import 'leaderboard/reader.dart';
+import 'message_row.dart' show SuperTabMessageRow;
 import 'local_models.dart';
 import 'machines.dart';
 import 'model.dart';
@@ -196,7 +197,7 @@ class _ManageModels extends StatelessWidget {
         ?.id;
     return LaidOutListView(
       padding: const EdgeInsets.symmetric(
-        horizontal: grid.AppDesktop.groupGap,
+        horizontal: SuperTabMessageRow.horizontalInset,
         vertical: grid.AppDesktop.controlGap,
       ),
       children: [
@@ -333,7 +334,7 @@ class _ManageSwarmState extends State<_ManageSwarm> {
     final blocked = _leaveBlocked;
     return LaidOutListView(
       padding: const EdgeInsets.symmetric(
-        horizontal: grid.AppDesktop.groupGap,
+        horizontal: SuperTabMessageRow.horizontalInset,
         vertical: grid.AppDesktop.controlGap,
       ),
       children: [
