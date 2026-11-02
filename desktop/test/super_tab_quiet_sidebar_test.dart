@@ -121,6 +121,26 @@ void main() {
     expect(row.properties.selected, isTrue);
   });
 
+  testWidgets(
+    'a project row has no chevron; a second click shows its workgroups',
+    (tester) async {
+      final c = await show(tester);
+      expect(
+        find.byKey(const ValueKey('super-project-toggle-lead')),
+        findsNothing,
+      );
+      await c.select('lead');
+      await tester.pump();
+      expect(c.expandedProjects, isNot(contains('lead')));
+      await tester.tap(find.byKey(const ValueKey('super-group-lead')));
+      await tester.pump();
+      expect(c.expandedProjects, contains('lead'));
+      await tester.tap(find.byKey(const ValueKey('super-group-lead')));
+      await tester.pump();
+      expect(c.expandedProjects, isNot(contains('lead')));
+    },
+  );
+
   testWidgets('+ beside Projects is New project, the same action', (
     tester,
   ) async {
