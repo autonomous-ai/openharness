@@ -8,6 +8,7 @@ import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/task_line.dart';
+import 'package:harness/super_tabs/thread_panel.dart';
 
 import 'super_tab_mentions_test.dart' show showView;
 import 'support/super_tab_fixture.dart';
@@ -309,6 +310,40 @@ void main() {
     expect(find.text('With fixes: one Important.'), findsOneWidget);
     expect(find.text('Kai has gone quiet.'), findsNothing);
     expect(find.text('A reply in a thread.'), findsNothing);
+  });
+
+  testWidgets('a thread opened takes the task panel\'s place for good', (
+    tester,
+  ) async {
+    final server = serverWith([taskRow('working'), proposalRow()]);
+    final c = await showView(tester, server);
+    await c.loadMessages('lead');
+    await tester.pumpAndSettle();
+    await tester.tap(line);
+    await tester.pumpAndSettle();
+    expect(find.byType(SuperTabTaskPanel), findsOneWidget);
+    c.openThread('proposal-1');
+    await tester.pumpAndSettle();
+    expect(find.byType(SuperTabThreadPanel), findsOneWidget);
+    expect(find.byType(SuperTabTaskPanel), findsNothing);
+    c.closeThread();
+    await tester.pumpAndSettle();
+    expect(find.byType(SuperTabTaskPanel), findsNothing);
+  });
+
+  testWidgets('on a narrow window, a click outside closes the task panel', (
+    tester,
+  ) async {
+    final c = await showView(tester, serverWith([taskRow('working')]));
+    await c.loadMessages('lead');
+    await tester.binding.setSurfaceSize(const Size(900, 800));
+    await tester.pumpAndSettle();
+    await tester.tap(line);
+    await tester.pumpAndSettle();
+    expect(find.byType(SuperTabTaskPanel), findsOneWidget);
+    await tester.tapAt(const Offset(20, 400));
+    await tester.pumpAndSettle();
+    expect(find.byType(SuperTabTaskPanel), findsNothing);
   });
 
   group('the panel\'s reply', () {
