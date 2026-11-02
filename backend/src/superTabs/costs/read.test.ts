@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Conversation } from '../model.js'
 import type { RouteRun } from './attempts.js'
-import { summarizeCosts, type CostRow } from './read.js'
+import { shipping, summarizeCosts, type CostRow } from './read.js'
 
 const MINUTE = 60_000
 const t = (input: number, output: number) => ({ input, output, cacheRead: 0, cacheWrite: 0 })
@@ -144,5 +144,46 @@ describe('the full cost per shipped change (routing, Goals piece 3)', () => {
     const shippedOpen = summarizeCosts([row('k1', { run: run({ startedAt: 0 }) }), row('o1', { outcome: null, run: run({ startedAt: 10 * MINUTE, endedAt: undefined, end: undefined }) })],
       [group('g1', [], 20 * MINUTE)])
     expect(shippedOpen.rows[0]).toMatchObject({ shipped: 1, fullCostKnown: 0.5, fullCostPerShipped: 8 })
+  })
+})
+
+/** shipping before Part 5 (spec 2026-11-02, hot loops): every cost row filtered per shipped group. Kept here only to pin that
+ *  grouping the rows once answers exactly as it did. */
+function legacyShipping(rows: CostRow[], groups: Conversation[]): Map<string, number> {
+  const shipped = new Map<string, number>()
+  for (const group of groups) {
+    const at = group.ledger?.shippedAt
+    if (at === undefined) continue
+    const ran = rows.filter(r => r.conversationId === group.id && r.run.startedAt <= at).sort((a, b) => b.run.startedAt - a.run.startedAt)[0]
+    if (ran) shipped.set(ran.assignmentId, at)
+  }
+  return shipped
+}
+
+describe('which attempt shipped each request (spec 2026-11-02, Part 5)', () => {
+  it('shipping answers as before', () => {
+    // A deterministic generator (mulberry32), so a failing case is the same on every run.
+    let seed = 20261102
+    const random = () => {
+      seed = (seed + 0x6D2B79F5) >>> 0
+      let s = seed
+      s = Math.imul(s ^ (s >>> 15), s | 1)
+      s ^= s + Math.imul(s ^ (s >>> 7), s | 61)
+      return ((s ^ (s >>> 14)) >>> 0) / 4294967296
+    }
+    const below = (n: number) => Math.floor(random() * n)
+    for (let i = 0; i < 100; i++) {
+      const groupCount = 1 + below(60)
+      // Several attempts per group, started at a few shared minutes so some start together; an assignment id now and then
+      // in two groups' rows, so a later group's ship overwrites an earlier one's.
+      const rows = Array.from({ length: below(200) }, (_, n) => row(below(10) ? `a${n}` : `a${below(n + 1)}`, {
+        conversationId: `g${below(groupCount + 5)}`, run: run({ startedAt: below(12) * 10 * MINUTE }) }))
+      const groups = Array.from({ length: groupCount }, (_, n) => {
+        // No ship, a ship before any attempt started, or one among the attempts; the same group listed twice now and then.
+        const id = below(15) ? `g${n}` : `g${below(groupCount)}`
+        return group(id, [], below(4) ? below(130) * MINUTE - 5 * MINUTE : undefined)
+      })
+      expect([...shipping(rows, groups)], `case ${i}`).toEqual([...legacyShipping(rows, groups)])
+    }
   })
 })
