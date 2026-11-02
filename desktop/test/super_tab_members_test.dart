@@ -421,6 +421,29 @@ void main() {
       await f.close(tester);
     });
 
+    testWidgets('the hover keeps the task and the time since its progress', (
+      tester,
+    ) async {
+      final f = await agents(tester);
+      final build = (f.server.state['conversations'] as List).firstWhere(
+        (g) => g['id'] == 'build',
+      );
+      final at = DateTime.now()
+          .subtract(const Duration(minutes: 4, seconds: 10))
+          .millisecondsSinceEpoch;
+      (build['assignment'] as Map)['progressAt'] = at;
+      await f.controller.refresh();
+      await f.show(tester);
+      final hover = tester
+          .widgetList<Tooltip>(
+            find.ancestor(of: f.row(1), matching: find.byType(Tooltip)),
+          )
+          .single
+          .message!;
+      expect(hover.split('\n').last, 'Windows credential fix · 4m');
+      await f.close(tester);
+    });
+
     testWidgets('right-click keeps Details and Remove from Swarm', (
       tester,
     ) async {
