@@ -317,7 +317,6 @@ Future<SuperTabController> _pumpBar(
                     key: ValueKey(c.tabId),
                     controller: c,
                     app: app,
-                    onAddAgent: (_) {},
                     needsHuman: (_) => 0,
                     onSelect: c.select,
                     onNewProject: () {},
@@ -446,7 +445,7 @@ void main() {
     expect(
       bar.dy,
       lessThan(
-        tester.getTopLeft(find.byKey(const ValueKey('super-new-project'))).dy,
+        tester.getTopLeft(find.byKey(const ValueKey('super-activity'))).dy,
       ),
     );
 
