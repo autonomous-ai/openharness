@@ -106,8 +106,11 @@ export async function portHolderIsThisAccount(port: number, platform: NodeJS.Pla
   })
 }
 
-/** Windows PowerShell's start and two CIM queries: about a second on a quiet PC, more on a busy one. */
-const WINDOWS_PEER_MS = 8_000
+/**
+ * Windows PowerShell's start and its CIM queries: about a second on a quiet PC, over 8 s on the Windows ARM runner (the
+ * Windows run on #2605), so a slow or busy PC is given 20 s. A lookup past that is no for its connection.
+ */
+export const WINDOWS_PEER_MS = 20_000
 
 /** How the daemon runs [windowsPeerQuery]: Windows PowerShell, off its event loop. Tests give their own. */
 export type WindowsPeerRun = (script: string, inputs: Record<string, string>) => Promise<{ status: number | null; stdout: string }>
@@ -128,8 +131,10 @@ export function windowsPeerQuery(peerPort: number, ownPort: number): { script: s
       '$process = Get-CimInstance Win32_Process -Filter ("ProcessId = " + [int]$rows[0].OwningProcess)',
       "if (-not $process) { 'no: its process is gone'; exit 0 }",
       // Windows keeps naming a socket's creator after it exits when a child inherited the handle, and the id may have gone
-      // to another process since: only one that started before the connection was made can be its owner.
-      "if (-not $process.CreationDate -or -not $rows[0].CreationTime -or $process.CreationDate -gt $rows[0].CreationTime) { 'no: its process started ' + [string]$process.CreationDate + ', the connection ' + [string]$rows[0].CreationTime; exit 0 }",
+      // to another process since: only one that started before the connection was made can be its owner. Windows gives the
+      // connection's time to the second and the process's finer (the Windows run on #2605 read a process started at
+      // 13:32:35 as after its connection of 13:32:35), so two seconds of slack: a recycled id must land within them too.
+      "if (-not $process.CreationDate -or -not $rows[0].CreationTime -or $process.CreationDate -gt $rows[0].CreationTime.AddSeconds(2)) { 'no: its process started ' + $(if ($process.CreationDate) { $process.CreationDate.ToString('o') }) + ', the connection ' + $(if ($rows[0].CreationTime) { $rows[0].CreationTime.ToString('o') }); exit 0 }",
       '$owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid',
       "if ($owner.ReturnValue -eq 0 -and $owner.Sid -and $owner.Sid -eq [Security.Principal.WindowsIdentity]::GetCurrent().User.Value) { 'yes' } else { 'no: its owner is ' + $owner.Sid + ' (' + $owner.ReturnValue + ')' }",
     ].join('\n'),
