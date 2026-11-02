@@ -77,11 +77,13 @@ def squash_message(pr, commits):
                 name(found.group(1), found.group(2))
             else:
                 lines.append(line)
-        bodies.append("\n".join(lines).strip())
+        body = "\n".join(lines).strip()
+        if body:
+            bodies.append(body)
         written = commit["commit"]["author"]
         if ((commit.get("author") or {}).get("login") or "").lower() != author or not author:
             name(written["name"], written["email"])
-    if len(bodies) == 1:
+    if len(commits) == 1 and bodies:
         title, _, body = bodies[0].partition("\n")
         title, text = f"{title.strip()} (#{number})", body.strip()
     else:
