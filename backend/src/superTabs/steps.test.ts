@@ -157,6 +157,31 @@ describe('assigning a step', () => {
       expect(f.f.group(f.id).assignment!.toldEngineerAt).toBe(f.f.now)
     })
 
+    // Review of #2659: Engineers often ask by post, "fixed at abc, please re-check", so a hung Reviewer must not stay held.
+    it('ends with the Engineer\'s post to it, in the step\'s chat or the task\'s, and its 30 minutes restart', () => {
+      const a = reviewing()
+      post(a.f, a.id, [a.f.dev], a.rev)
+      a.f.tick(60_000)
+      post(a.f, a.id, [a.rev], a.f.dev)
+      expect(a.f.group(a.id).assignment!.toldEngineerAt).toBeUndefined()
+      expect(a.f.group(a.id).assignment).toMatchObject({ status: 'working', progressAt: a.f.now })
+      const b = reviewing()
+      post(b.f, b.id, [b.f.dev], b.rev)
+      b.f.run({ type: 'conversation.agent', conversationId: b.f.task, agentId: b.rev, present: true, lead: false })
+      b.f.tick(60_000)
+      post(b.f, b.f.task, [b.rev], b.f.dev)
+      expect(b.f.group(b.id).assignment!.toldEngineerAt).toBeUndefined()
+      expect(b.f.group(b.id).assignment).toMatchObject({ progressAt: b.f.now })
+    })
+
+    it('gives no time to a Reviewer that isn\'t waiting: the Engineer\'s posts keep no idle Reviewer', () => {
+      const f = reviewing()
+      const before = f.f.group(f.id).assignment!.progressAt
+      f.f.tick(60_000)
+      post(f.f, f.id, [f.rev], f.f.dev)
+      expect(f.f.group(f.id).assignment!.progressAt).toBe(before)
+    })
+
     it('ends with the Engineer\'s next Ready', () => {
       const f = reviewing()
       post(f.f, f.id, [f.f.dev], f.rev)
