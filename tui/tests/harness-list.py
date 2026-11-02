@@ -89,12 +89,14 @@ try:
 
     # The month-old ones are folded, and their folder is the last one on their machine.
     assert 'Old session' not in s, s
-    assert s.index('old-repo') < s.index('▸ 25 older'), s
     assert s.index('old-repo') > s.index('billing'), 'newest folders first\n' + s
 
-    # One column: a machine, its folders, their rows, no indent; never `machine · folder`.
+    # The button is on its folder's label, one line.
+    assert any('old-repo' in l and '▸ 25 older' in l for l in s.splitlines()), s
+
+    # One column: a machine, its folders, no indent; never `machine · folder`.
     column = lambda text: next(l.index(text) for l in s.splitlines() if text in l)
-    assert column('studio') == column('old-repo') == column('▸ 25 older'), s
+    assert column('studio') == column('old-repo'), s
     assert ' · old-repo' not in s, s
 
     # The keys line has the main keys and says where the rest are.
@@ -110,20 +112,25 @@ try:
     s = taken('Old session 0')
     assert '▸ 25 older' not in s, s
     assert s.index('Old session 0') < s.index('Old session 2'), s
+    assert any('old-repo' in l and '▾ hide older' in l and '›' in l for l in s.splitlines()), s
+
+    # The same key hides them again, and shows them again.
+    keys('Enter'); gone('Old session 0'); taken('▸ 25 older')
+    keys('Enter'); taken('Old session 0')
 
     # Opened again they are folded again; a search finds one, with no `older` row in its results.
     keys('Escape'); gone('Search harnesses')
     keys('C-b', 's'); taken('▸ 25 older')
     type_text('Old session 7')
     s = taken('Old session 7')
-    assert 'older' not in s, s
+    assert '▸ 25 older' not in s and 'hide older' not in s, s
 
-    # OpenCode's white square on black and Codex's purple cloud on white, cursor's row included.
-    painted = coloured()
-    assert any(p in painted for p in ('48;2;0;0;0', '48;5;16', '48;5;0')) and '■' in painted, repr(painted)
+    # OpenCode's hollow square and Codex's cloud, as their icons: marks with no tile behind them.
+    assert '□' in screen(), screen()
     keys('C-u'); type_text('Old session 8'); taken('Old session 8')
-    painted = coloured()
-    assert any(p in painted for p in ('48;2;255;255;255', '48;5;231', '48;5;15')) and '☁' in painted, repr(painted)
+    assert '☁' in screen(), screen()
+    tiled = ('48;2;255;255;255m☁', '48;5;231m☁', '48;5;15m☁')
+    assert not any(t in coloured() for t in tiled), repr(coloured())
     print('harness-list ok')
 except BaseException:
     if started: print(screen(), file=sys.stderr)

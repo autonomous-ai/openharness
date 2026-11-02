@@ -1080,17 +1080,13 @@ fn quota_remaining<'a>(readings: impl Iterator<Item = (&'a str, &'a crate::fleet
     }).collect::<Vec<_>>().join("  ")
 }
 
-/// A subscription's provider as its engine's icon, in the engine's colour and on its tile (`✳`
-/// Claude, `☁` Codex/OpenAI…); a provider with no engine of its own, its name.
+/// A subscription's provider as its engine's icon, in the engine's colour (`✳` Claude, `☁`
+/// Codex/OpenAI…); a provider with no engine of its own, its name.
 fn quota_icon(provider: &str) -> String {
     let engine = match provider.to_ascii_lowercase().as_str() { "anthropic" | "claude" => "claude", "openai" | "chatgpt" | "codex" => "codex", _ => return quota_provider(provider) };
     let (mark, colour) = crate::theme::engine_mark(engine);
     if crate::theme::no_color() { return mark.to_string() }
-    let fg = crate::tmuxconf::colour_name(crate::theme::paint(colour));
-    match crate::theme::engine_tile(engine) {
-        Some(tile) => format!("#[fg={fg},bg={}]{mark}#[fg=default,bg=default]", crate::tmuxconf::colour_name(tile)),
-        None => format!("#[fg={fg}]{mark}#[fg=default]"),
-    }
+    format!("#[fg={}]{mark}#[fg=default]", crate::tmuxconf::colour_name(crate::theme::paint(colour)))
 }
 
 fn quota_provider(provider: &str) -> String {

@@ -346,33 +346,38 @@ pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Opt
     with_older_rows(grouped_in_order(rows))
 }
 
-/// [rows] with a `▸ N older` row closing each folder that has rows folded away (Enter unfolds them).
+/// [rows] with the heading of each folder that has rows folded away as a row of its own, its name
+/// and `▸ N older` on one line: the button that shows them, opening its folder (see
+/// settings::list_layout, which draws no other heading for it).
 fn with_older_rows(rows: Vec<Row>) -> Vec<Row> {
     let mut out: Vec<Row> = Vec::with_capacity(rows.len());
-    let mut run: Option<(String, Option<String>, Option<String>, usize)> = None;
-    let close = |out: &mut Vec<Row>, run: &mut Option<(String, Option<String>, Option<String>, usize)>| {
-        if let Some((key, section, group, n)) = run.take() {
-            let label = format!("▸ {n} older");
-            let mut row = Row::new(format!("{OLDER_ROW}{key}"), label.clone());
-            row.label_dim = label.chars().count();
-            row.section = section;
-            row.group = group;
-            out.push(row);
-        }
+    let mut start = 0;
+    let close = |out: &mut Vec<Row>, start: usize| {
+        let folded = || out[start..].iter().filter_map(|r| r.older.as_ref());
+        let Some(key) = folded().next().cloned() else { return };
+        let n = folded().count();
+        let first = &out[start];
+        let title = first.group.clone().unwrap_or_default();
+        let mut row = Row::new(format!("{OLDER_ROW}{key}"), title.clone()).right(format!("▸ {n} older"));
+        row.label_dim = title.chars().count();
+        row.section = first.section.clone();
+        row.group = first.group.clone();
+        out.insert(start, row);
     };
     for row in rows {
-        if run.as_ref().is_some_and(|(_, s, g, _)| *s != row.section || *g != row.group) { close(&mut out, &mut run) }
-        if let Some(key) = &row.older {
-            match &mut run { Some((_, _, _, n)) => *n += 1, None => run = Some((key.clone(), row.section.clone(), row.group.clone(), 1)) }
+        if out.last().is_some_and(|l| l.section != row.section || l.group != row.group) {
+            close(&mut out, start);
+            start = out.len();
         }
         out.push(row);
     }
-    close(&mut out, &mut run);
+    close(&mut out, start);
     out
 }
 
 /// [rows] with each section's rows together and each group's within it, in the order of each one's
-/// first row (the one active last's first), each group's rows in their own order.
+/// first row (the one active last's first), each group's rows in their own order, under the heading
+/// row it has if it has folded ones.
 pub fn grouped_in_order(mut rows: Vec<Row>) -> Vec<Row> {
     let mut sections: Vec<Option<String>> = Vec::new();
     let mut groups: Vec<(Option<String>, Option<String>)> = Vec::new();
@@ -380,7 +385,7 @@ pub fn grouped_in_order(mut rows: Vec<Row>) -> Vec<Row> {
         if !sections.contains(&r.section) { sections.push(r.section.clone()) }
         if !groups.iter().any(|(s, g)| *s == r.section && *g == r.group) { groups.push((r.section.clone(), r.group.clone())) }
     }
-    rows.sort_by_key(|r| (sections.iter().position(|s| *s == r.section), groups.iter().position(|(s, g)| *s == r.section && *g == r.group)));
+    rows.sort_by_key(|r| (sections.iter().position(|s| *s == r.section), groups.iter().position(|(s, g)| *s == r.section && *g == r.group), !r.id.starts_with(OLDER_ROW)));
     rows
 }
 
@@ -1004,7 +1009,7 @@ mod agent_row_tests {
         p
     }
 
-    fn visible_labels(p: &Picker) -> Vec<String> { p.visible.iter().map(|(i, _)| p.rows[*i].label.clone()).collect() }
+    fn visible_labels(p: &Picker) -> Vec<String> { p.visible.iter().map(|(i, _)| { let r = &p.rows[*i]; if r.id.starts_with(OLDER_ROW) { r.right.clone() } else { r.label.clone() } }).collect() }
 
     /// A harness untouched for over a week folds under its folder's `▸ N older`; Enter's unfolding
     /// brings it back, a search finds it with no such row, and one active or on screen never folds.
@@ -1016,6 +1021,11 @@ mod agent_row_tests {
         make_old(&mut app, "local", "a2");
         assert_eq!(agent_rows(&app, Filter::All, None, None).iter().filter(|r| r.id.starts_with(OLDER_ROW)).count(), 2, "one for webapp, one for api");
         let mut p = opened(agent_rows(&app, Filter::All, None, None));
+        // The folder's heading is the button: first in its folder, its name and its count.
+        let at = p.rows.iter().position(|r| r.right == "▸ 1 older" && r.group.as_deref() == Some("webapp")).unwrap();
+        assert_eq!(p.rows[at].label, "webapp");
+        assert_eq!(p.rows[at + 1].group.as_deref(), Some("webapp"));
+        assert!(at == 0 || p.rows[at - 1].section != p.rows[at].section || p.rows[at - 1].group != p.rows[at].group);
         let names = visible_labels(&p);
         assert!(names.contains(&"▸ 1 older".to_string()), "{names:?}");
         assert!(!names.contains(&"fix login".to_string()) && !names.contains(&"rate limit".to_string()), "{names:?}");
