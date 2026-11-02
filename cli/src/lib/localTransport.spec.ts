@@ -30,8 +30,17 @@ function folder(): { data: string; pipe: string } {
 }
 
 async function listen(server: Server, at: number | string): Promise<void> {
+  tolerant(server)
   cleanup.push(() => new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()) }))
   await new Promise<void>((resolve) => { typeof at === 'number' ? server.listen(at, '127.0.0.1', resolve) : server.listen(at, resolve) })
+}
+
+/**
+ * A test server's own sockets may be written to after the client has gone: an answer the client refused for want of the
+ * proof, then destroyed. On Linux that write is an EPIPE on the server's end, which nobody here needs to hear (CI on #2605).
+ */
+function tolerant(server: Server): void {
+  server.on('connection', (socket) => { socket.on('error', () => {}) })
 }
 
 /** Whoever holds the daemon's port: it records everything it is sent. */
@@ -58,6 +67,7 @@ async function pipeDaemon(pipe: string, token: Buffer): Promise<Seen[]> {
       res.end(JSON.stringify({ ok: true }))
     })
   }, pipe, { token })
+  tolerant(served.server)
   cleanup.push(served.close)
   return seen
 }
