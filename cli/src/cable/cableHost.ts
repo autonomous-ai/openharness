@@ -179,6 +179,12 @@ export class DaemonCableHost implements CableHost {
    * `selected`: announcing the older machine would replace the newer choice at the lane (deviceLink.ts select).
    */
   private selecting = ''
+  /**
+   * Counts the picks that could go through. Only the newest may move `selected`: a pick waiting on a slow machine lands up
+   * to 15 s later, and by then the person may be elsewhere (Diego's Buddy, 11-02). A count, not a compare with `selecting`:
+   * going away and back to one machine looks the same to that compare, and the first pick landing says nothing of the last.
+   */
+  private picks = 0
 
   /** Counts plug-ins: a lane open that lands after an unplug or a replug belongs to an older one and does nothing. */
   private plugIn = 0
@@ -248,8 +254,14 @@ export class DaemonCableHost implements CableHost {
     return this.viaFleet((r) => r.listMachines())
   }
 
+  /** The machine the newest pick is still on its way to, or '' when none is. */
+  pendingPick(): string {
+    return this.selecting
+  }
+
   async selectMachine(machineId: string): Promise<{ ok: true } | { ok: false; code: string; message: string }> {
     if (machineId === this.localId()) {
+      this.picks++
       this.selected = machineId
       this.selecting = ''
       // Let go of the REMOTE machine after a linger, keeping the socket — then announce where the dial
@@ -262,13 +274,16 @@ export class DaemonCableHost implements CableHost {
     if (!this.viaFleet((r) => r.hasLane())) {
       return { ok: false, code: 'UNAVAILABLE', message: 'Sign in on this computer to reach other machines' }
     }
+    const pick = ++this.picks
     this.selecting = machineId
     let selected: Awaited<ReturnType<FleetRouting['select']>>
     try {
       selected = await this.viaFleet((r) => r.select(machineId))
     } finally {
-      if (this.selecting === machineId) this.selecting = ''
+      if (pick === this.picks) this.selecting = ''
     }
+    // However it ended: a machine the person left failing late is no news to them.
+    if (pick !== this.picks) return { ok: false, code: 'SUPERSEDED', message: 'Another machine was chosen' }
     if (!selected.ok) return selected
     this.selected = machineId
     return { ok: true }

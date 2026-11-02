@@ -12,6 +12,8 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 
 import { CABLE_MAX_FRAME, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
+import { DaemonCableHost } from './cableHost.js'
+import type { MachineFleet } from './machineFleet.js'
 import { CableSession, recapFrame, type CableAgent, type CableHost, type CableMachine, type CablePort } from './cableSession.js'
 import { DialLog } from './dialLog.js'
 import { leadsOf, type SaidOnCard, type SwarmCard, type SwarmLead } from '../superTabs/cards.js'
@@ -2361,6 +2363,94 @@ describe('cable session', () => {
     port.say({ t: 'machine.select', machineId: 'mac-local' })
     await vi.waitFor(() => expect(port.types()).toContain('machine.selected'))
     await session.stop()
+  })
+
+  /**
+   * Diego's Buddy, 11-02. The dial's picks are not queued: a slow one is still out when the next arrives. Picking the
+   * machine the dial is already on took the "already selected" shortcut, so the host never heard of it, the slow pick
+   * landed, and `machine.selected` moved the dial's check mark away. On the real host, because the bug is between the two.
+   */
+  describe('a slow pick left behind', () => {
+    async function slowPick() {
+      const asked: Array<{ machineId: string; ok: () => void }> = []
+      const rows = [{ machineId: 'm2', name: 'office', state: 'ready', authMode: 'remote' }]
+      const fleet = {
+        list: async () => ({ machines: rows, source: 'backend' as const }),
+        recentAsks: async () => [],
+        online: async () => {},
+        // This computer's own select only announces where the dial is, and is answered at once here: the slow one is the pick.
+        select: (machineId: string) => machineId === 'mac-local' ? Promise.resolve() : new Promise<void>((ok) => { asked.push({ machineId, ok }) }),
+        release: vi.fn(),
+        listAgents: async () => [],
+      } as unknown as MachineFleet
+      const host = new DaemonCableHost({
+        sessions: () => [], displayName: () => '', machineName: () => 'this-mac', machineId: () => 'mac-local', computerId: () => 'abc',
+        sendTurn: vi.fn(), stopTurn: vi.fn(), answer: vi.fn(), recent: () => [], recentAsks: () => [], log: vi.fn(),
+      }, fleet)
+      const { session, port } = await connect(host)
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+      port.sent.length = 0
+      const told = (type: string) => port.sent.filter((m) => m.t === type).map((m) => m.machineId)
+      return { host, session, port, asked, told }
+    }
+    /** What the dial is told takes a few sends after a pick settles; let them all out. */
+    const drained = async () => { for (let turn = 0; turn < 20; turn++) await settle() }
+
+    it('tells the dial nothing of the slow machine once the person picked the one the dial is on', async () => {
+      const { host, session, port, asked, told } = await slowPick()
+      port.say({ t: 'machine.select', machineId: 'm2' })
+      await vi.waitFor(() => expect(asked.map((a) => a.machineId)).toEqual(['m2']))
+      port.say({ t: 'machine.select', machineId: 'mac-local' })
+      await vi.waitFor(() => expect(told('machine.selected')).toEqual(['mac-local']))
+      asked[0]!.ok()
+      await drained()
+      expect(told('machine.selected')).toEqual(['mac-local'])
+      expect(host.selectedMachine()).toBe('mac-local')
+      await session.stop()
+    })
+
+    it('follows the app back to the machine the dial is on, which replaces a slow pick the same way', async () => {
+      const { host, session, port, asked, told } = await slowPick()
+      port.say({ t: 'machine.select', machineId: 'm2' })
+      await vi.waitFor(() => expect(asked.map((a) => a.machineId)).toEqual(['m2']))
+      await session.followApp('mac-local', 'a1')
+      asked[0]!.ok()
+      await drained()
+      expect(told('machine.selected')).toEqual(['mac-local'])
+      expect(host.selectedMachine()).toBe('mac-local')
+      await session.stop()
+    })
+
+    it('shows no error for a pick the same machine\'s newer pick answers for', async () => {
+      // The dial shows a machine.error for the machine it still waits on, and a false one would clear its wait.
+      const { host, session, port, asked, told } = await slowPick()
+      port.say({ t: 'machine.select', machineId: 'm2' })
+      await vi.waitFor(() => expect(asked).toHaveLength(1))
+      port.say({ t: 'machine.select', machineId: 'm2' })
+      await vi.waitFor(() => expect(asked).toHaveLength(2))
+      asked[0]!.ok()
+      await drained()
+      expect(told('machine.error')).toEqual([])
+      expect(told('machine.selected')).toEqual([])
+      asked[1]!.ok()
+      await drained()
+      expect(told('machine.selected')).toEqual(['m2'])
+      expect(host.selectedMachine()).toBe('m2')
+      await session.stop()
+    })
+
+    it('tells a dial its pick was replaced when something else chose another machine', async () => {
+      // The dial still waits on its pick here, and only this ends the wait before its own "No response".
+      const { session, port, asked, told } = await slowPick()
+      port.say({ t: 'machine.select', machineId: 'm2' })
+      await vi.waitFor(() => expect(asked).toHaveLength(1))
+      await session.followApp('mac-local', 'a1')
+      asked[0]!.ok()
+      await drained()
+      expect(told('machine.error')).toEqual(['m2'])
+      await session.stop()
+    })
   })
 
   it('shows one row and says why when there is no lane to anywhere else', async () => {

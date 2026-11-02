@@ -387,6 +387,8 @@ export interface CableHost {
    * so the dial needs no table for a set it does not own.
    */
   selectMachine(machineId: string): Promise<{ ok: true } | { ok: false; code: string; message: string }>
+  /** The machine a pick is still on its way to, or '' when none is. Picking the selected machine then has to replace it. */
+  pendingPick?(): string
   /** The window's swarms and which is on screen. Empty with no window: the dial then draws no swarm line. */
   listSwarms(): { selected: string; swarms: CableSwarm[]; tiles: CableTile[] }
   /** The dial picked a swarm. Relayed to the window, which switches and re-describes its desk. */
@@ -3227,7 +3229,9 @@ export class CableSession {
    */
   private async selectMachine(machineId: string, isCurrent = () => true): Promise<void> {
     if (!machineId) return
-    if (machineId === this.host.selectedMachine()) {
+    // Not while a pick is on its way elsewhere: this one replaces it, so the host has to hear of it. Answered here alone,
+    // the slow pick landed afterwards and moved the check mark to a machine the person had left (Diego's Buddy, 11-02).
+    if (machineId === this.host.selectedMachine() && !this.host.pendingPick?.()) {
       await this.send({ t: 'machine.selected', machineId })
       await this.syncAgents()
       this.restoreInBackground()
@@ -3239,6 +3243,10 @@ export class CableSession {
     if (!isCurrent()) return
     if (!result.ok) {
       this.log(`cable: machine.select ${machineId} refused (${result.code})`)
+      // A newer pick of this same machine answers for this one. The dial is waiting on this machine, and an error for it
+      // would be shown and end that wait. For any other machine the error stands: the dial ignores it if it has moved on,
+      // and if something else chose (the app) it is what ends the dial's wait before its "No response".
+      if (result.code === 'SUPERSEDED' && this.host.pendingPick?.() === machineId) return
       await this.send({ t: 'machine.error', machineId, code: result.code, message: result.message })
       return
     }
@@ -3636,7 +3644,7 @@ export class CableSession {
       await focused
       const isCurrent = () => generation === this.appFocusGeneration
       if (!isCurrent() || !machineId) return
-      if (machineId === this.host.selectedMachine()) {
+      if (machineId === this.host.selectedMachine() && !this.host.pendingPick?.()) {
         // An older attachment to this same machine may have finished without acknowledging it,
         // because a newer pane superseded that request. The wheel still needs its selection.
         await this.syncMachines()
