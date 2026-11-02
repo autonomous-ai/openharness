@@ -14,6 +14,7 @@ void main() {
     ...more,
   };
   Map<String, dynamic> swarm([Map<String, dynamic> more = const {}]) => {
+    'version': 1,
     'id': 'tab',
     'name': 'Swarm',
     'ownerId': 'owner',
@@ -21,6 +22,8 @@ void main() {
     'people': <dynamic>[],
     'agents': <dynamic>[],
     'conversations': <dynamic>[],
+    'invitations': <dynamic>[],
+    'projects': <dynamic>[],
     ...more,
   };
 

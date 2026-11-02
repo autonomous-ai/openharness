@@ -330,6 +330,12 @@ class SuperTabConversation {
           ? SuperTabTask.fromJson(superTabMap(row['task']))
           : null,
       lastMessageSequence = (row['lastMessageSequence'] as num?)?.toInt() ?? 0,
+      requesterId = row['requesterId'] as String?,
+      shippedAt = row['shippedAt'] is num
+          ? DateTime.fromMillisecondsSinceEpoch(
+              (row['shippedAt'] as num).toInt(),
+            )
+          : null,
       lastMainSequence = (row['lastMainSequence'] as num?)?.toInt(),
       reactionSeq = (row['reactionSeq'] as num?)?.toInt() ?? 0,
       changedAt = row['changedAt'] is num
@@ -370,6 +376,14 @@ class SuperTabConversation {
   final List<SuperTabBuddySession> buddySessions;
   final SuperTabTask? task;
   final int? number;
+
+  /// The person who asked for this task; null on a conversation that is no
+  /// task, and from a server that does not say.
+  final String? requesterId;
+
+  /// When it shipped (its first Done); null until it has, and from a server
+  /// that does not say.
+  final DateTime? shippedAt;
   String get label => number == null ? title : '#$number $title';
   final String? leadId;
   final List<String> agentIds;
@@ -556,6 +570,10 @@ class SuperTabSnapshot {
             harness: effort,
       }),
       localModels = SuperTabLocalModels.read(row['localModels']),
+      removedMachines = [
+        for (final id in row['removedMachines'] as List? ?? const [])
+          if (id is String) id,
+      ],
       threadSessions = row['threadSessions'] == true,
       sessionsFromChat = row['sessionsFromChat'] == true,
       swarmBuddy = row['swarmBuddy'] == true,
@@ -641,6 +659,11 @@ class SuperTabSnapshot {
   /// desktop reads it (desktop_parity_test.dart); the phone offers no New
   /// session yet.
   final bool threadSessions;
+
+  /// The reader's own machines they took out of this Swarm: an automatic add
+  /// leaves them out (backend model.ts removedMachines). Empty from an older
+  /// backend.
+  final List<String> removedMachines;
 
   /// Whether that server also takes New session on a top-level message in a
   /// Buddy chat (read/contract.ts `sessionsFromChat`); false from an older one.
