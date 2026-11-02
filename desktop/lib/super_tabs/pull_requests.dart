@@ -13,6 +13,7 @@ import '../state/app_state.dart';
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'model.dart';
+import '../widgets/laid_out_list.dart';
 
 List<Uri> superTabPullRequestLinks(String text) => {
   for (final match in RegExp(
@@ -550,7 +551,7 @@ class _SuperTabPullRequestsState extends State<SuperTabPullRequests> {
                     ),
                   ),
                 )
-              : ListView(
+              : LaidOutListView(
                   padding: const EdgeInsets.only(bottom: 16),
                   children: [
                     if (_unsupported)

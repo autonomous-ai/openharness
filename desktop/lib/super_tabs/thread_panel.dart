@@ -16,6 +16,7 @@ import 'controller.dart';
 import 'jump_to_latest.dart';
 import 'model.dart';
 import 'thread_scroll.dart';
+import '../widgets/laid_out_list.dart';
 
 /// One thread beside the chat (Dee, 2026-10-29): its root, a "N replies"
 /// divider, the replies, and a composer whose reply goes to the root.
@@ -372,7 +373,7 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
                 children: [
                   // As in the chat, a message's text can be selected and copied.
                   SelectionArea(
-                    child: ListView(
+                    child: LaidOutListView(
                       controller: _scroll,
                       padding: const EdgeInsets.symmetric(
                         vertical: grid.AppDesktop.controlGap,
