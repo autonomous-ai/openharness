@@ -736,6 +736,98 @@ void main() {
       ]);
     });
 
+    // Tony's phone list, task 18, as Desktop's #2497: the server refuses new
+    // work on a paused machine, and only said so after the pick.
+    testWidgets('a paused machine says so and cannot be picked, and an online '
+        'one comes first', (tester) async {
+      final fake = backend(
+        machines: [
+          {...machine('mac-1', 'Aaa Paused'), 'paused': true},
+          machine('mac-2', 'Zed Open'),
+        ],
+      );
+      final computers = FakeComputers(const [])
+        ..own = [
+          (id: 'mac-1', name: 'Aaa Paused', away: false),
+          (id: 'mac-2', name: 'Zed Open', away: false),
+        ];
+      await pump(tester, fake, computers: computers);
+
+      expect(
+        find.descendant(
+          of: key('swarm-buddy-machine'),
+          matching: find.text('Zed Open'),
+        ),
+        findsOneWidget,
+        reason: 'the paused one is never the one offered',
+      );
+      await tester.tap(key('swarm-buddy-machine'));
+      await tester.pumpAndSettle();
+      expect(find.text('paused'), findsOneWidget);
+      await tester.tap(find.text('Aaa Paused'), warnIfMissed: false);
+      await tester.pumpAndSettle();
+      expect(
+        find.text(swarmBuddyOwnMachines.toLowerCase()),
+        findsOneWidget,
+        reason: 'not picked: the sheet stays',
+      );
+    });
+
+    testWidgets('with every machine paused, it says how to resume, offers no '
+        'Start, and an offline one says only that', (tester) async {
+      final fake = backend(
+        machines: [
+          {...machine('mac-1', 'Only Paused'), 'paused': true},
+        ],
+      );
+      await pump(
+        tester,
+        fake,
+        computers: FakeComputers(const [])
+          ..own = [(id: 'mac-1', name: 'Only Paused', away: false)],
+      );
+      expect(
+        find.text(
+          'New work is paused on your machines. Choose Resume new work in '
+          'Machines to start your Buddy.',
+        ),
+        findsOneWidget,
+      );
+      expect(key('swarm-buddy-start-button'), findsNothing);
+      await tester.tap(key('swarm-buddy-machine'));
+      await tester.pumpAndSettle();
+      expect(find.text('paused'), findsOneWidget);
+      await tester.tap(find.text('Only Paused'), warnIfMissed: false);
+      await tester.pumpAndSettle();
+      expect(fake.commands, isEmpty);
+    });
+
+    testWidgets('a machine both paused and offline says offline, and the words '
+        'for all offline stay', (tester) async {
+      final fake = backend(
+        machines: [
+          {...machine('mac-1', 'Gone'), 'paused': true},
+        ],
+      );
+      await pump(
+        tester,
+        fake,
+        computers: FakeComputers(const [])
+          ..own = [(id: 'mac-1', name: 'Gone', away: true)],
+      );
+      expect(
+        find.text(
+          'Your machines are offline. Open Harness on one of them to start '
+          'your Buddy there.',
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(key('swarm-buddy-machine'));
+      await tester.pumpAndSettle();
+      expect(find.text(swarmBuddyMachineOffline), findsOneWidget);
+      expect(find.text('paused'), findsNothing);
+    });
+
     testWidgets('with no machine of the person\'s own, it says to add one and '
         'offers no Start', (tester) async {
       await pump(
