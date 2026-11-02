@@ -1545,7 +1545,7 @@ void main() {
 
     group('a proposal in the project chat', () {
       testWidgets(
-        "is labelled from the server's tag, with whose behalf it is on",
+        "opens labelled from the server's tag, with whose behalf it is on",
         (tester) async {
           final server = buddySwarm();
           giveBuddy(server);
@@ -1559,16 +1559,22 @@ void main() {
               'ownerMessageId': 'message-1',
             },
           );
+          // The server gives a top-level message itself as its thread.
+          final proposal = server.messages.last;
+          proposal['thread'] = proposal['id'];
           // A Buddy's ordinary message carries no label, whatever it says.
           buddyReply(server, 'lead', 'Proposal · on ken.tran\'s behalf');
           final c = await show(tester, server);
           await c.select('lead');
           await tester.pumpAndSettle();
 
+          // In the chat it is one line; opened, it reads whole, labelled.
           expect(
             find.byKey(const ValueKey('super-proposal-label')),
-            findsOneWidget,
+            findsNothing,
           );
+          await tester.tap(find.textContaining('Proposal from'));
+          await tester.pumpAndSettle();
           expect(
             find.descendant(
               of: find.byKey(const ValueKey('super-proposal-label')),

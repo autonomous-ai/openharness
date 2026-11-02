@@ -17,7 +17,6 @@ import 'identity.dart' show superTabMachineName;
 import 'machine_status.dart' show kSuperTabMachineOfflineAfter;
 import 'model.dart';
 import 'buddy_chat.dart';
-import 'catch_up.dart';
 import 'project_github.dart';
 import 'parts.dart';
 import 'read_marks.dart';
@@ -2097,19 +2096,6 @@ class SuperTabController extends ChangeNotifier {
     ),
   );
 
-  /// What the reader missed in [id] after [after] (backend catchUp.ts).
-  Future<SuperTabCatchUp> readCatchUp(
-    String id,
-    int after,
-  ) async => SuperTabCatchUp.fromJson(
-    superTabMap(
-      await request(
-        'GET',
-        '$_path/conversations/${Uri.encodeComponent(id)}/catch-up?after=$after',
-      ),
-    ),
-  );
-
   late final _serverMarks = SuperTabReadMarkSender<String>(
     (id, sequence) => request(
       'POST',
@@ -3785,6 +3771,7 @@ class SuperTabController extends ChangeNotifier {
     for (var i = 0; i < next.length; i++) {
       final a = shown[i], b = next[i];
       if (a.id != b.id ||
+          a.text != b.text ||
           a.deliveries.length != b.deliveries.length ||
           !_sameReactions(a.reactions, b.reactions)) {
         return false;

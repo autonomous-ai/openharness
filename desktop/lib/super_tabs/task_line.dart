@@ -21,17 +21,38 @@ String superTabTaskWord(SuperTabMessage message, String readerId) =>
     switch (message.source['state']) {
       'planned' => 'planned',
       'working' => 'working',
-      'waiting' => message.source['answerFor'] == readerId ? 'Answer' : 'working',
+      'waiting' =>
+        message.source['answerFor'] == readerId ? 'Answer' : 'working',
       'review' => 'in review',
       'shipped' => 'shipped',
+      'stopped' => 'stopped',
       _ => '',
+    };
+
+/// A task's name, from the line's title. Its text is for older apps, which
+/// read it whole ("name · word"), and is the name only on a line with no title.
+String superTabTaskName(SuperTabMessage message) =>
+    switch (message.source['title']) {
+      final String title when title.isNotEmpty => title,
+      _ => message.text,
     };
 
 IconData _mark(SuperTabMessage message) => switch (message.source['state']) {
   'planned' => AppIcons.circleDashed,
   'shipped' => AppIcons.check,
+  'stopped' => AppIcons.circleSlash,
   _ => AppIcons.circleDot,
 };
+
+/// What a proposal is for: its goal, as the server writes it (backend
+/// buddies.ts, under its own opening line), else its first line.
+String _proposalName(String text) {
+  final lines = text.split('\n').map((line) => line.trim());
+  for (final line in lines) {
+    if (line.startsWith('Goal: ')) return line.substring(6).trim();
+  }
+  return lines.first;
+}
 
 /// One line that opens: the row both a task's and a proposal's message are.
 class _OpeningRow extends StatelessWidget {
@@ -80,8 +101,9 @@ class SuperTabTaskLine extends StatelessWidget {
   Widget build(BuildContext context) {
     final word = superTabTaskWord(message, readerId);
     final answer = word == 'Answer';
+    final title = superTabTaskName(message);
     final name = Text(
-      message.text,
+      title,
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
       style: DesktopChrome.text(medium: answer),
@@ -89,10 +111,12 @@ class SuperTabTaskLine extends StatelessWidget {
     final said = Text(
       word,
       maxLines: 1,
-      style: answer ? DesktopChrome.text(medium: true) : DesktopChrome.metadata(),
+      style: answer
+          ? DesktopChrome.text(medium: true)
+          : DesktopChrome.metadata(),
     );
     return _OpeningRow(
-      label: word.isEmpty ? message.text : '${message.text}, $word',
+      label: word.isEmpty ? title : '$title, $word',
       onOpen: onOpen,
       child: LayoutBuilder(
         builder: (context, constraints) {
@@ -148,7 +172,7 @@ class SuperTabProposalLine extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final text = 'Proposal from $owner: ${message.text.split('\n').first.trim()}';
+    final text = 'Proposal from $owner: ${_proposalName(message.text)}';
     return _OpeningRow(
       label: text,
       onOpen: onOpen,

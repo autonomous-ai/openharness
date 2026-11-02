@@ -20,7 +20,6 @@ import '../state/harness_attachments.dart';
 import '../state/workspace_chrome.dart';
 import 'chat_scroll.dart';
 import 'leaderboard/reader.dart';
-import 'catch_up_card.dart';
 import 'jump_to_latest.dart';
 import 'unread_line.dart';
 import 'roster.dart';
@@ -56,7 +55,6 @@ import 'buddies.dart';
 import 'decisions.dart';
 import 'decisions_view.dart';
 import 'route_row.dart';
-import 'ship_row.dart';
 import 'terminal_row.dart';
 import 'thread_panel.dart';
 import 'threads_view.dart';
@@ -66,7 +64,6 @@ import 'buddy_sessions.dart';
 import 'swarm_switcher.dart' show fallBackToPersonal;
 import 'project_options.dart';
 import 'switch_pm.dart';
-import 'project_status_card.dart';
 import 'task_line.dart';
 import 'pane_layout.dart';
 import 'view_room.dart';
@@ -408,7 +405,6 @@ class _SuperTabViewState extends State<SuperTabView>
       // The line is placed once the messages reach back to the mark.
     } else if (_unread.decide(id, shown, mark, own: c.isOwn)) {
       if (_openedAtMessage != id) _revealUnreadLine(id);
-      _loadCatchUp(id, mark);
     } else if (firstView || (grew && atEnd)) {
       _followEnd(id);
     } else if (atEnd) {
@@ -582,14 +578,6 @@ class _SuperTabViewState extends State<SuperTabView>
       },
     );
   }
-
-  /// Reads [id]'s catch-up card for the span after [mark], shown under its
-  /// line once it arrives.
-  void _loadCatchUp(String id, int mark) => unawaited(
-    _unread.catchUps.load(id, () => c.readCatchUp(id, mark)).then((shown) {
-      if (shown && mounted) setState(() {});
-    }),
-  );
 
   /// Shows the jump pill while the reader is away from a line not yet seen,
   /// and Jump to latest while the list is away from its newest message.
@@ -1981,9 +1969,28 @@ class _SuperTabViewState extends State<SuperTabView>
       if (m.conversationId == id) m,
   ];
 
-  /// A message waiting for an agent is never announced; notices older
-  /// backends stored stay hidden, in the list and as a reply's quote.
-  static bool _shown(SuperTabMessage m) => m.source['kind'] != 'delivery-hold';
+  /// What people never read in a chat, in the list and as a reply's quote: a
+  /// message waiting for an agent, notices older backends stored, the PM's own
+  /// notices about the work (backend NOTICE_READERS), and Shipped, which each
+  /// task's line now says (Quiet Swarm).
+  static const _neverShown = {
+    'delivery-hold',
+    'work-stalled',
+    'work-lost',
+    'work-resumed',
+    'idle-stop',
+    'idle',
+    'review-failed',
+    'update-request',
+    'digest-request',
+    'overlap',
+    'pair-loop',
+    'notice-digest',
+    'ship',
+  };
+
+  static bool _shown(SuperTabMessage m) =>
+      !_neverShown.contains(m.source['kind']);
 
   /// The row of [id]'s list that shows [messageId]: its own, or the notice
   /// that folds it in. Null while the message is not loaded.
@@ -2821,17 +2828,8 @@ class _SuperTabViewState extends State<SuperTabView>
         },
       );
     }
-    if (message.terminalEvent || message.source['kind'] == 'overlap') {
+    if (message.terminalEvent) {
       return SuperTabTerminalRow(
-        key: ValueKey(
-          '${inThread ? 'super-thread-message' : 'super-message'}-${message.id}',
-        ),
-        message: message,
-        controller: c,
-      );
-    }
-    if (SuperTabShipRow.shows(message)) {
-      return SuperTabShipRow(
         key: ValueKey(
           '${inThread ? 'super-thread-message' : 'super-message'}-${message.id}',
         ),
@@ -3041,7 +3039,10 @@ class _SuperTabViewState extends State<SuperTabView>
     final open = _openedTask;
     final task = open == null ? null : c.snapshot?.conversation(open.id);
     if (open == null || task == null || open.chat != c.selectedId) return null;
-    final line = c.messages(open.chat).where((m) => m.id == open.line).firstOrNull;
+    final line = c
+        .messages(open.chat)
+        .where((m) => m.id == open.line)
+        .firstOrNull;
     final rows = c.messages(open.id);
     final byId = {for (final m in rows) m.id: m};
     return SuperTabTaskPanel(
@@ -3340,8 +3341,6 @@ class _SuperTabViewState extends State<SuperTabView>
           _ => false,
         },
       );
-    // The controller these rows were built for, read when a row is pressed.
-    final shownFor = c;
     Widget row(int index) {
       final entry = entries[index];
       final message = entry.message;
@@ -3360,26 +3359,8 @@ class _SuperTabViewState extends State<SuperTabView>
                 previous?.createdAt?.toLocal(),
               ))
             _date(time),
-          if (message.id == _unread.lineAt(c.selectedId)) ...[
+          if (message.id == _unread.lineAt(c.selectedId))
             SuperTabNewMessagesLine(key: _unread.key),
-            if (_unread.catchUps.of(c.selectedId) case final summary?)
-              SuperTabCatchUpCard(
-                summary: summary,
-                onOpen: (messageId) =>
-                    unawaited(_openMessage(c.selectedId, messageId)),
-                onClose: () =>
-                    setState(() => _unread.catchUps.dismiss(c.selectedId)),
-                // Activity lists only the reader's own decisions and tags.
-                onOpenDecisions: () => _openActivity(
-                  filter: SuperTabActivityFilter.decisions,
-                  from: shownFor,
-                ),
-                onOpenMentions: () => _openActivity(
-                  filter: SuperTabActivityFilter.mentions,
-                  from: shownFor,
-                ),
-              ),
-          ],
           // The message itself is kept in place: its
           // date moves above earlier ones as they come.
           _BuiltRow(
@@ -3480,16 +3461,6 @@ class _SuperTabViewState extends State<SuperTabView>
             decisions: SuperTabDecisions.of(c),
             projectId: group.projectId,
           ),
-        // A project's chat opens with its status card: the coordinator's
-        // progress, replaced in place, and what waits on the reader there.
-        if (group != null && c.snapshot?.isProjectLead(group.id) == true)
-          for (final project in c.snapshot!.projects)
-            if (project.leadConversationId == group.id)
-              SuperTabProjectStatusCard(
-                key: ValueKey('super-project-status-card-${project.id}'),
-                controller: c,
-                projectId: project.id,
-              ),
         Expanded(
           child: c.loading
               ? const Center(child: CircularProgressIndicator())
