@@ -9,7 +9,7 @@ import {
   type Actor, type AgentConfiguration, type AgentStart, type AgentStartRequest, type BuddySessionEntry, type WorkTask, type Agent, type Author, type Check, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
 import { jobKindOf } from './evidence/jobKind.js'
-import { closeSteps } from './steps.js'
+import { closeSteps, holdsStepOf, isStep, taskOwner } from './steps.js'
 import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSaveSchema } from './routingPolicy.js'
 import { askedInSchema, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema } from './rules.js'
@@ -2509,7 +2509,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const leadToWorker = actor.kind === 'agent' && actor.agentId === group.leadId && assigned && assigned !== group.leadId
         && group.agentIds.includes(assigned) && (!context.reply || replyAgent === assigned)
         && !leadWorkerBounced(context.recent, group.leadId, assigned) ? assigned : null
+      // A step's agent tells its task's owner, as its status does (task steps design); with no owner, the coordinator.
+      const stepOwner = actor.kind === 'agent' && isStep(group) ? taskOwner(state, group) : null
       const workerToLead = actor.kind === 'agent' && activeWork(group) && group.assignment?.agentId === actor.agentId
+        && stepOwner && stepOwner !== actor.agentId ? stepOwner
+        : actor.kind === 'agent' && activeWork(group) && group.assignment?.agentId === actor.agentId
         && group.leadId && group.leadId !== actor.agentId && group.agentIds.includes(group.leadId) ? group.leadId : null
       const agentRecipient = leadToWorker ?? workerToLead
       // Any other agent's unnamed post in the group reaches its Lead: an agent whose task here was lost, moved or cancelled has
@@ -2519,7 +2523,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // A post that names its agents reaches only them: copying every one to the Lead filled its terminal (Ken, 10-30: 198 of
       // the 486 messages it got in a day were such copies). The assigned worker keeps its own rule above; a note to itself
       // stays its own.
-      const memberToLead = actor.kind === 'agent' && !command.agentOnly && !addressed.length && assigned !== actor.agentId && group.leadId
+      // In a task, an agent holding one of its open steps reaches the task's owner instead (task steps design).
+      const ownerHere = actor.kind === 'agent' && assigned && assigned !== actor.agentId && holdsStepOf(state, group.id, actor.agentId) ? assigned : null
+      const memberToLead = actor.kind === 'agent' && !command.agentOnly && !addressed.length && assigned !== actor.agentId && ownerHere ? [ownerHere]
+        : actor.kind === 'agent' && !command.agentOnly && !addressed.length && assigned !== actor.agentId && group.leadId
         && group.leadId !== actor.agentId && group.agentIds.includes(group.leadId) ? [group.leadId] : []
       // Buddy thread sessions (buddySessions.ts): a session thread's replies reach its session alone and stay in its thread; the
       // main Buddy hears the rest. Decided here from the thread, so every client, an old one or the phone, is routed alike.
@@ -2791,14 +2798,23 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // Finished work shows the worker recovered from a task it lost before.
       if (command.status === 'done') delete state.agents.find(a => a.id === assignment.agentId)?.lostTask
       if (changed) {
-        const label = STATUS_LABELS[command.status]
+        // A step's Ready is its own hand-over, whatever its instructions call it (task steps design): not "for review".
+        const label = isStep(group) && command.status === 'review' ? 'Ready' : STATUS_LABELS[command.status]
         const lead = group.leadId
         const own = actor.kind === 'agent' && actor.agentId === assignment.agentId
+        // A step's progress is its task owner's to act on (Ken, 2026-11-02: the PM's terminal got a message every few
+        // seconds from builders and reviewers). Ready and Done go to the owner, else the coordinator; what needs a person or
+        // is stuck goes to both.
+        const owner = isStep(group) ? taskOwner(state, group) : null
+        const stepTold = !isStep(group) || !own ? null
+          : ['review', 'done'].includes(command.status) ? [owner ?? lead]
+            : ['needs_human', 'blocked'].includes(command.status) ? [lead, owner] : []
         // Its own agent's change reaches the coordinator when the work waits on someone or is done: stuck is the coordinator's
         // to hear as a human decision is. Anyone else's changes that agent's work, so it reaches the agent (unless its host
         // confirmed it stopped) and the coordinator (final review). Nobody else is woken by role: the agent whose work is
         // ready names who reviews it (project instructions, phase 4).
-        const told = own ? (lead && ['needs_human', 'blocked', 'review', 'done'].includes(command.status) ? [lead] : [])
+        const told = stepTold ? stepTold.filter((id): id is string => !!id)
+          : own ? (lead && ['needs_human', 'blocked', 'review', 'done'].includes(command.status) ? [lead] : [])
           : [...command.status === 'stopped' ? [] : [assignment.agentId], ...lead ? [lead] : []]
         const recipients = [...new Set(told)].filter(id => actor.kind !== 'agent' || id !== actor.agentId)
         const asked = !command.ask ? '' : effects.result.notAsked ? `\n\n${effects.result.notAsked}` : `\n\nAsked ${person(state, command.ask.personId).email}.`

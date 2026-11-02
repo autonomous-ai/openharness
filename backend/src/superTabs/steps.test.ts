@@ -158,3 +158,65 @@ describe('a step closes with its task', () => {
     expect(stepSleeps({ archived: false, dormant: true })).toBe(true)
   })
 })
+
+// Ken, 2026-11-02: the PM's terminal got a message every few seconds, a builder's or a reviewer's. A step's progress is its
+// task owner's to act on; the PM hears what needs a person, what is stuck, and what the owner tells it.
+describe('who hears a step', () => {
+  function reviewing(f = stepsFixture()) {
+    const id = f.step('Review')
+    const rev = f.add('rev', id)
+    f.run({ type: 'work.assign', conversationId: id, agentId: rev }, f.as(f.dev))
+    const status = (status: string, result: string | null = 'note', on = id, by = rev) =>
+      f.run({ type: 'work.status', conversationId: on, assignmentId: f.group(on).assignment!.id, status, result } as Command, f.as(by)).messages
+    const post = (on: string, by = rev) =>
+      f.run({ type: 'message.send', conversationId: on, text: 'Two findings.', replyTo: null, recipientIds: [] } as Command, f.as(by)).messages
+    return { f, id, rev, status, post }
+  }
+  const to = (messages: Array<{ conversationId: string; recipients: string[]; text: string }>, id: string) =>
+    messages.filter(m => m.conversationId === id).map(m => m.recipients)
+
+  it('a step\'s review and done reach the task\'s owner, not the coordinator', () => {
+    const { f, id, status } = reviewing()
+    expect(to(status('review', 'Findings posted'), id)).toEqual([[f.dev]])
+    expect(to(status('done', 'Passed'), id)).toEqual([[f.dev]])
+  })
+
+  it('with no owner, a step\'s done reaches the coordinator', () => {
+    const { f, id, status } = reviewing()
+    // The task's own work is over: nobody owns it now.
+    status('done', 'Merged', f.task, f.dev)
+    expect(to(status('done', 'Passed'), id)).toEqual([[f.lead]])
+  })
+
+  it('a step\'s blocked reaches the coordinator and the owner', () => {
+    const { f, id, status } = reviewing()
+    expect(to(status('blocked', 'No Mac'), id).map(r => [...r].sort())).toEqual([[f.lead, f.dev].sort()])
+  })
+
+  it('a step\'s review row reads Ready', () => {
+    const { id, status } = reviewing()
+    expect(status('review', 'Findings posted').filter(m => m.conversationId === id).map(m => m.text)).toEqual(['Ready\n\nFindings posted'])
+  })
+
+  it('a step agent\'s unnamed post reaches the owner, in its step or in its task', () => {
+    const { f, id, post } = reviewing()
+    expect(to(post(id), id)).toEqual([[f.dev]])
+    expect(to(post(f.task), f.task)).toEqual([[f.dev]])
+  })
+
+  it('an agent with no open step in the task still reaches the coordinator', () => {
+    const { f, post } = reviewing()
+    const other = f.add('other', f.task)
+    expect(to(post(f.task, other), f.task)).toEqual([[f.lead]])
+  })
+
+  it('an old linked group keeps today\'s notices', () => {
+    const f = stepsFixture()
+    const old = f.run({ type: 'conversation.create', title: 'Review', brief: 'x', reviewOf: f.task, checks: [] }, f.as(f.dev)).result.conversationId as string
+    const rev = f.add('rev', old)
+    f.run({ type: 'work.assign', conversationId: old, agentId: rev }, f.as(f.dev))
+    const messages = f.run({ type: 'work.status', conversationId: old, assignmentId: f.group(old).assignment!.id, status: 'done', result: 'Passed' } as Command, f.as(rev)).messages
+    expect(to(messages, old)).toEqual([[f.lead]])
+    expect(messages.find(m => m.conversationId === old)!.text).toBe('Done\n\nPassed')
+  })
+})
