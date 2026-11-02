@@ -78,7 +78,8 @@ final reviewAndTest = [
   },
 ];
 
-const mockup = '#14 Review PR 12: passed · #15 Test PR 12: 1 check failed';
+// Every linked task is a step, named by its title (Ken, 2026-11-02).
+const mockup = 'Review PR 12: passed · Test PR 12: 1 check failed';
 
 Future<void> showView(WidgetTester tester, ConversationServer server) async {
   final controller = server.controller();
@@ -184,8 +185,8 @@ void main() {
     final snapshot = SuperTabSnapshot.fromJson(server.state);
     expect(
       superTabLinkedLine(snapshot, snapshot.conversation('offline')!),
-      '#20 Not begun: not started · #21 Under way: needs human · '
-      '#22 Some passed: 1 of 3 checks passed · #23 Two failed: 2 checks failed',
+      'Not begun: not started · Under way (Nova): needs human · '
+      'Some passed: 1 of 3 checks passed · Two failed: 2 checks failed',
     );
     expect(superTabLinkedLine(snapshot, snapshot.conversation('a')!), isNull);
   });
@@ -288,10 +289,11 @@ void main() {
     final snapshot = SuperTabSnapshot.fromJson(server.state);
     expect(snapshot.conversation('copy')!.step, 'Copy');
     expect(superTabIsStep(snapshot.conversation('copy')!), isTrue);
-    expect(superTabIsStep(snapshot.conversation('old')!), isFalse);
+    // Named or not, a linked task is a step (Ken, 2026-11-02).
+    expect(superTabIsStep(snapshot.conversation('old')!), isTrue);
     expect(
       superTabLinkedLine(snapshot, snapshot.conversation('offline')!),
-      '#20 Review PR 12: not started · Copy (Atlas): done · '
+      'Review PR 12: not started · Copy (Atlas): done · '
       'Thiết kế "v2" (Nova): working',
     );
   });
@@ -314,7 +316,8 @@ void main() {
     );
     final snapshot = SuperTabSnapshot.fromJson(server.state);
     final listed = superTabListedWork(snapshot.conversations).map((g) => g.id);
-    expect(listed, contains('old'));
+    // A linked task opened without a step name is a step too (Ken, 2026-11-02).
+    expect(listed, isNot(contains('old')));
     expect(listed, isNot(contains('copy')));
   });
 
@@ -454,6 +457,30 @@ void main() {
     expect(
       tester.getTopLeft(find.byKey(line)).dy,
       lessThan(tester.getTopLeft(find.textContaining('Line 5')).dy),
+    );
+  });
+
+  // Ken, 2026-11-02: every linked task is a step, named or not.
+  test('a linked task with no step name is a step, named by its title', () {
+    final server = groupServer(
+      linked: [
+        {
+          ...conversationFixture('old', 'Test: PR #2514'),
+          'number': 20,
+          'reviewOf': 'offline',
+          'assignment': {'id': 'w', 'agentId': 'reviewer', 'status': 'working'},
+        },
+      ],
+    );
+    final snapshot = SuperTabSnapshot.fromJson(server.state);
+    expect(superTabIsStep(snapshot.conversation('old')!), isTrue);
+    expect(
+      superTabListedWork(snapshot.conversations).map((g) => g.id),
+      isNot(contains('old')),
+    );
+    expect(
+      superTabLinkedLine(snapshot, snapshot.conversation('offline')!),
+      'Test: PR #2514 (Nova): working',
     );
   });
 }

@@ -1733,7 +1733,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
           || groupProject(state, reviewed).id !== project.id) fail('NOT_FOUND', 'This conversation is unavailable.', 404)
         open(state, reviewed.id)
         // One level: a step's own work is a task's step, never a task with steps of its own (task steps design).
-        if (command.step && reviewed.step) fail('STEP_OF_STEP', 'A step belongs to a task, not to another step.', 400)
+        if (command.step && isStep(reviewed)) fail('STEP_OF_STEP', 'A step belongs to a task, not to another step.', 400)
       }
       // Who asked: the person named, else the one a Buddy's proposal was sent for, else a person opening it themselves.
       const proposal = command.proposalMessageId ? proposalOf(state, project, context.proposal) : undefined
@@ -2760,7 +2760,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       delete worker.lostTask
       if (!group.agentIds.includes(worker.id)) group.agentIds.push(worker.id)
       // A step's agent works in its task's chat, where its owner and the other steps' agents are (task steps design).
-      const owning = group.step && group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : undefined
+      const owning = isStep(group) ? state.conversations.find(c => c.id === group.reviewOf) : undefined
       if (owning && !owning.agentIds.includes(worker.id) && joinsProject(state, owning, worker.id)) owning.agentIds.push(worker.id)
       rememberAttempt(group)
       group.assignment = { id: operationId, agentId: worker.id, status: 'working', configuration: structuredClone(worker.configuration),

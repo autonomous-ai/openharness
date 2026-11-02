@@ -106,7 +106,7 @@ async function sleepQuietGroups(db: PrismaClient, now: number): Promise<number> 
       if (!group.archived && !quiet) continue
       if ((await leadsOf(row.tabId)).has(group.id)) continue
       // A step sleeps with its task (task steps design): read once per task in this pass.
-      if (group.step && group.reviewOf && !stepSleeps(await taskOf(row.tabId, group.reviewOf))) continue
+      if (group.reviewOf && !stepSleeps(await taskOf(row.tabId, group.reviewOf))) continue
       const reports = group.audience ? null : await progressOf(row.tabId, group.projectId ?? 'lead')
       if (reports && (group.reportSeq ?? 0) > (reports.summarized[group.id] ?? reports.summarizedFloor)) continue
       if (await guarded(db, { tabId: row.tabId, op: 'update', kind: 'group', key: row.key, seen: row.version, data: { ...group, dormant: true } })) slept++

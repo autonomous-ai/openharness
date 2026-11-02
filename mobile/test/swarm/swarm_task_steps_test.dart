@@ -20,7 +20,7 @@ void main() {
         ).state,
       );
 
-  test('the project list hides steps and keeps old linked tasks', () {
+  test('the project list hides every linked task, named as a step or not', () {
     final snapshot = swarm([
       groupData(
         'task',
@@ -46,7 +46,7 @@ void main() {
       },
     ]);
     final work = swarmProjectWork(snapshot, snapshot.projects.single);
-    expect(work.active.map((g) => g.id), containsAll(['task', 'old']));
+    expect(work.active.map((g) => g.id), ['task']);
     expect(
       [...work.active, ...work.older].map((g) => g.id),
       isNot(contains('step')),
@@ -54,7 +54,7 @@ void main() {
     expect(superTabIsStep(snapshot.conversation('step')!), isTrue);
     expect(
       superTabLinkedLine(snapshot, snapshot.conversation('task')!),
-      '#9 Review PR 9: not started · Review (Dev): working',
+      'Review PR 9: not started · Review (Dev): working',
     );
   });
 }

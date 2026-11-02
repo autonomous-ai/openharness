@@ -1770,7 +1770,9 @@ class SuperTabController extends ChangeNotifier {
   /// The name of the step [message] was written in; null for a task's own.
   String? stepNameOf(SuperTabMessage message) {
     final group = snapshot?.conversation(message.conversationId);
-    return group != null && superTabIsStep(group) ? group.step : null;
+    return group != null && superTabIsStep(group)
+        ? superTabStepName(group)
+        : null;
   }
 
   /// [group]'s linked tasks with their checks' results ([superTabLinkedLine]);
