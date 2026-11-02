@@ -12,6 +12,11 @@ import 'support/super_tab_fixture.dart';
 
 final _now = DateTime(2026, 11, 2, 20, 30);
 
+Future<SuperTabActivity> loaded(
+  WidgetTester tester,
+  ConversationServer server,
+) async => (await tester.runAsync(() => load(server)))!;
+
 class _Opened {
   final mentions = <String>[];
   final threads = <(String, String)>[];
@@ -87,7 +92,7 @@ ConversationServer full() {
 void main() {
   testWidgets('has the three sections in order, and no filter', (tester) async {
     await withClock(Clock.fixed(_now), () async {
-      final activity = await tester.runAsync(() => load(full()))!;
+      final activity = await loaded(tester, full());
       await show(tester, activity);
       double top(String text) => tester.getTopLeft(find.text(text)).dy;
       expect(top('Needs you'), lessThan(top('New replies')));
@@ -109,7 +114,7 @@ void main() {
     tester,
   ) async {
     await withClock(Clock.fixed(_now), () async {
-      final activity = await tester.runAsync(() => load(full()))!;
+      final activity = await loaded(tester, full());
       await show(tester, activity);
       expect(find.text('W1 ships alone or waits?'), findsOneWidget);
       expect(find.text('Answer'), findsOneWidget);
@@ -140,7 +145,7 @@ void main() {
           'read': [],
           'more': false,
         };
-        final activity = await tester.runAsync(() => load(server))!;
+        final activity = await loaded(tester, server);
         await show(tester, activity, width: width);
         final rows = find.byWidgetPredicate(
           (w) =>
@@ -168,7 +173,7 @@ void main() {
   testWidgets(
     'a decision row opens its card to answer, a second tap folds it',
     (tester) async {
-      final activity = await tester.runAsync(() => load(full()))!;
+      final activity = await loaded(tester, full());
       await show(tester, activity);
       expect(find.text('Behind a flag'), findsNothing);
       await tester.tap(find.text('W1 ships alone or waits?'));
@@ -184,7 +189,7 @@ void main() {
     tester,
   ) async {
     await withClock(Clock.fixed(_now), () async {
-      final activity = await tester.runAsync(() => load(full()))!;
+      final activity = await loaded(tester, full());
       final opened = await show(tester, activity);
       await tester.tap(find.text('Nico is waiting on you'));
       await tester.tap(find.text('Wren mentioned you in # web-project'));
@@ -202,7 +207,7 @@ void main() {
     final server = swarm();
     server.tag('message-1', messageSequence: 1);
     server.tag('message-2', messageSequence: 9);
-    final activity = await tester.runAsync(() => load(server))!;
+    final activity = await loaded(tester, server);
     activity.controller.markRead('lead');
     await show(tester, activity);
     FontWeight? weight(int index) => tester
@@ -226,7 +231,7 @@ void main() {
       'says you are all caught up when nothing is new ($brightness)',
       (tester) async {
         final server = swarm()..followedThreads = null;
-        final activity = await tester.runAsync(() => load(server))!;
+        final activity = await loaded(tester, server);
         await show(tester, activity, brightness: brightness);
         expect(find.text("You're all caught up."), findsOneWidget);
         for (final heading in ['Needs you', 'New replies', 'Done today']) {
@@ -238,7 +243,7 @@ void main() {
 
   testWidgets('leaving the view marks nothing read', (tester) async {
     final server = full();
-    final activity = await tester.runAsync(() => load(server))!;
+    final activity = await loaded(tester, server);
     await show(tester, activity);
     await tester.pumpWidget(const SizedBox());
     await tester.pump();

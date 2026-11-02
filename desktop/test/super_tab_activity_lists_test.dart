@@ -212,6 +212,85 @@ void main() {
     });
   });
 
+  group('the number clears by reading (Dee: every number)', () {
+    Future<void> reload(
+      SuperTabActivity activity,
+      ConversationServer server,
+    ) async {
+      server.revision++;
+      await activity.controller.refresh();
+      await activity.mentions.load();
+      await activity.decisions.load();
+    }
+
+    test(
+      'a tag counts until its chat is read past it, then it leaves Needs you',
+      () async {
+        final server = swarm()..followedThreads = null;
+        server.tag('message-1', messageSequence: 5);
+        server.state['readMarks'] = {
+          'owner': {'lead': 4},
+        };
+        final activity = await load(server);
+        expect(activity.count, 1);
+        expect(
+          [for (final n in activity.needsYou) n.kind],
+          [SuperTabNeedKind.mention],
+        );
+        server.state['readMarks'] = {
+          'owner': {'lead': 5},
+        };
+        await reload(activity, server);
+        expect(activity.count, 0);
+        expect(activity.needsYou, isEmpty);
+      },
+    );
+
+    test('a decision counts until it is answered', () async {
+      final server = swarm()..followedThreads = null;
+      server.ask(['Ship it?']);
+      final activity = await load(server);
+      expect(activity.count, 1);
+      server.answerDecision('decision-1', 0);
+      server.state['decisionsWaiting'] = 0;
+      await reload(activity, server);
+      expect(activity.count, 0);
+      expect(activity.needsYou, isEmpty);
+    });
+
+    test('an agent waiting counts until it is answered', () async {
+      final server = swarm()..followedThreads = null;
+      wait(server);
+      final activity = await load(server);
+      expect(activity.count, 1);
+      _group(server, 'offline')['assignment'] = {
+        'id': 'a1',
+        'agentId': 'kestrel',
+        'status': 'working',
+      };
+      await reload(activity, server);
+      expect(activity.count, 0);
+      expect(activity.needsYou, isEmpty);
+    });
+
+    test(
+      'a tag in a thread-only reply is a new reply, not Needs you',
+      () async {
+        final server = swarm();
+        server.tag('message-2', threadId: 'message-1', messageSequence: 2);
+        server.followedThreads = {
+          'unread': [unreadThread('message-1')],
+          'read': [],
+          'more': false,
+        };
+        final activity = await load(server);
+        expect(activity.needsYou, isEmpty);
+        expect(activity.count, 0);
+        expect(activity.newReplies.map((t) => t.rootId), ['message-1']);
+      },
+    );
+  });
+
   group('New replies', () {
     test(
       'are the followed threads with replies the reader has not read',
