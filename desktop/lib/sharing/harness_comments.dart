@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
 import '../ws/ws_conn.dart';
+import '../widgets/laid_out_list.dart';
 
 typedef CommentAction = Future<Map<String, dynamic>> Function(
   String action,
@@ -241,7 +242,7 @@ class _HarnessCommentsState extends State<HarnessComments> {
         ),
       );
     }
-    return ListView.separated(
+    return LaidOutListView.separated(
       key: const ValueKey('comments-list'),
       primary: false,
       itemCount: _comments.length,

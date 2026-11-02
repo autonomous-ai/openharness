@@ -3991,6 +3991,7 @@ class _SuperTabViewState extends State<SuperTabView>
         controller: c,
         app: widget.app,
         board: _board,
+        storage: widget.app?.localStore,
         onInvite: widget.onInvite,
         onOpenAgent: (agent) {
           setState(() {

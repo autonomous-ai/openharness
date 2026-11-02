@@ -111,6 +111,77 @@ describe('guarded Redis commands', () => {
     expect(breaker.state()).toBe('closed')
   })
 
+  // While the circuit is closed a command is sent directly and its outcome counted from its own promise: no `run`, no
+  // async frame and no AbortController per command (spec 2026-11-02-swarm-cache-delta-design, Part 4).
+  it('a closed circuit sends without run', async () => {
+    const redis = await stuckRedis()
+    const breaker = createCircuitBreaker({ name: 'redis', failureThreshold: 5, openMs: 5_000, isFailure: isRedisFailure })
+    const run = vi.spyOn(breaker, 'run')
+    guardRedisCommands(redis.client, breaker)
+    redis.answer(true)
+
+    await expect(redis.client.get('k')).resolves.toBeNull()
+    await expect(redis.client.set('k', 'v')).resolves.toBeNull()
+
+    expect(run).not.toHaveBeenCalled()
+    expect(breaker.state()).toBe('closed')
+  })
+
+  it('five failures through the fast path open it', async () => {
+    const redis = await stuckRedis()
+    const breaker = createCircuitBreaker({ name: 'redis', failureThreshold: 5, openMs: 5_000, isFailure: isRedisFailure })
+    const run = vi.spyOn(breaker, 'run')
+    guardRedisCommands(redis.client, breaker)
+
+    for (let i = 0; i < 4; i++) await expect(redis.client.get('k')).rejects.toThrow(/timed out/i)
+    expect(breaker.state()).toBe('closed')
+    await expect(redis.client.get('k')).rejects.toThrow(/timed out/i)
+
+    expect(breaker.state()).toBe('open')
+    expect(run).not.toHaveBeenCalled()
+    const sent = redis.commands()
+    await expect(redis.client.get('k')).rejects.toBeInstanceOf(CircuitOpenError)
+    expect(redis.commands()).toBe(sent)
+  })
+
+  it('open refuses, and after 5 s one trial closes it on success', async () => {
+    let now = 0
+    const redis = await stuckRedis()
+    const breaker = createCircuitBreaker({ name: 'redis', failureThreshold: 5, openMs: 5_000, isFailure: isRedisFailure, now: () => now })
+    guardRedisCommands(redis.client, breaker)
+    for (let i = 0; i < 5; i++) await expect(redis.client.get('k')).rejects.toThrow(/timed out/i)
+    redis.answer(true)
+    now += 4_999
+    await expect(redis.client.get('k')).rejects.toBeInstanceOf(CircuitOpenError)
+
+    now += 1
+    // One trial at a time: the second command, sent while the first is in flight, is still refused.
+    const trial = redis.client.get('k')
+    const other = redis.client.get('k').catch((err: unknown) => err)
+    await expect(trial).resolves.toBeNull()
+    expect(await other).toBeInstanceOf(CircuitOpenError)
+
+    expect(breaker.state()).toBe('closed')
+    await expect(redis.client.get('k')).resolves.toBeNull()
+  })
+
+  it('a reply error does not count as a failure', async () => {
+    const redis = await stuckRedis()
+    const breaker = createCircuitBreaker({ name: 'redis', failureThreshold: 2, openMs: 60_000, isFailure: isRedisFailure })
+    const run = vi.spyOn(breaker, 'run')
+    guardRedisCommands(redis.client, breaker)
+
+    await expect(redis.client.get('k')).rejects.toThrow(/timed out/i)
+    redis.answer(true, '-WRONGTYPE Operation against a key holding the wrong kind of value\r\n')
+    await expect(redis.client.get('k')).rejects.toThrow(/WRONGTYPE/)
+    redis.answer(false)
+    // The answer in between reset the count, so one more timeout is the first in a row again.
+    await expect(redis.client.get('k')).rejects.toThrow(/timed out/i)
+
+    expect(breaker.state()).toBe('closed')
+    expect(run).not.toHaveBeenCalled()
+  })
+
   it('lets a connection that is not ready yet send its own setup, so it can come back while the circuit is open', async () => {
     // A Redis that answers, including the INFO that ioredis' ready check sends before the connection is ready.
     server = createServer(socket => {

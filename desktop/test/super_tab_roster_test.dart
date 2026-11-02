@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/core/relative_time.dart';
 import 'package:harness/notify/alert_sounds.dart';
@@ -33,6 +34,9 @@ class RosterFixture {
   SuperTabConversation? added;
   String? answered;
   final boundary = GlobalKey();
+
+  /// Where the roster keeps its scope choice; none by default.
+  LocalKeyValueStore? storage;
   bool disposed = false;
 
   Future<void> initialize() async {
@@ -98,6 +102,7 @@ class RosterFixture {
               onAddAgent: (group) => added = group,
               onAnswer: (id) => answered = id,
               onOpenAgent: (agent) => opened = agent,
+              storage: storage,
               now: now ?? DateTime.now,
             ),
           ),
@@ -1749,7 +1754,7 @@ void main() {
     'agents on another computer show their Swarm state with the tabs\' marks, most urgent first',
     (tester) async {
       final f = await fixture(tester);
-      await tester.binding.setSurfaceSize(const Size(280, 540));
+      await tester.binding.setSurfaceSize(const Size(280, 600));
       final now = DateTime.now().millisecondsSinceEpoch;
       // This Mac reads neither computer itself: only the Swarm says how they are.
       f.server.state['machines'] = [

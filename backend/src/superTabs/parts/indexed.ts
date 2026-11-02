@@ -184,7 +184,7 @@ export const groupsBy = (tx: Transaction, index: GroupIndex, pipeline: Prisma.In
 
 /** A project's quiet conversations last active since `since`, as the project index serves them. A conversation stored with no
  *  project belongs to the first one (projects.ts groupProject); a null match is a missing field too. */
-export function quietSince(tabId: string, projectId: string, since: number): Record<string, Prisma.InputJsonValue> {
+export function quietSince(tabId: string, projectId: string | string[], since: number): Record<string, Prisma.InputJsonValue> {
   return { tabId, deleted: false, dormant: true, lastActivityAt: { $gte: { $date: new Date(since).toISOString() } },
-    projectId: { $in: projectId === 'lead' ? ['lead', null] : [projectId] } }
+    projectId: { $in: [projectId].flat().flatMap(id => id === 'lead' ? ['lead', null] : [id]) } }
 }

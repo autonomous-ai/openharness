@@ -511,6 +511,12 @@ class ConversationServer {
   Map<String, dynamic>? leaderboard;
   final leaderboardReads = <String>[];
 
+  /// Answers by the read's path instead of [leaderboard], as a server does.
+  Map<String, dynamic> Function(String path)? leaderboardAnswer;
+
+  /// Holds the next reads' answers until it completes.
+  Future<void>? leaderboardGate;
+
   /// How many leaderboard reads fail as a server that is down does, before
   /// they answer again.
   var failLeaderboardReads = 0;
@@ -1580,7 +1586,8 @@ class ConversationServer {
           statusCode: 503,
         );
       }
-      final board = leaderboard;
+      if (leaderboardGate case final gate?) await gate;
+      final board = leaderboardAnswer?.call(path) ?? leaderboard;
       if (board == null) {
         throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
       }
