@@ -97,6 +97,7 @@ import '../settings/config_store.dart';
 import '../settings/experimental_features.dart';
 import '../core/local_key_value_store.dart';
 import '../core/harness_file_store.dart';
+import '../super_tabs/swarm_accounts.dart';
 import '../super_tabs/attachment_upload.dart';
 import '../super_tabs/avatar_upload.dart';
 import '../super_tabs/backend_transport.dart';
@@ -277,10 +278,15 @@ class AgentProfile {
     this.path,
     this.percentLeft,
     this.offered = true,
+    this.canOffer = false,
   });
 
-  /// False when the machine's owner has not offered this account to the Swarm: using it does.
+  /// False when the machine's owner has not offered this account to the Swarm. Using it does not:
+  /// only Swarm accounts… does ([AppNotifier.setAccountOffered]).
   final bool offered;
+
+  /// Not the default account, on a CLI that says what is offered: Swarm accounts… can list it.
+  final bool canOffer;
 
   /// The account's Swarm profile id ([swarmProfileId]): what `usage_read` and the current-account check use.
   final String id;
@@ -15209,26 +15215,79 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  /// Links [path] as a Claude profile on [machineId]. Returns `{profile}` or `{error}`.
-  Future<Map<String, dynamic>> linkClaudeProfile(
-    String machineId,
-    String path,
-  ) async {
-    try {
-      return await _conn(machineId).request(
-        'claude_profile_link',
-        payload: {'path': path},
-        timeout: const Duration(seconds: 10),
-      );
-    } catch (error) {
-      return {'error': 'UNREACHABLE'};
-    }
-  }
-
   final _addingClaude = <String>{};
 
-  /// Accounts the last list showed as not offered to the Swarm, by (machine, engine, folder).
-  final _unoffered = <(String, String, String)>{};
+  /// This computer's accounts its owner can offer to the Swarm or take back. Throws when it cannot
+  /// tell, so the screen says so and never reads a failure as "no accounts".
+  Future<List<SwarmAccount>> swarmAccounts(String machineId) async {
+    if (stateOf(machineId)?.isLocalMachine != true) {
+      throw StateError('not this computer');
+    }
+    final agents = stateOf(machineId)?.agents ?? const <Agent>[];
+    return [
+      for (final engine in const ['claude', 'codex'])
+        ...await () async {
+          final reply = engine == 'claude'
+              ? await listClaudeProfiles(
+                  machineId,
+                  observedPaths: {for (final a in agents) ?a.claudeHome},
+                )
+              : await listCodexProfiles(
+                  machineId,
+                  observedPaths: {for (final a in agents) ?a.codexHome},
+                );
+          final rows = reply['profiles'];
+          if (rows is! List) throw StateError('no list');
+          return [
+            for (final row in rows)
+              if (row is Map &&
+                  row['path'] is String &&
+                  row['offered'] is bool &&
+                  row['default'] != true)
+                SwarmAccount(
+                  engine: engine,
+                  path: row['path'] as String,
+                  label: row['label'] as String? ?? row['path'] as String,
+                  offered: row['offered'] as bool,
+                ),
+          ];
+        }(),
+    ];
+  }
+
+  /// Offers an account of this computer to the Swarm, or takes it back. Null when done, or what to
+  /// tell the owner.
+  Future<String?> setAccountOffered(
+    String machineId,
+    String engine,
+    String path,
+    bool offered,
+  ) async {
+    if (stateOf(machineId)?.isLocalMachine != true) {
+      return 'Accounts can be offered on their own computer only.';
+    }
+    String? code;
+    try {
+      final reply = await _conn(machineId).request(
+        'swarm_account_offer',
+        payload: {'engine': engine, 'path': path, 'offered': offered},
+        timeout: const Duration(seconds: 10),
+      );
+      code = reply['error'] as String?;
+    } on WsRequestFailure catch (failure) {
+      code = failure.code;
+    } catch (_) {
+      code = 'UNREACHABLE';
+    }
+    return switch (code) {
+      null => null,
+      'NOT_FOUND' => 'That account’s folder is gone.',
+      'UNSUPPORTED' ||
+      'UNKNOWN_TYPE' => 'Update Harness on this computer to offer accounts.',
+      'TOO_MANY' => 'Too many accounts are offered. Withdraw one first.',
+      _ => 'Couldn’t reach this computer. Try again.',
+    };
+  }
 
   /// What `usage_read` last said per account, kept so opening the picker again does not call the vendors again.
   final _usageCache = <(String, String, String), ({DateTime at, int? left})>{};
@@ -15263,12 +15322,6 @@ class AppNotifier extends ChangeNotifier {
     final rows = reply['profiles'];
     if (rows is! List) return const [];
     final defaultId = swarmProfileId(machineId, engine, 'default');
-    for (final row in rows) {
-      if (row is Map && row['path'] is String) {
-        final k = (machineId, engine, row['path'] as String);
-        row['offered'] == false ? _unoffered.add(k) : _unoffered.remove(k);
-      }
-    }
     final profiles = [
       for (final row in rows)
         if (row is Map && row['path'] is String)
@@ -15288,6 +15341,7 @@ class AppNotifier extends ChangeNotifier {
             return (
               path: path,
               offered: row['offered'] != false,
+              canOffer: row['offered'] is bool && !isDefault,
               label: row['label'] as String? ?? path,
               id: isDefault
                   ? defaultId
@@ -15343,6 +15397,7 @@ class AppNotifier extends ChangeNotifier {
             path: p.path,
             percentLeft: cached?.left,
             offered: p.offered,
+            canOffer: p.canOffer,
           );
         }(),
     ]);
@@ -17799,20 +17854,6 @@ class AppNotifier extends ChangeNotifier {
         !change.contextLoaded) {
       final error = await _loadSwitchHandoff(machineId, change, source, folder);
       if (error != null) return error;
-      if (!_machineWorkCurrent(machine, change.revision)) {
-        return 'This switch is no longer active.';
-      }
-    }
-    // Using an account the owner has not offered is the owner's consent to offer it.
-    final account = change.profile;
-    if (account != null &&
-        account != 'default' &&
-        _unoffered.contains((machineId, change.engine, account))) {
-      final linked = change.engine == 'claude'
-          ? await linkClaudeProfile(machineId, account)
-          : await linkCodexProfile(machineId, account);
-      if (linked['error'] case final String error) return error;
-      _unoffered.remove((machineId, change.engine, account));
       if (!_machineWorkCurrent(machine, change.revision)) {
         return 'This switch is no longer active.';
       }

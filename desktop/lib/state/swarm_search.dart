@@ -2021,7 +2021,7 @@ class SwarmSearchController extends ChangeNotifier {
               : !canSelectAgent(engine.id)
               ? 'Not supported by this harness'
               : several && !profile!.offered
-              ? 'Not offered to the Swarm yet'
+              ? 'Not offered to the Swarm'
               : several && profile!.percentLeft != null
               ? '${profile.percentLeft}% left'
               : isCurrent
@@ -2056,7 +2056,19 @@ class SwarmSearchController extends ChangeNotifier {
             addsClaudeAccount: true,
             engine: 'claude',
             title: 'Add Claude account…',
-            detail: 'Opens Claude to sign in. Run /login, then pick it again',
+            detail: 'Opens Claude to sign in. Yours until you offer it',
+            swarmId: null,
+            current: false,
+          ),
+        if (_agentProfiles.values.any((l) => l.any((p) => p.canOffer)) &&
+            'swarm accounts'.contains(matchQuery.toLowerCase()))
+          SwarmDestination(
+            id: 'engine:swarm-accounts',
+            agentEngine: 'claude',
+            managesSwarmAccounts: true,
+            engine: 'claude',
+            title: 'Swarm accounts…',
+            detail: 'Choose what other people’s PMs can use',
             swarmId: null,
             current: false,
           ),

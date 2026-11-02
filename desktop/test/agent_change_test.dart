@@ -131,6 +131,8 @@ class SwitchConnection extends MonitorConnection {
 /// A machine with two Claude accounts and two Codex ones, as the daemon would list them.
 class ProfileConnection extends SwitchConnection {
   final links = <String>[];
+  final offers = <Map<String, dynamic>>[];
+  Map<String, dynamic>? offerReply;
   final requests = <String>[];
   final usageReads = <Map<String, dynamic>>[];
   var plainUsage = false;
@@ -161,6 +163,9 @@ class ProfileConnection extends SwitchConnection {
   }) async {
     requests.add(type);
     switch (type) {
+      case 'swarm_account_offer':
+        offers.add(Map.of(payload));
+        return offerReply ?? {'offered': payload['offered']};
       case 'claude_profiles_list':
         return {'profiles': claudeRows};
       case 'claude_profile_link':
@@ -1515,12 +1520,9 @@ void main() {
     });
 
     test(
-      'using an account that is not offered links it first, then switches',
+      'using an account that is not offered runs this pane on it and offers nothing',
       () async {
-        final connection = ProfileConnection()
-          ..linkReply = {
-            'profile': {'path': '/home/me/.claude-work', 'label': 'Work'},
-          };
+        final connection = ProfileConnection();
         connection.claudeRows[1]['offered'] = false;
         final app = fixture(connection, sourceEngine: 'codex');
         app.stateOf('m')!.localOnly = true;
@@ -1532,13 +1534,51 @@ void main() {
           await app.changeAgent('m', 'a0', 'claude', profile: rows.last.key),
           isNull,
         );
-        expect(connection.links, ['/home/me/.claude-work']);
+        expect(connection.links, isEmpty);
+        expect(connection.offers, isEmpty);
         expect(
           connection.creations.single,
           containsPair('claudeHome', '/home/me/.claude-work'),
         );
       },
     );
+
+    test('the owner offers and withdraws an account by asking this computer', () async {
+      final connection = ProfileConnection();
+      connection.claudeRows[1]['offered'] = false;
+      final app = fixture(connection, sourceEngine: 'codex');
+      app.stateOf('m')!.localOnly = true;
+      addTearDown(app.dispose);
+      expect(await app.setAccountOffered('m', 'claude', '/home/me/.claude-work', true), isNull);
+      expect(await app.setAccountOffered('m', 'claude', '/home/me/.claude-work', false), isNull);
+      expect(connection.offers, [
+        {'engine': 'claude', 'path': '/home/me/.claude-work', 'offered': true},
+        {'engine': 'claude', 'path': '/home/me/.claude-work', 'offered': false},
+      ]);
+      connection.offerReply = {'error': 'NOT_FOUND'};
+      expect(await app.setAccountOffered('m', 'claude', '/gone', true), 'That account’s folder is gone.');
+      connection.offerReply = {'error': 'UNSUPPORTED'};
+      expect(await app.setAccountOffered('m', 'claude', '/x', true), 'Update Harness on this computer to offer accounts.');
+    });
+
+    test('accounts of another computer cannot be offered from here', () async {
+      final connection = ProfileConnection();
+      final app = fixture(connection, sourceEngine: 'codex');
+      addTearDown(app.dispose);
+      expect(await app.setAccountOffered('m', 'claude', '/home/me/.claude-work', true), 'Accounts can be offered on their own computer only.');
+      expect(connection.offers, isEmpty);
+    });
+
+    test('only an account a current CLI marks can be offered: never the default, never an old CLI row', () async {
+      final connection = ProfileConnection();
+      connection.claudeRows[1]['offered'] = false;
+      final app = fixture(connection, sourceEngine: 'codex');
+      app.stateOf('m')!.localOnly = true;
+      addTearDown(app.dispose);
+      expect((await app.agentProfiles('m', 'claude')).map((r) => r.canOffer), [false, true]);
+      connection.claudeRows[1].remove('offered');
+      expect((await app.agentProfiles('m', 'claude')).map((r) => r.canOffer), [false, false]);
+    });
 
     test(
       'an offered account, the default and an old CLI row link nothing',
@@ -1555,32 +1595,6 @@ void main() {
         expect(connection.links, isEmpty);
       },
     );
-
-    test('a failed link stops the switch with its error', () async {
-      final connection = ProfileConnection();
-      connection.codexRows = [
-        {'path': '${homeDir()}/.codex', 'label': 'Default', 'default': true},
-        {'path': '/home/me/.codex-a', 'label': 'A', 'offered': false},
-      ];
-      final app = fixture(connection, sourceEngine: 'claude');
-      app.stateOf('m')!.localOnly = true;
-      addTearDown(app.dispose);
-      app.stateOf('m')!.engines.replace(const [
-        EngineAvailability(
-          engine: 'codex',
-          installed: true,
-          supportsCodexHome: true,
-        ),
-      ]);
-      await app.addAgentToSwarm('m', 'a0');
-      await app.agentProfiles('m', 'codex');
-      expect(
-        await app.changeAgent('m', 'a0', 'codex', profile: '/home/me/.codex-a'),
-        'NOT_FOUND',
-      );
-      expect(connection.links, ['/home/me/.codex-a']);
-      expect(connection.events, isEmpty);
-    });
 
     test('picking the current engine and account does nothing', () async {
       final connection = ProfileConnection();
@@ -1695,6 +1709,40 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 50));
       return search;
     }
+
+    test('a row not offered says so, and Swarm accounts… is listed only where an account can be offered', () async {
+      final connection = ProfileConnection();
+      connection.claudeRows[1]['offered'] = false;
+      final app = fixture(connection, sourceEngine: 'codex');
+      app.stateOf('m')!.localOnly = true;
+      addTearDown(app.dispose);
+      final search = await pick(app);
+      final work = search.rows.firstWhere((r) => r.title == 'Claude · Work');
+      expect(work.detail, 'Not offered to the Swarm');
+      expect(search.rows.where((r) => r.managesSwarmAccounts).single.title, 'Swarm accounts…');
+      expect(search.rows.where((r) => r.addsClaudeAccount).single.detail, contains('Yours until you offer it'));
+      connection.claudeRows[1].remove('offered');
+      final old = await pick(app);
+      expect(old.rows.where((r) => r.managesSwarmAccounts), isEmpty);
+    });
+
+    test('Swarm accounts lists offerable rows of both engines, and a failed list throws rather than reading as none', () async {
+      final connection = ProfileConnection();
+      connection.claudeRows[1]['offered'] = false;
+      connection.codexRows = [
+        {'path': '${homeDir()}/.codex', 'label': 'Default', 'default': true, 'offered': true},
+        {'path': '/home/me/.codex-a', 'label': 'A', 'offered': true},
+      ];
+      final app = fixture(connection, sourceEngine: 'codex');
+      app.stateOf('m')!.localOnly = true;
+      addTearDown(app.dispose);
+      final rows = await app.swarmAccounts('m');
+      expect(rows.map((r) => (r.engine, r.label, r.offered)), [('claude', 'Work', false), ('codex', 'A', true)]);
+      connection.claudeRows = [];
+      final other = fixture(ProfileConnection(), sourceEngine: 'codex');
+      addTearDown(other.dispose);
+      await expectLater(other.swarmAccounts('m'), throwsStateError);
+    });
 
     test('a Codex pane on the default account has the default row current and no change', () async {
       final connection = ProfileConnection();
