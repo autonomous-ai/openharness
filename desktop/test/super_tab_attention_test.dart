@@ -163,7 +163,11 @@ void main() {
         'Threads; a decision on its row; plain unread is bold with no '
         'number', (tester) async {
       final server = projectServer();
-      server.followedThreads = {'unread': [], 'read': [], 'more': false};
+      server.followedThreads = {
+        'unread': [unreadThread('message-1', 2, conversationId: 'offline')],
+        'read': [],
+        'more': false,
+      };
       fromLead(server, 'Plain news', conversationId: 'offline');
       server.tag('message-1', conversationId: 'offline');
       server.tag('message-1', conversationId: 'offline', threadId: 'message-1');
@@ -173,6 +177,7 @@ void main() {
       final attention = SuperTabAttention.of(c);
       await attention.mentions.load();
       await attention.decisions.load();
+      await attention.load();
       c.toggleProject('lead');
       await pumpSidebar(tester, c, attention);
       // The workgroup: one tag in its chat and one decision, not the tag in
@@ -397,7 +402,11 @@ void main() {
     test('no red number once access is gone, nor for a tag in a chat the '
         'Swarm no longer lists', () async {
       final server = projectServer();
-      server.followedThreads = {'unread': [], 'read': [], 'more': false};
+      server.followedThreads = {
+        'unread': [unreadThread('message-1', 2)],
+        'read': [],
+        'more': false,
+      };
       server.tag('message-1', threadId: 'message-1', messageSequence: 2);
       server.tag(
         'message-9',
@@ -431,6 +440,7 @@ void main() {
       await c.refresh();
       final attention = SuperTabAttention.of(c);
       await attention.mentions.load();
+      await attention.load();
       // The tag in a chat the Swarm does not list counts nowhere.
       expect(attention.threadMentions, 1);
       expect(attention.mentionsIn('offline'), 1);
@@ -450,7 +460,11 @@ void main() {
     test('a tag stops counting once the reader has read past it, answered '
         'or not; a decision once its chat is read', () async {
       final server = projectServer();
-      server.followedThreads = {'unread': [], 'read': [], 'more': false};
+      server.followedThreads = {
+        'unread': [],
+        'read': [readThread('message-1', 2, follow: true)],
+        'more': false,
+      };
       fromLead(server, 'Please look', conversationId: 'offline');
       server.tag(
         'message-1',
@@ -462,6 +476,7 @@ void main() {
       final attention = SuperTabAttention.of(c);
       await attention.mentions.load();
       await attention.decisions.load();
+      await attention.load();
       expect(attention.mentionsIn('offline'), 2);
       // Read on another device, past the tagged message.
       server.markReadElsewhere('offline', server.revision);
@@ -476,9 +491,134 @@ void main() {
       );
       await c.refresh();
       await attention.mentions.load();
+      await attention.load();
       expect(attention.threadMentions, 1);
       server.markThreadReadElsewhere('lead', 'message-1', server.revision);
       await c.refresh();
+      expect(attention.threadMentions, 0);
+    });
+  });
+
+  group('the Threads number counts only threads the Threads view lists', () {
+    // Scholes 11-02: the sidebar said Threads 1 while the page said "No
+    // threads yet" and "Older threads are not listed."
+    test('a tag in a thread the list leaves out (past the server\'s bounds) '
+        'counts nothing, and the sidebar row shows no number', () async {
+      final server = projectServer();
+      server.followedThreads = {'unread': [], 'read': [], 'more': true};
+      server.tag('message-1', threadId: 'message-1', messageSequence: 2);
+      final c = await open(server);
+      final attention = SuperTabAttention.of(c);
+      await attention.mentions.load();
+      await attention.load();
+      expect(attention.loaded, isTrue);
+      expect(attention.shown, isEmpty);
+      expect(attention.more, isTrue);
+      // The tag is waiting, but the thread is not listed: no number.
+      expect(attention.mentions.waiting, hasLength(1));
+      expect(attention.threadMentions, 0);
+    });
+
+    testWidgets('the sidebar Threads row shows no number for a tag in a '
+        'thread the list leaves out, the very case of an empty list', (
+      tester,
+    ) async {
+      final server = projectServer();
+      server.followedThreads = {'unread': [], 'read': [], 'more': true};
+      server.tag('message-1', threadId: 'message-1', messageSequence: 2);
+      final c = await openHere(server);
+      final attention = SuperTabAttention.of(c);
+      await attention.mentions.load();
+      await attention.load();
+      await pumpSidebar(tester, c, attention);
+      expect(
+        inRow('super-threads', find.byType(SuperTabCountBadge)),
+        findsNothing,
+      );
+      expect(inRow('super-threads', find.text('1')), findsNothing);
+      await close(tester, c);
+    });
+
+    test('a tag in a thread the reader unfollowed (never listed) counts '
+        'nothing; in a thread the list shows it counts', () async {
+      final server = projectServer();
+      server.followedThreads = {
+        'unread': [],
+        'read': [readThread('message-1', 2, follow: true)],
+        'more': false,
+      };
+      server.tag('message-1', threadId: 'message-1', messageSequence: 2);
+      server.tag('message-7', threadId: 'message-7', messageSequence: 3);
+      final c = await open(server);
+      final attention = SuperTabAttention.of(c);
+      await attention.mentions.load();
+      await attention.load();
+      expect(attention.mentions.waiting, hasLength(2));
+      expect(attention.threadMentions, 1);
+    });
+
+    test('a thread with the same root id in another chat is not the listed '
+        'one', () async {
+      final server = projectServer();
+      server.followedThreads = {
+        'unread': [unreadThread('message-1', 2)],
+        'read': [],
+        'more': false,
+      };
+      server.tag(
+        'message-1',
+        conversationId: 'offline',
+        threadId: 'message-1',
+        messageSequence: 2,
+      );
+      final c = await open(server);
+      final attention = SuperTabAttention.of(c);
+      await attention.mentions.load();
+      await attention.load();
+      expect(attention.threadMentions, 0);
+    });
+
+    test('no number before the list has answered; a failed first read that '
+        'recovers then counts', () async {
+      final server = projectServer()..failThreadLists = true;
+      server.followedThreads = {
+        'unread': [unreadThread('message-1', 2)],
+        'read': [],
+        'more': false,
+      };
+      server.tag('message-1', threadId: 'message-1', messageSequence: 2);
+      final c = await open(server);
+      final attention = SuperTabAttention.of(c);
+      await attention.mentions.load();
+      expect(attention.threadMentions, 0);
+      await attention.load();
+      expect(attention.error, isNotNull);
+      expect(attention.threadMentions, 0);
+      server.failThreadLists = false;
+      await attention.load();
+      expect(attention.error, isNull);
+      expect(attention.threadMentions, 1);
+    });
+
+    test('when who may read what changes, the number is gone until the list '
+        'is read again; access lost clears it at once', () async {
+      final server = projectServer();
+      server.followedThreads = {
+        'unread': [unreadThread('message-1', 2)],
+        'read': [],
+        'more': false,
+      };
+      server.tag('message-1', threadId: 'message-1', messageSequence: 2);
+      final c = await open(server);
+      final attention = SuperTabAttention.of(c);
+      await attention.mentions.load();
+      await attention.load();
+      expect(attention.threadMentions, 1);
+      // The next read answers with the thread gone from the list.
+      server.followedThreads = {'unread': [], 'read': [], 'more': false};
+      await attention.load();
+      expect(attention.threadMentions, 0);
+      c.accessRevoked = true;
       expect(attention.threadMentions, 0);
     });
   });
