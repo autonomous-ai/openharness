@@ -522,6 +522,18 @@ void main() {
       await openSuperTabMembers(tester);
       expect(find.text('People'), findsOneWidget);
       final member = find.byKey(const ValueKey('super-member-agent-0'));
+      // Below twenty people, the agents holding no task fold under Idle (N).
+      await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('super-members-idle')),
+        150,
+        scrollable: find
+            .descendant(
+              of: find.byType(SuperTabRoster),
+              matching: find.byType(Scrollable),
+            )
+            .first,
+      );
+      await unfoldSuperTabIdle(tester);
       await tester.scrollUntilVisible(
         member,
         150,
