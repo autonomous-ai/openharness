@@ -632,6 +632,74 @@ void main() {
       expect(jsonEncode(server.saved), isNot(contains('private words')));
     });
 
+    test('the thread open beside the chat opens again, with its replies', () async {
+      final server = threaded();
+      final c = server.controller();
+      await c.refresh();
+      c.openThread('message-1');
+      await c.flush();
+      c.dispose();
+      final next = await again(server);
+      expect(next.openedThread, (conversationId: 'lead', root: 'message-1'));
+      await next.refresh();
+      await pumpEventQueue();
+      expect(next.threadMessages('message-1'), isNotEmpty);
+    });
+
+    test('a thread closed before the Swarm was let go stays closed', () async {
+      final server = threaded();
+      final c = server.controller();
+      await c.refresh();
+      c.openThread('message-1');
+      c.closeThread();
+      await c.flush();
+      c.dispose();
+      expect((await again(server)).openedThread, isNull);
+    });
+
+    test('opening or closing a thread saves soon, with no flush', () async {
+      final server = threaded();
+      final c = server.controller();
+      addTearDown(c.dispose);
+      await c.refresh();
+      c.openThread('message-1');
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(server.saved!['openThread'], isNotNull);
+      c.closeThread();
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(server.saved!['openThread'], isNull);
+    });
+
+    test('a saved thread in a conversation no longer read does not open', () async {
+      final server = threaded();
+      final c = server.controller(
+        initial: {
+          'tabId': 'tab',
+          'accountId': 'owner',
+          'selectedId': 'lead',
+          'openThread': {'conversationId': 'not-mine', 'root': 'message-1'},
+        },
+      );
+      addTearDown(c.dispose);
+      await c.refresh();
+      expect(c.openedThread, isNull);
+    });
+
+    test('a malformed saved thread opens nothing', () {
+      final server = threaded();
+      for (final open in <Object?>[
+        'nope',
+        {'conversationId': 1, 'root': 'message-1'},
+        {'conversationId': 'lead'},
+      ]) {
+        final c = server.controller(
+          initial: {'tabId': 'tab', 'accountId': 'owner', 'openThread': open},
+        );
+        addTearDown(c.dispose);
+        expect(c.openedThread, isNull);
+      }
+    });
+
     test('another account finds none of them', () async {
       final server = threaded();
       final c = server.controller();
