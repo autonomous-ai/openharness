@@ -321,10 +321,14 @@ const LOCAL_PIPE_RE = /^\\\\\.\\pipe\\harness-([0-9a-f]{32})$/
 /** Mirrors TOKEN_TEXT in src/lib/windows/pipeAuth.ts. */
 const DAEMON_TOKEN_RE = /^[0-9a-f]{64}\n?$/
 
-/** The record's daemon still runs (mirrors pidAlive in src/lib/processProof.ts). Once it is gone, any account can
- *  create a pipe of the recorded name, and would hear this request. */
+/**
+ * The record's daemon still runs. Once it is gone, any account can create a pipe of the recorded name, and would hear
+ * this request, the prompt in it, before its answer can fail the proof. The daemon is this account's, so a pid that
+ * answers EPERM is another account's process now, one that took the pid since: no daemon (Quinn 2's review of #2605).
+ * Unlike processProof.ts pidAlive, which counts it alive for callers that also read the process table.
+ */
 function pidRuns(pid) {
-  try { process.kill(pid, 0); return true } catch (error) { return error?.code === 'EPERM' }
+  try { process.kill(pid, 0); return true } catch { return false }
 }
 
 /**

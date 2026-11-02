@@ -19,7 +19,6 @@ import type { ReadableStream as NodeReadableStream } from 'node:stream/web'
 import { readDaemonRecord } from './daemonRecord.js'
 import { localCredentialHeaders } from './localCredential.js'
 import { unixSocketPath } from './localSocket.js'
-import { pidAlive } from './processProof.js'
 import { NOT_RUNNING } from './unreachable.js'
 import { daemonPipe } from './windows/daemonPipe.js'
 import { newPipeNonce, PIPE_AUTH_HEADER, pipeAuthValue, pipeProven, readDaemonToken } from './windows/pipeAuth.js'
@@ -139,13 +138,26 @@ export function daemonFetch(
 }
 
 /**
+ * Whether this account's process [pid] runs. The daemon is this account's, so EPERM is another account's process, one
+ * that took the pid since the daemon exited (processProof.ts `pidAlive` counts it alive): not the daemon.
+ */
+function ownProcessRuns(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
  * The daemon's pipe for a client that opens its WebSocket at once (`openLocalWs`): the recorded pipe while the recorded
  * daemon runs, and its token. Not the process table `daemonPipe` also reads: the socket's upgrade must prove the token
  * (`pipeWebSocket`), so a squatter is refused before any frame is sent to it.
  */
 export function daemonPipeNow(dataDir: string, port: number): PipeTarget | null {
   const record = readDaemonRecord(dataDir, port)
-  if (!record?.pipe || !record.pid || !pidAlive(record.pid)) return null
+  if (!record?.pipe || !record.pid || !ownProcessRuns(record.pid)) return null
   const token = readDaemonToken(dataDir)
   return token ? { pipe: record.pipe, token } : null
 }

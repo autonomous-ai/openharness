@@ -72,6 +72,12 @@ make the daemon refuse the credential over TCP from another account. Windows can
 - Still open: the connectors bridge's MCP clients can only dial its HTTP address, so whoever holds the bridge's port still hears
   its key and the tool calls (as on macOS). The key opens nothing from another account now. Closing it needs a local transport for
   MCP clients that proves the daemon, a separate task.
+- Still open: the OpenCode, Kilo, Pi and Amp plugins (`engines/kit/pluginFetch.ts`) have no socket on Windows and post to the
+  port with the hook-only token and the session's details. The token opens nothing from another account now, but whoever holds
+  the port hears both, and each new connection costs the daemon's one-second lookup. They need the pipe too, a separate task.
+- A recorded daemon pid that another account runs now is no daemon to the hook and the CLI's WebSockets (EPERM), so a pipe made
+  under a dead daemon's name is never dialled for it. A pid this account's own process took since is still dialled; then only the
+  pipe's proof refuses the answer, after the request was sent. That needs the pid reused by chance, not by choice.
 
 ### W2. Purge left a Codex Product Manager's home on Windows (High, fixed here)
 
