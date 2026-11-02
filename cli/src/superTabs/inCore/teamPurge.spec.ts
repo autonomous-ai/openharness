@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, win32 } from 'node:path'
 import { PM_HOMES } from '../teamDaemon.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { PurgeAgentService } from '../../lib/purgeAgentService.js'
 import { createSwarmAgents } from './agents.js'
 import { OWN_LEFT, SHARED_LEFT, SWEEP_LEFT, UNREADABLE_DETAIL, createConfidentialPurge, isPmCodexHome, ownHomeFolder, purgeRecord, withPurgeRetries, recordsOtherFolder, rewriteIfUnchanged, scrubClaudeSession, sweepForSession, type PurgeTarget } from './teamPurge.js'
 
@@ -974,16 +975,15 @@ describe('a purge that did not finish', () => {
     const own = join(home, PM_HOMES, 'super-start', 'codex')
     mkdirSync(own, { recursive: true })
     const record = purgeRecord(recordFile)
-    const state = { failing: true, live: false }
+    const state = { failing: true }
     const purge = vi.fn(async (request: Record<string, unknown>) => {
-      if (state.live) return { error: 'AGENT_RUNNING' }
       if (state.failing) return { error: 'SERVICE_DOWN' }
       return request.mode === 'inspect' ? { reviewId: 'review-1' } : { ok: true }
     })
     const ended = createConfidentialPurge({ confidential: () => true, home, record, purge,
       session: agentId => ({ agentId, sessionId: 'session', registeredAt: 1, engine: 'codex', cwd: null, codexHome: own }) })
     const reports: unknown[] = [], logs: string[] = []
-    const start = () => withPurgeRetries(ended, { record, report: status => reports.push(status), log: line => logs.push(line) })
+    const start = () => withPurgeRetries(ended, { record, sessions: () => ({ live: [], stopped: [] }), report: status => reports.push(status), log: line => logs.push(line) })
     return { own, record, state, purge, ended, reports, logs, start, recordFile }
   }
   /** Lets a due retry's disk work finish: it reads real folders, which fake timers do not wait for. */
@@ -1040,16 +1040,74 @@ describe('a purge that did not finish', () => {
     retried.stop()
   })
 
-  it('leaves a session that came back alone: the reviewed purge refuses it, and it stays pending', async () => {
-    const f = fixture(dir())
-    const retried = f.start()
-    await retried('pm')
-    f.state.live = true
-    await pass(MINUTE)
-    expect(existsSync(f.own)).toBe(true)
-    expect(f.record.pending().map(t => t.agentId)).toEqual(['pm'])
-    expect(f.purge.mock.calls.every(([request]) => request.mode === 'inspect')).toBe(true)
-    retried.stop()
+  // Security review 2 of #2680: the real service stops a live session in delete mode and erases it, and refuses nothing here.
+  describe('with its session or folder in use again', () => {
+    /** A retry against the real purge service, its stop watched, on what the registry holds now. */
+    type Rows = { live: Array<Record<string, unknown>>; stopped: Array<Record<string, unknown>> }
+    const inUse = (home: string, rows_: Rows | ((paths: { own: string; cwd: string }) => Rows)) => {
+      const own = join(home, PM_HOMES, 'super-start', 'codex'), cwd = join(home, 'work')
+      const registry = typeof rows_ === 'function' ? rows_({ own, cwd }) : rows_
+      mkdirSync(own, { recursive: true }); mkdirSync(cwd, { recursive: true })
+      const record = purgeRecord(join(home, 'super-tabs', 'team-purges.json'))
+      record.put({ agentId: 'pm', sessionId: 'session', cwd, engine: 'codex', codexHome: own })
+      const stop = vi.fn(async () => {})
+      const rows = () => [...registry.live, ...registry.stopped] as never[]
+      const byId = (id: string) => registry.live.find(s => s.agentId === id) as never
+      const service = new PurgeAgentService({ live: byId, sessions: rows, stop, restarting: () => false, deleted: () => {},
+        stopped: { get: (id: string) => registry.stopped.find(s => s.agentId === id), list: () => registry.stopped, remove: () => {}, delete: () => {} } as never,
+        checkpoints: { forSession: () => [], delete: () => {}, list: () => [] } as never,
+        inspect: (async () => ({ sessions: [], files: [] })) as never, erase: (async () => ({ ok: true })) as never })
+      const purge = vi.fn(async (request: Record<string, unknown>) => service.request(request as never) as Promise<Record<string, unknown>>)
+      const sessions = () => ({ live: registry.live as never, stopped: registry.stopped as never })
+      const ended = createConfidentialPurge({ confidential: () => true, home, record, purge, sessions,
+        session: id => (byId(id) ?? registry.stopped.find(s => s.agentId === id) ?? null) as never })
+      const retried = withPurgeRetries(ended, { record, sessions, report: () => {}, log: () => {} })
+      return { own, cwd, record, stop, purge, ended, retried, registry }
+    }
+    const row = (over: Record<string, unknown>) => ({ agentId: 'other', sessionId: 'other-session', registeredAt: 1, engine: 'codex', cwd: '/elsewhere', codexHome: null, ...over })
+
+    it('a retry leaves its own agent alone while it is live, and finishes once it stops', async () => {
+      const registry = { live: [row({ agentId: 'pm', sessionId: 'session' })], stopped: [] as Array<Record<string, unknown>> }
+      const f = inUse(dir(), registry)
+      await pass(MINUTE)
+      expect(f.purge).not.toHaveBeenCalled()
+      expect(f.stop).not.toHaveBeenCalled()
+      expect(existsSync(f.own)).toBe(true)
+      expect(f.record.pending().map(t => t.agentId)).toEqual(['pm'])
+      // It stopped: the next try goes through the service as any purge does.
+      registry.stopped.push(registry.live.pop()!)
+      await pass(2 * MINUTE)
+      expect(f.purge).toHaveBeenCalled()
+      f.retried.stop()
+    })
+
+    it('a conversation running under a new agent id keeps its engine home and traces, in a retry and a host\'s close', async () => {
+      const f = inUse(dir(), { live: [row({ agentId: 'new', sessionId: 'session' })], stopped: [] })
+      expect(await f.ended('pm')).toMatchObject({ error: 'SESSION_IN_USE' })
+      await pass(MINUTE)
+      expect(existsSync(f.own)).toBe(true)
+      expect(f.record.pending().map(t => t.agentId)).toEqual(['pm'])
+      f.retried.stop()
+    })
+
+    it('a later session in its folder or on its engine home stops it too', async () => {
+      for (const clash of [(p: { own: string; cwd: string }) => ({ cwd: p.cwd }), (p: { own: string; cwd: string }) => ({ codexHome: p.own })]) {
+        const f = inUse(dir(), paths => ({ live: [row(clash(paths))], stopped: [] }))
+        expect(await f.ended('pm')).toMatchObject({ error: 'SESSION_IN_USE' })
+        expect(existsSync(f.own)).toBe(true)
+        f.retried.stop()
+      }
+    })
+
+    it('a stopped session under a new id holds it unless that one is ending too, so two can\'t wait on each other', async () => {
+      const held = inUse(dir(), { live: [], stopped: [row({ agentId: 'new', sessionId: 'session' })] })
+      expect(await held.ended('pm')).toMatchObject({ error: 'SESSION_IN_USE' })
+      held.retried.stop()
+      const both = inUse(dir(), { live: [], stopped: [row({ agentId: 'new', sessionId: 'session' })] })
+      both.record.put({ agentId: 'new', sessionId: 'session', cwd: null, engine: 'codex', codexHome: null })
+      expect((await both.ended('pm')).error).not.toBe('SESSION_IN_USE')
+      both.retried.stop()
+    })
   })
 
   it('runs nothing with its record unreadable, and says so', async () => {
@@ -1072,7 +1130,7 @@ describe('a purge that did not finish', () => {
     let open!: () => void
     const held = new Promise<void>(resolve => { open = resolve })
     const slow = vi.fn(async (agentId: string) => { await held; return f.ended(agentId) })
-    const retried = withPurgeRetries(slow, { record: f.record, report: () => {}, log: () => {} })
+    const retried = withPurgeRetries(slow, { record: f.record, sessions: () => ({ live: [], stopped: [] }), report: () => {}, log: () => {} })
     const both = [retried('pm'), retried('pm')]
     expect(slow).toHaveBeenCalledTimes(1)
     open()
