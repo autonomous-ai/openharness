@@ -34,6 +34,8 @@ import { agentLaunchArgs, joinedInstructions } from '../../lib/agentAttribution.
 import { machineMcpLaunchArgs } from '../../lib/machineMcp.js'
 import { writeGridConfigDir } from '../../lib/gridConfigDir.js'
 import { describeGridLaunch, gridConfigHandOff, gridConflictingEnvToClear, type GridLaunchAnswer, type GridLaunchMachine, type GridLaunchRequest, type GridWebSearchStatus } from '../../lib/gridLaunchWire.js'
+import { syncProfileHome } from '../../lib/connectors/agents.js'
+import { Store as ConnectionsVault } from '../../lib/connectors/store.js'
 import { profileEnvironment } from '../../lib/engineHomes.js'
 import { DEFAULT_HARNESS_PERMISSION, freshHarnessEnvironment } from '../../lib/harnessDefaults.js'
 import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
@@ -351,6 +353,12 @@ export function createAgentCreator({
     // Idempotent, so paying this on every create against an already-set-up profile is free.
     if (!native && codexHome && !hooksDisabled && !await engineHooks.codex.installIn(hookPort, codexHome)) return {
       ok: false, error: 'NATIVE_LAUNCH_HELD', detail: 'Waiting to confirm Codex’s hooks in the selected profile.', unavailable: 'native',
+    }
+    // An agent on a profile home reads that home's MCP config, not the default's: it gets the connections there too.
+    const profileHome = engine === 'claude' ? claudeHome : engine === 'codex' ? codexHome : null
+    if (profileHome && (engine === 'claude' || engine === 'codex')) {
+      try { syncProfileHome(new ConnectionsVault(), engine, profileHome) }
+      catch (error) { console.warn(`[agent] connections for ${profileHome} · ${error instanceof Error ? error.message : error}`) }
     }
     // OpenCode may have upgraded from 1.x to 2.x while this daemon was running. Its new TUI must
     // not discover our old server plugin; the cached version probe changes with the executable.
