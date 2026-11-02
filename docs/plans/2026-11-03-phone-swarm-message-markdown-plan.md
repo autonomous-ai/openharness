@@ -45,7 +45,7 @@ Web links and `#42` render as phone link text and open their destination when ta
 ## Review Focus
 
 - A tap on a Markdown link or `#N` must not also trigger the message's reply action; exercise the real nested gesture behavior.
-- A long press over rendered Markdown must still open the message's existing menu.
+- A long press that starts on a rendered link must still open the message's existing menu.
 - Long reports with headings, lists, tables, and links must lay out and scroll without overflow.
 - Code spans and fenced or indented code must not become tappable links or lose literal Markdown characters.
 - Unknown conversation numbers and non-HTTP(S) link schemes must not open an unintended destination.
@@ -64,7 +64,7 @@ Web links and `#42` render as phone link text and open their destination when ta
 - Consumes: `SwarmTextPart` from `swarm_code_block.dart`, `SwarmMentions`, `swarmChatText`, `AppPalette`, and the existing code-block row.
 - Produces: `SwarmMessageText({required String text, required SwarmMentions mentions, Iterable<String> tagged = const [], Map<String, String> addresses = const {}})`, which renders Markdown prose; `SwarmMessageRow` continues to own code blocks and message actions.
 
-- [ ] **Step 1: Write failing widget tests** named `headings render as headings`, `strong and emphasis render with Markdown styles`, `ordered and unordered lists render their items`, `inline code is styled as code`, `quotes render as blockquotes`, `GFM tables render rows and cells`, `prose tap still opens reply`, and `a long report scrolls and keeps the message long press`.
+- [ ] **Step 1: Write failing widget tests** named `headings render as headings`, `strong and emphasis render with Markdown styles`, `ordered and unordered lists render their items`, `inline code is styled as code`, `quotes render as blockquotes`, `GFM tables render rows and cells`, `prose tap still opens reply`, and `a long report list remains scrollable`.
 - [ ] **Step 2: Run the focused widget test on the unchanged implementation** and record the expected failures where Markdown is still literal.
 - [ ] **Step 3: Implement `SwarmMessageText`** with `MarkdownBody`, the GitHub Flavored Markdown extension set, and phone design tokens; preserve the existing message prose tap and mention styling.
 - [ ] **Step 4: Run the focused widget test** and confirm each element renders and long content has no layout exception.
@@ -82,7 +82,7 @@ Web links and `#42` render as phone link text and open their destination when ta
 - Consumes: Task 1's `SwarmMessageText`, and loaded `SuperTabConversation.number` values from the Swarm snapshot.
 - Produces: message link taps call `launchUrl` only for validated HTTP(S) URLs; a known `#N` calls the existing conversation opener with that conversation id; unknown references remain plain text.
 
-- [ ] **Step 1: Write failing widget tests** named `Markdown web links open only their HTTP destination`, `bare web links open in the in-app browser`, `a known conversation number opens that conversation`, `an unknown conversation number remains plain text`, and `tapping a link does not trigger message reply`.
+- [ ] **Step 1: Write failing widget tests** named `Markdown web links open only their HTTP destination`, `bare web links open in the in-app browser`, `a known task or PR conversation number opens that exact conversation`, `an unknown conversation number remains plain text`, `tapping a link does not trigger message reply`, and `long pressing a link opens the message menu`.
 - [ ] **Step 2: Run the focused widget tests on the unchanged implementation** and confirm the missing link behaviors fail.
 - [ ] **Step 3: Implement validated web-link handling and snapshot-backed `#N` routing** without changing the message row's outer long-press behavior.
 - [ ] **Step 4: Run the focused widget tests** and confirm expected destinations and no unintended reply tap.
