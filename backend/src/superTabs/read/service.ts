@@ -9,7 +9,7 @@ import { agentOnly, author, fail, groupForBuddy, isLeads, seenMachineIds, stable
 import { mentionsDigest, swarmsWithTags, waitingMentions, waitingTagConversations } from '../mentions.js'
 import { decisionsWaiting } from '../decisions.js'
 import { readMarks, readThreadMarks, writeReadMark, writeThreadFollow, writeThreadMark } from '../readMarks.js'
-import { activityDigest, listActivity, markActivityRead, type ActivityItem } from '../activity.js'
+import { activityDigest, listActivity, markActivityChatRead, markActivityRead, markActivityThreadRead, type ActivityItem } from '../activity.js'
 import { readChatSettings, writeChatSetting, type NotifyLevel } from '../chatSettings.js'
 import { deliveredCopies } from '../pageReads.js'
 import { readBy } from '../parts/indexed.js'
@@ -232,7 +232,10 @@ export class SwarmReads {
     const next = Math.min(sequence, group.data!.lastMessageSequence), now = this.now()
     const held = await this.db.superTabReadMark.findUnique({ where: { id: stableId(tabId, conversationId, user.sub) }, select: { sequence: true } })
     await seedThreadMarks(this.db, { tabId, state, personId: user.sub, conversationId, old: held?.sequence ?? 0, next, now })
-    return { sequence: await writeReadMark(this.db, { tabId, personId: user.sub, conversationId, sequence: next, now }) }
+    const stored = await writeReadMark(this.db, { tabId, personId: user.sub, conversationId, sequence: next, now })
+    // The replies also in the chat that the mark passes are read in Activity too (activity.ts).
+    await markActivityChatRead(this.db, { tabId, personId: user.sub, conversationId, sequence: stored, now })
+    return { sequence: stored }
   }
 
   /** Moves the person's mark of thread `threadId` in a conversation they can read forward, never past the conversation's
@@ -242,8 +245,11 @@ export class SwarmReads {
    *  an unreadable conversation or project included, is the same refusal. Only a person reading as themselves has marks. */
   async markThreadRead(user: AuthUser, tabId: string, conversationId: string, threadId: string, sequence: number): Promise<{ sequence: number }> {
     const newest = await this.readableThread(user, tabId, conversationId, threadId)
-    return { sequence: await writeThreadMark(this.db, { tabId, personId: user.sub, conversationId, threadId, sequence: Math.min(sequence, newest),
-      now: this.now() }) }
+    const now = this.now()
+    const stored = await writeThreadMark(this.db, { tabId, personId: user.sub, conversationId, threadId, sequence: Math.min(sequence, newest), now })
+    // The thread's replies the mark passes are read in Activity too (activity.ts).
+    await markActivityThreadRead(this.db, { tabId, personId: user.sub, conversationId, threadId, sequence: stored, now })
+    return { sequence: stored }
   }
 
   /** Stores the person's Follow (true), Unfollow (false) or neither (null) of thread `threadId` (readMarks.ts writeThreadFollow),
