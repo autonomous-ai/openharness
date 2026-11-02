@@ -87,8 +87,6 @@ const Set<String> encryptedDownTypes = {
   'group_sync',
   'codex_profiles_list',
   'codex_profile_link',
-  'claude_profiles_list',
-  'claude_profile_link',
   // Asks the machine to read its OWN agent accounts' usage (cli/src/lib/accountUsage.ts). Missing
   // here it went out in the clear and the machine's CLI refused it outright with E2EE_REQUIRED —
   // which surfaced as an empty Usage page on a phone that was linked and connected.

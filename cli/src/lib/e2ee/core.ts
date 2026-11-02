@@ -358,7 +358,6 @@ export const ENCRYPTED_RPC_RESULT_TYPES = new Set<string>([
   'fs_list_dir_result', 'project_preview_result',
   // Same reasoning as fs_list_dir_result: reveals Codex profile folder names/paths on this machine.
   'codex_profiles_list_result', 'codex_profile_link_result',
-  'claude_profiles_list_result', 'claude_profile_link_result',
   // This machine's Claude/Codex rate limits and a key naming the account — what the person is
   // spending, and on whose subscription. The relay has no business reading either.
   'usage_read_result',
@@ -385,7 +384,6 @@ export const ENCRYPTED_DOWN_TYPES = new Set<string>([
   // Carries the fork's name and first task — what the person typed — like agent_create's prompt.
   'agent_fork',
   'fs_list_dir', 'project_preview', 'codex_profiles_list', 'codex_profile_link',
-  'claude_profiles_list', 'claude_profile_link',
   // Asks this machine to read its own agent accounts' usage (lib/accountUsage.ts). ⚠️ Missing here it
   // would not fail loudly — the same trap `question_response` once fell into: the payload would stay
   // an {__e2e} envelope, requestId would read back undefined, and the requester would wait out its
