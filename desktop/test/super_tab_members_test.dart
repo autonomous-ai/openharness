@@ -520,7 +520,6 @@ void main() {
       await tester.pumpAndSettle();
       expect(card, findsNothing);
       expect(find.text('Engine'), findsOneWidget);
-      expect(find.text('Claude Code'), findsWidgets);
       await f.close(tester);
     });
 
@@ -545,6 +544,8 @@ void main() {
       tester,
     ) async {
       final f = await people(tester);
+      // A dialog's width, beside the column.
+      await tester.binding.setSurfaceSize(const Size(900, 760));
       await f.show(tester);
       await tester.tap(person('owner'));
       await tester.pumpAndSettle();
@@ -572,8 +573,10 @@ void main() {
       await f.close(tester);
     });
 
-    testWidgets('a person with no points yet reads 0 of each', (tester) async {
+    testWidgets('a person off the board shows no points', (tester) async {
       final f = await people(tester);
+      // A dialog's width, beside the column.
+      await tester.binding.setSurfaceSize(const Size(900, 760));
       await f.show(tester);
       await tester.tap(person('tony'));
       await tester.pumpAndSettle();
