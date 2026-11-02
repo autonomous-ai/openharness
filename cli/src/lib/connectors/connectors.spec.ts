@@ -5,6 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync, chmodSync } from 'node:fs'
 import { createServer, request as httpRequest } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { managedNodePath } from '../nodeRuntime.js'
@@ -93,6 +94,25 @@ describe('signing in from this computer (MCP OAuth)', () => {
     await vi.waitFor(() => expect(flows.get(flow).state).toBe('connected'))
     expect(vault.token('linear')).toMatchObject({ source: 'dcr', mcp_entry: { headers: { Authorization: 'Bearer access-1' } } })
     expect(() => flows.deliver(flow, caught)).toThrow('ended')
+  })
+})
+
+describe('a bridge key another account heard', () => {
+  it('opens nothing: the same answer as an unknown key, and the service is never called', async () => {
+    const vault = new Store(mkdtempSync(join(tmpdir(), 'bridge-peer-')), {})
+    const key = bridgeKey(vault)
+    const asked: unknown[] = []
+    const bridge = createBridge(vault, { key: () => key, peerAccount: async (socket) => { asked.push(socket); return false } })
+    await new Promise<void>(resolve => { bridge.listen(0, '127.0.0.1', resolve) })
+    try {
+      const port = (bridge.address() as AddressInfo).port
+      const heard = await fetch(`http://127.0.0.1:${port}/${key}/linear/mcp`, { method: 'POST', body: '{}' })
+      const unknown = await fetch(`http://127.0.0.1:${port}/wrong/linear/mcp`, { method: 'POST', body: '{}' })
+      expect(heard.status).toBe(404)
+      expect(await heard.text()).toBe(await unknown.text())
+      // Only a request with the right key asks who is calling: a stranger cannot make the bridge run lsof.
+      expect(asked).toHaveLength(1)
+    } finally { bridge.closeAllConnections(); bridge.close(); rmSync(vault.root, { recursive: true, force: true }) }
   })
 })
 

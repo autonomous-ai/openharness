@@ -169,7 +169,7 @@ void main() {
       );
     });
 
-    test('goes with REST over the port, never down the socket', () async {
+    test('never goes down the socket, and never to the port once it is gone', () async {
       final tcp = await start(_Daemon.tcp());
       final unix = await start(_Daemon.unix(socketPath));
       final transport = LocalDaemonTransport(
@@ -188,16 +188,37 @@ void main() {
       await unix.close();
       daemons.remove(unix);
       if (File(socketPath).existsSync()) File(socketPath).deleteSync();
+      // The port's listener stands for another account that took it (audit H1).
+      await expectLater(api.me(), throwsA(anything));
+      expect(tcp.hits, isEmpty);
+      expect(tcp.credentials, isEmpty);
+    });
+
+    test('goes with REST over the port where no socket can exist', () async {
+      final tcp = await start(_Daemon.tcp());
+      final transport = LocalDaemonTransport(credential: () => credential);
+      final api = ApiClient(
+        config: configFor(tcp),
+        session: AuthSession(),
+        localTransport: transport,
+      );
+
       expect(await api.me(), {'via': 'tcp'});
       expect(tcp.credentials.last, credential);
     });
 
-    test('goes with the local WebSocket over the port', () async {
-      final tcp = await start(_Daemon.tcp());
+    test('is not offered to a port while a socket can exist', () {
       final transport = LocalDaemonTransport(
         candidate: socketPath,
         credential: () => credential,
-      )..useTcp();
+      );
+      expect(transport.portAllowed, isFalse);
+      expect(transport.tcpHeaders(), isEmpty);
+    });
+
+    test('goes with the local WebSocket over the port where no socket can exist', () async {
+      final tcp = await start(_Daemon.tcp());
+      final transport = LocalDaemonTransport(credential: () => credential);
       final conn = WsConn(
         wsBaseUrl: 'wss://unused.example',
         autonomousEnv: 'prod',
@@ -239,7 +260,9 @@ void main() {
       expect(tcp.hits, isEmpty);
     });
 
-    test('falls back to the port when there is no socket', () async {
+    test('finds no daemon, and asks no port, when the socket is gone', () async {
+      // The port's listener stands for another account: after a reboot it holds the
+      // port until this user logs in, and could answer anything (audit H1).
       final tcp = await start(_Daemon.tcp());
       final transport = LocalDaemonTransport(candidate: socketPath)..useSocket();
       final endpoint = await LocalCliDiscovery(
@@ -248,15 +271,28 @@ void main() {
         transport: transport,
       ).discover();
 
+      expect(endpoint, isNull);
+      expect(transport.socketPath, isNull);
+      expect(tcp.hits, isEmpty);
+    });
+
+    test('asks the port where no socket can exist', () async {
+      final tcp = await start(_Daemon.tcp());
+      final transport = LocalDaemonTransport();
+      final endpoint = await LocalCliDiscovery(
+        config: configFor(tcp),
+        identity: LocalMachineIdentity(computerIdFile: identityFile),
+        transport: transport,
+      ).discover();
+
       expect(endpoint, isNotNull);
       expect(endpoint!.socketPath, isNull);
-      expect(transport.socketPath, isNull);
       expect(tcp.hits, ['/api/status']);
     });
   });
 
   group('REST', () {
-    test('goes over the socket, and back to the port once it is gone', () async {
+    test('goes over the socket, and fails as a daemon that is down once it is gone', () async {
       final tcp = await start(_Daemon.tcp());
       final unix = await start(_Daemon.unix(socketPath));
       final transport = LocalDaemonTransport(candidate: socketPath)..useSocket();
@@ -273,7 +309,8 @@ void main() {
       daemons.remove(unix);
       // Closing the server removes its socket file; make sure nothing is left to dial.
       if (File(socketPath).existsSync()) File(socketPath).deleteSync();
-      expect(await api.me(), {'via': 'tcp'});
+      await expectLater(api.me(), throwsA(anything));
+      expect(tcp.hits, isEmpty);
       expect(transport.socketPath, isNull);
     });
 
@@ -345,15 +382,15 @@ void main() {
       expect(tcp.selects, 0);
     });
 
-    test('falls back to the port when the socket is not there', () async {
+    test('never dials the port when the socket is not there', () async {
       final tcp = await start(_Daemon.tcp());
       final transport = LocalDaemonTransport(candidate: socketPath)..useSocket();
       final conn = connFor(tcp, transport);
       addTearDown(conn.close);
       await conn.connect();
-      await until(() => tcp.selects > 0);
+      await Future<void>.delayed(const Duration(milliseconds: 200));
 
-      expect(tcp.selects, 1);
+      expect(tcp.selects, 0);
       expect(transport.socketPath, isNull);
     });
   });

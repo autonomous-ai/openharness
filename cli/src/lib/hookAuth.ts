@@ -4,6 +4,12 @@ import { join } from 'node:path'
 import { requireWindowsStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
 
 const FILE_NAME = 'hook-credential'
+/**
+ * What an engine's hook shows over TCP: it opens `/api/hook/*` and nothing else. A hook that can only post to a port
+ * hands its token to whoever holds that port (audit H1, docs/security/2026-11-02-team-account-boundary.md), so that
+ * token must not be the credential that drives the local API and its shell.
+ */
+const HOOK_TOKEN_FILE = 'hook-token'
 const TOKEN_RE = /^[A-Za-z0-9_-]{43}$/
 
 export function hookCredentialPath(dataDir: string): string {
@@ -19,11 +25,26 @@ function secureDataDirectory(dataDir: string): boolean {
   }
 }
 
+export function hookTokenPath(dataDir: string): string {
+  return join(dataDir, HOOK_TOKEN_FILE)
+}
+
 export function readHookCredential(dataDir: string): string | null {
+  return readSecret(dataDir, hookCredentialPath(dataDir))
+}
+
+export function loadOrCreateHookCredential(dataDir: string): string {
+  return loadOrCreateSecret(dataDir, hookCredentialPath(dataDir))
+}
+
+export function loadOrCreateHookToken(dataDir: string): string {
+  return loadOrCreateSecret(dataDir, hookTokenPath(dataDir))
+}
+
+function readSecret(dataDir: string, file: string): string | null {
   let fd: number | null = null
   try {
     if (!secureDataDirectory(dataDir)) return null
-    const file = hookCredentialPath(dataDir)
     // Windows: the file itself must be a real file in the profile (secureState.ts); its open follows links.
     if (process.platform === 'win32') requireWindowsStateFile(file)
     fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
@@ -44,8 +65,8 @@ export function readHookCredential(dataDir: string): string | null {
   }
 }
 
-export function loadOrCreateHookCredential(dataDir: string): string {
-  const existing = readHookCredential(dataDir)
+function loadOrCreateSecret(dataDir: string, file: string): string {
+  const existing = readSecret(dataDir, file)
   if (existing) return existing
   try {
     secureStateDirectory(dataDir)
@@ -53,12 +74,11 @@ export function loadOrCreateHookCredential(dataDir: string): string {
     throw new Error('hook credential directory has unsafe owner, mode, or type')
   }
   const value = randomBytes(32).toString('base64url')
-  const file = hookCredentialPath(dataDir)
   let fd: number
   try {
     fd = openSync(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
   } catch (error) {
-    const raced = readHookCredential(dataDir)
+    const raced = readSecret(dataDir, file)
     if (raced) return raced
     throw error
   }
