@@ -14,6 +14,7 @@ import 'package:harness_mobile/swarm/swarm_chat_cache.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_file_picker.dart';
 import 'package:harness_mobile/swarm/swarm_message_row.dart';
+import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_outgoing_files.dart';
@@ -2340,6 +2341,114 @@ void main() {
       of: key('swarm-thread-messages'),
       matching: find.text(text),
     );
+
+    testWidgets('an open thread refreshes numbered links when its target '
+        'arrives and is revoked', (tester) async {
+      final rootMessage = message('m1', 1, text: '#42', thread: 'm1');
+      final threadLine = line('m1', 1, 2);
+      final fake = backend([rootMessage], threads: [threadLine]);
+      fake.routes['/api/super-tabs/list'] = (_) => {
+        'tabs': [
+          {
+            'id': tab,
+            'name': 'Phone Swarm',
+            'ownerId': me,
+            'lastChangedAt': 100,
+          },
+        ],
+        'next': null,
+      };
+      fake.routes['$messages?thread=m1'] = (_) => {
+        'messages': [rootMessage],
+        'next': null,
+        'threads': [threadLine],
+      };
+      final host = await pump(tester, fake);
+
+      await tester.tap(key('swarm-thread-line-m1'));
+      await tester.pumpAndSettle();
+      expect(find.text('Thread'), findsOneWidget);
+      final before = tester.widget<SwarmMessageRow>(
+        key('swarm-thread-message-m1'),
+      );
+      expect(before.references, isEmpty);
+
+      final currentReader = host.session!.inbox.reader(tab)!;
+      SuperTabSnapshot currentSnapshot({required bool includeTarget}) =>
+          SuperTabSnapshot.fromJson({
+            'version': 1,
+            'id': tab,
+            'name': 'Phone Swarm',
+            'ownerId': me,
+            'people': <Object>[],
+            'agents': <Object>[],
+            'machines': <Object>[],
+            'projects': <Object>[],
+            'invitations': <Object>[],
+            'conversations': [
+              groupData('g1', title: 'Fix login'),
+              if (includeTarget)
+                groupData('task-42', number: 42, title: 'Task 42'),
+            ],
+          });
+      // Update what the inbox currently exposes without notifying the older
+      // reader held by the open thread. The changed listing emits an inbox
+      // notification, as a reader replacement does.
+      currentReader.snapshot = currentSnapshot(includeTarget: true);
+      fake.routes['/api/super-tabs/list'] = (_) => {
+        'tabs': [
+          {
+            'id': tab,
+            'name': 'Phone Swarm updated',
+            'ownerId': me,
+            'lastChangedAt': 100,
+          },
+        ],
+        'next': null,
+      };
+      await host.session!.inbox.refresh();
+      await tester.pumpAndSettle();
+
+      final arrived = tester.widget<SwarmMessageRow>(
+        key('swarm-thread-message-m1'),
+      );
+      expect(arrived.references[42], 'task-42');
+      expect(arrived, isNot(same(before)));
+
+      final pagesBeforeRevocation = tester
+          .widgetList<SwarmConversationPage>(find.byType(SwarmConversationPage))
+          .length;
+      currentReader.snapshot = currentSnapshot(includeTarget: false);
+      fake.routes['/api/super-tabs/list'] = (_) => {
+        'tabs': [
+          {
+            'id': tab,
+            'name': 'Phone Swarm changed again',
+            'ownerId': me,
+            'lastChangedAt': 100,
+          },
+        ],
+        'next': null,
+      };
+      await host.session!.inbox.refresh();
+      await tester.pumpAndSettle();
+
+      final revoked = tester.widget<SwarmMessageRow>(
+        key('swarm-thread-message-m1'),
+      );
+      expect(revoked.references, isEmpty);
+      expect(revoked, isNot(same(arrived)));
+
+      await tester.tap(inThread('#42'));
+      await tester.pumpAndSettle();
+      expect(
+        tester.widgetList<SwarmConversationPage>(
+          find.byType(SwarmConversationPage),
+        ),
+        hasLength(pagesBeforeRevocation),
+      );
+      expect(find.text('Thread'), findsOneWidget);
+    });
 
     Future<void> back(WidgetTester tester) async {
       await tester.tap(find.bySemanticsLabel('Back'));
