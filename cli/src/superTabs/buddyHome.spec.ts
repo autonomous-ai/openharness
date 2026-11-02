@@ -161,7 +161,8 @@ describe('a person\'s one Buddy\'s folder', () => {
 
 // Scholes, 11-02: the Buddy kept saying a merged button was "not in my copy of the code yet". Real git: a bare origin, the
 // person's clone of it, and new commits pushed from another clone.
-describe('a Buddy\'s copy of a project follows its default branch', () => {
+// Each test here runs dozens of real git commands: a busy machine takes more than the default 5 s (seen with a hook added).
+describe('a Buddy\'s copy of a project follows its default branch', { timeout: 30_000 }, () => {
   const commit = (dir: string, file: string, text: string) => {
     writeFileSync(join(dir, file), text)
     git(dir, 'add', file)
@@ -342,8 +343,11 @@ describe('a Buddy\'s copy of a project follows its default branch', () => {
     const p = project(root())
     await prepareBuddyHome(p.home, p.web)
     rmSync(join(p.home, BUDDY_COPIES_FILE))
+    const old = head(copy(p.home))
     advance(p.teammate)
     await refreshBuddyHomeIfDue(p.home, Date.now(), 0)
+    // Back before git could have moved it; the pass it joins is still running.
+    expect(head(copy(p.home))).toBe(old)
     await refreshBuddyHome(p.home)
     expect(head(copy(p.home))).toBe(head(p.teammate))
   })
@@ -370,8 +374,11 @@ describe('a Buddy\'s copy of a project follows its default branch', () => {
     const p = project(root())
     await prepareBuddyHome(p.home, p.web)
     advance(p.teammate)
-    void refreshBuddyHome(p.home)
+    let finished = false
+    void refreshBuddyHome(p.home).then(() => { finished = true })
     await removeBuddyHome(p.home)
+    // Nothing of the pass is left running to write in the folder after it is gone.
+    expect(finished).toBe(true)
     expect(existsSync(p.home)).toBe(false)
     expect(git(p.clone, 'worktree', 'list').trim().split('\n')).toHaveLength(1)
   })
