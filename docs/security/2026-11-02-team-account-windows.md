@@ -8,8 +8,7 @@ text and values the code produces. Nothing on a real account, permission or file
 
 ## Answer
 
-**The folders hold; the daemon's port does not.** Ports were covered only in part: the Team daemon's own port and the pty
-host's hello were not read. The ACLs setup writes keep the Team account out of the owner's profile.
+**The folders hold; the daemon's port does not.** Ports were covered only in part: the Team daemon's own port was not read. The ACLs setup writes keep the Team account out of the owner's profile.
 Other accounts can't read the sign-in code or the relay's token, and the daemon's pipe proves both ends. But on Windows the owner's
 local credential still goes over TCP to whoever holds the daemon's port, and the daemon accepts it from any account (W1).
 The Team account's daemon starts at boot, before the owner signs in. Purge was written for POSIX paths. It never deleted a
@@ -161,9 +160,10 @@ as `privacy.ts` `statusText` does.
 | Sign-in handover | Other accounts can't read it (protected, no Users ACE). The owner writes only to a plain folder and file. The Team account reads a plain small file once, and deletes anything else unread | `windowsTeam.ts:221-253`; `windowsBoundary.spec.ts`, `windowsTeam.spec.ts` |
 | Relay folder | Protected: owner, SYSTEM, Administrators full, Team account read, nobody else. Both sides check the owner's SID of the folder and the file. `icacls` gets an argument array | `windowsScript.ts:553-561`; `relay.ts:214-240`; `windowsBoundary.spec.ts` |
 | Daemon pipe | Both ends prove the token by HMAC; a squatter on a dead daemon's name learns nothing usable | `lib/windows/pipeAuth.ts` |
+| Terminal host pipe | Its own pipe per user and home, named with 16 random hex digits per start, made first (`FILE_FLAG_FIRST_PIPE_INSTANCE`), DACL `D:P(A;;GA;;;<user SID>)` (the user alone connects), remote clients refused; the daemon checks the host's hello proof of the token | `pty/src/transport/windows.rs:1-17, 172`; `lib/ptyHost/protocol.ts:135-160` |
 | Desktop, messages | Only over the pipe on Windows, never the credential over TCP | `local_daemon_transport.dart:167-173`; `messages/rpc.ts:20-25` |
 | The task | Runs as the Team account, least privilege. Every account may read it; the owner may also start it. Its XML holds backend addresses only, and its values are limited to what `cmd.exe` passes unchanged | `windowsScript.ts:46-58, 607-688`; `layout.ts` `carriedBackendEnv` |
-| Elevated scripts | Every value checked and single-quoted (every PowerShell quote). The administrator writes nothing in the Team profile; the stage is administrators-only; copies refuse links | `windowsScript.ts:31-44, 170-253, 369-383`; `windowsScript.spec.ts` |
+| Elevated scripts | Every value checked and single-quoted (every PowerShell quote). The administrator writes nothing in the Team profile; only Administrators and SYSTEM change the stage (the Team account lists and reads it, and writes its own output files there, W7); copies refuse links | `windowsScript.ts:31-44, 170-253, 369-383`; `windowsScript.spec.ts` |
 | Status text | Control and format characters removed before the owner sees them (L1) | `privacy.ts:180` |
 | Removal | Refuses an account or profile that is not ours. When the profile is held, it changes nothing and starts the task again. It forgets only team machines hosted by the owner's machine (L3) | `windowsScript.ts:716-776`; `command.ts:556-562` |
 
@@ -173,8 +173,8 @@ as `privacy.ts` `statusText` does.
   Code's Windows paths (W3). The SDDL tests check what setup asks Windows for, not what Windows did.
 - Whether another standard account can read a Team or owner process's command line on Windows (macOS M2). Windows normally
   needs a right on the process that it doesn't give across accounts. Not checked.
-- Ports were covered only in part: the Team daemon's own loopback port (18493) and the pty host's hello were not read beyond
-  what the macOS audit says.
+- Ports were covered only in part: the Team daemon's own loopback port (18493) was not read beyond what the macOS audit says.
+  The terminal host's pipe was read (under "What holds", security review 2 of this pull request); nothing about it ran on Windows.
 - Which callers of `localCredentialHeaders` speak TCP on Windows (W1): `cli.ts`, `remoteCommand.ts`, `superTabs/attach.ts`,
   `devices/client.ts`, `agentClient/settings.ts`, `lib/daemonEndpoint.ts`, `lib/autonomous-device/addonCommand.ts`. Not traced.
 - Whether a standard account can register a scheduled task for itself that runs while it is not signed in (W5).

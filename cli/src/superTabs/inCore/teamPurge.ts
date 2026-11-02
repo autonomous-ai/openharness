@@ -98,7 +98,6 @@ export type ScrubTold = 'shared' | 'unread' | 'unreadTodos' | 'unreadBackups'
  *  folder in the backups (re-check of 8c0b019). The error itself is dropped, as its message names the path. */
 const listed = (dir: string) => readdir(dir).catch((error: NodeJS.ErrnoException) => error.code === 'ENOENT' ? [] as string[] : null)
 
-/** Claude Code's folder name for a project folder: every character but a letter or digit made a dash. */
 /**
  * Whether [codexHome] is a Product Manager's own Codex home in the Team user's [home], `<home>/.harness-pm-homes/<id>/codex`
  * as superTabs/teamDaemon.ts pmEngineHome makes it, by [paths]' own rules: purge deletes its parent whole. A check for
@@ -116,6 +115,7 @@ export function isPmCodexHome(home: string, codexHome: string, paths: Pick<Platf
   return !!id && PM_START_ID.test(id) && last === 'codex' && more.length === 0
 }
 
+/** Claude Code's folder name for a project folder: every character but a letter or digit made a dash. */
 const claudeSlug = (cwd: string) => cwd.replace(/[^A-Za-z0-9]/g, '-')
 const SESSION = /^[A-Za-z0-9_-]{1,160}$/
 /** Its folder, when it names one that is no root: an empty or root key would match every other session's. */
