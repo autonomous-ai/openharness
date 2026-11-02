@@ -55,7 +55,7 @@ his thread in the project chat (his message asking for daily X posts).
 3. Get the screenshot: copy its `blob/<sha>/<path>?raw=true` link from the PR
    body, then `gh api -H "Accept: application/vnd.github.raw"
    "repos/autonomous-ai/openharness/contents/<path>?ref=<sha>" > shot.png`.
-   Crop to what tells the story (`sips -c HEIGHT WIDTH --cropOffset Y X`;
+   Crop to what tells the story (`sips -c HEIGHT WIDTH --cropOffset Y X`; an offset of `0 0` crops the centre, so use `1 1` for the top;
    dark theme, no empty panels). Look at it before using it.
 4. Write the copy with the pattern above. Check the count:
    `python3 -I docs/social/count.py docs/social/drafts/DATE.txt` (under 280).

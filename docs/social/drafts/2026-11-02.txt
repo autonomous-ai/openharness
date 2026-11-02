@@ -1,0 +1,7 @@
+We deleted the web app's left menu.
+
+Harness in a browser is now your agents side by side: Claude Code here, Codex there. One avatar in the corner, one small + for everything else.
+
+Less to look at. More room for the work.
+
+github.com/autonomous-ai/openharness
