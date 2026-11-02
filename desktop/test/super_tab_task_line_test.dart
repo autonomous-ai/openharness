@@ -1,6 +1,11 @@
+import 'dart:typed_data';
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_icons.dart';
+import 'package:harness/state/harness_attachments.dart';
+import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/task_line.dart';
 
@@ -304,6 +309,124 @@ void main() {
     expect(find.text('With fixes: one Important.'), findsOneWidget);
     expect(find.text('Kai has gone quiet.'), findsNothing);
     expect(find.text('A reply in a thread.'), findsNothing);
+  });
+
+  group('the panel\'s reply', () {
+    final field = find.byKey(const ValueKey('super-task-reply'));
+    final send = find.byKey(const ValueKey('super-task-send'));
+
+    ConversationServer assigned() {
+      final server = serverWith([taskRow('working')]);
+      final task = (server.state['conversations'] as List)
+          .cast<Map<String, dynamic>>()
+          .firstWhere((g) => g['id'] == 'group-1');
+      task['agentIds'] = ['kai'];
+      task['assignment'] = {'agentId': 'kai', 'status': 'working'};
+      return server;
+    }
+
+    Future<SuperTabController> open(
+      WidgetTester tester,
+      ConversationServer server,
+    ) async {
+      final c = await showView(tester, server);
+      await c.loadMessages('lead');
+      await tester.pumpAndSettle();
+      await tester.tap(line);
+      await tester.pumpAndSettle();
+      return c;
+    }
+
+    testWidgets('goes to the agent with the task, as a plain message', (
+      tester,
+    ) async {
+      final server = assigned();
+      await open(tester, server);
+      await tester.enterText(field, 'Yes, ship it.');
+      await tester.pump();
+      await tester.tap(send);
+      await tester.pumpAndSettle();
+      final sent =
+          server.posts.lastWhere(
+                (p) => (p['command'] as Map?)?['type'] == 'message.send',
+              )['command']
+              as Map;
+      expect(sent['conversationId'], 'group-1');
+      expect(sent['text'], 'Yes, ship it.');
+      expect(sent['replyTo'], isNull);
+      expect(sent['recipientIds'], ['kai']);
+      expect(tester.widget<TextField>(field).controller!.text, isEmpty);
+    });
+
+    testWidgets('a file with no words goes too', (tester) async {
+      final server = assigned();
+      final c = await open(tester, server);
+      c.threadAttachments('group-1', 'group-1').add([
+        HarnessAttachment('a.txt', Uint8List.fromList([104, 105])),
+      ]);
+      await tester.pump();
+      await tester.tap(send);
+      await tester.pumpAndSettle();
+      final sent =
+          server.posts.lastWhere(
+                (p) => (p['command'] as Map?)?['type'] == 'message.send',
+              )['command']
+              as Map;
+      expect(sent['conversationId'], 'group-1');
+      expect(sent['attachmentIds'], hasLength(1));
+    });
+
+    testWidgets('while something else is saving, the words stay in the box', (
+      tester,
+    ) async {
+      final server = assigned();
+      final c = await open(tester, server);
+      final hold = server.holdCommands = Completer<void>();
+      final other = c.command({
+        'type': 'conversation.rename',
+        'conversationId': 'lead',
+        'title': 'x',
+      });
+      await tester.pump();
+      await tester.enterText(field, 'Do not lose me.');
+      await tester.pump();
+      await tester.tap(send, warnIfMissed: false);
+      await tester.pump();
+      expect(
+        tester.widget<TextField>(field).controller!.text,
+        'Do not lose me.',
+      );
+      server.holdCommands = null;
+      hold.complete();
+      await other;
+      await tester.pumpAndSettle();
+      await tester.tap(send);
+      await tester.pumpAndSettle();
+      expect(
+        server.posts.map((p) => (p['command'] as Map?)?['text']),
+        contains('Do not lose me.'),
+      );
+    });
+
+    testWidgets('a reply on its way shows in the panel', (tester) async {
+      final server = assigned();
+      await open(tester, server);
+      final hold = server.holdCommands = Completer<void>();
+      await tester.enterText(field, 'On its way.');
+      await tester.pump();
+      await tester.tap(send);
+      await tester.pump();
+      expect(
+        find.descendant(
+          of: find.byType(SuperTabTaskPanel),
+          matching: find.textContaining('On its way.'),
+        ),
+        findsWidgets,
+      );
+      server.holdCommands = null;
+      hold.complete();
+      await tester.pumpAndSettle();
+    });
   });
 
   testWidgets('a task the reader\'s read does not hold opens nothing', (
