@@ -138,6 +138,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('super-group-lead')));
       await tester.pump();
       expect(c.expandedProjects, isNot(contains('lead')));
+    await tester.pump(const Duration(seconds: 1));
     },
   );
 
