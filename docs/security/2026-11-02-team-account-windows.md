@@ -11,13 +11,13 @@ text and values the code produces. Nothing on a real account, permission or file
 **The folders hold; the daemon's port does not.** Ports were covered only in part: the Team daemon's own port was not read. The ACLs setup writes keep the Team account out of the owner's profile.
 Other accounts can't read the sign-in code or the relay's token, and the daemon's pipe proves both ends. On Windows the owner's
 local credential went over TCP to whoever holds the daemon's port, and the daemon accepted it from any account (W1, fixed in
-task #2095; the connectors bridge's port is fixed in task #2162, pending its real Windows run).
+task #2095; the connectors bridge's port is fixed in task #2162).
 The Team account's daemon starts at boot, before the owner signs in. Purge was written for POSIX paths. It never deleted a
 Codex Product Manager's own home on Windows (W2, fixed in this pull request), and it can't finish a Claude Code one there (W3).
 
 | ID | Rating | Finding | Status |
 |---|---|---|---|
-| W1 | **High** | The owner's local credential goes to whoever holds the daemon's port, and opens the daemon from any account | **Fixed** in task #2095 for every client, test first. The Store add-ons over the pipe (task #2161): fixed, and run on real Windows x64 and Arm against the installed daemon (Windows workflow run 41464966703). The connectors bridge: fix in task #2162, pending its real Windows run |
+| W1 | **High** | The owner's local credential goes to whoever holds the daemon's port, and opens the daemon from any account | **Fixed** in task #2095 for every client, test first. The Store add-ons over the pipe (task #2161): fixed, and run on real Windows x64 and Arm against the installed daemon (Windows workflow run 41464966703). The connectors bridge: fixed in task #2162, and run on real Windows x64 and Arm (Windows workflow run 41488691783) |
 | W2 | **High** | Purge left a Codex Product Manager's whole home on Windows, and could take every PM's home on any platform | **Fixed here**, test first |
 | W3 | Medium | Purge can't scrub a Claude Code Product Manager on Windows: the account stays held, its memory stays | Read in code, fix requested |
 | W4 | Medium | The Team account can stall the owner's read of its status file | Read in code, fix requested |
@@ -83,7 +83,7 @@ make the daemon refuse the credential over TCP from another account. Windows can
   is not running. Their `localCredentialHeaders` give nothing on Windows and their 401 probe never runs there
   (`store/tools/windows-pipe.test.mjs`, run on Windows by the Windows workflow, with `store/tools/windows-ci/store-pipe.mjs`
   against the installed daemon).
-- The connectors bridge (task #2162, from Reed's review of #2605, Medium at least; called fixed once its real Windows run is green). Until then, `portHolderIsThisAccount`
+- The connectors bridge (task #2162, from Reed's review of #2605, Medium at least; fixed, and run on real Windows x64 and Arm: Windows workflow run 41488691783). Until then, `portHolderIsThisAccount`
   answered null on Windows, so the bridge never moved off a port another account held, and agents' entries and Harness's own
   `bridgeRoute` named that port. The bridge's default port, 51793, is the same for every account, and the Team account's daemon
   starts connectors at boot, so in practice the Team account read every tool call of the owner's agents and could return false
