@@ -255,8 +255,8 @@ class _BuddyStartState extends State<_BuddyStart> {
   String? _machine;
   String _engine = 'claude';
 
-  /// The machines under their one heading, each by its name; an offline one
-  /// says so and cannot be picked (Dee, 10-29: no notes).
+  /// The machines under their one heading, each by its name; an offline or
+  /// paused one says so and cannot be picked (Dee, 10-29: no notes).
   Future<void> _pickMachine(List<SwarmBuddyMachine> machines, String? chosen) =>
       showPhoneSheet(
         context,
@@ -269,8 +269,8 @@ class _BuddyStartState extends State<_BuddyStart> {
                 PhoneSheetAction(
                   icon: m.id == chosen ? LucideIcons.check : LucideIcons.laptop,
                   label: m.name,
-                  value: m.away ? swarmBuddyMachineOffline : null,
-                  enabled: !m.away,
+                  value: swarmBuddyMachineBlock(m),
+                  enabled: swarmBuddyMachineBlock(m) == null,
                   onTap: () {
                     if (mounted) setState(() => _machine = m.id);
                   },
@@ -288,9 +288,9 @@ class _BuddyStartState extends State<_BuddyStart> {
       actions.reader,
       computers: computers?.own ?? const [],
     );
+    final open = machines.where((m) => swarmBuddyMachineBlock(m) == null);
     final machine =
-        machines.where((m) => m.id == _machine && !m.away).firstOrNull ??
-        machines.where((m) => !m.away).firstOrNull;
+        open.where((m) => m.id == _machine).firstOrNull ?? open.firstOrNull;
     final busy = actions.busy;
     return Column(
       key: const ValueKey('swarm-buddy-start'),
@@ -308,7 +308,11 @@ class _BuddyStartState extends State<_BuddyStart> {
           Padding(
             padding: const EdgeInsets.only(top: AppSpace.xs),
             child: SwarmRow.line(
-              machines.isEmpty ? swarmBuddyNoMachine : swarmBuddyAllOffline,
+              machines.isEmpty
+                  ? swarmBuddyNoMachine
+                  : machines.any((m) => m.paused && !m.away)
+                  ? swarmBuddyAllPaused
+                  : swarmBuddyAllOffline,
               key: const ValueKey('swarm-buddy-no-machine'),
               lines: 3,
             ),
