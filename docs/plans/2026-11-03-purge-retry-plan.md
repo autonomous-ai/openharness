@@ -21,7 +21,7 @@
 ## Review Focus
 
 1. A retry goes only through the existing purge, with its reviewed delete and its limits. It adds no new way to delete anything, and only ever names ids from the record.
-2. A session that came back to life stays safe: the reviewed purge refuses it, so it stays pending and nothing is scrubbed.
+2. A session that came back stays safe: a retry pass skips a live agent, as the reviewed delete would stop and erase it. A purge that would take another session's conversation, engine home or running folder is refused. Either way it stays pending.
 3. An unreadable record retries nothing and says so; the account stays held until a person clears it, as today.
 4. A retry racing a host's own close of the same agent shares one run, so two never scrub at once.
 5. The status file is readable by the owner, so it holds no names.
@@ -48,9 +48,9 @@
 - Test: `cli/src/superTabs/inCore/teamPurge.spec.ts`
 
 **Interfaces:**
-- Produces: `withPurgeRetries(purge, { record, report, log }): ((agentId) => Promise<Record<string, unknown>>) & { stop(): void }`.
+- Produces: `withPurgeRetries(purge, { record, sessions, report, log }): ((agentId) => Promise<Record<string, unknown>>) & { stop(): void }`.
 
-- [ ] **Step 1: Write the failing tests:** a failed purge is retried after a restart and clears, removing the engine home; backoff grows and stops once none is pending; one that keeps failing stays recorded and keeps trying; a live session isn't scrubbed; an unreadable record runs nothing and reports it; two calls for one agent share a run; the report holds only a count.
+- [ ] **Step 1: Write the failing tests:** a failed purge is retried after a restart and clears, removing the engine home; backoff grows and stops once none is pending; one that keeps failing stays recorded and keeps trying; a live session isn't touched, against the real purge service; a conversation, engine home or folder another session holds is refused, without two ending sessions waiting on each other; an unreadable record runs nothing and reports it; two calls for one agent share a run; the report holds only a count.
 - [ ] **Step 2: Run them:** `npx vitest run --no-coverage src/superTabs/inCore/teamPurge.spec.ts` in `cli`. Expected: FAIL.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run them.** Expected: PASS.

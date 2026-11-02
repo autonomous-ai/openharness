@@ -470,7 +470,23 @@ export function ownHomeFolder(homes: string, codexHome: string | null | undefine
  * The purge of [agentId]'s data, once the Swarm ended it for good, when it was confidential: kept in [record] before the
  * first deletion and dropped once the sweep finds nothing. A retry finishes from the record, the session gone or not.
  */
+/** A session as a purge compares it with what it recorded. */
+interface HeldRow { agentId: string; sessionId?: string | null; cwd?: string | null; codexHome?: string | null }
+/** What this daemon runs now, and what it keeps stopped and may resume. */
+export type PurgeSessions = () => { live: readonly HeldRow[]; stopped: readonly HeldRow[] }
+
+/** Whether another session holds what deleting [target] would take: its conversation or engine home, or, while it runs, its
+ *  folder, whose transcripts and history lines go by that folder. A stopped one that is itself ending doesn't count, or two
+ *  sessions of one conversation would wait on each other for good (security reviews 1 and 2 of #2680). */
+function heldByAnother(target: PurgeTarget, sessions: ReturnType<PurgeSessions>, ending: PurgeRecord): boolean {
+  const same = (s: HeldRow) => (!!target.sessionId && s.sessionId === target.sessionId) || (!!target.codexHome && s.codexHome === target.codexHome)
+  return sessions.live.some(s => s.agentId !== target.agentId && (same(s) || (!!target.cwd && s.cwd === target.cwd)))
+    || sessions.stopped.some(s => s.agentId !== target.agentId && !ending.get(s.agentId) && same(s))
+}
+
 export function createConfidentialPurge(deps: {
+  /** What else is here now: a purge that would take what another session holds is refused, and stays recorded. */
+  sessions?: PurgeSessions
   confidential: (agentId: string) => boolean
   session: (agentId: string) => { agentId: string; sessionId?: string | null; registeredAt: number; engine: string; cwd: string | null; codexHome?: string | null } | null
   purge: (request: Record<string, unknown>) => Promise<Record<string, unknown>>
@@ -497,6 +513,9 @@ export function createConfidentialPurge(deps: {
       if (!session) return { skipped: true }
       target = { agentId: session.agentId, sessionId: session.sessionId ?? null, cwd: session.cwd, engine: session.engine, codexHome: session.codexHome ?? null }
       deps.record.put(target)
+    }
+    if (deps.sessions && heldByAnother(target, deps.sessions(), deps.record)) {
+      return { error: 'SESSION_IN_USE', detail: 'Another session holds what this purge would delete.' }
     }
     if (session) {
       const reference = { agentId: session.agentId, sessionId: session.sessionId ?? null, createdAt: session.registeredAt }
@@ -530,12 +549,14 @@ export interface PurgeStatus { pending: number; unreadable: boolean; at: number 
 /**
  * Tries again what the record still holds (Echo and Reed on #2675): a host's close gives up after a few tries, and one that
  * ended nothing leaves no host trying at all, while the account stays held. At its start, so a restart picks up the record, and
- * after any purge that leaves one, on a growing wait until none is left. Through [purge] alone, with its reviewed delete and its
- * refusals: a session that came back is refused and stays recorded. A record that can't be read names nothing to run, and waits
- * for a person, as it always has. Calls for one agent share a run, so a retry and a host's close never scrub at once.
+ * after any purge that leaves one, on a growing wait until none is left. Through [purge] alone, with its reviewed delete. A
+ * pass skips an agent that is live again: the reviewed delete stops a live session and erases it, which only a host closing it
+ * may ask for (security review 2 of #2680). It stays recorded and is tried again. A record that can't be read names nothing to
+ * run, and waits for a person, as it always has. Calls for one agent share a run, so a retry and a host's close never scrub at once.
  */
 export function withPurgeRetries(purge: (agentId: string) => Promise<Record<string, unknown>>, deps: {
   record: PurgeRecord
+  sessions: PurgeSessions
   report: (status: PurgeStatus) => void
   log: (line: string) => void
   now?: () => number
@@ -562,6 +583,7 @@ export function withPurgeRetries(purge: (agentId: string) => Promise<Record<stri
     passing = true
     for (const { agentId } of deps.record.pending()) {
       if (stopped) break
+      if (deps.sessions().live.some(s => s.agentId === agentId)) continue
       // By its kind alone: a detail can name a path, and this goes in the daemon's log.
       const said = await run(agentId).catch((error: unknown) => ({ error: kindOf(error) }))
       if (typeof said.error === 'string') deps.log(`a purge did not finish, and is tried again: ${said.error}`)

@@ -248,7 +248,7 @@ describe('harness team status', () => {
       return f.out.join('\n')
     }
     const two = await said({ pending: 2, unreadable: false, at: 1_000_000 - 60_000 })
-    expect(two).toContain('purges      ◍ 2 ended sessions\' data not deleted yet (60s ago)')
+    expect(two).toContain('purges      ◍ 2 ended sessions\' data not deleted yet (checked 60s ago)')
     expect(two).toContain('this account takes no other project\'s work until it has')
     expect(await said({ pending: 1, unreadable: false, at: 1_000_000 })).toContain('◍ 1 ended session\'s data not deleted yet')
     const unreadable = await said({ pending: 0, unreadable: true, at: 1_000_000 })

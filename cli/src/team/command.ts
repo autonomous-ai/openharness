@@ -528,7 +528,7 @@ function purgeLines(purges: TeamStatus['purges'], ago: (at: number) => string): 
   }
   if (!purges?.pending) return []
   const count = purges.pending === 1 ? '1 ended session\'s' : `${purges.pending} ended sessions'`
-  return [`  purges      ◍ ${count} data not deleted yet (${ago(purges.at)}). The daemon keeps trying by itself;`,
+  return [`  purges      ◍ ${count} data not deleted yet (checked ${ago(purges.at)}). The daemon keeps trying by itself;`,
     '              this account takes no other project\'s work until it has.']
 }
 

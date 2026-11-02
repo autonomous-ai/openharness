@@ -1456,10 +1456,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const policy = swarm.teamAppPolicyFor(env.ADAPTER_DATA_DIR, () => coreApi.daemon.machineId(), () => registry.list(), () => stoppedAgents.list(), purges)
     backend.remoteAppPolicy = policy
     // What it doesn't finish is tried again, here and after a restart (superTabs/inCore/teamPurge.ts withPurgeRetries).
-    teamPurge = swarm.withPurgeRetries(swarm.createConfidentialPurge({ confidential: (agentId) => policy.isConfidential(agentId), home: homedir(), record: purges,
+    const purgeSessions = () => ({ live: registry.list(), stopped: stoppedAgents.list() })
+    teamPurge = swarm.withPurgeRetries(swarm.createConfidentialPurge({ sessions: purgeSessions, confidential: (agentId) => policy.isConfidential(agentId), home: homedir(), record: purges,
       session: (agentId) => registry.byAgent(agentId) ?? stoppedAgents.get(agentId),
       purge: async (request) => backend.purgeAgentService ? await backend.purgeAgentService.request(request as never) : { error: 'UNSUPPORTED' } }),
-      { record: purges, report: swarm.teamPurgeReport(), log: (line) => console.warn(`[super-tabs] ${line}`) })
+      { record: purges, sessions: purgeSessions, report: swarm.teamPurgeReport(), log: (line) => console.warn(`[super-tabs] ${line}`) })
   }
   const questionWatcher = asking.questionWatcher
 
