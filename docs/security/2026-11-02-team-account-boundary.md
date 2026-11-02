@@ -1,7 +1,9 @@
 # Harness Team account: can its agents reach the main account's files?
 
 Audit of 2026-11-02 (task #2009), at `origin/main` 615626874. Nothing on any real account or permission was changed. On the
-Mac Studio, modes, listeners and the process table were read; contents of other people's files and secret values were not.
+Mac Studio, modes, listeners and the process table were read, with values on command lines masked. One scan also read the contents of
+readable files in `/private/tmp`, other agents' included, as the main account (M1): it counted key-shaped text, and printed each match's
+kind, length and randomness, and its file's top folder and extension, never a value. No other file's contents were read.
 
 ## Answer
 
@@ -78,8 +80,8 @@ Setup closes the home, and agents also write to `/private/tmp`, which every acco
 - 31 world-writable entries within three levels: 28 in `hps-credential-*` folders, made-up fixtures of a test
   (`store/agents/harness-monitor/test/credential.test.mjs`), and 3 of `.dotnet`.
 
-Any other local account can read them too (`ghrunner` here). A count-only scan as the owner, which printed no value, read 53,143 files
-up to 2 MB and three levels down. Its key-shaped matches look made up: 5 are 27 characters long in Dart files under review folders, and
+Any other local account can read them too (`ghrunner` here). A scan as the owner read the contents of 53,143 readable files, other agents' included,
+up to 2 MB and three levels down; it printed counts and each match's shape, never a value. Its key-shaped matches look made up: 5 are 27 characters long in Dart files under review folders, and
 one file holds one sample of nearly every key type. Another 144 files match `password=`-style text, and were not sorted out, so this
 shows no live secret and does not prove there is none. **If one is found, this is High.**
 
