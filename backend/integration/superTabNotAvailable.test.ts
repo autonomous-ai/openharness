@@ -212,6 +212,17 @@ describe('a Swarm the caller cannot reach, on every person route', () => {
     }
   })
 
+  it('asks every legacy full-state reader to update without revealing whether the Swarm exists', async () => {
+    const f = await swarm()
+    for (const as of [owner, member, outsider, removed]) {
+      const real = await app.inject({ url: `/api/super-tabs/${f.tab}`, headers: { 'x-user': as.sub } })
+      const missing = await app.inject({ url: `/api/super-tabs/${MISSING}`, headers: { 'x-user': as.sub } })
+      expect(real.statusCode).toBe(426)
+      expect(real.json().error.code).toBe('UPDATE_REQUIRED')
+      expect({ status: real.statusCode, body: real.body }).toEqual({ status: missing.statusCode, body: missing.body })
+    }
+  })
+
   it('still reads for a member, and keeps a role refusal\'s own words inside a Swarm they read', async () => {
     const f = await swarm()
     expect((await answer(calls(f.tab, 'lead', 'lead')[0]!, member)).status).toBe(200)
