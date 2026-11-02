@@ -1,0 +1,131 @@
+import { describe, expect, it } from 'vitest'
+import { isCoordinator, mineText, openWorkOf, taskText } from './agentContext.js'
+
+const NOW = Date.parse('2026-11-02T10:00:00.000Z')
+const MIN = 60_000
+
+type Group = Record<string, unknown>
+function swarm(groups: Group[], extra: Record<string, unknown> = {}) {
+  return {
+    projects: [{ id: 'app', name: 'App', leadConversationId: 'lead-app' }, { id: 'web', name: 'Web', leadConversationId: 'lead-web' }],
+    people: [{ id: 'ken', email: 'ken@example.com' }],
+    agents: [{ id: 'pm', name: 'PM' }, { id: 'dev1', name: 'Dev1' }, { id: 'rev1', name: 'Rev1' }, { id: 'pm-web', name: 'Web PM' }],
+    conversations: [
+      { id: 'lead-app', projectId: 'app', title: 'App', leadId: 'pm', agentIds: ['pm'], archived: false, checks: [], assignment: null },
+      { id: 'lead-web', projectId: 'web', title: 'Web', leadId: 'pm-web', agentIds: ['pm-web'], archived: false, checks: [], assignment: null },
+      ...groups,
+    ],
+    ...extra,
+  }
+}
+const task = (id: string, number: number, title: string, agentId: string | null, status: string | null, more: Group = {}): Group => ({
+  id, projectId: 'app', number, title, leadId: 'pm', agentIds: ['pm'], archived: false, checks: [],
+  assignment: agentId ? { id: `as-${id}`, agentId, status, result: null } : null, ...more,
+})
+const changed = (entries: Record<string, number>) => new Map(Object.entries(entries))
+
+describe('mine', () => {
+  it('lists an agent\'s open task with status, update time, result and PR', () => {
+    const state = swarm([task('g12', 12, 'Fix login', 'dev1', 'working', {
+      assignment: { id: 'a', agentId: 'dev1', status: 'working', result: 'Tests pass on main\nmore detail' },
+      pullRequestUrls: ['https://github.com/o/r/pull/7'] })])
+    expect(mineText(state, changed({ g12: NOW - 5 * MIN }), 'dev1', NOW)).toBe(
+      '#12 Fix login (conversation g12) — working, updated 5 min ago; last result: Tests pass on main; PR https://github.com/o/r/pull/7')
+  })
+
+  it('leaves out a reused agent\'s finished task', () => {
+    const state = swarm([task('g11', 11, 'Old work', 'dev1', 'done'), task('g12', 12, 'Fix login', 'dev1', 'working')])
+    expect(openWorkOf(state, 'dev1').map(t => t.number)).toEqual([12])
+    expect(mineText(state, changed({}), 'dev1', NOW)).not.toContain('#11')
+  })
+
+  it('leaves out archived tasks', () => {
+    const state = swarm([task('g12', 12, 'Fix login', 'dev1', 'working', { archived: true })])
+    expect(mineText(state, changed({}), 'dev1', NOW)).toBe('No task is assigned to you.')
+  })
+
+  it('lists linked tasks of its work with their assignee', () => {
+    const state = swarm([task('g12', 12, 'Fix login', 'dev1', 'working'),
+      task('g13', 13, 'Review: Fix login', 'rev1', 'working', { reviewOf: 'g12' })])
+    expect(mineText(state, changed({}), 'dev1', NOW)).toContain('\n  linked: #13 Review: Fix login (conversation g13) — Rev1, working')
+    // The Reviewer sees the task its work is linked to, either way.
+    expect(mineText(state, changed({}), 'rev1', NOW)).toContain('\n  linked: #12 Fix login (conversation g12) — Dev1, working')
+  })
+
+  it('the coordinator\'s mine lists its project\'s open tasks and counts them', () => {
+    const state = swarm([task('g12', 12, 'Fix login', 'dev1', 'working'), task('g14', 14, 'Docs', null, null),
+      task('g15', 15, 'Shipped', 'dev1', 'done'), task('g16', 16, 'Review', 'rev1', 'review', { reviewOf: 'g12' }),
+      { ...task('g20', 20, 'Web work', 'pm-web', 'working'), projectId: 'web' }])
+    expect(isCoordinator(state, 'pm')).toBe(true)
+    const text = mineText(state, changed({}), 'pm', NOW)
+    expect(text).toContain('#12 Fix login (conversation g12) — Dev1, working')
+    expect(text).toContain('#14 Docs (conversation g14) — unassigned')
+    expect(text).not.toContain('#15')
+    expect(text).not.toContain('Web work')
+    expect(text.endsWith('3 open tasks.')).toBe(true)
+  })
+
+  it('with nothing says so', () => {
+    expect(mineText(swarm([]), changed({}), 'dev1', NOW)).toBe('No task is assigned to you.')
+  })
+
+  it('cuts a result to its first line and 160 characters', () => {
+    const long = 'x'.repeat(200)
+    const state = swarm([task('g12', 12, 'Fix login', 'dev1', 'working', { assignment: { id: 'a', agentId: 'dev1', status: 'working', result: long } })])
+    expect(mineText(state, changed({}), 'dev1', NOW)).toContain(`last result: ${'x'.repeat(160)}…`)
+  })
+})
+
+describe('task', () => {
+  const group = task('g12', 12, 'Fix login', 'dev1', 'working', {
+    brief: 'Goal:\nSign in works offline.', pullRequestUrls: ['https://github.com/o/r/pull/7'],
+    assignment: { id: 'a3', agentId: 'dev1', status: 'working', result: 'Fixed the token refresh' },
+    checks: [
+      { id: 'c1', description: 'Signs in offline', independent: true, evidence: 'Ran the app offline', passedBy: 'agent:rev1' },
+      { id: 'c2', description: 'Refresh keeps the session', independent: true, evidence: 'Session dropped after refresh\nlog…', passedBy: null },
+      { id: 'c3', description: 'Docs updated', independent: false, evidence: null, passedBy: null },
+    ],
+  })
+  const attempts = [
+    { id: 'a2', agentId: 'gone', status: 'lost', result: 'Stalled', createdAt: '2026-11-01T09:00:00.000Z' },
+    { id: 'a1', agentId: 'dev1', status: 'stopped', result: null, createdAt: '2026-10-31T09:00:00.000Z' },
+  ]
+
+  it('shows goal, checks, attempts and linked tasks', () => {
+    const state = swarm([group, task('g13', 13, 'Review: Fix login', 'rev1', 'working', { reviewOf: 'g12' })])
+    const text = taskText(group, state, attempts, changed({ g12: NOW - 2 * MIN }), NOW)
+    expect(text.split('\n')[0]).toBe('#12 Fix login (conversation g12)')
+    expect(text).toContain('Project: App · Status: working · Assignee: Dev1 · Updated 2 min ago')
+    expect(text).toContain('PR: https://github.com/o/r/pull/7')
+    expect(text).toContain('Goal:\nSign in works offline.')
+    expect(text).toContain('✓ Signs in offline — by Rev1')
+    expect(text).toContain('✗ Refresh keeps the session — Session dropped after refresh')
+    expect(text).toContain('· Docs updated')
+    const lines = text.split('\n')
+    const at = lines.indexOf('Attempts (newest first):')
+    expect(lines.slice(at + 1, at + 4)).toEqual([
+      '- Dev1, working (current): Fixed the token refresh',
+      '- gone, lost, 2026-11-01 09:00 UTC: Stalled',
+      '- Dev1, stopped, 2026-10-31 09:00 UTC',
+    ])
+    expect(text).toContain('- #13 Review: Fix login (conversation g13) — Rev1, working')
+    expect(text).toContain('messages g12')
+    expect(text).toContain('messages g12 --thread ROOT')
+  })
+
+  it('shows at most 10 attempts', () => {
+    const many = Array.from({ length: 15 }, (_, i) => ({ id: `x${i}`, agentId: 'dev1', status: 'stopped', result: null, createdAt: '2026-10-31T09:00:00.000Z' }))
+    const text = taskText(group, swarm([group]), many, changed({}), NOW)
+    expect(text.split('\n').filter(l => l.startsWith('- Dev1, '))).toHaveLength(10)
+  })
+
+  it('cuts a long brief with a pointer', () => {
+    const long = { ...group, brief: 'b'.repeat(2000) }
+    const text = taskText(long, swarm([long]), [], changed({}), NOW)
+    expect(text).toContain(`${'b'.repeat(1500)}… (cut; the whole brief: status)`)
+  })
+
+  it('says when its attempts could not be read', () => {
+    expect(taskText(group, swarm([group]), null, changed({}), NOW)).toContain('Earlier attempts could not be read.')
+  })
+})

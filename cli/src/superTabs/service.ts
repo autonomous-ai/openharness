@@ -10,6 +10,7 @@ import { backend, swarmRoleFor, hostJournalFile, identifier, object, SuperTabHos
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads, type SwarmRead } from './swarmReads.js'
 import { within } from './wire.js'
+import { isCoordinator } from './agentContext.js'
 import { machineChoices } from '../lib/newCommand.js'
 import { wireRole } from '../lib/swarmSkills.js'
 import { START_REQUIREMENTS } from './capacity.js'
@@ -138,11 +139,6 @@ const OTHER_WORK_FIELDS = ['conversationId', 'projectName', 'title', 'owns', 'st
 /** How old a host form a one-off question about this machine's Swarms may take: the host reads one every second. */
 const POOLS_FRESH_MS = 5_000
 
-/** A project's Lead is its Lead conversation's, as the backend reads it; a Swarm from before projects has one, 'lead'. */
-function isLead(state: Record<string, unknown>, agentId: string): boolean {
-  const leads = Array.isArray(state.projects) ? list(state.projects).map(p => p.leadConversationId) : ['lead']
-  return list(state.conversations).some(c => leads.includes(c.id) && c.leadId === agentId)
-}
 
 /** Leads see each other's work (spec 2026-10-23): a Lead reads other projects' active work in the backend's fields alone;
  *  any other agent reads none of it. Nobody reads the Leads conversation, removed on 10-31, even from an older server
@@ -150,7 +146,7 @@ function isLead(state: Record<string, unknown>, agentId: string): boolean {
 function statusView(answer: Record<string, unknown>, agentId: string): Record<string, unknown> {
   const { otherProjectsWork, leadsConversationId, ...state } = object(answer.state)
   const conversations = list(state.conversations).filter(c => c.kind !== 'leads' && (leadsConversationId == null || c.id !== leadsConversationId))
-  if (isLead(state, agentId)) {
+  if (isCoordinator(state, agentId)) {
     return { ...answer, state: { ...state, conversations,
       ...(Array.isArray(otherProjectsWork) ? { otherProjectsWork: list(otherProjectsWork).map(work =>
         Object.fromEntries(OTHER_WORK_FIELDS.filter(key => key in work).map(key => [key, work[key]]))) } : {}) } }
