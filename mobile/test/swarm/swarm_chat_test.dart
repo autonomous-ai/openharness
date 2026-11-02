@@ -499,14 +499,7 @@ void main() {
   ) async {
     final fake = backend([message('m1', 1, text: '#42')]);
     final host = await pump(tester, fake);
-
-    // The message was rendered before its conversation entered the snapshot.
-    await tester.tap(find.text('#42', findRichText: true));
-    await tester.pumpAndSettle();
-    var pages = tester.widgetList<SwarmConversationPage>(
-      find.byType(SwarmConversationPage),
-    );
-    expect(pages.last.conversationId, 'g1');
+    expect(find.text('#42', findRichText: true), findsOneWidget);
 
     fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
       cursor: 'c3',
@@ -522,9 +515,20 @@ void main() {
     await host.session!.inbox.reader(tab)!.refresh();
     await tester.pumpAndSettle();
 
+    expect(
+      host.session!.inbox.reader(tab)!.snapshot!.conversation('task-42'),
+      isNotNull,
+    );
+    final row = tester.widget<SwarmMessageRow>(
+      find.byWidgetPredicate(
+        (widget) => widget is SwarmMessageRow && widget.message.id == 'm1',
+      ),
+    );
+    expect(row.references[42], 'task-42');
+
     await tester.tap(find.text('#42', findRichText: true));
     await tester.pumpAndSettle();
-    pages = tester.widgetList<SwarmConversationPage>(
+    var pages = tester.widgetList<SwarmConversationPage>(
       find.byType(SwarmConversationPage),
     );
     expect(pages.last.conversationId, 'task-42');
