@@ -38,6 +38,7 @@ import 'machine_icon.dart';
 import 'machine_status.dart';
 import 'model.dart';
 import 'join_machine.dart' show superTabSuggestedAgentSlots;
+import 'personal_machine_rows.dart';
 import 'team_account_setup.dart';
 import 'section_heading.dart';
 import '../widgets/laid_out_list.dart';
@@ -2279,6 +2280,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             mainAxisSize: MainAxisSize.min,
             children: _machines(),
           ),
+        if (widget.app case final app?)
+          PersonalMachineRows(controller: c, app: app),
       ],
     ];
     return widget.embedded
