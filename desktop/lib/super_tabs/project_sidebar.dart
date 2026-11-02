@@ -328,7 +328,16 @@ class ProjectSidebar extends StatelessWidget {
                 expanded: expanded,
                 child: InkWell(
                   key: ValueKey(key ?? 'super-group-${group.id}'),
-                  onTap: !tappable ? null : onTap ?? () => onSelect(group.id),
+                  onTap: !tappable
+                      ? null
+                      : onTap ??
+                            // A second click on the open project shows its
+                            // workgroups (Quiet Swarm: no chevrons).
+                            (project != null &&
+                                    !_paneCovered &&
+                                    controller.selectedId == group.id
+                                ? () => controller.toggleProject(project.id)
+                                : () => onSelect(group.id)),
                   hoverColor: Colors.transparent,
                   focusColor: grid.AppSurface.hoverFill,
                   borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
@@ -337,7 +346,15 @@ class ProjectSidebar extends StatelessWidget {
                       SizedBox(width: SuperTabSectionHeading.indentFor(0)),
                       SizedBox(
                         width: _iconColumn,
-                        child: project != null ? _channelMark() : null,
+                        child: project != null
+                            ? _channelMark()
+                            : label != null
+                            ? Icon(
+                                AppIcons.bot,
+                                size: AppIcons.inlineSize,
+                                color: DesktopChrome.foreground,
+                              )
+                            : null,
                       ),
                       Expanded(
                         child: Semantics(
@@ -492,9 +509,6 @@ class ProjectSidebar extends StatelessWidget {
                 ),
               ),
             ),
-            // At the far right edge, since it is always there and the mark
-            // beside it comes and goes (Dee, 2026-10-28).
-            if (project != null) _toggle(project, expanded: expanded),
           ],
         ),
       ),
@@ -530,35 +544,6 @@ class ProjectSidebar extends StatelessWidget {
           },
           child: child,
         );
-
-  /// The chevron that shows or hides a project's conversations: '>' while
-  /// they are hidden, 'v' while shown. Focused, Enter or Space toggles it; on
-  /// the focused name, → shows them and ← hides them.
-  Widget _toggle(SuperTabProject project, {required bool expanded}) =>
-      Semantics(
-        button: true,
-        expanded: expanded,
-        child: InkWell(
-          key: ValueKey('super-project-toggle-${project.id}'),
-          onTap: () => controller.toggleProject(project.id),
-          // Its row lights whole on hover (_RowSurface).
-          hoverColor: Colors.transparent,
-          focusColor: grid.AppSurface.hoverFill,
-          borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-          child: Tooltip(
-            message: expanded ? 'Hide conversations' : 'Show conversations',
-            child: SizedBox(
-              width: _iconColumn,
-              height: 36,
-              child: Icon(
-                expanded ? AppIcons.chevronDown : AppIcons.chevronRight,
-                size: AppIcons.inlineSize,
-                color: DesktopChrome.muted,
-              ),
-            ),
-          ),
-        ),
-      );
 
   /// A project's "Closed (N)" row and, when it is open, the closed groups under it: archived ones and finished
   /// ones that left the active set, as read for the project so far.

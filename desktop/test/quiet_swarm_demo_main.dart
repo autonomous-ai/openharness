@@ -15,12 +15,20 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/pane_layout_store.dart';
+import 'package:harness/web/shell/web_chrome.dart';
 
 import 'support/humans_fixture.dart';
 import 'support/super_tab_fixture.dart';
 
 const _tabs = ['lampOS', 'strategies', 'autonomous.ai', 'hardware', 'growth'];
-const _people = ['ken15', 'diego', 'dee', 'tony', 'scholes', 'phamngochuy.1989'];
+const _people = [
+  'ken15',
+  'diego',
+  'dee',
+  'tony',
+  'scholes',
+  'phamngochuy.1989',
+];
 const _projects = [
   'computer',
   'lamp',
@@ -213,18 +221,24 @@ Future<void> main() async {
     MaterialApp(
       debugShowCheckedModeBanner: false,
       theme: grid.buildAppTheme(brightness: Brightness.dark),
-      home: SwarmScreen(notifier: app, nativeTabs: false),
+      home: SwarmScreen(
+        notifier: app,
+        nativeTabs: false,
+        chrome: webWorkspaceChrome(app),
+      ),
     ),
   );
   app.superTabs.bind('dee');
   try {
     await app.superTabs.refreshTabs().timeout(const Duration(seconds: 3));
-  } catch (failure) {
-    debugPrint('DEMO refresh failed: $failure');
+  } catch (_) {
+    // Whatever it read is drawn.
   }
-  debugPrint('DEMO swarms: ${app.swarms.map((s) => s.superTabId).toList()}');
   final shown = app.swarms.where((s) => s.superTabId == 'autonomous-ai');
   if (shown.isNotEmpty) app.selectSwarm(shown.first.id);
+  for (final empty in app.swarms.where((s) => s.superTabId == null).toList()) {
+    await app.requestCloseSwarm(empty.id);
+  }
   final screen = Uri.base.queryParameters['screen'] ?? '1';
   await Future<void>.delayed(const Duration(seconds: 2));
   switch (screen) {
