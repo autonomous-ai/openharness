@@ -201,6 +201,7 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
       reader.kept?.draft(reader.tabId, id, root)?.text ??
       '';
   void setThreadDraft(String root, String text) {
+    if (_refused) return;
     reader.kept?.setDraft(reader.tabId, id, root, text);
     if (text.isEmpty) {
       _threadDrafts.remove(root);

@@ -177,8 +177,7 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
         // ⚠️ [AppNotifier.signInWithScan] does nothing while another sign-in is under way — an
         // account's page let go of on the way here — so that one is waited out first, or the scan
         // would be dropped without a word under a camera that reads one code only.
-        if (!await _signInFree())
-          throw StateError('Another sign-in is under way');
+        if (!await _signInFree()) throw StateError('Another sign-in is under way');
         if (!mounted || _step != _Step.scan) return;
         await notifier.signInWithScan(signIn);
         // In, or going in: the app swaps this screen for home. Still out and nothing under way is

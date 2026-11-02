@@ -47,10 +47,12 @@ class MemorySwarmKeptStore implements SwarmKeptStore {
 class SealedSwarmKeptStore implements SwarmKeptStore {
   SealedSwarmKeptStore({required this.key, required this.file});
 
-  factory SealedSwarmKeptStore.device() => SealedSwarmKeptStore(
+  /// The device's: one, so its clears and writes keep one order, whoever asks.
+  factory SealedSwarmKeptStore.device() => _device ??= SealedSwarmKeptStore(
     key: const KeychainSwarmHomeKey(name: 'swarm_kept_key'),
     file: File('${HarnessFileStore.shared.directory.path}/swarm-kept.bin'),
   );
+  static SealedSwarmKeptStore? _device;
 
   final SwarmHomeKey key;
   final File file;
@@ -83,7 +85,8 @@ class SealedSwarmKeptStore implements SwarmKeptStore {
         return null;
       }
       return opened;
-    } catch (_) {
+    } catch (failure) {
+      appLog.warn('swarm', 'Drafts not read: ${failure.runtimeType}');
       await _forget();
       return null;
     }
@@ -389,14 +392,17 @@ class SwarmKept extends ChangeNotifier {
 
   /// Written now: the app going to the background may be its last moment.
   Future<void> flush() async {
-    if (!_loaded || _store == null) return;
+    if (_disposed || !_loaded || _store == null) return;
     _save?.cancel();
     await _write();
   }
 
   @override
   void dispose() {
-    if (_save != null) unawaited(flush());
+    if (_save != null) {
+      _save?.cancel();
+      unawaited(_write());
+    }
     _disposed = true;
     super.dispose();
   }

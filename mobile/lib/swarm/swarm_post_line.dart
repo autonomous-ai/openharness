@@ -84,7 +84,7 @@ class SwarmPostLine extends StatelessWidget {
               widthFactor: 1,
               // Even on both sides, and wide enough for a finger.
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 6),
+                padding: const EdgeInsets.symmetric(horizontal: AppSpace.xs),
                 child: Text(label, style: swarmChatText(14, color: color)),
               ),
             ),
