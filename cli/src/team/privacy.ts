@@ -136,6 +136,8 @@ export interface TeamStatus {
   privacy?: PrivacyResult
   /** Claude Code and Codex in the team account (./engines.ts). */
   engines?: TeamEngines
+  /** The data of ended sessions not deleted yet (superTabs/inCore/teamPurge.ts): a count, never a name. */
+  purges?: { pending: number; unreadable: boolean; at: number }
 }
 
 /** The `engines` field of the status file, or undefined when it is not one. */

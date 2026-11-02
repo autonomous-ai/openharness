@@ -520,3 +520,63 @@ export function createConfidentialPurge(deps: {
   }
 }
 
+/** How long a purge that did not finish waits for its next try, each try the next, and the last from then on. */
+const PURGE_RETRY_MS = [1, 2, 5, 15, 30].map(minutes => minutes * 60_000)
+
+/** What the owner's `harness team status` reads of the purges still to finish (team/privacy.ts). A count: the status file is
+ *  the owner's to read, and never names a session of someone else's project. */
+export interface PurgeStatus { pending: number; unreadable: boolean; at: number }
+
+/**
+ * Tries again what the record still holds (Echo and Reed on #2675): a host's close gives up after a few tries, and one that
+ * ended nothing leaves no host trying at all, while the account stays held. At its start, so a restart picks up the record, and
+ * after any purge that leaves one, on a growing wait until none is left. Through [purge] alone, with its reviewed delete and its
+ * refusals: a session that came back is refused and stays recorded. A record that can't be read names nothing to run, and waits
+ * for a person, as it always has. Calls for one agent share a run, so a retry and a host's close never scrub at once.
+ */
+export function withPurgeRetries(purge: (agentId: string) => Promise<Record<string, unknown>>, deps: {
+  record: PurgeRecord
+  report: (status: PurgeStatus) => void
+  log: (line: string) => void
+  now?: () => number
+}): ((agentId: string) => Promise<Record<string, unknown>>) & { stop(): void } {
+  const running = new Map<string, Promise<Record<string, unknown>>>()
+  let timer: ReturnType<typeof setTimeout> | null = null, tries = 0, passing = false, stopped = false
+  const run = (agentId: string) => {
+    const known = running.get(agentId)
+    if (known) return known
+    const started = purge(agentId).finally(() => running.delete(agentId))
+    running.set(agentId, started)
+    return started
+  }
+  const settle = () => {
+    if (!deps.record.pending().length) tries = 0
+    try { deps.report({ pending: deps.record.pending().length, unreadable: deps.record.unknown(), at: (deps.now ?? Date.now)() }) }
+    catch (error) { deps.log(`could not report the purges still to finish: ${kindOf(error)}`) }
+    if (stopped || timer || passing || !deps.record.pending().length) return
+    timer = setTimeout(() => void pass(), PURGE_RETRY_MS[Math.min(tries, PURGE_RETRY_MS.length - 1)]!)
+    timer.unref?.()
+  }
+  const pass = async () => {
+    timer = null
+    passing = true
+    for (const { agentId } of deps.record.pending()) {
+      if (stopped) break
+      // By its kind alone: a detail can name a path, and this goes in the daemon's log.
+      const said = await run(agentId).catch((error: unknown) => ({ error: kindOf(error) }))
+      if (typeof said.error === 'string') deps.log(`a purge did not finish, and is tried again: ${said.error}`)
+    }
+    passing = false
+    tries++
+    settle()
+  }
+  const retried = async (agentId: string) => {
+    try { return await run(agentId) } finally { settle() }
+  }
+  settle()
+  return Object.assign(retried, { stop: () => { stopped = true; if (timer) clearTimeout(timer); timer = null } })
+}
+
+const kindOf = (error: unknown): string => error instanceof Error
+  ? typeof (error as NodeJS.ErrnoException).code === 'string' ? (error as NodeJS.ErrnoException).code! : error.name
+  : 'unknown failure'

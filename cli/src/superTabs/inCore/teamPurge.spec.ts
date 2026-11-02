@@ -969,6 +969,7 @@ describe('on Windows', () => {
 // Task #2264, Echo and Reed on #2675: nothing tried again once a host gave up, not even a restart.
 describe('a purge that did not finish', () => {
   const MINUTE = 60_000
+  const realTimeout = globalThis.setTimeout
   const fixture = (home: string, recordFile = join(home, 'super-tabs', 'team-purges.json')) => {
     const own = join(home, PM_HOMES, 'super-start', 'codex')
     mkdirSync(own, { recursive: true })
@@ -988,9 +989,7 @@ describe('a purge that did not finish', () => {
   /** Lets a due retry's disk work finish: it reads real folders, which fake timers do not wait for. */
   const pass = async (ms: number) => {
     await vi.advanceTimersByTimeAsync(ms)
-    vi.useRealTimers()
-    await new Promise(resolve => setTimeout(resolve, 60))
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    await new Promise(resolve => realTimeout(resolve, 60))
   }
   beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }) })
   afterEach(() => { vi.useRealTimers() })
