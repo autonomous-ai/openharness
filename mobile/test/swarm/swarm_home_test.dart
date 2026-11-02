@@ -886,8 +886,8 @@ void main() {
       expect(inside(publicRow, find.byType(SwarmAvatar)), findsNothing);
     });
 
-    testWidgets('a project the Lead tagged the person in is bold and bright '
-        'with @N filled; the rest are quiet; each has how many people read '
+    testWidgets('a project with a task-chat tag stays bold without a number; '
+        'the rest are quiet; each has how many people read '
         'it and when it last moved', (tester) async {
       final semantics = tester.ensureSemantics();
       await pump(tester, backend());
@@ -895,11 +895,8 @@ void main() {
       const mobileRow = 'swarm-project-$tab-$project';
       const webRow = 'swarm-project-$tab-$web';
       expect(weightOf(tester, mobileRow, 'Mobile'), AppFont.semibold);
-      final tags = tester.widget<SwarmTags>(
-        inside(mobileRow, find.byType(SwarmTags)),
-      );
-      expect((tags.count, tags.filled), (1, true));
-      expect(find.bySemanticsLabel(RegExp('1 mention')), findsOneWidget);
+      expect(inside(mobileRow, find.byType(SwarmTags)), findsNothing);
+      expect(find.bySemanticsLabel(RegExp('1 mention')), findsNothing);
       expect(weightOf(tester, webRow, 'Web'), isNot(AppFont.semibold));
       expect(inside(webRow, find.textContaining('@')), findsNothing);
       for (final row in [mobileRow, webRow]) {
@@ -2665,7 +2662,11 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(key('swarm-project-tags-loading'), findsNothing);
-      expect(inside(mobileRow, find.byType(SwarmTags)), findsOneWidget);
+      expect(
+        inside(mobileRow, find.byType(SwarmTags)),
+        findsNothing,
+        reason: "the tag is in a task chat, not the project chat",
+      );
       expect(inside(webRow, find.byType(SwarmTags)), findsNothing);
       expect(
         tester.getSize(key(mobileRow)).height,

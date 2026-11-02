@@ -90,8 +90,9 @@ void main() {
     for (var i = 0; i < 200; i++) {
       await tester.pump(const Duration(milliseconds: 100));
       if (projectRow.evaluate().isNotEmpty &&
-          host.session!.inbox.asks(tab)?.mentions.length == 2)
+          host.session!.inbox.asks(tab)?.mentions.length == 2) {
         break;
+      }
     }
     expect(projectRow, findsOneWidget);
     final reader = host.session!.inbox.reader(tab)!;
