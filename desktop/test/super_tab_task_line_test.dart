@@ -260,6 +260,27 @@ void main() {
     expect(find.byType(SuperTabTaskPanel), findsNothing);
   });
 
+  testWidgets('a proposal says its goal, not the server\'s opening words', (
+    tester,
+  ) async {
+    final c = await showView(
+      tester,
+      serverWith([
+        {
+          ...proposalRow(),
+          'text':
+              "Proposal from diego's Buddy, on diego's behalf.\n\n"
+              'Goal: Activity read fix\nScope: The app\nPriority: high',
+        },
+      ]),
+    );
+    await c.loadMessages('lead');
+    await tester.pumpAndSettle();
+    expect(find.textContaining(': Activity read fix'), findsOneWidget);
+    expect(find.textContaining('behalf'), findsNothing);
+    expect(find.textContaining('Scope'), findsNothing);
+  });
+
   testWidgets('a proposal is one line that opens', (tester) async {
     final c = await showView(tester, serverWith([proposalRow()]));
     await c.loadMessages('lead');
