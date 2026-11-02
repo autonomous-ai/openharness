@@ -127,11 +127,16 @@ function oneShot(opts: SummariseOptions): Promise<string> {
       if (code === 0) resolve(out)
       else reject(new Error(`claude exited ${code}`))
     })
+    const failInput = (err: Error): void => {
+      clearTimeout(timer)
+      child.kill('SIGKILL')
+      reject(err)
+    }
+    child.stdin?.on('error', failInput)
     try {
       child.stdin?.end(`${PROMPT}${opts.turnText.slice(0, 50_000)}\n`)
     } catch (err) {
-      clearTimeout(timer)
-      reject(err)
+      failInput(err instanceof Error ? err : new Error(String(err)))
     }
   })
 }

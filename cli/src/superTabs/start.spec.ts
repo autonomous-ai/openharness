@@ -1118,10 +1118,13 @@ describe('Swarm starts for another person\'s project', () => {
     return f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!
   }
 
-  it('wires the Harness GitHub App and says whom the work is for when the project\'s owner is not the machine\'s', async () => {
+  it('wires the Harness GitHub App, naming nobody, when the project\'s owner is not the machine\'s', async () => {
     const payload = await started({ state, githubApp: true })
     expect(payload).toMatchObject({ swarmRole: 'dev', swarmSkillMode: 'default', swarmGitHub: true })
-    expect(String(payload.prompt)).toMatch(/not this computer's own GitHub login\. Start each pull request body with: Requested by owner@example\.com through Harness\.$/)
+    expect(String(payload.prompt)).toMatch(/not this computer's own GitHub login\. Each task's message ends with the line to start its pull request bodies with\.$/)
+    // Whom the work is for comes with each task (backend projects.ts requestedByLine): the start names nobody, so an agent reused
+    // for another person's task never names the one before (security review 2 of #2492).
+    expect(String(payload.prompt)).not.toMatch(/Requested by|@example\.com/)
   })
 
   it('reads a Swarm from before projects as its owner\'s', async () => {
@@ -1138,7 +1141,8 @@ describe('Swarm starts for another person\'s project', () => {
     }
     const payload = await hosted({ requester: 'olive@example.com' })
     expect(payload).toMatchObject({ swarmRole: 'dev', swarmGitHub: true })
-    expect(String(payload.prompt)).toContain('Requested by olive@example.com through Harness.')
+    expect(String(payload.prompt)).toContain('Each task\'s message ends with the line to start its pull request bodies with.')
+    expect(String(payload.prompt)).not.toMatch(/Requested by|olive/)
     for (const github of [undefined, null, {}, { requester: '' }]) expect(await hosted(github)).not.toHaveProperty('swarmGitHub')
   })
 

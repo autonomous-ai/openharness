@@ -20,6 +20,7 @@ import { SwarmReads } from '../src/superTabs/read/service.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import { buddyChatId } from '../src/superTabs/buddies.js'
 import { INBOX_READS, INBOX_WINDOW_MS, LATEST_CHATS, MAX_THREADS, PREVIEW_CHARS, resetInboxReads, THREAD_CHATS } from '../src/superTabs/read/inbox.js'
+import { SEED_SCAN } from '../src/superTabs/read/threadMarkSeeds.js'
 import { stableId, type Author, type Conversation, type SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
@@ -243,12 +244,17 @@ describe('a person\'s inbox: unread threads and each chat\'s latest message', ()
         createdAt: shown('Web latest').createdAt, attachments: 0 } })
   })
 
-  it('counts only replies past the person\'s read mark, and drops a thread they have read', async () => {
+  it('counts replies only in a thread until the person reads the thread, never by reading the chat, and drops a thread they have read', async () => {
     const s = await busyScene()
     const reply1 = await db.superTabMessage.findFirstOrThrow({ where: { tabId: s.tabId, text: 'Web reply 1' } })
-    await markRead(s.tabId, s.web, reply1.sequence, peer)
-    expect(threadsOf((await inbox(s.tabId, peer)).body.data).filter(t => t.chat === s.web)).toEqual([{ chat: s.web, root: 'Web root', unread: 2, last: s.worker }])
+    const markThread = async (sequence: number) => expect((await app.inject({ method: 'POST', url: `/api/super-tabs/${s.tabId}/conversations/${s.web}/threads/${s.webRoot.id}/read`,
+      headers: { authorization: `Bearer ${peer.sub}` }, payload: { sequence } })).statusCode).toBe(200)
+    // The three replies are only in the thread: reading the chat past them reads none (Diego, 11-01).
     await markRead(s.tabId, s.web, s.webLatest.sequence, peer)
+    expect(threadsOf((await inbox(s.tabId, peer)).body.data).filter(t => t.chat === s.web)).toEqual([{ chat: s.web, root: 'Web root', unread: 3, last: s.worker }])
+    await markThread(reply1.sequence)
+    expect(threadsOf((await inbox(s.tabId, peer)).body.data).filter(t => t.chat === s.web)).toEqual([{ chat: s.web, root: 'Web root', unread: 2, last: s.worker }])
+    await markThread(s.webLatest.sequence)
     const after = (await inbox(s.tabId, peer)).body.data
     expect(threadsOf(after).filter(t => t.chat === s.web)).toEqual([])
     // The latest message stays: the Buddies list shows it whether read or not.
@@ -421,6 +427,169 @@ describe('thread unread as Desktop marks it (controller.dart threadUnread)', () 
     expect(latestOf(body.data)[s.web]).toBe('Older root')
     expect(body.data.more).toBe(false)
   })
+})
+
+describe('reading a chat never reads a reply only in a thread (Diego, 11-01)', () => {
+  const threadsRead = (tabId: string, as: AuthUser | 'team' = owner) => get(`/api/super-tabs/${tabId}/threads`, as)
+  const post = async (url: string, as: AuthUser | 'team', payload: unknown) => {
+    const response = await app.inject({ method: 'POST', url, headers: { authorization: `Bearer ${as === 'team' ? 'team' : as.sub}` }, payload: payload as never })
+    return { status: response.statusCode, body: response.json() as { data: any; error?: { code: string } } }
+  }
+  const markThread = async (tabId: string, conversationId: string, root: string, sequence: number, as: AuthUser) =>
+    expect((await post(`/api/super-tabs/${tabId}/conversations/${conversationId}/threads/${root}/read`, as, { sequence })).status).toBe(200)
+  const follow = async (tabId: string, conversationId: string, root: string, value: boolean, as: AuthUser) =>
+    expect((await post(`/api/super-tabs/${tabId}/conversations/${conversationId}/threads/${root}/follow`, as, { follow: value })).status).toBe(200)
+  const newest = async (tabId: string, conversationId: string) =>
+    (await db.superTabMessage.findFirstOrThrow({ where: { tabId, conversationId }, orderBy: { sequence: 'desc' } })).sequence
+  /** The person's thread mark rows, by root id. */
+  const marksOf = async (tabId: string, as: AuthUser) => Object.fromEntries((await db.superTabThreadMark.findMany({ where: { tabId, personId: as.sub } }))
+    .map(r => [r.threadId, { sequence: r.sequence, follow: r.follow ?? null }]))
+  const unreadRoots = (data: any) => threadsOf(data).map(t => `${t.root}: ${t.unread}`).sort()
+
+  it('keeps a thread-only reply unread in the inbox and in Threads after the person reads the chat past it', async () => {
+    const s = await scene()
+    const [root] = await insert(s.tabId, s.web, [{ text: 'Peer root', author: personAuthor(peer) }])
+    await markRead(s.tabId, s.web, await sequenceOf(root!), peer)
+    await insert(s.tabId, s.web, [{ text: 'Thread-only reply', author: agentAuthor(s.worker), thread: root }])
+    const [main] = await insert(s.tabId, s.web, [{ text: 'Main message', author: personAuthor(owner) }])
+    await markRead(s.tabId, s.web, await sequenceOf(main!), peer)
+    expect(threadsOf((await inbox(s.tabId, peer)).body.data)).toEqual([{ chat: s.web, root: 'Peer root', unread: 1, last: s.worker }])
+    const listed = (await threadsRead(s.tabId, peer)).body.data
+    expect(listed.unread.map((t: any) => t.root.text)).toEqual(['Peer root'])
+    expect(listed.read).toEqual([])
+    // Read in the thread, it leaves the inbox and Threads lists it as read.
+    await markThread(s.tabId, s.web, root!, await newest(s.tabId, s.web), peer)
+    expect((await inbox(s.tabId, peer)).body.data.threads).toEqual([])
+    const after = (await threadsRead(s.tabId, peer)).body.data
+    expect(after.unread).toEqual([])
+    expect(after.read.map((t: any) => t.root.text)).toEqual(['Peer root'])
+  })
+
+  it('does so for each thread the person started, replied in, was tagged in or follows, and for no other', async () => {
+    const s = await scene()
+    const [started, replied, taggedRoot, taggedReply, followed, notTheirs] = await insert(s.tabId, s.web, [
+      { text: 'Started', author: personAuthor(peer) },
+      { text: 'Replied', author: personAuthor(owner) },
+      { text: 'Tagged root', author: personAuthor(owner), mentions: [peer.sub] },
+      { text: 'Tagged reply', author: personAuthor(owner) },
+      { text: 'Followed', author: personAuthor(owner) },
+      { text: 'Not theirs', author: personAuthor(owner) },
+    ])
+    await insert(s.tabId, s.web, [{ text: 'Peer answers', author: personAuthor(peer), thread: replied }])
+    await markRead(s.tabId, s.web, await newest(s.tabId, s.web), peer)
+    await follow(s.tabId, s.web, followed!, true, peer)
+    await insert(s.tabId, s.web, [...[started, replied, taggedRoot, followed, notTheirs].map(thread => ({ text: 'Worker reply', author: agentAuthor(s.worker), thread })),
+      { text: 'Worker tags peer', author: agentAuthor(s.worker), thread: taggedReply, mentions: [peer.sub] }])
+    await insert(s.tabId, s.web, [{ text: 'Main message', author: personAuthor(owner) }])
+    await markRead(s.tabId, s.web, await newest(s.tabId, s.web), peer)
+    expect(unreadRoots((await inbox(s.tabId, peer)).body.data)).toEqual(['Followed: 1', 'Replied: 1', 'Started: 1', 'Tagged reply: 1', 'Tagged root: 1'])
+    expect((await threadsRead(s.tabId, peer)).body.data.unread.map((t: any) => t.root.text).sort())
+      .toEqual(['Followed', 'Replied', 'Started', 'Tagged reply', 'Tagged root'])
+    expect(Object.keys(await marksOf(s.tabId, peer))).not.toContain(notTheirs)
+  })
+
+  it('leaves a thread the person already opened at its own mark, and writes none on a thread they unfollowed', async () => {
+    const s = await scene()
+    const [root, unfollowed] = await insert(s.tabId, s.web, [{ text: 'Opened', author: personAuthor(peer) }, { text: 'Unfollowed', author: personAuthor(peer) }])
+    await markRead(s.tabId, s.web, await sequenceOf(unfollowed!), peer)
+    await follow(s.tabId, s.web, unfollowed!, false, peer)
+    const [first] = await insert(s.tabId, s.web, [{ text: 'Reply 1', author: agentAuthor(s.worker), thread: root }])
+    await markThread(s.tabId, s.web, root!, await sequenceOf(first!), peer)
+    await insert(s.tabId, s.web, [{ text: 'Reply 2', author: agentAuthor(s.worker), thread: root }, { text: 'Main 1', author: personAuthor(owner) }])
+    await markRead(s.tabId, s.web, await newest(s.tabId, s.web), peer)
+    // The chat's mark is now past the thread's own: a later read of the chat must not raise the thread's to it.
+    await insert(s.tabId, s.web, [{ text: 'Reply 3', author: agentAuthor(s.worker), thread: root },
+      { text: 'Unfollowed reply', author: agentAuthor(s.worker), thread: unfollowed }, { text: 'Main 2', author: personAuthor(owner) }])
+    await markRead(s.tabId, s.web, await newest(s.tabId, s.web), peer)
+    expect(await marksOf(s.tabId, peer)).toEqual({ [root!]: { sequence: await sequenceOf(first!), follow: null }, [unfollowed!]: { sequence: 0, follow: false } })
+    expect(unreadRoots((await inbox(s.tabId, peer)).body.data)).toEqual(['Opened: 2'])
+  })
+
+  it('gives a Follow alone the chat\'s old mark', async () => {
+    const s = await scene()
+    const [root] = await insert(s.tabId, s.web, [{ text: 'Followed', author: personAuthor(owner) }])
+    const old = await sequenceOf(root!)
+    await markRead(s.tabId, s.web, old, peer)
+    await follow(s.tabId, s.web, root!, true, peer)
+    await insert(s.tabId, s.web, [{ text: 'Reply', author: agentAuthor(s.worker), thread: root }, { text: 'Main', author: personAuthor(owner) }])
+    await markRead(s.tabId, s.web, await newest(s.tabId, s.web), peer)
+    expect(await marksOf(s.tabId, peer)).toEqual({ [root!]: { sequence: old, follow: true } })
+  })
+
+  it('marks nothing in a chat the person never read: its threads wait for their first visit', async () => {
+    const s = await scene()
+    const [root] = await insert(s.tabId, s.web, [{ text: 'Peer root', author: personAuthor(peer) }])
+    await insert(s.tabId, s.web, [{ text: 'Reply', author: agentAuthor(s.worker), thread: root }, { text: 'Main', author: personAuthor(owner) }])
+    await markRead(s.tabId, s.web, await newest(s.tabId, s.web), peer)
+    expect(await marksOf(s.tabId, peer)).toEqual({})
+    expect((await inbox(s.tabId, peer)).body.data.threads).toEqual([])
+  })
+
+  it('writes no mark for a root or reply the person cannot read, and none through a chat they cannot read', async () => {
+    const s = await scene()
+    const [own] = await insert(s.tabId, s.web, [{ text: 'Peer root', author: personAuthor(peer) }])
+    await markRead(s.tabId, s.web, await sequenceOf(own!), peer)
+    const [hiddenRoot] = await insert(s.tabId, s.web, [{ text: 'Hidden root', author: agentAuthor('hidden-agent'), source: { kind: 'note', recipientsOnly: true },
+      recipientIds: [s.worker], mentions: [peer.sub] }])
+    await insert(s.tabId, s.web, [{ text: 'Reply under a hidden root', author: agentAuthor(s.worker), thread: hiddenRoot, mentions: [peer.sub] },
+      { text: 'Hidden reply', author: agentAuthor('hidden-agent'), thread: own, source: { kind: 'note', recipientsOnly: true }, recipientIds: [s.worker] },
+      { text: 'Main', author: personAuthor(owner) }])
+    await markRead(s.tabId, s.web, await newest(s.tabId, s.web), peer)
+    expect(await marksOf(s.tabId, peer)).toEqual({})
+    expect((await inbox(s.tabId, peer)).body.data.threads).toEqual([])
+    const first = await get(`/api/super-tabs/${s.tabId}`, peer)
+    expect(JSON.stringify(first.body.data?.derived ?? {})).not.toContain(hiddenRoot!)
+    // The owner's private project and peer's Buddy chat: refused alike to the person who cannot read them, writing nothing.
+    const [secretRoot] = await insert(s.tabId, s.secretGroup, [{ text: 'Secret root', author: personAuthor(owner), mentions: [peer.sub] }])
+    await insert(s.tabId, s.secretGroup, [{ text: 'Secret reply', author: agentAuthor(s.worker), thread: secretRoot, mentions: [peer.sub] }])
+    const [buddyRoot] = await insert(s.tabId, s.buddyId, [{ text: 'Buddy root', author: personAuthor(peer), mentions: [owner.sub] }])
+    await insert(s.tabId, s.buddyId, [{ text: 'Buddy reply', author: agentAuthor('buddy-agent'), thread: buddyRoot, mentions: [owner.sub] }])
+    const refusals = [await post(`/api/super-tabs/${s.tabId}/conversations/${s.secretGroup}/read`, peer, { sequence: 10_000 }),
+      await post(`/api/super-tabs/${s.tabId}/conversations/${s.buddyId}/read`, owner, { sequence: 10_000 }),
+      await post(`/api/super-tabs/${s.tabId}/conversations/${s.web}/read`, 'team', { sequence: 10_000 })]
+    expect(refusals.map(r => r.status)).toEqual([404, 404, 403])
+    expect(JSON.stringify(refusals)).not.toMatch(/Secret|Buddy/)
+    expect(await db.superTabThreadMark.count({ where: { tabId: s.tabId, threadId: { in: [secretRoot!, buddyRoot!, hiddenRoot!] } } })).toBe(0)
+  })
+
+  it('keeps the higher thread mark when the chat is read on two devices while the thread is opened on a third', async () => {
+    const s = await scene()
+    const [root] = await insert(s.tabId, s.web, [{ text: 'Peer root', author: personAuthor(peer) }])
+    await markRead(s.tabId, s.web, await sequenceOf(root!), peer)
+    const [reply1] = await insert(s.tabId, s.web, [{ text: 'Reply 1', author: agentAuthor(s.worker), thread: root }])
+    await insert(s.tabId, s.web, [{ text: 'Reply 2', author: agentAuthor(s.worker), thread: root }, { text: 'Main', author: personAuthor(owner) }])
+    const top = await newest(s.tabId, s.web)
+    await Promise.all([markRead(s.tabId, s.web, top, peer), markRead(s.tabId, s.web, top, peer), markThread(s.tabId, s.web, root!, await sequenceOf(reply1!), peer)])
+    expect(await marksOf(s.tabId, peer)).toEqual({ [root!]: { sequence: await sequenceOf(reply1!), follow: null } })
+    expect(unreadRoots((await inbox(s.tabId, peer)).body.data)).toEqual(['Peer root: 1'])
+  })
+
+  it(`reads one bounded range from the old mark upward (${SEED_SCAN} rows), whatever the range's length`, async () => {
+    const s = await scene()
+    const [early, late] = await insert(s.tabId, s.web, [{ text: 'Early', author: personAuthor(peer) }, { text: 'Late', author: personAuthor(peer) }])
+    await markRead(s.tabId, s.web, await sequenceOf(late!), peer)
+    await insert(s.tabId, s.web, [{ text: 'Early reply', author: agentAuthor(s.worker), thread: early },
+      ...Array.from({ length: SEED_SCAN + 100 }, (_, i) => ({ text: `Main ${i}`, author: personAuthor(owner) })),
+      { text: 'Late reply', author: agentAuthor(s.worker), thread: late }])
+    const top = await newest(s.tabId, s.web)
+    await db.$runCommandRaw({ profile: 0 })
+    await db.$runCommandRaw({ drop: 'system.profile' }).catch(() => {})
+    await db.$runCommandRaw({ create: 'system.profile', capped: true, size: 16 * 1024 * 1024 })
+    await db.$runCommandRaw({ profile: 2, slowms: 0 })
+    try { await markRead(s.tabId, s.web, top, peer) } finally { await db.$runCommandRaw({ profile: 0 }) }
+    const rows = (await db.$runCommandRaw({ aggregate: 'system.profile', pipeline: [{ $match: { ns: { $not: { $regex: 'system\\.' } } } }, ...PROFILE_STAGES],
+      cursor: {} }) as unknown as { cursor: { firstBatch: ProfileEntry[] } }).cursor.firstBatch.map(profileEntry)
+    expect(rows.filter(r => r.planSummary === 'COLLSCAN')).toEqual([])
+    const messages = rows.filter(r => r.ns.endsWith('.SuperTabMessage') && r.op !== 'getmore')
+    const examined = messages.reduce((n, r) => n + (r.docsExamined ?? 0), 0)
+    console.info(`mark-read seed cost: ${messages.length} message reads, ${examined} message docs examined, ${rows.filter(r => r.op !== 'getmore').length} operations\n` +
+      rows.filter(r => r.op !== 'getmore').map(r => `  ${r.ns.split('.').at(-1)} ${r.op} ${r.planSummary ?? ''} docs=${r.docsExamined ?? 0} keys=${r.keysExamined ?? 0}`).join('\n'))
+    // The range read, the thread's root and the look-back for whether the person is in it: never one read per row or thread.
+    expect(messages.length).toBeLessThanOrEqual(3)
+    expect(examined).toBeLessThanOrEqual(SEED_SCAN + 10)
+    // The cap: a thread-only reply past the first SEED_SCAN rows of the range is not seen by this read.
+    expect(await marksOf(s.tabId, peer)).toEqual({ [early!]: { sequence: await sequenceOf(late!), follow: null } })
+  }, 60_000)
 })
 
 describe('the inbox\'s caps', () => {

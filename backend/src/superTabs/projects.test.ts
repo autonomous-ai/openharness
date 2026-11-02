@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { agentOnly, createSuperTab, SuperTabError, visibleState, type Actor, type MessageDraft } from './model.js'
-import { canReadAgent, canWatchAgent, markConfidential, projectOf, projectsOf, readConversation, skillModeOf, skillSetOf, watchersLost } from './projects.js'
+import { canReadAgent, canWatchAgent, markConfidential, projectOf, projectsOf, readConversation, skillModeOf, skillSetOf, watchersLost, workRequesterId, requestedByLine } from './projects.js'
 import { mayDrive } from './terminal.js'
 
 const owner: Actor = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
@@ -545,5 +545,75 @@ describe('whether a commit narrows who may watch a terminal', () => {
     f.run({ type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: ['peer'] })
     f.add('lead', 'second', false)
     expect(narrowed()).toBe(false)
+  })
+})
+
+// 11-01: agents on Tony's Mac opened Tony's pull requests as Ken's, the project's owner (#2486, #2488, #2491).
+describe('whom a group\'s work is for', () => {
+  it('is its requester while they can read its project, else the project\'s owner', () => {
+    const f = setup(), p = f.project('private')
+    f.run({ type: 'project.sharing', projectId: p.projectId, visibility: 'private', memberIds: ['peer'] })
+    const asked = String(f.run({ type: 'conversation.create', projectId: p.projectId, title: 'Asked', brief: '', checks: [], requesterId: 'peer' }).conversationId)
+    const plain = String(f.run({ type: 'conversation.create', projectId: p.projectId, title: 'Plain', brief: '', checks: [] }).conversationId)
+    const group = (id: string) => f.state.conversations.find(c => c.id === id)!
+    const project = () => projectOf(f.state, p.projectId)
+    expect(workRequesterId(f.state, project(), group(asked))).toBe('peer')
+    expect(workRequesterId(f.state, project(), group(plain))).toBe('owner')
+    expect(workRequesterId(f.state, project(), undefined)).toBe('owner')
+    // A group of another project never names its requester for this one.
+    expect(workRequesterId(f.state, projectOf(f.state, 'lead'), group(asked))).toBe('owner')
+    // No email on their row, or no longer in the Swarm: the owner.
+    const peer = f.state.people.find(p => p.id === 'peer')!
+    peer.email = ''
+    expect(workRequesterId(f.state, project(), group(asked))).toBe('owner')
+    peer.email = 'peer@example.com'
+    // Removed and invited again (a new generation): the old membership no longer reads the project.
+    peer.generation = 'second'
+    expect(workRequesterId(f.state, project(), group(asked))).toBe('owner')
+    peer.generation = 'first'
+    f.run({ type: 'project.sharing', projectId: p.projectId, visibility: 'private', memberIds: [] })
+    expect(workRequesterId(f.state, project(), group(asked))).toBe('owner')
+    f.run({ type: 'member.remove', userId: 'peer' })
+    f.run({ type: 'project.sharing', projectId: p.projectId, visibility: 'public', memberIds: [] })
+    expect(workRequesterId(f.state, project(), group(asked))).toBe('owner')
+  })
+})
+
+// Security review 2 of #2492: the line comes with each task, from that task's requester, never once at the agent's start.
+describe('whom a task\'s pull requests are for', () => {
+  const line = (email: string) => `Start each pull request body with: Requested by ${email} through Harness.`
+  it('ends each task\'s message with its own requester, for an Engineer reused across two people\'s tasks', () => {
+    const f = setup()
+    f.state.people.push({ id: 'third', email: 'third@example.com', role: 'collaborator', generation: 'first' })
+    f.add('lead', 'lead-harness')
+    const worker = f.add('lead', 'worker-harness', false)
+    expect(f.state.agents.find(a => a.id === worker)!.machineOwnerId).toBe('host')
+    const ask = (requesterId: string) => String(f.run({ type: 'conversation.create', title: requesterId, brief: `Work for ${requesterId}`,
+      checks: [{ description: 'Done', independent: false }], requesterId }).conversationId)
+    const first = ask('peer'), second = ask('third')
+    const assigned = (group: string) => {
+      f.run({ type: 'work.assign', conversationId: group, agentId: worker })
+      return f.messages.find(m => m.conversationId === group && m.recipients?.includes(worker))!.text
+    }
+    expect(assigned(first)).toBe(`Work for peer\n\nAcceptance checks:\n- Done\n\n${line('peer@example.com')}`)
+    f.run({ type: 'work.cancel', conversationId: first, assignmentId: f.state.conversations.find(c => c.id === first)!.assignment!.id, reason: 'Next one' })
+    const text = assigned(second)
+    expect(text.endsWith(line('third@example.com'))).toBe(true)
+    expect(text).not.toContain('peer@example.com')
+  })
+
+  it('is the owner\'s for a group nobody asked for, and absent on the owner\'s own machine and for a review', () => {
+    const f = setup()
+    const worker = f.add('lead', 'worker-harness', false)
+    const plain = String(f.run({ type: 'conversation.create', title: 'Plain', brief: '', checks: [] }).conversationId)
+    const review = String(f.run({ type: 'conversation.create', title: 'Review', brief: '', checks: [], reviewOf: plain }).conversationId)
+    const group = (id: string) => f.state.conversations.find(c => c.id === id)!
+    const project = projectOf(f.state, 'lead'), agentOf = (owner: string) => ({ ...f.state.agents.find(a => a.id === worker)!, machineOwnerId: owner })
+    expect(requestedByLine(f.state, project, group(plain), agentOf('host'))).toBe(line('owner@example.com'))
+    expect(requestedByLine(f.state, project, group(plain), agentOf('owner'))).toBeNull()
+    expect(requestedByLine(f.state, project, group(review), agentOf('host'))).toBeNull()
+    // An owner with no email on their row: no line, as the start gave none.
+    f.state.people.find(p => p.id === 'owner')!.email = ''
+    expect(requestedByLine(f.state, project, group(plain), agentOf('host'))).toBeNull()
   })
 })

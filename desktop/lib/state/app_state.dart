@@ -278,6 +278,10 @@ class _AgentChange {
   bool preservingViews = false;
   bool handoffHeld = false;
   bool contextLoaded = false;
+
+  /// Its machine prepared the handoff under this switch's id: its stop names
+  /// the switch (a Swarm Product Manager's machine checks the two match).
+  bool handoffPrepared = false;
   String? handoff;
 
   /// The handoff ran and left the new agent without a first prompt: say so once the switch is done.
@@ -4197,10 +4201,15 @@ class AppNotifier extends ChangeNotifier {
   }
 
   /// Capture once before showing a prompt. Old/replaced targets cannot inherit its answer.
+  /// [changeId]: the Change agent switch this close is part of, whose
+  /// handoff was prepared under that id. A Swarm Product Manager's machine
+  /// lets its stop through only for that switch (cli superTabs/leadSwitch.ts);
+  /// any other close of one is refused as before.
   Future<Map<String, dynamic>> Function(String) prepareSessionClose(
     String machineId,
-    Agent agent,
-  ) {
+    Agent agent, {
+    String? changeId,
+  }) {
     final machine = stateOf(machineId);
     final revision = _authRevision;
     final removal = machine?._agentRemovals[agent.id];
@@ -4239,6 +4248,7 @@ class AppNotifier extends ChangeNotifier {
             'sessionId': agent.sessionId ?? '',
             'createdAt': agent.createdAt!.toUtc().toIso8601String(),
             'mode': mode,
+            'changeId': ?changeId,
           },
         );
       } on WsRequestFailure catch (failure) {
@@ -17350,6 +17360,7 @@ class AppNotifier extends ChangeNotifier {
         sourceLabel: engineIdentity(source.engine).label,
       );
       if (accepted.accepted) {
+        change.handoffPrepared = true;
         change.handoff = accepted.prompt;
         change.handoffEmpty = accepted.prompt == null;
         change.handoffFailed = false;
@@ -17447,7 +17458,13 @@ class AppNotifier extends ChangeNotifier {
         (latest.project?.cwd ?? machine.projectOf(latest)?.cwd) != folder) {
       return 'The conversation changed. Reopen Change agent.';
     }
-    final close = prepareSessionClose(machineId, latest);
+    // Named only after its handoff was prepared under this id: a Swarm
+    // Product Manager's machine checks the two belong to one switch.
+    final close = prepareSessionClose(
+      machineId,
+      latest,
+      changeId: change.handoffPrepared ? change.creation._id : null,
+    );
     change.preservingViews = true;
     if (!latest.isStopped) {
       final saved = await close('now');

@@ -43,9 +43,19 @@ const rowName = (row: Pick<RoutingModel, 'engine' | 'model' | 'effort'>) =>
 const sameRow = (a: Pick<RoutingModel, 'engine' | 'model' | 'effort'>, b: Pick<RoutingModel, 'engine' | 'model' | 'effort'>) =>
   a.engine === b.engine && a.model === b.model && a.effort === b.effort
 
+/** Default rows a saved policy may still hold from before the default table changed: the old row as it was, and the row
+ *  that replaced it. Ken, 2026-11-02 turned Sonnet on at high effort; until then the default row was Sonnet at medium,
+ *  off. A policy saved before holds the old row unchanged and lacks the new one, and neither is a choice of its owner's. */
+const REPLACED_DEFAULTS: ReadonlyArray<{ old: RoutingModel; now: Pick<RoutingModel, 'engine' | 'model' | 'effort'> }> = [
+  { old: { engine: 'claude', model: 'sonnet', effort: 'medium', quality: 2, cost: 2, enabled: false }, now: { engine: 'claude', model: 'sonnet', effort: 'high' } },
+]
+
 /** The policy's settings that differ from the built-in policy, each as one sentence. */
 function policyLines(policy: RoutingPolicy): string[] {
-  const base = effectivePolicy(null, null).policy, lines: string[] = []
+  const current = effectivePolicy(null, null).policy, lines: string[] = []
+  // A policy saved with a replaced default row is read against the default it was saved with.
+  const replaced = REPLACED_DEFAULTS.filter(r => policy.models.some(m => sameRow(m, r.old)) && !policy.models.some(m => sameRow(m, r.now)))
+  const base = { ...current, models: [...current.models.filter(m => !replaced.some(r => sameRow(m, r.now))), ...replaced.map(r => r.old)] }
   if (policy.notes.trim()) lines.push(`Routing notes: ${policy.notes.trim()}`)
   for (const row of policy.models) {
     const built = base.models.find(m => sameRow(m, row))

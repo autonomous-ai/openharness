@@ -15,23 +15,24 @@ describe('routing policy', () => {
     expect(DEFAULT_ROUTING_POLICY.models).toContainEqual({ engine: 'claude', model: 'opus', effort: 'xhigh', quality: 3, cost: 4, enabled: true })
   })
 
-  // Ken, 2026-10-30: no Sonnet Builders. Only the default table changes; an owner's own table is theirs (Lead's ruling).
-  it('turns Sonnet off in the default table, and keeps an owner\'s saved Sonnet row and a tab override\'s as they are', () => {
+  // Ken, 2026-11-02: Sonnet at high effort is back for small work (2026-10-30 had turned it off). Only the default table
+  // changes; an owner's own table is theirs (Lead's ruling).
+  it('offers Sonnet at high effort in the default table, and keeps an owner\'s saved Sonnet row and a tab override\'s as they are', () => {
     const sonnet = (models: Array<{ engine: string; model: string; enabled: boolean }>) => models.filter(m => m.engine === 'claude' && m.model === 'sonnet')
-    expect(sonnet(DEFAULT_ROUTING_POLICY.models)).toEqual([expect.objectContaining({ effort: 'medium', quality: 2, enabled: false })])
+    expect(sonnet(DEFAULT_ROUTING_POLICY.models)).toEqual([expect.objectContaining({ effort: 'high', quality: 2, enabled: true })])
     // Haiku too (review of #2314): an older CLI on the new server picked it for easy work the server refuses, on every route.
     expect(DEFAULT_ROUTING_POLICY.models.filter(m => m.model === 'haiku')).toEqual([expect.objectContaining({ quality: 1, enabled: false })])
-    // What an older CLI's route can still pick from the default table builds: every row it may pick is rated 3.
-    expect(DEFAULT_ROUTING_POLICY.models.filter(m => m.enabled).every(m => m.quality === 3)).toBe(true)
-    expect(sonnet(effectivePolicy(null, null).policy.models).map(m => m.enabled)).toEqual([false])
-    // An owner who saved the table before keeps Sonnet on; it is their row.
-    const saved = { ...DEFAULT_ROUTING_POLICY, models: DEFAULT_ROUTING_POLICY.models.map(m => m.model === 'sonnet' ? { ...m, enabled: true } : m) }
+    // Nothing it may pick is rated below 2 (an older CLI's own route still keeps its builds at 3).
+    expect(DEFAULT_ROUTING_POLICY.models.filter(m => m.enabled).every(m => m.quality >= 2)).toBe(true)
+    expect(sonnet(effectivePolicy(null, null).policy.models).map(m => m.enabled)).toEqual([true])
+    // An owner who saved the table with Sonnet off keeps it off; it is their row.
+    const saved = { ...DEFAULT_ROUTING_POLICY, models: DEFAULT_ROUTING_POLICY.models.map(m => m.model === 'sonnet' ? { ...m, enabled: false } : m) }
     const read = effectivePolicy(saved, null)
     expect(read.warnings).toEqual([])
-    expect(sonnet(read.policy.models).map(m => m.enabled)).toEqual([true])
+    expect(sonnet(read.policy.models).map(m => m.enabled)).toEqual([false])
     expect(read.policy.models.filter(m => m.model !== 'sonnet')).toEqual(saved.models.filter(m => m.model !== 'sonnet'))
     // A tab override's own models win over the default too.
-    expect(sonnet(effectivePolicy(null, { models: saved.models }).policy.models).map(m => m.enabled)).toEqual([true])
+    expect(sonnet(effectivePolicy(null, { models: saved.models }).policy.models).map(m => m.enabled)).toEqual([false])
   })
   it('uses the default when the account has none, and merges a tab override field by field', () => {
     expect(effectivePolicy(null, null)).toEqual({ policy: DEFAULT_ROUTING_POLICY, warnings: [], overridden: [] })

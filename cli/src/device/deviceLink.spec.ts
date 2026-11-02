@@ -1251,3 +1251,138 @@ describe('the lane around a select', () => {
     expect(selectsOf(server)).toEqual([CLOUD, CLOUD_2])   // still there: nothing to send
   })
 })
+
+describe('a sign-in refresh that fails while the lane dials', () => {
+  /** A token read that throws `fails` times (a refresh lost to a network blip, as UNAVAILABLE), then reads. */
+  const flaky = (fails: number) => {
+    let left = fails
+    return { accessToken: vi.fn(async () => {
+      if (left > 0) { left -= 1; throw new Error('UNAVAILABLE: the sign-in could not be refreshed') }
+      return 'token-1'
+    }) }
+  }
+  /** A token read held open until the test lets it go. */
+  const held = () => {
+    const waiting: Array<(token: string) => void> = []
+    return { waiting, auth: { accessToken: vi.fn(() => new Promise<string>((resolve) => { waiting.push(resolve) })) } }
+  }
+
+  it('goes back to idle, not connecting forever, when the first token read throws', async () => {
+    const { link, server } = await lane({ auth: flaky(1) })
+    expect(await link.online().then(() => 'ok', (error: Error) => error.message)).toMatch(/UNAVAILABLE/)
+    expect(link.status()).toBe('idle')
+    expect(server.sockets).toHaveLength(0)
+  })
+
+  it('tries again after a reconnect whose token read fails once: a second socket within the backoff', async () => {
+    const auth = { accessToken: vi.fn(async () => 'token-1') }
+    const { link, server, lines } = await lane({ auth })
+    await link.online()
+    // The network blips: the backend drops the socket, and the refresh the reconnect needs fails once.
+    auth.accessToken.mockRejectedValueOnce(new Error('UNAVAILABLE: the sign-in could not be refreshed'))
+    server.closeCurrent(1012)
+    await until('the failed reconnect', () => lines.some((line) => line.startsWith('device: reconnect failed')), 3_000)
+    expect(link.status()).toBe('idle')
+    // 1 s for the first try, 2 s for the next: well inside 5 s.
+    await until('the second socket', () => server.sockets.length === 2 && link.status() === 'ready', 5_000)
+    expect(server.received.filter((frame) => frame.type === 'machines_watch')).toHaveLength(2)
+  }, 12_000)
+
+  it('stops trying once the dial is unplugged during the wait', async () => {
+    const auth = { accessToken: vi.fn(async () => 'token-1') }
+    const { link, server, lines } = await lane({ auth })
+    await link.online()
+    auth.accessToken.mockRejectedValue(new Error('UNAVAILABLE'))
+    server.closeCurrent(1012)
+    await until('the failed reconnect', () => lines.some((line) => line.startsWith('device: reconnect failed')), 3_000)
+    link.release()
+    const reads = auth.accessToken.mock.calls.length
+    await new Promise((resolve) => setTimeout(resolve, 2_500))   // past the next try's backoff
+    expect(auth.accessToken.mock.calls.length).toBe(reads)
+    expect(server.sockets).toHaveLength(1)
+    expect(link.status()).toBe('idle')
+  }, 12_000)
+
+  it('opens no socket when the dial is unplugged while the token is still being read', async () => {
+    const { waiting, auth } = held()
+    const { link, server } = await lane({ auth })
+    const opened = link.online().then(() => 'ok', (error: Error) => error.message)
+    await until('the token read', () => waiting.length === 1)
+    link.release()
+    waiting[0]!('token-1')
+    expect(await opened).not.toBe('ok')
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(server.sockets).toHaveLength(0)
+    expect(link.status()).toBe('idle')
+  })
+
+  it('reads one token and opens one socket for two callers that dial at once', async () => {
+    const { waiting, auth } = held()
+    const { link, server } = await lane({ auth })
+    const first = link.online()
+    const second = link.online()
+    await until('the token read', () => waiting.length >= 1)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(waiting).toHaveLength(1)
+    waiting[0]!('token-1')
+    await Promise.all([first, second])
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(server.sockets).toHaveLength(1)
+    expect(link.status()).toBe('ready')
+  })
+
+  it('stops, as not authorized, when the token read says the session is over rather than unavailable', async () => {
+    const over = (code: string) => Object.assign(new Error('sign in again'), { code })
+    const auth = { accessToken: vi.fn(async () => 'token-1') }
+    const { link, server, lines } = await lane({ auth })
+    await link.online()
+    auth.accessToken.mockRejectedValue(over('INVALID_REFRESH'))
+    server.closeCurrent(1012)
+    await until('the failed reconnect', () => lines.some((line) => line.startsWith('device: reconnect failed')), 3_000)
+    expect(link.status()).toBe('error')
+    const reads = auth.accessToken.mock.calls.length
+    await new Promise((resolve) => setTimeout(resolve, 2_500))   // past the next try's backoff
+    expect(auth.accessToken.mock.calls.length).toBe(reads)
+    expect(server.sockets).toHaveLength(1)
+    // Signed out on a first dial reads the same: not authorized, not connecting.
+    const fresh = await lane({ auth: { accessToken: vi.fn(async () => { throw over('MISSING') }) } })
+    expect(await fresh.link.online().then(() => 'ok', (error: Error) => error.message)).toBe('sign in again')
+    expect(fresh.link.status()).toBe('error')
+  }, 12_000)
+
+  it('says why a dial failed, so the plug-in retries only what nothing else will', async () => {
+    const codeOf = (promise: Promise<void>) => promise.then(() => 'ok', (error: Error & { code?: unknown }) => error.code)
+    // A token that could not be read just now: no socket, so only the caller can try again.
+    const blip = await lane({ auth: flaky(1) })
+    expect(await codeOf(blip.link.online())).toBe('TOKEN_UNAVAILABLE')
+    // A session that is over: trying again cannot fix it.
+    const over = await lane({ auth: { accessToken: vi.fn(async () => { throw Object.assign(new Error('sign in again'), { code: 'SIGN_IN_AGAIN' }) }) } })
+    const failed = await over.link.online().then(() => null, (error: Error & { code?: unknown }) => error)
+    expect(failed?.code).toBe('SESSION_OVER')
+    expect(failed?.message).toBe('sign in again')
+    // A backend that is not there: the socket failed, and the lane's own reconnect has that one.
+    const down = await lane()
+    await down.server.close()
+    const refused = await codeOf(down.link.online())
+    expect(['TOKEN_UNAVAILABLE', 'SESSION_OVER']).not.toContain(refused)
+    await until('the lane\'s own reconnect', () => (down.link as unknown as { reconnectTimer: unknown }).reconnectTimer !== null, 2_000)
+  })
+
+  it('does not keep dialling after the backend says not authorized during a reconnect', async () => {
+    const { link, server } = await lane()
+    // The backend reads selects and says nothing back, so the reconnect's attach is still waiting when the 4401 lands.
+    await link.online()
+    const selects = () => server.received.filter((frame) => frame.type === 'machine_select').length
+    const attached = link.attach(CLOUD).catch(() => {})
+    await until('the select', () => selects() === 1)
+    server.send({ type: 'machine_selected', payload: { machineId: CLOUD } })
+    await attached
+    server.closeCurrent(1012)
+    await until('the reconnect select', () => selects() === 2, 4_000)
+    server.closeCurrent(4401)
+    await until('not authorized', () => link.status() === 'error', 2_000)
+    await new Promise((resolve) => setTimeout(resolve, 2_500))   // past any backoff
+    expect(server.sockets).toHaveLength(2)
+    expect(link.status()).toBe('error')
+  }, 12_000)
+})

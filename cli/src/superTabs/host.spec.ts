@@ -18,6 +18,7 @@ import type { BackendNotice, CoreApi, TurnDelivery } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { attachedFiles as attachedFilesType } from './attachments.js'
 import { backend, BUDDY_SESSION_GONE_MS, BUDDY_SESSION_IDLE_MS, BUDDY_SESSION_SLEEP_GAP_MS, buddyChatIdOf, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
+import { SWITCH_ADOPT_MS, SWITCH_HOLD_MS } from './leadSwitch.js'
 import { TerminalHost } from './terminal.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
 import { CONTINUE } from './limitResume.js'
@@ -2313,8 +2314,8 @@ it.each(['NOT_SWARM_STARTED', 'AGENT_CHANGED'])('does not keep leasing a runtime
   expect(t.lease).toHaveBeenCalledTimes(1)
 })
 
-it('backs off transient close failures and caps retries for the same runtime', async () => {
-  const t = releaseFixture('swarm', { error: 'SERVICE_UNAVAILABLE' })
+it('caps retries of a close refused for good for the same runtime', async () => {
+  const t = releaseFixture('swarm', { error: 'UNSUPPORTED' })
   await t.poll()
   for (let i = 0; i < 4; i++) await t.poll(1_000)
   expect(t.lease).toHaveBeenCalledTimes(1)
@@ -2331,11 +2332,152 @@ it('backs off transient close failures and caps retries for the same runtime', a
   expect(t.lease).toHaveBeenCalledTimes(6)
 })
 
+// Diego, 11-01: every failure counted toward the five tries, so a few minutes of a busy Swarm, a timeout or a sign-in
+// renewal ended a stop for good, and the stopped worker ran on with its slot and memory until the daemon restarted.
+it('backs off a close the core cannot do yet, doubling to ten minutes, and never gives it up', async () => {
+  const t = releaseFixture('swarm', { error: 'SERVICE_UNAVAILABLE' })
+  await t.poll()
+  for (let i = 0; i < 4; i++) await t.poll(1_000)
+  expect(t.lease).toHaveBeenCalledTimes(1)
+  await t.poll(1_000)
+  expect(t.lease).toHaveBeenCalledTimes(2)
+  await t.poll(9_000)
+  expect(t.lease).toHaveBeenCalledTimes(2)
+  await t.poll(1_000)
+  expect(t.lease).toHaveBeenCalledTimes(3)
+  for (let i = 0; i < 20; i++) await t.poll(130_000)
+  expect(t.lease.mock.calls.length).toBeGreaterThan(5)
+  expect(t.lease.mock.calls.length).toBeLessThan(20)
+  for (let i = 0; i < 3; i++) {
+    const before = t.lease.mock.calls.length
+    await t.poll(10 * 60_000)
+    expect(t.lease).toHaveBeenCalledTimes(before + 1)
+  }
+  expect(t.sent).not.toHaveBeenCalled()
+})
 
-it('backs off unavailable launch-receipt reads without writing any close leases', async () => {
+/** Answers [command]'s requests with [reply] while [failing] says so; counts them. */
+function failCommand(t: ReturnType<typeof releaseFixture>, command: string, reply: () => { status: number; body: Record<string, unknown> }) {
+  const answer = t.core.account.backend
+  const state = { failing: true, calls: 0 }
+  t.core.account.backend = async (method, path, body) => {
+    if ((body as any)?.command?.type !== command || !state.failing) return answer(method, path, body)
+    state.calls++
+    return reply()
+  }
+  return state
+}
+const refusal = (status: number, code: string) => () => ({ status, body: { success: false, error: { code, message: 'Refused.' } } })
+const thrown = (message: string) => () => { throw new Error(message) }
+
+// Main's waits (5, 15, 60, 120 s) spend all five tries in the first four minutes of an outage.
+it('closes and removes a stopped worker once four minutes of a busy Swarm are over', async () => {
+  const t = releaseFixture('swarm', { closed: true })
+  const busy = failCommand(t, 'agent.stopLease', refusal(503, 'SWARM_BUSY'))
+  for (let s = 0; s < 240; s += 10) await t.poll(10_000)
+  expect(busy.calls).toBeGreaterThanOrEqual(5)
+  expect(busy.calls).toBeLessThan(10)
+  expect(t.close).not.toHaveBeenCalled()
+  busy.failing = false
+  for (let s = 0; s < 15 * 60 && !t.remove.mock.calls.length; s += 10) await t.poll(10_000)
+  expect(t.close).toHaveBeenCalledOnce()
+  expect(t.remove).toHaveBeenCalledOnce()
+  expect(t.lease).toHaveBeenCalledOnce()
+})
+
+it('confirms the removal of a closed worker once an outage of its acknowledgement is over', async () => {
+  const t = releaseFixture('swarm', { closed: true })
+  const busy = failCommand(t, 'agent.remove', refusal(503, 'SWARM_BUSY'))
+  for (let s = 0; s < 600; s += 10) await t.poll(10_000)
+  expect(busy.calls).toBeGreaterThan(5)
+  busy.failing = false
+  for (let s = 0; s < 15 * 60 && !t.remove.mock.calls.length; s += 10) await t.poll(10_000)
+  expect(t.remove).toHaveBeenCalledOnce()
+  expect(t.lease).toHaveBeenCalledOnce()
+  // The retries after the close re-check, with the core alone, that the session is still gone; no lease is taken again.
+  expect(t.close).toHaveBeenLastCalledWith({ agentId: 'harness' })
+})
+
+it.each([
+  ['a busy Swarm', refusal(503, 'SWARM_BUSY')],
+  ['a Swarm moving to its new store', refusal(503, 'SWARM_MIGRATING')],
+  ['a backend that is down', refusal(502, 'BACKEND_UNAVAILABLE')],
+  ['a sign-in being renewed', refusal(401, 'UNAUTHORIZED')],
+  ['throttling', refusal(429, 'RATE_LIMITED')],
+  ['a stop request read before it changed', refusal(403, 'STALE_RELEASE')],
+  ['a timeout', thrown('The request timed out.')],
+  ['a sign-in that could not be renewed', thrown("Could not renew this computer's sign-in.")],
+])('keeps asking for a close lease through %s, backed off', async (_why, reply) => {
+  const t = releaseFixture('swarm', { closed: true })
+  const failing = failCommand(t, 'agent.stopLease', reply)
+  for (let i = 0; i < 40; i++) await t.poll(130_000)
+  expect(failing.calls).toBeGreaterThan(5)
+  expect(failing.calls).toBeLessThan(30)
+  failing.failing = false
+  await t.poll(10 * 60_000)
+  expect(t.remove).toHaveBeenCalledOnce()
+})
+
+// Lead, 11-01: a stop that never gives up must not hammer the backend. Six hours of a busy Swarm, looked at each minute:
+// waits of 5 s doubling to 10 minutes are 7 tries in the first 11 minutes, then one each 10 minutes, about 42 in all.
+it('asks at most once each ten minutes through six hours of a busy Swarm', async () => {
+  const t = releaseFixture('swarm', { closed: true })
+  const busy = failCommand(t, 'agent.stopLease', refusal(503, 'SWARM_BUSY'))
+  const reads = () => vi.mocked(t.lookup).mock.calls.length
+  for (let i = 0; i < 6 * 60; i++) await t.poll(60_000)
+  expect(busy.calls).toBeGreaterThanOrEqual(30)
+  expect(busy.calls).toBeLessThanOrEqual(7 + 6 * 6)
+  // Each try reads the launch receipt once, and no more.
+  expect(reads()).toBe(busy.calls)
+  const before = busy.calls
+  await t.poll(9 * 60_000)
+  expect(busy.calls - before).toBeLessThanOrEqual(1)
+})
+
+it.each([
+  ['refused', refusal(403, 'FORBIDDEN')],
+  ['gone', refusal(404, 'NOT_FOUND')],
+  ['for a client to update', refusal(426, 'UPDATE_REQUIRED')],
+])('gives up a close lease %s after five tries for the same runtime', async (_why, reply) => {
+  const t = releaseFixture('swarm', { closed: true })
+  const failing = failCommand(t, 'agent.stopLease', reply)
+  for (let i = 0; i < 40; i++) await t.poll(130_000)
+  expect(failing.calls).toBe(5)
+  expect(t.close).not.toHaveBeenCalled()
+})
+
+it('gives up an old backend\'s close lease it cannot use after five tries', async () => {
+  const t = releaseFixture('swarm', { closed: true })
+  const failing = failCommand(t, 'agent.stopLease', () => ({ status: 200, body: { data: { result: {} } } }))
+  for (let i = 0; i < 40; i++) await t.poll(130_000)
+  expect(failing.calls).toBe(5)
+  expect(t.close).not.toHaveBeenCalled()
+})
+
+it('keeps reading an unavailable launch receipt, backed off, without writing any close leases', async () => {
   const t = releaseFixture()
   t.lookup.mockRejectedValue(new Error('Core temporarily unavailable'))
-  for (let i = 0; i < 10; i++) await t.poll(130_000)
+  for (let i = 0; i < 40; i++) await t.poll(130_000)
+  expect(t.lookup.mock.calls.length).toBeGreaterThan(5)
+  expect(t.lookup.mock.calls.length).toBeLessThan(30)
+  expect(t.lease).not.toHaveBeenCalled()
+})
+
+it.each(['pending', 'unconfirmed'] as const)('keeps reading a launch receipt still %s', async state => {
+  const t = releaseFixture('swarm', { closed: true })
+  t.lookup.mockResolvedValue({ creationId: 'super-original-creation', state } as never)
+  for (let i = 0; i < 40; i++) await t.poll(130_000)
+  expect(t.lookup.mock.calls.length).toBeGreaterThan(5)
+  expect(t.lease).not.toHaveBeenCalled()
+  t.lookup.mockResolvedValue({ creationId: 'super-original-creation', state: 'created', agentId: 'harness' })
+  await t.poll(10 * 60_000)
+  expect(t.remove).toHaveBeenCalledOnce()
+})
+
+it.each(['missing', 'failed', 'cancelled'] as const)('gives up a launch receipt that is %s after five reads, writing no close lease', async state => {
+  const t = releaseFixture()
+  t.lookup.mockResolvedValue({ creationId: 'super-original-creation', state } as never)
+  for (let i = 0; i < 40; i++) await t.poll(130_000)
   expect(t.lookup).toHaveBeenCalledTimes(5)
   expect(t.lease).not.toHaveBeenCalled()
 })
@@ -3598,6 +3740,91 @@ describe('keeping a Swarm Lead alive', () => {
     t.live(false)
     await t.poll()
     expect(t.keepLeadAlive).toHaveBeenCalledTimes(calls + 3)
+  })
+
+  // Dee, 11-01: its owner switches a Product Manager's engine from its pane. The host holds off reopening the old session while
+  // the new one takes its place, and reopens the old one on its old engine when none started in time; a restart keeps the
+  // hold, so a project never has two, and never none for long (superTabs/leadSwitch.ts).
+  const switched = (t: ReturnType<typeof lifeFixture>, at = 0) => {
+    const folder = join(t.dir, 'super-tabs', 'lead-switch')
+    mkdirSync(folder, { recursive: true, mode: 0o700 })
+    writeFileSync(join(folder, `${createHash('sha256').update('harness').digest('hex')}.json`),
+      JSON.stringify({ version: 1, agentId: 'harness', changeId: 'f'.repeat(32), targetEngine: 'codex', at }), { mode: 0o600 })
+  }
+  /** The switch's new session [id], running here when [runs] says so, by its creation receipt. */
+  const replacement = (t: ReturnType<typeof lifeFixture>, runs: () => boolean, old: () => boolean = () => false, id = 'new-session') => {
+    t.core.agents.byAgent = vi.fn((agentId: string) => (agentId === id ? runs() : agentId === 'harness' && old()) ? { agentId } : undefined) as never
+    t.core.agents.creationStatus = vi.fn(async (creationId: string) => ({ creationId, state: 'created' as const, agentId: id }))
+  }
+
+  it('holds a switching Lead\'s reopen until the switch\'s time limit, across a restart, then reopens it', async () => {
+    const t = lifeFixture([leadRow()])
+    switched(t)
+    await t.poll()
+    await t.poll(60_000)
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+    // The host restarts mid-switch: the hold is on disk.
+    t.host.stop()
+    const again = t.open()
+    const poll = async (advance: number) => { t.wait(advance); await again.tick(); for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve)) }
+    await poll(0)
+    await poll(SWITCH_HOLD_MS - 60_000)
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+    await poll(1)
+    expect(t.keepLeadAlive).toHaveBeenCalledWith('harness')
+    expect(t.closeMember).not.toHaveBeenCalled()
+  })
+
+  // Security review 2 of #2493: a new session the Swarm did not take in must not run unlinked beside the reopened one.
+  it('waits for the Swarm to take in a running new session, and closes it before reopening the old one when it did not', async () => {
+    const t = lifeFixture([leadRow()])
+    switched(t)
+    replacement(t, () => true)
+    await t.poll()
+    await t.poll(SWITCH_HOLD_MS + 1)
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+    await t.poll(SWITCH_ADOPT_MS - SWITCH_HOLD_MS - 1)
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+    await t.poll(1)
+    await vi.waitFor(() => expect(t.keepLeadAlive).toHaveBeenCalledWith('harness'))
+    expect(t.closeMember).toHaveBeenCalledWith('new-session', 'f'.repeat(32))
+    expect(t.closeMember.mock.invocationCallOrder[0]).toBeLessThan(t.keepLeadAlive.mock.invocationCallOrder[0])
+    expect(t.log).toHaveBeenCalledWith(expect.stringContaining('Closed the new session new-sess'))
+  })
+
+  it('closes a new session of the switch that starts after the old one was reopened, and says when it cannot', async () => {
+    const t = lifeFixture([leadRow()])
+    switched(t)
+    let late = false
+    replacement(t, () => late, () => true)
+    await t.poll()
+    await t.poll(SWITCH_HOLD_MS + 1)
+    expect(t.closeMember).not.toHaveBeenCalled()
+    late = true
+    t.closeMember.mockResolvedValueOnce({ error: 'AGENT_CHANGED' })
+    await t.poll(5_000)
+    await vi.waitFor(() => expect(t.closeMember).toHaveBeenCalledWith('new-session', 'f'.repeat(32)))
+    await vi.waitFor(() => expect(t.log).toHaveBeenCalledWith(expect.stringContaining('Could not close the new session new-sess')))
+    // Its own new session never counts, nor one from long ago.
+    t.closeMember.mockClear()
+    await t.poll(30 * 60_000)
+    expect(t.closeMember).not.toHaveBeenCalled()
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+  })
+
+  it('reads no new session from a creation that did not run here, or names the old session itself', async () => {
+    const t = lifeFixture([leadRow()])
+    switched(t)
+    t.core.agents.creationStatus = vi.fn(async (creationId: string) => ({ creationId, state: 'pending' as const }))
+    await t.poll()
+    await t.poll(SWITCH_HOLD_MS + 1)
+    await vi.waitFor(() => expect(t.keepLeadAlive).toHaveBeenCalledTimes(1))
+    const u = lifeFixture([leadRow()])
+    switched(u)
+    u.core.agents.creationStatus = vi.fn(async (creationId: string) => ({ creationId, state: 'created' as const, agentId: 'harness' }))
+    await u.poll(SWITCH_HOLD_MS + 1)
+    await vi.waitFor(() => expect(u.keepLeadAlive).toHaveBeenCalledTimes(1))
+    expect(u.closeMember).not.toHaveBeenCalled()
   })
 
   it('waits a minute after a reopen it asked for before asking again', async () => {

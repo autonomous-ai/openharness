@@ -227,9 +227,14 @@ The `prepare-commit-msg` hook runs even with `--no-verify`. Two things leave a c
 without trailers: plumbing such as `git commit-tree`, and a command that sets its own
 `-c core.hooksPath`.
 
-The agent is told to start each pull request body with `Requested by <owner's email>
-through Harness.` The token response also carries `pullRequestLine` with the owner's
-name. This line depends on the agent following its instructions. Harness does not
+Each task's message ends with `Start each pull request body with: Requested by <email>
+through Harness.`, naming the person whose ask the task is: its group's requester while
+they can still read the project, otherwise the project's owner (`requestedByLine` in
+`backend/src/superTabs/projects.ts`). It comes with every task, so an agent reused for
+another person's task names that person; the start prompt names nobody. It is given
+for another person's project (its owner is not the machine's), not for a review. Who asked
+changes no token and no trailer: the token response's `pullRequestLine` and the
+co-author still name the project's owner, so members' emails do not enter git history. This line depends on the agent following its instructions. Harness does not
 assign the pull request, because it does not know the person's GitHub login.
 
 ## The token endpoint

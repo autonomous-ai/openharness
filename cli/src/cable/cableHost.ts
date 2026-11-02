@@ -35,7 +35,7 @@ import type { SelectionCommand, SelectionResult } from './windowSelection.js'
 import type { VisitCommand, VisitResult } from './windowVisit.js'
 import type { FormCommand, FormResult } from './windowForm.js'
 import type { PetStore } from './pets/store.js'
-import type { MachineFleet } from './machineFleet.js'
+import { LANE_SESSION_OVER, LANE_TOKEN_UNAVAILABLE, type MachineFleet } from './machineFleet.js'
 import type { ReviewedAnswer, AnswerReceipt } from './questionInbox.js'
 import { isTier, type Tier } from '../lib/notifyTier.js'
 
@@ -150,6 +150,13 @@ function isPlaceholder(id: string): boolean {
 
 /** How long a keepalive may be answered from the last manifest read — see firmwareFor. */
 const RELEASE_KEEP_MS = 30 * 60_000
+/**
+ * The wait before trying the plug-in's lane again, doubling to the cap: the same backoff as the lane's own reconnect
+ * (deviceLink.ts reconnectLater). Diego, 11-01: a first open lost to a refresh that failed in a network blip was
+ * never tried again, and the wheel had no other Mac until the dial was replugged.
+ */
+const LANE_RETRY_MS = 1_000
+const LANE_RETRY_MAX_MS = 30_000
 
 export class DaemonCableHost implements CableHost {
   /**
@@ -172,6 +179,12 @@ export class DaemonCableHost implements CableHost {
    * `selected`: announcing the older machine would replace the newer choice at the lane (deviceLink.ts select).
    */
   private selecting = ''
+
+  /** Counts plug-ins: a lane open that lands after an unplug or a replug belongs to an older one and does nothing. */
+  private plugIn = 0
+  /** The next try at the lane for this plug-in, after an open that failed; cleared by an unplug or a replug. */
+  private laneRetry: NodeJS.Timeout | null = null
+  private laneTries = 0
 
   /** The last good manifest read per OTA key, for keepalives — see firmwareFor. */
   private readonly releases = new Map<string, { release: FirmwareRelease; at: number }>()
@@ -271,22 +284,64 @@ export class DaemonCableHost implements CableHost {
    */
   onDialAttached(): void {
     this.wiring.watching?.(true)
+    this.stopLaneRetry()
+    this.laneTries = 0
+    this.openLane(++this.plugIn, 'cable: dial on the wire — opening the cloud lane')
+  }
+
+  private openLane(plugIn: number, line: string): void {
     if (!this.viaFleet((r) => r.hasLane())) return
     // Signed out there is no lane to open: the socket is authenticated, so dialling it would fail once
     // per plug-in and log a failure for something nobody asked for. The dial still works — it is on the
-    // cable, and everything it shows on this computer is served in-process.
+    // cable, and everything it shows on this computer is served in-process. A retry stops here too.
     if (this.wiring.signedIn?.() === false) {
       this.wiring.log('cable: dial on the wire — this computer only (not signed in)')
       return
     }
-    this.wiring.log('cable: dial on the wire — opening the cloud lane')
+    this.wiring.log(line)
     void (async () => {
       // The socket first, and unconditionally: it is what makes the machine wheel's dots live, and it is
       // held for as long as the dial is plugged in whether or not anything is selected.
-      const online = await this.viaFleet((r) => r.online())
-      if (!online.ok) throw new Error(online.message)
+      let online: { ok: true } | { ok: false; message: string; code?: string }
+      try {
+        online = await this.viaFleet((r) => r.online())
+      } catch (err) {
+        online = { ok: false, message: (err as Error).message }
+      }
+      if (!online.ok) {
+        // A session that is over is not tried again: each try would be a refused refresh and two log lines every 30 s
+        // until someone signs in (security review 2 on #2483). The next sign-in and plug-in open it.
+        if (online.code === LANE_SESSION_OVER) {
+          this.wiring.log(`cable: could not open the lane (${online.message}) — other machines are unavailable until the next sign-in`)
+          return
+        }
+        this.wiring.log(`cable: could not open the lane (${online.message})`)
+        // Only a token that could not be read is tried again from here: it left the lane no socket, so nothing else
+        // would (deviceLink.ts readToken). A socket that failed is the lane's own reconnect's, and trying it here too
+        // ran two backoffs against a backend that is down (security review 2 on #2483).
+        if (online.code === LANE_TOKEN_UNAVAILABLE) this.retryLane(plugIn)
+        return
+      }
+      // Unplugged or replugged while it opened: the newer plug-in announces for itself, and an unplugged dial is
+      // nowhere to announce.
+      if (plugIn !== this.plugIn) return
+      this.laneTries = 0
       await this.announceSelection()
     })().catch((err) => this.wiring.log(`cable: could not open the lane (${(err as Error).message})`))
+  }
+
+  private retryLane(plugIn: number): void {
+    if (plugIn !== this.plugIn) return
+    this.stopLaneRetry()
+    const delay = Math.min(LANE_RETRY_MAX_MS, LANE_RETRY_MS * 2 ** Math.min(this.laneTries++, 5))
+    this.laneRetry = setTimeout(() => {
+      this.laneRetry = null
+      if (plugIn === this.plugIn) this.openLane(plugIn, 'cable: trying the cloud lane again')
+    }, delay)
+  }
+
+  private stopLaneRetry(): void {
+    if (this.laneRetry) { clearTimeout(this.laneRetry); this.laneRetry = null }
   }
 
   /**
@@ -318,6 +373,8 @@ export class DaemonCableHost implements CableHost {
    * a screen that is not there.
    */
   onDialGone(): void {
+    this.plugIn++
+    this.stopLaneRetry()
     this.wiring.watching?.(false)
     this.wiring.clearSelection?.()
     this.wiring.clearVisit?.()

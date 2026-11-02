@@ -61,8 +61,9 @@ export interface FleetRouting {
   forkAgent(agentId: string): Promise<ForkOutcome>
   /** Whether a lane to the other machines exists: signed in, with the fleet's own fleet. */
   hasLane(): boolean
-  /** Hold the lane for a dial, attached to no machine. Resolves with how it went; never rejects. */
-  online(): Promise<{ ok: true } | { ok: false; message: string }>
+  /** Hold the lane for a dial, attached to no machine. Resolves with how it went, and why when the lane said
+   *  (cable/machineFleet.ts LANE_*); never rejects. */
+  online(): Promise<{ ok: true } | { ok: false; message: string; code?: string }>
   select(machineId: string): Promise<SelectResult>
   release(immediate?: boolean): void
 }

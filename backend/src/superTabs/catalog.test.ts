@@ -4,7 +4,7 @@ import { DEFAULT_ROUTING_POLICY } from './routingPolicy.js'
 import { BENCHMARK_PRIORS } from './benchmarkPriors/data.js'
 import { PRICES } from './costs/prices.js'
 
-const NOT_OFFERED = 'Not offered by default: no Engineer runs on Claude Sonnet or Claude Haiku (Ken and Dee, 2026-10-30).'
+const NOT_OFFERED = 'Not offered by default: no agent runs on Claude Haiku, and none below high effort (Ken, 2026-11-02).'
 
 describe('the model catalog', () => {
   it('lists today\'s models with their strength', () => {
@@ -14,10 +14,11 @@ describe('the model catalog', () => {
       { engine: 'codex', model: 'default', effort: 'default', strength: 3, cost: 2, offered: true },
       { engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', strength: 3, cost: 2, offered: true },
       { engine: 'codex', model: 'gpt-6-astra', effort: 'xhigh', strength: 3, cost: 5, offered: true },
-      { engine: 'claude', model: 'sonnet', effort: 'medium', strength: 2, cost: 2, offered: false, note: NOT_OFFERED },
+      { engine: 'claude', model: 'sonnet', effort: 'high', strength: 2, cost: 2, offered: true },
       { engine: 'claude', model: 'haiku', effort: 'auto', strength: 1, cost: 1, offered: false, note: NOT_OFFERED },
     ])
-    expect(MODEL_CATALOG.models.filter(m => m.offered).every(m => m.strength === 3)).toBe(true)
+    // Ken, 2026-11-02: small work runs on Sonnet or Sol, nothing below high effort; Haiku stays off.
+    expect(MODEL_CATALOG.models.filter(m => m.offered).every(m => m.strength >= 2 && ['high', 'xhigh', 'default'].includes(m.effort))).toBe(true)
     expect(MODEL_CATALOG.grid).toEqual({ strength: 1, models: [{ model: 'kimi k3', strength: 2 }, { model: 'deepseek v4.1', strength: 2 }] })
   })
 

@@ -34,6 +34,7 @@ import type { LaneSeal } from '../core/api.js'
 import type { MachinePeer } from '../lib/e2ee/machinePeers.js'
 import { isWrapped } from '../lib/relayFrames.js'
 import { VERSION } from '../version.js'
+import { LANE_SESSION_OVER, LANE_TOKEN_UNAVAILABLE } from '../cable/machineFleet.js'
 
 /** One frame on the wire. The backend's own vocabulary, unchanged. */
 export interface DeviceFrame {
@@ -51,6 +52,13 @@ const RPC_TIMEOUT_MS = 15_000
  * a machine nobody could reach. Callers say nothing of it as a failure (deviceFleet.ts, cableHost.ts).
  */
 export const SELECT_SUPERSEDED = 'SELECT_SUPERSEDED'
+/** What a dial fails with when the lane was let go while its token was read (an unplug, the daemon stopping). */
+const LET_GO = 'the lane was let go while it dialled'
+/**
+ * The token read's codes for a session that is over (authSession.ts AuthSessionError): signed out, a refresh the backend
+ * refused, SSO asking for a new sign-in. Trying again cannot fix them; only UNAVAILABLE (a refresh lost to a blip) can.
+ */
+const SESSION_OVER = new Set(['MISSING', 'INVALID_REFRESH', 'SIGN_IN_AGAIN'])
 /**
  * How long an agent list may take: a background read nobody is watching a spinner for, refreshed every few seconds
  * (fleetRouter.ts). Diego, 10-30: a slow but working Mac answered its lists 5 to 25 s after the 15 s every request had,
@@ -158,6 +166,11 @@ export class DeviceLink {
   private wanted = ''
   private attempts = 0
   private reconnectTimer: NodeJS.Timeout | null = null
+  /**
+   * The dial in progress, from its token read to its socket opening. A caller meanwhile joins it: two dials at once
+   * would read two tokens and open two sockets, and the one replaced would stay open with nobody to close it.
+   */
+  private dialing: Promise<void> | null = null
   private pingTimer: NodeJS.Timeout | null = null
   private state: DeviceLinkStatus = 'idle'
   /** The dial is plugged in, so this socket should exist even with no machine selected. */
@@ -622,6 +635,14 @@ export class DeviceLink {
   private async connect(): Promise<void> {
     if (this.ws?.readyState === WebSocket.OPEN) return
     if (this.ws?.readyState === WebSocket.CONNECTING) return this.waitOpen()
+    if (!this.dialing) {
+      const dialing: Promise<void> = this.dial().finally(() => { if (this.dialing === dialing) this.dialing = null })
+      this.dialing = dialing
+    }
+    return this.dialing
+  }
+
+  private async dial(): Promise<void> {
     // A socket still closing (its close event not yet fired) is torn down here, before the next one replaces it: its
     // close is ignored once it is not the lane's socket (open()), so nothing else would end its sessions, fail what
     // waits on it, or stop its ping, and the next socket would start with all of it (review 2 on #2402).
@@ -635,7 +656,7 @@ export class DeviceLink {
       + `&label=${encodeURIComponent(hostname())}`
       + `&autonomousEnv=${encodeURIComponent(this.opts.autonomousEnv)}`
 
-    let token = await this.opts.auth.accessToken()
+    let token = await this.readToken()
     this.opts.log(`device: connecting → ${base}/api/device-ws`)
     try {
       await this.open(url, token)
@@ -643,9 +664,45 @@ export class DeviceLink {
       // Exactly ONE forced refresh, and only for a 401. Anything else is not a token problem, and a
       // refresh loop against a backend that is simply down burns the refresh token for nothing.
       if (!/401/.test(String((err as Error).message))) throw err
-      token = await this.opts.auth.accessToken({ force: true, failedToken: token })
+      token = await this.readToken({ force: true, failedToken: token })
       await this.open(url, token)
     }
+  }
+
+  /**
+   * The token for the next socket, read before that socket exists. A read that throws (a refresh lost to the same
+   * network blip, as UNAVAILABLE) leaves no socket, so no close event follows to reset the lane or schedule the next
+   * try: the lane goes back to idle here, and the caller retries (reconnectLater, cableHost). A lane let go while the
+   * read was out (the dial unplugged, the daemon stopping) opens nothing with the token it got.
+   */
+  private async readToken(options?: { force: true; failedToken: string }): Promise<string> {
+    let token: string
+    try {
+      token = await (options ? this.opts.auth.accessToken(options) : this.opts.auth.accessToken())
+    } catch (err) {
+      this.noSocket()
+      const message = err instanceof Error ? err.message : String(err)
+      // As a 4401 after the one refresh (onClose): stop, and let the cabled machine carry on. Retrying a session that
+      // is over would read for nothing every 30 s until someone signs in again.
+      if (!this.ws && SESSION_OVER.has(String((err as { code?: unknown }).code))) {
+        this.state = 'error'
+        this.opts.log('device: not signed in — other machines are unavailable until the next sign-in')
+        throw Object.assign(new Error(message), { code: LANE_SESSION_OVER })
+      }
+      // The caller retries this one (machineFleet.ts), unless the lane's own reconnect is already set: after a 401 the
+      // socket that failed scheduled it (onClose), and a second loop would dial twice per backoff.
+      throw Object.assign(new Error(message), this.reconnectTimer ? {} : { code: LANE_TOKEN_UNAVAILABLE })
+    }
+    if (!this.wanted && !this.heldOpen) {
+      this.noSocket()
+      throw new Error(LET_GO)
+    }
+    return token
+  }
+
+  /** No socket came of this dial: idle, not connecting forever. One that did exist reset it already (teardown). */
+  private noSocket(): void {
+    if (!this.ws && this.state === 'connecting') this.state = 'idle'
   }
 
   private open(url: string, token: string): Promise<void> {
@@ -914,8 +971,17 @@ export class DeviceLink {
       const wanted = this.wanted
       if (!wanted && !this.heldOpen) return
       const retry = wanted ? this.attach(wanted) : this.online()
-      // Replaced by a newer select meanwhile is not a failed reconnect: the newer one carries on.
-      void retry.catch((err) => { if ((err as Error).message !== SELECT_SUPERSEDED) this.opts.log(`device: reconnect failed (${(err as Error).message})`) })
+      void retry.catch((err) => {
+        // Replaced by a newer select meanwhile is not a failed reconnect: the newer one carries on.
+        if ((err as Error).message === SELECT_SUPERSEDED) return
+        this.opts.log(`device: reconnect failed (${(err as Error).message})`)
+        // No socket came of this try (its token read threw), so no close will schedule the next one: it is scheduled
+        // here, with the backoff, while the lane is still wanted. A socket that failed already scheduled its own
+        // (onClose), another dial may be under way, and a lane the backend refused (4401/4403) stays refused.
+        if (!this.wanted && !this.heldOpen) return
+        if (this.ws || this.reconnectTimer || this.dialing || this.state === 'error') return
+        this.reconnectLater()
+      })
     }, delay)
   }
 

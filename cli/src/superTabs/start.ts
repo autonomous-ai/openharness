@@ -155,9 +155,11 @@ export async function projectFacts(scoped: ScopedRequest, conversationId: unknow
   return { mode, github }
 }
 
-/** What an agent doing another person's project work is told about git, gh and its pull requests. */
-export const githubPromptLine = (requester: string) => `git and gh here use a Harness GitHub App token for this project's repository while you `
-  + `have a task, not this computer's own GitHub login. Start each pull request body with: Requested by ${requester} through Harness.`
+/** What an agent doing another person's project work is told about git and gh. It names nobody: each task's message says
+ *  whom that task's pull requests are for (backend projects.ts `requestedByLine`), so an agent reused for another person's
+ *  task never names the one before (security review 2 of #2492). */
+export const githubPromptLine = () => `git and gh here use a Harness GitHub App token for this project's repository while you `
+  + `have a task, not this computer's own GitHub login. Each task's message ends with the line to start its pull request bodies with.`
 
 /** Whether the machine launches `engine` with a model of its own for that session (lib/launchModel.ts). A daemon from
  *  before the flags does not name the field, and agent_create would silently drop a model it does not know. */
@@ -406,7 +408,7 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
           : buddySessionPrompt(String(input.tabId), String(request.conversationId), session, mode)
           : home ? swarmBuddyPrompt(String(input.tabId), String(request.conversationId), home, mode)
           : buddyPrompt(String(input.tabId), String(request.conversationId), mode))
-          : `${lead ? leadPrompt(String(input.tabId), String(request.conversationId), roleName) : workerPrompt(String(input.tabId), String(request.conversationId), roleName)}${github ? ` ${githubPromptLine(github.requester)}` : ''}`,
+          : `${lead ? leadPrompt(String(input.tabId), String(request.conversationId), roleName) : workerPrompt(String(input.tabId), String(request.conversationId), roleName)}${github ? ` ${githubPromptLine()}` : ''}`,
         ...(homeFolder ? { cwd: homeFolder } : request.worktree ? { projectSource: 'worktree', gitSource: request.cwd, branchName: `super-tab/${startId}`,
           // No branch named: the repository's default branch, fetched, not the host checkout's old HEAD.
           ...(request.branchRef ? { branchRef: request.branchRef } : { branchBase: 'default' }) } : { cwd: request.cwd }),

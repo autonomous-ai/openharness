@@ -16,7 +16,7 @@ import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { checkMentions, MAX_MENTIONS, namedIn, saysName, textTags, withTags, type MentionTarget } from './mentions.js'
 import { answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
 import { leadOf, TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest } from './terminal.js'
-import { leadNoticeRows, loseTasks, recordTaskState, renewLease, renewOwnTask, restartQuietTime, waitingForReview } from './liveness.js'
+import { changesRequested, leadNoticeRows, loseTasks, recordTaskState, renewLease, renewOwnTask, restartQuietTime, revisionReady, waitingForReview } from './liveness.js'
 import { DELETED_SWARM_COMMANDS, isPersonalSwarm, notThere, SWARM_DELETE_GRACE_MS } from './deletion.js'
 import { ABANDONED, askedModel, coordinatorCopy, failureNotice, failureRecipients, MACHINE_REMOVED } from './startFailure.js'
 import { noteStartFailed, noteStartSucceeded, resumeEngine } from './engineHealth.js'
@@ -34,7 +34,7 @@ import { shipNotice, shippedAt } from './ship.js'
 import { assignedNotice, tellBuddies } from './buddyNews.js'
 import { bindPullRequestCards, bindTaskCard, pullRequestCard, recordCardMerged } from './cards.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
-import { BUILT_IN_ROLE_DEFAULTS, agentProjectId, audienceOf, canReadProject, deleteProject, isConfidential, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
+import { BUILT_IN_ROLE_DEFAULTS, agentProjectId, audienceOf, canReadProject, deleteProject, isConfidential, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, requestedByLine, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
 import { BUDDY_SESSION_CAPABILITY, chatOwner, endSessionEntry, entryProject, liveSessions, mainBuddyOf, MAX_BUDDY_SESSIONS, MAX_SESSION_WAITING, requireChatOwner, SESSION_ENDED_KIND, sessionAgentsOf, sessionOf, setSessions, type SessionEndReason } from './buddySessions.js'
 import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, isSwarmBuddy, isSwarmBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, openBuddyChat, openSwarmBuddyChat, PM_LINE_KIND, PROPOSAL_ASK_MS, proposalText, renameBuddy, requireBuddyCommand, swarmBuddyChatId } from './buddies.js'
 import { BUDDY_OWN_MACHINE_REFUSAL, CODEX_BUDDY_REFUSAL } from './buddyContract.js'
@@ -2551,7 +2551,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // Its project on the row itself, so the row hides once its person loses that project (buddySessions.ts lostProjectRow).
       if (session?.inSession) Object.assign(effects.messages.at(-1)!, { buddySession: true, ...(session.project ? { buddyProject: session.project } : {}) })
       recordPost(state, group, actor, { replyTo: command.replyTo, text, reply: context.reply, openTags: context.openTags }, context.now)
-      if (actor.kind === 'agent') renewOwnTask(group, actor.agentId, context.now)
+      if (actor.kind === 'agent') renewOwnTask(state, group, actor.agentId, context.now)
       leadActed(group.id, 'post')
       break
     }
@@ -2722,9 +2722,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
           d => started(d) ? d.final! : { kind: 'member', agentId: worker.id, machineId: worker.machineId }, command.overrideReason, operationId)
         if (override) routeNote = { decisionId: decision.id, text: instead(`assigned ${worker.name}`) }
       }
-      // The brief (a task with none: its title), and its acceptance checks when it has some: checks are information.
+      // The brief (a task with none: its title), and its acceptance checks when it has some: checks are information. Then
+      // whom this task's pull requests are for, from its own requester (projects.ts requestedByLine).
+      const requestedBy = requestedByLine(state, home, group, worker)
       message(group.id, [group.brief || group.title,
-        ...group.checks.length ? [`Acceptance checks:\n${group.checks.map(c => `- ${c.description}`).join('\n')}`] : []].join('\n\n'), [worker.id], null, SYSTEM_ROW)
+        ...group.checks.length ? [`Acceptance checks:\n${group.checks.map(c => `- ${c.description}`).join('\n')}`] : [],
+        ...requestedBy ? [requestedBy] : []].join('\n\n'), [worker.id], null, SYSTEM_ROW)
       const news = assignedNotice(state, group, sender, operationId)
       if (news) effects.messages.push(news)
       if (routeNote) effects.messages.push({ id: stableId(operationId, 'route-override'), conversationId: group.id, author: sender,
@@ -2799,9 +2802,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
           if (shipped) effects.messages.push(shipped)
         }
       }
-      if (actor.kind === 'agent') renewOwnTask(group, actor.agentId, context.now)
+      if (actor.kind === 'agent') renewOwnTask(state, group, actor.agentId, context.now)
       // The time it waited for its review never counts, whoever moved it on.
       if (waited && activeWork(group) && !waitingForReview(assignment)) restartQuietTime(assignment, context.now)
+      // A Ready ends its Reviewer's wait for this revision: the review counts its quiet time from now (liveness.ts revisionReady).
+      if (activeWork(group) && waitingForReview(assignment)) revisionReady(state, group, context.now)
       break
     }
     case 'work.cancel': {
@@ -2891,7 +2896,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         group.assignment.reviewFoundAt = context.now
         restartQuietTime(group.assignment, context.now)
       }
-      if (actor.kind === 'agent') renewOwnTask(group, actor.agentId, context.now)
+      // Its Reviewer's verdict asking for changes: its own review task waits for the new revision (liveness.ts waitingForRevision).
+      if (!command.passed && !byAssignee && actor.kind === 'agent') changesRequested(state, group, actor.agentId, context.now)
+      if (actor.kind === 'agent') renewOwnTask(state, group, actor.agentId, context.now)
       break
     }
   }

@@ -33,6 +33,7 @@ import 'swarm_row.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
 import 'swarm_task_status.dart';
+import 'swarm_terminal_row.dart';
 import 'swarm_unread.dart';
 import 'team_glance.dart';
 
@@ -539,6 +540,8 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
             ),
           if (_homeC)
             _ProjectMenu(
+              reader: reader,
+              projectId: project.id,
               onLeaderboard: _openLeaderboardSheet,
               onTeam: _openTeamSheet,
               onNotifications:
@@ -755,38 +758,97 @@ class _Frame extends StatelessWidget {
   }
 }
 
+/// [projectId]'s Product Manager as [snapshot] has it now: the Lead of the
+/// project's own chat, while that agent is the project's and no Buddy. Null
+/// otherwise, never an agent of another project.
+SuperTabAgent? swarmProjectPm(SuperTabSnapshot? snapshot, String projectId) {
+  final project = snapshot?.projectById(projectId);
+  if (project == null) return null;
+  final chat = snapshot!.conversation(project.leadConversationId);
+  if (chat == null || chat.projectId != projectId) return null;
+  final pm = switch (chat.leadId) {
+    final id? => snapshot.agent(id),
+    null => null,
+  };
+  return pm == null || pm.projectId != projectId || pm.isBuddy ? null : pm;
+}
+
 /// ⋮ at the end of a Swarm Home C project's header: a small menu, on the
-/// design system's menu surface (the theme's), of its Leaderboard, its Team
-/// and its project chat's Notifications ([showSwarmNotifySheet]), while that
-/// chat is read. It goes with the header: losing the project closes it.
+/// design system's menu surface (the theme's), of Open terminal first for
+/// someone who may write (Tony, 11-01: the PM's terminal on this phone, by
+/// the Buddy row's rule and words, [swarmTerminalAction]), its Leaderboard,
+/// its Team and its project chat's Notifications ([showSwarmNotifySheet]),
+/// while that chat is read. It goes with the header: losing the project
+/// closes it. Open terminal follows the Swarm and the phone's computers
+/// while open, and at the tap reads the PM of [projectId] again.
 class _ProjectMenu extends StatelessWidget {
   const _ProjectMenu({
+    required this.reader,
+    required this.projectId,
     required this.onLeaderboard,
     required this.onTeam,
     this.onNotifications,
   });
 
+  final SwarmReader reader;
+  final String projectId;
   final VoidCallback onLeaderboard, onTeam;
   final VoidCallback? onNotifications;
 
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
-    Widget row(String key, String label, VoidCallback onTap) => MenuItemButton(
+    final shell = PhoneShellScope.maybeOf(context);
+    final computers = SwarmScope.computersOf(context);
+    Widget row(
+      String key,
+      String label,
+      VoidCallback? onTap, {
+      String? value,
+    }) => MenuItemButton(
       key: ValueKey(key),
       style: ButtonStyle(
         minimumSize: const WidgetStatePropertyAll(
           Size(AppSpace.xl * 6, minTouchTarget),
         ),
-        foregroundColor: WidgetStatePropertyAll(AppPalette.textPrimary),
+        foregroundColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.disabled)
+              ? AppPalette.textFaint
+              : AppPalette.textPrimary,
+        ),
         textStyle: WidgetStatePropertyAll(AppType.body()),
       ),
       onPressed: onTap,
+      // Dimmed with why it cannot open, as the Buddy row says it.
+      trailingIcon: value == null
+          ? null
+          : Text(value, style: AppType.body(color: AppPalette.textFaint)),
       child: Text(label),
     );
+    bool allowed() =>
+        !reader.accessRevoked &&
+        reader.snapshot?.projectById(projectId) != null &&
+        swarmCanWrite(reader);
+    // Built again as the Swarm moves (the header's) and as the phone's
+    // computers do ([SwarmScope.computersOf] depends on its host).
+    final terminal = allowed()
+        ? swarmTerminalAction(
+            agent: () => swarmProjectPm(reader.snapshot, projectId),
+            allowed: allowed,
+            shell: shell,
+            computers: computers,
+          )
+        : null;
     return MenuAnchor(
       alignmentOffset: const Offset(0, AppSpace.xs),
       menuChildren: [
+        if (terminal != null)
+          row(
+            'swarm-project-menu-terminal',
+            terminal.label,
+            terminal.enabled ? terminal.onTap : null,
+            value: terminal.value,
+          ),
         row('swarm-project-menu-leaderboard', 'Leaderboard', onLeaderboard),
         row('swarm-project-menu-team', 'Team', onTeam),
         if (onNotifications case final onTap?)

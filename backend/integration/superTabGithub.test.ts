@@ -93,6 +93,16 @@ async function fresh(options: { github?: boolean; approveAll?: boolean; signIn?:
 }
 
 type Env = Awaited<ReturnType<typeof fresh>>
+/** [person] joins the owner's Swarm [tab] as a collaborator. */
+async function invited(env: Env, tab: string, person: AuthUser) {
+  const invitation = await env.run(tab, { type: 'invite.create', email: person.email, role: 'collaborator', conversationId: 'lead' } as Command)
+  await env.run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string } as Command, person)
+}
+/** The owner's account without an email for this test, as an account can be: the owner's email is the token's gate. */
+async function ownerWithoutEmail() {
+  await db.user.update({ where: { id: owner.sub }, data: { email: '' } })
+  onTestFinished(async () => { await db.user.update({ where: { id: owner.sub }, data: { email: owner.email } }) })
+}
 /** The team account switched on for this test, in the Swarms of [owners] or everyone's. */
 function teamAccounts(owners = '') {
   vi.stubEnv('SWARM_TEAM_ACCOUNT_REQUIRED', '1')
@@ -136,6 +146,33 @@ describe('the GitHub token endpoint', () => {
     // The tab tells a Lead's start that this server has the app.
     const read = await env.app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/parts`, headers: { authorization: `Bearer ${owner.sub}` } })
     expect(read.json().data.githubApp).toBe(true)
+  })
+
+  // Security reviews 1 and 2 of #2492: who asked for a group changes no token. The owner's email is the gate and the commits
+  // name the owner, as on main; only each task's message names its requester (projects.ts requestedByLine).
+  it('gives the token and owner trailers whoever asked, and refuses it when the owner has no email, though the requester has one', async () => {
+    const env = await fresh()
+    const tab = (await env.store.create(owner, randomUUID(), 'Pilot')).id
+    await env.run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'owner-mac', harnessId: randomUUID(), name: 'Lead',
+      configuration: config, lead: true, project: { cwd: '/work/app', repositoryUrl: 'https://github.com/example/app.git' } } as Command)
+    await invited(env, tab, host)
+    const group = String((await env.run(tab, { type: 'conversation.create', title: 'Add search', brief: 'Add a search field', checks: [],
+      requesterId: host.sub } as Command)).result.conversationId)
+    const worker = String((await env.run(tab, { type: 'agent.add', conversationId: group, machineId: 'owner-mac', harnessId: randomUUID(),
+      name: 'Builder', configuration: config, lead: false } as Command)).result.agentId)
+    await env.run(tab, { type: 'work.assign', conversationId: group, agentId: worker } as Command)
+    const given = await ask(env, tab, worker, 'owner-mac', owner)
+    expect(given.statusCode, given.body).toBe(200)
+    expect(given.json().data).toMatchObject({ requestedBy: { name: 'Olive Owner', email: owner.email },
+      pullRequestLine: `Requested by Olive Owner (${owner.email}) through Harness.` })
+    expect(given.json().data.trailers[0]).toBe(`Co-authored-by: Olive Owner <${owner.email}>`)
+    expect(given.body).not.toContain(host.email)
+    await ownerWithoutEmail()
+    const refused = await ask(env, tab, worker, 'owner-mac', owner)
+    expect(refused.statusCode, refused.body).toBe(404)
+    // Refused as on main (here before the owner's own check, as this owner's account no longer matches): no token, whoever asked.
+    expect(refused.json().error.code).toBe('NOT_FOUND')
+    expect(env.github.calls.filter(c => c.path.endsWith('/access_tokens'))).toHaveLength(1)
   })
 
   // A Harness Team account has no git identity of its own (PR #1934, 2026-10-28): its commits are the app's bot account's.
@@ -243,7 +280,8 @@ describe('a queued start\'s preparation token', () => {
     projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture CPU', os: 'macOS', gpuPercent: null }, quotas: [], tools: { git: true },
     runningHarnessIds: [], stoppedHarnessIds: [] }
   /** The owner's project on github.com, with a start queued on [machineId], a machine its owner [contributor] added to the Swarm. */
-  async function queued(env: Env, machineId = 'gh-pool', contributor = host, repositoryUrl: string | null = 'https://github.com/example/app.git') {
+  async function queued(env: Env, machineId = 'gh-pool', contributor = host, repositoryUrl: string | null = 'https://github.com/example/app.git',
+    requester?: AuthUser) {
     const tab = (await env.store.create(owner, randomUUID(), 'Pool')).id
     await env.run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'owner-mac', harnessId: randomUUID(), name: 'Lead',
       configuration: config, lead: true, project: { cwd: '/work/app', repositoryUrl } } as Command)
@@ -269,7 +307,10 @@ describe('a queued start\'s preparation token', () => {
       const pool = (await poolRows(env.store, team, machineId)).find(p => p.tabId === tab)!
       await env.store.observeMachine(team, tab, machineId, { generation: pool.machine.generation, ...observed, privacy: { mode: 'dedicated' } })
     }
-    const startId = String((await env.run(tab, { type: 'agent.start', request: { conversationId: 'lead', machineId, engine: 'codex', name: 'Builder',
+    // A group [requester] asked for, its start's conversation; else the Lead's. The contributor joined above.
+    const conversationId = requester ? String((await env.run(tab, { type: 'conversation.create', title: 'Add search', brief: 'Add a search field',
+      checks: [], requesterId: requester.sub } as Command)).result.conversationId) : 'lead'
+    const startId = String((await env.run(tab, { type: 'agent.start', request: { conversationId, machineId, engine: 'codex', name: 'Builder',
       cwd: '/swarm-root/lead', permissionMode: 'full', worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } } as Command)).result.startId)
     return { tab, startId }
   }
@@ -452,6 +493,20 @@ describe('a queued start\'s preparation token', () => {
     const none = await env.app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/projects/lead/github/approve`,
       headers: { authorization: `Bearer ${owner.sub}` }, payload: { scope: 'swarm' } })
     expect(none.json().error).toMatchObject({ code: 'GITHUB_APPROVAL_NOT_CONFIGURED' })
+  })
+
+  // Security reviews 1 and 2 of #2492: a start's preparation names the owner whoever asked, as on main, and an owner without an
+  // email answers it empty, which fails the start on its host (cli/src/superTabs/projectFolder.ts).
+  it('names the owner for a start whoever asked for its group, and nobody when the owner has no email', async () => {
+    const env = await fresh()
+    const { tab, startId } = await queued(env, 'gh-pool', host, undefined, host)
+    const response = await prepare(env, tab, startId)
+    expect(response.statusCode, response.body).toBe(200)
+    expect(response.json().data).toMatchObject({ github: true, repository: 'example/app', requestedBy: { name: 'Olive Owner', email: owner.email } })
+    await ownerWithoutEmail()
+    const empty = await prepare(env, tab, startId)
+    expect(empty.statusCode, empty.body).toBe(200)
+    expect(empty.json().data.requestedBy).toEqual({ name: 'Olive Owner', email: '' })
   })
 
   it('answers no token for the machine owner\'s own project, unless its host asks for one anyway', async () => {

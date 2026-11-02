@@ -70,6 +70,29 @@ export async function writeThreadMark(db: PrismaClient, mark: ThreadMarkWrite): 
   return stored.sequence
 }
 
+/** Gives one thread the person has no mark of a mark at `sequence` (read/threadMarkSeeds.ts: the chat's mark before a read
+ *  moved it past a reply only in this thread), and answers whether it wrote one. A row a Follow alone wrote (sequence 0) takes
+ *  it and keeps its Follow; a row with any mark keeps its own, lower or higher, so a thread opened on another device is never
+ *  moved by a chat read. Each write matches only a row at 0 or creates one; when another device creates the row between the
+ *  two, the match runs again on it. A new row counts toward THREAD_MARK_CAP as any mark. */
+export async function seedThreadMark(db: PrismaClient, mark: ThreadMarkWrite): Promise<boolean> {
+  const { tabId, personId, conversationId, threadId, sequence } = mark
+  const id = stableId(tabId, conversationId, threadId, personId), updatedAt = new Date(mark.now)
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if ((await db.superTabThreadMark.updateMany({ where: { id, sequence: 0 }, data: { sequence, updatedAt } })).count) return true
+    if (await db.superTabThreadMark.findUnique({ where: { id }, select: { sequence: true } })) return false
+    try {
+      await db.superTabThreadMark.create({ data: { id, tabId, personId, conversationId, threadId, sequence, updatedAt } })
+    } catch (error) {
+      if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') throw error
+      continue
+    }
+    await capThreadMarks(db, tabId, personId)
+    return true
+  }
+  return fail('READ_MARK_BUSY', 'This conversation is being marked read on another device. Try again.', 503)
+}
+
 export interface ThreadFollowWrite { tabId: string; personId: string; conversationId: string; threadId: string; follow: boolean | null; now: number }
 
 /** Stores the person's Follow (true), Unfollow (false) or neither (null) of one thread on its mark row, and answers it. The

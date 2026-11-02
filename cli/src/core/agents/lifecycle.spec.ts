@@ -116,6 +116,21 @@ describe('stopping, purging and resuming an agent', () => {
     expect(stop).toHaveBeenCalledWith('gone', undefined)
   })
 
+  // Security review 1 of #2493: only the stop a Product Manager's switch makes carries that switch to the guard; every other
+  // stop asks without one (superTabs/leadSwitch.ts decides).
+  it('asks the Lead guard with the switch a stop carries, and without one for any other stop', async () => {
+    const CHANGE = 'a'.repeat(32)
+    const leadProtected = vi.fn((agentId: string, leadSwitch?: string) => agentId === 'a1' && leadSwitch !== CHANGE)
+    const { lifecycle } = setup({ leadProtected })
+    const stop = vi.mocked(createStopAgentService).mock.results[0].value as ReturnType<typeof vi.fn>
+    await expect(lifecycle.stopAgent('a1')).rejects.toBeInstanceOf(LeadProtectedError)
+    await expect(lifecycle.stopAgent('a1', { leadSwitch: 'b'.repeat(32) })).rejects.toBeInstanceOf(LeadProtectedError)
+    expect(stop).not.toHaveBeenCalled()
+    await lifecycle.stopAgent('a1', { leadSwitch: CHANGE })
+    expect(stop).toHaveBeenCalledWith('a1', { leadSwitch: CHANGE })
+    expect(leadProtected.mock.calls.map(call => call[1])).toEqual([undefined, 'b'.repeat(32), CHANGE])
+  })
+
   describe('purge', () => {
     it('sees live and stopped agents, stops through the stop service, and checkpoints where stop does', () => {
       const { deps, lifecycle, purge } = setup()
@@ -125,6 +140,15 @@ describe('stopping, purging and resuming an agent', () => {
       expect(purge.stopped).toBe(deps.stoppedAgents)
       expect(purge.checkpoints).toBe(deps.sessionCheckpoints)
       expect(purge.stop).toBe(lifecycle.stopAgent)
+      expect(purge.leadProtected).toBeUndefined()
+    })
+
+    // Security review 2 of #2493: a Product Manager's saved conversation is never deleted; the purge asks the same guard.
+    it('hands the purge the Lead guard, asked without a switch', () => {
+      const leadProtected = vi.fn((agentId: string) => agentId === 'a1')
+      const { purge } = setup({ leadProtected })
+      expect([purge.leadProtected?.('a1'), purge.leadProtected?.('a2')]).toEqual([true, false])
+      expect(leadProtected.mock.calls).toEqual([['a1'], ['a2']])
     })
 
     it('asks the pane, through the core, whether an agent waits at its folder-trust question', () => {
