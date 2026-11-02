@@ -51,7 +51,10 @@ class SuperTabTerminalRow extends StatelessWidget {
               minimumSize: workspaceIsCompact(context)
                   ? const Size.square(kFingerTarget)
                   : const Size(0, 28),
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              padding: const EdgeInsets.symmetric(
+                horizontal: grid.AppDesktop.controlGap,
+                vertical: grid.AppDesktop.menuInset,
+              ),
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               textStyle: DesktopChrome.metadata(),
             ).copyWith(
