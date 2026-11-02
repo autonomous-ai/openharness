@@ -99,6 +99,32 @@ describe('the guest token', () => {
   })
 })
 
+describe('a relay started again on its own port', () => {
+  const start = (port?: number) => startSubscriptionRelay({ owner: owner({}).subscriptions, ...(port ? { port } : {}) })
+  const answers = async (relay: SubscriptionRelay, token: string) => (await fetch(`${relay.url}/claude/v1/messages`, { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: '{}' })).status
+
+  it('listens on the port it is given, and refuses one that is taken', async () => {
+    const first = await start()
+    const taken = await start(first.port).then(() => null, (error: NodeJS.ErrnoException) => error.code)
+    expect(taken).toBe('EADDRINUSE')
+    const { port } = first
+    await first.close()
+    const again = await start(port)
+    expect(again.url).toBe(`http://127.0.0.1:${port}`)
+    await again.close()
+  })
+
+  it('takes a token back as its own, refuses any other, and a revoke cuts it', async () => {
+    const relay = await start()
+    relay.adoptToken('Team@Example.com', 'kept-token-kept-token-kept-token')
+    expect(await answers(relay, 'kept-token-kept-token-kept-token')).not.toBe(401)
+    expect(await answers(relay, 'other-token-other-token-other-tok')).toBe(401)
+    relay.revoke('team@example.com')
+    expect(await answers(relay, 'kept-token-kept-token-kept-token')).toBe(401)
+    await relay.close()
+  })
+})
+
 describe('Claude', () => {
   it('goes upstream with the owner\'s bearer and the OAuth beta, and never the guest\'s token', async () => {
     await start(ok, owner({ claude: claude(OWNER_CLAUDE) }).subscriptions)

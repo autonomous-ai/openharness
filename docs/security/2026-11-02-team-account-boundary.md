@@ -153,7 +153,16 @@ owner's own token is not returned. No live request was sent with the owner's sig
 would hand over a lasting credential.
 
 **Fix:** allow only the paths and methods the engines use, and refuse encoded separators. The one token is shared by every Team
-agent, and lasts until the daemon restarts; a per-launch token would limit a leak (M2).
+agent, and lasts until the daemon's first restart past 30 days (task #2125); a per-launch token, or a check that the caller is the Team
+account, would limit a leak (M2).
+
+**Since task #2125:** the Team account's token and port now outlive a restart of the owner's daemon, so running agents keep reaching the
+model. Any leak of the token now lasts until the first restart past 30 days, or until the port is lost or the Team account goes.
+While the daemon is down, a local account that takes the port hears the token from running agents, and could reuse it if it let
+the port go before the daemon returned. It only spends model calls through the relay's allowed paths, never the owner's sign-in, and
+it ends: a restart more than 30 days after the token was minted starts a new one, which strands running agents once. If the port stays
+taken, the daemon moves to a new port and a new token, but running agents keep sending their whole requests to the port's holder, who
+can answer them, until they restart. That is as before this change, and only a log line says so.
 
 ### M5. A Team agent can stop the owner's Swarm service (Medium)
 

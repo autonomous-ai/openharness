@@ -17,7 +17,7 @@ function setup(over: {
   let n = 0
   const relay: SubscriptionRelay = {
     port: 41234, url: 'http://127.0.0.1:41234',
-    mintToken: vi.fn((guest: string) => `token-${guest}-${++n}`),
+    adoptToken: () => {}, mintToken: vi.fn((guest: string) => `token-${guest}-${++n}`),
     revoke: vi.fn((guest: string) => { revoked.push(guest) }),
     close: vi.fn(async () => {}),
   }
@@ -54,7 +54,7 @@ describe('a guest\'s harness, as shared machines builds it', () => {
   })
 
   it('works with the defaults: no log, the machine\'s helper and LANG, no folders', async () => {
-    const relay = { port: 1, url: 'http://127.0.0.1:1', mintToken: () => 't', revoke: () => {}, close: async () => {} }
+    const relay = { port: 1, url: 'http://127.0.0.1:1', adoptToken: () => {}, mintToken: () => 't', revoke: () => {}, close: async () => {} }
     const shareFolders = vi.fn(async () => {})
     const launches = createGuestLaunches({ accounts: { ensureGuest: async () => ({ user: KIM, home: '/g', workspace: '/g/work' }), shareFolders, guests: () => [KIM] } as unknown as GuestAccounts,
       helperState: async () => 'ready', startRelay: async () => relay })
@@ -89,7 +89,7 @@ describe('a guest\'s harness, as shared machines builds it', () => {
 
   it('starts the relay again for the next harness when it could not start', async () => {
     let fails = true
-    const relay = { port: 1, url: 'http://127.0.0.1:1', mintToken: () => 't', revoke: () => {}, close: async () => {} }
+    const relay = { port: 1, url: 'http://127.0.0.1:1', adoptToken: () => {}, mintToken: () => 't', revoke: () => {}, close: async () => {} }
     const { launches, startRelay } = setup({ relay: async () => { if (fails) throw new Error('EADDRINUSE'); return relay } })
     expect(await launches.launch(input)).toEqual({ ok: false, error: 'GUEST_RELAY_FAILED', detail: expect.any(String) })
     await flush()
