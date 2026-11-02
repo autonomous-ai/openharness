@@ -43,7 +43,7 @@ import { confidentialSessions, otherRegistrations, recordConfidential } from './
 import { answersRequest, dirtyGroups, noteWorkChanges, projectUpdateRequest, UNANSWERED_REQUEST_MS } from './projectUpdates.js'
 import { cloneData } from './cloneData.js'
 import { digestDue, digestMessageId, digestOf, digestRequest, digestSince } from './digest.js'
-import { closedAgents, nextRemovalAt, removeClosedAgents, reopened, restoreSessions } from './closedAgents.js'
+import { closedAgents, nextRemovalAt, removeClosedAgents, reopened, restoreRefusal, restoreSessions } from './closedAgents.js'
 import { judgedMachines, loseTasks, nextLossAt, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { archivable, archiveLine, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests } from './tidy.js'
 import { clock, insertParts, loadActive, loadGroups, loadLightGroups, loadMachineParts, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
@@ -3001,14 +3001,28 @@ export class SuperTabStore {
       // Then the agents it shows closed leave, those with no active work left: the Lead is told of their tasks above (closedAgents.ts).
       removedIds.push(...removeClosedAgents(state, state.agents.filter(a => closed.includes(a.id)), now).map(a => a.id))
       // And the sessions it shows open again come back, by this report alone: it is proved this machine's contributor's above.
-      const elsewhere = back.length ? await otherRegistrations(tx, state, back.map(r => ({ machineId, harnessId: r.harnessId }))) : null
-      const granted = new Set<string>()
-      for (const record of back) {
-        try { await this.agentGrant(tx, state, record.agent); granted.add(record.harnessId) } catch (error) { if (!(error instanceof SuperTabError)) throw error }
+      const allowed = new Set<string>()
+      if (back.length) {
+        const elsewhere = await otherRegistrations(tx, state, back.map(r => ({ machineId, harnessId: r.harnessId })))
+        const facts = { elsewhere: new Set(back.flatMap(r => { const key = sessionKey(machineId, r.harnessId); return elsewhere.registered.has(key) || elsewhere.confidential.has(key) ? [r.harnessId] : [] })),
+          teamMachines: await this.teamMachines(tx, state), otherWorkspaceMachines: await this.otherWorkspaceMachines(tx, state) }
+        for (const record of back) {
+          const refused = restoreRefusal(state, record, user.sub, now, facts)
+          if (refused) { logger.info('[swarm] a reopened session was not restored', { reason: refused }); continue }
+          // Its share, then the record every Swarm registering this session writes: withdrawn, stopping or tied to a private project.
+          try {
+            await this.agentGrant(tx, state, record.agent)
+            await bindSession(tx, state, record.agent, now)
+            allowed.add(record.harnessId)
+          } catch (error) {
+            if (!(error instanceof SuperTabError)) throw error
+            logger.info('[swarm] a reopened session was not restored', { reason: error.code })
+          }
+        }
       }
-      restoreSessions(state, machineId, observation.runningHarnessIds, user.sub, now,
-        new Set(back.flatMap(r => elsewhere?.registered.has(sessionKey(machineId, r.harnessId)) || elsewhere?.confidential.has(sessionKey(machineId, r.harnessId)) ? [r.harnessId] : [])),
-        granted, harnessId => reserveHarnessSlot(state, machineId, harnessId, `rejoin-${stamp}`))
+      const restored = restoreSessions(state, machineId, observation.runningHarnessIds, now, allowed, harnessId => reserveHarnessSlot(state, machineId, harnessId, `rejoin-${stamp}`))
+      // An agent reads its groups again from here: said, as nothing else records why (security review 2 of #2601).
+      for (const agent of restored) logger.info('[swarm] a reopened session rejoined', { tabId, agentId: agent.id, machineId, projectId: agent.projectId ?? null })
       const written = await saved(checked)
       // What the next reports of this machine need to skip the load, as this commit leaves the Swarm.
       const mine = state.machines?.find(m => m.machineId === machineId)

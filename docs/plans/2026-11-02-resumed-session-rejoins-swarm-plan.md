@@ -27,6 +27,10 @@ The brief says "a host-only command". This uses the machine report instead. A co
 
 The removal also orders the host to close the session. A session reopened before that close is restored and the order dropped, as a person's add does. A session its Team account is held for is never restored, and the hold stands until its host confirms. A session that read a private chat keeps no record at all.
 
+## What security review added
+
+A restore takes the rules a person's add takes, by one check (`restoreRefusal`) and then the share and session record (`bindSession`), written in the same transaction: never onto a Team account serving another project, never a teammate's project where that machine can't take it, never into a task marked Team-written unless it runs in a Team account. A restore logs its agent, machine and project.
+
 ## Review Focus
 
 - A person left the Swarm or rejoined, the machine's share was revoked, or the contribution is new: the record is dropped and nothing is restored.

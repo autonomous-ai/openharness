@@ -31,9 +31,8 @@ describe('what may come back', () => {
   })
 
   it('never a teammate\'s project on a machine that can no longer take it', () => {
-    const lent = record({ agent: agent({ contributorId: 'mate', membershipGeneration: 'g2' }) })
-    expect(restoreRefusal(swarm({}, { hostMachineId: 'host-mac' }), { ...lent, agent: { ...lent.agent, projectId: 'p' } }, 'owner', NOW,
-      facts)).toBeNull()
+    // The Team account was removed: its owner's own project may come back there, and nobody else's.
+    expect(restoreRefusal(swarm({}, { hostMachineId: 'host-mac' }), record(), 'owner', NOW, facts)).toBeNull()
     const theirs = swarm({ projects: [{ id: 'p', name: 'P', ownerId: 'mate', leadConversationId: 'lead-p', visibility: 'public', members: [] }] } as unknown as Partial<SuperTabState>, { hostMachineId: 'host-mac' })
     expect(restoreRefusal(theirs, record(), 'owner', NOW, facts)).toBe('team-work')
   })
