@@ -226,6 +226,10 @@ void main() {
         'chat; Muted is kept, and access lost closes the sheet', (
       tester,
     ) async {
+      addTearDown(tester.view.reset);
+      tester.view
+        ..physicalSize = const Size(1170, 2532)
+        ..devicePixelRatio = 3;
       final fake = backend();
       final host = await pump(
         tester,
@@ -239,7 +243,7 @@ void main() {
 
       await tester.tap(key('swarm-project-menu'));
       await tester.pumpAndSettle();
-      await tester.ensureVisible(key('swarm-project-menu-notifications'));
+      expect(key('swarm-project-menu-terminal'), findsOneWidget);
       await tester.tap(key('swarm-project-menu-notifications'));
       await tester.pumpAndSettle();
       expect(ticked(tester), 'Mentions only');
@@ -251,7 +255,6 @@ void main() {
 
       await tester.tap(key('swarm-project-menu'));
       await tester.pumpAndSettle();
-      await tester.ensureVisible(key('swarm-project-menu-notifications'));
       await tester.tap(key('swarm-project-menu-notifications'));
       await tester.pumpAndSettle();
       expect(ticked(tester), 'Muted');
