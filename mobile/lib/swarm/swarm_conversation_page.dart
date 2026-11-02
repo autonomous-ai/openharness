@@ -25,6 +25,8 @@ import 'swarm_post_line.dart';
 import 'swarm_attach.dart';
 import 'swarm_buddy.dart';
 import 'swarm_buddy_chat.dart';
+import 'swarm_buddy_tab.dart'
+    show SwarmBuddyDot, SwarmBuddyMark, swarmBuddyMark;
 import 'swarm_chat_menu.dart';
 import 'swarm_file_links.dart';
 import 'swarm_choices.dart';
@@ -117,6 +119,8 @@ class SwarmConversationPage extends StatefulWidget {
     this.threadId,
     this.mention,
     this.homeC = false,
+    this.tabRoot = false,
+    this.swarmSwitch,
   });
 
   final String swarmId, conversationId;
@@ -149,6 +153,14 @@ class SwarmConversationPage extends StatefulWidget {
   /// screen back. The person's own Buddy chat has them too, in the project's
   /// Buddy tab and on its own page.
   final bool homeC;
+
+  /// At the root of a tab, as the Buddy tab holds the person's Buddy chat: no
+  /// back in its header, and its Buddy's dot before its name.
+  final bool tabRoot;
+
+  /// The Swarm it is in and how to pick another, for its Buddy menu; null with
+  /// no other Swarm to pick.
+  final SwarmBuddySwitch? swarmSwitch;
 
   @override
   State<SwarmConversationPage> createState() => _SwarmConversationPageState();
@@ -1135,12 +1147,30 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     required String? title,
     String? project,
     Widget? action,
+    SwarmBuddyMark? mark,
   }) => Padding(
     key: const ValueKey('swarm-chat-header'),
-    padding: const EdgeInsets.fromLTRB(0, AppSpace.xs, _headerEnd, AppSpace.xs),
+    padding: EdgeInsets.fromLTRB(
+      widget.tabRoot ? AppSpace.screenInset : 0,
+      AppSpace.xs,
+      _headerEnd,
+      AppSpace.xs,
+    ),
     child: Row(
       children: [
-        TtyBackButton(onPressed: () => Navigator.of(context).maybePop()),
+        if (!widget.tabRoot)
+          TtyBackButton(onPressed: () => Navigator.of(context).maybePop()),
+        if (mark != null)
+          Padding(
+            padding: const EdgeInsetsDirectional.only(end: AppSpace.s),
+            child: Semantics(
+              label: 'Buddy ${mark.label}',
+              child: SwarmBuddyDot(
+                mark,
+                key: const ValueKey('swarm-buddy-dot'),
+              ),
+            ),
+          ),
         Expanded(
           child: title == null
               ? Column(
@@ -1223,6 +1253,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                 ? view.title
                 : null,
             project: view.project,
+            mark: widget.tabRoot ? swarmBuddyMark(c.reader) : null,
             // The person's own Buddy chat: its Notifications, Rename Buddy,
             // Remove Buddy. Any other chat: its Notifications (the desktop's
             // chat menu).
@@ -1230,6 +1261,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               final buddy? => SwarmBuddyMenuButton(
                 actions: buddy,
                 chatId: widget.conversationId,
+                swarmId: widget.swarmId,
+                swarmSwitch: widget.swarmSwitch,
               ),
               null => SwarmChatMenuButton(reader: c.reader, chatId: c.id),
             },
@@ -1348,7 +1381,45 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                         );
                       },
                     ),
-                    if (view.canPost)
+                    if (view.old)
+                      Padding(
+                        key: const ValueKey('swarm-old-chat'),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: AppSpace.l,
+                          vertical: AppSpace.s,
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                'Old chat, kept to read.',
+                                style: swarmChatText(
+                                  13.5,
+                                  color: AppPalette.textSecondary,
+                                ),
+                              ),
+                            ),
+                            if (swarmCanWrite(c.reader) ||
+                                swarmBuddyChat(c.reader, swarmBuddyKey) != null)
+                              SwarmButton(
+                                key: const ValueKey(
+                                  'swarm-old-chat-open-buddy',
+                                ),
+                                label: 'Open Buddy',
+                                style: SwarmButtonStyle.link,
+                                onPressed: () => unawaited(
+                                  openSwarmBuddy(
+                                    context,
+                                    c.reader,
+                                    widget.swarmId,
+                                    swarmBuddyKey,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      )
+                    else if (view.canPost)
                       Flexible(
                         child: ListenableBuilder(
                           listenable: Listenable.merge([c.composer, _voice]),
@@ -2160,6 +2231,7 @@ class _ChatView {
     required this.project,
     required this.canPost,
     required this.archived,
+    required this.old,
     required this.names,
     required this.mentions,
     required this.roles,
@@ -2183,9 +2255,14 @@ class _ChatView {
     final group = c.conversation;
     final agents = snapshot?.agents ?? const <SuperTabAgent>[];
     final names = [for (final agent in agents) snapshot!.agentName(agent.id)];
+    // An older Buddy chat, where the Swarm gives one Buddy: kept to read, with
+    // no Buddy of its own to start, name or ask (the desktop's).
+    final old = group != null && swarmIsOldBuddyChat(reader, group.id);
     // The person's own Buddy chat (#2090): named after their Buddy, and
-    // holding every question the PM asked them in its project, as on Desktop.
-    final buddyProject = group != null && swarmIsOwnBuddyChat(reader, group.id)
+    // holding every question the PM asked them in its project, as on Desktop;
+    // their one chat for the Swarm holds every project's.
+    final buddyProject =
+        group != null && !old && swarmIsOwnBuddyChat(reader, group.id)
         ? group.projectId
         : null;
     final buddy = buddyProject == null
@@ -2205,15 +2282,21 @@ class _ChatView {
         for (final need in session.inbox.needs)
           if (need is SwarmDecisionNeed &&
               need.swarmId == reader.tabId &&
-              need.decision.projectId == buddyProject)
+              (buddyProject == swarmBuddyKey ||
+                  need.decision.projectId == buddyProject))
             need,
     ];
     return _ChatView(
       known: group != null,
-      title: group == null ? 'Chat' : buddy ?? group.label,
+      title: group == null
+          ? 'Chat'
+          : old
+          ? 'Old chat'
+          : buddy ?? group.label,
       project: buddy != null && project != null ? '#$project' : project,
       canPost: c.canPost,
       archived: group?.archived ?? false,
+      old: old,
       names: names,
       mentions: before != null && listEquals(before.names, names)
           ? before.mentions
@@ -2252,6 +2335,9 @@ class _ChatView {
   final String title;
   final String? project;
   final bool canPost, archived;
+
+  /// An older Buddy chat, kept to read ([swarmIsOldBuddyChat]).
+  final bool old;
 
   /// The Swarm's agents by name, and the @mentions of them marked in
   /// messages: made again only when a name changed.
@@ -2308,6 +2394,7 @@ class _ChatView {
       other.project == project &&
       other.canPost == canPost &&
       other.archived == archived &&
+      other.old == old &&
       listEquals(other.names, names) &&
       mapEquals(other.roles, roles) &&
       setEquals(other.leads, leads) &&
@@ -2324,6 +2411,7 @@ class _ChatView {
     project,
     canPost,
     archived,
+    old,
     Object.hashAll(names),
     Object.hashAll(mentionable),
     decisions,

@@ -6,6 +6,11 @@ import 'swarm_reader.dart';
 import 'swarm_request.dart';
 import 'swarm_start.dart';
 
+/// The key the person's one Buddy for the whole Swarm goes by among the
+/// project ids here: its chat and agent belong to no project (the desktop's
+/// `SuperTabController.kSwarmBuddyKey`).
+const swarmBuddyKey = '';
+
 /// What the phone knows of Buddies (spec: Buddies, 10-28; in every Swarm
 /// since #2090, where they replaced Chat with PM): each person's Buddy chat in
 /// each project, where the PM's private lines to them land, and the Buddy that
@@ -37,14 +42,20 @@ class SwarmBuddies {
     final chatOwners = <String, String>{};
     final ownChats = <String, String>{};
     for (final row in _rows(state['conversations'])) {
-      if (row case {
-        'kind': 'buddy',
-        'id': final String id,
-        'buddyOwnerId': final String owner,
-      }) {
+      if (row
+          case {
+            'kind': final String kind,
+            'id': final String id,
+            'buddyOwnerId': final String owner,
+          }
+          when kind == 'buddy' || kind == 'swarm-buddy') {
         chatOwners[id] = owner;
         if (owner == accountId) {
-          ownChats.putIfAbsent(row['projectId'] as String? ?? 'lead', () => id);
+          ownChats.putIfAbsent(
+            row['projectId'] as String? ??
+                (kind == 'swarm-buddy' ? swarmBuddyKey : 'lead'),
+            () => id,
+          );
         }
       }
     }
@@ -56,9 +67,12 @@ class SwarmBuddies {
         'buddyOf': {'personId': final String person},
       }) {
         buddyOwners[id] = person;
-        if (person == accountId) {
+        // A thread's own session is never the Buddy (the desktop's
+        // `isMainBuddy`), and it stays listed above, out of the team.
+        if (person == accountId && row['buddySession'] == null) {
           ownBuddies.putIfAbsent(
-            row['projectId'] as String? ?? 'lead',
+            row['projectId'] as String? ??
+                (row['buddyScope'] == 'swarm' ? swarmBuddyKey : 'lead'),
             () => id,
           );
         }
@@ -86,10 +100,12 @@ class SwarmBuddies {
   /// Every Buddy the read holds, anyone's, with the person it belongs to.
   final Map<String, String> buddyOwners;
 
-  /// The reader's own Buddy chat in each project, by project id.
+  /// The reader's own Buddy chat in each project, by project id; their one
+  /// chat for the Swarm under [swarmBuddyKey].
   final Map<String, String> ownChats;
 
-  /// The reader's own Buddy in each project, its agent id by project id.
+  /// The reader's own Buddy in each project, its agent id by project id; their
+  /// one Buddy for the Swarm under [swarmBuddyKey]. Never a thread's session.
   final Map<String, String> ownBuddies;
 
   /// The starts of the reader's own Buddies, oldest first: one is under way
@@ -148,6 +164,42 @@ bool swarmIsBuddyChat(SwarmReader reader, String conversationId) =>
 bool swarmIsOwnBuddyChat(SwarmReader reader, String conversationId) =>
     reader.buddies.chatOwners[conversationId] == reader.accountId;
 
+/// Whether [conversationId] is the person's older Buddy chat in a project,
+/// where the Swarm gives one Buddy for the whole Swarm: its history reads, and
+/// nothing is written there (the desktop's `isEarlierBuddyChat`). The server
+/// still takes a post from an app that does not say it knows this.
+bool swarmIsOldBuddyChat(SwarmReader reader, String conversationId) {
+  final snapshot = reader.snapshot;
+  final group = snapshot?.conversation(conversationId);
+  return snapshot?.swarmBuddy == true &&
+      group != null &&
+      group.isBuddyChat &&
+      !group.isSwarmBuddyChat;
+}
+
+/// The person's older Buddy chats with something in them, newest first, each
+/// with its project: only in projects they read now, so one they lost drops
+/// off, and none where the Swarm has no one Buddy (the desktop's Buddy menu).
+List<({SuperTabProject project, SuperTabConversation chat})> swarmOldBuddyChats(
+  SwarmReader reader,
+) {
+  final snapshot = reader.snapshot;
+  if (snapshot == null || !snapshot.swarmBuddy || reader.accessRevoked) {
+    return const [];
+  }
+  final chats = [
+    for (final project in snapshot.projects)
+      if (swarmBuddyChat(reader, project.id) case final chat?
+          when chat.lastMessageSequence > 0 && !chat.isSwarmBuddyChat)
+        (project: project, chat: chat),
+  ];
+  final never = DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+  chats.sort(
+    (a, b) => (b.chat.changedAt ?? never).compareTo(a.chat.changedAt ?? never),
+  );
+  return chats;
+}
+
 /// Whether [message] is one of the PM's private lines to the person: its
 /// project's Lead writing in the person's own Buddy chat, where it writes but
 /// cannot read (#2090; the desktop's `_shownAuthor`).
@@ -170,8 +222,12 @@ Map<String, dynamic>? swarmBuddyStart(SwarmReader reader, String projectId) {
   final chat = reader.buddies.ownChats[projectId];
   for (final start in reader.buddies.ownStarts.reversed) {
     final request = start['request'] as Map;
+    // A thread session's start is its thread's, never the Buddy's own.
+    if (request['buddySession'] != null) continue;
     if (request['projectId'] == projectId ||
-        (chat != null && request['conversationId'] == chat)) {
+        (chat != null && request['conversationId'] == chat) ||
+        // The one Buddy's start, before its chat is read here.
+        (projectId == swarmBuddyKey && request['buddyScope'] == 'swarm')) {
       return start;
     }
   }
@@ -452,7 +508,7 @@ Future<String?> openSwarmBuddyChat(SwarmReader reader, String projectId) async {
   if (operation.length > 160) operation = operation.substring(0, 160);
   final result = await _command(reader, {
     'type': 'buddy.chat',
-    'projectId': projectId,
+    if (projectId != swarmBuddyKey) 'projectId': projectId,
   }, operation: operation);
   return result['conversationId'] as String?;
 }
@@ -469,7 +525,7 @@ Future<String?> startSwarmBuddy(
 }) async {
   final result = await _command(reader, {
     'type': 'buddy.create',
-    'projectId': projectId,
+    if (projectId != swarmBuddyKey) 'projectId': projectId,
     'machineId': machineId,
     'engine': engine,
     'setup': ?setup,
@@ -481,7 +537,10 @@ Future<String?> startSwarmBuddy(
 /// Removes the person's Buddy in [projectId]: its session stops and its chat
 /// stays. Reads the Swarm again; a refusal throws.
 Future<void> removeSwarmBuddy(SwarmReader reader, String projectId) async {
-  await _command(reader, {'type': 'buddy.remove', 'projectId': projectId});
+  await _command(reader, {
+    'type': 'buddy.remove',
+    if (projectId != swarmBuddyKey) 'projectId': projectId,
+  });
   await reader.refresh();
 }
 
