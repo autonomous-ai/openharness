@@ -115,7 +115,8 @@ describe('a person\'s add or remove of the session', () => {
 
   it('takes its record with it when they add it back', () => {
     const f = fixture()
-    const state = { ...f.state, agents: f.state.agents.filter(a => a.id !== f.worker.id), removedSessions: [recordOf(f.worker)] }
+    // No machine listed, as a person may add a session on any machine of theirs.
+    const state = { ...f.state, machines: undefined, agents: f.state.agents.filter(a => a.id !== f.worker.id), removedSessions: [recordOf(f.worker)] }
     const added = applyCommand(state, person, { type: 'agent.add', conversationId: 'lead', machineId: 'mac', harnessId: 'worker', name: 'worker', lead: false, configuration: config },
       { now: NOW, operationId: 'add-again', contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }).state
     expect(added.removedSessions ?? []).toEqual([])
