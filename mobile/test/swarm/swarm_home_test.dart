@@ -13,6 +13,7 @@ import 'package:harness_mobile/shared/theme/app_theme.dart'
     show AppFont, AppPalette;
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
+import 'package:harness_mobile/swarm/swarm_home_list.dart';
 import 'package:harness_mobile/swarm/swarm_home_rows.dart';
 import 'package:harness_mobile/swarm/swarm_inbox.dart';
 import 'package:harness_mobile/swarm/swarm_leaderboard.dart';
@@ -1269,6 +1270,20 @@ void main() {
 
       await openNeeds(tester);
       expect(find.text('Nothing needs you.'), findsOneWidget);
+    });
+
+    testWidgets('a task-chat tag keeps its project under Mentions without a '
+        'project-chat count', (tester) async {
+      final host = await pump(tester, backend());
+      host.session!.home.setFilter(SwarmHomeFilter.mentions);
+      await tester.pumpAndSettle();
+
+      final row = key('swarm-project-$tab-$project');
+      expect(row, findsOneWidget);
+      expect(
+        inside('swarm-project-$tab-$project', find.byType(SwarmTags)),
+        findsNothing,
+      );
     });
 
     testWidgets('back from a project, Home still has its title, and it opens '
