@@ -215,6 +215,17 @@ class MergeTests(unittest.TestCase):
         self.assertEqual(title, "Only (#5)")
         self.assertEqual(message, "Body.")
 
+    def test_a_commit_of_only_co_author_lines_never_makes_an_empty_title(self):
+        pr = dict(number=5, title="Fix it", user=dict(login="ada"))
+        only = "Co-authored-by: Grace <grace@example.com>"
+        title, message = merger.squash_message(pr, [self.commit("1", only)])
+        self.assertEqual(title, "Fix it (#5)")
+        self.assertEqual(message, only)
+        title, message = merger.squash_message(pr, [self.commit("1", only), self.commit("2", "Real")])
+        self.assertEqual(title, "Fix it (#5)")
+        self.assertIn("* Real", message)
+        self.assertNotIn("* \n", message + "\n")
+
     def test_a_merge_sends_the_composed_message(self):
         self.client.commits = [self.commit("1", "Only\n\nBody.", "Harness by Autonomous", "noreply@autonomous.ai", None)]
         result = self.finish()
