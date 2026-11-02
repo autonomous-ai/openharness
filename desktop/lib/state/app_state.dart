@@ -4680,9 +4680,17 @@ class AppNotifier extends ChangeNotifier {
           .firstOrNull;
       if (project == null) return;
       // Only an existing chat of the reader's own: a device never makes one.
-      if (buddy && controller.buddyChat(projectId) != null) {
+      // Where the Swarm gives one Buddy per person, that is their Swarm chat
+      // (# buddy, which names no project), whichever project the dial is on;
+      // an earlier project chat there is history (Diego, 11-02).
+      final buddyKey =
+          controller.oneBuddy &&
+              controller.buddyChat(SuperTabController.kSwarmBuddyKey) != null
+          ? SuperTabController.kSwarmBuddyKey
+          : projectId;
+      if (buddy && controller.buddyChat(buddyKey) != null) {
         await (controller.buddyChatOpener ?? controller.openBuddyChat)(
-          projectId,
+          buddyKey,
         );
         if (_disposed || _devicePick != pick) return;
       } else {
