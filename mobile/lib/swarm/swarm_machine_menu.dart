@@ -211,7 +211,12 @@ class _Preview {
           if (item is Map)
             (
               name: text(item['name']),
-              project: text(item['projectName']),
+              // A Swarm-wide Buddy has no project: the server sends an empty name, and the agent is listed by its name alone.
+              project: item['projectName'] is String
+                  ? item['projectName'] as String
+                  : throw const FormatException(
+                      'Invalid machine removal preview',
+                    ),
               task: item['task'] is String ? item['task'] as String : null,
             )
           else
@@ -238,7 +243,7 @@ String _warning(_Preview preview) {
     lines.add('\nThese agents will stop:');
     for (final agent in preview.agents.take(_listed)) {
       lines.add(
-        '${agent.name} · ${agent.project}'
+        '${agent.name}${agent.project.isEmpty ? '' : ' · ${agent.project}'}'
         '${agent.task == null ? '' : '\nThe open task “${agent.task}” loses its agent.'}',
       );
     }

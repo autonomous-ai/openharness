@@ -583,6 +583,37 @@ void main() {
       },
     );
 
+    testWidgets(
+      'a Buddy with no project is listed by its name alone, and Remove still works',
+      (tester) async {
+        await open(
+          tester,
+          agents: plain,
+          routes: (f) =>
+              f.routes['/api/super-tabs/$tab/machines/mac-1/removal'] = (_) =>
+                  preview(
+                    agents: [
+                      {'name': 'Wren', 'projectName': ''},
+                    ],
+                  ),
+        );
+        await press(tester);
+        await tester.tap(find.text('Remove from Swarm'));
+        await tester.pumpAndSettle();
+        expect(find.textContaining('from this Swarm?'), findsOneWidget);
+        expect(find.text('Could not check this machine.'), findsNothing);
+        expect(find.textContaining('Wren'), findsOneWidget);
+        expect(find.textContaining('Wren ·'), findsNothing);
+        await tester.tap(
+          find.widgetWithText(FilledButton, 'Remove from Swarm'),
+        );
+        await tester.pumpAndSettle();
+        expect(fake.commands, [
+          {'type': 'machine.remove', 'machineId': 'mac-1'},
+        ]);
+      },
+    );
+
     testWidgets('cancelling the question sends nothing', (tester) async {
       await open(
         tester,
