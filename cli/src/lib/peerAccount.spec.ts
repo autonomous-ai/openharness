@@ -152,6 +152,15 @@ describe('who is at the other end of a loopback connection', () => {
       expect(script).toMatch(/WindowsIdentity\]::GetCurrent\(\)\.User\.Value/)
       expect(script).toMatch(/CreationDate -gt \$row\.CreationTime/)
     })
+
+    // Quinn 2's review of #2608: a listener of this account's on another address (::1, 127.0.0.2) answered yes, so the bridge
+    // waited instead of moving off another account's 127.0.0.1. Only a listener that keeps 127.0.0.1's port from being bound counts.
+    it('counts only the listeners that hold 127.0.0.1\'s port: on it, on any IPv4 address, or on any address dual-stack', () => {
+      const { script } = windowsListenerQuery(51793)
+      expect(script).toMatch(/Where-Object \{ \$_\.LocalAddress -in @\('127\.0\.0\.1', '0\.0\.0\.0', '::'\) \}/)
+      // Filtered before anything is decided: none of them is `none`, never another address's owner.
+      expect(script.indexOf("-in @('127.0.0.1'")).toBeLessThan(script.indexOf("'none'"))
+    })
   })
 
   it('reads the owner of the client end from /proc/net/tcp, not the server end', () => {
