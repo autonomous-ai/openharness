@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -9,6 +10,7 @@ import {
   readAccountUsage,
   type AccountUsageDeps,
 } from './accountUsage.js'
+import { claudeKeychainAccount, claudeKeychainService, readClaudeKeychain } from './agentCredentials.js'
 
 let home: string
 
@@ -190,5 +192,67 @@ describe('readAccountUsage', () => {
     const readings = await readAccountUsage(deps({ fetchImpl: vendor().fetchImpl }))
 
     expect(readings.map((r) => r.outcome)).toEqual(['signedOut', 'signedOut'])
+  })
+})
+
+describe('usage per profile', () => {
+  const sha8 = (text: string) => createHash('sha256').update(text).digest('hex').slice(0, 8)
+
+  it('names the Keychain service after the config dir as given', () => {
+    expect(claudeKeychainService('/x/home', {})).toBe(`Claude Code-credentials-${sha8('/x/home')}`)
+    expect(claudeKeychainService(undefined, {})).toBe('Claude Code-credentials')
+    expect(claudeKeychainService('', {})).toBe('Claude Code-credentials')
+  })
+
+  it('lets CLAUDE_SECURESTORAGE_CONFIG_DIR override the dir, and empty means the plain name', () => {
+    expect(claudeKeychainService('/x/home', { CLAUDE_SECURESTORAGE_CONFIG_DIR: '/y' })).toBe(`Claude Code-credentials-${sha8('/y')}`)
+    expect(claudeKeychainService('/x/home', { CLAUDE_SECURESTORAGE_CONFIG_DIR: '' })).toBe('Claude Code-credentials')
+  })
+
+  it('uses USER as the Keychain account when it is a plain name, else the placeholder', () => {
+    expect(claudeKeychainAccount({ USER: 'ana.b-1_x' })).toBe('ana.b-1_x')
+    expect(claudeKeychainAccount({ USER: 'a b' })).toBe('claude-code-user')
+    expect(claudeKeychainAccount({})).toMatch(/^[a-zA-Z0-9._-]+$|^claude-code-user$/)
+  })
+
+  it('the keychain read passes -a and -s', async () => {
+    // A fake `security` first on PATH, so nothing touches the real Keychain.
+    const bin = join(home, 'bin')
+    mkdirSync(bin)
+    writeFileSync(join(bin, 'security'), '#!/bin/sh\nprintf "%s\\n" "$@" > "$(dirname "$0")/args"\necho \'{}\'\n', { mode: 0o755 })
+    const path = process.env.PATH
+    process.env.PATH = `${bin}:${path}`
+    try {
+      expect(await readClaudeKeychain({ platform: 'darwin', configDir: '/x/home' })).toBe('{}')
+    } finally {
+      process.env.PATH = path
+    }
+    const { readFileSync } = await import('node:fs')
+    const args = readFileSync(join(bin, 'args'), 'utf8').trim().split('\n')
+    expect(args[args.indexOf('-a') + 1]).toBe(claudeKeychainAccount())
+    expect(args[args.indexOf('-s') + 1]).toBe(`Claude Code-credentials-${sha8('/x/home')}`)
+  })
+
+  it('a Claude profile reads <dir>/.credentials.json and <dir>/.claude.json, and only Claude', async () => {
+    write('p/.credentials.json', { claudeAiOauth: { accessToken: CLAUDE_TOKEN } })
+    write('p/.claude.json', { oauthAccount: { accountUuid: 'acct-123', emailAddress: 'w@x.y' } })
+    const { calls, fetchImpl } = vendor()
+    const readings = await readAccountUsage(deps({ fetchImpl, claudeHome: join(home, 'p') }))
+    expect(readings).toEqual([expect.objectContaining({ provider: 'claude', account: accountKey('claude', 'acct-123'), email: 'w@x.y', outcome: 'answered' })])
+    expect(calls.map((c) => c.url)).toEqual([CLAUDE_USAGE_URL])
+  })
+
+  it('a Codex profile reads <dir>/auth.json, and only Codex', async () => {
+    write('c/auth.json', { tokens: { access_token: CODEX_TOKEN, account_id: 'acct-123' } })
+    const { calls, fetchImpl } = vendor()
+    const readings = await readAccountUsage(deps({ fetchImpl, codexHome: join(home, 'c') }))
+    expect(readings).toEqual([expect.objectContaining({ provider: 'codex', account: accountKey('codex', 'acct-123') })])
+    expect(calls.map((c) => c.url)).toEqual([CODEX_USAGE_URL])
+  })
+
+  it('`only` limits a default reading to one provider; both homes read both', async () => {
+    expect((await readAccountUsage(deps({ only: 'codex' }))).map((r) => r.provider)).toEqual(['codex'])
+    expect((await readAccountUsage(deps({ only: 'claude' }))).map((r) => r.provider)).toEqual(['claude'])
+    expect((await readAccountUsage(deps({ claudeHome: home, codexHome: home }))).map((r) => r.provider)).toEqual(['claude', 'codex'])
   })
 })

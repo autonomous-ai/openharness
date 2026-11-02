@@ -1255,15 +1255,31 @@ pub fn engine_mark(engine: &str) -> (&'static str, Color) {
     (mark, paint(color))
 }
 
+/// The tile an engine's mark sits on, for the marks that have one: Codex's purple cloud on white,
+/// OpenCode's white square on black.
+pub fn engine_tile(engine: &str) -> Option<Color> {
+    match engine {
+        "codex" => Some(paint(Color::Rgb(0xFF, 0xFF, 0xFF))),
+        "opencode" => Some(paint(Color::Rgb(0x00, 0x00, 0x00))),
+        _ => None,
+    }
+}
+
+/// An engine's mark as drawn: its colour, on its tile if it has one.
+pub fn engine_style(engine: &str) -> Style {
+    let style = fg(engine_mark(engine).1);
+    match engine_tile(engine) { Some(tile) => style.bg(tile), None => style }
+}
+
 /// A colour as this terminal can show it: none under NO_COLOR, the nearest it has otherwise.
 pub fn paint(c: Color) -> Color { if no_color() { Color::Reset } else { depth_fit(c) } }
 
 fn engine_mark_raw(engine: &str) -> (&'static str, Color) {
     match engine {
         "claude" => ("✳", Color::Rgb(0xD9, 0x77, 0x57)),
-        "codex" => ("◎", Color::Rgb(0x10, 0xA3, 0x7F)),
+        "codex" => ("☁", Color::Rgb(0x7C, 0x3A, 0xED)),
         "cursor" => ("▲", TEXT),
-        "opencode" => ("▣", Color::Rgb(0xF5, 0xA7, 0x42)),
+        "opencode" => ("■", Color::Rgb(0xFF, 0xFF, 0xFF)),
         "pi" => ("π", ACCENT_SOFT),
         "hermes" => ("☿", Color::Rgb(0xC7, 0x92, 0xEA)),
         "amp" => ("ϟ", DANGER),

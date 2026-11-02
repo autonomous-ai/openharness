@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { agentOnly, type Agent, type Assignment, type Conversation, type SuperTabState } from './model.js'
-import { ARCHIVE_QUIET_MS, archivable, IDLE_NOTICE_MS, idleNotices, linkPending, reviewClosable, reviewCloseLine, reviewPullRequests } from './tidy.js'
+import { ARCHIVE_QUIET_MS, archivable, IDLE_NOTICE_MS, idleNotices, linkPending, staleSwitches, SWITCH_UNCLAIMED_MS, reviewClosable, reviewCloseLine, reviewPullRequests } from './tidy.js'
 
 const MINUTE = 60_000
 const START = Date.parse('2026-10-27T08:00:00.000Z')
@@ -219,5 +219,28 @@ describe('which reviews nobody reviews may close', () => {
     const state = reviewState({}, [PR, SECOND])
     expect(reviewCloseLine(state, review(state), { [PR]: 'merged', [SECOND]: 'closed' }, quiet)).toMatchObject({ conversationId: 'r1', recipients: [],
       author: { kind: 'agent', id: 'L' }, source: { kind: 'auto-archive' }, text: 'Closed: #2288 merged, #2290 closed; no Swarm review is needed now.' })
+  })
+})
+
+describe('staleSwitches', () => {
+  const request = (patch = {}) => ({ id: 'op1', engine: 'codex', profileId: 'p', requestedBy: 'p', at: iso(START), ...patch })
+  const asked = (switchRequest?: Agent['switchRequest']) => { const state = swarm(); target(state, 'L').switchRequest = switchRequest; return state }
+  const line = { conversationId: 'lead', recipients: [], text: "Couldn't switch the PM: its machine did not answer." }
+
+  it('drops a request nobody claimed in 2 minutes, with one line in the project chat', () => {
+    const state = asked(request())
+    expect(staleSwitches(state, START + SWITCH_UNCLAIMED_MS - 1)).toEqual([])
+    expect(target(state, 'L').switchRequest).toBeDefined()
+    expect(staleSwitches(state, START + SWITCH_UNCLAIMED_MS)).toMatchObject([line])
+    expect(target(state, 'L').switchRequest).toBeUndefined()
+    expect(staleSwitches(state, START + 3 * SWITCH_UNCLAIMED_MS)).toEqual([])
+  })
+
+  it('keeps a claimed request while its lease lasts and drops it once it lapsed', () => {
+    const state = asked(request({ claimedUntil: iso(START + 15 * MINUTE) }))
+    expect(staleSwitches(state, START + 10 * MINUTE)).toEqual([])
+    expect(target(state, 'L').switchRequest).toBeDefined()
+    expect(staleSwitches(state, START + 15 * MINUTE)).toMatchObject([line])
+    expect(target(state, 'L').switchRequest).toBeUndefined()
   })
 })

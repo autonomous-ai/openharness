@@ -25,6 +25,7 @@
  */
 import { createHash } from 'node:crypto'
 import { homedir } from 'node:os'
+import { join } from 'node:path'
 import {
   asRecord,
   claudeProfilePath,
@@ -86,6 +87,11 @@ export function accountKey(provider: UsageProviderId, accountId: string): string
  *  network. Production passes nothing. */
 export interface AccountUsageDeps {
   home?: string
+  /** A Claude profile's CLAUDE_CONFIG_DIR / a Codex profile's CODEX_HOME. Given alone, it limits the reading to that provider. */
+  claudeHome?: string
+  codexHome?: string
+  /** Read one provider's default account only. */
+  only?: UsageProviderId
   platform?: NodeJS.Platform
   fetchImpl?: typeof fetch
   readKeychain?: () => Promise<string | null>
@@ -94,18 +100,22 @@ export interface AccountUsageDeps {
 
 /** Both accounts, asked at once — one being slow says nothing about the other. */
 export async function readAccountUsage(deps: AccountUsageDeps = {}): Promise<AccountUsageReading[]> {
-  return Promise.all([readClaude(deps), readCodex(deps)])
+  const only = deps.only ?? (deps.claudeHome && !deps.codexHome ? 'claude' : deps.codexHome && !deps.claudeHome ? 'codex' : undefined)
+  return Promise.all([
+    ...(only !== 'codex' ? [readClaude(deps)] : []),
+    ...(only !== 'claude' ? [readCodex(deps)] : []),
+  ])
 }
 
 async function readClaude(deps: AccountUsageDeps): Promise<AccountUsageReading> {
   const home = deps.home ?? homedir()
   // The Keychain first and the file second (`agentCredentials.ts`).
-  const stored = (await readClaudeStored(deps))?.raw ?? null
+  const stored = (await readClaudeStored({ ...deps, configDir: deps.claudeHome }))?.raw ?? null
   const oauth = asRecord(asRecord(parseJson(stored))?.claudeAiOauth)
   const token = stringField(oauth?.accessToken)
   // The account lives beside the token rather than in it: `~/.claude.json` is where Claude Code
   // records who it is signed in as, on every platform.
-  const profile = asRecord(asRecord(parseJson(await readText(claudeProfilePath(home))))?.oauthAccount)
+  const profile = asRecord(asRecord(parseJson(await readText(deps.claudeHome ? join(deps.claudeHome, '.claude.json') : claudeProfilePath(home))))?.oauthAccount)
   const accountId = stringField(profile?.accountUuid)
   const email = emailField(profile?.emailAddress)
   const account = accountId ? accountKey('claude', accountId) : null
@@ -131,7 +141,7 @@ async function readClaude(deps: AccountUsageDeps): Promise<AccountUsageReading> 
 
 async function readCodex(deps: AccountUsageDeps): Promise<AccountUsageReading> {
   const home = deps.home ?? homedir()
-  const tokens = asRecord(asRecord(parseJson(await readText(codexAuthPath(home))))?.tokens)
+  const tokens = asRecord(asRecord(parseJson(await readText(deps.codexHome ? join(deps.codexHome, 'auth.json') : codexAuthPath(home))))?.tokens)
   const token = stringField(tokens?.access_token)
   const accountId = stringField(tokens?.account_id)
   const account = accountId ? accountKey('codex', accountId) : null

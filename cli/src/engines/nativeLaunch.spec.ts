@@ -305,7 +305,16 @@ it.each([
   expect(await result.launch.prepareHooks(19473, () => true, kind === 'generated' ? { [variable]: home } : {})).toBe(true)
   expect(result.launch.environment[variable]).toBe(home)
   expect(await result.launch.prepareHooks(19473, () => true)).toBe(true)
-  expect(confirmHome).not.toHaveBeenCalled()
+  // An explicit Claude profile is adopted (above); Codex's and generated ones belong to their row.
+  expect(confirmHome).toHaveBeenCalledTimes(engine === 'claude' && kind === 'explicit' ? 2 : 0)
+})
+
+it('an explicit claudeHome is adopted as a known home, so its transcripts bind', async () => {
+  const confirmHome = vi.fn()
+  const result = await inspectNativeLaunch('claude', { claudeHome: '/fixture/profile' }, { confirmHome })
+  if (!result.ok) throw Error(result.detail)
+  expect(await result.launch.prepareHooks(19473, () => true)).toBe(true)
+  expect(confirmHome).toHaveBeenCalledWith('claude', '/fixture/profile')
 })
 
 // Windows has no launch script to probe Codex's owned-process flag before each run (engines/kit/launchStartup.ts):

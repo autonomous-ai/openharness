@@ -2,7 +2,7 @@ import { onlyStepsHeld } from './steps.js'
 import { isBuddy } from './buddies.js'
 import { agentDisplayName } from './agentNames.js'
 import { activeWork, stableId, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
-import { agentProjectId, groupProject, projectsOf } from './projects.js'
+import { agentProjectId, groupProject, ledProject, projectsOf } from './projects.js'
 import { toLead } from './terminal.js'
 
 // Nobody has to tidy a Swarm by hand (roadmap, December). The server stops no agent (project instructions, phase 4): an agent
@@ -11,6 +11,9 @@ import { toLead } from './terminal.js'
 
 /** How long an agent has no open task before its coordinator is told. */
 export const IDLE_NOTICE_MS = 15 * 60_000
+
+/** How long a PM's switch request waits for its machine to claim it (agent.switchClaim) before it is dropped. */
+export const SWITCH_UNCLAIMED_MS = 2 * 60_000
 
 const time = (value: string | undefined) => value === undefined ? undefined : Date.parse(value)
 
@@ -69,6 +72,26 @@ export function idleNotices(state: SuperTabState, projectId: string, now: number
       recipients: [], author: { kind: 'agent', id: coordinator.id, name: coordinator.name, displayName: agentDisplayName(state.agents, coordinator.id),
         membershipGeneration: coordinator.membershipGeneration },
       text: `${target.displayName ?? target.name} has had no open task for 15 minutes.`, source: { kind: 'idle', agentId: target.id } }))
+  }
+  return rows
+}
+
+/** Whether a switch request ran out: nobody claimed it in 2 minutes, or its claim's lease lapsed. */
+export const switchExpired = (request: NonNullable<Agent['switchRequest']>, now: number): boolean =>
+  now >= (request.claimedUntil === undefined ? Date.parse(request.at) + SWITCH_UNCLAIMED_MS : Date.parse(request.claimedUntil))
+
+/** A switch request that ran out is dropped (the PM keeps its engine), and its project chat says so once: the host that never
+ *  answered cannot. Run by the liveness sweep, which any machine's report drives, as the PM's own host may be the one down. */
+export function staleSwitches(state: SuperTabState, now: number): MessageDraft[] {
+  const rows: MessageDraft[] = []
+  for (const pm of state.agents) {
+    const request = pm.switchRequest, project = request && ledProject(state, pm.id)
+    if (!request || !project) continue
+    if (!switchExpired(request, now)) continue
+    delete pm.switchRequest
+    rows.push({ id: stableId('switch-stale', pm.id, request.id), conversationId: project.leadConversationId, replyTo: null, recipients: [],
+      author: { kind: 'agent', id: pm.id, name: pm.name, displayName: agentDisplayName(state.agents, pm.id), membershipGeneration: pm.membershipGeneration },
+      text: "Couldn't switch the PM: its machine did not answer.", source: { kind: 'switch', agentId: pm.id } })
   }
   return rows
 }
