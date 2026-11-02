@@ -23,6 +23,7 @@ import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
 import { ensureManagedGrid, startGridPinRecheck } from '../lib/runtimeInstall.js'
 import { ApiConnections, apiConnectionsRequest } from '../lib/apiConnections.js'
 import { apiModelsRequest, apiTargetAnswer, refreshApiFor, rememberSavedApis } from '../lib/apiModels.js'
+import { linkClaudeProfile, listClaudeProfiles } from '../lib/claudeProfiles.js'
 import { linkCodexProfile, listCodexProfiles } from '../lib/codexProfiles.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { compactRuntimePickerModels, launchTarget, MODELS_REQUESTS, startModels, swarmLaunchTarget } from './models.js'
@@ -95,6 +96,10 @@ vi.mock('../lib/apiModels.js', () => ({
   rememberSavedApis: vi.fn(),
   refreshApiFor: vi.fn(() => (override: unknown) => ({ override, apiBase: 'https://api.example.test/v1' })),
   apiTargetAnswer: vi.fn(async () => ({ detail: 'This API is not saved. Add it in Models → APIs.' })),
+}))
+vi.mock('../lib/claudeProfiles.js', () => ({
+  listClaudeProfiles: vi.fn((observed: string[]) => observed.map((path) => ({ id: 'p', path, label: 'Claude', reportLabel: 'Claude' }))),
+  linkClaudeProfile: vi.fn((path: string) => (path ? { profile: { id: 'p', path, label: 'Linked', reportLabel: 'Linked' } } : { error: 'INVALID_PATH' })),
 }))
 vi.mock('../lib/codexProfiles.js', () => ({
   listCodexProfiles: vi.fn((observed: string[]) => observed.map((path) => ({ path, label: 'Codex' }))),
@@ -956,6 +961,29 @@ describe('the models service', () => {
         expect(await ask('codex_profile_link', { path: '/home/me/.codex-work' })).toEqual({ error: 'INTERNAL' })
         expect(log).toHaveBeenCalledWith('[backend] dispatch codex_profile_link failed:', expect.any(Error))
         log.mockRestore()
+      })
+
+      it('the Claude and Codex profile requests answer OWNER_REQUIRED to a guest', async () => {
+        const { requests } = setup()
+        for (const type of ['claude_profiles_list', 'claude_profile_link', 'codex_profiles_list', 'codex_profile_link']) {
+          expect(await requests[type]!({ path: '/x' }, { local: false, owner: false })).toEqual({ error: 'OWNER_REQUIRED' })
+        }
+      })
+
+      it('claude_profiles_list: the folders this machine offers under its own machine id; a failed scan is said', async () => {
+        const { ask, core } = setup()
+        expect(await ask('claude_profiles_list', { observedPaths: ['/home/me/.claude-work', 7] })).toEqual({ profiles: [{ id: 'p', path: '/home/me/.claude-work', label: 'Claude', reportLabel: 'Claude' }] })
+        expect(listClaudeProfiles).toHaveBeenLastCalledWith(['/home/me/.claude-work'], { machineId: core.daemon.machineId() })
+        expect(await ask('claude_profiles_list')).toEqual({ profiles: [] })
+        vi.mocked(listClaudeProfiles).mockImplementationOnce(() => { throw new Error('unreadable') })
+        expect(await ask('claude_profiles_list')).toEqual({ error: 'CLAUDE_PROFILES_FAILED' })
+      })
+
+      it('claude_profile_link: links the folder and answers the profile, or why not', async () => {
+        const { ask, core } = setup()
+        expect(await ask('claude_profile_link', { path: '/home/me/.claude-work' })).toEqual({ profile: { id: 'p', path: '/home/me/.claude-work', label: 'Linked', reportLabel: 'Linked' } })
+        expect(await ask('claude_profile_link', { path: 42 })).toEqual({ error: 'INVALID_PATH' })
+        expect(linkClaudeProfile).toHaveBeenLastCalledWith('', core.daemon.machineId())
       })
     })
   })
