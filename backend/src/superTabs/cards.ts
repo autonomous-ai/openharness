@@ -12,6 +12,8 @@ export interface GroupCards {
   task?: string
   /** Each linked pull request's card: the first main-chat message that linked it, and when a merge was recorded. */
   pullRequests?: PullRequestCard[]
+  /** Its one line in its project chat and what it last showed (taskLine.ts). */
+  line?: import('./taskLine.js').TaskLine
 }
 export interface PullRequestCard { url: string; messageId: string; mergedAt?: number }
 
