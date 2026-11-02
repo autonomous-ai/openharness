@@ -122,6 +122,23 @@ describe('the recaps in their own process', () => {
     expect(() => api.clients.turnSummary({ type: 'turn_summary' })).not.toThrow()
   })
 
+  // #2540's review (Orion): the recaps run here, in the edge host, on a core API with no agent list, so a Swarm agent was
+  // never found and every one of its finished turns alerted on the dial and the phone. The core says it with the session.
+  it('decides a finished turn on this core API: a session the core says is quiet on devices is silent, any other alerts', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const tier = async (session: typeof s1 & { quietOnDevices?: boolean }) => {
+      const { options } = setup({ create: (core, opts) => createRecaps(core, { recapForce: false, recapWithoutDevice: () => true, ...opts }) })
+      const core = connection()
+      options.onConnected!(core.core)
+      options.onEvent!(lifecycle({ kind: 'events', session, events: [started], replay: false }))
+      options.onEvent!(lifecycle({ kind: 'events', session, events: [ended], replay: false }))
+      await vi.waitFor(() => expect(core.said('summary')).toHaveLength(1))
+      return (core.said('summary')[0] as { frame: { payload: { tier?: string } } }).frame.payload.tier
+    }
+    expect(await tier({ ...s1, quietOnDevices: true })).toBe('silent')
+    expect(await tier(s1)).toBe('alert')
+  })
+
   it('runs on a core API that reaches the core only through these four ways, and holds no credential', async () => {
     const jev = vi.fn(async () => ({ status: 200, body: { data: {} } }))
     const ways = { turnCard: vi.fn(), turnSummary: vi.fn(), lastTurn: vi.fn(async () => null), jev }
