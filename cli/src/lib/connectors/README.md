@@ -89,7 +89,8 @@ falls back to a port, so whoever holds a port hears no tool call:
 
 Where no socket can be (Windows, or a folder too long for one), the entry is still the address
 `http://127.0.0.1:51793/<capability>/<code>/mcp`. The port also stays for clients already running on it until they
-restart, and for Harness's own cloud agents.
+restart: its old key lasts a day from the first start with a socket, then goes (`retireBridgeKey`). Harness's own cloud agents use
+the socket too, with Harness's key, which that listener alone accepts where a socket can be.
 
 Only names recorded in `projections.json` are changed or removed; a server the person added keeps its
 name and contents, a config that is not plain JSON is left alone, and a symlinked config is written

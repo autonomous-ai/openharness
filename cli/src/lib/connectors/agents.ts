@@ -63,8 +63,40 @@ export function harnessKey(vault: Store): string {
     const key = vault.file('harness-key.json').key
     if (typeof key === 'string' && key.length >= 32) return key
     const fresh = randomBytes(32).toString('base64url')
-    writePrivate(join(vault.root, 'harness-key.json'), { key: fresh })
+    writePrivate(join(vault.root, 'harness-key.json'), { ...vault.file('harness-key.json'), key: fresh })
     return fresh
+  })
+}
+
+/** How long the agents' key still opens the port once its entries have moved to the shim: running agents keep the address they read. */
+export const KEY_GRACE_MS = 24 * 60 * 60_000
+
+/**
+ * The agents' key where a socket can be, for the port's listener to compare against, or '' once it is retired. It has crossed the
+ * port, so a holder may have heard it (audit H1). It lasts [KEY_GRACE_MS] from the first time this is asked, then goes for good.
+ * Agents' entries no longer hold it; one still running from an old address answers "unknown" until it restarts.
+ */
+export function retireBridgeKey(vault: Store, now: number = Date.now()): string {
+  const seen = vault.file('bridge.json')
+  if (typeof seen.key !== 'string') return ''
+  if (typeof seen.keyRetiresAt === 'number' && now < seen.keyRetiresAt) return seen.key
+  return locked(vault.root, () => {
+    const { key, keyRetiresAt, ...rest } = vault.file('bridge.json')
+    if (typeof key !== 'string') return ''
+    if (typeof keyRetiresAt === 'number' && now >= keyRetiresAt) {
+      writePrivate(join(vault.root, 'bridge.json'), rest)
+      return ''
+    }
+    if (typeof keyRetiresAt !== 'number') writePrivate(join(vault.root, 'bridge.json'), { ...rest, key, keyRetiresAt: now + KEY_GRACE_MS })
+    return key
+  })
+}
+
+/** Replaces Harness's own key once where a socket can be: it crossed the port until now, and from here on it never does. */
+export function rotateHarnessKey(vault: Store): void {
+  locked(vault.root, () => {
+    if (vault.file('harness-key.json').socketOnly === true) return
+    writePrivate(join(vault.root, 'harness-key.json'), { key: randomBytes(32).toString('base64url'), socketOnly: true })
   })
 }
 
