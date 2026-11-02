@@ -6,6 +6,7 @@ import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
 import '../widgets/desktop_chrome.dart';
+import '../widgets/laid_out_list.dart';
 import 'controller.dart';
 import 'model.dart';
 import 'reply_box.dart';
@@ -318,6 +319,10 @@ class _SuperTabTaskPanelState extends State<SuperTabTaskPanel> {
       final assignee = task?.assignment?['agentId'];
       final who = assignee is String ? c.snapshot?.agent(assignee)?.name : null;
       final rows = widget.rows();
+      final pending = [
+        for (final sent in c.outgoing(widget.taskId))
+          if (sent.thread == null) sent,
+      ];
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -390,12 +395,11 @@ class _SuperTabTaskPanelState extends State<SuperTabTaskPanel> {
             ),
           ),
           Expanded(
-            child: ListView(
-              children: [
-                for (final message in rows) widget.row(message),
-                for (final sent in c.outgoing(widget.taskId))
-                  if (sent.thread == null) widget.outgoing(sent),
-              ],
+            child: LaidOutListView.builder(
+              itemCount: rows.length + pending.length,
+              itemBuilder: (context, index) => index < rows.length
+                  ? widget.row(rows[index])
+                  : widget.outgoing(pending[index - rows.length]),
             ),
           ),
           if (c.canWrite && task?.archived == false)
