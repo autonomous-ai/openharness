@@ -444,7 +444,12 @@ export function startGateway(host: GatewayHost): StartedGateway {
     .map((m) => m.pub)
 
   const ops: GatewayOps = {
-    backend: accountHttp.backend,
+    backend: (async (method: string, path: string, body?: unknown) => {
+      const answer = await accountHttp.backend(method, path, body)
+      // Whatever the answer: a request that timed out may still have changed the choice.
+      if (method === 'POST' && path === '/api/product-usage/settings') void usage?.choiceChanged()
+      return answer
+    }) as GatewayOps['backend'],
     machines: accountHttp.machines,
     mintGridName: accountHttp.mintGridName,
     status: async () => ({ fingerprint: gateway.fingerprint(), pairs: gateway.listPairs(), pending: gateway.pendingPair() as Record<string, unknown> | null }),

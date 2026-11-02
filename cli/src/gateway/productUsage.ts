@@ -27,7 +27,7 @@ const FIRST_REPORT_MS: readonly [number, number] = [10_000, 60_000]
 const TICK_MS: readonly [number, number] = [45_000, 75_000]
 // Spec 2026-11-02-poll-cost Part 4.1: every tick read the choice and reported (prod 2026-11-02: 330 settings GETs and 284
 // report POSTs a minute). The ticks stay, for the counts kept on this computer (the resource samples need them 45 s apart),
-// but the choice is read at start, by this computer's own `sync`, after a failed read or request, and then hourly: a report
+// but the choice is read at start, when it is made on this computer (`choiceChanged`), after a failed read or request, and then hourly: a report
 // carries its revision, so one sent after an opt-out elsewhere is refused (CHOICE_CHANGED) and the choice read at the next
 // tick. Reports go at most every 5 minutes, from the queue kept on disk.
 const SETTINGS_EVERY_MS = 3_600_000
@@ -392,6 +392,12 @@ export function createProductUsage(deps: ProductUsageDeps) {
   /** Read the choice and, with [post] (the default), send a report now. */
   const sync = (post = true): Promise<void> => syncing ??= syncOnce(true, post).finally(() => { syncing = null })
   const tick = (): Promise<void> => syncing ??= syncOnce(now() >= settingsAt, now() >= postAt && now() >= reportAt).finally(() => { syncing = null })
+  /** The choice was just made on this computer: read it now, without a report. After whatever is already on its way,
+   *  since a read in that run may have come back before the choice was made. */
+  const choiceChanged = async (): Promise<void> => {
+    while (syncing) await syncing
+    if (!stopped) await sync(false)
+  }
   let timer: ReturnType<typeof setTimeout> | undefined
   const schedule = (ms: number): void => {
     if (stopped) return
@@ -422,6 +428,7 @@ export function createProductUsage(deps: ProductUsageDeps) {
 
   return {
     sync,
+    choiceChanged,
     counter(metric: ProductUsageMetric): void {
       if (stopped || !metricSet.has(metric)) return
       if (isTuiMetric(metric)) {
