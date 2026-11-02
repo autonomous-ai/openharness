@@ -1063,41 +1063,6 @@ void main() {
     );
 
     test(
-      'a machine the person removed stays out, after a restart of the app too',
-      () async {
-        final store = MemoryStore();
-        final (app, backend) = await _twoTabs(store: store);
-        _ownMachine(app, 'rig');
-        await PersonalSwarm.of(app).show(app.activeSwarmId);
-        await _settle();
-        final c = await app.superTabs.open(PersonalSwarm.of(app).id!);
-        await PersonalMachines.of(app).sync(c);
-        await _settle();
-        expect(added(backend, c.tabId), contains('rig'));
-        await c.refresh();
-        await PersonalMachines.of(app).sync(c);
-        await _settle();
-        // Removed by the person, elsewhere.
-        final server = backend.servers[c.tabId]!;
-        server.state['machines'] = [
-          for (final m in server.state['machines'] as List)
-            if ((m as Map)['machineId'] != 'rig') m,
-        ];
-        await c.refresh();
-        final posted = added(backend, c.tabId).length;
-        await PersonalMachines.of(app).sync(c);
-        await _settle();
-        expect(added(backend, c.tabId), hasLength(posted));
-        expect(PersonalMachines.of(app).waiting(c), isEmpty);
-        // What this computer remembers survives: a fresh app reads it.
-        expect(
-          await store.read(PersonalMachines.storageKey('owner')),
-          contains('rig'),
-        );
-      },
-    );
-
-    test(
       'a failure says so on its row, waits, and does not hold the next back',
       () async {
         final (app, backend) = await _twoTabs();
@@ -1146,6 +1111,68 @@ void main() {
       await running;
       await _settle();
       expect(added(backend, c.tabId), before);
+    });
+
+    test('asks the server to add a machine only if it is missing, and lends it only through Team accounts, with Team accounts off too', () async {
+      final (app, backend) = await _twoTabs();
+      await PersonalSwarm.of(app).show(app.activeSwarmId);
+      await _settle();
+      final c = await app.superTabs.open(PersonalSwarm.of(app).id!);
+      backend.servers[c.tabId]!.state['teamAccounts'] = false;
+      await c.refresh();
+      _ownMachine(app, 'rig');
+      await PersonalMachines.of(app).sync(c);
+      await _settle();
+      final sent = backend
+          .contributions(c.tabId)
+          .firstWhere((m) => m['machineId'] == 'rig');
+      expect(sent['ifMissing'], isTrue);
+      expect(sent['teamAccountOnly'], isTrue);
+    });
+
+    test('a machine its person took out stays out, on a computer that never saw it: the server says so', () async {
+      final (app, backend, c) = await personal();
+      backend.servers[c.tabId]!.state['removedMachines'] = ['rig'];
+      await c.refresh();
+      _ownMachine(app, 'rig');
+      await PersonalMachines.of(app).sync(c);
+      await _settle();
+      expect(added(backend, c.tabId), isNot(contains('rig')));
+      expect(PersonalMachines.of(app).waiting(c), isEmpty);
+    });
+
+    test('sends unlessRemoved, so a read that is behind still cannot bring a removed one back', () async {
+      final (app, backend, c) = await personal();
+      _ownMachine(app, 'rig');
+      await PersonalMachines.of(app).sync(c);
+      await _settle();
+      expect(
+        backend
+            .contributions(c.tabId)
+            .firstWhere((m) => m['machineId'] == 'rig')['unlessRemoved'],
+        isTrue,
+      );
+    });
+
+    test(
+      'adds nothing while it shows a saved view: someone may have joined since',
+      () async {
+        final (app, backend, c) = await personal();
+        c.showingSavedForTest = true;
+        final before = added(backend, c.tabId);
+        _ownMachine(app, 'rig');
+        await PersonalMachines.of(app).sync(c);
+        await _settle();
+        expect(added(backend, c.tabId), before);
+        expect(PersonalMachines.of(app).waiting(c), isEmpty);
+      },
+    );
+
+    test('a Buddy-only machine, hidden from the Swarm\'s list, is added as an ordinary one', () async {
+      final (_, backend, c) = await personal(
+        before: (a) => _ownMachine(a, 'buddy-only'),
+      );
+      expect(added(backend, c.tabId), contains('buddy-only'));
     });
 
     group('their rows', () {
