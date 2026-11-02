@@ -15,7 +15,9 @@ Every command starts \`harness super-tab --tab TAB\` (your tab id is in your lau
 
 ## Read
 - \`status [--archived [PAGE]]\`: the shared roster and work: people, projects, agents (id, name, machine, state), conversations, tasks. Agent ids for \`--to\` come from here.
-- \`messages GROUP [--before SEQUENCE MESSAGE_ID]\`: recent messages of a conversation, thread replies included; each names the thread (the root message) it answers in. \`--before\` pages back from the cursor the last page named.
+- \`mine\`: what you work on, one line per task: its number, title, conversation id, status, when it last changed, its last result and pull requests, and the open tasks linked to it. A project's coordinator gets every open task of its project instead.
+- \`task GROUP\`: one task: its project, status, assignee, pull requests, brief, checks (passed, by whom, or failed with the evidence's first line), attempts newest first, and linked tasks. It reads a finished task too.
+- \`messages GROUP [--before SEQUENCE MESSAGE_ID]\`: recent messages of a conversation, thread replies included; each names the thread (the root message) it answers in. \`--before\` pages back from the cursor the last page named. \`messages GROUP --thread ROOT\` reads one thread whole: its root and every reply.
 - \`message GROUP MESSAGE_ID\`: one exact message, such as an earlier question or result a reply refers to.
 - \`instructions [PROJECT]\`: your project's instructions and the coordinator's notes, printed whole. Read them when you start and when told they changed. Without PROJECT, the project you work in. INSTRUCTIONS_UNAVAILABLE saying the Swarm has no project instructions yet is an older Swarm: work by the swarm skill Harness gave you at start (your role file) then. The same code saying to try again is a passing failure: run \`instructions\` again in a moment.
 - \`decisions [--answered]\`: decisions asked of people, still open, or with \`--answered\` those answered, each with its choice and note.

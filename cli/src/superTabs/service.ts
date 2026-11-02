@@ -10,7 +10,7 @@ import { backend, swarmRoleFor, hostJournalFile, identifier, object, SuperTabHos
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads, type SwarmRead } from './swarmReads.js'
 import { within } from './wire.js'
-import { isCoordinator } from './agentContext.js'
+import { isCoordinator, mineText, taskText } from './agentContext.js'
 import { machineChoices } from '../lib/newCommand.js'
 import { wireRole } from '../lib/swarmSkills.js'
 import { START_REQUIREMENTS } from './capacity.js'
@@ -68,6 +68,8 @@ async function finishingWith(core: CoreApi, command: Record<string, unknown>, ha
  *  is the project's instructions', never this help's. */
 const HELP = {
   status: 'Read the shared tab roster and work: people, projects, agents, conversations and their tasks. How the project routes work is in its instructions (instructions). The PM\'s status also lists otherProjectsWork: the active work of the Swarm\'s other projects (group, project, title, owned code, status, agent, PR), read only.',
+  mine: 'mine: what you work on, one line per task (number, title, conversation id, status, when it changed, last result, pull requests) with the open tasks linked to it. A project\'s coordinator gets every open task of its project instead.',
+  task: 'task GROUP: one task, active or finished: project, status, assignee, pull requests, brief, checks, attempts newest first, and linked tasks.',
   messages: 'messages GROUP: read recent messages in a conversation, thread replies included: each names its thread, the root message it answers there. A post with --reply-to lands in that message\'s thread. messages GROUP --thread ROOT reads one thread, its root and replies; a Buddy\'s thread session also gets there, as context, the main-chat messages it started from.',
   message: 'message GROUP MESSAGE_ID: read one exact message, including an earlier question or result referenced by a reply.',
   instructions: 'instructions [PROJECT]: print your project\'s instructions (its roles, workflow and routing) and the coordinator\'s notes, each with its id. Work by them; ask the coordinator, or a person, to change them.',
@@ -129,6 +131,14 @@ const HELP = {
 }
 
 const list = (value: unknown) => Array.isArray(value) ? value.map(object) : []
+/** One group by id as [identity] reads it, active or dormant (design 4.5); null when it is not there or not this agent's
+ *  to read (403 or 404), so the answer never tells which. */
+async function readGroupAsAgent(core: CoreApi, path: string, id: string, identity: string): Promise<Record<string, unknown> | null> {
+  const answer = await backend(core, 'GET', `${path}/groups/${encodeURIComponent(id)}?${identity}`)
+    .catch(error => { if (error instanceof SuperTabHostError && [403, 404].includes(error.status)) return null; throw error })
+  const group = object(object(answer).group).data
+  return group && typeof group === 'object' ? object(group) : null
+}
 /** A Swarm read as `GET /api/super-tabs/:id` answered it, `lastChangedAt` in place of `revision` (design 2026-10-26 5.3). */
 const answerOf = (read: SwarmRead) => ({ lastChangedAt: read.lastChangedAt, state: read.state, ...(read.githubApp ? { githubApp: true } : {}) })
 const OFF_ROSTER = 'This agent is not on this machine\'s Swarm roster right now. That can mean this machine has no access to it, or its billing does not allow it. Check how this machine is shared.'
@@ -597,8 +607,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         if (payload.action === 'routeHistory') {
           // The one group by id, active or dormant (design 4.5): a group that left the active set still has its history, and
           // a group this agent cannot read answers 403 or 404, before any history is read (review round 1).
-          const group = identifier(payload.conversationId) ? object(object(await backend(core, 'GET', `${path}/groups/${encodeURIComponent(String(payload.conversationId))}?${identity}`)
-            .catch(error => { if (error instanceof SuperTabHostError && [403, 404].includes(error.status)) return null; throw error })).group).data : null
+          const group = identifier(payload.conversationId) ? await readGroupAsAgent(core, path, String(payload.conversationId), identity) : null
           if (!group) return { error: 'NOT_FOUND', detail: 'No such group, or this agent cannot read it.', status: 404 }
           const [logged, tried] = await Promise.all([
             within(backend(core, 'GET', `${path}/route-decisions?${identity}`)),
@@ -618,6 +627,21 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           // Every attempt the group had, also the ones `work.define` took out of the state; the server already cut the results.
           const attempts = Array.isArray(tried) ? tried.slice(0, 50).map(object).map(a => ({ id: a.id, agentId: a.agentId, status: a.status, result: typeof a.result === 'string' ? a.result.slice(0, 500) : null, createdAt: a.createdAt ?? null })) : null
           return { ok: true, value: { ...(decisions ? { decisions } : { decisionsUnreadable: true }), ...(attempts ? { attempts } : { attemptsUnreadable: true }) } }
+        }
+        // What this agent works on, and one task (agent context design, section 1). Both read the Swarm read `status` makes;
+        // a task that left the active set (finished and quiet for a day, or archived) is read by id, as routeHistory reads it.
+        if (payload.action === 'mine') {
+          const read = await swarm()
+          return { ok: true, value: { text: mineText(read.state, read.groupChangedAt, agentId, Date.now()) } }
+        }
+        if (payload.action === 'task' && identifier(payload.conversationId)) {
+          const id = String(payload.conversationId)
+          const read = await swarm()
+          const active = list(read.state.conversations).find(c => c.id === id)
+          const group = active ?? await readGroupAsAgent(core, path, id, identity)
+          if (!group) return { error: 'NOT_FOUND', detail: 'No such task, or this agent cannot read it.', status: 404 }
+          const tried = await within(backend(core, 'GET', `${path}/conversations/${encodeURIComponent(id)}/attempts?${identity}`))
+          return { ok: true, value: { text: taskText(group, read.state, Array.isArray(tried) ? list(tried) : null, read.groupChangedAt, Date.now()) } }
         }
         // The jobs running and waiting on a project's GitHub Actions, counts only, for the route's machine-fit plug-in
         // (machineFit.ts; backend github/ciLoad.ts). The server reads it through its GitHub App, never this machine's login.

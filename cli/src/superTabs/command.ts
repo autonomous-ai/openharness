@@ -28,7 +28,7 @@ function harnessIn(frames: PaneFrame[], pane: string, machineId: string): boolea
 
 const ELSEWHERE = 'From a harness, Swarm commands go to this computer\'s own Harness only: leave out --machine and --port, or give this computer\'s own.'
 
-const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status [--project NAME] [--archived [PAGE]] | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | decisions [--answered] | costs [--days N] | post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | react GROUP MESSAGE_ID EMOJI OPERATION_ID [--off] | command OPERATION_ID JSON | propose OPERATION_ID JSON [--attach PATH]... | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | plan [JSON] | remove-machine MACHINE_ID [--yes] | set-agents MACHINE_ID COUNT | instructions [PROJECT] | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help'
+const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status [--project NAME] [--archived [PAGE]] | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | mine | task GROUP | decisions [--answered] | costs [--days N] | post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | react GROUP MESSAGE_ID EMOJI OPERATION_ID [--off] | command OPERATION_ID JSON | propose OPERATION_ID JSON [--attach PATH]... | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | plan [JSON] | remove-machine MACHINE_ID [--yes] | set-agents MACHINE_ID COUNT | instructions [PROJECT] | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help'
 /** A Buddy's guard refuses a post or a proposal read from stdin (#2358): there its words would skip the secret check. A Buddy
  *  that followed the stdin form here was refused and tried again (#2360 took it out of a Buddy's help), so a Buddy's usage
  *  line and JSON hints never offer it. */
@@ -194,6 +194,8 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
   else if (action === 'status' && first === '--archived' && (positional.length === 2 || positional.length === 3 && /^[A-Za-z0-9_-]{1,512}$/.test(second ?? ''))) {
     Object.assign(payload, { archived: true, ...(second ? { before: second } : {}) })
   }
+  else if (action === 'mine' && positional.length === 1) { /* the agent's own work (agentContext.ts) */ }
+  else if (action === 'task' && identifier(first) && positional.length === 2) payload.conversationId = first
   else if (action === 'decisions' && (positional.length === 1 || (positional.length === 2 && first === '--answered'))) payload.state = first ? 'answered' : 'open'
   else if (action === 'instructions' && (positional.length === 1 || positional.length === 2 && identifier(first))) {
     if (first) payload.projectId = first
@@ -388,6 +390,13 @@ export async function superTabCommand(argv: readonly string[], deps: {
       if (request.payload.action === 'screen' && value.ok === true && typeof value.text === 'string') print(value.text)
       else print(JSON.stringify(answer.error ? answer : value))
       return value.ok === true ? 0 : 1
+    } else if (request.payload.action === 'mine' || request.payload.action === 'task') {
+      // Printed as text for the agent to read (agent context design); every failure, as JSON.
+      const answer = await scoped({ ...request.payload })
+      const value = object(answer.value)
+      if (answer.ok === true && typeof value.text === 'string') { print(value.text); return 0 }
+      print(JSON.stringify(answer))
+      return 1
     } else if (request.payload.action === 'instructions') {
       // Printed as text for the agent to work by; every failure, as JSON.
       const answer = await scoped({ ...request.payload })

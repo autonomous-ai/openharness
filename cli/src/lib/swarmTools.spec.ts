@@ -40,4 +40,10 @@ describe('SWARM_TOOLS_SKILL', () => {
     expect(lineOf('"type":"note.add"')).toMatch(/only the project's coordinator/i)
     expect(lineOf('"type":"note.remove"')).toMatch(/coordinator/)
   })
+  // Agent context design, section 1: the skill says what each tool returns; when to use it is the instructions'.
+  it('lists mine, task and reading one thread', () => {
+    expect(SWARM_TOOLS_SKILL).toContain('- \`mine\`:')
+    expect(SWARM_TOOLS_SKILL).toContain('- \`task GROUP\`:')
+    expect(SWARM_TOOLS_SKILL).toContain('messages GROUP --thread ROOT')
+  })
 })

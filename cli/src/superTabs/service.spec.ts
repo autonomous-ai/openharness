@@ -1513,3 +1513,41 @@ describe('finishing your own work', () => {
     expect(posts(t)).toEqual([{ ...status('done'), tokens: opus }, status('done')])
   })
 })
+
+// Agent context design, section 1 (Ken, 2026-11-02: agents forgot their task; the PM read the whole Swarm for progress).
+describe('mine and task', () => {
+  const ok = (data: unknown) => ({ status: 200, body: { success: true, data } })
+  const withState = (t: ReturnType<typeof setup>, conversations: Array<Record<string, unknown>>, groupRead?: (path: string) => unknown) => {
+    const state = { agents: [{ ...t.agent, name: 'Dev1' }], conversations }
+    vi.mocked(t.core.account.backend).mockImplementation(async (_method, path) => {
+      if (path.includes('/attempts')) return ok([]) as never
+      if (path.startsWith('/api/super-tabs/tab/groups/') && groupRead) return groupRead(path) as never
+      return ok(swarmData(t.agent, path, state)) as never
+    })
+  }
+  it('mine answers its text', async () => {
+    const t = setup()
+    withState(t, [{ id: 'g12', number: 12, title: 'Fix login', archived: false, checks: [], assignment: { agentId: t.agentId, status: 'working', result: null } }])
+    const answer = await t.ask({ action: 'mine', tabId: 'tab', harnessId: 'native' }, owner) as { value: { text: string } }
+    expect(answer.value.text).toMatch(/^#12 Fix login \(conversation g12\) — working/)
+  })
+  it('task reads a dormant group from the group read', async () => {
+    const t = setup()
+    const dormant = { id: 'g9', number: 9, title: 'Old fix', archived: true, dormant: true, checks: [], brief: 'Goal:\nOld.', assignment: { agentId: t.agentId, status: 'done', result: 'Merged' } }
+    withState(t, [], path => path.startsWith('/api/super-tabs/tab/groups/g9?') ? ok({ group: { key: 'g9', version: 1, changedAt: 1, data: dormant } }) : ok({}))
+    const answer = await t.ask({ action: 'task', tabId: 'tab', harnessId: 'native', conversationId: 'g9' }, owner) as { value: { text: string } }
+    expect(answer.value.text.split('\n')[0]).toBe('#9 Old fix (conversation g9)')
+    expect(answer.value.text).toContain('- Dev1, done (current): Merged')
+  })
+  it('task of a group it cannot read answers NOT_FOUND', async () => {
+    const t = setup()
+    withState(t, [], () => ({ status: 404, body: { success: false, error: { code: 'NOT_FOUND', message: 'This conversation is unavailable.' } } }))
+    expect(await t.ask({ action: 'task', tabId: 'tab', harnessId: 'native', conversationId: 'g404' }, owner)).toMatchObject({ error: 'NOT_FOUND' })
+  })
+  it('help names mine and task', async () => {
+    const t = setup()
+    const answer = await t.ask({ action: 'help', tabId: 'tab', harnessId: 'native' }, owner) as { help: Record<string, unknown> }
+    expect(answer.help.mine).toEqual(expect.stringContaining('mine'))
+    expect(answer.help.task).toEqual(expect.stringContaining('task GROUP'))
+  })
+})
