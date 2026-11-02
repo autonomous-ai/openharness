@@ -351,6 +351,14 @@ export interface SwarmChanged { tabId: string; userIds: string[]; lastChangedAt:
 /** Which machines' hosts should read a Swarm's changes, and the commit's time. */
 export interface HostsChanged { tabId: string; machineIds: string[]; lastChangedAt: number }
 
+/** Which claimed deliveries an `end` ends ([SuperTabStore.endDeliveries]): plain equalities that narrow the read, and a match for
+ *  what the caller's filter says with `in`. */
+export interface DeliveriesEnding {
+  where?: { id?: string; agentId?: string; messageId?: string; assignmentId?: string }
+  matches?: (row: { agentId: string; conversationId: string; assignmentId: string | null; nativeContextId: string | null;
+    authorKind: string; authorId: string; authorGeneration: string }) => boolean
+}
+
 /** Which agent, of which Swarm, on which machine, has a delivery to read. */
 export interface DeliveriesWaiting { machineId: string; tabId: string; agentId: string }
 
@@ -1572,7 +1580,7 @@ export class SuperTabStore {
       if (command.type === 'project.sharing' && command.visibility === 'private') {
         await makeProjectPrivate(tx, effects.state, command.projectId)
       }
-      const watchersLost = await revokeNativeContexts(tx, original, effects.state, end => this.endDeliveries(tx, tabId, end))
+      const watchersLost = await revokeNativeContexts(tx, original, effects.state, (holds, end) => this.endDeliveries(tx, tabId, holds, end))
       // Rule (b) for claims (design D10): a change to who a conversation's deliveries may reach writes those delivery rows,
       // so a claim of one conflicts with it. An archived conversation, or one its receiver left, ends them: kept for a
       // reopening, 6 of the 9 deliveries prod watch found stuck for days on 2026-10-28 waited in archived groups, unread.
@@ -1584,20 +1592,26 @@ export class SuperTabStore {
       const archivedSteps = unreadable && command.type !== 'conversation.agent' ? effects.state.conversations.filter(c => c.reviewOf === command.conversationId
         && c.archived && !original.conversations.find(o => o.id === c.id)?.archived).map(c => c.id) : []
       // One plain match per conversation: an `in` on this hot collection is sent as $expr, which no index bounds (hotFilters).
-      if (unreadable) await this.endDeliveries(tx, tabId, async () => {
-        let count = 0
-        for (const conversationId of [command.conversationId, ...archivedSteps]) {
-          count += (await tx.superTabDelivery.updateMany({ where: { tabId, conversationId, status: { in: [...CANCELLABLE_DELIVERY] },
-            ...(command.type === 'conversation.agent' ? { agentId: command.agentId } : {}) },
-            data: { status: 'cancelled', holdReason: null, holdSince: null } })).count
-        }
-        return { count }
-      })
+      if (unreadable) {
+        const conversationIds = [command.conversationId, ...archivedSteps]
+        await this.endDeliveries(tx, tabId, {
+          ...(command.type === 'conversation.agent' ? { where: { agentId: command.agentId } } : {}),
+          matches: row => conversationIds.includes(row.conversationId),
+        }, async () => {
+          let count = 0
+          for (const conversationId of conversationIds) {
+            count += (await tx.superTabDelivery.updateMany({ where: { tabId, conversationId, status: { in: [...CANCELLABLE_DELIVERY] },
+              ...(command.type === 'conversation.agent' ? { agentId: command.agentId } : {}) },
+              data: { status: 'cancelled', holdReason: null, holdSince: null } })).count
+          }
+          return { count }
+        })
+      }
       const removedGroups = original.conversations.filter(c => !effects.state.conversations.some(n => n.id === c.id))
       if (removedGroups.length) {
         // Keep immutable history and operation receipts for audit/replay; all
         // reads require a live conversation. No removed group can deliver work.
-        await this.endDeliveries(tx, tabId, () => tx.superTabDelivery.updateMany({ where: { tabId, conversationId: { in: removedGroups.map(c => c.id) },
+        await this.endDeliveries(tx, tabId, { matches: row => removedGroups.some(c => c.id === row.conversationId) }, () => tx.superTabDelivery.updateMany({ where: { tabId, conversationId: { in: removedGroups.map(c => c.id) },
           status: { in: [...CANCELLABLE_DELIVERY] } }, data: { status: 'cancelled', holdReason: null, holdSince: null } }))
       }
       // Each conversation numbers its own messages. Only a change of a work group's state wakes its coordinator, read through
@@ -1766,7 +1780,7 @@ export class SuperTabStore {
       if (command.type === 'message.send' && command.replyTo && actor.kind === 'agent') {
         // A notice gathered for the digest and answered before it (read in its chat): the digest does not name it again.
         const replyTo = command.replyTo, agentId = actor.agentId
-        await this.endDeliveries(tx, tabId, () => tx.superTabDelivery.updateMany({ where: { tabId, messageId: replyTo, agentId,
+        await this.endDeliveries(tx, tabId, { where: { messageId: replyTo, agentId } }, () => tx.superTabDelivery.updateMany({ where: { tabId, messageId: replyTo, agentId,
           status: { in: ['queued', 'claimed', 'uncertain', 'delivered', 'confirmed', 'gathered'] } },
           data: { status: 'answered', answeredAt: new Date(context.now), holdReason: null, holdSince: null } }))
       }
@@ -1774,7 +1788,7 @@ export class SuperTabStore {
         // Judged on the progress after this report summarized what it names.
         const progress = projectsOf(effects.state).find(p => p.id === command.projectId)?.progress
         if (progress?.requestMessageId && answersRequest(progress, command.throughRevision)) {
-          await this.endDeliveries(tx, tabId, () => tx.superTabDelivery.updateMany({ where: { tabId, agentId: actor.agentId, messageId: progress.requestMessageId,
+          await this.endDeliveries(tx, tabId, { where: { agentId: actor.agentId, messageId: progress.requestMessageId } }, () => tx.superTabDelivery.updateMany({ where: { tabId, agentId: actor.agentId, messageId: progress.requestMessageId,
             status: { in: ['queued', 'claimed', 'uncertain', 'delivered', 'confirmed'] } },
             data: { status: 'answered', answeredAt: new Date(context.now), holdReason: null, holdSince: null } }))
         }
@@ -1789,7 +1803,9 @@ export class SuperTabStore {
         // A gathered row whose sender went stays for its digest, which judges it: a Done outlives the agent that sent it (review of #2560).
         ...revoked.map(sender => ({ ...sender, status: { not: 'gathered' } })), ...(effects.cancelledAgents.length ? [{ agentId: { in: effects.cancelledAgents } }] : []),
       ]
-      if (cancelled.length) await this.endDeliveries(tx, tabId, () => tx.superTabDelivery.updateMany({ where: { tabId,
+      if (cancelled.length) await this.endDeliveries(tx, tabId, { matches: row => effects.cancelledAgents.includes(row.agentId)
+        || revoked.some(s => s.authorKind === row.authorKind && s.authorId === row.authorId && s.authorGeneration === row.authorGeneration) },
+      () => tx.superTabDelivery.updateMany({ where: { tabId,
         status: { in: [...CANCELLABLE_DELIVERY] }, OR: cancelled }, data: { status: 'cancelled', holdReason: null, holdSince: null } }))
       await this.requeueFormerLeads(tx, tabId, original, effects.state)
       for (const attempt of effects.previousAttempts) {
@@ -2359,7 +2375,7 @@ export class SuperTabStore {
     if (!assignmentIds.length) return
     const assignmentId = { in: assignmentIds }
     await tx.superTabRun.deleteMany({ where: { tabId, assignmentId } })
-    await this.endDeliveries(tx, tabId, () => tx.superTabDelivery.updateMany({ where: { tabId, assignmentId, status: { in: [...CANCELLABLE_DELIVERY] } },
+    await this.endDeliveries(tx, tabId, { matches: row => row.assignmentId !== null && assignmentIds.includes(row.assignmentId) }, () => tx.superTabDelivery.updateMany({ where: { tabId, assignmentId, status: { in: [...CANCELLABLE_DELIVERY] } },
       data: { status: 'cancelled', holdReason: null, holdSince: null } }))
   }
 
@@ -2457,11 +2473,16 @@ export class SuperTabStore {
    * Ends deliveries (cancelled, answered) by `end`, and tells the machines whose agents had one claimed: a host holds a
    * claimed delivery its pane refused (and says `hold` only after 30 s), and reads that agent's list only every 30 s (cli
    * superTabs/host.ts), so without this it could type a message for that long after it was answered or withdrawn (spec
-   * 2026-11-02 poll cost, Part 3.2; final review). One equality read per call: the claimed rows of this Swarm, which are few.
-   * `end` stays a named `updateMany` at each caller, so the hot-filter lint (hotFilters.test.ts) still sees it.
+   * 2026-11-02 poll cost, Part 3.2; final review). Only the machines holding what ends: each one told reads that agent's list,
+   * and every agent reply answers a delivery (review of #2632). One equality read per call of the claimed rows, which are few;
+   * [holds] says which of them `end` ends, as its filter does: plain equalities narrow the read, and anything an `in` would say
+   * is matched here, as `in` on this collection is what the hot-filter lint forbids. `end` stays a named `updateMany` at each
+   * caller, so that lint (hotFilters.test.ts) still sees it.
    */
-  async endDeliveries(tx: Transaction, tabId: string, end: () => Promise<{ count: number }>): Promise<{ count: number }> {
-    const claimed = await tx.superTabDelivery.findMany({ where: { tabId, status: 'claimed' }, select: { machineId: true, agentId: true } })
+  async endDeliveries(tx: Transaction, tabId: string, holds: DeliveriesEnding, end: () => Promise<{ count: number }>): Promise<{ count: number }> {
+    const rows = await tx.superTabDelivery.findMany({ where: { tabId, status: 'claimed', ...holds.where },
+      select: { machineId: true, agentId: true, conversationId: true, assignmentId: true, nativeContextId: true, authorKind: true, authorId: true, authorGeneration: true } })
+    const claimed = holds.matches ? rows.filter(holds.matches) : rows
     const ended = await end()
     if (ended.count) {
       for (const key of new Set(claimed.map(row => `${row.machineId}\u0000${row.agentId}`))) {
@@ -3733,9 +3754,10 @@ export class SuperTabStore {
       // As a person's archive does (execute): a claim of a delivery here conflicts with this write.
       // Its finished steps archive here too (execute does the same): a cancelled one stays open, to hear why. One plain match per
       // conversation: an `in` on this hot collection is sent as $expr, which no index bounds (hotFilters).
-      await this.endDeliveries(tx, tabId, async () => {
+      const endedIds = [groupId, ...stepsOf(state, group.id).filter(step => step.archived && !heldBefore.has(step.id)).map(step => step.id)]
+      await this.endDeliveries(tx, tabId, { matches: row => endedIds.includes(row.conversationId) }, async () => {
         let count = 0
-        for (const conversationId of [groupId, ...stepsOf(state, group.id).filter(step => step.archived && !heldBefore.has(step.id)).map(step => step.id)]) {
+        for (const conversationId of endedIds) {
           count += (await tx.superTabDelivery.updateMany({ where: { tabId, conversationId, status: { in: [...CANCELLABLE_DELIVERY] } },
             data: { status: 'cancelled', holdReason: null, holdSince: null } })).count
         }
@@ -3783,7 +3805,7 @@ export class SuperTabStore {
         const unchanged = delivery.holdSince ? { claimId: delivery.claimId, holdReason: delivery.holdReason, holdSince: delivery.holdSince }
           : { updatedAt: delivery.updatedAt }
         const quiet = reachable && delivery.status === 'claimed' && !delivery.holdSince
-        settled += (await this.endDeliveries(tx, tabId, () => tx.superTabDelivery.updateMany({ where: { id: delivery.id, tabId, status: delivery.status, ...unchanged },
+        settled += (await this.endDeliveries(tx, tabId, { where: { id: delivery.id } }, () => tx.superTabDelivery.updateMany({ where: { id: delivery.id, tabId, status: delivery.status, ...unchanged },
           data: { status: 'cancelled', ...quiet ? { holdReason: QUIET_CLAIM } : {} } }))).count
       }
       return settled
@@ -3816,7 +3838,7 @@ export class SuperTabStore {
         finishWorker(state, assignment.agentId)
         assignment.result = 'The execution host confirmed that this harness stopped.'
         await tx.superTabRun.deleteMany({ where: { tabId, assignmentId } })
-        await this.endDeliveries(tx, tabId, () => tx.superTabDelivery.updateMany({ where: { tabId, assignmentId,
+        await this.endDeliveries(tx, tabId, { where: { assignmentId } }, () => tx.superTabDelivery.updateMany({ where: { tabId, assignmentId,
           status: { in: [...CANCELLABLE_DELIVERY] } }, data: { status: 'cancelled', holdReason: null, holdSince: null } }))
         await closeAssignment(tx, tabId, assignmentId, 'stopped', this.now())
         // No agent command closes this attempt, so nobody was told: in the two-account E2E of 2026-10-19

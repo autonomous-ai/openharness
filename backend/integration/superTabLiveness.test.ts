@@ -1835,7 +1835,8 @@ describe('the push for a new delivery', () => {
       waiting.length = 0
       await f.execute({ type: 'message.send', conversationId: f.group, text: 'Done.', replyTo: forWorker, recipientIds: [] }, host, f.worker)
       expect(waiting).toContainEqual({ machineId: 'test-host', tabId: f.tab, agentId: f.worker })
-      expect(waiting).not.toContainEqual({ machineId: 'lead-host', tabId: f.tab, agentId: f.lead })
+      // The reply is itself a new delivery for the Lead, told once for it: not told again for the claim it holds.
+      expect(waiting.filter(w => w.agentId === f.lead)).toHaveLength(1)
     })
 
     /** A conversation with no task in it, so its agent may leave and it may be archived, with a claimed delivery of the worker's. */

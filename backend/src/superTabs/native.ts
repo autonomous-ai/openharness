@@ -11,7 +11,7 @@ import { CANCELLABLE_DELIVERY } from './pageReads.js'
 import { cloneData } from './cloneData.js'
 import { numberMessages, type Touch } from './parts/commit.js'
 import { redactCredentials } from './credentials.js'
-import type { DeliveriesWaiting } from './store.js'
+import type { DeliveriesEnding, DeliveriesWaiting } from './store.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 export const openNativeSchema = z.object({ operationId: id, conversationId: id, agentId: id }).strict()
@@ -273,13 +273,13 @@ export class SuperTabNativeStore {
  *  an agent (watchersLost), for the observers to check again. */
 /** `ending` (store.ts endDeliveries) runs the cancel of the revoked contexts' waiting deliveries, so a host holding one hears. */
 export async function revokeNativeContexts(tx: Transaction, before: SuperTabState, after: SuperTabState,
-  ending: (end: () => Promise<{ count: number }>) => Promise<{ count: number }> = end => end()) {
+  ending: (holds: DeliveriesEnding, end: () => Promise<{ count: number }>) => Promise<{ count: number }> = (_, end) => end()) {
   const { conditions, watchersLost } = revokeConditions(before, after)
   if (conditions.length) {
     const where = { tabId: before.id, revoked: false, OR: conditions }
     const revoked = await tx.superTabNativeContext.findMany({ where, select: { id: true } })
     await tx.superTabNativeContext.updateMany({ where, data: { revoked: true } })
-    if (revoked.length) await ending(() => tx.superTabDelivery.updateMany({ where: { tabId: before.id,
+    if (revoked.length) await ending({ matches: row => revoked.some(r => r.id === row.nativeContextId) }, () => tx.superTabDelivery.updateMany({ where: { tabId: before.id,
       nativeContextId: { in: revoked.map(r => r.id) }, status: { in: [...CANCELLABLE_DELIVERY] } },
       data: { status: 'cancelled', holdReason: null, holdSince: null } }))
   }
