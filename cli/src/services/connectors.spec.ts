@@ -164,7 +164,7 @@ describe('the connectors service', () => {
       said.mockRestore()
       holder.close()
     }
-  })
+  }, 30_000)
 
   it.each([
     ['its own account holds the port, by the real lookup', undefined],
@@ -194,7 +194,8 @@ describe('the connectors service', () => {
       said.mockRestore()
       holder.close()
     }
-  })
+  // Its waits add up past the default 5 s on a loaded machine: it timed out once in a full coverage run.
+  }, 30_000)
 
   it('does not move on one answer: a handover ending just then reads as another account, so it tries the port again first', async () => {
     const holder = createServer()
@@ -216,7 +217,7 @@ describe('the connectors service', () => {
       said.mockRestore()
       await new Promise<void>(resolve => holder.close(() => resolve()))
     }
-  })
+  }, 30_000)
 
   it('says so when the port it moved to cannot be saved', async () => {
     const holder = createServer()
