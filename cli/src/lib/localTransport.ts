@@ -11,14 +11,14 @@
  * The folder's mode is the guarantee here, as for every client of this socket (lib/localSocket.ts): nobody else can
  * have put a socket in it.
  */
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, lstatSync, readdirSync } from 'node:fs'
 import { request } from 'node:http'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { Readable } from 'node:stream'
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web'
 import { readDaemonRecord } from './daemonRecord.js'
 import { localCredentialHeaders } from './localCredential.js'
-import { localSocketName, unixSocketPath } from './localSocket.js'
+import { unixSocketPath } from './localSocket.js'
 import { pidAlive } from './processProof.js'
 import { NOT_RUNNING } from './unreachable.js'
 import { daemonPipe } from './windows/daemonPipe.js'
@@ -34,14 +34,18 @@ const LOCAL_WS_PATH = '/api/local-ws'
  */
 export function localSocketRoute(dataDir: string, port: number, platform: NodeJS.Platform = process.platform): string | null {
   const expected = unixSocketPath(dataDir, port, platform)
-  if (!expected || existsSync(expected)) return expected
+  // A data folder's own mode covers its socket; a short folder's lies elsewhere, so it is checked, and one that isn't private is refused as
+  // a daemon that is down is: connecting to this name fails.
+  const checked = (socket: string): string => !socket.startsWith(dataDir) && !socketIsPrivate(socket) ? `${socket}.not-private` : socket
+  if (!expected) return expected
+  if (existsSync(expected)) return checked(expected)
   let names: string[] = []
   try { names = readdirSync(dataDir) } catch { return expected }
   for (const name of names) {
     const configured = /^daemon-(\d+)\.json$/.exec(name)?.[1]
     if (!configured || readDaemonRecord(dataDir, Number(configured), platform)?.port !== port) continue
-    const socket = join(dataDir, localSocketName(Number(configured)))
-    if (existsSync(socket)) return socket
+    const socket = unixSocketPath(dataDir, Number(configured), platform)
+    if (socket && existsSync(socket)) return checked(socket)
   }
   return expected
 }
@@ -90,6 +94,25 @@ async function overSocket(socketPath: string, input: Request, pipe?: PipeTarget)
 /** What `fetch` throws for a daemon that is not there: the callers' "is it running" texts read its cause. */
 export function notThere(): TypeError {
   return Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('connect ECONNREFUSED: no Harness pipe'), { code: 'ECONNREFUSED' }) })
+}
+
+/** Whether [path] is what the daemon makes: a socket of this account's, owner only, in a real folder nobody else can write to. */
+export function socketIsPrivate(path: string): boolean {
+  const uid = process.getuid?.()
+  try {
+    const folder = lstatSync(dirname(path)), file = lstatSync(path)
+    return folder.isDirectory() && (folder.mode & 0o022) === 0 && file.isSocket() && (file.mode & 0o077) === 0
+      && (uid === undefined || (folder.uid === uid && file.uid === uid))
+  } catch { return false }
+}
+
+/** `fetch` that sends every request over the private Unix socket at [socketPath], whatever host its address names, and fails as `fetch` does
+ *  when the socket is missing or not private: what is sent can carry a key. */
+export function fetchOverSocket(socketPath: string): typeof fetch {
+  return async (input, init) => {
+    if (!socketIsPrivate(socketPath)) throw new TypeError('fetch failed', { cause: new Error('The socket is missing or not private.') })
+    return overSocket(socketPath, new Request(input, init))
+  }
 }
 
 /**

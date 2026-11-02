@@ -252,6 +252,31 @@ describe('agent_create, refused before any pane exists', () => {
     expect(vi.mocked(create!).mock.calls.map(([input]) => input.codexHome)).toEqual([null, null, null, null])
   })
 
+  it('claudeHome is refused for codex and with a grid (INVALID_CLAUDE_HOME), and dropped when it is not a plain absolute path', async () => {
+    const { ask, create } = setup()
+    const refused = { error: 'INVALID_CLAUDE_HOME', detail: 'claudeHome is only valid for claude, without a grid' }
+    expect(await ask({ engine: 'codex', cwd: '/w', claudeHome: '/homes/claude' })).toStrictEqual(refused)
+    vi.mocked(parseGridLaunchOverride).mockReturnValueOnce({ state: 'ok', override: { networkId: 'g' } } as never)
+    expect(await ask({ engine: 'claude', cwd: '/w', claudeHome: '/homes/claude' })).toStrictEqual(refused)
+    expect(create).not.toHaveBeenCalled()
+    for (const claudeHome of ['relative', '/with\nnewline', `/${'x'.repeat(4096)}`, 7]) await ask({ engine: 'claude', cwd: '/w', claudeHome })
+    expect(vi.mocked(create!).mock.calls.map(([input]) => 'claudeHome' in input)).toEqual([false, false, false, false])
+  })
+
+  it('claudeHome is accepted only when it is a profile this machine offers', async () => {
+    const { ask, create } = setup({ claudeHomeOffered: (home) => home === '/homes/offered' })
+    expect(await ask({ engine: 'claude', cwd: '/w', claudeHome: '/homes/other' })).toStrictEqual({ error: 'INVALID_CLAUDE_HOME', detail: 'claudeHome is not a Claude profile of this machine' })
+    expect(create).not.toHaveBeenCalled()
+    await ask({ engine: 'claude', cwd: '/w', claudeHome: '/homes/offered' })
+    expect(vi.mocked(create!).mock.calls[0][0]).toMatchObject({ claudeHome: '/homes/offered' })
+  })
+
+  it('claudeHome reaches the create input', async () => {
+    const { ask, create } = setup()
+    await ask({ engine: 'claude', cwd: '/w', claudeHome: '/homes/claude' })
+    expect(vi.mocked(create!).mock.calls[0][0]).toMatchObject({ engine: 'claude', claudeHome: '/homes/claude' })
+  })
+
   it('a harness that is not an id, not installed here, a viewer, or not for this engine', async () => {
     const { ask, create } = setup()
     expect(await ask({ engine: 'claude', cwd: '/w', dsh: 'not an id' })).toStrictEqual({ error: 'INVALID_DSH', detail: 'dsh must be an owner/name id' })
@@ -1100,6 +1125,11 @@ describe('agent_resume and agent_restart', () => {
     expect(await relaunch('agent_resume', { agentId: 'a1', permissionMode: 'plan' })).toMatchObject({ resumed: true })
     expect(restart).toHaveBeenCalledWith('a1')
     expect(vi.mocked(resume!).mock.calls).toEqual([['a1'], ['a1', 'plan']])
+  })
+
+  it('refuse a resume that would trade Team-written work\'s mode for another: its project settings stay off (audit H2)', async () => {
+    const run = setup({ byAgent: (id: string) => id === 'written' ? { ...session('written'), permissionMode: 'teamWritten' } : undefined })
+    expect(await run.relaunch('agent_resume', { agentId: 'written', permissionMode: 'full' })).toStrictEqual({ error: 'INVALID_PERMISSION_MODE' })
   })
 
   it('refuse a request with no agent, on a machine that cannot relaunch, and a permission mode a restart has no use for', async () => {

@@ -87,6 +87,7 @@ data folder, so this needs a bad record, or a Team agent that writes it.
 
 **Fixed:** `isPmCodexHome` accepts exactly `<home>\.harness-pm-homes\<id>\codex`, checked with the platform's own path rules,
 and the id by `pmEngineHome`'s own rule (`PM_START_ID`: letters, digits, `_` and `-`).
+`ownHomeFolder`, main's check for a Team-written agent's own home, follows the same id rule, so `.. ` is refused there too.
 Tests: `teamPurge.spec.ts`, "isPmCodexHome" (with `path.win32`), and "of a Codex session whose home is not one of
 pmEngineHome's". Both fail on `main`; the `.. ` case fails without the id rule. PR #2559 adds the same `/` check in a second place and needs the same helper.
 

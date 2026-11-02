@@ -158,6 +158,8 @@ export class BackendSocket {
     grid: GridLaunchOverride | null
     /** A Codex CODEX_HOME folder to launch this agent against instead of `~/.codex`; codex only. */
     codexHome: string | null
+    /** A Claude CLAUDE_CONFIG_DIR folder (a profile) to launch this agent against; claude only. Absent for the default account. */
+    claudeHome?: string | null
     /** The domain-specific harness to create this agent as (installed here, base engine = `engine`). */
     dsh: string | null
     /** The message the session opens with, already submitted (`FIRST_PROMPT_ARGS` in engineLaunch.ts);

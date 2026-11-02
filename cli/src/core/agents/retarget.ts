@@ -26,6 +26,10 @@ import { parseRuntimeProfile } from '../../lib/runtimeProfileWire.js'
 import type { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
 import { canRestart, restartTargetOf } from '../../lib/terminalBackend.js'
 import { launchContract } from '../../engines/launches.js'
+import { moveCodexConversation } from '../../engines/codex/providerMove.js'
+import { engineBin } from '../../lib/engineBin.js'
+import { sessionCodexHome } from '../../lib/engineHomes.js'
+import { windowsEngineArgv } from '../../lib/windows/launch.js'
 import type { TerminalBackendCoordinator } from '../../lib/terminalBackendCoordinator.js'
 import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
@@ -309,7 +313,16 @@ export function createAgentRetargeter({
           ...(movesProvider ? { continueInFork: true as const } : {}) },
         retargetPermission.bypassPermission === true,
         { ...paneSwapDeps(session, place, !grid && !backend.clearEnv ? { ...built.overrides, clearPaneEnv: gridEnvVarNames(session.engine) } : built.overrides,
-          retargetPermission.permissionMode ?? null, dispatchCurrent), isCurrent: dispatchCurrent },
+          retargetPermission.permissionMode ?? null, dispatchCurrent), isCurrent: dispatchCurrent,
+          ...(movesProvider ? { prepareFork: () => {
+            const env: NodeJS.ProcessEnv = { ...process.env, CODEX_HOME: sessionCodexHome(session), ...built.overrides.env, ...built.overrides.native?.environment }
+            if (!grid) for (const name of gridEnvVarNames(session.engine)) delete env[name]
+            return moveCodexConversation({
+              sessionId: session.sessionId!, toGrid: !!grid, args: built.overrides.extraArgs ?? [], env,
+              argv: (codexArgs) => windowsEngineArgv(session.engine, [built.overrides.native?.executable?.command ?? engineBin(session.engine), ...codexArgs]),
+              ...(session.cwd ? { cwd: session.cwd } : {}),
+            })
+          } } : {}) },
       )
       replacementStarted = outcome.ok
       if (!current()) return changed()

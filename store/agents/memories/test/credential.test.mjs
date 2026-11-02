@@ -7,11 +7,14 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { closeBridges, listAgents, localCredentialHeaders } from '../lib/bridge.mjs'
 
+// A folder too long for a socket has one under the home folder: only a home too long as well is left on the port.
+process.env.HOME = `/${'h'.repeat(120)}`
+
 const CREDENTIAL = `test-local-credential-${'a'.repeat(21)}` // the CLI's shape: 43 base64url characters
 
-/** A data folder as the CLI leaves it: 0700, holding a 0600 `hook-credential` (or none). */
+/** A data folder as the CLI leaves it, too long to hold a socket: the one case on TCP, with the credential: 0700, holding a 0600 `hook-credential` (or none). */
 function dataDir({ credential = CREDENTIAL, mode = 0o600, folderMode = 0o700 } = {}) {
-  const dir = join(mkdtempSync(join(tmpdir(), 'memories-credential-')), 'data')
+  const dir = join(mkdtempSync(join(tmpdir(), 'memories-credential-')), 'data-'.padEnd(120, 'x'))
   mkdirSync(dir, { mode: 0o700 })
   if (credential !== null) { writeFileSync(join(dir, 'hook-credential'), `${credential}\n`, { mode: 0o600 }); chmodSync(join(dir, 'hook-credential'), mode) }
   chmodSync(dir, folderMode)

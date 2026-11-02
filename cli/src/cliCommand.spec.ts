@@ -310,6 +310,60 @@ describe('start --repair beside a running daemon', () => {
   }, ONE_RUN_TEST_MS)
 })
 
+describe('start --help', () => {
+  it.each(['--help', '-h'])('%s prints the start options and starts, stops and writes nothing', async (flag) => {
+    const root = freshRoot()
+    seedSession(root)
+    const daemon = seedRunningDaemon(root)
+    const port = await daemonStatusServer(root, 'm_other')
+
+    const result = await runAsync(root, ['start', flag], { PORT: String(port) })
+
+    expect(result.timedOut).toBe(false)
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('Usage: harness start')
+    expect(result.stdout).toContain('--restart')
+    expect(result.stdout).not.toContain('machine running')
+    expect(result.stdout).not.toContain('already running')
+    expect(alive(daemon.pid)).toBe(true)
+    expect(readFileSync(join(root, 'data', 'adapter.pid'), 'utf8').trim()).toBe(String(daemon.pid))
+  }, ONE_RUN_TEST_MS)
+})
+
+describe('start beside a running daemon it has no sign-in to judge by', () => {
+  // A run under another HOME has no session there: its identity is a fresh computer id, which always differs from
+  // the daemon's. That used to read as "another account" and stop the daemon.
+  it('says it runs and exits, leaving the daemon up', async () => {
+    const root = freshRoot()                           // signed out
+    const daemon = seedRunningDaemon(root)
+    const port = await daemonStatusServer(root, 'm_account')
+
+    const result = await runAsync(root, ['start'], { PORT: String(port) })
+
+    expect(result.status).toBe(1)
+    expect(result.stdout + result.stderr).toContain(`machine already running (pid ${daemon.pid}) as another account`)
+    expect(result.stdout + result.stderr).toContain('harness start --restart')
+    expect(alive(daemon.pid)).toBe(true)
+    expect(existsSync(join(root, 'data', 'adapter.pid'))).toBe(true)
+  }, ONE_RUN_TEST_MS)
+
+  it('--restart stops it and starts over, as asked', async () => {
+    const root = freshRoot()
+    const daemon = seedRunningDaemon(root)
+    const port = await daemonStatusServer(root, 'm_account')
+
+    const result = await runAsync(root, ['start', '--restart'], { PORT: String(port) })
+
+    // As the test above it: after the stop the start goes on to boot inline, which refuses to displace this
+    // fixture's live private socket, so no daemon comes up.
+    expect(result.timedOut).toBe(false)
+    expect(result.status).toBe(1)
+    expect(result.stdout).toContain(`machine running (pid ${daemon.pid}) — restarting it (--restart)`)
+    await daemon.exited
+    expect(existsSync(join(root, 'data', 'adapter.pid'))).toBe(false)
+  }, ONE_RUN_TEST_MS)
+})
+
 describe('start beside a daemon that serves another account', () => {
   // A forced login stops the daemon and waits for the browser, and a start that landed in that window
   // used to bring a daemon up on the OLD session (closed under the spawn lock now — loginForceRace.spec.ts).
@@ -465,12 +519,15 @@ describe('the daemon\'s control calls, through the CLI', () => {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     const PORT = String((server.address() as AddressInfo).port)
 
-    // A data folder too long to hold a socket: the one case on the port. With a socket, see lib/daemonEndpoint.spec.ts.
+    // A data folder too long to hold a socket and a home too long as well: the one case on the port. With a socket, see
+    // lib/daemonEndpoint.spec.ts.
     const ADAPTER_DATA_DIR = join(root, 'd'.repeat(100))
-    const status = await runAsync(root, ['remote-password', 'status', '--json'], { PORT, ADAPTER_DATA_DIR })
+    const HOME = join(root, 'h'.repeat(100))
+    mkdirSync(HOME, { recursive: true })
+    const status = await runAsync(root, ['remote-password', 'status', '--json'], { PORT, ADAPTER_DATA_DIR, HOME })
     expect(status.status, status.stderr).toBe(0)
     expect(JSON.parse(status.stdout)).toEqual({ hasPassword: true, fingerprint: 'fp-1', setAt: 7 })
-    const sync = await runAsync(root, ['group', 'sync'], { PORT, ADAPTER_DATA_DIR })
+    const sync = await runAsync(root, ['group', 'sync'], { PORT, ADAPTER_DATA_DIR, HOME })
     expect(sync.status, sync.stderr).toBe(0)
     expect(sync.stdout).toContain('Comparing with every reachable member now.')
     expect(got).toEqual(['GET /api/remote-password/status local=1', 'POST /api/group/sync local=1'])

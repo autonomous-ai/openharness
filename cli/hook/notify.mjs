@@ -294,15 +294,22 @@ function privateSocket(file) {
  * the one the daemon was given instead when another account held that one, so the daemon's records say which
  * (mirrors localSocketRoute in src/lib/localTransport.ts).
  */
+function socketIn(dataDir, port) {
+  const beside = join(dataDir, `daemon-${port}.sock`)
+  if (Buffer.byteLength(beside) <= MAX_SOCKET_PATH_BYTES) return beside
+  const short = join(homedir(), '.harness', 's', createHash('sha256').update(dataDir).digest('hex').slice(0, 16), `daemon-${port}.sock`)
+  return Buffer.byteLength(short) <= MAX_SOCKET_PATH_BYTES ? short : null
+}
+
 function daemonSocket(port, dataDir) {
-  const named = join(dataDir, `daemon-${port}.sock`)
-  if (privateSocket(named)) return named
+  const named = socketIn(dataDir, port)
+  if (named && privateSocket(named)) return named
   try {
     for (const name of readdirSync(dataDir)) {
       const configured = /^daemon-(\d+)\.json$/.exec(name)?.[1]
       if (!configured) continue
-      const socket = join(dataDir, `daemon-${configured}.sock`)
-      if (JSON.parse(readPrivateStateFile(join(dataDir, name), 4096))?.port === port && privateSocket(socket)) return socket
+      const socket = socketIn(dataDir, Number(configured))
+      if (socket && JSON.parse(readPrivateStateFile(join(dataDir, name), 4096))?.port === port && privateSocket(socket)) return socket
     }
   } catch { /* An unreadable folder has no socket to offer. */ }
   return null
@@ -359,8 +366,8 @@ function windowsDaemonPipe(port, dataDir) {
  * How this hook reaches the daemon, and what it shows. Any account can bind the TCP port while the daemon restarts (audit
  * H1, docs/security/2026-11-02-team-account-boundary.md), and whoever holds it would hear this request, the user's
  * prompt in it included. So on macOS and Linux it goes over the 0600 socket; with none there the daemon is down, and
- * this is the same as a failed post. A data folder too long to hold a socket is the one case with no way but TCP, and
- * then the hook-only token goes, never the credential. Over the socket the credential still goes because a daemon from
+ * this is the same as a failed post. A data folder too long to hold a socket has one under the home folder (socketIn). A
+ * home too long as well is the one case with no way but TCP, and then the hook-only token goes, never the credential. Over the socket the credential still goes because a daemon from
  * before the hook token (an update not yet handed over) checks it there. On Windows it goes over the daemon's pipe, and
  * never to the port: the Team account's daemon starts at boot, before the owner's, and could hold it (audit W1,
  * docs/security/2026-11-02-team-account-windows.md).
@@ -369,7 +376,7 @@ function hookRoute(port) {
   const dataDir = paths().dataDir
   if (process.platform === 'win32') return windowsDaemonPipe(port, dataDir)
   const tokenRoute = (address, token) => token ? { address, headers: { 'X-Harness-Hook-Token': token } } : null
-  if (Buffer.byteLength(join(dataDir, `daemon-${port}.sock`)) > MAX_SOCKET_PATH_BYTES) return tokenRoute({ host: '127.0.0.1', port }, readHookCredential('hook-token'))
+  if (!socketIn(dataDir, port)) return tokenRoute({ host: '127.0.0.1', port }, readHookCredential('hook-token'))
   const socketPath = daemonSocket(port, dataDir)
   return socketPath ? tokenRoute({ socketPath }, readHookCredential()) : null
 }

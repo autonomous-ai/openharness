@@ -11,7 +11,7 @@ import { retryTransient } from './retry.js'
  * row (pageReads.ts). `delivered` and `confirmed` are not finished (a reply or a project report moves them to `answered`),
  * nor are the open ones.
  */
-export const FINAL_DELIVERY = ['answered', 'cancelled', 'superseded'] as const
+export const FINAL_DELIVERY = ['answered', 'cancelled', 'superseded', 'digested'] as const
 export const COMPACT_AFTER_MS = 14 * 86_400_000
 /** Batches per hourly run: up to 10 k deliveries, so the first runs also clear the backlog. Prod finishes ≤ 3.4 k a day. */
 const BATCHES_PER_RUN = 20

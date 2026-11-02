@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -9,6 +10,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/attention.dart';
 import 'package:harness/super_tabs/buddy_rows.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/threads_view.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
@@ -880,6 +882,233 @@ void main() {
     expect(server.readMarkPosts.last, {
       'conversationId': 'lead',
       'sequence': 1,
+    });
+  });
+
+  // Scholes, 2026-11-02: a reply sent from a card did not show until an agent
+  // answered, so it looked unsent.
+  group('a reply sent from the Threads view', () {
+    const field = ValueKey('super-thread-reply-lead/message-1');
+    const send = ValueKey('super-thread-send-lead/message-1');
+    const own = ValueKey('super-thread-own-reply-lead/message-1');
+
+    Future<(ConversationServer, SuperTabController, SuperTabAttention)> shown(
+      WidgetTester tester,
+    ) async {
+      final server = projectServer();
+      fromLead(server, 'Root');
+      fromLead(server, 'Fresh reply');
+      server.messages.last['thread'] = 'message-1';
+      conversation(server, 'lead')['lastMainSequence'] = 1;
+      server.followedThreads = {
+        'unread': [unreadThread('message-1', 2, text: 'Root')],
+        'read': const [],
+        'more': false,
+      };
+      final c = await openHere(server);
+      final attention = SuperTabAttention.of(c);
+      await attention.load();
+      await tester.binding.setSurfaceSize(const Size(700, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: Scaffold(
+            body: SuperTabThreadsView(attention: attention, onOpen: (_, _) {}),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      return (server, c, attention);
+    }
+
+    Finder inOwn(Finder what) =>
+        find.descendant(of: find.byKey(own), matching: what);
+
+    testWidgets('shows at once as sending, then sent, and stays', (
+      tester,
+    ) async {
+      final (server, c, attention) = await shown(tester);
+      final hold = server.holdCommands = Completer<void>();
+      await tester.enterText(find.byKey(field), 'On it');
+      await tester.pump();
+      await tester.tap(find.byKey(send));
+      await tester.pump();
+      await tester.pump();
+      // Before any answer, and before the server has answered at all.
+      expect(inOwn(find.text('On it')), findsOneWidget);
+      expect(inOwn(find.text('Sending…')), findsOneWidget);
+      expect(inOwn(find.text('Sent')), findsNothing);
+      expect(tester.widget<TextField>(find.byKey(field)).controller!.text, '');
+      hold.complete();
+      server.holdCommands = null;
+      await tester.pumpAndSettle();
+      expect(inOwn(find.text('On it')), findsOneWidget);
+      expect(inOwn(find.text('Sent')), findsOneWidget);
+      expect(inOwn(find.text('Sending…')), findsNothing);
+      // An agent answers, and the transcript holds the reply: it stays, once.
+      await c.loadMessages('lead');
+      fromLead(server, 'Answer');
+      server.messages.last['thread'] = 'message-1';
+      await c.refresh();
+      await attention.load();
+      await tester.pumpAndSettle();
+      expect(find.text('On it'), findsOneWidget);
+      expect(inOwn(find.text('Sent')), findsOneWidget);
+      await close(tester, c);
+    });
+
+    testWidgets('failed: its text stays, with Retry, and Retry sends it', (
+      tester,
+    ) async {
+      final (server, c, _) = await shown(tester);
+      server.refuse = {'code': 'SWARM_BUSY', 'message': 'Busy, try again.'};
+      await tester.enterText(find.byKey(field), 'On it');
+      await tester.pump();
+      await tester.tap(find.byKey(send));
+      await tester.pumpAndSettle();
+      expect(inOwn(find.text('On it')), findsOneWidget);
+      expect(inOwn(find.text('Not sent')), findsOneWidget);
+      expect(inOwn(find.text('Sent')), findsNothing);
+      // Why it failed is said once, on the reply, not again in the box.
+      expect(find.text('Busy, try again.'), findsOneWidget);
+      server.refuse = null;
+      final posts = server.posts.length;
+      await tester.tap(inOwn(find.text('Retry')));
+      await tester.pumpAndSettle();
+      expect(server.posts.length, posts + 1);
+      expect((server.posts.last['command'] as Map)['text'], 'On it');
+      expect(inOwn(find.text('Sent')), findsOneWidget);
+      expect(inOwn(find.text('Not sent')), findsNothing);
+      await close(tester, c);
+    });
+
+    testWidgets('failed: Delete takes it away, and it is never called sent', (
+      tester,
+    ) async {
+      final (server, c, _) = await shown(tester);
+      server.refuse = {'code': 'SWARM_BUSY', 'message': 'Busy, try again.'};
+      await tester.enterText(find.byKey(field), 'On it');
+      await tester.pump();
+      await tester.tap(find.byKey(send));
+      await tester.pumpAndSettle();
+      await tester.tap(inOwn(find.text('Delete')));
+      await tester.pumpAndSettle();
+      expect(find.text('On it'), findsNothing);
+      expect(find.text('Sent'), findsNothing);
+      await close(tester, c);
+    });
+
+    // Review of #2555: a sent reply stays in the controller's list until its
+    // chat's transcript loads, and must not come back as new on a later visit.
+    testWidgets('a reply from an earlier visit does not come back as new', (
+      tester,
+    ) async {
+      // A chat that is not open: its transcript never loads here.
+      final server = projectServer();
+      fromLead(server, 'Root', conversationId: 'offline');
+      fromLead(server, 'Fresh reply', conversationId: 'offline');
+      server.messages.last['thread'] = 'message-1';
+      conversation(server, 'offline')['lastMainSequence'] = 1;
+      Map<String, dynamic> listed(int lastReply) => {
+        'unread': [
+          unreadThread(
+            'message-1',
+            lastReply,
+            conversationId: 'offline',
+            text: 'Root',
+          ),
+        ],
+        'read': const [],
+        'more': false,
+      };
+      server.followedThreads = listed(2);
+      final c = await openHere(server);
+      final attention = SuperTabAttention.of(c);
+      await attention.load();
+      await tester.binding.setSurfaceSize(const Size(700, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: Scaffold(
+            body: SuperTabThreadsView(attention: attention, onOpen: (_, _) {}),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      const reply = ValueKey('super-thread-reply-offline/message-1');
+      const ownHere = ValueKey('super-thread-own-reply-offline/message-1');
+      await tester.enterText(find.byKey(reply), 'On it');
+      await tester.pump();
+      await tester.tap(
+        find.byKey(const ValueKey('super-thread-send-offline/message-1')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(ownHere), findsOneWidget);
+      // Still in the list: this chat's transcript has not loaded.
+      expect(c.outgoing('offline').where((m) => m.text == 'On it'), isNotEmpty);
+      attention.closed();
+      server.followedThreads = listed(9);
+      attention.opened();
+      await attention.load();
+      await tester.pumpAndSettle();
+      expect(attention.isNew(attention.shown.single), isTrue);
+      expect(find.byKey(ownHere), findsNothing);
+      await close(tester, c);
+    });
+
+    test('a reply with only files says so', () {
+      expect(const SuperTabOwnReply('', null).shownText, 'Files');
+      expect(const SuperTabOwnReply('On it', null).shownText, 'On it');
+    });
+
+    testWidgets('failed: its whole text shows, not cut short', (tester) async {
+      final (server, c, _) = await shown(tester);
+      server.refuse = {'code': 'SWARM_BUSY', 'message': 'Busy, try again.'};
+      final long = List.generate(9, (i) => 'line $i').join('\n');
+      await tester.enterText(find.byKey(field), long);
+      await tester.pump();
+      await tester.tap(find.byKey(send));
+      await tester.pumpAndSettle();
+      final row = tester.renderObject<RenderParagraph>(inOwn(find.text(long)));
+      expect(row.didExceedMaxLines, isFalse);
+      await close(tester, c);
+    });
+
+    testWidgets('a reply the card already read back is not shown twice', (
+      tester,
+    ) async {
+      final (server, c, attention) = await shown(tester);
+      await tester.enterText(find.byKey(field), 'On it');
+      await tester.pump();
+      await tester.tap(find.byKey(send));
+      await tester.pumpAndSettle();
+      final thread = attention.shown.single;
+      final operationId = server.posts.last['operationId'] as String;
+      final id = superTabMessageId(
+        tabId: c.tabId,
+        accountId: c.accountId,
+        operationId: operationId,
+      );
+      attention.newReplies[thread.key] = [
+        ...attention.newReplies[thread.key]!,
+        SuperTabMessage.fromJson({
+          'id': id,
+          'conversationId': 'lead',
+          'sequence': 90,
+          'author': {'kind': 'person', 'id': c.accountId, 'name': 'Me'},
+          'text': 'On it',
+          'thread': 'message-1',
+          'replyTo': 'message-1',
+          'createdAt': '2026-11-02T00:00:00Z',
+        }),
+      ];
+      await attention.load();
+      await tester.pumpAndSettle();
+      expect(find.text('On it'), findsOneWidget);
+      expect(find.byKey(own), findsNothing);
+      await close(tester, c);
     });
   });
 

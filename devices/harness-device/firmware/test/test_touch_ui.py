@@ -2083,7 +2083,16 @@ static bool clear_of_text(void) {
 static bool pm_dots(void) { return disc_at(442, 218, 12, 0xeaeaf0) && disc_at(442, 248, 9, 0x55565f); }
 static bool buddy_dots(void) { return disc_at(442, 218, 9, 0x55565f) && disc_at(442, 248, 12, 0xc49bff); }
 static bool any_dot(void) { return disc_at(442, 218, 12, 0xeaeaf0) || disc_at(442, 218, 9, 0x55565f); }
-static bool badge(void) { return disc_at(449, 241, 14, 0x000000) && disc_at(449, 241, 10, 0xc49bff); }
+// The Buddy's unheard word on the PM side: the lower dot itself turns lilac, at its own place and size.
+static bool badge(void) { return disc_at(442, 218, 12, 0xeaeaf0) && disc_at(442, 248, 9, 0xc49bff); }
+// Nothing drawn off the dots' line: the old badge, 7 px off the lower dot, smeared the two together.
+static bool offset_disc(void) {
+    for (int i = 0; i < scene.count; i++) {
+        const ht_run_t *r = &scene.runs[i];
+        if (r->box.h > 1 && r->x + r->w / 2 == 449 && r->y + r->box.h / 2 == 241) return true;
+    }
+    return false;
+}
 /*
  * Diego's dial, 2026-11-02: every daemon restart (each CLI update) dropped the dial on the tabs list, because the Swarm cards
  * took 5-40 s to come back. The face comes back on its Swarm, Lead and side whenever the cards do, unless the person moved on.
@@ -2290,16 +2299,16 @@ static void swarm_buddy_checks(const char *dir) {
     assert(scene_says("No Buddy here yet") && lilac_ring());
     { int before = starts; tap(fake_ms + 2000, 233, 260); assert(starts == before); }
 
-    // 7d the quiet notice: on the PM side the Buddy's word is a lilac badge and a line on the lower arc, with no beep, no
-    // inbox entry and no wake. The run count holds.
+    // 7d the quiet notice: on the PM side the Buddy's word turns the lower dot lilac and writes a line on the lower arc, with
+    // no beep, no inbox entry and no wake. The run count holds.
     buddy_setup();
     ui_supertab_recap("s1", "B0", "lead-web", "Assigned #2083 to web-api. I'll post here when the PR is up.", 1792560000u, false);
     scene_take(); pm_runs = scene.count;
-    assert(!badge() && !scene_says("Your Buddy replied"));
+    assert(!badge() && pm_dots() && !offset_disc() && !scene_says("Your Buddy replied"));
     int entries = s.notice_count; int woke = wakes;
     assert(!ui_supertab_notice("s1", "B0", HT_CHAT_BUDDY, "b0", "Cache it.", 1792560002u));
     scene_take();
-    assert(s.notice_count == entries && wakes == woke && badge() && scene_says("Your Buddy replied") && scene.count == pm_runs);
+    assert(s.notice_count == entries && wakes == woke && badge() && !pm_dots() && !offset_disc() && scene_says("Your Buddy replied") && scene.count == pm_runs);
     FOCUS_PAGE("buddy-7d");
     // Another project shows none; back on web-api it is still there.
     swipe_next(); assert(!badge() && !scene_says("Your Buddy replied"));
@@ -2309,8 +2318,8 @@ static void swarm_buddy_checks(const char *dir) {
     // The resting face keeps its own line on the lower arc: there the badge alone tells it.
     ui_supertab_recap("s1", "B0", "lead-web", "", 1792560000u, true);
     assert(!ui_supertab_notice("s1", "B0", HT_CHAT_BUDDY, "b0", "Later.", 1792560002u));
-    scene_take(); assert(badge() && !scene_says("Your Buddy replied"));
-    swipe_up(); swipe_down(); assert(!badge());
+    scene_take(); assert(badge() && !offset_disc() && !scene_says("Your Buddy replied"));
+    swipe_up(); swipe_down(); assert(!badge() && pm_dots());
     // A Buddy word while its side is open is read there; the desktop opening the Buddy chat reads one too.
     swipe_up(); buddy_card("buddy");
     assert(!ui_supertab_notice("s1", "B0", HT_CHAT_BUDDY, "b0", "Done.", 1792560003u));

@@ -184,6 +184,11 @@ describe('forking an agent', () => {
     if (engine === 'codex') expect(request.codexHome).toBe(finalHome)
   })
 
+  it('keeps its source\'s Claude account on its row', async () => {
+    expect(await setup(source({ claudeHome: '/profiles/work' })).fork({ agentId: 'a1', name: null, prompt: null })).toMatchObject({ ok: true })
+    expect(vi.mocked(createAndRegisterPane).mock.calls[0]![0].claudeHome).toBe('/profiles/work')
+  })
+
   it('does not open instruction files or install API notes while its harness waits for the Store', async () => {
     vi.mocked(installedDsh).mockReturnValueOnce({ manifest: { name: 'Fixture' } } as never)
     launchDsh.mockResolvedValueOnce({ ok: false, error: 'DSH_UNAVAILABLE', detail: 'Waiting for the Store.', unavailable: 'store' })

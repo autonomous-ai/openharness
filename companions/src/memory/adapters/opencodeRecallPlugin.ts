@@ -1,6 +1,8 @@
+import { pluginFetchSource } from './opencodePluginFetch.js'
+
 /** Native transport only. Retrieval, evidence, scope and controls remain in Harness's shared core. */
-export function opencodeRecallPluginSource(port: number): string {
-  return `
+export function opencodeRecallPluginSource(port: number, socket: string | null): string {
+  return `${pluginFetchSource('recallFetch', socket)}
   const recallTurns = new Map(), recallCompactions = new Set(), recallParts = new Set()
   let recallVersion
   const recallMessage = async (input, output) => {
@@ -27,7 +29,7 @@ export function opencodeRecallPluginSource(port: number): string {
   const recallRequest = async (route, sessionID, body, signal) => {
     const pane = process.env.TMUX_PANE, token = hookToken()
     if (!pane || !token) return null
-    const response = await fetch("http://127.0.0.1:${port}/api/hook/" + route, {
+    const response = await recallFetch("http://127.0.0.1:${port}/api/hook/" + route, {
       method: "POST", signal, headers: { "content-type": "application/json", "x-harness-hook-token": token },
       body: JSON.stringify({ engine: "opencode", sessionId: sessionID, callerPid: process.pid,
         tmuxPane: pane, runtimeHints: [{ backend: "tmux", paneId: pane }], ...body }),
