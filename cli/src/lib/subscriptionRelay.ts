@@ -67,6 +67,8 @@ export interface SubscriptionRelayDeps {
   fetchImpl?: typeof fetch
   upstream?: Partial<Record<SubscriptionProvider, string>>
   now?: () => number
+  /** The port to listen on, to come back where running agents expect it (team/relay.ts). Taken, the start fails with EADDRINUSE. */
+  port?: number
   /** One line per request: provider, status, a short guest fingerprint. Never a token. */
   log?: (line: string) => void
 }
@@ -77,6 +79,8 @@ export interface SubscriptionRelay {
   url: string
   /** A new token for [guestEmail]; a guest may hold several (one per harness). */
   mintToken(guestEmail: string): string
+  /** Takes back a token this relay's previous run minted, as a running agent still presents it. */
+  adoptToken(guestEmail: string, token: string): void
   /** Every token [guestEmail] holds stops working at once. */
   revoke(guestEmail: string): void
   close(): Promise<void>
@@ -189,19 +193,23 @@ export async function startSubscriptionRelay(deps: SubscriptionRelayDeps): Promi
 
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject)
-    server.listen(0, '127.0.0.1', () => resolve())
+    server.listen(deps.port ?? 0, '127.0.0.1', () => resolve())
   })
   const port = (server.address() as AddressInfo).port
+  const adopt = (guestEmail: string, token: string) => {
+    const digest = createHash('sha256').update(token).digest()
+    tokens.set(digest.toString('hex'), { guest: guestEmail.toLowerCase(), digest })
+  }
 
   return {
     port,
     url: `http://127.0.0.1:${port}`,
     mintToken(guestEmail) {
       const token = randomBytes(32).toString('base64url')
-      const digest = createHash('sha256').update(token).digest()
-      tokens.set(digest.toString('hex'), { guest: guestEmail.toLowerCase(), digest })
+      adopt(guestEmail, token)
       return token
     },
+    adoptToken: adopt,
     revoke(guestEmail) {
       const guest = guestEmail.toLowerCase()
       for (const [key, entry] of tokens) if (entry.guest === guest) tokens.delete(key)
