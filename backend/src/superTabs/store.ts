@@ -1970,6 +1970,8 @@ export class SuperTabStore {
     const row = await transaction(this.db, async tx => {
       const { state } = await this.load(tx, user, tabId, {})
       const actor = await this.actor(tx, user, state, asAgentId)
+      // Refuse revoked membership before an upload lookup can reveal that the Swarm exists.
+      author(state, actor)
       const found = await tx.superTabAttachment.findFirst({ where: { tabId, id: uploadId } })
       if (!found || found.actorKey !== actorKey(actor) || found.usedBy || (found.purpose && found.purpose !== PENDING_UPLOAD_PURPOSE)) unavailable()
       // Access may have gone while the bytes moved: the actor must still be able to post there.
