@@ -10,11 +10,11 @@
  * of a project they no longer read in their Buddy chat. A thread whose root they cannot read gets no mark, so its id never
  * reaches their marks. The caller has checked they read the chat, as a person reading as themselves.
  *
- * Cost: one read of the range's first SEED_SCAN thread replies from `old` upward by the (tabId, conversationId, sequence)
- * index; main rows and notices do not spend the reply budget. Only when one is someone else's reply only in its thread: the delivered-copy check, the threads' mark rows
- * and roots by id, the look-back for the person in at most SEED_THREADS threads (MEMBER_SCAN rows each, one read), then one
- * conditional write per thread. A reply past the range's first SEED_SCAN replies is not marked on this read: the chat mark
- * stops at the last scanned reply, so a later read can seed the rest. Threads beyond SEED_THREADS are not marked; the server logs it.
+ * Cost: read at most SEED_ROWS indexed rows and retain at most SEED_SCAN replies. Main rows do not spend the reply
+ * budget, but the row ceiling bounds database work. Roots and marks are fetched for at most SEED_SCAN candidate threads;
+ * at most SEED_THREADS unknown memberships use MEMBER_SCAN look-back rows each, and at most SEED_THREADS marks are written.
+ * Any unhandled range or thread holds the chat mark before it. A later request can advance it; clients may defer that
+ * request until another message arrives. Privacy and membership checks below still apply before a mark is written.
  */
 import type { PrismaClient } from '@prisma/client'
 import { logger } from '../../utils/logger.js'
@@ -25,8 +25,10 @@ import { BEHIND_THREADS, groupBy, isReply, MEMBER_SCAN, newestInThreads, readabl
 
 /** Thread replies of the range one chat read looks at, from the old mark upward. */
 export const SEED_SCAN = 5 * UNREAD_SCAN
-/** Threads one chat read marks at most, newest reply first: as many as the inbox reads behind their chat's mark. */
+/** Threads one chat read marks, or checks historical membership of, at most. */
 export const SEED_THREADS = BEHIND_THREADS
+/** Indexed rows examined before filtering replies: main rows do not spend the smaller reply budget. */
+export const SEED_ROWS = 10 * SEED_SCAN
 
 export interface SeedInput { tabId: string; state: SuperTabState; personId: string; conversationId: string; old: number; next: number; now: number }
 
@@ -38,30 +40,35 @@ export async function seedThreadMarks(db: PrismaClient, input: SeedInput): Promi
   const { tabId, state, personId, conversationId, old, next } = input
   if (old <= 0 || next <= old) return next
   const [scan] = await db.superTabMessage.aggregateRaw({ pipeline: [
-    { $match: { tabId, conversationId, sequence: { $gt: old, $lte: next }, $expr: REPLY } }, { $sort: { sequence: 1, _id: 1 } }, { $limit: SEED_SCAN },
+    { $match: { tabId, conversationId, sequence: { $gt: old, $lte: next } } }, { $sort: { sequence: 1, _id: 1 } }, { $limit: SEED_ROWS },
     { $project: { ...SCAN_FIELDS, alsoInChat: 1 } },
-    { $group: { _id: null, scanned: { $sum: 1 }, last: { $last: '$sequence' }, replies: { $push: '$$ROOT' } } },
-  ] }) as unknown as Array<{ scanned: number; last: number; replies: Array<Record<string, unknown>> }>
+    { $group: { _id: null, scanned: { $sum: 1 }, last: { $last: '$sequence' }, replies: { $push: { $cond: [REPLY, '$$ROOT', '$$REMOVE'] } } } },
+    { $project: { scanned: 1, last: 1, replyCount: { $size: '$replies' }, replies: { $slice: ['$replies', SEED_SCAN] } } },
+  ] }) as unknown as Array<{ scanned: number; last: number; replyCount: number; replies: Array<Record<string, unknown>> }>
   if (!scan) return next
-  const safe = scan.scanned >= SEED_SCAN ? scan.last : next
+  let safe = scan.replyCount >= SEED_SCAN ? Number(scan.replies.at(-1)!.sequence) : scan.scanned >= SEED_ROWS ? scan.last : next
+  const holdBefore = (thread: string) => { safe = Math.min(safe, threads.get(thread)![0]!.sequence - 1) }
+  const heldSequence = () => {
+    if (safe < next) logger.warn('[swarm-read-marks] chat mark held at seed cap', { tabId, conversationId, old, next, safe })
+    return safe
+  }
   const own = (a: Pick<Author, 'kind' | 'id'>) => a.kind === 'person' && a.id === personId
   const inIt = (m: Row) => own(m.author) || m.mentions.includes(personId)
   const waits = (m: Row) => !m.alsoInChat && !own(m.author)
   const rows = scan.replies.map(raw => row({ ...raw, conversationId }))
-  if (!rows.some(waits)) return safe
+  if (!rows.some(waits)) return heldSequence()
   const shown = await readable(db, tabId, rows, state)
-  // Newest reply first.
-  const byThread = [...groupBy(shown.toReversed(), m => m.thread!)].filter(([, replies]) => replies.some(waits))
-  if (!byThread.length) return safe
-  if (byThread.length > SEED_THREADS) logger.warn('[swarm-read-marks] threads past the cap not marked', { tabId, conversationId, threads: byThread.length })
-  const threads = new Map(byThread.slice(0, SEED_THREADS))
+  // Oldest first: never advance past the first reply of an unhandled thread.
+  const byThread = [...groupBy(shown, m => m.thread!)].filter(([, replies]) => replies.some(waits))
+  if (!byThread.length) return heldSequence()
+  const threads = new Map(byThread)
   // The person's rows of these threads, by id: one with a mark keeps it, an unfollowed one gets none.
   const held = new Map((await db.superTabThreadMark.aggregateRaw({ pipeline: [
     { $match: { _id: { $in: [...threads.keys()].map(thread => stableId(tabId, conversationId, thread, personId)) } } },
     { $project: { _id: 0, threadId: 1, sequence: 1, follow: 1 } },
   ] }) as unknown as Array<{ threadId: string; sequence: number; follow?: boolean | null }>).map(r => [r.threadId, r]))
   const open = [...threads.keys()].filter(thread => { const mark = held.get(thread); return !mark || (Number(mark.sequence) <= 0 && mark.follow !== false) })
-  if (!open.length) return safe
+  if (!open.length) return heldSequence()
   // Each root by its id, in this chat, one the person reads.
   const found = (await readBy(db, 'SuperTabMessage', 'id', [{ $match: { _id: { $in: open }, tabId, conversationId } }, { $project: { ...SCAN_FIELDS, conversationId: 1 } }])).map(row)
   const roots = new Map((await readable(db, tabId, found.filter(m => !isReply(m)), state)).map(m => [m.id, m]))
@@ -71,11 +78,14 @@ export async function seedThreadMarks(db: PrismaClient, input: SeedInput): Promi
   // thread index range; only the rows that name them come back.
   const unknown = withRoot.filter(thread => !member.has(thread))
   if (unknown.length) {
-    const named = await newestInThreads(db, tabId, unknown.map(thread => ({ conversationId, thread, sequence: { $lte: old } })), MEMBER_SCAN, personId)
+    if (unknown.length > SEED_THREADS) holdBefore(unknown[SEED_THREADS]!)
+    const named = await newestInThreads(db, tabId, unknown.slice(0, SEED_THREADS).map(thread => ({ conversationId, thread, sequence: { $lte: old } })), MEMBER_SCAN, personId)
     for (const m of await readable(db, tabId, named, state)) member.add(m.thread!)
   }
-  for (const thread of withRoot.filter(t => member.has(t))) {
+  const eligible = withRoot.filter(t => member.has(t))
+  if (eligible.length > SEED_THREADS) holdBefore(eligible[SEED_THREADS]!)
+  for (const thread of eligible.slice(0, SEED_THREADS)) {
     await seedThreadMark(db, { tabId, personId, conversationId, threadId: thread, sequence: old, now: input.now })
   }
-  return safe
+  return heldSequence()
 }
