@@ -15,7 +15,7 @@ import { createHash } from 'node:crypto'
 import { chmodSync, lstatSync, mkdirSync, realpathSync } from 'node:fs'
 import { lstat, readdir, rm, rmdir } from 'node:fs/promises'
 import { userInfo } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { env } from '../config/env.js'
 import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import { readTeamConfig, type TeamConfig } from '../team/config.js'
@@ -48,9 +48,19 @@ export const buddyTmpParent = (dataDir: string = env.ADAPTER_DATA_DIR): string =
 
 /** The folder of the Buddy that runs in [root], by its real path, so a relaunch finds it. Short: some tools make sockets in TMPDIR. */
 export function buddyTmpFolder(root: string, dataDir: string = env.ADAPTER_DATA_DIR): string {
-  let real = root
-  try { real = realpathSync(root) } catch { /* gone or not made yet: its path as given */ }
-  return join(buddyTmpParent(dataDir), createHash('sha256').update(real).digest('hex').slice(0, 16))
+  return join(buddyTmpParent(dataDir), createHash('sha256').update(realOfFolder(root)).digest('hex').slice(0, 16))
+}
+
+/** [path]'s real path: of the nearest folder that exists, with the rest added, so a Buddy's folder removed before its cleanup
+ *  still names the same temporary folder. */
+export function realOfFolder(path: string): string {
+  let at = path, rest = ''
+  for (;;) {
+    try { return join(realpathSync(at), rest) } catch { /* not there: its folder decides */ }
+    if (dirname(at) === at) return path
+    rest = join(basename(at), rest)
+    at = dirname(at)
+  }
 }
 
 /** This account is the owner of a computer with a Team account. Windows' temporary folder is already the account's own. */
@@ -161,15 +171,17 @@ export function agentTmpEnv(engine: AgentEngine, role: string | undefined, deps:
 
 /**
  * The private folder of the Buddy that runs in [root], made and closed, or null: on a computer with no Team account, in the
- * Team account itself, on Windows, or when it cannot be made private, which the log says. Null opens nothing in its guard.
+ * Team account itself, on Windows or Linux, or when it cannot be made private, which the log says. Null opens nothing in its guard.
  */
 export function buddyTmpOf(root: string, deps: AgentTmpDeps = realDeps): string | null {
   if (deps.platform === 'win32') return null
   sweepWhenDue(agentTmpFolder(deps.dataDir), deps)
-  if (!ownerOfTeamComputer(deps)) return null
+  // macOS alone until the sandbox has been tried with bubblewrap: a folder it would not open breaks every command of a Buddy.
+  if (deps.platform !== 'darwin' || !ownerOfTeamComputer(deps)) return null
   const folder = buddyTmpFolder(root, deps.dataDir)
   // The parent first: making the folder through a link in the parent's place would make it where that link points.
-  if (prepareAgentTmp(buddyTmpParent(deps.dataDir)) && prepareAgentTmp(folder)) return folder
+  // By its real path, as the guard compares real paths: a data folder reached through a link would refuse its own reads.
+  try { if (prepareAgentTmp(buddyTmpParent(deps.dataDir)) && prepareAgentTmp(folder)) return realpathSync(folder) } catch { /* said below */ }
   deps.log(`the private temporary folder ${folder} could not be made private; this Buddy uses the system's`)
   return null
 }

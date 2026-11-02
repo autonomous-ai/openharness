@@ -1,5 +1,5 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { agentTmpEnv } from './agentTmp.js'
+import { agentTmpEnv, buddyTmpEnv } from './agentTmp.js'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -571,10 +571,21 @@ describe('buildLaunchOverrides — the owner\'s private temporary folder (audit 
     expect(agentTmpEnv).toHaveBeenLastCalledWith('claude', undefined)
   })
 
-  it('names the saved role, so a Buddy relaunches without it', async () => {
+  it('names the saved role of an agent', async () => {
     const swarm = { args: () => [], prepare: () => ({ instructions: 'x' }) }
-    await buildLaunchOverrides(deps({ swarm } as never).d, 'claude', { cwd: '/w', swarmSkill: { role: 'buddy', key: 'k' } as never }, 'a')
-    expect(agentTmpEnv).toHaveBeenLastCalledWith('claude', 'buddy')
+    await buildLaunchOverrides(deps({ swarm } as never).d, 'claude', { cwd: '/w', swarmSkill: { role: 'agent', key: 'k' } as never }, 'a')
+    expect(agentTmpEnv).toHaveBeenLastCalledWith('claude', 'agent')
+  })
+
+  // A restart, update, resume or fork of a Buddy keeps its own folder: its guard still names it (review of #2563).
+  it('keeps a relaunched Buddy in its own folder, and the launch\'s own variables win', async () => {
+    const swarm = { args: () => [], prepare: () => ({ instructions: 'x' }) }
+    const agents = vi.mocked(agentTmpEnv).mock.calls.length
+    vi.mocked(buddyTmpEnv).mockReturnValueOnce({ TMPDIR: '/data-buddy-tmp/one', CLAUDE_CODE_TMPDIR: '/data-buddy-tmp/one' })
+    expect(await buildLaunchOverrides(deps({ swarm } as never).d, 'claude', { cwd: '/w', swarmSkill: { role: 'buddy', key: 'k' } as never }, 'a'))
+      .toMatchObject({ ok: true, overrides: { env: { TMPDIR: '/data-buddy-tmp/one', CLAUDE_CODE_TMPDIR: '/data-buddy-tmp/one' } } })
+    expect(buddyTmpEnv).toHaveBeenLastCalledWith('claude', '/w')
+    expect(vi.mocked(agentTmpEnv).mock.calls.length).toBe(agents)
   })
 
   it('gives way to the launch\'s own variables', async () => {

@@ -209,7 +209,25 @@ describe('a Buddy\'s private temporary folder', () => {
     expect(buddyTmpEnv('claude', '/work/one', deps(data, { platform: 'win32' }))).toEqual({})
     expect(buddyTmpOf('/work/one', deps(data, { config: () => null }))).toBeNull()
     expect(existsSync(buddyTmpParent(data))).toBe(false)
-    expect(Object.keys(buddyTmpEnv('claude', '/work/one', deps(data, { platform: 'linux' })))).toContain('TMPDIR')
+  })
+
+  // Not yet run in Linux's sandbox (bubblewrap): a folder it would not open breaks every command of a Buddy (review of #2563).
+  it('leaves Linux on the system\'s folder until the sandbox has been tried there', () => {
+    const data = dataIn()
+    expect(buddyTmpEnv('claude', '/work/one', deps(data, { platform: 'linux' }))).toEqual({})
+    expect(buddyTmpOf('/work/one', deps(data, { platform: 'linux' }))).toBeNull()
+    expect(existsSync(buddyTmpParent(data))).toBe(false)
+  })
+
+  it('names the folder by its real path when the data folder is reached through a link, as the guard compares real paths', () => {
+    const at = scratch(), real = join(at, 'real'), data = join(at, 'data')
+    mkdirSync(real); symlinkSync(real, data)
+    expect(buddyTmpOf('/work/one', deps(data))).toBe(join(`${data}-buddy-tmp`, buddyTmpFolder('/work/one', data).split('/').at(-1)!))
+    const linked = join(scratch(), 'link'), parentReal = scratch()
+    symlinkSync(scratch(), linked)
+    const nested = join(parentReal, 'real-data'), viaLink = join(scratch(), 'via')
+    mkdirSync(nested); symlinkSync(parentReal, viaLink)
+    expect(buddyTmpOf('/work/one', deps(join(viaLink, 'real-data')))).toBe(join(`${nested}-buddy-tmp`, buddyTmpFolder('/work/one', nested).split('/').at(-1)!))
   })
 
   it('closes a folder someone left open, and a parent too', () => {

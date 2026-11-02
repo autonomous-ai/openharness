@@ -18,7 +18,7 @@
 
 ## Design
 
-- **Growth:** the daily sweep deletes a Buddy folder's entries with nothing changed for 7 days, and a folder left empty for 30 days. Ending a Claude Buddy session removes its folder with its other traces.
+- **Growth:** the daily sweep deletes a Buddy folder's entries with nothing changed for 7 days, and a folder left empty for 30 days. Ending a Claude Buddy session removes that session's output, and the whole folder once the Buddy's own folder is gone: a plain session shares it with the main Buddy.
 - **Concurrency:** no locks. One folder per Buddy; `mkdir` and `chmod` repeat safely. A sweep and a writer race as in `agent-tmp`, and recent files are kept.
 - **Read cost:** one walk per day, off the launch path.
 - **Scale:** 10x Buddies is 10x small folders. The metric that warns first is the size of `<data>-buddy-tmp`.
@@ -27,11 +27,12 @@
 - **Audience:** file modes enforce it (0700, owner checked); no server is involved.
 - **Identity:** the folder belongs to the daemon's account, checked by uid; no login is used.
 - **Failure:** a folder that cannot be private logs a line, and the Buddy runs on the system's folder as today.
-- **Platforms:** macOS and Linux. Windows' temporary folder is already the account's own.
+- **Platforms:** macOS only for now. Linux stays on the system's folder until the real sandbox spec has run with bubblewrap. Windows' temporary folder is already the account's own.
 
 ## Limits
 
 - A teammate's Buddy running under the Team account itself is unchanged: this gate is the owner's account.
+- M1 stays open for Buddies on Linux. Claude Code before 2.1.77 has no `allowRead`, and a wide Buddy on it would fail closed: its commands break, nothing leaks.
 - A tool that names `/tmp` itself ignores `TMPDIR`. A wide Buddy's sandbox refuses that write; a narrow Buddy's guard refuses such commands.
 
 ## Tasks

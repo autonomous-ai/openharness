@@ -1,5 +1,5 @@
 import { buddyTmpFolder, buddyTmpParent } from '../../lib/agentTmp.js'
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -74,11 +74,31 @@ const call = (cwd: string, name: string, input: Record<string, string>) => JSON.
 const left = (kind: keyof typeof SHARED_LEFT) => SHARED_LEFT[kind]
 
 describe('a Buddy\'s private temporary folder when its session ends', () => {
-  it('goes with its other traces, and another Buddy\'s stays', async () => {
+  // A plain session of the one Buddy chat shares its folder with the main Buddy and closes itself when idle (review of #2563).
+  const claudeFiles = (temp: string, folder: string, session: string) =>
+    join(temp, `claude-${process.getuid?.() ?? 0}`, realpathSync(folder).replace(/[^A-Za-z0-9]/g, '-'), session)
+
+  it('keeps it while its Buddy folder is there, another session may run in it, and removes only this session\'s output', async () => {
+    const home = dir(), folder = join(dir(), 'buddy-one')
+    mkdirSync(folder)
+    const temp = buddyTmpFolder(folder), SESSION = '11111111-1111-4111-8111-111111111111', OTHER = '22222222-2222-4222-8222-222222222222'
+    for (const session of [SESSION, OTHER]) { mkdirSync(claudeFiles(temp, folder, session), { recursive: true }); writeFileSync(join(claudeFiles(temp, folder, session), 'output'), 'private') }
+    writeFileSync(join(temp, 'a-tool'), 'x')
+    await scrubClaudeSession(home, target({ sessionId: SESSION, cwd: folder }))
+    expect(existsSync(claudeFiles(temp, folder, SESSION))).toBe(false)
+    expect(existsSync(claudeFiles(temp, folder, OTHER))).toBe(true)
+    expect(existsSync(join(temp, 'a-tool'))).toBe(true)
+    await scrubClaudeSession(home, target({ sessionId: null, cwd: folder }))
+    expect(existsSync(temp)).toBe(true)
+    rmSync(buddyTmpParent(), { recursive: true, force: true })
+  })
+
+  it('goes whole once its Buddy folder is gone, and another Buddy\'s stays', async () => {
     const home = dir(), folder = join(dir(), 'buddy-one'), other = join(dir(), 'buddy-two')
     mkdirSync(folder); mkdirSync(other)
     const mine = buddyTmpFolder(folder), theirs = buddyTmpFolder(other)
     for (const at of [mine, theirs]) { mkdirSync(at, { recursive: true }); writeFileSync(join(at, 'output'), 'private') }
+    rmSync(folder, { recursive: true })
     await scrubClaudeSession(home, target({ sessionId: null, cwd: folder }))
     expect(existsSync(mine)).toBe(false)
     expect(existsSync(theirs)).toBe(true)
