@@ -19,6 +19,7 @@ import 'swarm_code_block.dart';
 import 'swarm_file_links.dart';
 import 'swarm_face.dart';
 import 'swarm_ship_row.dart';
+import 'swarm_task_line.dart';
 
 /// The chat's prose in the app's own face, as prototype v2 draws it: the
 /// messages, quotes, names and the field. Times, roles and day dividers stay
@@ -291,6 +292,7 @@ class SwarmMessageRow extends StatelessWidget {
     this.receipt,
     this.card,
     this.onLongPress,
+    this.onOpenTask,
   });
 
   final SuperTabMessage message;
@@ -323,6 +325,9 @@ class SwarmMessageRow extends StatelessWidget {
   final bool followed;
   final Widget? quote;
   final VoidCallback onTap;
+
+  /// Opens a task held by the current reader; null for an unavailable target.
+  final VoidCallback? onOpenTask;
 
   /// Null where the person cannot post, or in the thread itself.
   final VoidCallback? onReply;
@@ -375,6 +380,14 @@ class SwarmMessageRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (swarmIsTaskLine(message)) {
+      return SwarmTaskLine(
+        key: ValueKey('swarm-message-${message.id}'),
+        message: message,
+        readerId: readerId,
+        onOpen: onOpenTask,
+      );
+    }
     // A ship line is a card, not a message from its author.
     if (swarmShips(message)) {
       return SwarmShipRow(

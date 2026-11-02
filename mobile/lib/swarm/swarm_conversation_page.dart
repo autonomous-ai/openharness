@@ -49,6 +49,7 @@ import 'swarm_reactions.dart';
 import 'swarm_read_marks.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
+import 'swarm_task_line.dart';
 import 'swarm_thread.dart';
 import 'swarm_thread_line.dart';
 import 'swarm_thread_page.dart';
@@ -885,6 +886,20 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     );
   }
 
+  VoidCallback? _taskOpener(SwarmConversation c, SuperTabMessage message) {
+    final taskId = message.source['taskId'];
+    if (!swarmIsTaskLine(message) ||
+        taskId is! String ||
+        c.reader.snapshot?.conversation(taskId) == null) {
+      return null;
+    }
+    return () {
+      if (c.reader.snapshot?.conversation(taskId) != null) {
+        openSwarmConversation(context, widget.swarmId, taskId);
+      }
+    };
+  }
+
   /// One of thread [t]'s messages as the chat draws its own, less what only
   /// the chat has: no quote, no thread line, no Reply (the box is the reply).
   Widget _threadRow(
@@ -909,6 +924,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       tagged: _taggedOf(c, m).keys.toList(),
       taggedAddresses: _taggedOf(c, m),
       readerId: c.reader.accountId,
+      onOpenTask: _taskOpener(c, m),
       grouped: grouped,
       lit: false,
       quote: null,
@@ -1650,12 +1666,14 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       stream,
       (agentId) => snapshot?.agent(agentId),
     );
-    final messages = answered.isEmpty
-        ? stream
-        : [
-            for (final m in stream)
-              if (!answered.contains(m.id)) m,
-          ];
+    final messages = swarmTaskLineMessages(
+      answered.isEmpty
+          ? stream
+          : [
+              for (final m in stream)
+                if (!answered.contains(m.id)) m,
+            ],
+    );
     // The notes hidden are part of what the rows were made from: a warning
     // goes once its agent's prompt is answered, with no new message.
     final from = (
@@ -1753,6 +1771,12 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
             key,
             (
               m,
+              // Drop a cached opener when access to its target changes.
+              snapshot?.conversation(
+                m.source['taskId'] is String
+                    ? m.source['taskId'] as String
+                    : '',
+              ),
               card,
               name,
               swarmLookKey(look),
@@ -1791,6 +1815,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               tagged: tagged.keys.toList(),
               taggedAddresses: tagged,
               readerId: c.reader.accountId,
+              onOpenTask: _taskOpener(c, m),
               grouped: grouped,
               lit: lit,
               followed: followed,
@@ -2586,6 +2611,8 @@ String swarmDayLabel(DateTime day, DateTime now) {
 Set<String> swarmGroupedMessages(List<SuperTabMessage> messages) {
   bool joins(SuperTabMessage current, SuperTabMessage previous) {
     bool plain(SuperTabMessage m) =>
+        !swarmIsTaskLine(m) &&
+        m.source['kind'] != 'ship' &&
         m.replyTo == null &&
         m.text.length <= 280 &&
         !m.text.contains('\n') &&
