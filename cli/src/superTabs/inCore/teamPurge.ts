@@ -461,7 +461,8 @@ export const UNREADABLE_DETAIL = "This machine's record of purges still to finis
 export function ownHomeFolder(homes: string, codexHome: string | null | undefined): string | null {
   if (!codexHome || !codexHome.startsWith(homes)) return null
   const [first, creation, name, ...rest] = codexHome.slice(homes.length).split(/[\\/]/)
-  if (first !== '' || !creation || creation === '.' || creation === '..' || name !== 'codex' || rest.length) return null
+  // pmEngineHome's own rule for the id: `.. ` passed a check for `..`, and Windows reads it as `..`, the whole Team home (#2568).
+  if (first !== '' || !creation || !PM_START_ID.test(creation) || name !== 'codex' || rest.length) return null
   return codexHome.slice(0, homes.length + 1 + creation.length)
 }
 
