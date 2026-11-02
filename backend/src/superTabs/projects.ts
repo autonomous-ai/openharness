@@ -354,6 +354,20 @@ export const onTeamAccount = (state: SuperTabState, target: Agent): boolean =>
 export const accountOf = (agent: Pick<Agent, 'machineId' | 'machineOwnerId'>, onTeam: boolean): string =>
   onTeam ? `team:${agent.machineOwnerId}:${agent.machineId}` : `own:${agent.machineOwnerId}`
 
+/** Notices the server writes in its own words under an agent's name (security reviews of #2570): they quote no agent, task
+ *  titles and names aside. */
+const SERVER_WORDS: ReadonlySet<unknown> = new Set(['work-stalled', 'work-resumed', 'idle', 'review-capacity', 'overlap', 'pm-switch-notice'])
+/** Whose words a row carries, for the mark of another account's (audit M3): its author's (a post, a status row, a brief, a
+ *  route's reason); a lost task's notice, its worker's last result; none, a notice in the server's own words. A review's
+ *  failed findings name no reviewer: they count as unknown, which is marked. */
+export function wordsOf(source: unknown): 'author' | 'none' | 'unknown' | { agentId: string } {
+  const row = source as { kind?: unknown; agentId?: unknown } | null | undefined
+  if (SERVER_WORDS.has(row?.kind)) return 'none'
+  if (row?.kind === 'review-failed') return 'unknown'
+  if (row?.kind === 'work-lost') return typeof row.agentId === 'string' ? { agentId: row.agentId } : 'unknown'
+  return 'author'
+}
+
 /**
  * A confidential session in a Harness Team account (#895 R2): every teammate's work there runs as one macOS user whose
  * folders hold other projects' clones, so typing in it is a shell that reads them. Nobody drives it through the Swarm. Its
