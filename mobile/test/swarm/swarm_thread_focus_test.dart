@@ -155,6 +155,14 @@ void main() {
 
   Finder lit(String id) => find.byKey(ValueKey('swarm-lit-$id'));
 
+  /// The opacity of the wash behind message [id]'s row: what the person sees
+  /// of it being lit.
+  double washOf(WidgetTester tester, String id) {
+    final row = tester.widget(find.byKey(ValueKey('swarm-message-$id')));
+    if (row is! AnimatedContainer) return 0;
+    return ((row.decoration as BoxDecoration).color ?? Colors.transparent).a;
+  }
+
   group('a message in the thread', () {
     testWidgets('lands on it and lights it for 2 seconds', (tester) async {
       await openAt(
@@ -166,10 +174,16 @@ void main() {
       expect(find.byType(SwarmThreadPage), findsOneWidget);
       expect(onScreen(tester, find.text('Reply 20.')), isTrue);
       expect(lit('m20'), findsOneWidget);
+      expect(
+        washOf(tester, 'm20'),
+        greaterThan(0),
+        reason: 'drawn, not just marked',
+      );
 
       await tester.pump(const Duration(seconds: 2, milliseconds: 50));
       await tester.pumpAndSettle();
       expect(lit('m20'), findsNothing);
+      expect(washOf(tester, 'm20'), 0, reason: 'the light went out');
       expect(onScreen(tester, find.text('Reply 20.')), isTrue);
     });
 
