@@ -69,7 +69,8 @@ make the daemon refuse the credential over TCP from another account. Windows can
   It takes only a process that started before the connection was made, never the lookup's own process, and never a harness-pty,
   PowerShell or console host the daemon started (another lookup running at once). PowerShell compares in whole seconds, as it gets
   the connection's time only to the second, so a process id taken within that second by some other process of the owner's stays
-  open on an older host. The helper compares exactly when Windows gives the connection's time finer than a second. At most four
+  open on an older host. The helper compares exactly when Windows gives the connection's time finer than a second, and refuses a time later than
+  the clock, so a time misread can only fail closed. At most four
   lookups run at once and up to 32 wait their turn; one past those is no for now, and is asked again on its next request. A
   lookup that times out (5 s for the helper; 45 s for PowerShell, about a second on x64 and 20 to 25 s on the Windows ARM runner)
   stays no for that connection.

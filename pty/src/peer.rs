@@ -50,7 +50,7 @@ pub fn verdict(
     rows: &[Row],
     lookup: u32,
     daemon: u32,
-    _now: u64,
+    now: u64,
     mut process: impl FnMut(u32) -> Option<Process>,
 ) -> Verdict {
     let no = |why: String| Verdict::No(why);
@@ -66,6 +66,20 @@ pub fn verdict(
     };
     if row.created == 0 || caller.started == 0 {
         return no("Windows gave no start time".into());
+    }
+    // The rule below trusts this time. One that read late, not being the clock we think it is,
+    // would turn the rule off without a sign, so it is no too: wrong either way, it fails closed.
+    if row.created > now.saturating_add(CLOCK_SLACK) {
+        return no(format!(
+            "Windows gave a connection time later than the clock ({} > {now})",
+            row.created
+        ));
+    }
+    if caller.name.is_empty() {
+        return no("Windows will not give its name".into());
+    }
+    if caller.parent.is_none() {
+        return no("Windows will not give its parent".into());
     }
     // Windows keeps naming a socket's creator after it exits when a child inherited the handle,
     // and the id may have gone to another process since: only one that started before the
