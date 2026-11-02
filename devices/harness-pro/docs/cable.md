@@ -252,3 +252,5 @@ With `swarmChat`, the daemon sends the round dial's frames (`docs/device-voice-s
   Lead and sends `supertab.select`. `supertab.notice.read` removes the row whose `chatId` matches.
 - `state` is `work` only for a working group and otherwise `done`; `ask` and `stuck` are not sent to a `swarmChat` device.
 - `supertab.focus` with an empty `lead` (the desktop opened the Swarm with no project, e.g. its Chat with PM) opens the Lead last shown in that Swarm, else its first.
+- Voice does not follow the face. The daemon treats a `board:"pro"` hello's `voice.begin` as it did before `swarmChat`: spoken words post in the Lead conversation, never in the
+  group, PM or Buddy chat the desktop has open, because the Pro's rooms do not show where words go. Voice comes to the face chat in Phase 3 of the parity spec.
