@@ -7,7 +7,7 @@ import { suspendedEngines } from '../engineHealth.js'
 import { leadChoices } from '../leadStart.js'
 import { isBuddyChat, isBuddyReader } from '../buddies.js'
 import { agentForBuddy, agentWithoutMachine, groupForBuddy, machineHiddenFrom, seenMachineIds, visibleState, withSeenRequirement, type Actor, type Agent, type Conversation, type SuperTabState } from '../model.js'
-import { slotCounter, machineTeamWork, teamAccountSwarm, type ContributedMachine } from '../machines.js'
+import { slotCounter, machineTeamWork, type ContributedMachine } from '../machines.js'
 import * as store from '../parts/index.js'
 import type { Part, SwarmParts } from '../parts/index.js'
 import { canReadGroup } from '../projects.js'
@@ -150,7 +150,6 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
     ...(actor.kind === 'person' && extras.decisionsWaiting !== undefined ? { decisionsWaiting: extras.decisionsWaiting } : {}),
     ...(actor.kind === 'person' && extras.decisionsDigest !== undefined ? { decisionsDigest: extras.decisionsDigest } : {}),
     ...(actor.kind === 'person' && extras.activityDigest !== undefined ? { activityDigest: extras.activityDigest } : {}),
-    ...(teamAccountSwarm(state) ? {} : { teamAccounts: false as const }),
     threadSessions: true as const,
     sessionsFromChat: true as const,
     // One Buddy per person per Swarm (Dee, 10-31): an app shows # buddy and New session in a project only when the server says so.

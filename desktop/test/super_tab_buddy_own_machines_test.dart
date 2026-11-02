@@ -269,6 +269,50 @@ void main() {
       await close(tester, f, c);
     });
 
+    // The server refuses it with MACHINE_PAUSED, so the picker says so first.
+    testWidgets('a paused machine says so and cannot be picked', (
+      tester,
+    ) async {
+      final (:f, :c, :mac) = await open(
+        tester,
+        machines: [
+          {...rig(), 'paused': true},
+        ],
+      );
+
+      await tester.tap(barMachine);
+      await tester.pumpAndSettle();
+      expect(tester.widget<MenuItemButton>(option('rig')).onPressed, isNull);
+      expect(
+        find.descendant(
+          of: option('rig'),
+          matching: find.text(kBuddyMachinePaused),
+        ),
+        findsOneWidget,
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(of: barMachine, matching: find.text(mac)),
+        findsOneWidget,
+      );
+      await close(tester, f, c);
+    });
+
+    testWidgets('with every machine paused, says how to resume and cannot '
+        'start', (tester) async {
+      final (:f, :c, :mac) = await open(
+        tester,
+        machines: [
+          {...rig(), 'machineId': 'm', 'paused': true},
+        ],
+      );
+
+      expect(find.text(kBuddyAllPaused), findsOneWidget);
+      expect(tester.widget<FilledButton>(start).onPressed, isNull);
+      await close(tester, f, c);
+    });
+
     testWidgets(
       'Start on this Mac prepares it and starts the Buddy with its setup, '
       'adding nothing to the Swarm',
