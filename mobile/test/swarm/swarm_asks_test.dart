@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/logging/app_log.dart';
 import 'package:harness_mobile/swarm/swarm_asks.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
@@ -234,6 +235,28 @@ void main() {
 
       expect(r.asks.loading, isFalse);
       expect(r.asks.error, isNotNull);
+    });
+
+    test('goes in the log once, however many reads of the asks fail', () async {
+      final before = appLog;
+      final log = _Log();
+      appLog = log;
+      addTearDown(() => appLog = before);
+      final r = rig(decisions: 1);
+      final failure = const SuperTabFailure('INTERNAL', 'Broken');
+      r.swarm.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) =>
+          throw failure;
+      r.swarm.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
+        'mentions': <Object>[],
+      };
+
+      await r.reader.refresh();
+      await settle();
+      await r.reader.refresh();
+      await settle();
+
+      expect(r.asks.error, isNotNull);
+      expect(log.errors, [failure]);
     });
 
     test('ends when the Swarm itself could not be read', () async {
@@ -725,4 +748,17 @@ void main() {
       expect(news, ['d2']);
     },
   );
+}
+
+class _Log implements AppLog {
+  final errors = <Object?>[];
+
+  @override
+  void record(
+    AppLogLevel level,
+    String category,
+    String message, {
+    Object? error,
+    StackTrace? stackTrace,
+  }) => errors.add(error);
 }

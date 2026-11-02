@@ -144,7 +144,7 @@ describe('restarting an agent', () => {
   })
 
   it('adopts an old role before native inspection and relaunch', async () => {
-    const skill = { role: 'lead' as const, key: 'a1' }
+    const skill = { role: 'coordinator' as const, key: 'a1' }
     const run = setup(agent(), { adoptSwarmSkill: async row => ({ ...row, swarmSkill: skill }) })
     expect(await run.restart('a1')).toMatchObject({ ok: true })
     expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.objectContaining({ swarmSkill: skill }),

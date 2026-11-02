@@ -191,6 +191,68 @@ describe('sealing, guarded', () => {
   })
 })
 
+// Change 5 of docs/plans/2026-10-31-live-events-relay-design.md: events only the terminal app reads go to the relay only
+// while a terminal app of the account is open, once the backend has said whether one is.
+describe('events only a terminal app reads', () => {
+  const events = ['tool_end', 'subagent_finished', 'done', 'context_compact', 'tool_start', 'text_delta', 'thinking_delta', 'thinking_title', 'turn_ended']
+  const others = ['tool_start', 'text_delta', 'thinking_delta', 'thinking_title', 'turn_ended']
+  const setup = () => {
+    const socket = relaySocket(MACHINE), gateway = gatewayOf(socket)
+    const queue = upstreamOf(socket).queue
+    const relayed = () => {
+      queue.length = 0
+      for (const type of events) gateway.broadcast({ type, agentId: 'a1', payload: {} })
+      return queue.map(item => (item.msg as { frame: { type: string } }).frame.type)
+    }
+    return { socket, gateway, relayed }
+  }
+  afterEach(() => vi.useRealTimers())
+
+  it('relays them only while a terminal app is open, once the backend has said, and again everything after the link drops', async () => {
+    vi.useFakeTimers()
+    const { socket, gateway, relayed } = setup()
+    expect(relayed()).toEqual(events)
+    await dispatchDown(socket, { type: '__tui_open', payload: { forMs: 0 } }, '')
+    expect(relayed()).toEqual(others)
+    await dispatchDown(socket, { type: '__tui_open', payload: { forMs: 180_000 } }, '')
+    expect(relayed()).toEqual(events)
+    await vi.advanceTimersByTimeAsync(180_001)
+    expect(relayed()).toEqual(others)
+    ;(gateway as unknown as { linkGone(): void }).linkGone()
+    expect(relayed()).toEqual(events)
+  })
+
+  it('ignores the word from a window on this computer, reads a bad span as 0 and caps a long one at 180 s', async () => {
+    vi.useFakeTimers()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { socket, relayed } = setup()
+    socket.registerLocalClient('local:tool', { sendFrame: () => true, sendBinary: () => true })
+    await dispatchDown(socket, { type: '__tui_open', payload: { forMs: 0 } }, 'local:tool', 'local')
+    expect(relayed()).toEqual(events)
+    for (const forMs of [-5, 'x', Number.NaN]) {
+      await dispatchDown(socket, { type: '__tui_open', payload: { forMs } }, '')
+      expect(relayed(), String(forMs)).toEqual(others)
+    }
+    await dispatchDown(socket, { type: '__tui_open', payload: { forMs: 10 * 86_400_000 } }, '')
+    await vi.advanceTimersByTimeAsync(180_001)
+    expect(relayed()).toEqual(others)
+    warn.mockRestore()
+    await socket.unregisterLocalClient('local:tool')
+  })
+
+  it('always sends a guest its sealed copy, held or not', async () => {
+    const { socket, gateway } = setup()
+    const e2ee = (gateway as unknown as { e2ee: { guestSessions(g: string): string[]; wrapFor(c: string, f: unknown): unknown } }).e2ee
+    vi.spyOn(e2ee, 'guestSessions').mockReturnValue(['guest-conn'])
+    vi.spyOn(e2ee, 'wrapFor').mockReturnValue({ type: 'tool_end', payload: { __e2e: 'sealed' } })
+    await dispatchDown(socket, { type: '__tui_open', payload: { forMs: 0 } }, '')
+    const queue = upstreamOf(socket).queue
+    queue.length = 0
+    gateway.broadcast({ type: 'tool_end', agentId: 'a1', payload: {} }, 'guest@example.com')
+    expect(queue.map(item => (item.msg as { targetConnId?: string }).targetConnId)).toEqual(['guest-conn'])
+  })
+})
+
 describe('the trust edges the split made visible', () => {
   it('a process on this computer cannot send the backend hub\'s own frames: it once could set how many devices watch', async () => {
     const socket = relaySocket(MACHINE)

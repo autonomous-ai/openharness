@@ -210,6 +210,8 @@ void main() {
 
     expect(i.needs.whereType<SwarmWorkNeed>(), hasLength(2));
     expect(news, isEmpty);
+    // The read is kept in the background: its folder goes only after.
+    await homeSaved(cache);
   });
 
   test('a Swarm off the list leaves the Home kept at once', () async {

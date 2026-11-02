@@ -1,8 +1,11 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createServer, type AddressInfo, type Server, type Socket } from 'node:net'
 import { Redis } from 'ioredis'
 import { createCircuitBreaker, CircuitOpenError } from './circuitBreaker.js'
 import { guardRedisCommands, isRedisFailure, wasNotSent } from './redisGuard.js'
+
+// Real clients, against the fake server below: the shared setup's never connect (noRedis.test-support.ts).
+vi.unmock('ioredis')
 
 // A real ioredis client against a loopback server that speaks just enough RESP: while `answering` is false it reads
 // commands and never replies (a Redis that is up but stuck); once answering it owes, and sends in order, a nil for every

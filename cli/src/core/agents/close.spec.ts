@@ -54,8 +54,11 @@ describe('closing agents no window shows', () => {
   // Diego's Buddy, 10-30: the close service refuses a Buddy only if the guard the core is handed reaches it.
   it('hands the close service the Lead and Buddy guards it was given', () => {
     const leadProtected = (id: string) => id === 'lead', buddyProtected = (id: string) => id === 'buddy'
-    const { close } = setup({ leadProtected, buddyProtected })
+    const leadSwitching = (id: string) => id === 'lead', leadSwitchEnded = vi.fn()
+    const { close } = setup({ leadProtected, leadSwitching, leadSwitchEnded, buddyProtected })
     expect([close.leadProtected?.('lead'), close.buddyProtected?.('buddy'), close.buddyProtected?.('lead')]).toEqual([true, true, false])
+    expect(close.leadSwitching).toBe(leadSwitching)
+    expect(close.leadSwitchEnded).toBe(leadSwitchEnded)
   })
 
   it('reads from its pane whether it waits at a question its engine asks before any conversation', async () => {
@@ -285,6 +288,17 @@ describe('agent_close', () => {
     done({ closed: true })
     await vi.waitFor(() => expect(replies).toStrictEqual([{ closed: true }]))
     ask({ request: vi.fn(async () => ({})) }, { ...target, mode: 'now', onlyIfHidden: 'yes' })
+  })
+
+  // Dee, 11-01: a Swarm Product Manager's close passes its guard only as the switch it names (lib/closeAgentService.ts).
+  it('passes on the Change agent switch a close names, only in the shape Change agent makes it', () => {
+    const request = vi.fn(async () => ({}))
+    ask({ request }, { ...target, mode: 'now', changeId: 'e'.repeat(32) })
+    expect(request).toHaveBeenLastCalledWith({ ...target, mode: 'now', changeId: 'e'.repeat(32) })
+    for (const changeId of ['E'.repeat(32), 'e'.repeat(31), 7, '../x']) {
+      ask({ request }, { ...target, mode: 'now', changeId })
+      expect(request).toHaveBeenLastCalledWith({ ...target, mode: 'now' })
+    }
   })
 
   it('refuses a request it cannot read, and says when the close failed or there is no service to ask', async () => {

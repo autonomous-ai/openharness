@@ -2,6 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> Replaced by [2026-10-30-project-instructions-design.md](2026-10-30-project-instructions-design.md): the instruction document and agents' direct messages
+> replace what this describes. Kept as history; do not build from it.
+
 **Goal:** Before a Super Tab Lead starts or assigns work, `harness super-tab route` filters what cannot run the task, lets Jev choose among the rest with full context, falls back to a fixed policy order, records the decision, and shows it in the conversation where a person can change it.
 
 **Architecture:** The backend owns the routing policy (account default plus a per-tab override), the decision log (`SuperTabRouteDecision`) and the commands that link decisions to starts and assignments. The CLI owns candidate collection, the hard filter, the policy order and the Jev call, as a pure core (`cli/src/superTabs/route.ts`) driven by a thin orchestrator (`routeCommand.ts`) and two new Super Tab service actions. The Desktop renders route messages, the Change override and the policy forms.

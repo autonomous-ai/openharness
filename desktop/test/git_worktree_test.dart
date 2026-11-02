@@ -353,6 +353,144 @@ void main() {
     );
   });
 
+  // The composer draws its placeholder once and keeps it. A start that made
+  // the branch and was then cancelled left it behind, and the next press asked
+  // for the same name: "A branch named witty-finch already exists. Choose
+  // another name." about a name nobody chose (desktop 1.3.41, 2026-10-30).
+  test('a kept placeholder taken since takes the next free number; a typed name is still refused', () async {
+    Future<String> placeholder() => ProjectFolderRequest.worktree(
+      repo,
+      branchRef: 'refs/heads/feature',
+      branchName: 'witty-finch',
+      placeholder: true,
+    ).prepareLocal(projectHome: p.join(root.path, 'harnesses'));
+    final first = await placeholder();
+    final second = await placeholder();
+    expect(await git(['branch', '--show-current'], first), 'witty-finch');
+    expect(await git(['branch', '--show-current'], second), 'witty-finch-2');
+    expect(second, p.join(worktrees(), 'witty-finch-2'));
+    expect(
+      await git(['config', '--get', 'branch.witty-finch-2.harness']),
+      'placeholder',
+    );
+    await expectLater(
+      worktree(name: 'witty-finch'),
+      throwsA(isA<RepositoryCloneException>()),
+    );
+  });
+
+  group('discarding a prepared worktree', () {
+    Future<String> placeholder() => ProjectFolderRequest.worktree(
+      repo,
+      branchRef: 'refs/heads/feature',
+      branchName: 'witty-finch',
+      placeholder: true,
+    ).prepareLocal(projectHome: p.join(root.path, 'harnesses'));
+    Future<bool> branchExists(String name) async =>
+        (await Process.run('git', [
+          '-C',
+          repo,
+          'show-ref',
+          '--verify',
+          '--quiet',
+          'refs/heads/$name',
+        ])).exitCode ==
+        0;
+
+    test('removes the folder, the branch Harness made, and its mark', () async {
+      await File(p.join(repo, '.git', 'info', 'exclude'))
+          .writeAsString('.env\n');
+      final path = await placeholder();
+      // `.worktreeinclude` copies ignored files in; they are the start's own.
+      await File(p.join(path, '.env')).writeAsString('KEY=1');
+      expect(await discardPreparedWorktree(path), isTrue);
+      expect(await Directory(path).exists(), isFalse);
+      expect(await branchExists('witty-finch'), isFalse);
+      final mark = await Process.run('git', [
+        '-C',
+        repo,
+        'config',
+        '--get',
+        'branch.witty-finch.harness',
+      ]);
+      expect(mark.exitCode, isNot(0));
+      // The name is free again for the next press.
+      expect(await placeholder(), p.join(worktrees(), 'witty-finch'));
+    });
+
+    test('a subfolder project removes the whole worktree', () async {
+      final sub = await ProjectFolderRequest.worktree(
+        p.join(repo, 'src'),
+        branchRef: 'refs/heads/feature',
+        branchName: 'witty-finch',
+        placeholder: true,
+      ).prepareLocal(projectHome: p.join(root.path, 'harnesses'));
+      expect(p.basename(sub), 'src');
+      expect(await discardPreparedWorktree(sub), isTrue);
+      expect(await Directory(p.dirname(sub)).exists(), isFalse);
+      expect(await branchExists('witty-finch'), isFalse);
+    });
+
+    test('keeps a worktree with changes in it, and its branch', () async {
+      final path = await placeholder();
+      await File(p.join(path, 'src', 'value')).writeAsString('edited');
+      await File(p.join(path, 'notes.txt')).writeAsString('new');
+      expect(await discardPreparedWorktree(path), isFalse);
+      expect(await Directory(path).exists(), isTrue);
+      expect(await branchExists('witty-finch'), isTrue);
+    });
+
+    test('keeps a branch with commits of its own', () async {
+      final path = await placeholder();
+      await File(p.join(path, 'src', 'value')).writeAsString('work');
+      await git(['commit', '-am', 'work'], path);
+      expect(await discardPreparedWorktree(path), isFalse);
+      expect(await Directory(path).exists(), isTrue);
+      expect(await branchExists('witty-finch'), isTrue);
+    });
+
+    // Review of this change: with no reflog, "one entry or fewer" read as
+    // unused, and a committed branch was deleted with its commit.
+    test(
+      'without reflogs a branch is never proven unused, so it stays',
+      () async {
+        await git(['config', 'core.logAllRefUpdates', 'false']);
+        final path = await placeholder();
+        await File(p.join(path, 'src', 'value')).writeAsString('work');
+        await git(['commit', '-am', 'work'], path);
+        final tip = await git(['rev-parse', 'witty-finch']);
+        expect(await discardPreparedWorktree(path), isFalse);
+        expect(await git(['rev-parse', 'witty-finch']), tip);
+        expect(await Directory(path).exists(), isTrue);
+      },
+    );
+
+    test('a marked branch the person chose keeps its branch', () async {
+      final path = await placeholder();
+      expect(await discardPreparedWorktree(path, keepBranch: true), isTrue);
+      expect(await Directory(path).exists(), isFalse);
+      expect(await branchExists('witty-finch'), isTrue);
+    });
+
+    test('an existing branch loses only the worktree made for it', () async {
+      await git(['branch', 'topic', 'main']);
+      final path = await worktree(
+        ref: 'refs/heads/topic',
+        name: 'topic',
+        existing: true,
+      );
+      expect(await discardPreparedWorktree(path), isTrue);
+      expect(await Directory(path).exists(), isFalse);
+      expect(await branchExists('topic'), isTrue);
+    });
+
+    test('never removes a repository\'s own checkout', () async {
+      expect(await discardPreparedWorktree(repo), isFalse);
+      expect(await Directory(repo).exists(), isTrue);
+      expect(await branchExists('main'), isTrue);
+    });
+  });
+
   test(
     'an existing branch is checked out as it is in a new worktree, once',
     () async {

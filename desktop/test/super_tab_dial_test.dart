@@ -314,6 +314,67 @@ void main() {
     expect(row(after.last)['conversationId'], 'design-lead');
   });
 
+  // Diego, 11-02: with one Buddy per Swarm the reader's Buddy chat is the
+  // Swarm's (kind swarm-buddy, no project). The dial's Buddy side, a swipe or a
+  // tap on its Buddy used to look for a chat of the project and land on the
+  // earlier project chat (history) or the Lead chat.
+  Future<(SuperTabLaunchFixture, SuperTabController)> openOneBuddy() async {
+    final (f, c) = await openChats();
+    final server = f.connection.server;
+    server.state['swarmBuddy'] = true;
+    (server.state['conversations'] as List).add(
+      {
+        ...conversationFixture('swarm-buddy-owner', "owner's Buddy"),
+        'kind': 'swarm-buddy',
+        'buddyOwnerId': 'owner',
+      }..remove('projectId'),
+    );
+    await c.refresh();
+    return (f, c);
+  }
+
+  test('with one Buddy per Swarm the dial\'s Buddy side opens the Swarm chat, from any project, never the earlier project chat', () async {
+    final (f, c) = await openOneBuddy();
+    expect(c.oneBuddy, isTrue);
+    for (final project in ['design', 'lead']) {
+      c.select('design-fix');
+      await settle();
+      await follow(f, project, 'buddy');
+      await settle();
+      expect(c.selectedId, 'swarm-buddy-owner');
+    }
+    // Back to the PM side from there: the project's Lead chat.
+    await follow(f, 'design', 'pm');
+    await settle();
+    expect(c.selectedId, 'design-lead');
+  });
+
+  test('another person\'s Swarm Buddy chat is never opened, and the Lead chat opens instead', () async {
+    final (f, c) = await openOneBuddy();
+    final server = f.connection.server;
+    for (final row in (server.state['conversations'] as List).cast<Map>()) {
+      if (row['kind'] == 'swarm-buddy') row['buddyOwnerId'] = 'sam';
+    }
+    (server.state['conversations'] as List).removeWhere(
+      (row) => (row as Map)['id'] == 'design-pm',
+    );
+    await c.refresh();
+    await follow(f, 'design', 'buddy');
+    await settle();
+    expect(c.selectedId, 'design-lead');
+  });
+
+  test(
+    'an older Swarm keeps the project\'s Buddy chat for the dial\'s Buddy side',
+    () async {
+      final (f, c) = await openChats();
+      expect(c.oneBuddy, isFalse);
+      await follow(f, 'design', 'buddy');
+      await settle();
+      expect(c.selectedId, 'design-pm');
+    },
+  );
+
   test('a Buddy side where the reader has no Buddy chat opens the Lead chat and makes none', () async {
     final (f, c) = await openChats();
     final server = f.connection.server;

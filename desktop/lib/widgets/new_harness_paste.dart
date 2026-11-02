@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:file_selector/file_selector.dart' show XFile;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -14,10 +15,13 @@ import 'new_harness_attachments.dart';
 /// holds pixels, not a file, so the picture has no name of its own.
 const kPastedImageName = 'pasted-image.png';
 
-/// The files a file manager's Copy left on this computer's clipboard.
+/// The files a file manager's Copy left on this computer's clipboard. One too
+/// heavy to read now stays on disk; the box it is pasted in refuses it by its
+/// size, or sends it from disk.
 Future<CopiedFiles> _clipboardFiles() async => readCopiedFiles(
   await NativeClipboard.readFilePaths(),
   maxBytes: HarnessAttachments.maxBytes,
+  keepOnDisk: true,
 );
 
 /// Paste in [child]'s task field attaches what the clipboard holds besides
@@ -107,7 +111,9 @@ class _NewHarnessPasteTargetState extends State<NewHarnessPasteTarget> {
     final target = widget.attachments;
     await target.reading(() async {
       final copied = await widget.readFiles();
-      if (copied.files.isNotEmpty || copied.tooLarge.isNotEmpty) {
+      if (copied.files.isNotEmpty ||
+          copied.tooLarge.isNotEmpty ||
+          copied.onDisk.isNotEmpty) {
         return _attachCopied(target, copied);
       }
       if (pastedTextWins(await _clipboardText())) {
@@ -121,7 +127,11 @@ class _NewHarnessPasteTargetState extends State<NewHarnessPasteTarget> {
 
   void _attachCopied(HarnessAttachments target, CopiedFiles copied) => _attach(
     target,
-    [for (final file in copied.files) HarnessAttachment(file.name, file.bytes)],
+    [
+      for (final file in copied.files) HarnessAttachment(file.name, file.bytes),
+      for (final file in copied.onDisk)
+        HarnessAttachment.onDisk(file.name, XFile(file.path), file.size),
+    ],
     oversized: copied.tooLarge,
   );
 

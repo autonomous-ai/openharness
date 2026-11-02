@@ -3,7 +3,7 @@
  * dormant group goes as a one-line stub, and only to a reader who could read the part's last data. Where that check
  * cannot be made (its project is gone), the change also moved the visibility epoch and every reader reloads.
  */
-import { groupWithoutMachines, type Actor, type Agent, type AgentStart, type Conversation } from '../model.js'
+import { groupForBuddy, type Actor, type Agent, type AgentStart, type Conversation } from '../model.js'
 import { isBuddyReader } from '../buddies.js'
 import { canReadAgent, canReadGroup } from '../projects.js'
 import { knownKind, type MachineData, type Part } from '../parts/index.js'
@@ -49,7 +49,7 @@ export function changesFor(view: ReaderView, changed: Part[], actor: Actor): Par
         // Sent from the changed part itself: the reader's view may hold only a conversation's light fields (parts/light.ts).
         else if (groupReadable(part.data as Conversation)) {
           const group = part.data as Conversation
-          out.groups.push(envelope(part, visibleGroupView(buddy ? groupWithoutMachines(group) : group, visibleAgents, seenMachines)))
+          out.groups.push(envelope(part, visibleGroupView(buddy ? groupForBuddy(group) : group, visibleAgents, seenMachines)))
         }
         break
       }
@@ -67,6 +67,8 @@ export function changesFor(view: ReaderView, changed: Part[], actor: Actor): Par
         break
       }
       case 'start': {
+        // A Buddy reads no starts, so not a removal's id either (security review 2 of #2258).
+        if (buddy) break
         const start = live(seen.starts, part.key), group = groupOf((part.data as AgentStart).request.conversationId)
         if (part.deleted) { if (group && groupReadable(group)) out.starts.push(stub(part)) }
         else if (start) out.starts.push(start)

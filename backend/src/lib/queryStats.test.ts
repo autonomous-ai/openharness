@@ -14,6 +14,22 @@ function stats(options: Partial<QueryStatsOptions> = {}) {
 type Row = { op: string; shape: string; route: string; n: number; ms: number; docs: number; bytes: number; errors: number; maxMs: number }
 const rows = (logged: Logged) => logged.context.top as Row[]
 
+it('totals every query of each route, however small, beside the top shapes', () => {
+  const { s, infos } = stats({ sampleEvery: 1, top: { bytes: 1, count: 1, ms: 1 } })
+  runWork('http GET /api/a', () => {
+    s.record('Big', 'findMany', { where: { id: 'x' } }, 50, [{ text: 'x'.repeat(500) }])
+    for (let i = 0; i < 5; i++) s.record('Small', 'findFirst', { where: { k: 'y' } }, 1, [])
+  })
+  runWork('http GET /api/b', () => s.record('Small', 'findFirst', { where: { k: 'z' } }, 2, []))
+  s.flush()
+  // The top lists keep one shape; the route totals keep every query.
+  expect((infos[0]!.context.top as Row[]).length).toBeLessThan(3)
+  expect(infos[0]!.context.routes).toEqual({
+    'http GET /api/a': { n: 6, ms: 55, docs: 1, bytes: JSON.stringify([{ text: 'x'.repeat(500) }]).length + 5 * 2, ops: { 'Small.findFirst': 5, 'Big.findMany': 1 } },
+    'http GET /api/b': { n: 1, ms: 2, docs: 0, bytes: 2, ops: { 'Small.findFirst': 1 } },
+  })
+})
+
 describe('filterShape', () => {
   it('keeps the keys of a Prisma filter and replaces every value with ?', () => {
     const shape = filterShape('findMany', { where: { tabId: 'tab-secret-1', OR: [{ status: { in: ['open', 'held'] } }, { owner: { email: 'alice@example.com' } }] },

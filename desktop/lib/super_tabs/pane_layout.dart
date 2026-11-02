@@ -19,32 +19,45 @@ class SuperTabPaneLayout extends StatefulWidget {
     this.left,
     this.right,
     this.storage,
+    this.rightDefault = rightWidth,
   });
 
   static const storageKey = 'super-tab-pane-widths';
   static const leftWidth = 300.0;
   static const rightWidth = 280.0;
 
+  /// A thread's default width (Scholes, 10-31): room for its reply box's
+  /// options on one row ("New session" and "Also to chat"). [rightWidth]
+  /// stays the narrowest the pane goes.
+  static const threadWidth = 340.0;
+
   /// The roster drawer's share of a narrow window at most. On a phone it filled the screen, leaving no
   /// veil to tap, so closing it was hard (owner, 2026-10-23).
   static const drawerMaxFraction = 0.7;
 
-  /// The roster drawer's width in a window [available] wide.
-  static double drawerWidth(double available) =>
-      (available * drawerMaxFraction).clamp(0, rightWidth).toDouble();
+  /// The roster drawer's width in a window [available] wide, at most [max]
+  /// (a thread's drawer passes [threadWidth]).
+  static double drawerWidth(double available, {double max = rightWidth}) =>
+      (available * drawerMaxFraction).clamp(0, max).toDouble();
   final Widget? left, right;
 
   final Widget center;
   final VoidCallback onLeave;
   final LocalKeyValueStore? storage;
 
+  /// The right pane's width until a person sets one by its divider (that
+  /// width, saved, wins): [threadWidth] while it shows a thread.
+  final double rightDefault;
+
   @override
   State<SuperTabPaneLayout> createState() => _SuperTabPaneLayoutState();
 }
 
 class _SuperTabPaneLayoutState extends State<SuperTabPaneLayout> {
-  double _left = SuperTabPaneLayout.leftWidth,
-      _right = SuperTabPaneLayout.rightWidth;
+  double _left = SuperTabPaneLayout.leftWidth;
+  // Null until a person sets it, or it is restored: the right pane then
+  // takes the widget's default for what it shows.
+  double? _right;
   int _edit = 0;
   Future<void> _writing = Future.value();
 
@@ -75,7 +88,15 @@ class _SuperTabPaneLayoutState extends State<SuperTabPaneLayout> {
           : fallback;
       setState(() {
         _left = width('left', _left);
-        _right = width('right', _right);
+        // A width the person chose is saved with that mark and kept
+        // exactly, 280 included. Builds before the mark saved the right
+        // pane's default (280, also the minimum) with any divider move: an
+        // unmarked 280 reads as no choice, so a thread opens at its own width.
+        final right = width('right', -1);
+        final chosen = value is Map && value['rightChosen'] == true;
+        if (right > 0 && (chosen || right != SuperTabPaneLayout.rightWidth)) {
+          _right = right;
+        }
       });
     } catch (_) {
       // A missing or old preference must not prevent opening the workspace.
@@ -85,7 +106,11 @@ class _SuperTabPaneLayoutState extends State<SuperTabPaneLayout> {
   void _save() {
     final store = widget.storage;
     if (store == null) return;
-    final value = jsonEncode({'left': _left, 'right': _right});
+    final right = _right;
+    final value = jsonEncode({
+      'left': _left,
+      if (right != null) ...{'right': right, 'rightChosen': true},
+    });
     _writing = _writing
         .then((_) => store.write(SuperTabPaneLayout.storageKey, value))
         .catchError((Object _) {});
@@ -109,7 +134,11 @@ class _SuperTabPaneLayoutState extends State<SuperTabPaneLayout> {
           ? limit(_left, leftMin, width - centerMin - rightMin)
           : 0.0;
       final right = hasRight
-          ? limit(_right, rightMin, width - centerMin - left)
+          ? limit(
+              _right ?? widget.rightDefault,
+              rightMin,
+              width - centerMin - left,
+            )
           : 0.0;
       final arrangement = PaneArrangement([
         if (hasLeft) Rect.fromLTRB(0, 0, left / width, 1),

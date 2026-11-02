@@ -218,7 +218,8 @@ void main() {
         ..replies.add('Yes, ship it today and tell me when it is up.');
       final key = await chat(tester, _MeteredRecorder(), stt);
       await tapMic(tester);
-      await tapMic(tester);
+      // Stop: the words land in the box, unsent.
+      await tester.tap(find.byKey(const ValueKey('swarm-voice-stop')));
       await tester.pumpAndSettle();
       await shoot(tester, key, 'swarm-voice-heard-$look');
     });

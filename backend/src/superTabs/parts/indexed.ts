@@ -41,6 +41,10 @@ export const NAMED_INDEX = {
     cleanup: { autonomousEnv: 1, cleanupMachineIds: 1, updatedAt: 1 },
     /** Swarms by id. */
     id: { _id: 1 },
+    /** A Workspace's Swarms: a Workspace removal reads its deleted ones (workspaceStore.ts). */
+    workspace: { autonomousEnv: 1, workspaceId: 1 },
+    /** Deleted Swarms by purge time (deletion.ts): the purge sweep. */
+    purge: { purgeAt: 1 },
   },
   /** Each part kind's changes since a cursor; machines also by when they were last read. */
   SwarmHead: { changes: { tabId: 1, changedAt: 1 } },
@@ -59,10 +63,31 @@ export const NAMED_INDEX = {
     /** One message. */
     id: { _id: 1 },
   },
+  /** A Swarm's newest route decisions: the route-decision list. */
+  SuperTabRouteDecision: { recent: { tabId: 1, createdAt: 1 } },
   SuperTabDelivery: {
     /** An agent's deliveries by status and age: its open ones, oldest first. */
     agentOpen: { tabId: 1, agentId: 1, status: 1, createdAt: 1 },
+    /** Finished deliveries by their last change: those old enough to compact (deliveryCompaction.ts). */
+    compaction: { status: 1, updatedAt: 1 },
   },
+  /** Compacted receipts (pageReads.ts): a page's by message id, and a host's by the compacted delivery's id. */
+  SuperTabReceipt: {
+    id: { _id: 1 },
+    delivery: { tabId: 1, deliveryIds: 1 },
+  },
+  /** A person's thread marks (readMarks.ts): `person`, every one or those moved since a cursor, the cap's count and oldest,
+   *  and the sweep's people per Swarm; `age`, the sweep's marks untouched for 180 days. */
+  SuperTabThreadMark: {
+    person: { tabId: 1, personId: 1, updatedAt: 1 },
+    age: { updatedAt: 1 },
+  },
+  /** A page's thread summaries, by root id (pageReads.ts pageThreads). */
+  SuperTabThread: { id: { _id: 1 } },
+  /** `age`: Activity rows past their expiry (activity.ts sweepActivity). */
+  SuperTabActivity: { age: { createdAt: 1 } },
+  /** `age`: chat settings back at the default, untouched for a week (chatSettings.ts sweepChatSettings). */
+  SuperTabChatSetting: { age: { updatedAt: 1 } },
 } as const
 export type NamedCollection = keyof typeof NAMED_INDEX
 export type NamedIndex<C extends NamedCollection> = keyof typeof NAMED_INDEX[C] & string

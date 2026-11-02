@@ -95,6 +95,7 @@ Future<T?> showPaneMenu<T>({
           delegate: _PaneMenuPosition(position, minWidth, maxWidth),
           child: _PaneMenuFocus(
             close: () => close(null),
+            onDispose: deregister,
             focusFirst: focusFirst,
             // A row list sizes itself to its widest row ([IntrinsicWidth]) and scrolls as one
             // column. A BODY does neither: it is handed the menu's box and lays itself out, which
@@ -192,10 +193,12 @@ class _PaneMenuPosition extends SingleChildLayoutDelegate {
 class _PaneMenuFocus extends StatefulWidget {
   const _PaneMenuFocus({
     required this.close,
+    required this.onDispose,
     required this.focusFirst,
     required this.child,
   });
   final VoidCallback close;
+  final VoidCallback onDispose;
   final bool focusFirst;
   final Widget child;
 
@@ -219,6 +222,7 @@ class _PaneMenuFocusState extends State<_PaneMenuFocus> {
 
   @override
   void dispose() {
+    widget.onDispose();
     _scope.dispose();
     super.dispose();
   }

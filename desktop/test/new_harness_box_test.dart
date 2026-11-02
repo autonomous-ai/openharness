@@ -274,7 +274,7 @@ void main() {
     box.setQuery('acme/rocket');
     // Repository input is dedicated to cloning, never creating a blank folder.
     expect(box.options.any((row) => row.id == 'project:new'), isFalse);
-    expect(box.options.first.title, 'Clone rocket');
+    expect(box.options.first.title, 'Clone acme/rocket');
     box.accept(box.options.first);
     expect(box.project.repository?.name, 'rocket');
     expect(box.projectLabel, '~/harnesses/rocket');

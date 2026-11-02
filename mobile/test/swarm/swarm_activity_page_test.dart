@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
@@ -225,6 +227,7 @@ void main() {
       find.byType(SwarmConversationPage),
     );
     expect((page.conversationId, page.messageId), (leadChat, 'msg-tag'));
+    expectHomeCProject('Mobile');
   });
 
   testWidgets('Threads: the person\'s threads, the one with news first', (
@@ -256,6 +259,7 @@ void main() {
       find.byType(SwarmConversationPage),
     );
     expect((page.conversationId, page.messageId), (leadChat, 'root-1'));
+    expectHomeCProject('Mobile');
   });
 
   testWidgets("Reactions: who reacted how to the person's message", (
@@ -373,5 +377,137 @@ void main() {
     hidden.value = false;
     await tester.pumpAndSettle();
     expect(chatReads(fake), 1);
+  });
+
+  group('opened at a decision (a notice or link)', () {
+    Future<SwarmHost> at(
+      WidgetTester tester,
+      FakeSwarm fake, {
+      String focus = 'decision:d1',
+      String swarmId = tab,
+    }) => pump(
+      tester,
+      fake,
+      home: SwarmActivityPage(focus: focus, swarmId: swarmId),
+    );
+
+    testWidgets('it opens in full, every option and Done there', (
+      tester,
+    ) async {
+      await at(tester, activityBackend());
+
+      expect(key('swarm-activity-open-decision:d1'), findsOneWidget);
+      expect(key('swarm-option-d1-0'), findsOneWidget);
+      expect(key('swarm-option-d1-1'), findsOneWidget);
+      expect(key('swarm-activity-focus-gone'), findsNothing);
+    });
+
+    testWidgets('one no longer open, another Swarm\'s, or never the '
+        'person\'s says so alike, naming nothing of it', (tester) async {
+      for (final (focus, swarmId) in [
+        ('decision:gone', tab),
+        ('decision:d1', 'tab-other'),
+        ('decision:theirs', 'tab-other'),
+      ]) {
+        await tester.pumpWidget(const SizedBox());
+        await at(tester, activityBackend(), focus: focus, swarmId: swarmId);
+
+        expect(
+          find.text('This decision is no longer open.'),
+          findsOneWidget,
+          reason: '$focus in $swarmId',
+        );
+        expect(key('swarm-activity-open-decision:d1'), findsNothing);
+        expect(key('swarm-activity-loading'), findsNothing);
+        if (swarmId != tab) {
+          expect(find.textContaining('Approve merge'), findsNothing);
+          expect(find.textContaining('Mobile'), findsNothing);
+        }
+      }
+    });
+
+    testWidgets('until the decisions are read it says nothing of it; a read '
+        'that fails says so, and Try again brings the decision', (
+      tester,
+    ) async {
+      final fake = activityBackend();
+      final held = Completer<Object?>();
+      fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) =>
+          held.future;
+      await pump(
+        tester,
+        fake,
+        home: const SwarmActivityPage(focus: 'decision:d1', swarmId: tab),
+      );
+      expect(key('swarm-activity-focus-gone'), findsNothing);
+      expect(key('swarm-activity-focus-failed'), findsNothing);
+
+      held.completeError(const SuperTabFailure('UNAVAILABLE', 'Down.'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-activity-focus-failed'), findsOneWidget);
+      expect(key('swarm-activity-focus-gone'), findsNothing);
+
+      final first = activityBackend();
+      fake.routes['/api/super-tabs/$tab/decisions?state=open'] =
+          first.routes['/api/super-tabs/$tab/decisions?state=open']!;
+      await tester.tap(key('swarm-activity-focus-retry'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-activity-focus-failed'), findsNothing);
+      expect(key('swarm-activity-open-decision:d1'), findsOneWidget);
+    });
+
+    testWidgets('a read that answers after access was lost shows nothing of '
+        'it', (tester) async {
+      final fake = activityBackend();
+      final held = Completer<Object?>();
+      fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) =>
+          held.future;
+      final host = await at(tester, fake);
+      host.session!.inbox.reader(tab)!.revoke();
+      await tester.pump();
+      held.complete(
+        activityBackend().routes['/api/super-tabs/$tab/decisions?state=open']!(
+          null,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-activity-open-decision:d1'), findsNothing);
+      expect(find.textContaining('Approve merge'), findsNothing);
+      expect(find.text('This decision is no longer open.'), findsOneWidget);
+    });
+
+    testWidgets('access lost while it is answered: the row goes and the '
+        'answer held for Undo is never sent', (tester) async {
+      final fake = activityBackend();
+      final host = await at(tester, fake);
+      await tester.tap(key('swarm-option-d1-1'));
+      await tester.pump();
+      expect(find.text('Sending “Merge”'), findsOneWidget);
+
+      host.session!.inbox.reader(tab)!.revoke();
+      await tester.pump(const Duration(seconds: 10));
+      await tester.pumpAndSettle();
+
+      expect(fake.commands, isEmpty);
+      expect(key('swarm-activity-open-decision:d1'), findsNothing);
+      expect(find.textContaining('Approve merge'), findsNothing);
+      expect(find.textContaining('Sending'), findsNothing);
+    });
+
+    testWidgets('access lost while Approve asks: the question closes and '
+        'nothing is sent', (tester) async {
+      final fake = activityBackend();
+      final host = await pump(tester, fake);
+      await tester.tap(key('swarm-activity-approve-decision:d1'));
+      await tester.pumpAndSettle();
+      expect(find.text('Approve?'), findsOneWidget);
+
+      host.session!.inbox.reader(tab)!.revoke();
+      await tester.pumpAndSettle();
+      expect(find.text('Approve?'), findsNothing);
+      expect(find.textContaining('Approve merge'), findsNothing);
+      expect(fake.commands, isEmpty);
+    });
   });
 }

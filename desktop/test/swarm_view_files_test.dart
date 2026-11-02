@@ -12,6 +12,7 @@ import 'package:harness/core/harness_file_store.dart';
 import 'package:harness/logging/app_log.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/pane_layout_store.dart';
+import 'package:harness/super_tabs/account_keys.dart';
 import 'package:harness/super_tabs/saved_view.dart';
 
 import 'super_tab_saved_view_test.dart' show savedViewForTest;
@@ -118,7 +119,12 @@ void main() {
       );
       addTearDown(real.dispose);
       expect(real.localStore, same(HarnessFileStore.shared));
-      expect(real.superTabs.storage, same(HarnessFileStore.shared));
+      // The settings store, behind the web's guard on a signed-out account's
+      // writes (super_tabs/account_keys.dart).
+      expect(
+        (real.superTabs.storage as SwarmAccountStorage).inner,
+        same(HarnessFileStore.shared),
+      );
       expect(real.superTabs.viewStorage, isNot(same(HarnessFileStore.shared)));
       expect(real.superTabs.viewStorage, isNot(isA<HarnessFileStore>()));
     });

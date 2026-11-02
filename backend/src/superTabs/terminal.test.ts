@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
+import { mayDrive } from './terminal.js'
 
 const owner: Actor = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Actor = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -46,14 +47,91 @@ describe('reading and typing in an agent terminal', () => {
     expect(() => s.run({ type: 'agent.screen', agentId: s.worker }, peer)).toThrow('read-only')
   })
 
-  it('refuses the worker itself, another worker and another project\'s Lead', () => {
+  // Reading or typing in another agent's terminal is workflow (project instructions, phase 4); the Product Manager's stays private.
+  it('lets any agent of the project read or type in another agent\'s terminal', () => {
     const s = swarm()
     const second = s.run({ type: 'agent.add', conversationId: s.group, machineId: 'host', harnessId: 'second', name: 'second', configuration: config, lead: false },
       owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
-    for (const actor of [as(s.worker), as(second), as(s.otherLead)]) {
-      expect(() => s.run({ type: 'agent.screen', agentId: s.worker }, actor)).toThrow()
-      expect(() => s.run({ type: 'agent.input', agentId: s.worker, keys: ['Enter'] }, actor)).toThrow()
+    const outside = s.run({ type: 'agent.add', conversationId: s.state.conversations.find(c => c.leadId === s.otherLead)!.id, machineId: 'host', harnessId: 'outside',
+      name: 'outside', configuration: config, lead: false }, owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
+    const target = (id: string) => s.state.agents.find(a => a.id === id)!
+    expect(() => mayDrive(s.state, as(second), target(s.worker))).not.toThrow()
+    expect(s.run({ type: 'agent.input', agentId: s.worker, keys: ['Enter'] }, as(second)).terminal).toMatchObject({ requesterKey: `agent:${second}` })
+    expect(() => mayDrive(s.state, as(second), target(outside))).toThrow()
+    expect(() => s.run({ type: 'agent.screen', agentId: outside }, as(second))).toThrow()
+    expect(() => mayDrive(s.state, as(second), target(s.lead), false, 'screen')).toThrow(expect.objectContaining({ code: 'TERMINAL_PRIVATE' }))
+  })
+
+  it('refuses another project\'s Lead', () => {
+    const s = swarm()
+    expect(() => s.run({ type: 'agent.screen', agentId: s.worker }, as(s.otherLead))).toThrow()
+    expect(() => s.run({ type: 'agent.input', agentId: s.worker, keys: ['Enter'] }, as(s.otherLead))).toThrow()
+  })
+
+  // Security review S1: Bob's own sign-in speaks for the agent his machine runs, so through it he would type, as Alice, into
+  // her private project's agents. An agent drives another login's agent only where its own machine's person could.
+  it('lets an agent drive another login\'s agent only where the person whose machine runs it could', () => {
+    let state: SuperTabState = createSuperTab('tab', 'Pilot', { id: 'owner', email: 'owner@example.com' }, 'prod')
+    state.people.push({ id: 'alice', email: 'alice@example.com', role: 'collaborator', generation: 'a1' },
+      { id: 'bob', email: 'bob@example.com', role: 'collaborator', generation: 'b1' })
+    const alice: Actor = { kind: 'person', userId: 'alice', email: 'alice@example.com' }
+    const bob: Actor = { kind: 'person', userId: 'bob', email: 'bob@example.com' }
+    let sequence = 0
+    const run = (command: Command, actor: Actor, context: Partial<CommandContext> = {}) => {
+      const effects = applyCommand(state, actor, command, { now: 1_000_000, operationId: `op-${++sequence}`, ...context })
+      state = effects.state
+      return effects
     }
+    // As a start on a host's own contributed machine leaves its agent: hosted and contributed by that host.
+    const add = (conversationId: string, harnessId: string, host: string, by: Actor = alice) => run({ type: 'agent.add', conversationId,
+      machineId: `${host}-mac`, harnessId, name: harnessId, configuration: config, lead: false }, by,
+      { contribution: { machineOwnerId: host, contributorId: host } }).result.agentId as string
+    const hosted = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: state.agents.find(a => a.id === agentId)!.machineOwnerId })
+    const secret = run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }, alice).result.projectId as string
+    const task = run({ type: 'conversation.create', projectId: secret, title: 'Task', brief: 'Do it.', checks: [] }, alice).result.conversationId as string
+    const onAlice = add(task, 'on-alice', 'alice'), sibling = add(task, 'sibling', 'alice'), onBob = add(task, 'on-bob', 'bob')
+    const target = (id: string) => state.agents.find(a => a.id === id)!
+    // Bob himself reads nothing of Secret, so the agent his machine runs drives none of its agents on Alice's login.
+    expect(() => run({ type: 'agent.input', agentId: onAlice, text: '!id', keys: ['Enter'] }, bob)).toThrow()
+    for (const command of [{ type: 'agent.input', agentId: onAlice, text: '!id', keys: ['Enter'] }, { type: 'agent.screen', agentId: onAlice }] as Command[]) {
+      expect(() => run(command, hosted(onBob))).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+    }
+    for (const kind of ['input', 'screen'] as const) expect(() => mayDrive(state, hosted(onBob), target(onAlice), false, kind)).toThrow()
+    // The same login's agents drive each other, and Alice's agent still drives the one on Bob's machine: she could herself.
+    expect(run({ type: 'agent.input', agentId: onAlice, keys: ['Enter'] }, hosted(sibling)).terminal).toMatchObject({ machineOwnerId: 'alice' })
+    expect(run({ type: 'agent.screen', agentId: onBob }, hosted(onAlice)).terminal).toMatchObject({ machineOwnerId: 'bob' })
+    // In a project Bob reads, his agent drives Alice's as he could.
+    const open = run({ type: 'project.create', name: 'Open', visibility: 'public', brief: '' }, alice).result.projectId as string
+    const shared = run({ type: 'conversation.create', projectId: open, title: 'Task', brief: 'Do it.', checks: [] }, alice).result.conversationId as string
+    const herWorker = add(shared, 'her-worker', 'alice'), hisWorker = add(shared, 'his-worker', 'bob', bob)
+    expect(run({ type: 'agent.input', agentId: herWorker, keys: ['Enter'] }, hosted(hisWorker)).terminal).toMatchObject({ machineOwnerId: 'alice' })
+  })
+
+  // The project's coordinator keeps its pre-branch power (to answer an agent's input prompt), even on a machine whose owner
+  // could not drive the target.
+  it('lets the coordinator drive a project agent on another login even where its host could not', () => {
+    let state: SuperTabState = createSuperTab('tab', 'Pilot', { id: 'owner', email: 'owner@example.com' }, 'prod')
+    state.people.push({ id: 'alice', email: 'alice@example.com', role: 'collaborator', generation: 'a1' },
+      { id: 'bob', email: 'bob@example.com', role: 'collaborator', generation: 'b1' })
+    const alice: Actor = { kind: 'person', userId: 'alice', email: 'alice@example.com' }
+    let sequence = 0
+    const run = (command: Command, actor: Actor, context: Partial<CommandContext> = {}) => {
+      const effects = applyCommand(state, actor, command, { now: 1_000_000, operationId: `op-${++sequence}`, ...context })
+      state = effects.state
+      return effects
+    }
+    const add = (conversationId: string, harnessId: string, host: string, lead = false) => run({ type: 'agent.add', conversationId,
+      machineId: `${host}-mac`, harnessId, name: harnessId, configuration: config, lead }, alice,
+      { contribution: { machineOwnerId: host, contributorId: host } }).result.agentId as string
+    const hosted = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: state.agents.find(a => a.id === agentId)!.machineOwnerId })
+    const created = run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }, alice).result
+    const task = run({ type: 'conversation.create', projectId: created.projectId as string, title: 'Task', brief: 'Do it.', checks: [] }, alice).result.conversationId as string
+    const worker = add(task, 'worker', 'alice'), helper = add(task, 'helper', 'bob')
+    const coordinator = add(created.conversationId as string, 'pm', 'bob', true)
+    expect(run({ type: 'agent.input', agentId: worker, keys: ['Enter'] }, hosted(coordinator)).terminal).toMatchObject({ machineOwnerId: 'alice' })
+    expect(run({ type: 'agent.screen', agentId: worker }, hosted(coordinator)).terminal).toMatchObject({ machineOwnerId: 'alice' })
+    // Any other agent there still drives only as its host could.
+    expect(() => run({ type: 'agent.screen', agentId: worker }, hosted(helper))).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
   })
 
   // Ken (2026-10-28): members may watch the Lead, but driving another person's Lead needs its machine's owner, whether or not
@@ -201,7 +279,7 @@ describe('terminal alerts', () => {
     const s = swarm()
     const on = () => s.run({ type: 'agent.alert', agentId: s.worker, alert: 'model', active: true }, as(s.worker)).messages
     expect(on()[0]).toMatchObject({ recipients: [s.lead], source: { kind: 'terminal-alert', agentId: s.worker, alert: 'model' },
-      text: `${name(s, s.worker)} can't get answers from its model: its requests keep failing. Stop it, or give the work to another model.` })
+      text: `${name(s, s.worker)} can't get answers from its model: its requests keep failing.` })
     expect(on()).toEqual([])
     expect(s.state.agents.find(a => a.id === s.worker)!.limitedUntil).toBeUndefined()
     s.run({ type: 'agent.alert', agentId: s.worker, alert: 'model', active: false }, as(s.worker))

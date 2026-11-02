@@ -16,7 +16,7 @@ import 'model.dart';
 
 /// A task's status: its mark, and its line in three parts, so a row too
 /// narrow for all of it cuts the [reason] and never the [age]: ages are what
-/// tell a stuck task from a new one. [pm] is what the PM did once the task
+/// tell a stuck task from a new one. [pm] is what was done once the task
 /// got here, and when.
 typedef SuperTabTaskStatus = ({
   HarnessActivity mark,
@@ -37,7 +37,7 @@ String _ago(Duration age) =>
     age.inMinutes < 1 ? 'just now' : '${superTabAgoShort(age)} ago';
 
 /// Whether a task is moving, waiting on purpose and for what, or stuck, and
-/// what the PM did about it (#957, the mockup Ken approved). The server
+/// what was done about it (#957, the mockup Ken approved). The server
 /// records the state (backend liveness.ts); a working task has none, and its
 /// time is its agent's last progress. Null for anything else: finished work,
 /// a group without work, or a wait an older backend sent no state for.
@@ -70,7 +70,7 @@ SuperTabTaskStatus? superTabTaskStatus(
   final since = at(liveness['since']);
   final result = (assignment?['result'] as String?)?.trim();
   final asked = result == null || result.isEmpty ? null : result;
-  // What the PM did once the task got here: earlier actions are not handling it.
+  // What was done once the task got here: earlier actions are not handling it.
   final acted = group.leadAction;
   final pmAt =
       acted != null && (acted['at'] as num) >= (liveness['since'] as num)
@@ -79,9 +79,11 @@ SuperTabTaskStatus? superTabTaskStatus(
   final pmDid = pmAt == null
       ? null
       : switch (acted!['kind']) {
-          'assign' => 'PM reassigned it',
-          'route' || 'start' => 'PM retrying',
-          'post' => 'PM posted',
+          // Facts, never who: any agent may act on a task now.
+          'assign' => 'Reassigned',
+          'route' => 'Routed again',
+          'start' => 'Starting another agent',
+          'post' => 'Posted',
           _ => null,
         };
   final personId = liveness['personId'] as String?;
@@ -93,7 +95,11 @@ SuperTabTaskStatus? superTabTaskStatus(
         ?asked,
       ].join(' · '),
     ),
-    ('waiting', 'review') => (HarnessActivity.needsInput, 'Waiting for review'),
+    // Handed on: whoever checks it next, with the agent's note.
+    ('waiting', 'review') => (
+      HarnessActivity.needsInput,
+      ['Waiting on others', ?asked].join(' · '),
+    ),
     ('waiting', 'revision') => (
       HarnessActivity.needsInput,
       'Waiting for the new revision',

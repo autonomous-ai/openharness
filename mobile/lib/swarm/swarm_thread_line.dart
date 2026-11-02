@@ -25,12 +25,15 @@ typedef SwarmThreadFace = ({
   String name,
   String id,
   bool agent,
+  bool pm,
   SwarmLook look,
 });
 
 /// The newest reply authors of [thread] as [snapshot] names and dresses them:
 /// an agent by the Swarm's name for it, a person by their address's first
-/// part, as the chat names a message's author.
+/// part, as the chat names a message's author. The project's coordinator
+/// wears manager blue here as on its own messages, whatever its role is
+/// called.
 List<SwarmThreadFace> swarmThreadFaces(
   SuperTabSnapshot? snapshot,
   SuperTabThread thread,
@@ -50,12 +53,14 @@ List<SwarmThreadFace> swarmThreadFaces(
                       as String,
               id: id,
               agent: true,
+              pm: snapshot?.isLead(id) ?? false,
               look: snapshot?.agentLook(id) ?? (picture: null, status: null),
             )
           : (
               name: superTabPersonName(author['name'] as String? ?? ''),
               id: id,
               agent: false,
+              pm: false,
               look: snapshot?.personLook(id) ?? (picture: null, status: null),
             ),
 ];
@@ -104,6 +109,7 @@ class SwarmThreadLine extends StatelessWidget {
                   name: who.name,
                   id: who.id,
                   agent: who.agent,
+                  pm: who.pm,
                   picture: who.look.picture,
                   status: who.look.status,
                   diameter: face,

@@ -14,6 +14,7 @@ import 'package:harness_mobile/swarm/swarm_inbox.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_start.dart';
+import 'package:harness_mobile/swarm/swarm_outgoing_files.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
@@ -121,7 +122,7 @@ void main() {
               required conversationId,
               required name,
               required mime,
-              required bytes,
+              required file,
               required cancel,
               required onProgress,
             }) async {
@@ -142,7 +143,7 @@ void main() {
         conversationId: 'g9',
         name: 'shot.jpg',
         mime: 'image/jpeg',
-        bytes: Uint8List(1),
+        file: SwarmOutgoingFile('shot.jpg', Uint8List(1)),
         cancel: CancelToken(),
         onProgress: (_) {},
       );

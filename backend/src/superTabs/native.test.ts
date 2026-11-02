@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Prisma } from '@prisma/client'
-import { isLeads, type Agent, type SuperTabState } from './model.js'
-import { revokeConditions } from './native.js'
+import type { Agent, SuperTabState } from './model.js'
+import { recoveryText, revokeConditions, turnRecipients } from './native.js'
 import { canReadAgent, canReadGroup, ownSession, projectsOf, watchClosed } from './projects.js'
 import { outsider, owner, peer, richSwarm } from './read/fixture.test-support.js'
 
@@ -30,7 +30,7 @@ function everyCheck(before: SuperTabState, after: SuperTabState): Prisma.SuperTa
   for (const group of before.conversations) {
     const current = after.conversations.find(c => c.id === group.id)
     if (!current || (current.archived && !group.archived)) conditions.push({ conversationId: group.id })
-    else if (!isLeads(current)) {
+    else {
       for (const member of after.people) {
         const reader = { kind: 'person' as const, userId: member.id, email: member.email }
         if (canReadGroup(before, reader, group) && !canReadGroup(after, reader, current)) conditions.push({ conversationId: group.id, userId: member.id })
@@ -99,14 +99,13 @@ describe('which terminals a commit revokes (item 7: only what changed access is 
     expect(got.conditions).toEqual(expected)
   })
 
-  // A conversation's kind alone decides who reads it: every person reads the Leads conversation, but as a project group only
-  // that project's readers do. A Buddy chat's kind narrows only what agents read, and no agent reader is checked here.
+  // A conversation's kind alone decides who reads it: nobody reads the removed Leads conversation (model.ts leadsRemoved), but
+  // as a project group that project's readers do. A Buddy chat's kind narrows only what agents read, and no agent reader is
+  // checked here.
   it('revokes exactly what every check revokes when only a conversation\'s kind changes', () => {
     const ids = swarm()
-    const leads = ids.before.conversations.find(isLeads)!
-    leads.projectId = ids.s.secret
-    const { got, expected } = ids.revokes(after => { delete group(after, leads.id).kind })
-    expect(expected).toEqual([{ conversationId: leads.id, userId: outsider.userId }])
+    const { got, expected } = ids.revokes(after => { group(after, ids.s.secretGroup).kind = 'leads' })
+    expect(expected).toEqual([{ conversationId: ids.s.secretGroup, userId: owner.userId }, { conversationId: ids.s.secretGroup, userId: peer.userId }])
     expect(got.conditions).toEqual(expected)
   })
 
@@ -114,5 +113,25 @@ describe('which terminals a commit revokes (item 7: only what changed access is 
     const ids = swarm()
     const { got } = ids.revokes(after => { target(after, ids.s.worker).confidential = true })
     expect(got.watchersLost).toEqual([{ agentId: ids.s.worker, personIds: [owner.userId, peer.userId, outsider.userId] }])
+  })
+})
+
+// Project instructions, phase 4: a recording gap is a notice of what happened, to the coordinator alone; nothing blocks its
+// task, and a typed prompt or its answer reaches nobody (phase 1's ruling: a terminal turn names no one).
+describe('what a recorded terminal turn tells', () => {
+  it('records a recording gap without blocking its task', () => {
+    const group = { leadId: 'L', title: 'Ship it', assignment: { status: 'working' } }
+    const text = recoveryText({ name: 'worker', displayName: 'Rowan' }, group, 'The work was interrupted by a restart of the terminal recording.',
+      '2026-10-30T08:00:00.000Z')
+    expect(text).toBe('Rowan\'s terminal recording on "Ship it" has a gap. The work was interrupted by a restart of the terminal recording.\n\n'
+      + 'Last recorded checkpoint: 2026-10-30T08:00:00.000Z. Input and commands before the gap may already have taken effect.')
+    expect(text).not.toMatch(/Recovery needed|Check the agent|Keep this task|report working|Do not replay/)
+    expect(group.assignment.status).toBe('working')
+    expect(recoveryText({ name: 'worker' }, group, 'Part of the recorded terminal history was lost.', null)).toContain('Last recorded checkpoint: time unavailable.')
+    // A required recovery reaches the coordinator; a prompt, an answer or any other gap nobody; nor the coordinator's own.
+    expect(turnRecipients(group, { id: 'w' }, true)).toEqual(['L'])
+    expect(turnRecipients(group, { id: 'w' }, false)).toEqual([])
+    expect(turnRecipients(group, { id: 'L' }, true)).toEqual([])
+    expect(turnRecipients({ leadId: null }, { id: 'w' }, true)).toEqual([])
   })
 })

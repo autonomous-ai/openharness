@@ -56,7 +56,8 @@ export interface ProgressView {
  *  clients overlay it on the parts. */
 export interface Derived {
   /** Every agent the reader can see. `workDecision` is null when the stored value stands; `roleId` null outside Custom. */
-  agents: Record<string, { downSince: string | null; limitedUntil: string | null; workDecision: 'awaiting' | null; roleId: string | null }>
+  /** `roleName`: the role it goes by (instructions.ts roleNameOf), its stored one or what it is. */
+  agents: Record<string, { downSince: string | null; limitedUntil: string | null; workDecision: 'awaiting' | null; roleId: string | null; roleName: string }>
   /** Every contributed machine the reader can see. */
   /** `clientVersion`: the CLI version its daemon last connected with (routing reads a machine updated since its failed starts). */
   machines: Record<string, { availableSlots: number; teamWork: { allowed: true } | { allowed: false; reason: string; [key: string]: unknown }; clientVersion?: string
@@ -78,13 +79,35 @@ export interface Derived {
   decisionsWaiting?: number
   /** A person only: a digest of which decisions are open, moving when they change though the count may not. */
   decisionsDigest?: string
+  /** A person only: a digest of which of their Activity rows are unread (activity.ts), moving when one is written, read or
+   *  removed. No count and no chat: the client reads its list again when it moves. Absent from an older backend. */
+  activityDigest?: string
   /** A person only: their own read marks (readMarks.ts), the newest message sequence read by conversation. A first load has
    *  every one of the conversations it holds; a changes read only those moved since its cursor, kept by the client as the
    *  higher of the two. Never another person's. */
   readMarks?: Record<string, number>
-  /** Present, and false, only in a Swarm Harness Team accounts are not tried in yet (machines.ts teamAccountSwarm): this
-   *  Mac's daemon and Desktop then offer no team account for it. Absent is every older backend's "yes". */
+  /** A person only: their own thread marks (readMarks.ts), the newest message sequence read by thread root, by conversation.
+   *  Like `readMarks`: a first load has those of the conversations it holds, a changes read those moved since its cursor.
+   *  Absent when there are none, and from an older backend. Never another person's. */
+  threadMarks?: Record<string, Record<string, number>>
+  /** A person only: their own notification setting by conversation (chatSettings.ts), `all`, `mentions` or `muted`. Like
+   *  `readMarks`: a first load has every one of the conversations it holds (a chat with none is at `mentions`), a changes read
+   *  those moved since its cursor. Absent when there are none, and from an older backend. Never another person's. */
+  chatSettings?: Record<string, 'all' | 'mentions' | 'muted'>
+  /** Present, and false, only from a backend that held Harness Team accounts to listed owners' Swarms (2026-10-27 to 11-02):
+   *  this Mac's daemon and Desktop then offered no team account for it. No longer sent: every Swarm takes part. */
   teamAccounts?: false
+  /** This server takes a thread reply's `newSession` (buddySessions.ts): Desktop offers New session only where it is
+   *  true and the Buddy's machine reports it can run sessions. Absent from an older backend, whose strict schema refuses
+   *  the field. */
+  threadSessions?: true
+  /** This server also takes `newSession` on a person's top-level message in their own Buddy chat: the message roots its
+   *  own thread, which gets the session (commands.ts routeBuddySession). Desktop offers New session in that chat's main
+   *  composer only where it is true. Absent from an older backend, which refuses it. */
+  sessionsFromChat?: true
+  /** One Buddy per person per Swarm (Dee, 10-31): a person's one Buddy chat, its Buddy reading every project they read, and New
+   *  session in one project. An older server says nothing, and its app keeps a Buddy per project. */
+  swarmBuddy?: true
 }
 export interface OtherProjectWorkView {
   conversationId: string; projectName: string; title: string; owns: string[]; status: WorkStatus; agentName: string; pr: string | null
@@ -105,6 +128,8 @@ interface ReadMeta {
 export interface FirstLoad extends ReadMeta {
   tabId: string
   githubApp?: true
+  /** This backend opens a task's steps (`conversation.create` with `step`, task steps design); absent on an older one. */
+  steps?: true
   head: LivePart<HeadView>
   members: LivePart<MemberView>[]
   agents: LivePart<AgentView>[]
@@ -224,6 +249,11 @@ export interface HostAgentRow {
   joinSwarm: boolean
   skillMode: 'default' | 'orchestration'
   role?: { id: string; name: string; kind: string; version: string; projectId: string } | null
+  /** The role it goes by (instructions.ts roleNameOf). */
+  roleName: string
+  /** Its project's instructions as the state names them: the host reads the text when `revision` moves. Revision 0 (no
+   *  `hash`): no document yet, so the built-in template. */
+  instructions: { projectId: string; revision: number; hash: string | null; coordinatorName: string } | null
   lead: boolean
   /** New: lets the host decide what it may read without a full Swarm read. */
   leadsConversationId: string | null

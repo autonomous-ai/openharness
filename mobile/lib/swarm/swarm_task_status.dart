@@ -43,7 +43,7 @@ Color swarmTaskMarkColor(SwarmTaskMark mark) => switch (mark) {
 
 /// A task's status: its mark, and its line in three parts, so a row too
 /// narrow for all of it cuts the [reason] and never the [age]: ages are what
-/// tell a stuck task from a new one. [pm] is what the PM did once the task
+/// tell a stuck task from a new one. [pm] is what was done once the task
 /// got here, and when. The desktop's `SuperTabTaskStatus`.
 typedef SwarmTaskStatus = ({
   SwarmTaskMark mark,
@@ -75,7 +75,7 @@ DateTime _at(num ms) =>
     DateTime.fromMillisecondsSinceEpoch(ms.toInt(), isUtc: true);
 
 /// Whether a task is moving, waiting on purpose and for what, or stuck, and
-/// what the PM did about it: the desktop's `superTabTaskStatus`, word for
+/// what was done about it: the desktop's `superTabTaskStatus`, word for
 /// word (desktop parity in swarm_task_status_test). The server records the
 /// state (backend liveness.ts); a working task has none, and its time is its
 /// agent's last progress. Null for anything else: finished work, a group
@@ -116,7 +116,7 @@ SwarmTaskStatus? swarmTaskStatus(
     final String text when text.trim().isNotEmpty => text.trim(),
     _ => null,
   };
-  // What the PM did once the task got here: earlier actions are not handling
+  // What was done once the task got here: earlier actions are not handling
   // it.
   final acted = group.leadAction;
   final pmAt = switch (acted?['at']) {
@@ -126,9 +126,11 @@ SwarmTaskStatus? swarmTaskStatus(
   final pmDid = pmAt == null
       ? null
       : switch (acted!['kind']) {
-          'assign' => 'PM reassigned it',
-          'route' || 'start' => 'PM retrying',
-          'post' => 'PM posted',
+          // Facts, never who: any agent may act on a task now.
+          'assign' => 'Reassigned',
+          'route' => 'Routed again',
+          'start' => 'Starting another agent',
+          'post' => 'Posted',
           _ => null,
         };
   final personId = switch (liveness['personId']) {
@@ -143,7 +145,11 @@ SwarmTaskStatus? swarmTaskStatus(
         ?result,
       ].join(' · '),
     ),
-    ('waiting', 'review') => (SwarmTaskMark.needsInput, 'Waiting for review'),
+    // Handed on: whoever checks it next, with the agent's note.
+    ('waiting', 'review') => (
+      SwarmTaskMark.needsInput,
+      ['Waiting on others', ?result].join(' · '),
+    ),
     ('waiting', 'revision') => (
       SwarmTaskMark.needsInput,
       'Waiting for the new revision',

@@ -248,10 +248,16 @@ void main() {
       await controller.select('offline');
       await controller.refresh();
       await tester.pumpAndSettle();
-      expect(weightOf(tester, project, 'Pilot'), grid.AppFont.semibold);
+      // Open, the project's row is its own chat's, as in Slack: only the
+      // workgroup with news is bold (Dee, 10-31).
+      expect(weightOf(tester, project, 'Pilot'), isNot(grid.AppFont.semibold));
       expect(weightOf(tester, g1, name), grid.AppFont.semibold);
       expect(unreadDot(project), findsNothing);
       expect(unreadDot(g1), findsNothing);
+      // Collapsed, it is bold for what it hides.
+      await tester.tap(toggle);
+      await tester.pumpAndSettle();
+      expect(weightOf(tester, project, 'Pilot'), grid.AppFont.semibold);
       await close(tester, controller);
     },
   );
@@ -274,9 +280,13 @@ void main() {
       await controller.select('offline');
       await controller.refresh();
       await tester.pumpAndSettle();
-      expect(spoken(tester, project), contains('Unread messages'));
+      expect(spoken(tester, project), isNot(contains('Unread messages')));
       expect(spoken(tester, g1), contains('Unread messages'));
       expect(spoken(tester, g2), isNot(contains('Unread messages')));
+      // Collapsed, the project is heard as unread for what it hides.
+      await tester.tap(toggle);
+      await tester.pumpAndSettle();
+      expect(spoken(tester, project), contains('Unread messages'));
       semantics.dispose();
       await close(tester, controller);
     },

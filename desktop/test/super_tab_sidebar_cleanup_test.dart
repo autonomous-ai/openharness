@@ -78,32 +78,22 @@ Future<void> closeSwarm(WidgetTester tester, SuperTabController c) async {
 }
 
 void main() {
-  testWidgets(
-    'on a Mac the top reads New project, Your devices, Your models: what '
-    'needs the person is in the menu bar and on the Dock instead',
-    (tester) async {
-      final c = await showSwarm(tester);
-      expect(topRows(tester), ['New project', 'Your devices', 'Your models']);
-      expect(find.byKey(const ValueKey('super-notifications')), findsNothing);
-      expect(tester.takeException(), isNull);
-      await closeSwarm(tester, c);
-    },
-    variant: TargetPlatformVariant.only(TargetPlatform.macOS),
-  );
-
-  testWidgets(
-    'with no menu-bar list to carry them, Notifications stays last with its '
-    'count',
-    (tester) async {
+  // Slack's Activity takes Notifications' place on every platform, above
+  // Threads (Lead, 10-31): on a Mac too, beside the menu bar and the Dock.
+  for (final platform in [TargetPlatform.macOS, TargetPlatform.linux]) {
+    testWidgets('the top reads New project, Your devices, Your models, '
+        'Activity with its count, Threads', (tester) async {
       final c = await showSwarm(tester);
       expect(topRows(tester), [
         'New project',
         'Your devices',
         'Your models',
-        'Notifications3',
+        'Activity3',
+        'Threads',
       ]);
+      expect(find.text('Notifications'), findsNothing);
+      expect(tester.takeException(), isNull);
       await closeSwarm(tester, c);
-    },
-    variant: TargetPlatformVariant.only(TargetPlatform.linux),
-  );
+    }, variant: TargetPlatformVariant.only(platform));
+  }
 }

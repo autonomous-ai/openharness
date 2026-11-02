@@ -17,6 +17,8 @@ class SuperTabMessageText extends StatelessWidget {
     this.references = const {},
     this.onOpenGroup,
     this.mentions = const [],
+    this.addresses = const {},
+    this.taggedYou = false,
   });
   final String text;
   final Map<int, String> references;
@@ -25,6 +27,14 @@ class SuperTabMessageText extends StatelessWidget {
   /// The names a Lead tagged in this message. Each reads highlighted where
   /// the text says it; one the text does not say opens its first line.
   final List<String> mentions;
+
+  /// The address of each person in [mentions], by name: a tag by full
+  /// address is theirs only when it is this one.
+  final Map<String, String> addresses;
+
+  /// The message tags the reader, so its row is washed in the accent: a tag
+  /// takes the stronger accent in light, to stay 4.5:1 on its pill there.
+  final bool taggedYou;
 
   static Uri? webLink(String? href) {
     final uri = href == null ? null : Uri.tryParse(href);
@@ -47,6 +57,15 @@ class SuperTabMessageText extends StatelessWidget {
         : '${tags.join(' ')} $body';
   }
 
+  /// The tags [text] holds, in order: each name as written after its `@`,
+  /// lowercased, a full address with its domain. Not in code or a link. The
+  /// backend reads a message's tags by this same rule (superTabs/mentions.ts);
+  /// test/fixtures/tag_fixture.json is the table both pass.
+  static List<String> tagsIn(String text) => [
+    for (final match in _Mention.tag.allMatches(_prose(text)))
+      '${match[1]}${match[2] ?? ''}'.toLowerCase(),
+  ];
+
   static final _opensBlock = RegExp(
     r'^(?: {4}|\t| {0,3}(?:[-*+](?:[ \t\n]|$)|#{1,6}(?:[ \t\n]|$)|>'
     r'|\d{1,9}[.)](?:[ \t\n]|$)|```|~~~|\||\[[^\]\n]+\]:'
@@ -56,10 +75,11 @@ class SuperTabMessageText extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
+    // Read only for a message that tags someone: most tag nobody.
+    final said = mentions.isEmpty ? const <String>[] : tagsIn(text);
     final unsaid = [
       for (final name in mentions)
-        if (!_Mention.tag.allMatches(text).any((m) => _Mention.names(m, name)))
-          '@$name',
+        if (!said.any((tag) => _says(tag, name, addresses))) '@$name',
     ];
     return MarkdownBody(
       data: withTags(unsaid, text),
@@ -68,9 +88,19 @@ class SuperTabMessageText extends StatelessWidget {
       inlineSyntaxes: [
         _WebAutolink(),
         _WorkgroupReference(references),
-        if (mentions.isNotEmpty) _Mention(mentions),
+        if (mentions.isNotEmpty) _Mention(mentions, addresses),
       ],
-      builders: {'pre': _CodeBlock(), 'mention': _MentionName()},
+      builders: {
+        'pre': _CodeBlock(),
+        'mention': _MentionName(
+          taggedYou
+              ? grid.AppTheme.pick(
+                  grid.AppCard.accentStrong,
+                  grid.AppPalette.accentOnSurface,
+                )
+              : grid.AppPalette.accentOnSurface,
+        ),
+      },
       paddingBuilders: {'a': _CompactLinkLabel()},
       styleSheet: desktopMarkdownStyleSheet(context),
       onTapLink: (_, href, _) {
@@ -169,21 +199,85 @@ class _WorkgroupReference extends md.InlineSyntax {
   }
 }
 
+final _fence = RegExp(r'^ {0,3}(`{3,}|~{3,})');
+final _codeSpan = RegExp(r'(?<!`)(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)');
+final _linkTarget = RegExp(r'\]\([^)\]]*\)');
+final _bareLink = RegExp(r'\b(?:https?://|www\.)\S+', caseSensitive: false);
+String _blank(Match match) => match[0]!.replaceAll(RegExp(r'[^\n]'), ' ');
+
+/// [text] with what is never a tag blanked out, as Markdown renders it: fenced
+/// and indented code, code spans, bare links and link destinations.
+String _prose(String text) {
+  final lines = text.split('\n');
+  String? fence;
+  var indented = false;
+  for (var i = 0; i < lines.length; i++) {
+    final line = lines[i];
+    final blank = line.replaceAll(RegExp(r'[^\n]'), ' ');
+    if (fence != null) {
+      final close = _fence.firstMatch(line);
+      if (close != null &&
+          close[1]![0] == fence[0] &&
+          close[1]!.length >= fence.length &&
+          line.substring(close[0]!.length).trim().isEmpty) {
+        fence = null;
+      }
+      lines[i] = blank;
+      continue;
+    }
+    final open = _fence.firstMatch(line);
+    if (open != null &&
+        !(open[1]![0] == '`' &&
+            line.substring(open[0]!.length).contains('`'))) {
+      fence = open[1];
+      lines[i] = blank;
+      indented = false;
+      continue;
+    }
+    // Indented code starts after a blank line (or the first line) and runs
+    // while its lines stay indented.
+    final startsCode =
+        RegExp(r'^( {4}|\t)').hasMatch(line) &&
+        line.trim().isNotEmpty &&
+        (indented || i == 0 || lines[i - 1].trim().isEmpty);
+    indented = startsCode || (indented && line.trim().isEmpty);
+    if (startsCode) lines[i] = blank;
+  }
+  return lines
+      .join('\n')
+      .replaceAllMapped(_codeSpan, _blank)
+      .replaceAllMapped(_linkTarget, _blank)
+      .replaceAllMapped(_bareLink, _blank);
+}
+
+/// Whether [tag] (as [SuperTabMessageText.tagsIn] gives it) names [name]: by
+/// the name, or by full address, which must be theirs when it is known (the
+/// backend matches an address to a person's email, mentions.ts namedIn).
+bool _says(String tag, String name, Map<String, String> addresses) {
+  final at = tag.indexOf('@');
+  if (at < 0) return tag == name.toLowerCase();
+  final address = addresses[name];
+  return address == null
+      ? tag.substring(0, at) == name.toLowerCase()
+      : tag == address.toLowerCase();
+}
+
 /// `@name` or `@name@domain` for a tagged person; any other `@` stays text.
 /// Parsed as inline Markdown, so code and fenced blocks remain literal.
 class _Mention extends md.InlineSyntax {
-  _Mention(this.mentions) : super(tag.pattern);
-  // A name never ends in a dot: `@dee.` closes a sentence.
+  _Mention(this.mentions, this.addresses) : super(tag.pattern);
+  // Never right after a letter, digit, `@` or `/` (an address, a path, a
+  // link). A name never ends in a dot: `@dee.` closes a sentence.
   static final tag = RegExp(
-    r'(?<![\w@])@([\w+-]+(?:\.[\w+-]+)*)(@[\w-]+(?:\.[\w-]+)+)?',
+    r'(?<![\w@/])@([\w+-]+(?:\.[\w+-]+)*)(@[\w-]+(?:\.[\w-]+)+)?',
   );
-  static bool names(Match match, String name) =>
-      match[1]!.toLowerCase() == name.toLowerCase();
   final List<String> mentions;
+  final Map<String, String> addresses;
   @override
   bool onMatch(md.InlineParser parser, Match match) {
+    final tag = '${match[1]}${match[2] ?? ''}'.toLowerCase();
     parser.addNode(
-      mentions.any((name) => names(match, name))
+      mentions.any((name) => _says(tag, name, addresses))
           ? md.Element.text('mention', match[0]!)
           : md.Text(match[0]!),
     );
@@ -192,6 +286,8 @@ class _Mention extends md.InlineSyntax {
 }
 
 class _MentionName extends MarkdownElementBuilder {
+  _MentionName(this.ink);
+  final Color ink;
   @override
   Widget? visitElementAfterWithContext(
     BuildContext context,
@@ -202,7 +298,7 @@ class _MentionName extends MarkdownElementBuilder {
     TextSpan(
       text: element.textContent,
       style: (parentStyle ?? const TextStyle()).copyWith(
-        color: grid.AppPalette.accentOnSurface,
+        color: ink,
         backgroundColor: grid.AppSurface.accentWash,
         fontWeight: FontWeight.w600,
       ),

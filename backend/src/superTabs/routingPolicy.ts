@@ -1,16 +1,18 @@
-/** Super Tab routing policy (docs/superpowers/specs/2026-10-19-super-tab-routing-v1-design.md).
- * The account default applies to every tab its owner creates; a tab owner may override single fields.
- * Every field has a built-in default so routing works before anyone opens the form. */
+/** The routing policy's shape (docs/superpowers/specs/2026-10-19-super-tab-routing-v1-design.md), kept for older clients
+ * (project instructions, phase 4). The tab's routing-policy read serves the built-in policy below, made from the model catalog
+ * (catalog.ts), so an older CLI reads the catalog's rows as a policy; an owner's saved policy or tab override is accepted,
+ * kept nowhere and never read to route. Only the migration (migration/instructions.ts) still reads a saved one, with
+ * effectivePolicy, to write its differences into the project's instructions. */
 import { z } from 'zod'
 import { BENCHMARK_PRIORS } from './benchmarkPriors/data.js'
 import { JOB_KINDS, priorLevel, type JobKind, type PriorsTable } from './benchmarkPriors/priors.js'
+import { MODEL_CATALOG, type CatalogModel } from './catalog.js'
 
-/** Built-in rows added after owners could save a policy, so saved policies read them too (effectivePolicy). Codex's own default
- *  model, named: GPT-6.1 Sol scores 58.18 on Terminal-Bench 4.0 in Codex (benchmarkPriors/data.ts) and costs Sonnet's API rate
- *  (costs/prices.ts). A start or Reviewer that names it is rated by this row, not as an unknown slug (Lead, 10-30). */
-const ADDED_ROWS = [
-  { engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', quality: 3, cost: 2, enabled: true },
-] as const satisfies ReadonlyArray<Record<string, unknown>>
+/** A catalog row as a policy row: its strength is the row's quality, and whether it is offered whether it is enabled. */
+const policyRow = (m: CatalogModel) => ({ engine: m.engine, model: m.model, effort: m.effort, quality: m.strength, cost: m.cost, enabled: m.offered })
+/** Built-in rows added after owners could save a policy, so saved policies read them too (effectivePolicy): Codex's own
+ *  default model named (GPT-6.1 Sol), and GPT-6-Astra at xhigh, as the catalog has them. */
+const ADDED_ROWS = MODEL_CATALOG.models.filter(m => m.model === 'gpt-6.1-sol' || m.model === 'gpt-6-astra').map(policyRow)
 /** An owner keeps exactly up to 40 rows of their own. A built-in row added on read, or the owner's own version of one (the same
  *  engine and model), never counts against that, or a full policy could no longer be saved once read (reviews of #2271). */
 const OWN_MODEL_ROWS = 40
@@ -45,36 +47,31 @@ const fields = {
 }
 export const routingPolicySchema = z.object({ version: z.literal(1), ...fields }).strict()
 export const routingOverrideSchema = z.object(fields).partial().strict()
-/** What a save accepts: also one row at most per built-in model, so a second copy never rides free of the 40 (review of #2271).
- *  Only saves check it: a policy saved before it still reads as saved, never as unreadable. */
-const saved = { ...fields, models: models.superRefine((rows, ctx) => {
-  for (const added of ADDED_ROWS) if (rows.filter(row => same(row, added)).length > 1)
-    ctx.addIssue({ code: 'custom', message: `Only one row for ${added.engine} ${added.model}.` })
-}) }
+/** What a save accepts: the first row for each built-in model rides free, and every further copy counts against the 40, so a
+ *  second copy never rides free (review of #2271), yet an owner with two rows of a model that became built-in, such as
+ *  Astra at two efforts, still saves (review of #2314). Only saves count them: a policy saved before still reads as saved. */
+const extraCopies = (rows: ReadonlyArray<Named>) => ADDED_ROWS.reduce((n, added) => n + Math.max(0, rows.filter(row => same(row, added)).length - 1), 0)
+const saved = { ...fields, models: models.refine(rows => rows.filter(row => !builtIn(row)).length + extraCopies(rows) <= OWN_MODEL_ROWS,
+  `At most ${OWN_MODEL_ROWS} rows of your own.`) }
 export const routingPolicySaveSchema = z.object({ version: z.literal(1), ...saved }).strict()
 export const routingOverrideSaveSchema = z.object(saved).partial().strict()
 export type RoutingPolicy = z.infer<typeof routingPolicySchema>
 export type RoutingOverride = z.infer<typeof routingOverrideSchema>
 export type RoutingModel = RoutingPolicy['models'][number]
 
+/** The built-in policy: the catalog's rows and grid ratings, with the floors and reserve an older CLI reads. */
 export const DEFAULT_ROUTING_POLICY: RoutingPolicy = {
   version: 1,
-  models: [
-    { engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 3, enabled: true },
-    { engine: 'codex', model: 'default', effort: 'default', quality: 3, cost: 2, enabled: true },
-    // Next to `default` so the form lists Codex's rows together. List order ranks nothing: the CLI route breaks ties by title.
-    ...ADDED_ROWS,
-    { engine: 'claude', model: 'sonnet', effort: 'medium', quality: 2, cost: 2, enabled: true },
-    { engine: 'claude', model: 'haiku', effort: 'auto', quality: 1, cost: 1, enabled: true },
-  ],
+  models: MODEL_CATALOG.models.map(policyRow),
   floor: { low: 1, medium: 2, high: 3 },
   quotaReserve: 10,
   notes: '',
-  // Local models are free but weaker: low-difficulty, well-specified work unless the owner says otherwise. Kimi K3 and
-  // DeepSeek v4.1 do Sonnet's work (Ken, 2026-10-29: they were offered only for low work and rarely ran).
-  localModels: { quality: 1, enabled: true, models: [{ model: 'kimi k3', quality: 2 }, { model: 'deepseek v4.1', quality: 2 }] },
+  localModels: { quality: MODEL_CATALOG.grid.strength, enabled: true,
+    models: MODEL_CATALOG.grid.models.map(row => ({ model: row.model, quality: row.strength })) },
 }
 
+/** A saved account policy with a tab override over it, as routing read them before the instructions. Only the migration
+ *  reads saved policies now. */
 export function effectivePolicy(account: unknown, override: unknown) {
   const warnings: string[] = []
   let policy = DEFAULT_ROUTING_POLICY
@@ -109,13 +106,6 @@ export function effectivePolicy(account: unknown, override: unknown) {
 
 /** A name's words for matching: lowercase letters and digits, "4.1" read as "41" (cli superTabs/route.ts `words`). */
 const words = (text: string) => text.toLowerCase().split(/[^a-z0-9.]+/).map(w => w.replace(/\./g, '')).filter(Boolean)
-/** How strong a grid model counts: the first of the policy's named rows whose every word is in its id or label, else the
- *  policy's local quality. The CLI's route rates the same way (cli superTabs/route.ts gridQuality). */
-export function gridQuality(policy: RoutingPolicy, model: string, label = ''): number {
-  const name = words(`${model} ${label}`).join('')
-  const local = policy.localModels ?? DEFAULT_ROUTING_POLICY.localModels!
-  return local.models?.find(row => words(row.model).every(w => name.includes(w)))?.quality ?? local.quality
-}
 
 /** Where a starting quality came from: the owner's override, or the benchmark table (with the scores it rests on). */
 export type Prior = { quality: number; source: 'owner' } | { quality: number; source: 'benchmark'; ratio: number; sources: NonNullable<ReturnType<typeof priorLevel>>['sources'] }

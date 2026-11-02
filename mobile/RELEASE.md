@@ -143,9 +143,10 @@ may lack symbolicated stacks until the matching symbols are supplied.
 | `1.0.9 (72)` | 2026-10-21 | TestFlight, then submitted as 1.0.9. The system banner shows while the app is open, and agent questions and turn tiers reach phones over the relay; faster terminal typing over P2P; Change agent hands over the conversation and can switch a busy Claude harness; a Harness OS computer's Version page, its update's restart and Unlock after one; Set up a device under Add computer; a desk tab renamed or closed by holding its chip in Find. Built from `feat/mobile-ios-android` at `9c329760`, the merge of local `main` with origin's #1499 |
 | `1.0.10 (73)` | 2026-10-23 | TestFlight. The phone's first session: task chips, one suggestion with a Send button, the keyboard over its task and a mic that sends the prompt, and Desktop's engine choice; a Harness OS computer signed out, its password changed, SSH turned on; Version lists releases and takes a newer OS release only; a pasted image waits for its transcode before uploading. 1.0.9 had been submitted, so it went up as 1.0.10. Built from `feat/mobile-ios-android` at `3c024672` |
 | `1.0.11 (74)` | 2026-10-26 | TestFlight. Claude Code scroll keeps up with the finger. 1.0.10 is approved, so it went up as 1.0.11 to carry refreshed App Store screenshots. Built from `feat/mobile-ios-android` at `13b9b38b` |
+| `1.0.12 (75)` | 2026-10-30 | TestFlight. A Harness OS computer signs in to GitHub, checks for updates, sets up Intern 3 and offers Computer use; Settings ▸ Experimental with Swarm, off by default; WebSocket reconnects back off; terminal uploads no longer freeze. 1.0.11 had been submitted, so it went up as 1.0.12. Built from `feat/mobile-ios-android` at `3a258bb8` |
 
-`pubspec.yaml` is now at `1.0.11+75`, the next build number. Build 74 (1.0.11) is the last TestFlight build and
-build 73 (1.0.10) the last Play build (54 went up outside this record, 53 went to Play only); do not upload any of them again. 1.0.1 to 1.0.10 are approved, so new builds go up as 1.0.11 until it is submitted or approved too. Check App Store Connect before uploading if another release has happened meanwhile.
+`pubspec.yaml` is now at `1.0.12+76`, the next build number. Build 75 (1.0.12) is the last build, for both
+TestFlight and Play (54 went up outside this record, 53 went to Play only); do not upload any of them again. 1.0.1 to 1.0.10 are approved and 1.0.11 is submitted or approved, so new builds go up as 1.0.12 until it is submitted or approved too. Check App Store Connect before uploading if another release has happened meanwhile.
 
 ### Why the app is iPhone-only
 
@@ -374,3 +375,5 @@ account (Autonomous Inc.) is exempt — check which kind the account is before p
 | `71` (1.0.8) | 2026-10-20 | Built by another session, same code as iOS 1.0.8 (71); uploaded by hand to Production (reported by the release owner on 2026-10-21) |
 | `72` (1.0.9) | 2026-10-21 | Built, same code as iOS 1.0.9 (72); uploaded by hand, the track it went to is not recorded |
 | `73` (1.0.10) | 2026-10-23 | Built, same code as iOS 1.0.10 (73); to be uploaded by hand |
+| `74` (1.0.11) | 2026-10-26 | Built at a pulled-back pubspec number, same `mobile/` code as iOS 1.0.11 (74); whether it was uploaded is not recorded, so do not reuse 74 |
+| `75` (1.0.12) | 2026-10-30 | Built, same code as iOS 1.0.12 (75); to be uploaded by hand |

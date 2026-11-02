@@ -12,12 +12,16 @@ class SessionCloseItem {
     required this.activity,
     this.machineName,
     this.protectionReason,
+    this.coordinatorName,
   });
 
   final String name;
   final String activity;
   final String? machineName;
   final String? protectionReason;
+
+  /// The coordinator's name in the project the protected agent coordinates.
+  final String? coordinatorName;
 
   bool get completed => activity == 'stopped' || activity == 'deferred';
 }
@@ -110,6 +114,10 @@ class _SessionClosePromptState extends State<_SessionClosePrompt> {
         .map((item) => item.protectionReason)
         .whereType<String>()
         .firstOrNull;
+    final coordinator = widget.sessions
+        .map((item) => item.coordinatorName)
+        .whereType<String>()
+        .firstOrNull;
     final description = widget.error ?? protectionReason ?? _summary(attention);
     final visible = widget.error == null && protectionReason == null
         ? attention
@@ -132,7 +140,7 @@ class _SessionClosePromptState extends State<_SessionClosePrompt> {
                 const SizedBox(height: DesktopChrome.controlGap),
                 Text(
                   protectionReason != null
-                      ? 'You can close $scope. The Product Manager will keep running.'
+                      ? 'You can close $scope. The ${coordinator ?? 'Product Manager'} will keep running.'
                       : widget.error == null
                       ? 'Stopping ${count == 1 ? 'this session' : 'all $count sessions'} will close $scope. History will be saved.'
                       : widget.tabName == null

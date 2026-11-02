@@ -1016,6 +1016,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _unregisterModels?.call();
     _modelsOverlay?.remove();
     _modelsOverlay?.dispose();
+    // Cleared, or the open titlebar dropdown below removes it a second time.
+    _modelsOverlay = null;
     _onboarding.removeListener(_onboardingChanged);
     if (widget.onboarding == null) _onboarding.dispose();
     app.modelManager.removeListener(_modelManagerChanged);
@@ -1066,6 +1068,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
     unawaited(_deviceWindowRequests?.cancel());
     _deviceRevealCooldown?.cancel();
     app.systemNotifications.onTap = null;
+    // It sits in the page's overlay, above this screen: name and email must not
+    // outlive the session that drew them.
+    _titlebarDropdown?.$2();
     if (_menuHost) {
       unawaited(_menuBus.send('machinesState', {'machines': []}));
       app.removeListener(_syncNative);
@@ -2483,7 +2488,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
   Future<void> _actOnNative(MethodCall call) async {
     if (mounted && call.method == 'keymapCommand') {
       final command = (call.arguments as Map?)?['command'];
-      if (command is String && dispatchSwarmQuickSwitcherCommand(command)) return;
+      if (command is String && dispatchSwarmQuickSwitcherCommand(command))
+        return;
     }
 
     if (mounted && call.method == 'keymapPending') {
@@ -2989,6 +2995,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
                     targets[i].$1,
                     targets[i].$2.id,
                   ),
+                  coordinatorName: superTabLeadCoordinatorName(
+                    app,
+                    targets[i].$1,
+                    targets[i].$2.id,
+                  ),
                   machineName: showMachines
                       ? app.stateOf(targets[i].$1)?.machine.displayName ??
                             targets[i].$1
@@ -3370,9 +3381,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
   // --- The tab row's last control: Sign in, or the account ----------------
   // Like a browser's toolbar (owner, 2026-10-11): everything before it is an
   // icon, and this is Sign in while this computer holds no account, and whose
-  // account it is afterwards. A viewer build's bar is as it was: it has no
-  // guest, and its own ways to its account.
-  bool get _accountControlShown => app.viewer == null;
+  // account it is afterwards. A viewer build has no guest; its host says
+  // whether it wears the avatar.
+  bool get _accountControlShown =>
+      app.viewer == null || widget.chrome?.showsAccount == true;
 
   /// What the native tab row draws for it. Absent, it draws nothing.
   Map<String, Object?>? get _accountPayload => !_accountControlShown
@@ -3395,10 +3407,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }
 
   /// The control and the gap before it, for a row this app draws.
-  List<Widget> _accountControl() => !_accountControlShown
+  List<Widget> _accountControl({bool compact = false}) => !_accountControlShown
       ? const []
       : [
-          const SizedBox(width: DesktopChrome.controlGap),
+          if (!compact) const SizedBox(width: DesktopChrome.controlGap),
           if (app.isGuest)
             WorkspaceSignInButton(
               key: const ValueKey('swarm-sign-in-button'),
@@ -3407,13 +3419,16 @@ class _SwarmScreenState extends State<SwarmScreen> {
           else
             KeyedSubtree(
               key: _accountButtonKey,
-              child: WorkspaceAvatarButton(
-                key: const ValueKey('swarm-account-button'),
-                initial: _accountInitial,
-                tooltip: _accountTooltip,
-                onPressed: _shortcutsEnabled
-                    ? () => unawaited(_showAccountMenu())
-                    : null,
+              child: fingerTarget(
+                enabled: compact,
+                WorkspaceAvatarButton(
+                  key: const ValueKey('swarm-account-button'),
+                  initial: _accountInitial,
+                  tooltip: _accountTooltip,
+                  onPressed: _shortcutsEnabled
+                      ? () => unawaited(_showAccountMenu())
+                      : null,
+                ),
               ),
             ),
         ];
@@ -3440,6 +3455,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
         name: user?.name ?? '',
         email: user?.email ?? '',
         topInset: _native ? 0 : _tabBarHeight,
+        // Pairing a phone is for a computer; a phone is already here.
+        forPhone: _compact(context),
         onOpen: onOpen,
         ownsPointer: (position) => _owns(_accountButtonKey, position),
       ),
@@ -6423,7 +6440,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
       additionalDestinations: [
         if (superTabTarget != null)
           for (final agent
-              in app.superTabs.peek(superTabTarget.tabId)?.snapshot?.teamAgents ??
+              in app.superTabs
+                      .peek(superTabTarget.tabId)
+                      ?.snapshot
+                      ?.teamAgents ??
                   [])
             SwarmDestination(
               id: agentDestinationId(agent.machineId, agent.harnessId),
@@ -9056,15 +9076,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
                 (showAddPhone ? addPhoneWidth : 0) +
                 (showDevices ? devicesWidth : 0) +
                 accountWidth;
-      final leadingWidth = chrome?.leadingWidth(context) ?? 0.0;
       final tabBudget = math.max(
         0.0,
         constraints.maxWidth -
             cell.width * 5 -
             grid.AppDesktop.tabBarTrailingInset -
             actionsWidth -
-            (_slotShown ? 44 : 0) -
-            leadingWidth,
+            (_slotShown ? 44 : 0),
       );
       _tabWidths = List.filled(
         labels.length,
@@ -9090,11 +9108,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
           child: Row(
             children: [
               SizedBox(width: cell.width),
-              if (chrome != null)
-                SizedBox(
-                  width: leadingWidth,
-                  child: chrome.leading(context, _workspaceCommands),
-                ),
               _withTabArrows(
                 arrows,
                 color: theme.foreground,
@@ -9264,15 +9277,16 @@ class _SwarmScreenState extends State<SwarmScreen> {
                   ),
                 ),
               ),
-              _statusToolIcon(
-                'new-tab',
-                'New Tab',
-                _newTab,
-                AppIcons.plus,
-                Size(cell.width * 3, toolHeight),
-                theme,
-                tooltip: _commandTooltip('New Tab', 'swarm.new'),
-              ),
+              chrome?.newTabControl?.call(context, _workspaceCommands) ??
+                  _statusToolIcon(
+                    'new-tab',
+                    'New Tab',
+                    _newTab,
+                    AppIcons.plus,
+                    Size(cell.width * 3, toolHeight),
+                    theme,
+                    tooltip: _commandTooltip('New Tab', 'swarm.new'),
+                  ),
               if (_tabActivityOffered)
                 ListenableBuilder(
                   listenable: _tabActivity,
@@ -9415,44 +9429,38 @@ class _SwarmScreenState extends State<SwarmScreen> {
         );
 
   /// A compact host uses a tab switcher instead of the tab list.
-  Widget _compactTabStrip(
-    WorkspaceChrome chrome,
-    TerminalTheme theme,
-  ) => Builder(
-    builder: (context) {
-      final cell = workspaceBarCellSizeOf(context);
-      return Material(
-        key: const ValueKey('workspace-tab-bar'),
-        color: grid.AppPalette.swarmTabBar,
-        // A phone's bar: every control a finger's size, its icon as it
-        // was, so the bar is at least that tall too.
-        child: SizedBox(
-          height: math.max(
-            kFingerTarget,
-            math.max(_tabBarHeight, cell.height * 2),
-          ),
-          child: Row(
-            children: [
-              SizedBox(width: cell.width),
-              SizedBox(
-                width: math.max(chrome.leadingWidth(context), kFingerTarget),
-                child: fingerTarget(
-                  enabled: true,
-                  chrome.leading(context, _workspaceCommands),
-                ),
+  Widget _compactTabStrip(WorkspaceChrome chrome, TerminalTheme theme) =>
+      Builder(
+        builder: (context) {
+          final cell = workspaceBarCellSizeOf(context);
+          return Material(
+            key: const ValueKey('workspace-tab-bar'),
+            color: grid.AppPalette.swarmTabBar,
+            // A phone's bar: every control a finger's size, its icon as it
+            // was, so the bar is at least that tall too.
+            child: SizedBox(
+              height: math.max(
+                kFingerTarget,
+                math.max(_tabBarHeight, cell.height * 2),
               ),
-              Expanded(child: chrome.compactTabs!(context, _workspaceCommands)),
-              fingerTarget(enabled: true, _searchButton(theme)),
-              fingerTarget(enabled: true, _notificationsButton(theme)),
-              if (kIsWeb && _slotShown)
-                fingerTarget(enabled: true, _daemonTabButton()),
-              SizedBox(width: cell.width),
-            ],
-          ),
-        ),
+              child: Row(
+                children: [
+                  SizedBox(width: cell.width),
+                  Expanded(
+                    child: chrome.compactTabs!(context, _workspaceCommands),
+                  ),
+                  fingerTarget(enabled: true, _searchButton(theme)),
+                  fingerTarget(enabled: true, _notificationsButton(theme)),
+                  if (kIsWeb && _slotShown)
+                    fingerTarget(enabled: true, _daemonTabButton()),
+                  ..._accountControl(compact: true),
+                  SizedBox(width: cell.width),
+                ],
+              ),
+            ),
+          );
+        },
       );
-    },
-  );
 
   Widget _statusToolIcon(
     String id,

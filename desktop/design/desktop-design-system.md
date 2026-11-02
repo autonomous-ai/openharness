@@ -404,6 +404,9 @@ Deliberate differences from Desktop, and only these:
 - The terminal keeps its own font, size and palette, as on Desktop.
 - Bottom sheets, which Desktop does not have, round their top corners at the
   card radius (12).
+- Swarm Home starts a new message from a round, 56-point, accent-filled +
+  floating at its bottom right (New message, as Slack Mobile does), not from
+  a button in its top bar.
 
 The mobile style check (`scripts/check-ui-style.py`) covers `mobile/lib/swarm`
 with the same rules as Desktop's Swarm code and an allowlist of its own.

@@ -18,7 +18,10 @@ export function createSwarmAgents({ byAgent, stoppedIds, closeAgent, resumeAgent
    *  (security re-check 1 and 2 of #2089). The close's own answer when there is nothing to delete or it went. */
   const ended = async <T>(agentId: string, closed: T): Promise<T | { error: 'PURGE_FAILED'; detail: string }> => {
     if (!purgeEnded) return closed
-    const said = await purgeEnded(agentId).catch((error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }))
+    // A thrown failure by its kind alone, its code or its class: its message may name a path, which went into the daemon's
+    // log and the close's answer (security review 2 of #2389).
+    const said = await purgeEnded(agentId).catch((error: unknown) => ({ error: error instanceof Error
+      ? typeof (error as NodeJS.ErrnoException).code === 'string' ? (error as NodeJS.ErrnoException).code! : error.name : 'unknown failure' }))
     if (typeof said.error !== 'string') return closed
     const detail = typeof (said as Record<string, unknown>).detail === 'string' ? (said as Record<string, unknown>).detail as string : said.error
     // An unreadable record was said once, where it was kept; its host logs each refused retry (review of #2142).

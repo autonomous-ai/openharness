@@ -83,6 +83,9 @@ export class AgentRestartCoordinator {
   }
 }
 
+/** How the relaunch reopens the conversation: resumed, continued in a fork of it, or neither (a fresh one). */
+export interface RelaunchArgvOptions { bypassPermission: boolean; resumeSessionId?: string; forkSessionId?: string }
+
 export interface RestartAgentDeps {
   /** False after Stop, replacement, or removal. Checked across every await. */
   isCurrent?: () => boolean
@@ -110,10 +113,10 @@ export interface RestartAgentDeps {
    * ordering only, never allowed to fail the restart; implementations swallow their own errors.
    */
   stopConflictingJob?: () => Promise<void>
-  buildArgv: (opts: { bypassPermission: boolean; resumeSessionId?: string }) => string[]
+  buildArgv: (opts: RelaunchArgvOptions) => string[]
   /** Why the relaunch [buildArgv] would build is refused on this platform (a Windows batch-file engine whose arguments
    *  cmd.exe would read, lib/windows/launch.ts), asked before anything is stopped; null when it is not. */
-  launchRefusal?: (opts: { bypassPermission: boolean; resumeSessionId?: string }) => string | null
+  launchRefusal?: (opts: RelaunchArgvOptions) => string | null
   log: (message: string) => void
   /** Keeps the conversation the fresh fallback left as a stopped harness (keepAbandonedConversation.ts). */
   keepAbandoned?: () => void
@@ -124,8 +127,14 @@ export interface RestartAgentDeps {
  *  respawn over a target the kill sequence could not confirm. */
 export const KILL_CONFIRMED: ReadonlySet<TerminateOutcome> = new Set(['gone', 'terminated', 'killed'])
 
+/**
+ * [session.continueInFork]: the conversation goes on in a fork of it (`codex fork <id>`) instead of being resumed — the
+ * relaunch moves it to a provider it cannot be resumed on (`EngineLaunch.providerBoundConversations`). The fork is the
+ * whole conversation, so nothing is kept for the one it came from; the agent follows the fork's id when it binds
+ * (bind.ts, as a rebound).
+ */
 export async function restartAgent(
-  session: { engine: AgentEngine; sessionId: string; resumeOnly?: true },
+  session: { engine: AgentEngine; sessionId: string; resumeOnly?: true; continueInFork?: true },
   bypassPermission: boolean,
   deps: RestartAgentDeps,
 ): Promise<RestartOutcome> {
@@ -135,8 +144,9 @@ export async function restartAgent(
   // Before anything is stopped: refused after the kill, the agent was left with no engine at all.
   const refused = await deps.respawnRefusal?.()
   if (refused) return { ok: false, detail: `${refused} Nothing was stopped.` }
+  const reopen = (id: string | undefined) => !id ? {} : session.continueInFork ? { forkSessionId: id } : { resumeSessionId: id }
   // The resume relaunch has every argument the fresh fallback has, and more: refused, neither would start.
-  const launchRefused = deps.launchRefusal?.({ bypassPermission, ...(session.sessionId ? { resumeSessionId: session.sessionId } : {}) })
+  const launchRefused = deps.launchRefusal?.({ bypassPermission, ...reopen(session.sessionId) })
   if (launchRefused) return { ok: false, error: 'ENGINE_LAUNCH_REFUSED', detail: `${launchRefused} Nothing was stopped.` }
   if (!current()) return changed
   const armed = await deps.holdOpen()
@@ -166,10 +176,7 @@ export async function restartAgent(
   if (!current()) return changed
   const spawnAndWait = async (withResume: boolean): Promise<ProcessIdentity | null> => {
     if (!current()) return null
-    const argv = deps.buildArgv({
-      bypassPermission,
-      ...(withResume && resumeSessionId ? { resumeSessionId } : {}),
-    })
+    const argv = deps.buildArgv({ bypassPermission, ...(withResume ? reopen(resumeSessionId) : {}) })
     const spawned = await deps.respawn(argv)
     if (!current()) return null
     if (!spawned.ok) {

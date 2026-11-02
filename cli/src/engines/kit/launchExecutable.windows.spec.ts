@@ -68,6 +68,13 @@ describe('the Windows engine search', () => {
     expect(await capture('C:\\tools')).toMatchObject({ state: 'held', detail: expect.stringContaining('aliases') })
   })
 
+  it('holds at a dangling link even with an engine after it, where Windows stops too', async () => {
+    // POSIX looks past it as bash and zsh do; Windows' search stops at the link, so a later engine is not what runs.
+    dangling.add('c:\\tools\\codex.exe')
+    files.add('c:\\later\\codex.cmd')
+    expect(await capture('C:\\tools;C:\\later')).toMatchObject({ state: 'held', detail: expect.stringContaining('aliases') })
+  })
+
   it('treats a missing entry as absent and holds on any other error', async () => {
     expect(await capture('C:\\tools')).toMatchObject({ state: 'held' })
     vi.mocked(fs.statSync).mockImplementationOnce((() => { throw missing('x', 'EACCES') }) as never)

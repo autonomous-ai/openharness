@@ -20,6 +20,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSyn
 import { dirname, join } from 'node:path'
 import type { RemoteAppPolicy } from '../../core/api.js'
 import { eventAgentId } from '../../core/guestPolicy.js'
+import { roleFromWire } from '../../lib/swarmSkills.js'
 import { observerSnapshotFile } from '../../sharing/swarmMarks.js'
 import type { PurgeRecord } from './teamPurge.js'
 export { isTeamDaemon, pmEngineHome, PM_HOMES } from '../teamDaemon.js'
@@ -218,7 +219,8 @@ export function teamAppPolicyFor(dataDir: string, machineId: () => string,
   stopped: () => ReadonlyArray<{ agentId: string; sessionId?: string | null; swarmSkill?: { role?: string } }>, purges?: PurgeRecord) {
   const record = confidentialRecord(confidentialRecordFile(dataDir))
   const held = (rows: ReadonlyArray<{ agentId: string; sessionId?: string | null; swarmSkill?: { role?: string } }>) =>
-    rows.map(s => ({ agentId: s.agentId, sessionId: s.sessionId ?? null, lead: s.swarmSkill?.role === 'lead' }))
+    // The coordinator, saved as `coordinator`, or as `lead` by a release from before role kinds.
+    rows.map(s => ({ agentId: s.agentId, sessionId: s.sessionId ?? null, lead: roleFromWire(s.swarmSkill?.role)?.role === 'coordinator' }))
   let seen: { key: string; marks: string[] | null } | null = null
   const marks = () => {
     if (record.unknown()) return null

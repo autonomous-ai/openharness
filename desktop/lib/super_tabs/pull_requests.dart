@@ -13,6 +13,7 @@ import '../state/app_state.dart';
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'model.dart';
+import '../widgets/laid_out_list.dart';
 
 List<Uri> superTabPullRequestLinks(String text) => {
   for (final match in RegExp(
@@ -87,11 +88,8 @@ class _SuperTabPullRequestsState extends State<SuperTabPullRequests> {
   SuperTabController get c => widget.controller;
   bool get _active =>
       widget.visible && _tickers && (widget.app?.foreground.value ?? true);
-  // The Product Managers' conversation belongs to no project, whatever was
-  // chosen in a workgroup before.
   bool get _projectScope =>
-      c.selectedId != c.snapshot?.leadsConversationId &&
-      (_all || c.snapshot?.isProjectLead(c.selectedId) == true);
+      _all || c.snapshot?.isProjectLead(c.selectedId) == true;
   List<SuperTabConversation> get _groups =>
       c.snapshot?.conversations
           .where(
@@ -486,8 +484,7 @@ class _SuperTabPullRequestsState extends State<SuperTabPullRequests> {
               const SizedBox(width: 8),
               if (c.snapshot?.isProjectLead(c.selectedId) == true)
                 Text('This project', style: DesktopChrome.metadata())
-              // The Product Managers' conversation belongs to no project.
-              else if (c.selectedId != c.snapshot?.leadsConversationId)
+              else
                 DropdownButton<bool>(
                   value: _all,
                   underline: const SizedBox.shrink(),
@@ -554,7 +551,7 @@ class _SuperTabPullRequestsState extends State<SuperTabPullRequests> {
                     ),
                   ),
                 )
-              : ListView(
+              : LaidOutListView(
                   padding: const EdgeInsets.only(bottom: 16),
                   children: [
                     if (_unsupported)

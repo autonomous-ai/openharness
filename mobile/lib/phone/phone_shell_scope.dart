@@ -11,6 +11,7 @@ class PhoneShellScope extends InheritedWidget {
     required this.onMachineLinked,
     required this.onOpenAgent,
     this.onShowSwarm,
+    this.canOpenMachine,
     required super.child,
   });
 
@@ -21,6 +22,10 @@ class PhoneShellScope extends InheritedWidget {
   /// Puts [agentId] on the home screen — the terminal at the ROOT of the Agents tab — instead of
   /// pushing a terminal over whatever page asked. See `openAgent` in `phone_navigation.dart`.
   final void Function(String machineId, String agentId) onOpenAgent;
+
+  /// This phone has [machineId] linked and can open its terminals
+  /// ([onOpenAgent]). Null where nothing can be opened.
+  final bool Function(String machineId)? canOpenMachine;
 
   /// Swarm Home at the root, every page over it closed: Swarm asked for from
   /// the terminal (its mark, Find). Null where the shell has no Swarm Home to

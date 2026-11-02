@@ -1847,7 +1847,18 @@ class _TerminalPanelState extends State<TerminalPanel>
       if (imageBytes != null &&
           imageBytes.isNotEmpty &&
           imageBytes.length <= terminalLocalImagePasteMaxPayloadBytes) {
-        await target.pasteImage(imageBytes);
+        final pasted = await target.pasteImage(imageBytes);
+        final stalled = target.lastStalledUpload;
+        if (!pasted && stalled != null && mounted) {
+          ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+            SnackBar(
+              content: Text(
+                'The image upload stopped at ${(stalled.percent * 100).round()}%: '
+                'part of it never reached the machine. Paste again to retry.',
+              ),
+            ),
+          );
+        }
         return;
       }
     }

@@ -2,8 +2,9 @@
  * Whether a local model can drive a coding agent, beside the 64K context floor (`codingContext.ts`). 2026-10-24: a Builder
  * on llama3.2:3b, with a 128K window, made over a thousand requests for a one-line edit and never finished; a qwen3 4B
  * Builder timed out the day before. A model this small cannot keep up with a coding agent's tools and context, and one
- * that answers slowly has the grid's relay give up on it. Such a model is not offered to Builders, and Run for Swarm
- * says why (desktop `lib/models/coding_model.dart` holds the same rule).
+ * that answers slowly has the grid's relay give up on it. Run for Swarm says why (desktop `lib/models/coding_model.dart`
+ * holds the same rule), and since the project instructions the route still offers such a model, with this sentence as its
+ * note: the agent choosing decides (phase 4, decision 19).
  */
 
 /** Fewer parameters than this, and Claude Code or Codex goes round in circles. */
@@ -39,11 +40,11 @@ export function paramsOf(m: CodingModelFacts): number | undefined {
 export function codingRefusal(m: CodingModelFacts): string | null {
   const params = paramsOf(m)
   if (params !== undefined && params < MIN_CODING_PARAMS_B) {
-    return `${m.name} is too small for a coding agent (about ${Math.round(params * 10) / 10}B parameters; Builders need ${MIN_CODING_PARAMS_B}B or more).`
+    return `${m.name} is too small for a coding agent (about ${Math.round(params * 10) / 10}B parameters; a coding agent needs ${MIN_CODING_PARAMS_B}B or more).`
   }
   const speed = m.tokensPerSecond ?? m.estTokS
   if (speed !== undefined && speed < MIN_CODING_TOK_S) {
-    return `${m.name} is too slow on this computer for a coding agent (about ${Math.round(speed)} tok/s; Builders need ${MIN_CODING_TOK_S} or more).`
+    return `${m.name} is too slow on this computer for a coding agent (about ${Math.round(speed)} tok/s; a coding agent needs ${MIN_CODING_TOK_S} or more).`
   }
   return null
 }

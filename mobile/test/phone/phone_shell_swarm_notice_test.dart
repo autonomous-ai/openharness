@@ -5,9 +5,11 @@ import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/phone/phone_shell.dart';
 import 'package:harness_mobile/phone/agent_home.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
+import 'package:harness_mobile/swarm/swarm_activity_page.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 
+import '../swarm/swarm_fixture.dart';
 import 'devices_fixture.dart';
 
 /// A tapped Swarm notice opens the conversation it was about, over the Swarm
@@ -81,13 +83,20 @@ void main() {
           }
           await tester.pump();
           await tester.pump(const Duration(milliseconds: 400));
-          if (on) {
+          if (on && kind == 'decision') {
+            // A decision opens in Activity, at it: no chat shows decisions.
+            final page = tester.widget<SwarmActivityPage>(
+              find.byType(SwarmActivityPage),
+            );
+            expect((page.focus, page.swarmId), ('decision:d1', 'tab-b'));
+            expect(find.byType(SwarmConversationPage), findsNothing);
+            expect(find.byType(SwarmPage, skipOffstage: false), findsOneWidget);
+          } else if (on) {
             final page = tester.widget<SwarmConversationPage>(
               find.byType(SwarmConversationPage),
             );
             expect(page.conversationId, target.conversationId);
             expect(page.messageId, target.messageId);
-            expect(page.decisionId, target.decisionId);
           } else {
             expect(find.byType(SwarmConversationPage), findsNothing);
             expect(find.byType(AgentHome), findsOneWidget);
@@ -120,6 +129,47 @@ void main() {
     expectOpened(tester);
   });
 
+  testWidgets("a tap on a project chat's notice opens the project on Home "
+      "C's screen, its chat at the message", (tester) async {
+    final fake = FakeSwarm();
+    fake.routes['/api/super-tabs/list'] = (_) => {
+      'tabs': [
+        {'id': tab, 'name': 'Phone Swarm', 'ownerId': 'person-me'},
+      ],
+      'next': null,
+    };
+    fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
+      ...firstLoad(),
+      'members': [part('person-me', 1, person('person-me'))],
+    };
+    fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
+    fake.routes['/api/super-tabs/$tab/'] = (_) => <String, dynamic>{
+      'messages': <Object>[],
+      'next': null,
+    };
+    (app as _NoticeApp).swarm = fake;
+    await tester.pumpWidget(MaterialApp(home: PhoneShell(notifier: app)));
+    for (var i = 0; i < 20; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    notices().openedSwarm.value = (
+      swarmId: tab,
+      conversationId: leadChat,
+      messageId: 'm7',
+      decisionId: null,
+    );
+    for (var i = 0; i < 20; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    expectHomeCProject('Mobile');
+    final chat = tester.widget<SwarmConversationPage>(
+      find.byType(SwarmConversationPage),
+    );
+    expect((chat.conversationId, chat.messageId), (leadChat, 'm7'));
+  });
+
   testWidgets('a tap that launched the app opens it too', (tester) async {
     // Read before the shell exists, so no listener sees it change.
     notices().openedSwarm.value = (
@@ -137,6 +187,19 @@ void main() {
 }
 
 class _NoticeApp extends DevicesApp {
+  /// The Swarm backend the shell's Swarm reads, when a test gives one.
+  FakeSwarm? swarm;
+
+  @override
+  Future<Object?> swarmRequest(
+    String method,
+    String path, {
+    Map<String, dynamic>? body,
+  }) => switch (swarm) {
+    final fake? => fake.request(method, path, body: body),
+    null => super.swarmRequest(method, path, body: body),
+  };
+
   @override
   void handleAppResumed() {}
 }

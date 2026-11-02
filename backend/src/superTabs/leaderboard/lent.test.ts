@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { MACHINE_FRESH_MS, type ContributedMachine } from '../machines.js'
 import { createSuperTab, type Agent, type Conversation, type SuperTabState, type WorkStatus } from '../model.js'
-import { accrueLent } from './lent.js'
-import { weekStart } from './week.js'
+import { accrueLent, addLent, lentAgents } from './lent.js'
+import { WEEK_MS, weekStart } from './week.js'
 
 // Monday 2026-10-26 00:00 UTC.
 const MONDAY = Date.UTC(2026, 9, 26)
@@ -98,5 +98,32 @@ describe('lent agent-hours from machine readings', () => {
     }
     expect(pool.lent?.map(l => (l.week - MONDAY) / (7 * 86_400_000))).toEqual([2, 3, 4, 5, 6])
     expect(pool.lent?.every(l => l.busyMs === 5_000)).toBe(true)
+  })
+})
+
+describe('lent for a report that loads no Swarm (DB 2.5)', () => {
+  /** busy works on someone else's task, idle waits for review, and a week too old to keep is on the ledger. */
+  const scene = (running: string[]) => {
+    const pool = machine(running, MONDAY)
+    pool.lent = [{ week: MONDAY - 6 * WEEK_MS, busyMs: 1 }, { week: MONDAY, busyMs: 5 }]
+    return swarm(pool, [agent('busy'), agent('idle')], [task('busy'), task('idle', 'review')])
+  }
+
+  it('adds what accrueLent adds, from the count of agents it counts', () => {
+    for (const [running, now] of [[['h-busy', 'h-idle'], MONDAY + 30_000], [['h-busy'], MONDAY + 100_000], [[], MONDAY + 10_000],
+      [['h-idle'], MONDAY + 10_000]] as const) {
+      const full = scene([...running]), fast = scene([...running])
+      accrueLent(full, full.machines![0]!, now)
+      addLent(fast.machines![0]!, now, lentAgents(fast, fast.machines![0]!, fast.machines![0]!.observation!.runningHarnessIds))
+      expect(fast.machines![0]!.lent, JSON.stringify(running)).toEqual(full.machines![0]!.lent)
+    }
+    expect(lentAgents(scene([]), scene([]).machines![0]!, ['h-busy', 'h-idle'])).toBe(1)
+  })
+
+  it('writes nothing with no time since the last reading or no agent counted', () => {
+    const state = scene(['h-busy']), pool = state.machines![0]!
+    addLent(pool, MONDAY, 1)
+    addLent(pool, MONDAY + 30_000, 0)
+    expect(pool.lent).toEqual([{ week: MONDAY - 6 * WEEK_MS, busyMs: 1 }, { week: MONDAY, busyMs: 5 }])
   })
 })

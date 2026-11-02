@@ -224,11 +224,14 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  /// [swarm]'s project Mobile, from Home, on its Tasks tab.
+  /// [swarm]'s project Mobile, from Home, with its Team sheet open, its tasks
+  /// on top (Swarm Home C).
   Future<void> openTasks(WidgetTester tester, {String swarm = tab}) async {
     await tester.tap(key('swarm-project-$swarm-$project'));
     await tester.pumpAndSettle();
-    await tester.tap(key('swarm-project-tab-tasks'));
+    await tester.tap(key('swarm-project-menu'));
+    await tester.pumpAndSettle();
+    await tester.tap(key('swarm-project-menu-team'));
     await tester.pumpAndSettle();
   }
 
@@ -247,7 +250,7 @@ void main() {
       await openTasks(tester);
 
       for (final (id, text) in [
-        ('g-review', 'Nova · Waiting for review · 3m · PM posted 1m ago'),
+        ('g-review', 'Nova · Waiting on others · 3m · Posted 1m ago'),
         ('g-work', 'Atlas · Working · 4m ago'),
       ]) {
         final row = key('swarm-task-$id');
@@ -303,13 +306,13 @@ void main() {
       await openTasks(tester);
       expect(
         line(tester, 'g-review'),
-        'Nova · Waiting for review · 3m · PM posted 1m ago',
+        'Nova · Waiting on others · 3m · Posted 1m ago',
       );
 
       await tester.pump(const Duration(minutes: 1));
       expect(
         line(tester, 'g-review'),
-        'Nova · Waiting for review · 4m · PM posted 2m ago',
+        'Nova · Waiting on others · 4m · Posted 2m ago',
       );
       expect(line(tester, 'g-work'), 'Atlas · Working · 5m ago');
     });
@@ -354,7 +357,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(
         line(tester, 'g-review'),
-        'Nova · Waiting for review · 3m · PM posted 1m ago',
+        'Nova · Waiting on others · 3m · Posted 1m ago',
       );
       expect(find.byType(Skeleton), findsNothing);
       expect(key('swarm-project-loading'), findsNothing);
@@ -397,6 +400,8 @@ void main() {
       );
       expect(find.textContaining('Orion'), findsNothing);
 
+      await tester.tap(key('swarm-team-close'));
+      await tester.pumpAndSettle();
       await tester.tap(key('tty-back'));
       await tester.pumpAndSettle();
       await openTasks(tester, swarm: other);
@@ -428,7 +433,7 @@ void main() {
           'g-ask',
           'Nova · Waiting on person-tony · Ship it behind a flag? · 12m',
         ),
-        ('g-review', 'Nova · Waiting for review · 3m · PM posted 1m ago'),
+        ('g-review', 'Nova · Waiting on others · 3m · Posted 1m ago'),
         ('g-work', 'Atlas · Working · 4m ago'),
       ]) {
         expect(

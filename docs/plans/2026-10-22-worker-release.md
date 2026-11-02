@@ -2,6 +2,9 @@
 
 > **For agentic workers:** Use superpowers:executing-plans to implement this plan task by task.
 
+> Replaced by [2026-10-30-project-instructions-design.md](2026-10-30-project-instructions-design.md): the instruction document and agents' direct messages
+> replace what this describes. Replaced in part: the keep, reuse and stop decision, the host's stop handling and the slot return stay; holding routing, starts and assignments while a finished worker awaits a decision goes.
+
 **Goal:** Require the Lead to reuse, keep or stop each finished worker; stopping closes its native session and returns its machine slot.
 
 **Architecture:** Persist the decision on the Swarm agent, independently of the group's replaceable assignment. The backend gates new routing, starting and assignment. The execution host consumes stop requests through the existing identity-bound core lifecycle, including its service-process bridge, and confirms removal through the command transaction, which also cancels deliveries. A global SuperTabRun reservation prevents another public Swarm from assigning the same native session during close. A pending stop cannot be reassigned. An owner or contributor can withdraw a stuck stop with normal Remove; this clears its work reservation and retires that native ID only in this Swarm. Native capacity remains reserved until host stop proof. A separate two-minute close lease protects other Swarms from an already-running close; completion or expiry permits reuse elsewhere. Native core closure accepts only the original recorded Swarm launch and refuses personally resumed sessions throughout saving/stopping.

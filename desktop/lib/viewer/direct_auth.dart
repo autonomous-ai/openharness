@@ -8,7 +8,7 @@ import 'direct_auth_api.dart';
 /// A viewer build's SSO session — authSession.ts's `AuthSessionManager`, moved into the app because
 /// a device with no harness CLI has nobody else to hold it: the tokens `/api/auth/exchange` issued,
 /// kept in [AuthSession], refreshed [_refreshSkew] before they lapse, one refresh at a time.
-class DirectAuth implements AccessTokenSource {
+class DirectAuth implements AccessTokenSource, SignInRevision {
   DirectAuth({required this.session, required this.api});
 
   final AuthSession session;
@@ -18,6 +18,11 @@ class DirectAuth implements AccessTokenSource {
   int _revision = 0;
 
   static const _refreshSkew = Duration(seconds: 60);
+
+  /// Moves with every sign-in and sign-out here: a request signed before it
+  /// moved is not retried as whoever is signed in now.
+  @override
+  int get signInRevision => _revision;
 
   /// Browser adapters release their cross-tab session listener here.
   void dispose() {}

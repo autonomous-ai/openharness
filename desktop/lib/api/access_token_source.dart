@@ -9,3 +9,18 @@ abstract interface class AccessTokenSource {
 abstract interface class AccessTokenFailure implements Exception {
   bool get signedOut;
 }
+
+/// A token source that says which sign-in its tokens belong to: the number
+/// moves whenever someone signs in or out on this device, so a request can
+/// tell that a retry would go out as somebody else.
+abstract interface class SignInRevision {
+  int get signInRevision;
+}
+
+/// A request's sign-in ended before it could be retried: it is not sent
+/// again, as anybody.
+class SignInChanged implements Exception {
+  const SignInChanged();
+  @override
+  String toString() => 'The sign-in changed. Try again.';
+}

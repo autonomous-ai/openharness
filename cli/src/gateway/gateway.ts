@@ -50,6 +50,14 @@ export interface RelayGatewayOptions {
   core: GatewayEvents
 }
 
+/** Transcript events only the terminal app (`harness tui`, Harness OS) reads in full. Desktop, the web and the phone take
+ *  them only as "the model is working" or to clear a preview line, which the next text, tool or turn end does too; so while
+ *  the account has no terminal app open they stay off the relay (one Desktop's day, 2026-10-30: about 12,700 of its
+ *  170,666 frames). Thinking stays: Desktop's "Starting up…" chip for a resting grid model ends on it. */
+export const TUI_ONLY_EVENTS: ReadonlySet<string> = new Set(['tool_end', 'subagent_finished', 'done', 'context_compact'])
+/** The longest the backend's word that a terminal app is open is taken for (backend bus.ts TUI_OPEN_FOR_MS). */
+export const TUI_OPEN_MAX_MS = 180_000
+
 export class RelayGateway implements GatewayPort {
   /** Optional scalar-only measurement hooks. Never hand a frame or user payload to the collector. */
   productUsage?: {
@@ -92,6 +100,9 @@ export class RelayGateway implements GatewayPort {
   private readonly liveStreams = new Map<string, Set<string>>()
   /** Cross-instance commander (device) client count, from backend `__clients` frames. */
   private commanderCount = 0
+  /** Until when a terminal app of the account counts as open, from the backend's `__tui_open`; null until it has said
+   *  (an older backend, a team account, the link not yet back), when every event is relayed as before. */
+  private tuiUntil: number | null = null
   /** Subset of commanderCount whose device is ACTIVELY rendering this machine (multi-attach). null = the
    *  backend doesn't send the signal (old build). */
   private commanderActive: number | null = null
@@ -223,6 +234,7 @@ export class RelayGateway implements GatewayPort {
     this.routeCounters.clear()
     this.staleRouteLogged.clear()
     this.replayCommanderOnNextSnapshot = true
+    this.tuiUntil = null
   }
 
   /** The ONE place commander presence changes. Both callers — the `__clients` snapshot and the link going
@@ -295,13 +307,19 @@ export class RelayGateway implements GatewayPort {
       } catch { /* Work continues without metrics. */ }
     }
     if (this.link.servesThisComputerOnly()) return
-    this.link.enqueue({ t: 'up', frame: this.e2ee.wrapUp(frame) })
+    if (!this.heldForNoTerminalApp(frame.type)) this.link.enqueue({ t: 'up', frame: this.e2ee.wrapUp(frame) })
     if (guest) {
       for (const connId of this.e2ee.guestSessions(guest)) {
         const sealed = this.e2ee.wrapFor(connId, frame)
         if (sealed) this.link.enqueue({ t: 'up', targetConnId: connId, frame: sealed })
       }
     }
+  }
+
+  /** Whether [type] is an event only a terminal app reads and the account has none open now, once the backend has said
+   *  (docs/plans/2026-10-31-live-events-relay-design.md, change 5). A guest's own sealed copy is never held. */
+  private heldForNoTerminalApp(type: unknown): boolean {
+    return this.tuiUntil !== null && Date.now() >= this.tuiUntil && typeof type === 'string' && TUI_ONLY_EVENTS.has(type)
   }
 
   /** The guest a remote connection's session is (gateway/sharedTrust.ts), '' when its store did not
@@ -636,6 +654,12 @@ export class RelayGateway implements GatewayPort {
         if (generation != null) this.replayedCommanderGeneration = generation
         this.core.commanderJoined()
       }
+      return
+    }
+    // A terminal app of the account is open for `forMs` (backend bus.ts noteTuiPresence), or none is (0).
+    if (type === '__tui_open') {
+      const forMs = Number((frame.payload as { forMs?: unknown } | undefined)?.forMs)
+      this.tuiUntil = Date.now() + (Number.isFinite(forMs) && forMs > 0 ? Math.min(forMs, TUI_OPEN_MAX_MS) : 0)
       return
     }
     if (type === '__client_disconnected') {

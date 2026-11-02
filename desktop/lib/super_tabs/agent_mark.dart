@@ -16,9 +16,12 @@ import 'model.dart';
 const _lease = Duration(minutes: 5);
 const _quietRunning = Duration(minutes: 25);
 
-/// A hand-off, as the backend reads one: a result saying it is ready for
-/// review and naming a revision. A copy of READY_FOR_REVIEW and REVISION in
-/// backend/src/superTabs/liveness.ts (waitingForReview): change both together.
+/// A hand-off from an agent on the older built-in skills: a result saying it is
+/// ready for review and naming a revision. The backend holds such work as
+/// waiting for review in every project while those agents exist; Desktop
+/// reads it only in a project without instructions ([superTabReadsHandoff]).
+/// A copy of READY_FOR_REVIEW and REVISION in backend/src/superTabs/liveness.ts
+/// (waitingForReview): change both together.
 final _readyForReview = RegExp(r'\bready for review\b', caseSensitive: false);
 final _revision = RegExp(
   r'(?:@|\b(?:at|head)\s+)[0-9a-f]{7,40}\b|\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b',
@@ -29,8 +32,16 @@ final _revision = RegExp(
 /// task, or a finished one whose pull request has not merged yet. Only a group
 /// the viewer reads.
 class SuperTabAgentWork {
-  const SuperTabAgentWork(this.group, {this.awaitingMerge = false});
+  const SuperTabAgentWork(
+    this.group, {
+    this.awaitingMerge = false,
+    this.readsHandoff = true,
+  });
   final SuperTabConversation group;
+
+  /// Whether a result saying "ready for review" is a hand-off: only in a
+  /// project without instructions ([superTabReadsHandoff]).
+  final bool readsHandoff;
 
   /// Done, with its pull request still open: the agent waits on its merge.
   final bool awaitingMerge;
@@ -42,7 +53,8 @@ class SuperTabAgentWork {
   /// until a review finds problems in it (liveness.ts waitingForReview).
   bool get handedOver {
     final result = _assignment?['result'];
-    return status == 'working' &&
+    return readsHandoff &&
+        status == 'working' &&
         _assignment?['reviewFoundAt'] == null &&
         result is String &&
         _readyForReview.hasMatch(result) &&
@@ -58,6 +70,11 @@ class SuperTabAgentWork {
   static DateTime? _time(Object? ms) =>
       ms is num ? DateTime.fromMillisecondsSinceEpoch(ms.toInt()) : null;
 }
+
+/// Whether [group]'s project predates instructions, where a result saying it
+/// is ready for review still hands the work over.
+bool superTabReadsHandoff(SuperTabController c, SuperTabConversation group) =>
+    c.snapshot?.projectFor(group.id)?.hasInstructions != true;
 
 /// Whether the viewer reads [group]: never a Buddy chat, and a private group
 /// only when its people include them. The server sends no other; this keeps a
@@ -85,9 +102,23 @@ bool superTabGroupReadable(SuperTabController c, SuperTabConversation group) =>
           .where((g) => superTabWorkWaits(g.assignment?['status']))
           .firstOrNull
       case final asking?) {
-    return (work: SuperTabAgentWork(asking), task: task);
+    return (
+      work: SuperTabAgentWork(
+        asking,
+        readsHandoff: superTabReadsHandoff(c, asking),
+      ),
+      task: task,
+    );
   }
-  if (task != null) return (work: SuperTabAgentWork(task), task: task);
+  if (task != null) {
+    return (
+      work: SuperTabAgentWork(
+        task,
+        readsHandoff: superTabReadsHandoff(c, task),
+      ),
+      task: task,
+    );
+  }
   final merging = groups
       .where(
         (g) =>

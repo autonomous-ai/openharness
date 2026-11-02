@@ -70,6 +70,18 @@ void main() {
         );
       },
     );
+
+    test('never ends a default name with a dot or puts two in a row', () {
+      expect(
+        _names([
+          _person('a', '${'a' * 29}.b@example.com'),
+          _person('b', 'ken..nguyen@example.com'),
+          _person('c', 'dee.@example.com'),
+          _person('d', 'x.@example.com'),
+        ]),
+        {'a': 'a' * 29, 'b': 'ken.nguyen', 'c': 'dee', 'd': 'x1'},
+      );
+    });
   });
 
   test('names come from the server, whatever order members arrive in', () {

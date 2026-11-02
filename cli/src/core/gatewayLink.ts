@@ -242,6 +242,7 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
     open: async (machineId, frame) => {
       const answer = await lane('open', { machineId, frame })
       if (answer.frame && typeof answer.frame === 'object') return { frame: record(answer.frame) }
+      if (answer.unknownEpoch === true) return { unknownEpoch: true }
       return answer.unreadable === true ? { unreadable: true } : { lost: true }
     },
     drop: (machineId) => { void lane('drop', { machineId }) },

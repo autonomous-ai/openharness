@@ -161,7 +161,7 @@ Each line takes about a minute to check. Either the spec answers it, or says why
 ```markdown
 ## Design (docs/feature-design-rules.md)
 
-Reviewed revision: ______  Reviewer (another engine): ______  Each line: answered / N/A because …
+Reviewed revision: ______  Reviewer: ______  Each line: answered / N/A because …
 
 1. Growth: what deletes each record; lifecycle table, no empty cells.              [ ]
 2. Concurrency: what a write locks; each invariant's keeper on every path,

@@ -295,3 +295,12 @@ TerminalBinaryFrame? decodeTerminalLocal(List<int> raw) {
 /// spare). Every chunk but the last is exactly this size; `seq` is the chunk index. Mirrors the
 /// harness CLI's `UPLOAD_CHUNK_BYTES` in terminalStreamManager.ts — keep the two in step.
 const terminalUploadChunkBytes = 256 * 1024;
+
+/// Upload bytes allowed out ahead of the daemon's per-chunk acknowledgement
+/// (`terminal_chunked_upload_progress`). Sent back to back, a large image filled the P2P data
+/// channel's 2 MiB send buffer (`terminalP2pMaxBufferedBytes`) faster than a slow link drained it;
+/// the plugin then read the busy channel as a dead one and dropped the link with those chunks still
+/// in its buffer, and the upload stopped part way, its overlay frozen (2026-10-30). Four chunks keep
+/// that buffer, and the relay's own queue toward the machine, well below their limits. Every daemon
+/// that accepts a chunked upload acknowledges each chunk (both shipped together).
+const terminalUploadWindowBytes = 4 * terminalUploadChunkBytes;

@@ -111,3 +111,47 @@ describe('a Buddy\'s archived tasks', () => {
     expect(status.next).toBe('cursor-2')
   })
 })
+
+describe('a person\'s one Buddy\'s status (spec 2026-10-31-one-buddy-per-swarm)', () => {
+  /** What the one Buddy reads: every project its person reads, each project's chat and tasks, and its one chat. */
+  const many = (projects: number) => {
+    const ids = Array.from({ length: projects }, (_, i) => `p${i}`)
+    return {
+      projects: ids.map(id => ({ id, name: `Project ${id}`, leadConversationId: `${id}-chat` })),
+      agents: [{ id: 'buddy', name: 'Buddy', buddyScope: 'swarm', buddyOf: { personId: 'peer', generation: 'g' } }],
+      conversations: [
+        { id: 'swarm-chat', kind: 'swarm-buddy', title: 'Buddy', leadId: null, agentIds: ['buddy'], checks: [], assignment: null, buddyOwnerId: 'peer' },
+        ...ids.map(id => ({ id: `${id}-chat`, projectId: id, title: id, leadId: null, agentIds: [], checks: [], assignment: null })),
+        ...ids.flatMap(id => [1, 2].map(n => ({ id: `${id}-t${n}`, projectId: id, number: n, title: `${id} task ${n}`, leadId: null, agentIds: [], checks: [], assignment: null }))),
+      ],
+    }
+  }
+  const changed = (state: ReturnType<typeof many>) => Object.fromEntries(state.conversations.map((c, i) => [c.id, 1000 + i]))
+
+  it('is an index: one line per project, at most 50, and the 20 newest tasks across them, each naming its project', async () => {
+    const state = many(60)
+    const status = await buddyStatus(input(state, changed(state)), { pullRequests: reader().read, decisions: decisions() })
+    expect(status.projects).toHaveLength(50)
+    expect(status.moreProjects).toBe(10)
+    expect((status.projects as Array<Record<string, unknown>>)[0]).toEqual({ name: 'Project p0', chat: 'p0-chat', open: 2, changed: 0 })
+    const tasks = status.tasks as Array<Record<string, unknown>>
+    expect(tasks).toHaveLength(20)
+    expect(tasks[0]).toMatchObject({ project: 'Project p59', title: 'p59 task 2' })
+    expect(status.more).toBe(100)
+    expect(status.chat).toBe('swarm-chat')
+    // No project chat or Buddy chat is listed as a task.
+    expect(tasks.map(t => t.conversationId)).not.toContain('swarm-chat')
+    expect(tasks.some(t => String(t.conversationId).endsWith('-chat'))).toBe(false)
+  })
+
+  it('reads one project by name or id with status --project, and says which projects there are for a name it does not know', async () => {
+    const state = many(3)
+    const one = await buddyStatus({ ...input(state, changed(state)), project: 'project p1' }, { pullRequests: reader().read, decisions: decisions() })
+    expect(one.project).toEqual({ name: 'Project p1', chat: 'p1-chat' })
+    expect((one.tasks as Array<Record<string, unknown>>).map(t => t.conversationId)).toEqual(['p1-t2', 'p1-t1'])
+    expect((await buddyStatus({ ...input(state, changed(state)), project: 'p2' }, { pullRequests: reader().read, decisions: decisions() })).project)
+      .toEqual({ name: 'Project p2', chat: 'p2-chat' })
+    expect(await buddyStatus({ ...input(state), project: 'Nope' }, { pullRequests: reader().read, decisions: decisions() }))
+      .toEqual({ error: 'No project named Nope that your owner reads.', projects: ['Project p0', 'Project p1', 'Project p2'] })
+  })
+})

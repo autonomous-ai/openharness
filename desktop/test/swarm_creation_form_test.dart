@@ -1067,6 +1067,58 @@ void main() {
     await unmount(tester);
   });
 
+  testWidgets(
+    'New Project rules out no model when the Swarm sends its catalog',
+    (tester) async {
+      // The tab's routing-policy read: a policy that turns Codex off.
+      final answer = {
+        'policy': {
+          'version': 1,
+          'models': [
+            {
+              'engine': 'codex',
+              'model': 'gpt-5',
+              'effort': 'high',
+              'enabled': false,
+            },
+            {
+              'engine': 'claude',
+              'model': 'opus',
+              'effort': 'high',
+              'enabled': true,
+            },
+          ],
+        },
+        'catalog': {'models': <Object>[]},
+      };
+      var (box, _) = await mount(
+        tester,
+        leadMachines: [studio],
+        leadModels: LeadModelList.of(answer),
+      );
+      box.focusField(NewHarnessField.agent);
+      var codex = box.options.where((o) => o.id == 'codex').single;
+      expect(codex.enabled, isTrue);
+      expect(codex.why, isNull);
+      expect(box.leadBlocked ?? '', isNot(contains('model list')));
+      expect(find.textContaining('model list'), findsNothing);
+      await unmount(tester);
+
+      // An older backend's answer (no catalog): that server still enforces
+      // its list, so New Project says so, as today.
+      (box, _) = await mount(
+        tester,
+        leadMachines: [studio],
+        leadModels: LeadModelList.of({...answer}..remove('catalog')),
+      );
+      box.focusField(NewHarnessField.agent);
+      codex = box.options.where((o) => o.id == 'codex').single;
+      expect(codex.enabled, isFalse);
+      expect(codex.why, 'The Swarm’s model list has no enabled Codex model.');
+      await unmount(tester);
+    },
+  );
+
   for (final brightness in Brightness.values) {
     testWidgets(
       'With no machine able to run a PM, the box says why and how to fix it '

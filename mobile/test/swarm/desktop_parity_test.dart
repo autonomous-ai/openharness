@@ -15,11 +15,14 @@ const _copies = {
   'lib/swarm/parts.dart': 'lib/super_tabs/parts.dart',
   'lib/swarm/profile_model.dart': 'lib/super_tabs/profile_model.dart',
   // Live cards (Slack parity, #2212): which messages are cards, and the
-  // review verdict a card shows. The phone reads no GitHub yet (Lead, 10-29:
+  // linked tasks a card shows. The phone reads no GitHub yet (Lead, 10-29:
   // that request is a security change of its own), so Desktop's PR facts
   // reader has no copy here.
   'lib/swarm/live_card_model.dart': 'lib/super_tabs/live_card_model.dart',
-  'lib/swarm/review_verdict.dart': 'lib/super_tabs/review_verdict.dart',
+  'lib/swarm/linked_tasks.dart': 'lib/super_tabs/linked_tasks.dart',
+  // Task steps design: a task's steps and its merged chat.
+  'lib/swarm/task_steps.dart': 'lib/super_tabs/task_steps.dart',
+  'lib/swarm/instructions_model.dart': 'lib/super_tabs/instructions_model.dart',
 };
 
 /// The phone's model is ahead of main's desktop copy, so it is no exact copy
@@ -69,6 +72,20 @@ void main() {
       });
     },
   );
+
+  test('the phone names a sent message as the desktop does', () {
+    // The phone matches a post to its row by this id (swarm_outbox.dart); a
+    // drift shows a second copy that never leaves (Dee, 11-01).
+    final function = RegExp(
+      r'String superTabMessageId\(\{[\s\S]*?\.substring\(0, 24\);',
+    );
+    String of(String path) =>
+        function.firstMatch(File(path).readAsStringSync())!.group(0)!;
+    expect(
+      of('lib/swarm/swarm_outbox.dart'),
+      of('../desktop/lib/super_tabs/controller.dart'),
+    );
+  });
 
   for (final MapEntry(key: phone, value: desktop) in _copies.entries) {
     test("$phone matches the desktop's $desktop", () {

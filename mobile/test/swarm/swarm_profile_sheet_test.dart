@@ -394,7 +394,8 @@ void main() {
 
     testWidgets('the title and the name are headings of 17; the status under '
         'the name is a caption of 13', (tester) async {
-      await open(tester);
+      // A username of its own: the field holding it is not the name.
+      await open(tester, extra: {'username': 'pm'});
 
       for (final text in ['Your profile', 'person-me']) {
         expect(styleOf(tester, text).fontSize, 17, reason: text);

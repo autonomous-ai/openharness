@@ -137,6 +137,41 @@ class MainActivity : FlutterActivity() {
           else -> result.notImplemented()
         }
       }
+
+    // `harness/links` — the message links (`harness://swarm/<tab>/<conversation>/<message>`,
+    // Desktop's Copy link to message) this phone was asked to open (Dart: `SwarmLinkChannel` in
+    // `lib/swarm/swarm_message_link.dart`). Each waits here until Dart's `take` answers it, so one
+    // that launched the app, or came before sign-in, waits for the signed-in screen to ask;
+    // `arrived` tells a listening Dart that more wait. At most 20 wait, the newest kept.
+    links = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "harness/links").also {
+      it.setMethodCallHandler { call, result ->
+        if (call.method != "take") { result.notImplemented(); return@setMethodCallHandler }
+        result.success(ArrayList(waitingLinks))
+        waitingLinks.clear()
+      }
+    }
+    receiveLink(intent)
+  }
+
+  private var links: MethodChannel? = null
+  private val waitingLinks = mutableListOf<String>()
+
+  // singleTop: a link opened while the app runs comes here, not to a new activity.
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    receiveLink(intent)
+  }
+
+  private fun receiveLink(intent: Intent?) {
+    if (intent == null) return
+    val data = intent.data ?: return
+    // Reopened from Recents, Android hands back the intent that first started the app: that link
+    // was opened then.
+    if ((intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0) return
+    if (intent.action != Intent.ACTION_VIEW || data.scheme != "harness" || data.host != "swarm") return
+    waitingLinks.add(data.toString())
+    while (waitingLinks.size > 20) waitingLinks.removeAt(0)
+    links?.invokeMethod("arrived", null)
   }
 
   private var setupNetwork: ConnectivityManager.NetworkCallback? = null

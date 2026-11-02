@@ -14,7 +14,7 @@ import { windowsLaunchRefusal } from '../../lib/windows/launch.js'
 import { isWindowsHeldPane, windowsPaneLaunch } from '../../lib/windows/engineStart.js'
 import { mergedLaunchEnv } from './launchEnv.js'
 import type { RegisteredSession } from '../../lib/registry.js'
-import { AgentRestartCoordinator, type RestartAgentDeps } from '../../lib/restartAgent.js'
+import { AgentRestartCoordinator, type RelaunchArgvOptions, type RestartAgentDeps } from '../../lib/restartAgent.js'
 import { processRows } from '../../lib/terminalAgentDiscovery.js'
 import type { RestartTarget } from '../../lib/terminalBackend.js'
 import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
@@ -70,7 +70,7 @@ export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedCon
     const identity = paneReadIdentity(target)
     const ownsOriginal = () => current?.() !== false && sameRestartTarget(target)
       && paneReadIdentity(byAgent(target.agentId)) === identity
-    const relaunchOptions = (opts: { bypassPermission: boolean; resumeSessionId?: string }) => ({
+    const relaunchOptions = (opts: RelaunchArgvOptions) => ({
       ...opts,
       ...(launch.native ? { native: launch.native } : {}),
       // The mode picked at create outranks what the live argv said: `bypassPermission` is a yes/no, and

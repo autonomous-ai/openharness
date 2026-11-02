@@ -101,7 +101,6 @@ void main() {
         'Keyboard shortcuts',
         'Connectors',
         'Usage',
-        'Routing',
         'Tab invites',
         'Experimental',
         'About',

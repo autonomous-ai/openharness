@@ -3,7 +3,7 @@
  * applied, persisted, so behavior after the migration is identical. Link lists are restored from history beforehand
  * (store.ts restorePullRequestUrls); removals that expire and the released-harness cap are left to the first write.
  */
-import { activeWork, awaitingWorkers, isLeads, numberConversations, parkLaterConversations, syncLeads, type Conversation, type SuperTabState } from '../model.js'
+import { activeWork, awaitingWorkers, isLeads, numberConversations, parkLaterConversations, type Conversation, type SuperTabState } from '../model.js'
 import { assignAgentDisplayNames } from '../agentNames.js'
 import { agentProjectId, placeRules, projectsOf } from '../projects.js'
 import { DORMANT_AFTER_MS, type ProgressData } from '../parts/index.js'
@@ -25,7 +25,6 @@ function owesReports(state: SuperTabState, group: Conversation): boolean {
 export function normalize(original: SuperTabState, { now, lastActivity }: { now: number; lastActivity: ReadonlyMap<string, number> }): SuperTabState {
   const state = structuredClone(original)
   parkLaterConversations(state)
-  syncLeads(state)
   numberConversations(state)
   placeRules(state)
   assignAgentDisplayNames(state.agents)

@@ -1,0 +1,18 @@
+[Unit]
+Description=Harness Recovery: this computer installed again as it came
+# Only when started from the recovery partition (installer.py recovery_conf), never from a USB.
+ConditionKernelCommandLine=harness.recovery
+After=local-fs.target
+
+[Service]
+Type=oneshot
+# Its progress shown, whatever console the startup left on the screen.
+ExecStartPre=-/usr/bin/chvt 1
+ExecStart=/usr/bin/python3 /usr/lib/harness-os/install.py --recover
+# The console, not tty1 itself: the startup's end (plymouth-quit, the gettys) hangs tty1 up, and a
+# hung-up terminal fails every later write, the installer's progress with it (exit 120).
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

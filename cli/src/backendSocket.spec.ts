@@ -2679,6 +2679,21 @@ describe('BackendSocket outbound queue', () => {
     await socket.stop()
   })
 
+  it('sends apps away from this desk a slim transcript event, and the windows here the whole one', async () => {
+    const socket = relaySocket('token')
+    const broadcast = vi.spyOn(gatewayOf(socket), 'broadcast')
+    const frames: Record<string, unknown>[] = []
+    socket.registerLocalClient('local:window', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
+    const ended = { type: 'tool_end', agentId: 'a1', dbSessionId: 's1', payload: { id: 'u1', tool: 'Bash', output: 'the whole output',
+      isError: false, summary: 'ok', agentId: 'a1', sessionId: 's1' } }
+    const whole = structuredClone(ended)
+    socket.send(ended)
+    expect(frames.filter((frame) => frame.type === 'tool_end')).toEqual([whole])
+    expect(broadcast).toHaveBeenCalledExactlyOnceWith({ ...ended, payload: { id: 'u1', tool: 'Bash', isError: false, agentId: 'a1', sessionId: 's1' } }, undefined)
+    await socket.unregisterLocalClient('local:window')
+    await socket.stop()
+  })
+
   it('says whether an app away from this desk holds a session: a web one, never a device', async () => {
     const socket = relaySocket('token')
     expect(socket.hasRemoteApp()).toBe(false)

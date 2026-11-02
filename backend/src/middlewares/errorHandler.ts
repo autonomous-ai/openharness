@@ -46,7 +46,7 @@ export async function errorHandler(
       logger.warn('Swarm busy', { code: error.code, path: request.url, method: request.method })
       return sendBusy(reply, error.message, error.code)
     }
-    return sendError(reply, error.message, error.code, error.status)
+    return sendError(reply, error.message, error.code, error.status, error.details)
   }
 
   // A database transaction that expired or could not start (P2028) is load, not a fault: the caller retries.

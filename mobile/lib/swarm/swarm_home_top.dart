@@ -7,7 +7,7 @@ import 'package:harness_mobile/phone/fzf.dart' show fzfAge;
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
-import 'package:harness_mobile/shared/widgets/touch_target.dart';
+import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import 'model.dart';
@@ -20,9 +20,13 @@ import 'swarm_start.dart';
 import 'swarm_style.dart';
 
 /// The top of Swarm Home, direction C, as Tony's prototype C1 draws it
-/// (2026-10-30): the Swarm switcher in its title ([showSwarmSwitcher]),
-/// Jump to… under it ([SwarmJumpField]), and While you were away
-/// ([SwarmAwayCard]).
+/// (2026-10-30): the Swarm switcher in its title ([showSwarmSwitcher]) and
+/// While you were away ([SwarmAwayCard]).
+
+/// Whether the account's Swarms are still to come, a failed read still trying:
+/// never from a server without the list, which no read will bring.
+bool swarmHomeListing(SwarmInbox inbox) =>
+    !inbox.loaded && inbox.swarms.isEmpty && inbox.error != swarmServerTooOld;
 
 /// Whether Home offers Swarm [swarmId]: the account's, and its read not
 /// taken away, though the list may still have it until it is read again.
@@ -117,6 +121,13 @@ class _Switcher extends StatelessWidget {
             ),
             children: [
               const _Grabber(),
+              if (swarmHomeListing(inbox))
+                const SkeletonBlock(
+                  child: SwarmSkeletonRow(
+                    key: ValueKey('swarm-switch-loading'),
+                    titleOnly: true,
+                  ),
+                ),
               if (inbox.swarms.length > 1)
                 SwarmRow(
                   key: const ValueKey('swarm-switch-all'),
@@ -189,53 +200,6 @@ class _Glyph extends StatelessWidget {
   );
 }
 
-/// Jump to…: a search field's look over Home's list, a button that opens
-/// the search ([onTap]).
-class SwarmJumpField extends StatelessWidget {
-  const SwarmJumpField({super.key, required this.onTap});
-
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    return Semantics(
-      button: true,
-      label: 'Jump to',
-      excludeSemantics: true,
-      onTap: onTap,
-      child: Material(
-        color: AppPalette.swarmSearchSurface,
-        borderRadius: BorderRadius.circular(AppCard.radius),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(AppCard.radius),
-          onTap: onTap,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: minTouchTarget),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: AppSpace.m),
-              child: Row(
-                children: [
-                  Icon(
-                    LucideIcons.search300,
-                    size: 20,
-                    color: AppPalette.textFaint,
-                  ),
-                  const SizedBox(width: AppSpace.s),
-                  Text(
-                    'Jump to…',
-                    style: AppType.body(color: AppPalette.textFaint),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 /// How many tasks of [snapshot] their agents said Done after [since]: work
 /// done holds no time of its Done, which comes at or after its last
 /// progress ([swarmProgressAt]), so what this counts is a floor, as Done
@@ -252,7 +216,7 @@ int swarmDoneSince(SuperTabSnapshot snapshot, DateTime since) => snapshot
 /// While you were away, as C1 draws it: how long the person was away, from
 /// leaving the app ([since]) to coming back ([back]), then the work done
 /// since ([done], green) and what needs them now ([needs], yellow), each a
-/// dash while it is not known. A tap opens what needs them ([onTap]).
+/// skeleton until it is known. A tap opens what needs them ([onTap]).
 class SwarmAwayCard extends StatelessWidget {
   const SwarmAwayCard({
     super.key,
@@ -360,24 +324,28 @@ class _Stat extends StatelessWidget {
     required this.color,
   });
 
-  /// Null while it is not known: a dash.
+  /// Null until it is known: a skeleton as tall as the figure.
   final int? count;
   final String label;
   final Color color;
 
   @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Text(
-        count?.toString() ?? '–',
-        style: AppType.title(
-          color: (count ?? 0) > 0 ? color : AppPalette.textSecondary,
-          fontWeight: AppFont.semibold,
-          height: 1.2,
-        ),
-      ),
-      Text(label, style: AppType.caption(color: AppPalette.textSecondary)),
-    ],
-  );
+  Widget build(BuildContext context) {
+    final count = this.count;
+    final style = AppType.title(
+      color: (count ?? 0) > 0 ? color : AppPalette.textSecondary,
+      fontWeight: AppFont.semibold,
+      height: 1.2,
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (count == null)
+          SkeletonText(style: style, width: 28)
+        else
+          Text('$count', style: style),
+        Text(label, style: AppType.caption(color: AppPalette.textSecondary)),
+      ],
+    );
+  }
 }

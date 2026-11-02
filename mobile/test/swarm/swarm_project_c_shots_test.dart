@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -18,12 +19,12 @@ import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 
 /// Review screenshots of a project's screen in Swarm Home C, as Tony's
-/// prototype draws it (2026-10-30): its Chat with the New messages line,
+/// prototype draws it (2026-10-30): its chat with the New messages line,
 /// a task card and a PR card, a code block, reactions with the add-reaction
-/// chip and a replies row; its Team with open tasks on top, the humans with
-/// their week and points, and the agents in their states; and Approve's
-/// question. On a 390-point phone in both phone themes, from made-up data
-/// only, to the folder `SWARM_PROJECT_C_SHOTS` names.
+/// chip and a replies row; ☰ open; its Leaderboard sheet; its Team sheet with
+/// open tasks on top, See all and the agents in their states; and Approve's
+/// question. On 390- and 320-point phones in both phone themes, from made-up
+/// data only, to the folder `SWARM_PROJECT_C_SHOTS` names.
 final shots = Platform.environment['SWARM_PROJECT_C_SHOTS'];
 void main() {
   setUpAll(() async {
@@ -51,15 +52,25 @@ void main() {
     }
   });
 
-  testWidgets('the project screen, its Chat and Team, in both phone themes', (
+  testWidgets('the project screen, its menu and sheets, in both phone themes', (
     tester,
   ) async {
-    await tester.binding.setSurfaceSize(const Size(390, 844));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
+    addTearDown(tester.view.reset);
+    // Real shadows: a test's stand-in draws a menu's as a thick black rim.
+    debugDisableShadows = false;
     // An iPhone's status bar and home indicator.
     tester.view.padding = const FakeViewPadding(top: 47 * 3, bottom: 34 * 3);
     addTearDown(tester.view.resetPadding);
-    for (final palette in [HarnessPalette.graphite, HarnessPalette.paper]) {
+    for (final (palette, size) in [
+      for (final palette in [HarnessPalette.graphite, HarnessPalette.paper])
+        for (final size in const [Size(390, 844), Size(320, 568)])
+          (palette, size),
+    ]) {
+      // The view, not only the surface: a sheet takes its height from
+      // MediaQuery.
+      tester.view
+        ..physicalSize = size * 3
+        ..devicePixelRatio = 3;
       final brightness = palette.brightness;
       AppTheme.palette.value = palette;
       AppTheme.brightness.value = brightness;
@@ -132,6 +143,24 @@ void main() {
             workerId: 'agent-juno',
             lastMessageSequence: 4,
           ),
+          for (final (i, title) in const [
+            'Sign-in retries',
+            'Push token refresh',
+            'Machine list paging',
+            'Voice note waveform',
+            'Offline queue limits',
+            'Thread reply count',
+            'Attachment previews',
+          ].indexed)
+            groupData(
+              'g-more-$i',
+              title: title,
+              number: 2170 + i,
+              agentIds: ['agent-lead', 'agent-builder'],
+              status: 'working',
+              workerId: 'agent-builder',
+              lastMessageSequence: 2,
+            ),
         ],
         derived: derived,
       );
@@ -141,6 +170,24 @@ void main() {
         row['changedAt'] = now
             .subtract(Duration(minutes: row['key'] == 'g2' ? 7 : 2))
             .millisecondsSinceEpoch;
+      }
+      // Each agent's last progress on its task, by the test's clock, which
+      // the Team counts by: Nova's 4 minutes ago, Juno's question 7.
+      for (final row in groups.cast<Map>()) {
+        final minutes = switch (row['key']) {
+          'g1' => 4,
+          'g2' => 7,
+          _ => null,
+        };
+        if (minutes == null) continue;
+        final data = row['data'] as Map;
+        data['assignment'] = <String, dynamic>{
+          ...data['assignment'] as Map,
+          'progressAt': clock
+              .now()
+              .subtract(Duration(minutes: minutes))
+              .millisecondsSinceEpoch,
+        };
       }
       final lead = (groups.first as Map)['data'] as Map;
       lead
@@ -303,7 +350,8 @@ void main() {
                     as RenderRepaintBoundary)
                 .toImage(pixelRatio: 3);
         final png = await image.toByteData(format: ui.ImageByteFormat.png);
-        await File('$shots/project-c-$name-${brightness.name}.png')
+        final width = size.width.round();
+        await File('$shots/project-c-$width-$name-${brightness.name}.png')
             .writeAsBytes(png!.buffer.asUint8List());
         image.dispose();
       });
@@ -312,13 +360,30 @@ void main() {
       await tester.drag(key('swarm-messages'), const Offset(0, 600));
       await tester.pumpAndSettle();
       await capture('chat-earlier');
-      await tester.tap(key('swarm-project-tab-team'));
+      await tester.tap(key('swarm-project-menu'));
+      await tester.pumpAndSettle();
+      await capture('menu');
+      await tester.tap(key('swarm-project-menu-leaderboard'));
+      await tester.pumpAndSettle();
+      await capture('leaderboard');
+      await tester.tap(key('swarm-leaderboard-close'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-project-menu'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-project-menu-team'));
       await tester.pumpAndSettle();
       await capture('team');
-      await tester.drag(key('swarm-project-team-list'), const Offset(0, -400));
+      await tester.dragUntilVisible(
+        key('swarm-team-see-all'),
+        key('swarm-project-team-list'),
+        const Offset(0, -200),
+      );
+      await tester.pumpAndSettle();
+      await capture('team-see-all');
+      await tester.drag(key('swarm-project-team-list'), const Offset(0, -1000));
       await tester.pumpAndSettle();
       await capture('team-agents');
-      await tester.drag(key('swarm-project-team-list'), const Offset(0, 400));
+      await tester.drag(key('swarm-project-team-list'), const Offset(0, 2000));
       await tester.pumpAndSettle();
       await tester.tap(key('swarm-approve-d1'));
       await tester.pumpAndSettle();
@@ -328,6 +393,7 @@ void main() {
       host.dispose();
       account.dispose();
     }
+    debugDisableShadows = true;
     AppTheme.palette.value = HarnessPalette.graphite;
     AppTheme.brightness.value = Brightness.dark;
   }, skip: shots == null);

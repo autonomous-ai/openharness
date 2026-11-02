@@ -4,6 +4,10 @@ import type { RegisteredSession } from '../../lib/registry.js'
 import type { LaunchOverrides, LaunchOverridesResult } from '../../lib/launchOverrides.js'
 import type { RestoreAgentsDeps, RestoreLaunch } from '../../lib/restoreAgents.js'
 import { windowsLaunchRefusal } from '../../lib/windows/launch.js'
+import type { AdoptSwarmSkill } from '../api.js'
+
+/** What a harness held for its Swarm role says in its pane, in the person's words. */
+export const SWARM_ROLE_HELD = 'Waiting for the Swarm to confirm this agent\'s role. It starts by itself once the Swarm answers.'
 
 interface RestoreLaunchDeps {
   workspaceMissing(cwd: string | null | undefined): { error: string; detail: string } | null
@@ -13,14 +17,30 @@ interface RestoreLaunchDeps {
   refreshGridWebSearch(agentId: string, overrides: LaunchOverrides): void
   launch(entry: RegisteredSession, opts: { resumeSessionId?: string }, overrides: LaunchOverrides,
     permission: { permissionMode?: string | null; bypassPermission?: boolean }): RestoreLaunch
+  /** An older Swarm session's role, read before it is relaunched (superTabs/inCore/adoption.ts). Absent while the Swarm is off. */
+  adoptSwarmSkill?: AdoptSwarmSkill
 }
 
 export function createRestoreLaunch(deps: RestoreLaunchDeps): RestoreAgentsDeps['buildLaunch'] {
-  return async (entry, { current, prepare, ...opts }) => {
-    if (externalResumePending(entry.externalResume)) return { held: 'search', holdScope: 'workspace',
-      detail: entry.launch?.state === 'held' ? entry.launch.detail : 'Waiting to verify this external conversation.' }
-    const missing = deps.workspaceMissing(entry.cwd)
+  return async (given, { current, prepare, ...opts }) => {
+    if (externalResumePending(given.externalResume)) return { held: 'search', holdScope: 'workspace',
+      detail: given.launch?.state === 'held' ? given.launch.detail : 'Waiting to verify this external conversation.' }
+    const missing = deps.workspaceMissing(given.cwd)
     if (missing) return missing
+    // An older Swarm session comes back with its role, or waits for it: boot restore and a host move relaunched an old
+    // Buddy with no saved role as an ordinary session, without its guard (security review 1 of #2255). A held one waits in
+    // its pane, and the held pass launches it once the Swarm answers (core/agents/heldLaunches.ts); a move does not happen.
+    let entry = given
+    const looked = await deps.adoptSwarmSkill?.lookup?.(given, current)
+    if (looked !== undefined) {
+      // The lookup answers null once this launch no longer owns the row.
+      if (looked === null) return { cancelled: true }
+      if (looked === 'unavailable') return { held: 'superTabs', detail: SWARM_ROLE_HELD }
+      // A move builds this while the old engine still runs and writes the row only once it has stopped: it launches with the
+      // role and leaves the record to the agent's next start, which reads it again.
+      if (prepare !== false) looked.commit()
+      entry = looked.row
+    }
     const built = await deps.relaunchOverrides(entry, entry, current)
     if (!current()) return { cancelled: true }
     if (!built.ok && built.error === 'AGENT_CHANGED') return { cancelled: true }

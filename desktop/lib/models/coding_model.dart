@@ -1,8 +1,8 @@
 import 'local_model.dart';
 
-/// Whether a local model can drive a coding agent: the CLI's rule (`cli/src/lib/codingModel.ts`), which keeps such a
-/// model out of what a machine offers its Swarm, here so Run for Swarm can say why before anything starts. 2026-10-24: a
-/// Builder on llama3.2:3b made over a thousand requests for a one-line edit and never finished.
+/// Whether a local model is likely to drive a coding agent well: the CLI's rule (`cli/src/lib/codingModel.ts`), here as
+/// a note beside Get and Run for Swarm, never a refusal (project instructions, decision 14). 2026-10-24: an agent on
+/// llama3.2:3b made over a thousand requests for a one-line edit and never finished.
 const minCodingParamsB = 7.0;
 const minCodingTokS = 10.0;
 
@@ -25,8 +25,8 @@ double? paramsFromName(String name) {
   return match == null ? null : double.parse(match.group(1)!);
 }
 
-/// Why [model] cannot drive a coding agent, in a sentence, or null when it can or nothing says otherwise.
-String? codingRefusal(LocalModel model) {
+/// Why [model] may struggle to drive a coding agent, in a sentence, or null when it should not or nothing says.
+String? codingNote(LocalModel model) {
   final size = model.sizeBytes;
   final params =
       model.paramsB ??
@@ -36,14 +36,14 @@ String? codingRefusal(LocalModel model) {
           : size * 8 / _bitsPerWeight(model.quantization) / 1e9);
   if (params != null && params < minCodingParamsB) {
     final shown = (params * 10).round() / 10;
-    return '${model.shownName} is too small for a coding agent (about '
+    return '${model.shownName} may be too small for a coding agent (about '
         '${shown == shown.roundToDouble() ? shown.toInt() : shown}B parameters; '
-        'Builders need ${minCodingParamsB.toInt()}B or more).';
+        'a coding agent usually needs ${minCodingParamsB.toInt()}B or more).';
   }
   final speed = model.tokensPerSecond ?? model.estTokS;
   if (speed != null && speed < minCodingTokS) {
-    return '${model.shownName} is too slow on this computer for a coding agent '
-        '(about ${speed.round()} tok/s; Builders need ${minCodingTokS.toInt()} or more).';
+    return '${model.shownName} may be too slow on this computer for a coding agent '
+        '(about ${speed.round()} tok/s; a coding agent usually needs ${minCodingTokS.toInt()} or more).';
   }
   return null;
 }

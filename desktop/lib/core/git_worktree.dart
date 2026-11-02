@@ -646,8 +646,17 @@ Future<String> prepareGitProject(
     'refs/heads',
   ]);
   final taken = locals.output.split('\n').toSet();
-  final branch = branchName ?? placeholderBranch(taken, random: random);
+  var branch = branchName ?? placeholderBranch(taken, random: random);
   final madeUp = branchName == null || placeholder;
+  // The composer keeps the placeholder it drew, so a start that made it and
+  // was then cancelled leaves it taken for the next press. Nobody chose that
+  // name: take the next free number, as the CLI does (gitProject.ts).
+  if (madeUp && !existingBranch) {
+    final base = branch;
+    for (var suffix = 2; taken.contains('refs/heads/$branch'); suffix++) {
+      branch = '$base-$suffix';
+    }
+  }
   if (existingBranch) {
     if (!taken.contains('refs/heads/$branch')) {
       throw const RepositoryCloneException(
@@ -782,6 +791,80 @@ Future<String> prepareGitProject(
   }
   await _copyIncluded(root.output, destination, startProcess);
   return inside(destination);
+}
+
+/// Takes back a worktree [prepareGitProject] made for a start that was then
+/// cancelled: its folder, and the branch Harness made for it. A cancelled
+/// start left both behind, and the next press was refused for the branch
+/// (desktop 1.3.41, 2026-10-30). [folder] is what [prepareGitProject]
+/// returned, a subfolder of the worktree for a subfolder project.
+///
+/// True once the worktree is gone. Anything that may be somebody's work stays:
+/// a repository's own checkout, a worktree with changes in it, a branch that
+/// cannot be shown to have no commits of its own. With [keepBranch] (a branch
+/// that was there before the start) only the folder goes; a branch without
+/// Harness's mark keeps its branch too.
+Future<bool> discardPreparedWorktree(
+  String folder, {
+  bool keepBranch = false,
+  GitProcessStarter? startProcess,
+}) async {
+  Future<({int code, String output, String errorOutput})> git(
+    String at,
+    List<String> arguments, {
+    Duration timeout = const Duration(seconds: 4),
+  }) => _git(at, arguments, timeout: timeout, startProcess: startProcess);
+  final dirs = await git(folder, [
+    'rev-parse',
+    '--path-format=absolute',
+    '--show-toplevel',
+    '--git-dir',
+    '--git-common-dir',
+  ]);
+  final lines = dirs.code == 0 ? dirs.output.split('\n') : const <String>[];
+  if (lines.length != 3 || lines.any((line) => line.isEmpty)) return false;
+  final [top, gitDir, common] = lines;
+  // The repository's own checkout has its git directory as the common one.
+  if (gitDir == common) return false;
+  final current = await git(folder, ['symbolic-ref', '--quiet', 'HEAD']);
+  final head = await git(folder, ['rev-parse', '--verify', 'HEAD']);
+  if (head.code != 0) return false;
+  final ref = current.code == 0 ? current.output : null;
+  final branch = ref?.replaceFirst('refs/heads/', '');
+  final mark = branch == null
+      ? null
+      : await git(folder, [
+          'config',
+          '--get',
+          'branch.$branch.$kHarnessBranchKey',
+        ]);
+  final made =
+      !keepBranch && mark != null && mark.code == 0 && mark.output.isNotEmpty;
+  if (made) {
+    // Proof, not absence of evidence: one entry ("branch: Created from …")
+    // that is still the tip. No reflog at all (core.logAllRefUpdates=false)
+    // proves nothing, and a branch with a commit there was lost in review.
+    final log = await git(folder, ['reflog', 'show', '--format=%H', ref!]);
+    if (log.code != 0 || log.output != head.output) return false;
+  }
+  // Without --force: a worktree with changes in it refuses. Ignored files
+  // (what `.worktreeinclude` copied in) do not count as changes. As long as
+  // `worktree add` may take: a deadline mid-delete leaves half a folder.
+  final removed = await git(folder, [
+    'worktree',
+    'remove',
+    '--',
+    top,
+  ], timeout: const Duration(minutes: 2));
+  if (removed.code != 0) return false;
+  if (made) {
+    // The tip proven above; one that moved since is kept.
+    final deleted = await git(common, ['update-ref', '-d', ref!, head.output]);
+    if (deleted.code == 0) {
+      await git(common, ['config', '--remove-section', 'branch.$branch']);
+    }
+  }
+  return true;
 }
 
 /// `refs/remotes/origin/fix/typo` → origin, fix/typo, and a refspec that

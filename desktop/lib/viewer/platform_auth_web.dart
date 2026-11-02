@@ -82,6 +82,11 @@ class BrowserAuth extends DirectAuth {
     });
   }
 
+  /// This browser's own count, which also moves when another tab changes the
+  /// account: the delegate's moves only with this tab's sign-ins.
+  @override
+  int get signInRevision => _revision;
+
   @override
   Future<bool> hasSession() => _run(_delegate.hasSession);
 
