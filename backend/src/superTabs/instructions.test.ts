@@ -115,6 +115,11 @@ describe('the built-in template', () => {
     expect(routing).toContain('Urgent work (production down, security) ignores quota.')
     for (const gone of ['share per day', '5-hour', 'Engineers move to the next model', 'Max 20x']) expect(routing).not.toContain(gone)
   })
+  it('lets the PM\'s own account take work as any other once no other account has weekly quota left', () => {
+    // Ken, 2026-11-03: with every other account out, work should not wait on the PM's weekly line.
+    const routing = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Routing')).replace(/\n +/g, ' ')
+    expect(routing).toContain('- When no other account has weekly quota left, the PM\'s account takes work as any other account does.')
+  })
 })
 
 describe('role names', () => {
