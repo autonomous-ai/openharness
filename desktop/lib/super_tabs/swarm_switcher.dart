@@ -278,6 +278,11 @@ class PersonalSwarm extends ChangeNotifier {
       )) {
         return;
       }
+      // Its person took it out, on any computer: it stays out (backend
+      // commands.ts machine.remove). Add machine brings it back.
+      if (snapshot.removedMachines.any((id) => sameMachineId(id, machineId))) {
+        return;
+      }
       await contributeComputer(
         c,
         app,
@@ -288,6 +293,9 @@ class PersonalSwarm extends ChangeNotifier {
         // accounts, this Mac is never lent under its owner's own login.
         teamAccountOnly: snapshot.teamAccounts,
         offerTeamAccount: false,
+        // The server decides, whatever this computer read.
+        ifMissing: true,
+        unlessRemoved: true,
       );
     } catch (failure) {
       // Only while the tab still shows Personal: once it moved on, Personal
