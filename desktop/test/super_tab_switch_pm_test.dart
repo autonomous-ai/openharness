@@ -184,6 +184,22 @@ void main() {
   );
 
   testWidgets(
+    'the dialog says only offered accounts are listed on a machine the reader does not own',
+    (tester) async {
+      const line = 'Only accounts its owner offered are listed.';
+      for (final (account, shown) in [('owner', true), ('mac', false)]) {
+        await mount(tester, swarm(), account);
+        await openMenu(tester);
+        await tester.tap(item);
+        await tester.pumpAndSettle();
+        expect(find.text(line), shown ? findsOneWidget : findsNothing);
+        await tester.tap(find.text('Cancel'));
+        await finish(tester);
+      }
+    },
+  );
+
+  testWidgets(
     'a machine that reports no profiles offers each engine\'s default',
     (tester) async {
       final server = swarm();

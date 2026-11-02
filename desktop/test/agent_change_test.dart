@@ -134,6 +134,7 @@ class ProfileConnection extends SwitchConnection {
   final requests = <String>[];
   final usageReads = <Map<String, dynamic>>[];
   var plainUsage = false;
+  Map<String, dynamic> linkReply = {'error': 'NOT_FOUND'};
   List<Map<String, dynamic>>? codexRows;
   var claudeRows = <Map<String, dynamic>>[
     {
@@ -164,7 +165,10 @@ class ProfileConnection extends SwitchConnection {
         return {'profiles': claudeRows};
       case 'claude_profile_link':
         links.add(payload['path'] as String);
-        return {'error': 'NOT_FOUND'};
+        return linkReply;
+      case 'codex_profile_link':
+        links.add(payload['path'] as String);
+        return linkReply;
       case 'codex_profiles_list':
         if (codexRows != null) return {'profiles': codexRows};
         return {
@@ -1508,6 +1512,74 @@ void main() {
         containsPair('claudeHome', '/home/me/.claude-work'),
       );
       expect(connection.creations.single, isNot(contains('codexHome')));
+    });
+
+    test(
+      'using an account that is not offered links it first, then switches',
+      () async {
+        final connection = ProfileConnection()
+          ..linkReply = {
+            'profile': {'path': '/home/me/.claude-work', 'label': 'Work'},
+          };
+        connection.claudeRows[1]['offered'] = false;
+        final app = fixture(connection, sourceEngine: 'codex');
+        app.stateOf('m')!.localOnly = true;
+        addTearDown(app.dispose);
+        await app.addAgentToSwarm('m', 'a0');
+        final rows = await app.agentProfiles('m', 'claude');
+        expect(rows.map((r) => r.offered), [true, false]);
+        expect(
+          await app.changeAgent('m', 'a0', 'claude', profile: rows.last.key),
+          isNull,
+        );
+        expect(connection.links, ['/home/me/.claude-work']);
+        expect(
+          connection.creations.single,
+          containsPair('claudeHome', '/home/me/.claude-work'),
+        );
+      },
+    );
+
+    test(
+      'an offered account, the default and an old CLI row link nothing',
+      () async {
+        final connection = ProfileConnection();
+        connection.claudeRows[1]['offered'] = true;
+        final app = fixture(connection, sourceEngine: 'codex');
+        app.stateOf('m')!.localOnly = true;
+        addTearDown(app.dispose);
+        await app.addAgentToSwarm('m', 'a0');
+        final rows = await app.agentProfiles('m', 'claude');
+        expect(rows.every((r) => r.offered), isTrue);
+        await app.changeAgent('m', 'a0', 'claude', profile: rows.last.key);
+        expect(connection.links, isEmpty);
+      },
+    );
+
+    test('a failed link stops the switch with its error', () async {
+      final connection = ProfileConnection();
+      connection.codexRows = [
+        {'path': '${homeDir()}/.codex', 'label': 'Default', 'default': true},
+        {'path': '/home/me/.codex-a', 'label': 'A', 'offered': false},
+      ];
+      final app = fixture(connection, sourceEngine: 'claude');
+      app.stateOf('m')!.localOnly = true;
+      addTearDown(app.dispose);
+      app.stateOf('m')!.engines.replace(const [
+        EngineAvailability(
+          engine: 'codex',
+          installed: true,
+          supportsCodexHome: true,
+        ),
+      ]);
+      await app.addAgentToSwarm('m', 'a0');
+      await app.agentProfiles('m', 'codex');
+      expect(
+        await app.changeAgent('m', 'a0', 'codex', profile: '/home/me/.codex-a'),
+        'NOT_FOUND',
+      );
+      expect(connection.links, ['/home/me/.codex-a']);
+      expect(connection.events, isEmpty);
     });
 
     test('picking the current engine and account does nothing', () async {

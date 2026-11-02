@@ -353,4 +353,36 @@ void main() {
       controller.dispose();
     },
   );
+
+  testWidgets('a pm-switch-notice line renders as a plain message', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(900, 520));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final server = ConversationServer();
+    server.append('Your PM now runs on Codex.', conversationId: 'offline');
+    server.messages.last['source'] = {'kind': 'pm-switch-notice'};
+    final controller = server.controller(
+      initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': 'offline'},
+    );
+    await controller.refresh();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: grid.buildAppTheme(brightness: Brightness.dark),
+        home: Scaffold(
+          body: SuperTabView(
+            controller: controller,
+            onInvite: () {},
+            onAddAgent: (_) {},
+            onOpenTerminal: (_) {},
+            machineName: (_) => 'Team Mac',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Your PM now runs on Codex.'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
 }

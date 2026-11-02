@@ -119,6 +119,14 @@ Future<void> showSwitchPm(
                             () => picked = (engine: p.engine, id: p.id),
                           ),
                         ),
+                      if (lead != null &&
+                          lead.machineOwnerId != c.accountId) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          'Only accounts its owner offered are listed.',
+                          style: DesktopChrome.metadata(),
+                        ),
+                      ],
                       const SizedBox(height: 12),
                       Text(
                         'The new session starts fresh and reads a handoff note. Tasks and chat stay.',

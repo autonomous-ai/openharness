@@ -2020,8 +2020,10 @@ class SwarmSearchController extends ChangeNotifier {
               ? buddyKeepsItsEngine
               : !canSelectAgent(engine.id)
               ? 'Not supported by this harness'
+              : several && !profile!.offered
+              ? 'Not offered to the Swarm yet'
               : several && profile!.percentLeft != null
-              ? '${profile.percentLeft}% left'
+              ? '${profile!.percentLeft}% left'
               : isCurrent
               ? 'Current agent'
               : engine.id == 'opencode'

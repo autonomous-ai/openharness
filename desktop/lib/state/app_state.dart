@@ -276,7 +276,11 @@ class AgentProfile {
     required this.label,
     this.path,
     this.percentLeft,
+    this.offered = true,
   });
+
+  /// False when the machine's owner has not offered this account to the Swarm: using it does.
+  final bool offered;
 
   /// The account's Swarm profile id ([swarmProfileId]): what `usage_read` and the current-account check use.
   final String id;
@@ -15219,6 +15223,9 @@ class AppNotifier extends ChangeNotifier {
 
   final _addingClaude = <String>{};
 
+  /// Accounts the last list showed as not offered to the Swarm, by (machine, engine, folder).
+  final _unoffered = <(String, String, String)>{};
+
   /// What `usage_read` last said per account, kept so opening the picker again does not call the vendors again.
   final _usageCache = <(String, String, String), ({DateTime at, int? left})>{};
   static const _usageFresh = Duration(minutes: 5);
@@ -15252,6 +15259,12 @@ class AppNotifier extends ChangeNotifier {
     final rows = reply['profiles'];
     if (rows is! List) return const [];
     final defaultId = swarmProfileId(machineId, engine, 'default');
+    for (final row in rows) {
+      if (row is Map && row['path'] is String) {
+        final k = (machineId, engine, row['path'] as String);
+        row['offered'] == false ? _unoffered.add(k) : _unoffered.remove(k);
+      }
+    }
     final profiles = [
       for (final row in rows)
         if (row is Map && row['path'] is String)
@@ -15270,6 +15283,7 @@ class AppNotifier extends ChangeNotifier {
                     path == _codexDefaultHome());
             return (
               path: path,
+              offered: row['offered'] != false,
               label: row['label'] as String? ?? path,
               id: isDefault
                   ? defaultId
@@ -15324,6 +15338,7 @@ class AppNotifier extends ChangeNotifier {
             label: p.label,
             path: p.path,
             percentLeft: cached?.left,
+            offered: p.offered,
           );
         }(),
     ]);
@@ -17772,6 +17787,20 @@ class AppNotifier extends ChangeNotifier {
         !change.contextLoaded) {
       final error = await _loadSwitchHandoff(machineId, change, source, folder);
       if (error != null) return error;
+      if (!_machineWorkCurrent(machine, change.revision)) {
+        return 'This switch is no longer active.';
+      }
+    }
+    // Using an account the owner has not offered is the owner's consent to offer it.
+    final account = change.profile;
+    if (account != null &&
+        account != 'default' &&
+        _unoffered.contains((machineId, change.engine, account))) {
+      final linked = change.engine == 'claude'
+          ? await linkClaudeProfile(machineId, account)
+          : await linkCodexProfile(machineId, account);
+      if (linked['error'] case final String error) return error;
+      _unoffered.remove((machineId, change.engine, account));
       if (!_machineWorkCurrent(machine, change.revision)) {
         return 'This switch is no longer active.';
       }
