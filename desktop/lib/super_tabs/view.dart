@@ -1661,7 +1661,8 @@ class _SuperTabViewState extends State<SuperTabView>
     SuperTabController? from,
   }) {
     if (!mounted || (from != null && from != c)) return;
-    if (filter != null) SuperTabActivity.of(c).setFilter(filter);
+    // Its row asks for no list: All, whichever one was showing.
+    SuperTabActivity.of(c).setFilter(filter ?? SuperTabActivityFilter.all);
     _closeSidebar();
     setState(() {
       _showNotifications = true;
