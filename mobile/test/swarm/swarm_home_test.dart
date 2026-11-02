@@ -29,6 +29,7 @@ import 'package:harness_mobile/swarm/swarm_row.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_start.dart';
 import 'package:harness_mobile/swarm/swarm_style.dart';
+import 'package:harness_mobile/swarm/team_glance.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import '../voice_fakes.dart';
@@ -1274,7 +1275,13 @@ void main() {
 
     testWidgets('a task-chat tag keeps its project under Mentions without a '
         'project-chat count', (tester) async {
-      final host = await pump(tester, backend());
+      final fake = backend();
+      final load = fake.routes['/api/super-tabs/$tab/parts']!;
+      fake.routes['/api/super-tabs/$tab/parts'] = (body) async => {
+        ...await load(body) as Map<String, dynamic>,
+        'agents': <Object>[],
+      };
+      final host = await pump(tester, fake);
       host.session!.home.setFilter(SwarmHomeFilter.mentions);
       await tester.pumpAndSettle();
 
@@ -1283,6 +1290,10 @@ void main() {
       expect(
         inside('swarm-project-$tab-$project', find.byType(SwarmTags)),
         findsNothing,
+      );
+      expect(
+        dotOf(tester, 'swarm-project-$tab-$project'),
+        swarmStateColor(SwarmAgentState.waiting),
       );
     });
 

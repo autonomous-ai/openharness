@@ -26,13 +26,13 @@ class SwarmHomeProject {
     required this.swarmId,
     required this.project,
     this.active,
-    this.news = swarmNoNews,
+    this.news = swarmNoProjectNews,
   });
 
   final String swarmId;
   final SuperTabProject project;
   final DateTime? active;
-  final SwarmRowNews news;
+  final SwarmProjectNews news;
 
   String get key => swarmHomeProjectKey(swarmId, project.id);
 }
@@ -97,7 +97,8 @@ SwarmHomeLists swarmHomeLists(
   return (pinned: newest(pinned), recent: newest(recent), quiet: newest(quiet));
 }
 
-bool _hasNews(SwarmHomeProject p) => p.news.bold || p.news.tags > 0;
+bool _hasNews(SwarmHomeProject p) =>
+    p.news.bold || p.news.tags > 0 || p.news.hasWaitingTag;
 
 /// [lists] under Home's [filter] (`SwarmHomePrefs.filter`; unread is the
 /// desktop's `_hasUnread`), pinned ones too. None with something new was
@@ -110,7 +111,7 @@ SwarmHomeLists swarmHomeFiltered(SwarmHomeLists lists, SwarmHomeFilter filter) {
     case SwarmHomeFilter.unread:
       keep = _hasNews;
     case SwarmHomeFilter.mentions:
-      keep = (p) => p.news.tags > 0;
+      keep = (p) => p.news.hasWaitingTag || p.news.tags > 0;
   }
   return (
     pinned: lists.pinned.where(keep).toList(),

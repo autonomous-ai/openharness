@@ -190,7 +190,7 @@ void main() {
 
     expect(chat(r, 'g1'), (bold: true, tags: 0));
     expect(swarmProjectNews(r.reader, r.asks), {
-      project: (bold: true, tags: 0),
+      project: (bold: true, tags: 0, hasWaitingTag: false),
     });
   });
 
@@ -226,7 +226,11 @@ void main() {
 
     r.reader.readMarks!.markRead(leadChat, 4);
     await settle();
-    expect(swarmProjectNews(r.reader, r.asks)[project], (bold: true, tags: 0));
+    expect(swarmProjectNews(r.reader, r.asks)[project], (
+      bold: true,
+      tags: 0,
+      hasWaitingTag: true,
+    ));
     expect(chat(r, 'g1'), (bold: true, tags: 1));
     expect(
       r.asks.mentions,
@@ -240,7 +244,7 @@ void main() {
     final r = await rig(tags: [mentionRow('t1'), mentionRow('t2')]);
 
     expect(swarmProjectNews(r.reader, r.asks), {
-      project: (bold: true, tags: 0),
+      project: (bold: true, tags: 0, hasWaitingTag: true),
     });
 
     final quiet = await rig();
@@ -259,8 +263,8 @@ void main() {
     });
 
     expect(swarmProjectNews(quiet.reader, quiet.asks), {
-      project: (bold: true, tags: 0),
-      other: (bold: true, tags: 0),
+      project: (bold: true, tags: 0, hasWaitingTag: false),
+      other: (bold: true, tags: 0, hasWaitingTag: false),
     });
   });
 
@@ -316,7 +320,7 @@ void main() {
 
       expect(chat(r, 'g1'), (bold: true, tags: 1));
       expect(swarmProjectNews(r.reader, r.asks), {
-        project: (bold: true, tags: 0),
+        project: (bold: true, tags: 0, hasWaitingTag: true),
       });
 
       r.reader.readMarks!.markRead('g1', 4);
@@ -332,7 +336,7 @@ void main() {
 
       expect(chat(r, 'g1'), (bold: true, tags: 1));
       expect(swarmProjectNews(r.reader, r.asks), {
-        project: (bold: true, tags: 0),
+        project: (bold: true, tags: 0, hasWaitingTag: true),
       });
 
       // The person reads the chat as far as the first read had marked it.
@@ -429,7 +433,7 @@ void main() {
 
       expect(chat(r, 'g1'), (bold: true, tags: 1));
       expect(swarmProjectNews(r.reader, r.asks), {
-        project: (bold: true, tags: 0),
+        project: (bold: true, tags: 0, hasWaitingTag: true),
       });
     });
 
@@ -449,7 +453,7 @@ void main() {
       expect(chat(r, 'g1'), (bold: false, tags: 0));
       expect(chat(r, 'g2'), (bold: true, tags: 1));
       expect(swarmProjectNews(r.reader, r.asks), {
-        project: (bold: true, tags: 0),
+        project: (bold: true, tags: 0, hasWaitingTag: true),
       });
       expect(r.asks.mentions, hasLength(2));
     });
@@ -468,7 +472,7 @@ void main() {
       );
 
       expect(swarmProjectNews(r.reader, r.asks), {
-        other: (bold: true, tags: 1),
+        other: (bold: true, tags: 1, hasWaitingTag: true),
       });
       // The private chat's own row still counts its tag, as the desktop's.
       expect(chat(r, 'private'), (bold: true, tags: 1));
@@ -523,7 +527,7 @@ void main() {
 
         expect(chat(r, 'g1'), (bold: true, tags: 1));
         expect(swarmProjectNews(r.reader, r.asks), {
-          project: (bold: true, tags: 0),
+          project: (bold: true, tags: 0, hasWaitingTag: true),
         });
       },
     );
@@ -551,7 +555,7 @@ void main() {
 
       expect(chat(r, 'g1'), (bold: true, tags: 0));
       expect(swarmProjectNews(r.reader, r.asks), {
-        project: (bold: true, tags: 0),
+        project: (bold: true, tags: 0, hasWaitingTag: false),
       });
       expect(
         r.swarm.paths.where((p) => p.endsWith('/parts')),

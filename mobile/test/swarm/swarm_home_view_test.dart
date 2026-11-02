@@ -37,7 +37,7 @@ class _FailingStore extends MemoryKeyValueStore {
 /// does to the Projects list, that it is kept on this phone, and that the menu
 /// goes with the account or the Swarms it sorts.
 void main() {
-  const SwarmRowNews bold = (bold: true, tags: 0);
+  const SwarmProjectNews bold = (bold: true, tags: 0, hasWaitingTag: false);
   const web = 'project-2';
   const webLead = 'group-lead-web';
   final now = DateTime.utc(2030, 1, 2, 12);
@@ -45,7 +45,7 @@ void main() {
   SwarmHomeProject row(
     String id, {
     DateTime? active,
-    SwarmRowNews news = swarmNoNews,
+    SwarmProjectNews news = swarmNoProjectNews,
   }) => SwarmHomeProject(
     swarmId: tab,
     project: SuperTabProject.fromJson({
@@ -74,7 +74,7 @@ void main() {
       row(
         'tagged',
         active: now.subtract(hour * 2),
-        news: (bold: true, tags: 2),
+        news: (bold: true, tags: 2, hasWaitingTag: true),
       ),
       row('pinned-read', active: now.subtract(hour * 72)),
     ];
