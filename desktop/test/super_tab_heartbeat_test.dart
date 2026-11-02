@@ -25,7 +25,10 @@ class _Rig {
           'name': id,
           'contributorId': 'owner',
           'maxAgents': 4,
-          'observation': {'receivedAt': _at(), 'resources': {'cpu': 1}},
+          'observation': {
+            'receivedAt': _at(),
+            'resources': {'cpu': 1},
+          },
         },
     ];
     c = SuperTabController(
@@ -57,15 +60,17 @@ class _Rig {
   int told = 0;
   Future<Map<String, dynamic>>? failing;
 
-  Map<String, dynamic> machine(String id) =>
-      (server.state['machines'] as List).cast<Map<String, dynamic>>().firstWhere(
-        (m) => m['machineId'] == id,
-      );
+  Map<String, dynamic> machine(String id) => (server.state['machines'] as List)
+      .cast<Map<String, dynamic>>()
+      .firstWhere((m) => m['machineId'] == id);
 
   /// [id] reports now, and the server says so with a machine's push.
   void beat(String id) {
     final m = machine(id);
-    m['observation'] = {'receivedAt': _at(), 'resources': {'cpu': _at() % 97}};
+    m['observation'] = {
+      'receivedAt': _at(),
+      'resources': {'cpu': _at() % 97},
+    };
     c.told(main: false, at: _at());
   }
 
@@ -90,8 +95,10 @@ void main() {
         final before = r.c.snapshot;
         r.minute();
         // ignore: avoid_print
-        print('COUNT on screen: state reads ${r.states}, messages reads '
-            '${r.messages}, controller notifications ${r.told}');
+        print(
+          'COUNT on screen: state reads ${r.states}, messages reads '
+          '${r.messages}, controller notifications ${r.told}',
+        );
         expect(r.states, greaterThan(0));
         expect(r.messages, 0);
         expect(r.told, 0);
