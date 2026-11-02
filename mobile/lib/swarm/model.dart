@@ -651,8 +651,8 @@ class SuperTabSnapshot {
 
   /// Whether this Swarm's server takes a thread reply's New session: true only
   /// where it says so (backend read/contract.ts `threadSessions`). Read as the
-  /// desktop reads it (desktop_parity_test.dart); the phone offers no New
-  /// session yet.
+  /// desktop reads it (desktop_parity_test.dart); the Buddy chat's thread reply
+  /// box offers New session by it (swarm_buddy_sessions.dart).
   final bool threadSessions;
 
   /// Whether that server also takes New session on a top-level message in a
