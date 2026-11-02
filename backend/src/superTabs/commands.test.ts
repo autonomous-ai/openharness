@@ -1694,13 +1694,44 @@ describe('any agent of the project', () => {
     expect(() => f.run(member(outside, true), E)).toThrow(coordinatorRequired)
     expect(() => f.run(member(f.worker, false), E)).toThrow(coordinatorRequired)
     expect(chat()).not.toContain(outside)
-    f.run(member(outside, true), f.leadActor)
-    expect(chat()).toContain(outside)
-    f.run(member(outside, false), owner)
-    expect(chat()).not.toContain(outside)
+    // An agent stored there before the project chat held only its coordinator is still the coordinator's or a person's to take out.
+    f.run(member(f.worker, false), owner)
+    expect(chat()).not.toContain(f.worker)
     // A task's members are any agent's to add.
     f.run({ type: 'conversation.agent', conversationId: group, agentId: engineer, present: true, lead: false }, E)
     expect(f.state.conversations.find(c => c.id === group)!.agentIds).toContain(engineer)
+  })
+
+  // Ken, 2026-11-02: a Reviewer was a member of the project chat next to the PM, so Desktop opened two terminals there and the
+  // Reviewer posted an announcement in it. The project chat holds only its coordinator among agents, whoever adds one and by
+  // whichever path; an announcement goes in its task, for the coordinator or its requester to repost.
+  it('refuses any agent but the coordinator in the project chat, by every path', () => {
+    const { f, engineer } = project(), group = f.group()
+    const reviewer = f.add('reviewer', 'owner', group)
+    const chat = () => f.state.conversations.find(c => c.id === 'lead')!
+    const refused = expect.objectContaining({ code: 'PROJECT_CHAT_COORDINATOR_ONLY', message: expect.stringContaining('holds only its coordinator') })
+    const member = (agentId: string, lead = false) => ({ type: 'conversation.agent', conversationId: 'lead', agentId, present: true, lead }) as Command
+    const request = { conversationId: 'lead', machineId: 'machine', engine: 'claude', name: 'Finn 2', cwd: '/repo', worktree: true,
+      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 80, tools: [], devices: [], quotaRequired: false } }
+    const before = structuredClone(f.state)
+    for (const actor of [f.leadActor, owner]) {
+      expect(() => f.run(member(reviewer), actor)).toThrow(refused)
+      expect(() => f.run({ type: 'agent.start', request } as Command, actor, { contribution: f.contribution })).toThrow(refused)
+      expect(() => f.run({ type: 'work.assign', conversationId: 'lead', agentId: reviewer }, actor)).toThrow(refused)
+    }
+    // A person sharing a session already running, as Desktop's New agent in the project chat did.
+    expect(() => f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'shared', name: 'Shared', configuration: config, lead: false },
+      owner, { contribution: f.contribution })).toThrow(refused)
+    // A post naming it still reaches nobody new: the refusal says the coordinator hears posts here, and where to tell it.
+    expect(() => f.run({ type: 'message.send', conversationId: 'lead', text: 'Announce the review.', replyTo: null, recipientIds: [reviewer] }, f.leadActor))
+      .toThrow(expect.objectContaining({ code: 'PROJECT_CHAT_COORDINATOR_ONLY', message: expect.stringContaining('reaches the coordinator') }))
+    expect(f.state).toEqual(before)
+    // An agent stored there before is named as before (it stays until removed); the coordinator and a new one are still set.
+    f.run({ type: 'message.send', conversationId: 'lead', text: 'Your turn.', replyTo: null, recipientIds: [f.worker] }, f.leadActor)
+    f.run(member(f.lead), owner)
+    f.run(member(engineer, true), owner)
+    expect(chat().leadId).toBe(engineer)
+    expect(chat().agentIds).not.toContain(reviewer)
   })
 
   // Security review L2: the project chat is the people's and is never archived, so its work, name and records are its
