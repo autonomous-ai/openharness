@@ -122,6 +122,7 @@ describe('built-in Swarm skills', () => {
   // own: before the red flags, or last where there are none.
   const shared = '## Shared machines and secrets\n'
     + '- Stop only processes and databases you started yourself, by the process id you recorded when you started them. Never stop anything by name or pattern (pkill -f, killall): on a shared machine that kills other agents\' work.\n'
+    + '- Keep temporary files in $TMPDIR or your session folder, never in /tmp by name: every account on the machine can read /tmp and plant files there.\n'
     + '- Never print or paste a secret into chat, logs, pull requests or commits. Secrets reach you only through a private file or an environment variable, loaded in the same command that uses them.\n'
     + '- Never remove a worktree that a live process still uses. A fresh worktree on the default branch may belong to an agent that is just starting.\n'
     + '- Install nothing system-wide on a shared machine; put the tools you need in your session folder.\n\n'
@@ -988,7 +989,7 @@ describe('a Buddy\'s folder (Lead\'s ruling on the privacy review of #1992)', ()
 // built-in text it launched with, for a Swarm with no instructions, and a row an older CLI saved relaunches onto its own.
 describe('role kinds keep their role files', () => {
   /** The whole file a Reviewer's launch writes in each mode, byte for byte, as before role kinds. */
-  const REVIEW = { orchestration: '9ce49d67c7dcb7cdf7ee5dcd1bcc8551eeb7e4f5f8e99e637cf39e25efcf5550', default: 'ef55546c73320571db46d05eecba56761b53697e2144a9cf59cba596d70ba57e' }
+  const REVIEW = { orchestration: '710046290a77da0a92ba29d9c8c5b1067a44a086e249bf240e877646912e2203', default: '797295b9eac601e83a52a079fd0508b6051d9a0bd7a1c69da3813084abe8c8b8' }
   const folder = (workspace: string, key: string, name: string) =>
     join(realpathSync(workspace), '.harness', 'runtime', sha256(key), 'swarm', 'skills', name)
   it('keeps each session\'s role file', () => {

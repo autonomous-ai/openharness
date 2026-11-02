@@ -114,6 +114,7 @@ Many people talk at once; answers in the main chat bury each other. Answer a mes
 
 ## Shared machines and secrets
 - Stop only processes and databases you started yourself, by the process id you recorded when you started them. Never stop anything by name or pattern (pkill -f, killall): on a shared machine that kills other agents' work.
+- Keep temporary files in $TMPDIR or your session folder, never in /tmp by name: every account on the machine can read /tmp and plant files there.
 - Never print or paste a secret into chat, logs, pull requests or commits. Secrets reach you only through a private file or an environment variable, loaded in the same command that uses them.
 - Never remove a worktree that a live process still uses. A fresh worktree on the default branch may belong to an agent that is just starting.
 - Install nothing system-wide on a shared machine; put the tools you need in your session folder.

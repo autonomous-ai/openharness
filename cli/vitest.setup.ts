@@ -1,7 +1,8 @@
 /**
  * Point every test's data AND runtime dirs at throwaway directories BEFORE any module reads `env`.
  *
- * `config/env.ts` resolves `ADAPTER_DATA_DIR` at import time and defaults to the user's real
+ * `config/env.ts` resolves `ADAPTER_DATA_DIR` at import { vi } from 'vitest'
+import time and defaults to the user's real
  * `~/.harness/cli/data`. Specs that import the hook server (and through it the registry) therefore wrote
  * their fixtures into the LIVE registry — a stale `late-session` record turned up there, written by
  * `launcherWs.spec.ts`, which is how this was found. Tests must never touch the user's data.
@@ -60,3 +61,16 @@ process.env.HARNESS_HOOK_ROUTES_DIR = join(process.env.ADAPTER_DATA_DIR, 'hook-r
 process.env.HARNESS_STORE_CATALOG_URL ??= 'http://127.0.0.1:9/catalog.json'
 // Last: everything above is in place, so `config/testIsolation.ts` may let `env.ts` load.
 process.env.HARNESS_TEST_ISOLATED = '1'
+
+// The Mac running these may have a real Harness Team account, whose root-owned config says the owner's agents get a private
+// temporary folder (lib/agentTmp.ts): on such a Mac every launch's environment would differ from a spec's. A spec that passes
+// its own deps tests the real thing, and one that wires it in sets what this answers.
+vi.mock('./src/lib/agentTmp.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./src/lib/agentTmp.js')>()
+  return {
+    ...real,
+    agentTmpEnv: vi.fn((engine: Parameters<typeof real.agentTmpEnv>[0], role: string | undefined, deps?: Parameters<typeof real.agentTmpEnv>[2]) =>
+      deps ? real.agentTmpEnv(engine, role, deps) : {}),
+    agentTmpRoot: vi.fn((deps?: Parameters<typeof real.agentTmpRoot>[0]) => deps ? real.agentTmpRoot(deps) : null),
+  }
+})
