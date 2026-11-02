@@ -52,6 +52,7 @@ void pro_app_supertab_recap(const char *tab, const char *lead, const char *chat_
 void pro_app_supertab_focus(const char *tab, const char *lead);
 // `supertab.notice`: a new message in one of that Lead's chats (`chat` "lead" | "pm" | "group" | "buddy"; `text` is cut to POD_UNREAD_TEXT). The alert tier of an agent's
 // notice: an entry, the toast, a wake and a beep. A Buddy's chat is ignored. `supertab.notice.read`: that chat was read on the desktop; its entry and toast go.
+// They also go when the Swarm leaves `supertabs` or the Lead leaves its Swarm: access lost sends no read.
 void pro_app_supertab_notice(const char *tab, const char *lead, const char *chat, const char *chat_id, const char *text);
 void pro_app_supertab_notice_read(const char *tab, const char *lead, const char *chat_id);
 
