@@ -13,6 +13,7 @@ import 'composer_tags.dart';
 import 'composer_toggle.dart';
 import 'reply_box.dart';
 import 'controller.dart';
+import 'message_row.dart' show SuperTabMessageRow;
 import 'jump_to_latest.dart';
 import 'model.dart';
 import 'thread_scroll.dart';
@@ -332,19 +333,25 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Padding(
+            Container(
+              // As high as the chat's header, so their rules meet.
+              constraints: const BoxConstraints(minHeight: 51),
+              alignment: Alignment.center,
               padding: const EdgeInsets.fromLTRB(
-                grid.AppDesktop.groupGap,
+                SuperTabMessageRow.horizontalInset,
+                0,
                 grid.AppDesktop.controlGap,
-                grid.AppDesktop.controlGap,
-                grid.AppDesktop.controlGap,
+                0,
               ),
               child: Row(
                 children: [
                   Expanded(
                     child: Semantics(
                       header: true,
-                      child: Text('Thread', style: DesktopChrome.heading()),
+                      child: Text(
+                        'Thread',
+                        style: DesktopChrome.text(medium: true),
+                      ),
                     ),
                   ),
                   AppIconButton(
