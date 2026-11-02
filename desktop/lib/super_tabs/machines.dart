@@ -40,6 +40,7 @@ import 'machine_icon.dart';
 import 'machine_status.dart';
 import 'model.dart';
 import 'join_machine.dart' show superTabSuggestedAgentSlots;
+import 'personal_machine_rows.dart';
 import 'team_account_setup.dart';
 import 'section_heading.dart';
 import '../widgets/laid_out_list.dart';
@@ -363,6 +364,8 @@ Future<bool> _sendContribution(
   required bool Function() alive,
   bool teamAccountOnly = false,
   bool offerTeamAccount = true,
+  bool ifMissing = false,
+  bool unlessRemoved = false,
 }) async {
   // An earlier lost reply leaves an uncertain attempt holding its own
   // receipt, and only one action may be in flight: check that one first, then
@@ -389,6 +392,8 @@ Future<bool> _sendContribution(
     'engines': engines,
     'maxAgents': maxAgents,
     if (teamAccountOnly) 'teamAccountOnly': true,
+    if (ifMissing) 'ifMissing': true,
+    if (unlessRemoved) 'unlessRemoved': true,
   });
   if (result == null) {
     throw SuperTabFailure(
@@ -424,6 +429,8 @@ Future<String?> contributeComputer(
   required bool Function() alive,
   bool teamAccountOnly = false,
   bool offerTeamAccount = true,
+  bool ifMissing = false,
+  bool unlessRemoved = false,
   Future<MachineResources?> Function(String machineId)? readResources,
 }) async {
   final prepared = await _prepareContribution(
@@ -456,6 +463,8 @@ Future<String?> contributeComputer(
     alive: alive,
     teamAccountOnly: teamAccountOnly,
     offerTeamAccount: offerTeamAccount,
+    ifMissing: ifMissing,
+    unlessRemoved: unlessRemoved,
   );
   return added ? machineId : null;
 }
@@ -2401,6 +2410,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             mainAxisSize: MainAxisSize.min,
             children: _machines(),
           ),
+        if (widget.app case final app?)
+          PersonalMachineRows(controller: c, app: app),
       ],
     ];
     return widget.embedded

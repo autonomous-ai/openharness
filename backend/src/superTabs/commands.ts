@@ -132,9 +132,14 @@ const task = z.object({
     .refine(r => r.focus !== undefined || r.reviews !== undefined, 'Give the review a focus or a number of reviews.').optional(),
 }).strict()
 
+/** The machines a Swarm remembers its people took out. */
+const MAX_REMOVED_MACHINES = 64
+
 export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('machine.contribute'), machineId: id, name: title, cwd: path, scope: z.literal('swarm').optional(), engines: z.array(swarmEngine).min(1).max(2), maxAgents,
-    ifMissing: z.literal(true).optional(), teamAccountOnly: z.literal(true).optional() }).strict(),
+    ifMissing: z.literal(true).optional(), teamAccountOnly: z.literal(true).optional(),
+    // With ifMissing: not if its person took it out (Swarm removedMachines). A Personal Swarm's own sync sends it (#2181).
+    unlessRemoved: z.literal(true).optional() }).strict(),
   z.object({ type: z.literal('machine.pause'), machineId: id, paused: z.boolean() }).strict(),
   z.object({ type: z.literal('machine.engineResume'), machineId: id, engine: z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/), askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('machine.remove'), machineId: id }).strict(),
@@ -1638,6 +1643,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         if (actor.userId !== state.ownerId && !mac) fail('OWNER_REQUIRED', 'Only the Swarm owner adds a machine automatically.', 403)
         // A Buddy-only record is not the machine in the Swarm: it becomes an ordinary one below.
         if (cleaning || state.machines.some(m => m.machineId === command.machineId && !m.buddyOnly)) break
+        if (command.unlessRemoved && state.removedMachines?.some(r => r.machineId === command.machineId)) break
+      }
+      // Added again: no longer one its person took out.
+      if (state.removedMachines) {
+        state.removedMachines = state.removedMachines.filter(r => r.machineId !== command.machineId)
+        if (!state.removedMachines.length) delete state.removedMachines
       }
       if (cleaning) fail('MACHINE_CLEANING', 'This machine is still cleaning up after its removal. Add it again once that finishes.')
       if (!state.machines.some(m => m.machineId === command.machineId) && state.machines.length >= 32) fail('MACHINES_FULL', 'A Super Tab can have up to 32 contributed machines.')
@@ -1713,6 +1724,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       for (const team of moving) removeMachine(team.machineId, team, [], machine => `${who} removed ${machine} from the Swarm`)
       if (pool) result.removalId = operationId
       result.removedAgents = [...removed]
+      // So a Personal Swarm's sync, on any computer, never adds it back by itself (#2181). What deletes it: adding it again, the
+      // Swarm's deletion, and the cap (the oldest goes: that one could come back once).
+      if (pool) {
+        state.removedMachines = [...(state.removedMachines ?? []).filter(r => r.machineId !== command.machineId),
+          { machineId: command.machineId, contributorId: pool.contributorId }].slice(-MAX_REMOVED_MACHINES)
+      }
       break
     }
     case 'localModels.set': {

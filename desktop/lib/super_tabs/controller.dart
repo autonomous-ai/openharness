@@ -605,6 +605,9 @@ class SuperTabController extends ChangeNotifier {
   bool get showingSaved => _showingSaved;
   bool _showingSaved = false;
 
+  @visibleForTesting
+  set showingSavedForTest(bool value) => _showingSaved = value;
+
   /// Moves when what a [savedView] holds changes: the state as read, or the
   /// open conversation and its page. Not for what only the page around them
   /// does (read marks, open groups), which needs no new copy kept.
