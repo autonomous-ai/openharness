@@ -94,10 +94,12 @@ class SwarmInbox extends ChangeNotifier {
     required this.request,
     this.upload = refuseSwarmUpload,
     this.pollInterval = const Duration(seconds: 15),
+    DateTime Function()? now,
     SwarmHomeCache? homeCache,
     Duration homeWait = const Duration(seconds: 30),
     this.readMarks,
-  }) : _home = homeCache == null
+  }) : _now = now ?? DateTime.now,
+       _home = homeCache == null
            ? null
            : SwarmHomeKeeper(homeCache, accountId, wait: homeWait) {
     if (_home != null) unawaited(_restore());
@@ -155,8 +157,16 @@ class SwarmInbox extends ChangeNotifier {
   /// True once the list has been read.
   bool loaded = false;
 
-  /// Invitations waiting for the person, read only while they have no Swarm.
+  /// Invitations waiting for the person: read at every read of the list while
+  /// they have no Swarm, and at most every [_invitationsEvery] while they have
+  /// one, since the list is read every few seconds on every open phone.
   List<SwarmInvitation> invitations = const [];
+
+  static const _invitationsEvery = Duration(minutes: 5);
+  final DateTime Function() _now;
+
+  /// When the invitations were last asked for; null when they are due now.
+  DateTime? _invitationsAt;
 
   /// The last read of the invitations failed, while there is no Swarm: not "no invitation".
   /// Those read before stay meanwhile.
@@ -200,7 +210,12 @@ class SwarmInbox extends ChangeNotifier {
       joining.remove(invitation.inviteId);
       if (!_disposed) notifyListeners();
     }
-    await refresh();
+    // Gone at once, and not brought back by a read already under way.
+    _putOff.add(invitation.inviteId);
+    invitations = List.unmodifiable(
+      invitations.where((other) => other.inviteId != invitation.inviteId),
+    );
+    await refreshAll();
     return true;
   }
 
@@ -346,6 +361,19 @@ class SwarmInbox extends ChangeNotifier {
     return _refreshing ??= _read().whenComplete(() => _refreshing = null);
   }
 
+  /// One read now with the invitations in it: a pull, or a join just made. Runs
+  /// after a read already under way, which may have passed them by.
+  Future<void> refreshAll() async {
+    if (_refreshing case final reading?) await reading;
+    _invitationsAt = null;
+    await refresh();
+  }
+
+  bool get _invitationsDue {
+    final at = _invitationsAt;
+    return at == null || _now().difference(at) >= _invitationsEvery;
+  }
+
   /// What a screen draws of the inbox itself: a read that leaves it as it
   /// was tells nobody.
   Object get _face =>
@@ -356,13 +384,20 @@ class SwarmInbox extends ChangeNotifier {
     _polling = true;
     try {
       final (:listed, :changedAt) = await _list();
-      List<SwarmInvitation>? invited = const [];
+      List<SwarmInvitation>? invited;
       Object? unread;
-      if (listed.isEmpty) {
+      if (listed.isEmpty || _invitationsDue) {
+        _invitationsAt = _now();
         try {
           invited = await _invitations();
         } catch (failure) {
-          (invited, unread) = (null, failure);
+          // With a Swarm, Home has work to show: it stays as it is, and the
+          // read comes round again.
+          if (listed.isEmpty) {
+            unread = failure;
+          } else {
+            appLog.warn('swarm', 'Invitations not read', error: failure);
+          }
         }
       }
       if (_disposed) return;
