@@ -1626,9 +1626,6 @@ class SuperTabController extends ChangeNotifier {
 
   // ── Buddy thread sessions (spec 2026-10-30-buddy-thread-sessions) ───────
 
-  /// How many thread sessions a Buddy chat may run at once (backend limit).
-  static const maxBuddySessions = 3;
-
   /// When the server last refused a reply's New session as a field it does not
   /// know, though it said it takes them (one of its servers older during a
   /// release): New session is not offered for [_sessionsRefusedFor] after.
@@ -1734,10 +1731,6 @@ class SuperTabController extends ChangeNotifier {
     return messages.where((m) => m.sessionEnded).lastOrNull ??
         messages.where((m) => m.buddySession).lastOrNull;
   }
-
-  /// Whether the open Buddy chat already runs [maxBuddySessions] sessions.
-  bool get buddySessionsFull =>
-      (_ownBuddyChat?.buddySessions.length ?? 0) >= maxBuddySessions;
 
   /// Ends [root]'s session in the reader's own Buddy chat. Closing the thread
   /// pane only hides it; this stops it. False when refused or not sent.

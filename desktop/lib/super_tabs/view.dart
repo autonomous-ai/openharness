@@ -803,8 +803,7 @@ class _SuperTabViewState extends State<SuperTabView>
     final newSession =
         _chatSessions.contains(id) &&
         c.offersChatSessions &&
-        c.threadSessionBlocked == null &&
-        !c.buddySessionsFull;
+        c.threadSessionBlocked == null;
     final result = await c.send(
       replyTo: _replies[id]?.id,
       newSession: newSession,
@@ -854,17 +853,12 @@ class _SuperTabViewState extends State<SuperTabView>
   Widget _chatSessionChoice(bool writable) {
     final id = c.selectedId;
     final blocked = c.threadSessionBlocked;
-    final full = blocked == null && c.buddySessionsFull;
     return SuperTabComposerToggle(
       key: const ValueKey('super-chat-new-session'),
-      on: _chatSessions.contains(id) && blocked == null && !full,
+      on: _chatSessions.contains(id) && blocked == null,
       label: 'New session',
-      hint:
-          blocked ??
-          (full
-              ? '${SuperTabController.maxBuddySessions} sessions running. End one to start another.'
-              : 'Starts a separate Buddy session for this message'),
-      onChanged: writable && blocked == null && !full
+      hint: blocked ?? 'Starts a separate Buddy session for this message',
+      onChanged: writable && blocked == null
           ? (on) => setState(
               () => on ? _chatSessions.add(id) : _chatSessions.remove(id),
             )
@@ -2825,6 +2819,18 @@ class _SuperTabViewState extends State<SuperTabView>
         ),
         null => null,
       },
+      threadEnd:
+          thread == null ||
+              inThread ||
+              !c.canWrite ||
+              c.threadSession(thread.id) == null
+          ? null
+          : SuperTabSessionEnd(
+              key: ValueKey('super-thread-session-end-${thread.id}'),
+              controller: c,
+              root: thread.id,
+              metadata: true,
+            ),
       onOpenThread:
           !inThread && root != null && (thread != null || message.threadReply)
           ? () => c.openThread(root)
@@ -3904,8 +3910,7 @@ class _SuperTabViewState extends State<SuperTabView>
             child: Visibility(
               visible:
                   _chatSessions.contains(chatId) &&
-                  c.threadSessionBlocked == null &&
-                  !c.buddySessionsFull,
+                  c.threadSessionBlocked == null,
               maintainSize: true,
               maintainAnimation: true,
               maintainState: true,

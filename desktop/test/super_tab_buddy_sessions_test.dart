@@ -384,30 +384,25 @@ void main() {
     expect(newSession, findsNothing);
   });
 
-  testSessions('at the limit the choice is unavailable and says why', (
-    tester,
-  ) async {
-    final server = buddyChat();
-    for (final thread in ['t-a', 't-b', 't-c']) {
-      addSession(server, thread, agentId: 'session-$thread');
-    }
-    final c = await show(tester, server);
-    await openThread(tester, c, 'message-1');
-    expect(inThread(find.text('New session')), findsOneWidget);
-    expect(box(tester, newSession).onChanged, isNull);
-    expect(box(tester, newSession).on, isFalse);
-    expect(
-      inThread(find.byTooltip('3 sessions running. End one to start another.')),
-      findsOneWidget,
-    );
-    // Tapping the words does nothing either; a reply goes plain.
-    await tester.tap(newSession);
-    await tester.enterText(composer, 'Plain');
-    await tester.pump();
-    await tester.tap(send);
-    await tester.pumpAndSettle();
-    expect(lastCommand(server).containsKey('newSession'), isFalse);
-  });
+  testSessions(
+    'past the old limit of 3 the choice stays on offer and is sent',
+    (tester) async {
+      final server = buddyChat();
+      for (final thread in ['t-a', 't-b', 't-c', 't-d']) {
+        addSession(server, thread, agentId: 'session-$thread');
+      }
+      final c = await show(tester, server);
+      await openThread(tester, c, 'message-1');
+      expect(box(tester, newSession).onChanged, isNotNull);
+      await tester.tap(newSession);
+      await tester.pump();
+      await tester.enterText(composer, 'A fifth');
+      await tester.pump();
+      await tester.tap(send);
+      await tester.pumpAndSettle();
+      expect(lastCommand(server)['newSession'], isTrue);
+    },
+  );
 
   testSessions('a starting session says so, and its thread offers no choice', (
     tester,
@@ -527,6 +522,42 @@ void main() {
     );
   });
 
+  testSessions('the chat\'s thread line ends a session without opening it, '
+      'and only a session\'s line offers it', (tester) async {
+    final server = buddyChat();
+    server.append('Reading the pod logs…', conversationId: 'offline');
+    server.messages.last
+      ..['thread'] = 'message-1'
+      ..['replyTo'] = 'message-1'
+      ..['buddySession'] = true;
+    server.append('Second topic', conversationId: 'offline');
+    server.append('A reply', conversationId: 'offline');
+    server.messages.last
+      ..['thread'] = 'message-4'
+      ..['replyTo'] = 'message-4';
+    addSession(server, 'message-1', agentId: 'session-1');
+    final c = await show(tester, server);
+    final endInChat = find.byKey(
+      const ValueKey('super-thread-session-end-message-1'),
+    );
+    expect(endInChat, findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('super-thread-session-end-message-4')),
+      findsNothing,
+    );
+    expect(find.bySemanticsLabel('End session'), findsOneWidget);
+    await tester.tap(endInChat);
+    await tester.pumpAndSettle();
+    expect(lastCommand(server), {
+      'type': 'buddy.sessionEnd',
+      'conversationId': 'offline',
+      'thread': 'message-1',
+      'reason': 'ended',
+    });
+    // The tap ended it; it did not open the thread.
+    expect(c.openedThread, isNull);
+  });
+
   test('the Buddy is the main session, never a thread\'s own', () async {
     final server = buddyChat();
     // A session listed first, and its start, must not stand for the Buddy.
@@ -571,6 +602,33 @@ void main() {
     expect(c.threadSession('message-1'), isNull);
     expect(c.offersThreadSessions('message-1'), isFalse);
     expect(await c.endThreadSession('message-1'), isFalse);
+  });
+
+  testSessions('access lost takes End session off the chat\'s thread line, and '
+      'a tap already on its way changes nothing after', (tester) async {
+    final server = buddyChat();
+    server.append('A reply', conversationId: 'offline');
+    server.messages.last
+      ..['thread'] = 'message-1'
+      ..['replyTo'] = 'message-1'
+      ..['buddySession'] = true;
+    addSession(server, 'message-1', agentId: 'session-1');
+    final c = await show(tester, server);
+    final endInChat = find.byKey(
+      const ValueKey('super-thread-session-end-message-1'),
+    );
+    final hold = server.holdCommands = Completer<void>();
+    await tester.tap(endInChat);
+    await tester.pump();
+    expect(find.text('Ending…'), findsOneWidget);
+    c.revokeAccess('You no longer have access to this Swarm.');
+    await tester.pump();
+    expect(endInChat, findsNothing);
+    hold.complete();
+    server.holdCommands = null;
+    await tester.pumpAndSettle();
+    expect(endInChat, findsNothing);
+    expect(find.text('Ending…'), findsNothing);
   });
 
   testSessions('a late End session answer leaves another thread as it is', (
@@ -755,6 +813,30 @@ void main() {
     await tester.pumpAndSettle();
     expect(newSession, findsNothing);
     expect(alsoSend, findsOneWidget);
+  });
+
+  testSessions('a full machine is said in the server\'s own plain words, and '
+      'the reply waits to be sent again', (tester) async {
+    const words =
+        'Peer Mac is already running as many agents as it allows. End a '
+        'session there, or try again when one finishes.';
+    final server = buddyChat();
+    final c = await show(tester, server);
+    await openThread(tester, c, 'message-1');
+    server
+      ..refuse = {'code': 'MACHINE_FULL', 'message': words}
+      ..refuseStatus = 409;
+    await tester.tap(newSession);
+    await tester.pump();
+    await tester.enterText(composer, 'Measure it now');
+    await tester.pump();
+    await tester.tap(send);
+    await tester.pumpAndSettle();
+    expect(lastCommand(server)['newSession'], isTrue);
+    expect(tester.widget<Text>(threadError).data, words);
+    // Not lost: it waits as Not sent, for Retry once a place frees.
+    expect(find.text('Not sent'), findsOneWidget);
+    expect(find.text('Measure it now'), findsOneWidget);
   });
 
   testSessions('a New session reply the server refuses keeps its text in the '
@@ -1149,7 +1231,9 @@ void main() {
     await tester.pump();
     final sent = server.posts.length;
     expect(find.text('Ending…'), findsOneWidget);
-    final link = tester.widget<SuperTabLink>(end);
+    final link = tester.widget<SuperTabLink>(
+      find.descendant(of: end, matching: find.byType(SuperTabLink)),
+    );
     expect(link.onTap, isNull);
     expect(
       tester.getSemantics(end),

@@ -197,10 +197,7 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
   /// Whether this reply starts a session.
   bool get _startsSession =>
       _offersSession &&
-      (_sessionLocked ||
-          (_newSession &&
-              !c.buddySessionsFull &&
-              c.threadSessionBlocked == null));
+      (_sessionLocked || (_newSession && c.threadSessionBlocked == null));
 
   /// A session's thread stays in the thread: Also send is not offered there,
   /// nor for a reply that starts one.
@@ -614,22 +611,19 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
   /// ended; greyed while it can't start, its hover saying why.
   Widget _sessionChoice(bool writable) {
     final locked = _sessionLocked;
-    // What the server would refuse is said before sending: a block (paused,
-    // no Buddy, an older host) before the limit.
+    // What the server would refuse is said before sending: paused, no Buddy,
+    // an older host.
     final blocked = c.threadSessionBlocked;
-    final full = !locked && blocked == null && c.buddySessionsFull;
     return SuperTabComposerToggle(
       key: const ValueKey('super-thread-new-session'),
-      on: locked || (_newSession && !full && blocked == null),
+      on: locked || (_newSession && blocked == null),
       label: _sessionLabel,
       hint:
           blocked ??
           (locked
               ? 'This thread\'s session ended. Your reply starts a new one.'
-              : full
-              ? '${SuperTabController.maxBuddySessions} sessions running. End one to start another.'
               : 'Starts a separate Buddy session for this thread'),
-      onChanged: writable && !locked && !full && blocked == null
+      onChanged: writable && !locked && blocked == null
           ? (on) => setState(() => _newSession = on)
           : null,
     );
