@@ -370,13 +370,16 @@ void main() {
       SuperTabChatNotices.of(c).onMessage = (g, s) => told.add((g.id, s));
       fromLead(server, 'Before', conversationId: 'offline');
       await c.refresh();
+      await settle();
       expect(told, isEmpty);
       await c.setNotify('offline', SuperTabNotify.all);
       fromLead(server, 'After', conversationId: 'offline');
       await c.refresh();
+      await settle();
       expect(told.map((t) => t.$1), ['offline']);
       fromLead(server, 'In the project chat');
       await c.refresh();
+      await settle();
       expect(told.map((t) => t.$1), ['offline']);
     });
 
@@ -397,6 +400,7 @@ void main() {
       c.away = true;
       fromLead(server, 'While on another Swarm');
       await c.refresh();
+      await settle();
       expect(told, hasLength(1));
     });
 
@@ -409,6 +413,111 @@ void main() {
       binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
       fromLead(server, 'While in another app');
       await c.refresh();
+      await settle();
+      expect(told, hasLength(1));
+    });
+
+    // Task #2224: what a person sent from their phone, the web or another Mac tells them nothing.
+    Future<(SuperTabController, ConversationServer, List<int>)>
+    chatSetToAll() async {
+      final server = projectServer();
+      final c = await open(server);
+      final told = <int>[];
+      SuperTabChatNotices.of(c).onMessage = (_, s) => told.add(s);
+      await c.setNotify('offline', SuperTabNotify.all);
+      return (c, server, told);
+    }
+
+    test('their own message from another device tells them nothing', () async {
+      final (c, server, told) = await chatSetToAll();
+      server.append('From my phone', conversationId: 'offline');
+      await c.refresh();
+      await settle();
+      expect(told, isEmpty);
+    });
+
+    test(
+      'a message whose author can\'t be read is told about, never lost',
+      () async {
+        final server = projectServer();
+        final c = SuperTabController(
+          tabId: 'tab',
+          accountId: 'owner',
+          save: server.save,
+          request: (method, path, {body}) async {
+            if (path.contains('offline/messages?after=')) {
+              throw StateError('Offline');
+            }
+            return server.request(method, path, body: body);
+          },
+        );
+        addTearDown(c.dispose);
+        await c.refresh();
+        final told = <int>[];
+        SuperTabChatNotices.of(c).onMessage = (_, s) => told.add(s);
+        await c.setNotify('offline', SuperTabNotify.all);
+        fromLead(server, 'From the Lead', conversationId: 'offline');
+        await c.refresh();
+        await settle();
+        expect(told, hasLength(1));
+      },
+    );
+
+    // Review of #2646: a chat's top is its main stream, and agents answer in threads.
+    test(
+      'a teammate\'s thread reply before their own message tells nothing',
+      () async {
+        final (c, server, told) = await chatSetToAll();
+        fromLead(server, 'In a thread', conversationId: 'offline');
+        server.messages.last['thread'] = 'a-root';
+        server.append('From my phone', conversationId: 'offline');
+        await c.refresh();
+        await settle();
+        expect(told, isEmpty);
+      },
+    );
+
+    test('a page with more behind it is unsure, so it tells', () async {
+      final server = projectServer();
+      final c = SuperTabController(
+        tabId: 'tab',
+        accountId: 'owner',
+        save: server.save,
+        request: (method, path, {body}) async {
+          final answer = await server.request(method, path, body: body);
+          return path.contains('offline/messages?after=')
+              ? {
+                  ...answer,
+                  'next': {'sequence': 1, 'id': 'more'},
+                }
+              : answer;
+        },
+      );
+      addTearDown(c.dispose);
+      await c.refresh();
+      final told = <int>[];
+      SuperTabChatNotices.of(c).onMessage = (_, s) => told.add(s);
+      await c.setNotify('offline', SuperTabNotify.all);
+      server.append('From my phone', conversationId: 'offline');
+      await c.refresh();
+      await settle();
+      expect(told, hasLength(1));
+    });
+
+    test('a teammate\'s message still does', () async {
+      final (c, server, told) = await chatSetToAll();
+      fromLead(server, 'From the Lead', conversationId: 'offline');
+      await c.refresh();
+      await settle();
+      expect(told, hasLength(1));
+    });
+
+    test('a teammate\'s message among their own still does', () async {
+      final (c, server, told) = await chatSetToAll();
+      fromLead(server, 'From the Lead', conversationId: 'offline');
+      server.append('From my phone', conversationId: 'offline');
+      await c.refresh();
+      await settle();
       expect(told, hasLength(1));
     });
 

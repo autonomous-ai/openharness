@@ -303,8 +303,18 @@ class SuperTabChatNotices {
       if (controller.notifyOf(group.id) != SuperTabNotify.all) continue;
       if (controller.selectedId == group.id && _openChatRead) continue;
       if (top <= controller.readMark(group.id)) continue;
-      onMessage?.call(group, top);
+      unawaited(_tell(group, before, top));
     }
+  }
+
+  /// Tells of [group] unless all it gained is the person's own, which the state doesn't say. By the
+  /// time that's read, the person may have read the chat or lost it.
+  Future<void> _tell(SuperTabConversation group, int before, int top) async {
+    final epoch = _epoch;
+    if (await controller.onlyOwnSince(group.id, before)) return;
+    if (_disposed || controller.accessRevoked || _epoch != epoch) return;
+    if (top <= controller.readMark(group.id)) return;
+    onMessage?.call(group, top);
   }
 
   /// Whether the open chat is being read now. The view on screen knows; with none up, this falls
