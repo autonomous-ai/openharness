@@ -14,8 +14,15 @@ import 'machines.dart';
 /// A machine a Buddy may run on, as the pickers list it: one of the reader's
 /// own. One outside the Swarm ([inSwarm] false) stays theirs: the server
 /// records it for their Buddies alone and never adds it to the Swarm (Dee,
-/// 10-29). An [offline] one is listed but cannot be picked.
-typedef BuddyMachine = ({String id, String name, bool inSwarm, bool offline});
+/// 10-29). An [offline] one, or one [paused] in the Swarm, is listed but cannot
+/// be picked: the server refuses new work there (backend machines.ts).
+typedef BuddyMachine = ({
+  String id,
+  String name,
+  bool inSwarm,
+  bool offline,
+  bool paused,
+});
 
 /// The menu's group of the reader's own machines. The picker has only its
 /// headings, machine names and 'offline': no notes (Dee, 10-29).
@@ -23,6 +30,14 @@ const kBuddyOwnMachines = 'Your machines';
 
 /// Why a row cannot be picked, as the sidebar says a Buddy is 'not started'.
 const kBuddyMachineOffline = 'offline';
+const kBuddyMachinePaused = 'paused';
+
+/// Why [m] cannot be picked in words, or null when it can.
+String? buddyMachineBlock(BuddyMachine m) => m.offline
+    ? kBuddyMachineOffline
+    : m.paused
+    ? kBuddyMachinePaused
+    : null;
 
 /// The reader's own machines a Buddy may run on, like a Lead, whatever its
 /// engine (Ken, 10-28): those signed in to their account, in the Swarm or not,
@@ -46,6 +61,7 @@ List<BuddyMachine> buddyMachines(SuperTabController c, {AppNotifier? app}) {
       // Not in the account's list (yet): only a fresh Swarm reading says it
       // is there, else it is offline until one does (review of #2240).
       offline: app?.stateOf(id)?.isOffline ?? _silent(m),
+      paused: m['paused'] == true,
     );
   }
   String? here;
@@ -65,25 +81,28 @@ List<BuddyMachine> buddyMachines(SuperTabController c, {AppNotifier? app}) {
       name: name,
       inSwarm: listed != null,
       offline: s.isOffline,
+      paused: listed?.paused ?? false,
     );
   }
   final all = byId.values.toList();
-  int rank(BuddyMachine m) => m.id == here ? 0 : (m.offline ? 2 : 1);
+  int rank(BuddyMachine m) =>
+      m.id == here ? 0 : (buddyMachineBlock(m) == null ? 1 : 2);
   // A stable sort: within a rank, the Swarm's order, then the account's.
   return [
     for (final r in [0, 1, 2]) ...all.where((m) => rank(m) == r),
   ];
 }
 
-/// The machine of [machines] that [chosen] names while it is online, else the
-/// first online one; null when none is.
-BuddyMachine? pickedBuddyMachine(List<BuddyMachine> machines, String? chosen) =>
-    machines.where((m) => m.id == chosen && !m.offline).firstOrNull ??
-    machines.where((m) => !m.offline).firstOrNull;
+/// The machine of [machines] that [chosen] names while it can be picked, else
+/// the first that can; null when none can.
+BuddyMachine? pickedBuddyMachine(List<BuddyMachine> machines, String? chosen) {
+  final open = machines.where((m) => buddyMachineBlock(m) == null);
+  return open.where((m) => m.id == chosen).firstOrNull ?? open.firstOrNull;
+}
 
 /// The Machine field of the Buddy pickers: the reader's machines under a
-/// heading that says who can read the chat, offline ones listed with why
-/// they cannot be picked. Built as the Add machine form's picker is, since a
+/// heading that says who can read the chat, offline and paused ones listed
+/// with why they cannot be picked. Built as the Add machine form's picker is, since a
 /// shared select field has no unavailable row. With [fitNames] it is as wide
 /// as its longest name rather than the row.
 class BuddyMachineField extends StatefulWidget {
@@ -141,41 +160,41 @@ class _BuddyMachineFieldState extends State<BuddyMachineField> {
     ),
   );
 
-  Widget _row(BuddyMachine m, double width, String? focusId) => Padding(
-    padding: const EdgeInsets.symmetric(
-      horizontal: grid.AppDesktop.menuInset,
-      vertical: grid.AppDesktop.listRowGap / 2,
-    ),
-    child: SizedBox(
-      width: width - 2 * grid.AppDesktop.menuInset,
-      child: MenuItemButton(
-        key: ValueKey('super-buddy-machine-option-${m.id}'),
-        autofocus: m.id == focusId,
-        overflowAxis: Axis.vertical,
-        semanticsLabel: [
-          m.name,
-          if (m.offline) kBuddyMachineOffline,
-        ].join(', '),
-        style: ButtonStyle(
-          side: const WidgetStatePropertyAll(BorderSide.none),
-          padding: WidgetStatePropertyAll(AppMenuRowMetrics.roomy.padding),
-        ),
-        onPressed: widget.busy || m.offline
-            ? null
-            : () => widget.onChanged(m.id),
-        // In words, never by its grey alone (design system, Color and state).
-        trailingIcon: m.offline
-            ? Text(
-                kBuddyMachineOffline,
-                style: DesktopChrome.metadata(color: DesktopChrome.muted),
-              )
-            : m.id == widget.value
-            ? const Icon(AppIcons.check, size: grid.AppControl.iconSize)
-            : null,
-        child: Text(m.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+  Widget _row(BuddyMachine m, double width, String? focusId) {
+    final block = buddyMachineBlock(m);
+    return Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal: grid.AppDesktop.menuInset,
+        vertical: grid.AppDesktop.listRowGap / 2,
       ),
-    ),
-  );
+      child: SizedBox(
+        width: width - 2 * grid.AppDesktop.menuInset,
+        child: MenuItemButton(
+          key: ValueKey('super-buddy-machine-option-${m.id}'),
+          autofocus: m.id == focusId,
+          overflowAxis: Axis.vertical,
+          semanticsLabel: [m.name, ?block].join(', '),
+          style: ButtonStyle(
+            side: const WidgetStatePropertyAll(BorderSide.none),
+            padding: WidgetStatePropertyAll(AppMenuRowMetrics.roomy.padding),
+          ),
+          onPressed: widget.busy || block != null
+              ? null
+              : () => widget.onChanged(m.id),
+          // In words, never by its grey alone (design system, Color and state).
+          trailingIcon: block != null
+              ? Text(
+                  block,
+                  style: DesktopChrome.metadata(color: DesktopChrome.muted),
+                )
+              : m.id == widget.value
+              ? const Icon(AppIcons.check, size: grid.AppControl.iconSize)
+              : null,
+          child: Text(m.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -184,7 +203,11 @@ class _BuddyMachineFieldState extends State<BuddyMachineField> {
         .where((m) => m.id == widget.value)
         .firstOrNull;
     final focusId =
-        current?.id ?? widget.machines.where((m) => !m.offline).firstOrNull?.id;
+        current?.id ??
+        widget.machines
+            .where((m) => buddyMachineBlock(m) == null)
+            .firstOrNull
+            ?.id;
     final label = current?.name ?? 'Choose a machine';
     final style = DesktopChrome.control();
     final fitted = widget.fitNames
@@ -340,22 +363,31 @@ class BuddyMachineAdder {
 }
 
 /// What the Buddy pickers say when none of the reader's machines can take a
-/// Buddy now: none is signed in to their account, or all are offline.
+/// Buddy now: none is signed in to their account, all are offline, or new work
+/// is paused on those that are not.
 const kBuddyNoMachine =
     'Your Buddy runs on one of your own computers. Open Harness on one, '
     'signed in to your account.';
 const kBuddyAllOffline =
     'Your machines are offline. Open Harness on one of them to start your '
     'Buddy there.';
+const kBuddyAllPaused =
+    'New work is paused on your machines. Choose Resume new work in Machines '
+    'to start your Buddy.';
 
-/// [kBuddyNoMachine] or, with machines listed, [kBuddyAllOffline].
+/// [kBuddyNoMachine], or with machines listed [kBuddyAllPaused] when resuming
+/// one would be enough, else [kBuddyAllOffline].
 class BuddyNoMachine extends StatelessWidget {
   const BuddyNoMachine({super.key, required this.machines});
   final List<BuddyMachine> machines;
 
   @override
   Widget build(BuildContext context) => Text(
-    machines.isEmpty ? kBuddyNoMachine : kBuddyAllOffline,
+    machines.isEmpty
+        ? kBuddyNoMachine
+        : machines.any((m) => m.paused && !m.offline)
+        ? kBuddyAllPaused
+        : kBuddyAllOffline,
     key: const ValueKey('super-buddy-no-machine'),
     style: DesktopChrome.metadata(),
   );
