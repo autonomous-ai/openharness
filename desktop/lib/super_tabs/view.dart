@@ -2288,12 +2288,7 @@ class _SuperTabViewState extends State<SuperTabView>
         // A phone's rows line up (Huy, 2026-11-02): the sidebar icon starts at
         // the top bar's edge, and the people icon sits under its avatar.
         padding: _phone
-            ? const EdgeInsets.fromLTRB(
-                kPhoneBarGutter - (kFingerTarget - AppIcons.inlineSize) / 2,
-                6,
-                kPhoneBarGutter + (kPhoneBarIcon - kFingerTarget) / 2,
-                6,
-              )
+            ? kPhoneBarRowPadding
             : const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
         decoration: BoxDecoration(
           border: Border(bottom: BorderSide(color: DesktopChrome.rim)),
