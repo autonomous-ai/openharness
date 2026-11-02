@@ -288,7 +288,7 @@ void main() {
     await closeReadView(tester, c);
   });
 
-  for (final drawer in ['Conversations', 'Members and machines']) {
+  for (final drawer in ['Conversations', 'Members']) {
     testWidgets('$drawer keeps covered messages unread until revealed', (
       tester,
     ) async {
@@ -412,7 +412,7 @@ void main() {
         find.descendant(of: reply, matching: find.text('Atlas')),
         findsOneWidget,
       );
-      await tester.tap(find.byTooltip('Members and machines'));
+      await tester.tap(find.byTooltip('Members'));
       await tester.pumpAndSettle();
       expect(find.text('hi'), findsNothing);
       expect(find.text('Atlas'), findsWidgets);

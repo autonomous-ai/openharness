@@ -166,7 +166,7 @@ void main() {
     );
     await _openReply(tester);
     expect(tester.getSize(find.byTooltip('Cancel reply')), const Size(32, 32));
-    await tester.tap(find.byTooltip('Members and machines'));
+    await tester.tap(find.byTooltip('Members'));
     await tester.pumpAndSettle();
     expect(
       tester.getSize(find.byKey(const ValueKey('super-person-owner'))).height,

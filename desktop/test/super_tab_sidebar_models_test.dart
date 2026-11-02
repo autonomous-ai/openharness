@@ -8,6 +8,7 @@ import 'package:harness/widgets/engine_identity.dart';
 
 import 'support/humans_fixture.dart';
 import 'support/super_tab_fixture.dart';
+import 'support/super_tab_members.dart';
 
 /// Models in the left sidebar, after Machines (Dee, 2026-10-29 and 10-30):
 /// every model by its exact name with its share of the agents' tasks of the
@@ -316,6 +317,7 @@ void main() {
   ) async {
     final server = modelsSwarm();
     final controller = await show(tester, server);
+    await openSuperTabMembers(tester);
     await tester.tap(find.byKey(const ValueKey('leaderboard-week')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Last week').last);

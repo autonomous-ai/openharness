@@ -12,6 +12,7 @@ import 'package:harness/super_tabs/roster.dart';
 import 'package:harness/shared/widgets/app_icon_button.dart';
 
 import 'support/super_tab_fixture.dart';
+import 'support/super_tab_members.dart';
 
 void main() {
   testWidgets('rapid pending rows have independent identity and dimmed text', (
@@ -309,7 +310,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.byTooltip('Members and machines'));
+      await tester.tap(find.byTooltip('Members'));
       await tester.pumpAndSettle();
       final roster = find.byType(SuperTabRoster);
       expect(tester.getSize(roster).width, 360 * 0.7);
@@ -401,6 +402,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    await openSuperTabMembers(tester);
     expect(find.text('Pilot'), findsOneWidget);
     expect(find.text('# Pilot'), findsOneWidget);
     expect(find.text('CHATS'), findsNothing);
@@ -517,6 +519,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
+      await openSuperTabMembers(tester);
       expect(find.text('Humans'), findsOneWidget);
       final member = find.byKey(const ValueKey('super-member-agent-0'));
       await tester.scrollUntilVisible(
@@ -575,7 +578,8 @@ void main() {
       expect(find.text('Native terminal fixture'), findsOneWidget);
       expect(find.text('Review this result.'), findsNothing);
       expect(find.byKey(const ValueKey('super-group-lead')), findsOneWidget);
-      expect(find.byType(SuperTabRoster), findsOneWidget);
+      // The right column stays closed at rest beside the terminals too.
+      expect(find.byType(SuperTabRoster), findsNothing);
       expect(
         tester
             .widget<AppIconButton>(

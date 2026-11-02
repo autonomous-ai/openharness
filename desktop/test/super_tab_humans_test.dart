@@ -13,6 +13,7 @@ import 'package:harness/super_tabs/view.dart';
 
 import 'support/humans_fixture.dart';
 import 'support/super_tab_fixture.dart';
+import 'support/super_tab_members.dart';
 
 /// The leaderboard lives in the right pane's Humans section (Dee, 2026-10-27),
 /// built to the desktop design system (2026-10-28): a small week picker, then
@@ -66,6 +67,7 @@ void main() {
         await tester.pump();
       }
     }
+    await openSuperTabMembers(tester, settle: settle);
     return controller;
   }
 
@@ -504,6 +506,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    await openSuperTabMembers(tester);
     expect(tester.takeException(), isNull);
     final points = tester.getTopRight(part('points', 'peer')).dx;
     expect(tester.getTopRight(part('points', 'owner')).dx, points);

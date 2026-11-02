@@ -8,6 +8,7 @@ import 'package:harness/super_tabs/view.dart';
 
 import 'support/humans_fixture.dart';
 import 'support/super_tab_fixture.dart';
+import 'support/super_tab_members.dart';
 
 /// One member list, one row shape (Dee, 2026-10-29): Humans under a heading
 /// that carries the week, each with their points, then the Agents with their
@@ -41,6 +42,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    await openSuperTabMembers(tester);
     return controller;
   }
 
@@ -246,6 +248,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    await openSuperTabMembers(tester);
     expect(tester.takeException(), isNull);
     for (final number in ['21', '87%']) {
       expect(find.text(number), findsOneWidget, reason: number);

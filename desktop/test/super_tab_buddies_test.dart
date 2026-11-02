@@ -16,6 +16,7 @@ import 'package:harness/super_tabs/view.dart';
 import 'support/buddy_fixture.dart';
 import 'support/pm_chat_fixture.dart';
 import 'support/super_tab_fixture.dart';
+import 'support/super_tab_members.dart';
 import 'swarm_state_test.dart' show createApp;
 
 /// Buddies (Ken's spec, 10-28): a person's private agent per project. Since
@@ -1357,6 +1358,7 @@ void main() {
         final server = buddySwarm();
         giveBuddy(server);
         final c = await show(tester, server);
+        await openSuperTabMembers(tester);
         expect(
           find.byKey(const ValueKey('super-person-owner')),
           findsOneWidget,
