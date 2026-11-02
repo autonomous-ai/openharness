@@ -8,6 +8,7 @@ import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
 import { extracted } from './parts/write.js'
 import { stepSleeps } from './steps.js'
+import { reportedAs } from './projectUpdates.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const config: AgentConfiguration = { engine: 'codex', model: 'test-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
@@ -218,5 +219,14 @@ describe('who hears a step', () => {
     const messages = f.run({ type: 'work.status', conversationId: old, assignmentId: f.group(old).assignment!.id, status: 'done', result: 'Passed' } as Command, f.as(rev)).messages
     expect(to(messages, old)).toEqual([[f.lead]])
     expect(messages.find(m => m.conversationId === old)!.text).toBe('Done\n\nPassed')
+  })
+})
+
+describe('the PM\'s reports', () => {
+  it('name a step by its own number and its task', () => {
+    const f = stepsFixture()
+    const id = f.step('Review')
+    expect(reportedAs(f.state, f.group(id))).toBe(`#${f.group(id).number} (step Review of #${f.group(f.task).number})`)
+    expect(reportedAs(f.state, f.group(f.task))).toBe(`#${f.group(f.task).number}`)
   })
 })
