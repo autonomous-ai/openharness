@@ -1,3 +1,5 @@
+import 'browser_menu_guard.dart';
+
 import 'dart:async';
 
 import 'package:harness/shared/theme/app_icons.dart';
@@ -1116,14 +1118,17 @@ class _MachineRow extends StatelessWidget {
                   }
                   return KeyEventResult.ignored;
                 },
-                child: InkWell(
-                  onTap: onTap,
-                  onSecondaryTapDown: menu == null
-                      ? null
-                      : (details) => openMenu(details.localPosition),
-                  onLongPress: menu == null ? null : openMenu,
-                  borderRadius: BorderRadius.circular(8),
-                  child: row,
+                child: BrowserMenuOff(
+                  active: menu != null,
+                  child: InkWell(
+                    onTap: onTap,
+                    onSecondaryTapDown: menu == null
+                        ? null
+                        : (details) => openMenu(details.localPosition),
+                    onLongPress: menu == null ? null : openMenu,
+                    borderRadius: BorderRadius.circular(8),
+                    child: row,
+                  ),
                 ),
               );
         return Semantics(
