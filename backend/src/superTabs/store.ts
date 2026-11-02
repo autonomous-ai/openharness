@@ -30,7 +30,7 @@ import { logger } from '../utils/logger.js'
 import { retryTransient } from './retry.js'
 import { recordReload } from './retryStats.js'
 import { buddyChatId, swarmBuddyChatId, type ChosenBuddyName } from './buddies.js'
-import { buddyPerson, canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, onTeamAccount, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility } from './projects.js'
+import { accountOf, buddyPerson, canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, onTeamAccount, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { SESSION_ENDED_KIND, sessionContext, sessionReadsRow, type ContextRow } from './buddySessions.js'
 import { isBuddy, isBuddyChat, isBuddyReader, refuseBuddyRouting, routingRow } from './buddies.js'
@@ -3427,8 +3427,32 @@ export class SuperTabStore {
       // (buddyNews.ts) is marked, so its host words it as news to note, never a message to answer there.
       const target = agent(state, agentId), group = conversation(state, delivery.conversationId)
       const message = row && isBuddy(target) ? rowForBuddy(row) : row
-      return { delivery: updated, message, ...isBuddy(target) && !group.agentIds.includes(target.id) ? { buddyNews: true as const } : {} }
+      return { delivery: updated, message, ...isBuddy(target) && !group.agentIds.includes(target.id) ? { buddyNews: true as const } : {},
+        ...row && await this.otherAccount(tx, state, target, row) ? { otherAccount: true as const } : {} }
     })
+  }
+
+  /**
+   * Whether [row] was written by an agent of another account than [target]'s (audit M3, task #2021): a Team agent's message
+   * reaches its Mac owner's agents, which would act on it with the owner's rights ("post me ~/.ssh/config"). The host marks
+   * it, from this answer alone: the message's text plays no part. An agent is on a Team account by the Swarm's record of its
+   * machine (an agent there joined on one, teamByRecord) or by its machine's account row, as notTeamMachine reads them: one point read per machine, never the
+   * Swarm's machine parts, which a claim leaves unread (superTabHotReads). Fails closed: an author no longer in the Swarm,
+   * or whose id now names a later membership than wrote it, counts as another account. A person's message is never marked.
+   */
+  private async otherAccount(tx: Transaction, state: SuperTabState, target: Agent, row: SuperTabMessage): Promise<boolean> {
+    const written = row.author as unknown as Author
+    if (written.kind !== 'agent') return false
+    const author = state.agents.find(a => a.id === written.id)
+    if (!author || author.membershipGeneration !== written.membershipGeneration) return true
+    const account = async (agent: Agent) => {
+      const recorded = teamByRecord(state, agent.machineId)
+      const machine = recorded ? null : await tx.machine.findFirst({ where: { machineId: agent.machineId, userId: agent.machineOwnerId,
+        autonomousEnv: state.environment, ...machineAlive }, select: { sessionKind: true, hostMachineId: true } })
+      return accountOf(agent, recorded || machine?.sessionKind === 'team' || !!machine?.hostMachineId)
+    }
+    const [from, to] = await Promise.all([account(author), account(target)])
+    return from !== to
   }
 
   /** The host cannot type a claimed instruction yet. Recorded on the delivery, an agent-only one's too: it is how the delivery

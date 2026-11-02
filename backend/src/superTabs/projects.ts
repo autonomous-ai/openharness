@@ -349,6 +349,11 @@ export const teamAccountPool = (pool: import('./machines.js').ContributedMachine
 export const onTeamAccount = (state: SuperTabState, target: Agent): boolean =>
   !!target.teamAccount || teamAccountPool(state.machines?.find(m => m.machineId === target.machineId))
 
+/** Which account [agent] acts as (audit M3, task #2021): its machine owner's own on any of their machines, or, [onTeam], that
+ *  one machine's Harness Team account. */
+export const accountOf = (agent: Pick<Agent, 'machineId' | 'machineOwnerId'>, onTeam: boolean): string =>
+  onTeam ? `team:${agent.machineOwnerId}:${agent.machineId}` : `own:${agent.machineOwnerId}`
+
 /**
  * A confidential session in a Harness Team account (#895 R2): every teammate's work there runs as one macOS user whose
  * folders hold other projects' clones, so typing in it is a shell that reads them. Nobody drives it through the Swarm. Its
