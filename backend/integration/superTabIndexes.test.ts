@@ -11,6 +11,7 @@ import { costRows } from '../src/superTabs/costs/read.js'
 import { readEvidence } from '../src/superTabs/evidence/store.js'
 import { recentDecisions } from '../src/superTabs/routeDecisions.js'
 import { settleStuckDeliveries } from '../src/superTabs/deliverySettle.js'
+import { listNamedIndexes } from '../src/superTabs/parts/indexed.js'
 import { revokeNativeContexts } from '../src/superTabs/native.js'
 import { outsider, owner, peer, richSwarm, swarm } from '../src/superTabs/read/fixture.test-support.js'
 import { threadSummaries } from '../src/superTabs/threads.js'
@@ -231,21 +232,24 @@ describe('the delivery poll order', () => {
 
 describe('the delivery pass', () => {
   it('reads the open deliveries through the status index, examining only those it judges, with their dates as Dates', async () => {
-    const open = ['queued', 'claimed', 'uncertain'].map((status, i) => ({ _id: `A-open-${i}`, tabId: 'A', conversationId: 'g1', messageId: 'A-m900',
+    const open = ['queued', 'claimed', 'uncertain', 'gathered'].map((status, i) => ({ _id: `A-open-${i}`, tabId: 'A', conversationId: 'g1', messageId: 'A-m900',
       agentId: `agent-${i}`, machineId: 'host', membershipGeneration: 'gen', authorKind: 'person', authorId: 'owner', authorGeneration: 'gen', status,
       ...status === 'claimed' ? { claimId: 'claim', holdReason: 'team_waiting_user', holdSince: { $date: new Date(T0 + 1000).toISOString() } } : {},
       createdAt: { $date: new Date(T0).toISOString() }, updatedAt: { $date: new Date(T0 + 2000).toISOString() } }))
     await db.$runCommandRaw({ insert: 'SuperTabDelivery', documents: open })
     const judged: Array<{ tabId: string; rows: unknown[] }> = []
     const store = { settleDeliveries: async (tabId: string, rows: unknown[]) => { judged.push({ tabId, rows }); return 0 } }
+    // As the worker has at startup: its plan is named, or a fourth status plans it on `compaction` and sorts.
+    await listNamedIndexes(db)
     const [, profile] = await profiled('SuperTabDelivery', () => settleStuckDeliveries(db, store, T0))
     await db.superTabDelivery.deleteMany({ where: { messageId: 'A-m900' } })
-    // One scan of the index per open status, merged in id order.
-    expect(profile).toEqual({ plans: [Array(3).fill('IXSCAN { status: 1, _id: 1 }').join(', ')], docsExamined: 3, returned: 3 })
+    // One scan of the index per unfinished status, merged in id order.
+    expect(profile).toEqual({ plans: [Array(4).fill('IXSCAN { status: 1, _id: 1 }').join(', ')], docsExamined: 4, returned: 4 })
     expect(judged).toEqual([{ tabId: 'A', rows: [
       expect.objectContaining({ id: 'A-open-0', status: 'queued', holdSince: null, createdAt: new Date(T0), updatedAt: new Date(T0 + 2000) }),
       expect.objectContaining({ id: 'A-open-1', status: 'claimed', holdReason: 'team_waiting_user', holdSince: new Date(T0 + 1000) }),
       expect.objectContaining({ id: 'A-open-2', status: 'uncertain', conversationId: 'g1', agentId: 'agent-2' }),
+      expect.objectContaining({ id: 'A-open-3', status: 'gathered' }),
     ] }])
   })
 })

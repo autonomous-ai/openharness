@@ -2966,7 +2966,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
           : [...command.status === 'stopped' ? [] : [assignment.agentId], ...lead ? [lead] : []]
         const recipients = [...new Set(told)].filter(id => actor.kind !== 'agent' || id !== actor.agentId)
         const asked = !command.ask ? '' : effects.result.notAsked ? `\n\n${effects.result.notAsked}` : `\n\nAsked ${person(state, command.ask.personId).email}.`
-        message(group.id, `${label}${command.result ? `\n\n${command.result}` : ''}${asked}`, recipients, null, SYSTEM_ROW)
+        // The status set, on the row: a Done waits for the coordinator's next digest, what needs someone does not (store.ts writeMessages).
+        message(group.id, `${label}${command.result ? `\n\n${command.result}` : ''}${asked}`, recipients, null, { ...SYSTEM_ROW, status: command.status })
         // The server opens no review by itself: the agent whose work is ready opens and assigns it, as the project's instructions
         // say (project instructions, phase 4). When no machine the project may use can start either engine, or soon none
         // will, the project's coordinator hears it once, in its chat (reviewCapacity.ts).

@@ -3513,7 +3513,8 @@ describe('Product Managers chat, removed (Dee, 2026-10-31)', () => {
     // The Lead that made the overlap knows it; the other project's Lead hears it in its own project chat, written as itself.
     expect(alerts).toEqual([expect.objectContaining({ conversationId: docsChat, recipientIds: [docsLead],
       author: expect.objectContaining({ id: docsLead }), text: expect.stringContaining('"Agents filter" (Pilot') })])
-    expect((await store.deliveries(host, tab, docsLead)).filter(d => d.messageId === alerts[0]!.id)).toHaveLength(1)
+    // Nobody waits on it within minutes: it goes in that Lead's next digest (noticeDigest.ts).
+    expect(await db.superTabDelivery.findMany({ where: { tabId: tab, agentId: docsLead, messageId: alerts[0]!.id, status: 'gathered' } })).toHaveLength(1)
     // The two Leads' to settle (Ken, 2026-10-29): the Lead it reaches reads it; people in the project chat do not.
     expect((await store.messages(host, tab, docsChat, {}, docsLead)).messages.map(m => m.id)).toContain(alerts[0]!.id)
     expect((await store.messages(owner, tab, docsChat, {})).messages.map(m => m.id)).not.toContain(alerts[0]!.id)

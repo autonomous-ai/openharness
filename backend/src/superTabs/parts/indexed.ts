@@ -70,6 +70,9 @@ export const NAMED_INDEX = {
     agentOpen: { tabId: 1, agentId: 1, status: 1, createdAt: 1 },
     /** Finished deliveries by their last change: those old enough to compact (deliveryCompaction.ts). */
     compaction: { status: 1, updatedAt: 1 },
+    /** Unfinished deliveries in id order, a page at a time (deliverySettle.ts). Named: with a fourth status Mongo planned the pass on
+     *  `compaction` and sorted, reading far more than a page. */
+    settle: { status: 1, _id: 1 },
   },
   /** Compacted receipts (pageReads.ts): a page's by message id, and a host's by the compacted delivery's id. */
   SuperTabReceipt: {
