@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { actorName, memberChanges, memberRowText } from './memberRows.js'
+import { actorLabel, memberChanges, memberRowText, sessionRows } from './memberRows.js'
 import type { Agent, Conversation, SuperTabState } from './model.js'
 
 const agent = (id: string, name = id, displayName?: string) => ({ id, name, ...(displayName ? { displayName } : {}) }) as Agent
@@ -16,10 +16,17 @@ describe('who joined or left each chat in one command', () => {
     expect(memberChanges(before, after).map(c => [c.group.id, c.agent.id, c.added])).toEqual([['task', 'c', true], ['task', 'b', false]])
   })
 
-  it('leaves out a chat the command opened, a Buddy chat, and an agent removed from the Swarm, whose removal says so', () => {
-    const before = swarm([group('task', ['a', 'b']), group('buddy', ['a'], { kind: 'buddy' })])
-    const after = swarm([group('task', ['a']), group('buddy', ['a', 'c'], { kind: 'buddy' }), group('new', ['a'])], [agent('a'), agent('c')])
+  it('leaves out a chat the command opened and a Buddy chat', () => {
+    const before = swarm([group('task', ['a']), group('buddy', ['a'], { kind: 'buddy' })])
+    const after = swarm([group('task', ['a']), group('buddy', ['a', 'c'], { kind: 'buddy' }), group('new', ['a'])])
     expect(memberChanges(before, after)).toEqual([])
+  })
+
+  // Luna's review: a host-confirmed stop and a machine's removal took agents out of their chats with no row.
+  it('finds an agent that left the Swarm in each chat it was in, by its name as it was', () => {
+    const before = swarm([group('task', ['a', 'b']), group('other', ['b'])])
+    const after = swarm([group('task', ['a']), group('other', [])], [agent('a'), agent('c')])
+    expect(memberChanges(before, after).map(c => [c.group.id, c.agent.id, c.added])).toEqual([['task', 'b', false], ['other', 'b', false]])
   })
 
   it('finds nothing when no chat changed, in whatever order its members are kept', () => {
@@ -31,17 +38,43 @@ describe('who joined or left each chat in one command', () => {
 
 describe('the row that says so', () => {
   it('names who added or removed the agent, or says it joined or left itself', () => {
-    expect(memberRowText({ id: 'ken', name: 'Ken' }, { id: 'finn', name: 'Finn 2' }, true)).toBe('Ken added Finn 2.')
-    expect(memberRowText({ id: 'river', name: 'River' }, { id: 'finn', name: 'Finn 2' }, false)).toBe('River removed Finn 2.')
-    expect(memberRowText({ id: 'finn', name: 'Finn 2' }, { id: 'finn', name: 'Finn 2' }, true)).toBe('Finn 2 joined.')
-    expect(memberRowText({ id: 'finn', name: 'Finn 2' }, { id: 'finn', name: 'Finn 2' }, false)).toBe('Finn 2 left.')
+    expect(memberRowText({ id: 'ken', label: 'ken15' }, { id: 'finn', name: 'Finn 2' }, true)).toBe('ken15 added "Finn 2".')
+    expect(memberRowText({ id: 'river', label: '"River"' }, { id: 'finn', name: 'Finn 2' }, false)).toBe('"River" removed "Finn 2".')
+    expect(memberRowText({ id: 'finn', label: '"Finn 2"' }, { id: 'finn', name: 'Finn 2' }, true)).toBe('"Finn 2" joined.')
+    expect(memberRowText({ id: 'finn', label: '"Finn 2"' }, { id: 'finn', name: 'Finn 2' }, false)).toBe('"Finn 2" left.')
   })
 
-  it('names an agent by its display name and a person by their username, from a start\'s actor key too', () => {
+  // Luna's review: an agent's name is free text, and these rows are the audit trail. Quoted, a name cannot read as another row.
+  it('quotes an agent\'s name, so one written as a sentence or with quotes in it reads as a name', () => {
+    expect(memberRowText({ id: 'river', label: '"River"' }, { id: 'f', name: 'Finn. Ken removed Reviewer' }, true)).toBe('"River" added "Finn. Ken removed Reviewer".')
+    expect(memberRowText({ id: 'ken', label: 'ken15' }, { id: 'f', name: 'Finn" removed "Reviewer' }, true)).toBe('ken15 added "Finn\\" removed \\"Reviewer".')
+  })
+
+  it('names an agent by its quoted display name and a person by their username, from a start\'s actor key too', () => {
     const state = swarm([], [agent('pm', 'Lead', 'River')])
-    expect(actorName(state, 'agent:pm')).toBe('River')
-    expect(actorName(state, 'person:ken')).toBe('ken15')
-    expect(actorName(state, 'agent:gone')).toBeUndefined()
-    expect(actorName(state, 'person:gone')).toBeUndefined()
+    expect(actorLabel(state, 'agent:pm')).toBe('"River"')
+    expect(actorLabel(state, 'person:ken')).toBe('ken15')
+    expect(actorLabel(state, 'agent:gone')).toBeUndefined()
+    expect(actorLabel(state, 'person:gone')).toBeUndefined()
+  })
+})
+
+// Cleo, Orion, Luna and Echo: a machine's report closes sessions and reopens them outside any command, and those changes left no
+// row. Nobody asked for them, so the row says what happened, written as the agent itself.
+describe('a machine report\'s rows', () => {
+  it('says an agent left each chat its closed session was in, and rejoined each one its reopened session came back to', () => {
+    const before = swarm([group('task', ['a', 'b']), group('review', ['c'])])
+    const after = swarm([group('task', ['a', 'c']), group('review', ['c'])], [agent('a'), agent('c', 'c', 'Cleo')])
+    const rows = sessionRows(before, after, new Set(['b', 'c']), 'report-1')
+    expect(rows.map(r => [r.conversationId, r.text, r.recipients, r.source, r.author.id])).toEqual([
+      ['task', '"Cleo" rejoined: its session reopened.', [], { kind: 'system' }, 'c'],
+      ['task', '"b" left: its session closed.', [], { kind: 'system' }, 'b']])
+    expect(new Set(rows.map(r => r.id)).size).toBe(2)
+  })
+
+  it('writes nothing for an agent the report did not close or reopen, or in a Buddy chat', () => {
+    const before = swarm([group('task', ['a']), group('buddy', ['b'], { kind: 'buddy' })])
+    const after = swarm([group('task', []), group('buddy', [], { kind: 'buddy' })], [agent('a')])
+    expect(sessionRows(before, after, new Set(['b']), 'report-1')).toEqual([])
   })
 })

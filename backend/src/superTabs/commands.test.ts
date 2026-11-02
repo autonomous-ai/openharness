@@ -1577,8 +1577,12 @@ describe('message attachments', () => {
     f.run({ type: 'agent.release', agentId: worker, decision: 'stop' } as Command, leadActor)
     expect(() => f.run({ type: 'agent.remove', agentId: worker }, { ...workerActor, agentId: other })).toThrow()
     const releaseId = f.state.agents.find(a => a.id === worker)!.releaseId!
+    const chats = f.state.conversations.filter(c => c.agentIds.includes(worker)).map(c => c.id)
+    const name = f.state.agents.find(a => a.id === worker)!.displayName
     const removed = f.run({ type: 'agent.remove', agentId: worker, releaseId }, workerActor)
-    expect(removed.messages).toEqual([])
+    // Each chat it was in says it left (Luna's review of #2207): its own host confirmed the stop.
+    expect(chats.length).toBeGreaterThan(0)
+    expect(removed.messages.map(m => [m.conversationId, m.text, m.recipients])).toEqual(chats.map(id => [id, `"${name}" left.`, []]))
     expect(removed.cancelledAgents).toContain(worker)
     expect(f.state.agents.some(a => a.id === worker)).toBe(false)
     // Its host closed the session before confirming; nothing is left for it to close.
@@ -1788,6 +1792,17 @@ describe('any agent of the project', () => {
     // Nothing changed, nothing said; an agent removed from the Swarm has its removal row alone.
     expect(rows(f.run(member(engineer, true), owner))).toEqual([])
     expect(rows(f.run({ type: 'agent.remove', agentId: outsider }))).toEqual([])
+  })
+
+  // Orion's review of #2207: refusing a post's recipient by name told whoever held another project's agent id its name.
+  it('names in a refusal only an agent of the chat\'s own project', () => {
+    const { f } = project()
+    const other = f.run({ type: 'project.create', name: 'Private', visibility: 'private', brief: '' }).result as { conversationId: string }
+    const theirs = f.run({ type: 'agent.add', conversationId: other.conversationId, machineId: 'host', harnessId: 'theirs', name: 'Secret name', configuration: config,
+      lead: true }, owner, { contribution: f.contribution }).result.agentId as string
+    const sent = () => f.run({ type: 'message.send', conversationId: 'lead', text: 'Hello.', replyTo: null, recipientIds: [theirs] }, f.leadActor)
+    expect(sent).toThrow(expect.objectContaining({ code: 'INVALID_RECIPIENT' }))
+    expect(sent).not.toThrow('Secret name')
   })
 
   // Security review L2: the project chat is the people's and is never archived, so its work, name and records are its
@@ -2987,6 +3002,8 @@ describe('machine.remove', () => {
     const named = (id: string) => { const a = f.state.agents.find(x => x.id === id)!; return a.displayName ?? a.name }
     const workerName = named(worker)
     const effects = f.run({ type: 'machine.remove', machineId: 'host' })
+    // Its agents' chats say who took them out (Echo's review of #2207).
+    expect(effects.messages.filter(m => m.conversationId === group).map(m => m.text)).toContain(`owner removed "${workerName}".`)
 
     expect(f.state.machines).toEqual([expect.objectContaining({ machineId: 'host', paused: true,
       removal: { id: effects.result.removalId, state: 'cleaning', requestedAt: new Date(1000).toISOString() } })])
