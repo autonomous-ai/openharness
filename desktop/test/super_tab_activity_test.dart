@@ -603,6 +603,42 @@ void main() {
       expect(told, hasLength(1));
     });
 
+    // Task #2224: what a person sent from their phone, the web or another Mac tells them nothing.
+    Future<(SuperTabController, ConversationServer, List<int>)>
+    chatSetToAll() async {
+      final server = projectServer();
+      final c = await open(server);
+      final told = <int>[];
+      SuperTabChatNotices.of(c).onMessage = (_, s) => told.add(s);
+      await c.setNotify('offline', SuperTabNotify.all);
+      return (c, server, told);
+    }
+
+    test('their own message from another device tells them nothing', () async {
+      final (c, server, told) = await chatSetToAll();
+      server.append('From my phone', conversationId: 'offline');
+      await c.refresh();
+      await settle();
+      expect(told, isEmpty);
+    });
+
+    test('a teammate\'s message still does', () async {
+      final (c, server, told) = await chatSetToAll();
+      fromLead(server, 'From the Lead', conversationId: 'offline');
+      await c.refresh();
+      await settle();
+      expect(told, hasLength(1));
+    });
+
+    test('a teammate\'s message among their own still does', () async {
+      final (c, server, told) = await chatSetToAll();
+      fromLead(server, 'From the Lead', conversationId: 'offline');
+      server.append('From my phone', conversationId: 'offline');
+      await c.refresh();
+      await settle();
+      expect(told, hasLength(1));
+    });
+
     test('the open chat on screen in a focused app is not told', () async {
       final (c, server, told) = await openChatSetToAll();
       fromLead(server, 'While reading it');
