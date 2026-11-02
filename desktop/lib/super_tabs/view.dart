@@ -2528,6 +2528,14 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
+  ButtonStyle _menuRowStyle({bool finger = false}) => ButtonStyle(
+    minimumSize: WidgetStatePropertyAll(Size(208, finger ? kFingerTarget : 32)),
+    side: WidgetStatePropertyAll(BorderSide.none),
+    padding: WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 12)),
+    alignment: Alignment.centerLeft,
+    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+  );
+
   /// A menu's row, a finger's height on a phone.
   Widget _menuItem(
     String label,
@@ -2535,15 +2543,7 @@ class _SuperTabViewState extends State<SuperTabView>
     bool finger = false,
     Widget? trailing,
   }) => MenuItemButton(
-    style: ButtonStyle(
-      minimumSize: WidgetStatePropertyAll(
-        Size(208, finger ? kFingerTarget : 32),
-      ),
-      side: WidgetStatePropertyAll(BorderSide.none),
-      padding: WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 12)),
-      alignment: Alignment.centerLeft,
-      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-    ),
+    style: _menuRowStyle(finger: finger),
     trailingIcon: trailing,
     onPressed: action,
     child: Text(label),
@@ -2551,28 +2551,35 @@ class _SuperTabViewState extends State<SuperTabView>
 
   /// The reader's own setting for a chat, kept on every device (Slack's channel
   /// notifications); a viewer has one too.
-  Widget _notifyMenu(SuperTabConversation group) => SubmenuButton(
-    key: const ValueKey('super-notify-menu'),
-    menuChildren: [
-      for (final (level, label) in const [
-        (SuperTabNotify.all, 'All new messages'),
-        (SuperTabNotify.mentions, 'Mentions only'),
-        (SuperTabNotify.muted, 'Muted'),
-      ])
-        MenuItemButton(
-          key: ValueKey('super-notify-${level.name}'),
-          leadingIcon: SizedBox(
-            width: 16,
-            child: c.notifyOf(group.id) == level
-                ? const Icon(AppIcons.check, size: 14)
-                : null,
-          ),
-          onPressed: () => unawaited(_setNotify(group.id, level)),
-          child: Text(label),
-        ),
-    ],
-    child: const Text('Notifications'),
-  );
+  Widget _notifyMenu(SuperTabConversation group, {bool asRow = false}) =>
+      SubmenuButton(
+        key: const ValueKey('super-notify-menu'),
+        style: asRow ? _menuRowStyle(finger: _phone) : null,
+        submenuIcon: asRow
+            ? const WidgetStatePropertyAll(
+                Icon(AppIcons.chevronRight, size: 14),
+              )
+            : null,
+        menuChildren: [
+          for (final (level, label) in const [
+            (SuperTabNotify.all, 'All new messages'),
+            (SuperTabNotify.mentions, 'Mentions only'),
+            (SuperTabNotify.muted, 'Muted'),
+          ])
+            MenuItemButton(
+              key: ValueKey('super-notify-${level.name}'),
+              leadingIcon: SizedBox(
+                width: 16,
+                child: c.notifyOf(group.id) == level
+                    ? const Icon(AppIcons.check, size: 14)
+                    : null,
+              ),
+              onPressed: () => unawaited(_setNotify(group.id, level)),
+              child: Text(label),
+            ),
+        ],
+        child: const Text('Notifications'),
+      );
 
   /// Until all of the project's closed groups are read, it may have archived
   /// ones: the list reads them when it opens.
@@ -2618,7 +2625,7 @@ class _SuperTabViewState extends State<SuperTabView>
           item('Instructions', () => _groupAction('instructions', group)),
         if (editable && owner)
           item('Sharing', () => _groupAction('sharing', group)),
-        _notifyMenu(group),
+        _notifyMenu(group, asRow: true),
         const Divider(height: 9),
         item(
           'Project settings…',
@@ -3152,6 +3159,7 @@ class _SuperTabViewState extends State<SuperTabView>
       controller: c,
       taskId: open.id,
       word: line == null ? '' : superTabTaskWord(line, c.accountId),
+      mark: line == null ? null : superTabTaskMark(line),
       row: (message) => _message(message, false, byId, inThread: true),
       onClose: () => setState(() => _openedTask = null),
       onOpenInFull: () {

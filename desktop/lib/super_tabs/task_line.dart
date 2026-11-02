@@ -37,12 +37,13 @@ String superTabTaskName(SuperTabMessage message) =>
       _ => message.text,
     };
 
-IconData _mark(SuperTabMessage message) => switch (message.source['state']) {
-  'planned' => AppIcons.circleDashed,
-  'shipped' => AppIcons.check,
-  'stopped' => AppIcons.circleSlash,
-  _ => AppIcons.circleDot,
-};
+IconData superTabTaskMark(SuperTabMessage message) =>
+    switch (message.source['state']) {
+      'planned' => AppIcons.circleDashed,
+      'shipped' => AppIcons.check,
+      'stopped' => AppIcons.circleSlash,
+      _ => AppIcons.circleDot,
+    };
 
 /// What a proposal is for: its goal, as the server writes it (backend
 /// buddies.ts, under its own opening line), else its first line.
@@ -121,7 +122,7 @@ class SuperTabTaskLine extends StatelessWidget {
       child: LayoutBuilder(
         builder: (context, constraints) {
           final mark = Icon(
-            _mark(message),
+            superTabTaskMark(message),
             size: AppIcons.inlineSize,
             color: DesktopChrome.muted,
           );
@@ -207,6 +208,7 @@ class SuperTabTaskPanel extends StatefulWidget {
     required this.controller,
     required this.taskId,
     required this.word,
+    this.mark,
     required this.row,
     required this.onClose,
     required this.onOpenInFull,
@@ -217,6 +219,9 @@ class SuperTabTaskPanel extends StatefulWidget {
 
   /// The word its line says.
   final String word;
+
+  /// The mark its line shows; null once the line is out of the chat's rows.
+  final IconData? mark;
   final Widget Function(SuperTabMessage message) row;
 
   final VoidCallback onClose;
@@ -327,20 +332,38 @@ class _SuperTabTaskPanelState extends State<SuperTabTaskPanel> {
           Divider(height: 1, thickness: 1, color: DesktopChrome.rim),
           Padding(
             padding: const EdgeInsets.all(grid.AppDesktop.groupGap),
-            child: Column(
+            child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  task?.title ?? '',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: DesktopChrome.text(medium: true),
-                ),
-                Text(
-                  [?who, if (widget.word.isNotEmpty) widget.word].join(' · '),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: DesktopChrome.metadata(),
+                if (widget.mark case final mark?) ...[
+                  Icon(
+                    mark,
+                    size: AppIcons.inlineSize,
+                    color: DesktopChrome.muted,
+                  ),
+                  const SizedBox(width: grid.AppDesktop.controlGap),
+                ],
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        task?.title ?? '',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: DesktopChrome.text(medium: true),
+                      ),
+                      Text(
+                        [
+                          ?who,
+                          if (widget.word.isNotEmpty) widget.word,
+                        ].join(' · '),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: DesktopChrome.metadata(),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
