@@ -291,6 +291,74 @@ void _controllerTests() {
   });
 
   // Review of #1791, 2: the saved read is no longer bounded.
+  // Task #2169: Desktop draws at once, as the saved view is this account's own (SuperTabSavedViews is keyed by account).
+  group('on Desktop', () {
+    test('a saved view draws before the first read answers, and the read replaces it', () {
+      final server = ConversationServer()..append('Please start.');
+      final view = _saved(server);
+      fakeAsync((async) {
+        server
+          ..append('Done.')
+          ..holdReads = Completer<void>();
+        final c = _controller(_Reads(server), reading: SuperTabReading.desktop)..drawSaved(view);
+        expect(c.snapshot!.name, 'Pilot');
+        expect(c.messages('lead').single.text, 'Please start.');
+        expect(c.showingSaved, isTrue);
+        expect(c.loading, isFalse);
+        c.start();
+        async.flushMicrotasks();
+        expect(c.showingSaved, isTrue);
+        server.holdReads!.complete();
+        server.holdReads = null;
+        async.flushMicrotasks();
+        expect(c.showingSaved, isFalse);
+        expect(c.messages('lead').map((m) => m.text), ['Please start.', 'Done.']);
+        c.dispose();
+      });
+    });
+
+    test('a conversation the reader lost since goes when the first read answers', () {
+      final server = ConversationServer()..append('Hello');
+      final conversations = server.state['conversations'] as List;
+      conversations.add({...(conversations.first as Map), 'id': 'gone', 'title': 'Gone'});
+      final view = _saved(server);
+      fakeAsync((async) {
+        conversations.removeLast();
+        server.append('Later');
+        final c = _controller(_Reads(server), reading: SuperTabReading.desktop)..drawSaved(view);
+        expect(c.snapshot!.conversation('gone'), isNotNull);
+        c.start();
+        async.flushMicrotasks();
+        expect(c.showingSaved, isFalse);
+        expect(c.snapshot!.conversation('gone'), isNull);
+        c.dispose();
+      });
+    });
+
+    test('a first read that is refused takes the saved view off the screen', () {
+      final server = ConversationServer()..append('Hello');
+      final view = _saved(server);
+      fakeAsync((async) {
+        final c = SuperTabController(
+          tabId: 'tab',
+          accountId: 'owner',
+          request: (method, path, {body}) => Future.error(const SuperTabFailure('FORBIDDEN', 'You no longer have access.')),
+          save: server.save,
+          initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': 'lead'},
+          reading: SuperTabReading.desktop,
+        )..drawSaved(view);
+        expect(c.snapshot, isNotNull);
+        c.start();
+        async.flushMicrotasks();
+        expect(c.accessRevoked, isTrue);
+        expect(c.showingSaved, isFalse);
+        expect(c.snapshot, isNull);
+        expect(c.messages('lead'), isEmpty);
+        c.dispose();
+      });
+    });
+  });
+
   test('a saved view read after the Swarm was refused draws nothing', () {
     final server = ConversationServer()..append('Hello');
     final view = _saved(server);
