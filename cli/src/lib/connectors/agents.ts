@@ -18,6 +18,9 @@ import { MCP_SHIM_SOURCE } from './mcpShimSource.js'
 import { CODE, locked, writePrivate, type Store } from './store.js'
 import { transport } from './rest.js'
 import { socketPathIn } from '../localSocket.js'
+import { isPipePath } from '../windows/pipeAuth.js'
+import type { PipeTarget } from '../windows/pipeClient.js'
+import { BRIDGE_PIPE_FILE } from './bridge.js'
 
 const validPort = (port: unknown): port is number => typeof port === 'number' && Number.isInteger(port) && port >= 0 && port < 65536
 
@@ -108,6 +111,34 @@ export function bridgeUrl(key: string, code: string, port = bridgePort()): strin
 /** The bridge's 0600 socket for MCP clients, in the vault's private folder or its short one, or null where there is none. */
 export function bridgeSocketPath(vault: Store, platform: NodeJS.Platform = process.platform): string | null {
   return platform === 'win32' ? null : socketPathIn(vault.root, 'bridge.sock')
+}
+
+/** Where the bridge records its pipe on Windows (bridge.ts `serveBridgePipe`): the shim and Harness's own route read it. */
+export function bridgePipeRecord(vault: Store): string {
+  return join(vault.root, BRIDGE_PIPE_FILE)
+}
+
+/**
+ * Whether this account's process [pid] runs. The bridge is this account's, so a pid that answers EPERM is another account's
+ * process, one that took the pid since the bridge exited and could have made a pipe of its name: no bridge.
+ */
+function ownProcessRuns(pid: number): boolean {
+  try { process.kill(pid, 0); return true } catch { return false }
+}
+
+/**
+ * The bridge's pipe and token on Windows, or null when there is nothing to dial: no record, a name that is not a local Harness
+ * pipe (`isPipePath`: never another computer's), a token that is not 32 bytes, or a recorded process that no longer runs as
+ * this account. Read for each request, so a bridge that restarted under a new name is followed.
+ */
+export function readBridgePipe(vault: Store, runs: (pid: number) => boolean = ownProcessRuns, platform: NodeJS.Platform = process.platform): PipeTarget | null {
+  let record: Record<string, unknown>
+  try { record = vault.file(BRIDGE_PIPE_FILE) } catch { return null }
+  const { pipe, pid, token } = record
+  if (typeof pipe !== 'string' || !isPipePath(pipe, platform)) return null
+  if (typeof token !== 'string' || !/^[0-9a-f]{64}$/.test(token)) return null
+  if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0 || !runs(pid)) return null
+  return { pipe, token: Buffer.from(token, 'hex') }
 }
 
 /** How an MCP client reaches one connection. */

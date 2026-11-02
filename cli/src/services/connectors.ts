@@ -1,6 +1,6 @@
 /**
  * Connected services (lib/connectors): the MCP bridge every local agent's connector entries reach, through a stdio shim to
- * its 0600 socket (and on 127.0.0.1:51793 for clients still running on that address), and `connectors`, the desktop app's Connectors screen. Agents' entries are written
+ * its 0600 socket, or on Windows its pipe (and on 127.0.0.1:51793 for clients still running on that address), and `connectors`, the desktop app's Connectors screen. Agents' entries are written
  * again as it starts, so an agent installed since a service was connected gets it too.
  *
  * `connectors` takes `{action}`: `list`, `connect` {connector}, `flow` {flow}, `disconnect` {connector},
@@ -18,7 +18,7 @@ import type { AddressInfo } from 'node:net'
 import type { CoreApi, ServiceRequests } from '../core/api.js'
 import { bridgePort, bridgeSocketPath, retireBridgeKey, rotateHarnessKey, saveBridgePort, sync } from '../lib/connectors/agents.js'
 import { portHolderIsThisAccount } from '../lib/peerAccount.js'
-import { createBridge, serveBridgeSocket } from '../lib/connectors/bridge.js'
+import { createBridge, serveBridgePipe, serveBridgeSocket } from '../lib/connectors/bridge.js'
 import { services, type GatewayRow } from '../lib/connectors/catalog.js'
 import { addApiKey, addCustom, cards, disconnect, Flows, signInFor } from '../lib/connectors/connect.js'
 import * as gateway from '../lib/connectors/gateway.js'
@@ -92,7 +92,22 @@ function listenSocket(vault: Store, path: string, retryMs: number, said = false)
   })
 }
 
-export function startConnectors(core: CoreApi, overrides: Partial<ConnectorsDeps> & { holderIsMine?: (port: number) => Promise<boolean | null> } = {}): ServiceRequests {
+/** The bridge's pipe on Windows (bridge.ts `serveBridgePipe`), a new name at each try. Said once, as the socket is. */
+function listenPipe(vault: Store, path: (() => string) | undefined, retryMs: number, said = false): void {
+  serveBridgePipe(vault, path?.()).catch((error: unknown) => {
+    if (!said) console.warn(`[connectors] the bridge's pipe is not listening, trying again: ${error instanceof Error ? error.message : String(error)}`)
+    setTimeout(() => listenPipe(vault, path, retryMs, true), retryMs).unref()
+  })
+}
+
+export interface ConnectorsOverrides extends Partial<ConnectorsDeps> {
+  holderIsMine?: (port: number) => Promise<boolean | null>
+  /** The platform it runs on, and on Windows where its pipe is (a test's socket named as a pipe). */
+  platform?: NodeJS.Platform
+  pipePath?: () => string
+}
+
+export function startConnectors(core: CoreApi, overrides: ConnectorsOverrides = {}): ServiceRequests {
   const env = overrides.env ?? process.env
   const store = overrides.vault ?? new Store(undefined, env)
   const deps: ConnectorsDeps = {
@@ -103,10 +118,13 @@ export function startConnectors(core: CoreApi, overrides: Partial<ConnectorsDeps
   }
   const { vault } = deps
   const flows = new Flows(vault, env)
-  const socket = bridgeSocketPath(vault)
-  // Where a socket can be, the port takes neither key for long: Harness's own goes over the socket, and the agents' retires (agents.ts).
-  if (socket) { try { rotateHarnessKey(vault) } catch (error) { console.warn(`[connections] could not replace Harness's key: ${(error as Error).message}`) } }
-  const bridgeKeys = socket
+  const platform = overrides.platform ?? process.platform
+  const socket = bridgeSocketPath(vault, platform)
+  // Windows has no socket, but a pipe (task #2162): until then the Team account, holding the port from boot, heard every tool call.
+  const local = socket !== null || platform === 'win32'
+  // Where a socket or pipe can be, the port takes neither key for long: Harness's own goes over it, and the agents' retires (agents.ts).
+  if (local) { try { rotateHarnessKey(vault) } catch (error) { console.warn(`[connections] could not replace Harness's key: ${(error as Error).message}`) } }
+  const bridgeKeys = local
     ? { key: () => { try { return retireBridgeKey(vault) } catch { return '' } } }
     : { key: () => String(vault.file('bridge.json').key ?? ''), harnessKey: () => String(vault.file('harness-key.json').key ?? '') }
   const bridge = createBridge(vault, bridgeKeys)
@@ -125,8 +143,9 @@ export function startConnectors(core: CoreApi, overrides: Partial<ConnectorsDeps
     },
   } : undefined)
   if (socket) listenSocket(vault, socket, deps.retryMs)
+  else if (local) listenPipe(vault, overrides.pipePath, deps.retryMs)
   // Stamped now, not at a client's first call: the day counts from this start.
-  if (socket) { try { retireBridgeKey(vault) } catch { /* The next request tries again. */ } }
+  if (local) { try { retireBridgeKey(vault) } catch { /* The next request tries again. */ } }
   try { sync(vault, env) } catch { /* A config that cannot be written now is written at the next connect. */ }
 
   // Connections the same on every computer of the account: read now, at each `connectors_changed`, and
