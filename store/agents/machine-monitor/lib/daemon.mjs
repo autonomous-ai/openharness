@@ -52,9 +52,8 @@ export function dataDir(env = process.env) {
  * The same function, by the same name, is in every Store package that talks to the daemon.
  */
 export function localCredentialHeaders(env = process.env) {
-  // Where a socket can be, nothing carries the credential: a holder of the TCP port would hear it (localDaemon.mjs). Nor on
-  // Windows, which has no socket: the Team account's daemon starts at boot and can hold the port (audit W1,
-  // docs/security/2026-11-02-team-account-windows.md). This add-on reaches the daemon there once it uses the daemon's pipe.
+  // Where a socket can be, and on Windows, where the daemon's pipe is the way, nothing carries the credential: a holder of the
+  // TCP port would hear it (localDaemon.mjs; on Windows the Team account's daemon can hold it from boot, audit W1).
   if (process.platform === 'win32' || daemonSocketPath(65_535, env)) return {};
   const dir = dataDir(env);
   const uid = typeof process.getuid === 'function' ? process.getuid() : null;
@@ -83,8 +82,8 @@ const CREDENTIAL_REFUSED = "Harness refused this process's local credential. Run
 /** Whether the daemon behind a bridge socket that would not open refused the credential: a WebSocket
  *  cannot report the 401, so the same headers are shown once over plain HTTP, which can. */
 async function credentialRefused(url, headers, env = process.env) {
-  // Over the socket no credential is shown, and the port may be anyone's: there is nothing to ask it.
-  if (daemonSocketPath(65_535, env)) return false;
+  // Over the socket or the pipe no credential is shown, and the port may be anyone's: there is nothing to ask it.
+  if (process.platform === 'win32' || daemonSocketPath(65_535, env)) return false;
   try {
     const answer = await fetch(url.replace(/^ws:/, 'http:'), { headers, signal: AbortSignal.timeout(2000) });
     await answer.body?.cancel();
