@@ -17,7 +17,7 @@ Codex Product Manager's own home on Windows (W2, fixed in this pull request), an
 
 | ID | Rating | Finding | Status |
 |---|---|---|---|
-| W1 | **High** | The owner's local credential goes to whoever holds the daemon's port, and opens the daemon from any account | **Fixed** in task #2095 for every client, test first. Store add-ons can't reach the daemon on Windows until they use its pipe (own task). The connectors bridge is still open (own task) |
+| W1 | **High** | The owner's local credential goes to whoever holds the daemon's port, and opens the daemon from any account | **Fixed** in task #2095 for every client, test first. Store add-ons stop working on Windows until they use its pipe (own task). The connectors bridge is still open (own task) |
 | W2 | **High** | Purge left a Codex Product Manager's whole home on Windows, and could take every PM's home on any platform | **Fixed here**, test first |
 | W3 | Medium | Purge can't scrub a Claude Code Product Manager on Windows: the account stays held, its memory stays | Read in code, fix requested |
 | W4 | Medium | The Team account can stall the owner's read of its status file | Read in code, fix requested |
@@ -65,7 +65,8 @@ make the daemon refuse the credential over TCP from another account. Windows can
   `windowsPeerQuery`: `Get-NetTCPConnection`, then the process's owner SID against this account's). Anything but a clear yes is
   no. This alone makes a credential heard on the port useless to another account, from an old client or plugin too.
   It takes only a process that started before the connection was made, so a recycled process id never counts. At most four
-  lookups run at once; one past them is no for now, and is asked again on its next request.
+  lookups run at once and up to 32 wait their turn; one past those is no for now, and is asked again on its next request. A
+  lookup that times out stays no for that connection.
 - Hooks post over the daemon's pipe (`hook/notify.mjs` `windowsDaemonPipe`), proving the token without sending it, and take an
   answer only with the daemon's proof. With no live pipe they post nothing, as on macOS with no socket.
 - CLI clients never put the credential on TCP (`localCredentialHeaders` gives nothing on Windows). Their fetch helper and their
@@ -73,7 +74,9 @@ make the daemon refuse the credential over TCP from another account. Windows can
   running.
 - The Store add-ons (Harness Monitor, Machine Monitor, Memories, Autonomous Grid) and the Store's dev tools each carry their own
   `localCredentialHeaders`. They sent the credential to `127.0.0.1:18473` on Windows, the default port the Team daemon takes at
-  boot. They now send none there, so they can't reach the daemon on Windows until they use its pipe, a task already started.
+  boot. They now send none there, so the daemon refuses their credentialed requests on Windows (their text blames the
+  credential) until they use its pipe, a task already started. Until then they still dial the port without it: whoever holds
+  it can accept them, hear their requests and answer them.
 - Still open, rated Medium, its own task: the connectors bridge. Its default port (51793) is the same for every account, the Team
   daemon also starts connectors, and on Windows `portHolderIsThisAccount` answers null, so the owner's bridge never moves off a
   held port (`services/connectors.ts`). Whoever holds it from boot reads every tool call of the owner's agents and can answer them
