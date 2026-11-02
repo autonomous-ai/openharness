@@ -25,6 +25,7 @@ import { env } from '../config/env.js'
 import { startHookServer, type HookServerHandlers } from '../hookServer.js'
 import { bridgeKey } from '../lib/connectors/agents.js'
 import { createBridge } from '../lib/connectors/bridge.js'
+import { portHolderIsThisAccount } from '../lib/peerAccount.js'
 import { Store } from '../lib/connectors/store.js'
 import { SENTINEL_NAME } from './layout.js'
 import { realPrivacyDeps, runPrivacyCheck } from './privacy.js'
@@ -306,12 +307,16 @@ describe('the privacy check, on the real file system', () => {
  */
 describe.runIf(sudoNobody)('a secret another account heard opens nothing, as nobody', () => {
   /** One request as `nobody`: its status and body, from the real Node client. */
-  const askAsNobody = (url: string, init: { method?: string; headers?: Record<string, string>; body?: string }): { status: number; text: string } => {
+  const askAsNobody = async (url: string, init: { method?: string; headers?: Record<string, string>; body?: string }): Promise<{ status: number; text: string }> => {
     const script = `fetch(${JSON.stringify(url)}, ${JSON.stringify(init)}).then(async r => console.log(JSON.stringify({ status: r.status, text: await r.text() })), e => { console.error(e); process.exit(9) })`
-    const quoted = (word: string) => `'${word.replace(/'/g, `'\\''`)}'`
-    const run = asNobody(`${quoted(process.execPath)} -e ${quoted(script)}`)
-    expect(run.status, run.output).toBe(0)
-    return JSON.parse(run.output.trim().split('\n').at(-1)!) as { status: number; text: string }
+    // Not asNobody: its spawnSync would hold this process, which is the server being asked, until the timeout.
+    const child = spawn('sudo', ['-n', '-u', 'nobody', process.execPath, '-e', script], { cwd: '/', stdio: ['ignore', 'pipe', 'pipe'], timeout: 20_000 })
+    let output = ''
+    child.stdout.on('data', (chunk: Buffer) => { output += chunk.toString() })
+    child.stderr.on('data', (chunk: Buffer) => { output += chunk.toString() })
+    const status = await new Promise<number | null>((resolve) => { child.on('close', resolve) })
+    expect(status, output).toBe(0)
+    return JSON.parse(output.trim().split('\n').at(-1)!) as { status: number; text: string }
   }
 
   it('the daemon refuses the credential and the hook token from nobody, and takes them from this account', async () => {
@@ -320,9 +325,9 @@ describe.runIf(sudoNobody)('a secret another account heard opens nothing, as nob
       const credential = readFileSync(join(env.ADAPTER_DATA_DIR, 'hook-credential'), 'utf8').trim()
       const hookToken = readFileSync(join(env.ADAPTER_DATA_DIR, 'hook-token'), 'utf8').trim()
       const base = `http://127.0.0.1:${started.port}`
-      expect(askAsNobody(`${base}/api/machines`, { headers: { 'X-Harness-Local': credential } }).status).toBe(401)
-      expect(askAsNobody(`${base}/api/status`, { headers: { 'X-Harness-Local': credential } }).text).not.toContain('secretDetail')
-      expect(askAsNobody(`${base}/api/hook/session-end`, { method: 'POST', headers: { 'x-harness-hook-token': hookToken }, body: '{}' }).status).toBe(401)
+      expect((await askAsNobody(`${base}/api/machines`, { headers: { 'X-Harness-Local': credential } })).status).toBe(401)
+      expect((await askAsNobody(`${base}/api/status`, { headers: { 'X-Harness-Local': credential } })).text).not.toContain('secretDetail')
+      expect((await askAsNobody(`${base}/api/hook/session-end`, { method: 'POST', headers: { 'x-harness-hook-token': hookToken }, body: '{}' })).status).toBe(401)
       expect(await (await fetch(`${base}/api/status`, { headers: { 'X-Harness-Local': credential } })).text()).toContain('secretDetail')
       expect((await fetch(`${base}/api/hook/session-end`, { method: 'POST', headers: { 'x-harness-hook-token': hookToken }, body: '{}' })).status).not.toBe(401)
     } finally {
@@ -332,6 +337,21 @@ describe.runIf(sudoNobody)('a secret another account heard opens nothing, as nob
     }
   }, 60_000)
 
+  it('a listener of nobody on a plain listen(port), on `::`, reads as another account\'s', async () => {
+    // It exits by itself: this process may not stop another account's.
+    const script = `const s = require('node:net').createServer().listen(0, () => console.log(s.address().port)); setTimeout(() => process.exit(0), 8000)`
+    const child = spawn('sudo', ['-n', '-u', 'nobody', process.execPath, '-e', script], { cwd: '/', stdio: ['ignore', 'pipe', 'inherit'] })
+    const port = await new Promise<number>((resolve, reject) => {
+      child.stdout.once('data', (chunk: Buffer) => resolve(Number(chunk.toString().trim())))
+      child.once('close', () => reject(new Error('the listener ended before it named its port')))
+    })
+    try {
+      expect(await portHolderIsThisAccount(port)).toBe(false)
+    } finally {
+      await new Promise((resolve) => { child.once('close', resolve) })
+    }
+  }, 30_000)
+
   it('the bridge answers nobody with the right key as it answers an unknown key', async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'hb-')))
     const vault = new Store(root, {})
@@ -340,8 +360,8 @@ describe.runIf(sudoNobody)('a secret another account heard opens nothing, as nob
     await new Promise<void>((resolve) => { bridge.listen(0, '127.0.0.1', resolve) })
     try {
       const base = `http://127.0.0.1:${(bridge.address() as AddressInfo).port}`
-      const heard = askAsNobody(`${base}/${key}/linear/mcp`, { method: 'POST', body: '{}' })
-      const unknown = askAsNobody(`${base}/wrong/linear/mcp`, { method: 'POST', body: '{}' })
+      const heard = await askAsNobody(`${base}/${key}/linear/mcp`, { method: 'POST', body: '{}' })
+      const unknown = await askAsNobody(`${base}/wrong/linear/mcp`, { method: 'POST', body: '{}' })
       expect(heard).toEqual(unknown)
       const mine = await fetch(`${base}/${key}/linear/mcp`, { method: 'POST', body: '{}' })
       expect(await mine.text()).not.toBe(unknown.text)
