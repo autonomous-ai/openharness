@@ -24,7 +24,7 @@
 3. The Engineer's own posts and heartbeats start nothing (review of #2487).
 4. A note to an Engineer already working holds nothing, as `integration/superTabLiveness.test.ts` already pinned: "still reading", then silence, moves.
 5. The server reads one phrase of a post's text, the form the instructions set for a verdict. A Reviewer who words it differently while the Engineer is working is moved as before, which is the safe side.
-6. A named limit: a Reviewer that writes to an Engineer waiting on its review, then hangs with a live session, isn't moved once that Engineer goes back to working, until the next Ready or the task's end. The PM's 30-minute read of open tasks still shows it.
+6. A named limit: a Reviewer that writes to an Engineer waiting on its review, then hangs with a live session, isn't moved once that Engineer goes back to working, until the next Ready, the Engineer's post to it, or the task's end. The PM's 30-minute read of open tasks still shows it.
 
 ## Design
 
