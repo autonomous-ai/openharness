@@ -122,7 +122,7 @@ class SwarmSession extends ChangeNotifier {
   late final SwarmChatNotices _chatNotices;
   int _screens = 0;
   final _watching = <String, int>{};
-  final _held = <String, ({int choice, Timer timer})>{};
+  final _held = <String, ({int? choice, Timer timer})>{};
 
   /// Needs whose held answer was dropped unsent: their card says so until
   /// another answer is held.
@@ -207,13 +207,25 @@ class SwarmSession extends ChangeNotifier {
   /// The option held for [need], while its Undo window runs.
   int? held(SwarmDecisionNeed need) => _held[need.key]?.choice;
 
+  /// [need] is held to be left to its coordinator, while its Undo window runs.
+  bool heldDelegate(SwarmDecisionNeed need) {
+    final held = _held[need.key];
+    return held != null && held.choice == null;
+  }
+
   /// [need]'s held answer was dropped before it was sent: it left the list
   /// meanwhile (the Swarm read again in full) and came back.
   bool dropped(SwarmDecisionNeed need) => _dropped.contains(need.key);
 
   /// Answers [need] with option [choice] once [undoWindow] has passed,
   /// unless [undo] takes it back first.
-  void hold(SwarmDecisionNeed need, int choice) {
+  void hold(SwarmDecisionNeed need, int choice) => _hold(need, choice);
+
+  /// Leaves [need] to its coordinator once [undoWindow] has passed, unless
+  /// [undo] takes it back first, as an answer is held.
+  void holdDelegate(SwarmDecisionNeed need) => _hold(need, null);
+
+  void _hold(SwarmDecisionNeed need, int? choice) {
     if (_disposed) return;
     // Off the list since it was asked (answered elsewhere, or access taken
     // away): there is nothing to answer.
@@ -240,10 +252,15 @@ class SwarmSession extends ChangeNotifier {
     }
   }
 
-  void _send(SwarmDecisionNeed need, int choice) {
+  void _send(SwarmDecisionNeed need, int? choice) {
     if (_disposed) return;
     notifyListeners();
-    unawaited(inbox.asks(need.swarmId)?.answer(need.decision, choice));
+    final asks = inbox.asks(need.swarmId);
+    unawaited(
+      choice == null
+          ? asks?.delegate(need.decision)
+          : asks?.answer(need.decision, choice),
+    );
   }
 
   void _needsChanged() {
