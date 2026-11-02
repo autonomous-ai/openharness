@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/swarm_message_row.dart';
@@ -24,6 +25,7 @@ void main() {
     WidgetTester tester,
     String text, {
     VoidCallback? onTap,
+    VoidCallback? onLongPress,
   }) async {
     final message = SuperTabMessage.fromJson({
       'id': 'm1',
@@ -49,7 +51,7 @@ void main() {
                 quote: null,
                 actions: false,
                 onTap: onTap ?? () {},
-                onLongPress: () {},
+                onLongPress: onLongPress ?? () {},
                 onReply: null,
               ),
             ],
@@ -156,5 +158,84 @@ void main() {
       scrollable: find.byType(Scrollable).first,
     );
     expect(find.text('Finding 80'), findsOneWidget);
+  });
+
+  testWidgets('Markdown web links open their destination without replying', (
+    tester,
+  ) async {
+    final opened = <Object?>[];
+    var replies = 0;
+    const launcher = MethodChannel('plugins.flutter.io/url_launcher');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(launcher, (call) async {
+      opened.add((call.arguments as Map)['url']);
+      return true;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(launcher, null));
+    await show(
+      tester,
+      '[Review](https://example.com/review)',
+      onTap: () => replies++,
+    );
+
+    await tester.tap(find.text('Review', findRichText: true));
+    await tester.pump();
+
+    expect(opened, ['https://example.com/review']);
+    expect(replies, 0);
+  });
+
+  testWidgets('bare web links open in the in-app browser', (tester) async {
+    final opened = <Object?>[];
+    const launcher = MethodChannel('plugins.flutter.io/url_launcher');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(launcher, (call) async {
+      opened.add((call.arguments as Map)['url']);
+      return true;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(launcher, null));
+    await show(tester, 'https://example.com/review');
+
+    await tester.tap(
+      find.text('https://example.com/review', findRichText: true),
+    );
+    await tester.pump();
+
+    expect(opened, ['https://example.com/review']);
+  });
+
+  testWidgets('non-web Markdown destinations do not open', (tester) async {
+    final opened = <Object?>[];
+    const launcher = MethodChannel('plugins.flutter.io/url_launcher');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(launcher, (call) async {
+      opened.add((call.arguments as Map)['url']);
+      return true;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(launcher, null));
+    await show(tester, '[Unsafe](javascript:alert(1))');
+
+    await tester.tap(find.text('Unsafe', findRichText: true));
+    await tester.pump();
+
+    expect(opened, isEmpty);
+  });
+
+  testWidgets('long pressing a rendered link opens the message menu', (
+    tester,
+  ) async {
+    var holds = 0;
+    await show(
+      tester,
+      '[Guide](https://example.com/guide)',
+      onLongPress: () => holds++,
+    );
+
+    await tester.longPress(find.text('Guide', findRichText: true));
+
+    expect(holds, 1);
   });
 }

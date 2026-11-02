@@ -103,6 +103,7 @@ void main() {
     List<Map<String, dynamic>>? members,
     List<Map<String, dynamic>>? projects,
     List<Map<String, dynamic>>? agents,
+    List<Map<String, dynamic>> additionalGroups = const [],
     Map<String, dynamic> g1 = const {},
   }) {
     // The Swarm's counts say a decision waits: what has its list read.
@@ -119,6 +120,7 @@ void main() {
         head: projects == null ? null : headData(projects: projects),
         agents: agents,
         groups: [
+          ...additionalGroups,
           {
             ...groupData(
               'g1',
@@ -470,6 +472,62 @@ void main() {
     await tester.pump();
 
     expect(opened, ['https://cdn.harness.autonomous.ai/f1/plan.md']);
+  });
+
+  testWidgets('a numbered task message opens that task conversation', (
+    tester,
+  ) async {
+    await pump(
+      tester,
+      backend(
+        [message('m1', 1, text: '#42')],
+        additionalGroups: [groupData('task-42', number: 42, title: 'Task 42')],
+      ),
+    );
+
+    await tester.tap(find.text('#42', findRichText: true));
+    await tester.pumpAndSettle();
+
+    final pages = tester.widgetList<SwarmConversationPage>(
+      find.byType(SwarmConversationPage),
+    );
+    expect(pages.last.conversationId, 'task-42');
+  });
+
+  testWidgets('a numbered PR message opens that PR conversation', (
+    tester,
+  ) async {
+    await pump(
+      tester,
+      backend(
+        [message('m1', 1, text: '#43')],
+        additionalGroups: [groupData('pr-43', number: 43, title: 'PR 43')],
+      ),
+    );
+
+    await tester.tap(find.text('#43', findRichText: true));
+    await tester.pumpAndSettle();
+
+    final pages = tester.widgetList<SwarmConversationPage>(
+      find.byType(SwarmConversationPage),
+    );
+    expect(pages.last.conversationId, 'pr-43');
+  });
+
+  testWidgets('an unknown conversation number does not open a chat', (
+    tester,
+  ) async {
+    await pump(tester, backend([message('m1', 1, text: '#999')]));
+
+    await tester.tap(find.text('#999', findRichText: true));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.widgetList<SwarmConversationPage>(
+        find.byType(SwarmConversationPage),
+      ),
+      hasLength(1),
+    );
   });
 
   testWidgets('a notification opens an earlier message and highlights it', (

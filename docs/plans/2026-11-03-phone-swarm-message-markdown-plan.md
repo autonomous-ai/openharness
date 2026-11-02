@@ -78,13 +78,14 @@ Web links and `#42` render as phone link text and open their destination when ta
 - Modify: `mobile/lib/swarm/swarm_message_row.dart`
 - Modify: `mobile/lib/swarm/swarm_conversation_page.dart`
 - Test: `mobile/test/swarm/swarm_message_markdown_test.dart`
+- Test: `mobile/test/swarm/swarm_chat_test.dart` (snapshot-backed conversation routing)
 
 **Interfaces:**
 - Consumes: Task 1's `SwarmMessageText`, and loaded `SuperTabConversation.number` values from the Swarm snapshot.
 - Produces: message link taps call `launchUrl` only for validated HTTP(S) URLs; a known `#N` calls the existing conversation opener with that conversation id; unknown references remain plain text.
 
-- [ ] **Step 1: Write failing widget tests** named `Markdown web links open only their HTTP destination`, `bare web links open in the in-app browser`, `a known task or PR conversation number opens that exact conversation`, `an unknown conversation number remains plain text`, `tapping a link does not trigger message reply`, and `long pressing a link opens the message menu`.
-- [ ] **Step 2: Run the focused widget tests on the unchanged implementation** and confirm the missing link behaviors fail.
+- [x] **Step 1: Write failing widget tests** named `Markdown web links open their destination without replying`, `bare web links open in the in-app browser`, `a numbered task message opens that task conversation`, `a numbered PR message opens that PR conversation`, `an unknown conversation number does not open a chat`, and `long pressing a rendered link opens the message menu`.
+- [x] **Step 2: Run the focused widget tests on the unchanged implementation** and confirm web destinations and numbered task/PR routing fail.
 - [ ] **Step 3: Implement validated web-link handling and snapshot-backed `#N` routing** without changing the message row's outer long-press behavior.
 - [ ] **Step 4: Run the focused widget tests** and confirm expected destinations and no unintended reply tap.
 - [ ] **Step 5: Commit the failing tests, then commit the passing implementation.**
