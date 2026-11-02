@@ -1953,7 +1953,7 @@ class _SuperTabViewState extends State<SuperTabView>
 
   /// The messages [id]'s list shows, in order.
   /// A thread reply shows in its thread, and here only when also sent.
-  List<SuperTabMessage> _shownMessages(String id) {
+  List<SuperTabMessage> _shownMessages(String id, {bool replies = false}) {
     final messages = c.taskMessages(id);
     final answered = answeredPromptAlerts(
       messages,
@@ -1969,7 +1969,7 @@ class _SuperTabViewState extends State<SuperTabView>
         .where(
           (m) =>
               _shown(m) &&
-              m.inMainStream &&
+              (replies || m.inMainStream) &&
               !answered.contains(m.id) &&
               !(SuperTabShipRow.shows(m) &&
                   lined.contains(m.source['conversationId'])),
@@ -3181,7 +3181,8 @@ class _SuperTabViewState extends State<SuperTabView>
       taskId: open.id,
       word: line == null ? '' : superTabTaskWord(line, c.accountId),
       mark: line == null ? null : superTabTaskMark(line),
-      rows: () => _shownMessages(open.id),
+      // The whole conversation (screen 3): agents answer with replies.
+      rows: () => _shownMessages(open.id, replies: true),
       row: (message) => _message(message, false, byId, inThread: true),
       outgoing: (sent) => _outgoingRow(sent, byId, grouped: false),
       onClose: () => setState(() => _openedTask = null),

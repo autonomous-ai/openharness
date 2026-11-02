@@ -225,8 +225,8 @@ class SuperTabTaskPanel extends StatefulWidget {
   /// The mark its line shows; null once the line is out of the chat's rows.
   final IconData? mark;
 
-  /// The rows the chat would list for the task: its steps' too, not hidden
-  /// notices, and no thread's replies, which open in full.
+  /// The task's whole conversation in time order: its steps' rows and every
+  /// thread's replies, without hidden notices.
   final List<SuperTabMessage> Function() rows;
 
   final Widget Function(SuperTabMessage message) row;
