@@ -91,8 +91,14 @@ void main() {
     List<Map<String, dynamic>> starts = const [],
     List<Map<String, dynamic>> decisions = const [],
     String role = 'owner',
+    Map<String, dynamic>? head,
+    String chatProject = project,
+    bool oneBuddy = false,
   }) {
-    final derived = {'decisionsWaiting': decisions.length};
+    final derived = {
+      'decisionsWaiting': decisions.length,
+      if (oneBuddy) 'swarmBuddy': true,
+    };
     final fake = FakeSwarm();
     fake.routes['/api/super-tabs/list'] = (_) => {
       'tabs': [
@@ -102,13 +108,17 @@ void main() {
     };
     fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
       ...firstLoad(
+        head: head,
         groups: [
           groupData('g1', title: 'Fix login', number: 7),
-          buddyChatData(
-            chat,
-            agentIds: [if (buddy != null) 'agent-wren'],
-            lastMessageSequence: page.length,
-          ),
+          {
+            ...buddyChatData(
+              chat,
+              agentIds: [if (buddy != null) 'agent-wren'],
+              lastMessageSequence: page.length,
+            ),
+            'projectId': chatProject,
+          },
         ],
         agents: [
           agent('agent-lead', name: 'Lead', displayName: 'River'),
@@ -184,6 +194,70 @@ void main() {
         ...changes(cursor: 'c3'),
         'starts': [for (final s in starts) part(s['id'] as String, 2, s)],
       };
+
+  group("with the person's one Swarm Buddy (Diego, 11-02)", () {
+    /// Wren as the Swarm's one Buddy: it belongs to no project.
+    Map<String, dynamic> oneWren() =>
+        {...wren(), 'buddyScope': 'swarm'}..remove('projectId');
+
+    final twoProjects = headData(
+      projects: [
+        ...(headData()['projects'] as List).cast<Map<String, dynamic>>(),
+        {
+          'id': 'project-2',
+          'name': 'Web',
+          'ownerId': me,
+          'leadConversationId': 'lead-2',
+          'visibility': 'public',
+          'members': <Object>[],
+          'updateMinutes': 5,
+        },
+      ],
+    );
+
+    testWidgets("a chat in another project shows no Start while the person's "
+        'one Buddy runs, and is named after it', (tester) async {
+      await pump(
+        tester,
+        backend(
+          buddy: oneWren(),
+          head: twoProjects,
+          chatProject: 'project-2',
+          oneBuddy: true,
+        ),
+      );
+
+      expect(key('swarm-buddy-start'), findsNothing);
+      expect(key('swarm-buddy-start-button'), findsNothing);
+      expect(hint(tester), 'Message Wren');
+    });
+
+    testWidgets("a start of the one Buddy under way shows no Start in "
+        "another project's chat either", (tester) async {
+      await pump(
+        tester,
+        backend(
+          head: twoProjects,
+          chatProject: 'project-2',
+          oneBuddy: true,
+          starts: [
+            {
+              ...buddyStartData('s1', chatId: chat),
+              'request': {
+                ...(buddyStartData('s1', chatId: chat)['request'] as Map)
+                    .cast<String, dynamic>()
+                  ..remove('conversationId'),
+                'buddyScope': 'swarm',
+              },
+            },
+          ],
+        ),
+      );
+
+      expect(key('swarm-buddy-start-button'), findsNothing);
+      expect(key('swarm-buddy-starting'), findsOneWidget);
+    });
+  });
 
   group('with its Buddy running', () {
     testWidgets('is named after the Buddy, under its project, and its '
