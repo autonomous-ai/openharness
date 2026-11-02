@@ -29,6 +29,7 @@ import 'finger_target.dart';
 import 'new_harness_attachments.dart';
 import 'new_harness_paste.dart';
 import 'engine_identity.dart';
+import 'laid_out_list.dart';
 
 /// Desktop composer and legacy terminal launch form sharing the same draft.
 /// Enter on the selected launch action starts with the displayed defaults.
@@ -4444,7 +4445,7 @@ class _RoleFieldState extends State<_RoleField> {
               maxWidth: _roleFieldWidth,
               maxHeight: grid.AppControl.menuMaxHeight,
             ),
-            child: ListView(
+            child: LaidOutListView(
               padding: grid.AppMenu.panelPadding,
               shrinkWrap: true,
               children: [

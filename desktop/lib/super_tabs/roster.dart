@@ -30,6 +30,7 @@ import 'model.dart';
 import 'profile_sheet.dart';
 import 'section_heading.dart';
 import 'agent_line.dart';
+import '../widgets/laid_out_list.dart';
 
 /// The current Swarm's authorized people, each with their week on the
 /// leaderboard of the open conversation's project, and every agent of the
@@ -627,7 +628,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
           terminalThemeStore,
           appearancePrefsStore,
         ]),
-        builder: (context, _) => ListView(
+        builder: (context, _) => LaidOutListView(
           key: PageStorageKey('super-tab-resources-${c.tabId}'),
           padding: const EdgeInsets.symmetric(vertical: 12),
           children: _members(),

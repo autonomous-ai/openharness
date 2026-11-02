@@ -27,6 +27,7 @@ import 'package:harness/widgets/machine_picker_form.dart';
 import 'package:harness/widgets/swarm_switcher.dart';
 import 'package:harness/widgets/search_result_text.dart';
 import 'package:harness/ws/local_cli_discovery.dart';
+import 'package:harness/widgets/laid_out_list.dart';
 import 'package:xterm/xterm.dart' show TerminalStyle;
 
 import 'keymap_host_test.dart' show MemoryKeymap, key;
@@ -1586,7 +1587,7 @@ void main() {
           .widget<ListView>(
             find.descendant(
               of: find.byType(SwarmResourcePreview),
-              matching: find.byType(ListView),
+              matching: find.byType(LaidOutListView),
             ),
           )
           .controller!
