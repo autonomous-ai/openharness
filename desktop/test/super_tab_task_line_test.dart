@@ -15,16 +15,19 @@ Map<String, dynamic> taskRow(
   String? answerFor,
   String taskId = 'group-1',
   int sequence = 5,
+  String? title = 'Phone Activity opens the right message',
+  String? text,
 }) => {
   'id': id,
   'conversationId': 'lead',
   'sequence': sequence,
-  'text': 'Phone Activity opens the right message',
+  'text': text ?? 'Phone Activity opens the right message · $state',
   'createdAt': at.toIso8601String(),
   'author': {'kind': 'agent', 'id': 'kai', 'name': 'Kai'},
   'source': {
     'kind': 'task-line',
     'taskId': taskId,
+    'title': ?title,
     'state': state,
     'answerFor': ?answerFor,
   },
@@ -77,12 +80,13 @@ void main() {
     ('working', 'working', AppIcons.circleDot),
     ('review', 'in review', AppIcons.circleDot),
     ('shipped', 'shipped', AppIcons.check),
+    ('stopped', 'stopped', AppIcons.circleSlash),
   ]) {
     testWidgets('a $state task is one line: its mark, name and "$word"', (
       tester,
     ) async {
       final c = await showView(tester, serverWith([taskRow(state)]));
-        await c.loadMessages('lead');
+      await c.loadMessages('lead');
       await tester.pumpAndSettle();
       expect(line, findsOneWidget);
       expect(
@@ -103,6 +107,76 @@ void main() {
     });
   }
 
+  testWidgets('the name comes from the title, not the text older apps read', (
+    tester,
+  ) async {
+    final c = await showView(
+      tester,
+      serverWith([
+        taskRow(
+          'review',
+          title: 'Offline drafts',
+          text: 'Offline drafts · in review',
+        ),
+      ]),
+    );
+    await c.loadMessages('lead');
+    await tester.pumpAndSettle();
+    expect(find.text('Offline drafts'), findsOneWidget);
+    expect(find.text('Offline drafts · in review'), findsNothing);
+  });
+
+  testWidgets('a line with no title still reads, as its text says it', (
+    tester,
+  ) async {
+    final c = await showView(
+      tester,
+      serverWith([taskRow('review', title: null, text: 'Offline drafts')]),
+    );
+    await c.loadMessages('lead');
+    await tester.pumpAndSettle();
+    expect(find.text('Offline drafts'), findsOneWidget);
+  });
+
+  testWidgets('an edited line redraws in place at the next read', (
+    tester,
+  ) async {
+    final server = serverWith([
+      taskRow(
+        'working',
+        text: 'Offline drafts · working',
+        title: 'Offline drafts',
+      ),
+    ]);
+    final c = await showView(tester, server);
+    await c.loadMessages('lead');
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(of: line, matching: find.text('working')),
+      findsOneWidget,
+    );
+
+    // The server edits the one message, and moves the chat's reaction counter.
+    server.messages.first
+      ..['text'] = 'Offline drafts · in review'
+      ..['source'] = {
+        ...server.messages.first['source'] as Map,
+        'state': 'review',
+      };
+    final group = (server.state['conversations'] as List)
+        .cast<Map<String, dynamic>>()
+        .firstWhere((g) => g['id'] == 'lead');
+    group['reactionSeq'] = ((group['reactionSeq'] as int?) ?? 0) + 1;
+    await c.loadMessages('lead');
+    await c.loadMessages('lead');
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(of: line, matching: find.text('in review')),
+      findsOneWidget,
+    );
+    expect(line, findsOneWidget);
+  });
+
   testWidgets('a task waiting on the reader says Answer', (tester) async {
     final c = await showView(
       tester,
@@ -116,24 +190,25 @@ void main() {
     );
   });
 
-  testWidgets('a task waiting on someone else never says Answer to the reader', (
-    tester,
-  ) async {
-    final c = await showView(
-      tester,
-      serverWith([taskRow('waiting', answerFor: 'someone-else')]),
-    );
-    await c.loadMessages('lead');
-    await tester.pumpAndSettle();
-    expect(
-      find.descendant(of: line, matching: find.text('Answer')),
-      findsNothing,
-    );
-    expect(
-      find.descendant(of: line, matching: find.text('working')),
-      findsOneWidget,
-    );
-  });
+  testWidgets(
+    'a task waiting on someone else never says Answer to the reader',
+    (tester) async {
+      final c = await showView(
+        tester,
+        serverWith([taskRow('waiting', answerFor: 'someone-else')]),
+      );
+      await c.loadMessages('lead');
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(of: line, matching: find.text('Answer')),
+        findsNothing,
+      );
+      expect(
+        find.descendant(of: line, matching: find.text('working')),
+        findsOneWidget,
+      );
+    },
+  );
 
   testWidgets('an unknown state keeps the line and says nothing it cannot', (
     tester,
