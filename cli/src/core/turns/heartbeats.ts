@@ -1,7 +1,7 @@
 /**
  * Turn heartbeats: while a turn is open, every few seconds, check what the agent is really doing, tell
- * the app (activity, and a heartbeat while working) and keep the dial's card alive; stop once the turn
- * is closed and the dial no longer needs it.
+ * the app (a heartbeat while working, else its activity when it changed) and keep the dial's card alive;
+ * stop once the turn is closed and the dial no longer needs it.
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 7: docs/design/2026-10-03-harnessd.md).
  */
@@ -29,8 +29,14 @@ export function createHeartbeats({ bySession, sessionTurnOpen, agentIdFor, runti
   const TURN_HEARTBEAT_MS = 5000
   const heartbeats = new Map<string, NodeJS.Timeout>()
   const turnStartedAt = new Map<string, number>()
+  // One frame a beat. One Desktop's day (2026-10-30) had 32,819 agent_activity and 28,411 turn_heartbeat, the same
+  // activity twice while working, and an idle or waiting session's every 5 s. Working goes as turn_heartbeat alone (the
+  // phone reads only it; every app reads `activity` from it). Anything else goes as agent_activity when it changed since
+  // the last one sent: by state and epoch, not revision, which every probe of an idle open turn moves with nothing new.
+  const lastSent = new Map<string, string>()
   const stopHeartbeat = (sessionId: string): void => {
     runtimeActivity.forget(sessionId)
+    lastSent.delete(sessionId)
     const timer = heartbeats.get(sessionId)
     if (timer) { clearInterval(timer); heartbeats.delete(sessionId) }
   }
@@ -44,8 +50,10 @@ export function createHeartbeats({ bySession, sessionTurnOpen, agentIdFor, runti
       if (!heartbeats.has(sessionId)) return
       const activity = turnActivity.snapshot(sessionId)
       if (activity) {
-        clients.send(correlateAgentEvent({ type: 'agent_activity', payload: { activity } }, sessionId, agentIdFor(sessionId)))
+        const said = `${activity.state}:${activity.epoch}`
         if (activity.state === 'working') clients.send(turnHeartbeatFrame(sessionId, agentIdFor(sessionId), activity))
+        else if (lastSent.get(sessionId) !== said) clients.send(correlateAgentEvent({ type: 'agent_activity', payload: { activity } }, sessionId, agentIdFor(sessionId)))
+        lastSent.set(sessionId, said)
       }
       const deviceBusy = mirror.heartbeat(sessionId)
       if (!sessionTurnOpen(sessionId) && !deviceBusy) stopHeartbeat(sessionId)

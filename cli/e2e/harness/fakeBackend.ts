@@ -135,6 +135,9 @@ export class FakeBackend {
   private down = false
   /** How long everything relayed between a machine and its web clients is held, ms. */
   latencyMs = 0
+  /** How long what each machine sends up to the devices' lanes is held, ms, by machine id: a machine slow to answer
+   *  (Diego's, 10-30), not a slow relay. Its handshakes and replies come late alike; what goes down to it does not. */
+  readonly slowUp = new Map<string, number>()
   /** What each web client sent towards its machine, as sent (sealed), by connection id. */
   readonly webSent = new Map<string, Frame[]>()
   /** What reached each web client from its machine, as relayed (sealed), by connection id. */
@@ -617,13 +620,13 @@ export class FakeBackend {
     const tagged = { ...envelope.frame, machineId }
     if (envelope.targetConnId) {
       const owner = this.connOwners.get(envelope.targetConnId)
-      if (owner?.machineId === machineId) this.sendDevice(owner.device, tagged)
+      if (owner?.machineId === machineId) this.upToDevice(owner.device, machineId, tagged)
       const web = [...this.webClients].find((client) => client.connId === envelope.targetConnId && client.machineId === machineId)
       if (web) this.toWeb(web, envelope.frame)
       if (!owner && !web) this.targeted.set(envelope.targetConnId, [...(this.targeted.get(envelope.targetConnId) ?? []), envelope.frame])
       return
     }
-    if (envelope.commanderEligible) for (const device of this.devices) this.sendDevice(device, tagged)
+    if (envelope.commanderEligible) for (const device of this.devices) this.upToDevice(device, machineId, tagged)
     // The real hub: web clients get every broadcast that is not device-only.
     if (envelope.webEligible !== false) this.toWebClients(machineId, envelope.frame)
   }
@@ -786,6 +789,13 @@ export class FakeBackend {
     const connId = device.conns.get(machineId)
     this.deviceSent.push(frame)
     if (connId) this.sendNode(machineId, connId, frame)
+  }
+
+  /** What a machine sends up to a device, later by `slowUp` if the machine is slow: equal delays fire in order. */
+  private upToDevice(device: Device, machineId: string, frame: Frame): void {
+    const late = this.slowUp.get(machineId) ?? 0
+    if (late > 0) setTimeout(() => this.sendDevice(device, frame), late)
+    else this.sendDevice(device, frame)
   }
 
   private sendDevice(device: Device, frame: Frame): void {

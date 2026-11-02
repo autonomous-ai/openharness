@@ -18,6 +18,7 @@ import { guardedSendJson } from './wsSend.js'
 import { trackSocketLiveness } from './hub.js'
 import { createOrderedInbox } from './orderedInbox.js'
 import { declaredKind, trackSocket } from './wsAttribution.js'
+import { markCpuKind } from './selfProfile.js'
 
 const wss = createWss(WS_LIMITS.agentMessages, { echoFirstProtocol: true })
 /** The daemons' one ceiling for a shared tab's frame (cli lib/e2ee/tabSession.ts `SHARED_TAB_FRAME_MAX`). */
@@ -99,6 +100,7 @@ async function attach(ws: WebSocket, userId: string, share: string, machine: str
   // Counted as frames arrive, not as the queue reaches them: behind a slow publish, a count taken when each is handled
   // let a burst of up to the queue's 256 frames in before the rate saw any (review of Task 7, 2026-10-15).
   ws.on('message', (raw, binary) => {
+    markCpuKind('agent-messages-ws')
     if (closed) return
     if (Date.now() - windowStart >= 1000) { windowStart = Date.now(); count = 0 }
     const size = Array.isArray(raw) ? raw.reduce((n, b) => n + b.length, 0) : (raw as Buffer).byteLength

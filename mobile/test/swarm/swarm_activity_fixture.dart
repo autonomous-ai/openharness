@@ -46,10 +46,15 @@ Map<String, dynamic> activityThread(
 
 /// One Swarm, project Mobile: decision d1 (recommending "Merge"), River's
 /// tag m1, work g1 waiting on the person, and a project chat whose newest
-/// page [page] answers. The server's read mark of that chat is [readMark].
+/// page [page] answers. The server's read mark of that chat is [readMark],
+/// and its thread marks by root [threadMarks] (none from an older server).
+/// A server with Activity (#2453) sends [activityDigest] as it stands at
+/// each read; none sends no digest, as a server before Activity.
 FakeSwarm activityBackend({
+  String? Function()? activityDigest,
   Map<String, dynamic> Function()? page,
   int readMark = 10,
+  Map<String, int>? threadMarks,
   int chatSequence = 12,
   bool decision = true,
   List<Map<String, dynamic>> groups = const [],
@@ -65,10 +70,15 @@ FakeSwarm activityBackend({
     'decisionsWaiting': decision ? 1 : 0,
     'mentionsWaiting': 1,
     'readMarks': {leadChat: readMark},
+    'threadMarks': ?(threadMarks == null ? null : {leadChat: threadMarks}),
+  };
+  Map<String, dynamic> now() => {
+    ...derived,
+    'activityDigest': ?activityDigest?.call(),
   };
   fake.routes['/api/super-tabs/$tab/parts'] = (_) {
     final load = firstLoad(
-      derived: derived,
+      derived: now(),
       lastChangedAt: 1,
       groups: [
         groupData(
@@ -88,7 +98,7 @@ FakeSwarm activityBackend({
     return load;
   };
   fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
-      changes(cursor: 'c2', derived: derived, lastChangedAt: 1);
+      changes(cursor: 'c2', derived: now(), lastChangedAt: 1);
   fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
     'decisions': [
       if (decision)
@@ -215,3 +225,40 @@ void activitySecondSwarm(
     _,
   ) => page?.call() ?? {'messages': <Object>[], 'next': null};
 }
+
+/// The server's Activity of the person in Swarm [tab]: GET answers [rows]
+/// as it stands, POST read is remembered by [FakeSwarm.calls].
+const activityPath = '/api/super-tabs/$tab/activity';
+
+/// One row of `/activity` (backend superTabs/activity.ts ActivityItem), made
+/// at 07:[minute] on 11-01.
+Map<String, dynamic> activityRow(
+  String id, {
+  String kind = 'reply',
+  String conversationId = leadChat,
+  String? messageId,
+  String? threadId,
+  Map<String, dynamic> actor = const {
+    'kind': 'agent',
+    'id': 'agent-lead',
+    'name': 'River',
+  },
+  String? emoji,
+  String text = '',
+  int minute = 0,
+  bool read = false,
+}) => {
+  'id': id,
+  'kind': kind,
+  'conversationId': conversationId,
+  'conversationTitle': 'Mobile',
+  'projectName': 'Mobile',
+  'messageId': messageId ?? 'msg-$id',
+  'messageSequence': 20 + minute,
+  'threadId': threadId,
+  'actor': actor,
+  'emoji': emoji,
+  'text': text.isEmpty ? 'Text of $id' : text,
+  'createdAt': DateTime.utc(2026, 11, 1, 7, minute).toIso8601String(),
+  'read': read,
+};

@@ -144,4 +144,19 @@ void main() {
       }
     },
   );
+
+  test('a snapshot that names its input hands AppKit those keys alone, and '
+      'keeps every binding for the menu rows', () {
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    final map = MemoryKeymap();
+    final whole = nativeKeymapSnapshot(map);
+    expect(whole, isNot(contains('input')));
+    final signedOut = nativeKeymapSnapshot(
+      map,
+      inputOnly: const {'swarm.close'},
+    );
+    expect(signedOut['input'], ['cmd+w']);
+    expect(signedOut['contexts'], whole['contexts']);
+  });
 }

@@ -9,7 +9,7 @@ import { PrismaClient } from '@prisma/client'
 import Fastify, { type FastifyInstance } from 'fastify'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
-import { CdnAvatarStore, MemoryAttachmentStore, MemoryAvatarStore } from '../src/superTabs/attachments.js'
+import { MemoryAttachmentStore, MemoryAvatarStore, SharedAvatarStore } from '../src/superTabs/attachments.js'
 import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
 import type { Command } from '../src/superTabs/commands.js'
@@ -279,15 +279,15 @@ describe('setting avatars', () => {
   })
 })
 
-// Prod has no avatar bucket (Ken, 2026-10-28): pictures go in the attachments bucket under avatars/ and are linked on its
-// CDN, as chat files are.
+// Prod has no avatar bucket (Ken, 2026-10-28): pictures go in the attachments bucket under avatars/ and are linked as chat
+// files are, by signed links that stop opening (fileLinks.ts), so they keep working once the bucket is no longer public.
 describe('avatars in the attachments bucket', () => {
   const bucket = new MemoryAttachmentStore()
   let shared: SuperTabStore
   let reads: FastifyInstance
   beforeAll(async () => {
     shared = new SuperTabStore(db, Date.now, { store: bucket, prefix: 'super-tabs', publicBase: 'https://cdn.example.test',
-      avatars: new CdnAvatarStore(bucket, 'https://cdn.example.test'), avatarPrefix: 'avatars' })
+      avatars: new SharedAvatarStore(bucket), avatarPrefix: 'avatars' })
     reads = Fastify()
     reads.setErrorHandler(errorHandler)
     reads.addHook('onRequest', async request => { request.user = [owner, peer].find(u => `Bearer ${u.sub}` === request.headers.authorization) })
@@ -306,19 +306,20 @@ describe('avatars in the attachments bucket', () => {
     return response.json().data.derived?.avatars?.[`person:${owner.sub}`] as string | undefined
   }
 
-  it('uploads, reads and replaces a picture, linked on the CDN', async () => {
+  it('uploads, reads and replaces a picture, by a signed link that stops opening', async () => {
     const tab = (await shared.create(owner, randomUUID(), 'Shared bucket')).id
     const invitation = await shared.execute(owner, tab, { operationId: randomUUID(), command: { type: 'invite.create', email: peer.email, role: 'collaborator', conversationId: 'lead' } })
     await shared.execute(peer, tab, { operationId: randomUUID(), command: { type: 'invite.accept', inviteId: invitation.result.inviteId as string } })
     const first = await picture(tab, image(64))
     expect(first).toMatch(new RegExp(`^avatars/${tab}/[0-9a-f]{32}/avatar$`))
     expect(bucket.objects.get(first)).toMatchObject({ contentType: 'image/png' })
-    expect(await linkFor(tab)).toBe(`https://cdn.example.test/${first}`)
-    expect(bucket.objects.get(first)!.bytes).toEqual(Buffer.from(image(64)))
+    const firstLink = (await linkFor(tab))!
+    expect(firstLink).toMatch(new RegExp(`^https://storage\\.memory\\.test/${first}\\?expires=\\d+&signature=`))
+    expect(bucket.open(firstLink)).toEqual(Buffer.from(image(64)))
+    expect(bucket.open(firstLink, Number(new URL(firstLink).searchParams.get('expires')))).toBeNull()
     const second = await picture(tab, image(96))
     expect(second).not.toBe(first)
-    expect(await linkFor(tab)).toBe(`https://cdn.example.test/${second}`)
-    expect(bucket.objects.get(second)!.bytes).toEqual(Buffer.from(image(96)))
+    expect(bucket.open((await linkFor(tab))!)).toEqual(Buffer.from(image(96)))
   })
 
   it('keeps chat files out of the avatar folder and out of avatar links', async () => {

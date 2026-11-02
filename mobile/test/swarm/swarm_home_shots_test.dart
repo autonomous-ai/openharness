@@ -195,6 +195,21 @@ void main() {
       );
       fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
         ...load,
+        // More people than a row draws, so its faces overlap.
+        'members': [
+          for (final (i, id) in [
+            me,
+            'person-ana',
+            'person-ben',
+            'person-cy',
+            'person-dan',
+            'person-eve',
+          ].indexed)
+            part(id, i + 1, {
+              ...person(id),
+              'username': id.replaceFirst('person-', ''),
+            }),
+        ],
         // The fixture's lead chat is another project's.
         'groups': [
           for (final row in load['groups'] as List)

@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/parts.dart';
+import 'package:harness_mobile/swarm/swarm_conversation_page.dart'
+    show swarmAgentRole;
 import 'package:harness_mobile/swarm/swarm_message_row.dart';
 import 'package:harness_mobile/swarm/swarm_thread_line.dart';
 
@@ -73,28 +75,49 @@ void main() {
     expect(tester.getSize(find.byWidget(left)).width, SwarmThreadLine.face);
   });
 
-  testWidgets('the PM wears manager blue as on its own messages, another '
-      'agent its own colour', (tester) async {
-    final snapshot = swarm();
-    Future<SwarmChatAvatar> lead(Map<String, String> roles) async {
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: SwarmThreadLine(
-              thread: thread,
-              faces: swarmThreadFaces(snapshot, thread, roles: roles),
-              onOpen: () {},
-            ),
+  testWidgets("keeps the coordinator's face whatever its role is called", (
+    tester,
+  ) async {
+    // The coordinator goes by Coordinator; an engineer is called PM.
+    final load = firstLoad(
+      agents: [
+        {
+          ...agent('agent-lead', name: 'Lead', displayName: 'River'),
+          'roleName': 'Coordinator',
+        },
+        {...agent('agent-builder', displayName: 'Nova'), 'roleName': 'PM'},
+      ],
+    );
+    final snapshot = SuperTabSnapshot.fromJson(
+      SuperTabParts.firstLoad(load).state,
+    );
+    final replied = SuperTabThread.fromJson({
+      'id': 'm1',
+      'replies': 2,
+      'lastSequence': 3,
+      'authors': [
+        {'kind': 'agent', 'id': 'agent-lead', 'name': 'Lead'},
+        {'kind': 'agent', 'id': 'agent-builder', 'name': 'Builder'},
+      ],
+      'people': <String>[],
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SwarmThreadLine(
+            thread: replied,
+            faces: swarmThreadFaces(snapshot, replied),
+            onOpen: () {},
           ),
         ),
-      );
-      return tester
-          .widgetList<SwarmChatAvatar>(find.byType(SwarmChatAvatar))
-          .elementAt(1);
-    }
-
-    expect((await lead({'agent-lead': 'PM'})).pm, isTrue);
-    expect((await lead({'agent-lead': 'Builder'})).pm, isFalse);
-    expect((await lead(const {})).pm, isFalse);
+      ),
+    );
+    final [lead, builder] = tester
+        .widgetList<SwarmChatAvatar>(find.byType(SwarmChatAvatar))
+        .toList();
+    expect(lead.pm, isTrue);
+    expect(builder.pm, isFalse);
+    expect(swarmAgentRole(snapshot, 'agent-lead'), 'Coordinator');
+    expect(swarmAgentRole(snapshot, 'agent-builder'), 'PM');
   });
 }

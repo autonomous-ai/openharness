@@ -7,6 +7,7 @@ import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/state/pane_layout_store.dart';
 import 'package:harness/super_tabs/controller.dart' show SuperTabFailure;
 import 'package:harness/viewer/viewer_key_store.dart';
@@ -249,7 +250,7 @@ void main() {
       conversationId: 'buddy-chat',
       name: 'shot.png',
       mime: 'image/png',
-      bytes: Uint8List.fromList([1, 2, 3]),
+      file: HarnessAttachment('shot.png', Uint8List.fromList([1, 2, 3])),
       cancel: CancelToken(),
       onProgress: (_) {},
     );

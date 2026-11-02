@@ -320,6 +320,9 @@ describe('the gateway\'s process, spoken to by the core', () => {
     await lane.rekey('m2', { epoch: 'x' })
     expect(await lane.seal('m2', { type: 'message' })).toEqual({ frame: { type: 'message', sealed: true } })
     expect(await lane.open('m2', { type: 'message' })).toEqual({ unreadable: true })
+    // The far daemon's new epoch crosses the process line as itself.
+    w.gateways[0]!.ops.lane.open.mockResolvedValueOnce({ unknownEpoch: true } as never)
+    expect(await lane.open('m2', { type: 'commander_question' })).toEqual({ unknownEpoch: true })
     lane.drop('m2')
     await Promise.resolve()
     const { ops } = w.gateways[0]

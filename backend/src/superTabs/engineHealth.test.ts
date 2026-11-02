@@ -100,10 +100,20 @@ describe('an engine whose starts fail on a machine', () => {
 })
 
 describe('an engine a machine cannot run', () => {
-  it('is one its reading says is signed out or out of quota; unknown and older readings keep today\'s behaviour', () => {
+  // Quota is information, not a gate (project instructions, phase 4): only signed out and suspended refuse a start.
+  it('starts on an engine whose quota is used up', () => {
+    expect(engineUnusable(machine(exhausted), 'codex', NOW)).toBeNull()
+    expect(engineUnusable(machine({ ...exhausted, readiness: { engines: [{ engine: 'codex', installed: true, signedIn: false }] } }), 'codex', NOW))
+      .toBe('Codex is not signed in to a subscription on this machine.')
+    const suspended = machine(exhausted), state = stateWith(suspended)
+    noteStartFailed(state, start(), NOW)
+    noteStartFailed(state, start(), NOW)
+    expect(engineUnusable(suspended, 'codex', NOW)).toContain('Codex is suspended on this machine')
+  })
+
+  it('is one its reading says is signed out; unknown and older readings keep today\'s behaviour', () => {
     expect(engineUnusable(machine({ readiness: { engines: [{ engine: 'codex', installed: true, signedIn: false }] } }), 'codex', NOW))
       .toBe('Codex is not signed in to a subscription on this machine.')
-    expect(engineUnusable(machine(exhausted), 'codex', NOW)).toBe('Codex has no subscription quota left on this machine until its usage window resets.')
     expect(engineUnusable(machine(fine), 'codex', NOW)).toBeNull()
     expect(engineUnusable(machine({ readiness: { engines: [{ engine: 'codex', installed: true, signedIn: null }] },
       quotas: [{ engine: 'codex', known: false, windows: [] }] }), 'codex', NOW)).toBeNull()

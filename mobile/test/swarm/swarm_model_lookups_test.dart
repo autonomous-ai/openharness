@@ -80,6 +80,35 @@ void main() {
     expect(snapshot.projectFor('nope'), isNull);
   });
 
+  // Dee, 10-31: the Product Managers' (Leads) conversation is removed. A
+  // server from before still sends it: the phone lists and opens it nowhere,
+  // and every other chat reads as before.
+  test('the removed Product Managers conversation is in no read, even from an '
+      'older server that still sends it', () {
+    final older = SuperTabSnapshot.fromJson(
+      SuperTabParts.firstLoad(
+        firstLoad(
+          head: {...headData(), 'leadsConversationId': 'leads'},
+          groups: [
+            groupData('g1', title: 'Fix login', agentIds: ['agent-builder']),
+            {
+              ...groupData('leads', title: 'Leads', agentIds: ['agent-lead']),
+              'kind': 'leads',
+              'projectId': null,
+            },
+            {...groupData('g2', title: 'Unmarked'), 'kind': 'leads'},
+            {...groupData('buddy-me', title: 'Buddy'), 'kind': 'buddy'},
+          ],
+        ),
+      ).state,
+    );
+    expect(older.conversation('leads'), isNull);
+    expect(older.conversation('g2'), isNull);
+    expect(older.conversations.map((c) => c.id), [leadChat, 'g1', 'buddy-me']);
+    expect(older.conversation('buddy-me')?.isBuddyChat, isTrue);
+    expect(older.projectFor('g1')?.id, isNotNull);
+  });
+
   test("each project's Product Manager, and no project for anyone else", () {
     expect(snapshot.leadProjectForAgent('agent-lead')?.id, project);
     expect(snapshot.leadProjectForAgent('agent-cleo')?.id, web);

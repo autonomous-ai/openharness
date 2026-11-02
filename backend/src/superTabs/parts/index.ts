@@ -7,6 +7,6 @@ export * from './types.js'
 export { clock, createClock } from './clock.js'
 export { knownKind, reassemble, split, toLegacyState } from './shape.js'
 
-export { DORMANT_PAGE, insertParts, lastChangedAt, loadActive, loadAll, loadChanged, loadDormant, loadGroups, loadMachines, loadObserved, loadReadBase, loadStartsOfAgents } from './load.js'
+export { DORMANT_PAGE, insertParts, lastChangedAt, loadActive, loadAll, loadChanged, loadDormant, loadGroups, loadMachineParts, loadMachines, loadObserved, loadReadBase, loadStartsOfAgents } from './load.js'
 export { loadLight, loadLightGroups } from './light.js'
 export { guardedWrite, PartConflict, type PartWrite } from './write.js'

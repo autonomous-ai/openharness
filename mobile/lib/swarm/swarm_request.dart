@@ -1,7 +1,8 @@
 import 'dart:math';
-import 'dart:typed_data';
 
 import 'package:dio/dio.dart' show CancelToken;
+
+import 'swarm_outgoing_files.dart' show SwarmOutgoingFile;
 
 /// One Swarm backend call: what `AppNotifier.swarmRequest` does, and what the
 /// readers here are handed so their tests need no machine.
@@ -38,15 +39,16 @@ String superTabOperationId() {
 /// Sends one file for a message in [conversationId] of Swarm [tabId] and
 /// answers the backend's `{attachment: {...}}` — `ApiClient.uploadSwarmAttachment`,
 /// and what the chats here are handed so their tests need no backend.
-/// [onProgress] is told the part sent, from 0 to 1. A refusal throws a
-/// [SuperTabFailure] carrying the backend's code.
+/// [file] is read as it goes, never whole when it is large. [onProgress] is
+/// told the part sent, from 0 to 1. A refusal throws a [SuperTabFailure]
+/// carrying the backend's code.
 typedef SwarmUpload =
     Future<Map<String, dynamic>> Function({
       required String tabId,
       required String conversationId,
       required String name,
       required String mime,
-      required Uint8List bytes,
+      required SwarmOutgoingFile file,
       required CancelToken cancel,
       required void Function(double sent) onProgress,
     });
@@ -57,7 +59,7 @@ Future<Map<String, dynamic>> refuseSwarmUpload({
   required String conversationId,
   required String name,
   required String mime,
-  required Uint8List bytes,
+  required SwarmOutgoingFile file,
   required CancelToken cancel,
   required void Function(double sent) onProgress,
 }) => Future.error(

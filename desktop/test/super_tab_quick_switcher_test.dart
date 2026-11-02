@@ -477,57 +477,39 @@ void main() {
     variant: TargetPlatformVariant.only(TargetPlatform.macOS),
   );
 
-  for (final held in [true, false]) {
-    testWidgets(
-      'Product Managers channel follows sidebar visibility (held=$held)',
-      (tester) async {
-        final (f, c) = await setup(tester);
-        f.connection.server.state['leadsConversationId'] = 'managers';
-        if (held) {
-          (f.connection.server.state['conversations'] as List).add({
-            ...conversationFixture('managers', 'Internal coordination title'),
-            'kind': 'leads',
-            'projectId': '',
-          });
-        }
-        f.connection.server.revision++;
-        await c.refresh();
-        await tester.pump();
-        expect(
-          find.text('product-managers'),
-          held ? findsOneWidget : findsNothing,
-        );
-        await open(tester);
+  testWidgets(
+    'finds no Product Managers chat, even from an older server that sends it',
+    (tester) async {
+      final (f, c) = await setup(tester);
+      f.connection.server.state['leadsConversationId'] = 'managers';
+      (f.connection.server.state['conversations'] as List).add({
+        ...conversationFixture('managers', 'Internal coordination title'),
+        'kind': 'leads',
+        'projectId': '',
+      });
+      f.connection.server.revision++;
+      await c.refresh();
+      await tester.pump();
+      expect(find.text('product-managers'), findsNothing);
+      await open(tester);
+      for (final query in ['product-managers', 'Internal coordination']) {
         await tester.enterText(
           find.byKey(const ValueKey('swarm-quick-query')),
-          'product-managers',
+          query,
         );
         await tester.pump();
         expect(
           find.byKey(const ValueKey('swarm-quick-conversation:managers')),
-          held ? findsOneWidget : findsNothing,
+          findsNothing,
+          reason: query,
         );
-        if (held) {
-          expect(
-            find.descendant(
-              of: find.byKey(
-                const ValueKey('swarm-quick-conversation:managers'),
-              ),
-              matching: find.text('product-managers'),
-            ),
-            findsOneWidget,
-          );
-          await key(tester, LogicalKeyboardKey.enter);
-          await tester.pumpAndSettle();
-          expect(c.selectedId, 'managers');
-        } else {
-          await key(tester, LogicalKeyboardKey.escape);
-        }
-        await close(tester, f, c);
-      },
-      variant: TargetPlatformVariant.only(TargetPlatform.macOS),
-    );
-  }
+      }
+      await key(tester, LogicalKeyboardKey.escape);
+      expect(c.selectedId, isNot('managers'));
+      await close(tester, f, c);
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.macOS),
+  );
 
   testWidgets(
     'old private chat stays out even when the reader is in its audience',

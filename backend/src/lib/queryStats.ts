@@ -274,9 +274,19 @@ export function createQueryStats({ pod = `${hostname()}:${process.pid}`, slowMs 
     const ranked = (by: (r: typeof rows[number]) => number, n: number) => [...rows].sort((a, b) => by(b) - by(a)).slice(0, n)
     const picked = new Set([...ranked(r => r.bytes, top.bytes), ...ranked(r => r.n, top.count), ...ranked(r => r.ms, top.ms)])
     const sum = (by: (r: typeof rows[number]) => number) => rows.reduce((total, r) => total + by(r), 0)
+    // Every query of each route, small ones too: the top lists drop a cheap shape however often it runs (an empty poll's
+    // read, 2026-10-31), so a route's own count would read short.
+    const routes = new Map<string, { n: number; ms: number; docs: number; bytes: number; ops: Record<string, number> }>()
+    for (const r of rows) {
+      let total = routes.get(r.route)
+      if (!total) routes.set(r.route, total = { n: 0, ms: 0, docs: 0, bytes: 0, ops: {} })
+      total.n += r.n; total.ms += r.ms; total.docs += r.docs; total.bytes += r.bytes; total.ops[r.op] = (total.ops[r.op] ?? 0) + r.n
+    }
+    const byRoute = Object.fromEntries([...routes].sort((a, b) => b[1].ms - a[1].ms).slice(0, 40).map(([route, t]) =>
+      [route, { ...t, ops: Object.fromEntries(Object.entries(t.ops).sort((a, b) => b[1] - a[1]).slice(0, 12)) }]))
     log('db by shape', { pod, windowMs: Math.round(performance.now() - started), queries: sum(r => r.n), ms: sum(r => r.ms), docs: sum(r => r.docs),
       bytes: sum(r => r.bytes), errors: sum(r => r.errors), keys: rows.length, overflowQueries, bytesCapped, slowQueries, slowMs: Math.round(slowTotalMs), slowSuppressed,
-      top: [...picked].sort((a, b) => b.bytes - a.bytes || b.n - a.n) })
+      top: [...picked].sort((a, b) => b.bytes - a.bytes || b.n - a.n), routes: byRoute })
     entries = new Map(); overflowQueries = 0; slowLogged = 0; slowSuppressed = 0; slowQueries = 0; slowTotalMs = 0; bytesCapped = 0; started = performance.now()
   }
 

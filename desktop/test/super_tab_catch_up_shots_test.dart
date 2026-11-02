@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -28,18 +29,23 @@ Map<String, dynamic> _item(int sequence, String author, String text) => {
 };
 
 /// The chat opened after a while away: the New messages line with the
-/// catch-up card under it, at normal and enlarged text.
+/// catch-up card under it, at normal and enlarged text, and with the pointer
+/// on its decisions link.
 void main() {
   setUpAll(() async {
     if (shots != null) await loadPreviewFonts();
   });
 
-  for (final (brightness, scale) in [
-    (Brightness.light, 1.0),
-    (Brightness.dark, 1.0),
-    (Brightness.dark, 1.8),
+  for (final (brightness, scale, hovered) in [
+    (Brightness.light, 1.0, false),
+    (Brightness.dark, 1.0, false),
+    (Brightness.dark, 1.8, false),
+    (Brightness.light, 1.0, true),
+    (Brightness.dark, 1.0, true),
   ]) {
-    final name = '${brightness.name}${scale > 1 ? '-large-text' : ''}';
+    final name =
+        '${brightness.name}${scale > 1 ? '-large-text' : ''}'
+        '${hovered ? '-decisions-hover' : ''}';
     testWidgets('screenshots for review ($name)', (tester) async {
       final picture = GlobalKey();
       final server = ConversationServer();
@@ -112,6 +118,14 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('super-catch-up')), findsOne);
+      if (hovered) {
+        final link = find.byKey(const ValueKey('super-catch-up-decisions'));
+        expect(link, findsOne);
+        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+        await mouse.addPointer(location: tester.getCenter(link));
+        addTearDown(mouse.removePointer);
+        await tester.pumpAndSettle();
+      }
       expect(tester.takeException(), isNull);
       if (shots == null) return;
       await tester.runAsync(() async {

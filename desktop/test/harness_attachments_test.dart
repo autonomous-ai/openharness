@@ -113,7 +113,7 @@ void main() {
       expect(files.add([_file('a.png'), _file('b.txt')]), isNull);
       expect(files.add([_file('a.png', 8)]), isNull);
       expect(files.files.map((f) => f.name), ['b.txt', 'a.png']);
-      expect(files.files.last.bytes.length, 8);
+      expect(files.files.last.size, 8);
       final problem = files.add([
         _file('huge.mov', HarnessAttachments.maxBytes + 1),
       ]);

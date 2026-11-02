@@ -45,6 +45,23 @@ describe('the parts a command touches (design section 1.2, column T)', () => {
     expect(has(touches, 'agent', a.worker)).toBe(true)
   })
 
+  it('makes the coordinator\'s instructions save, notes and name meet a Lead change on the Lead conversation its check reads (review of phase 2)', () => {
+    const f = swarm(), lead = f.agentActor(f.lead)
+    const notes = [{ id: 'n1', text: 'Not machine A.', askedBy: 'owner', at: 500, expiresAt: null }]
+    for (const [command, context] of [
+      [{ type: 'instructions.save', projectId: 'lead', baseRevision: 1, text: 'PM text.', summary: 'PM text', askedBy: 'owner' }, {}],
+      [{ type: 'note.add', projectId: 'lead', text: 'Not machine B.', askedBy: 'owner' }, {}],
+      [{ type: 'note.remove', projectId: 'lead', noteId: 'n1' }, { notes }],
+      [{ type: 'project.coordinatorName', projectId: 'lead', name: 'Lead engineer' }, {}],
+      // An older CLI's rule, a save to the instructions after the one above (project instructions, phase 4).
+      [{ type: 'rule.set', rule: { kind: 'preferIdle' }, text: 'Idle first.', askedIn: { conversationId: 'lead', messageId: 'm1' } },
+        { askedIn: { author: { kind: 'person', id: 'owner', name: 'owner', membershipGeneration: 'g' }, source: false, createdAt: 0 },
+          instructions: { revision: 2, text: 'PM text.' } }],
+    ] as Array<[Command, Partial<CommandContext>]>) {
+      expect(has(f.run(command, lead, context).touches, 'group', 'lead'), command.type).toBe(true)
+    }
+  })
+
   it('leaves a post\'s recipients alone, so workers posting to their Lead in different groups never meet on the Lead', () => {
     const f = swarm(), a = f.group('A')
     const { effects, touches } = f.run({ type: 'message.send', conversationId: a.id, text: 'Report', replyTo: null, recipientIds: [] }, f.agentActor(a.worker))
@@ -52,34 +69,28 @@ describe('the parts a command touches (design section 1.2, column T)', () => {
     expect(has(touches, 'agent', f.lead)).toBe(false)
   })
 
-  it('makes two reviews the Swarm opens at once meet on the Reviewer both would take, and on the head that numbers them', () => {
-    const f = swarm(), a = f.group('A')
-    // A strong Reviewer of either engine reviews (rules.ts reviewRefusal).
-    const reviewer = f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'reviewer', name: 'Reviewer', configuration: { ...config, engine: config.engine === 'claude' ? 'codex' : 'claude', model: config.engine === 'claude' ? 'default' : 'opus' }, lead: false },
-      owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).effects.result.agentId as string
-    f.state.agents.find(x => x.id === reviewer)!.role = 'reviewer'
-    f.state.projects![0]!.repository = { machineId: 'host', cwd: '/repo', repositoryUrl: 'https://github.com/example/project' }
-    const ready = f.run({ type: 'work.status', conversationId: a.id, assignmentId: a.assignmentId, status: 'review',
-      result: 'Ready. https://github.com/example/project/pull/7' }, f.agentActor(a.worker))
-    expect(ready.effects.state.conversations.find(c => c.reviewOf === a.id)!.assignment!.agentId).toBe(reviewer)
-    expect(has(ready.touches, 'agent', reviewer)).toBe(true)
-    expect(has(ready.touches, 'head', 'head')).toBe(true)
-    expect(has(ready.touches, 'group', 'lead')).toBe(true)
-    // A Ready for review that opens nothing touches none of them.
-    const again = f.run({ type: 'work.status', conversationId: a.id, assignmentId: a.assignmentId, status: 'review', result: 'Ready, head 2.' }, f.agentActor(a.worker))
-    expect(has(again.touches, 'agent', reviewer) || has(again.touches, 'head', 'head')).toBe(false)
+  it('touches an agent a post names from outside its group, which joins, but not one already there', () => {
+    const f = swarm(), a = f.group('A'), b = f.group('B')
+    const { effects, touches } = f.run({ type: 'message.send', conversationId: a.id, text: 'Look', replyTo: null, recipientIds: [b.worker] }, f.agentActor(a.worker))
+    expect(effects.messages[0]!.recipients).toEqual([b.worker])
+    expect(has(touches, 'agent', b.worker)).toBe(true)
+    // Already a member now: an ordinary post to it no longer touches it.
+    expect(has(f.run({ type: 'message.send', conversationId: a.id, text: 'Again', replyTo: null, recipientIds: [b.worker] }, f.agentActor(a.worker)).touches, 'agent', b.worker)).toBe(false)
   })
-
-  it('makes finishing work and the Lead\'s next start or assignment meet on the project\'s progress part', () => {
+  // The project's progress part was also the fence of the worker decisions the Lead had to make before its next start,
+  // assignment or route (design ruling R5). No command reads those decisions now (project instructions, phase 4, decision 17),
+  // so finishing work and the next start, assignment or route no longer meet there (final review of the branch).
+  it('leaves the project\'s progress part to its reports when work finishes, and when the next is defined, routed or assigned', () => {
     const f = swarm(), a = f.group('A')
     f.run({ type: 'work.check', conversationId: a.id, assignmentId: a.assignmentId, checkId: f.state.conversations.find(c => c.id === a.id)!.checks[0]!.id,
       passed: true, evidence: 'Shown' }, f.agentActor(f.lead))
     const done = f.run({ type: 'work.status', conversationId: a.id, assignmentId: a.assignmentId, status: 'done', result: 'Shipped' }, f.agentActor(a.worker))
-    expect(has(done.touches, 'progress', 'lead')).toBe(true)
+    expect(has(done.touches, 'progress', 'lead')).toBe(false)
     const cancelled = f.group('B')
-    expect(has(f.run({ type: 'work.cancel', conversationId: cancelled.id, assignmentId: cancelled.assignmentId, reason: 'Not needed' }).touches, 'progress', 'lead')).toBe(true)
+    expect(has(f.run({ type: 'work.cancel', conversationId: cancelled.id, assignmentId: cancelled.assignmentId, reason: 'Not needed' }).touches, 'progress', 'lead')).toBe(false)
+    expect(has(f.run({ type: 'work.define', conversationId: cancelled.id, brief: 'Again', checks: [] }).touches, 'progress', 'lead')).toBe(false)
     const next = f.run({ type: 'conversation.create', title: 'C', brief: 'More', checks: [{ description: 'Done', independent: false }] }).effects.result.conversationId as string
-    expect(has(f.run({ type: 'work.assign', conversationId: next, agentId: a.worker }).touches, 'progress', 'lead')).toBe(true)
+    expect(has(f.run({ type: 'work.assign', conversationId: next, agentId: a.worker }).touches, 'progress', 'lead')).toBe(false)
   })
 
   it('makes naming a requester meet that person\'s removal on their member part', () => {

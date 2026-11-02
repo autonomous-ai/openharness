@@ -1,5 +1,8 @@
 # Swarm routing phase 1: strong models for hard tasks, quota that fits the task
 
+> Replaced by [2026-10-30-project-instructions-design.md](2026-10-30-project-instructions-design.md): the instruction document and agents' direct messages
+> replace what this describes. Kept as history; do not build from it.
+
 Owner-approved 2026-10-21. Short spec for the implementing agent. The longer reasoning is in
 `docs/superpowers/specs/2026-10-21-swarm-quota-aware-routing-design.md`; where the two differ, this file wins.
 

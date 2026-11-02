@@ -8,6 +8,7 @@ import '../core/local_key_value_store.dart';
 import 'account_keys.dart';
 import 'attachment_upload.dart';
 import 'avatar_upload.dart';
+import 'activity.dart';
 import 'controller.dart';
 import 'decisions.dart';
 import 'model.dart';
@@ -35,6 +36,7 @@ class SuperTabClient {
     this.onTabs,
     this.onSelection,
     this.onMention,
+    this.onChatMessage,
     this.onTagCounts,
     this.onNotices,
     this.upload = refuseUpload,
@@ -66,6 +68,11 @@ class SuperTabClient {
   /// A Lead tagged this account in one of its Swarms while the app was open.
   /// A new tag of the reader in Swarm `tabId`.
   final void Function(String tabId, SuperTabMention mention)? onMention;
+
+  /// A new message in a chat the reader set to All new messages
+  /// ([SuperTabChatNotices]), with the Swarm, the chat and how far it goes.
+  final void Function(String tabId, SuperTabConversation group, int sequence)?
+  onChatMessage;
 
   /// The waiting tags of a Swarm that is not open changed ([waitingTags]).
   final void Function()? onTagCounts;
@@ -367,7 +374,17 @@ class SuperTabClient {
   Iterable<SuperTabController> get loadedControllers => _loaded.values;
 
   /// Native close actions name the machine's harness id, not the Swarm agent id.
-  String? leadProtectionReasonForHarness(String machineId, String harnessId) {
+  String? leadProtectionReasonForHarness(String machineId, String harnessId) =>
+      _leadOfHarness(machineId, harnessId)?.reason;
+
+  /// The coordinator's name in the project the machine's harness coordinates.
+  String? leadCoordinatorForHarness(String machineId, String harnessId) =>
+      _leadOfHarness(machineId, harnessId)?.coordinator;
+
+  ({String reason, String coordinator})? _leadOfHarness(
+    String machineId,
+    String harnessId,
+  ) {
     for (final snapshot in [
       for (final controller in loadedControllers) ?controller.snapshot,
       ..._closedSnapshots.values,
@@ -377,7 +394,11 @@ class SuperTabClient {
           continue;
         }
         if (snapshot.leadProtectionReason(agent.id) case final reason?) {
-          return reason;
+          final project = snapshot.leadProjectForAgent(agent.id)!;
+          return (
+            reason: reason,
+            coordinator: snapshot.coordinatorNameOf(project.id),
+          );
         }
       }
     }
@@ -423,7 +444,12 @@ class SuperTabClient {
     _listMentions = true;
     discoveryError = null;
     for (final controller in _loaded.values) {
-      controller.revokeAccess('The account changed. Open this Swarm again.');
+      // Desktop keeps each account's unsent and unconfirmed messages for its
+      // next sign-in; the web forgets them with the rest ([_forgetSignedOut]).
+      controller.revokeAccess(
+        'The account changed. Open this Swarm again.',
+        keepSaved: !_forgetsWebOnly,
+      );
     }
     for (final future in _controllers.values) {
       unawaited(
@@ -747,6 +773,10 @@ class SuperTabClient {
       ..onArrived = onMention == null
           ? null
           : (mention) => onMention!(id, mention);
+    if (onChatMessage case final told?) {
+      SuperTabChatNotices.of(controller).onMessage = (group, sequence) =>
+          told(id, group, sequence);
+    }
     if (onNotices case final changed?) {
       SuperTabMentions.of(controller).addListener(changed);
       SuperTabDecisions.of(controller).addListener(changed);

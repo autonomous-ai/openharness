@@ -62,7 +62,7 @@ export interface LifecycleDeps {
   /** An agent a move a dead daemon left may still run beside (main.ts `moveHeld`): no engine of it starts this start. */
   moveHeld?: (agentId: string) => boolean
   /** Whether the agent is a Lead the core must never stop, as core/main.ts hands it in; absent, none is. */
-  leadProtected?: (agentId: string) => boolean
+  leadProtected?: (agentId: string, leadSwitch?: string) => boolean
 }
 
 /** The owner, 2026-10-23: the Lead of an active project is never stopped, in any case; deleting its project closes it. */
@@ -94,13 +94,14 @@ export function createAgentLifecycle({
    */
   const stopAgent: typeof stop = (target, options) => {
     const agentId = registry.resolve(target)?.agentId ?? target
-    if (leadProtected?.(agentId)) return Promise.reject(new LeadProtectedError())
+    if (leadProtected?.(agentId, options?.leadSwitch)) return Promise.reject(new LeadProtectedError())
     return stop(target, options).then(() => { stopped?.(agentId) })
   }
   const purgeAgentService = new PurgeAgentService({
     live: id => registry.byAgent(id), sessions: () => [...registry.list(), ...stoppedAgents.list()],
     stopped: stoppedAgents, checkpoints: sessionCheckpoints, stop: stopAgent,
     restarting: id => restartJobs.busy(id) || stopJobs.has(id),
+    ...(leadProtected ? { leadProtected: (id: string) => leadProtected(id) } : {}),
     atFolderTrust,
     atEmptyComposer,
     deleted: s => {

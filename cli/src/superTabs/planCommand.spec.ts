@@ -29,8 +29,8 @@ describe('planWork', () => {
     expect(out).toEqual({
       ok: true, status: 'OPTIMAL', makespanMinutes: 180, cost: 540, route: { makespanMinutes: 240, cost: 600 },
       plan: [
-        // Codex default leaves the effort to the engine, so it starts at the project's minimum, as the route lifts it.
-        { order: 1, groupId: 'g1', group: 'Group g1', machineId: 'm1', machine: 'm1.local', engine: 'codex', model: 'default', effort: 'high',
+        // Codex default leaves the effort to the engine; an owner's minimum effort no longer lifts it (project instructions, phase 4).
+        { order: 1, groupId: 'g1', group: 'Group g1', machineId: 'm1', machine: 'm1.local', engine: 'codex', model: 'default', effort: 'default',
           startsInMinutes: 0, finishesInMinutes: 60, finishAt: at(60) },
         { order: 2, groupId: 'g2', group: 'Group g2', machineId: 'm2', machine: 'm2.local', engine: 'claude', gridModel: 'deepseek/flash', gridName: 'swarm-g',
           startsInMinutes: 60, finishesInMinutes: 180, finishAt: at(180) },
@@ -38,6 +38,25 @@ describe('planWork', () => {
       estimates: ['Group g2'], leftOut: [], ignored: [],
       next: expect.stringContaining('overrideReason "scheduler plan"'),
     })
+  })
+
+  // Final review: a task planned below its difficulty's strength, or a catalog that could not be read, is said.
+  it('says which groups no model as strong as their difficulty asks can run, and when the catalog could not be read', async () => {
+    const run = vi.fn<SolverRun>(async () => answer([{ task: 'g1', machine: 'm1', model: 'claude-opus-high', start: 0, end: 60, order: 1 },
+      { task: 'g2', machine: 'm1', model: 'claude-opus-high', start: 60, end: 120, order: 2 }]))
+    const strong = await planWork({ request: undefined }, scoped(state()), { run, now: () => NOW, dataDir: '/unused' })
+    expect(strong).not.toHaveProperty('notes')
+    const weak = { ok: true, value: { tab: { state: state(), githubApp: false }, agentId: 'lead1', machines: [],
+      policy: { policy, warnings: [], catalog: { models: [{ engine: 'claude', model: 'sonnet', effort: 'medium', strength: 2, cost: 2, offered: true }], grid: { strength: 1, models: [] } } } } }
+    const sonnet = vi.fn<SolverRun>(async () => answer([{ task: 'g1', machine: 'm1', model: 'claude-sonnet-medium', start: 0, end: 60, order: 1 },
+      { task: 'g2', machine: 'm1', model: 'claude-sonnet-medium', start: 60, end: 120, order: 2 }]))
+    const out = await planWork({ request: { groups: { g1: { difficulty: 'high', risk: 'low', size: 'small' } } } }, vi.fn(async () => weak), { run: sonnet, now: () => NOW, dataDir: '/unused' })
+    expect(out.notes).toEqual(['No model that can run Group g1 is as strong as its difficulty asks: it is planned on the strongest that can.'])
+    // With no catalog there is no model to plan on: the scheduler finds no plan, and the answer says why.
+    const none = { ok: true, value: { ...weak.value, policy: {} } }
+    const infeasible = vi.fn<SolverRun>(async () => ({ ok: true, value: { status: 'INFEASIBLE', reason: 'no machine and model meet the floor of: g1, g2', plan: [], route: {} } }))
+    const blind = await planWork({ request: undefined }, vi.fn(async () => none), { run: infeasible, now: () => NOW, dataDir: '/unused' })
+    expect(blind).toMatchObject({ error: 'NO_PLAN', notes: ['The model catalog could not be read, or lists no models: no new agent on Claude Code or Codex is offered, only agents already in the Swarm and models served on its grid.'] })
   })
 
   it('says why machines were left out', async () => {

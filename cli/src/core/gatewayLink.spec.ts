@@ -479,6 +479,9 @@ describe('the gateway in its own process, as the core sees it', () => {
     expect(await lane.open('m2', { type: 'agents_list_result' })).toEqual({ frame: { type: 'agents_list_result', payload: {} } })
     answer = { unreadable: true }
     expect(await lane.open('m2', { type: 'agents_list_result' })).toEqual({ unreadable: true })
+    // A new epoch is the far daemon restarted, not a frame that does not open: the lane renews for it.
+    answer = { unknownEpoch: true, unreadable: true }
+    expect(await lane.open('m2', { type: 'commander_question' })).toEqual({ unknownEpoch: true })
     lane.drop('m2')
     expect(call).toHaveBeenLastCalledWith(GATEWAY_CALLS.lane, { op: 'drop', machineId: 'm2' }, LANE_WAIT_MS)
     // The gateway not there (or failed): no session is started, nothing is sealed or opened.

@@ -3,11 +3,15 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../auth/phone_sign_in.dart';
 import '../auth/sign_in_provider.dart';
+import '../core/runtime_platform.dart';
 import '../logging/app_log.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../state/app_state.dart';
+import 'approval_sign_in_panel.dart';
+import 'or_divider.dart';
 import 'quiet_link.dart';
 import 'setup_tour.dart';
 import 'sign_in_provider_button.dart';
@@ -17,11 +21,15 @@ import 'window_chrome.dart';
 /// ([AppNotifier.signInStepShowing]).
 ///
 /// It stands where the tour stood and looks like its last slide: what an
-/// account adds on the left, one line each, and Continue with Google and
-/// Continue with Apple on the right. The buttons stand alone, with Continue
-/// with email centered under them (owner, 2026-10-12).
-/// Nothing else is on the page, and nothing on it changes while the browser is
-/// open — every way in stays live instead (owner, 2026-10-11).
+/// account adds on the left, one line each, and the ways in on the right:
+/// Continue with Google, Continue with Apple, and the browser sign-in page's
+/// other ways (email, GitHub, passkey) as a button of the same size; then,
+/// after OR, Scan with your phone and Sign in on another device — the ways a
+/// new or remote computer signs in with no browser of its own (Scholes's
+/// end-to-end test of 1.3.44, 2026-10-31: a remote computer stopped here).
+/// Nothing on it changes while the browser is open — every way in stays live
+/// instead (owner, 2026-10-11). A scan or code under way takes the ways in's
+/// place ([approval]) until it is approved or cancelled.
 /// Design: `docs/research/2026-10-08-onboarding-redesign/index.html`, 1b.
 
 /// The page's two lines of title.
@@ -35,11 +43,56 @@ const signInStepBenefits = [
   (icon: AppIcons.panelsTopLeft, line: 'Same tabs on every computer'),
 ];
 
+/// The bottom bar's line while nothing is under way: which computer this is,
+/// and whether Harness is already set up on it (Scholes's end-to-end test of
+/// 1.3.44, finding 5: every relaunch showed a bare page that knew nothing of
+/// the computer). [mac] words it "This Mac", else "This computer". The name
+/// is always in brackets, "This Mac (Studio)", on a first run as after setup.
+String signInStepReadyLine({
+  String? computerName,
+  bool setUp = false,
+  bool mac = true,
+}) {
+  final (:lead, :name, :rest) = signInStepReadyParts(
+    computerName: computerName,
+    setUp: setUp,
+    mac: mac,
+  );
+  return '$lead${name ?? ''}$rest';
+}
+
+/// The ready line in three parts: a long [name] is what the bar cuts, never
+/// the rest of the sentence ("Sign in to continue." above all).
+typedef SignInReadyLine = ({String lead, String? name, String rest});
+
+/// [signInStepReadyLine] in its [SignInReadyLine] parts.
+SignInReadyLine signInStepReadyParts({
+  String? computerName,
+  bool setUp = false,
+  bool mac = true,
+}) {
+  final here = mac ? 'This Mac' : 'This computer';
+  final name = computerName?.trim();
+  final tail = setUp
+      ? ' is set up. Sign in to continue.'
+      : '. Sign in to continue.';
+  if (name == null || name.isEmpty) {
+    return (
+      lead: setUp ? '$here$tail' : 'Sign in to continue.',
+      name: null,
+      rest: '',
+    );
+  }
+  return (lead: '$here (', name: name, rest: ')$tail');
+}
+
 /// The page itself, apart from the app: what it says and its three controls.
 class SignInStep extends StatelessWidget {
   const SignInStep({
     super.key,
     required this.onSignIn,
+    this.onApprove,
+    this.approval,
     this.starting = false,
     this.startingProvider,
     this.finishing = false,
@@ -49,11 +102,20 @@ class SignInStep extends StatelessWidget {
     this.signOutError,
     this.onRetrySignOut,
     this.recovery,
+    this.readyLine = (lead: 'Sign in to continue.', name: null, rest: ''),
   });
 
-  /// Continue with Google, Continue with Apple, or — with no provider —
-  /// Continue with email, which is the sign-in page's own chooser.
+  /// Continue with Google, Continue with Apple, or — with no provider — Email,
+  /// GitHub or passkey, which is the sign-in page's own chooser.
   final ValueChanged<SignInProvider?> onSignIn;
+
+  /// Scan with your phone, or Sign in on another device. Null where this app
+  /// cannot sign in that way: the page then offers the browser alone.
+  final ValueChanged<ApprovalSignIn>? onApprove;
+
+  /// A scan or a code under way ([ApprovalSignInPanel]): shown in place of the
+  /// ways in.
+  final Widget? approval;
 
   /// A sign-in was pressed and its browser has not opened yet. The control
   /// that began it ([startingProvider]; none is email) steps back for that
@@ -72,6 +134,10 @@ class SignInStep extends StatelessWidget {
   final VoidCallback? onRetrySignOut;
   final Widget? recovery;
 
+  /// The bottom bar's line while nothing is under way
+  /// ([signInStepReadyParts]).
+  final SignInReadyLine readyLine;
+
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
@@ -88,13 +154,16 @@ class SignInStep extends StatelessWidget {
               Expanded(child: _stage(context, gutter)),
               _ReadyBar(
                 gutter: gutter,
-                line: signingOut
+                line: switch (signingOut
                     ? 'Signing out…'
                     : finishing
                     ? 'Signing in…'
                     : sessionExpired
                     ? 'Your session ended. Sign in again to continue.'
-                    : 'Sign in to continue.',
+                    : null) {
+                  final busy? => (lead: busy, name: null, rest: ''),
+                  null => readyLine,
+                },
               ),
             ],
           );
@@ -206,6 +275,8 @@ class SignInStep extends StatelessWidget {
               onPressed: onRetrySignOut,
               child: const Text('Retry sign out'),
             )
+          else if (approval case final approval?)
+            approval
           else ...[
             for (final provider in SignInProvider.values)
               _stepsBack(
@@ -218,17 +289,44 @@ class SignInStep extends StatelessWidget {
                   onPressed: () => onSignIn(provider),
                 ),
               ),
-            Align(
-              alignment: Alignment.center,
-              child: _stepsBack(
-                starting && startingProvider == null,
-                QuietLink(
-                  key: const Key('sign-in-step-email'),
-                  label: 'Continue with email',
-                  onPressed: () => onSignIn(null),
+            // The sign-in page's own chooser: an email and its code, GitHub,
+            // or a passkey. A button named for what it opens, not small print.
+            _stepsBack(
+              starting && startingProvider == null,
+              FilledButton.icon(
+                key: const Key('sign-in-step-email'),
+                onPressed: () => onSignIn(null),
+                style: _otherWay(filled: true),
+                icon: const Icon(AppIcons.mail, size: 18),
+                label: const Text(
+                  'Email, GitHub or passkey',
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
             ),
+            if (onApprove case final approve?) ...[
+              const OrDivider(),
+              OutlinedButton.icon(
+                key: const Key('sign-in-step-scan'),
+                onPressed: () => approve(ApprovalSignIn.phone),
+                style: _otherWay(),
+                icon: const Icon(AppIcons.smartphone, size: 18),
+                label: const Text(
+                  'Scan with your phone',
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              OutlinedButton.icon(
+                key: const Key('sign-in-step-code'),
+                onPressed: () => approve(ApprovalSignIn.code),
+                style: _otherWay(),
+                icon: const Icon(AppIcons.keyboard, size: 18),
+                label: const Text(
+                  'Sign in on another device',
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
           ],
           if ((signOutError ?? error) case final error?)
             Semantics(
@@ -246,6 +344,34 @@ class SignInStep extends StatelessWidget {
       ),
     ),
   );
+
+  /// The ways in beside Google and Apple: their size and type, in the app's
+  /// own colours — a raised card fill for the browser page's other ways, an
+  /// outline for those another device approves.
+  ButtonStyle _otherWay({bool filled = false}) {
+    final ink = grid.AppPalette.textPrimary;
+    return ButtonStyle(
+      minimumSize: WidgetStatePropertyAll(
+        SignInProviderButton.minimumSize(prominent: true),
+      ),
+      textStyle: WidgetStatePropertyAll(grid.AppType.heading()),
+      foregroundColor: WidgetStatePropertyAll(ink),
+      iconColor: WidgetStatePropertyAll(ink),
+      backgroundColor: WidgetStatePropertyAll(
+        filled ? grid.AppPalette.cardBg : Colors.transparent,
+      ),
+      side: WidgetStatePropertyAll(BorderSide(color: grid.AppPalette.divider)),
+      overlayColor: WidgetStateProperty.resolveWith(
+        (states) => ink.withValues(
+          alpha: states.contains(WidgetState.pressed)
+              ? .12
+              : states.contains(WidgetState.hovered)
+              ? .06
+              : 0,
+        ),
+      ),
+    );
+  }
 
   /// [child], stepped back while its own sign-in is starting.
   Widget _stepsBack(bool back, Widget child) => AnimatedOpacity(
@@ -295,7 +421,7 @@ class _ReadyBar extends StatelessWidget {
   const _ReadyBar({required this.gutter, required this.line});
 
   final double gutter;
-  final String line;
+  final SignInReadyLine line;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -324,15 +450,10 @@ class _ReadyBar extends StatelessWidget {
               const SizedBox(width: 8),
               Flexible(
                 child: Semantics(
+                  key: const Key('sign-in-step-ready-line'),
                   liveRegion: true,
-                  child: Text(
-                    line,
-                    key: const Key('sign-in-step-ready-line'),
-                    overflow: TextOverflow.ellipsis,
-                    style: grid.AppType.label(
-                      color: grid.AppPalette.textPrimary,
-                    ),
-                  ),
+                  label: '${line.lead}${line.name ?? ''}${line.rest}',
+                  child: ExcludeSemantics(child: _parts(context)),
                 ),
               ),
             ],
@@ -346,6 +467,46 @@ class _ReadyBar extends StatelessWidget {
       ],
     ),
   );
+
+  /// The line as it reads, with only the computer's name giving way to a
+  /// narrow window: "This Mac (Studio-with-a-very-lo…) is set up. Sign in to
+  /// continue." Narrower than the sentence around a name cut to "…", the
+  /// line is one text cut at its end, as it always was: never an overflow.
+  Widget _parts(BuildContext context) {
+    final style = grid.AppType.label(color: grid.AppPalette.textPrimary);
+    Text part(String text, String key) => Text(
+      text,
+      key: Key('sign-in-step-ready-$key'),
+      maxLines: 1,
+      softWrap: false,
+      overflow: TextOverflow.ellipsis,
+      style: style,
+    );
+    final name = line.name;
+    if (name == null) {
+      return part('${line.lead}${line.rest}', 'text');
+    }
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final around = TextPainter(
+          text: TextSpan(text: '${line.lead}…${line.rest}', style: style),
+          textDirection: Directionality.of(context),
+          textScaler: MediaQuery.textScalerOf(context),
+          maxLines: 1,
+        )..layout();
+        final fits = around.width <= constraints.maxWidth;
+        around.dispose();
+        if (!fits) return part('${line.lead}$name${line.rest}', 'text');
+        return Row(
+          children: [
+            part(line.lead, 'lead'),
+            Flexible(child: part(name, 'name')),
+            part(line.rest, 'rest'),
+          ],
+        );
+      },
+    );
+  }
 }
 
 /// The sign-in step bound to the app: shown by RootShell between setup and the
@@ -442,6 +603,23 @@ class _SignInStepScreenState extends State<SignInStepScreen> {
           },
           child: SignInStep(
             onSignIn: (provider) => unawaited(app.signInFromStep(provider)),
+            onApprove: app.canSignInWithPhone && app.canSignInWithCode
+                ? (method) => unawaited(app.approveFromStep(method))
+                : null,
+            approval: switch (app.approvalSignIn) {
+              final method? => ApprovalSignInPanel(
+                method: method,
+                qrLink: app.pendingQrLink,
+                code: app.pendingSignInCode,
+                refreshAt: app.approvalRefreshAt,
+                confirmEmail: app.pendingConfirmEmail,
+                previousEmail: app.previousAccountEmail,
+                answered: app.approvalAnswered,
+                onConfirm: app.confirmPhoneSignIn,
+                onCancel: app.cancelLogin,
+              ),
+              null => null,
+            },
             // Its browser is not open yet: the CLI has to start before it can
             // name the page.
             starting: app.canCancelLogin && app.pendingAuthorizeUrl == null,
@@ -449,6 +627,11 @@ class _SignInStepScreenState extends State<SignInStepScreen> {
             finishing: app.signingIn && !app.canCancelLogin,
             error: app.loginBrowserError ?? _error,
             sessionExpired: app.sessionExpired,
+            readyLine: signInStepReadyParts(
+              computerName: app.thisComputerName,
+              setUp: app.harnessSetUpBefore,
+              mac: RuntimePlatform.isMacOS,
+            ),
             signingOut: app.signingOut,
             signOutError: app.signOutError,
             onRetrySignOut: () => unawaited(app.logout()),

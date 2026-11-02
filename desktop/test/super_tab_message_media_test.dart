@@ -1,12 +1,14 @@
 // What a chat message shows besides its words, as Slack does: pictures in
 // the row, up to 360 px with their shape kept, that open full screen; code
 // in a block with Copy; every other file one compact chip (Dee, 10-29).
+import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/super_tabs/attachment_upload.dart';
 import 'package:harness/super_tabs/attachment_viewer.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
@@ -31,11 +33,12 @@ Map<String, dynamic> _file(
   String name,
   String mime, {
   String? url,
+  int size = 120 * 1024,
 }) => {
   'id': id,
   'name': name,
   'mime': mime,
-  'size': 120 * 1024,
+  'size': size,
   'url': url ?? 'https://cdn.harness.autonomous.ai/$id/$name',
 };
 
@@ -122,6 +125,78 @@ void main() {
         await close(tester, c);
       });
     }
+
+    testWidgets('a picture over 10 MB is a chip, and nothing is fetched', (
+      tester,
+    ) async {
+      final c = await show(
+        tester,
+        files: [_file('a1', 'huge.png', 'image/png', size: 11 * 1024 * 1024)],
+      );
+
+      expect(find.byKey(const ValueKey('super-attachment:a1')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('super-attachment-inline:a1')),
+        findsNothing,
+      );
+      expect(loaded, isEmpty);
+      await close(tester, c);
+    });
+
+    testWidgets('a picture of 1 MB, or 10 MB itself, still shows in place', (
+      tester,
+    ) async {
+      final png = await _png(tester, 120, 80);
+      pictures['one.png'] = png;
+      pictures['ten.png'] = png;
+      final c = await show(
+        tester,
+        files: [
+          _file('a1', 'one.png', 'image/png', size: 1024 * 1024),
+          _file('a2', 'ten.png', 'image/png', size: 10 * 1024 * 1024),
+        ],
+      );
+
+      for (final id in ['a1', 'a2']) {
+        expect(
+          find.byKey(ValueKey('super-attachment-inline:$id')),
+          findsOneWidget,
+        );
+      }
+      expect(loaded.toSet(), hasLength(2));
+      await close(tester, c);
+    });
+
+    testWidgets('a picture is read at most 10 MB, whatever its row says', (
+      tester,
+    ) async {
+      int? asked;
+      final fetcher = attachmentFetcher;
+      attachmentFetcher = (url, {maxBytes}) async {
+        asked = maxBytes;
+        throw const AttachmentTooLarge();
+      };
+      addTearDown(() => attachmentFetcher = fetcher);
+      final failed = Completer<Object>();
+      AttachmentImage(
+            Uri.parse('https://cdn.harness.autonomous.ai/a1/lies.png'),
+          )
+          .resolve(ImageConfiguration.empty)
+          .addListener(
+            ImageStreamListener(
+              (_, _) {},
+              onError: (error, _) {
+                if (!failed.isCompleted) failed.complete(error);
+              },
+            ),
+          );
+
+      expect(
+        await tester.runAsync(() => failed.future),
+        isA<AttachmentTooLarge>(),
+      );
+      expect(asked, kSuperTabFormAttachmentMaxBytes);
+    });
 
     testWidgets('a click opens the picture full screen, with Download', (
       tester,

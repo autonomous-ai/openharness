@@ -434,18 +434,18 @@ void main() {
       expect(find.text(benefit.line), findsOneWidget);
     }
     expect(find.text('Sign in to continue.'), findsOneWidget);
-    // Email is centered under the standalone buttons, and no Skip remains.
+    // Email, GitHub or passkey is a button of their width under the two
+    // accounts; a phone's scan and a code follow. No Skip remains.
     final google = tester.getRect(_google);
     expect(tester.getRect(_apple).left, google.left);
     expect(find.text('Skip'), findsNothing);
-    expect(
-      tester.getRect(find.text('Continue with email')).center.dx,
-      moreOrLessEquals(google.center.dx, epsilon: 0.5),
-    );
+    expect(tester.getRect(_email).width, google.width);
     expect(
       tester.getRect(_email).top,
       greaterThan(tester.getRect(_apple).bottom),
     );
+    expect(find.text('Scan with your phone'), findsOneWidget);
+    expect(find.text('Sign in on another device'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await _shot(tester, '2-sign-in-page');
 

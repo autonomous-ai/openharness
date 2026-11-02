@@ -317,10 +317,11 @@ describe('the policy as the core runs it', () => {
     const snapshot = join(d, 'super-tabs', 'observers-team-mac.json')
     confidentialRecord(confidentialRecordFile(d)).add([])
     writeFileSync(snapshot, JSON.stringify({ machineId: 'team-mac', confidential: ['marked'] }))
-    const p = teamAppPolicyFor(d, () => 'team-mac', () => [{ agentId: 'pm', sessionId: null, swarmSkill: { role: 'lead' } }, { agentId: 'marked' }, { agentId: 'worker' }], () => [])
+    const p = teamAppPolicyFor(d, () => 'team-mac', () => [{ agentId: 'pm', sessionId: null, swarmSkill: { role: 'lead' } }, { agentId: 'marked' }, { agentId: 'worker' }],
+      () => [{ agentId: 'pm-now', sessionId: null, swarmSkill: { role: 'coordinator' } }, { agentId: 'tester', sessionId: null, swarmSkill: { role: 'agent' } }])
     expect(p.refuse('terminal_open', { agentId: 'marked' })).toMatchObject({ error: 'SWARM_CONFIDENTIAL' })
     expect(p.refuse('terminal_open', { agentId: 'worker' })).toBeNull()
-    expect(confidentialRecord(confidentialRecordFile(d)).ids()).toEqual(['marked', 'pm'])
+    expect(confidentialRecord(confidentialRecordFile(d)).ids()).toEqual(['marked', 'pm', 'pm-now'])
     expect(p.isConfidential('marked')).toBe(true)
     // With a purge still to finish in its record, the account is held and that session closed.
     const purges = purgeRecord(join(d, 'super-tabs', 'team-purges.json'))

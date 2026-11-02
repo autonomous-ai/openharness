@@ -25,10 +25,24 @@ Map<String, dynamic> found(
   'checks': {'passed': passed, 'failed': 0, 'pending': pending, 'total': total},
 };
 
+/// #14, a task linked to "work" whose one check passed.
+final linkedReview = {
+  ...conversationFixture('review', 'Review avatars'),
+  'number': 14,
+  'reviewOf': 'work',
+  'agentIds': ['ivy'],
+  'checks': [
+    {'id': 'r', 'description': 'Reviewed', 'evidence': 'ok', 'passedBy': 'ivy'},
+  ],
+};
+
 /// A workgroup with a builder, a reviewer whose verdict is in the chat, and the
 /// two cards the backend names: its brief is the task card, its first link of
-/// [pr] the PR card.
-ConversationServer cardServer({int? mergedAt}) {
+/// [pr] the PR card. With [linked], the tasks linked to it.
+ConversationServer cardServer({
+  int? mergedAt,
+  List<Map<String, dynamic>> linked = const [],
+}) {
   final server = ConversationServer();
   server.state['agents'] = [
     for (final (id, name, role) in [
@@ -68,6 +82,7 @@ ConversationServer cardServer({int? mergedAt}) {
       ],
     },
   });
+  (server.state['conversations'] as List).addAll(linked);
   server.append('Add avatars.', conversationId: 'work');
   server.append('Opened $pr', conversationId: 'work');
   server.append('Ready: yes on 1a2b3c4d5', conversationId: 'work');
@@ -134,20 +149,19 @@ void main() {
     expect(SuperTabCards.fromJson(null).of('m1'), isNull);
   });
 
-  testWidgets('a PR card shows its title, state, checks and the verdict', (
+  testWidgets('a PR card shows its title, state, checks and the linked tasks', (
     tester,
   ) async {
     final facts = reading(() => [found(pr)]);
     addTearDown(facts.dispose);
-    await show(tester, cardServer(), facts, 'message-2');
+    await show(tester, cardServer(linked: [linkedReview]), facts, 'message-2');
     expect(find.text('Round avatars'), findsOneWidget);
     expect(find.text('app · PR #7'), findsOneWidget);
     expect(find.text('Open'), findsOneWidget);
     expect(find.text('12 checks passed'), findsOneWidget);
-    expect(
-      find.text('Reviewer: Ivy · Ready: yes on 1a2b3c4d5'),
-      findsOneWidget,
-    );
+    expect(find.text('#14 Review avatars: passed'), findsOneWidget);
+    // The reviewer's `Ready: yes` in the chat is not read.
+    expect(find.textContaining('Reviewer: '), findsNothing);
   });
 
   testWidgets('without GitHub on this computer, CI is left out quietly', (
@@ -179,15 +193,29 @@ void main() {
   ) async {
     final facts = reading(() => [found(pr)]);
     addTearDown(facts.dispose);
-    await show(tester, cardServer(), facts, 'message-1');
+    await show(tester, cardServer(linked: [linkedReview]), facts, 'message-1');
     expect(find.text('#12 Avatars'), findsOneWidget);
     expect(find.text('Working'), findsOneWidget);
     expect(find.text('1 of 2 checks passed'), findsOneWidget);
     expect(find.text('Round avatars'), findsOneWidget);
-    expect(
-      find.text('Reviewer: Ivy · Ready: yes on 1a2b3c4d5'),
-      findsOneWidget,
-    );
+    expect(find.text('#14 Review avatars: passed'), findsOneWidget);
+    expect(find.textContaining('Reviewer: '), findsNothing);
+  });
+
+  testWidgets('a task in review is waiting on others', (tester) async {
+    final server = cardServer();
+    (server.state['conversations'] as List)
+        .cast<Map<String, dynamic>>()
+        .firstWhere((g) => g['id'] == 'work')['assignment'] = {
+      'id': 'w',
+      'agentId': 'kai',
+      'status': 'review',
+    };
+    final facts = SuperTabPullRequestFacts(null);
+    addTearDown(facts.dispose);
+    await show(tester, server, facts, 'message-1');
+    expect(find.text('Waiting on others'), findsOneWidget);
+    expect(find.text('In review'), findsNothing);
   });
 
   testWidgets('a failed check keeps its evidence and is not counted passed', (
@@ -340,32 +368,29 @@ void main() {
   );
 
   testWidgets(
-    'the verdict comes from the review chat, for the revision it reviewed',
+    "a linked task without checks reads its work's status, never a Ready line",
     (tester) async {
-      final server = cardServer();
-      server.messages.removeWhere((m) => '${m['text']}'.startsWith('Ready:'));
-      final groups = (server.state['conversations'] as List)
-          .cast<Map<String, dynamic>>();
-      groups.firstWhere((g) => g['id'] == 'work')['agentIds'] = ['kai'];
-      groups.add({
-        ...conversationFixture('review', 'Review: Avatars'),
-        'number': 13,
-        'reviewOf': 'work',
-        'agentIds': ['ivy'],
-        'assignment': {
-          'id': 'r',
-          'agentId': 'ivy',
-          'status': 'done',
-          'result': 'Ready: no — revision 050bab807. Two findings.',
-        },
-      });
+      final server = cardServer(
+        linked: [
+          {
+            ...conversationFixture('review', 'Review: Avatars'),
+            'number': 13,
+            'reviewOf': 'work',
+            'agentIds': ['ivy'],
+            'assignment': {
+              'id': 'r',
+              'agentId': 'ivy',
+              'status': 'done',
+              'result': 'Ready: no — revision 050bab807. Two findings.',
+            },
+          },
+        ],
+      );
       final facts = SuperTabPullRequestFacts(null);
       addTearDown(facts.dispose);
       await show(tester, server, facts, 'message-1');
-      expect(
-        find.text('Reviewer: Ivy · Ready: no on 050bab807'),
-        findsOneWidget,
-      );
+      expect(find.text('#13 Review: Avatars: done'), findsOneWidget);
+      expect(find.textContaining('050bab807'), findsNothing);
     },
   );
 

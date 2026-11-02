@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:collection/collection.dart' show DeepCollectionEquality;
 import 'package:flutter/foundation.dart';
 
+import 'package:harness_mobile/logging/app_log.dart';
+
 import 'model.dart';
 import 'swarm_reader.dart';
 import 'swarm_request.dart';
@@ -64,7 +66,9 @@ class SuperTabMention implements SwarmAskItem {
       leadName = row['leadName'] as String? ?? 'Lead',
       text = row['text'] as String? ?? '',
       createdAt = DateTime.tryParse(row['createdAt'] as String? ?? ''),
-      resolvedBy = row['resolvedBy'] as String?;
+      resolvedBy = row['resolvedBy'] as String?,
+      threadId = row['threadId'] as String?,
+      messageSequence = (row['messageSequence'] as num?)?.toInt();
   @override
   final String id, projectName, conversationId, conversationTitle;
   final String projectId, messageId, leadName, text;
@@ -73,6 +77,14 @@ class SuperTabMention implements SwarmAskItem {
 
   /// `reply` or `done` once it moved to Earlier; null while it waits.
   final String? resolvedBy;
+
+  /// The thread's root when the tag is in a reply only in its thread: it
+  /// counts on Threads (`SwarmThreads.threadMentions`). Null in the main
+  /// stream, and from a backend before it.
+  final String? threadId;
+
+  /// The tagging message's sequence; null from a backend before it.
+  final int? messageSequence;
 }
 
 /// The reader's open decisions and waiting tags in one Swarm, read from the
@@ -105,6 +117,10 @@ class SwarmAsks extends ChangeNotifier {
 
   /// The [SwarmReader.generation] whose asks were read, or need none.
   int _settled = -1;
+
+  /// The read of the lists under way, if any: what waits here is known once
+  /// it ends.
+  Future<void>? get reading => _loading;
 
   /// Decisions being answered: their buttons wait for the backend.
   final Set<String> answering = {};
@@ -321,10 +337,18 @@ class SwarmAsks extends ChangeNotifier {
         }
       }
       if (changed) notifyListeners();
-    } catch (_) {
+    } catch (failure) {
       if (_disposed || reader.generation != generation) return true;
       const failed = 'Could not load what is waiting for you. Try again.';
       final told = error == failed && _failed && _settled == generation;
+      // Once per failure, not once per poll.
+      if (!told) {
+        appLog.warn(
+          'swarm',
+          'What waits in ${reader.tabId} not read',
+          error: failure,
+        );
+      }
       error = failed;
       _failed = true;
       _settled = generation;

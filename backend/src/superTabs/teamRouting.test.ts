@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
-import { admitMachineStart, machineObservationSchema, machineTeamWork, machineSlots, observedPrivacy, PRIVACY_FRESH_MS, removalPreview, teamAccountRequired, teamAccountSwarm, teamWorkRefusal, type ContributedMachine, type MachinePrivacy } from './machines.js'
+import { admitMachineStart, machineObservationSchema, machineTeamWork, machineSlots, observedPrivacy, PRIVACY_FRESH_MS, removalPreview, teamAccountRequired, teamWorkRefusal, type ContributedMachine, type MachinePrivacy } from './machines.js'
 import { createSuperTab, SuperTabError, visibleState, type Actor, type AgentConfiguration, type AgentStart, type SuperTabState } from './model.js'
 import type { RouteDecision } from './routeRecord.js'
 
@@ -380,49 +380,30 @@ describe('until a team account is required everywhere', () => {
   })
 })
 
-// Tried on production with one person's Swarms first (2026-10-27): SWARM_TEAM_ACCOUNT_OWNERS holds the switch to the
-// Swarms those people own, and every other Swarm stays as it is with the switch off.
-describe('the switch held to the Swarms of listed owners', () => {
+// Every Swarm alike (2026-11-02). The switch was held to listed owners' Swarms while it was tried on production
+// (SWARM_TEAM_ACCOUNT_OWNERS, 2026-10-27 to 11-02); a value left in a deployment must not hold it back any more.
+describe('the switch, in every Swarm', () => {
   afterEach(() => { delete process.env.SWARM_TEAM_ACCOUNT_OWNERS })
 
-  it('requires a team account in a listed owner\'s Swarm, and in no other', () => {
+  it('requires a team account in any Swarm, whatever SWARM_TEAM_ACCOUNT_OWNERS says, and in none with the switch off', () => {
     const f = swarm(), group = f.group()
-    process.env.SWARM_TEAM_ACCOUNT_OWNERS = ' someone@example.com, OWNER@example.com '
-    expect(teamAccountRequired(f.state)).toBe(true)
+    process.env.SWARM_TEAM_ACCOUNT_OWNERS = 'someone@example.com'
+    expect(teamAccountRequired()).toBe(true)
     expect(refusal(() => f.run({ type: 'agent.start', request: f.request(group, 'mate-mac') }, owner, f.pooled('mate-mac')))?.code)
       .toBe('TEAM_ACCOUNT_REQUIRED')
-    process.env.SWARM_TEAM_ACCOUNT_OWNERS = 'someone@example.com'
-    expect(teamAccountRequired(f.state)).toBe(false)
+    delete process.env.SWARM_TEAM_ACCOUNT_REQUIRED
+    expect(teamAccountRequired()).toBe(false)
     f.run({ type: 'agent.start', request: f.request(group, 'mate-mac') }, owner, f.pooled('mate-mac'))
     expect(f.state.starts).toHaveLength(1)
-    // A Team machine follows the rule in every Swarm, as it does with the switch off.
-    f.machine('mate-team').observation = reading('team', FAILED)
-    expect(refusal(() => f.run({ type: 'agent.start', request: f.request(group, 'mate-team') }, owner, f.pooled('mate-team')))?.code).toBe('PRIVACY_CHECK_FAILED')
   })
 
-  it('leaves a teammate\'s work on the Mac, not its team account, in a Swarm the team account is not tried in', () => {
+  it('sends a teammate\'s work on a Mac to its team account in any Swarm, whatever SWARM_TEAM_ACCOUNT_OWNERS says', () => {
     const f = swarm(), group = f.group()
     Object.assign(f.machine('mate-team'), { hostMachineId: 'mate-mac', name: 'MacBook Pro', cwd: '/team-swarm' })
     delete process.env.SWARM_TEAM_ACCOUNT_REQUIRED
     process.env.SWARM_TEAM_ACCOUNT_OWNERS = 'someone@example.com'
-    expect(teamAccountSwarm(f.state)).toBe(false)
     f.run({ type: 'agent.start', request: f.request(group, 'mate-mac') }, owner, f.pooled('mate-mac'))
-    expect(f.state.starts![0]!.request).toMatchObject({ machineId: 'mate-mac', cwd: '/swarm/lead' })
-    process.env.SWARM_TEAM_ACCOUNT_OWNERS = 'owner@example.com'
-    expect(teamAccountSwarm(f.state)).toBe(true)
-    f.run({ type: 'agent.start', request: f.request(group, 'mate-mac') }, owner, f.pooled('mate-mac'))
-    expect(f.state.starts![1]!.request).toMatchObject({ machineId: 'mate-team', cwd: '/team-swarm/lead' })
-  })
-
-  it('is every Swarm\'s with no list, and none with the switch off, list or not', () => {
-    const f = swarm()
-    process.env.SWARM_TEAM_ACCOUNT_OWNERS = ' , '
-    expect(teamAccountRequired(f.state)).toBe(true)
-    expect(teamAccountRequired()).toBe(true)
-    process.env.SWARM_TEAM_ACCOUNT_OWNERS = 'owner@example.com'
-    expect(teamAccountRequired()).toBe(false)
-    delete process.env.SWARM_TEAM_ACCOUNT_REQUIRED
-    expect(teamAccountRequired(f.state)).toBe(false)
+    expect(f.state.starts![0]!.request).toMatchObject({ machineId: 'mate-team', cwd: '/team-swarm/lead' })
   })
 })
 
@@ -456,12 +437,9 @@ describe('one machine: a Mac and its Harness Team account', () => {
     f.machine('mate-team').observation = reading('team', FAILED)
     expect(machineTeamWork(f.state, f.machine('mate-mac'), NOW, ['mate-team'])?.code).toBe('PRIVACY_CHECK_FAILED')
     expect(machineTeamWork(f.state, f.machine('mate-mac'), NOW, ['mate-team'], ['mate-team'])?.code).toBe('MACHINE_IN_OTHER_WORKSPACE')
-    // The account itself reads as itself; a Mac whose account is no longer signed in, or outside the Swarms it is tried in,
-    // reads as a Mac without one.
+    // The account itself reads as itself; a Mac whose account is no longer signed in reads as a Mac without one.
     expect(machineTeamWork(f.state, f.machine('mate-team'), NOW, ['mate-team'])?.code).toBe('PRIVACY_CHECK_FAILED')
     expect(machineTeamWork(f.state, f.machine('mate-mac'), NOW, [])?.code).toBe('TEAM_ACCOUNT_REQUIRED')
-    process.env.SWARM_TEAM_ACCOUNT_OWNERS = 'someone@example.com'
-    try { expect(machineTeamWork(f.state, f.machine('mate-mac'), NOW, ['mate-team'])).toBeNull() } finally { delete process.env.SWARM_TEAM_ACCOUNT_OWNERS }
   })
 
   it('once the team account is removed, its pool left behind takes nothing: the Mac is a Mac without one again', () => {
@@ -528,14 +506,6 @@ describe('one machine: a Mac and its Harness Team account', () => {
     const f = oneMachine(), group = f.group()
     f.state.machines = f.state.machines!.filter(m => m.machineId !== 'mate-team')
     expect(refusal(() => f.run({ type: 'agent.start', request: f.request(group, 'mate-mac') }, owner, f.pooled('mate-mac')))?.code).toBe('TEAM_ACCOUNT_REQUIRED')
-  })
-
-  it('a machines rule naming the Mac allows its team account', () => {
-    const f = oneMachine(), group = f.group()
-    f.run({ type: 'rule.set', projectId: 'lead', rule: { kind: 'machines', machineIds: ['mate-mac'] }, text: 'Only the MacBook Pro.' })
-    const effects = f.run({ type: 'agent.start', request: f.request(group, 'mate-mac') }, owner, f.pooled('mate-mac'))
-    expect(effects.result.warnings).toBeUndefined()
-    expect(effects.messages).toEqual([])
   })
 
   it('a route that picked the Mac for a teammate\'s project keeps it, and the start there is the pick', () => {

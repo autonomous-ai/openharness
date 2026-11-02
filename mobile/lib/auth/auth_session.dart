@@ -31,6 +31,7 @@ class AuthSession {
   static const _expiresAt = 'auth_access_token_expires_at';
   static const _issuer = 'auth_session_issuer';
   static const _ssoClientId = 'auth_sso_client_id';
+  static const _accountId = 'auth_account_id';
 
   AuthSession({LocalKeyValueStore? storage})
     : _storage = storage ?? HarnessFileStore.shared;
@@ -45,6 +46,8 @@ class AuthSession {
     SessionIssuer issuer = SessionIssuer.sso,
     String? ssoClientId,
   }) async {
+    // First: a new token must never be found beside the last account's id.
+    await _storage.delete(_accountId);
     await _storage.write(_access, token);
     await _storage.write(_issuer, issuer.name);
     if (refreshToken != null && refreshToken.isNotEmpty) {
@@ -133,7 +136,15 @@ class AuthSession {
     );
   }
 
+  /// Whose this sign-in is, as the account last said: what lets a launch open
+  /// what it kept for that account before the account has answered again. Null
+  /// until then. A renewal keeps it, being the same sign-in; a new sign-in and a
+  /// sign-out forget it.
+  Future<String?> accountId() => _storage.read(_accountId);
+  Future<void> saveAccountId(String id) => _storage.write(_accountId, id);
+
   Future<void> clear() async {
+    await _storage.delete(_accountId);
     await _storage.delete(_access);
     await _storage.delete(_refresh);
     await _storage.delete(_env);

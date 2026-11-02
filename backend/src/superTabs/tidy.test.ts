@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { agentOnly, type Agent, type Assignment, type Conversation, type SuperTabState } from './model.js'
-import { ARCHIVE_QUIET_MS, archivable, IDLE_STOP_MS, reviewClosable, reviewCloseLine, reviewPullRequests, stopIdleWorkers } from './tidy.js'
+import { ARCHIVE_QUIET_MS, archivable, IDLE_NOTICE_MS, idleNotices, linkPending, reviewClosable, reviewCloseLine, reviewPullRequests } from './tidy.js'
 
 const MINUTE = 60_000
 const START = Date.parse('2026-10-27T08:00:00.000Z')
@@ -14,149 +14,116 @@ const worker = (patch: Partial<Agent> = {}): Agent => ({ id: 'w', machineId: 'm'
 const group = (patch: Partial<Conversation> = {}): Conversation => ({ id: 'g1', title: 'Task', leadId: 'L', agentIds: ['L', 'w'], archived: false,
   brief: 'Do it', checks: [], assignment: done(), lastMessageSequence: 3, lastActivityAt: iso(START), ...patch })
 
-/** A Swarm whose Lead `L` runs on machine `m` with worker `w` (session `h`); the machine reported at `reportAt` that `h` runs
- *  with nothing uncommitted, unless `uncommitted` says otherwise. */
-function swarm(opts: { agents?: Agent[]; groups?: Conversation[]; reportAt?: number; uncommitted?: Record<string, boolean> | null; running?: string[] } = {}) {
-  const uncommitted = opts.uncommitted === undefined ? { h: false } : opts.uncommitted
+/** A Swarm whose coordinator `L` runs on machine `m` with agent `w` (session `h`). */
+function swarm(opts: { agents?: Agent[]; groups?: Conversation[] } = {}) {
   return {
     id: 't', ownerId: 'p', paused: false,
     agents: [worker({ id: 'L', harnessId: 'hl', name: 'Lead', displayName: 'River' }), ...opts.agents ?? [worker()]],
     people: [{ id: 'p', email: 'p@example.com', role: 'owner', generation: 'g' }],
-    machines: [{ machineId: 'm', name: 'Studio', observation: { receivedAt: opts.reportAt ?? START + 15 * MINUTE, runningHarnessIds: opts.running ?? ['hl', 'h'],
-      stoppedHarnessIds: [], ...uncommitted ? { harnessUncommitted: uncommitted } : {} } }],
+    machines: [{ machineId: 'm', name: 'Studio' }],
     conversations: [{ id: 'lead', title: 'Lead', leadId: 'L', agentIds: ['L'], archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0 },
       ...opts.groups ?? [group()]],
   } as unknown as SuperTabState
 }
-const at = START + IDLE_STOP_MS
+const at = START + IDLE_NOTICE_MS
 const target = (state: SuperTabState, id = 'w') => state.agents.find(a => a.id === id)!
 
-describe('stopping idle workers', () => {
-  it('stops a Swarm-started Builder 15 minutes after its last activity, with one line in its last group for the Lead', () => {
-    const state = swarm()
-    const rows = stopIdleWorkers(state, 'lead', at, new Set())
-    expect(target(state)).toMatchObject({ workDecision: 'stop' })
-    expect(target(state).releaseId).toEqual(expect.any(String))
-    // Marked as the idle check's, so its host may withdraw it if its folder changed since (agent.stopRefused).
-    expect(target(state).idleStop).toEqual({ previous: null })
-    // Ken, 2026-10-29: the Lead's to handle, delivered to it; people do not read it (model.ts agentOnly).
-    expect(rows).toEqual([expect.objectContaining({ conversationId: 'g1', recipients: ['L'], replyTo: null,
-      author: expect.objectContaining({ kind: 'agent', id: 'L' }), text: 'Rowan stopped: no work for 15 minutes.',
-      source: { kind: 'idle-stop', agentId: 'w' } })])
+// Project instructions, phase 4, decision 7: the server stops no idle agent; it tells the coordinator once per idle spell, and
+// the instructions say what the coordinator does about it.
+describe('idle agents', () => {
+  it('tells the coordinator once about an agent with no open task for 15 minutes', () => {
+    const state = swarm({ agents: [worker({ startedSession: { creationId: 'c', sessionId: 's', createdAt: iso(START - MINUTE) } })], groups: [] })
+    const rows = idleNotices(state, 'lead', at, new Set())
+    expect(rows).toEqual([expect.objectContaining({ conversationId: 'lead', recipients: ['L'], replyTo: null,
+      author: expect.objectContaining({ kind: 'agent', id: 'L' }), text: 'Rowan has had no open task for 15 minutes.', source: { kind: 'idle', agentId: 'w' } })])
+    // The coordinator's alone: people do not read it (model.ts agentOnly).
     expect(rows.map(row => agentOnly(row.source, row.recipients))).toEqual([true])
-  })
-
-  it('tells a Lead outside the worker\'s last group in its own chat, and hides the copy left in that group for no one', () => {
-    const state = swarm({ groups: [group({ agentIds: ['w'] })] })
-    const rows = stopIdleWorkers(state, 'lead', at, new Set())
-    expect(rows.map(row => [row.conversationId, row.recipients])).toEqual([['g1', []], ['lead', ['L']]])
-    expect(rows.map(row => agentOnly(row.source, row.recipients))).toEqual([true, true])
-    expect(rows.map(row => row.source?.agentId)).toEqual(['w', 'w'])
-  })
-
-  it('waits until a full 15 minutes have passed since its group last spoke', () => {
-    const state = swarm({ groups: [group({ lastActivityAt: iso(START + 5 * MINUTE) })] })
-    expect(stopIdleWorkers(state, 'lead', at, new Set())).toEqual([])
+    // Nothing is stopped or decided for it.
     expect(target(state).workDecision).toBeUndefined()
-    state.machines![0]!.observation!.receivedAt = at + 5 * MINUTE
-    expect(stopIdleWorkers(state, 'lead', at + 5 * MINUTE, new Set())).toHaveLength(1)
+    expect(target(state).releaseId).toBeUndefined()
+    expect(target(state).idleNoticedAt).toBe(START - MINUTE)
+    // Once per idle spell: the next polls say nothing.
+    expect(idleNotices(state, 'lead', at + MINUTE, new Set())).toEqual([])
+    expect(idleNotices(state, 'lead', at + 60 * MINUTE, new Set())).toEqual([])
+    // New work and a new idle spell after it: one more.
+    state.conversations.push(group({ assignment: done({ progressAt: at + 2 * MINUTE }), lastActivityAt: iso(at + 2 * MINUTE) }))
+    expect(idleNotices(state, 'lead', at + 10 * MINUTE, new Set())).toEqual([])
+    const again = idleNotices(state, 'lead', at + 17 * MINUTE, new Set())
+    expect(again).toEqual([expect.objectContaining({ text: 'Rowan has had no open task for 15 minutes.' })])
+    expect(new Set([...rows, ...again].map(row => row.id)).size).toBe(2)
+    expect(target(state).idleNoticedAt).toBe(at + 2 * MINUTE)
   })
 
-  it('counts its start, its last progress and a keep decision as activity', () => {
+  it('never tells of a Buddy, the coordinator, an agent with a delivery waiting or one in a task with active work', () => {
+    const buddy = swarm({ agents: [worker({ buddyOf: { personId: 'p', generation: 'g' } })], groups: [] })
+    expect(idleNotices(buddy, 'lead', at, new Set())).toEqual([])
+    const alone = swarm({ agents: [], groups: [] })
+    expect(idleNotices(alone, 'lead', at, new Set())).toEqual([])
+    expect(idleNotices(swarm({ groups: [] }), 'lead', at, new Set(['w']))).toEqual([])
+    // Its own work, or a member of a task whose work is going (a Reviewer or a Tester linked to it).
+    expect(idleNotices(swarm({ groups: [group({ assignment: done({ status: 'working' }) })] }), 'lead', at, new Set())).toEqual([])
+    const linked = group({ agentIds: ['L', 'other', 'w'], assignment: done({ agentId: 'other', status: 'review' }), lastActivityAt: iso(START - 60 * MINUTE) })
+    expect(idleNotices(swarm({ groups: [linked] }), 'lead', at, new Set())).toEqual([])
+  })
+
+  it('waits until a full 15 minutes have passed since the group of its own task last spoke', () => {
+    const state = swarm({ groups: [group({ lastActivityAt: iso(START + 5 * MINUTE) })] })
+    expect(idleNotices(state, 'lead', at, new Set())).toEqual([])
+    expect(idleNotices(state, 'lead', at + 5 * MINUTE, new Set())).toHaveLength(1)
+  })
+
+  it('counts its start and its last progress as activity', () => {
     const fresh = swarm({ agents: [worker({ startedSession: { creationId: 'c', sessionId: 's', createdAt: iso(START + MINUTE) } })], groups: [] })
-    expect(stopIdleWorkers(fresh, 'lead', at, new Set())).toEqual([])
+    expect(idleNotices(fresh, 'lead', at, new Set())).toEqual([])
     const progressed = swarm({ groups: [group({ assignment: done({ progressAt: START + MINUTE }) })] })
-    expect(stopIdleWorkers(progressed, 'lead', at, new Set())).toEqual([])
+    expect(idleNotices(progressed, 'lead', at, new Set())).toEqual([])
+  })
+
+  // A keep is the coordinator's answer to the notice: it is not asked again every 15 minutes while the agent waits, only once
+  // the agent has had and finished another task (final review of the branch).
+  it('says nothing more of a kept agent until it has had and finished another task', () => {
     const kept = swarm({ agents: [worker({ workDecision: 'keep', keptAt: START + MINUTE })] })
-    expect(stopIdleWorkers(kept, 'lead', at, new Set())).toEqual([])
-    kept.machines![0]!.observation!.receivedAt = at + MINUTE
-    expect(stopIdleWorkers(kept, 'lead', at + MINUTE, new Set())).toHaveLength(1)
+    expect(idleNotices(kept, 'lead', at + MINUTE, new Set())).toEqual([])
+    expect(idleNotices(kept, 'lead', at + 24 * 60 * MINUTE, new Set())).toEqual([])
+    // Assigned again, its keep is cleared (commands.ts work.assign); finished, it is marked awaiting (model.ts finishWorker).
+    const later = at + 30 * MINUTE
+    target(kept).workDecision = 'awaiting'
+    kept.conversations.push(group({ id: 'g2', assignment: done({ id: 'a2', progressAt: later }), lastActivityAt: iso(later) }))
+    expect(idleNotices(kept, 'lead', later + IDLE_NOTICE_MS - 1, new Set())).toEqual([])
+    expect(idleNotices(kept, 'lead', later + IDLE_NOTICE_MS, new Set())).toHaveLength(1)
   })
 
-  it('stops a worker that never got a task, saying so in the Lead conversation when it sits in no group', () => {
-    const state = swarm({ groups: [] })
-    expect(stopIdleWorkers(state, 'lead', at, new Set())).toEqual([expect.objectContaining({ conversationId: 'lead', recipients: ['L'] })])
-    expect(target(state).workDecision).toBe('stop')
-  })
-
-  // Swarm autonomous-harness, 2026-10-29: a Builder started by hand in a busy task's group never got that task, and every
-  // message there kept it up, idle, for 18+ minutes.
-  it('stops a worker that never had a task 15 minutes after its start, however busy a group it only sits in is', () => {
-    const busyGroup = group({ assignment: { ...done(), agentId: 'other', status: 'working' }, agentIds: ['L', 'other', 'w'], lastActivityAt: iso(at - MINUTE) })
-    const state = swarm({ groups: [busyGroup] })
-    expect(stopIdleWorkers(state, 'lead', at, new Set())).toEqual([expect.objectContaining({ source: { kind: 'idle-stop', agentId: 'w' } })])
-    // A Reviewer is never assigned work: a group's messages are its work, so they keep it as before.
-    const reviewer = swarm({ agents: [worker({ role: 'reviewer' } as Partial<Agent>)], groups: [busyGroup] })
-    expect(stopIdleWorkers(reviewer, 'lead', at, new Set())).toEqual([])
-    // Nor is one that had a task of its own and finished it: its group's last message still counts.
+  // Swarm autonomous-harness, 2026-10-29: an agent started by hand in a busy chat never got a task, and every message there
+  // kept it idle. Messages in a group without active work are about others' work: it is idle from its start.
+  it('tells of an agent that never had a task 15 minutes after its start, however busy a finished group it sits in is', () => {
+    const chatty = group({ assignment: done({ agentId: 'other' }), agentIds: ['L', 'other', 'w'], lastActivityAt: iso(at - MINUTE) })
+    expect(idleNotices(swarm({ groups: [chatty] }), 'lead', at, new Set())).toEqual([expect.objectContaining({ source: { kind: 'idle', agentId: 'w' } })])
+    // One that had a task of its own and finished it: its group's last message still counts.
     const finished = swarm({ groups: [group({ lastActivityAt: iso(at - MINUTE) })] })
-    expect(stopIdleWorkers(finished, 'lead', at, new Set())).toEqual([])
+    expect(idleNotices(finished, 'lead', at, new Set())).toEqual([])
   })
 
-  it('never stops a worker with active work, a queued delivery, or uncommitted changes', () => {
-    expect(stopIdleWorkers(swarm({ groups: [group({ assignment: done({ status: 'working' }) })] }), 'lead', at, new Set())).toEqual([])
-    expect(stopIdleWorkers(swarm(), 'lead', at, new Set(['w']))).toEqual([])
-    expect(stopIdleWorkers(swarm({ uncommitted: { h: true } }), 'lead', at, new Set())).toEqual([])
+  it('tells of an agent a person added by hand, from its groups\' last activity, and of no agent it cannot time', () => {
+    const added = worker({ startedSession: undefined })
+    expect(idleNotices(swarm({ agents: [added], groups: [group({ assignment: null, lastActivityAt: iso(START) })] }), 'lead', at, new Set())).toHaveLength(1)
+    expect(idleNotices(swarm({ agents: [added], groups: [group({ assignment: null, lastActivityAt: iso(START + MINUTE) })] }), 'lead', at, new Set())).toEqual([])
+    expect(idleNotices(swarm({ agents: [added], groups: [] }), 'lead', at, new Set())).toEqual([])
   })
 
-  it('never stops a worker its host has not said is clean: an older host, a session not running, or a silent machine', () => {
-    expect(stopIdleWorkers(swarm({ uncommitted: null }), 'lead', at, new Set())).toEqual([])
-    expect(stopIdleWorkers(swarm({ uncommitted: { other: false } }), 'lead', at, new Set())).toEqual([])
-    expect(stopIdleWorkers(swarm({ running: ['hl'] }), 'lead', at, new Set())).toEqual([])
-    expect(stopIdleWorkers(swarm({ reportAt: at - 3 * MINUTE }), 'lead', at, new Set())).toEqual([])
-  })
-
-  it('leaves Leads, people\'s own sessions, stopping workers and workers waiting out a usage limit alone', () => {
-    const lead = swarm({ agents: [], uncommitted: { hl: false } })
-    expect(stopIdleWorkers(lead, 'lead', at, new Set())).toEqual([])
-    expect(stopIdleWorkers(swarm({ agents: [worker({ startedSession: undefined })] }), 'lead', at, new Set())).toEqual([])
-    const stopping = swarm({ agents: [worker({ workDecision: 'stop', releaseId: 'r1' })] })
-    expect(stopIdleWorkers(stopping, 'lead', at, new Set())).toEqual([])
-    expect(target(stopping).releaseId).toBe('r1')
-    const limited = swarm({ agents: [worker({ lostTask: { conversationId: 'g1', assignmentId: 'a1', reason: 'limit', at: START, resumeAt: iso(at + MINUTE) } })],
-      groups: [group({ assignment: done({ status: 'lost' }) })] })
-    expect(stopIdleWorkers(limited, 'lead', at, new Set())).toEqual([])
-  })
-
-  it('keeps a worker waiting out a usage limit past its reset time, until its task resumes or is handed on', () => {
+  it('leaves stopping agents and agents waiting out a usage limit alone, past its reset time too, until their task is handed on', () => {
+    expect(idleNotices(swarm({ agents: [worker({ workDecision: 'stop', releaseId: 'r1' })] }), 'lead', at, new Set())).toEqual([])
     const lostTask = { conversationId: 'g1', assignmentId: 'a1', reason: 'limit', at: START, resumeAt: iso(START + MINUTE) }
     const lost = () => group({ assignment: done({ status: 'lost', lost: { reason: 'limit', at: START, resumeAt: iso(START + MINUTE) } }) })
-    // The reset passed long ago and the resume is late: its task still waits for it.
-    const late = swarm({ agents: [worker({ lostTask })], groups: [lost()], reportAt: at + 10 * MINUTE })
-    expect(stopIdleWorkers(late, 'lead', at + 10 * MINUTE, new Set())).toEqual([])
-    // Handed on to another attempt, or cancelled: nothing waits for it any more.
+    expect(idleNotices(swarm({ agents: [worker({ lostTask })], groups: [lost()] }), 'lead', at + 10 * MINUTE, new Set())).toEqual([])
     const handed = swarm({ agents: [worker({ lostTask })], groups: [group({ assignment: done({ id: 'a2', agentId: 'other', status: 'done' }) })] })
-    expect(stopIdleWorkers(handed, 'lead', at, new Set())).toHaveLength(1)
-    const cancelled = swarm({ agents: [worker({ lostTask })], groups: [group({ assignment: done({ status: 'cancelled' }) })] })
-    expect(stopIdleWorkers(cancelled, 'lead', at, new Set())).toHaveLength(1)
+    expect(idleNotices(handed, 'lead', at, new Set())).toHaveLength(1)
   })
 
-  it('keeps a Reviewer while the work it reviews is still open, and stops it once that work is finished', () => {
-    const reviewer = worker({ role: 'reviewer' })
-    const review = group({ id: 'r1', reviewOf: 'g1', assignment: done({ id: 'a2' }) })
-    const open = swarm({ agents: [reviewer], groups: [group({ agentIds: ['L', 'b'], assignment: done({ agentId: 'b', status: 'review' }) }), review] })
-    expect(stopIdleWorkers(open, 'lead', at, new Set())).toEqual([])
-    const finished = swarm({ agents: [reviewer], groups: [group({ agentIds: ['L', 'b'], assignment: done({ agentId: 'b' }) }), review] })
-    expect(stopIdleWorkers(finished, 'lead', at, new Set())).toHaveLength(1)
-  })
-
-  it('says so in a group the poll loaded, never in an asleep one, which would refuse the line (review of #2073)', () => {
-    const reviewer = () => worker({ role: 'reviewer' })
-    const asleep = group({ id: 'r2', reviewOf: 'g1', assignment: done({ id: 'a3' }), lastActivityAt: iso(START) })
-    const older = group({ id: 'r1', reviewOf: 'g1', assignment: done({ id: 'a2' }), lastActivityAt: iso(START - 5 * MINUTE) })
-    const finished = group({ agentIds: ['L', 'b'], assignment: done({ agentId: 'b' }) })
-    const loaded = swarm({ agents: [reviewer()], groups: [finished, older] })
-    expect(stopIdleWorkers(loaded, 'lead', at, new Set(), [asleep])).toEqual([expect.objectContaining({ conversationId: 'r1' })])
-    const alone = swarm({ agents: [reviewer()], groups: [finished] })
-    expect(stopIdleWorkers(alone, 'lead', at, new Set(), [asleep])).toEqual([expect.objectContaining({ conversationId: 'lead' })])
-    expect(target(alone).workDecision).toBe('stop')
-  })
-
-  it('does nothing once the owner turned tidying off, or for another project\'s workers', () => {
-    const off = swarm()
+  it('tells whether or not the owner turned tidying off, and never of another project\'s agents', () => {
+    const off = swarm({ groups: [] })
     off.tidy = false
-    expect(stopIdleWorkers(off, 'lead', at, new Set())).toEqual([])
-    expect(stopIdleWorkers(swarm({ agents: [worker({ projectId: 'other' })] }), 'lead', at, new Set())).toEqual([])
+    expect(idleNotices(off, 'lead', at, new Set())).toHaveLength(1)
+    expect(idleNotices(swarm({ agents: [worker({ projectId: 'other' })] }), 'lead', at, new Set())).toEqual([])
   })
 })
 
@@ -177,7 +144,8 @@ describe('which finished groups archive', () => {
     }
   })
 
-  it('is never a review whose Reviewer gave no verdict while the work it reviews is going, unless it was cancelled', () => {
+  // By hand any agent or person archives a linked task (project instructions, phase 4); the Swarm alone still waits for it.
+  it('is never a linked task with no verdict while the work it links to is going, unless it was cancelled', () => {
     const verdict = { id: 'v', description: 'Verdict with the reviewed revision', independent: false }
     const review = (patch: Partial<Conversation>) => group({ id: 'r1', reviewOf: 'g1', ...patch })
     // Stored as done with no verdict, as no command allows: the rule still holds.
@@ -186,9 +154,11 @@ describe('which finished groups archive', () => {
       review({ id: 'r2', checks: [{ ...verdict, evidence: 'Ready: yes — revision abc', passedBy: 'agent:w' }] }),
       review({ id: 'r3', checks: [{ ...verdict, evidence: null, passedBy: null }], assignment: done({ status: 'cancelled' }) })] })
     expect(state.conversations.slice(2).map(g => archivable(state, g, quiet))).toEqual([false, true, true])
+    expect(state.conversations.slice(2).map(g => linkPending(state, g))).toEqual([true, false, false])
     // Once the reviewed work is done, its review is moot.
     state.conversations[1]!.assignment = done()
     expect(archivable(state, state.conversations[2]!, quiet)).toBe(true)
+    expect(linkPending(state, state.conversations[2]!)).toBe(false)
   })
 
   it('is never a Lead conversation, a private chat, the Leads conversation, an archived group, or any once tidying is off', () => {

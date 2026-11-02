@@ -141,23 +141,15 @@ void main() {
       await tester.pump();
       expect(find.byType(SignInStep), findsOneWidget);
       expect(find.text('Continue with Google'), findsOneWidget);
-      // The quiet way in is on this sign-in too — as words, not as one more
-      // button the width of the two above it.
+      // Email, GitHub and passkey are on this sign-in too, as a button of the
+      // same width as the two above it (Scholes's test, 2026-10-31: small print
+      // hid that it leads to GitHub and passkey too).
       final email = find.byKey(const Key('sign-in-step-email'));
       expect(email, findsOneWidget);
-      expect(
-        find.ancestor(
-          of: find.text('Continue with email'),
-          matching: find.byType(TextButton),
-        ),
-        findsNothing,
-      );
+      expect(find.text('Email, GitHub or passkey'), findsOneWidget);
       expect(
         tester.getSize(email).width,
-        lessThan(
-          tester.getSize(find.byKey(const Key('login-continue-google'))).width *
-              .8,
-        ),
+        tester.getSize(find.byKey(const Key('login-continue-google'))).width,
       );
 
       expect(find.byKey(const Key('login-close-button')), findsNothing);

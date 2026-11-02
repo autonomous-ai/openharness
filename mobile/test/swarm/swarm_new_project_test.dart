@@ -11,12 +11,46 @@ import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
+import 'package:harness_mobile/swarm/swarm_style.dart' show SwarmButton;
 
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 import 'swarm_new_project_fixture.dart';
 
 void main() {
+  group('swarmNewProjectSwarm', () {
+    String? pick(
+      List<String> writable, {
+      String? from,
+      Set<String> paused = const {},
+    }) => swarmNewProjectSwarm(
+      writable,
+      openedFrom: from,
+      paused: paused.contains,
+    );
+
+    test('none paused: the Swarm Home shows, else the first', () {
+      expect(pick(['a', 'b'], from: 'b'), 'b');
+      expect(pick(['a', 'b']), 'a');
+    });
+
+    test('opened from a paused Swarm: the first that takes work', () {
+      expect(pick(['b', 'a'], from: 'a', paused: {'a'}), 'b');
+      expect(pick(['a', 'b'], paused: {'a'}), 'b');
+    });
+
+    test('all paused: the Swarm Home shows, else the first', () {
+      expect(pick(['a', 'b'], from: 'b', paused: {'a', 'b'}), 'b');
+      expect(pick(['a', 'b'], paused: {'a', 'b'}), 'a');
+    });
+
+    test('a Swarm Home shows that it may not offer is never picked', () {
+      expect(pick(['a'], from: 'gone'), 'a');
+      expect(pick(['a'], from: 'gone', paused: {'a'}), 'a');
+      expect(pick(const []), isNull);
+    });
+  });
+
   group('swarmLeadMachines', () {
     List<SwarmLeadMachine> machines(
       List<Map<String, dynamic>> pools, {
@@ -75,8 +109,8 @@ void main() {
       );
     });
 
-    test('an engine not offered, not installed, signed out, out of quota or '
-        'suspended is ruled out with why; one left runs', () {
+    test('an engine not offered, not installed, signed out or suspended is '
+        'ruled out with why; one left runs; quota rules nothing out', () {
       final [codexOnly] = machines([
         leadPool(
           'mac-1',
@@ -90,7 +124,9 @@ void main() {
         'claude': 'Claude Code isn’t signed in',
       });
 
-      final [none] = machines([
+      // An engine at 100% stays startable: quota is information, and an older
+      // server's own refusal shows as the start's error.
+      final [spent] = machines([
         leadPool(
           'mac-1',
           engines: ['claude'],
@@ -105,12 +141,10 @@ void main() {
           ],
         ),
       ]);
-      expect(none.startable, isFalse);
-      expect(
-        none.detail,
-        'Can’t run a Product Manager: Claude Code has no quota left until it '
-        'resets, Codex isn’t offered here',
-      );
+      expect(spent.startable, isTrue);
+      expect(spent.engine, 'claude');
+      expect(spent.engineRefusals, {'codex': 'Codex isn’t offered here'});
+      expect(spent.detail, isNot(contains('quota')));
 
       final [suspended] = machines([
         leadPool(
@@ -123,22 +157,32 @@ void main() {
       expect(suspended.engineRefusals['claude'], contains('failed to start'));
     });
 
-    test('the Swarm\'s model list rules an engine out on every machine', () {
-      final [studio] = machines(
-        [leadPool('mac-1')],
-        modelList: swarmLeadModelListRefusals({
-          'models': [
-            {'engine': 'claude', 'model': 'opus', 'enabled': false},
-            {'engine': 'codex', 'model': 'gpt-5', 'enabled': true},
-          ],
-        }),
-      );
+    test('an older Swarm\'s model list rules an engine out on every machine; '
+        'one that sends its catalog rules nothing out', () {
+      final policy = {
+        'models': [
+          {'engine': 'claude', 'model': 'opus', 'enabled': false},
+          {'engine': 'codex', 'model': 'gpt-5', 'enabled': true},
+        ],
+      };
+      // The tab's routing-policy read, as an older backend answers it.
+      final [studio] = machines([
+        leadPool('mac-1'),
+      ], modelList: swarmLeadModelListRefusals({'policy': policy}));
       expect(studio.engine, 'codex');
       expect(
         studio.engineRefusals['claude'],
         'The Swarm’s model list has no enabled Claude model',
       );
       expect(swarmLeadModelListRefusals(null), isEmpty);
+      // With its catalog, the list is the Swarm's advice: nothing is refused.
+      expect(
+        swarmLeadModelListRefusals({
+          'policy': policy,
+          'catalog': {'models': <Object>[]},
+        }),
+        isEmpty,
+      );
     });
 
     test('a teammate\'s machine runs it as the server decided for each '
@@ -754,6 +798,7 @@ void main() {
       WidgetTester tester,
       List<NewProjectSwarm> swarms, {
       ValueNotifier<String?>? account,
+      bool settle = true,
     }) async {
       tester.view.physicalSize = const Size(1170, 2532);
       tester.view.devicePixelRatio = 3;
@@ -779,7 +824,7 @@ void main() {
           ),
         ),
       );
-      await tester.pumpAndSettle();
+      if (settle) await tester.pumpAndSettle();
       return host;
     }
 
@@ -835,8 +880,10 @@ void main() {
     testWidgets('a Swarm whose first read failed offers it once its read '
         'recovers', (tester) async {
       final swarm = NewProjectSwarm()..unreadable = true;
-      final host = await pump(tester, [swarm]);
-      expect(key('swarm-projects-error-$tab'), findsOneWidget);
+      final host = await pump(tester, [swarm], settle: false);
+      // A skeleton breathes for as long as it shows: nothing settles under it.
+      await pumpFor(tester);
+      expect(key('swarm-projects-loading-$tab'), findsOneWidget);
       expect(key('swarm-new-project'), findsNothing);
 
       swarm.unreadable = false;
@@ -874,6 +921,232 @@ void main() {
       await pump(tester, [NewProjectSwarm()]);
       await tap(tester, 'swarm-new-project');
       expect(key('swarm-new-project-swarm'), findsNothing);
+    });
+
+    group('a paused Swarm (Dee, 11-01)', () {
+      /// The Swarm the sheet opened on, by the name on its Swarm row.
+      void opensOn(String name) => expect(
+        find.descendant(
+          of: key('swarm-new-project-swarm'),
+          matching: find.text(name),
+        ),
+        findsOneWidget,
+      );
+
+      /// The Swarm list's rows, top to bottom.
+      List<String> listed(WidgetTester tester, List<String> ids) {
+        final rows = [
+          for (final id in ids)
+            if (key('swarm-new-project-pick-swarm-$id').evaluate().isNotEmpty)
+              id,
+        ];
+        rows.sort(
+          (a, b) => tester
+              .getTopLeft(key('swarm-new-project-pick-swarm-$a'))
+              .dy
+              .compareTo(
+                tester.getTopLeft(key('swarm-new-project-pick-swarm-$b')).dy,
+              ),
+        );
+        return rows;
+      }
+
+      /// Why Create is off, if it says.
+      String note(WidgetTester tester) =>
+          key('swarm-new-project-note').evaluate().isEmpty
+          ? ''
+          : tester.widget<Text>(key('swarm-new-project-note')).data!;
+
+      Finder pausedOn(String id) => find.descendant(
+        of: key('swarm-new-project-pick-swarm-$id'),
+        matching: find.text('Paused'),
+      );
+
+      testWidgets('none paused: it opens on the first, and none says Paused', (
+        tester,
+      ) async {
+        await pump(tester, [
+          NewProjectSwarm(),
+          NewProjectSwarm(id: 'tab-2', name: 'Lamp Swarm'),
+        ]);
+        await tap(tester, 'swarm-new-project');
+        opensOn('Phone Swarm');
+        expect(note(tester), isNot(contains(swarmLeadSwarmPaused)));
+        await tap(tester, 'swarm-new-project-swarm');
+        expect(listed(tester, [tab, 'tab-2']), [tab, 'tab-2']);
+        expect(find.text('Paused'), findsNothing);
+      });
+
+      testWidgets('on All Swarms with the first paused it opens on one that '
+          'takes work; the paused one is listed last, marked, and still '
+          'choosable', (tester) async {
+        await pump(tester, [
+          NewProjectSwarm(name: 'Swarm review verification')..paused = true,
+          NewProjectSwarm(id: 'tab-2', name: 'Lamp Swarm'),
+        ]);
+        await tap(tester, 'swarm-new-project');
+        opensOn('Lamp Swarm');
+        expect(note(tester), isNot(contains(swarmLeadSwarmPaused)));
+        await pickMachine(tester, 'mac-1');
+        expect(
+          tester.widget<SwarmButton>(key('swarm-new-project-create')).onPressed,
+          isNotNull,
+          reason: 'Create is on',
+        );
+
+        await tap(tester, 'swarm-new-project-swarm');
+        expect(listed(tester, [tab, 'tab-2']), ['tab-2', tab]);
+        expect(pausedOn(tab), findsOneWidget);
+        expect(pausedOn('tab-2'), findsNothing);
+        await tap(tester, 'swarm-new-project-pick-swarm-$tab');
+        opensOn('Swarm review verification');
+        expect(
+          find.descendant(
+            of: key('swarm-new-project-swarm'),
+            matching: find.text('Paused'),
+          ),
+          findsOneWidget,
+        );
+        expect(note(tester), contains(swarmLeadSwarmPaused));
+      });
+
+      testWidgets('opened from a paused Swarm Home shows, it opens on the '
+          'first that takes work, never on one the person only views', (
+        tester,
+      ) async {
+        final host = await pump(tester, [
+          NewProjectSwarm(id: 'tab-viewed', name: 'Viewed', role: 'viewer'),
+          NewProjectSwarm(name: 'Swarm review verification')..paused = true,
+          NewProjectSwarm(id: 'tab-2', name: 'Lamp Swarm'),
+        ]);
+        host.session!.home.show(tab);
+        await tester.pumpAndSettle();
+        await tap(tester, 'swarm-new-project');
+        opensOn('Lamp Swarm');
+        await tap(tester, 'swarm-new-project-swarm');
+        expect(listed(tester, [tab, 'tab-2', 'tab-viewed']), ['tab-2', tab]);
+        expect(pausedOn(tab), findsOneWidget);
+        expect(
+          find.descendant(
+            of: key('swarm-new-project-sheet'),
+            matching: find.text('Viewed'),
+          ),
+          findsNothing,
+        );
+      });
+
+      testWidgets('opened from a Swarm that takes work, not the first, it '
+          'opens on that one', (tester) async {
+        final host = await pump(tester, [
+          NewProjectSwarm(),
+          NewProjectSwarm(id: 'tab-2', name: 'Lamp Swarm'),
+        ]);
+        host.session!.home.show('tab-2');
+        await tester.pumpAndSettle();
+        await tap(tester, 'swarm-new-project');
+        opensOn('Lamp Swarm');
+      });
+
+      testWidgets('all paused: it opens on the Swarm Home shows, says why, '
+          'and Create stays off', (tester) async {
+        final host = await pump(tester, [
+          NewProjectSwarm()..paused = true,
+          NewProjectSwarm(id: 'tab-2', name: 'Lamp Swarm')..paused = true,
+        ]);
+        host.session!.home.show('tab-2');
+        await tester.pumpAndSettle();
+        await tap(tester, 'swarm-new-project');
+        opensOn('Lamp Swarm');
+        expect(note(tester), contains(swarmLeadSwarmPaused));
+        expect(
+          tester.widget<SwarmButton>(key('swarm-new-project-create')).onPressed,
+          isNull,
+        );
+        await tap(tester, 'swarm-new-project-swarm');
+        expect(listed(tester, [tab, 'tab-2']), [tab, 'tab-2']);
+        expect(pausedOn(tab), findsOneWidget);
+        expect(pausedOn('tab-2'), findsOneWidget);
+      });
+
+      testWidgets('paused while it is open: it stays on the Swarm chosen, '
+          'marked, and Create goes off', (tester) async {
+        final lamp = NewProjectSwarm(id: 'tab-2', name: 'Lamp Swarm');
+        final host = await pump(tester, [NewProjectSwarm(), lamp]);
+        host.session!.home.show('tab-2');
+        await tester.pumpAndSettle();
+        await tap(tester, 'swarm-new-project');
+        await pickMachine(tester, 'mac-1');
+        lamp.paused = true;
+        await host.session!.inbox.reader('tab-2')!.refresh();
+        await tester.pumpAndSettle();
+        opensOn('Lamp Swarm');
+        expect(
+          find.descendant(
+            of: key('swarm-new-project-swarm'),
+            matching: find.text('Paused'),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          tester.widget<SwarmButton>(key('swarm-new-project-create')).onPressed,
+          isNull,
+        );
+      });
+
+      testWidgets('access to the Swarm it opened on, past a paused one, '
+          'taken away while open closes it', (tester) async {
+        final lamp = NewProjectSwarm(id: 'tab-2', name: 'Lamp Swarm');
+        final host = await pump(tester, [
+          NewProjectSwarm()..paused = true,
+          lamp,
+        ]);
+        host.session!.home.show(tab);
+        await tester.pumpAndSettle();
+        await tap(tester, 'swarm-new-project');
+        opensOn('Lamp Swarm');
+        lamp.revoked = true;
+        await host.session!.inbox.reader('tab-2')!.refresh();
+        await tester.pumpAndSettle();
+        expect(find.byType(BottomSheet), findsNothing);
+        expect(find.text('Lamp Swarm'), findsNothing);
+      });
+    });
+
+    testWidgets('the repository row says a link can be entered while none '
+        'is chosen, and a tap reaches it; once one is, it says no more', (
+      tester,
+    ) async {
+      Finder hint() => find.descendant(
+        of: key('swarm-new-project-repository'),
+        matching: find.text('Or enter a link'),
+      );
+      await pump(tester, [
+        NewProjectSwarm(projects: [swarmProject(project, 'Mobile')]),
+      ]);
+      await tap(tester, 'swarm-new-project');
+      expect(hint(), findsOneWidget);
+      await tap(tester, 'swarm-new-project-repository');
+      await tap(tester, 'swarm-new-project-pick-link');
+      await tester.enterText(
+        key('swarm-new-project-link'),
+        'https://github.com/owner/name',
+      );
+      await tap(tester, 'swarm-new-project-link-use');
+      expect(hint(), findsNothing);
+    });
+
+    testWidgets('a Swarm with a repository: no hint, and no line added', (
+      tester,
+    ) async {
+      await pump(tester, [NewProjectSwarm()]);
+      await tap(tester, 'swarm-new-project');
+      expect(
+        find.descendant(
+          of: key('swarm-new-project-repository'),
+          matching: find.text('Or enter a link'),
+        ),
+        findsNothing,
+      );
     });
 
     testWidgets('the repository is the most recently active project\'s, '

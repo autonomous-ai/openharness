@@ -126,3 +126,28 @@ describe('the nightly routing reflection', () => {
     expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ tabId: 1, projectId: 1, createdAt: 1/)
   })
 })
+
+describe('the pending-upload sweep', () => {
+  it('reads only the unfinished uploads it removes, by the (purpose, createdAt) index', async () => {
+    const { sweepPendingUploads } = await import('../src/lib/pendingUploadSweep.js')
+    const { MemoryAttachmentStore } = await import('../src/superTabs/attachments.js')
+    const row = (purpose: string | null, ageMs: number) => ({ id: randomUUID().replaceAll('-', '').slice(0, 24), tabId: 'tab', conversationId: 'lead',
+      actorKey: 'person:x', name: 'x', mime: 'text/plain', size: 1, objectKey: `k/${randomUUID()}`, createdAt: new Date(Date.now() - ageMs),
+      ...(purpose ? { purpose } : {}) })
+    // Sent and unsent chat files, old and new, and young unfinished uploads: a read the index does not bound examines them all.
+    await db.superTabAttachment.createMany({ data: [
+      ...Array.from({ length: 40 }, () => row(null, 3 * DAY)), ...Array.from({ length: 5 }, () => row('pending-upload', 60_000)),
+      row('pending-upload', 2 * 3_600_000), row('pending-upload', 3 * 3_600_000),
+    ] })
+    let result: unknown
+    const entries = await profiled(db, async () => { result = await sweepPendingUploads(db, new MemoryAttachmentStore(), Date.now()) })
+    expect(result).toEqual({ removed: 2, failed: 0 })
+    // The two finds; the claims and removals that follow go by id.
+    const rows = reads(entries, 'SuperTabAttachment', ['purpose'], ['_id'])
+    expect(rows.length, JSON.stringify(plan(rows))).toBe(2)
+    for (const read of rows) {
+      expect(read.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ purpose: 1, createdAt: 1/)
+      expect(read.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(Math.max(read.nreturned ?? 0, 2))
+    }
+  })
+})

@@ -61,6 +61,9 @@ export interface StopAgentOptions {
    * conversation cannot be read, it is stopped without one, and this is called. Never for a conversation once bound.
    */
   withoutConversation?(): void
+  /** The Change agent switch this stop is the close of (closeAgentService.ts): a Swarm Product Manager's stop guard lets only
+   *  that switch's own stop through (superTabs/leadSwitch.ts). No other stop carries it: Stop Harness, a delete or a purge. */
+  leadSwitch?: string
 }
 
 // Hooks rebuild registry objects. Compare stable values, never JavaScript object

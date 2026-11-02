@@ -171,7 +171,10 @@ void main() {
     c.openThread('message-1');
     await tester.pumpAndSettle();
     expect(panel(), findsOneWidget);
-    // A thread opens at its root, replies below.
+    // A thread opens at its newest reply; read back, it offers the way down.
+    expect(inPanel(find.byKey(jump)), findsNothing);
+    threadScroll(tester).jumpTo(0);
+    await tester.pumpAndSettle();
     expect(inPanel(find.byKey(jump)), findsOneWidget);
 
     await tester.tap(inPanel(find.byKey(jump)));
@@ -214,10 +217,12 @@ void main() {
   });
 
   testWidgets('replies that arrive while the reader stays at the root of a '
-      'long thread are counted, with no scrolling first', (tester) async {
+      'long thread are counted', (tester) async {
     final server = threadOf(30);
     final c = await show(tester, server);
     c.openThread('message-1');
+    await tester.pumpAndSettle();
+    threadScroll(tester).jumpTo(0);
     await tester.pumpAndSettle();
     for (final text in ['Reply 31: late.', 'Reply 32: later.']) {
       server.append(text);
@@ -258,6 +263,12 @@ void main() {
     final c = await show(tester, server);
     c.openThread('message-1');
     await tester.pumpAndSettle();
+    // It opens on the real last reply, not an estimate of where it is.
+    expect(threadScroll(tester).position.extentAfter, lessThan(1));
+    expect(inPanel(find.textContaining('Reply 60:')), findsOneWidget);
+    expect(inPanel(find.byKey(jump)), findsNothing);
+    threadScroll(tester).jumpTo(0);
+    await tester.pumpAndSettle();
     expect(inPanel(find.byKey(jump)), findsOneWidget);
 
     await tester.tap(inPanel(find.byKey(jump)));
@@ -275,9 +286,6 @@ void main() {
     final server = threadOf(30);
     final c = await show(tester, server);
     c.openThread('message-1');
-    await tester.pumpAndSettle();
-    final scroll = threadScroll(tester);
-    scroll.jumpTo(scroll.position.maxScrollExtent);
     await tester.pumpAndSettle();
     server.append('Reply 31: late.');
     server.messages.last

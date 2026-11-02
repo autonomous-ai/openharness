@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { ENGINES } from '../engines/types.js'
 import { basename, dirname, join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { BUDDY_ENGINE_HOMES, allowBuddyReads, engineHomesOutsideDefaults, buddyApprovalsOf, buddyGuardSource, buddyLaunchWide, buddySandboxSettings, buddyWideOf, grantBuddyWide, hasBuddyApprovals,
+import { BUDDY_ENGINE_HOMES, markBuddyNarrow, allowBuddyReads, engineHomesOutsideDefaults, buddyApprovalsOf, buddyGuardSource, buddyLaunchWide, buddySandboxSettings, buddyWideOf, grantBuddyWide, hasBuddyApprovals,
   judgeBuddyApprovals, recordBuddyApprovals, revokeBuddyWide, writeBuddyAccount } from './buddyGuard.js'
 
 // Wide mode (docs/specs/2026-10-30-buddy-read-access.md): a Buddy on its person's own machine also reads outside its
@@ -494,6 +494,17 @@ describe('no secret leaves in a post or a proposal', () => {
     expect(bash(`harness super-tab post chat '${text}' op-1`)).toBe('allow')
   })
 
+  // Since #2355 a post's TEXT - reads stdin, which the secret check above cannot see: refused in wide mode as in its folder.
+  it('refuses a post or a proposal read from stdin, wide or not', () => {
+    for (const guard of [script, narrow]) {
+      for (const command of ['harness super-tab post chat - op-1', "harness super-tab post chat '-' op-1 --reply-to m1", 'harness super-tab propose op-1 -']) {
+        const refused = answer('Bash', { command, description: 'x' }, guard)
+        expect(refused.permissionDecision).toBe('deny')
+        expect(refused.permissionDecisionReason).toContain('Harness cannot check it for secrets')
+      }
+    }
+  })
+
   it.each([
     ['a code block', 'Logs:\n```\nerror at line 1\n```'],
     ['more than 10 lines', Array.from({ length: 11 }, (_, i) => `line ${i}`).join('\n')],
@@ -543,6 +554,19 @@ describe('the launch\'s wide mode and sandbox', () => {
     ['Linux without bubblewrap', { platform: 'linux' as NodeJS.Platform, hasBwrap: false }],
   ])('keeps the folder only on %s', (_, change) => {
     expect(buddyLaunchWide(repo, { ...deps, ...change })).toBeNull()
+  })
+
+  // Security review 1 of #2436: a Buddy of one project launches with no wide guard at all.
+  it('keeps the folder only for a Buddy of one project, its folder marked by its host before launch, a -2 name included', () => {
+    const narrow = join(dirname(repo), 'super-tab-narrow-start')
+    mkdirSync(narrow, { recursive: true })
+    markBuddyNarrow(basename(narrow), dataDir)
+    expect(buddyLaunchWide(narrow, deps)).toBeNull()
+    const taken = `${narrow}-2`
+    mkdirSync(taken, { recursive: true })
+    expect(buddyLaunchWide(taken, deps)).toBeNull()
+    // Another folder, unmarked, still gets it.
+    expect(buddyLaunchWide(repo, deps)).not.toBeNull()
   })
 
   it('turns wide mode on for Linux with bubblewrap', () => {
@@ -687,6 +711,68 @@ describe('wide mode only while the host has granted it', () => {
     allowBuddyReads(reads, { session: 'harness', files: [], links: ['https://claude.ai/artifact/kept'] })
     recordBuddyApprovals({ reads, session: 'harness', approvals, judged: { wide: true, approve: [], refused: [], forgot: true }, messageId: 'm' })
     expect(JSON.parse(readFileSync(reads.file, 'utf8'))).toMatchObject({ wide: { session: 'harness', account: 'person-1', launch: 'launch-1' }, approvals, links: [{ url: 'https://claude.ai/artifact/kept' }] })
+  })
+})
+
+// Spec 2026-10-30-buddy-thread-sessions: a thread session is a Buddy of its own, in a worktree of its own. Its grant is its
+// own, at its own launch, and no session reads another's folder.
+describe('a Buddy\'s thread sessions', () => {
+  const worktrees = join(home, 'harnesses', 'worktrees'), mine = join(worktrees, 'openharness', 'session-b'), theirs = join(worktrees, 'openharness', 'main-buddy')
+  file(join(mine, 'own.txt'))
+  file(join(theirs, 'sent-to-main.txt'), 'private\n')
+  const readsB = { file: join(dataDir, 'buddy-reads', 'session-b.json'), drops: join(dataDir, 'paste-drops') }
+  const wideB = buddyWideOf({ home, dataDir, tmpDirs: [tmpClaude], repos: ['autonomous-ai/openharness'], launch: 'launch-b', otherSessions: [worktrees] })
+  const scriptB = join(parent, 'buddy-guard-b.mjs')
+  writeFileSync(scriptB, buddyGuardSource(mine, readsB, wideB))
+  const grantB = () => grantBuddyWide(readsB, { session: 'harness-b', wide: true, account: 'person-1', launch: 'launch-b' })
+  const decideB = (tool: string, input: Record<string, unknown>) => {
+    const run = spawnSync(process.execPath, [scriptB], { input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input, cwd: mine }),
+      encoding: 'utf8', timeout: 10_000 })
+    expect(run.status).toBe(0)
+    return JSON.parse(run.stdout).hookSpecificOutput.permissionDecision
+  }
+  const notes = join(home, 'work', 'notes.txt')
+  afterAll(grant)
+
+  it('gets no grant from the main session\'s, and the main session none from its own', () => {
+    grant()
+    rmSync(readsB.file, { force: true })
+    expect([decide('Read', { file_path: notes }), decideB('Read', { file_path: notes })]).toEqual(['allow', 'deny'])
+    // The main session's list copied as its own still names the main session's launch: no grant.
+    writeFileSync(readsB.file, readFileSync(reads.file, 'utf8'))
+    expect(decideB('Read', { file_path: notes })).toBe('deny')
+    // Its own grant, written at its own person's message: its own reads open, and the main session's grant taken back
+    // changes nothing for it.
+    grantB()
+    expect(decideB('Read', { file_path: notes })).toBe('allow')
+    revokeBuddyWide(reads)
+    expect([decide('Read', { file_path: notes }), decideB('Read', { file_path: notes })]).toEqual(['deny', 'allow'])
+    // Its grant written into the main session's list names its own launch: the main session still has none.
+    writeFileSync(reads.file, readFileSync(readsB.file, 'utf8'))
+    expect(decide('Read', { file_path: notes })).toBe('deny')
+  })
+
+  it('reads its own folder and never another session\'s, by any tool or path', () => {
+    grantB()
+    expect(decideB('Read', { file_path: join(mine, 'own.txt') })).toBe('allow')
+    expect(decideB('Read', { file_path: notes })).toBe('allow')
+    for (const [tool, input] of [
+      ['Read', { file_path: join(theirs, 'sent-to-main.txt') }], ['Grep', { pattern: 'private', path: join(theirs, 'sent-to-main.txt') }],
+      ['LS', { path: theirs }], ['Glob', { pattern: '**/*.txt', path: worktrees }], ['Glob', { pattern: '*', path: join(home, 'harnesses') }],
+      ['Bash', { command: `cat ${join(theirs, 'sent-to-main.txt')}`, description: 'x' }], ['Bash', { command: `ls ${theirs}`, description: 'x' }],
+      ['Read', { file_path: join(mine, '..', 'main-buddy', 'sent-to-main.txt') }],
+    ] as const) expect([tool, decideB(tool, input)]).toEqual([tool, 'deny'])
+  })
+
+  it('closes the worktrees folder at launch for a Buddy in a worktree, and nothing for one elsewhere', () => {
+    const launchHome = join(parent, 'launch-sessions'), at = join(launchHome, 'harnesses', 'worktrees', 'app', 'session')
+    mkdirSync(at, { recursive: true })
+    const facts = { platform: 'darwin' as NodeJS.Platform, team: false, home: launchHome, dataDir, uid: 501, hasBwrap: false, engineHomes: [] }
+    expect(buddyLaunchWide(at, facts)!.otherSessions).toEqual([join(launchHome, 'harnesses', 'worktrees')])
+    expect(buddyLaunchWide(launchHome, facts)).not.toHaveProperty('otherSessions')
+    // The sandbox does not close it: its own folder is in it.
+    expect((buddySandboxSettings(at, buddyLaunchWide(at, facts)!).filesystem as { denyRead: string[] }).denyRead)
+      .not.toContain(join(launchHome, 'harnesses', 'worktrees'))
   })
 })
 

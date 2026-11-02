@@ -50,6 +50,13 @@ describe('the shared error handler', () => {
     expect(res.json().error.code).toBe('FORBIDDEN')
   })
 
+  it('sends a refusal\'s details with its code, so a stale instructions save can merge', async () => {
+    thrown = new SuperTabError('INSTRUCTIONS_STALE', 'Merge and save again.', 409, false, { revision: 3, text: 'Current.' })
+    const res = await app.inject({ method: 'GET', url: '/fails' })
+    expect(res.statusCode).toBe(409)
+    expect(res.json()).toEqual({ success: false, error: { revision: 3, text: 'Current.', code: 'INSTRUCTIONS_STALE', message: 'Merge and save again.' } })
+  })
+
   it('answers an expired or unstartable database transaction as a retryable 503', async () => {
     for (const message of ['Transaction API error: Transaction already closed: A query cannot be executed on an expired transaction. The timeout for this transaction was 15000 ms, however 15412 ms passed since the start of the transaction.',
       'Transaction API error: Unable to start a transaction in the given time.']) {

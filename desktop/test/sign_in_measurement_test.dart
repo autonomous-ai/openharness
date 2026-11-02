@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/auth/cli_login.dart';
@@ -33,6 +34,20 @@ class _Cli extends CliLogin {
     required void Function(String link, int expiresIn) onQr,
     required Future<bool> Function(String email) onConfirm,
   }) {
+    final attempt = Completer<void>();
+    attempts.add(attempt);
+    return attempt.future;
+  }
+
+  /// Each code sign-in's way to show its code.
+  final showCode = <void Function(String code, int expiresIn)>[];
+
+  @override
+  Future<void> loginWithCode({
+    required void Function(String code, int expiresIn) onCode,
+    required Future<bool> Function(String email) onConfirm,
+  }) {
+    showCode.add(onCode);
     final attempt = Completer<void>();
     attempts.add(attempt);
     return attempt.future;
@@ -234,6 +249,23 @@ void main() {
       final usage = await _phoneSignInEnding(PhoneSignInException(code, 'x'));
       expect(usage.ended, [end.$1]);
       expect(usage.reasons, [end.$2]);
+    });
+  });
+
+  test('a code the page replaces before it runs out counts as expired, not '
+      'as the person cancelling', () {
+    fakeAsync((async) {
+      final cli = _Cli(), usage = _Recorder();
+      final app = _app(cli, usage);
+      unawaited(app.loginWithCode());
+      async.flushMicrotasks();
+      cli.showCode.single('12345678', 120);
+      async.elapse(AppNotifier.approvalCodeLife);
+      async.flushMicrotasks();
+      expect(cli.attempts, hasLength(2));
+      expect(usage.reasons, [SignInEndReason.expired]);
+      app.dispose();
+      async.flushMicrotasks();
     });
   });
 }

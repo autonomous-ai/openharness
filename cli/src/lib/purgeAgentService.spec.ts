@@ -151,6 +151,21 @@ it('previews without stopping, then deletes only reviewed history and checkpoint
   expect(await remove(plan.reviewId)).toHaveProperty('error')
   expect(stop).toHaveBeenCalledOnce()
 })
+// Security review 2 of #2493: a Swarm Product Manager stopped by its engine's switch, or by a crash, is reopened on its saved
+// conversation; deleting it left nothing to reopen. Its review is read as any other; its deletion is refused before anything.
+it('refuses to delete a Swarm Product Manager\'s saved conversation, live or stopped, deleting and stopping nothing', async () => {
+  const leadProtected = vi.fn((id: string) => id === session.agentId)
+  const svc = new PurgeAgentService({ live: id => registry.byAgent(id), sessions: () => [...registry.list(), ...stopped.list()],
+    stopped, checkpoints, stop, restarting: () => false, deleted, now: () => now, leadProtected })
+  const plan = await svc.request({ ...target, mode: 'inspect' })
+  expect(plan.reviewId).toEqual(expect.any(String))
+  expect(await svc.request({ ...target, mode: 'delete', reviewId: String(plan.reviewId) }))
+    .toEqual({ error: 'LEAD_PROTECTED', detail: 'This harness is the Product Manager of a Swarm project. Delete its project first to stop it.' })
+  expect(existsSync(session.transcriptPath!)).toBe(true)
+  expect(stop).not.toHaveBeenCalled()
+  expect(deleted).not.toHaveBeenCalled()
+})
+
 it('rejects an absent, expired, rotated or replaced review before stopping', async () => {
   expect(await remove('never-reviewed')).toHaveProperty('error')
   const expired = await review(); now += 120_001

@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
-import { lstat, readdir, rmdir, stat } from 'node:fs/promises'
-import { basename, dirname, join, normalize, resolve, sep } from 'node:path'
+import { constants, type Dirent } from 'node:fs'
+import { access, lstat, mkdir, readdir, readFile, rmdir, stat, writeFile } from 'node:fs/promises'
+import { basename, dirname, join, normalize, relative, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 import { upgradeOlderRuntimeIgnore } from './harnessRuntimeIgnore.js'
 
@@ -68,9 +69,64 @@ export async function sweepWorktrees(input: {
   return removed
 }
 
+/** Why a worktree that passed every check above was kept anyway, by a fixed code: an error's own text can carry its path.
+ *  UNWRITABLE: a folder in it git could not empty, so nothing was touched. NOT_REMOVED: git began and failed; whatever is
+ *  left keeps its record, so git still works there. */
+export class WorktreeKept extends Error {
+  constructor(readonly code: 'WORKTREE_UNWRITABLE' | 'WORKTREE_NOT_REMOVED') { super(code) }
+}
+
+/** Whether a folder in the worktree cannot be emptied: git would delete part of it and stop (below). One Mac, 10-28: a
+ *  skill folder an agent had copied in read-only stopped the removal of a stopped worker's worktree after a third of it. */
+async function unwritableFolder(dir: string): Promise<boolean> {
+  try { await access(dir, constants.W_OK | constants.X_OK) } catch { return true }
+  let entries: Dirent[]
+  try { entries = await readdir(dir, { withFileTypes: true }) } catch { return true }
+  for (const entry of entries) if (entry.isDirectory() && await unwritableFolder(join(dir, entry.name))) return true
+  return false
+}
+
+/**
+ * `git worktree remove`, without losing the worktree when it fails: git deletes the worktree's record in the repository even
+ * when it could not delete its folder ("there's no going back from here", builtin/worktree.c), so the folder's .git then
+ * points to nothing and every git and gh command there fails. A stopped worker's folder on one Mac (10-28) was left like that,
+ * and a Buddy's on another with the same symptom (10-30). git empties the folder in directory order, so its .git file is often
+ * gone too before git reaches what it cannot delete (security review 1 of #2417: 8 of 30 trials). Both are read first and,
+ * if the folder is still there, each is written back where it is missing: the record only where git keeps records, the
+ * .git file never over one that is there.
+ */
+async function removeKeepingRecord(main: string, common: string, gitDir: string, path: string): Promise<void> {
+  // The whole record: its HEAD, index and reflog, and the refs only this worktree holds (refs/bisect, refs/worktree; security
+  // review 2 of #2417).
+  const saved = new Map<string, Buffer>()
+  const save = async (dir: string): Promise<void> => {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const file = join(dir, entry.name)
+      if (entry.isDirectory()) await save(file)
+      else if (entry.isFile()) saved.set(relative(gitDir, file), await readFile(file))
+    }
+  }
+  await save(gitDir)
+  const link = await readFile(join(path, '.git'))
+  try {
+    await git(main, ['worktree', 'remove', '--', path])
+  } catch (error) {
+    if (!await lstat(path).then(info => info.isDirectory(), () => false)) throw error
+    await writeFile(join(path, '.git'), link, { flag: 'wx' }).catch((failed: NodeJS.ErrnoException) => { if (failed.code !== 'EEXIST') throw failed })
+    if (dirname(gitDir) === join(common, 'worktrees') && !await lstat(gitDir).then(() => true, () => false)) {
+      for (const [name, data] of saved) {
+        await mkdir(dirname(join(gitDir, name)), { recursive: true })
+        await writeFile(join(gitDir, name), data)
+      }
+    }
+    throw new WorktreeKept('WORKTREE_NOT_REMOVED')
+  }
+}
+
 /** Removes one worktree under the rule above: true when it went. The Swarm's host calls it with no idle wait for a worker
- *  it just stopped (superTabs/machines.ts `removeStoppedWorktree`). */
-export async function sweepOne(path: string, now: number, idleMs: number): Promise<boolean> {
+ *  it just stopped (superTabs/machines.ts `removeStoppedWorktree`), and asks [unused] again just before git removes it: the
+ *  reads and the folder walk take a while, and a session may open there meanwhile (security review 1 of #2417). */
+export async function sweepOne(path: string, now: number, idleMs: number, unused: () => boolean = () => true): Promise<boolean> {
   const gitDir = resolve(path, await git(path, ['rev-parse', '--git-dir']))
   const common = resolve(path, await git(path, ['rev-parse', '--git-common-dir']))
   if (gitDir === common || basename(common) !== '.git') return false
@@ -85,7 +141,9 @@ export async function sweepOne(path: string, now: number, idleMs: number): Promi
   if (await git(path, ['status', '--porcelain']) !== '') return false
   const branch = await git(path, ['symbolic-ref', '--quiet', 'HEAD']).catch(() => null)
   if (!branch && await git(path, ['rev-list', '--count', 'HEAD', '--not', '--branches', '--remotes']) !== '0') return false
-  await git(main, ['worktree', 'remove', '--', path])
+  if (await unwritableFolder(path)) throw new WorktreeKept('WORKTREE_UNWRITABLE')
+  if (!unused()) return false
+  await removeKeepingRecord(main, common, gitDir, path)
   const name = branch?.slice('refs/heads/'.length)
   // Only a branch Harness made: marked in the repository's config, or named `harness/…` by older builds.
   const made = name !== undefined && (name.startsWith('harness/')

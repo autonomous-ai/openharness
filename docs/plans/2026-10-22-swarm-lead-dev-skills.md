@@ -1,5 +1,8 @@
 # Swarm Lead and DEV Skills Implementation Plan
 
+> Replaced by [2026-10-30-project-instructions-design.md](2026-10-30-project-instructions-design.md): the instruction document and agents' direct messages
+> replace what this describes. Kept as history; do not build from it.
+
 **Goal:** Ship built-in Lead and DEV skills for Claude Code and Codex without requiring a plugin. Attach only the appropriate skill to each newly launched Swarm session.
 
 **Architecture:** Carry an explicit optional Swarm role through native creation, prepare a role-specific skill beneath a session-keyed workspace runtime, and point the engine's session instructions to it. Preserve the role and runtime key for restarts. Sessions created before this change keep their current behavior and adopt the skill only on their next fresh Swarm launch (Lead confirmed this boundary on 2026-10-22). Ordinary coding sessions keep their current behavior. Use the existing engine instruction contracts, preserving the person's instructions.

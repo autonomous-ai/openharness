@@ -194,9 +194,6 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
       }
     } else if (delivery == null &&
         c.selected?.leadId == null &&
-        // Every person reads the Product Managers' conversation; a post there
-        // stands even before any Product Manager receives it.
-        c.selected?.id != c.snapshot?.leadsConversationId &&
         // A Buddy chat has no Lead: its Buddy takes the message.
         c.selected?.isBuddyChat != true) {
       title = 'Not sent · this chat has no Lead';

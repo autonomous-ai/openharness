@@ -836,32 +836,22 @@ void main() {
         find.descendant(of: dev, matching: find.text('Dev')),
         findsOneWidget,
       );
-      server.state['projects'] = [
-        {
-          ...projectFixture('lead', 'Pilot', 'lead'),
-          'skillSet': 'custom',
-          'roles': [
-            {
-              'id': 'lead',
-              'name': 'Product Manager',
-              'kind': 'lead',
-              'version': 'v1',
-            },
-            {
-              'id': 'research',
-              'name': 'Research Engineer',
-              'kind': 'builder',
-              'version': 'v1',
-            },
-          ],
-        },
-      ];
-      (server.state['agents'] as List)[1]['roleId'] = 'research';
+      // The role the project's document gives it; its badge cut to 12 characters.
+      (server.state['agents'] as List)[1]['roleName'] = 'Research Engineer';
       await c.refresh();
       await show();
       await tester.pumpAndSettle();
       expect(
-        find.descendant(of: dev, matching: find.text('Research Engineer')),
+        find.descendant(of: dev, matching: find.text('Research En…')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: dev,
+          matching: find.byWidgetPredicate(
+            (w) => w is Semantics && w.properties.label == 'Research Engineer',
+          ),
+        ),
         findsOneWidget,
       );
       expect(
@@ -1498,10 +1488,12 @@ void main() {
         expect(find.textContaining('Pilot'), findsWidgets);
         expect(find.textContaining('Beacon'), findsWidgets);
         expect(
-          find.textContaining('Review the onboarding flow'),
+          find.text(
+            'The open task “Review the onboarding flow” loses its agent.',
+          ),
           findsOneWidget,
         );
-        expect(find.textContaining('Product Manager'), findsWidgets);
+        expect(find.textContaining('Product Manager'), findsNothing);
         expect(find.textContaining('only on this machine'), findsOneWidget);
         expect(find.textContaining('Swarm folders'), findsOneWidget);
         if (capture != null) {
@@ -2886,7 +2878,7 @@ void main() {
   // Ken, 2026-10-28: work kept landing on engines that could not run on a machine. The only visible change: an engine that
   // is out of quota or suspended there has its name struck through in the machine's Subscriptions, with why on hover.
   testWidgets(
-    'strikes through an engine out of quota or suspended on a machine, with why on hover',
+    'strikes through an engine suspended on a machine, and says on hover when one has no quota left',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(900, 1400));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -2964,8 +2956,8 @@ void main() {
         findsOneWidget,
       );
       expect(tip('claude'), startsWith(suspended));
-      // Out of quota: struck, its figure kept.
-      expect(decoration('codex', 'Codex'), TextDecoration.lineThrough);
+      // Out of quota: information, never struck; its figure kept.
+      expect(decoration('codex', 'Codex'), isNull);
       expect(
         find.descendant(
           of: find.byKey(const ValueKey('super-machine-allowance-m-codex')),
@@ -2973,12 +2965,8 @@ void main() {
         ),
         findsOneWidget,
       );
-      expect(
-        tip('codex'),
-        startsWith(
-          'Not used for new work here: no quota left until it resets.',
-        ),
-      );
+      expect(tip('codex'), startsWith('No quota left until it resets.'));
+      expect(tip('codex'), isNot(contains('Not used for new work')));
       expect(tester.takeException(), isNull);
 
       // Once neither holds, nothing is struck.

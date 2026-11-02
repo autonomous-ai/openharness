@@ -73,7 +73,11 @@ export async function markFinishedGroups(db: PrismaClient): Promise<number> {
 export async function archiveFinishedGroups(db: PrismaClient, store: Pick<SuperTabStore, 'archiveFinished'>, prs: PullRequests, now: number): Promise<number> {
   const tidy = new Map<string, boolean>()
   const tidyOn = async (tabId: string) => {
-    if (!tidy.has(tabId)) tidy.set(tabId, ((await db.swarmHead.findUnique({ where: { id: `${tabId}:head` } }))?.data as unknown as HeadData | undefined)?.tidy !== false)
+    // A deleted Swarm (deletion.ts) is left alone: none of its pull requests is read.
+    if (!tidy.has(tabId)) {
+      const head = (await db.swarmHead.findUnique({ where: { id: `${tabId}:head` } }))?.data as unknown as HeadData | undefined
+      tidy.set(tabId, head?.tidy !== false && !head?.deletion)
+    }
     return tidy.get(tabId)!
   }
   // One read per pull request a pass, however many groups link it.

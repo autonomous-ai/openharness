@@ -722,6 +722,83 @@ void main() {
       );
     });
   });
+
+  /// Thread marks kept on the server (backend readMarks.ts): a thread opened
+  /// on any device reads as read here, and one opened here reads as read on
+  /// every other.
+  group('Threads read through their own marks', () {
+    const page = activityPage;
+
+    SwarmActivityItem rootOne(SwarmActivity activity) => activity
+        .items(SwarmActivityFilter.threads)
+        .firstWhere((item) => item.key == 'thread:$tab:root-1');
+
+    List<({String path, Object? sequence})> threadWrites(FakeSwarm fake) => [
+      for (final call in fake.calls)
+        if (call.method == 'POST' && call.path.contains('/threads/'))
+          (path: call.path, sequence: call.body?['sequence']),
+    ];
+
+    test('a thread opened only on another device is not news', () async {
+      // The chat itself was read only through 10; root-1's reply is at 12.
+      final session = await start(
+        backend(page: page, threadMarks: {'root-1': 12}),
+      );
+      final activity = session.activity..watch();
+      await settle();
+      expect(activity.handled(rootOne(activity)), 'Read');
+      expect(activity.count(SwarmActivityFilter.threads), 0);
+    });
+
+    test("a reply past the thread's mark is news", () async {
+      final session = await start(
+        backend(page: page, threadMarks: {'root-1': 11}),
+      );
+      final activity = session.activity..watch();
+      await settle();
+      expect(activity.handled(rootOne(activity)), isNull);
+      expect(activity.count(SwarmActivityFilter.threads), 1);
+    });
+
+    test('Reply sends the thread\'s mark to the server once', () async {
+      final fake = backend(page: page);
+      fake.routes['/api/super-tabs/$tab/conversations/$leadChat/threads/'] = (
+        body,
+      ) => {'sequence': body!['sequence']};
+      final session = await start(fake);
+      final activity = session.activity..watch();
+      await settle();
+      activity.replied(rootOne(activity));
+      activity.replied(rootOne(activity));
+      await settle();
+      expect(threadWrites(fake), [
+        (
+          path:
+              '/api/super-tabs/$tab/conversations/$leadChat/threads/root-1/read',
+          sequence: 12,
+        ),
+      ]);
+      expect(activity.handled(rootOne(activity)), 'Read');
+    });
+
+    test('on a server without thread marks, Reply still reads the thread on '
+        'this phone, across a restart', () async {
+      final store = MemoryKeyValueStore();
+      final first = await start(backend(page: page), store: store);
+      final activity = first.activity..watch();
+      await settle();
+      activity.replied(rootOne(activity));
+      await settle();
+      expect(
+        store.values['swarm_read_marks.$me.$tab'],
+        contains('"root-1":12'),
+      );
+
+      final again = await start(backend(page: page), store: store);
+      final reader = again.inbox.reader(tab)!;
+      expect(reader.readMarks!.threadThrough(leadChat, 'root-1'), 12);
+    });
+  });
 }
 
 /// A phone store whose read of [slow] waits for [release].

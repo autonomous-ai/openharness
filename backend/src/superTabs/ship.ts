@@ -1,9 +1,11 @@
-import { agentRole, isLeads, stableId, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
+import { isLeads, stableId, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { agentDisplayName } from './agentNames.js'
 import { groupProject } from './projects.js'
 
 /** The source of the celebration row Desktop draws with confetti. */
 export const SHIP_KIND = 'ship'
+/** How a check's `passedBy` names an agent (model.ts actorKey). */
+const AGENT_KEY = 'agent:'
 
 /** When the group first shipped, as the leaderboard records it (leaderboard/record.ts `recordStatus`: once, on the first Done). */
 export const shippedAt = (group: Conversation): number | undefined => group.ledger?.shippedAt
@@ -18,9 +20,11 @@ export function shipNotice(state: SuperTabState, group: Conversation, author: Au
   const project = groupProject(state, group)
   const agentName = (id: string) => agentDisplayName(state.agents, id) ?? state.agents.find(a => a.id === id)?.name
   const builderIds = [group.assignment.agentId].filter(id => agentName(id))
-  const reviewGroups = state.conversations.filter(c => c.reviewOf === group.id)
-  const reviewerIds = [...new Set([group, ...reviewGroups].flatMap(c => c.agentIds))]
-    .filter(id => !builderIds.includes(id) && state.agents.some(a => a.id === id && agentRole(a) === 'reviewer'))
+  // Reviewed by whoever passed a check on it or on a task linked to it, whatever its role, but never by its own assignee
+  // (project instructions, phase 4).
+  const passers = [group, ...state.conversations.filter(c => c.reviewOf === group.id)].flatMap(c => c.checks)
+    .flatMap(c => c.passedBy?.startsWith(AGENT_KEY) ? [c.passedBy.slice(AGENT_KEY.length)] : [])
+  const reviewerIds = [...new Set(passers)].filter(id => id !== group.assignment!.agentId && agentName(id))
   const requester = state.people.find(p => p.id === group.requesterId)
   const names = (ids: string[]) => ids.map(agentName).join(' and ')
   const credits = [requester && `requested by ${requester.email.split('@')[0]}`, builderIds.length && `built by ${names(builderIds)}`,

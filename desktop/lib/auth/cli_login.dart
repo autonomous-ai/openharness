@@ -62,7 +62,7 @@ class CliSignOutUnderTestError extends Error {
 /// signed-in session, and driving `harness login --json`'s NDJSON event stream when it does not. The
 /// CLI owns the SSO session end to end (`~/.harness/auth/session.json`) — this app never sees, stores,
 /// or refreshes an access token itself.
-class CliLogin implements SignInClient, PhoneSignInClient {
+class CliLogin implements SignInClient, PhoneSignInClient, CodeSignInClient {
   final HarnessCliRunner _runner;
   Process? _activeProcess;
   int _loginRevision = 0;
@@ -116,12 +116,23 @@ class CliLogin implements SignInClient, PhoneSignInClient {
     required Future<bool> Function(String email) onConfirm,
   }) => _login(const ['--qr'], onQr: onQr, onConfirm: onConfirm);
 
+  /// `harness login --code`: a short code another signed-in device types in, in place of the QR;
+  /// each `code` event is the code to show, the account question as for [loginWithPhone].
+  @override
+  Future<void> loginWithCode({
+    required void Function(String code, int expiresIn) onCode,
+    required Future<bool> Function(String email) onConfirm,
+  }) => _login(const ['--code'], onCode: onCode, onConfirm: onConfirm);
+
   Future<void> _login(
     List<String> extra, {
     void Function(String url)? onAuthorizeUrl,
     void Function(String link, int expiresIn)? onQr,
+    void Function(String code, int expiresIn)? onCode,
     Future<bool> Function(String email)? onConfirm,
   }) async {
+    // Approved from another device — a phone's scan, or a code typed there — rather than in a browser.
+    final approval = onQr != null || onCode != null;
     // A cancelled spawn can finish after a replacement login has started.
     // Each process owns only its attempt, including its eventual cleanup.
     final revision = ++_loginRevision;
@@ -174,9 +185,10 @@ class CliLogin implements SignInClient, PhoneSignInClient {
             final note = json['message'];
             if (note is String && note.isNotEmpty) waitingNote.value = note;
           case 'authorize_url':
-            // Asked for a QR and given a browser page: a CLI from before `--qr`, which ignores the
-            // flag and starts SSO. Nothing would ever be shown — stop it and say why.
-            if (onQr != null) {
+            // Asked for a QR or a code and given a browser page: a CLI from before `--qr` or
+            // `--code`, which ignores the flag and starts SSO. Nothing would ever be shown — stop it
+            // and say why.
+            if (approval) {
               tooOld = true;
               process.kill();
               break;
@@ -187,6 +199,11 @@ class CliLogin implements SignInClient, PhoneSignInClient {
             final url = json['url'], expiresIn = json['expiresIn'];
             if (url is String) {
               onQr?.call(url, expiresIn is int ? expiresIn : 120);
+            }
+          case 'code':
+            final shown = json['code'], expiresIn = json['expiresIn'];
+            if (shown is String) {
+              onCode?.call(shown, expiresIn is int ? expiresIn : 120);
             }
           case 'confirm':
             final email = json['email'];
@@ -207,9 +224,9 @@ class CliLogin implements SignInClient, PhoneSignInClient {
         throw StateError('Sign-in was cancelled.');
       }
       if (tooOld) {
-        throw const PhoneSignInException(
+        throw PhoneSignInException(
           'CLI_TOO_OLD',
-          'This computer\'s Harness CLI is too old to sign in with a phone. Continue with Google or Apple, or update Harness.',
+          'This computer\'s Harness CLI is too old to sign in with ${onCode != null ? 'a code' : 'a phone'}. Continue with Google or Apple, or update Harness.',
         );
       }
       if (!gotResult || !success) {
@@ -219,12 +236,12 @@ class CliLogin implements SignInClient, PhoneSignInClient {
                 ? 'Sign-in was cancelled.'
                 : 'Sign-in did not complete.');
         // A phone sign-in says why it ended, so the screen can offer the right next step.
-        if (onQr != null && code != null) {
+        if (approval && code != null) {
           throw PhoneSignInException(code, text);
         }
         // A browser one says so too, for the count of why sign-ins did not go through. A CLI that
         // ended without a result line crashed or was killed: that is a reason of its own.
-        if (onQr == null && (code != null || !gotResult)) {
+        if (!approval && (code != null || !gotResult)) {
           throw SignInException(code ?? 'NO_RESULT', text);
         }
         throw StateError(text);

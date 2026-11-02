@@ -1,7 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import 'model.dart';
-import 'review_verdict.dart';
+import 'linked_tasks.dart';
 
 /// A task's state in a few words, from its assignment's status: the desktop's
 /// `superTabCardStatus` (live_card.dart), word for word.
@@ -11,62 +11,13 @@ String swarmCardStatus(Map<String, dynamic>? assignment) =>
       'working' => 'Working',
       'needs_human' => 'Waiting on a person',
       'blocked' => 'Blocked',
-      'review' => 'In review',
+      'review' => 'Waiting on others',
       'done' => 'Done',
       'stopped' || 'lost' => 'Stopped',
       'cancelled' => 'Cancelled',
       'reconciling' => 'Checking its agent',
       _ => 'Not started',
     };
-
-/// "Reviewer: Ivy · Ready: no on 050bab807", as the desktop's
-/// `SuperTabController.reviewLine` reads it: the newest review chat's recorded
-/// verdict for [group] (its result or check evidence), else the newest
-/// `Ready:` line a reviewer posted in [messages]. Only workgroups of
-/// [group]'s own project count as its review chats: never a Buddy chat or the
-/// Leads chat. Null without a reviewer.
-String? swarmReviewLine(
-  SuperTabSnapshot snapshot,
-  SuperTabConversation group,
-  List<SuperTabMessage> messages,
-) {
-  final reviews =
-      snapshot.conversations
-          .where(
-            (c) =>
-                c.reviewOf == group.id &&
-                c.projectId == group.projectId &&
-                c.kind == null,
-          )
-          .toList()
-        ..sort((a, b) => (b.number ?? 0).compareTo(a.number ?? 0));
-  final reviewers = {
-    for (final r in [
-      ...snapshot.reviewers(group),
-      for (final review in reviews) ...snapshot.reviewers(review),
-    ])
-      r.id: r,
-  }.values;
-  if (reviewers.isEmpty) return null;
-  final ids = {for (final r in reviewers) r.id};
-  final recorded = reviews
-      .expand(
-        (review) => [
-          review.assignment?['result'],
-          for (final check in review.checks) check['evidence'],
-        ],
-      )
-      .whereType<String>();
-  final posted = messages.reversed
-      .where((m) => m.fromAgent && ids.contains(m.authorId))
-      .map((m) => m.text);
-  final verdict = [
-    ...recorded,
-    ...posted,
-  ].map(parseSuperTabVerdict).nonNulls.firstOrNull;
-  final names = reviewers.map((r) => snapshot.agentName(r.id)).join(', ');
-  return 'Reviewer: $names · ${verdict?.label ?? 'No verdict yet'}';
-}
 
 /// One pull request on a card: its link and whether the Swarm recorded its
 /// merge.
@@ -87,6 +38,9 @@ class SwarmCardFacts {
   /// The task's title and its state line, for a task card.
   final ({String title, String line})? task;
   final List<SwarmCardPull> pulls;
+
+  /// The group's linked tasks with their checks' results
+  /// ([superTabLinkedLine]); null without any.
   final String? review;
 
   /// The card message [messageId] is in [group], or null for a plain message.
@@ -95,7 +49,6 @@ class SwarmCardFacts {
     SuperTabSnapshot snapshot,
     SuperTabConversation group,
     String messageId,
-    List<SuperTabMessage> messages,
   ) {
     final card = group.cards.of(messageId);
     if (card == null) return null;
@@ -127,7 +80,7 @@ class SwarmCardFacts {
               when uri.pathSegments.length == 4)
             (url: uri, merged: merged.contains(url)),
       ],
-      review: swarmReviewLine(snapshot, group, messages),
+      review: superTabLinkedLine(snapshot, group),
     );
   }
 

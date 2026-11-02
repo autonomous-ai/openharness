@@ -31,6 +31,9 @@ class _Picked extends XFile {
 
   @override
   Future<Uint8List> readAsBytes() async => bytes;
+
+  @override
+  Future<int> length() async => bytes.length;
 }
 
 /// A file chooser that answers when the test says so.
@@ -583,7 +586,7 @@ void main() {
               required conversationId,
               required name,
               required mime,
-              required bytes,
+              required file,
               required cancel,
               required onProgress,
             }) async {
@@ -596,7 +599,7 @@ void main() {
                 conversationId: conversationId,
                 name: name,
                 mime: mime,
-                bytes: bytes,
+                file: file,
                 cancel: cancel,
                 onProgress: onProgress,
               );

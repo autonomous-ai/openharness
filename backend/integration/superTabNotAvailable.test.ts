@@ -82,6 +82,7 @@ function calls(tab: string, chat: string, project: string) {
     json('GET', 'GET /api/super-tabs/:tabId/parts', `${t}/parts?asAgentId=${MISSING}`),
     json('GET', 'GET /api/super-tabs/:tabId/changes', `${t}/changes?cursor=abc`),
     json('GET', 'GET /api/super-tabs/:tabId/inbox', `${t}/inbox`),
+    json('GET', 'GET /api/super-tabs/:tabId/threads', `${t}/threads`),
     json('POST', 'POST /api/super-tabs/:tabId/commands', `${t}/commands`,
       { operationId: op(), command: { type: 'message.send', conversationId: chat, text: 'hello', replyTo: null, recipientIds: [] } }),
     json('GET', 'GET /api/super-tabs/:tabId/mentions', `${t}/mentions?state=waiting`),
@@ -97,10 +98,18 @@ function calls(tab: string, chat: string, project: string) {
     json('POST', 'POST /api/super-tabs/:tabId/native', `${t}/native`, { operationId: op(), conversationId: chat, agentId: MISSING }),
     json('GET', 'GET /api/super-tabs/:tabId/conversations/:conversationId/messages', `${t}/conversations/${chat}/messages`),
     json('GET', 'GET /api/super-tabs/:tabId/conversations/:conversationId/catch-up', `${t}/conversations/${chat}/catch-up?after=0`),
+    json('GET', 'GET /api/super-tabs/:tabId/conversations/:conversationId/messages/:messageId/attachments/:attachmentId',
+      `${t}/conversations/${chat}/messages/${MISSING}/attachments/${MISSING}`),
     json('POST', 'POST /api/super-tabs/:tabId/conversations/:conversationId/read', `${t}/conversations/${chat}/read`, { sequence: 1 }),
+    json('POST', 'POST /api/super-tabs/:tabId/conversations/:conversationId/threads/:threadId/follow', `${t}/conversations/${chat}/threads/${MISSING}/follow`,
+      { follow: true }),
     json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/github', `${t}/projects/${project}/github`),
     json('POST', 'POST /api/super-tabs/:tabId/projects/:projectId/github/approve', `${t}/projects/${project}/github/approve`, { scope: 'project' }),
     json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/roles/:roleId', `${t}/projects/${project}/roles/${MISSING}`),
+    json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/ci-load', `${t}/projects/${project}/ci-load`),
+    // A made-up agent: an outsider is answered as for any Swarm it cannot reach. Asked of the Lead's project, so a member's
+    // in-Swarm refusal of an agent it does not run is not taken for the private project's answer.
+    json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/ci-load', `${t}/projects/lead/ci-load?asAgentId=${MISSING}`),
     json('GET', 'GET /api/super-tabs/:tabId/route-decisions/:decisionId', `${t}/route-decisions/${MISSING}`),
     json('GET', 'GET /api/super-tabs/:tabId/machines/:machineId/removal', `${t}/machines/${MISSING}/removal`),
     multipart('POST /api/super-tabs/:tabId/attachments', `${t}/attachments`, form([field('conversationId', chat), file('notes.txt', 'text/plain', 'hello')])),
@@ -148,6 +157,21 @@ describe('a Swarm the caller cannot reach, on every person route', () => {
       // So does a GitHub token, which needs the same app.
       const expected = /\/github\/approve$|\/github-token$/.test(call.route) ? cases.missing : { status: 404, body: NOT_AVAILABLE_BODY }
       for (const [name, got] of Object.entries(cases)) expect.soft(got, `${name}: ${call.url}`).toEqual(expected)
+    }
+  })
+
+  it('answers a deleted Swarm alike on every route, to its owner and members too, for its chats, Buddy chat and private project', async () => {
+    const f = await swarm()
+    const execute = (command: Command, as = owner) => store.execute(as, f.tab, { operationId: randomUUID(), command })
+    const buddyChat = String((await execute({ type: 'buddy.chat' }, member)).result.conversationId)
+    await execute({ type: 'swarm.delete', name: 'Not available' })
+    const missing = calls(MISSING, 'lead', 'lead')
+    for (const [chat, project] of [['lead', 'lead'], [buddyChat, 'lead'], [f.privateChat, f.privateProject]] as const) {
+      for (const [i, call] of calls(f.tab, chat, project).entries()) {
+        const cases = { owner: await answer(call, owner), member: await answer(call, member), outsider: await answer(call, outsider), missing: await answer(missing[i]!, owner) }
+        const expected = /\/github\/approve$|\/github-token$/.test(call.route) ? cases.missing : { status: 404, body: NOT_AVAILABLE_BODY }
+        for (const [name, got] of Object.entries(cases)) expect.soft(got, `${name}: ${call.url}`).toEqual(expected)
+      }
     }
   })
 

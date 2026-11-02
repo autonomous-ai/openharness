@@ -175,14 +175,34 @@ describe('creating an agent', () => {
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
 
   it.each(['claude', 'codex'] as const)('attaches each Swarm role before %s pane dispatch', async engine => {
-    for (const role of ['lead', 'dev'] as const) {
+    for (const [role, name] of [['coordinator', 'swarm-lead'], ['agent', 'swarm-dev']] as const) {
       const cwd = folder()
       await setup().create(request({ cwd, engine, swarmRole: role }))
       const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
       expect(pane.swarmSkill).toEqual({ role, key: pane.sessionLabel })
       const place = vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2]
-      expect(place.swarmInstructions).toContain(`swarm-${role}/SKILL.md`)
+      expect(place.swarmInstructions).toContain(`${name}/SKILL.md`)
     }
+  })
+
+  // Project instructions, phase 4 (decision 1): a Reviewer started by an older client keeps its swarm-review file, and a
+  // launch an older CLI saved to finish later (a pending intent) names its role in the wire's values.
+  it('registers a Reviewer as an agent that keeps its swarm-review file, from this CLI\'s launch or an older one\'s saved intent', async () => {
+    for (const over of [{ swarmRole: 'agent', swarmFallback: 'review' }, { swarmRole: 'review' }]) {
+      await setup().create(request({ cwd: folder(), ...over }))
+      const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
+      expect(pane.swarmSkill).toEqual({ role: 'agent', fallback: 'review', key: pane.sessionLabel })
+      expect(vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2].swarmInstructions).toContain('swarm-review/SKILL.md')
+    }
+    // A fallback is an agent's alone.
+    for (const [over, role, name] of [[{ swarmRole: 'lead' }, 'coordinator', 'swarm-lead'], [{ swarmRole: 'coordinator', swarmFallback: 'review' }, 'coordinator', 'swarm-lead'],
+      [{ swarmRole: 'dev' }, 'agent', 'swarm-dev']] as const) {
+      await setup().create(request({ cwd: folder(), ...over }))
+      const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
+      expect(pane.swarmSkill).toEqual({ role, key: pane.sessionLabel })
+      expect(vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2].swarmInstructions).toContain(`${name}/SKILL.md`)
+    }
+    expect(await setup().create(request({ cwd: folder(), swarmRole: 'pm' }))).toMatchObject({ ok: false, error: 'SWARM_SKILL_FAILED' })
   })
 
   // Codex's "Update available" screen held a Swarm agent's task with no one at its terminal (Studio Codex, 2026-10-29).
@@ -191,55 +211,55 @@ describe('creating an agent', () => {
       await setup().create(request({ cwd: folder(), ...over }))
       return (vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1] as { extraArgs?: string[] }).extraArgs ?? []
     }
-    for (const role of ['lead', 'dev'] as const) expect(await extraArgsOf({ engine: 'codex', swarmRole: role })).toEqual(expect.arrayContaining(['-c', 'check_for_update_on_startup=false']))
+    for (const role of ['coordinator', 'agent'] as const) expect(await extraArgsOf({ engine: 'codex', swarmRole: role })).toEqual(expect.arrayContaining(['-c', 'check_for_update_on_startup=false']))
     expect(await extraArgsOf({ engine: 'codex' })).not.toContain('check_for_update_on_startup=false')
-    expect(await extraArgsOf({ engine: 'claude', swarmRole: 'dev' })).not.toContain('check_for_update_on_startup=false')
+    expect(await extraArgsOf({ engine: 'claude', swarmRole: 'agent' })).not.toContain('check_for_update_on_startup=false')
   })
 
   it.each(['default', 'orchestration'] as const)('writes the %s skill text and its prompt line for the project\'s mode', async mode => {
     const cwd = folder()
-    await setup().create(request({ cwd, swarmRole: 'dev', swarmSkillMode: mode }))
+    await setup().create(request({ cwd, swarmRole: 'agent', swarmSkillMode: mode }))
     const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
-    expect(pane.swarmSkill).toEqual({ role: 'dev', key: pane.sessionLabel, mode })
+    expect(pane.swarmSkill).toEqual({ role: 'agent', key: pane.sessionLabel, mode })
     const place = vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2]
-    const file = JSON.parse(/read (".*") with/.exec(place.swarmInstructions!)![1]!)
+    const file = JSON.parse(/instead: read (".*")\.$/.exec(place.swarmInstructions!)![1]!)
     expect(readFileSync(file, 'utf8').includes('Work otherwise the way you normally do.')).toBe(mode === 'default')
-    expect(place.swarmInstructions!.startsWith(mode === 'default' ? 'Use the swarm-dev skill for this session: the team process' : 'Use the built-in swarm-dev skill')).toBe(true)
+    expect(place.swarmInstructions!.startsWith('Use the built-in swarm-tools skill')).toBe(true)
   })
 
   // A Swarm Lead on the Mac Studio sat at Claude Code's "Yes, I accept" for full mode before its first turn (2026-10-26).
   it('accepts full mode\'s warning for a Swarm agent the Swarm starts in full mode, and for nothing else', async () => {
-    await setup().create(request({ swarmRole: 'lead', permissionMode: 'full' }))
+    await setup().create(request({ swarmRole: 'coordinator', permissionMode: 'full' }))
     expect(acceptFullMode).toHaveBeenLastCalledWith('claude', undefined)
     const launch = { current: () => true, environment: { HOME: root, CLAUDE_CONFIG_DIR: '/moved' }, prepareHooks: async () => true } as unknown as NativeLaunch
-    await setup({ native: async () => ({ ok: true, launch }) }).create(request({ swarmRole: 'dev', permissionMode: 'full' }))
+    await setup({ native: async () => ({ ok: true, launch }) }).create(request({ swarmRole: 'agent', permissionMode: 'full' }))
     expect(acceptFullMode).toHaveBeenLastCalledWith('claude', expect.objectContaining({ CLAUDE_CONFIG_DIR: '/moved' }))
-    await setup().create(request({ swarmRole: 'lead', permissionMode: 'auto' }))
+    await setup().create(request({ swarmRole: 'coordinator', permissionMode: 'auto' }))
     await setup().create(request({ permissionMode: 'full' }))
     expect(acceptFullMode).toHaveBeenCalledTimes(2)
     // A settings file it cannot write leaves the engine to ask, and the launch goes on.
     vi.mocked(acceptFullMode).mockImplementationOnce(() => { throw new Error('settings locked') }).mockImplementationOnce(() => { throw 'worse' })
-    expect(await setup().create(request({ swarmRole: 'lead', permissionMode: 'full' }))).toMatchObject({ ok: true })
-    expect(await setup().create(request({ swarmRole: 'lead', permissionMode: 'full' }))).toMatchObject({ ok: true })
+    expect(await setup().create(request({ swarmRole: 'coordinator', permissionMode: 'full' }))).toMatchObject({ ok: true })
+    expect(await setup().create(request({ swarmRole: 'coordinator', permissionMode: 'full' }))).toMatchObject({ ok: true })
     expect(console.warn).toHaveBeenCalledWith('[agent] full mode acceptance · settings locked')
     expect(console.warn).toHaveBeenCalledWith('[agent] full mode acceptance · worse')
   })
 
   it('keeps a selected Store harness when attaching a Swarm skill', async () => {
     vi.mocked(installedDsh).mockReturnValueOnce(installed() as never).mockReturnValueOnce(installed() as never)
-    expect(await setup().create(request({ dsh: 'blender', swarmRole: 'dev' }))).toMatchObject({ ok: true })
+    expect(await setup().create(request({ dsh: 'blender', swarmRole: 'agent' }))).toMatchObject({ ok: true })
     expect(vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]).toMatchObject({
-      dsh: 'blender', swarmSkill: { role: 'dev' }, env: expect.objectContaining({ HARNESS_DSH: 'blender' }),
+      dsh: 'blender', swarmSkill: { role: 'agent' }, env: expect.objectContaining({ HARNESS_DSH: 'blender' }),
     })
     expect(vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1]?.extraArgs).toContain('--dsh')
   })
 
   it('gives a session doing another person\'s project work the GitHub App\'s git and gh, and keeps that on its skill', async () => {
     vi.mocked(swarmGitHubLaunch).mockReturnValueOnce({ env: { GIT_CONFIG_PARAMETERS: 'fixture', GH_CONFIG_DIR: '/fixture/gh' }, clearEnv: ['GH_TOKEN'] })
-    expect(await setup().create(request({ cwd: folder(), swarmRole: 'dev', swarmGitHub: true }))).toMatchObject({ ok: true })
+    expect(await setup().create(request({ cwd: folder(), swarmRole: 'agent', swarmGitHub: true }))).toMatchObject({ ok: true })
     const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
     expect(swarmGitHubLaunch).toHaveBeenCalledWith(pane.sessionLabel)
-    expect(pane.swarmSkill).toEqual({ role: 'dev', key: pane.sessionLabel, github: true })
+    expect(pane.swarmSkill).toEqual({ role: 'agent', key: pane.sessionLabel, github: true })
     expect(pane.env).toMatchObject({ GIT_CONFIG_PARAMETERS: 'fixture', GH_CONFIG_DIR: '/fixture/gh' })
     expect(vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1]?.clearEnv).toContain('GH_TOKEN')
   })
@@ -269,9 +289,9 @@ describe('creating an agent', () => {
   })
 
   it('launches as before where the GitHub App does not apply, and without a role never asks', async () => {
-    await setup().create(request({ cwd: folder(), swarmRole: 'dev', swarmGitHub: true }))
+    await setup().create(request({ cwd: folder(), swarmRole: 'agent', swarmGitHub: true }))
     const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
-    expect(pane.swarmSkill).toEqual({ role: 'dev', key: pane.sessionLabel })
+    expect(pane.swarmSkill).toEqual({ role: 'agent', key: pane.sessionLabel })
     expect(pane.env).not.toHaveProperty('GIT_CONFIG_PARAMETERS')
     vi.mocked(swarmGitHubLaunch).mockClear()
     await setup().create(request({ cwd: folder(), swarmGitHub: true }))
@@ -280,7 +300,7 @@ describe('creating an agent', () => {
 
   it('refuses before opening a pane when the GitHub App\'s files cannot be written', async () => {
     vi.mocked(swarmGitHubLaunch).mockImplementationOnce(() => { throw Error('fixture disk full') })
-    expect(await setup().create(request({ cwd: folder(), swarmRole: 'dev', swarmGitHub: true })))
+    expect(await setup().create(request({ cwd: folder(), swarmRole: 'agent', swarmGitHub: true })))
       .toMatchObject({ ok: false, error: 'SWARM_SKILL_FAILED', detail: 'Error: fixture disk full' })
     expect(createAndRegisterPane).not.toHaveBeenCalled()
   })
@@ -290,7 +310,7 @@ describe('creating an agent', () => {
   it('refuses a Swarm role while the Swarm is off, before opening a pane, and starts everything else as before', async () => {
     acceptFullMode.mockClear()
     const off = setup({ swarmLaunch: undefined })
-    expect(await off.create(request({ cwd: folder(), swarmRole: 'dev' })))
+    expect(await off.create(request({ cwd: folder(), swarmRole: 'agent' })))
       .toEqual({ ok: false, error: 'SWARM_SKILL_FAILED', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' })
     expect(createAndRegisterPane).not.toHaveBeenCalled()
     expect(acceptFullMode).not.toHaveBeenCalled()
@@ -300,7 +320,7 @@ describe('creating an agent', () => {
 
   it('refuses an unsafe Swarm runtime before opening a pane', async () => {
     const cwd = folder(['.harness'])
-    expect(await setup().create(request({ cwd, swarmRole: 'dev' }))).toMatchObject({ ok: false, error: 'SWARM_SKILL_FAILED' })
+    expect(await setup().create(request({ cwd, swarmRole: 'agent' }))).toMatchObject({ ok: false, error: 'SWARM_SKILL_FAILED' })
     expect(createAndRegisterPane).not.toHaveBeenCalled()
   })
 
@@ -366,7 +386,7 @@ describe('creating an agent', () => {
       vi.mocked(harnessMadeWorktree).mockImplementation(async path => path === worktree)
       const authority = { id: 'fixture', label: 'harness-claude-fixture', current: () => true, hold: () => {} }
       const prepare = (over: Record<string, unknown>, local = true) =>
-        setup().create.prepare(request({ swarmRole: 'lead', permissionMode: 'full', bypassPermission: true, ...over }), authority, { local })
+        setup().create.prepare(request({ swarmRole: 'coordinator', permissionMode: 'full', bypassPermission: true, ...over }), authority, { local })
       expect((await prepare({ cwd: clone })).ok).toBe(true)
       expect(preTrustClaudeProject).toHaveBeenCalledWith(clone)
       await prepare({ cwd: worktree })
@@ -905,12 +925,12 @@ describe('creating an agent', () => {
       writeMachineMcp({ lamp: { command: 'lamp-mcp', args: [], engines: ['claude'], projects: [] } })
       try {
         const { create } = setup()
-        const launched = async (role: 'buddy' | 'dev') => {
+        const launched = async (role: 'buddy' | 'agent') => {
           vi.mocked(buildEngineLaunchArgv).mockClear()
           expect(await create(request({ cwd: folder(), swarmRole: role }))).toMatchObject({ ok: true })
           return JSON.stringify(vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1])
         }
-        expect(await launched('dev')).toContain('lamp-mcp')
+        expect(await launched('agent')).toContain('lamp-mcp')
         expect(await launched('buddy')).not.toContain('lamp-mcp')
       } finally { rmSync(join(env.ADAPTER_DATA_DIR, 'mcp-servers.json'), { force: true }) }
     })

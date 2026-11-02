@@ -1,13 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { ContributedMachine } from './machines.js'
 import { createSuperTab, type Conversation, type SuperTabState } from './model.js'
-import { DEFAULT_ROUTING_POLICY } from './routingPolicy.js'
 import { RELAYED_QUOTA, reviewCapacityNotice } from './reviewCapacity.js'
 
 // Overnight 2026-10-30, 12 pull requests waited hours for a review while every Codex Reviewer was out of weekly quota, and
-// nobody was told until people noticed in the morning (Tony: "don't let the workflow get stuck"). Since Ken's ruling the same
-// day any strong engine reviews any build, so the notice speaks only when no Reviewer of any engine can start: once per cause,
-// in the project chat, tagging who can fix it.
+// nobody was told until people noticed in the morning (Tony: "don't let the workflow get stuck"). The notice speaks only when
+// no new agent of either engine can start on any machine the project may use: once per cause, in the project chat, tagging
+// who can fix it. No policy, quality or rules (project instructions, phase 4): a machine counts when the project may use it.
 
 const NOW = 10_000_000
 const HOUR = 3_600_000
@@ -46,26 +45,36 @@ function swarm(machines: ContributedMachine[], engine = 'claude', visibility: 'p
   return { state, built, project: state.projects![0]! }
 }
 const anyMachine = () => true
-const notice = (state: SuperTabState, group: Conversation, mayRun: (machineId: string, engine: string) => boolean = anyMachine, now = NOW) =>
-  reviewCapacityNotice(state, group, DEFAULT_ROUTING_POLICY, target => mayRun(target.machineId, target.engine), now)
-const FIXES = 'More Claude Code or Codex quota, an engine signed in on another machine, a paused machine resumed, or another machine in the Swarm'
+const notice = (state: SuperTabState, group: Conversation, teamOk: (machineId: string, contributorId: string) => boolean = anyMachine, now = NOW) =>
+  reviewCapacityNotice(state, group, now, teamOk)
 
-describe('the notice that new Reviewers cannot start', () => {
-  it('says nothing for a Claude build while Codex is out everywhere but Claude can review (Ken, 2026-10-30)', () => {
-    // The morning of 10-30: every Codex out of weekly quota, Claude fine. Claude reviews the Claude build now, so nobody is told.
+describe('the notice that new agents cannot start', () => {
+  it('says when no machine the project may use can start either engine', () => {
+    const { state, built } = swarm([machine('studio', 'Mac Studio', 'ken', both(out)), machine('tony-mac', 'MacBook Pro 19', 'tony', both(out)),
+      machine('huy-mac', 'Huy personal Mac', 'huy', both(plenty))])
+    // Huy's machine has quota, but the project may not use it (machines.ts teamWorkCheck): it is not counted.
+    const mayUse = (machineId: string) => machineId !== 'huy-mac'
+    expect(notice(state, built, mayUse)).toMatchObject({ source: { kind: 'review-capacity', engine: 'any', cause: 'out' }, mentions: ['ken', 'tony'] })
+    expect(notice(state, built, mayUse)).toBeNull()
+    const usable = swarm([machine('studio', 'Mac Studio', 'ken', both(out)), machine('tony-mac', 'MacBook Pro 19', 'tony', { claude: out, codex: plenty })])
+    expect(notice(usable.state, usable.built)).toBeNull()
+  })
+
+  it('says nothing for a Claude build while Codex is out everywhere but Claude can start (Ken, 2026-10-30)', () => {
+    // The morning of 10-30: every Codex out of weekly quota, Claude fine. Claude can start, so nobody is told.
     const { state, built, project } = swarm([machine('studio', 'Mac Studio', 'ken', { claude: plenty, codex: out }),
       machine('tony-mac', 'MacBook Pro 19', 'tony', { claude: plenty, codex: out })])
     expect(notice(state, built)).toBeNull()
     expect(project.reviewCapacity).toBeUndefined()
   })
 
-  it('says once in the project chat that no Reviewer of any engine can start, naming each machine and tagging its owner', () => {
+  it('says once in the project chat that no agent of either engine can start, naming each machine and tagging its owner', () => {
     const { state, built, project } = swarm([machine('studio', 'Mac Studio', 'ken', both(out)), machine('huy-mac', 'MacBookPro2021', 'huy', both({ signedOut: plenty })),
       machine('tony-mac', 'MacBook Pro 19', 'tony', { claude: out, codex: [{ name: '5-hour', usedPercent: 100 }, { name: 'weekly', usedPercent: 40 }] })])
     const first = notice(state, built)
     expect(first).toMatchObject({ conversationId: project.leadConversationId, mentions: ['ken', 'huy', 'tony'], source: { kind: 'review-capacity', engine: 'any', cause: 'out' } })
-    expect(first!.text).toBe('Reviews cannot start a new Reviewer: no machine this project may use can run Claude Code or Codex now '
-      + `(Mac Studio: out of quota; MacBookPro2021: signed out; MacBook Pro 19: out of quota). ${FIXES} would unblock them. @ken15 @huy @tony can fix it.`)
+    expect(first!.text).toBe('No new agent can start: no machine this project may use can run Claude Code or Codex now '
+      + '(Mac Studio: out of quota; MacBookPro2021: signed out; MacBook Pro 19: out of quota). @ken15 @huy @tony can fix it.')
     // A person's own numbers are never shown to the others.
     expect(first!.text).not.toMatch(/\d+ ?%/)
     expect(notice(state, built, anyMachine, NOW + HOUR)).toBeNull()
@@ -78,7 +87,7 @@ describe('the notice that new Reviewers cannot start', () => {
     expect(notice(codexOnly.state, codexOnly.built)).toBeNull()
   })
 
-  it('counts a paused machine as unable to start a Reviewer, as the route does', () => {
+  it('counts a paused machine as unable to start an agent, as the route does', () => {
     const { state, built } = swarm([machine('studio', 'Mac Studio', 'ken', both(plenty), { paused: true })])
     expect(notice(state, built)!.text).toContain('(Mac Studio: paused)')
   })
@@ -87,8 +96,8 @@ describe('the notice that new Reviewers cannot start', () => {
     const { state, built } = swarm([machine('studio', 'Mac Studio', 'ken', { claude: low, codex: out }), machine('tony-mac', 'MacBook Pro 19', 'tony', both(out))])
     const warned = notice(state, built)
     expect(warned).toMatchObject({ mentions: ['ken', 'tony'], source: { kind: 'review-capacity', engine: 'any', cause: 'low' } })
-    expect(warned!.text).toBe('Quota for new Reviewers is close to running out on every machine this project may use '
-      + `(Mac Studio: close to running out; MacBook Pro 19: out of quota). ${FIXES} would keep reviews going. @ken15 @tony can fix it.`)
+    expect(warned!.text).toBe('Quota for new agents is close to running out on every machine this project may use '
+      + '(Mac Studio: close to running out; MacBook Pro 19: out of quota). @ken15 @tony can fix it.')
     expect(notice(state, built)).toBeNull()
     state.machines![0]!.observation!.quotas[0]!.windows[0]!.usedPercent = 100
     expect(notice(state, built)).toMatchObject({ source: { cause: 'out' } })
@@ -119,7 +128,7 @@ describe('the notice that new Reviewers cannot start', () => {
     expect(project.reviewCapacity).toBe(kept)
   })
 
-  it('counts a quota it cannot read as usable, as starts do, and says nothing with no machine for Reviewers at all', () => {
+  it('counts a quota it cannot read as usable, as starts do, and says nothing with no machine for agents at all', () => {
     const unread = swarm([machine('studio', 'Mac Studio', 'ken', both(out)), machine('x', 'Unread', 'tony', { codex: 'unknown' })])
     expect(notice(unread.state, unread.built)).toBeNull()
     const { state, built } = swarm([])
@@ -147,12 +156,12 @@ describe('the notice that new Reviewers cannot start', () => {
     expect(notice(state, built)).toMatchObject({ source: { cause: 'out' } })
   })
 
-  it('counts an offline machine as unavailable, and leaves out machines and engines this project may not use', () => {
+  it('counts an offline machine as unavailable, and leaves out machines this project may not use', () => {
     const offline = machine('tony-mac', 'MacBook Pro 19', 'tony', both(plenty))
     offline.observation!.receivedAt = NOW - HOUR
-    const { state, built } = swarm([machine('studio', 'Mac Studio', 'ken', { claude: out, codex: plenty }), offline, machine('ruled', 'Ruled out', 'huy', both(plenty))])
-    // The owner's rules leave out Codex on the Studio and the third machine altogether.
-    const said = notice(state, built, (id, engine) => id !== 'ruled' && !(id === 'studio' && engine === 'codex'))
+    const { state, built } = swarm([machine('studio', 'Mac Studio', 'ken', both(out)), offline, machine('personal', 'Personal Mac', 'huy', both(plenty))])
+    // Huy's personal machine takes no other person's project (machines.ts teamWorkCheck): left out altogether.
+    const said = notice(state, built, (id, contributorId) => id !== 'personal' && contributorId !== 'huy')
     expect(said!.text).toContain('(Mac Studio: out of quota; MacBook Pro 19: offline)')
     expect(said!.mentions).toEqual(['ken', 'tony'])
   })

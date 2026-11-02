@@ -1,0 +1,17 @@
+#!/bin/sh
+# GRUB's entry for the recovery partition (installer.py RECOVERY_CONF), started only when asked for
+# once (grubenv next_entry, by a power button's reset): the USB's own system, which installs this
+# computer again as it came. Nothing on a computer installed without one.
+set -e
+conf=/etc/harness-os/recovery.conf
+[ -r "$conf" ] || exit 0
+. "$conf"
+cat <<EOF
+menuentry 'Harness Recovery' --id harness-recovery {
+	insmod part_gpt
+	insmod ext2
+	search --no-floppy --fs-uuid --set=root $RECOVERY_UUID
+	linux /arch/boot/x86_64/vmlinuz-$RECOVERY_KERNEL $RECOVERY_PARAMETERS
+	initrd /arch/boot/x86_64/initramfs-$RECOVERY_KERNEL.img
+}
+EOF

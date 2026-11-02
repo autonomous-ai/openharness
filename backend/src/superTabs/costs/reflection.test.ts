@@ -3,7 +3,7 @@ import type { Conversation } from '../model.js'
 import type { ModelKindEvidence } from '../evidence/store.js'
 import type { RouteRun } from './attempts.js'
 import type { CostRow } from './read.js'
-import { approvedReminder, localDate, proposalQuestion, proposalTitle, routingReflection, wilson, type FailedStart, type ReflectionInput } from './reflection.js'
+import { approvedLine, localDate, proposalQuestion, proposalTitle, routingLine, routingReflection, wilson, type FailedStart, type ReflectionInput } from './reflection.js'
 
 const MINUTE = 60_000, HOUR = 60 * MINUTE, DAY = 24 * HOUR
 const NOW = 10 * DAY
@@ -53,7 +53,7 @@ function seededWeek(): ReflectionInput {
     groups.push(group(g, [{ assignmentId: `d${i}`, firstReview: false }], { by: `d${i}b`, at: at(daysAgo) + 3 * HOUR }))
   })
   const failed: FailedStart = { engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', at: at(0.2) }
-  return { now: NOW, rows, groups, failedStarts: [failed, { ...failed, at: at(3) }], truncated: false,
+  return { now: NOW, rows, groups, failedStarts: [failed, { ...failed, at: at(3) }], truncated: false, document: '# Project instructions\n\n## Routing\n\n- Opus builds.\n',
     evidence: [evidence('claude', 'opus', 'feature', { reworkRounds: 1, fixesAfterMerge: 1 }), evidence('codex', 'gpt-6.1-sol', 'ui', { reworkRounds: 2 })] }
 }
 /** [n] more first reviews of a kind on a model, all as [passed], each shipped at $[cost]. */
@@ -96,12 +96,18 @@ describe('the nightly routing reflection', () => {
     expect(report.text).toContain(`2. ${PARSER}: about $10.00 a week at API prices. Its first review passed 4 of 5`)
   })
 
-  it('asks plainly what a Yes does, and recommends Yes only on strong evidence, else Not yet', () => {
-    const [ui] = routingReflection(seededWeek())!.proposals
-    expect(proposalQuestion(ui!)).toEqual({ question: `${UI}? Expected saving: ${ui!.saving}. ${ui!.why}`,
-      options: ['Yes: the Lead is reminded each night and routes this way; nothing changes by itself', 'No: keep routing as it is',
-        'Not yet: ask again when there is more evidence'],
-      recommended: 2, unblocks: 'If you say yes, the Lead is reminded each night for 30 days and routes ui work this way. No rule or setting changes.' })
+  // Project instructions, phase 4 (decision 21): a Yes is one fixed line the coordinator writes into the Routing section.
+  it('asks Yes as a change to the instructions, and recommends Yes only on strong evidence, else Not yet', () => {
+    const [ui, cheaper, docs] = routingReflection(seededWeek())!.proposals
+    expect(routingLine(ui!)).toBe('Ui work no longer runs on codex gpt-6.1-sol high.')
+    expect(routingLine(cheaper!)).toBe('Parser work runs on claude sonnet medium instead of claude opus high.')
+    expect(routingLine(docs!)).toBe('Docs work starts on a subscription model, not on the grid.')
+    const asked = proposalQuestion(ui!)
+    expect(asked.options[0]!.startsWith('Yes: the coordinator writes this into the Routing section of the instructions')).toBe(true)
+    expect(asked).toEqual({ question: `${UI}? Expected saving: ${ui!.saving}. ${ui!.why}`,
+      options: [asked.options[0], 'No: keep routing as it is', 'Not yet: ask again when there is more evidence'],
+      recommended: 2, unblocks: expect.stringContaining(routingLine(ui!)) })
+    expect(asked.unblocks).not.toMatch(/reminded|30 days/)
     expect(proposalTitle(proposalQuestion(ui!).question)).toBe(UI)
     // Ten first reviews on each side: strong enough to recommend Yes, with no small-sample warning.
     const week = seededWeek()
@@ -128,33 +134,45 @@ describe('the nightly routing reflection', () => {
     expect(routingReflection(week)!.proposals.map(p => p.title)).toEqual(['Stop routing test work to codex gpt-6.1-sol xhigh', UI, PARSER])
   })
 
-  it('leaves out what the owner answered lately, approved or a rule already does, without spending a slot on it, and lists what was approved', () => {
+  it('leaves out what the owner answered lately, without spending a slot on it', () => {
     const week = seededWeek()
     more(week, 'test', 'codex', 'gpt-6.1-sol', 'xhigh', 7, false)
     expect(routingReflection({ ...week, decided: ['Stop routing test work to codex gpt-6.1-sol xhigh'] })!.proposals.map(p => p.title)).toEqual([UI, PARSER, DOCS])
-    const approved = routingReflection({ ...week, approved: [{ title: UI, on: '2026-10-28', by: 'owner' }, { title: DOCS, on: '2026-10-29', by: 'pm' }] })!
-    expect(approved.proposals.map(p => p.title)).toEqual(['Stop routing test work to codex gpt-6.1-sol xhigh', PARSER])
-    expect(approved.text.split('\n')).toEqual(expect.arrayContaining([
-      'Approved changes: the Lead is reminded each night and routes this way; each is listed for 30 days:',
-      `- ${UI} (approved 2026-10-28)`,
-      // Left to the PM by the owner: never shown as the owner's own approval (delta review of #2276).
-      `- ${DOCS} (PM decided 2026-10-29)`]))
-    expect(approvedReminder([{ title: UI, on: '2026-10-28', by: 'owner' }])).toBe('Approved routing changes: route this way until routing does it '
-      + `by itself. This reminder repeats each night for 30 days after each approval.\n- ${UI} (approved 2026-10-28)`)
-    // A project rule forbidding the model, or no grid first, already makes the change.
-    expect(routingReflection({ ...seededWeek(), rules: [{ kind: 'forbidModel', engine: 'codex', model: 'gpt-6.1-sol' }] })!.proposals.map(p => p.title)).toEqual([PARSER, DOCS])
-    expect(routingReflection({ ...seededWeek(), rules: [{ kind: 'noGridFirst' }] })!.proposals.map(p => p.title)).toEqual([UI, PARSER])
   })
 
-  it('says an approval whose 30 days just ended is still not followed, instead of proposing it cold (Lead, 10-30)', () => {
-    const report = routingReflection({ ...seededWeek(), lapsed: [{ title: UI, on: '2026-09-29', by: 'owner' }, { title: DOCS, on: '2026-09-30', by: 'pm' }] })!
-    const [ui, parser, docs] = report.proposals
-    expect(ui!.why).toBe('Approved on 2026-09-29; the last 7 days still route the old way. Its first review passed 0 of 6 (0%); even the top of its 95% range is 39%. '
-      + 'Only 6 first reviews.')
-    expect(docs!.why).toMatch(/^PM decided on 2026-09-30; the last 7 days still route the old way\. 3 of 3 docs tasks/)
-    expect(parser!.why).toMatch(/^Its first review passed/)
-    expect(proposalQuestion(ui!).question).toContain('Approved on 2026-09-29; the last 7 days still route the old way.')
-    expect(report.text).toContain(`1. ${UI}: about $12.00 a week at API prices of attempts that failed their first review. Approved on 2026-09-29;`)
+  // Project instructions, phase 4 (decision 21): the approved list, its nightly reminder and the recall of a lapsed approval
+  // are gone; a proposal whose line the instructions hold is reported with how the last 7 days ran, never asked again.
+  it('reads the instructions instead of an approved list', () => {
+    const week = seededWeek()
+    const [ui, parser] = routingReflection(week)!.proposals
+    const document = `${week.document}- ${routingLine(ui!)}\n- ${routingLine(parser!)}\n`
+    const report = routingReflection({ ...week, document })!
+    expect(report.proposals.map(p => p.title)).toEqual([DOCS])
+    expect(report.text.split('\n')).toEqual(expect.arrayContaining([
+      'In the instructions: Ui work no longer runs on codex gpt-6.1-sol high. The last 7 days ran 6 ui tasks on codex gpt-6.1-sol high.',
+      'In the instructions: Parser work runs on claude sonnet medium instead of claude opus high. The last 7 days ran 5 parser tasks on claude opus high.']))
+    expect(report.text).not.toMatch(/Approved changes|reminded/)
+    // Without the line, the same change is proposed.
+    expect(routingReflection(week)!.proposals.map(p => p.title)).toEqual([UI, PARSER, DOCS])
+    expect(routingReflection(week)!.text).not.toContain('In the instructions:')
+  })
+
+  // A Yes changes nothing by itself: until the coordinator writes its line, each report says it was approved and is not in the
+  // instructions yet, read from the document (final review of the branch).
+  it('lists an approved line not in the instructions yet, until it is there', () => {
+    const week = seededWeek()
+    const [ui] = routingReflection(week)!.proposals
+    expect(approvedLine(proposalQuestion(ui!).unblocks)).toBe(routingLine(ui!))
+    expect(approvedLine('If you say yes, the Lead is reminded each night.')).toBeNull()
+    const approved = [{ line: routingLine(ui!), on: '2026-10-29' }, { line: 'Docs work runs on claude opus high instead of claude sonnet medium.', on: '2026-10-28', leftTo: 'PM' }]
+    const report = routingReflection({ ...week, decided: [ui!.title], approved })!
+    expect(report.text.split('\n')).toEqual(expect.arrayContaining([
+      'Approved 2026-10-29; not in the instructions yet: Ui work no longer runs on codex gpt-6.1-sol high.',
+      'Approved 2026-10-28 (left to the PM); not in the instructions yet: Docs work runs on claude opus high instead of claude sonnet medium.']))
+    expect(report.proposals.map(p => p.title)).toEqual([PARSER, DOCS])
+    const written = routingReflection({ ...week, decided: [ui!.title], approved: approved.slice(0, 1), document: `${week.document}- ${routingLine(ui!)}\n` })!
+    expect(written.text).not.toContain('not in the instructions yet')
+    expect(written.text).toContain(`In the instructions: ${routingLine(ui!)}`)
   })
 
   it('dates in the project\'s time zone, the default one for none or an unknown one', () => {

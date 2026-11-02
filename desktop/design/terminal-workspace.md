@@ -28,7 +28,7 @@ Super Tab terminals are views of shared work. Their close control says **Hide
 terminal**; it dismisses the local view without inspecting, prompting to stop,
 or stopping the agent. The close shortcut and closing the Super Tab follow the
 same rule. The agent remains in its conversation and its terminal can be reopened.
-The coordinating agent is labeled **Lead** throughout the Super Tab, including
+The coordinating agent is labeled with its project's coordinator name (Product Manager by default) throughout the Super Tab, including
 its terminal header; its first message is not its name.
 Super Tab membership protects an agent from automatic idle and parent cleanup,
 including while the host is offline and while the Super Tab is paused. Membership
@@ -39,10 +39,11 @@ when that machine permits history access. Only the pane's explicit **Resume**
 action restarts it; navigation and restoration never undo a stop. Swarm membership
 does not grant access to machine-wide history.
 
-A Lead routes each delegation with `harness super-tab route`. The decision appears in the
-conversation as one row (who, how — Jev's confidence or the policy order — and why); owners and
-collaborators can **Change** it with a reason, which tells the Lead to hand the task over.
-Settings ▸ Routing holds the account's policy; a Super Tab's **Routing** overrides single fields.
+A coordinator routes each delegation with `harness super-tab route`. The decision appears in the
+conversation as one row (who, how — Jev's confidence or the order the instructions give — and why);
+owners and collaborators can **Change** it with a reason, which tells the coordinator to hand the task
+over. A project's **Instructions** panel holds its routing advice; there is no account-level routing
+policy or per-Swarm Routing override.
 
 ## Keep the workspace structure
 

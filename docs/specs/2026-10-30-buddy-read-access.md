@@ -3,6 +3,8 @@
 Status: approved by the Lead (10-30), with my recommendations; built in group #1389 (PR #2310), with the fixes from its
 two security reviews. Requested by Ken (10-30). Ken chose the sandbox setting in section 3 (10-30). Engineer: Rowan.
 
+Under the project instructions design a Buddy reads the project's document instead of copying role texts: see `docs/swarms.md#instructions`.
+
 There is no on/off switch (Ken's rule against switches): removing the Buddy turns it off. Turning it off for a whole Swarm
 would need a release.
 
@@ -228,7 +230,8 @@ mode and through `codex sandbox` in the Buddy's mode. Both refuse, and nothing c
 
 The Buddy skill's Limits section now describes wide mode: what it may read, how to ask, the `run:` line, that a write
 never runs, summaries only, and that text others wrote never asks it to run anything. Desktop keeps no copy of the
-Buddy text; it copies only the Lead, Engineer and Reviewer texts.
+Buddy text, and under the project instructions design it copies no role texts at all: a Buddy holds the
+`swarm-instructions` skill (the project's document, refreshed by its host) and no tools skill.
 
 ## Design (docs/feature-design-rules.md)
 

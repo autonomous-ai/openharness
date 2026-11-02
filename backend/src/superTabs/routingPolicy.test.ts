@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_ROUTING_POLICY, effectivePolicy, gridQuality, priorFor, routingOverrideSaveSchema, routingOverrideSchema, routingPolicySaveSchema, routingPolicySchema } from './routingPolicy.js'
+import { DEFAULT_ROUTING_POLICY, effectivePolicy, priorFor, routingOverrideSaveSchema, routingOverrideSchema, routingPolicySaveSchema, routingPolicySchema } from './routingPolicy.js'
 import type { PriorsTable } from './benchmarkPriors/priors.js'
-import { startTarget, targetQuality } from './rules.js'
 
 describe('routing policy', () => {
   it('ships a valid default that needs no setup', () => {
@@ -16,23 +15,24 @@ describe('routing policy', () => {
     expect(DEFAULT_ROUTING_POLICY.models).toContainEqual({ engine: 'claude', model: 'opus', effort: 'xhigh', quality: 3, cost: 4, enabled: true })
   })
 
-  // Ken, 2026-10-30: no Sonnet Builders. Only the default table changes; an owner's own table is theirs (Lead's ruling).
-  it('turns Sonnet off in the default table, and keeps an owner\'s saved Sonnet row and a tab override\'s as they are', () => {
+  // Ken, 2026-11-02: Sonnet at high effort is back for small work (2026-10-30 had turned it off). Only the default table
+  // changes; an owner's own table is theirs (Lead's ruling).
+  it('offers Sonnet at high effort in the default table, and keeps an owner\'s saved Sonnet row and a tab override\'s as they are', () => {
     const sonnet = (models: Array<{ engine: string; model: string; enabled: boolean }>) => models.filter(m => m.engine === 'claude' && m.model === 'sonnet')
-    expect(sonnet(DEFAULT_ROUTING_POLICY.models)).toEqual([expect.objectContaining({ effort: 'medium', quality: 2, enabled: false })])
+    expect(sonnet(DEFAULT_ROUTING_POLICY.models)).toEqual([expect.objectContaining({ effort: 'high', quality: 2, enabled: true })])
     // Haiku too (review of #2314): an older CLI on the new server picked it for easy work the server refuses, on every route.
     expect(DEFAULT_ROUTING_POLICY.models.filter(m => m.model === 'haiku')).toEqual([expect.objectContaining({ quality: 1, enabled: false })])
-    // What an older CLI's route can still pick from the default table builds: every row it may pick is rated 3.
-    expect(DEFAULT_ROUTING_POLICY.models.filter(m => m.enabled).every(m => m.quality === 3)).toBe(true)
-    expect(sonnet(effectivePolicy(null, null).policy.models).map(m => m.enabled)).toEqual([false])
-    // An owner who saved the table before keeps Sonnet on; it is their row.
-    const saved = { ...DEFAULT_ROUTING_POLICY, models: DEFAULT_ROUTING_POLICY.models.map(m => m.model === 'sonnet' ? { ...m, enabled: true } : m) }
+    // Nothing it may pick is rated below 2 (an older CLI's own route still keeps its builds at 3).
+    expect(DEFAULT_ROUTING_POLICY.models.filter(m => m.enabled).every(m => m.quality >= 2)).toBe(true)
+    expect(sonnet(effectivePolicy(null, null).policy.models).map(m => m.enabled)).toEqual([true])
+    // An owner who saved the table with Sonnet off keeps it off; it is their row.
+    const saved = { ...DEFAULT_ROUTING_POLICY, models: DEFAULT_ROUTING_POLICY.models.map(m => m.model === 'sonnet' ? { ...m, enabled: false } : m) }
     const read = effectivePolicy(saved, null)
     expect(read.warnings).toEqual([])
-    expect(sonnet(read.policy.models).map(m => m.enabled)).toEqual([true])
+    expect(sonnet(read.policy.models).map(m => m.enabled)).toEqual([false])
     expect(read.policy.models.filter(m => m.model !== 'sonnet')).toEqual(saved.models.filter(m => m.model !== 'sonnet'))
     // A tab override's own models win over the default too.
-    expect(sonnet(effectivePolicy(null, { models: saved.models }).policy.models).map(m => m.enabled)).toEqual([true])
+    expect(sonnet(effectivePolicy(null, { models: saved.models }).policy.models).map(m => m.enabled)).toEqual([false])
   })
   it('uses the default when the account has none, and merges a tab override field by field', () => {
     expect(effectivePolicy(null, null)).toEqual({ policy: DEFAULT_ROUTING_POLICY, warnings: [], overridden: [] })
@@ -86,14 +86,6 @@ describe('routing policy', () => {
     // An owner's own Astra row wins over the built-in one, on or off, and is never doubled (review of #2271).
     const owned = { ...before, models: [...before.models, { ...astra, effort: 'high', quality: 2, cost: 9, enabled: false }] }
     expect(effectivePolicy(owned, null).policy.models.filter(m => m.model === 'gpt-6-astra')).toEqual([{ ...astra, effort: 'high', quality: 2, cost: 9, enabled: false }])
-  })
-
-  it('rates a start or agent on Astra at the top tier on the server, as the CLI\'s route does (cli route.ts rateFor)', () => {
-    const on = (effort: string) => targetQuality(DEFAULT_ROUTING_POLICY, startTarget({ machineId: 'm', engine: 'codex', model: 'gpt-6-astra', effort }))
-    expect(on('xhigh')).toBe(3)
-    expect(on('high')).toBe(3)
-    const before = { ...DEFAULT_ROUTING_POLICY, models: DEFAULT_ROUTING_POLICY.models.filter(m => m.model !== 'gpt-6-astra') }
-    expect(targetQuality(before, startTarget({ machineId: 'm', engine: 'codex', model: 'gpt-6-astra', effort: 'xhigh' }))).toBe(1)
   })
 
   describe('a built-in row added on read (review of #2271 at 1d9499646)', () => {
@@ -165,18 +157,14 @@ describe('routing policy', () => {
     expect(routingOverrideSchema.safeParse({ version: 1 }).success).toBe(false)
   })
 
-  it('rates Kimi K3 and DeepSeek v4.1 at Sonnet\'s tier and every other grid model at the local quality, from the policy', () => {
-    const { policy } = effectivePolicy(null, null)
-    expect(gridQuality(policy, 'moonshotai/kimi-k3')).toBe(2)
-    expect(gridQuality(policy, 'deepseek/deepseek-v4.1-flash-1017', 'deepseek/deepseek-v4.1-flash-1017 · OpenRouter')).toBe(2)
-    expect(gridQuality(policy, 'qwen3:4b', 'Qwen 3 4B')).toBe(1)
-    // A policy saved before per-model rows reads the built-in ones; the owner's own rows replace them, first match first.
+  // Grid ratings are the catalog's (catalog.test.ts); the CLI's route rates grid models by them (cli superTabs/route.ts
+  // gridStrength). The migration still reads a saved policy's own grid rows.
+  it('reads a policy saved before per-model grid rows with the built-in ones, and an owner\'s own rows as saved', () => {
+    const builtIn = DEFAULT_ROUTING_POLICY.localModels!.models
     const saved = { ...DEFAULT_ROUTING_POLICY, localModels: { quality: 1, enabled: true } }
-    expect(gridQuality(effectivePolicy(saved, null).policy, 'moonshotai/kimi-k3')).toBe(2)
-    const owner = effectivePolicy(saved, { localModels: { quality: 2, enabled: true, models: [{ model: 'qwen 3', quality: 3 }, { model: 'qwen', quality: 1 }] } }).policy
-    expect(gridQuality(owner, 'qwen3:4b', 'Qwen 3 4B')).toBe(3)
-    expect(gridQuality(owner, 'moonshotai/kimi-k3')).toBe(2)
-    expect(gridQuality({ ...owner, localModels: { quality: 1, enabled: true, models: [] } }, 'moonshotai/kimi-k3')).toBe(1)
+    expect(effectivePolicy(saved, null).policy.localModels).toEqual({ quality: 1, enabled: true, models: builtIn })
+    const own = [{ model: 'qwen 3', quality: 3 }, { model: 'qwen', quality: 1 }]
+    expect(effectivePolicy(saved, { localModels: { quality: 2, enabled: true, models: own } }).policy.localModels).toEqual({ quality: 2, enabled: true, models: own })
     expect(routingPolicySchema.safeParse({ ...DEFAULT_ROUTING_POLICY, localModels: { quality: 1, enabled: true, models: [{ model: 'x', quality: 4 }] } }).success).toBe(false)
   })
 

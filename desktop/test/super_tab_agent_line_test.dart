@@ -208,7 +208,7 @@ void main() {
           findsOneWidget,
         );
         expect(
-          _line('Teal', 'In review · Mac Studio · Opus · high'),
+          _line('Teal', 'Waiting on others · Mac Studio · Opus · high'),
           findsOneWidget,
         );
         expect(

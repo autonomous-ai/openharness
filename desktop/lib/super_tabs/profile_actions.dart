@@ -73,6 +73,9 @@ extension SuperTabProfileActions on SuperTabController {
       'messageId': message.id,
       'emoji': emoji.key,
       'on': !mine,
+      // An app that knows one Buddy per Swarm says so: the server then
+      // refuses it in an older Buddy chat (security review 1 of #2435).
+      if (oneBuddy) 'oneBuddy': true,
     });
     if (failure == null) await loadMessages(message.conversationId);
     return failure;

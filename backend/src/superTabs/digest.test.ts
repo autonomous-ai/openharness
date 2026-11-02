@@ -83,6 +83,14 @@ describe('a project\'s morning digest', () => {
     expect(decisionLines(state, lampOS(state), [])).toEqual([])
   })
 
+  it('leaves out decisions in work that is over: its task done or cancelled, or archived (Dee, 10-31)', () => {
+    const state = fixture()
+    const group = state.conversations.find(c => c.id === 'g7')!
+    group.assignment = { ...group.assignment!, status: 'done' }
+    expect(decisionLines(state, lampOS(state), [{ conversationId: 'g7', personId: 'owner', count: 1 }, { conversationId: 'g3', personId: 'ann', count: 1 }]))
+      .toEqual(['- #3 Lexer: 1 for ann@example.com'])
+  })
+
   it('puts the decisions waiting in the Lead\'s digest wake-up only when there are some', () => {
     const state = fixture(), lead = state.agents.find(a => a.id === 'lead')!
     expect(digestRequest(state, lead, EIGHT, [{ conversationId: 'g7', personId: 'ann', count: 1 }])!.text).toMatch(/\nDecisions waiting:\n- #7 Pricing: 1 for ann@example\.com$/)
@@ -109,13 +117,16 @@ describe('a project\'s morning digest', () => {
     expect(digestRequest(state, lead, EIGHT + 24 * HOUR)).not.toBeNull()
   })
 
-  it('wakes nobody for a project with no digest time, in a paused Swarm, or for an agent that is not the Lead', () => {
+  it('wakes nobody for a project whose digest a person turned off, in a paused Swarm, or for an agent that is not the Lead', () => {
     const state = fixture()
     expect(digestRequest(state, state.agents.find(a => a.id === 'nico')!, EIGHT)).toBeNull()
     state.paused = true
     expect(digestRequest(state, state.agents.find(a => a.id === 'lead')!, EIGHT)).toBeNull()
     state.paused = false
+    // Never set, it is on by default at 08:00 Vietnam time (Dee, 2026-10-31); turned off, it stays off.
     delete lampOS(state).digest
+    expect(digestRequest(state, state.agents.find(a => a.id === 'lead')!, EIGHT)?.text).toContain('(08:00, Asia/Ho_Chi_Minh)')
+    lampOS(state).digestOff = true
     expect(digestRequest(state, state.agents.find(a => a.id === 'lead')!, EIGHT)).toBeNull()
   })
 })

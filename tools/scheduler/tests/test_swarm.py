@@ -74,40 +74,33 @@ class ConvertTest(unittest.TestCase):
 
     def test_machines_keep_their_slots_and_only_the_policy_engines(self):
         self.assertEqual([(m.id, m.name, m.slots, m.engines) for m in self.inst.machines],
-                         [('m1', 'Studio', 16, ('claude', 'codex')), ('m2', 'Laptop', 1, ('claude', 'codex'))])
+                         [('m1', 'Studio', 16, ('claude', 'codex')), ('m2', 'Laptop', 1, ('claude', 'codex')), ('m3', 'Banned', 8, ('claude', 'codex'))])
 
     def test_enabled_policy_rows_and_the_shared_api_model_become_models(self):
         got = {m.id: (m.engine, m.cost, m.quality['default'], m.concurrency, m.subscription) for m in self.inst.models}
         self.assertEqual(got, {'claude-opus': ('claude', 3, 3, None, True), 'codex-default': ('codex', 2, 3, None, True),
                                'claude-sonnet': ('claude', 2, 2, None, True), 'grid-deepseek/flash': ('claude', 1, 1, 4, False)})
 
-    def test_weekly_quota_less_the_reserve_is_the_budget_and_identical_readings_share_an_account(self):
-        out = convert(STATUS, ROUTE_LOG, {**CONFIG, 'budget': 'now'})
-        got = sorted((tuple(map(tuple, a['members'])), a['budget']) for a in out['instance']['accounts'])
-        self.assertEqual(got, [((('m1', 'codex'), ('m2', 'codex')), {'weekly': 23.0}), ((('m2', 'claude'),), {'weekly': 18.0})])
-
     def test_by_default_the_budget_is_the_start_of_the_night_with_the_actual_picks_spend_added_back(self):
         # g1: large on Opus takes 8 x 3 / 2 = 12 from m2's Claude account; g2: small on Codex takes 1 from the shared one.
         got = sorted((a.members, a.budget) for a in self.inst.accounts)
-        self.assertEqual(got, [((('m1', 'codex'), ('m2', 'codex')), {'weekly': 24.0}), ((('m2', 'claude'),), {'weekly': 30.0})])
+        self.assertEqual(got, [((('m1', 'codex'), ('m2', 'codex')), {'weekly': 34.0}), ((('m2', 'claude'),), {'weekly': 40.0}),
+                               ((('m3', 'claude'),), {'weekly': 90.0})])
 
     def test_quota_windows_are_read_at_the_snapshot_with_resets_in_minutes_and_a_past_reset_refilled(self):
         got = sorted((a.members, [(w.name, w.left, w.resets_in) for w in a.windows], a.reserve) for a in self.inst.accounts)
         # Weekly left includes what the actual picks spent (start of the night); the 5-hour readings are as read.
         self.assertEqual(got, [
-            ((('m1', 'codex'), ('m2', 'codex')), [('5-hour', 80.0, 60), ('weekly', 34.0, 7200)], 10.0),
-            ((('m2', 'claude'),), [('5-hour', 100.0, None), ('weekly', 40.0, 5400)], 10.0)])
+            ((('m1', 'codex'), ('m2', 'codex')), [('5-hour', 80.0, 60), ('weekly', 34.0, 7200)], 0.0),
+            ((('m2', 'claude'),), [('5-hour', 100.0, None), ('weekly', 40.0, 5400)], 0.0),
+            ((('m3', 'claude'),), [('weekly', 90.0, 7200)], 0.0)])
 
     def test_added_back_spend_never_takes_a_window_past_full(self):
         # m2's Claude weekly: 5% used, so 95 left; adding back g1's 12 would give 107, more than a window holds.
         status = copy.deepcopy(STATUS)
         status['value']['state']['machines'][1]['observation']['quotas'][0]['windows'][1]['usedPercent'] = 5
         claude = next(a for a in load(convert(status, ROUTE_LOG, CONFIG)['instance']).accounts if a.members == (('m2', 'claude'),))
-        self.assertEqual((claude.windows[1].left, claude.budget), (100.0, {'weekly': 90.0}))
-
-    def test_an_owner_rule_naming_machines_leaves_the_others_out(self):
-        self.assertNotIn('m3', [m.id for m in self.inst.machines])
-        self.assertFalse([a for a in self.inst.accounts if any(m == 'm3' for m, _ in a.members)])
+        self.assertEqual((claude.windows[1].left, claude.budget), (100.0, {'weekly': 100.0}))
 
     def test_models_carry_the_words_of_the_routes_candidate_title(self):
         got = {m.id: m.label for m in self.inst.models}
@@ -116,19 +109,15 @@ class ConvertTest(unittest.TestCase):
 
     def test_a_task_takes_its_assessment_from_the_route_log(self):
         t = self.inst.task('g1')
-        self.assertEqual((t.minutes, t.floor, t.kind, t.difficulty, t.spend), (180, 3, 'backend', 'high', {'5-hour': 50, 'weekly': 8}))
+        self.assertEqual((t.minutes, t.floor, t.kind, t.difficulty, t.spend), (180, 1, 'backend', 'high', {'5-hour': 50, 'weekly': 8}))
 
     def test_a_hand_matched_request_and_an_estimate_are_used_and_listed_as_estimates(self):
-        self.assertEqual((self.inst.task('g2').minutes, self.inst.task('g2').floor), (20, 2))
-        self.assertEqual((self.inst.task('g4').minutes, self.inst.task('g4').floor), (60, 1))
+        self.assertEqual(self.inst.task('g2').minutes, 20)
+        self.assertEqual(self.inst.task('g4').minutes, 60)
         self.assertEqual(sorted(e['group'] for e in self.out['estimates']), ['g2', 'g4'])
 
     def test_dependencies_come_from_the_config(self):
         self.assertEqual(self.inst.task('g2').deps, ('g1',))
-
-    def test_a_review_must_differ_from_the_work_it_depends_on(self):
-        self.assertEqual(self.inst.task('g2').independent_of, ('g1',))
-        self.assertEqual(self.inst.task('g1').independent_of, ())
 
     def test_a_grid_model_is_its_own_family(self):
         self.assertEqual(self.inst.model('grid-deepseek/flash').family, 'deepseek/flash')
@@ -139,6 +128,21 @@ class ConvertTest(unittest.TestCase):
 
     def test_actual_picks_map_each_assignment_to_its_model_row(self):
         self.assertEqual(self.out['actual'], {'g1': ['m2', 'claude-opus'], 'g2': ['m1', 'codex-default'], 'g4': ['m1', 'claude-sonnet']})
+
+    # Project instructions, phase 4: from a Swarm snapshot every task has floor 1, no `independent_of`, reserve 0 and no
+    # machines rule; the solver keeps those fields for bench instances.
+    def test_tasks_have_no_floor_or_independence(self):
+        self.assertEqual([(t.id, t.floor, t.independent_of) for t in self.inst.tasks], [('g1', 1, ()), ('g2', 1, ()), ('g4', 1, ())])
+
+    def test_owner_rules_leave_no_machine_out(self):
+        self.assertEqual([m.id for m in self.inst.machines], ['m1', 'm2', 'm3'])
+        self.assertTrue([a for a in self.inst.accounts if a.members == (('m3', 'claude'),)])
+
+    def test_the_budget_is_the_weekly_quota_left(self):
+        out = convert(STATUS, ROUTE_LOG, {**CONFIG, 'budget': 'now'})
+        got = sorted((tuple(map(tuple, a['members'])), a['reserve'], a['budget']) for a in out['instance']['accounts'])
+        self.assertEqual(got, [((('m1', 'codex'), ('m2', 'codex')), 0.0, {'weekly': 33.0}), ((('m2', 'claude'),), 0.0, {'weekly': 28.0}),
+                               ((('m3', 'claude'),), 0.0, {'weekly': 90.0})])
 
     def test_a_dependency_on_an_unknown_group_is_refused(self):
         with self.assertRaisesRegex(ConvertError, 'g2 depends on g9'):

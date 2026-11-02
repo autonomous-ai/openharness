@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -544,4 +545,85 @@ void main() {
       await f.close();
     },
   );
+
+  // A message tagging several agents: one agent's cancelled copy said Not sent
+  // under it though the Lead's copy arrived, and people sent it again (10-30).
+  // Not sent shows only when no recipient got it; one still waiting keeps its
+  // own line, so the receipt never promises arrival while another waits.
+  group('receipt: several recipients', () {
+    Map<String, dynamic> row(String agentId, String status) => {
+      'id': 'delivery-$agentId',
+      'agentId': agentId,
+      'status': status,
+    };
+    String? receipt(List<Map<String, dynamic>> deliveries) =>
+        SuperTabMessage.fromJson({
+          'id': 'm1',
+          'conversationId': 'lead',
+          'text': '@Lead @Builder please start',
+          'sequence': 1,
+          'author': {'kind': 'person', 'id': 'owner', 'name': 'Owner'},
+          'deliveries': deliveries,
+        }).receiptDelivery?.status;
+
+    test('one copy cancelled while another arrived is not the receipt', () {
+      for (final arrived in ['delivered', 'confirmed', 'answered']) {
+        final rows = [row('lead-agent', arrived), row('builder', 'cancelled')];
+        expect(receipt(rows), arrived);
+        expect(receipt(rows.reversed.toList()), arrived);
+      }
+      expect(receipt([row('builder', 'cancelled')]), 'cancelled');
+      expect(
+        receipt([row('lead-agent', 'queued'), row('builder', 'cancelled')]),
+        'queued',
+      );
+      expect(
+        receipt([row('builder', 'cancelled'), row('lead-agent', 'claimed')]),
+        'claimed',
+      );
+      expect(
+        receipt([row('lead-agent', 'answered'), row('builder', 'uncertain')]),
+        'uncertain',
+      );
+    });
+
+    testWidgets(
+      'the Lead got it and the Builder\'s copy was cancelled: no Not sent',
+      (tester) async {
+        final f = ReceiptFixture(tester, status: null);
+        await f.show(
+          prepare: () => f.message['deliveries'] = [
+            row('builder', 'cancelled'),
+            row('lead-agent', 'delivered'),
+          ],
+        );
+        f.expectQuiet();
+        await f.close();
+      },
+    );
+
+    testWidgets('every copy cancelled still reads Not sent', (tester) async {
+      final f = ReceiptFixture(tester, status: null);
+      await f.show(
+        prepare: () => f.message['deliveries'] = [row('builder', 'cancelled')],
+      );
+      expect(find.text('Not sent'), findsOneWidget);
+      await f.close();
+    });
+
+    testWidgets('the Lead\'s copy still waiting keeps its line, not Not sent', (
+      tester,
+    ) async {
+      final f = ReceiptFixture(tester, status: null);
+      await f.show(
+        prepare: () => f.message['deliveries'] = [
+          row('builder', 'cancelled'),
+          row('lead-agent', 'queued'),
+        ],
+      );
+      expect(find.text('Not sent'), findsNothing);
+      expect(find.text('Not delivered yet'), findsOneWidget);
+      await f.close();
+    });
+  });
 }

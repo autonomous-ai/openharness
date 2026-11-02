@@ -1892,10 +1892,10 @@ describe('registry across a reboot and pane loss', () => {
   it('fills an old supported session role once and persists it through reload', async () => {
     const { registry } = await loadRegistryModule(); registry.load()
     const pending = registry.openPendingAgent({ engine: 'claude', cwd: dataDir, runtimes: [{ backend: 'tmux', paneId: '%21' }] })!
-    const skill = { role: 'lead' as const, key: pending.agentId }
+    const skill = { role: 'coordinator' as const, key: pending.agentId }
     expect(registry.setSwarmSkill('missing', skill)).toBe(false)
     expect(registry.setSwarmSkill(pending.agentId, skill)).toBe(true)
-    expect(registry.setSwarmSkill(pending.agentId, { role: 'dev', key: 'replacement' })).toBe(false)
+    expect(registry.setSwarmSkill(pending.agentId, { role: 'agent', key: 'replacement' })).toBe(false)
     const { registry: reloaded } = await loadRegistryModule(); reloaded.load()
     expect(reloaded.byAgent(pending.agentId)?.swarmSkill).toEqual(skill)
     const other = reloaded.openPendingAgent({ engine: 'opencode', cwd: dataDir, runtimes: [{ backend: 'tmux', paneId: '%22' }] })!
@@ -1905,7 +1905,7 @@ describe('registry across a reboot and pane loss', () => {
   it('preserves Swarm role and runtime key across hooks and reload', async () => {
     const { registry } = await loadRegistryModule()
     registry.load()
-    const swarmSkill = { role: 'dev' as const, key: 'harness-claude-worker' }
+    const swarmSkill = { role: 'agent' as const, key: 'harness-claude-worker' }
     const pending = registry.openPendingAgent({ engine: 'claude', cwd: dataDir,
       runtimes: [{ backend: 'tmux', paneId: '%21' }], swarmSkill })!
     const transcriptPath = join(dataDir, 'swarm.jsonl')
@@ -1915,6 +1915,25 @@ describe('registry across a reboot and pane loss', () => {
     reloaded.load()
     expect(reloaded.byAgent(pending.agentId)?.swarmSkill).toEqual(swarmSkill)
     expect(reloaded.releaseEngine(pending.agentId, true)?.swarmSkill).toBeUndefined()
+  })
+
+  // Project instructions, phase 4 (decision 1): a row an older CLI saved names its Swarm role in the wire's values.
+  it('reads a Swarm role an older CLI saved as this release keeps it, on load and from a stopped harness\'s row', async () => {
+    const { registry, strictPersistedRow } = await loadRegistryModule()
+    registry.load()
+    const pending = registry.openPendingAgent({ engine: 'claude', cwd: dataDir, runtimes: [{ backend: 'tmux', paneId: '%23' }],
+      swarmSkill: { role: 'agent', fallback: 'review', key: 'reviewer' } })!
+    const file = join(dataDir, 'registry.json')
+    const row = (JSON.parse(readFileSync(file, 'utf8')) as Array<Record<string, unknown>>).find(r => r.agentId === pending.agentId)!
+    expect(row.swarmSkill).toEqual({ role: 'agent', fallback: 'review', key: 'reviewer' })
+    const older = { ...row, swarmSkill: { role: 'review', key: 'reviewer', mode: 'default' } }
+    expect(strictPersistedRow(older)?.swarmSkill).toEqual({ role: 'agent', fallback: 'review', key: 'reviewer', mode: 'default' })
+    expect(strictPersistedRow({ ...row, swarmSkill: { role: 'lead', key: 'pm' } })?.swarmSkill).toEqual({ role: 'coordinator', key: 'pm' })
+    expect(strictPersistedRow({ ...row, swarmSkill: { role: 'pm', key: 'pm' } })).not.toHaveProperty('swarmSkill')
+    writeFileSync(file, JSON.stringify([older]), { mode: 0o600 })
+    const { registry: reloaded } = await loadRegistryModule()
+    reloaded.load()
+    expect(reloaded.byAgent(pending.agentId)?.swarmSkill).toEqual({ role: 'agent', fallback: 'review', key: 'reviewer', mode: 'default' })
   })
 
   it('keeps strict conversation resume after the engine binds and the daemon reloads', async () => {

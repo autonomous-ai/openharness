@@ -24,17 +24,18 @@ import { createWss, upgradeStatusText, WS_LIMITS } from './wsServer.js'
 import { prisma } from './prisma.js'
 import {
   publishUp, claimMachineOwner, releaseMachineOwner, publishDeviceE2eePair,
-  publishTerminalUp, subscribeTerminalDown,
-  setMachineAppState, clearMachineAppState,
+  subscribeTerminalDown,
+  setMachineAppState, clearMachineAppState, noteTuiPresence,
 } from './bus.js'
-import { trackSocketLiveness } from './hub.js'
+import { deliverUpLocal, trackSocketLiveness } from './hub.js'
+import { PROCESS_ID } from './registry.js'
 import { guardedSend, guardedSendJson } from './wsSend.js'
 import { trackSocket } from './wsAttribution.js'
 import { attachNodeRole, PRESENCE_TTL_SEC } from './nodeRole.js'
 import { presenceTracker, presenceWriteDue, recordTurnStarted, touchClientOnlineDay, touchMachineOnlineDay, touchUserOnlineDay, TUI_SURFACES, type ClientSurface, type PresenceWriteState } from './dailyTracking.js'
 import { countryCodeFromHeaders } from './clientGeo.js'
 import { recordCreatedAgent, recordDeletedAgent } from './agentTracker.js'
-import type { Frame } from './tunnel.js'
+import type { Frame, UpBusMsg } from './tunnel.js'
 import { logger } from '../utils/logger.js'
 import { utcDayKey } from '../types/analytics.js'
 import { machineBillingAllowsDataPlane } from './billingState.js'
@@ -66,6 +67,9 @@ import {
   terminalP2pPolicy,
 } from './p2pSignaling.js'
 import { ShortTurnGuard } from './shortTurnGuard.js'
+import { markCpuKind } from './selfProfile.js'
+import { createConnectionRoutes } from './terminalRoute.js'
+import { recordRelay } from './relayStats.js'
 
 const wss = createWss(WS_LIMITS.adapter, { echoFirstProtocol: true })
 
@@ -276,6 +280,7 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
   const preHandlerQueue: Array<[RawData, boolean]> = []
   let onMessage: ((raw: RawData, isBinary: boolean) => void) | null = null
   ws.on('message', (raw: RawData, isBinary: boolean) => {
+    markCpuKind(isBinary ? 'adapter-ws binary' : 'adapter-ws text')
     if (onMessage) onMessage(raw, isBinary)
     else if (preHandlerQueue.length < 64) preHandlerQueue.push([raw, isBinary])
   })
@@ -410,6 +415,17 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
   // deadline instead, which is the same fix already applied to the hub's own sockets.
   const releaseLiveness = trackSocketLiveness(ws, 'adapter')
 
+  // Frames for one viewer go straight to it when it is on this process, else to the process holding it
+  // (lib/terminalRoute.ts); a connection keeps the route its first frame took for this socket's life.
+  const routes = createConnectionRoutes(machineId)
+  // A frame for one connection takes its route; a target that is not a plausible connection id (the daemon sets it) is
+  // published as before, never used as a route or Redis key.
+  const sendTargeted = (msg: UpBusMsg & { targetConnId: unknown }): void => {
+    const target = msg.targetConnId
+    if (typeof target === 'string' && target.length > 0 && target.length <= 128) routes.targeted({ ...msg, targetConnId: target })
+    else void publishUp(machineId, msg as UpBusMsg)
+  }
+
   onMessage = (raw: RawData, isBinary: boolean): void => {
     if (isBinary) {
       const hop = decodeTerminalHop(new Uint8Array(raw as Buffer))
@@ -422,7 +438,7 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
             : hop.kind === TerminalBinaryKind.keyframe ? 'terminal_keyframe' : 'terminal_sync',
           hop.clientFrame.length,
         )) return
-      void publishTerminalUp(machineId, Buffer.from(raw as Buffer))
+      routes.hop(Buffer.from(raw as Buffer), hop.connId)
       return
     }
     let env: AdapterFrame
@@ -438,7 +454,7 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
         const bytes = terminalFrameBytes(env.frame)
         if (!env.targetConnId || bytes > TERMINAL_ENVELOPE_MAX_BYTES
           || !isEncryptedTerminalFrame(env.frame) || !terminalRate.allow(terminalType, bytes)) return
-        void publishUp(machineId, {
+        sendTargeted({
           webEligible: true,
           commanderEligible: false,
           targetConnId: env.targetConnId,
@@ -453,7 +469,7 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
           || !terminalP2pPolicy(userId, machineId).enabled
           || bytes > P2P_SIGNAL_MAX_BYTES || !isEncryptedP2pFrame(env.frame)
           || !p2pSignalRate.allow(bytes)) return
-        void publishUp(machineId, {
+        sendTargeted({
           webEligible: true,
           commanderEligible: false,
           targetConnId: env.targetConnId,
@@ -493,7 +509,11 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
         // TUI says where it runs (TUI_SURFACES); a name this backend does not know counts as nothing,
         // never as the desktop app.
         if (surface === undefined) touchUserPresence(kind as 'open' | 'ping')
-        else if (typeof surface === 'string' && TUI_SURFACES.has(surface)) touchTuiPresence(surface as ClientSurface, kind as 'open' | 'ping')
+        else if (typeof surface === 'string' && TUI_SURFACES.has(surface)) {
+          touchTuiPresence(surface as ClientSurface, kind as 'open' | 'ping')
+          // Its account's daemons relay the events only a terminal app reads while one is open (bus.ts noteTuiPresence).
+          void noteTuiPresence(userId, kind as 'open' | 'ping')
+        }
         return
       }
       // The machine appending to its account's device key log (lib/deviceKeyLog.ts): its own key, or a
@@ -560,14 +580,19 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
         }
         if (env.webEligible === false && env.commanderEligible !== true && !env.targetConnId) return
       }
-      // No originPid: the hub's Redis loopback must deliver to this instance's own web clients too
-      // (there's no manager-ws local fast-path on this route).
-      void publishUp(machineId, {
+      const up = {
         webEligible: env.webEligible !== false, // default true (plain event/RPC frames)
         commanderEligible: env.commanderEligible === true, // devices get only opted-in frames
-        ...(env.targetConnId ? { targetConnId: env.targetConnId } : {}), // E2EE per-client push
         frame: env.frame,
-      })
+      }
+      // An E2EE per-client push (pairing, welcome, an RPC reply) takes its connection's route, so it keeps its order with
+      // that connection's terminal frames.
+      if (env.targetConnId) { sendTargeted({ ...up, targetConnId: env.targetConnId }); return }
+      // Every client of the machine: this process's own first, then the rest through Redis, whose copy this process
+      // skips (originPid), as manager-ws does. A local viewer's targeted frames are delivered here at once, so its
+      // untargeted ones must be too, or an RPC reply would overtake the event the daemon sent before it (review 2026-10-31).
+      deliverUpLocal(machineId, up)
+      void publishUp(machineId, { ...up, originPid: PROCESS_ID }).then(n => recordRelay('up broadcast', 'published', n))
     }
   }
   // Drain whatever arrived while the role was being attached, in the order it was sent.
@@ -576,6 +601,7 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
 
   const cleanup = (): void => {
     releaseLiveness()
+    routes.close()
     terminalDownUnsub()
     accountPushesUnsub()
     swarmPushesUnsub()

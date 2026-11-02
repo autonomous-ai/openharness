@@ -18,18 +18,34 @@ export function dirtyGroups(state: SuperTabState, project: SwarmProject): Conver
   return reportGroups(state, project).filter(g => (g.reportSeq ?? 0) > (progress.summarized[g.id] ?? progress.summarizedFloor))
 }
 
-/** Workgroup reports mark their conversation, and the project's progress changes only when the project goes from clean to
- *  dirty, so posts in different conversations of one project never write the same part (spec ruling 1). */
-export function noteProjectReports(state: SuperTabState, messages: MessageDraft[], sequences: ReadonlyMap<string, number>, now: number) {
-  if (!state.projects) return
-  for (const message of messages) {
-    const group = conversation(state, message.conversationId)
+/** The least time between two of a project's scheduled wake-ups (Dee, 2026-10-31: "even at 30 min that's 48 updates a day").
+ *  A question, a blocker or completion reaches the coordinator at once anyway, as the status line's recipients. */
+export const WAKE_GAP_MS = 15 * 60_000
+/** How long after a project's first change since its last report the wake-up waits, so a burst (a task created, assigned
+ *  and started) is one wake-up. */
+export const BATCH_MS = 5 * 60_000
+
+/** What of a work group's state wakes its coordinator: its task (assigned, a new one), the task's status (review, done,
+ *  blocked, needs_human, cancelled; a review group's verdict is its own task's status), a review's findings, its merges and
+ *  pull requests. Ordinary messages, progress notes, terminal turns and archiving change none of it. */
+const workState = (group: Conversation): string => JSON.stringify([group.assignment?.id ?? null, group.assignment?.status ?? null,
+  group.assignment?.reviewFoundAt ?? null, group.ledger?.mergedAt ?? null, group.pullRequestUrls?.length ?? 0])
+
+/** Marks each work group whose state this write changed, or that it created, through its latest message, so the wake-up
+ *  asks the coordinator to read it; the project's progress changes only when the project goes from clean to dirty, so
+ *  changes in different conversations of one project never write the same part (spec ruling 1). */
+export function noteWorkChanges(before: SuperTabState, after: SuperTabState, now: number) {
+  if (!after.projects) return
+  const prior = new Map(before.conversations.map(g => [g.id, g]))
+  for (const group of after.conversations) {
     if (isLeads(group) || group.audience) continue
-    const project = groupProject(state, group)
+    const was = prior.get(group.id)
+    if (was && workState(was) === workState(group)) continue
+    const project = groupProject(after, group)
     if (group.id === project.leadConversationId) continue
-    const clean = !project.progress || !dirtyGroups(state, project).length
+    const clean = !project.progress || !dirtyGroups(after, project).length
     project.progress ??= freshProgress(now)
-    group.reportSeq = sequences.get(message.id) ?? group.messageSeq ?? 0
+    group.reportSeq = Math.max(group.reportSeq ?? 0, group.messageSeq ?? 0)
     if (clean) project.progress.since = now
   }
 }
@@ -43,27 +59,29 @@ const throughOf = (groups: Conversation[]) => Object.fromEntries(groups.map(g =>
 export const UNANSWERED_REQUEST_MS = 2 * 60 * 60_000
 
 export function projectUpdateRequest(state: SuperTabState, target: Agent, now: number): MessageDraft | null {
-  // An older Swarm without stored projects is one synthesized project. It keeps no report progress (noteProjectReports),
+  // An older Swarm without stored projects is one synthesized project. It keeps no report progress (noteWorkChanges),
   // so its Lead is woken only for lost work (liveness.ts), which replaced the wake-up for workers down two hours.
   if (state.paused) return null
   const project = projectOf(state, agentProjectId(state, target))
   const group = conversation(state, project.leadConversationId), progress = project.progress
   if (group.leadId !== target.id || group.archived) return null
   const dirty = dirtyGroups(state, project)
+  // Five minutes after the first change, and at most once every 15 minutes, whatever cadence an older client set
+  // (updateMinutes is still read, never used here).
   const reports = !!progress && dirty.some(g => (g.reportSeq ?? 0) > (progress.requested[g.id] ?? progress.requestedFloor)) &&
-    now >= Math.max(progress.requestedAt ?? 0, progress.since) + project.updateMinutes * 60_000
+    now >= Math.max(progress.since + BATCH_MS, progress.requestedAt === undefined ? 0 : progress.requestedAt + WAKE_GAP_MS)
   if (!reports) return null
   const through = throughOf(dirty)
   const id = stableId('project-update', state.id, project.id, JSON.stringify(through))
   const after = (g: Conversation) => `${g.number !== undefined ? `#${g.number}` : JSON.stringify(g.title)} after ${progress!.summarized[g.id] ?? progress!.summarizedFloor}`
-  const text = `Consolidate new reports for project ${JSON.stringify(project.name)}. ` +
+  const text = `Work changed in project ${JSON.stringify(project.name)}. ` +
     `Read the new messages of these workgroups: ${dirty.map(after).join(', ')}; inspect their current work. ` +
-    'At your next natural checkpoint, tell the people what changed, what is blocked, and what comes next. Include useful workgroup references and result links. ' +
-    'Do not copy the terminal log or repeat unchanged status. This is a scheduled request, not a new task. ' +
+    'Then keep the project\'s status card current: one short line per active task saying where it is, what changed, and what it waits on; ' +
+    'nothing repeated from the cards in the chat. The card updates in place and posts nothing to the chat. This is a scheduled request, not a new task. ' +
     `Use harness super-tab --tab ${state.id} command UNIQUE_OPERATION_ID ` +
-    `JSON with {"type":"project.report","projectId":"${project.id}","through":${JSON.stringify(through)},"text":"your update"}. ` +
-    'Use text:null to acknowledge if nothing merits an update. Reuse the same operation ID after a lost reply. ' +
-    'Keep reporting human questions, serious blockers, and completion immediately; do not wait for this cadence.'
+    `JSON with {"type":"project.report","projectId":"${project.id}","through":${JSON.stringify(through)},"text":"the whole card"}. ` +
+    'Use text:null to acknowledge when the card is still right. Reuse the same operation ID after a lost reply. ' +
+    'Post in the project chat only when work merges or ships, a person must decide something new, or work is badly stuck, in one or two lines with the link.'
   return { id, conversationId: group.id,
     author: author(state, { kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }),
     text, replyTo: null, recipients: [target.id],

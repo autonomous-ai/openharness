@@ -64,10 +64,12 @@ function buddyChatOf(conversations: Json[], projectId: string, me: string | unde
   return conversations.find(c => isReadersBuddyChat(c, me) && inProject(c, projectId) && c.archived !== true && cardId(c.id))
 }
 /** The reader's Buddies in their chat: the chat's agents that are a Buddy of the reader. One whose `buddyOf` names someone
- *  else (an agent id reused or misfiled) is not. */
+ *  else (an agent id reused or misfiled) is not, and neither is a thread session (spec 2026-10-30-buddy-thread-sessions),
+ *  which answers in its own thread: the dial's Buddy is the main one. */
 function buddiesIn(agents: Json[], chat: Json, me: string | undefined): Json[] {
   const ids = idsOf(chat.agentIds)
-  return agents.filter(a => typeof a.id === 'string' && ids.includes(a.id) && me !== undefined && object(a.buddyOf).personId === me)
+  return agents.filter(a => typeof a.id === 'string' && ids.includes(a.id) && me !== undefined && object(a.buddyOf).personId === me
+    && (a.buddySession === undefined || a.buddySession === null))
 }
 /** The name Desktop shows and draws an agent by (super_tabs/identity.dart). */
 const agentName = (agent: Json): string => String(agent.displayName ?? agent.name ?? '')

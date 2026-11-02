@@ -1,8 +1,8 @@
 import { spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync,
+import { chmodSync, closeSync, existsSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync,
   writeFileSync } from 'node:fs'
-import { basename, dirname, isAbsolute, join } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 import { isTeamAccount } from '../team/config.js'
 import { buddyAccountFile } from './buddyAccount.js'
@@ -24,7 +24,11 @@ export interface BuddyWide { home: string; denied: readonly string[];
   /** This launch, at random: a grant from before a relaunch is none (delta reviews of #2310). */
   launch: string
   /** Where the host keeps the account signed in on this machine (`writeBuddyAccount`): a grant holds only for it. */
-  accountFile: string }
+  accountFile: string
+  /** Where every Swarm session's folder on this machine is (Harness's worktrees folder): closed to this one's reads but its
+   *  own folder, so a Buddy's thread session never reads another session's folder or the files sent to it (spec
+   *  2026-10-30-buddy-thread-sessions). The guard's alone: closing it in the sandbox would close the session's own folder. */
+  otherSessions?: readonly string[] }
 
 /** Where each engine Harness runs keeps its sessions, history and sign-in in a home: closed to a Buddy, as other agents on
  *  this machine keep Swarm chats there (delta reviews of #2310). Typed by the engine list, so a new engine names its own. */
@@ -49,7 +53,7 @@ export const BUDDY_ENGINE_HOMES: Record<Exclude<AgentEngine, 'terminal'>, readon
 /** Places in a home that hold secrets or other people's data (the Lead's list, 10-30): ssh, cloud, GitHub, ArgoCD and
  *  Harness credentials; keychains; browser profiles and mail; shell and database histories, which keep typed secrets; and
  *  the Claude Code and Codex folders, where agents on this machine keep transcripts and pasted Swarm messages from chats
- *  the Buddy may not read (the Leads conversation, private chats, other projects). */
+ *  the Buddy may not read (private chats, other projects, the Leads conversation from before its removal). */
 const CLOSED_IN_HOME = ['.ssh', '.aws', '.azure', '.config/gcloud', '.gnupg', '.kube', '.docker', '.config/gh', '.config/hub', '.config/anthropic', '.config/argocd',
   '.argocd', '.secrets', '.config/git/credentials', '.password-store', '.config/op', '.zsh_sessions', '.bash_sessions', '.local/share/fish',
   'Library/Caches/claude-cli-nodejs', ...Object.values(BUDDY_ENGINE_HOMES).flat(),
@@ -70,9 +74,9 @@ const SYSTEM_READABLE = process.platform === 'darwin'
 /** Wide mode for one person's Buddy: [home] is theirs, [dataDir] Harness's data folder (its lists, approvals, downloads and
  *  agent records stay closed), [tmpDirs] where Claude Code keeps other sessions' tool output, and [repos] the project's repositories (owner/name), the only ones gh api reads. */
 export function buddyWideOf(input: { home: string; dataDir: string; tmpDirs: readonly string[]; repos: readonly string[]; hosts?: readonly string[];
-  system?: readonly string[]; launch?: string; closed?: readonly string[] }): BuddyWide {
+  system?: readonly string[]; launch?: string; closed?: readonly string[]; otherSessions?: readonly string[] }): BuddyWide {
   return { home: input.home, launch: input.launch ?? randomUUID(), accountFile: buddyAccountFile(input.dataDir), readable: [input.home, ...(input.system ?? SYSTEM_READABLE)], repos: input.repos, hosts: input.hosts ?? [], sessionTemp: input.tmpDirs, denied: [...CLOSED_IN_HOME.map(path => join(input.home, path)), input.dataDir, ...input.tmpDirs, ...(input.closed ?? [])],
-    approvalsDir: join(input.dataDir, 'buddy-approvals') }
+    approvalsDir: join(input.dataDir, 'buddy-approvals'), ...(input.otherSessions?.length ? { otherSessions: input.otherSessions } : {}) }
 }
 
 /** What a Buddy's launch reads of its machine to decide wide mode (`buddyLaunchWide`). */
@@ -138,11 +142,42 @@ function configHosts(home: string): string[] {
  * needs their own account, never a Harness Team account, and Claude Code's sandbox to run its shell in: macOS, or Linux
  * with bubblewrap. Windows has none.
  */
+/** A Buddy of one project (a project session, or the one Buddy's session in an older project chat: backend
+ *  Agent.buddyNarrow) never reads beyond its folder, whose home may hold another project's clone. Its host marks its folder,
+ *  by the worktree name its start gives it, before it launches (superTabs/start.ts), so its launch sets up no wide guard at
+ *  all, not only no grant (security review 1 of #2436). */
+export const buddyNarrowFile = (dataDir: string, leaf: string): string =>
+  join(dataDir, 'buddy-narrow', createHash('sha256').update(leaf).digest('hex').slice(0, 32))
+export function markBuddyNarrow(leaf: string, dataDir: string = env.ADAPTER_DATA_DIR): void {
+  const file = buddyNarrowFile(dataDir, leaf)
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
+  writeFileSync(file, '', { mode: 0o600 })
+}
+/** Whether [root] is a folder its host marked as one project's Buddy's: by its name, or its name before a -2, -3 a taken one
+ *  got (lib/gitProject.ts). */
+const narrowFolder = (root: string, dataDir: string) => {
+  const name = basename(root)
+  return [name, name.replace(/-\d+$/, '')].some(leaf => existsSync(buddyNarrowFile(dataDir, leaf)))
+}
+
 export function buddyLaunchWide(root: string, facts: BuddyLaunchFacts = launchFacts()): BuddyWide | null {
+  if (narrowFolder(root, facts.dataDir)) return null
   if (facts.team || !(facts.platform === 'darwin' || (facts.platform === 'linux' && facts.hasBwrap)) || !facts.engineHomes) return null
   // Where Claude Code keeps every session's tool output on this machine.
   const tmpDirs = [...new Set([`/tmp/claude-${facts.uid}`, `/private/tmp/claude-${facts.uid}`, join(tmpdir(), `claude-${facts.uid}`)])]
-  return buddyWideOf({ home: facts.home, dataDir: facts.dataDir, tmpDirs, repos: githubRepos(root), hosts: configHosts(facts.home), closed: facts.engineHomes })
+  return buddyWideOf({ home: facts.home, dataDir: facts.dataDir, tmpDirs, repos: githubRepos(root), hosts: configHosts(facts.home), closed: facts.engineHomes,
+    otherSessions: sessionsFolderOf(root, facts.home) })
+}
+
+/** Harness's worktrees folder, where every Swarm session's folder is (lib/gitProject.ts), when [root] is one of them: a
+ *  Buddy or thread session in a worktree of its own. None for a folder elsewhere, which nothing here would close. */
+function sessionsFolderOf(root: string, home: string): string[] {
+  const real = (path: string) => { try { return realpathSync(path) } catch { return null } }
+  // lib/projectFolder.ts projectsRoot, which this module does not import: it brings git and every source host with it.
+  const worktrees = join(home, process.env.HARNESS_OS === '1' ? 'projects' : 'harnesses', 'worktrees'), at = real(root), folder = real(worktrees)
+  if (!at || !folder) return []
+  const inside = relative(folder, at)
+  return inside && !inside.startsWith('..') && !isAbsolute(inside) ? [worktrees] : []
 }
 
 
@@ -385,7 +420,8 @@ const SECRET_NAMES = [/^\.env/i, /\.env$/i, /\.(pem|key|p12|pfx|jks|keystore|kdb
   /^\.claude/i, /^\.codex/i, /ro-?prod|prod-?db/i, /^\.?(netrc|npmrc|pypirc|pgpass|htpasswd|git-credentials)$/i]
 const secretName = (path) => path.split(sep).some((part) => SECRET_NAMES.some((name) => name.test(part)))
 const realRoots = (paths) => paths.map((path) => realOf(path) ?? path)
-const DENIED = WIDE ? realRoots(WIDE.denied) : []
+// Other sessions' folders (WIDE.otherSessions) are closed as these are; its own folder is read as its folder, before any of this.
+const DENIED = WIDE ? realRoots([...WIDE.denied, ...(WIDE.otherSessions ?? [])]) : []
 // What may be read outside the folder at all: the person's home and the system folders named for it. Everything else is
 // closed, the process and device folders and every temporary folder among it (security reviews 1 and 2 of #2310: on Linux
 // /proc/<pid>/environ held the read-only DB URL while db-size ran; on macOS /private/var/folders held other processes'
@@ -546,13 +582,18 @@ function decoded(text) {
 }
 const SECRET = (kind) => 'This holds what looks like ' + kind + ', so nothing was sent, and nobody will be asked. Take it out and ' +
   'send again: never pass on secrets, tokens, keys or connection strings.'
-// A file to attach, in the folder (outward refused any other): its first 10 MB, the most a chat file holds, read as text.
-// One that is not there holds nothing, as sending it fails anyway; one there that cannot be read is refused.
+// A file to attach, in the folder (outward refused any other), read whole as text to be checked for secrets. A Buddy's files
+// stay at 10 MB, the form upload's size: a chat file may be 256 MB now, but one past 10 MB would go out with only its
+// start checked, so it is refused. One that is not there holds nothing, as sending it fails anyway; one there that cannot
+// be read is refused.
+const ATTACH_MAX_BYTES = 10 * 1024 * 1024
+const TOO_LARGE = 'A Buddy attaches files of up to 10 MB, so nothing was sent, and nobody will be asked. Attach a smaller file.'
 function fileText(path) {
   let fd
   try {
     fd = openSync(resolve(ROOT, path), constants.O_RDONLY)
-    const buffer = Buffer.alloc(10 * 1024 * 1024), read = readSync(fd, buffer, 0, buffer.length, 0)
+    const buffer = Buffer.alloc(ATTACH_MAX_BYTES + 1), read = readSync(fd, buffer, 0, buffer.length, 0)
+    if (read > ATTACH_MAX_BYTES) { reason = TOO_LARGE; return null }
     return buffer.subarray(0, read).toString('utf8')
   } catch (error) { return error?.code === 'ENOENT' ? '' : null } finally { if (fd !== undefined) closeSync(fd) }
 }
@@ -563,7 +604,11 @@ function pastedOutput(json) {
   const text = [proposal?.goal, proposal?.scope].filter((part) => typeof part === 'string').join('\n')
   return text.includes('\x60\x60\x60') || text.split('\n').length > 10
 }
-const SUMMARIZE = 'A proposal carries your summary of what you read, never its output: no code block and at most 10 lines. Nothing ' +
+const STDIN = (action) => (action === 'post' ? 'A Buddy passes its message as TEXT itself' : 'A Buddy passes its proposal\'s JSON itself') +
+  ': - in its place reads it from stdin, where Harness cannot check it for secrets. Nothing was sent, and nobody will be asked. ' +
+  'Send again with it in quotes where the - was: ' + (action === 'post' ? 'harness super-tab post GROUP \'your message\' OPERATION_ID'
+    + ', or in double quotes when it holds an apostrophe: "it\'s done"' : 'harness super-tab propose OPERATION_ID \'{"conversationId":"...","goal":"..."}\'') + '.'
+const SUMMARIZE ='A proposal carries your summary of what you read, never its output: no code block and at most 10 lines. Nothing ' +
   'was sent, and nobody will be asked. Summarize the numbers and findings in a few lines and send again.'
 
 // harness super-tab [--tab ID] ACTION ...: only a Buddy's actions, an --attach only from its folder, and nothing it sends
@@ -576,6 +621,11 @@ function superTabAllowed(rest) {
   if (after.some((word, at) => (word === '--attach' && (after[at + 1] === undefined || outward(after[at + 1])))
     || ['--agent', '--port', '--machine'].includes(word))) return false
   if (rest[i] !== 'post' && rest[i] !== 'propose') return true
+  // A post's TEXT or a proposal's JSON that is exactly - is read from stdin (superTabs/command.ts, post since #2355), where
+  // this guard sees only the dash and cannot check what is sent for secrets. A Buddy cannot feed stdin today (no pipes,
+  // redirects or heredocs above), but the secret check must not rest on that. Any other text, -- or "- P1" among them, is
+  // the message itself and is checked as it is.
+  if (after[1] === '-') { reason = STDIN(rest[i]); return false }
   const attached = after.flatMap((word, at) => after[at - 1] === '--attach' ? [fileText(word)] : [])
   if (attached.includes(null)) return false
   // Its words one by one, and what it says run together: the post's text or the proposal's decoded fields, with its files.
@@ -820,9 +870,9 @@ const MARK = /\.[0-9a-f]{64}\.owner$/
 /** A message holds at most ten files (superTabs/attachments.ts): ten messages' worth, and as many links. */
 const MAX_FILES = 100
 const MAX_LINKS = 50
-/** The backend's per-file limit (superTabs/attachments.ts MAX_ATTACHMENT_BYTES): no download is larger, so nothing larger
- *  is read whole to be listed. */
-const MAX_BYTES = 10 * 1024 * 1024
+/** The backend's per-file limit (superTabs/attachments.ts MAX_ATTACHMENT_BYTES, 256 MB): no download is larger, so nothing
+ *  larger is listed. A listed file is never read whole: its bytes are hashed 64 KiB at a time, here and in the guard. */
+const MAX_BYTES = 256 * 1024 * 1024
 
 /** A claude.ai Artifact link as the guard compares it (`artifactLink` in the guard above, the same rules), or null. */
 function artifactLink(text: string): string | null {
@@ -1092,47 +1142,64 @@ export function recordBuddyApprovals(input: { reads: BuddyReads; session: string
  * an own list it cannot delete (a folder it cannot write to), which it empties in place where it can, needing only the
  * file, so the guard allows nothing meanwhile, keeping that list's mark and its session so the next try finds it; and a
  * mark it cannot delete. A list that went between the folder's read and its own counts as gone.
+ *
+ * It fails by fixed codes alone (`SentListsError`), never with the error it caught: the host logs what it failed with, and
+ * a filesystem error's message names its path, in the person's home (follow-up to #2389's security re-check 2).
  */
 export function forgetBuddyReads(session: string, dir = listsDir()): void {
   let names: string[]
   try { names = readdirSync(dir) } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
-    throw error
+    throw new SentListsError(['SENT_LISTS_UNREAD'])
   }
   const own = `.${sha256(session)}.owner`
   const marked = new Set(names.filter(name => name.endsWith(own)).map(name => `${name.slice(0, -own.length)}.json`))
   const kept = new Set<string>()
-  let failed: unknown
+  const failed = new Set<SentListsFailure>()
   // Only a list's own name: a .tmp is a write not yet renamed, which no guard reads.
   for (const name of names) {
     if (!name.endsWith('.json')) continue
     const file = join(dir, name)
-    let text: string | undefined, unreadable: unknown
-    try { text = readFileSync(file, 'utf8') } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') unreadable = error }
+    let text: string | undefined, unreadable = false
+    try { text = readFileSync(file, 'utf8') } catch (error) { unreadable = (error as NodeJS.ErrnoException).code !== 'ENOENT' }
     let named: unknown
     try { named = text === undefined ? undefined : (JSON.parse(text) as { session?: unknown } | null)?.session } catch { /* not JSON: it names no session */ }
     if (!marked.has(name)) {
       // Not its own by mark. One it cannot read is another session's to remove when that session's mark is beside it, and
       // otherwise whose it is cannot be told: kept, and the end fails so it is tried again, as before marks (review of #2261).
-      if (unreadable !== undefined) {
+      if (unreadable) {
         const base = `${name.slice(0, -'.json'.length)}.`
-        if (!names.some(other => other.startsWith(base) && MARK.test(other))) failed ??= unreadable
+        if (!names.some(other => other.startsWith(base) && MARK.test(other))) failed.add('SENT_LIST_UNREAD')
         continue
       }
       if (named !== session) continue
     } else if (typeof named === 'string' && named !== session) continue
-    try { rmSync(file, { force: true }) } catch (error) {
+    try { rmSync(file, { force: true }) } catch {
       const empty: List = { version: 1, session, files: [], links: [] }
       try { writeFileSync(file, `${JSON.stringify(empty)}\n`) } catch { /* neither: the host's next try is all that is left */ }
       kept.add(name)
-      failed ??= error
+      failed.add('SENT_LIST_KEPT')
     }
   }
   for (const name of names) {
     if (!name.endsWith(own) || kept.has(`${name.slice(0, -own.length)}.json`)) continue
-    try { rmSync(join(dir, name), { force: true }) } catch (error) { failed ??= error }
+    try { rmSync(join(dir, name), { force: true }) } catch { failed.add('SENT_LIST_MARK_KEPT') }
   }
-  if (failed) throw failed
+  if (failed.size) throw new SentListsError(SENT_LISTS_FAILURES.filter(code => failed.has(code)))
+}
+
+/** What kept an ended session's lists from all going, in the order they are named: its lists folder could not be read; a list
+ *  whose session could not be told could not be read, and was kept; one of its own lists could not be deleted, and was emptied
+ *  where it could be; or the mark beside one could not be deleted. */
+const SENT_LISTS_FAILURES = ['SENT_LISTS_UNREAD', 'SENT_LIST_UNREAD', 'SENT_LIST_KEPT', 'SENT_LIST_MARK_KEPT'] as const
+export type SentListsFailure = typeof SENT_LISTS_FAILURES[number]
+
+/** `forgetBuddyReads`'s failure: its codes, each once, and nothing of the errors behind them, whose messages name paths. */
+export class SentListsError extends Error {
+  constructor(readonly codes: readonly SentListsFailure[]) {
+    super(codes.join(', '))
+    this.name = 'SentListsError'
+  }
 }
 
 const shellQuote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`

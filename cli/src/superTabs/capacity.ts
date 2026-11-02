@@ -6,18 +6,25 @@ import { commandAvailableInInteractiveShell, type CommandAvailability } from '..
 import { launchModelEngines } from '../lib/launchModel.js'
 import { object } from './wire.js'
 import { readCapacityDisk } from './disk.js'
+import { floorOf, heavyNeed } from './machineFit.js'
+import type { Needs } from './route.js'
 
 type Json = Record<string, unknown>
 export interface Requirements {
   memoryBytes: number; diskBytes: number; maxCpuPercent: number
   tools: string[]; devices: string[]; quotaRequired: boolean
 }
-/** What `start` asks of a machine when the Lead has no reason to ask for more: the help's template. */
-export const START_REQUIREMENTS: Requirements = { memoryBytes: 2147483648, diskBytes: 10737418240, maxCpuPercent: 85, tools: ['git'], devices: [], quotaRequired: false }
-/** The same plus what the task needs. The route admits a pick on exactly this, so the start it suggests is admitted too. */
-export const startRequirements = (needs: { tools: string[]; devices: string[] }): Requirements =>
-  // CPU use is only a momentary reading: a busy machine would refuse every candidate (seen in the route e2e at 98.7%), so the route does not cap it.
-  ({ ...START_REQUIREMENTS, maxCpuPercent: 100, tools: [...new Set([...START_REQUIREMENTS.tools, ...needs.tools])], devices: needs.devices })
+/** What `start` asks of a machine when the Lead has no reason to ask for more: the help's template. CPU use is only a momentary
+ *  reading: a busy machine would refuse every start (seen in the route e2e at 98.7%), so no cap; memory, disk and pressure gate it. */
+export const START_REQUIREMENTS: Requirements = { memoryBytes: 2147483648, diskBytes: 10737418240, maxCpuPercent: 100, tools: ['git'], devices: [], quotaRequired: false }
+/** The same plus what the task needs. The route admits a pick on exactly this, so the start it suggests is admitted too. Heavy
+ *  work asks only the least it can run with (machineFit.ts floorOf), so a machine the route ranks later, between half the need
+ *  and the need, still admits its start (Lead, 10-31); the start says it is heavy in its own `heavy` field. */
+export const startRequirements = (needs: Pick<Needs, 'tools' | 'devices' | 'heavy'>): Requirements => {
+  const need = heavyNeed(needs), floor = need ? floorOf(need) : null
+  return { ...START_REQUIREMENTS, tools: [...new Set([...START_REQUIREMENTS.tools, ...needs.tools])], devices: needs.devices,
+    ...(floor ? { memoryBytes: Math.max(START_REQUIREMENTS.memoryBytes, floor.memoryBytes), diskBytes: Math.max(START_REQUIREMENTS.diskBytes, floor.diskBytes) } : {}) }
+}
 
 /** A missing result is a completed check; an absent value or failed check is only unverified. */
 export function requiredToolReason(tool: string, reported: unknown, failure?: unknown): string | null {
@@ -160,6 +167,9 @@ export function admission(capacity: Json, engine: Json, quota: ReturnType<typeof
   if (!quota.known) {
     unknown.push('Subscription allowance is unknown for this account.')
     if (requirements.quotaRequired) reasons.push('The requested subscription allowance could not be verified.')
-  } else if (quota.windows.some(w => w.usedPercent >= 100)) reasons.push('The subscription has an exhausted usage window. Wait for a fresh allowance reading or choose another account.')
+  } else if (quota.windows.some(w => w.usedPercent >= 100)) unknown.push(USED_UP_WINDOW)
   return { allowed: reasons.length === 0, reasons, unknown }
 }
+/** Quota is information, not a gate (project instructions, phase 4): a start on a used-up account goes ahead, its engine
+ *  shows its usage limit, and the agent resumes when the window resets (superTabs/limitResume.ts). The route says it too. */
+export const USED_UP_WINDOW = 'The subscription has a used-up usage window: work there waits until it resets.'
