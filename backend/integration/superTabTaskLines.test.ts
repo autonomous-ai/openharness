@@ -81,7 +81,7 @@ describe('a task\'s one message in its project chat', () => {
       ['needs_human', 'Keep drafts after a restart?', { ask: { personId: peer.sub, options: ['Keep', 'Drop'], recommended: 0, unblocks: 'The release' } },
         'Offline drafts · waiting on peer', { state: 'waiting', answerFor: peer.sub }],
       ['review', 'Ready: https://github.com/example/app/pull/7 at abc1234.', {}, 'Offline drafts · in review', { state: 'review' }],
-      ['done', 'Merged https://github.com/example/app/pull/7.', {}, 'Offline drafts · shipped', { state: 'shipped' }],
+      ['done', 'Review passed: https://github.com/example/app/pull/7.', {}, 'Offline drafts · ready', { state: 'ready' }],
     ]
     for (const [value, result, extra, text, source] of steps) {
       await status(value, result, extra)
@@ -92,6 +92,11 @@ describe('a task\'s one message in its project chat', () => {
       expect(now.reactionSeq).toBeGreaterThan(seq)
       seq = now.reactionSeq
     }
+    // Shipped once the merge is recorded (PM, review of #2633).
+    await s.as(P)({ type: 'conversation.merged', conversationId: T, pullRequestUrl: 'https://github.com/example/app/pull/7' })
+    const shipped = await s.page('lead')
+    expect(shipped.lines).toEqual([expect.objectContaining({ id: lineId, text: 'Offline drafts · shipped', source: expect.objectContaining({ state: 'shipped' }) })])
+    expect(shipped.reactionSeq).toBeGreaterThan(seq)
     // The Shipped line is gone: its line says it.
     expect((await store.messages(owner, s.tab, 'lead', {}) as unknown as { messages: Row[] }).messages.filter(m => m.source?.kind === 'ship')).toEqual([])
   })

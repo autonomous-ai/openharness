@@ -453,7 +453,7 @@ describe('reactions', () => {
 describe('the ship moment', () => {
   const config = { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
   // The task's own line says it shipped, in place of the Shipped line (taskLine.ts; Quiet Swarm, Dee, 11-02).
-  it('edits the task\'s one line in the project chat to shipped when its work is Done, once on a retry, waking nobody', async () => {
+  it('edits the task\'s one line in the project chat to shipped when its merge is recorded, once on a retry, waking nobody', async () => {
     const tab = await swarm()
     await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: randomUUID(), name: 'River', configuration: config, lead: true })
     const group = (await run(tab, { type: 'conversation.create', title: 'Avatars', brief: 'Add avatars.',
@@ -467,9 +467,13 @@ describe('the ship moment', () => {
       evidence: 'npm test: 12 passed' }, owner, builder)
     const operationId = randomUUID()
     const done: Command = { type: 'work.status', conversationId: group, assignmentId: work.assignment!.id, status: 'done',
-      result: 'Merged https://github.com/example/app/pull/7' }
+      result: 'Review passed: https://github.com/example/app/pull/7' }
     await run(tab, done, owner, builder, operationId)
     await run(tab, done, owner, builder, operationId)
+    const merged: Command = { type: 'conversation.merged', conversationId: group, pullRequestUrl: 'https://github.com/example/app/pull/7' }
+    const mergeId = randomUUID()
+    await run(tab, merged, owner, undefined, mergeId)
+    await run(tab, merged, owner, undefined, mergeId)
     const rows = await db.superTabMessage.findMany({ where: { tabId: tab, conversationId: 'lead' } })
     expect(rows.filter(m => (m.source as { kind?: string } | null)?.kind === 'ship')).toEqual([])
     const lines = rows.filter(m => (m.source as { kind?: string } | null)?.kind === 'task-line')

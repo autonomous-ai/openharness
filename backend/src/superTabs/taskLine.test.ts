@@ -45,7 +45,7 @@ describe('a task\'s one line in its project chat', () => {
     expect(f.task(id).cards?.line).toMatchObject({ messageId: line!.id, state: 'planned' })
   })
 
-  it('edits the same line through working, waiting, review and shipped', () => {
+  it('edits the same line through working, waiting, review, ready and shipped', () => {
     const f = fixture()
     const id = f.group()
     const builder = f.add('Kai', id)
@@ -56,17 +56,31 @@ describe('a task\'s one line in its project chat', () => {
       ['needs_human', 'Offline drafts · waiting on dee', { state: 'waiting', answerFor: 'owner' },
         { ask: { personId: 'owner', options: ['Keep', 'Drop'], recommended: 0, unblocks: 'The release' } }],
       ['review', 'Offline drafts · in review', { state: 'review' }, {}],
-      ['done', 'Offline drafts · shipped', { state: 'shipped' }, {}],
+      // Done with its pull request, not merged yet: ready, never shipped (PM, review of #2633).
+      ['done', 'Offline drafts · ready', { state: 'ready' }, {}],
     ]
     for (const [value, text, source, extra] of steps) {
       const before = seq()
-      const effects = f.status(id, builder, value, value === 'needs_human' ? 'Keep drafts after a restart?' : value === 'done' ? `Merged ${PR}` : null, extra)
+      const effects = f.status(id, builder, value, value === 'needs_human' ? 'Keep drafts after a restart?' : value === 'done' ? `Review passed: ${PR}` : null, extra)
       expect(f.lines(effects)).toEqual([])
       expect(effects.edits).toEqual([expect.objectContaining({ id: lineId, conversationId: 'lead', text,
         source: expect.objectContaining({ kind: TASK_LINE_KIND, taskId: id, ...source }) })])
       if (!('answerFor' in source)) expect(effects.edits![0]!.source).not.toHaveProperty('answerFor')
       expect(seq()).toBe(before + 1)
     }
+    // Shipped once its merge is recorded, and only then.
+    const merged = f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: PR })
+    expect(merged.edits).toEqual([expect.objectContaining({ id: lineId, text: 'Offline drafts · shipped', source: expect.objectContaining({ state: 'shipped' }) })])
+    expect(f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: PR }).edits ?? []).toEqual([])
+  })
+
+  it('reads done, never shipped, for work Done with no pull request', () => {
+    const f = fixture()
+    const id = f.group('Review: PR #2632')
+    const builder = f.add('Kai', id)
+    const lineId = f.lines(f.run({ type: 'work.assign', conversationId: id, agentId: builder }))[0]!.id
+    const done = f.status(id, builder, 'done', 'Ready to merge: Yes.')
+    expect(done.edits).toEqual([expect.objectContaining({ id: lineId, text: 'Review: PR #2632 · done', source: expect.objectContaining({ state: 'done' }) })])
   })
 
   it('writes no Shipped line for a task with a line', () => {
