@@ -323,9 +323,9 @@ describe('a Buddy thread session', () => {
     await expect(f.reply(mine, 'x', { newSession: true })).rejects.toMatchObject({ code: 'BUDDY_SESSION_NO_BUDDY' })
   })
 
-  // In the one Buddy chat only a project session proposes, and only to its project's PM (spec 3); a plain session proposes
-  // nothing, as the main Buddy does.
-  it('proposes to the PM only from a project session, for its person\'s ask in its own thread', async () => {
+  // In the one Buddy chat a project session proposes only to its project's PM (spec 3); a plain session names a project, as
+  // the main Buddy does (Scholes, 11-02).
+  it('proposes for its person\'s ask in its own thread: a plain session only to a project it names', async () => {
     const f = await swarm()
     const [root, plainRoot] = [await f.say('Start here'), await f.say('Plain topic')]
     const { agentId, first } = await f.session(root, 'Measure prod CPU for the last day', { sessionProjectId: 'lead' })
@@ -333,7 +333,7 @@ describe('a Buddy thread session', () => {
     const mainAsk = await f.say('Send the other thing to the PM')
     const propose = (ownerMessageId: string, as = agentId) => f.execute({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId, goal: 'CPU fix',
       scope: 'Backend', priority: 'normal' }, peer, as)
-    await expect(propose(plain.first, plain.agentId)).rejects.toMatchObject({ code: 'BUDDY_PROPOSE_SESSION' })
+    await expect(propose(plain.first, plain.agentId)).rejects.toMatchObject({ code: 'BUDDY_PROPOSE_PROJECT' })
     await expect(propose(mainAsk)).rejects.toMatchObject({ code: 'PROPOSAL_UNASKED' })
     await expect(propose(plain.first)).rejects.toMatchObject({ code: 'PROPOSAL_UNASKED' })
     await expect(propose(first)).resolves.toBeTruthy()
