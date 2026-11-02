@@ -13,13 +13,14 @@
  * daemon serves a named pipe instead (`listenAuthenticated` below). Reaching that pipe is no credential, so every
  * request over it proves the daemon's token (lib/windows/pipeAuth.ts).
  */
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import http from 'node:http'
 import { connect } from 'node:net'
 import type { IncomingMessage } from 'node:http'
 import type { Socket } from 'node:net'
 import type { Duplex } from 'node:stream'
-import { chmodSync, linkSync, lstatSync, renameSync, unlinkSync, type Stats } from 'node:fs'
+import { chmodSync, linkSync, lstatSync, mkdirSync, renameSync, unlinkSync, type Stats } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { readDaemonRecord } from './daemonRecord.js'
 import { daemonPipe, type LocalDaemonOptions } from './windows/daemonPipe.js'
@@ -51,11 +52,25 @@ const trustedSockets = new WeakSet<Socket>()
 /** Requests over the daemon's pipe whose auth checked out, and the proof each answer to them carries. */
 const pipeProofs = new WeakMap<IncomingMessage, string>()
 
-/** The daemon's Unix socket for `port` in this data directory, or null where there is none: Windows, or a path too long. */
+/** Where a folder too long to hold a socket keeps its sockets: under the home folder, as /tmp is shared and TMPDIR differs between launchd
+ *  and a shell, so clients would disagree. The same rule is in cli/hook/notify.mjs, store/tools/local-daemon.mjs and Desktop's
+ *  local_daemon_transport.dart. */
+export function shortSocketFolder(folder: string, home: string = homedir()): string {
+  return join(home, '.harness', 's', createHash('sha256').update(folder).digest('hex').slice(0, 16))
+}
+
+/** `name` in [folder], or in its short folder when that path is too long for a socket; null when even that is, the one case left on TCP. */
+export function socketPathIn(folder: string, name: string, home: string = homedir()): string | null {
+  const beside = join(folder, name)
+  if (Buffer.byteLength(beside) <= MAX_SOCKET_PATH_BYTES) return beside
+  const short = join(shortSocketFolder(folder, home), name)
+  return Buffer.byteLength(short) <= MAX_SOCKET_PATH_BYTES ? short : null
+}
+
+/** The daemon's Unix socket for `port` in this data directory, or null where there is none: Windows, or a home too long as well. */
 export function unixSocketPath(dataDir: string, port: number, platform: NodeJS.Platform = process.platform): string | null {
   if (platform === 'win32') return null
-  const path = join(dataDir, localSocketName(port))
-  return Buffer.byteLength(path) <= MAX_SOCKET_PATH_BYTES ? path : null
+  return socketPathIn(dataDir, localSocketName(port))
 }
 
 /**
@@ -103,6 +118,18 @@ export interface LocalSocketServer {
   closeSync: () => void
 }
 
+/** A short folder (shortSocketFolder) is made here, and it and its parent are this account's real folders, owner only, before a socket goes in. */
+function prepareShortFolder(path: string): void {
+  const folder = dirname(path)
+  if (!/[\\/]\.harness[\\/]s[\\/][0-9a-f]{16}$/.test(folder)) return
+  mkdirSync(folder, { recursive: true, mode: 0o700 })
+  for (const each of [dirname(folder), folder]) {
+    const seen = lstatSync(each), uid = process.getuid?.()
+    if (!seen.isDirectory() || (uid !== undefined && seen.uid !== uid)) throw new Error(`${each} is not private: it must be this account's own folder.`)
+    chmodSync(each, 0o700)
+  }
+}
+
 /**
  * Serve `handler` on a Unix socket at `path`. Refuse a live listener or a non-socket file, and remove
  * only a stale socket. CLI startup is serialized by the per-user spawn lock; two daemons that start at
@@ -112,6 +139,7 @@ export async function listenLocalSocket(handler: http.RequestListener, path: str
   if (options.token) return listenAuthenticated(handler, path, options.token)
   // A Harness pipe, or any endpoint on Windows, is never trusted by reachability: it needs the daemon's token.
   if (pipeIdOf(path) || process.platform === 'win32') throw new Error(`${path} needs the daemon's token: reaching a pipe is no credential`)
+  prepareShortFolder(path)
   // A TCP collision can now move this user to another port. Holding a TCP port no longer proves
   // an existing Unix socket is stale: never unlink a live daemon belonging to this user.
   await refuseLiveSocket(path)

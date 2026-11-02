@@ -23,11 +23,17 @@ export function daemonDataDir(env = process.env) {
   return env.ADAPTER_DATA_DIR || join(homedir(), '.harness', 'cli', 'data')
 }
 
-/** The daemon's socket for `port`, or null where it can have none: Windows, or a path too long. */
+/**
+ * The daemon's socket for `port`: in its data folder, or where that path is too long for a socket, in a 0700 folder under the home folder
+ * named by the folder's hash (the CLI's `socketPathIn`). Null where it can have none: Windows, or a home too long as well.
+ */
 export function daemonSocketPath(port, env = process.env, platform = process.platform) {
   if (platform === 'win32') return null
-  const path = join(daemonDataDir(env), `daemon-${port}.sock`)
-  return Buffer.byteLength(path) <= MAX_SOCKET_PATH_BYTES ? path : null
+  const folder = daemonDataDir(env), name = `daemon-${port}.sock`, beside = join(folder, name)
+  if (Buffer.byteLength(beside) <= MAX_SOCKET_PATH_BYTES) return beside
+  const hash = createHash('sha256').update(folder).digest('hex').slice(0, 16)
+  const short = join(env.HOME || homedir(), '.harness', 's', hash, name)
+  return Buffer.byteLength(short) <= MAX_SOCKET_PATH_BYTES ? short : null
 }
 
 /** Whether `path` is the daemon's: a socket of this account's, owner only, in a real folder nobody else can write to. */
