@@ -32,7 +32,8 @@ beforeAll(async () => {
     ...Array.from({ length: 60 }, (_, i) => share(`other-${i}@example.com`, i)),
     ...Array.from({ length: 5 }, (_, i) => share('recipient@example.com', 100 + i)),
     share('recipient@example.com', 110, { autonomousEnv: 'dev' }),
-    share('recipient@example.com', 111, { revokedAt: new Date() }),
+    // Revoked but not yet expired, as production holds them by the thousand: each sits inside the expiresAt range.
+    ...Array.from({ length: 30 }, (_, i) => share('recipient@example.com', 200 + i, { revokedAt: new Date() })),
     share('recipient@example.com', 112, { expiresAt: new Date(Date.now() - 1000) }),
   ] })
   app = Fastify()
@@ -52,8 +53,8 @@ describe('the harness shares list', () => {
     const entries = await profiled(db, async () => { expect((await app.inject({ method: 'GET', url: '/api/harness-shares' })).statusCode).toBe(200) })
     const rows = reads(entries, 'harness_shares', ['recipientEmail', 'autonomousEnv', 'revokedAt', 'expiresAt'])
     expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
-    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ recipientEmail: 1, autonomousEnv: 1, createdAt: 1 \}/)
-    // Only the recipient's shares in this environment (5 listed, the revoked and the expired one), none of the 60 others.
-    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(7)
+    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ recipientEmail: 1, autonomousEnv: 1, revokedAt: 1, createdAt: 1, expiresAt: 1 \}/)
+    // Only the recipient's shares in this environment (just the 5 listed): not the 30 revoked, the expired one or the 60 others.
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(5)
   })
 })
