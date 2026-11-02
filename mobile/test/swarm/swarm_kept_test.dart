@@ -78,6 +78,13 @@ void main() {
     expect(await store.read('me'), isNull);
   });
 
+  test('the device has one store, so its clears and writes keep one order', () {
+    expect(
+      identical(SealedSwarmKeptStore.device(), SealedSwarmKeptStore.device()),
+      isTrue,
+    );
+  });
+
   group('SwarmKept', () {
     late MemorySwarmKeptStore memory;
 
@@ -201,6 +208,20 @@ void main() {
       await kept.ready;
       expect(kept.draft('t', 'c', null)?.text, 'newer');
       expect(kept.draft('t', 'old', null)?.text, 'kept');
+    });
+
+    test('a flush after it closes writes nothing', () async {
+      final kept = SwarmKept(
+        accountId: 'me',
+        store: memory,
+        saveAfter: const Duration(hours: 1),
+      );
+      await kept.ready;
+      kept.dispose();
+      await pumpEventQueue();
+      memory.held = null;
+      await kept.flush();
+      expect(memory.held, isNull);
     });
 
     test('with no store, it holds for the session', () async {
