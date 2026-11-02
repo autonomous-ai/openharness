@@ -64,11 +64,16 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
   const landedBy = byKey(landed, g => g.requesterId!)
   const answersBy = byKey(visible.flatMap(group => (group.ledger?.unblocks ?? []).map(unblock => ({ ...unblock, group }))), u => u.personId)
   const machinesBy = byKey(visibleMachines, m => m.contributorId)
+  // Under All projects, whether a board of this reader's already shows the person; a project's board lists only its own.
+  const sharesBoard = (personId: string): boolean => {
+    const person = state.people.find(p => p.id === personId)
+    return !allProjects || (!!person && [...projectIds].some(id => canReadProject(state, { kind: 'person', userId: person.id, email: person.email }, projectOf(state, id))))
+  }
   const score = (personId: string, span: Span) => {
     const shippedHere = (landedBy.get(personId) ?? []).filter(g => within(g.ledger!.shippedAt!, span))
     const answers = (answersBy.get(personId) ?? []).filter(u => within(u.at, span))
     const machines = (machinesBy.get(personId) ?? [])
-      .map(m => ({ name: m.name, busyMs: lentIn(m, span, now) })).filter(m => m.busyMs > 0)
+      .map(m => ({ name: m.name, busyMs: lentIn(m, span, now, { projects: projectIds, unsplit: sharesBoard(personId) }) })).filter(m => m.busyMs > 0)
     const freedMs = sum(answers.map(u => u.waitedMs)), lentMs = sum(machines.map(m => m.busyMs))
     const points = shippedHere.length * SHIPPED_POINTS + sum(answers.map(unblockPoints)) + Math.floor(lentMs / (LENT_HOURS_PER_POINT * HOUR_MS))
     const details: PersonDetails = {

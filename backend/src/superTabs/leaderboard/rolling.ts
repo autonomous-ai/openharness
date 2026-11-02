@@ -30,23 +30,33 @@ export function periodSpans(name: PeriodName, now: number): { current: Span; pre
 
 export const within = (at: number, span: Span): boolean => at >= span.start && at < span.end
 
-/** Where the unsplit part of a week's row counts: the week's last moment, or for the week finer rows began, that day, so it
- *  leaves Last 24h at once instead of staying "new" until Sunday. Never before its week. */
-const fallsAt = (week: number): number => Math.max(week, Math.min(week + WEEK_MS - 1, FINER_ROWS_SINCE))
+/** Where the unsplit part of a week's row counts: the middle of its week, or the day finer rows began if that came first, so
+ *  a week that just ended is no lump in Last 24h, nor the week they began in until Sunday. Never before its week. */
+const fallsAt = (week: number): number => Math.max(week, Math.min(week + WEEK_MS / 2, FINER_ROWS_SINCE))
+
+/** What a rolling read of Lent may add: the projects it sums; and whether it may add this machine's unsplit weekly time, which
+ *  names no project, so it could be a private one's. A reader gets it only for someone a board they can open already shows,
+ *  as the week read does (review of #2499). */
+export interface LentReach { projects: ReadonlySet<string>; unsplit: boolean }
 
 /** A machine's busy agent time in [span]. A day's row is shared out evenly over the part of that day that has passed, so a
- *  rolling edge inside a day takes its share: the hours inside a day are not kept (a machine would hold 840 rows). */
-export function lentIn(machine: Pick<ContributedMachine, 'lent' | 'lentDays'>, span: Span, now: number): number {
+ *  rolling edge inside a day takes its share: the hours inside a day are not kept (a machine would hold 840 rows). What the
+ *  weekly row holds beyond its days is told from all its days, the ones of projects out of reach included: otherwise their
+ *  time would come back as unsplit. */
+export function lentIn(machine: Pick<ContributedMachine, 'lent' | 'lentDays'>, span: Span, now: number, reach: LentReach): number {
   if (!span.rolling) return machine.lent?.find(l => l.week === span.start)?.busyMs ?? 0
   const days = machine.lentDays ?? []
   let total = 0
-  for (const { day, busyMs } of days) {
+  for (const { day, projectId, busyMs } of days) {
+    if (!reach.projects.has(projectId)) continue
     const end = Math.min(day + DAY_MS, now + 1)
     total += busyMs * Math.max(0, Math.min(end, span.end) - Math.max(day, span.start)) / Math.max(1, end - day)
   }
-  for (const { week, busyMs = 0 } of machine.lent ?? []) {
-    if (!within(fallsAt(week), span)) continue
-    total += Math.max(0, busyMs - days.reduce((sum, d) => sum + (d.day >= week && d.day < week + WEEK_MS ? d.busyMs : 0), 0))
+  if (reach.unsplit) {
+    for (const { week, busyMs = 0 } of machine.lent ?? []) {
+      if (!within(fallsAt(week), span)) continue
+      total += Math.max(0, busyMs - days.reduce((sum, d) => sum + (d.day >= week && d.day < week + WEEK_MS ? d.busyMs : 0), 0))
+    }
   }
   return Math.round(total)
 }

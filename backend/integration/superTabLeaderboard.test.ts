@@ -175,7 +175,7 @@ describe('the leaderboard read', () => {
       const s = await scene(state => {
         const day = Math.floor(NOW / 86_400_000) * 86_400_000
         state.machines = [{ machineId: 'peer-mac', name: 'Peer Mac', contributorId: peer.sub, membershipGeneration: state.people.find(p => p.id === peer.sub)!.generation, generation: 'g1',
-          cwd: '/repo', engines: ['claude'], maxAgents: 2, paused: false, lent: [{ week: WEEK - WEEK_MS, busyMs: 20 * HOUR }], lentDays: [{ day, busyMs: 10 * HOUR }] }]
+          cwd: '/repo', engines: ['claude'], maxAgents: 2, paused: false, lent: [{ week: WEEK - WEEK_MS, busyMs: 20 * HOUR }], lentDays: [{ day, projectId: 'lead', busyMs: 10 * HOUR }] }]
         state.conversations.find(c => c.title === 'Fresh')!.ledger!.reviewHours = [{ hour: NOW - HOUR, engine: 'claude', model: 'opus', effort: 'high', count: 2 }]
         state.conversations.find(c => c.title === 'Fresh')!.ledger!.reviews = [{ week: WEEK - WEEK_MS, engine: 'claude', model: 'opus', effort: 'high', count: 3 }]
       })
@@ -207,6 +207,31 @@ describe('the leaderboard read', () => {
       const one = await get(url, owner)
       expect(score(one.body, peer.sub).shipped.count).toBe(2)
       expect(one.body.data).not.toHaveProperty('allProjects')
+    })
+
+    it('All projects adds Lent earned on a private project only for who reads it', async () => {
+      const s = await scene(state => {
+        const secret = state.projects!.find(p => p.name === 'Secret')!
+        state.machines = [{ machineId: 'peer-mac', name: 'Peer Mac', contributorId: peer.sub, membershipGeneration: state.people.find(p => p.id === peer.sub)!.generation, generation: 'g1',
+          cwd: '/repo', engines: ['claude'], maxAgents: 2, paused: false, lentDays: [{ day: Math.floor(NOW / 86_400_000) * 86_400_000, projectId: secret.id, busyMs: 30 * HOUR }] }]
+      })
+      const url = `/api/super-tabs/${s.tabId}/leaderboard?projectId=lead&period=30d&scope=all`
+      expect(score((await get(url, owner)).body, peer.sub).lent).toEqual({ machines: 1, agentMs: 30 * HOUR })
+      const outsiders = await get(url, outsider)
+      expect(score(outsiders.body, peer.sub).lent).toEqual({ machines: 0, agentMs: 0 })
+      expect(score(outsiders.body, peer.sub).details.lent).toEqual([])
+    })
+
+    it('All projects sums a Swarm from before projects, whose list is not stored', async () => {
+      const s = await scene(state => {
+        const secret = state.projects!.find(p => p.name === 'Secret')!
+        state.conversations = state.conversations.filter(c => c.projectId !== secret.id)
+        state.agents = state.agents.filter(a => state.conversations.some(c => c.agentIds.includes(a.id)))
+        delete state.projects
+      })
+      const { status, body } = await get(`/api/super-tabs/${s.tabId}/leaderboard?projectId=lead&period=7d&scope=all`, peer)
+      expect(status).toBe(200)
+      expect(score(body, peer.sub).shipped.count).toBeGreaterThan(0)
     })
 
     it('All projects names a private project\'s PM only to who reads that project', async () => {

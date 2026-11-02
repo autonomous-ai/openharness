@@ -20,7 +20,7 @@ import { readChanged, readLastChangedAt, readLastChangedAts, readLight, readLigh
 import { migrateSwarm } from '../migration/migrate.js'
 import * as parts from '../parts/index.js'
 import type { GroupData, Part, SwarmParts } from '../parts/index.js'
-import { canReadProject, canReadGroup, readConversation, readProject } from '../projects.js'
+import { canReadGroup, canReadProject, projectsOf, readConversation, readProject } from '../projects.js'
 import { isBuddyReader } from '../buddies.js'
 import { workspacesRequired } from '../workspaceStore.js'
 import type { Leaderboard } from '../leaderboard/contract.js'
@@ -328,7 +328,7 @@ export class SwarmReads {
       const actor = await this.store.actor(tx, user, state)
       readProject(state, actor, projectId)
       // Every project this reader reads, by the same check as the one asked for; what they may not read is never loaded.
-      const readable = allProjects ? (state.projects ?? []).filter(p => canReadProject(state, actor, p)).map(p => p.id) : undefined
+      const readable = allProjects ? projectsOf(state).filter(p => canReadProject(state, actor, p)).map(p => p.id) : undefined
       const dormant = await recentDormantGroups(tx, tabId, readable ?? projectId, now - LEDGER_WEEKS * WEEK_MS)
       const groups = [...state.conversations.filter(g => !g.dormant), ...dormant].filter(g => !isLeads(g) && canReadGroup(state, actor, g))
       const names = await profileNames(tx, state.people.map(p => p.id))

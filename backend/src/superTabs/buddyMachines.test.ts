@@ -157,11 +157,11 @@ describe('a Buddy on its person\'s own machine outside the Swarm', () => {
 
   it('keeps a machine\'s daily Lent rows out of every Swarm read: only the leaderboard read uses them', () => {
     const f = setup()
-    f.state.machines!.find(m => m.machineId === 'owner-mac')!.lentDays = [{ day: 0, busyMs: 1 }]
+    f.state.machines!.find(m => m.machineId === 'owner-mac')!.lentDays = [{ day: 0, projectId: 'lead', busyMs: 1 }]
     for (const reader of [owner, peer, pmActor(f)]) {
       expect(visibleState(f.state, reader, 1000).machines!.find(m => m.machineId === 'owner-mac')).not.toHaveProperty('lentDays')
     }
-    expect(f.state.machines!.find(m => m.machineId === 'owner-mac')!.lentDays).toEqual([{ day: 0, busyMs: 1 }])
+    expect(f.state.machines!.find(m => m.machineId === 'owner-mac')!.lentDays).toEqual([{ day: 0, projectId: 'lead', busyMs: 1 }])
   })
 
   it('never serves the Swarm\'s local models, and its host is not told the Swarm\'s grid or to join a Team account', async () => {

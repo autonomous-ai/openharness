@@ -9,6 +9,7 @@ import { DAY_MS as DAY, WEEK_MS as WEEK, weekStart } from './week.js'
 
 // Wednesday 2026-11-25 12:00 UTC.
 const NOW = Date.UTC(2026, 10, 25, 12), TODAY = Date.UTC(2026, 10, 25), THIS_WEEK = weekStart(NOW)
+const reach = { projects: new Set(['lead']), unsplit: true }
 const opus = { engine: 'claude', model: 'opus', effort: 'high' }
 
 function swarm(): SuperTabState {
@@ -103,27 +104,27 @@ describe('All projects', () => {
 
 describe('Lent in a rolling period', () => {
   it('shares a day out over the part of it that has passed, so the periods add up', () => {
-    const pool = { lentDays: [{ day: TODAY, busyMs: 6 * HOUR }, { day: TODAY - DAY, busyMs: 12 * HOUR }, { day: TODAY - 2 * DAY, busyMs: 24 * HOUR }] }
+    const pool = { lentDays: [{ day: TODAY, projectId: 'lead', busyMs: 6 * HOUR }, { day: TODAY - DAY, projectId: 'lead', busyMs: 12 * HOUR }, { day: TODAY - 2 * DAY, projectId: 'lead', busyMs: 24 * HOUR }] }
     // Now is noon: all of today, the second half of yesterday.
-    expect(Math.round(lentIn(pool, spans('24h').current, NOW) / HOUR)).toBe(12)
-    expect(Math.round(lentIn(pool, spans('24h').previous!, NOW) / HOUR)).toBe(18)
-    expect(lentIn(pool, spans('7d').current, NOW)).toBe(42 * HOUR)
+    expect(Math.round(lentIn(pool, spans('24h').current, NOW, reach) / HOUR)).toBe(12)
+    expect(Math.round(lentIn(pool, spans('24h').previous!, NOW, reach) / HOUR)).toBe(18)
+    expect(lentIn(pool, spans('7d').current, NOW, reach)).toBe(42 * HOUR)
   })
 
   it('reads days only for a period and weeks only for a week', () => {
-    const pool = { lent: [{ week: THIS_WEEK, busyMs: 10 * HOUR }], lentDays: [{ day: TODAY, busyMs: 10 * HOUR }] }
-    expect(lentIn(pool, { start: THIS_WEEK, end: THIS_WEEK + WEEK, rolling: false }, NOW)).toBe(10 * HOUR)
-    expect(lentIn(pool, spans('7d').current, NOW)).toBe(10 * HOUR)
+    const pool = { lent: [{ week: THIS_WEEK, busyMs: 10 * HOUR }], lentDays: [{ day: TODAY, projectId: 'lead', busyMs: 10 * HOUR }] }
+    expect(lentIn(pool, { start: THIS_WEEK, end: THIS_WEEK + WEEK, rolling: false }, NOW, reach)).toBe(10 * HOUR)
+    expect(lentIn(pool, spans('7d').current, NOW, reach)).toBe(10 * HOUR)
   })
 
   it('counts a week recorded before the days once, at its end, and only what its days do not hold', () => {
-    // Thursday 2026-11-05, reading the week before the finer rows began.
-    const now = Date.UTC(2026, 10, 5, 12), last = Date.UTC(2026, 9, 26), at = (name: PeriodName) => periodSpans(name, now).current
-    const pool = { lent: [{ week: last, busyMs: 10 * HOUR }], lentDays: [{ day: last + 6 * DAY, busyMs: 4 * HOUR }] }
-    expect(lentIn(pool, at('30d'), now)).toBe(10 * HOUR)
-    // The unsplit 6 hours fall on Sunday's last moment, with the day's row.
-    expect(lentIn(pool, at('7d'), now)).toBe(10 * HOUR)
-    expect(lentIn(pool, at('24h'), now)).toBe(0)
+    // Wednesday 2026-11-04, reading the week before the finer rows began.
+    const now = Date.UTC(2026, 10, 4, 12), last = Date.UTC(2026, 9, 26), at = (name: PeriodName) => periodSpans(name, now).current
+    const pool = { lent: [{ week: last, busyMs: 10 * HOUR }], lentDays: [{ day: last + 6 * DAY, projectId: 'lead', busyMs: 4 * HOUR }] }
+    expect(lentIn(pool, at('30d'), now, reach)).toBe(10 * HOUR)
+    // The unsplit 6 hours fall in the middle of that week: in Last 7d, with the day's row, and no lump in Last 24h.
+    expect(lentIn(pool, at('7d'), now, reach)).toBe(10 * HOUR)
+    expect(lentIn(pool, at('24h'), now, reach)).toBe(0)
   })
 
   it('reads the same however many times it is asked, and writes nothing', () => {
@@ -136,13 +137,42 @@ describe('Lent in a rolling period', () => {
   })
 
   it('ignores a week\'s old online hours, as the weekly read does', () => {
-    expect(lentIn({ lent: [{ week: THIS_WEEK - WEEK, agentMs: 40 * HOUR }] }, spans('30d').current, NOW)).toBe(0)
+    expect(lentIn({ lent: [{ week: THIS_WEEK - WEEK, agentMs: 40 * HOUR }] }, spans('30d').current, NOW, reach)).toBe(0)
   })
 
   it('scores a machine by the period', () => {
-    const pool = machine({ lentDays: [{ day: TODAY, busyMs: 20 * HOUR }, { day: TODAY - 10 * DAY, busyMs: 30 * HOUR }] })
+    const pool = machine({ lentDays: [{ day: TODAY, projectId: 'lead', busyMs: 20 * HOUR }, { day: TODAY - 10 * DAY, projectId: 'lead', busyMs: 30 * HOUR }] })
     expect(dee(read('7d', [], [pool]))).toMatchObject({ points: 2, lent: { machines: 1, agentMs: 20 * HOUR }, details: { lent: [{ machineName: 'Studio', busyHours: 20 }] } })
     expect(dee(read('30d', [], [pool]))).toMatchObject({ points: 5, lent: { agentMs: 50 * HOUR } })
+  })
+})
+
+describe('Lent of a project out of reach (review of #2499)', () => {
+  const secret = { day: TODAY, projectId: 'secret', busyMs: 20 * HOUR }, mine = { day: TODAY, projectId: 'lead', busyMs: 10 * HOUR }
+
+  it('adds nothing to All projects or a project\'s board, only what those projects earned', () => {
+    const pool = machine({ lentDays: [secret, mine] })
+    expect(dee(read('7d', [], [pool]))).toMatchObject({ points: 1, lent: { agentMs: 10 * HOUR } })
+    const all = (projects: string[]) => leaderboard({ state: swarm(), groups: [], machines: [pool], projectId: 'lead', week: THIS_WEEK, now: NOW, period: '7d', allProjects: projects })
+    expect(dee(all(['lead'])).lent.agentMs).toBe(10 * HOUR)
+    const asOwner = swarm()
+    asOwner.projects!.push({ ...asOwner.projects![0]!, id: 'secret', leadConversationId: 'secret-lead' })
+    expect(dee(leaderboard({ state: asOwner, groups: [], machines: [pool], projectId: 'lead', week: THIS_WEEK, now: NOW, period: '7d', allProjects: ['lead', 'secret'] })).lent.agentMs).toBe(30 * HOUR)
+  })
+
+  it('never comes back as unsplit weekly time', () => {
+    const pool = { lent: [{ week: weekStart(TODAY), busyMs: 30 * HOUR }], lentDays: [secret, mine] }
+    expect(lentIn(pool, spans('7d').current, NOW, reach)).toBe(10 * HOUR)
+  })
+
+  it('leaves a weekly row, which names no project, out for someone no board of the reader shows', () => {
+    const state = swarm(), last = Date.UTC(2026, 9, 26), now = Date.UTC(2026, 10, 2, 12)
+    state.projects![0]!.visibility = 'private'
+    state.projects!.push({ ...state.projects![0]!, id: 'secret', leadConversationId: 'secret-lead', members: [{ id: 'dee', generation: 'g' }] })
+    const pool = machine({ lent: [{ week: last, busyMs: 20 * HOUR }] })
+    const asRead = (projects: string[]) => leaderboard({ state, groups: [], machines: [pool], projectId: 'lead', week: weekStart(now), now, period: '30d', allProjects: projects })
+    expect(dee(asRead(['lead']))).toMatchObject({ points: 0, lent: { machines: 0, agentMs: 0 } })
+    expect(dee(asRead(['lead', 'secret'])).lent.agentMs).toBe(20 * HOUR)
   })
 })
 
@@ -151,8 +181,8 @@ describe('the week finer rows began', () => {
     // Thursday of the week of 2026-11-02, with Monday's and Tuesday's work recorded by week only.
     const now = Date.UTC(2026, 10, 5, 12), week = Date.UTC(2026, 10, 2)
     const pool = { lent: [{ week, busyMs: 8 * HOUR }] }, ledger = { reviews: [{ week, ...opus, count: 3 }] }
-    expect(lentIn(pool, periodSpans('24h', now).current, now)).toBe(0)
-    expect(lentIn(pool, periodSpans('7d', now).current, now)).toBe(8 * HOUR)
+    expect(lentIn(pool, periodSpans('24h', now, reach).current, now)).toBe(0)
+    expect(lentIn(pool, periodSpans('7d', now, reach).current, now)).toBe(8 * HOUR)
     expect(reviewsIn(ledger, periodSpans('24h', now).current)).toEqual([])
     expect(reviewsIn(ledger, periodSpans('7d', now).current)).toMatchObject([{ count: 3 }])
   })
@@ -213,16 +243,16 @@ describe('what readings write', () => {
 
   it('adds a reading to its week and its day', () => {
     const m = pool()
-    addLent(m, NOW, 2)
+    addLent(m, NOW, 2, { lead: 1, other: 1 })
     addLent(m, NOW, 0)
     expect(m.lent).toEqual([{ week: THIS_WEEK, busyMs: 20_000 }])
-    expect(m.lentDays).toEqual([{ day: TODAY, busyMs: 20_000 }])
+    expect(m.lentDays).toEqual([{ day: TODAY, projectId: 'lead', busyMs: 10_000 }, { day: TODAY, projectId: 'other', busyMs: 10_000 }])
   })
 
   it('keeps a machine\'s days bounded, and every day Last 30d can ask for', () => {
     const m = pool()
-    m.lentDays = Array.from({ length: 60 }, (_, back) => ({ day: TODAY - back * DAY, busyMs: 1 }))
-    addLent(m, NOW, 1)
+    m.lentDays = Array.from({ length: 60 }, (_, back) => ({ day: TODAY - back * DAY, projectId: 'lead', busyMs: 1 }))
+    addLent(m, NOW, 1, { lead: 1 })
     expect(m.lentDays.length).toBeLessThanOrEqual(35)
     expect(Math.min(...m.lentDays.map(d => d.day))).toBeLessThanOrEqual(NOW - 30 * DAY)
     expect(m.lentDays.find(d => d.day === TODAY)!.busyMs).toBe(10_001)
@@ -230,8 +260,8 @@ describe('what readings write', () => {
 
   it('never counts a day and its week twice', () => {
     const m = pool()
-    addLent(m, NOW, 1)
-    expect(lentIn(m, spans('7d').current, NOW)).toBe(10_000)
-    expect(lentIn(m, spans('30d').current, NOW)).toBe(10_000)
+    addLent(m, NOW, 1, { lead: 1 })
+    expect(lentIn(m, spans('7d').current, NOW, reach)).toBe(10_000)
+    expect(lentIn(m, spans('30d').current, NOW, reach)).toBe(10_000)
   })
 })
