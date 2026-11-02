@@ -3,6 +3,7 @@ import { storeOldLeads } from './leads.test-support.js'
 import { applyCommand, commandSchema, LOOP_NOTICE_AT, PAIR_CHAIN_LIMIT, swarmGridName, withoutCredentials, type Command, type CommandContext } from './commands.js'
 import { CREDENTIAL_MARKER, type CredentialKind } from './credentials.js'
 import { sweepLiveness } from './liveness.js'
+import { SWITCH_UNCLAIMED_MS } from './tidy.js'
 import { hostLocalGrid, machineSlots, removalPreview, swarmGridRow } from './machines.js'
 import { activeWork, agentOnly, agentRole, createSuperTab, visibleState, type Actor, type AgentConfiguration } from './model.js'
 import type { RouteDecision } from './routeRecord.js'
@@ -4574,6 +4575,7 @@ describe('lead.switch', () => {
     mine.f.run(mine.request)
     expect(mine.agent().switchRequest).toMatchObject({ engine: 'codex', profileId: WORK, requestedBy: 'owner' })
     const theirs = setup(['leadSwitch'], 'peer')
+    theirs.agent().machineOwnerId = 'peer'
     theirs.f.run(theirs.request, peer)
     expect(theirs.agent().switchRequest).toMatchObject({ requestedBy: 'peer' })
     const other = setup()
@@ -4636,17 +4638,89 @@ describe('lead.switch', () => {
     expect(bad.agent().profileId).toBeUndefined()
   })
 
-  it('agent.rebind clears the request, the limit mark and the limit alert when the account changed', () => {
+  it('refuses a borrower of a lent machine, and lets the machine\'s lender and a Team account\'s owner switch', () => {
+    // Tony (peer) borrowed Ken's Mac: the pool's contributor is Tony, the machine's owner is Ken.
+    const lent = setup(['leadSwitch'], 'peer')
+    lent.agent().machineOwnerId = 'ken'
+    expect(code(() => lent.f.run(lent.request, peer))).toBe('PROJECT_OWNER_REQUIRED')
+    const lender = setup(['leadSwitch'], 'peer')
+    lender.agent().machineOwnerId = 'peer'
+    lender.f.run(lender.request, peer)
+    expect(lender.agent().switchRequest).toMatchObject({ requestedBy: 'peer' })
+    const team = setup(['leadSwitch'], 'peer')
+    team.f.state.machines![0]!.observation!.sessionKind = 'team'
+    team.agent().machineOwnerId = 'peer'
+    team.f.run(team.request, peer)
+    expect(team.agent().switchRequest).toBeDefined()
+  })
+
+  it('drops a request nobody claimed on any machine\'s report, and refuses a late claim', () => {
+    const s = setup()
+    s.f.run(s.request)
+    const claim = { type: 'agent.switchClaim', agentId: s.pm, switchId: s.sid() } as const
+    expect(code(() => s.f.run(claim, s.as, { now: 1000 + SWITCH_UNCLAIMED_MS }))).toBe('STALE_SWITCH')
+    const swept = sweepLiveness(s.f.state, 1000 + SWITCH_UNCLAIMED_MS)
+    expect(swept).toMatchObject([{ text: "Couldn't switch the PM: its machine did not answer." }])
+    expect(s.agent().switchRequest).toBeUndefined()
+  })
+
+  it('does not extend a claim\'s lease by claiming again', () => {
+    const s = setup()
+    s.f.run(s.request)
+    const claim = { type: 'agent.switchClaim', agentId: s.pm, switchId: s.sid() } as const
+    s.f.run(claim, s.as)
+    const again = s.f.run(claim, s.as, { now: 1000 + 10 * 60_000 })
+    expect(again.result).toMatchObject({ expiresAt: 1000 + 15 * 60_000 })
+    expect(s.agent().switchRequest!.claimedUntil).toBe(new Date(1000 + 15 * 60_000).toISOString())
+  })
+
+  it('agent.rebind that keeps the account leaves the limit mark, one that moves it clears it', () => {
     const s = setup()
     s.agent().limitedUntil = new Date(5_000_000).toISOString()
     s.agent().alerting = ['limit', 'prompt']
     s.f.run(s.request)
-    const switchId = s.sid()
-    s.f.run({ type: 'agent.rebind', agentId: s.pm, machineId: 'host', projectId: 'lead', previousHarnessId: 'pm', harnessId: 'pm-2', configuration: { ...config, engine: 'claude' } }, s.as)
-    expect(s.agent()).toMatchObject({ alerting: ['prompt'], limitedUntil: null })
+    const rebind = (patch: object, from: string, to: string) => s.f.run({ type: 'agent.rebind', agentId: s.pm, machineId: 'host', projectId: 'lead',
+      previousHarnessId: from, harnessId: to, configuration: config, ...patch } as never, s.as)
+    // Same engine (codex), no profile: the limited account stays, though a request for another one was pending.
+    rebind({}, 'pm', 'pm-2')
+    expect(s.agent()).toMatchObject({ alerting: ['limit', 'prompt'], limitedUntil: new Date(5_000_000).toISOString() })
     expect(s.agent().switchRequest).toBeUndefined()
+    // Same engine, another account reported: the mark goes.
+    rebind({ profileId: WORK }, 'pm-2', 'pm-3')
+    expect(s.agent()).toMatchObject({ alerting: ['prompt'], limitedUntil: null, profileId: WORK })
+    // Another engine without a profile: back to the default account.
+    rebind({ configuration: { ...config, engine: 'claude' } }, 'pm-3', 'pm-4')
     expect(s.agent().profileId).toBeUndefined()
-    // The host's result then finds the request gone and still tells the chat.
-    expect(s.f.run({ type: 'agent.switchResult', agentId: s.pm, switchId, ok: true }, s.as).messages[0]!.text).toBe('PM moved to Claude.')
+    // Same engine, no profile: kept.
+    s.agent().profileId = WORK
+    rebind({ configuration: { ...config, engine: 'claude' } }, 'pm-4', 'pm-5')
+    expect(s.agent().profileId).toBe(WORK)
+  })
+
+  it('writes one line per switch: a late or repeated result writes nothing', () => {
+    const s = setup()
+    s.f.run(s.request)
+    const switchId = s.sid()
+    const result = { type: 'agent.switchResult', agentId: s.pm, switchId, ok: true } as const
+    // The sweep gave up on it first: the host's late result is stale.
+    const late = setup()
+    late.f.run(late.request)
+    const lateId = late.sid()
+    sweepLiveness(late.f.state, 1000 + SWITCH_UNCLAIMED_MS)
+    expect(code(() => late.f.run({ ...result, switchId: lateId }, late.as))).toBe('STALE_SWITCH')
+    // The rebind landed it: the result still tells the chat once, and a retry with a new operation id does not.
+    s.f.run({ type: 'agent.rebind', agentId: s.pm, machineId: 'host', projectId: 'lead', previousHarnessId: 'pm', harnessId: 'pm-2',
+      configuration: { ...config, engine: 'claude' } }, s.as)
+    expect(s.f.run(result, s.as).messages[0]!.text).toBe('PM moved to Claude.')
+    expect(code(() => s.f.run(result, s.as))).toBe('STALE_SWITCH')
+    // A made-up id with nothing pending is refused too.
+    expect(code(() => s.f.run({ ...result, switchId: 'made-up' }, s.as))).toBe('STALE_SWITCH')
+  })
+
+  it('writes the host\'s error as one clean line', () => {
+    const s = setup()
+    s.f.run(s.request)
+    const failed = s.f.run({ type: 'agent.switchResult', agentId: s.pm, switchId: s.sid(), ok: false, error: 'signed out.\nplease\tretry.. ' }, s.as)
+    expect(failed.messages[0]!.text).toBe("Couldn't switch the PM: signed out. please retry. It is back on Codex.")
   })
 })

@@ -72,15 +72,18 @@ export function idleNotices(state: SuperTabState, projectId: string, now: number
   return rows
 }
 
-/** A switch request nobody claimed in 2 minutes, or whose claim's lease lapsed, is dropped (the PM keeps its engine), and its
- *  project chat says so once: the host that never answered cannot. Run on every poll, as the PM's own host may be the one down. */
+/** Whether a switch request ran out: nobody claimed it in 2 minutes, or its claim's lease lapsed. */
+export const switchExpired = (request: NonNullable<Agent['switchRequest']>, now: number): boolean =>
+  now >= (request.claimedUntil === undefined ? Date.parse(request.at) + SWITCH_UNCLAIMED_MS : Date.parse(request.claimedUntil))
+
+/** A switch request that ran out is dropped (the PM keeps its engine), and its project chat says so once: the host that never
+ *  answered cannot. Run by the liveness sweep, which any machine's report drives, as the PM's own host may be the one down. */
 export function staleSwitches(state: SuperTabState, now: number): MessageDraft[] {
   const rows: MessageDraft[] = []
   for (const pm of state.agents) {
     const request = pm.switchRequest, project = request && ledProject(state, pm.id)
     if (!request || !project) continue
-    const until = request.claimedUntil === undefined ? Date.parse(request.at) + SWITCH_UNCLAIMED_MS : Date.parse(request.claimedUntil)
-    if (now < until) continue
+    if (!switchExpired(request, now)) continue
     delete pm.switchRequest
     rows.push({ id: stableId('switch-stale', pm.id, request.id), conversationId: project.leadConversationId, replyTo: null, recipients: [],
       author: { kind: 'agent', id: pm.id, name: pm.name, displayName: agentDisplayName(state.agents, pm.id), membershipGeneration: pm.membershipGeneration },

@@ -35,6 +35,7 @@ import { shipNotice, shippedAt } from './ship.js'
 import { assignedNotice, tellBuddies } from './buddyNews.js'
 import { bindPullRequestCards, bindTaskCard, pullRequestCard, recordCardMerged } from './cards.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
+import { switchExpired } from './tidy.js'
 import { BUILT_IN_ROLE_DEFAULTS, agentProjectId, audienceOf, canReadProject, deleteProject, isConfidential, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, requestedByLine, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
 import { BUDDY_SESSION_CAPABILITY, chatOwner, endSessionEntry, entryProject, liveSessions, mainBuddyOf, MAX_BUDDY_SESSIONS, MAX_SESSION_WAITING, requireChatOwner, SESSION_ENDED_KIND, sessionAgentsOf, sessionOf, setSessions, type SessionEndReason } from './buddySessions.js'
 import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, isSwarmBuddy, isSwarmBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, openBuddyChat, openSwarmBuddyChat, PM_LINE_KIND, PROPOSAL_ASK_MS, proposalText, renameBuddy, requireBuddyCommand, swarmBuddyChatId } from './buddies.js'
@@ -242,7 +243,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('agent.sessionClosed'), agentId: id, harnessId: id }).strict(),
   z.object({ type: z.literal('agent.configuration'), previousVersion: id.nullable(), configuration }).strict(),
   z.object({ type: z.literal('agent.rebind'), agentId: id, machineId: id, projectId: id,
-    previousHarnessId: id, harnessId: id, configuration,
+    previousHarnessId: id, harnessId: id, configuration, profileId: z.string().regex(/^([0-9a-f]{16}|default)$/).optional(),
     startedSession: z.object({ creationId: id, sessionId: id, createdAt: z.iso.datetime() }).strict().optional() }).strict(),
   z.object({ type: z.literal('conversation.agent'), conversationId: id, agentId: id, present: z.boolean(), lead: z.boolean() }).strict(),
   z.object({ type: z.literal('invite.create'), email: z.email().max(320), role: z.enum(['collaborator', 'viewer']), conversationId: id }).strict(),
@@ -1406,11 +1407,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const home = conversation(state, project.leadConversationId)
       const pm = state.agents.find(a => a.id === home.leadId && home.agentIds.includes(a.id))
       const pool = state.machines?.find(m => m.machineId === pm?.machineId)
-      // The project's owner, or the owner of the machine the PM runs on (who can already drive it from Desktop).
-      if (pool?.contributorId === actor.userId && actor.userId !== project.ownerId) {
-        author(state, actor, true)
-        mutableProjects(state)
-      } else manageProject(state, actor, project.id)
+      // The project's owner, or the owner of the machine the PM runs on (not whoever contributed it: a lent machine's borrower).
+      if (pm?.machineOwnerId === actor.userId && actor.userId !== project.ownerId) author(state, actor, true)
+      else manageProject(state, actor, project.id)
       const name = coordinatorNameOf(project)
       if (!pm || !pool) fail('NO_LEAD', `This project has no running ${name}.`)
       if (machineOffline(pool, context.now)) fail('MACHINE_OFFLINE', `Wait for a fresh reading from ${pool.name}.`)
@@ -2328,13 +2327,16 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         fail('AGENT_CHANGED', 'The member’s terminal changed. Read its current binding before replacing it.')
       }
       // The new account is not limited: only a switch that kept the engine and the account leaves the limit mark.
-      const moved = command.configuration.engine !== target.configuration?.engine || (!!target.switchRequest && target.switchRequest.profileId !== (target.profileId ?? 'default'))
-      if (moved) {
+      // The account is what the host reports; without it, a new engine means its default and the same engine keeps the account.
+      const engineChanged = command.configuration.engine !== target.configuration?.engine
+      const landed = command.profileId ?? (engineChanged ? 'default' : target.profileId ?? 'default')
+      if (engineChanged || landed !== (target.profileId ?? 'default')) {
         target.limitedUntil = null
         target.alerting = target.alerting?.filter(a => a !== 'limit')
       }
-      // A rebind to the engine it asked for is the switch landing; one back to the old engine is #2493 rolling back.
-      if (target.switchRequest?.engine === command.configuration.engine) moveToProfile(target, target.switchRequest.profileId)
+      moveToProfile(target, landed)
+      // Whatever request was pending is settled; its result, when it comes, is still the one line the chat gets.
+      if (target.switchRequest) target.switchLanded = target.switchRequest.id
       delete target.switchRequest
       target.harnessId = command.harnessId
       target.replacement = { previousHarnessId: command.previousHarnessId, harnessId: command.harnessId }
@@ -2398,30 +2400,32 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     }
     case 'agent.switchClaim': {
       const target = agent(state, command.agentId)
-      if (actor.kind !== 'agent' || actor.agentId !== target.id || target.switchRequest?.id !== command.switchId) {
+      if (actor.kind !== 'agent' || actor.agentId !== target.id || target.switchRequest?.id !== command.switchId || switchExpired(target.switchRequest, context.now)) {
         fail('STALE_SWITCH', 'Only the execution host can claim the current switch.', 403)
       }
-      // Covers #2493's 3 minute prepare and 10 minute create limits.
+      // Covers #2493's 3 minute prepare and 10 minute create limits. A second claim gets the same lease back, never a longer one.
+      target.switchRequest.claimedUntil ??= new Date(context.now + SWITCH_LEASE_MS).toISOString()
       result.leaseId = operationId
-      result.expiresAt = context.now + SWITCH_LEASE_MS
-      target.switchRequest.claimedUntil = new Date(result.expiresAt as number).toISOString()
+      result.expiresAt = Date.parse(target.switchRequest.claimedUntil)
       break
     }
     case 'agent.switchResult': {
       const target = agent(state, command.agentId)
-      // agent.rebind already cleared a request whose new session started, so no request left is as good as the current one.
-      if (actor.kind !== 'agent' || actor.agentId !== target.id || (target.switchRequest && target.switchRequest.id !== command.switchId)) {
+      // agent.rebind clears a request whose new session started but keeps its id, so the result of either is the one to answer.
+      if (actor.kind !== 'agent' || actor.agentId !== target.id || ![target.switchRequest?.id, target.switchLanded].includes(command.switchId)) {
         fail('STALE_SWITCH', 'Only the execution host can report the current switch.', 403)
       }
       const project = ledProject(state, target.id)
       if (command.ok && target.switchRequest) moveToProfile(target, target.switchRequest.profileId)
       delete target.switchRequest
+      delete target.switchLanded
       if (!project) break
+      const error = command.error?.replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/[.\s]+$/, '')
       const engine = ENGINE_NAMES[target.configuration?.engine ?? ''] ?? 'its engine'
       const label = target.profileId && state.machines?.find(m => m.machineId === target.machineId)?.observation?.profiles
         ?.find(p => p.engine === target.configuration?.engine && p.id === target.profileId)?.label
       effects.messages.push({ id: operationId, conversationId: project.leadConversationId, author: sender, replyTo: null, recipients: [], source: SYSTEM_ROW,
-        text: command.ok ? `PM moved to ${engine}${label ? ` · ${label}` : ''}.` : `Couldn't switch the PM: ${command.error ?? 'it failed'}. It is back on ${engine}.` })
+        text: command.ok ? `PM moved to ${engine}${label ? ` · ${label}` : ''}.` : `Couldn't switch the PM: ${error || 'it failed'}. It is back on ${engine}.` })
       break
     }
     case 'agent.stopLease': {
