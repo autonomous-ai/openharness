@@ -1,7 +1,9 @@
 import 'dart:async';
 
 import 'package:clock/clock.dart';
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 
 import '../core/machine_resources.dart';
@@ -88,10 +90,15 @@ class SuperTabMachines extends StatefulWidget {
     this.collapsed = false,
     this.onToggleCollapsed,
     this.onOpenAgent,
+    this.ticks,
   });
   final SuperTabController controller;
   final AppNotifier? app;
   final bool embedded;
+
+  /// Runs the one-second clock; by default everywhere but under `flutter test`.
+  @visibleForTesting
+  final bool? ticks;
 
   /// Whether the body below the heading is hidden. The heading itself, and
   /// its Add machine action, remain visible so the group stays reachable.
@@ -784,8 +791,15 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   /// reporting through it are refreshing until one more is. Null: the app has not been away.
   int? _swarmReadsAtReturn;
 
-  /// Once a second, so that ages, states and the heading's count follow the clock between the Swarm's reads.
+  /// Once a second while the list shows ([_syncTick]), so that ages and states
+  /// follow the clock between the Swarm's reads.
   Timer? _tick;
+
+  /// What each row last drew, and their order: a tick or a machine's report
+  /// redraws only a row whose words moved, and the list only when rows move.
+  final _rowsDrawn = <String, Object>{};
+  List<String> _orderDrawn = const [];
+  final _rowBeats = <String, ValueNotifier<int>>{};
   final _tips = <String, GlobalKey<TooltipState>>{};
 
   /// One per Swarm menu open now, each keeping the browser's menu off.
@@ -817,9 +831,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   @override
   void initState() {
     super.initState();
-    if (!kUnderTest) {
-      _tick = Timer.periodic(const Duration(seconds: 1), (_) => _changed());
-    }
+    c.machinesChanged.addListener(_machinesMoved);
     unawaited(_readTeamSetup());
     if ((!kUnderTest || widget.readLocal != null) && widget.app != null) {
       _updateUsage();
@@ -831,6 +843,88 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   void _changed() {
     if (mounted) setState(() {});
   }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _syncTick();
+  }
+
+  @override
+  void didUpdateWidget(SuperTabMachines old) {
+    super.didUpdateWidget(old);
+    if (!identical(old.controller, c)) {
+      old.controller.machinesChanged.removeListener(_machinesMoved);
+      c.machinesChanged.addListener(_machinesMoved);
+    }
+    _syncTick();
+  }
+
+  /// The clock runs only while something it moves shows: not for a Swarm not
+  /// on screen, a window at the back, or a collapsed group, whose heading shows
+  /// an age only while the Swarm can't be read.
+  void _syncTick() {
+    final wanted =
+        (widget.ticks ?? !kUnderTest) &&
+        !c.away &&
+        TickerMode.valuesOf(context).enabled &&
+        widget.app?.foreground.value != false &&
+        (!widget.collapsed || c.backendUnreachable);
+    if (!wanted) {
+      _tick?.cancel();
+      _tick = null;
+    } else {
+      _tick ??= Timer.periodic(
+        const Duration(seconds: 1),
+        (_) => _redrawMoved(),
+      );
+    }
+  }
+
+  /// A machine reported, or the Swarm came on screen or left it. Told outside
+  /// a build but for that last, which may come from one.
+  void _machinesMoved() {
+    if (!mounted) return;
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      SchedulerBinding.instance.addPostFrameCallback((_) => _machinesMoved());
+      return;
+    }
+    _syncTick();
+    _redrawMoved();
+  }
+
+  /// Redraws what no longer says what it drew, and nothing else.
+  void _redrawMoved() {
+    if (!mounted || c.snapshot == null || c.accessRevoked) return;
+    final views = _sortedViews();
+    if (c.backendUnreachable ||
+        !listEquals(_orderDrawn, [for (final v in views) v.id])) {
+      _changed();
+      return;
+    }
+    for (final view in views) {
+      if (_rowsDrawn[view.id] != _rowWords(view)) {
+        _rowBeats[view.id]?.value++;
+      }
+    }
+  }
+
+  /// Everything a row's look goes by, but for what a rebuild of the list says.
+  Object _rowWords(_MachineView view) => Object.hashAll([
+    view.name,
+    view.status,
+    view.readingAt,
+    view.arrived,
+    view.paused,
+    view.cleaning,
+    view.dim,
+    view.details,
+    view.tip,
+    view.problem,
+    view.subscriptionsAside,
+    view.agents.length,
+  ]);
 
   /// Reads why this Mac has no Harness Team account, only while its person's
   /// own row offers Set up: asked of this Mac's daemon, never of another's.
@@ -872,6 +966,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   }
 
   void _foreground() {
+    _syncTick();
     _updateUsage();
     _revision++;
     _timer?.cancel();
@@ -929,6 +1024,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     _revision++;
     _timer?.cancel();
     _tick?.cancel();
+    c.machinesChanged.removeListener(_machinesMoved);
+    for (final beat in _rowBeats.values) {
+      beat.dispose();
+    }
     widget.app?.foreground.removeListener(_foreground);
     _usage?.removeListener(_changed);
     _usage?.dispose();
@@ -2215,7 +2314,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   }
 
   /// Keep offline machines in the same list and on the same columns.
-  List<Widget> _machines() {
+  List<_MachineView> _sortedViews() {
     final views = [for (final id in _rowIds) _view(id)];
     String key(_MachineView view) =>
         superTabMachineName(view.name).toLowerCase();
@@ -2231,7 +2330,30 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
           ? key(a).compareTo(key(b))
           : a.id.compareTo(b.id),
     );
-    return [for (final view in views) _machine(view)];
+    return views;
+  }
+
+  /// One row each, redrawn on its own ([_redrawMoved]).
+  List<Widget> _machines() {
+    final views = _sortedViews();
+    _orderDrawn = [for (final v in views) v.id];
+    _rowBeats.removeWhere((id, beat) {
+      if (_orderDrawn.contains(id)) return false;
+      beat.dispose();
+      return true;
+    });
+    return [
+      for (final id in _orderDrawn)
+        ValueListenableBuilder<int>(
+          key: ValueKey('super-machine-row-$id'),
+          valueListenable: _rowBeats.putIfAbsent(id, () => ValueNotifier(0)),
+          builder: (context, _, _) {
+            final view = _view(id);
+            _rowsDrawn[id] = _rowWords(view);
+            return _machine(view);
+          },
+        ),
+    ];
   }
 
   @override

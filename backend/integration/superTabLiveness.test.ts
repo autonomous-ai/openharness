@@ -2217,3 +2217,209 @@ describe('an agent closed on its machine', () => {
     expect(await closing(f)).toEqual([])
   })
 })
+
+// Huy, 2026-11-02 (task #2131, after #2569): once a closed agent left the list, reopening its session left it outside the Swarm until
+// someone added it from Desktop. The removal keeps a record in its machine's part, and that machine's own report brings it back.
+describe('a session reopened after its agent was removed', () => {
+  const state = async (f: Awaited<ReturnType<typeof swarm>>) => (await f.timed.read(owner, f.tab)).state
+  const machinePart = async (f: { tab: string }, machineId: string) => (await db.swarmMachine.findFirstOrThrow({ where: { tabId: f.tab, key: machineId } })).data as { removedSessions?: Array<Record<string, any>> }
+  /** A Swarm with an idle agent of a role, in the task's group, that its machine's report just removed. */
+  async function removed(over: Record<string, unknown> = {}) {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const idle = await f.add(f.group, 'test-host', f.harness.other, 'Idle one')
+    const row = await db.swarmAgent.findFirstOrThrow({ where: { tabId: f.tab, key: idle } })
+    await db.swarmAgent.update({ where: { id: row.id }, data: { data: { ...row.data as object, roleName: 'Reviewer', ...over } } })
+    // A session listed stopped leaves once it has stayed so, by a machine that keeps reporting (closedAgents.ts STOPPED_REMOVE_MS).
+    for (let seconds = 0; seconds < 35; seconds += 5) {
+      f.clock.now += 5_000
+      await f.observe('lead-host', [f.harness.lead])
+      await f.observe('test-host', [f.harness.worker], { stoppedHarnessIds: [f.harness.other] })
+    }
+    expect((await state(f)).agents.map(a => a.id)).not.toContain(idle)
+    return { ...f, idle }
+  }
+  const resume = (f: Awaited<ReturnType<typeof removed>>) => { f.clock.now += MINUTE; return f.observe('test-host', [f.harness.worker, f.harness.other]) }
+  const patchRecord = async (f: Awaited<ReturnType<typeof removed>>, change: (record: Record<string, any>) => void) => {
+    const row = await db.swarmMachine.findFirstOrThrow({ where: { tabId: f.tab, key: 'test-host' } })
+    const data = structuredClone(row.data) as { removedSessions: Array<Record<string, any>> }
+    change(data.removedSessions[0]!)
+    await db.swarmMachine.update({ where: { id: row.id }, data: { data: data as object } })
+  }
+
+  it('is listed again with its group, role and configuration, once, and its record goes', async () => {
+    const f = await removed()
+    await resume(f)
+    const read = await state(f), back = read.agents.find(a => a.id === f.idle)!
+    expect(back).toMatchObject({ harnessId: f.harness.other, machineId: 'test-host', name: 'Idle one', roleName: 'Reviewer', configuration: config })
+    expect(back.downSince).toBeUndefined()
+    expect(read.conversations.find(c => c.id === f.group)!.agentIds).toContain(f.idle)
+    expect((await machinePart(f, 'test-host')).removedSessions ?? []).toEqual([])
+    await resume(f)
+    expect((await state(f)).agents.filter(a => a.id === f.idle)).toHaveLength(1)
+  })
+
+  it('stays out while the report does not list it running', async () => {
+    const f = await removed()
+    f.clock.now += MINUTE
+    await f.observe('test-host', [f.harness.worker])
+    expect((await state(f)).agents.map(a => a.id)).not.toContain(f.idle)
+    expect((await machinePart(f, 'test-host')).removedSessions).toHaveLength(1)
+  })
+
+  it('comes back only from its own machine: another machine\'s report leaves it out, and a stranger\'s is refused', async () => {
+    const f = await removed()
+    f.clock.now += MINUTE
+    await f.observe('lead-host', [f.harness.lead, f.harness.other])
+    expect((await state(f)).agents.map(a => a.id)).not.toContain(f.idle)
+    expect((await machinePart(f, 'test-host')).removedSessions).toHaveLength(1)
+    const generation = (await poolRows(f.timed, host, 'test-host')).find(p => p.tabId === f.tab)!.machine.generation
+    await expect(f.timed.observeMachine(owner, f.tab, 'test-host', { generation, tools: [], quotas: [], resources: {} as never,
+      runningHarnessIds: [f.harness.other], stoppedHarnessIds: [] } as never)).rejects.toBeTruthy()
+    expect((await state(f)).agents.map(a => a.id)).not.toContain(f.idle)
+    expect((await machinePart(f, 'test-host')).removedSessions).toHaveLength(1)
+  })
+
+  it('no command brings it back: nothing a person or an agent sends names the record', async () => {
+    const f = await removed()
+    await expect(f.execute({ type: 'agent.rejoin', machineId: 'test-host', harnessId: f.harness.other } as unknown as Command)).rejects.toBeTruthy()
+    expect((await state(f)).agents.map(a => a.id)).not.toContain(f.idle)
+  })
+
+  it('is told only to its own machine\'s host, and is in no person\'s read', async () => {
+    const f = await removed()
+    expect((await poolRows(f.timed, host, 'test-host')).find(p => p.tabId === f.tab)).toMatchObject({ removedHarnessIds: [f.harness.other] })
+    expect((await poolRows(f.timed, host, 'lead-host')).find(p => p.tabId === f.tab)!.removedHarnessIds ?? []).toEqual([])
+    expect(JSON.stringify(await state(f))).not.toContain('removedSessions')
+    expect(JSON.stringify(await f.timed.read(host, f.tab))).not.toContain('removedSessions')
+  })
+
+  it('keeps no record of an agent someone asked to stop, or a confidential one', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const stop = await f.add(f.group, 'test-host', f.harness.other, 'Stop one')
+    await f.execute({ type: 'agent.release', agentId: stop, decision: 'stop' })
+    f.clock.now += MINUTE
+    await f.observe('lead-host', [f.harness.lead])
+    await f.observe('test-host', [f.harness.worker], { stoppedHarnessIds: [f.harness.other] })
+    expect((await machinePart(f, 'test-host')).removedSessions ?? []).toEqual([])
+    const secret = await removed({ confidential: true })
+    expect((await machinePart(secret, 'test-host')).removedSessions ?? []).toEqual([])
+  })
+
+  it('keeps no record of a session that reads a private chat, though nothing marked it confidential', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const idle = await f.add(f.group, 'test-host', f.harness.other, 'Idle one')
+    const group = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.group } })
+    await db.swarmGroup.update({ where: { id: group.id }, data: { data: { ...group.data as object, audience: { kind: 'people', people: [{ id: owner.sub }] } } } })
+    for (let seconds = 0; seconds < 35; seconds += 5) {
+      f.clock.now += 5_000
+      await f.observe('lead-host', [f.harness.lead])
+      await f.observe('test-host', [f.harness.worker], { stoppedHarnessIds: [f.harness.other] })
+    }
+    expect((await state(f)).agents.map(a => a.id)).not.toContain(idle)
+    expect((await machinePart(f, 'test-host')).removedSessions ?? []).toEqual([])
+  })
+
+  it.each([
+    ['a machine owner who is not the report\'s', (r: Record<string, any>) => { r.agent.machineOwnerId = 'someone-else' }],
+    ['a contributor no longer in the Swarm', (r: Record<string, any>) => { r.agent.contributorId = 'someone-else' }],
+    ['its contributor left and came back', (r: Record<string, any>) => { r.agent.membershipGeneration = 'an-older-one' }],
+    ['its project gone', (r: Record<string, any>) => { r.agent.projectId = 'no-such-project' }],
+    ['a share grant that changed', (r: Record<string, any>) => { r.agent.hostGrant = 'revoked' }],
+    ['a harness that does not match', (r: Record<string, any>) => { r.agent.harnessId = 'other-session' }],
+  ])('is not restored with %s, and its record goes', async (_, change) => {
+    const f = await removed()
+    await patchRecord(f, change)
+    await resume(f)
+    expect((await state(f)).agents.map(a => a.id)).not.toContain(f.idle)
+    expect((await machinePart(f, 'test-host')).removedSessions ?? []).toEqual([])
+  })
+
+  it('does not come back into an archived group, a private chat, or one that is gone; it is listed all the same', async () => {
+    const f = await removed()
+    const open = String((await f.execute({ type: 'conversation.create', title: 'Open one', brief: 'b', checks: [] })).result.conversationId)
+    await patchRecord(f, r => { r.groupIds = [f.group, open, 'no-such-group'] })
+    await f.execute({ type: 'conversation.archive', conversationId: open, archived: true })
+    const group = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.group } })
+    await db.swarmGroup.update({ where: { id: group.id }, data: { data: { ...group.data as object, audience: { people: [] } } } })
+    await resume(f)
+    const read = await db.swarmGroup.findMany({ where: { tabId: f.tab, key: { in: [f.group, open] } } })
+    for (const row of read) expect((row.data as { agentIds: string[] }).agentIds).not.toContain(f.idle)
+    expect((await state(f)).agents.map(a => a.id)).toContain(f.idle)
+  })
+
+  it('leaves one added by hand meanwhile as it is, and one registered in another Swarm out', async () => {
+    const f = await removed()
+    const again = await f.add(f.group, 'test-host', f.harness.other, 'Added by hand')
+    expect(again).toBe(f.idle)
+    await resume(f)
+    expect((await state(f)).agents.find(a => a.id === f.idle)!.name).toBe('Added by hand')
+    expect((await machinePart(f, 'test-host')).removedSessions ?? []).toEqual([])
+
+    const moved = await removed()
+    const elsewhere = await swarm()
+    await elsewhere.add(elsewhere.group, 'test-host', moved.harness.other, 'Elsewhere now')
+    await resume(moved)
+    expect((await state(moved)).agents.map(a => a.id)).not.toContain(moved.idle)
+    expect((await machinePart(moved, 'test-host')).removedSessions ?? []).toEqual([])
+  })
+
+  // Rowan's review of #2569: the removal now also orders its host to close the session.
+  it('stays open when it comes back before its host closed it: the close order goes with the record', async () => {
+    const f = await removed()
+    expect((await poolRows(f.timed, host, 'test-host')).length).toBeGreaterThan(0)
+    const closing = () => db.swarmMachine.findFirstOrThrow({ where: { tabId: f.tab, key: 'test-host' } }).then(row => (row.data as { closingSessions: Array<{ harnessId: string }> }).closingSessions)
+    expect((await closing()).map(c => c.harnessId)).toContain(f.harness.other)
+    await resume(f)
+    expect((await state(f)).agents.map(a => a.id)).toContain(f.idle)
+    expect((await closing()).map(c => c.harnessId)).not.toContain(f.harness.other)
+  })
+
+  it('rejoins after its host closed it, once the session is opened again', async () => {
+    const f = await removed()
+    const row = await db.swarmMachine.findFirstOrThrow({ where: { tabId: f.tab, key: 'test-host' } })
+    await db.swarmMachine.update({ where: { id: row.id }, data: { data: { ...row.data as object, closingSessions: [] } } })
+    await resume(f)
+    expect((await state(f)).agents.map(a => a.id)).toContain(f.idle)
+  })
+
+  it('never past a hold: a session its Team account is held for stays out, and the hold stands', async () => {
+    const f = await removed()
+    const row = await db.swarmMachine.findFirstOrThrow({ where: { tabId: f.tab, key: 'test-host' } })
+    const data = structuredClone(row.data) as { closingSessions: Array<Record<string, unknown>> }
+    for (const close of data.closingSessions) if (close.harnessId === f.harness.other) Object.assign(close, { heldFor: 'lead', since: f.clock.now })
+    await db.swarmMachine.update({ where: { id: row.id }, data: { data: data as object } })
+    await resume(f)
+    expect((await state(f)).agents.map(a => a.id)).not.toContain(f.idle)
+    const after = (await db.swarmMachine.findFirstOrThrow({ where: { tabId: f.tab, key: 'test-host' } })).data as { closingSessions: Array<Record<string, unknown>>; removedSessions?: unknown[] }
+    expect(after.closingSessions.find(c => c.harnessId === f.harness.other)).toMatchObject({ heldFor: 'lead' })
+    expect(after.removedSessions ?? []).toEqual([])
+  })
+
+  // Security review 1 of #2601: the record every Swarm registering this session writes (sessionScope.ts bindSession).
+  it.each([
+    ['withdrawn from this Swarm', (tab: string) => ({ releasedTabIds: [tab] })],
+    ['being stopped', () => ({ stopReleaseId: 'release-1' })],
+    ['tied to another private project', () => ({ privateScope: 'another-scope' })],
+  ])('stays out of a session %s, and its record goes', async (_, fields) => {
+    const f = await removed()
+    const row = await db.superTab.findUniqueOrThrow({ where: { id: f.tab }, select: { autonomousEnv: true } })
+    const scope = stableId('swarm-session', row.autonomousEnv, host.sub, f.idle)
+    await db.superTabSessionScope.upsert({ where: { id: scope }, create: { id: scope, scopeIds: [], ...fields(f.tab) }, update: fields(f.tab) })
+    await resume(f)
+    expect((await state(f)).agents.map(a => a.id)).not.toContain(f.idle)
+    expect((await machinePart(f, 'test-host')).removedSessions ?? []).toEqual([])
+  })
+
+  it('goes after 30 days, and with its machine', async () => {
+    const f = await removed()
+    f.clock.now += 31 * 24 * 60 * MINUTE
+    await f.observe('test-host', [f.harness.worker])
+    expect((await machinePart(f, 'test-host')).removedSessions ?? []).toEqual([])
+    const g = await removed()
+    await g.execute({ type: 'machine.remove', machineId: 'test-host' }, host)
+    expect((await machinePart(g, 'test-host')).removedSessions ?? []).toEqual([])
+  })
+})

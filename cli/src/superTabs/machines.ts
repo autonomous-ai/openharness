@@ -502,7 +502,14 @@ export class ContributedMachines {
         for (const id of ids) {
           if (await this.core.agents.stopped?.(id) || (!this.core.agents.byAgent(id) && await this.core.agents.gone?.(id))) stopped.push(id)
         }
-        const running = ids.filter(id => !!this.core.agents.byAgent(id) && !stopped.includes(id))
+        // A session whose agent left as closed, reopened here: listed running, and that report brings its agent back (backend
+        // closedAgents.ts restoreSessions). The backend names them, so nothing else on this machine is ever reported.
+        const removed = Array.isArray(row.removedHarnessIds) ? row.removedHarnessIds.filter(identifier) : []
+        const reopened: string[] = []
+        for (const id of removed) {
+          if (!ids.includes(id) && this.core.agents.byAgent(id) && !await this.core.agents.stopped?.(id)) reopened.push(id)
+        }
+        const running = [...ids.filter(id => !!this.core.agents.byAgent(id) && !stopped.includes(id)), ...reopened]
         const pending = startsOf(row)
         looked.push({ row, pool, pending })
         const preparing = began >= this.preparingRefusedUntil ? pending.flatMap(start => this.preparing.has(String(start.id)) ? [String(start.id)] : []) : []

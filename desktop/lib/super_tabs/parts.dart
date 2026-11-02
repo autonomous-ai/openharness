@@ -24,6 +24,7 @@ class SuperTabPartsChange {
     this.removedGroups = const {},
     this.dormantGroups = const {},
     this.readMarksOnly = false,
+    this.machinesOnly = false,
   });
 
   /// Some part or a derived value is new: what the screens draw may differ.
@@ -37,6 +38,10 @@ class SuperTabPartsChange {
 
   /// Only the reader's read marks moved: the page around the view, not what a saved view holds.
   final bool readMarksOnly;
+
+  /// Only what a machine reports moved (its reading, its Lent, its worked-out
+  /// values): what shows machines may differ, nothing else.
+  final bool machinesOnly;
 }
 
 /// The parts of one Swarm as this reader last saw them (section 5.1): every part by kind and key at the newest
@@ -224,12 +229,14 @@ class SuperTabParts {
   /// the group out of the active ones, `derived` is replaced, and the cursor moves. A reload answer is the caller's.
   SuperTabPartsChange apply(Map<String, dynamic> changes) {
     var changed = false;
+    // Anything but a machine's own report moved.
+    var beyondMachines = false;
     final removed = <String>{}, dormant = <String>{};
     if (changes['head'] != null) {
       final head = _envelope(changes['head'], live: true);
       if (_newer('head', head)) {
         _head = head;
-        changed = true;
+        changed = beyondMachines = true;
       }
     }
     for (final kind in _lists) {
@@ -239,6 +246,9 @@ class SuperTabParts {
         final key = part['key'] as String;
         if (!_newer('$kind:$key', part)) continue;
         changed = true;
+        if (kind != 'machines' || !_reportOnly(held[key], part)) {
+          beyondMachines = true;
+        }
         if (part['deleted'] == true) {
           held.remove(key);
           if (kind == 'groups') {
@@ -281,6 +291,7 @@ class SuperTabParts {
         _takeChatSettings(derived.remove('chatSettings')) |
         readMarksMoved;
     if (!const DeepCollectionEquality().equals(derived, _derived)) {
+      if (!_sameBeyondMachines(derived, _derived)) beyondMachines = true;
       _derived = derived;
       changed = true;
     }
@@ -292,7 +303,43 @@ class SuperTabParts {
       removedGroups: removed,
       dormantGroups: dormant,
       readMarksOnly: marksMoved && !changed,
+      machinesOnly: changed && !beyondMachines && !marksMoved,
     );
+  }
+
+  /// Whether [next] says of a held machine only what its reports write: a
+  /// heartbeat. A new machine, a removed one, or one renamed or paused is news
+  /// to more than the machines list.
+  static bool _reportOnly(
+    Map<String, dynamic>? held,
+    Map<String, dynamic> next,
+  ) {
+    if (held == null || next['deleted'] == true || next['data'] == null) {
+      return false;
+    }
+    Map<String, dynamic> rest(Map<String, dynamic> part) =>
+        Map.of(superTabMap(part['data']))
+          ..remove('observation')
+          ..remove('lent')
+          ..remove('lentDays');
+    return const DeepCollectionEquality().equals(rest(held), rest(next));
+  }
+
+  static bool _sameBeyondMachines(
+    Map<String, dynamic> a,
+    Map<String, dynamic> b,
+  ) => const DeepCollectionEquality().equals(
+    Map.of(a)..remove('machines'),
+    Map.of(b)..remove('machines'),
+  );
+
+  /// The machines as [state] lists them, with what the server worked out.
+  List<Map<String, dynamic>> get machines {
+    final worked = _derivedMap('machines');
+    return [
+      for (final machine in _data('machines'))
+        _overlay(machine, worked[machine['machineId']]),
+    ];
   }
 
   /// Takes dormant groups read on demand (section 4.5): a page of the dormant list, or one group by id. Each is kept
@@ -323,7 +370,6 @@ class SuperTabParts {
   /// groups come first in the order they were read, then the dormant groups held.
   Map<String, dynamic> get state {
     final agentsDerived = _derivedMap('agents');
-    final machinesDerived = _derivedMap('machines');
     final avatars = _derivedMap('avatars');
     final state = <String, dynamic>{
       ...superTabMap(_head['data']),
@@ -347,10 +393,7 @@ class SuperTabParts {
         ..._data('groups'),
         for (final part in _dormant.values) superTabMap(part['data']),
       ],
-      'machines': [
-        for (final machine in _data('machines'))
-          _overlay(machine, machinesDerived[machine['machineId']]),
-      ],
+      'machines': machines,
       'starts': [for (final start in _data('starts')) start],
       'githubApp': githubApp,
     };
