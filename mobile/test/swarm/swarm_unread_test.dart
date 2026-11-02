@@ -211,10 +211,12 @@ void main() {
   });
 
   test('a project counts only tags opening its chat clears, while task tags stay on their own row', () async {
-    final r = await rig(tags: [
-      mentionRow('project-tag', conversationId: leadChat, messageSequence: 4),
-      mentionRow('task-tag', messageSequence: 4),
-    ]);
+    final r = await rig(
+      tags: [
+        mentionRow('project-tag', conversationId: leadChat, messageSequence: 4),
+        mentionRow('task-tag', messageSequence: 4),
+      ],
+    );
     await moveOn(r, {
       leadChat: groupData(leadChat, title: 'Mobile', lastMessageSequence: 4),
       'g1': groupData('g1', title: 'Fix login', lastMessageSequence: 4),
@@ -226,7 +228,11 @@ void main() {
     await settle();
     expect(swarmProjectNews(r.reader, r.asks)[project], (bold: true, tags: 0));
     expect(chat(r, 'g1'), (bold: true, tags: 1));
-    expect(r.asks.mentions, hasLength(2), reason: 'Activity retains waiting tags');
+    expect(
+      r.asks.mentions,
+      hasLength(2),
+      reason: 'Activity retains waiting tags',
+    );
   });
 
   test('a project is bold while its project chat or open work is unread, '
