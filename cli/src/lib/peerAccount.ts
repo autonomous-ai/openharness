@@ -159,6 +159,9 @@ export function runWindowsNative(inputs: Record<string, string>, binary: () => s
 export function nativeFirst(native: WindowsNativeRun, powershell: WindowsPeerRun): WindowsPeerRun {
   let told = false
   return async (script, inputs) => {
+    // The helper answers only who owns a connection. Another query through this default, as the listener check of #2608, has
+    // its own script and rules: run with no ports, the helper could say nothing, and that check would go quiet.
+    if (inputs.HARNESS_PEER_PORT === undefined) return powershell(script, inputs)
     const answer = await native(inputs)
     if (answer !== 'missing' && answer.status !== 2 && answer.status !== 3) return answer
     if (!told) {
