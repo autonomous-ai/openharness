@@ -140,7 +140,8 @@ export function windowsPeerQuery(peerPort: number, ownPort: number): { script: s
 }
 
 /**
- * Windows: whose the listeners on loopback [port] are. Prints `none` when nothing listens, `yes` when one of them belongs
+ * Windows: whose the listeners on loopback [port] are, of those that hold 127.0.0.1's port (on it, on any IPv4 address, or
+ * dual-stack on any address). Prints `none` when nothing listens there, `yes` when one of them belongs
  * to a process of this account (a second daemon or a handover of its own, which the bridge waits out), and `no` otherwise.
  * As in [windowsPeerQuery], the owner is compared by SID, and a process that started after its listener was made (an id
  * reused since its creator exited) or one gone is not this account's: the answer that moves the bridge is the safe one.
@@ -149,7 +150,9 @@ export function windowsPeerQuery(peerPort: number, ownPort: number): { script: s
 export function windowsListenerQuery(port: number): { script: string; inputs: Record<string, string> } {
   return {
     script: [
-      '$rows = @(Get-NetTCPConnection -State Listen -LocalPort ([int]$env:HARNESS_LISTEN_PORT) -ErrorAction SilentlyContinue)',
+      // Only these keep 127.0.0.1's port from being bound; this account's listener on ::1 or 127.0.0.2 must not keep the bridge
+      // waiting on another account's 127.0.0.1 (Quinn 2's review of #2608).
+      "$rows = @(Get-NetTCPConnection -State Listen -LocalPort ([int]$env:HARNESS_LISTEN_PORT) -ErrorAction SilentlyContinue | Where-Object { $_.LocalAddress -in @('127.0.0.1', '0.0.0.0', '::') })",
       "if ($rows.Count -eq 0) { 'none'; exit 0 }",
       '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
       'foreach ($row in $rows) {',
