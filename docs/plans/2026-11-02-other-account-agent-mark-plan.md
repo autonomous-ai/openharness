@@ -37,6 +37,15 @@ role-text line, no hard limit (a hard limit would break the project's review and
    receiver reads as its page read shows them, one read by id for both) another account's agent wrote. The host puts a
    "Quoted from another account" line before that quote and names the thread's root as such in the thread line.
 
+8. **After the security reviews of #2570.** A marked quote sets off each of its lines with "> ", so a header it fakes
+   never starts a line. A row is marked by whose words it carries (`projects.ts wordsOf`): its author's (a post, a status
+   row, a brief, a route's reason); a lost task's notice, its worker's (it quotes the last result); none for the server's
+   own notices (`work-stalled`, `work-resumed`, `idle`, `review-capacity`, `overlap`, `pm-switch-notice`); unknown, so
+   marked, for a failed review's findings. This replaces decision 4's "Swarm notices are not marked": a notice is marked
+   when it quotes another account's agent. The coordinator's digest marks each line that quotes one, and says so in its
+   first line. An agent the Swarm records on no Team account whose machine row is gone counts as another account. Only a
+   claim works out the marks.
+
 ## Steps (test first)
 
 1. Backend integration test (`integration/superTabTeam.test.ts`): the claim of a Team agent's message to the owner's Lead
