@@ -10,7 +10,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/decisions_view.dart';
 import 'package:harness/super_tabs/model.dart';
-import 'package:harness/super_tabs/project_status_card.dart';
+import 'package:harness/super_tabs/project_status.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'box_render_preview_test.dart' show loadPreviewFonts;
@@ -106,23 +106,7 @@ Future<void> shot(WidgetTester tester, String name) async {
   });
 }
 
-Finder card(String projectId) =>
-    find.byKey(ValueKey('super-project-status-$projectId'));
 Finder statusText() => find.byKey(const ValueKey('super-project-status-text'));
-Finder needs(String id) =>
-    find.byKey(ValueKey('super-project-status-needs-$id'));
-Finder answer(String id) =>
-    find.byKey(ValueKey('super-project-status-answer-$id'));
-Finder fold(String projectId) =>
-    find.byKey(ValueKey('super-project-status-fold-$projectId'));
-
-String plain(WidgetTester tester, Finder text) =>
-    tester.widget<Text>(text).textSpan!.toPlainText();
-
-String heading(WidgetTester tester, String projectId) => plain(
-  tester,
-  find.descendant(of: card(projectId), matching: find.byType(Text)).first,
-);
 
 Future<void> change(
   WidgetTester tester,
@@ -186,390 +170,90 @@ void main() {
       expect(odd.text, 'x');
       expect(odd.at, isNull);
     });
+  });
 
-    test('the time reads as a clock today and with its date before', () {
-      final now = DateTime(2026, 10, 31, 18);
+  group('the Status dialog', () {
+    Future<void> openStatus(WidgetTester tester) async {
+      await tester.tap(find.byTooltip('Project options'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(MenuItemButton, 'Status'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('shows the report and when it was updated, links clickable', (
+      tester,
+    ) async {
+      await showView(tester, swarm());
+      expect(statusText(), findsNothing, reason: 'not over the chat');
+      await openStatus(tester);
+      expect(find.textContaining('Status · updated '), findsOneWidget);
+      final spans = <TextSpan>[];
+      tester.widget<Text>(statusText()).textSpan!.visitChildren((span) {
+        if (span is TextSpan && span.recognizer != null) spans.add(span);
+        return true;
+      });
+      // The link is its own span, without the sentence's full stop.
       expect(
-        SuperTabProjectStatusCard.updatedAt(
-          DateTime(2026, 10, 31, 16, 52),
-          now,
-        ),
-        '16:52',
+        spans.single.text,
+        'https://github.com/autonomous-ai/openharness/pull/4750',
       );
+      expect(spans.single.recognizer, isA<TapGestureRecognizer>());
+    });
+
+    testWidgets('a new report replaces the text in place', (tester) async {
+      final server = swarm();
+      final c = await showView(tester, server);
+      await openStatus(tester);
+      await change(tester, server, c, () {
+        ((server.state['projects'] as List).first as Map)['status'] = _status(
+          'All merged.',
+        );
+      });
       expect(
-        SuperTabProjectStatusCard.updatedAt(DateTime(2026, 10, 30, 9, 5), now),
-        'Oct 30, 09:05',
+        tester.widget<Text>(statusText()).textSpan!.toPlainText(),
+        'All merged.',
       );
-      expect(
-        SuperTabProjectStatusCard.updatedAt(DateTime(2025, 12, 1, 9, 5), now),
-        'Dec 1 2025, 09:05',
-      );
+    });
+
+    testWidgets('access lost while it is open closes it at once', (
+      tester,
+    ) async {
+      final c = await showView(tester, swarm());
+      await openStatus(tester);
+      c.revokeAccess('You no longer have access to this Swarm.');
+      await tester.pumpAndSettle();
+      expect(statusText(), findsNothing);
+    });
+
+    testWidgets('the project going closes it, leaving no text behind', (
+      tester,
+    ) async {
+      final server = swarm();
+      final c = await showView(tester, server);
+      await openStatus(tester);
+      await change(tester, server, c, () {
+        (server.state['projects'] as List).removeAt(0);
+      });
+      expect(statusText(), findsNothing);
     });
   });
 
-  group('the status card', () {
-    testWidgets(
-      'shows the coordinator\'s text and when it was updated, links clickable',
-      (tester) async {
-        await showView(tester, swarm());
-        expect(card('lead'), findsOneWidget);
-        expect(heading(tester, 'lead'), 'Status · updated 16:52');
-        expect(plain(tester, statusText()), _report);
-        // The link is its own span, without the sentence's full stop.
-        final spans = <TextSpan>[];
-        tester.widget<Text>(statusText()).textSpan!.visitChildren((span) {
-          if (span is TextSpan && span.recognizer != null) spans.add(span);
-          return true;
-        });
-        expect(
-          spans.single.text,
-          'https://github.com/autonomous-ai/openharness/pull/4750',
-        );
-        expect(spans.single.recognizer, isA<TapGestureRecognizer>());
-        // It sits above the chat, not in it.
-        expect(find.byType(SuperTabProjectStatusCard), findsOneWidget);
-      },
-    );
-
-    testWidgets(
-      'a Swarm read that leaves the text keeps the same link tap, so a click in progress is not lost',
-      (tester) async {
-        final server = swarm();
-        final c = await showView(tester, server);
-        GestureRecognizer? tap() {
-          GestureRecognizer? found;
-          tester.widget<Text>(statusText()).textSpan!.visitChildren((span) {
-            if (span is TextSpan && span.recognizer != null) {
-              found = span.recognizer;
-            }
-            return true;
-          });
-          return found;
-        }
-
-        final before = tap();
-        expect(before, isNotNull);
-        await change(tester, server, c, () => server.ask(['Ship how?']));
-        expect(needs('decision-1'), findsOneWidget);
-        expect(identical(tap(), before), isTrue);
-      },
-    );
-
-    testWidgets(
-      'Needs you lists only the reader\'s open decisions in this project, and Answer opens it where Notifications answers it',
-      (tester) async {
-        final server = swarm()
-          // decision-1: asked here, open.
-          ..ask(['Model keys for live runs?'])
-          // decision-2: asked in the other project.
-          ..ask(['Logo?'], projectId: 'design', conversationId: 'design-lead')
-          // decision-3: says this project, but its conversation is Design's.
-          ..ask(['Mismatch?'], conversationId: 'design-lead')
-          // decision-4: in a conversation the reader cannot read.
-          ..ask(['Hidden?'], conversationId: 'private-elsewhere')
-          // decision-5: asked here, already answered.
-          ..ask(['Done already?']);
-        server.answerDecision('decision-5', 0);
-        await showView(tester, server);
-
-        expect(needs('decision-1'), findsOneWidget);
-        for (final id in [
-          'decision-2',
-          'decision-3',
-          'decision-4',
-          'decision-5',
-        ]) {
-          expect(needs(id), findsNothing, reason: id);
-        }
-        expect(find.text('Logo?'), findsNothing);
-        expect(find.text('Hidden?'), findsNothing);
-        expect(
-          find.descendant(
-            of: needs('decision-1'),
-            matching: find.text('dee: Model keys for live runs?'),
-          ),
-          findsOneWidget,
-        );
-        expect(
-          find.descendant(
-            of: needs('decision-1'),
-            matching: find.text('Needs you'),
-          ),
-          findsOneWidget,
-        );
-
-        await tester.tap(answer('decision-1'));
-        await tester.pumpAndSettle();
-        // The Activity page (Notifications' place), with the decision's own
-        // option buttons.
-        expect(
-          find.descendant(
-            of: find.byType(SuperTabDecisionList),
-            matching: find.text('Decisions'),
-          ),
-          findsOneWidget,
-        );
-        expect(
-          find.byKey(const ValueKey('super-decision-decision-1-0')),
-          findsOneWidget,
-        );
-        expect(server.posts, isEmpty);
-      },
-    );
-
-    testWidgets(
-      'hidden while there is no report and nothing waits; a decision alone shows it',
-      (tester) async {
-        final server = swarm(status: {});
-        final c = await showView(tester, server);
-        expect(card('lead'), findsNothing);
-
-        // A decision in the other project changes nothing here.
-        await change(tester, server, c, () {
-          server.ask(
-            ['Logo?'],
-            projectId: 'design',
-            conversationId: 'design-lead',
-          );
-        });
-        expect(card('lead'), findsNothing);
-
-        await change(tester, server, c, () => server.ask(['Ship how?']));
-        expect(card('lead'), findsOneWidget);
-        expect(heading(tester, 'lead'), 'Status');
-        expect(statusText(), findsNothing);
-        expect(needs('decision-2'), findsOneWidget);
-
-        await change(
-          tester,
-          server,
-          c,
-          () => server.answerDecision('decision-2', 0),
-        );
-        expect(card('lead'), findsNothing);
-      },
-    );
-
-    testWidgets(
-      'folding is remembered per project on this computer, and the heading still says what waits',
-      (tester) async {
-        final server = swarm()..ask(['Ship how?']);
-        (server.state['projects'] as List)[1]['status'] = _status(
-          'Logo drafts',
-        );
-        final c = await showView(tester, server);
-
-        await tester.tap(fold('lead'));
-        await tester.pumpAndSettle();
-        expect(statusText(), findsNothing);
-        expect(needs('decision-1'), findsNothing);
-        expect(heading(tester, 'lead'), 'Status · updated 16:52 · 1 needs you');
-        expect(c.statusFolded('lead'), isTrue);
-
-        await c.flush();
-        final saved = server.saved!;
-        expect(saved['statusFolded'], ['lead']);
-
-        // Restarted: still folded here; the other project's card is not.
-        await tester.pumpWidget(const SizedBox());
-        final again = await showView(tester, server, initial: saved);
-        expect(statusText(), findsNothing);
-        expect(heading(tester, 'lead'), 'Status · updated 16:52 · 1 needs you');
-        again.select('design-lead');
-        await tester.pumpAndSettle();
-        expect(plain(tester, statusText()), 'Logo drafts');
-
-        // Shown again, and that is remembered too.
-        again.select('lead');
-        await tester.pumpAndSettle();
-        await tester.tap(fold('lead'));
-        await tester.pumpAndSettle();
-        expect(plain(tester, statusText()), _report);
-        await again.flush();
-        expect(server.saved!['statusFolded'], isEmpty);
-      },
-    );
-
-    test('the folded set keeps only the newest projects', () async {
-      final server = swarm();
-      final c = server.controller(account: 'peer');
-      addTearDown(c.dispose);
-      for (var i = 0; i <= SuperTabController.statusFoldedKept; i++) {
-        c.setStatusFolded('p$i', folded: true);
-      }
-      expect(c.statusFolded('p0'), isFalse);
-      expect(c.statusFolded('p1'), isTrue);
-      expect(c.statusFolded('p${SuperTabController.statusFoldedKept}'), isTrue);
-      // Another account's saved view on this computer is not read.
-      await c.flush();
-      final other = SuperTabController(
-        tabId: 'tab',
-        accountId: 'someone-else',
-        request: (_, _, {body}) async => const {},
-        save: (_) async {},
-        initial: server.saved!,
-      );
-      addTearDown(other.dispose);
-      expect(other.statusFolded('p1'), isFalse);
+  group('the time it says', () {
+    final now = DateTime(2026, 11, 2, 21);
+    test('today is the clock, on a 12-hour dial', () {
+      expect(superTabStatusTime(DateTime(2026, 11, 2, 20, 33), now), '8:33 PM');
+      expect(superTabStatusTime(DateTime(2026, 11, 2, 0, 5), now), '12:05 AM');
+      expect(superTabStatusTime(DateTime(2026, 11, 2, 12), now), '12:00 PM');
     });
-
-    testWidgets(
-      'a new report replaces the card in place and adds nothing to the chat',
-      (tester) async {
-        final server = swarm();
-        final c = await showView(tester, server);
-        final messages = c.messages('lead').length;
-        await change(tester, server, c, () {
-          (server.state['projects'] as List)[0]['status'] = _status(
-            'Memory engine  merged #4750',
-            at: _at.add(const Duration(minutes: 30)),
-          );
-        });
-        expect(plain(tester, statusText()), 'Memory engine  merged #4750');
-        expect(heading(tester, 'lead'), 'Status · updated 17:22');
-        expect(find.byType(SuperTabProjectStatusCard), findsOneWidget);
-        expect(c.messages('lead').length, messages);
-      },
-    );
-
-    testWidgets(
-      'each project\'s chat shows its own card, never the one opened before',
-      (tester) async {
-        final server = swarm();
-        (server.state['projects'] as List)[1]['status'] = _status(
-          'Logo drafts',
-        );
-        final c = await showView(tester, server);
-        c.select('design-lead');
-        await tester.pumpAndSettle();
-        expect(card('design'), findsOneWidget);
-        expect(card('lead'), findsNothing);
-        expect(plain(tester, statusText()), 'Logo drafts');
-      },
-    );
-
-    testWidgets('access lost while the card is open hides it at once', (
-      tester,
-    ) async {
-      final server = swarm()..ask(['Ship how?']);
-      final c = await showView(tester, server);
-      expect(needs('decision-1'), findsOneWidget);
-      c.revokeAccess('You no longer have access to this Swarm.');
-      await tester.pump();
-      expect(card('lead'), findsNothing);
-      expect(find.textContaining('Ship how?'), findsNothing);
-      expect(find.textContaining('Memory engine'), findsNothing);
-    });
-
-    testWidgets(
-      'the card on its own forgets the project once access is lost, never showing what it read before',
-      (tester) async {
-        final server = swarm()..ask(['Ship how?']);
-        final c = server.controller(account: 'peer');
-        addTearDown(c.dispose);
-        await c.refresh();
-        await tester.pumpWidget(
-          MaterialApp(
-            home: Scaffold(
-              body: SuperTabProjectStatusCard(controller: c, projectId: 'lead'),
-            ),
-          ),
-        );
-        await tester.pumpAndSettle();
-        expect(card('lead'), findsOneWidget);
-        expect(needs('decision-1'), findsOneWidget);
-
-        c.revokeAccess('You no longer have access to this Swarm.');
-        await tester.pump();
-        expect(card('lead'), findsNothing);
-        expect(find.textContaining('Memory engine'), findsNothing);
-        expect(find.textContaining('Ship how?'), findsNothing);
-      },
-    );
-
-    testWidgets(
-      'losing the project drops its card, and a changed audience drops Needs you rows before the new list arrives',
-      (tester) async {
-        final server = swarm();
-        (server.state['conversations'] as List).add({
-          ...conversationFixture('plans', 'Plans'),
-          'projectId': 'lead',
-        });
-        server.ask(['Ship how?'], conversationId: 'plans');
-        final c = await showView(tester, server);
-        expect(needs('decision-1'), findsOneWidget);
-
-        // The reader loses the workgroup; the new list is slow to come.
-        final slow = server.holdDecisions = Completer<void>();
-        await change(tester, server, c, () {
-          (server.state['conversations'] as List).removeWhere(
-            (g) => (g as Map)['id'] == 'plans',
-          );
-          server.hideDecision('decision-1');
-          server.parts.epoch++;
-        });
-        expect(needs('decision-1'), findsNothing);
-        expect(find.textContaining('Ship how?'), findsNothing);
-        server.holdDecisions = null;
-        slow.complete();
-        await tester.pumpAndSettle();
-        expect(needs('decision-1'), findsNothing);
-
-        // The project itself goes: no card, no text left behind.
-        await change(tester, server, c, () {
-          (server.state['projects'] as List).removeAt(0);
-        });
-        expect(card('lead'), findsNothing);
-        expect(find.textContaining('Memory engine'), findsNothing);
-      },
-    );
-
-    testWidgets(
-      'a failed first decisions read shows the report alone, and the rows once a read succeeds',
-      (tester) async {
-        final server = swarm()..ask(['Ship how?']);
-        server.failDecisions = true;
-        final c = await showView(tester, server);
-        expect(card('lead'), findsOneWidget);
-        expect(needs('decision-1'), findsNothing);
-        expect(find.byType(CircularProgressIndicator), findsNothing);
-
-        server.failDecisions = false;
-        await change(tester, server, c, () {
-          (server.state['projects'] as List)[0]['status'] = _status('Later');
-        });
-        expect(needs('decision-1'), findsOneWidget);
-      },
-    );
-
-    testWidgets('a report at the limit scrolls inside the card', (
-      tester,
-    ) async {
-      final long = List.filled(40, 'Line of progress ' * 3).join('\n');
-      final text = long.substring(0, SuperTabProjectStatus.maxText);
-      await showView(tester, swarm(status: _status(text)));
-      expect(tester.getSize(card('lead')).height, lessThan(320));
+    test('before today says the date', () {
       expect(
-        find.descendant(
-          of: card('lead'),
-          matching: find.byType(SingleChildScrollView),
-        ),
-        findsOneWidget,
+        superTabStatusTime(DateTime(2026, 10, 30, 16, 52), now),
+        'Oct 30, 4:52 PM',
       );
-      expect(tester.takeException(), isNull);
+      expect(
+        superTabStatusTime(DateTime(2025, 10, 30, 16, 52), now),
+        'Oct 30 2025, 4:52 PM',
+      );
     });
-
-    for (final brightness in Brightness.values) {
-      testWidgets('screenshot, ${brightness.name}', (tester) async {
-        final server = swarm()..ask(['Model keys for live runs?']);
-        final c = await showView(tester, server, brightness: brightness);
-        expect(card('lead'), findsOneWidget);
-        await shot(tester, 'project-status-${brightness.name}');
-        await tester.tap(fold('lead'));
-        await tester.pumpAndSettle();
-        await shot(tester, 'project-status-folded-${brightness.name}');
-        await c.flush();
-      });
-    }
   });
 }

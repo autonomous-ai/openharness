@@ -33,15 +33,14 @@ test('the local credential is read the way the CLI reads it, and only then', () 
   assert.deepEqual(localCredentialHeaders({ ADAPTER_DATA_DIR: dataDir({ credential: 'too-short' }) }), {})
 })
 
-// Audit W1 (docs/security/2026-11-02-team-account-windows.md): on Windows there is no socket, and the port may be held by
-// the Team account's daemon, which starts at boot. So no credential goes on a request there: until this add-on reaches the
-// daemon over its pipe, it cannot reach it on Windows, and says the daemon is unreachable.
-test('on Windows no request carries the credential, whatever the folder and file', (t) => {
+// On Windows the credential never goes to the port, whose holder may be another account's: the Team account's daemon
+// starts at boot, before the owner's (audit W1). The package reaches the daemon over its proven pipe instead (localDaemon.mjs).
+test('on Windows no credential is read: it never goes to the port', (t) => {
   const platform = Object.getOwnPropertyDescriptor(process, 'platform')
   Object.defineProperty(process, 'platform', { value: 'win32' })
   t.after(() => Object.defineProperty(process, 'platform', platform))
-  assert.deepEqual(localCredentialHeaders({ ADAPTER_DATA_DIR: dataDir() }), {})
   assert.deepEqual(localCredentialHeaders({ ADAPTER_DATA_DIR: dataDir({ mode: 0o666, folderMode: 0o777 }) }), {})
+  assert.deepEqual(localCredentialHeaders({ ADAPTER_DATA_DIR: dataDir() }), {}, 'nor a credential the POSIX checks would pass')
 })
 
 test('where a socket can be, a check opens it and shows nothing, and only if it is private', async (t) => {
@@ -59,4 +58,20 @@ test('where a socket can be, a check opens it and shows nothing, and only if it 
   chmodSync(path, 0o666)
   assert.throws(() => daemonBridge(18473, env), /missing or not private/)
   assert.deepEqual(daemonBridge(18473, { ADAPTER_DATA_DIR: dataDir() }).headers, { 'X-Harness-Local': CREDENTIAL })
+})
+
+test('on Windows a check opens the daemon\'s pipe with the pipe auth, never the port, and with no pipe says Harness is not running', (t) => {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')
+  Object.defineProperty(process, 'platform', { value: 'win32' })
+  t.after(() => Object.defineProperty(process, 'platform', platform))
+  const dir = dataDir()
+  assert.throws(() => daemonBridge(18473, { ADAPTER_DATA_DIR: dir }), /Harness is not running/, 'no record: the port is not tried')
+  const pipe = `\\\\.\\pipe\\harness-${'a'.repeat(32)}`
+  writeFileSync(join(dir, 'daemon-18473.json'), JSON.stringify({ port: 18473, pipe, pid: process.pid }))
+  writeFileSync(join(dir, 'daemon-token'), `${'b'.repeat(64)}\n`)
+  const bridge = daemonBridge(18473, { ADAPTER_DATA_DIR: dir })
+  assert.equal(bridge.url, 'ws://localhost/api/local-ws')
+  assert.deepEqual(Object.keys(bridge.headers), ['X-Harness-Auth'], 'the pipe auth, and no credential')
+  assert.equal(typeof bridge.createConnection, 'function')
+  assert.equal(bridge.proven('0'.repeat(64)), false, 'an answer without the daemon\'s proof is refused')
 })

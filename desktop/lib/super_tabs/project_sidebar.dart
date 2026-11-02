@@ -237,13 +237,10 @@ class ProjectSidebar extends StatelessWidget {
         reading == null || controller.expandedProjects.contains(project?.id)
         ? controller.unreadShown(group)
         : reading.unread.isNotEmpty;
-    // A collapsed project counts the tags in the conversations it hides, as
-    // Slack's collapsed section does; open, each row has its own.
-    final badge = attention == null
-        ? 0
-        : reading == null || controller.expandedProjects.contains(project?.id)
-        ? attention!.mentionsIn(group.id)
-        : reading.mentions;
+    // Only what opening this row shows, so opening it clears the number (Dee,
+    // Slack's way). Tags in the task conversations it hides make it bold, and
+    // are on their own rows and in Activity.
+    final badge = attention?.mentionsIn(group.id) ?? 0;
     return _drawRow(
       group,
       project: project,
@@ -1222,8 +1219,8 @@ class _ProjectReading {
   Set<String> get waiting => _open.waiting;
   Set<String> get unread => _open.unread;
 
-  /// Tags of the reader in the project's chat and its open workgroups: a
-  /// collapsed project's number.
+  /// Tags of the reader in the project's chat and its open workgroups: why the
+  /// unread filter keeps a collapsed project. Never its number ([_row]).
   late final int mentions = switch (sidebar.attention) {
     null => 0,
     final attention =>

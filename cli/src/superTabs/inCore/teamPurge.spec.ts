@@ -94,6 +94,20 @@ describe('a Buddy\'s private temporary folder when its session ends', () => {
     rmSync(buddyTmpParent(), { recursive: true, force: true })
   })
 
+  // Windows has no user id: Claude Code's temp folder there is under uid 0's name (agentTmp's own fallback).
+  it('finds a session\'s files where the platform has no user id', async () => {
+    const home = dir(), folder = join(dir(), 'buddy-no-uid'), SESSION = '11111111-1111-4111-8111-111111111111'
+    mkdirSync(folder)
+    const files = join(buddyTmpFolder(folder), 'claude-0', realpathSync(folder).replace(/[^A-Za-z0-9]/g, '-'), SESSION)
+    mkdirSync(files, { recursive: true })
+    const getuid = process.getuid
+    Object.defineProperty(process, 'getuid', { value: undefined, configurable: true, writable: true })
+    try { await scrubClaudeSession(home, target({ sessionId: SESSION, cwd: folder })) }
+    finally { Object.defineProperty(process, 'getuid', { value: getuid, configurable: true, writable: true }) }
+    expect(existsSync(files)).toBe(false)
+    rmSync(buddyTmpParent(), { recursive: true, force: true })
+  })
+
   it('goes whole once its Buddy folder is gone, and another Buddy\'s stays', async () => {
     const home = dir(), folder = join(dir(), 'buddy-one'), other = join(dir(), 'buddy-two')
     mkdirSync(folder); mkdirSync(other)
@@ -325,6 +339,28 @@ describe('scrubbing a Claude Code session from the Team user\'s shared home', ()
     await scrubClaudeSession(home, target())
     expect(readFileSync(join(claude, 'history.jsonl'), 'utf8')).toBe('')
     expect(await scrubClaudeSession(dir(), target())).toEqual([])
+  })
+})
+
+describe('a Claude Code config with part of it missing', () => {
+  it('takes the folder from its repository paths when it has no projects at all', async () => {
+    const home = dir(), folder = join(home, 'project-folder')
+    mkdirSync(join(home, '.claude'), { recursive: true })
+    writeFileSync(join(home, '.claude.json'), JSON.stringify({ githubRepoPaths: { 'acme/app': [folder, '/kept'] } }))
+    await scrubClaudeSession(home, target({ sessionId: null, cwd: folder }))
+    expect(JSON.parse(readFileSync(join(home, '.claude.json'), 'utf8'))).toEqual({ githubRepoPaths: { 'acme/app': ['/kept'] } })
+  })
+})
+
+describe('Windows, with the projects folder unreadable', () => {
+  // A listing that fails names only what the slug says, and the removal reports it unread, never as gone.
+  it('tries the one name the folder gives, and says what it could not read', async () => {
+    const home = dir(), told: string[] = []
+    mkdirSync(join(home, '.claude'), { recursive: true })
+    writeFileSync(join(home, '.claude', 'projects'), 'not a folder')
+    await scrubClaudeSession(home, target({ sessionId: null, cwd: 'C:\\Users\\team\\work' }), [], undefined, what => told.push(what), win32)
+    expect(existsSync(join(home, '.claude', 'projects'))).toBe(true)
+    expect(told).toEqual(['unread'])
   })
 })
 

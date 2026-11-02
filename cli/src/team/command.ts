@@ -14,7 +14,7 @@
  * team work does not run as the owner instead.
  */
 import type { AgentTmpState } from '../lib/agentTmp.js'
-import type { AuthSession } from '../lib/authSession.js'
+import { sameSignIn, type AuthSession } from '../lib/authSession.js'
 import { SIGN_OUT_BUTTON_FLAG, type SignOutAsked } from '../lib/signOut.js'
 import type { AdminVia, RunAdmin } from './admin.js'
 import { teamConfigJson, type TeamConfig } from './config.js'
@@ -731,10 +731,11 @@ async function recordTeamMachine(deps: TeamCommandDeps, label: string, log: (lin
       { computerId: session.computerId, label }, headers)
     const machineId = answer?.machine?.machineId
     if (typeof machineId !== 'string' || !machineId) throw new Error('Harness answered without a machine id')
-    // A refresh may have rewritten the session meanwhile: the machine id goes into the newest one.
+    // A refresh may have rewritten the session meanwhile: the machine id goes into the newest one, while it is still the sign-in
+    // this asked for. A new owner's sign-in drops it, and its own start looks up its own.
     const kept = await deps.updateSession((latest) => latest.kind !== 'team' || latest.computerId !== session.computerId
-      || latest.machineId === machineId ? null : { ...latest, machineId, updatedAt: deps.now() })
-    if (kept?.kind !== 'team' || kept.computerId !== session.computerId) return
+      || !sameSignIn(latest, session.signInEpoch) || latest.machineId === machineId ? null : { ...latest, machineId, updatedAt: deps.now() })
+    if (kept?.machineId !== machineId) return
     log(`runs as machine ${machineId}`)
   } catch (error) {
     log(`could not look up this account's machine yet (${(error as Error).message}); the next start tries again`)

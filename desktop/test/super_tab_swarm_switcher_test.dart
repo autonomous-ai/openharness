@@ -9,6 +9,8 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
+import 'package:harness/super_tabs/machines.dart';
+import 'package:harness/super_tabs/personal_machines.dart';
 import 'package:harness/super_tabs/swarm_switcher.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/ws/ws_conn.dart';
@@ -34,6 +36,9 @@ class _Backend {
 
   /// While set, preparing a machine for a Swarm waits for it.
   Completer<void>? holdPrepare;
+
+  /// The machine whose preparing fails.
+  String? failPrepareOn;
 
   /// Machines answer preparing with this state ('ready' sets them up).
   String prepareState = 'ready';
@@ -154,6 +159,9 @@ class _Connection extends WsConn {
     backend.machineCalls.add((machineId, action ?? ''));
     if (action == 'prepareContribution') {
       if (backend.holdPrepare case final hold?) await hold.future;
+      if (backend.failPrepareOn == machineId) {
+        throw const SuperTabFailure('SETUP_FAILED', 'Setup failed there.');
+      }
       return {
         'state': backend.prepareState,
         'scope': 'swarm',
@@ -164,6 +172,38 @@ class _Connection extends WsConn {
     }
     return {};
   }
+}
+
+/// [id], one more of this account's machines: online and linked unless told.
+void _ownMachine(
+  AppNotifier app,
+  String id, {
+  bool online = true,
+  bool team = false,
+  bool shared = false,
+  bool linked = true,
+}) {
+  final machine = Machine(
+    machineId: id,
+    authMode: MachineAuthMode.remote,
+    name: 'Machine $id',
+    sessionKind: team ? 'team' : null,
+    machineShare: shared
+        ? MachineShare(
+            ownerName: 'Teammate',
+            ownerEmail: 'teammate@example.com',
+            via: 'email',
+            added: true,
+          )
+        : null,
+  );
+  app.machines = [...app.machines, machine];
+  app.machineStates[id] = MachineState(machine)
+    ..nodeOnline = online
+    ..needsLink = !linked
+    ..connectionStatus = online
+        ? ConnectionStatus.connected
+        : ConnectionStatus.disconnected;
 }
 
 AppNotifier _computer(
@@ -910,5 +950,361 @@ void main() {
     expect(backend.creates, hasLength(2));
     expect(_rowText('Personal'), findsOneWidget);
     await _releaseAll(tester, app);
+  });
+
+  group('Personal lists all of the person\'s own machines (Dee)', () {
+    List<String?> added(_Backend backend, String id) => [
+      for (final c in backend.contributions(id)) c['machineId'] as String?,
+    ];
+
+    Future<(AppNotifier, _Backend, SuperTabController)> personal({
+      void Function(AppNotifier)? before,
+    }) async {
+      final (app, backend) = await _twoTabs();
+      before?.call(app);
+      await PersonalSwarm.of(app).show(app.activeSwarmId);
+      await _settle();
+      final c = await app.superTabs.open(PersonalSwarm.of(app).id!);
+      await PersonalMachines.of(app).sync(c);
+      await _settle();
+      return (app, backend, c);
+    }
+
+    test('opened on one Mac it adds the person\'s other linked machines, and '
+        'skips a Team machine, a teammate\'s and an unlinked one', () async {
+      final (app, backend, c) = await personal(
+        before: (app) {
+          _ownMachine(app, 'rig');
+          _ownMachine(app, 'lamp');
+          _ownMachine(app, 'team', team: true);
+          _ownMachine(app, 'theirs', shared: true);
+          _ownMachine(app, 'unlinked', linked: false);
+        },
+      );
+      expect(added(backend, c.tabId), unorderedEquals(['m', 'rig', 'lamp']));
+      expect(
+        backend.machineCalls.map((call) => call.$1),
+        isNot(contains('team')),
+      );
+      expect(
+        backend.machineCalls.map((call) => call.$1),
+        isNot(contains('theirs')),
+      );
+      expect(PersonalMachines.of(app).waiting(c), isEmpty);
+    });
+
+    test(
+      'one at a time: the next is not set up until the last is in',
+      () async {
+        final (app, backend) = await _twoTabs();
+        await PersonalSwarm.of(app).show(app.activeSwarmId);
+        await _settle();
+        final c = await app.superTabs.open(PersonalSwarm.of(app).id!);
+        _ownMachine(app, 'rig');
+        _ownMachine(app, 'lamp');
+        final hold = backend.holdPrepare = Completer<void>();
+        final running = PersonalMachines.of(app).sync(c);
+        await _settle();
+        final prepared = backend.machineCalls.where(
+          (call) => call.$2 == 'prepareContribution' && call.$1 != 'm',
+        );
+        expect(prepared, hasLength(1));
+        hold.complete();
+        backend.holdPrepare = null;
+        await running;
+        await _settle();
+        expect(
+          backend.machineCalls.where(
+            (call) => call.$2 == 'prepareContribution' && call.$1 != 'm',
+          ),
+          hasLength(2),
+        );
+      },
+    );
+
+    test(
+      'an offline machine is listed as Offline, and joins once it is online',
+      () async {
+        final (app, backend, c) = await personal(
+          before: (app) => _ownMachine(app, 'lamp', online: false),
+        );
+        expect(added(backend, c.tabId), ['m']);
+        final row = PersonalMachines.of(app).waiting(c).single;
+        expect(row.machineId, 'lamp');
+        expect(row.status, 'Offline');
+        app.machineStates['lamp']!
+          ..nodeOnline = true
+          ..connectionStatus = ConnectionStatus.connected;
+        await PersonalMachines.of(app).sync(c);
+        await _settle();
+        expect(added(backend, c.tabId), ['m', 'lamp']);
+        expect(PersonalMachines.of(app).waiting(c), isEmpty);
+      },
+    );
+
+    test(
+      'adds nothing while anyone else is in it, and lists nothing',
+      () async {
+        final (app, backend, c) = await personal();
+        final before = added(backend, c.tabId);
+        (backend.servers[c.tabId]!.state['people'] as List).add({
+          'id': 'peer',
+          'email': 'peer@example.com',
+          'role': 'collaborator',
+        });
+        await c.refresh();
+        _ownMachine(app, 'rig');
+        _ownMachine(app, 'lamp', online: false);
+        await PersonalMachines.of(app).sync(c);
+        await _settle();
+        expect(added(backend, c.tabId), before);
+        expect(PersonalMachines.of(app).waiting(c), isEmpty);
+      },
+    );
+
+    test(
+      'a failure says so on its row, waits, and does not hold the next back',
+      () async {
+        final (app, backend) = await _twoTabs();
+        await PersonalSwarm.of(app).show(app.activeSwarmId);
+        await _settle();
+        final c = await app.superTabs.open(PersonalSwarm.of(app).id!);
+        _ownMachine(app, 'rig');
+        _ownMachine(app, 'lamp');
+        backend.failPrepareOn = 'rig';
+        await PersonalMachines.of(app).sync(c);
+        await _settle();
+        expect(added(backend, c.tabId), contains('lamp'));
+        final row = PersonalMachines.of(app).waiting(c).single;
+        expect(row.machineId, 'rig');
+        expect(row.status, "Couldn't add");
+        expect(row.reason, isNotEmpty);
+        // Within its wait it is not asked again.
+        final asked = backend.machineCalls
+            .where((call) => call.$1 == 'rig')
+            .length;
+        await PersonalMachines.of(app).sync(c);
+        await _settle();
+        expect(
+          backend.machineCalls.where((call) => call.$1 == 'rig'),
+          hasLength(asked),
+        );
+      },
+    );
+
+    test('another account\'s list is never read under the last one: sign-out ends the sync', () async {
+      final (app, backend) = await _twoTabs();
+      await PersonalSwarm.of(app).show(app.activeSwarmId);
+      await _settle();
+      final c = await app.superTabs.open(PersonalSwarm.of(app).id!);
+      _ownMachine(app, 'rig');
+      final hold = backend.holdPrepare = Completer<void>();
+      final before = added(backend, c.tabId);
+      final running = PersonalMachines.of(app).sync(c);
+      await _settle();
+      app.currentUser = CurrentUserProfile(
+        id: 'other',
+        email: 'other@example.com',
+      );
+      hold.complete();
+      backend.holdPrepare = null;
+      await running;
+      await _settle();
+      expect(added(backend, c.tabId), before);
+    });
+
+    test('asks the server to add a machine only if it is missing, and lends it only through Team accounts, with Team accounts off too', () async {
+      final (app, backend) = await _twoTabs();
+      await PersonalSwarm.of(app).show(app.activeSwarmId);
+      await _settle();
+      final c = await app.superTabs.open(PersonalSwarm.of(app).id!);
+      backend.servers[c.tabId]!.state['teamAccounts'] = false;
+      await c.refresh();
+      _ownMachine(app, 'rig');
+      await PersonalMachines.of(app).sync(c);
+      await _settle();
+      final sent = backend
+          .contributions(c.tabId)
+          .firstWhere((m) => m['machineId'] == 'rig');
+      expect(sent['ifMissing'], isTrue);
+      expect(sent['teamAccountOnly'], isTrue);
+    });
+
+    test('this computer stays out too once its person took it out, and its add asks the server so', () async {
+      final (app, backend) = await _twoTabs();
+      await PersonalSwarm.of(app).show(app.activeSwarmId);
+      await _settle();
+      final id = PersonalSwarm.of(app).id!;
+      final sent = backend.contributions(id).single;
+      expect(sent['ifMissing'], isTrue);
+      expect(sent['unlessRemoved'], isTrue);
+      // Taken out, on any computer: the next show adds it no more.
+      final server = backend.servers[id]!;
+      server.state['machines'] = <Map<String, dynamic>>[];
+      server.state['removedMachines'] = ['m'];
+      final c = await app.superTabs.open(id);
+      await c.refresh();
+      await PersonalSwarm.of(app).show(app.activeSwarmId);
+      await _settle();
+      expect(backend.contributions(id), hasLength(1));
+    });
+
+    test('a machine its person took out stays out, on a computer that never saw it: the server says so', () async {
+      final (app, backend, c) = await personal();
+      backend.servers[c.tabId]!.state['removedMachines'] = ['rig'];
+      await c.refresh();
+      _ownMachine(app, 'rig');
+      await PersonalMachines.of(app).sync(c);
+      await _settle();
+      expect(added(backend, c.tabId), isNot(contains('rig')));
+      expect(PersonalMachines.of(app).waiting(c), isEmpty);
+    });
+
+    test('sends unlessRemoved, so a read that is behind still cannot bring a removed one back', () async {
+      final (app, backend, c) = await personal();
+      _ownMachine(app, 'rig');
+      await PersonalMachines.of(app).sync(c);
+      await _settle();
+      expect(
+        backend
+            .contributions(c.tabId)
+            .firstWhere((m) => m['machineId'] == 'rig')['unlessRemoved'],
+        isTrue,
+      );
+    });
+
+    test(
+      'adds nothing while it shows a saved view: someone may have joined since',
+      () async {
+        final (app, backend, c) = await personal();
+        c.showingSavedForTest = true;
+        final before = added(backend, c.tabId);
+        _ownMachine(app, 'rig');
+        await PersonalMachines.of(app).sync(c);
+        await _settle();
+        expect(added(backend, c.tabId), before);
+        expect(PersonalMachines.of(app).waiting(c), isEmpty);
+      },
+    );
+
+    test('a Buddy-only machine, hidden from the Swarm\'s list, is added as an ordinary one', () async {
+      final (_, backend, c) = await personal(
+        before: (a) => _ownMachine(a, 'buddy-only'),
+      );
+      expect(added(backend, c.tabId), contains('buddy-only'));
+    });
+
+    group('their rows', () {
+      Finder row(String id) =>
+          find.byKey(ValueKey('super-personal-machine-$id'));
+      Future<void> pump(
+        WidgetTester tester,
+        AppNotifier app,
+        SuperTabController c,
+      ) async {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SingleChildScrollView(
+                child: SuperTabMachines(
+                  controller: c,
+                  app: app,
+                  embedded: true,
+                  onAddAgent: (_) {},
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+      }
+
+      testWidgets(
+        'an offline machine reads one word, and the row goes once it joined',
+        (tester) async {
+          late AppNotifier app;
+          late SuperTabController c;
+          await tester.runAsync(() async {
+            final (a, _, opened) = await personal(
+              before: (a) => _ownMachine(a, 'lamp', online: false),
+            );
+            app = a;
+            c = opened;
+          });
+          await pump(tester, app, c);
+          expect(
+            find.descendant(
+              of: row('lamp'),
+              matching: find.text('Machine lamp'),
+            ),
+            findsOneWidget,
+          );
+          expect(
+            find.descendant(of: row('lamp'), matching: find.text('Offline')),
+            findsOneWidget,
+          );
+          await tester.runAsync(() async {
+            app.machineStates['lamp']!
+              ..nodeOnline = true
+              ..connectionStatus = ConnectionStatus.connected;
+            await PersonalMachines.of(app).sync(c);
+            await _settle();
+            await c.refresh();
+          });
+          await tester.pump();
+          expect(row('lamp'), findsNothing);
+        },
+      );
+
+      testWidgets('a failure reads one word, with its reason on hover', (
+        tester,
+      ) async {
+        late AppNotifier app;
+        late SuperTabController c;
+        await tester.runAsync(() async {
+          final (a, backend, opened) = await personal();
+          app = a;
+          c = opened;
+          backend.failPrepareOn = 'rig';
+          _ownMachine(a, 'rig');
+          await PersonalMachines.of(a).sync(c);
+          await _settle();
+        });
+        await pump(tester, app, c);
+        expect(
+          find.descendant(of: row('rig'), matching: find.text("Couldn't add")),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: row('rig'),
+            matching: find.textContaining('Setup failed'),
+          ),
+          findsNothing,
+        );
+        expect(
+          find.descendant(
+            of: row('rig'),
+            matching: find.byTooltip('Setup failed there.'),
+          ),
+          findsOneWidget,
+        );
+      });
+
+      testWidgets('another Swarm lists none', (tester) async {
+        late AppNotifier app;
+        late SuperTabController other;
+        await tester.runAsync(() async {
+          final (a, _, _) = await personal(
+            before: (a) => _ownMachine(a, 'lamp', online: false),
+          );
+          app = a;
+          other = await a.superTabs.open('gamma');
+          await other.refresh();
+        });
+        await pump(tester, app, other);
+        expect(row('lamp'), findsNothing);
+      });
+    });
   });
 }

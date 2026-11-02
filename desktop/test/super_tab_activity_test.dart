@@ -570,6 +570,45 @@ void main() {
       await c.refresh();
       expect(told.map((t) => t.$1), ['offline']);
     });
+
+    Future<(SuperTabController, ConversationServer, List<int>)>
+    openChatSetToAll() async {
+      final binding = TestWidgetsFlutterBinding.ensureInitialized();
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      final server = projectServer();
+      final c = await open(server);
+      final told = <int>[];
+      SuperTabChatNotices.of(c).onMessage = (_, s) => told.add(s);
+      await c.setNotify(c.selectedId, SuperTabNotify.all);
+      return (c, server, told);
+    }
+
+    test('the open chat is told while its Swarm is away', () async {
+      final (c, server, told) = await openChatSetToAll();
+      c.away = true;
+      fromLead(server, 'While on another Swarm');
+      await c.refresh();
+      expect(told, hasLength(1));
+    });
+
+    test('the open chat is told while another app is in front', () async {
+      final (c, server, told) = await openChatSetToAll();
+      final binding = TestWidgetsFlutterBinding.instance;
+      addTearDown(
+        () => binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed),
+      );
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      fromLead(server, 'While in another app');
+      await c.refresh();
+      expect(told, hasLength(1));
+    });
+
+    test('the open chat on screen in a focused app is not told', () async {
+      final (c, server, told) = await openChatSetToAll();
+      fromLead(server, 'While reading it');
+      await c.refresh();
+      expect(told, isEmpty);
+    });
   });
 
   group('sidebar', () {
@@ -687,6 +726,197 @@ void main() {
       await close(tester, c);
       expect(server.activityReadPosts, isNotEmpty);
     });
+  });
+
+  group('leaving Activity marks read only what the visit showed (Diego)', () {
+    Future<void> visit(
+      WidgetTester tester,
+      SuperTabActivity activity, {
+      List<SuperTabActivityFilter> filters = const [],
+      Future<void> Function()? during,
+    }) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: Scaffold(
+            body: SuperTabActivityView(
+              activity: activity,
+              onOpenMention: (_) {},
+              onOpenMessage: (_, _) {},
+              now: () => DateTime.utc(2026, 10, 31, 6),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      for (final filter in filters) {
+        await tester.tap(
+          find.byKey(ValueKey('super-activity-filter-${filter.name}')),
+        );
+        await tester.pumpAndSettle();
+      }
+      await during?.call();
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(settle);
+    }
+
+    Future<(ConversationServer, SuperTabController, SuperTabActivity)> unread(
+      WidgetTester tester,
+      List<Map<String, dynamic>> items,
+    ) async {
+      final server = projectServer();
+      server.state['activityDigest'] = 'd1';
+      server.activity = {'items': items, 'more': false};
+      final c = await openHere(server);
+      final activity = SuperTabActivity.of(c);
+      await tester.runAsync(settle);
+      return (server, c, activity);
+    }
+
+    Map<String, dynamic> at(Map<String, dynamic> item, String time) => {
+      ...item,
+      'createdAt': '2026-10-31T$time:00.000Z',
+    };
+
+    testWidgets('a Decisions-only visit leaves replies unread', (tester) async {
+      final (server, c, activity) = await unread(tester, [reply('r1')]);
+      final count = activity.count;
+      await visit(
+        tester,
+        activity,
+        filters: [SuperTabActivityFilter.decisions],
+      );
+      expect(server.activityReadPosts, isEmpty);
+      expect(activity.items.single.read, isFalse);
+      expect(activity.count, count);
+      await close(tester, c);
+    });
+
+    testWidgets('a Mentions-only visit leaves reactions unread', (
+      tester,
+    ) async {
+      final (server, c, activity) = await unread(tester, [reaction('x1')]);
+      await visit(tester, activity, filters: [SuperTabActivityFilter.mentions]);
+      expect(server.activityReadPosts, isEmpty);
+      expect(activity.items.single.read, isFalse);
+      await close(tester, c);
+    });
+
+    testWidgets('a visit on All marks both kinds through the newest', (
+      tester,
+    ) async {
+      final (server, c, activity) = await unread(tester, [
+        at(reply('r1'), '05:00'),
+        at(reaction('x1'), '04:00'),
+      ]);
+      await visit(tester, activity);
+      expect(server.activityReadPosts, hasLength(1));
+      expect(
+        server.activityReadPosts.single['through'],
+        '2026-10-31T05:00:00.000Z',
+      );
+      expect(activity.items.every((i) => i.read), isTrue);
+      await close(tester, c);
+    });
+
+    testWidgets(
+      'only the list showing when it is left counts: Replies, then Reactions',
+      (tester) async {
+        final (server, c, activity) = await unread(tester, [
+          at(reaction('x1'), '05:00'),
+          at(reply('r1'), '06:00'),
+        ]);
+        await visit(
+          tester,
+          activity,
+          filters: [
+            SuperTabActivityFilter.replies,
+            SuperTabActivityFilter.reactions,
+          ],
+        );
+        expect(
+          server.activityReadPosts.single['through'],
+          '2026-10-31T05:00:00.000Z',
+        );
+        expect(
+          {for (final i in activity.items) i.id: i.read},
+          {'x1': true, 'r1': false},
+        );
+        await close(tester, c);
+      },
+    );
+
+    testWidgets(
+      'a Replies visit stops before an unread reaction it did not show: '
+      'the mark is by time',
+      (tester) async {
+        final (server, c, activity) = await unread(tester, [
+          at(reply('new'), '06:00'),
+          at(reaction('x1'), '05:00'),
+          at(reply('old'), '04:00'),
+        ]);
+        activity.setFilter(SuperTabActivityFilter.replies);
+        await visit(tester, activity);
+        expect(
+          server.activityReadPosts.single['through'],
+          '2026-10-31T04:00:00.000Z',
+        );
+        final read = {for (final i in activity.items) i.id: i.read};
+        expect(read, {'new': false, 'x1': false, 'old': true});
+        await close(tester, c);
+      },
+    );
+
+    testWidgets(
+      'an unread reaction at the same moment as a shown reply stops it too',
+      (tester) async {
+        final (server, c, activity) = await unread(tester, [
+          at(reply('r1'), '05:00'),
+          at(reaction('x1'), '05:00'),
+        ]);
+        activity.setFilter(SuperTabActivityFilter.replies);
+        await visit(tester, activity);
+        expect(server.activityReadPosts, isEmpty);
+        await close(tester, c);
+      },
+    );
+
+    testWidgets(
+      'a row that arrives while Replies shows is listed, and is read on leaving',
+      (tester) async {
+        final (server, c, activity) = await unread(tester, [
+          at(reply('r1'), '05:00'),
+        ]);
+        await visit(
+          tester,
+          activity,
+          filters: [SuperTabActivityFilter.replies],
+          during: () async {
+            server.activity = {
+              'items': [at(reply('r2'), '06:00'), at(reply('r1'), '05:00')],
+              'more': false,
+            };
+            await tester.runAsync(() => activity.load());
+          },
+        );
+        expect(
+          server.activityReadPosts.single['through'],
+          '2026-10-31T06:00:00.000Z',
+        );
+        await close(tester, c);
+      },
+    );
+
+    testWidgets(
+      'leaving puts the filter back on All; a filter asked for still opens on it',
+      (tester) async {
+        final (_, c, activity) = await unread(tester, [reply('r1')]);
+        activity.setFilter(SuperTabActivityFilter.decisions);
+        await visit(tester, activity);
+        expect(activity.filter, SuperTabActivityFilter.all);
+        await close(tester, c);
+      },
+    );
   });
 
   group('the one # buddy row (#2447) follows the same rules', () {

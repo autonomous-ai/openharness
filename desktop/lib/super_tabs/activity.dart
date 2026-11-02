@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 
 import 'controller.dart';
 import 'decisions.dart';
@@ -130,6 +130,15 @@ class SuperTabActivity extends ChangeNotifier {
   String get _path =>
       '/api/super-tabs/${Uri.encodeComponent(controller.tabId)}';
 
+  /// Whether the filter lists [item]. Decisions and Mentions list neither kind.
+  bool shows(SuperTabActivityItem item) => switch (filter) {
+    SuperTabActivityFilter.all => true,
+    SuperTabActivityFilter.replies => item.kind == SuperTabActivityKind.reply,
+    SuperTabActivityFilter.reactions =>
+      item.kind == SuperTabActivityKind.reaction,
+    _ => false,
+  };
+
   /// Whether [item] shows bold.
   bool isUnread(SuperTabActivityItem item) =>
       !item.read || _newThisVisit.contains(item.id);
@@ -169,16 +178,21 @@ class SuperTabActivity extends ChangeNotifier {
     unawaited(mentions.load());
   }
 
-  /// The view was left: what it showed is read on every device.
+  /// The view was left: what its list showed then is read on every device, and
+  /// the next visit starts on All unless it asks for a list (Diego, 2026-11-02).
+  /// Rows only passed by on the way to another list stay unread, which loses
+  /// nothing; marking a row nobody read would.
   void closed() {
     if (!_open) return;
     _open = false;
     _newThisVisit.clear();
+    final shown = {for (final i in items.where(shows)) i.id};
+    filter = SuperTabActivityFilter.all;
     // The view is going away while this runs (its dispose): what listens is
     // told after the frame's teardown, never during it.
     scheduleMicrotask(() {
       if (_disposed) return;
-      unawaited(_markShownRead());
+      unawaited(_markShownRead(shown));
       notifyListeners();
     });
   }
@@ -189,11 +203,23 @@ class SuperTabActivity extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> _markShownRead() async {
-    final newest = items
-        .where((i) => !i.read)
-        .map((i) => i.createdAt)
-        .whereType<DateTime>()
+  /// The mark is by time, whatever the kind (backend activity.ts
+  /// markActivityRead): it stops before the oldest unread row [shown] lacks, or
+  /// that row would be read on every device unseen. A shown row newer than it
+  /// stays unread for now, which loses nothing.
+  Future<void> _markShownRead(Set<String> shown) async {
+    final unread = items.where((i) => !i.read && i.createdAt != null).toList();
+    final unseen = unread
+        .where((i) => !shown.contains(i.id))
+        .map((i) => i.createdAt!)
+        .fold<DateTime?>(null, (a, b) => a == null || b.isBefore(a) ? b : a);
+    final newest = unread
+        .where(
+          (i) =>
+              shown.contains(i.id) &&
+              (unseen == null || i.createdAt!.isBefore(unseen)),
+        )
+        .map((i) => i.createdAt!)
         .fold<DateTime?>(null, (a, b) => a == null || b.isAfter(a) ? b : a);
     if (newest == null || !supported || controller.accessRevoked) return;
     final epoch = controller.visibilityEpoch;
@@ -372,6 +398,9 @@ class SuperTabChatNotices {
   /// Told with the chat and how far it now goes.
   void Function(SuperTabConversation group, int sequence)? onMessage;
 
+  /// Set by the view on screen: whether a person can see its chat now.
+  bool Function()? chatShown;
+
   final _seen = <String, int>{};
   int? _epoch;
   bool _disposed = false;
@@ -394,10 +423,19 @@ class SuperTabChatNotices {
       _seen[group.id] = top;
       if (before == null || top <= before) continue;
       if (controller.notifyOf(group.id) != SuperTabNotify.all) continue;
-      if (controller.selectedId == group.id) continue;
+      if (controller.selectedId == group.id && _openChatRead) continue;
       if (top <= controller.readMark(group.id)) continue;
       onMessage?.call(group, top);
     }
+  }
+
+  /// Whether the open chat is being read now. The view on screen knows; with none up, this falls
+  /// back to the Swarm showing and the app in front.
+  bool get _openChatRead {
+    if (chatShown case final shown?) return shown();
+    final state = WidgetsBinding.instance.lifecycleState;
+    return !controller.away &&
+        (state == null || state == AppLifecycleState.resumed);
   }
 
   void _dispose() {

@@ -503,6 +503,7 @@ export function dropIdleBuddyMachines(state: SuperTabState, now: number): void {
       machineOwnerId: pool.contributorId, requestedAt: new Date(now).toISOString(), buddyOnly: true })
     state.harnessReservations = state.harnessReservations?.filter(r => r.machineId !== pool.machineId)
     state.releasedHarnesses = state.releasedHarnesses?.filter(r => r.machineId !== pool.machineId)
+    state.removedSessions = state.removedSessions?.filter(r => r.machineId !== pool.machineId)
   }
 }
 

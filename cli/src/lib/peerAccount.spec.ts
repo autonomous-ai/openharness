@@ -61,7 +61,7 @@ describe('who is at the other end of a loopback connection', () => {
       const yes = answering('yes\r\n')
       expect(await peerIsThisAccount(socket(), 'win32', yes.run)).toBe(true)
       // The client's end, as Windows lists it: its own port local, the daemon's remote.
-      expect(yes.asked).toEqual([{ HARNESS_PEER_PORT: '50001', HARNESS_OWN_PORT: '18473' }])
+      expect(yes.asked).toEqual([{ HARNESS_PEER_PORT: '50001', HARNESS_OWN_PORT: '18473', HARNESS_DAEMON_PID: String(process.pid) }])
     })
 
     it('says no for another account, any other answer, a failure, or a lookup that never answered', async () => {
@@ -86,9 +86,9 @@ describe('who is at the other end of a loopback connection', () => {
     })
 
     it('asks Windows by the connection\'s ports, given as inputs, and compares the owner by SID', () => {
-      const query = windowsPeerQuery(50_001, 18473)
-      expect(query.inputs).toEqual({ HARNESS_PEER_PORT: '50001', HARNESS_OWN_PORT: '18473' })
-      expect(query.script).not.toMatch(/50001|18473/)
+      const query = windowsPeerQuery(50_001, 18473, 42_424)
+      expect(query.inputs).toEqual({ HARNESS_PEER_PORT: '50001', HARNESS_OWN_PORT: '18473', HARNESS_DAEMON_PID: '42424' })
+      expect(query.script).not.toMatch(/50001|18473|42424/)
       expect(query.script).toContain('Get-NetTCPConnection')
       expect(query.script).toContain('GetOwnerSid')
       expect(query.script).toContain('[Security.Principal.WindowsIdentity]::GetCurrent().User.Value')
@@ -187,6 +187,19 @@ describe('who is at the other end of a loopback connection', () => {
       const creation = script.indexOf('CreationDate'), owner = script.indexOf('GetOwnerSid')
       expect(creation).toBeGreaterThan(-1)
       expect(creation).toBeLessThan(owner)
+    })
+
+    // Up to four lookups run at once: a sibling's PowerShell or its console host, started by the daemon in the
+    // connection's second, could take an id the caller freed (Remy's review of #2605). Nothing of that kind the daemon
+    // starts calls its port with a secret, so one whose parent or grandparent is the daemon is no.
+    it('never takes a PowerShell or console host the daemon started, a sibling lookup', () => {
+      const { script } = windowsPeerQuery(50_001, 18473, 42_424)
+      expect(script).toContain('$daemon = [int]$env:HARNESS_DAEMON_PID')
+      expect(script).toMatch(/\$process\.Name -match '\^\(powershell\|conhost\)\\\.exe\$'/)
+      expect(script).toMatch(/\$process\.ParentProcessId -eq \$daemon/)
+      expect(script).toMatch(/\$parent\.ParentProcessId -eq \$daemon/)
+      const sibling = script.indexOf('$daemon'), owner = script.indexOf('GetOwnerSid')
+      expect(sibling).toBeLessThan(owner)
     })
   })
 

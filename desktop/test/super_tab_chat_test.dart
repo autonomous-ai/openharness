@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/super_tabs/activity.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/message_text.dart';
@@ -132,6 +133,50 @@ void main() {
     }
   });
 
+  testWidgets('a chat behind the terminals runs no timers until it returns', (
+    tester,
+  ) async {
+    final server = ConversationServer()..append('Hello');
+    final c = server.controller();
+    addTearDown(c.dispose);
+    await c.refresh();
+    bool chatTicks() => TickerMode.valuesOf(
+      tester.element(find.text('Hello', skipOffstage: false)),
+    ).enabled;
+    await showReadView(tester, c);
+    expect(chatTicks(), isTrue);
+    await showReadView(tester, c, terminals: true);
+    expect(chatTicks(), isFalse);
+    await showReadView(tester, c);
+    expect(chatTicks(), isTrue);
+    await closeReadView(tester, c);
+  });
+
+  // Task #2219: All new messages goes quiet only while the open chat is read on screen.
+  testWidgets(
+    'an open chat set to All is told behind the terminals, not on screen',
+    (tester) async {
+      final server = ConversationServer()..append('Hello');
+      final c = server.controller();
+      addTearDown(c.dispose);
+      await c.refresh();
+      final told = <int>[];
+      SuperTabChatNotices.of(c).onMessage = (_, s) => told.add(s);
+      await c.setNotify(c.selectedId, SuperTabNotify.all);
+      await showReadView(tester, c);
+      server.append('While reading it');
+      await tester.runAsync(c.refresh);
+      await tester.pump();
+      expect(told, isEmpty);
+      await showReadView(tester, c, terminals: true);
+      server.append('Behind the terminals');
+      await tester.runAsync(c.refresh);
+      await tester.pump();
+      expect(told, hasLength(1));
+      await closeReadView(tester, c);
+    },
+  );
+
   testWidgets('returning from terminals reads the already loaded transcript', (
     tester,
   ) async {
@@ -177,7 +222,9 @@ void main() {
     (tester) async {
       final server = ConversationServer()..append('First update');
       final c = await show(tester, server);
-      await tester.tap(find.byKey(const ValueKey('super-pull-requests')));
+      await tester.tap(find.byTooltip('Project options'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(MenuItemButton, 'Pull requests'));
       await tester.pumpAndSettle();
       server.append('The review is ready.');
       await c.refresh();
@@ -214,7 +261,9 @@ void main() {
   ) async {
     final server = ConversationServer()..append('Visible update');
     final c = await show(tester, server);
-    await tester.tap(find.byKey(const ValueKey('super-pull-requests')));
+    await tester.tap(find.byTooltip('Project options'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(MenuItemButton, 'Pull requests'));
     await tester.pumpAndSettle();
     server.append('Not yet fetched');
     c.snapshot = SuperTabSnapshot.fromJson(server.state);
@@ -598,7 +647,9 @@ void main() {
       expect(scroll().offset, reading);
       expect(find.text('2 new messages'), findsOneWidget);
       expect(c.unread(c.selected!), isTrue);
-      await tester.tap(find.byKey(const ValueKey('super-pull-requests')));
+      await tester.tap(find.byTooltip('Project options'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(MenuItemButton, 'Pull requests'));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('super-chat')));
       await tester.pumpAndSettle();

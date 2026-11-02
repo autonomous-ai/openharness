@@ -41,8 +41,12 @@ export function markTeamWritten(state: SuperTabState, group: Conversation, worke
 
 /** Refuses an agent outside a Team account for Team-written code. The project's coordinator stays: it never builds or runs it. */
 export function requireTeamWrittenAccount(state: SuperTabState, group: Conversation, worker: Agent): void {
-  if (!coordinates(state, group, worker) && teamWrittenTask(state, group) && !onTeamAccount(state, worker)) failTeamWritten()
+  if (barredFromTeamWritten(state, group, worker)) failTeamWritten()
 }
+
+/** Whether [worker] may not join [group]: an agent outside a Team account, in Team-written code, and not its project's coordinator. */
+export const barredFromTeamWritten = (state: SuperTabState, group: Conversation, worker: Agent): boolean =>
+  !coordinates(state, group, worker) && teamWrittenTask(state, group) && !onTeamAccount(state, worker)
 
 /** Refuses a start for Team-written code on a machine outside a Team account. */
 export function requireTeamWrittenMachine(state: SuperTabState, group: Conversation, machineId: string): void {

@@ -4,7 +4,7 @@ import ws_ from '../../cli/node_modules/ws/index.js'
 const { WebSocket } = ws_
 import { randomBytes } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
-import { CREDENTIAL_REFUSED, daemonBridge } from './local-credential.mjs'
+import { CREDENTIAL_REFUSED, openDaemonBridge } from './local-credential.mjs'
 
 const [machineId, dshId, engine, workspace] = process.argv.slice(2)
 const keep = process.argv.includes('--keep')
@@ -13,8 +13,7 @@ if (!machineId || !dshId || !engine || !workspace) {
   process.exit(2)
 }
 
-const { url, headers } = daemonBridge()
-const ws = new WebSocket(url, { headers })
+const ws = openDaemonBridge(WebSocket)
 ws.on('unexpected-response', (_req, res) => { log(res.statusCode === 401 ? CREDENTIAL_REFUSED : `ws error Unexpected server response: ${res.statusCode}`); process.exit(1) })
 const pending = new Map()
 const agentFrames = []

@@ -78,7 +78,7 @@ class SuperTabLeaderboardReader extends ChangeNotifier {
       board = null;
       error = null;
     }
-    _timer ??= Timer.periodic(every, (_) => unawaited(refresh()));
+    _timer ??= Timer.periodic(every, (_) => unawaited(tick()));
     return refresh();
   }
 
@@ -98,6 +98,10 @@ class SuperTabLeaderboardReader extends ChangeNotifier {
     _timer?.cancel();
     _timer = null;
   }
+
+  /// A timed read. A reader that is off screen skips it.
+  @protected
+  Future<void> tick() => refresh();
 
   Future<void> refresh() async {
     final projectId = _projectId;
@@ -167,11 +171,13 @@ class SuperTabProjectBoard extends SuperTabLeaderboardReader {
     super.every = const Duration(minutes: 5),
   }) : super(tabId: controller.tabId, request: controller.request) {
     controller.addListener(_follow);
+    controller.machinesChanged.addListener(_returned);
     _follow();
   }
 
   final SuperTabController controller;
   String? _following;
+  bool _missed = false;
 
   /// The project whose board this is; null while none is open.
   String? get projectId => _following;
@@ -189,9 +195,24 @@ class SuperTabProjectBoard extends SuperTabLeaderboardReader {
     }
   }
 
+  /// A Swarm that isn't showing reads no board. One that missed a read takes it as it returns.
+  @override
+  Future<void> tick() {
+    if (!controller.away) return refresh();
+    _missed = true;
+    return Future.value();
+  }
+
+  void _returned() {
+    if (!_missed || controller.away) return;
+    _missed = false;
+    unawaited(refresh());
+  }
+
   @override
   void dispose() {
     controller.removeListener(_follow);
+    controller.machinesChanged.removeListener(_returned);
     super.dispose();
   }
 }

@@ -48,6 +48,17 @@ describe('splitting a Swarm into parts', () => {
     expect([parts.head, ...parts.members, ...parts.groups].every(p => p.version === 500 && p.changedAt === 1000)).toBe(true)
   })
 
+  // Task #2131: what a removal restores from. A new list here that shape does not copy vanishes on load.
+  it('keeps a removal\'s record on its machine, there and back, and writes no empty list for one with none', () => {
+    const record = { machineId: 'mac', harnessId: 'h-gone', agent: { id: 'gone', name: 'Gone' } as never, groupIds: ['g1'], leadOf: [], removedAt: 5 }
+    const state = { ...legacy(), removedSessions: [record] }
+    const parts = split(state, { tabId: 'tab1', version: 500, now: 1000 })
+    expect(parts.machines.find(p => p.key === 'mac')!.data!.removedSessions).toEqual([{ harnessId: 'h-gone', agent: record.agent, groupIds: ['g1'], leadOf: [], removedAt: 5 }])
+    expect(parts.machines.find(p => p.key === 'other')!.data).not.toHaveProperty('removedSessions')
+    expect(reassemble(parts).removedSessions).toEqual([record])
+    expect(reassemble(split(legacy(), { tabId: 'tab1', version: 500, now: 1000 }))).not.toHaveProperty('removedSessions')
+  })
+
   it('keeps a slot ledger for every machine the Swarm references, contributed or not', () => {
     const machines = split(legacy(), { tabId: 'tab1', version: 500, now: 1000 }).machines
     expect(machines.map(p => p.key)).toEqual(['mac', 'other', 'third', 'removed'])

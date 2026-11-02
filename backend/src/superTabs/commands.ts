@@ -132,9 +132,14 @@ const task = z.object({
     .refine(r => r.focus !== undefined || r.reviews !== undefined, 'Give the review a focus or a number of reviews.').optional(),
 }).strict()
 
+/** The machines a Swarm remembers its people took out. */
+const MAX_REMOVED_MACHINES = 64
+
 export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('machine.contribute'), machineId: id, name: title, cwd: path, scope: z.literal('swarm').optional(), engines: z.array(swarmEngine).min(1).max(2), maxAgents,
-    ifMissing: z.literal(true).optional(), teamAccountOnly: z.literal(true).optional() }).strict(),
+    ifMissing: z.literal(true).optional(), teamAccountOnly: z.literal(true).optional(),
+    // With ifMissing: not if its person took it out (Swarm removedMachines). A Personal Swarm's own sync sends it (#2181).
+    unlessRemoved: z.literal(true).optional() }).strict(),
   z.object({ type: z.literal('machine.pause'), machineId: id, paused: z.boolean() }).strict(),
   z.object({ type: z.literal('machine.engineResume'), machineId: id, engine: z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/), askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('machine.remove'), machineId: id }).strict(),
@@ -567,6 +572,11 @@ function releaseHarness(state: SuperTabState, machineId: string, harnessId: stri
     observation.runningHarnessIds = observation.runningHarnessIds.filter(id => id !== harnessId)
     if (!observation.stoppedHarnessIds.includes(harnessId)) observation.stoppedHarnessIds.push(harnessId)
   }
+}
+
+function dropRemovedRecord(state: SuperTabState, machineId: string, harnessId: string): void {
+  state.removedSessions = state.removedSessions?.filter(r => r.machineId !== machineId || r.harnessId !== harnessId)
+  if (!state.removedSessions?.length) delete state.removedSessions
 }
 
 function dropClosing(state: SuperTabState, keep: (request: NonNullable<SuperTabState['closingSessions']>[number]) => boolean): void {
@@ -1210,6 +1220,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
 
   /** Deleting its project is the only removal that takes a Lead. `close: false` when its host already closed the session. */
   const removeAgent = (target: Agent, { lead = false, close = true } = {}) => {
+    // A person's removal stands: a record of this session must not bring it back when it reopens (closedAgents.ts).
+    dropRemovedRecord(state, target.machineId, target.harnessId)
     // A Buddy chat's record of its sessions (buddySessions.ts): a session leaves it, and a main Buddy takes its sessions with it.
     for (const chat of state.conversations.filter(c => isBuddyChat(c) && c.agentIds.includes(target.id))) {
       if (target.buddySession) setSessions(chat, (chat.buddySessions ?? []).filter(e => e.agentId !== target.id))
@@ -1284,6 +1296,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     // Its capacity left with it: no slot there is held for anyone now.
     state.harnessReservations = state.harnessReservations?.filter(r => r.machineId !== machineId)
     state.releasedHarnesses = state.releasedHarnesses?.filter(r => r.machineId !== machineId)
+    state.removedSessions = state.removedSessions?.filter(r => r.machineId !== machineId)
     const machine = pool?.name ?? 'a machine'
     // Routing lives in each project's instructions (project instructions), but reads still serve the old rules, older CLIs
     // still route by them and a rollback would enforce them: for this release a machines rule still loses the machine, and
@@ -1630,6 +1643,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         if (actor.userId !== state.ownerId && !mac) fail('OWNER_REQUIRED', 'Only the Swarm owner adds a machine automatically.', 403)
         // A Buddy-only record is not the machine in the Swarm: it becomes an ordinary one below.
         if (cleaning || state.machines.some(m => m.machineId === command.machineId && !m.buddyOnly)) break
+        if (command.unlessRemoved && state.removedMachines?.some(r => r.machineId === command.machineId)) break
+      }
+      // Added again: no longer one its person took out.
+      if (state.removedMachines) {
+        state.removedMachines = state.removedMachines.filter(r => r.machineId !== command.machineId)
+        if (!state.removedMachines.length) delete state.removedMachines
       }
       if (cleaning) fail('MACHINE_CLEANING', 'This machine is still cleaning up after its removal. Add it again once that finishes.')
       if (!state.machines.some(m => m.machineId === command.machineId) && state.machines.length >= 32) fail('MACHINES_FULL', 'A Super Tab can have up to 32 contributed machines.')
@@ -1705,6 +1724,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       for (const team of moving) removeMachine(team.machineId, team, [], machine => `${who} removed ${machine} from the Swarm`)
       if (pool) result.removalId = operationId
       result.removedAgents = [...removed]
+      // So a Personal Swarm's sync, on any computer, never adds it back by itself (#2181). What deletes it: adding it again, the
+      // Swarm's deletion, and the cap (the oldest goes: that one could come back once).
+      if (pool) {
+        state.removedMachines = [...(state.removedMachines ?? []).filter(r => r.machineId !== command.machineId),
+          { machineId: command.machineId, contributorId: pool.contributorId }].slice(-MAX_REMOVED_MACHINES)
+      }
       break
     }
     case 'localModels.set': {
@@ -1968,6 +1993,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         fail('TEAM_ACCOUNT_HELD', 'This session held people\'s private chats and is being deleted from this machine\'s Harness Team account, so it cannot be added back.', 403)
       }
       if (!existing) reserveHarnessSlot(state, command.machineId, command.harnessId, operationId)
+      // Added back by hand: what they chose now stands over what its removal kept.
+      dropRemovedRecord(state, command.machineId, command.harnessId)
       // Added back before its host closed it: the session stays open.
       if (!existing) dropClosing(state, c => c.machineId !== command.machineId || c.harnessId !== command.harnessId)
       if (!existing) state.agents.push({ id: agentId, machineId: command.machineId, harnessId: command.harnessId,
@@ -2695,7 +2722,14 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         && stepOwner && stepOwner !== actor.agentId ? stepOwner
         : actor.kind === 'agent' && activeWork(group) && group.assignment?.agentId === actor.agentId
         && group.leadId && group.leadId !== actor.agentId && group.agentIds.includes(group.leadId) ? group.leadId : null
-      const agentRecipient = leadToWorker ?? workerToLead
+      // The task's owner talks to its step's agent the same way (Diego, 2026-11-02: an Engineer's "fixed, please re-check" in its
+      // Review step woke the PM and the Reviewer never heard it). Its unnamed post there reaches that agent alone, never the
+      // coordinator. A reply to someone else, or a post leadWorkerBounced holds back, falls back to the coordinator as before:
+      // nothing is dropped.
+      const ownerToStepAgent = actor.kind === 'agent' && isStep(group) && assigned && assigned !== actor.agentId
+        && taskOwner(state, group) === actor.agentId && group.agentIds.includes(assigned) && (!context.reply || replyAgent === assigned)
+        && !leadWorkerBounced(context.recent, actor.agentId, assigned) ? assigned : null
+      const agentRecipient = leadToWorker ?? workerToLead ?? ownerToStepAgent
       // Any other agent's unnamed post in the group reaches its Lead: an agent whose task here was lost, moved or cancelled has
       // its status and results refused, so its posts are all the Lead hears from it. They reached no one until 10-29, when a
       // moved prod-watch agent's "the backend worker is down" alarm and its answers to the Lead's questions had no delivery,
@@ -2711,7 +2745,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const stepTold = actor.kind === 'agent' && isStep(group) && actor.agentId !== group.leadId ? taskOwner(state, group) : null
       const ownerInStep = actor.kind === 'agent' && stepTold && stepTold !== actor.agentId ? stepTold : null
       const memberToLead = actor.kind === 'agent' && !command.agentOnly && !addressed.length && assigned !== actor.agentId && (ownerHere ?? ownerInStep) ? [(ownerHere ?? ownerInStep)!]
-        : actor.kind === 'agent' && !command.agentOnly && !addressed.length && assigned !== actor.agentId && group.leadId
+        : actor.kind === 'agent' && !command.agentOnly && !addressed.length && assigned !== actor.agentId && !ownerToStepAgent && group.leadId
         && group.leadId !== actor.agentId && group.agentIds.includes(group.leadId) ? [group.leadId] : []
       // Buddy thread sessions (buddySessions.ts): a session thread's replies reach its session alone and stay in its thread; the
       // main Buddy hears the rest. Decided here from the thread, so every client, an old one or the phone, is routed alike.
@@ -3191,7 +3225,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
 /** A contribution owns capacity independently of membership. Reuse invalidates every prior stop proof. */
 export { swarmGridName } from './model.js'
 
-function reserveHarnessSlot(state: SuperTabState, machineId: string, harnessId: string, generation: string) {
+export function reserveHarnessSlot(state: SuperTabState, machineId: string, harnessId: string, generation: string) {
   const observation = state.machines?.find(m => m.machineId === machineId)?.observation
   const renewed = !!(state.harnessReservations?.some(r => r.machineId === machineId && r.harnessId === harnessId)
     || state.releasedHarnesses?.some(r => r.machineId === machineId && r.harnessId === harnessId)
