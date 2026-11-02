@@ -12,6 +12,7 @@
 import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import type { Socket } from 'node:net'
+import { runPowershellAsync } from './windows/powershell.js'
 
 export type PeerAccount = (socket: Socket) => Promise<boolean>
 
@@ -105,14 +106,57 @@ export async function portHolderIsThisAccount(port: number, platform: NodeJS.Pla
   })
 }
 
+/** Windows PowerShell's start and two CIM queries: about a second on a quiet PC, more on a busy one. */
+const WINDOWS_PEER_MS = 8_000
+
+/** How the daemon runs [windowsPeerQuery]: Windows PowerShell, off its event loop. Tests give their own. */
+export type WindowsPeerRun = (script: string, inputs: Record<string, string>) => Promise<{ status: number | null; stdout: string }>
+const runWindowsPeer: WindowsPeerRun = (script, inputs) => runPowershellAsync(script, inputs, WINDOWS_PEER_MS)
+
+/**
+ * Windows: whether the client end of the connection 127.0.0.1:[peerPort] → 127.0.0.1:[ownPort] belongs to a process of
+ * this account. Prints `yes` or `no`. Windows lists the client's end with its own port as the local one. The owner is
+ * compared by SID, never by name; a process of another account, one whose owner Windows will not give, one gone, or
+ * more than one row (which cannot be told apart) is `no`. The ports are inputs, never in the script's text.
+ */
+export function windowsPeerQuery(peerPort: number, ownPort: number): { script: string; inputs: Record<string, string> } {
+  return {
+    script: [
+      '$rows = @(Get-NetTCPConnection -State Established -LocalAddress 127.0.0.1 -LocalPort ([int]$env:HARNESS_PEER_PORT) -RemoteAddress 127.0.0.1 -RemotePort ([int]$env:HARNESS_OWN_PORT) -ErrorAction SilentlyContinue)',
+      "if ($rows.Count -ne 1) { 'no'; exit 0 }",
+      '$process = Get-CimInstance Win32_Process -Filter ("ProcessId = " + [int]$rows[0].OwningProcess)',
+      "if (-not $process) { 'no'; exit 0 }",
+      '$owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid',
+      "if ($owner.ReturnValue -eq 0 -and $owner.Sid -and $owner.Sid -eq [Security.Principal.WindowsIdentity]::GetCurrent().User.Value) { 'yes' } else { 'no' }",
+    ].join('\n'),
+    inputs: { HARNESS_PEER_PORT: String(peerPort), HARNESS_OWN_PORT: String(ownPort) },
+  }
+}
+
+async function askWindows(socket: Socket, run: WindowsPeerRun): Promise<boolean> {
+  const peerPort = socket.remotePort, ownPort = socket.localPort
+  // As on Linux and macOS: only an exact pair of addresses makes the pair of ports name one connection.
+  if (!peerPort || !ownPort || socket.remoteAddress !== '127.0.0.1' || socket.localAddress !== '127.0.0.1') return false
+  const query = windowsPeerQuery(peerPort, ownPort)
+  try {
+    const result = await run(query.script, query.inputs)
+    return result.status === 0 && result.stdout.trim() === 'yes'
+  } catch {
+    return false
+  }
+}
+
 const answers = new WeakMap<Socket, Promise<boolean>>()
 
-/** Windows reaches the daemon over its proven pipe and has neither lookup: its TCP rules are unchanged. */
-export function peerIsThisAccount(socket: Socket, platform: NodeJS.Platform = process.platform): Promise<boolean> {
-  if (platform === 'win32') return Promise.resolve(true)
+/**
+ * Whether the caller on [socket] runs as this OS account: asked of `/proc/net/tcp`, `lsof`, or on Windows of Windows itself
+ * ([run], audit W1: Windows answered yes without asking, and the Team account, holding the port at boot, opened the daemon
+ * with the credential it heard).
+ */
+export function peerIsThisAccount(socket: Socket, platform: NodeJS.Platform = process.platform, run: WindowsPeerRun = runWindowsPeer): Promise<boolean> {
   let answer = answers.get(socket)
   if (!answer) {
-    answer = ask(socket, platform).then((yes) => {
+    answer = (platform === 'win32' ? askWindows(socket, run) : ask(socket, platform)).then((yes) => {
       if (!yes) console.warn(`[peer] refused a valid secret on 127.0.0.1:${socket.localPort}: the caller is not this account`)
       return yes
     })
