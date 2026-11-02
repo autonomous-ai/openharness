@@ -434,6 +434,25 @@ void main() {
       expect(told, isEmpty);
     });
 
+    // Task #2265: the server moves its author's mark in the commit that wrote it.
+    test('their own message, with the mark the server moved, is no news: no '
+        'notice, not bold, and no read to find out whose it was', () async {
+      final (c, server, told) = await chatSetToAll();
+      server.append('From my phone', conversationId: 'offline');
+      ((server.state['readMarks'] ??= <String, dynamic>{}) as Map).update(
+        'owner',
+        (marks) => {...marks as Map, 'offline': server.revision},
+        ifAbsent: () => {'offline': server.revision},
+      );
+      final reads = <String>[];
+      server.onRead = reads.add;
+      await c.refresh();
+      await settle();
+      expect(told, isEmpty);
+      expect(c.unread(c.snapshot!.conversation('offline')!), isFalse);
+      expect(reads.where((p) => p.contains('offline/messages')), isEmpty);
+    });
+
     test(
       'a message whose author can\'t be read is told about, never lost',
       () async {
