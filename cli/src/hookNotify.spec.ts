@@ -1,7 +1,7 @@
 import { execFileSync, spawn, spawnSync } from 'child_process'
 import { createServer } from 'http'
-import { createServer as createNetServer } from 'net'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs'
+import { connect as netConnect, createServer as createNetServer } from 'net'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
@@ -33,6 +33,25 @@ afterEach(async () => {
   await Promise.all(netServers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))))
   for (const dir of tmpDirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
+
+/**
+ * The daemon's socket, as the hook now reaches it (audit H1), in front of a test's fake daemon on [port]. A connection
+ * to a port nobody holds is cut, as a daemon that is down. A folder that does not exist yet stays without one.
+ */
+async function daemonSocketFor(port: number, dataDir: string | undefined): Promise<void> {
+  if (!dataDir || !existsSync(dataDir)) return
+  const path = join(dataDir, `daemon-${port}.sock`)
+  if (existsSync(path)) return
+  const proxy = createNetServer((client) => {
+    const upstream = netConnect(port, '127.0.0.1')
+    client.on('error', () => upstream.destroy())
+    upstream.on('error', () => client.destroy())
+    client.pipe(upstream).pipe(client)
+  })
+  netServers.push(proxy)
+  await new Promise<void>((resolve) => { proxy.listen(path, resolve) })
+  chmodSync(path, 0o600)
+}
 
 interface RunHookOpts {
   port: number
@@ -184,6 +203,7 @@ fs.readFileSync = (path, ...args) => {
       mkdirSync(hookDataDir, { recursive: true, mode: 0o700 })
       try { writeFileSync(join(hookDataDir, 'hook-credential'), `${'a'.repeat(43)}\n`, { mode: 0o600, flag: 'wx' }) } catch { /* already exists */ }
     }
+    daemonSocketFor(opts.port, hookDataDir).then(() => {
     const child = spawn(process.execPath, args, {
       env,
       stdio: ['pipe', 'pipe', 'inherit'],
@@ -198,6 +218,7 @@ fs.readFileSync = (path, ...args) => {
       session_id: 'session-test',
       reason: 'logout',
     }))
+    }, reject)
   })
 }
 
@@ -1798,6 +1819,7 @@ describe('a hook reaches the daemon that made its pane', () => {
     const atDev = await collect({}, dev.credential)
     publishHookRoute(release.dataDir, atRelease.port, routes)
     publishHookRoute(dev.dataDir, atDev.port, routes)
+    await daemonSocketFor(atRelease.port, release.dataDir)
     // The dev daemon started last: the command is its own. The pane is the release daemon's.
     await runHook({
       port: atDev.port, dataDir: dev.dataDir, tmuxPane: '%7', paneOwner: release.tag,
@@ -1872,6 +1894,7 @@ describe('a hook reaches the daemon that made its pane', () => {
     expect(atDev.requests).toHaveLength(6)
     // And with the record in order, the same hook goes to the release daemon.
     publishHookRoute(release.dataDir, atRelease.port, routes)
+    await daemonSocketFor(atRelease.port, release.dataDir)
     await hook(release.tag)
     expect(atRelease.requests).toHaveLength(1)
   })
