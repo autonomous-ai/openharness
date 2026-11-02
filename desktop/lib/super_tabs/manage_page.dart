@@ -9,6 +9,7 @@ import '../shared/widgets/app_dialog.dart';
 import '../state/app_state.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
+import '../widgets/laid_out_list.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'leaderboard/models_section.dart';
@@ -193,7 +194,7 @@ class _ManageModels extends StatelessWidget {
     final projectId = controller.snapshot
         ?.projectFor(controller.selectedId)
         ?.id;
-    return ListView(
+    return LaidOutListView(
       padding: const EdgeInsets.symmetric(
         horizontal: grid.AppDesktop.groupGap,
         vertical: grid.AppDesktop.controlGap,
@@ -330,7 +331,7 @@ class _ManageSwarmState extends State<_ManageSwarm> {
         .firstOrNull;
     final deleted = _deleted;
     final blocked = _leaveBlocked;
-    return ListView(
+    return LaidOutListView(
       padding: const EdgeInsets.symmetric(
         horizontal: grid.AppDesktop.groupGap,
         vertical: grid.AppDesktop.controlGap,

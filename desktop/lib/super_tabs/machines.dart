@@ -2385,7 +2385,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
           )
         : null;
     if (widget.manage) {
-      return ListView(
+      return LaidOutListView(
         padding: const EdgeInsets.symmetric(
           horizontal: grid.AppDesktop.groupGap,
           vertical: grid.AppDesktop.controlGap,
