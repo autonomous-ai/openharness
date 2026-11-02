@@ -25,7 +25,7 @@ import { openDaemon } from '../agentClient/daemon.js'
 import { readTeamConfig } from '../team/config.js'
 import { realTeamRelayPublisher, type TeamRelayPublisher } from '../team/relay.js'
 import { readLastTry, refreshCreationId, refreshTeamAccount, teamRefreshFile, writeLastTry, type TeamRefreshDeps } from '../team/refresh.js'
-import { readTeamStatus } from '../team/privacy.js'
+import { readTeamStatusOffThread } from '../team/privacy.js'
 import { ensureTeamTmux, TMUX_MANIFEST_URL, tmuxRunsAt, untarGz, type TeamTmuxDeps, type TeamTmuxOutcome } from '../team/tmux.js'
 import { downloadVerified } from '../lib/selfUpdate.js'
 import { managedTmuxPath, tmuxInstallDirectories } from '../lib/tmuxOnPath.js'
@@ -880,7 +880,8 @@ function realTeamRefreshDeps(core: CoreApi, publishedAt: number | null): TeamRef
   const file = teamRefreshFile(core.dataDir)
   return {
     config: () => readTeamConfig(),
-    status: readTeamStatus,
+    // Never on this thread on Windows: the Team account can hold its file's open for as long as it likes (audit W4).
+    status: (path) => readTeamStatusOffThread(path),
     publishedAt: () => publishedAt,
     machines: async () => {
       const reply = await core.account.backend('GET', '/api/machines')

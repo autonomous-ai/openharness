@@ -10,7 +10,7 @@
  * time. Each probe must be refused with EACCES or EPERM. Reading it, or any other answer (a missing file means the
  * folder above it was searchable), fails the check, and the first failing item is what the machine reports.
  */
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { closeSync, constants, fstatSync, mkdirSync, openSync, readSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { TeamConfig } from './config.js'
@@ -154,6 +154,72 @@ export function enginesOf(value: unknown): TeamEngines | undefined {
 
 /** A status is well under 1 KiB: its one free text is capped at 300 characters. */
 const STATUS_MAX_BYTES = 64 * 1024
+/** Plenty for a small file and a Node start on a busy machine; a read still waiting then is being held (audit W4). */
+const STATUS_READ_DEADLINE_MS = 5_000
+
+/**
+ * On Windows an open waits for an oplock the file's owner holds, for as long as it holds it, and the Team account owns this file
+ * (audit W4): it would stop whoever opens it. So the open happens in a child, which can be killed: unlike a worker stuck in a
+ * synchronous call, or a thread-pool thread every file operation shares. It keeps the same limits as the read below.
+ */
+const STATUS_CHILD_SOURCE = `const fs = require('fs'), max = ${STATUS_MAX_BYTES}
+const fd = fs.openSync(process.argv[1], 'r'), stat = fs.fstatSync(fd)
+if (!stat.isFile() || stat.size > max) process.exit(3)
+const buffer = Buffer.alloc(max + 1)
+let length = 0
+for (let got = 1; got > 0 && length < buffer.length; length += got) got = fs.readSync(fd, buffer, length, buffer.length - length, null)
+if (length > max) process.exit(3)
+process.stdout.write(buffer.subarray(0, length))`
+const statusChildArgs = (path: string): string[] => ['-e', STATUS_CHILD_SOURCE, '--', path]
+/** No window, and none of this process's settings, NODE_OPTIONS among them. */
+const statusChildOptions = () => ({ windowsHide: true, env: process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {} })
+
+/** For `harness team status` and setup, which wait for their answer. The daemon uses readTeamStatusOffThread. */
+function readStatusInChild(path: string, deadlineMs: number): string {
+  const result = spawnSync(process.execPath, statusChildArgs(path), { ...statusChildOptions(), timeout: deadlineMs, maxBuffer: STATUS_MAX_BYTES + 1,
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+  if (result.status !== 0) throw new Error('not a status file')
+  return result.stdout
+}
+
+let statusChildRunning = false
+export function resetStatusChild(): void { statusChildRunning = false }
+
+export interface StatusReadOptions { platform?: NodeJS.Platform; deadlineMs?: number; spawn?: typeof spawn; log?: (line: string) => void }
+
+/**
+ * The status as the owner's daemon reads it about once a minute, never waiting on the file (audit W4). One child at a time: while a
+ * killed one has not gone, a read answers no status, as an unreadable file does, rather than start another for the same stall.
+ */
+export async function readTeamStatusOffThread(path: string, options: StatusReadOptions = {}): Promise<TeamStatus | null> {
+  if ((options.platform ?? process.platform) !== 'win32') return readTeamStatus(path)
+  if (statusChildRunning) return null
+  statusChildRunning = true
+  const log = options.log ?? ((line: string) => console.log(`[team] ${line}`))
+  const text = await new Promise<string | null>((resolve) => {
+    const chunks: Buffer[] = []
+    let size = 0
+    let child: ChildProcess
+    try {
+      child = (options.spawn ?? spawn)(process.execPath, statusChildArgs(path), { ...statusChildOptions(), stdio: ['ignore', 'pipe', 'ignore'] })
+    } catch { statusChildRunning = false; resolve(null); return }
+    const timer = setTimeout(() => {
+      log(`the status file ${path} did not answer in ${options.deadlineMs ?? STATUS_READ_DEADLINE_MS} ms; reading on without it`)
+      child.kill()
+      resolve(null)
+    }, options.deadlineMs ?? STATUS_READ_DEADLINE_MS)
+    timer.unref?.()
+    child.stdout?.on('data', (chunk: Buffer) => {
+      size += chunk.length
+      if (size > STATUS_MAX_BYTES) { child.kill(); resolve(null) } else chunks.push(chunk)
+    })
+    const done = (code: number | null) => { statusChildRunning = false; clearTimeout(timer); resolve(code === 0 ? Buffer.concat(chunks).toString('utf8') : null) }
+    child.once('error', () => done(null))
+    child.once('close', done)
+    child.unref?.()
+  })
+  return text === null ? null : readTeamStatus(path, () => text)
+}
 
 /**
  * The status file, which the Team account may replace with anything, and which the owner's daemon reads about once a minute
@@ -161,7 +227,8 @@ const STATUS_MAX_BYTES = 64 * 1024
  * link to /dev/zero would run until memory is gone (audit M5). So: never through a link, never waiting on a FIFO, a plain file
  * only, and never more than the limit, whatever fstat said a moment ago. As ./handoff.ts reads its code. Throws otherwise.
  */
-export function readStatusFile(path: string): string {
+export function readStatusFile(path: string, platform: NodeJS.Platform = process.platform, deadlineMs: number = STATUS_READ_DEADLINE_MS): string {
+  if (platform === 'win32') return readStatusInChild(path, deadlineMs)
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
   try {
     const stat = fstatSync(fd)
@@ -193,7 +260,7 @@ function privacyOf(value: unknown): PrivacyResult | undefined {
   return undefined
 }
 
-export function readTeamStatus(path: string, read: (path: string) => string = readStatusFile): TeamStatus | null {
+export function readTeamStatus(path: string, read: (path: string) => string = (at) => readStatusFile(at)): TeamStatus | null {
   let raw: unknown
   try { raw = JSON.parse(read(path)) } catch { return null }
   if (!raw || typeof raw !== 'object' || (raw as { version?: unknown }).version !== 1) return null

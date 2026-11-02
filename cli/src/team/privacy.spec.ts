@@ -1,11 +1,12 @@
-import { execFileSync, spawn } from 'node:child_process'
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { EventEmitter } from 'node:events'
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync, readFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { readTeamConfig, teamConfigJson, type TeamConfig } from './config.js'
 import {
-  PRIVACY_RECHECK_MS, TeamPrivacyObserver, adminGroupIds, privacyProbes, readTeamStatus, realPrivacyDeps, runPrivacyCheck, writeTeamStatus,
+  PRIVACY_RECHECK_MS, TeamPrivacyObserver, readStatusFile, readTeamStatusOffThread, resetStatusChild, adminGroupIds, privacyProbes, readTeamStatus, realPrivacyDeps, runPrivacyCheck, writeTeamStatus,
   type PrivacyDeps, type PrivacyResult,
 } from './privacy.js'
 
@@ -354,5 +355,94 @@ describe('what a status says, as it reaches a terminal', () => {
   it('keeps accented and non-Latin words', () => {
     const status = readTeamStatus('/x', () => JSON.stringify({ version: 1, signIn: { state: 'failed', at: 2, detail: 'Không đăng nhập được · 失敗' } }))
     expect(status?.signIn?.detail).toBe('Không đăng nhập được · 失敗')
+  })
+})
+
+// Audit W4: on Windows a Team process can hold the owner's open of its status file with an oplock, for as long as it likes. A FIFO
+// is the same stall where this runs: a plain open waits on it until someone writes. Windows itself: windowsTeamRemove.real.spec.ts.
+describe.skipIf(process.platform === 'win32')('reading the status file in a child, as on Windows', () => {
+  const dir = () => mkdtempSync(join(tmpdir(), 'team-status-'))
+  const stalled = () => { const fifo = join(dir(), 'status.json'); execFileSync('mkfifo', [fifo]); return fifo }
+  const options = (over = {}) => ({ platform: 'win32' as NodeJS.Platform, deadlineMs: 400, log: () => {}, ...over })
+  afterEach(() => resetStatusChild())
+
+  it('reads a plain file, as the status it holds', async () => {
+    const file = join(dir(), 'status.json')
+    writeFileSync(file, JSON.stringify({ version: 1, privacy: { passed: true, checkedAt: 3 } }))
+    expect(await readTeamStatusOffThread(file, options({ deadlineMs: 15_000 }))).toEqual({ version: 1, privacy: { passed: true, checkedAt: 3 } })
+    expect(readTeamStatus(file, (path) => readStatusFile(path, 'win32', 15_000))).toEqual({ version: 1, privacy: { passed: true, checkedAt: 3 } })
+  })
+
+  it('never stops the daemon on a stalled open: other work runs, the read ends at its deadline as no status, and says so', async () => {
+    const log = vi.fn()
+    let ticks = 0
+    const timer = setInterval(() => { ticks++ }, 20)
+    const started = Date.now()
+    const status = await readTeamStatusOffThread(stalled(), options({ log }))
+    clearInterval(timer)
+    expect(status).toBeNull()
+    expect(Date.now() - started).toBeLessThan(5_000)
+    expect(ticks).toBeGreaterThan(5)
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('status file'))
+  })
+
+  it('kills the child at the deadline', async () => {
+    const children: ChildProcess[] = []
+    const spawnChild = ((...args: Parameters<typeof spawn>) => { const child = spawn(...args); children.push(child); return child }) as typeof spawn
+    await readTeamStatusOffThread(stalled(), options({ spawn: spawnChild }))
+    expect(children).toHaveLength(1)
+    await vi.waitFor(() => expect(children[0].exitCode !== null || children[0].signalCode !== null).toBe(true))
+  })
+
+  it('runs one child at a time, so a stuck one never piles up, and reads again once it has gone', async () => {
+    const fake = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter(), kill: vi.fn(), unref: vi.fn() })
+    const spawnChild = vi.fn(() => fake) as unknown as typeof spawn
+    const first = readTeamStatusOffThread('/s', options({ spawn: spawnChild, deadlineMs: 20 }))
+    expect(await first).toBeNull()
+    expect(fake.kill).toHaveBeenCalled()
+    expect(await readTeamStatusOffThread('/s', options({ spawn: spawnChild }))).toBeNull()
+    expect(spawnChild).toHaveBeenCalledTimes(1)
+    fake.emit('close', null)
+    void readTeamStatusOffThread('/s', options({ spawn: spawnChild, deadlineMs: 20 }))
+    expect(spawnChild).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not keep the daemon alive, and asks for no window', async () => {
+    const spawnChild = vi.fn(spawn)
+    const file = join(dir(), 'status.json')
+    writeFileSync(file, '{"version":1}')
+    await readTeamStatusOffThread(file, options({ spawn: spawnChild as unknown as typeof spawn, deadlineMs: 15_000 }))
+    expect(spawnChild.mock.calls[0][2]).toMatchObject({ windowsHide: true })
+  })
+
+  it.each([
+    ['a file over the limit', (at: string) => writeFileSync(at, 'x'.repeat(64 * 1024 + 1))],
+    ['a folder', (at: string) => mkdirSync(at)],
+    ['nothing', () => {}],
+    ['not JSON', (at: string) => writeFileSync(at, 'nope')],
+  ])('answers no status for %s', async (_, make) => {
+    const file = join(dir(), 'status.json')
+    make(file)
+    expect(await readTeamStatusOffThread(file, options({ deadlineMs: 15_000 }))).toBeNull()
+  })
+
+  it('still removes escape codes from what the child read', async () => {
+    const file = join(dir(), 'status.json')
+    writeFileSync(file, JSON.stringify({ version: 1, signIn: { state: 'failed', at: 2, detail: '\u001b[31mred\u0007' } }))
+    expect((await readTeamStatusOffThread(file, options({ deadlineMs: 15_000 })))?.signIn?.detail).toBe('[31mred')
+  })
+
+  it('the blocking form used by harness team status ends at the deadline too', () => {
+    const started = Date.now()
+    expect(readTeamStatus(stalled(), (path) => readStatusFile(path, 'win32', 400))).toBeNull()
+    expect(Date.now() - started).toBeLessThan(5_000)
+  })
+
+  it('leaves other platforms on the plain read, with no child', async () => {
+    const spawnChild = vi.fn() as unknown as typeof spawn
+    const file = join(dir(), 'status.json')
+    writeFileSync(file, '{"version":1}')
+    expect(await readTeamStatusOffThread(file, options({ platform: 'darwin', spawn: spawnChild }))).toEqual({ version: 1 })
+    expect(spawnChild).not.toHaveBeenCalled()
   })
 })

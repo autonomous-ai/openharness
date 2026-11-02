@@ -324,7 +324,7 @@ describe('the Windows remove script', () => {
   it('stops the task and the team account\'s processes, then the profile, then the account, then the task\'s definition', () => {
     const script = buildWindowsRemoveScript(removeInput())
     const order = ['Disable-ScheduledTask', 'GetOwnerSid', 'Remove-CimInstance', 'Remove-LocalUser', 'Unregister-ScheduledTask', 'Set-BatchLogon $teamSid $false',
-      'Remove-Tree $STATUS_DIR']
+      'Remove-Held $STATUS_DIR']
       .map((s) => at(script, s))
     expect(order).toEqual([...order].sort((a, b) => a - b))
   })
@@ -361,7 +361,7 @@ describe('the Windows remove script', () => {
     // Nothing the team account wrote is read as an administrator to name a machine to remove (audit L3).
     expect(script).not.toContain('computer-id')
     expect(script).not.toContain('$COMPUTER_ID')
-    expect(at(script, 'Test-Path -LiteralPath $SHARED_MARK')).toBeGreaterThan(at(script, 'Remove-Tree $STATUS_DIR'))
+    expect(at(script, 'Test-Path -LiteralPath $SHARED_MARK')).toBeGreaterThan(at(script, 'Remove-Held $STATUS_DIR'))
     // A line ending in LF alone: the owner's side splits this output at LF.
     expect(script).toContain('[Console]::Out.Write("harness: $m`n")')
   })
@@ -372,4 +372,74 @@ describe('the Windows remove script', () => {
   })
 
   it.skipIf(!pwsh)('parses', () => parses(buildWindowsRemoveScript(removeInput())))
+})
+
+// Audit W7: what the Team account wrote goes to the administrator's console.
+describe('what the elevated setup prints of the Team account\'s output', () => {
+  it('has no control or format characters, read where every print gets it', () => {
+    const script = buildWindowsSetupScript(input())
+    expect(script).toContain("[regex]::Replace($text, '[\\p{Cc}\\p{Cf}\\p{Cs}\\p{Zl}\\p{Zp}]', '')")
+    expect(script).toMatch(/\$lines = @\(Get-Content -LiteralPath \$out[^\n]*\| ForEach-Object \{ Clean-Line \$_ \} \| Where-Object \{ \$_ \}\)/)
+    expect(script.indexOf('function Clean-Line')).toBeLessThan(script.indexOf('function As-Team'))
+  })
+})
+
+// Audit W5: removal runs as an administrator on folders the Team account could write.
+describe('what the elevated removal deletes of the Team account\'s', () => {
+  const script = () => buildWindowsRemoveScript(removeInput())
+
+  it('compiles its helper before anything changes, and stops with nothing removed if it cannot', () => {
+    const text = script()
+    expect(text).toContain('Add-Type -TypeDefinition $HELPER')
+    expect(text).toMatch(/try \{ Load-Helper \} catch \{ die "[^"]*nothing was removed/)
+    expect(text.indexOf('try { Load-Helper }')).toBeLessThan(text.indexOf('# 1. The team daemon'))
+  })
+
+  it('never walks them by path', () => {
+    const text = script()
+    for (const path of ['$TEAM_HOME', '$STATUS_DIR', '$relay.FullName']) {
+      expect(text).toContain(`Remove-Held ${path}`)
+      expect(text).not.toContain(`Remove-Tree ${path}`)
+    }
+  })
+
+  it('renames first, into a name nobody knows, and goes on where Windows will not let it', () => {
+    const text = script()
+    expect(text).toContain('[guid]::NewGuid()')
+    expect(text).toMatch(/try \{ \[IO\.Directory\]::Move\(\$path, \$moved\); \$at = \$moved \} catch \{ \}/)
+    expect(text.indexOf('[IO.Directory]::Move($path, $moved)')).toBeLessThan(text.indexOf('[HarnessTeamRemove]::Delete($at)'))
+  })
+
+  it('opens each child relative to its parent\'s handle, never following a link', () => {
+    const text = script()
+    expect(text).toContain('NtOpenFile')
+    expect(text).toContain('RootDirectory')
+    expect(text).toContain('FILE_OPEN_REPARSE_POINT')
+    expect(text).toContain('FILE_FLAG_OPEN_REPARSE_POINT')
+    expect(text).toContain('SetFileInformationByHandle')
+  })
+
+  it('keeps what cannot be deleted for the next restart, and says what could not go elsewhere', () => {
+    const text = script()
+    expect(text).toContain('Remove-Held $TEAM_HOME $left')
+    expect(text).toMatch(/throw "could not delete/)
+  })
+
+  it('stops the tasks the Team account registered before its processes, and restores them if removal stops', () => {
+    const text = script()
+    expect(text).toContain('function Team-Tasks')
+    expect(text).toMatch(/\$_\.Principal\.UserId/)
+    expect(text.indexOf('Disable-ScheduledTask -InputObject')).toBeLessThan(text.indexOf('# 2. Every process running as the team account'))
+    expect(text.match(/Restore-Tasks/g)!.length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('deletes them once the account is gone, its own daemon\'s task apart', () => {
+    const text = script()
+    expect(text).toContain('foreach ($own in @(Team-Tasks)) { Unregister-ScheduledTask -InputObject $own -Confirm:$false')
+    expect(text.indexOf('foreach ($own in @(Team-Tasks))')).toBeGreaterThan(text.indexOf('# 4. The account.'))
+  })
+
+  it('matches a task by the Team account alone, in any form Windows names it', () => {
+    expect(script()).toMatch(/\(\$user -split '\\\\'\)\[-1\] -eq \$TEAM -or \(\$teamSid -and \$user -eq \$teamSid\)/)
+  })
 })
