@@ -2407,9 +2407,10 @@ describe('the profiles a machine reports', () => {
     const f = fixture()
     Object.assign(f.pool.machine, { engines: ['claude', 'codex'] })
     Object.assign(f.pool, { capabilitiesWanted: true })
-    f.claudeProfiles.mockReturnValue([{ id: id('d'), default: true, path: '/Users/me', label: 'me@corp', reportLabel: 'Claude' },
-      { id: id('a'), path: '/Users/me/.claude-work', label: 'Work', reportLabel: 'Work' }])
-    f.codexProfiles.mockReturnValue([{ path: '/Users/me/.codex-two', label: 'two' }])
+    f.claudeProfiles.mockReturnValue([{ id: id('d'), default: true, path: '/Users/me', label: 'me@corp', reportLabel: 'Claude', offered: true },
+      { id: id('a'), path: '/Users/me/.claude-work', label: 'Work', reportLabel: 'Work', offered: true },
+      { id: id('b'), path: '/Users/me/.claude-other', label: 'Other', reportLabel: '.claude-other', offered: false }])
+    f.codexProfiles.mockReturnValue([{ path: '/Users/me/.codex-two', label: 'two', offered: true }, { path: '/Users/me/.codex-found', label: 'found', offered: false }])
     f.request.mockImplementation(async (type: string, payload?: unknown): Promise<Record<string, unknown>> => {
       if (type !== 'usage_read') return {}
       const profile = (payload as { profile?: { engine: string } } | undefined)?.profile
@@ -2434,6 +2435,16 @@ describe('the profiles a machine reports', () => {
     expect(JSON.stringify(profiles)).not.toMatch(/Users|@/)
   })
 
+  it('reports and reads only the accounts the owner offered, never a discovered one', async () => {
+    const f = both()
+    await f.machine.tick()
+    const profiles = posted(f).at(-1)!.profiles as Array<{ label: string }>
+    expect(profiles.map(p => p.label)).not.toContain('.claude-other')
+    expect(profiles.map(p => p.label)).not.toContain('.codex-found')
+    const read = f.request.mock.calls.filter(c => c[0] === 'usage_read').map(c => JSON.stringify(c[1]))
+    expect(read.join()).not.toContain(id('b'))
+  })
+
   it('a Team daemon reports its default accounts only', async () => {
     const f = both()
     f.setTeam(true)
@@ -2446,7 +2457,7 @@ describe('the profiles a machine reports', () => {
   it("reports the default Codex home once, as Default", async () => {
     const f = both()
     const home = join(process.env.CODEX_HOME || join(homedir(), '.codex'))
-    f.codexProfiles.mockReturnValue([{ path: (() => { try { return realpathSync(home) } catch { return home } })(), label: 'x' }, { path: '/Users/me/.codex-two', label: 'two' }])
+    f.codexProfiles.mockReturnValue([{ path: (() => { try { return realpathSync(home) } catch { return home } })(), label: 'x', offered: true }, { path: '/Users/me/.codex-two', label: 'two', offered: true }])
     await f.machine.tick()
     const codex = (posted(f).at(-1)!.profiles as Array<{ engine: string; label: string }>).filter(p => p.engine === 'codex')
     expect(codex.map(p => p.label)).toEqual(['Default', '.codex-two'])
@@ -2455,8 +2466,8 @@ describe('the profiles a machine reports', () => {
   it('leaves out an engine this machine does not offer, an entry the backend would refuse, and what is over the caps', async () => {
     const f = both()
     Object.assign(f.pool.machine, { engines: ['claude'] })
-    f.claudeProfiles.mockReturnValue([{ id: id('d'), default: true, path: '/h', label: 'x', reportLabel: 'x' },
-      ...Array.from({ length: 12 }, (_, i) => ({ id: id(i.toString(16)), path: `/h/${i}`, label: `p${i}`, reportLabel: i === 0 ? 'a@b' : i === 1 ? '' : `p${i}` }))])
+    f.claudeProfiles.mockReturnValue([{ id: id('d'), default: true, path: '/h', label: 'x', reportLabel: 'x', offered: true },
+      ...Array.from({ length: 12 }, (_, i) => ({ id: id(i.toString(16)), path: `/h/${i}`, label: `p${i}`, reportLabel: i === 0 ? 'a@b' : i === 1 ? '' : `p${i}`, offered: true }))])
     await f.machine.tick()
     const profiles = posted(f).at(-1)!.profiles as Array<{ engine: string; label: string }>
     expect(profiles.every(p => p.engine === 'claude')).toBe(true)

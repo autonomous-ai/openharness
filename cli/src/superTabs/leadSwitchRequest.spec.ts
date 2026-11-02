@@ -92,6 +92,12 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
     }
   })
 
+  it('asks the machine for offered accounts only, so one the owner never offered is refused as gone', async () => {
+    const t = setup({ home: null })
+    await t.switches.serve(row({ switchRequest: { id: 'sw1', engine: 'claude', profileId: 'abcdef0123456789' } }))
+    expect(t.profiles).toHaveBeenCalledWith('claude', 'abcdef0123456789', expect.anything(), { offeredOnly: true })
+  })
+
   it('maps a permission mode the target engine lacks to ask, as Desktop does, and bypass follows the mode', async () => {
     const t = setup({ old: { permissionMode: 'acceptEdits', bypassPermission: true } })
     await t.switches.serve(row({ switchRequest: { id: 'sw1', engine: 'codex', profileId: 'p1' } }))

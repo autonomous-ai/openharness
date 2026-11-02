@@ -6,7 +6,9 @@
  * Claude Code hashes for its Keychain item and what CLAUDE_CONFIG_DIR must hold; its id is of the real path.
  *
  * Two labels: `label` is for the machine's owner (may be an email); `reportLabel` is what leaves the
- * machine and so never holds an '@'.
+ * machine, so it comes from the folder alone and never names a person. `offered` marks what the owner put on the Swarm: the
+ * default account, linked folders and the ones Harness itself made under `~/.harness/claude-profiles`; the rest is discovered
+ * and stays the owner's own to pick in Change agent.
  */
 
 import { createHash, randomUUID } from 'crypto'
@@ -22,6 +24,7 @@ export interface ClaudeProfile {
   path: string
   label: string
   reportLabel: string
+  offered: boolean
   /** Set on the default account alone. */
   default?: true
 }
@@ -54,21 +57,26 @@ function accountOf(folder: string): { displayName?: string; emailAddress?: strin
   }
 }
 
-function reportLabelFor(path: string, displayName: string | undefined): string {
-  const orca = ORCA_HOME_RE.exec(path)
-  const candidates = [displayName, orca ? `Orca ${orca[1].slice(0, 4)}` : basename(path)]
-  const found = candidates.find((c) => c && !c.includes('@')) ?? 'Claude'
-  return found.slice(0, REPORT_LABEL_MAX)
+function harnessFolder(home: string): string {
+  return join(home, '.harness', 'claude-profiles') + sep
 }
 
-function profileFor(machineId: string, path: string, real: string, isDefault = false): ClaudeProfile {
+/** The folder's name, never the account's: a display name is a person's, and this label is served to the whole Swarm. */
+function reportLabelFor(path: string, home: string): string {
+  const orca = ORCA_HOME_RE.exec(path)
+  const name = orca ? `Orca ${orca[1].slice(0, 4)}` : path.startsWith(harnessFolder(home)) ? `Claude ${basename(path)}` : basename(path)
+  return (name.includes('@') ? 'Claude' : name).slice(0, REPORT_LABEL_MAX)
+}
+
+function profileFor(machineId: string, path: string, real: string, home: string, offered: boolean, isDefault = false): ClaudeProfile {
   const { displayName, emailAddress } = accountOf(path)
   return {
     id: profileId(machineId, 'claude', isDefault ? 'default' : real),
     ...(isDefault ? { default: true as const } : {}),
     path,
     label: displayName ?? emailAddress ?? basename(path),
-    reportLabel: reportLabelFor(path, displayName),
+    reportLabel: reportLabelFor(path, home),
+    offered: offered || isDefault,
   }
 }
 
@@ -122,7 +130,7 @@ export function linkClaudeProfile(path: string, machineId: string): { profile: C
   const linked = readLinkedPaths()
   linked.add(path)
   writeLinkedPaths(linked)
-  return { profile: profileFor(machineId, path, resolved) }
+  return { profile: profileFor(machineId, path, resolved, homedir(), true) }
 }
 
 function holdsProfile(folder: string): boolean {
@@ -166,15 +174,17 @@ export function listClaudeProfiles(
   options: { home?: string; environment?: NodeJS.ProcessEnv; machineId: string },
 ): ClaudeProfile[] {
   const home = options.home ?? homedir()
-  const candidates = new Set<string>([...readLinkedPaths(), ...observedPaths, ...discover(home, options.environment ?? process.env)])
+  const linkedPaths = readLinkedPaths()
+  const linked = new Set([...linkedPaths].flatMap((p) => { const r = resolveFolder(p); return typeof r === 'string' ? [r] : [] }))
+  const candidates = new Set<string>([...linkedPaths, ...observedPaths, ...discover(home, options.environment ?? process.env)])
   const defaultPath = resolveFolder(home)
-  const defaultProfile = profileFor(options.machineId, home, typeof defaultPath === 'string' ? defaultPath : home, true)
+  const defaultProfile = profileFor(options.machineId, home, typeof defaultPath === 'string' ? defaultPath : home, home, true, true)
   const profiles = new Map<string, ClaudeProfile>()
   for (const candidate of candidates) {
     const resolved = resolveFolder(candidate)
     // De-duplicated by the real folder; the path kept is the first one given.
     if (typeof resolved === 'string' && resolved !== (typeof defaultPath === 'string' ? defaultPath : home) && !profiles.has(resolved)) {
-      profiles.set(resolved, profileFor(options.machineId, candidate, resolved))
+      profiles.set(resolved, profileFor(options.machineId, candidate, resolved, home, linked.has(resolved) || candidate.startsWith(harnessFolder(home))))
     }
   }
   const others = [...profiles.values()].sort((a, b) => a.label.toLowerCase().localeCompare(b.label.toLowerCase()) || a.path.localeCompare(b.path))
@@ -192,13 +202,13 @@ export function codexReportLabel(path: string): string {
  * older backend sends, or its reported id), a path for a profile this machine still has, null for an unknown or gone one.
  */
 export function profileHome(
-  engine: string, id: string, machineId: string, options: { home?: string; environment?: NodeJS.ProcessEnv } = {},
+  engine: string, id: string, machineId: string, options: { home?: string; environment?: NodeJS.ProcessEnv; offeredOnly?: boolean } = {},
 ): string | 'default' | null {
   if (engine !== 'claude' && engine !== 'codex') return null
   if (id === 'default' || id === profileId(machineId, engine, 'default')) return 'default'
-  if (engine === 'claude') return listClaudeProfiles([], { ...options, machineId }).find((p) => p.id === id)?.path ?? null
+  if (engine === 'claude') return listClaudeProfiles([], { ...options, machineId }).find((p) => p.id === id && (p.offered || !options.offeredOnly))?.path ?? null
   const discovery = options.home ? { home: options.home, environment: (options.environment ?? {}) as Record<string, string> } : undefined
-  const found = listCodexProfiles([], discovery).find((p) => profileId(machineId, 'codex', p.path) === id)?.path ?? null
+  const found = listCodexProfiles([], discovery).find((p) => profileId(machineId, 'codex', p.path) === id && (p.offered || !options.offeredOnly))?.path ?? null
   // The default Codex home is the default account, whichever of its two ids was asked.
   return found === defaultCodexHome(options.home, options.environment) ? 'default' : found
 }

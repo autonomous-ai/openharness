@@ -121,7 +121,7 @@ export class LeadSwitchRequests {
     const team = this.deps.team()
     // The hex id of the default account counts as the default; a Team daemon takes no other account (its user's folders are not
     // the owner's to offer).
-    const home = this.deps.profiles(engine, profileId, this.machineId)
+    const home = this.deps.profiles(engine, profileId, this.machineId, { offeredOnly: true })
     if (home === null || (team && home !== 'default')) return { ok: false, error: GONE }
     const old = this.core.agents.byAgent(run.harnessId)
     // The PM comes back as a Swarm PM, from what it was started as: with no saved role or no conversation to rebuild its prompt

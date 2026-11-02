@@ -39,7 +39,7 @@ describe('claudeProfiles', () => {
     account(join(home, '.claude-work'), { displayName: 'Work' })
     const profiles = listClaudeProfiles([], { home, environment: {}, machineId })
     expect(profiles.map((p) => p.id)).toEqual([profileId(machineId, 'claude', 'default'), expect.stringMatching(/^[0-9a-f]{16}$/)])
-    expect(profiles[0]).toMatchObject({ path: home, label: 'Me', reportLabel: 'Me', default: true })
+    expect(profiles[0]).toMatchObject({ path: home, label: 'Me', reportLabel: expect.not.stringContaining('Me'), offered: true, default: true })
     expect(profiles[1]).not.toHaveProperty('default')
     expect(profiles[1]).toMatchObject({ path: join(home, '.claude-work'), label: 'Work' })
   })
@@ -48,7 +48,7 @@ describe('claudeProfiles', () => {
     const { listClaudeProfiles, profileId } = await loadModule()
     mkdirSync(join(home, '.claude-empty'))
     const profiles = listClaudeProfiles([], { home, environment: {}, machineId })
-    expect(profiles).toEqual([{ id: profileId(machineId, 'claude', 'default'), default: true, path: home, label: expect.any(String), reportLabel: expect.any(String) }])
+    expect(profiles).toEqual([{ id: profileId(machineId, 'claude', 'default'), default: true, path: home, label: expect.any(String), reportLabel: expect.any(String), offered: true }])
   })
 
   it('finds the inherited CLAUDE_CONFIG_DIR and a folder holding only settings.json', async () => {
@@ -71,7 +71,28 @@ describe('claudeProfiles', () => {
   it('uses displayName for the label when present', async () => {
     const { listClaudeProfiles } = await loadModule()
     account(join(home, '.claude-w'), { displayName: 'Work', emailAddress: 'w@x.y' })
-    expect(listClaudeProfiles([], { home, environment: {}, machineId })[1]).toMatchObject({ label: 'Work', reportLabel: 'Work' })
+    expect(listClaudeProfiles([], { home, environment: {}, machineId })[1]).toMatchObject({ label: 'Work', reportLabel: '.claude-w' })
+  })
+
+  it('never reports a person: the label is the folder, Orca by its id, Harness-made as Claude <n>', async () => {
+    const { listClaudeProfiles } = await loadModule()
+    account(join(home, '.claude-w'), { displayName: 'Jane Doe', emailAddress: 'jane@x.y' })
+    account(join(home, '.harness/claude-profiles/acct1'), { displayName: 'Jane Doe' })
+    const rows = listClaudeProfiles([], { home, environment: {}, machineId })
+    expect(rows.map((p) => p.reportLabel)).toEqual(expect.arrayContaining(['.claude-w', 'Claude acct1']))
+    expect(JSON.stringify(rows.map((p) => p.reportLabel))).not.toContain('Jane')
+  })
+
+  it('offers the default, linked and Harness-made folders; a discovered one (Orca, ~/.claude-*) is listed but not offered', async () => {
+    const { listClaudeProfiles, linkClaudeProfile } = await loadModule()
+    const orca = join(home, 'Library/Application Support/orca/claude-profiles/ab12cd34-0000-4000-8000-000000000000/home')
+    account(orca, { displayName: 'Ken' })
+    account(join(home, '.claude-w'), {})
+    account(join(home, '.harness/claude-profiles/acct1'), {})
+    const offered = () => Object.fromEntries(listClaudeProfiles([], { home, environment: {}, machineId }).map((p) => [p.path === home ? 'default' : p.reportLabel, p.offered]))
+    expect(offered()).toEqual({ default: true, 'Orca ab12': false, '.claude-w': false, 'Claude acct1': true })
+    linkClaudeProfile(orca, machineId)
+    expect(offered()['Orca ab12']).toBe(true)
   })
 
   it('drops a report label containing @', async () => {
@@ -89,8 +110,8 @@ describe('claudeProfiles', () => {
 
   it('cuts it at 40 characters', async () => {
     const { listClaudeProfiles } = await loadModule()
-    account(join(home, '.claude-w'), { displayName: 'x'.repeat(60) })
-    expect(listClaudeProfiles([], { home, environment: {}, machineId })[1].reportLabel).toBe('x'.repeat(40))
+    account(join(home, '.claude-' + 'x'.repeat(60)), {})
+    expect(listClaudeProfiles([], { home, environment: {}, machineId })[1].reportLabel).toBe(('.claude-' + 'x'.repeat(60)).slice(0, 40))
   })
 
   it('ignores a malformed or oversized account file', async () => {
@@ -168,6 +189,23 @@ describe('profileHome', () => {
     expect(profileHome('claude', 'f'.repeat(16), machineId, options)).toBeNull()
     expect(profileHome('codex', 'f'.repeat(16), machineId, options)).toBeNull()
     expect(profileHome('gemini', 'default', machineId, options)).toBeNull()
+  })
+
+  it('with offeredOnly, an account the owner never offered is as good as gone, and linking brings it back', async () => {
+    const { listClaudeProfiles, profileHome, linkClaudeProfile, profileId } = await loadModule()
+    const folder = join(home, '.claude-work')
+    account(folder, {})
+    const codex = join(home, '.codex-two')
+    mkdirSync(codex)
+    writeFileSync(join(codex, 'auth.json'), '{}')
+    const options = { home, environment: {}, offeredOnly: true }
+    const work = listClaudeProfiles([], { home, environment: {}, machineId })[1]
+    expect(profileHome('claude', work.id, machineId, options)).toBeNull()
+    expect(profileHome('claude', work.id, machineId, { home, environment: {} })).toBe(folder)
+    expect(profileHome('codex', profileId(machineId, 'codex', codex), machineId, options)).toBeNull()
+    expect(profileHome('claude', 'default', machineId, options)).toBe('default')
+    linkClaudeProfile(folder, machineId)
+    expect(profileHome('claude', work.id, machineId, options)).toBe(folder)
   })
 
   it('finds a Codex folder by its id', async () => {

@@ -145,8 +145,8 @@ export interface MachineDeps {
    *  (team/relay.ts), so one it has not signed in itself is ready all the same. */
   relayed?: () => boolean
   /** The Claude and Codex profile folders this machine offers ([listClaudeProfiles], [listCodexProfiles]). */
-  claudeProfiles?: (machineId: string) => Array<{ id: string; path: string; reportLabel: string; default?: true }>
-  codexProfiles?: () => Array<{ path: string }>
+  claudeProfiles?: (machineId: string) => Array<{ id: string; path: string; reportLabel: string; offered: boolean; default?: true }>
+  codexProfiles?: () => Array<{ path: string; offered?: boolean }>
 }
 const MACHINE_DEPS = { claudeProfiles: (machineId: string) => listClaudeProfiles([], { machineId }), codexProfiles: () => listCodexProfiles(), backend, open: openDaemon, capabilities: readCapabilities, start: startAgent, now: Date.now }
 /** A start's folder preparation can clone a whole repository; past this, its cleanup gives up and tries again later. */
@@ -318,9 +318,9 @@ export class ContributedMachines {
     engines: string[], allowances: Array<{ engine: string; windows: Parameters<typeof allowanceLeft>[0] }>) {
     const found: Array<{ engine: 'claude' | 'codex'; id: string; label: string; leftPercent: number | null; resetsAt: string | null }> = []
     const accounts = {
-      claude: () => this.deps.claudeProfiles!(this.machineId).filter(p => !p.default).map(p => ({ id: p.id, label: p.reportLabel })),
+      claude: () => this.deps.claudeProfiles!(this.machineId).filter(p => !p.default && p.offered).map(p => ({ id: p.id, label: p.reportLabel })),
       // The default Codex account is ~/.codex or an inherited CODEX_HOME: reported once, as Default.
-      codex: () => this.deps.codexProfiles!().filter(p => p.path !== defaultCodexHome()).map(p => ({ id: profileId(this.machineId, 'codex', p.path), label: codexReportLabel(p.path) })),
+      codex: () => this.deps.codexProfiles!().filter(p => p.offered && p.path !== defaultCodexHome()).map(p => ({ id: profileId(this.machineId, 'codex', p.path), label: codexReportLabel(p.path) })),
     }
     for (const engine of ['claude', 'codex'] as const) {
       if (!engines.includes(engine)) continue

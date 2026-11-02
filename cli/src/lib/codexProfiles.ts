@@ -20,6 +20,8 @@ import { hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirec
 export interface CodexProfile {
   path: string
   label: string
+  /** The default account or a folder the owner linked; a discovered one is the owner's own to pick, not the Swarm's. */
+  offered?: boolean
 }
 
 export type CodexProfileError = { error: 'INVALID_PATH' | 'NOT_FOUND' }
@@ -130,7 +132,9 @@ export function listCodexProfiles(
     environment: processEnvironment(),
   },
 ): CodexProfile[] {
-  const candidates = new Set<string>([...readLinkedPaths(), ...observedPaths])
+  const linkedPaths = readLinkedPaths()
+  const linked = new Set([...linkedPaths].flatMap((p) => { const r = resolveCodexProfilePath(p); return 'error' in r ? [] : [r.path] }))
+  const candidates = new Set<string>([...linkedPaths, ...observedPaths])
   try {
     for (const path of discoverCodexProfiles(discoveryOptions)) {
       candidates.add(path)
@@ -138,11 +142,12 @@ export function listCodexProfiles(
   } catch {
     // A discovery failure must not hide linked/observed profiles that are still good.
   }
+  const defaultHome = defaultCodexHome(discoveryOptions.home, discoveryOptions.environment)
   const profiles = new Map<string, CodexProfile>()
   for (const path of candidates) {
     const resolved = resolveCodexProfilePath(path)
     // A vanished folder or a malformed persisted entry must not be offered as a working profile.
-    if (!('error' in resolved)) profiles.set(resolved.path, resolved)
+    if (!('error' in resolved)) profiles.set(resolved.path, { ...resolved, offered: linked.has(resolved.path) || resolved.path === defaultHome })
   }
   return [...profiles.values()].sort((a, b) => {
     const byLabel = a.label.toLowerCase().localeCompare(b.label.toLowerCase())
