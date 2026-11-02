@@ -130,8 +130,8 @@ referenced by an open group or a record that needs it; tests for the read and th
 - [ ] **Step 2: Watch them fail.**
 - [ ] **Step 3: Implement** in batches of 500 by the purge index (`readBy(db, 'SwarmAgent', 'purge', ...)`), grouped by
   Swarm; named keys from `groupsBy(db, 'dormancy', [{ $match: { tabId, deleted: false, dormant: false, $or: [agentIds,
-  data.leadId, data.assignment.agentId in keys] } }])` and live starts by `aggregateRaw` on `{ tabId, agentId: { $in },
-  deleted: false }`. Delete the rest with `delete` repeating the due match; compact the named ones with `update`, same match.
+  data.leadId, data.assignment.agentId in keys] } }])` and live starts by `readBy(db, 'SwarmStart', 'agents', ...)` on
+  `{ tabId, agentId: { $in }, deleted: false }` (a new named index: unnamed, Mongo planned it on `[deleted, finishedAt]`). Delete the rest with `delete` repeating the due match; compact the named ones with `update`, same match.
 - [ ] **Step 4: Watch them pass.** **Step 5: Commit** tests, then code.
 
 ### Task 4: Tombstones compacted before this change get a purge time
@@ -146,9 +146,9 @@ referenced by an open group or a record that needs it; tests for the read and th
 
 - [ ] **Step 1: Failing test** `gives tombstones compacted before the purge a purge time`: compacted agent tombstones
   (`deleted: true, purgeAt: null`) get `purgeAt = now`; live agents and member tombstones are untouched; the next sweep
-  purges the unnamed ones. The update reads through `[tabId, deleted]` keys, fetching only tombstones.
-- [ ] **Step 2: Watch it fail.** **Step 3: Implement** one `update` `{ deleted: true, purgeAt: null }` with hint
-  `{ tabId: 1, deleted: 1 }`. **Step 4: Watch it pass.** **Step 5: Commit.**
+  purges the unnamed ones. The update reads each agent at most once (no index leads with `deleted`; about 1,300 agents in
+  prod), once per worker start for one release.
+- [ ] **Step 2: Watch it fail.** **Step 3: Implement** one `update` `{ deleted: true, purgeAt: null }`. **Step 4: Watch it pass.** **Step 5: Commit.**
 
 ### Measurement
 
