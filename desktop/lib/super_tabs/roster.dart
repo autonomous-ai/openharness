@@ -26,6 +26,7 @@ import 'controller.dart';
 import 'detail_dialog.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
+import 'leaderboard/format.dart';
 import 'leaderboard/member_row.dart';
 import 'leaderboard/model.dart';
 import 'leaderboard/person_row.dart';
@@ -284,44 +285,60 @@ class _SuperTabRosterState extends State<SuperTabRoster>
     );
   }
 
-  /// A person's email and role, and their week when the board has them. One's
-  /// own also opens the profile sheet, where one's avatar and status change.
-  Future<void> _person(SuperTabPerson person, SuperTabPersonScore? score) =>
-      showAppDialog<void>(
-        context: context,
-        builder: (context) => SuperTabDetailDialog(
-          title: leaderboardName(person, score),
-          // Who they are on one line under the name (Ken, 2026-10-28).
-          detail:
+  /// A person's card (Quiet Swarm, screen 5): their name with the crown,
+  /// their points, the period on hover, their numbers under the name and
+  /// what is behind them; who they are on the avatar's hover. One's own also
+  /// opens the profile sheet, where one's avatar and status change.
+  Future<void> _person(SuperTabPerson person, SuperTabPersonScore? score) {
+    final name = leaderboardName(person, score);
+    return showAppDialog<void>(
+      context: context,
+      builder: (context) => SuperTabDetailDialog(
+        title: leaderboardCrowned(score) ? '$name \u{1F451}' : name,
+        detail: score == null ? null : leaderboardCardNumbers(score),
+        leading: Tooltip(
+          message:
               '${person.email} · ${switch (person.role) {
                 'owner' => 'Owner',
                 'viewer' => 'Can view',
                 _ => 'Can collaborate',
               }}',
-          leading: SuperTabAvatar.person(person, size: 40),
-          body: score == null
-              ? const SizedBox.shrink()
-              : LeaderboardPersonWeek(score: score),
-          actions: [
+          child: SuperTabAvatar.person(person, size: 40),
+        ),
+        headerActions: [
+          if (score != null)
+            Tooltip(
+              message: 'Points ${score.spanName}',
+              child: Text(
+                plural(score.points, 'point'),
+                style: leaderboardPointsStyle(),
+              ),
+            ),
+        ],
+        body: score == null
+            ? const SizedBox.shrink()
+            : LeaderboardPersonWeek(score: score, summary: false),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              widget.onInvite();
+            },
+            child: const Text('Manage people'),
+          ),
+          if (person.id == c.accountId && c.canWrite)
             TextButton(
+              key: const ValueKey('super-profile-edit'),
               onPressed: () {
                 Navigator.pop(context);
-                widget.onInvite();
+                showSuperTabProfile(this.context, c);
               },
-              child: const Text('Manage people'),
+              child: const Text('Edit profile'),
             ),
-            if (person.id == c.accountId && c.canWrite)
-              TextButton(
-                key: const ValueKey('super-profile-edit'),
-                onPressed: () {
-                  Navigator.pop(context);
-                  showSuperTabProfile(this.context, c);
-                },
-                child: const Text('Edit profile'),
-              ),
-          ],
-        ),
-      );
+        ],
+      ),
+    );
+  }
 
   Future<void> _details(SuperTabAgent agent) => showSuperTabAgentDetails(
     context,
@@ -332,7 +349,14 @@ class _SuperTabRosterState extends State<SuperTabRoster>
   );
 
   /// The agent's card (Quiet Swarm, screen 5).
-  Future<void> _card(SuperTabAgent agent) => _details(agent);
+  Future<void> _card(SuperTabAgent agent) => showSuperTabAgentCard(
+    context,
+    c,
+    widget.app,
+    agent,
+    onOpenAgent: widget.onOpenAgent,
+    onOpenTask: widget.onAnswer,
+  );
 
   /// An agent's row, one line (Quiet Swarm, screen 4): avatar, name, then
   /// its state in a word and the tabs' status mark at the right. Role, task,

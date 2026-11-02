@@ -37,6 +37,14 @@ String leaderboardName(SuperTabPerson person, SuperTabPersonScore? score) =>
 bool leaderboardCrowned(SuperTabPersonScore? score) =>
     score != null && score.rank == 1 && score.points > 0;
 
+/// A person's card's numbers (Quiet Swarm, screen 5), each said even at 0:
+/// "111 shipped · 40 unblocked · 411 hours" (hours lent).
+String leaderboardCardNumbers(SuperTabPersonScore score) => [
+  '${score.shipped} shipped',
+  '${score.unblocked} unblocked',
+  plural(int.parse(leaderboardHours(score.lentMs)), 'hour'),
+].join(' · ');
+
 /// "16 shipped", "1 unblocked", "43 hours lent": each number that would not
 /// read zero, in words; empty when all would.
 List<String> leaderboardNumbers(SuperTabPersonScore score) {
@@ -256,23 +264,36 @@ class LeaderboardNumbers extends StatelessWidget {
 /// they unblocked and what they lent, item by item. From a server without
 /// details, the medians, the time freed and lent, and their shipping streak.
 class LeaderboardPersonWeek extends StatelessWidget {
-  const LeaderboardPersonWeek({super.key, required this.score});
+  const LeaderboardPersonWeek({
+    super.key,
+    required this.score,
+    this.summary = true,
+  });
   final SuperTabPersonScore score;
+
+  /// Whether it says the points first; a card that shows them in its
+  /// heading leaves them out.
+  final bool summary;
 
   @override
   Widget build(BuildContext context) {
     if (score.details case final details?) {
-      return _LeaderboardPersonDetails(score: score, details: details);
+      return _LeaderboardPersonDetails(
+        score: score,
+        details: details,
+        summary: summary,
+      );
     }
     String median(int? ms, String what) =>
         ms == null ? '' : ' · median ${leaderboardDuration(ms)}$what';
     final rows = [
-      (
-        'Points',
-        score.medal == null
-            ? '${score.points} ${score.spanName}'
-            : '${score.points} ${score.spanName} · place ${score.rank}',
-      ),
+      if (summary)
+        (
+          'Points',
+          score.medal == null
+              ? '${score.points} ${score.spanName}'
+              : '${score.points} ${score.spanName} · place ${score.rank}',
+        ),
       (
         'Shipped',
         score.shipped == 0
@@ -332,9 +353,14 @@ class LeaderboardPersonWeek extends StatelessWidget {
 /// five and the rest one click away, and saying so when empty. The dialog
 /// around it scrolls (Ken, 2026-10-28).
 class _LeaderboardPersonDetails extends StatefulWidget {
-  const _LeaderboardPersonDetails({required this.score, required this.details});
+  const _LeaderboardPersonDetails({
+    required this.score,
+    required this.details,
+    required this.summary,
+  });
   final SuperTabPersonScore score;
   final SuperTabPersonDetails details;
+  final bool summary;
 
   @override
   State<_LeaderboardPersonDetails> createState() =>
@@ -430,13 +456,14 @@ class _LeaderboardPersonDetailsState extends State<_LeaderboardPersonDetails> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(
-          [
-            '${plural(score.points, 'point')} ${score.spanName}',
-            if (before != null) '$before ${score.earlierName}',
-          ].join(' · '),
-          style: quiet,
-        ),
+        if (widget.summary)
+          Text(
+            [
+              '${plural(score.points, 'point')} ${score.spanName}',
+              if (before != null) '$before ${score.earlierName}',
+            ].join(' · '),
+            style: quiet,
+          ),
         section('Shipped', 'No pull requests merged yet', [
           for (final shipped in details.shipped)
             item(switch (Uri.tryParse(shipped.prUrl ?? '')) {
