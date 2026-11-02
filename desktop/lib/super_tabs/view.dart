@@ -3172,14 +3172,14 @@ class _SuperTabViewState extends State<SuperTabView>
         .messages(open.chat)
         .where((m) => m.id == open.line)
         .firstOrNull;
-    final rows = c.messages(open.id);
-    final byId = {for (final m in rows) m.id: m};
+    final byId = {for (final m in c.taskMessages(open.id)) m.id: m};
     return SuperTabTaskPanel(
       key: ValueKey('super-task-panel-${open.id}'),
       controller: c,
       taskId: open.id,
       word: line == null ? '' : superTabTaskWord(line, c.accountId),
       mark: line == null ? null : superTabTaskMark(line),
+      rows: () => _shownMessages(open.id),
       row: (message) => _message(message, false, byId, inThread: true),
       onClose: () => setState(() => _openedTask = null),
       onOpenInFull: () {

@@ -209,6 +209,7 @@ class SuperTabTaskPanel extends StatefulWidget {
     required this.taskId,
     required this.word,
     this.mark,
+    required this.rows,
     required this.row,
     required this.onClose,
     required this.onOpenInFull,
@@ -222,6 +223,11 @@ class SuperTabTaskPanel extends StatefulWidget {
 
   /// The mark its line shows; null once the line is out of the chat's rows.
   final IconData? mark;
+
+  /// The rows the chat would list for the task: its steps' too, not hidden
+  /// notices, and no thread's replies, which open in full.
+  final List<SuperTabMessage> Function() rows;
+
   final Widget Function(SuperTabMessage message) row;
 
   final VoidCallback onClose;
@@ -266,12 +272,12 @@ class _SuperTabTaskPanelState extends State<SuperTabTaskPanel> {
     super.dispose();
   }
 
-  /// Reads the task once, then only when its newest message moves.
+  /// Reads the task once, then only when it or a step has something new.
   void _follow() {
-    final newest = c.snapshot?.conversation(widget.taskId)?.lastMessageSequence;
+    final newest = c.taskProgress(widget.taskId);
     if (newest == null || newest == _read) return;
     _read = newest;
-    unawaited(c.loadMessages(widget.taskId));
+    unawaited(c.loadTaskMessages(widget.taskId));
   }
 
   /// A plain message in the task's own conversation.
@@ -296,7 +302,7 @@ class _SuperTabTaskPanelState extends State<SuperTabTaskPanel> {
       final task = c.snapshot?.conversation(widget.taskId);
       final assignee = task?.assignment?['agentId'];
       final who = assignee is String ? c.snapshot?.agent(assignee)?.name : null;
-      final rows = c.messages(widget.taskId);
+      final rows = widget.rows();
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [

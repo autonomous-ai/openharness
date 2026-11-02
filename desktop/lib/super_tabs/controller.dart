@@ -1869,6 +1869,23 @@ class SuperTabController extends ChangeNotifier {
 
   final _merges = <String, SuperTabStepsMerge>{};
 
+  /// A number that moves when [id] or one of its steps has something new.
+  int? taskProgress(String id) {
+    final state = snapshot;
+    final task = state?.conversation(id);
+    if (state == null || task == null) return null;
+    return superTabStepsOf(state, task).fold<int>(
+      task.lastMessageSequence,
+      (sum, step) => sum + step.lastMessageSequence,
+    );
+  }
+
+  /// Reads a task that is not the selected conversation, with its steps.
+  Future<void> loadTaskMessages(String id) async {
+    await loadMessages(id);
+    if (!_disposed) _readSteps(id, light: false);
+  }
+
   /// The name of the step [message] was written in; null for a task's own.
   String? stepNameOf(SuperTabMessage message) {
     final group = snapshot?.conversation(message.conversationId);
