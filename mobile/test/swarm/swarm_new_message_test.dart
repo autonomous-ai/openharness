@@ -21,6 +21,7 @@ import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
+import 'package:harness_mobile/swarm/swarm_voice.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
@@ -894,21 +895,29 @@ void main() {
       expect(sends(fake).single['command']['text'], 'Ship it tonight');
     });
 
-    /// The sheet open on the Lead's chat, its mic heard by [dictation].
-    Future<FakeSwarm> talking(WidgetTester tester, _Dictation dictation) async {
+    /// The sheet open on the Lead's chat — or on none, unless [pick] — its
+    /// mic heard by [dictation], or recorded and transcribed by [stt].
+    Future<FakeSwarm> talking(
+      WidgetTester tester,
+      _Dictation? dictation, {
+      FakeTranscriber? stt,
+      bool pick = true,
+      void Function(SwarmHost host)? host,
+    }) async {
       final fake = backend();
-      await pump(
+      final pumped = await pump(
         tester,
         fake,
         voice: () => VoiceInputController(
-          transcriber: FakeTranscriber().call,
+          transcriber: (stt ?? FakeTranscriber()).call,
           recorder: FakeVoiceRecorder(),
           language: ValueNotifier('vi'),
         ),
         dictation: dictation,
       );
+      host?.call(pumped);
       await open(tester);
-      await tester.tap(row(leadChat));
+      if (pick) await tester.tap(row(leadChat));
       await tester.pump();
       return fake;
     }
@@ -950,6 +959,101 @@ void main() {
       expect(sends(fake).single['command']['text'], 'Mai họp lúc 9 giờ');
       expect(sends(fake).single['command']['conversationId'], leadChat);
       expect(sheetOpen(), isFalse);
+    });
+
+    // Tony, 11-01: Send right of stop ends the take and posts it.
+    testWidgets("the row's Send ends the take and posts its last words to the "
+        'chat picked, once, and the sheet closes', (tester) async {
+      final dictation = _Dictation();
+      final fake = await talking(tester, dictation);
+
+      await tapIn(tester, 'swarm-mic');
+      expect(
+        tester.widget<SwarmRoundButton>(inSheet('swarm-voice-send')).onTap,
+        isNull,
+        reason: 'an empty box',
+      );
+      dictation.say('Mai họp');
+      await tester.pump();
+      dictation.lastWords = 'Mai họp lúc 9 giờ';
+      final at = tester.getCenter(inSheet('swarm-voice-send'));
+      await tester.tapAt(at);
+      await tester.pump();
+      await tester.tapAt(at);
+      await tester.pumpAndSettle();
+
+      expect(sends(fake), hasLength(1));
+      expect(sends(fake).single['command']['text'], 'Mai họp lúc 9 giờ');
+      expect(sends(fake).single['command']['conversationId'], leadChat);
+      expect(sheetOpen(), isFalse);
+    });
+
+    testWidgets("with no chat picked the row's Send is off", (tester) async {
+      final dictation = _Dictation();
+      final fake = await talking(tester, dictation, pick: false);
+
+      await tapIn(tester, 'swarm-mic');
+      dictation.say('cho ai đây');
+      await tester.pump();
+      expect(field(tester), 'cho ai đây');
+      expect(
+        tester.widget<SwarmRoundButton>(inSheet('swarm-voice-send')).onTap,
+        isNull,
+      );
+      await tapIn(tester, 'swarm-voice-send');
+      expect(sends(fake), isEmpty);
+      expect(inSheet('swarm-voice-stop'), findsOneWidget, reason: 'listening');
+    });
+
+    testWidgets("a recording: the row's Send posts what was typed and what "
+        'was said; nothing heard posts nothing and keeps the sheet', (
+      tester,
+    ) async {
+      final stt = FakeTranscriber()..replies.addAll(['', 'lúc 9 giờ']);
+      final fake = await talking(tester, null, stt: stt);
+      await write(tester, 'Mai họp');
+
+      await tapIn(tester, 'swarm-mic');
+      expect(
+        tester.widget<SwarmRoundButton>(inSheet('swarm-voice-send')).onTap,
+        isNotNull,
+        reason: 'live while recording',
+      );
+      await tapIn(tester, 'swarm-voice-send');
+      await tester.pumpAndSettle();
+      expect(sends(fake), isEmpty);
+      expect(field(tester), 'Mai họp');
+      expect(sheetOpen(), isTrue);
+      expect(find.text(SwarmVoice.nothingSent), findsOneWidget);
+
+      await tapIn(tester, 'swarm-mic');
+      await tapIn(tester, 'swarm-voice-send');
+      await tester.pumpAndSettle();
+      expect(sends(fake).single['command']['text'], 'Mai họp lúc 9 giờ');
+      expect(sheetOpen(), isFalse);
+    });
+
+    testWidgets("the Swarm's read taken away while the row's Send transcribes "
+        'closes the sheet and posts nothing', (tester) async {
+      final stt = FakeTranscriber()..pending = Completer<String>();
+      late SwarmHost host;
+      final fake = await talking(tester, null, stt: stt, host: (h) => host = h);
+      await tapIn(tester, 'swarm-mic');
+      await tapIn(tester, 'swarm-voice-send');
+      expect(inSheet('swarm-voice-sending'), findsOneWidget);
+
+      for (final route in ['parts', 'changes']) {
+        fake.routes['/api/super-tabs/$tab/$route'] = (_) =>
+            throw SuperTabFailure('FORBIDDEN', 'No access.', statusCode: 403);
+      }
+      unawaited(host.session!.inbox.reader(tab)!.refresh());
+      await tester.pumpAndSettle();
+      expect(sheetOpen(), isFalse);
+      stt.pending!.complete('bí mật');
+      await tester.pumpAndSettle();
+
+      expect(sends(fake), isEmpty);
+      expect(find.text('bí mật'), findsNothing);
     });
 
     testWidgets('cancel takes back what the take added and keeps what was '
@@ -1354,6 +1458,9 @@ class _Dictation implements SwarmDictation {
   void Function(String)? _words;
   void Function(SwarmDictationEnd)? _end;
 
+  /// What [stop] hears last, before it ends.
+  String? lastWords;
+
   void say(String words) => _words?.call(words);
 
   @override
@@ -1373,6 +1480,7 @@ class _Dictation implements SwarmDictation {
 
   @override
   Future<void> stop() async {
+    if (lastWords case final words?) say(words);
     final end = _end;
     _words = _end = null;
     end?.call(SwarmDictationEnd.done);

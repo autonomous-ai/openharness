@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'model.dart';
+import 'swarm_chat_notify.dart';
 import 'swarm_reader.dart';
 import 'swarm_read_marks.dart';
 
@@ -89,9 +90,7 @@ bool swarmAnyUnread(Iterable<SwarmReader> readers) {
     final marks = reader.readMarks;
     if (reader.accessRevoked || snapshot == null || marks == null) continue;
     for (final SuperTabConversation group in snapshot.conversations) {
-      if (!group.dormant &&
-          snapshot.chatSettings[group.id] != 'muted' &&
-          marks.unread(group)) {
+      if (!group.dormant && !swarmMuted(reader, group) && marks.unread(group)) {
         return true;
       }
     }

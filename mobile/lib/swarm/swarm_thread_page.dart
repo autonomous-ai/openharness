@@ -163,6 +163,9 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
           write: (text) {
             if (_mayReply) _thread.draft = text;
           },
+          post: () {
+            if (mounted && _mayReply && _thread.canSend) unawaited(_send());
+          },
         );
       }
     }
@@ -542,8 +545,8 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
   /// then +, Also send, the mic and a round Send (the desktop's thread
   /// composer, with the main chat's mic). While a take is under way the
   /// toolbar is the voice row ([SwarmVoiceRow]): Also send is hidden, and
-  /// keeps its tick for the Send after the take. No Tag: a thread has no @
-  /// picker.
+  /// keeps its tick for the row's Send or the one after the take. No Tag: a
+  /// thread has no @ picker.
   Widget _box(SwarmThread t, Tty tty) {
     // A reply on its way never holds the box: the next is typed meanwhile.
     final canSend = t.canSend;
