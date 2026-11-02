@@ -1,7 +1,8 @@
 /**
  * Removed agents' tombstones go 7 days after their removal (prod 2026-11-02: about 1,000 kept for good in one Swarm, read by
- * every live-agent read). Members and machines keep theirs, compacted (sweeps.ts compactTombstones). An agent added again
- * after its tombstone went starts above its configuration revisions (parts/write.ts), so its versions never go back.
+ * every live-agent read). Members and machines keep theirs, compacted (sweeps.ts compactTombstones). Before any goes, its
+ * Swarm's agent floor rises to its version: an agent added with no tombstone starts above it (parts/write.ts), so a client
+ * that saw the tombstone takes the agent again (Desktop keeps the newest version it saw until it reloads).
  */
 import type { PrismaClient } from '@prisma/client'
 import { groupsBy, readBy } from './parts/indexed.js'
@@ -37,8 +38,8 @@ export async function purgeAgentTombstones(db: PrismaClient, now: number): Promi
   const due = { deleted: true, purgeAt: { $lt: at(now) } }
   let purged = 0, kept = 0
   for (;;) {
-    const rows = await readBy(db, 'SwarmAgent', 'purge', [{ $match: due }, { $limit: BATCH }, { $project: { _id: 1, tabId: 1, key: 1 } }]) as
-      Array<{ _id: string; tabId: string; key: string }>
+    const rows = await readBy(db, 'SwarmAgent', 'purge', [{ $match: due }, { $limit: BATCH }, { $project: { _id: 1, tabId: 1, key: 1, version: 1 } }]) as
+      Array<{ _id: string; tabId: string; key: string; version: number }>
     if (!rows.length) break
     const tabs = new Map<string, string[]>()
     for (const row of rows) tabs.set(row.tabId, [...tabs.get(row.tabId) ?? [], row.key])
@@ -47,6 +48,12 @@ export async function purgeAgentTombstones(db: PrismaClient, now: number): Promi
     const held = rows.filter(row => named.has(`${row.tabId}\0${row.key}`)).map(row => row._id)
     const free = rows.filter(row => !named.has(`${row.tabId}\0${row.key}`)).map(row => row._id)
     if (free.length) {
+      // The floor first: a deleted tombstone's version is never lost. A revival between the two writes continues from the
+      // tombstone, above the floor already.
+      const floors = new Map<string, number>()
+      for (const row of rows) if (!named.has(`${row.tabId}\0${row.key}`)) floors.set(row.tabId, Math.max(floors.get(row.tabId) ?? 0, row.version))
+      await db.$runCommandRaw({ update: 'SwarmHead', updates: [...floors].map(([tabId, version]) => ({ q: { _id: `${tabId}:head` },
+        u: { $max: { agentFloor: version } } })) })
       const reply = await db.$runCommandRaw({ delete: 'SwarmAgent', deletes: [{ q: { _id: { $in: free }, ...due }, limit: 0 }] }) as unknown as { n?: number }
       purged += Number(reply.n ?? 0)
     }

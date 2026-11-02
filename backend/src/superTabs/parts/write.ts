@@ -100,12 +100,11 @@ async function keepFinishedAt(tx: Transaction, id: string, fields: Record<string
   return row?.finishedAt ? { ...fields, finishedAt: row.finishedAt } : fields
 }
 
-/** The newest configuration revision stored for an agent, 0 with none. Revisions are the agent part's versions, so an agent
- *  whose tombstone was purged (agentTombstones.ts) starts above it when added again: its versions never go back (D6). */
-async function configurationRevision(tx: Transaction, tabId: string, agentId: string): Promise<number> {
-  const [row] = await tx.superTabConfiguration.aggregateRaw({ pipeline: [{ $match: { tabId, agentId } }, { $sort: { revision: -1 } }, { $limit: 1 },
-    { $project: { _id: 0, revision: 1 } }] }) as unknown as Array<{ revision: number }>
-  return row?.revision ?? 0
+/** Where an agent added with no tombstone starts above: the highest version of its Swarm's purged agent tombstones
+ *  (agentTombstones.ts), 0 before any. A client that saw a purged tombstone's version takes the agent again (D6). */
+async function agentFloor(tx: Transaction, tabId: string): Promise<number> {
+  const head = await tx.swarmHead.findUnique({ where: { id: partId(tabId, 'head') }, select: { agentFloor: true } })
+  return head?.agentFloor ?? 0
 }
 
 /**
@@ -131,7 +130,7 @@ export async function guardedWrite(tx: Transaction, tabId: string, write: PartWr
       if (!updated.count) throw new PartConflict(write.kind, write.key)
       return prior.version + 1
     }
-    const version = Math.max(write.first ?? 1, write.kind === 'agent' ? await configurationRevision(tx, tabId, write.key) + 1 : 0)
+    const version = Math.max(write.first ?? 1, write.kind === 'agent' ? await agentFloor(tx, tabId) + 1 : 0)
     await model.create({ data: { id, tabId, key: write.key, version, changedAt: new Date(stamp), deleted: false, ordinal: write.ordinal,
       data: json(write.data), ...fields } })
     return version

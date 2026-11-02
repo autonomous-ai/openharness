@@ -1768,6 +1768,9 @@ model SwarmHead {
   visibilityEpoch Int       @default(1)
   /// The tab revision when it was split into parts (0 for a Swarm born in parts). Every later message sequence is above it.
   sequenceBase    Int       @default(0)
+  /// The highest version of any agent tombstone the sweep purged (superTabs/agentTombstones.ts): an agent added with no
+  /// tombstone starts above it, so its versions never go back. Missing until the first purge.
+  agentFloor      Int?
 
   @@unique([tabId, key])
   @@index([tabId, changedAt])
