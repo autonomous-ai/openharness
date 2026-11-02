@@ -71,4 +71,14 @@ void main() {
     // Only hides: the desk itself is never rewritten or padded.
     expect(desk.map((s) => s.id), ['remote', 'mixed']);
   });
+
+  test('a New Tab under a profile with no tab of its own keeps every tab in '
+      'sight', () {
+    final remote = tab('remote', ['m2']);
+    final mixed = tab('mixed', ['m1', 'm2']);
+    final opened = Swarm(id: 'new', isNewTabPage: true);
+    final shown = swarmsForMachineProfile([remote, mixed, opened], 'm1');
+    // Not the New Tab alone — the last tab in sight, which ⌘W leaves open.
+    expect(shown.map((s) => s.id), ['remote', 'mixed', 'new']);
+  });
 }
