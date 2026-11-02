@@ -74,21 +74,30 @@ action, from the project's menu or from the limit line, whoever owns that machin
   `resolveClaudeProfilePath(path)`, persisted as `claude-profiles.json` (paths only, 0600, atomic, at most 256).
   - A folder counts when it holds `.claude.json` or `settings.json`.
   - Discovery: an inherited `CLAUDE_CONFIG_DIR`, conventional `~/.claude-*` folders, and Orca's
-    `claude-profiles/*/home`. The default account (no `CLAUDE_CONFIG_DIR`) is always the first row, `id: 'default'`.
-  - Label: the account's `displayName` from `<dir>/.claude.json` `oauthAccount`, else the folder name, else (for Orca's
-    `home`) `Orca <first 4 of the uuid>`. A label never carries an email address when it leaves the machine (see 5).
+    `claude-profiles/*/home`, and the folders Desktop's "Add Claude account…" makes under `~/.harness/claude-profiles/`.
+    The default account (no `CLAUDE_CONFIG_DIR`) is always the first row, marked `default: true`.
+  - Local label (the owner's own windows): the account's `displayName`, else the folder name. Reported label (leaves the
+    machine): from the folder only, never a name or email: the folder name, `Orca <first 4 of the uuid>` for Orca's `home`,
+    `Claude <n>` for Harness's own folders.
+  - **Offered** (owner's consent, Diego 11-02): a row is `offered` when it is the default account, a folder the owner linked,
+    or a Harness-made folder. Only offered accounts are reported to the Swarm (see 5); the rest stay visible to the owner's
+    own Change agent, and using one there links it.
 - RPCs `claude_profiles_list {observedPaths}` and `claude_profile_link {path}` sit beside the Codex pair in
   `services/models.ts` `launchTargetRequests` and in `core/api.ts` `MODELS_REQUESTS`. They stay off the E2EE type lists
   (`lib/e2ee/core.ts` is pinned by the interop keystone and is not edited for this work), so they serve the machine's own
   windows and its host; a relayed window does not list another machine's accounts. Both answer the machine owner only (`OWNER_REQUIRED`), and so do
   the Codex pair from now on: they disclose folder paths.
-- Every profile has an opaque `id`: the first 16 hex of sha256(`<machine id>:<engine>:<realpath>`). Only the machine maps an
-  id back to a folder.
+- Every profile has an opaque `id`: the first 16 hex of sha256(`<machine id>:<engine>:<realpath>`); the default account's id
+  is sha256(`<machine id>:<engine>:default`)[0..16]. The CLI, the backend and Desktop compute the same value and each pins the
+  vector `('m', 'claude') -> 71dc90339553114c`. Only the machine maps an id back to a folder. The path given to Claude Code
+  (and hashed for its Keychain item) is the folder as linked, not its realpath.
 
 ### 2. Starting Claude in a profile (CLI)
 
 - `agent_create` takes `claudeHome`, validated as `codexHome` is (`core/agents/launches.ts:375-386`): absolute, at most
-  4096 characters, no control characters, engine `claude`, no grid; otherwise `INVALID_CLAUDE_HOME`.
+  4096 characters, no control characters, engine `claude`, no grid, and a listed non-default Claude profile of this machine
+  or a folder under `~/.harness/claude-profiles/`; otherwise `INVALID_CLAUDE_HOME`. A default account is started with no
+  `claudeHome` / `codexHome`.
 - It travels on the `CreateAgent` input to the native launch, which already maps `NativeLaunchSource.claudeHome` to
   `CLAUDE_CONFIG_DIR` and installs the hooks there (`engines/nativeLaunch.ts:141-143`, `:210`).
 - The registry row keeps it (`RegisteredSession.claudeHome`, as `hermesHome`), so restart, resume and the PM's rollback
@@ -125,21 +134,32 @@ action, from the project's menu or from the limit line, whoever owns that machin
 - `_changeAgent` passes `claudeHome` / `codexHome` to `createAgent` (`:17506`). The handoff request is unchanged: the
   handoff file does not depend on the account, and `leadSwitch.ts` reads only `targetEngine` from its receipt.
 - "Add Claude account…" at the end of the Claude rows opens a pane on the same machine running `claude` with a new
-  `CLAUDE_CONFIG_DIR` under `~/.harness/claude-profiles/<n>`, links it, and says "Run /login, then pick it again".
+  `CLAUDE_CONFIG_DIR` under `~/.harness/claude-profiles/<n>` (the next free `n`, one add at a time) and says "Run /login,
+  then pick it again". The CLI finds that folder by itself once Claude has created it.
+- Change agent asks for accounts only on this computer's own panes (the list RPCs are local only). A Swarm Buddy's pane offers
+  no engine or account change ("A Buddy keeps its engine for now"). Rows not offered to the Swarm say "Not offered to the Swarm
+  yet"; picking one links it first.
 
 ### 5. The machine reports its profiles (CLI → backend)
 
-- The machine report gains `profiles: [{ engine, id, label, leftPercent, resetsAt }]`, at most 16, beside `readiness`.
-  `label` is at most 40 characters and is dropped if it contains `@`. No path, email, account id or plan is sent.
+- The machine report gains `profiles: [{ engine, id, label, leftPercent, resetsAt }]`, at most 16, beside `readiness`:
+  the **offered** accounts only (see 1), the default one of each engine included. A Team daemon reports its default accounts
+  only. `label` is the reported label, at most 40 characters, never containing `@`. No path, email, account id or plan is
+  sent. It is sent only to a backend that asks for capabilities.
 - The backend's `machineObservationSchema` accepts it (strict, capped). `storedObservation` keeps it for contributed engines
-  only. An old backend refuses the field and the CLI drops it through the existing `sendAlone` chain.
+  only, and serves it only to people who may switch a PM on that machine (its owner, owners of projects whose PM runs there);
+  everyone else and every agent gets the reading without it. An old backend refuses the field and the CLI drops it through
+  the existing `sendAlone` chain.
 - The CLI advertises a `leadSwitch` capability (`machines.ts` `CAPABILITIES`), which the backend requires before it sends a
   switch, as `leadStart` is today.
 
 ### 6. Switch PM (backend)
 
 - New person command `lead.switch { projectId, engine, profileId, model?, effort? }`.
-  - Allowed for the project's owner (`manageProject`, as `lead.start`) and for the owner of the machine running the PM.
+  - Allowed for the project's owner (`manageProject`, as `lead.start`) and for the real owner of the machine running the PM
+    (`machineOwnerId`; a borrower of a lent machine is not its owner).
+  - A literal `'default'` profileId means the default id of the requested engine. The agent's `profileId` is absent for a
+    default account.
   - Refused when: the project has no running PM (`NO_LEAD`); the PM's machine is offline (`MACHINE_OFFLINE`); its host lacks `leadSwitch`
     (`HOST_OUTDATED`); a switch is already pending (`LEAD_SWITCHING`); `profileId` is not in that machine's reported
     profiles for `engine` (`PROFILE_UNKNOWN`); the engine is not offered on that machine (`ENGINE_NOT_OFFERED`).
@@ -150,10 +170,14 @@ action, from the project's menu or from the limit line, whoever owns that machin
   Answers `{ leaseId, expiresAt }` (15 minutes, covering #2493's 3 + 10 minute limits).
 - `agent.switchResult { agentId, switchId, ok, error? }`: the host reports the end. It clears `switchRequest` and writes one
   line in the project's PM chat: "PM moved to Codex · Work." or "Couldn't switch the PM: <error>. It is back on Claude."
-- `agent.rebind` also clears `switchRequest`, and clears `limitedUntil` and the `limit` alert when the engine or account
-  changed (the new account is not limited).
-- An unclaimed request older than 2 minutes, or a claim whose lease ran out with no result, is dropped by the Swarm's
-  periodic tidy pass (beside `idleNotices`, `backend/src/superTabs/tidy.ts`) with the line "Couldn't switch the PM: its machine did not answer."
+- `agent.rebind` takes an optional `profileId` (what actually started; an old backend refuses the field and the CLI resends
+  once without it). It clears `switchRequest` (remembering it as landed, so exactly one result line is written), and clears
+  `limitedUntil` and the `limit` alert only when the engine or the normalized account changed.
+- When a switch lands on a non-default account and the person who asked is not the machine's owner, the owner gets one line
+  in their Buddy chat: `<requester> moved the PM of <project> on <machine> to your <Engine> account "<label>".`
+- An unclaimed request older than 2 minutes, or a claim whose lease ran out with no result, is dropped by the liveness
+  sweep that runs on any machine's report (`staleSwitches`, `backend/src/superTabs/tidy.ts`) with the line "Couldn't switch
+  the PM: its machine did not answer." An expired request cannot be claimed.
 
 ### 7. Switch PM (host)
 
@@ -162,12 +186,16 @@ action, from the project's menu or from the limit line, whoever owns that machin
   2. map `profileId` to a folder with the profile lists (refuse `PROFILE_UNKNOWN` if it is gone);
   3. over the local daemon socket (which is the machine owner, `backendSocket.ts:1024`), with a fresh 32-hex `changeId`:
      `agent_handoff_prepare { agentId, changeId, targetEngine }`, then `agent_close { mode: 'now', changeId }`, then
-     `agent_create { engine, cwd, creationId: changeId, claudeHome | codexHome, model, effort, prompt: <handoff prompt> }`,
-     then `agent_handoff_complete`;
+     `agent_create { engine, cwd, creationId: changeId, claudeHome | codexHome, model, effort, the old PM's Swarm role, skill
+     and GitHub fields, startedBy: 'agent', prompt: <the Lead start prompt, then the handoff> }` (the PM comes back as a
+     Swarm PM, exactly as its first start made it), then `agent_handoff_complete`;
+  Before the close it refuses an account that is not offered or not signed in, and an old PM with no saved Swarm skill.
   4. report `agent.switchResult`. Success is when `agent.rebind` lands for that agent; failure is any refused step, or
      #2493's rollback reopening the old PM.
 - #2493's `leadSwitch.ts` guards are unchanged. The host's own handoff receipt is what lets the close through.
-- One switch per PM at a time; a restart mid-switch keeps #2493's record and its limits.
+- One switch per PM at a time (the run is recorded before the claim); a restart mid-switch follows #2493's record instead of
+  running again. A Team daemon allows the default account only, and a Codex PM there keeps its own engine home (`pmEngineHome`).
+- Result errors are fixed phrases, never paths or raw errors.
 
 ### 8. Where people see it (Desktop)
 
@@ -178,7 +206,8 @@ action, from the project's menu or from the limit line, whoever owns that machin
   `limit` (the pattern of `answeredPromptAlerts`).
 - The Switch PM dialog lists the PM machine's reported profiles: engine, label, `% left` and reset time, the current one
   marked, the ones at 0% shown but not selectable. Below the list: "The new session starts fresh and reads a handoff note.
-  Tasks and chat stay." Confirm sends `lead.switch`. While it runs, the PM row shows "Switching…".
+  Tasks and chat stay." When the reader does not own that machine: "Only accounts its owner offered are listed." Confirm
+  sends `lead.switch`. While it runs, the PM row shows "Switching…".
 
 ## Design checklist (docs/feature-design-rules.md)
 
