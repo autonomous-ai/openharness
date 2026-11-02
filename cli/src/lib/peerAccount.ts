@@ -139,21 +139,26 @@ export function windowsPeerQuery(peerPort: number, ownPort: number): { script: s
 
 /**
  * How many lookups run at once. Each is a PowerShell in this account for up to WINDOWS_PEER_MS, and whoever heard the
- * hook token could open connections without end (Luna's review of #2605): one past these is no. The callers that still
- * show a secret over TCP are few (old clients, the plugins, the bridge), and a refused one tries again.
+ * hook token could open connections without end (Luna's review of #2605): one past these is no, for now. That no is not
+ * kept on the connection, so a keep-alive client asking again on it is asked of Windows once a slot frees.
  */
 export const WINDOWS_PEER_LOOKUPS = 4
 let windowsLookups = 0
 
-async function askWindows(socket: Socket, run: WindowsPeerRun): Promise<boolean> {
+/** A Windows answer: yes, no, or not asked: too many lookups were running, or the lookup never finished. */
+type WindowsAnswer = boolean | 'busy' | 'timeout'
+
+async function askWindows(socket: Socket, run: WindowsPeerRun): Promise<WindowsAnswer> {
   const peerPort = socket.remotePort, ownPort = socket.localPort
   // As on Linux and macOS: only an exact pair of addresses makes the pair of ports name one connection.
   if (!peerPort || !ownPort || socket.remoteAddress !== '127.0.0.1' || socket.localAddress !== '127.0.0.1') return false
-  if (windowsLookups >= WINDOWS_PEER_LOOKUPS) return false
+  if (windowsLookups >= WINDOWS_PEER_LOOKUPS) return 'busy'
   const query = windowsPeerQuery(peerPort, ownPort)
   windowsLookups++
   try {
     const result = await run(query.script, query.inputs)
+    // runPowershellAsync gives a null status to a script it ended at its limit, or one that never started.
+    if (result.status === null) return 'timeout'
     return result.status === 0 && result.stdout.trim() === 'yes'
   } catch {
     return false
@@ -172,9 +177,13 @@ const answers = new WeakMap<Socket, Promise<boolean>>()
 export function peerIsThisAccount(socket: Socket, platform: NodeJS.Platform = process.platform, run: WindowsPeerRun = runWindowsPeer): Promise<boolean> {
   let answer = answers.get(socket)
   if (!answer) {
-    answer = (platform === 'win32' ? askWindows(socket, run) : ask(socket, platform)).then((yes) => {
-      if (!yes) console.warn(`[peer] refused a valid secret on 127.0.0.1:${socket.localPort}: the caller is not this account`)
-      return yes
+    const asked: Promise<WindowsAnswer> = platform === 'win32' ? askWindows(socket, run) : ask(socket, platform)
+    answer = asked.then((result) => {
+      const why = result === 'busy' ? 'busy, too many lookups are running; asked again on its next request'
+        : result === 'timeout' ? 'Windows did not say who the caller is in time' : 'the caller is not this account'
+      if (result !== true) console.warn(`[peer] refused a valid secret on 127.0.0.1:${socket.localPort}: ${why}`)
+      if (result === 'busy') answers.delete(socket)
+      return result === true
     })
     answers.set(socket, answer)
   }
