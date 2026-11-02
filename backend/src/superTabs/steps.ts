@@ -42,11 +42,13 @@ export function endSteps(state: SuperTabState, task: Conversation, reason: strin
 }
 
 /** The row each step endSteps cancelled keeps, in that step, for the agent whose work ended: [reason], as [author], or as that
- *  agent where none is given (a project with no Lead). One whose agent has left the Swarm reaches nobody: a delivery to it would
+ *  agent where none is given (a project with no Lead). One whose agent or its contributor has left the Swarm reaches nobody: a delivery to it would
  *  throw, and the archive pass that wrote it could then never archive its task. With no author either, there is no row. */
 export function stepEndedRows(state: SuperTabState, cancelled: Conversation[], reason: string, author: Author | null, id: (step: Conversation) => string): MessageDraft[] {
   return cancelled.flatMap(step => {
-    const agent = state.agents.find(a => a.id === step.assignment!.agentId)
+    // agent()'s own rule, without its throw: its contributor still here, at the generation it was shared under.
+    const found = state.agents.find(a => a.id === step.assignment!.agentId)
+    const agent = found && state.people.find(p => p.id === found.contributorId)?.generation === found.membershipGeneration ? found : undefined
     const by: Author | null = author ?? (agent ? { kind: 'agent', id: agent.id, name: agent.name, displayName: agentDisplayName(state.agents, agent.id), membershipGeneration: agent.membershipGeneration } : null)
     return by ? [{ id: id(step), conversationId: step.id, author: by, text: reason, replyTo: null, recipients: agent ? [agent.id] : [], source: { kind: 'system' } }] : []
   })
