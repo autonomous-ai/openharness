@@ -15,6 +15,7 @@ import { closeBridges, listAgents as monitorAgents } from '../agents/harness-mon
 import { closeBridges as closeMemories, listAgents as memoriesAgents } from '../agents/memories/lib/bridge.mjs'
 import { closeSessions, listHarnesses, listMachines } from '../agents/machine-monitor/lib/daemon.mjs'
 import { harnessExecute } from '../agents/autonomous-grid/lib/harness.mjs'
+import { openDaemonBridge } from './local-credential.mjs'
 import * as localDaemon from './local-daemon.mjs'
 import { removeTempFolders, tempFolder } from './test-folders.mjs'
 
@@ -207,4 +208,48 @@ test('nothing is dialled for a record that is not a live local pipe, or with no 
   assert.equal(daemonPipe(1, { ADAPTER_DATA_DIR: dir }), null, 'no token')
   try { symlinkSync(elsewhere, join(dir, 'daemon-token')) } catch { t.diagnostic('this account cannot make links here'); return }
   assert.equal(daemonPipe(1, { ADAPTER_DATA_DIR: dir }), null, 'a token reached through a link')
+})
+
+/** The `ws` package's client, as far as openDaemonBridge uses it: options in, `upgrade` listeners, `terminate`. */
+class ScriptedWs {
+  static made = []
+  constructor(url, options) { this.url = url; this.options = options; this.listeners = []; this.terminated = false; ScriptedWs.made.push(this) }
+  on(event, listener) { if (event === 'upgrade') this.listeners.push(listener); return this }
+  terminate() { this.terminated = true }
+  upgrade(headers) { for (const listener of this.listeners) listener({ headers }) }
+}
+
+test('a dev tool ends an upgrade on the pipe without the daemon\'s proof, and keeps one with it', () => {
+  const { dir, token } = dataDir()
+  const id = randomBytes(16).toString('hex'), pipe = `\\\\.\\pipe\\harness-${id}`
+  record(dir, 18473, { port: 18473, pipe, pid: process.pid })
+  const env = { ADAPTER_DATA_DIR: dir }
+  const impostor = openDaemonBridge(ScriptedWs, 18473, env)
+  assert.equal(impostor.url, 'ws://localhost/api/local-ws')
+  assert.deepEqual(Object.keys(impostor.options).sort(), ['createConnection', 'headers'], 'the pipe, its auth, and nothing else')
+  assert.deepEqual(Object.keys(impostor.options.headers), ['X-Harness-Auth'])
+  impostor.upgrade({ 'x-harness-proof': '0'.repeat(64) })
+  assert.equal(impostor.terminated, true, 'a wrong proof ends it before open')
+  const silent = openDaemonBridge(ScriptedWs, 18473, env)
+  silent.upgrade({})
+  assert.equal(silent.terminated, true, 'and so does none')
+  const daemon = openDaemonBridge(ScriptedWs, 18473, env)
+  const [nonce] = daemon.options.headers['X-Harness-Auth'].split('.')
+  daemon.upgrade({ 'x-harness-proof': mac(token, 0x00, nonce) })
+  assert.equal(daemon.terminated, false, 'the daemon\'s own proof is kept')
+})
+
+// The real `ws`, where the CLI's packages are installed (the Windows workflow installs them before its specs): an upgrade
+// without the daemon's proof never opens, so the tool's first frame, sent on `open`, never goes.
+const ws = await import('../../cli/node_modules/ws/index.js').then((module) => module.default.WebSocket, () => null)
+test('with the real ws, an upgrade on the pipe without the daemon\'s proof never opens and sends nothing', { skip: ws ? false : 'cli/node_modules has no ws here', timeout: 10_000 }, async () => {
+  const { dir, token } = dataDir(), daemon = await daemonOnPipe(token, { proof: '0'.repeat(64) })
+  record(dir, 18473, { port: 18473, pipe: daemon.pipe, pid: process.pid })
+  const socket = openDaemonBridge(ws, 18473, { ADAPTER_DATA_DIR: dir })
+  let opened = false
+  socket.on('open', () => { opened = true; socket.send(JSON.stringify({ type: 'machine_select', payload: { machineId: 'm' } }), () => socket.close()) })
+  await new Promise((done) => { socket.on('close', done); socket.on('error', () => {}) })
+  assert.equal(opened, false)
+  assert.ok(daemon.got.some(g => g.url && g.valid), 'the upgrade reached the pipe with a valid auth')
+  assert.equal(daemon.got.filter(g => g.type).length, 0, 'and no frame followed it')
 })
