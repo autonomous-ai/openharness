@@ -2049,6 +2049,9 @@ describe('hook notify posts over the daemon\'s pipe on Windows (W1)', () => {
     ['a pipe on another computer', (id: string) => ({ pipe: `\\\\fileserver\\pipe\\harness-${id}`, pid: process.pid })],
     ['a file named as a pipe', (id: string) => ({ pipe: `C:\\Users\\Public\\harness-${id}`, pid: process.pid })],
     ['a daemon that has exited', (id: string) => ({ pipe: `\\\\.\\pipe\\harness-${id}`, pid: exitedPid() })],
+    // The daemon is this account's: a pid another account runs (EPERM; pid 1 is root's) is one reused since it exited,
+    // and whoever has it may have created the pipe of the recorded name (Quinn 2's review of #2605).
+    ...(process.getuid?.() === 0 ? [] : [['a pid another account runs now', (id: string) => ({ pipe: `\\\\.\\pipe\\harness-${id}`, pid: 1 })] as const]),
   ] as const)('posts nothing, to the pipe or the port, with %s', async (_name, fields) => {
     const { dataDir, token, id, socket, preload } = windowsData()
     const tcp = await collect()

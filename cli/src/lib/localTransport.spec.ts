@@ -172,4 +172,9 @@ describe('daemonPipeNow: the daemon\'s pipe for a client that opens at once', ()
     expect(daemonPipeNow(prepared(process.pid, false).data, 4242)).toBeNull()
     expect(daemonPipeNow(prepared(spawnSync(process.execPath, ['-e', '']).pid!).data, 4242)).toBeNull()
   })
+
+  // The daemon is this account's: a pid another account runs (EPERM; pid 1 is root's) was reused since it exited.
+  it.skipIf(process.getuid?.() === 0)('is none when another account runs the recorded pid now', () => {
+    expect(daemonPipeNow(prepared(1).data, 4242)).toBeNull()
+  })
 })
