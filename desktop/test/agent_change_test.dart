@@ -133,18 +133,22 @@ class ProfileConnection extends SwitchConnection {
   final links = <String>[];
   final requests = <String>[];
   final usageReads = <Map<String, dynamic>>[];
-  final claudeRows = <Map<String, dynamic>>[
+  var plainUsage = false;
+  List<Map<String, dynamic>>? codexRows;
+  var claudeRows = <Map<String, dynamic>>[
     {
       'id': '71dc90339553114c',
       'path': '/home/me',
       'label': 'Default',
       'reportLabel': 'Default',
+      'default': true,
     },
     {
       'id': '5629f1d572da7cc4',
       'path': '/home/me/.claude-work',
       'label': 'Work',
       'reportLabel': 'Work',
+      'default': false,
     },
   ];
 
@@ -162,6 +166,7 @@ class ProfileConnection extends SwitchConnection {
         links.add(payload['path'] as String);
         return {'error': 'NOT_FOUND'};
       case 'codex_profiles_list':
+        if (codexRows != null) return {'profiles': codexRows};
         return {
           'profiles': [
             {'path': '${homeDir()}/.codex', 'label': 'Default'},
@@ -171,6 +176,34 @@ class ProfileConnection extends SwitchConnection {
         };
       case 'usage_read':
         usageReads.add(Map.of(payload));
+        if (plainUsage && payload['profile'] == null) {
+          return {
+            'providers': [
+              for (final e in ['claude', 'codex'])
+                {
+                  'provider': e,
+                  'outcome': 'answered',
+                  'httpStatus': 200,
+                  'body': e == 'claude'
+                      ? {
+                          'five_hour': {
+                            'utilization': 88,
+                            'resets_at': '2099-01-01T00:00:00Z',
+                          },
+                        }
+                      : {
+                          'rate_limit': {
+                            'primary_window': {
+                              'used_percent': 40,
+                              'limit_window_seconds': 18000,
+                              'reset_after_seconds': 100,
+                            },
+                          },
+                        },
+                },
+            ],
+          };
+        }
         final id = (payload['profile'] as Map)['id'];
         if (id == '77103ab28be2ebd0') throw StateError('no reading');
         return {
@@ -1489,6 +1522,61 @@ void main() {
       );
       expect(connection.events, isEmpty);
       expect(connection.creations, isEmpty);
+    });
+
+    test('the default row (default: true) is keyed default, never by the home folder', () async {
+      final connection = ProfileConnection();
+      final app = fixture(connection, sourceEngine: 'codex');
+      app.stateOf('m')!.localOnly = true;
+      addTearDown(app.dispose);
+      await app.addAgentToSwarm('m', 'a0');
+      // Whatever id the row carries, the flag decides.
+      connection.claudeRows[0]['id'] = 'ffffffffffffffff';
+      final rows = await app.agentProfiles('m', 'claude');
+      expect(rows.first.key, 'default');
+      expect(rows.first.path, '/home/me');
+      await app.changeAgent('m', 'a0', 'claude', profile: rows.first.key);
+      expect(connection.creations.single, isNot(contains('claudeHome')));
+    });
+
+    test('a Codex row marked default is keyed default', () async {
+      final connection = ProfileConnection();
+      final app = fixture(connection, sourceEngine: 'claude');
+      app.stateOf('m')!.localOnly = true;
+      addTearDown(app.dispose);
+      connection.codexRows = [
+        {
+          'path': '/elsewhere/codex',
+          'label': 'Default',
+          'id': swarmProfileId('m', 'codex', 'default'),
+          'default': true,
+        },
+        {'path': '/home/me/.codex-a', 'label': 'A'},
+      ];
+      final rows = await app.agentProfiles('m', 'codex');
+      expect(rows.first.key, 'default');
+    });
+
+    test('an old CLI: literal default id maps to the default row and reads the plain usage', () async {
+      final connection = ProfileConnection();
+      final app = fixture(connection, sourceEngine: 'codex');
+      app.stateOf('m')!.localOnly = true;
+      addTearDown(app.dispose);
+      connection.claudeRows = [
+        {'id': 'default', 'path': '/home/me', 'label': 'Default'},
+        {
+          'id': '5629f1d572da7cc4',
+          'path': '/home/me/.claude-work',
+          'label': 'Work',
+        },
+      ];
+      connection.plainUsage = true;
+      final rows = await app.agentProfiles('m', 'claude');
+      expect(rows.first.key, 'default');
+      expect(rows.first.id, swarmProfileId('m', 'claude', 'default'));
+      // The plain read answers Claude first, then Codex: Claude's 88% used wins.
+      expect(rows.first.percentLeft, 12);
+      expect(connection.usageReads.any((r) => r.isEmpty), isTrue);
     });
 
     test('the default account passes no claudeHome', () async {

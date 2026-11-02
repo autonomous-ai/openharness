@@ -15255,16 +15255,29 @@ class AppNotifier extends ChangeNotifier {
     final profiles = [
       for (final row in rows)
         if (row is Map && row['path'] is String)
-          (
-            path: row['path'] as String,
-            label: row['label'] as String? ?? row['path'] as String,
-            // The CLI names an account by its realpath; the default one is a row too.
-            id:
-                row['id'] as String? ??
-                (engine == 'codex' && row['path'] == _codexDefaultHome()
-                    ? defaultId
-                    : swarmProfileId(machineId, engine, row['path'] as String)),
-          ),
+          () {
+            final path = row['path'] as String;
+            final rowId = row['id'] as String?;
+            // An old Claude CLI names its default account with the literal 'default'.
+            final legacy = engine == 'claude' && rowId == 'default';
+            // The CLI marks the default row; an old Codex CLI sends no flag, so its env folder is it.
+            final isDefault =
+                row['default'] == true ||
+                legacy ||
+                rowId == defaultId ||
+                (engine == 'codex' &&
+                    row['default'] == null &&
+                    path == _codexDefaultHome());
+            return (
+              path: path,
+              label: row['label'] as String? ?? path,
+              id: isDefault
+                  ? defaultId
+                  : (rowId ?? swarmProfileId(machineId, engine, path)),
+              isDefault: isDefault,
+              legacy: legacy,
+            );
+          }(),
     ];
     // One account has no choice to show, so its usage is not worth a vendor call.
     var budget = profiles.length > 1 ? _usageReadsPerEngine : 0;
@@ -15279,16 +15292,26 @@ class AppNotifier extends ChangeNotifier {
             budget--;
             int? left;
             try {
+              // An old CLI does not know profile reads: its plain read answers both
+              // engines' default accounts, so take the one for this engine.
               final usage = parseUsageReadResult(
                 await _conn(machineId).request(
                   'usage_read',
-                  payload: {
-                    'profile': {'engine': engine, 'id': p.id},
-                  },
+                  payload: p.legacy
+                      ? const {}
+                      : {
+                          'profile': {'engine': engine, 'id': p.id},
+                        },
                   timeout: const Duration(seconds: 10),
                 ),
               );
-              final tightest = usage.firstOrNull?.tightest;
+              final tightest =
+                  (p.legacy
+                          ? usage
+                                .where((u) => u.provider.name == engine)
+                                .firstOrNull
+                          : usage.firstOrNull)
+                      ?.tightest;
               if (tightest != null) {
                 left = (100 - tightest.usedPercent).round().clamp(0, 100);
               }
@@ -15297,7 +15320,7 @@ class AppNotifier extends ChangeNotifier {
           }
           return AgentProfile(
             id: p.id,
-            key: p.id == defaultId ? 'default' : p.path,
+            key: p.isDefault ? 'default' : p.path,
             label: p.label,
             path: p.path,
             percentLeft: cached?.left,
