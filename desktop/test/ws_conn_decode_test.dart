@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/ws/relay_codec.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 // Task #2195: a big answer decodes off the UI thread, and frames stay in the order they came.
@@ -12,6 +14,41 @@ String _frame(int seq, {int pad = 0}) => jsonEncode({
   'type': 'terminal_output',
   'payload': {'streamId': 's', 'seq': seq, 'pad': 'x' * pad},
 });
+
+/// A seal nothing opens: whatever reaches the app from a sealed connection got past it.
+class _ClosedSeal implements RelayCodec {
+  int opened = 0;
+
+  @override
+  Map<String, dynamic> helloFrame() => {'type': 'e2e_hello', 'payload': {}};
+
+  @override
+  Future<bool> handleWelcome(Map<String, dynamic> payload) async => true;
+
+  @override
+  bool handleRekey(Map<String, dynamic> payload) => true;
+
+  @override
+  int get terminalP2pVersion => 1;
+
+  @override
+  Map<String, dynamic>? encodeFrame(Map<String, dynamic> frame) => frame;
+
+  @override
+  Map<String, dynamic>? decodeFrame(Map<String, dynamic> frame) {
+    opened++;
+    return null;
+  }
+
+  @override
+  Uint8List? encodeBinary(Uint8List localFrame) => localFrame;
+
+  @override
+  Uint8List? decodeBinary(Uint8List wireFrame) {
+    opened++;
+    return null;
+  }
+}
 
 void main() {
   late HttpServer server;
@@ -125,6 +162,33 @@ void main() {
     expect(arrived, [1]);
   });
 
+  // Security review 2 of #2627: a frame keeps the connection it came on. Finished after that connection went, it reaches nothing.
+  test('a large frame whose connection drops while it decodes reaches nothing, nor does what waited behind it', () async {
+    hold = Completer<void>();
+    socket
+      ..add(_frame(1, pad: WsConn.largeFrameChars))
+      ..add(_frame(2));
+    await until(() => decoded.isNotEmpty);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    await conn.debugDropTransport();
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    hold!.complete();
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(arrived, isEmpty);
+  });
+
+  test('a large frame still decoding at close reaches nothing', () async {
+    hold = Completer<void>();
+    socket
+      ..add(_frame(1, pad: WsConn.largeFrameChars))
+      ..add(_frame(2));
+    await until(() => decoded.isNotEmpty);
+    await conn.close();
+    hold!.complete();
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(arrived, isEmpty);
+  });
+
   test(
     'the real isolate decoder decodes, and says null for what will not parse',
     () async {
@@ -135,4 +199,95 @@ void main() {
       expect(await WsConn.decodeInIsolate('{nope'), isNull);
     },
   );
+
+  group('on a sealed connection', () {
+    late HttpServer relay;
+    late WebSocket wire;
+    late WsConn sealed;
+    late _ClosedSeal seal;
+    late List<int> dispatched;
+    late List<int> binaries;
+
+    setUp(() async {
+      seal = _ClosedSeal();
+      dispatched = [];
+      binaries = [];
+      relay = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final ready = Completer<WebSocket>();
+      unawaited(
+        relay.forEach((request) async {
+          final s = await WebSocketTransformer.upgrade(request);
+          s.listen((_) {});
+          if (!ready.isCompleted) ready.complete(s);
+        }),
+      );
+      sealed = WsConn(
+        wsBaseUrl: 'ws://127.0.0.1:${relay.port}',
+        autonomousEnv: 'prod',
+        machineId: 'm',
+        accessTokenProvider: (_, _) async => 'test-token',
+        onAuthFailure: (_) {},
+        relayCodecs: (_) async => seal,
+        onStatus: (_) {},
+        onEvent: (event) {
+          final seq = (event['payload'] as Map?)?['seq'];
+          if (seq is int) dispatched.add(seq);
+        },
+      );
+      sealed.onBinaryFrame = (frame) async => binaries.add(frame.length);
+      unawaited(sealed.connect());
+      wire = await ready.future;
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    });
+
+    tearDown(() async {
+      await sealed.close();
+      await relay.close(force: true);
+    });
+
+    // Security review 2 of #2627: the relay isn't trusted here. A large frame to hold the queue,
+    // a forged one behind it, then a dropped socket must not make the forged one the machine's.
+    test('a forged frame behind a large one, the socket then dropped, reaches nothing', () async {
+      hold = Completer<void>();
+      wire
+        ..add(_frame(1, pad: WsConn.largeFrameChars))
+        ..add(_frame(2))
+        ..add(Uint8List.fromList([1, 2, 3]));
+      await until(() => decoded.isNotEmpty);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await wire.close();
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+      hold!.complete();
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+      expect(dispatched, isEmpty);
+      expect(binaries, isEmpty);
+    });
+
+    test(
+      'a forged frame behind a large one reaches nothing after close',
+      () async {
+        hold = Completer<void>();
+        wire
+          ..add(_frame(1, pad: WsConn.largeFrameChars))
+          ..add(_frame(2));
+        await until(() => decoded.isNotEmpty);
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        await sealed.close();
+        hold!.complete();
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+        expect(dispatched, isEmpty);
+      },
+    );
+
+    test(
+      'with the socket up, a large frame goes through the seal like any other',
+      () async {
+        wire
+          ..add(_frame(1, pad: WsConn.largeFrameChars))
+          ..add(_frame(2));
+        await until(() => seal.opened >= 2);
+        expect(dispatched, isEmpty);
+      },
+    );
+  });
 }
