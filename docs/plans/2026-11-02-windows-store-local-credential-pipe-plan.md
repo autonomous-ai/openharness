@@ -111,11 +111,13 @@ tests: each package's `test/credential.test.mjs`, `store/tools/local-credential.
 
 ### Task 3: A real Windows run, the README and the report
 
-**Files:** Create `store/tools/windows-ci/store-pipe.mjs`; modify `.github/workflows/windows.yml` (one step in the install job, one in
-the specs step), `store/tools/README.md`, `docs/security/2026-11-02-team-account-windows.md` (the W1 line).
+**Files:** Create `store/tools/windows-ci/store-pipe.mjs` and `cli/src/lib/windows/storePackagesPipe.windows.spec.ts`; modify
+`cli/scripts/windows-ci/check-install.ps1`, `store/tools/README.md`, `docs/security/2026-11-02-team-account-windows.md` (the W1 line).
+No workflow file changes: this project's GitHub App may not push them, and the Windows workflow already runs every spec in
+`cli/src/lib/windows` and `check-install.ps1`.
 
 - [ ] **Step 1:** `store-pipe.mjs` runs, against the installed daemon, machine monitor `daemonStatus` (REST) and `listHarnesses`,
-  harness monitor and memories `listAgents`, over the pipe: it prints each result and
-  exits 1 on any failure. The workflow runs it after "Check the install", and runs `store/tools/windows-pipe.test.mjs` natively.
+  harness monitor and memories `listAgents`, and the grid's `harnessExecute`, over the pipe: it prints each result and exits 1 on any
+  failure; `check-install.ps1` runs it last. The vitest spec runs `store/tools/windows-pipe.test.mjs` on Windows on a real pipe.
 - [ ] **Step 2:** README's "Daemon checks" and the report's W1 row and Fixed list name the Store packages.
 - [ ] **Step 3: Commit,** then ask the PM to start the Windows workflow on the final head.
