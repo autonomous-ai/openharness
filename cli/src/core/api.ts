@@ -729,6 +729,7 @@ export const MODELS_REQUESTS = [
   'grid_fleet_models_list', 'grid_fleet_model_download', 'grid_fleet_model_start', 'grid_fleet_model_stop',
   'grid_fleet_run', 'grid_fleet_cancel', 'grid_swarm_sync', 'grid_swarm_api_share', 'grid_swarm_api_shares', 'grid_swarm_offer', 'grid_swarm_offers', 'grid_swarm_heal',
   'api_connections', 'codex_profiles_list', 'codex_profile_link',
+  'claude_profiles_list', 'claude_profile_link', 'swarm_account_offer',
 ] as const
 
 const MINUTE = 60_000
