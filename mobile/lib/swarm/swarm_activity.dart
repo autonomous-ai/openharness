@@ -506,9 +506,10 @@ class SwarmActivity extends ChangeNotifier {
       final decision = need.decision;
       final asks = inbox.asks(need.swarmId);
       final busy =
-          session.held(need) != null ||
+          session.holding(need) ||
           (asks?.answering.contains(decision.id) ?? false) ||
-          asks?.unconfirmed(decision) != null;
+          asks?.unconfirmed(decision) != null ||
+          (asks?.unconfirmedDelegate(decision) ?? false);
       final choice = decision.recommended;
       if (!busy && choice >= 0 && choice < decision.options.length) {
         return decision.options[choice];
@@ -651,9 +652,7 @@ class SwarmActivity extends ChangeNotifier {
 
   bool _held(String key) => inbox.needs.any(
     (need) =>
-        need.key == key &&
-        need is SwarmDecisionNeed &&
-        session.held(need) != null,
+        need.key == key && need is SwarmDecisionNeed && session.holding(need),
   );
 
   /// On this phone's first Activity of a Swarm, the reactions already there

@@ -158,7 +158,16 @@ void main() {
         ],
       };
       await pump(tester, fake);
-      await tester.scrollUntilVisible(key('swarm-answered'), 200);
+      await tester.scrollUntilVisible(
+        key('swarm-answered'),
+        200,
+        scrollable: find
+            .descendant(
+              of: find.byType(ListView).last,
+              matching: find.byType(Scrollable),
+            )
+            .first,
+      );
       expect(find.text('Answered'), findsOneWidget);
       expect(
         find.text('Question a1?'),

@@ -207,6 +207,9 @@ class SwarmSession extends ChangeNotifier {
   /// The option held for [need], while its Undo window runs.
   int? held(SwarmDecisionNeed need) => _held[need.key]?.choice;
 
+  /// Whether anything is held for [need]: an answer, or leaving it.
+  bool holding(SwarmDecisionNeed need) => _held.containsKey(need.key);
+
   /// [need] is held to be left to its coordinator, while its Undo window runs.
   bool heldDelegate(SwarmDecisionNeed need) {
     final held = _held[need.key];
