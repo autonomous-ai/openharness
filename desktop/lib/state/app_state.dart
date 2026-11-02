@@ -6650,7 +6650,24 @@ class AppNotifier extends ChangeNotifier {
     await _store?.saveEnvironment(value);
   }
 
+  /// How long into startup each step finished, in ms, for the log line and for tests. Task #2169.
+  @visibleForTesting
+  Map<String, int> get startupTimings => Map.unmodifiable(_startupTimings);
+  final _startupTimings = <String, int>{};
+  final _startupClock = Stopwatch();
+  void _markStartup(String step) {
+    if (_startupClock.isRunning) _startupTimings[step] = _startupClock.elapsedMilliseconds;
+  }
+
+  /// Set by any install during this boot: what the CLI said before it is out of date.
+  bool _installedThisBoot = false;
+
   Future<void> bootstrap() async {
+    _startupTimings.clear();
+    _startupClock
+      ..reset()
+      ..start();
+    _installedThisBoot = false;
     final localFixture = localManualFixture;
     if (localFixture != null) {
       _bootstrapLocalManual(localFixture);
@@ -6685,8 +6702,20 @@ class AppNotifier extends ChangeNotifier {
         if (!_selfInstallUnavailable) {
           _startUpdateChecking();
         }
+        // Beside the tool probe, as neither waits on the other (task #2169). A fresh computer has no CLI yet: a check that
+        // fails is asked again after. One from before a sign-out or an install says nothing about now.
+        final askedAt = _authRevision;
+        final early = cliLogin.checkStatus().then<CliAuthStatus?>((status) {
+          _markStartup('signed-in check');
+          return status;
+        }).catchError((Object _) => null);
         final environmentReady = await _prepareEnvironment();
+        _markStartup('tools');
         if (!environmentReady) return;
+        await _continueAfterEnvironmentReady(
+          early: _installedThisBoot || askedAt != _authRevision ? null : early,
+        );
+        return;
       }
       await _continueAfterEnvironmentReady();
     } catch (error, stack) {
@@ -6862,6 +6891,7 @@ class AppNotifier extends ChangeNotifier {
     bool quiet = false,
   }) async {
     final provisioner = environmentProvisioner ?? EnvironmentProvisioner();
+    if (install) _installedThisBoot = true;
     final result = await provisioner.ensureReady(
       onProgress: (value) {
         _measureSetup(value);
@@ -6900,7 +6930,7 @@ class AppNotifier extends ChangeNotifier {
   /// What `bootstrap()` does right after the environment is confirmed ready — pulled out so
   /// [recheckEnvironmentStep] can reach the same destination without repeating `bootstrap()`'s config
   /// load and update-check startup, which already ran on the launch that got stuck here.
-  Future<void> _continueAfterEnvironmentReady() async {
+  Future<void> _continueAfterEnvironmentReady({Future<CliAuthStatus?>? early}) async {
     agentPrefetch?.setupRunning = false;
     final revision = _authRevision;
     if (!_authWorkCurrent(revision)) return;
@@ -6916,7 +6946,8 @@ class AppNotifier extends ChangeNotifier {
     // refreshes it itself. This app never reads, stores, or refreshes a token of its own; it just
     // asks the CLI whether this computer is currently signed in.
     try {
-      final authStatus = await cliLogin.checkStatus();
+      final authStatus = await early ?? await cliLogin.checkStatus();
+      _markStartup('signed-in check');
       if (!_authWorkCurrent(revision)) return;
       signedIn = authStatus.loggedIn;
       if (!authStatus.loggedIn) {
@@ -7184,6 +7215,15 @@ class AppNotifier extends ChangeNotifier {
     // `_authWorkCurrent` returns) used to leave "Starting local service…" on a screen nothing would
     // ever repaint.
     await _identifyBeforeLayout(revision);
+    _ensurePool();
+    // The daemon check starts beside the restores, as neither waits on the other (task #2169). The window opens once both
+    // have answered, so the tiles are there for it, as before.
+    Object? daemonFailure;
+    var daemonFailed = false;
+    final daemon = ensureCliDaemonReady().then<void>((_) => _markStartup('daemon')).catchError((Object error) {
+      daemonFailed = true;
+      daemonFailure = error;
+    });
     await _restorePaneLayout(claimOnAttach: true);
     _armLaunchClaimExpiry();
     if (!_authWorkCurrent(revision)) {
@@ -7192,14 +7232,14 @@ class AppNotifier extends ChangeNotifier {
     }
     await dial.restore();
     await firstArrival.restore();
+    _markStartup('saved tabs');
     if (!_authWorkCurrent(revision)) {
       _bootStatusMessage = null;
       return;
     }
-    _ensurePool();
-    try {
-      await ensureCliDaemonReady();
-    } catch (error) {
+    await daemon;
+    if (daemonFailed) {
+      final error = daemonFailure;
       _bootStatusMessage = null;
       if (!_authWorkCurrent(revision)) return;
       status = AppStatus.authenticated;
@@ -7214,6 +7254,9 @@ class AppNotifier extends ChangeNotifier {
     // the saved session gone) — that already routed to the login screen, so don't clobber it.
     if (status == AppStatus.unauthenticated) return;
     status = AppStatus.authenticated;
+    _markStartup('window');
+    appLog.info('startup', _startupTimings.entries.map((step) => '\${step.key} after \${step.value} ms').join(', '));
+    _startupClock.stop();
     notifyListeners();
     // The CLI has confirmed daemon readiness. Display-name/avatar metadata is
     // independent of machine discovery and must not delay work — and a guest
