@@ -604,7 +604,7 @@ describe('reading a chat never reads a reply only in a thread (Diego, 11-01)', (
     expect(unreadRoots((await inbox(s.tabId, peer)).body.data)).toEqual(['Peer root: 1'])
   })
 
-  it(`reads one bounded range from the old mark upward (${SEED_SCAN} rows), whatever the range's length`, async () => {
+  it(`reads one bounded reply range from the old mark upward (${SEED_SCAN} replies), whatever the range's length`, async () => {
     const s = await scene()
     const [early, late] = await insert(s.tabId, s.web, [{ text: 'Early', author: personAuthor(peer) }, { text: 'Late', author: personAuthor(peer) }])
     await markRead(s.tabId, s.web, await sequenceOf(late!), peer)
@@ -627,7 +627,7 @@ describe('reading a chat never reads a reply only in a thread (Diego, 11-01)', (
     // The range read, the thread's root and the look-back for whether the person is in it: never one read per row or thread.
     expect(messages.length).toBeLessThanOrEqual(3)
     expect(examined).toBeLessThanOrEqual(SEED_SCAN + 10)
-    // The cap: a thread-only reply past the first SEED_SCAN rows of the range is not seen by this read.
+    // The cap: a thread-only reply past the first SEED_SCAN replies of the range is not seen by this read.
     expect(await marksOf(s.tabId, peer)).toEqual({ [early!]: { sequence: await sequenceOf(late!), follow: null } })
   }, 60_000)
 })
