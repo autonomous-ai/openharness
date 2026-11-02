@@ -24,7 +24,7 @@ const CLOUD = 'cloud-machine'
 type Frame = Record<string, unknown>
 
 /** The fake backend's device socket: what the lane sent, and a way to send it frames. */
-async function fakeDeviceWs(opts: { refuseToken?: string } = {}) {
+async function fakeDeviceWs(opts: { refuseToken?: string; late?: (frame: Frame, nth: number) => number } = {}) {
   const received: Frame[] = []
   const tokens: string[] = []
   let socket: WebSocket | null = null
@@ -40,13 +40,17 @@ async function fakeDeviceWs(opts: { refuseToken?: string } = {}) {
   await new Promise<void>((resolve) => wss.once('listening', () => resolve()))
   const listeners = new Set<(frame: Frame) => void>()
   const sockets: WebSocket[] = []
+  const heard: Record<string, number> = {}
   wss.on('connection', (ws) => {
     socket = ws
     sockets.push(ws)
     ws.on('message', (raw) => {
       const frame = JSON.parse(raw.toString()) as Frame
-      received.push(frame)
-      for (const listener of listeners) listener(frame)
+      const seen = (heard[String(frame.type)] = (heard[String(frame.type)] ?? 0) + 1)
+      const take = () => { received.push(frame); for (const listener of listeners) listener(frame) }
+      // A loaded machine hands the server a frame some time after the lane sent it: `late` says how long, per frame.
+      const wait = opts.late?.(frame, seen) ?? 0
+      if (wait > 0) setTimeout(take, wait); else take()
     })
   })
   const port = (wss.address() as { port: number }).port
@@ -97,8 +101,8 @@ afterEach(async () => {
   for (const server of servers.splice(0)) await server.close()
 })
 
-async function lane(over: { refuseToken?: string; auth?: { accessToken(options?: { force?: boolean; failedToken?: string }): Promise<string> }; welcome?: boolean; now?: () => number; linked?: Set<string>; handshakeMs?: number; renewEveryMs?: number } = {}) {
-  const server = await fakeDeviceWs({ refuseToken: over.refuseToken })
+async function lane(over: { refuseToken?: string; late?: (frame: Frame, nth: number) => number; auth?: { accessToken(options?: { force?: boolean; failedToken?: string }): Promise<string> }; welcome?: boolean; now?: () => number; linked?: Set<string>; handshakeMs?: number; renewEveryMs?: number } = {}) {
+  const server = await fakeDeviceWs({ refuseToken: over.refuseToken, late: over.late })
   servers.push(server)
   const seal = fakeSeal()
   const lines: string[] = []
@@ -1337,7 +1341,8 @@ describe('a sign-in refresh that fails while the lane dials', () => {
 
   it('tries again after a reconnect whose token read fails once: a second socket within the backoff', async () => {
     const auth = { accessToken: vi.fn(async () => 'token-1') }
-    const { link, server, lines } = await lane({ auth })
+    // The second watch frame reaches the server 400 ms after the lane is ready, as one does on a loaded machine.
+    const { link, server, lines } = await lane({ auth, late: (frame, nth) => frame.type === 'machines_watch' && nth === 2 ? 400 : 0 })
     await link.online()
     // The network blips: the backend drops the socket, and the refresh the reconnect needs fails once.
     auth.accessToken.mockRejectedValueOnce(new Error('UNAVAILABLE: the sign-in could not be refreshed'))
