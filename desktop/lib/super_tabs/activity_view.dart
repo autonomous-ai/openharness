@@ -80,20 +80,13 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
     final mentions =
         filter == SuperTabActivityFilter.all ||
         filter == SuperTabActivityFilter.mentions;
-    bool kind(SuperTabActivityItem i) => switch (filter) {
-      SuperTabActivityFilter.all => true,
-      SuperTabActivityFilter.replies => i.kind == SuperTabActivityKind.reply,
-      SuperTabActivityFilter.reactions =>
-        i.kind == SuperTabActivityKind.reaction,
-      _ => false,
-    };
     final epoch = DateTime.fromMillisecondsSinceEpoch(0);
     return [
       if (mentions)
         for (final m in [...a.mentions.waiting, ...a.mentions.earlier])
           (at: m.createdAt ?? epoch, mention: m, item: null),
       for (final i in a.items)
-        if (kind(i)) (at: i.createdAt ?? epoch, mention: null, item: i),
+        if (a.shows(i)) (at: i.createdAt ?? epoch, mention: null, item: i),
     ]..sort((x, y) => y.at.compareTo(x.at));
   }
 
