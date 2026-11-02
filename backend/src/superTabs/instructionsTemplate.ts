@@ -98,6 +98,7 @@ export const TEMPLATE_ROUTING = `## Routing
   4. An idle agent is reused only between candidates equal so far, except the same Reviewer for its next round and
      work that follows straight on from what the agent just did.
   5. Between equals, the machine with fewer agents working. Then price.
+- When no other account has weekly quota left, the PM's account takes work as any other account does.
 - The route's lines show each account's weekly quota left and reset time, but its order does not rank by them: the PM
   applies this order itself. Picking against it needs a reason in the route's override: urgency, context, or a machine
   the work needs. "Idle" is not a reason.
