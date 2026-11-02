@@ -9337,8 +9337,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
     },
   );
 
-  Widget _daemonTabButton() => DaemonSlotButton(
+  Widget _daemonTabButton({bool phoneBar = false}) => DaemonSlotButton(
     face: _face,
+    phoneBar: phoneBar,
     enabled: _shortcutsEnabled,
     selected: _daemonOverlay != null,
     onPressed: _activateDaemon,
@@ -9459,7 +9460,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
               Expanded(child: chrome.compactTabs!(context, _workspaceCommands)),
               phoneBarCell(_searchButton(theme)),
               phoneBarCell(_notificationsButton(theme)),
-              if (kIsWeb && _slotShown) phoneBarCell(_daemonTabButton()),
+              if (kIsWeb && _slotShown) _daemonTabButton(phoneBar: true),
               ..._accountControl(compact: true),
               SizedBox(
                 width: _accountControlShown && app.isGuest
