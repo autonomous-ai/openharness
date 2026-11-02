@@ -1100,6 +1100,67 @@ describe('overlapping machine selects', () => {
     expect(selects()).toHaveLength(2)
   })
 
+  /**
+   * Diego's Buddy, 11-02: a select is answered, then the machine's handshake may take its whole 15 s. A newer pick in those
+   * seconds found nothing to replace (the select had settled), so the older attach still resolved and the dial was told it
+   * had landed on a machine the person had already left.
+   */
+  describe('a newer pick during the handshake', () => {
+    /** A lane whose machines answer no hello until told to: every select is answered at once. */
+    async function slowHello() {
+      const up = await lane({ welcome: false })
+      up.server.on((frame) => {
+        if (frame.type === 'machine_select') up.server.send({ type: 'machine_selected', payload: { machineId: (frame.payload as { machineId: string }).machineId } })
+      })
+      await up.link.online()
+      const hello = () => up.server.received.filter((frame) => frame.type === 'e2e_hello').length
+      const welcome = (machineId: string) => up.server.send({ type: 'e2e_welcome', machineId, payload: { ephPub: 'E' } })
+      return { ...up, hello, welcome }
+    }
+
+    it('fails the older attach once its handshake ends, and leaves the lane on the newer machine', async () => {
+      const { link, hello, welcome, lines } = await slowHello()
+      const older = settled(link.attach(LINKED))
+      await soon('the hello', () => hello() === 1)
+      expect(await settled(link.attach(CLOUD))).toBe('ok')
+      welcome(LINKED)
+      expect(await older).toBe('SELECT_SUPERSEDED')
+      expect(link.selectedMachine).toBe(CLOUD)
+      await soon('the session', () => lines.includes(`device: e2e session ready ${LINKED}`))
+    })
+
+    it('fails the older attach the same way when its handshake fails instead', async () => {
+      const { link, server, hello } = await slowHello()
+      const older = settled(link.attach(LINKED))
+      await soon('the hello', () => hello() === 1)
+      expect(await settled(link.attach(CLOUD))).toBe('ok')
+      server.send({ type: 'e2e_denied', machineId: LINKED, payload: {} })
+      // Its own failure is what it reports: the caller that made a newer pick decides what it means (cableHost.ts).
+      expect(await older).toBe('E2EE_DENIED')
+      expect(link.selectedMachine).toBe(CLOUD)
+    })
+
+    it('still resolves both attaches of one machine through one handshake', async () => {
+      const { link, server, hello, welcome } = await slowHello()
+      const first = settled(link.attach(LINKED))
+      await soon('the hello', () => hello() === 1)
+      const second = settled(link.attach(LINKED))
+      welcome(LINKED)
+      expect([await first, await second]).toEqual(['ok', 'ok'])
+      expect(hello()).toBe(1)
+      expect(server.received.filter((frame) => frame.type === 'machine_select')).toHaveLength(1)
+    })
+
+    it('fails the attach when the lane is revoked during its handshake', async () => {
+      const { link, server, hello } = await slowHello()
+      const pending = settled(link.attach(LINKED))
+      await soon('the hello', () => hello() === 1)
+      server.send({ type: 'device_revoked' })
+      expect(await pending).toBe('revoked')
+      expect(link.selectedMachine).toBe('')
+    })
+  })
+
   it('fails a select in flight when the lane is revoked, and starts the next one fresh', async () => {
     const { link, server, selects } = await selecting(60_000)
     const pending = settled(link.attach(CLOUD))
