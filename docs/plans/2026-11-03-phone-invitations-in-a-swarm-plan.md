@@ -10,7 +10,7 @@
 
 **Spec:** Tony's mobile list, task 24.
 
-## Sketch: Swarm Home, in a Swarm, with one invitation
+## Sketch: Swarm Home, in a Swarm, with one invitation (approved for Tony by the Lead: one line each, gone when there are none)
 
 ```
 ┌──────────────────────────────────────┐
@@ -18,9 +18,7 @@
 │                                      │
 │ Invitations                          │
 │ ╭──────────────────────────────────╮ │
-│ │ Design Team                      │ │
-│ │ You can collaborate              │ │
-│ │              Not now   Join      │ │
+│ │ Design Team       Not now   Join │ │
 │ ╰──────────────────────────────────╯ │
 │                                      │
 │ Pinned                               │
